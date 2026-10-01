@@ -410,6 +410,9 @@ impl<'a> Gen<'a> {
                 .iter()
                 .find(|l| l.id == v)
                 .map_or_else(|| format!("v{}", v.0), |l| format!("vec.{}", l.name)),
+            // One name per generic channel type, as a `Vec`'s is per element (N54: two
+            // `Vec[Chan[T]]` in one unit would otherwise share a helper's symbol).
+            Ty::ChanOf(c) => format!("chan.{}", c.0),
             other => other.name().to_owned(),
         }
     }

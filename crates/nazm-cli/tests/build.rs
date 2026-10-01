@@ -3314,6 +3314,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
                 Shape::T => "0",
                 Shape::VecT => "vec_new[Int]()",
                 Shape::ChanT => "chan_new_of[Int](1)",
+                Shape::ChansT => "vec_new[Chan[Int]]()",
             })
             .collect();
         // `vec_new` is the one built-in whose type argument nothing else could say.
@@ -3322,7 +3323,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
             && !i
                 .params()
                 .iter()
-                .any(|p| matches!(p, Shape::T | Shape::VecT | Shape::ChanT))
+                .any(|p| matches!(p, Shape::T | Shape::VecT | Shape::ChanT | Shape::ChansT))
         {
             format!("{}[Int]", i.name())
         } else {
@@ -3344,6 +3345,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
             // to reach an `Int` from one.
             Shape::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
             Shape::ChanT => format!("if chan_send_of({call}, 0) {{ 1 }} else {{ 0 }}"),
+            Shape::ChansT => format!("vec_len({call})"),
         };
         let src = format!("fn main() -> Int {{ {body} }}\n");
 

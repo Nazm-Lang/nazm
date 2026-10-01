@@ -1255,7 +1255,8 @@ transitively), `exit_with` from a task. Peak RSS stays at 3.8 MB from 5,000 to 5
 **Limitation** · One OS thread per task and nothing more. No M:N, no work stealing, no
 fairness, no task density, no timeouts, and **no cancellation beyond closing a channel**.
 `Chan` alone carries `Int`; `Chan[T]` (N53) carries any `T` that may cross into a task, no
-sequence or closure (`N0390`), with no `select`. Ownership prevents data races; **that is not deadlock freedom**
+sequence or closure (`N0390`); since N54 a select over `Chan[T]` receives, a deadline needs a
+`TimeCap`, and closing a channel is how a task is cancelled — cooperatively, where it waits. Ownership prevents data races; **that is not deadlock freedom**
 and is not claimed as such (`architecture.md` §5).
 
 *N53, 2026-10-02: Generic channels — VERIFIED.* `Chan[T]` with `chan_new_of[T]`, `chan_send_of`,
@@ -1266,6 +1267,14 @@ send after close refused and its value released by the sender. The type persists
 (`{"chan":T}`, which a `/7` reader refuses as an unknown shape), and a typed channel's operations
 are `explain-cost` sites. `crates/nazm-cli/tests/generic_channels.rs`, 8 tests; fourteen N53
 mutations.
+
+*N54, 2026-10-02: Select, deadlines, cooperative cancellation, counters — VERIFIED for one OS thread
+per task.* `chan_select_of` (lowest ready index; a closed channel is ready) and `chan_select_until`
+(`-2` after at least `ms`) over `Vec[Chan[T]]`; `time_now_ms`; both clock built-ins need a `TimeCap`
+held (`N0369`), and `critical`'s `no-ambient-time` refuses them. A task waiting in a select is
+woken by another task's send and cancelled by a close; N44's failure rule is unchanged.
+`NAZM_SCHED_REPORT` counts tasks spawned and joined, selects and timeouts, and the interpreter, LLVM
+and Cranelift agree on it. `crates/nazm-cli/tests/select.rs`, 9 tests; sixteen N54 mutations.
 
 **Next dependency** · None for the current model; area 15 for anything beyond it.
 
@@ -1279,6 +1288,12 @@ of it must beat (`docs/performance.md`, N44): a task started and joined in 13 µ
 trip between two tasks 4.6 µs, a streamed value 60 ns, and linear scaling to four tasks; and
 decided against a fixed worker pool, which with blocking channels and no suspendable tasks would
 deadlock programs that are correct today (§7.46).
+
+*N54, 2026-10-02 — DESIGNED.* §7.56 chose the model a pool would use — stackful tasks on guarded
+stacks with a per-target switch, stackless continuations ruled out for colouring every function
+that can block — and named what has to move first: the thread-local first-failure slot, the stack
+limit, and a hand-off for blocking foreign calls. Select, deadlines and cancellation were built so
+that nothing in them depends on the thread model.
 
 **Limitation** · None of it exists and none of it is measured. `architecture.md` records
 that the "1M live tasks under 2GB" target was **withdrawn** as arithmetically unsupported —

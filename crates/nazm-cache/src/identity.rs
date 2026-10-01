@@ -167,7 +167,11 @@ use crate::digest::{self, Framed};
 /// defining a function of any of those names moved from accepted to refused, `Chan` with
 /// arguments from refused to accepted, and an element that cannot cross into a task is refused
 /// (`N0390`).
-pub const SEMANTIC_EPOCH: u32 = 16;
+/// `17` — N54, 2026-10-02. Select and the clock: `TimeCap` became a built-in type name and
+/// `chan_select_of`, `chan_select_until` and `time_now_ms` built-in names, so a program defining
+/// any of them moved from accepted to refused, and a clock read without a `TimeCap` held is
+/// refused (`N0369`).
+pub const SEMANTIC_EPOCH: u32 = 17;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

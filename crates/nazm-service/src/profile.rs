@@ -34,11 +34,14 @@ pub enum Rule {
     ContentsStayInFiles,
     /// No declassification: no `str_vouch` anywhere (N52).
     NoDeclassification,
+    /// No clock (N54): nothing that needs a `TimeCap` — a program whose behaviour depends on
+    /// time is not reproducible.
+    NoAmbientTime,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -47,6 +50,7 @@ impl Rule {
         Self::BoundedAllocation,
         Self::ContentsStayInFiles,
         Self::NoDeclassification,
+        Self::NoAmbientTime,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -61,6 +65,7 @@ impl Rule {
             Self::BoundedAllocation => "bounded-allocation",
             Self::ContentsStayInFiles => "contents-stay-in-files",
             Self::NoDeclassification => "no-declassification",
+            Self::NoAmbientTime => "no-ambient-time",
         }
     }
 
@@ -74,7 +79,8 @@ impl Rule {
             | Self::LockedBuild
             | Self::BoundedAllocation
             | Self::ContentsStayInFiles
-            | Self::NoDeclassification => None,
+            | Self::NoDeclassification
+            | Self::NoAmbientTime => None,
         }
     }
 }
@@ -118,6 +124,7 @@ impl Profile {
                 Rule::NoForeign,
                 Rule::LockedBuild,
                 Rule::NoDeclassification,
+                Rule::NoAmbientTime,
             ],
             Self::Cyber => &[
                 Rule::DeclaredEffects,
@@ -321,6 +328,23 @@ pub fn evaluate(
                         },
                     })
                     .collect()
+            } else if rule == Rule::NoAmbientTime {
+                res.functions()
+                    .iter()
+                    .flat_map(|f| f.call_sites.iter())
+                    .filter(|s| {
+                        matches!(
+                            s.callee,
+                            nazm_core::sema::Callee::Builtin(i)
+                                if nazm_core::sema::CapabilityKind::held_for(i)
+                                    == Some(nazm_core::sema::CapabilityKind::Time)
+                        )
+                    })
+                    .map(|s| Witness {
+                        span: s.span,
+                        note: "this reads a clock".to_owned(),
+                    })
+                    .collect()
             } else if rule == Rule::DeclaredEffects {
                 res.functions()
                     .iter()
@@ -393,6 +417,7 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::BoundedAllocation => "each site allocates inside a loop, a number of times the compiler does not know; allocate before the loop, or reuse what was allocated (`nazm explain-cost` lists every site)".to_owned(),
                 Rule::ContentsStayInFiles => "a file's contents may be written to a file, never shown; `nazm explain-flow` lists every sink and what reaches it".to_owned(),
                 Rule::NoDeclassification => "this profile admits no declassification: the value keeps its origin".to_owned(),
+                Rule::NoAmbientTime => "this profile admits no clock: a deadline or a time read makes the program's behaviour depend on when it runs".to_owned(),
             })
         })
         .collect()

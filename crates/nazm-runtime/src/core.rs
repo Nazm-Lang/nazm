@@ -24,6 +24,14 @@ pub const MEMORY_FORMAT: &str = "nazm-memory: sequences allocated=%lld reclaimed
                                  live=%lld strings allocated=%lld reclaimed=%lld live=%lld \
                                  channels allocated=%lld reclaimed=%lld live=%lld \
                                  closures allocated=%lld reclaimed=%lld live=%lld";
+
+/// The environment variable that asks a compiled program for its scheduler's counters (N54).
+/// A diagnostic, like [`MEMORY_VARIABLE`]: written to standard error at exit, invisible to the
+/// program.
+pub const SCHED_VARIABLE: &str = "NAZM_SCHED_REPORT";
+
+/// What that report says: four counts of what happened, never samples.
+pub const SCHED_FORMAT: &str = "nazm-sched: spawned=%lld joined=%lld selects=%lld timeouts=%lld";
 use crate::{preamble, Needs};
 
 /// The runtime's own surface, as a unit that does not define it sees it.
@@ -103,6 +111,10 @@ pub fn emit_runtime(needs: Needs) -> String {
         "@nz.chan_reclaimed",
         "@nz.clo_allocated",
         "@nz.clo_reclaimed",
+        "@nz.sched_spawned",
+        "@nz.sched_joined",
+        "@nz.sched_selects",
+        "@nz.sched_timeouts",
     ] {
         let _ = writeln!(out, "{c} = hidden global i64 0");
     }
@@ -154,10 +166,12 @@ pub fn emit_runtime(needs: Needs) -> String {
     }
     if needs.tasks {
         out.push_str(TASK_RUNTIME);
+        out.push_str(SCHED_RUNTIME);
     }
     if needs.channels {
         out.push_str(CHANNEL_RUNTIME);
         out.push_str(GENERIC_CHANNEL_RUNTIME);
+        out.push_str(SELECT_RUNTIME);
     }
     if needs.closures {
         out.push_str(CLOSURE_RUNTIME);
@@ -1021,6 +1035,269 @@ done:
 /// lock; the last release calls `release` on each slot still queued, then frees what
 /// `nz.chan_release` frees. The ownership of a slot's contents is the caller's to arrange: a
 /// sender hands over a reference of its own, a receiver takes it.
+/// Select, deadlines and the clock (N54, `docs/architecture.md` §7.56).
+///
+/// A select cannot wait on several channels' condition variables, so every typed channel's
+/// send and close advances one process-wide event count, `@nz.sel_gen`, and wakes whoever is
+/// selecting. A selector reads the count, scans its channels in index order under each one's
+/// lock, and waits only while the count has not moved since — under the count's own lock, so a
+/// wake-up between its scan and its wait is never lost. `@nz.sel_waiters` lets a send skip the
+/// lock when nobody selects. The lock and its condition variable are made once, on first use,
+/// and live as long as the process.
+const SELECT_RUNTIME: &str = r"
+@nz.sel_gen = hidden global i64 0
+@nz.sel_waiters = hidden global i64 0
+@nz.sel_sync = hidden global ptr null
+
+define hidden ptr @nz.sel_sync_get() {
+entry:
+  %s = load atomic ptr, ptr @nz.sel_sync acquire, align 8
+  %unmade = icmp eq ptr %s, null
+  br i1 %unmade, label %make, label %have
+have:
+  ret ptr %s
+make:
+  %fresh = call ptr @malloc(i64 256)
+  %oom = icmp eq ptr %fresh, null
+  br i1 %oom, label %nomem, label %init
+nomem:
+  ret ptr null
+init:
+  %mi = call i32 @pthread_mutex_init(ptr %fresh, ptr null)
+  %fcv = getelementptr i8, ptr %fresh, i64 128
+  %ci = call i32 @pthread_cond_init(ptr %fcv, ptr null)
+  %pair = cmpxchg ptr @nz.sel_sync, ptr null, ptr %fresh acq_rel acquire
+  %won = extractvalue {ptr, i1} %pair, 1
+  br i1 %won, label %mine, label %theirs
+mine:
+  ret ptr %fresh
+theirs:
+  %md = call i32 @pthread_mutex_destroy(ptr %fresh)
+  %cd = call i32 @pthread_cond_destroy(ptr %fcv)
+  call void @free(ptr %fresh)
+  %other = extractvalue {ptr, i1} %pair, 0
+  ret ptr %other
+}
+
+; Called after a typed channel changed in a way a selector waits for: a value queued, or a close.
+define hidden void @nz.sel_signal() {
+entry:
+  %gen = atomicrmw add ptr @nz.sel_gen, i64 1 seq_cst
+  %who = load atomic i64, ptr @nz.sel_waiters seq_cst, align 8
+  %any = icmp sgt i64 %who, 0
+  br i1 %any, label %wake, label %quiet
+wake:
+  %s = call ptr @nz.sel_sync_get()
+  %lost = icmp eq ptr %s, null
+  br i1 %lost, label %quiet, label %tell
+tell:
+  %l = call i32 @pthread_mutex_lock(ptr %s)
+  %scv = getelementptr i8, ptr %s, i64 128
+  %bc = call i32 @pthread_cond_broadcast(ptr %scv)
+  %u = call i32 @pthread_mutex_unlock(ptr %s)
+  br label %quiet
+quiet:
+  ret void
+}
+
+; `chan_close_of`: the `Int` channel's close, then the event a selector waits for.
+define hidden void @nz.chanv_close(ptr %c) {
+entry:
+  call void @nz.chan_close(ptr %c)
+  call void @nz.sel_signal()
+  ret void
+}
+
+; One look at one channel, without waiting: 1 and the oldest slot copied out to `%dst` (its
+; reference handed over), 2 when closed and drained, 0 when neither.
+define hidden i64 @nz.chanv_try(ptr %c, ptr %dst) {
+entry:
+  %mp = getelementptr i8, ptr %c, i64 40
+  %m = load ptr, ptr %mp
+  %vp = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %vp
+  %lenp = getelementptr i8, ptr %c, i64 8
+  %headp = getelementptr i8, ptr %c, i64 16
+  %closedp = getelementptr i8, ptr %c, i64 24
+  %datap = getelementptr i8, ptr %c, i64 32
+  %sp = getelementptr i8, ptr %c, i64 64
+  %stride = load i64, ptr %sp
+  %l = call i32 @pthread_mutex_lock(ptr %m)
+  %queued = load i64, ptr %lenp
+  %has = icmp sgt i64 %queued, 0
+  br i1 %has, label %take, label %ask
+ask:
+  %shut = load i64, ptr %closedp
+  %isshut = icmp ne i64 %shut, 0
+  %why = select i1 %isshut, i64 2, i64 0
+  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i64 %why
+take:
+  %head = load i64, ptr %headp
+  %cap = load i64, ptr %c
+  %data = load ptr, ptr %datap
+  %off = mul i64 %head, %stride
+  %slot = getelementptr i8, ptr %data, i64 %off
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %slot, i64 %stride, i1 false)
+  %h1 = add i64 %head, 1
+  %nh = urem i64 %h1, %cap
+  store i64 %nh, ptr %headp
+  %left = sub i64 %queued, 1
+  store i64 %left, ptr %lenp
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i64 1
+}
+
+; `%h` is a `Vec[Chan[T]]`; `%timed` nonzero gives up after `%ms` milliseconds. The result:
+; `i` a value from channel `i` in `%dst`, `-3 - i` channel `i` closed and drained, `-1` no
+; channels, `-2` timed out, and the most negative `i64` out of memory — which no `-3 - i`
+; can be. The lowest ready index wins.
+define hidden i64 @nz.chanv_select(ptr %h, ptr %dst, i64 %ms, i64 %timed) {
+entry:
+  %ts = alloca [2 x i64], align 8
+  %now = alloca [2 x i64], align 8
+  %count = load i64, ptr %h
+  %nothing = icmp sle i64 %count, 0
+  br i1 %nothing, label %none, label %setup
+none:
+  ret i64 -1
+setup:
+  %s = call ptr @nz.sel_sync_get()
+  %oom = icmp eq ptr %s, null
+  br i1 %oom, label %nomem, label %counted
+nomem:
+  ret i64 -9223372036854775808
+counted:
+  %sel = atomicrmw add ptr @nz.sched_selects, i64 1 monotonic
+  %in = atomicrmw add ptr @nz.sel_waiters, i64 1 seq_cst
+  %istimed = icmp ne i64 %timed, 0
+  br i1 %istimed, label %deadline, label %look
+deadline:
+  ; CLOCK_REALTIME is 0 on every v1 target, and it is what pthread_cond_timedwait measures.
+  %r0 = call i32 @clock_gettime(i32 0, ptr %ts)
+  %sec0 = load i64, ptr %ts
+  %tsn = getelementptr i8, ptr %ts, i64 8
+  %nsec0 = load i64, ptr %tsn
+  %pos = icmp sgt i64 %ms, 0
+  %wait_ms = select i1 %pos, i64 %ms, i64 0
+  %addsec = sdiv i64 %wait_ms, 1000
+  %addms = srem i64 %wait_ms, 1000
+  %addns = mul i64 %addms, 1000000
+  %ns1 = add i64 %nsec0, %addns
+  %carry = icmp sge i64 %ns1, 1000000000
+  %ns2 = sub i64 %ns1, 1000000000
+  %nsf = select i1 %carry, i64 %ns2, i64 %ns1
+  %sec1 = add i64 %sec0, %addsec
+  %sec2 = add i64 %sec1, 1
+  %secf = select i1 %carry, i64 %sec2, i64 %sec1
+  store i64 %secf, ptr %ts
+  store i64 %nsf, ptr %tsn
+  br label %look
+look:
+  %g0 = load atomic i64, ptr @nz.sel_gen seq_cst, align 8
+  %cdp = getelementptr i8, ptr %h, i64 16
+  %cdata = load ptr, ptr %cdp
+  br label %scan
+scan:
+  %i = phi i64 [ 0, %look ], [ %inext, %onward ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %probe, label %idle
+probe:
+  %coff = mul i64 %i, 8
+  %cpp = getelementptr i8, ptr %cdata, i64 %coff
+  %ch = load ptr, ptr %cpp
+  %got = call i64 @nz.chanv_try(ptr %ch, ptr %dst)
+  %took = icmp eq i64 %got, 1
+  br i1 %took, label %value, label %closedq
+closedq:
+  %drained = icmp eq i64 %got, 2
+  br i1 %drained, label %ended, label %onward
+onward:
+  %inext = add i64 %i, 1
+  br label %scan
+value:
+  %o1 = atomicrmw sub ptr @nz.sel_waiters, i64 1 seq_cst
+  ret i64 %i
+ended:
+  %o2 = atomicrmw sub ptr @nz.sel_waiters, i64 1 seq_cst
+  %enc = sub i64 -3, %i
+  ret i64 %enc
+idle:
+  br i1 %istimed, label %check, label %wait
+check:
+  %r1 = call i32 @clock_gettime(i32 0, ptr %now)
+  %nsec = load i64, ptr %now
+  %nwn = getelementptr i8, ptr %now, i64 8
+  %nnsec = load i64, ptr %nwn
+  %dsec = load i64, ptr %ts
+  %dtn = getelementptr i8, ptr %ts, i64 8
+  %dnsec = load i64, ptr %dtn
+  %later = icmp sgt i64 %nsec, %dsec
+  %samesec = icmp eq i64 %nsec, %dsec
+  %nslate = icmp sge i64 %nnsec, %dnsec
+  %atlast = and i1 %samesec, %nslate
+  %past = or i1 %later, %atlast
+  br i1 %past, label %timeout, label %wait
+timeout:
+  %o3 = atomicrmw sub ptr @nz.sel_waiters, i64 1 seq_cst
+  %to = atomicrmw add ptr @nz.sched_timeouts, i64 1 monotonic
+  ret i64 -2
+wait:
+  %wl = call i32 @pthread_mutex_lock(ptr %s)
+  %wcv = getelementptr i8, ptr %s, i64 128
+  br label %recheck
+recheck:
+  %g1 = load atomic i64, ptr @nz.sel_gen seq_cst, align 8
+  %still = icmp eq i64 %g1, %g0
+  br i1 %still, label %sleep, label %woke
+sleep:
+  br i1 %istimed, label %tsleep, label %fsleep
+tsleep:
+  ; Woken, timed out or spurious alike: look again, and the deadline check decides.
+  %tw = call i32 @pthread_cond_timedwait(ptr %wcv, ptr %s, ptr %ts)
+  br label %woke
+fsleep:
+  %fw = call i32 @pthread_cond_wait(ptr %wcv, ptr %s)
+  br label %recheck
+woke:
+  %wu = call i32 @pthread_mutex_unlock(ptr %s)
+  br label %look
+}
+
+; A monotonic clock in milliseconds. Clock 4 is CLOCK_MONOTONIC_RAW on both Linux and macOS.
+define hidden i64 @nz.time_now_ms() {
+entry:
+  %tp = alloca [2 x i64], align 8
+  %r = call i32 @clock_gettime(i32 4, ptr %tp)
+  %sec = load i64, ptr %tp
+  %tpn = getelementptr i8, ptr %tp, i64 8
+  %nsec = load i64, ptr %tpn
+  %msec = mul i64 %sec, 1000
+  %frac = sdiv i64 %nsec, 1000000
+  %t = add i64 %msec, %frac
+  ret i64 %t
+}
+";
+
+/// The scheduler's counters (N54): called by generated code after a task starts and before a
+/// scope joins, so the runtime's task text — under the self-hosted parity gate — is untouched.
+const SCHED_RUNTIME: &str = r"
+define hidden void @nz.sched_note_spawn() {
+entry:
+  %n = atomicrmw add ptr @nz.sched_spawned, i64 1 monotonic
+  ret void
+}
+
+; `%h` is the scope's task list; every task in it is about to be joined.
+define hidden void @nz.sched_note_join(ptr %h) {
+entry:
+  %tasks = load i64, ptr %h
+  %n = atomicrmw add ptr @nz.sched_joined, i64 %tasks monotonic
+  ret void
+}
+";
+
 const GENERIC_CHANNEL_RUNTIME: &str = r"
 define hidden ptr @nz.chanv_new(i64 %cap, i64 %stride, ptr %release) {
 entry:
@@ -1187,6 +1464,7 @@ store:
   store i64 %grown, ptr %lenp
   %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  call void @nz.sel_signal()
   ret i1 true
 }
 

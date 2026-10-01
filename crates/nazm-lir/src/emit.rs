@@ -1652,6 +1652,8 @@ impl Emitter<'_> {
                                     | Builtin::ChanSendOf
                                     | Builtin::ChanRecvOf
                                     | Builtin::ChanCloseOf
+                                    | Builtin::ChanSelectOf
+                                    | Builtin::ChanSelectUntil
                             ) =>
                         {
                             self.chan_op(*op, *e, &vals, at)
@@ -1946,6 +1948,8 @@ impl Emitter<'_> {
         let has = self.fresh();
         let take = self.fresh_label();
         let cont = self.fresh_label();
+        // Counted before the join, while the list still says how many it holds (N54).
+        let _ = writeln!(self.out, "  call void @nz.sched_note_join(ptr %{tids})");
         let _ = writeln!(
             self.out,
             "  %{r} = call {{ ptr, i64 }} @nz.scope_join(ptr %{tids})"
@@ -2120,6 +2124,8 @@ impl Emitter<'_> {
             },
             span,
         );
+        // Started (N54): every path that did not start one has failed by here.
+        let _ = writeln!(self.out, "  call void @nz.sched_note_spawn()");
     }
 
     /// The `void *(void *)` function a thread actually starts in.
@@ -2448,8 +2454,71 @@ impl Emitter<'_> {
                     ty: Ty::Bool,
                 }
             }
+            Builtin::ChanSelectOf | Builtin::ChanSelectUntil => {
+                // N54: the runtime copies at most one slot out; its reference moves onto `out`.
+                let (ms, timed) = if op == Builtin::ChanSelectUntil {
+                    (format!("%{}", arg(2)), 1)
+                } else {
+                    ("0".to_owned(), 0)
+                };
+                let r = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{r} = call i64 @nz.chanv_select(ptr %{}, ptr {slot}, i64 {ms}, i64 {timed})",
+                    arg(0)
+                );
+                let oom = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{oom} = icmp eq i64 %{r}, -9223372036854775808"
+                );
+                self.guard(
+                    oom,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span,
+                );
+                let took = self.fresh();
+                let take = self.fresh_label();
+                let cont = self.fresh_label();
+                let _ = writeln!(self.out, "  %{took} = icmp sge i64 %{r}, 0");
+                let _ = writeln!(self.out, "  br i1 %{took}, label %b{take}, label %b{cont}");
+                self.open(&format!("b{take}"));
+                let v = self.fresh();
+                let _ = writeln!(self.out, "  %{v} = load {lt}, ptr {slot}");
+                let vec =
+                    self.program
+                        .types
+                        .vec_of(elem)
+                        .map_or(VecTy(u32::MAX), |vt| match Ty::of(vt) {
+                            Ty::Vec(v) => v,
+                            _ => VecTy(u32::MAX),
+                        });
+                // Moved, as a receive moves it: the push's reference replaces the slot's.
+                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);
+                self.release(v, t);
+                let _ = writeln!(self.out, "  br label %b{cont}");
+                self.open(&format!("b{cont}"));
+                // `-3 - i` is channel `i`, closed and drained: the program sees `i`.
+                let shut = self.fresh();
+                let index = self.fresh();
+                let result = self.fresh();
+                let _ = writeln!(self.out, "  %{shut} = icmp sle i64 %{r}, -3");
+                let _ = writeln!(self.out, "  %{index} = sub i64 -3, %{r}");
+                let _ = writeln!(
+                    self.out,
+                    "  %{result} = select i1 %{shut}, i64 %{index}, i64 %{r}"
+                );
+                Val::Of {
+                    value: result,
+                    ty: Ty::Int,
+                }
+            }
             Builtin::ChanCloseOf => {
-                let _ = writeln!(self.out, "  call void @nz.chan_close(ptr %{})", arg(0));
+                // Through the generic close, which also wakes a select (N54).
+                let _ = writeln!(self.out, "  call void @nz.chanv_close(ptr %{})", arg(0));
                 let zero = self.fresh();
                 let _ = writeln!(self.out, "  %{zero} = add i64 0, 0");
                 Val::Of {
@@ -3176,9 +3245,21 @@ impl Emitter<'_> {
             | Builtin::ChanNewOf
             | Builtin::ChanSendOf
             | Builtin::ChanRecvOf
-            | Builtin::ChanCloseOf => {
+            | Builtin::ChanCloseOf
+            | Builtin::ChanSelectOf
+            | Builtin::ChanSelectUntil => {
                 let _ = writeln!(self.out, "  unreachable");
                 return Val::Transferred;
+            }
+            // A clock read (N54); its authority was the checker's.
+            Builtin::TimeNowMs => {
+                self.needs_channels = true;
+                let t = self.fresh();
+                let _ = writeln!(self.out, "  %{t} = call i64 @nz.time_now_ms()");
+                return Val::Of {
+                    value: t,
+                    ty: Ty::Int,
+                };
             }
             Builtin::IntToStr => {
                 // 20 digits is the widest `Int` (`-9223372036854775808`), plus the NUL
@@ -3608,7 +3689,11 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
             if let mir::StatementKind::Assign {
                 value:
                     mir::Rvalue::Primitive {
-                        op: Builtin::ChanSendOf | Builtin::ChanRecvOf,
+                        op:
+                            Builtin::ChanSendOf
+                            | Builtin::ChanRecvOf
+                            | Builtin::ChanSelectOf
+                            | Builtin::ChanSelectUntil,
                         elem: Some(t),
                         ..
                     },

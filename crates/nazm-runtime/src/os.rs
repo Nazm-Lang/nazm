@@ -55,6 +55,8 @@ pub fn declarations(out: &mut String) {
         "declare i32 @pthread_attr_init(ptr)",
         "declare i32 @pthread_attr_setstacksize(ptr, i64)",
         "declare i32 @pthread_attr_destroy(ptr)",
+        "declare i32 @pthread_cond_timedwait(ptr, ptr, ptr)",
+        "declare i32 @clock_gettime(i32, ptr)",
     ] {
         let _ = writeln!(out, "{d}");
     }

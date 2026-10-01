@@ -393,9 +393,63 @@ impl Fx<'_, '_, '_> {
                 self.b.switch_to_block(cont);
                 self.set(dst, bit);
             }
+            Intrinsic::ChanSelectOf | Intrinsic::ChanSelectUntil => {
+                // N54, as the LLVM backend has it: at most one slot copied out, its reference
+                // moved onto the vector; `-3 - i` is channel `i` closed and drained.
+                let t = element(op, elem);
+                self.g.needs.sequences = true;
+                let cs = arg(self, 0);
+                let h = arg(self, 1);
+                let (ms, timed) = if op == Intrinsic::ChanSelectUntil {
+                    (arg(self, 2), self.iconst(1))
+                } else {
+                    (self.iconst(0), self.iconst(0))
+                };
+                let slot = self.element_slot(t);
+                let r = self
+                    .rt("nz.chanv_select", &[cs, slot, ms, timed])
+                    .unwrap_or_else(|| self.iconst(-1));
+                let oom = self.b.ins().icmp_imm_s(IntCC::Equal, r, i64::MIN);
+                self.guard(oom, "N0406", "out of memory");
+                let took = self
+                    .b
+                    .ins()
+                    .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, r, 0);
+                let take = self.b.create_block();
+                let cont = self.b.create_block();
+                self.b.ins().brif(took, take, &[], cont, &[]);
+                self.b.switch_to_block(take);
+                let stride = self.iconst(i64::from(self.size(t)));
+                let data = self
+                    .rt("nz.arr_grow", &[h, stride])
+                    .unwrap_or_else(|| self.iconst(0));
+                let null = self.b.ins().icmp_imm_s(IntCC::Equal, data, 0);
+                self.guard(null, "N0406", "out of memory");
+                let len = self.b.ins().load(types::I64, mem(), h, 0);
+                let off = self.b.ins().imul(len, stride);
+                let at = self.b.ins().iadd(data, off);
+                let n = self.size(t);
+                self.copy(at, slot, n);
+                let grown = self.b.ins().iadd_imm_s(len, 1);
+                self.b.ins().store(mem(), grown, h, 0);
+                self.b.ins().jump(cont, &[]);
+                self.b.switch_to_block(cont);
+                let shut = self.b.ins().icmp_imm_s(IntCC::SignedLessThanOrEqual, r, -3);
+                let minus3 = self.iconst(-3);
+                let index = self.b.ins().isub(minus3, r);
+                let result = self.b.ins().select(shut, index, r);
+                self.set(dst, result);
+            }
+            Intrinsic::TimeNowMs => {
+                let t = self
+                    .rt("nz.time_now_ms", &[])
+                    .unwrap_or_else(|| self.iconst(0));
+                self.set(dst, t);
+            }
             Intrinsic::ChanCloseOf => {
                 let c = arg(self, 0);
-                self.rt("nz.chan_close", &[c]);
+                // The generic close, which also wakes a select (N54).
+                self.rt("nz.chanv_close", &[c]);
                 let z = self.iconst(0);
                 self.set(dst, z);
             }

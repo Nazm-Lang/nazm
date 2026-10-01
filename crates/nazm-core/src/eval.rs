@@ -256,7 +256,24 @@ impl Channel {
         state.queue.push_back(value);
         drop(state);
         self.changed.notify_all();
+        select_event();
         Some(true)
+    }
+
+    /// One look without waiting (N54): a value taken, the channel closed and drained, or
+    /// neither.
+    fn try_take(&self) -> Option<Ready> {
+        let mut state = self.state.lock().ok()?;
+        let ready = match state.queue.pop_front() {
+            Some(v) => Ready::Value(v),
+            None if state.closed => Ready::Closed,
+            None => Ready::Empty,
+        };
+        drop(state);
+        if matches!(ready, Ready::Value(_)) {
+            self.changed.notify_all();
+        }
+        Some(ready)
     }
 
     /// Take a value, or report that the channel is closed **and drained**. Values queued
@@ -280,7 +297,69 @@ impl Channel {
         state.closed = true;
         drop(state);
         self.changed.notify_all();
+        select_event();
         Some(())
+    }
+}
+
+/// What one look at a channel found (N54).
+enum Ready {
+    Value(Value),
+    Closed,
+    Empty,
+}
+
+/// The select event count (N54, §7.56): every send and close advances it, and a select waits
+/// only while it has not moved since the select last looked — under its own lock, so no
+/// wake-up between a look and a wait is lost. One for every channel: a select cannot wait on
+/// several condition variables.
+static SELECT_EVENTS: Mutex<u64> = Mutex::new(0);
+static SELECT_WOKEN: std::sync::Condvar = std::sync::Condvar::new();
+
+fn select_event() {
+    if let Ok(mut g) = SELECT_EVENTS.lock() {
+        *g = g.wrapping_add(1);
+    }
+    SELECT_WOKEN.notify_all();
+}
+
+/// What a select found: the lowest ready index, with the value it took if any; `-1` for no
+/// channels; `-2` when the deadline passed first.
+fn select(
+    chans: &[Arc<Channel>],
+    deadline: Option<std::time::Instant>,
+) -> Option<(i64, Option<Value>)> {
+    if chans.is_empty() {
+        return Some((-1, None));
+    }
+    SCHED_SELECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    loop {
+        let seen = *SELECT_EVENTS.lock().ok()?;
+        for (i, c) in chans.iter().enumerate() {
+            let at = i64::try_from(i).unwrap_or(i64::MAX);
+            match c.try_take()? {
+                Ready::Value(v) => return Some((at, Some(v))),
+                Ready::Closed => return Some((at, None)),
+                Ready::Empty => {}
+            }
+        }
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            SCHED_TIMEOUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Some((-2, None));
+        }
+        let mut g = SELECT_EVENTS.lock().ok()?;
+        while *g == seen {
+            match deadline {
+                Some(d) => {
+                    let now = std::time::Instant::now();
+                    if now >= d {
+                        break;
+                    }
+                    g = SELECT_WOKEN.wait_timeout(g, d - now).ok()?.0;
+                }
+                None => g = SELECT_WOKEN.wait(g).ok()?,
+            }
+        }
     }
 }
 
@@ -488,6 +567,32 @@ static CHANNELS_ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 static CHANNELS_RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CLOSURES_ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CLOSURES_RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SCHED_SPAWNED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SCHED_JOINED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SCHED_SELECTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SCHED_TIMEOUTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// What the scheduler did (N54): tasks started and joined, selects, and selects that timed
+/// out. The same four counts a compiled program reports under `NAZM_SCHED_REPORT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchedCounts {
+    pub spawned: u64,
+    pub joined: u64,
+    pub selects: u64,
+    pub timeouts: u64,
+}
+
+/// This process's scheduler counts.
+#[must_use]
+pub fn sched_counts() -> SchedCounts {
+    let n = |c: &std::sync::atomic::AtomicU64| c.load(std::sync::atomic::Ordering::Relaxed);
+    SchedCounts {
+        spawned: n(&SCHED_SPAWNED),
+        joined: n(&SCHED_JOINED),
+        selects: n(&SCHED_SELECTS),
+        timeouts: n(&SCHED_TIMEOUTS),
+    }
+}
 
 /// What one class of storage did: created, reclaimed.
 ///
@@ -1367,6 +1472,45 @@ impl Interpreter {
                     None => Ok(Value::Bool(false)),
                 }
             }
+            // N54: the lowest ready channel's value moved onto `out`, or its index alone.
+            (Intrinsic::ChanSelectOf, [Value::Vec(cs), Value::Vec(out)])
+            | (Intrinsic::ChanSelectUntil, [Value::Vec(cs), Value::Vec(out), Value::Int(_)]) => {
+                let deadline = match args {
+                    [_, _, Value::Int(ms)] => Some(
+                        std::time::Instant::now()
+                            + std::time::Duration::from_millis(u64::try_from(*ms).unwrap_or(0)),
+                    ),
+                    _ => None,
+                };
+                let chans: Vec<Arc<Channel>> = {
+                    let Some(cs) = seq(cs) else {
+                        return Err(bug("a vector that could not be read"));
+                    };
+                    cs.iter()
+                        .filter_map(|v| match v {
+                            Value::Chan(c) => Some(Arc::clone(c)),
+                            _ => None,
+                        })
+                        .collect()
+                };
+                let Some((at, taken)) = select(&chans, deadline) else {
+                    return Err(bug("a channel that could not be locked"));
+                };
+                if let Some(v) = taken {
+                    let Some(mut out) = seq(out) else {
+                        return Err(bug("a vector that could not be written"));
+                    };
+                    out.push(v);
+                }
+                Ok(Value::Int(at))
+            }
+            (Intrinsic::TimeNowMs, []) => {
+                static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+                let base = BASE.get_or_init(std::time::Instant::now);
+                Ok(Value::Int(
+                    i64::try_from(base.elapsed().as_millis()).unwrap_or(i64::MAX),
+                ))
+            }
             (Intrinsic::ChanClose | Intrinsic::ChanCloseOf, [Value::Chan(c)]) => {
                 c.close().map_or_else(
                     || Err(bug("a channel that could not be locked")),
@@ -1607,6 +1751,9 @@ impl Interpreter {
                 };
                 task.call_body(f, frame(f, args)).map(|_| ())
             })
+            .inspect(|_| {
+                SCHED_SPAWNED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            })
             .map_err(|e| RuntimeError {
                 diagnostic: Box::new(
                     Diagnostic::error(
@@ -1632,6 +1779,10 @@ impl Interpreter {
     /// promises — tasks do not have private failure modes. The first failure is reported
     /// and the rest are treated as consequences of it.
     fn join_all(tasks: Vec<JoinHandle<Result<(), RuntimeError>>>) -> Result<(), RuntimeError> {
+        SCHED_JOINED.fetch_add(
+            u64::try_from(tasks.len()).unwrap_or(u64::MAX),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let mut first: Option<RuntimeError> = None;
         for handle in tasks {
             let outcome = match handle.join() {

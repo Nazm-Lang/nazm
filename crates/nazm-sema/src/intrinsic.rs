@@ -44,6 +44,8 @@ pub enum Shape {
     VecT,
     /// `Chan[T]` (N53).
     ChanT,
+    /// `Vec[Chan[T]]`: the channels a select waits on (N54).
+    ChansT,
 }
 
 impl Shape {
@@ -57,7 +59,7 @@ impl Shape {
             Self::Ints => Some(Type::Ints),
             Self::Strs => Some(Type::Strs),
             Self::Chan => Some(Type::Chan),
-            Self::T | Self::VecT | Self::ChanT => None,
+            Self::T | Self::VecT | Self::ChanT | Self::ChansT => None,
         }
     }
 
@@ -74,6 +76,7 @@ impl Shape {
             Self::T => "T",
             Self::VecT => "Vec[T]",
             Self::ChanT => "Chan[T]",
+            Self::ChansT => "Vec[Chan[T]]",
         }
     }
 }
@@ -175,6 +178,15 @@ pub enum Intrinsic {
     ChanRecvOf,
     /// `chan_close_of[T](c: Chan[T]) -> Int` — `chan_close` for a `Chan[T]`.
     ChanCloseOf,
+    /// `chan_select_of[T](cs: Vec[Chan[T]], out: Vec[T]) -> Int` (N54) — waits for the
+    /// lowest-indexed ready channel: a value moved onto `out`, or a closed and drained one
+    /// giving nothing. `-1` for no channels.
+    ChanSelectOf,
+    /// `chan_select_until[T](cs: Vec[Chan[T]], out: Vec[T], ms: Int) -> Int` (N54) —
+    /// `chan_select_of`, or `-2` once at least `ms` milliseconds pass. Needs a `TimeCap`.
+    ChanSelectUntil,
+    /// `time_now_ms() -> Int` (N54) — a monotonic clock in milliseconds. Needs a `TimeCap`.
+    TimeNowMs,
 
     // --- the outside world -------------------------------------------------------
     //
@@ -231,7 +243,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 45] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -260,6 +272,9 @@ impl Intrinsic {
         Self::ChanSendOf,
         Self::ChanRecvOf,
         Self::ChanCloseOf,
+        Self::ChanSelectOf,
+        Self::ChanSelectUntil,
+        Self::TimeNowMs,
         Self::ArgsCount,
         Self::Arg,
         Self::ReadFile,
@@ -321,6 +336,9 @@ impl Intrinsic {
             Self::ChanSendOf => "chan_send_of",
             Self::ChanRecvOf => "chan_recv_of",
             Self::ChanCloseOf => "chan_close_of",
+            Self::ChanSelectOf => "chan_select_of",
+            Self::ChanSelectUntil => "chan_select_until",
+            Self::TimeNowMs => "time_now_ms",
         }
     }
 
@@ -338,7 +356,9 @@ impl Intrinsic {
             | Self::ChanNewOf
             | Self::ChanSendOf
             | Self::ChanRecvOf
-            | Self::ChanCloseOf => 1,
+            | Self::ChanCloseOf
+            | Self::ChanSelectOf
+            | Self::ChanSelectUntil => 1,
             _ => 0,
         }
     }
@@ -378,6 +398,9 @@ impl Intrinsic {
             Self::ChanSendOf => &[Shape::ChanT, Shape::T],
             Self::ChanRecvOf => &[Shape::ChanT, Shape::VecT],
             Self::ChanCloseOf => &[Shape::ChanT],
+            Self::ChanSelectOf => &[Shape::ChansT, Shape::VecT],
+            Self::ChanSelectUntil => &[Shape::ChansT, Shape::VecT, Shape::Int],
+            Self::TimeNowMs => &[],
         }
     }
 
@@ -414,7 +437,9 @@ impl Intrinsic {
             Self::VecGet | Self::VecPop => Shape::T,
             Self::ChanNewOf => Shape::ChanT,
             Self::ChanSendOf | Self::ChanRecvOf => Shape::Bool,
-            Self::ChanCloseOf => Shape::Int,
+            Self::ChanCloseOf | Self::ChanSelectOf | Self::ChanSelectUntil | Self::TimeNowMs => {
+                Shape::Int
+            }
         }
     }
 

@@ -7570,11 +7570,12 @@ killers = [{ package = "nazm-service", test = "context", name = "a_functions_pac
 
 [[mutation]]
 name = "n36-the-witness-points-at-the-function"
-why = "the reason an effect was added is the caller's name rather than the call, so the witness points away from what requires it"
+why = """the reason an effect was added is the caller's name rather than the call, so the witness points away from what requires it
+Repointed by N54: N50 gave the effect graph's node its own name span, so `node.f.name_span` no longer compiled and the mutant was UNUSABLE in N50's gate."""
 file = "crates/nazm-core/src/effects.rs"
 find = """                                at,
                                 source: EffectSource::Inferred(callee),"""
-replace = """                                at: node.f.name_span,
+replace = """                                at: node.name_span,
                                 source: EffectSource::Inferred(callee),"""
 killers = [{ package = "nazm-core", test = "effects", name = "a_purity_assertion_fails_through_every_level_and_names_a_shortest_witness" }]
 
@@ -8045,10 +8046,11 @@ Repointed by N49, which moved it to 12 for string escapes: an entry that read a 
 Repointed by N50, which moved it to 13 for function values: an entry that refused a function named as a value must not be reused.
 Repointed by N51, which moved it to 14 for effect parameters: an entry that refused a captured capability must not be reused.
 Repointed by N52, which moved it to 15 for declassification: an entry that accepted a function named str_vouch must not be reused.
-Repointed by N53, which moved it to 16 for generic channels: an entry that refused `Chan[Str]` must not be reused."""
+Repointed by N53, which moved it to 16 for generic channels: an entry that refused `Chan[Str]` must not be reused.
+Repointed by N54, which moved it to 17 for select and the clock: an entry that accepted a function named time_now_ms must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 16;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 15;"
+find = "pub const SEMANTIC_EPOCH: u32 = 17;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 16;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10026,10 +10028,11 @@ killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs
 
 [[mutation]]
 name = "n52-an-undeclared-function-vouches-without-authority"
-why = "code that declares no effects vouches with no VouchCap, so declassification is ambient"
+why = """code that declares no effects vouches with no VouchCap, so declassification is ambient
+Repointed by N54, which made the check one for every authority held apart from an effect (a vouch's and a clock's)."""
 file = "crates/nazm-core/src/effects.rs"
-find = "                && !site.held.contains(CapabilityKind::Vouch)"
-replace = "                && false"
+find = "            if !site.held.contains(kind) {"
+replace = "            if false && !site.held.contains(kind) {"
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs_its_authority_everywhere_and_is_recorded" }]
 
 [[mutation]]
@@ -10200,9 +10203,11 @@ name = "n53-the-llvm-receive-copies"
 why = "the LLVM receive pushes the value and keeps the reference it was handed, so every received string leaks"
 file = "crates/nazm-lir/src/emit.rs"
 find = """
+                // is given back: the value has moved, not been copied.
                 let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);
                 self.release(v, t);"""
 replace = """
+                // is given back: the value has moved, not been copied.
                 let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);"""
 killers = [{ package = "nazm-cli", test = "generic_channels", name = "records_and_strings_cross_tasks_through_typed_channels_everywhere" }]
 
@@ -10266,8 +10271,174 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::the_run
 
 [[mutation]]
 name = "n53-the-runtime-abi-stays"
-why = "the generic channel runtime ships under N50's revision, so an object built before it is reused"
+why = """the generic channel runtime ships under N50's revision, so an object built before it is reused
+Repointed by N54, which moved the revision to 6 for select: an object built against N53's runtime must not be reused."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = "pub const RUNTIME_ABI_REVISION: u32 = 5;"
-replace = "pub const RUNTIME_ABI_REVISION: u32 = 4;"
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_five_and_its_digest_covers_generic_channels" }]
+find = "pub const RUNTIME_ABI_REVISION: u32 = 6;"
+replace = "pub const RUNTIME_ABI_REVISION: u32 = 5;"
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_six_and_its_digest_covers_select" }]
+
+
+# --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
+
+[[mutation]]
+name = "n54-a-closed-channel-is-not-ready"
+why = "a select skips a closed and drained channel, so closing never cancels a waiting task"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  br i1 %drained, label %ended, label %onward"
+replace = "  br i1 false, label %ended, label %onward"
+killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
+
+[[mutation]]
+name = "n54-a-send-wakes-no-select"
+why = "a typed send advances nothing a select waits on, so a waiting select sleeps through it"
+file = "crates/nazm-runtime/src/core.rs"
+find = """
+  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  call void @nz.sel_signal()
+  ret i1 true"""
+replace = """
+  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 true"""
+killers = [{ package = "nazm-cli", test = "select", name = "a_waiting_select_is_woken_by_another_task_s_send" }]
+
+[[mutation]]
+name = "n54-a-waiter-is-never-woken"
+why = "the event count moves but nobody waiting is told, so a select waits forever"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  br i1 %any, label %wake, label %quiet"
+replace = "  br i1 false, label %wake, label %quiet"
+killers = [{ package = "nazm-cli", test = "select", name = "closing_a_channel_cancels_a_task_waiting_in_select" }]
+
+[[mutation]]
+name = "n54-a-deadline-never-passes"
+why = "a select with a deadline waits as one without"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  br i1 %past, label %timeout, label %wait"
+replace = "  br i1 false, label %timeout, label %wait"
+killers = [{ package = "nazm-cli", test = "select", name = "a_deadline_is_a_lower_bound_and_a_zero_one_only_looks" }]
+
+[[mutation]]
+name = "n54-a-deadline-is-now"
+why = "every deadline is zero milliseconds away, so a select times out before it waited"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %wait_ms = select i1 %pos, i64 %ms, i64 0"
+replace = "  %wait_ms = select i1 false, i64 %ms, i64 0"
+killers = [{ package = "nazm-cli", test = "select", name = "a_deadline_is_a_lower_bound_and_a_zero_one_only_looks" }]
+
+[[mutation]]
+name = "n54-the-llvm-select-keeps-the-slot-s-reference"
+why = "the LLVM select pushes the value and keeps the reference the runtime handed over, so a selected string leaks"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+                // Moved, as a receive moves it: the push's reference replaces the slot's.
+                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);
+                self.release(v, t);"""
+replace = """
+                // Moved, as a receive moves it: the push's reference replaces the slot's.
+                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);"""
+killers = [{ package = "nazm-cli", test = "select", name = "a_value_select_did_not_choose_stays_queued_and_is_released_once" }]
+
+[[mutation]]
+name = "n54-the-llvm-closed-index-is-not-decoded"
+why = "the LLVM select hands the program the runtime's `-3 - i` for a closed channel"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+                    "  %{result} = select i1 %{shut}, i64 %{index}, i64 %{r}\""""
+replace = """
+                    "  %{result} = select i1 false, i64 %{index}, i64 %{r}\""""
+killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
+
+[[mutation]]
+name = "n54-the-cranelift-closed-index-is-not-decoded"
+why = "the Cranelift select hands the program the runtime's `-3 - i` for a closed channel"
+file = "crates/nazm-codegen-clif/src/prims.rs"
+find = "                let result = self.b.ins().select(shut, index, r);"
+replace = "                let result = self.b.ins().select(shut, r, r);"
+killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
+
+[[mutation]]
+name = "n54-the-cranelift-select-copies-nothing"
+why = "the Cranelift select grows the vector without copying the selected value into it"
+file = "crates/nazm-codegen-clif/src/prims.rs"
+find = """
+                self.copy(at, slot, n);
+                let grown = self.b.ins().iadd_imm_s(len, 1);
+                self.b.ins().store(mem(), grown, h, 0);
+                self.b.ins().jump(cont, &[]);
+                self.b.switch_to_block(cont);
+                let shut = self"""
+replace = """
+                let grown = self.b.ins().iadd_imm_s(len, 1);
+                self.b.ins().store(mem(), grown, h, 0);
+                self.b.ins().jump(cont, &[]);
+                self.b.switch_to_block(cont);
+                let shut = self"""
+killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
+
+[[mutation]]
+name = "n54-the-interpreter-takes-the-last-ready"
+why = "the interpreter's select breaks ties by highest index, so it disagrees with the native one"
+file = "crates/nazm-core/src/eval.rs"
+find = "        for (i, c) in chans.iter().enumerate() {"
+replace = "        for (i, c) in chans.iter().enumerate().rev() {"
+killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
+
+[[mutation]]
+name = "n54-a-clock-needs-no-authority"
+why = "a clock read needs no TimeCap, so time is ambient"
+file = "crates/nazm-sema/src/capability.rs"
+find = "            Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => Some(Self::Time),"
+replace = "            Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => None,"
+killers = [{ package = "nazm-cli", test = "select", name = "a_clock_needs_a_time_cap_held_where_it_is_read" }]
+
+[[mutation]]
+name = "n54-critical-admits-a-clock"
+why = "the critical profile forgets its no-ambient-time rule"
+file = "crates/nazm-service/src/profile.rs"
+find = """
+                Rule::NoDeclassification,
+                Rule::NoAmbientTime,
+            ],"""
+replace = """
+                Rule::NoDeclassification,
+            ],"""
+killers = [{ package = "nazm-cli", test = "select", name = "critical_refuses_a_clock" }]
+
+[[mutation]]
+name = "n54-the-llvm-spawn-is-not-counted"
+why = "an LLVM program reports no task started, disagreeing with the interpreter"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+        let _ = writeln!(self.out, "  call void @nz.sched_note_spawn()");"""
+replace = ""
+killers = [{ package = "nazm-cli", test = "select", name = "the_scheduler_s_counters_agree_everywhere" }]
+
+[[mutation]]
+name = "n54-the-cranelift-join-is-not-counted"
+why = "a Cranelift program reports no task joined"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """
+                self.rt("nz.sched_note_join", &[t]);"""
+replace = ""
+killers = [{ package = "nazm-cli", test = "select", name = "the_scheduler_s_counters_agree_everywhere" }]
+
+[[mutation]]
+name = "n54-the-interpreter-counts-no-timeout"
+why = "the interpreter's select times out without counting it"
+file = "crates/nazm-core/src/eval.rs"
+find = """
+            SCHED_TIMEOUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);"""
+replace = ""
+killers = [{ package = "nazm-cli", test = "select", name = "the_scheduler_s_counters_agree_everywhere" }]
+
+[[mutation]]
+name = "n54-a-select-is-not-a-blocking-site"
+why = "`explain-cost` does not say a select may wait"
+file = "crates/nazm-mir/src/cost.rs"
+find = """
+                        | Intrinsic::ChanRecvOf
+                        | Intrinsic::ChanSelectOf"""
+replace = """
+                        | Intrinsic::ChanRecvOf"""
+killers = [{ package = "nazm-cli", test = "select", name = "a_select_s_operations_are_resource_sites" }]

@@ -154,6 +154,8 @@ fn statement(
                         | Intrinsic::ChanSendOf
                         | Intrinsic::ChanRecvOf
                         | Intrinsic::ChanCloseOf
+                        | Intrinsic::ChanSelectOf
+                        | Intrinsic::ChanSelectUntil
                 ) {
                     push(SiteKind::Channel, op.name());
                 }
@@ -163,6 +165,8 @@ fn statement(
                         | Intrinsic::ChanRecv
                         | Intrinsic::ChanSendOf
                         | Intrinsic::ChanRecvOf
+                        | Intrinsic::ChanSelectOf
+                        | Intrinsic::ChanSelectUntil
                 ) {
                     push(SiteKind::Block, op.name());
                 }
@@ -208,6 +212,8 @@ const fn allocates(op: Intrinsic) -> bool {
             | Intrinsic::StrsPush
             | Intrinsic::VecPush
             | Intrinsic::ChanRecvOf
+            | Intrinsic::ChanSelectOf
+            | Intrinsic::ChanSelectUntil
     )
 }
 
