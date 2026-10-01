@@ -9,7 +9,7 @@
 
 use std::fmt::Write as _;
 
-use nazm_core::sema::{Effect, EffectSource, FnId, ModuleGraph, Resolution};
+use nazm_core::sema::{Effect, EffectSource, FnId, ModuleGraph, Resolution, SinkClass};
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::{SourceMap, Span};
 
@@ -27,16 +27,26 @@ pub enum Rule {
     NoForeign,
     /// The build is a package build held to its lockfile (`--locked`, N46).
     LockedBuild,
+    /// No allocation site whose count per call is unknown (N52): what an embedded program
+    /// allocates is bounded by its call structure.
+    BoundedAllocation,
+    /// No file contents, and nothing of unknown origin, reach standard output or error (N52).
+    ContentsStayInFiles,
+    /// No declassification: no `str_vouch` anywhere (N52).
+    NoDeclassification,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 8] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
         Self::NoForeign,
         Self::LockedBuild,
+        Self::BoundedAllocation,
+        Self::ContentsStayInFiles,
+        Self::NoDeclassification,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -48,6 +58,9 @@ impl Rule {
             Self::NoSpawn => "no-spawn",
             Self::NoForeign => "no-foreign",
             Self::LockedBuild => "locked-build",
+            Self::BoundedAllocation => "bounded-allocation",
+            Self::ContentsStayInFiles => "contents-stay-in-files",
+            Self::NoDeclassification => "no-declassification",
         }
     }
 
@@ -57,7 +70,11 @@ impl Rule {
             Self::NoIo => Some(Effect::Io),
             Self::NoSpawn => Some(Effect::Spawn),
             Self::NoForeign => Some(Effect::Foreign),
-            Self::DeclaredEffects | Self::LockedBuild => None,
+            Self::DeclaredEffects
+            | Self::LockedBuild
+            | Self::BoundedAllocation
+            | Self::ContentsStayInFiles
+            | Self::NoDeclassification => None,
         }
     }
 }
@@ -94,14 +111,20 @@ impl Profile {
     pub const fn rules(self) -> &'static [Rule] {
         match self {
             Self::General => &[],
-            Self::Embedded => &[Rule::NoIo, Rule::NoSpawn],
+            Self::Embedded => &[Rule::NoIo, Rule::NoSpawn, Rule::BoundedAllocation],
             Self::Critical => &[
                 Rule::DeclaredEffects,
                 Rule::NoSpawn,
                 Rule::NoForeign,
                 Rule::LockedBuild,
+                Rule::NoDeclassification,
             ],
-            Self::Cyber => &[Rule::DeclaredEffects, Rule::NoForeign, Rule::LockedBuild],
+            Self::Cyber => &[
+                Rule::DeclaredEffects,
+                Rule::NoForeign,
+                Rule::LockedBuild,
+                Rule::ContentsStayInFiles,
+            ],
         }
     }
 }
@@ -217,12 +240,17 @@ fn chain(res: &Resolution, main: FnId, effect: Effect) -> Vec<Witness> {
 
 /// Evaluate `profiles` over a checked program. `locked` is whether this build is a package
 /// build whose lockfile was verified.
+///
+/// `unbounded` is every allocation site whose count per call is unknown, read off MIR by the
+/// caller (N52); `None` where it was not computed, which a rule needing it fails on rather than
+/// passing vacuously.
 #[must_use]
 pub fn evaluate(
     profiles: &[Profile],
     graph: &ModuleGraph,
     res: &Resolution,
     locked: bool,
+    unbounded: Option<&[Witness]>,
 ) -> Evaluation {
     let mut profiles: Vec<Profile> = profiles.to_vec();
     profiles.sort_unstable();
@@ -255,6 +283,44 @@ pub fn evaluate(
                     }
                     _ => Vec::new(),
                 }
+            } else if rule == Rule::BoundedAllocation {
+                unbounded.map_or_else(
+                    || {
+                        vec![Witness {
+                            span: main
+                                .and_then(|m| res.function(m))
+                                .map_or(Span::synthetic(), |f| f.name_span),
+                            note: "the program's resource facts were not computed".to_owned(),
+                        }]
+                    },
+                    <[Witness]>::to_vec,
+                )
+            } else if rule == Rule::ContentsStayInFiles {
+                let restricted = nazm_core::sema::OriginSet::RESTRICTED;
+                res.sinks()
+                    .iter()
+                    .filter(|s| s.class == SinkClass::Output)
+                    .filter_map(|s| {
+                        let o = s.origins.intersection(restricted).iter().next()?;
+                        Some(Witness {
+                            span: s.at,
+                            note: format!("this writes to standard output what {}", o.describe()),
+                        })
+                    })
+                    .collect()
+            } else if rule == Rule::NoDeclassification {
+                res.sinks()
+                    .iter()
+                    .filter(|s| s.class == SinkClass::Vouch)
+                    .map(|s| Witness {
+                        span: s.at,
+                        note: if s.origins.is_empty() {
+                            "a vouch, clearing nothing".to_owned()
+                        } else {
+                            format!("a vouch, clearing {}", s.origins.names().join(", "))
+                        },
+                    })
+                    .collect()
             } else if rule == Rule::DeclaredEffects {
                 res.functions()
                     .iter()
@@ -324,6 +390,9 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::NoIo | Rule::NoSpawn | Rule::NoForeign => {
                     "the chain shows where the effect enters; a profile refuses, it never rewrites".to_owned()
                 }
+                Rule::BoundedAllocation => "each site allocates inside a loop, a number of times the compiler does not know; allocate before the loop, or reuse what was allocated (`nazm explain-cost` lists every site)".to_owned(),
+                Rule::ContentsStayInFiles => "a file's contents may be written to a file, never shown; `nazm explain-flow` lists every sink and what reaches it".to_owned(),
+                Rule::NoDeclassification => "this profile admits no declassification: the value keeps its origin".to_owned(),
             })
         })
         .collect()

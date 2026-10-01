@@ -488,6 +488,12 @@ blocks as values in the native backends.*
 
 ### 4. Memory model and reclamation — VERIFIED for the current type universe
 
+**N52 (2026-10-02)** · resource sites are facts: `nazm explain-cost` (`nazm.cost/1`) lists each
+function's allocation, retain, block, channel, foreign and task sites from MIR with a count per
+call — `at-most-once`, or `unknown` inside a loop, never a number the compiler does not know
+(`explain_cost_reports_each_site_with_a_count_per_call`). Not a byte count and not a measurement.
+
+
 **N50 (2026-10-02)** · a function value is a counted closure object; what it captured is released
 when its last reference goes, on a normal exit, a `return`, a loop's next iteration and a failure
 inside the closure's own code (`a_failure_inside_a_closure_reclaims_its_captures_and_its_callers`,
@@ -836,6 +842,17 @@ a compile error with a span — met for every function that declares its effects
 ambient one, which is the bridge above.
 
 ### 7. Provenance and information flow, as a language feature — PARTIAL
+
+**N52 (2026-10-02)** · a sink registry (`SinkClass`: `path`, `output`, `file-data`, and `vouch`
+for the evidence of a declassification), each solved through helpers' parameters, closures and
+modules with the origins that reach it (`every_sink_class_is_solved_through_helpers_closures_and_containers`);
+`nazm explain-flow` prints them as `nazm.flow/1`. Declassification is `str_vouch` under a
+`VouchCap` held anywhere, recorded with the origins it cleared
+(`a_vouch_needs_its_authority_everywhere_and_is_recorded`). Profiles: `cyber`'s
+`contents-stay-in-files`, `critical`'s `no-declassification`. Containers remain whole-container
+conservative, stated. A 2,000-function chain solves deterministically within a deadline
+(`a_long_call_chain_is_solved_deterministically_and_in_bounded_time`).
+
 
 **N50 (2026-10-02)** · a closure's body is reduced to flows as a function of its own; its
 parameters are of unknown origin, its captures carry what the captured binding carried (unknown
@@ -1384,8 +1401,11 @@ wrapper, a locked package build satisfying the build rule and a tampered one not
 required profile holding the whole program, a profile never changing what runs nor its verdict
 being cached, and the report's bytes and outcome. `embedded` refuses `io` and `spawn` —
 no operating-system services, no scheduler — and allows `foreign`, the way hardware is reached.
-It does **not** restrict allocation (untracked: BLOCKED) or bound the stack, and there is still
-no freestanding target, so a program it accepts still links the host's C library.
+It does **not** bound the stack, and there is still no freestanding target, so a program it
+accepts still links the host's C library. *N52, 2026-10-02:* allocation is no longer untracked —
+`embedded` gains `bounded-allocation`, refusing an allocation site whose count per call is
+`unknown` (inside a loop), read off MIR by `nazm_mir::cost`; a per-byte bound is not claimed
+(`profiles_read_resource_and_flow_facts`).
 
 **Next dependency** · Cross-compilation (area 33), then a freestanding runtime — which
 means area 13. *This clause added "and therefore area 4" with the sentence "A language that

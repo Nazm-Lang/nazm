@@ -2433,6 +2433,15 @@ impl Emitter<'_> {
         let arg = |i: usize| vals.get(i).copied().unwrap_or_default();
 
         let value = match op {
+            // Declassification changes provenance, which is the checker's, and nothing at run
+            // time (N52): the result is the argument, as a reference of its own.
+            Builtin::StrVouch => {
+                self.retain(arg(0), Ty::Str);
+                return Val::Of {
+                    value: arg(0),
+                    ty: Ty::Str,
+                };
+            }
             Builtin::StrLen => {
                 let (_, len) = self.str_parts(arg(0));
                 return Val::Of {

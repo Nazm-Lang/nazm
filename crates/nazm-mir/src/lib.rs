@@ -23,6 +23,7 @@
 //! with ownership and failure explicit — and not an SSA form: locals are mutable, and there are
 //! no phi nodes, because nothing that reads MIR needs them.
 
+pub mod cost;
 pub mod digest;
 pub mod instance;
 pub mod ir;

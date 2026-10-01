@@ -151,6 +151,8 @@ impl Origin {
             | Intrinsic::VecNew
             | Intrinsic::ChanNew
             | Intrinsic::ExitWith => BuiltinFlow::Fresh,
+            // Declassification (N52): no origin, and the clearing recorded.
+            Intrinsic::StrVouch => BuiltinFlow::Vouch,
         }
     }
 
@@ -178,6 +180,56 @@ pub enum BuiltinFlow {
     Fresh,
     /// Its arguments', joined — and its first argument, the path, is a restricted sink.
     WritePath,
+    /// No origin: its argument's are cleared, and the clearing is recorded (N52).
+    Vouch,
+}
+
+/// Where data leaves the program, by class (N52): the sink registry. A sink is an argument
+/// of a built-in; every one is reduced to flows and solved as N38's path sink is, and what a
+/// class may receive beyond the language's one restriction is a profile's policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SinkClass {
+    /// The path `write_file` writes to: the restricted sink (`N0372`).
+    Path,
+    /// What `print` and `eprint` write.
+    Output,
+    /// What `write_file` writes.
+    FileData,
+    /// Not a sink: where `str_vouch` cleared these origins, recorded beside the sinks so the
+    /// evidence of every declassification is in one place.
+    Vouch,
+}
+
+impl SinkClass {
+    pub const ALL: [Self; 4] = [Self::Path, Self::Output, Self::FileData, Self::Vouch];
+
+    /// How every persisted and printed form writes it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Path => "path",
+            Self::Output => "output",
+            Self::FileData => "file-data",
+            Self::Vouch => "vouch",
+        }
+    }
+
+    #[must_use]
+    pub fn by_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.name() == name)
+    }
+
+    /// The sinks a built-in's arguments are, by argument position. Exhaustive on purpose:
+    /// a built-in that takes data out of the program says so here.
+    #[must_use]
+    pub const fn of_intrinsic(i: Intrinsic) -> &'static [(usize, Self)] {
+        match i {
+            Intrinsic::WriteFile => &[(0, Self::Path), (1, Self::FileData)],
+            Intrinsic::Print | Intrinsic::EPrint => &[(0, Self::Output)],
+            Intrinsic::StrVouch => &[(0, Self::Vouch)],
+            _ => &[],
+        }
+    }
 }
 
 /// A set of origins, canonical by construction: a bit per id, iterated in id order.
@@ -350,8 +402,20 @@ pub struct CallFact {
 pub struct SinkFact {
     /// The built-in's name at the call.
     pub at: Span,
-    /// The path's flow.
+    /// The flow into the sink (the path, for a `path` sink).
     pub path: Flow,
+    /// Which sink (N52).
+    pub class: SinkClass,
+}
+
+/// A sink as solved (N52): which function, which class, where, and the origins that reach
+/// it. What profiles and `nazm explain-flow` read; never cached, like every solved fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SinkReport {
+    pub function: crate::resolve::FnId,
+    pub class: SinkClass,
+    pub at: Span,
+    pub origins: OriginSet,
 }
 
 /// One function's body, reduced to flows.

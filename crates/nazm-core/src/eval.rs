@@ -1507,6 +1507,8 @@ impl Interpreter {
                 let _ = std::io::stdout().flush();
                 std::process::exit(i32::try_from(*code).unwrap_or(1))
             }
+            // Declassification changes provenance and nothing at run time (N52).
+            (Intrinsic::StrVouch, [v @ Value::Str(_)]) => Ok(v.clone()),
             (Intrinsic::StrFromByte, [Value::Int(b)]) => {
                 let Ok(byte) = u8::try_from(*b) else {
                     return Err(out_of_bounds(

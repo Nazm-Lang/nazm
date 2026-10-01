@@ -45,11 +45,14 @@ pub enum CapabilityKind {
     Spawn,
     /// Authority to call a foreign (C) function: what the `foreign` effect exercises (N42).
     Foreign,
+    /// Authority to declassify (N52): what `str_vouch` needs. No effect is authorised by it —
+    /// clearing an origin does nothing outside the program.
+    Vouch,
 }
 
 impl CapabilityKind {
     /// Every kind, in id order.
-    pub const ALL: [Self; 3] = [Self::Io, Self::Spawn, Self::Foreign];
+    pub const ALL: [Self; 4] = [Self::Io, Self::Spawn, Self::Foreign, Self::Vouch];
 
     /// The kind's stable identity. Never reused and never reordered.
     #[must_use]
@@ -58,6 +61,7 @@ impl CapabilityKind {
             Self::Io => 0,
             Self::Spawn => 1,
             Self::Foreign => 2,
+            Self::Vouch => 3,
         }
     }
 
@@ -68,6 +72,7 @@ impl CapabilityKind {
             Self::Io => "IoCap",
             Self::Spawn => "SpawnCap",
             Self::Foreign => "ForeignCap",
+            Self::Vouch => "VouchCap",
         }
     }
 
@@ -112,6 +117,8 @@ impl CapabilityKind {
             | Intrinsic::Print
             | Intrinsic::EPrint
             | Intrinsic::ExitWith => CapabilitySet::of(Self::Io),
+            // Declassification is authority of its own (N52).
+            Intrinsic::StrVouch => CapabilitySet::of(Self::Vouch),
             Intrinsic::StrLen
             | Intrinsic::StrByte
             | Intrinsic::StrSlice
@@ -156,7 +163,7 @@ impl CapabilityKind {
     pub const fn article(self) -> &'static str {
         match self {
             Self::Io => "an",
-            Self::Spawn | Self::Foreign => "a",
+            Self::Spawn | Self::Foreign | Self::Vouch => "a",
         }
     }
 
@@ -253,10 +260,19 @@ mod tests {
 
     #[test]
     fn every_built_in_needs_exactly_the_authority_for_its_effect() {
-        // Two tables, one question each; for v1 they agree built-in by built-in.
+        // Two tables, one question each; they agree built-in by built-in, with one stated
+        // exception: declassification needs authority and performs no effect (N52).
         for i in Intrinsic::ALL {
             let from_effect =
                 Effect::of_intrinsic(i).map_or(CapabilitySet::EMPTY, CapabilityKind::for_effect);
+            if i == Intrinsic::StrVouch {
+                assert_eq!(from_effect, CapabilitySet::EMPTY);
+                assert_eq!(
+                    CapabilityKind::of_intrinsic(i),
+                    CapabilitySet::of(CapabilityKind::Vouch)
+                );
+                continue;
+            }
             assert_eq!(CapabilityKind::of_intrinsic(i), from_effect, "{}", i.name());
         }
         assert_eq!(
