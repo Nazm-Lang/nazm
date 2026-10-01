@@ -336,6 +336,36 @@ fn main() -> Int {
     assert_eq!(closures_made(&line), 8, "{line}");
 }
 
+#[test]
+fn a_returned_closure_keeps_what_it_captured_alive() {
+    // The maker's bindings go when it returns; the closure's own references keep the storage.
+    // Allocating after the maker returns would reuse storage a closure had not retained, so a
+    // closure that only borrowed reads someone else's value here.
+    let line = agrees(
+        r#"
+fn make(k: Int) -> fn(Int) -> Str {
+    let xs = ints_new();
+    ints_push(xs, k);
+    let tag = str_concat("tag-", int_to_str(k));
+    fn(i: Int) -> Str { str_concat(tag, int_to_str(ints_get(xs, i))) }
+}
+fn main() -> Int {
+    let g = make(5);
+    let ys = ints_new();
+    ints_push(ys, 99);
+    let other = str_concat("xxxx-", int_to_str(7));
+    let zs = ints_new();
+    ints_push(zs, 98);
+    print(g(0));
+    print(other);
+    ints_len(ys) + ints_len(zs) - 2
+}
+"#,
+        "tag-55xxxx-70",
+    );
+    assert_eq!(closures_made(&line), 1, "{line}");
+}
+
 // --- recursion through a value -----------------------------------------------------------
 
 #[test]
