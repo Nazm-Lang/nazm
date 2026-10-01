@@ -5073,7 +5073,7 @@ until they are joined, then unwinds — and it, not any task's, is the one repor
 thread keeps only its first failure and the parent's came first on its own thread. So a scope's result is a function of its tasks' outcomes, not
 of the order they happened to finish in.
 
-**Cancellation: none in v1.** There is no cancel operation, no cancellation on sibling failure,
+**Cancellation: none in v1** — amended by N54 (§7.56): cooperative cancellation by closing a channel a task selects on, and a select deadline; no cancellation on a sibling's failure still. In v1 there is no cancel operation, no cancellation on sibling failure,
 and no timeout. A blocked `chan_recv` waits until a value arrives or the channel is closed. This
 is a decision, not an omission to fill quietly: cooperative cancellation needs observation
 points in blocking operations, and both implementations would have to agree on every one of them.
@@ -5752,6 +5752,84 @@ report counts generic channels with the others.
 **Runtime representation.** A generic channel is a ring of fixed-size slots, the slot size and the
 element release function given at creation; send and receive copy one slot under the channel's
 lock. The `Int` channel keeps its own ring, so nothing about existing programs changes.
+
+## 7.56 Select, deadlines, cancellation and the scheduler's counters — N54, 2026-10-02
+
+Written before the code. §7.46 left five things out: a worker pool, cancellation, timeouts, select
+and any count of what the scheduler did. This section settles what N54 adds, and — as carefully —
+what it decides not to build yet and why.
+
+**The model stays one OS thread per task.** An M:N scheduler needs tasks that can be suspended off
+an OS thread: either a stack per task that a worker switches to (stackful), or compiled
+continuations (stackless: every function that may block becomes a state machine). Stackless is
+ruled out for Nazm: it colours every function that can reach a channel operation, doubles every
+backend's lowering, and breaks the debugger's frame model (§7.50). Stackful is the model a pool
+would use — a guarded `mmap`'d stack per task and a small per-target switch routine — and it is not
+built here, because three things the runtime already promises are thread-local and would silently
+break when a task migrated between workers: the first-failure slot (`nz.failed`, §7.45), the stack
+limit `nz.stack_check` budgets from (N49), and the C library's own per-thread state any foreign call
+(N42) may rely on. Each needs a task-local home first, and a foreign call that blocks needs a
+hand-off so it cannot pin a worker. Until then a fixed pool would deadlock correct programs (§7.46),
+so **bounded workers are DESIGNED, not implemented**: the stack model is chosen (stackful, guarded,
+per-target switch), its prerequisites are named, and nothing in the language below depends on it —
+every rule here holds unchanged under a pool.
+
+**Suspension points.** The operations that may wait are exactly: `chan_send`/`chan_send_of` on a full
+channel, `chan_recv`/`chan_recv_of` on an empty one, `chan_select_of`/`chan_select_until` with no
+channel ready, and a `scope`'s join. Nothing else waits. These are also the only places a future pool
+would park a task, and the only places cancellation is observed.
+
+**Select.** `chan_select_of(cs: Vec[Chan[T]], out: Vec[T]) -> Int` waits until some channel in `cs`
+is *ready* — it holds a value, or it is closed and drained — and returns the **lowest index** among
+the channels ready when it looks. A ready channel holding a value gives its oldest value, moved onto
+`out` as `chan_recv_of` moves it; a closed and drained one gives nothing, and `out` is unchanged.
+`-1` means `cs` is empty. Tie-breaking is deterministic — lowest index — but *which* channels are
+ready when select looks depends on how tasks were scheduled, so a select's result is classified
+**schedule-dependent**, as any receive from a channel two tasks send into already is. A closed channel
+is always ready: closing is a broadcast, which is what makes it a cancellation signal.
+
+**Deadlines.** `chan_select_until(cs, out, ms: Int) -> Int` is `chan_select_of` that gives
+up after `ms` milliseconds and returns `-2`; `ms <= 0` looks once and does not wait. Reading the clock
+is reading the host, so it needs authority: a new capability, **`TimeCap`**, held where it is written,
+in every function (as `VouchCap` is, N52). Like a vouch it performs no effect — reading a clock changes
+nothing outside the program, and N51 already says *pure* means *no effect*, not *referentially
+transparent* — so the authority is the one thing that gates it, and the thing a profile refuses.
+`time_now_ms() -> Int` reads a monotonic clock in milliseconds, a fresh `Int` with no origin. So a function that may time
+out says so in its signature, and a profile can refuse time outright: `critical` gains
+**`no-ambient-time`**, refusing any use of `TimeCap`, because a program whose behaviour depends on a
+clock is not reproducible. The interpreter and both native backends read the same host clock; a
+timeout is a lower bound — at least `ms` elapse before `-2` — never a promise of promptness.
+
+**Cancellation is cooperative and explicit.** A canceller closes a channel; every task selecting on it
+sees it ready and decides what to do. Cancellation is observed only at the suspension points above, and
+only by a task that looks — a task in a loop that never selects runs to completion. There is still no
+cancellation on a sibling's failure: N44's rule that a scope reports its first failure in start order
+and joins every task is kept unchanged, because cancelling siblings on failure would make which failure
+is reported depend on timing. Cleanup is unchanged too: a cancelled task returns like any other, its
+scope joins it, and everything it held is released on that path (§7.42).
+
+**Ownership.** Select moves at most one value, from one channel, onto `out`; nothing else changes hands.
+A value queued in a channel select did not choose stays queued. A timed-out select moves nothing.
+
+**Counters.** With `NAZM_SCHED_REPORT=1` a program writes one line to standard error at exit,
+`nazm-sched: spawned=… joined=… selects=… timeouts=…`: tasks started, tasks joined, select calls
+completed, and selects that timed out. They are counts of what happened, not samples; the interpreter
+and both native backends count the same events, and for a program whose selects cannot race they agree.
+`queued`, `running`, `suspended`, wake-ups and steals are counts only a pool has, and are not invented
+for a scheduler that has none.
+
+**Implementation.** Select over typed channels only (N53's `nz.chanv_*`), so the `Int` channel's runtime
+under the self-hosted compiler's parity gate is untouched. A select cannot wait on several condition
+variables, so every typed channel's state change also advances one runtime-wide *event count* and
+broadcasts its condition variable; a selector reads the count, scans the channels in index order under
+each one's lock, and waits only if the count has not moved since it read it — the classic event-count
+protocol, which cannot lose a wake-up. The cost is one extra lock per typed send, receive or close,
+measured below (`docs/performance.md`, N54). The counters live in the runtime (`nz.sched_*`), called by
+generated code after a task starts and before a scope joins.
+
+**Not here.** A worker pool, task migration, work stealing, cancellation on failure, `select` over send
+operations or over the `Int` channel, timers other than a select's deadline, async I/O, deadlock
+detection.
 
 ## 8. Toolchain, and one real incompatibility
 
