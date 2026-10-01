@@ -9654,7 +9654,7 @@ find = """
 replace = """
                     // The object's own reference to each capture.
                     let _ = t;"""
-killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+killers = [{ package = "nazm-cli", test = "closures", name = "a_returned_closure_keeps_what_it_captured_alive" }]
 
 [[mutation]]
 name = "n50-the-llvm-closure-release-forgets-its-captures"
@@ -9683,7 +9683,7 @@ why = "the Cranelift closure object copies an in-memory capture without a refere
 file = "crates/nazm-codegen-clif/src/func.rs"
 find = "                        self.retain_at(at, *t);"
 replace = "                        let _ = at;"
-killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+killers = [{ package = "nazm-cli", test = "closures", name = "a_returned_closure_keeps_what_it_captured_alive" }]
 
 [[mutation]]
 name = "n50-the-cranelift-closure-release-forgets-its-captures"
