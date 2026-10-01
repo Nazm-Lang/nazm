@@ -21,6 +21,8 @@
     clippy::indexing_slicing
 )]
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -352,20 +354,22 @@ fn a_legal_module_cycle_compiles_and_links() {
 }
 
 #[test]
-fn a_call_cycle_across_modules_is_still_refused() {
-    // §11 and §26's second half. The recursion policy is a whole-program analysis and
-    // stays one: `A::f → B::g → A::f` is a cycle no single module can see, and per-module
-    // code generation is not a reason to stop looking for it.
+fn a_call_cycle_across_modules_compiles_and_its_runaway_is_n0408() {
+    // §11 and §26's second half. The cycle analysis is whole-program and stays one:
+    // `A::f → B::g → A::f` is a cycle no single module can see. Until N49 it was refused;
+    // since, both functions check their stack first, so a terminating cycle runs and a
+    // runaway one reports `N0408` instead of dying of a signal.
     let dir = tempfile::tempdir().expect("tempdir");
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\npub fn f(n: Int) -> Int { g(n) }\nfn main() -> Int { f(1) }\n",
+        "use \"b.nz\";\npub fn f(n: Int) -> Int { if n == 0 { 0 } else { g(n - 1) + 1 } }\n\
+         pub fn h(n: Int) -> Int { k(n + 1) }\nfn main() -> Int { f(5) }\n",
     );
     write(
         dir.path(),
         "b.nz",
-        "use \"a.nz\";\npub fn g(n: Int) -> Int { f(n) }\n",
+        "use \"a.nz\";\npub fn g(n: Int) -> Int { f(n) }\npub fn k(n: Int) -> Int { h(n + 1) }\n",
     );
     let out = Command::new(NAZM)
         .args(["build", "a.nz", "-o", "prog"])
@@ -373,15 +377,37 @@ fn a_call_cycle_across_modules_is_still_refused() {
         .output()
         .expect("build");
     assert!(
-        !out.status.success(),
-        "a cross-module cycle must be refused"
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("N0101"), "{err}");
-    assert!(err.contains("recursion"), "{err}");
+    let ran = Command::new(dir.path().join("prog")).output().expect("run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "5");
+
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\npub fn f(n: Int) -> Int { if n == 0 { 0 } else { g(n - 1) + 1 } }\n\
+         pub fn h(n: Int) -> Int { k(n + 1) }\nfn main() -> Int { h(0) }\n",
+    );
+    let out = Command::new(NAZM)
+        .args(["build", "a.nz", "-o", "runaway"])
+        .current_dir(dir.path())
+        .output()
+        .expect("build");
     assert!(
-        !dir.path().join("prog").exists(),
-        "nothing should be written"
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ran = common::bounded_exe(&dir.path().join("runaway"))
+        .output()
+        .expect("run");
+    let err = String::from_utf8_lossy(&ran.stderr);
+    assert_eq!(ran.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("error[N0408]") && (err.contains(" at a.nz:") || err.contains(" at b.nz:")),
+        "{err}"
     );
 }
 
@@ -617,14 +643,15 @@ fn a_native_build_is_unaffected_by_the_semantic_cache() {
 #[test]
 fn a_backend_refusal_inside_an_imported_module_names_that_module() {
     // §29. Emission moved per module; a diagnostic must still point where the source is,
-    // which is the property N1 established and N5 must not spend.
+    // which is the property N1 established and N5 must not spend. The refusal here is
+    // polymorphic recursion (`N0357`): native recursion, this case until N49, compiles now.
     let dir = tempfile::tempdir().expect("tempdir");
-    let app = "use \"lib.nz\";\nfn main() -> Int { go(2) }\n";
+    let app = "use \"lib.nz\";\nfn main() -> Int { grow(1, 2) }\n";
     write(dir.path(), "app.nz", app);
     write(
         dir.path(),
         "lib.nz",
-        "pub fn go(n: Int) -> Int { if n < 1 { 0 } else { go(n - 1) } }\n",
+        "pub fn grow[T](x: T, n: Int) -> Int { if n == 0 { 0 } else { let v = vec_new[T](); vec_push(v, x); grow(v, n - 1) + 1 } }\n",
     );
 
     // The rendered form names the file outright.
@@ -635,8 +662,8 @@ fn a_backend_refusal_inside_an_imported_module_names_that_module() {
         .expect("build");
     assert!(!rendered.status.success());
     let text = String::from_utf8_lossy(&rendered.stderr);
-    assert!(text.contains("--> lib.nz:1:50"), "{text}");
-    assert!(text.contains("N0101"), "{text}");
+    assert!(text.contains("--> lib.nz:1:100"), "{text}");
+    assert!(text.contains("N0357"), "{text}");
     assert!(
         !dir.path().join("prog").exists(),
         "nothing should be written"
@@ -657,7 +684,7 @@ fn a_backend_refusal_inside_an_imported_module_names_that_module() {
         .collect();
     let refusal = reported
         .iter()
-        .find(|d| d["code"] == "N0101")
+        .find(|d| d["code"] == "N0357")
         .expect("a refusal");
     let at = refusal["primary"]["span"]["start"]
         .as_u64()

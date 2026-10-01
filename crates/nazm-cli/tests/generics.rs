@@ -62,9 +62,10 @@ fn polymorphic_recursion_runs_interpreted_and_is_refused_natively_by_name() {
 }
 
 #[test]
-fn ordinary_recursion_through_a_generic_function_is_refused_like_any_other() {
-    // `count[Str]` calling `count[Str]` is recursion, and the native backend's recursion
-    // rule does not bend because the definition is generic.
+fn ordinary_recursion_through_a_generic_function_compiles() {
+    // `count[Str]` calling `count[Str]` is recursion, refused natively until N49 and
+    // compiled since, with the stack check MIR places in the instance as in any other
+    // function in a call cycle. Polymorphic recursion is still refused (`N0357`).
     let dir = tempfile::tempdir().expect("tempdir");
     write(
         dir.path(),
@@ -76,11 +77,9 @@ fn ordinary_recursion_through_a_generic_function_is_refused_like_any_other() {
     assert!(ok);
     assert_eq!(stdout, "3");
     let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog"]);
-    assert!(!ok);
-    assert!(
-        stderr.contains("N0101") && stderr.contains("recursion"),
-        "{stderr}"
-    );
+    assert!(ok, "{stderr}");
+    let ran = Command::new(dir.path().join("prog")).output().expect("run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "3");
 }
 
 #[test]

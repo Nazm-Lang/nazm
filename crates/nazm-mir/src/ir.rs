@@ -243,6 +243,9 @@ pub enum StatementKind {
     ScopeJoin { list: LocalId },
     /// If this thread has failed — a callee, a task adopted by a join — leave along `unwind`.
     CheckFailed { unwind: BlockId },
+    /// If this thread's stack is nearly exhausted, fail with `N0408` and leave along `unwind`
+    /// (N49, `docs/spec.md` *Native recursion*). First in every function in a call cycle.
+    StackCheck { unwind: BlockId },
 }
 
 /// One step of a field path: which record, and which of its fields by declaration index.
@@ -298,7 +301,8 @@ impl StatementKind {
             Self::Assign { unwind, .. } => *unwind,
             Self::ScopeOpen { unwind, .. }
             | Self::Spawn { unwind, .. }
-            | Self::CheckFailed { unwind } => Some(*unwind),
+            | Self::CheckFailed { unwind }
+            | Self::StackCheck { unwind } => Some(*unwind),
             Self::SetField { .. } | Self::Drop(_) | Self::ScopeJoin { .. } => None,
         }
     }

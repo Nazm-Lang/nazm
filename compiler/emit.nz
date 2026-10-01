@@ -4254,6 +4254,9 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
         add_line(head, "declare i32 @pthread_cond_broadcast(ptr)");
         add_line(head, "declare i32 @pthread_mutex_destroy(ptr)");
         add_line(head, "declare i32 @pthread_cond_destroy(ptr)");
+        add_line(head, "declare i32 @pthread_attr_init(ptr)");
+        add_line(head, "declare i32 @pthread_attr_setstacksize(ptr, i64)");
+        add_line(head, "declare i32 @pthread_attr_destroy(ptr)");
     }
     // The record types this program declares, each as a named LLVM aggregate, in
     // **layout order** — canonical by field name, so moving two field declarations
@@ -5027,6 +5030,9 @@ fn task_runtime() -> Str {
     let r = strs_new();
     strs_push(r, "define internal i32 @nz.spawn(ptr %h, ptr %fn, ptr %blk) {");
     strs_push(r, "entry:");
+    strs_push(r, "  ; Every task thread has 8 MiB of stack (N49): the size `nz.stack_check` budgets from, and");
+    strs_push(r, "  ; Linux's default already. The attribute object is opaque; 128 bytes covers every v1 target.");
+    strs_push(r, "  %attr = alloca [128 x i8], align 16");
     strs_push(r, "  %data = call ptr @nz.arr_grow(ptr %h, i64 8)");
     strs_push(r, "  %oom = icmp eq ptr %data, null");
     strs_push(r, "  br i1 %oom, label %nomem, label %record");
@@ -5039,7 +5045,10 @@ fn task_runtime() -> Str {
     strs_push(r, "  store i64 %raw, ptr %slot");
     strs_push(r, "  %next = add i64 %len, 1");
     strs_push(r, "  store i64 %next, ptr %h");
-    strs_push(r, "  %rc = call i32 @pthread_create(ptr %blk, ptr null, ptr %fn, ptr %blk)");
+    strs_push(r, "  %ai = call i32 @pthread_attr_init(ptr %attr)");
+    strs_push(r, "  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 8388608)");
+    strs_push(r, "  %rc = call i32 @pthread_create(ptr %blk, ptr %attr, ptr %fn, ptr %blk)");
+    strs_push(r, "  %ad = call i32 @pthread_attr_destroy(ptr %attr)");
     strs_push(r, "  %bad = icmp ne i32 %rc, 0");
     strs_push(r, "  br i1 %bad, label %undo, label %ok");
     strs_push(r, "undo:");

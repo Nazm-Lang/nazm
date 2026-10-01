@@ -94,6 +94,12 @@ pub fn lower(
         }
     }
 
+    // Which definitions are in a call cycle, and so begin with a stack check (N49).
+    let facts = Facts {
+        from_generic,
+        recursive: in_call_cycles(&res),
+    };
+
     let mut functions = Vec::new();
     let mut defects: Vec<Diagnostic> = Vec::new();
     for f in &core.functions {
@@ -107,7 +113,7 @@ pub fn lower(
             owner: owner(graph, f.module, DefKind::Function, &f.name),
             args: Vec::new(),
         };
-        match lower_function(&res, &map, f, None, id, identity, &from_generic) {
+        match lower_function(&res, &map, f, None, id, identity, &facts) {
             Ok(m) => functions.push(m),
             Err(e) => defects.push(*e),
         }
@@ -125,15 +131,7 @@ pub fn lower(
             ParamOwner::Function(planned.key.def),
             planned.key.args.clone(),
         ));
-        match lower_function(
-            &res,
-            &map,
-            f,
-            subst,
-            id,
-            planned.identity.clone(),
-            &from_generic,
-        ) {
+        match lower_function(&res, &map, f, subst, id, planned.identity.clone(), &facts) {
             Ok(m) => functions.push(m),
             Err(e) => defects.push(*e),
         }
@@ -236,6 +234,108 @@ struct Fx<'a> {
     error: Option<(Span, String)>,
 }
 
+/// What the whole program says about each definition, by `FnId` index, before any body is
+/// lowered.
+struct Facts {
+    /// A generic definition's body calls it, so its symbol must be bindable across objects.
+    from_generic: Vec<bool>,
+    /// It is in a call cycle, so it checks its stack first (N49).
+    recursive: Vec<bool>,
+}
+
+/// Which definitions are in a call cycle — a cycle of calls between definitions, generic or
+/// not, through any number of modules. `spawn` closes none: a task runs on its own stack, so a
+/// function that spawns itself grows no stack (N49, `docs/spec.md` *Native recursion*).
+///
+/// Over definitions rather than instances, so an instance of a recursive generic definition
+/// checks too; polymorphic recursion never reaches here (`N0357`). Tarjan's algorithm with an
+/// explicit stack, so a deep call graph costs heap and not this compiler's stack.
+fn in_call_cycles(res: &Resolution) -> Vec<bool> {
+    let fns = res.functions();
+    let n = fns.len();
+    let edges: Vec<Vec<usize>> = fns
+        .iter()
+        .map(|f| {
+            f.call_sites
+                .iter()
+                .filter(|site| !site.spawned)
+                .filter_map(|site| match site.callee {
+                    Callee::Function(g) => Some(g.index()),
+                    _ => None,
+                })
+                .filter(|&g| g < n)
+                .collect()
+        })
+        .collect();
+    let mut index = vec![usize::MAX; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut out = vec![false; n];
+    let mut next = 0usize;
+    for root in 0..n {
+        if index.get(root).copied() != Some(usize::MAX) {
+            continue;
+        }
+        let mut work: Vec<(usize, usize)> = vec![(root, 0)];
+        while let Some(&(v, i)) = work.last() {
+            if i == 0 {
+                if let (Some(x), Some(l)) = (index.get_mut(v), low.get_mut(v)) {
+                    *x = next;
+                    *l = next;
+                }
+                next += 1;
+                stack.push(v);
+                if let Some(o) = on_stack.get_mut(v) {
+                    *o = true;
+                }
+            }
+            if let Some(&w) = edges.get(v).and_then(|e| e.get(i)) {
+                if let Some(top) = work.last_mut() {
+                    top.1 = i + 1;
+                }
+                if index.get(w).copied() == Some(usize::MAX) {
+                    work.push((w, 0));
+                } else if on_stack.get(w).copied().unwrap_or(false) {
+                    let iw = index.get(w).copied().unwrap_or(0);
+                    if let Some(l) = low.get_mut(v) {
+                        *l = (*l).min(iw);
+                    }
+                }
+                continue;
+            }
+            work.pop();
+            let lv = low.get(v).copied().unwrap_or(0);
+            if let Some(&(parent, _)) = work.last() {
+                if let Some(l) = low.get_mut(parent) {
+                    *l = (*l).min(lv);
+                }
+            }
+            if lv == index.get(v).copied().unwrap_or(0) {
+                let mut members = Vec::new();
+                while let Some(w) = stack.pop() {
+                    if let Some(o) = on_stack.get_mut(w) {
+                        *o = false;
+                    }
+                    members.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                let cycle = members.len() > 1 || edges.get(v).is_some_and(|e| e.contains(&v));
+                if cycle {
+                    for m in members {
+                        if let Some(o) = out.get_mut(m) {
+                            *o = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 fn lower_function(
     res: &Resolution,
     map: &FuncMap<'_>,
@@ -243,7 +343,7 @@ fn lower_function(
     subst: Option<(ParamOwner, Vec<Type>)>,
     id: FuncId,
     identity: Identity,
-    from_generic: &[bool],
+    facts: &Facts,
 ) -> Result<Function, Box<Diagnostic>> {
     if let Some(symbol) = &f.foreign {
         // A foreign function: its signature, as locals, and no body (N42).
@@ -313,6 +413,12 @@ fn lower_function(
     fx.ret = fx.ty(f.ret, f.ret_span);
     let entry = fx.new_block(BlockOrigin::Source);
     fx.cur = Some(entry);
+    // A function in a call cycle checks its thread's stack before anything else (N49): the
+    // parameters are borrowed and nothing is owned yet, so its failure edge releases nothing.
+    if facts.recursive.get(f.def.index()).copied().unwrap_or(false) {
+        let unwind = fx.unwind();
+        fx.push(StatementKind::StackCheck { unwind }, f.name_span);
+    }
 
     let result = fx.temp(fx.ret, f.body.at, "result");
     fx.block_into(&f.body, Some(result));
@@ -342,7 +448,11 @@ fn lower_function(
         name: f.name.clone(),
         identity,
         exported: def.is_some_and(|d| d.visibility.is_exported()),
-        reached_from_generic: from_generic.get(f.def.index()).copied().unwrap_or(false),
+        reached_from_generic: facts
+            .from_generic
+            .get(f.def.index())
+            .copied()
+            .unwrap_or(false),
         params: f.params,
         locals: fx.locals,
         ret: fx.ret,
@@ -1410,6 +1520,9 @@ fn remap_statement(k: StatementKind, map: &impl Fn(BlockId) -> BlockId) -> State
             callee_at,
         },
         StatementKind::CheckFailed { unwind } => StatementKind::CheckFailed {
+            unwind: map(unwind),
+        },
+        StatementKind::StackCheck { unwind } => StatementKind::StackCheck {
             unwind: map(unwind),
         },
         other => other,

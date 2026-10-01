@@ -50,6 +50,11 @@ pub(crate) fn declarations(out: &mut String) {
         "declare i32 @pthread_mutex_destroy(ptr)",
         "declare i32 @pthread_cond_destroy(ptr)",
         "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)",
+        "declare ptr @llvm.frameaddress.p0(i32)",
+        "declare i32 @getrlimit(i32, ptr)",
+        "declare i32 @pthread_attr_init(ptr)",
+        "declare i32 @pthread_attr_setstacksize(ptr, i64)",
+        "declare i32 @pthread_attr_destroy(ptr)",
     ] {
         let _ = writeln!(out, "{d}");
     }

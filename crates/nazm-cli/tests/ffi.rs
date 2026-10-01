@@ -539,6 +539,7 @@ fn a_reserved_c_symbol_is_every_one_the_runtime_calls() {
         join: true,
         strings: true,
         shims: true,
+        stack: true,
     };
     let text = nazm_lir::emit_runtime(all);
     let mut found = Vec::new();

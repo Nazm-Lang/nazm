@@ -631,17 +631,20 @@ fn a_legal_import_cycle_caches_and_relinks() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_warm_store_cannot_bypass_the_recursion_refusal() {
-    // The refusal is whole-program and it happens **before** any key exists: a key is a
-    // digest of emitted IR, so the IR must be produced, so everything required to produce
-    // it has already run. A fully warm store does not get to the store at all.
+fn a_module_an_edit_puts_into_a_call_cycle_is_compiled_again_with_its_stack_check() {
+    // Until N49 the subject here was that a warm store could not bypass the recursion
+    // refusal. Since N49 recursion compiles, and the property that replaces it is this: an
+    // edit to one module can put another module's unchanged function into a call cycle, and
+    // that function then needs a stack check its cached object does not have. The key is a
+    // digest of the emitted text, which now carries the check, so the old object is not
+    // reused — the unchanged module is compiled again.
     let dir = tempfile::tempdir().expect("tempdir");
     project(
         dir.path(),
         &[
             (
                 "a.nz",
-                "use \"b.nz\";\npub fn ping(n: Int) -> Int { n }\nfn main() -> Int { pong(1) }\n",
+                "use \"b.nz\";\npub fn ping(n: Int) -> Int { n }\nfn main() -> Int { pong(3) }\n",
             ),
             (
                 "b.nz",
@@ -652,29 +655,22 @@ fn a_warm_store_cannot_bypass_the_recursion_refusal() {
     build(dir.path(), "a.nz");
     assert_eq!(build(dir.path(), "a.nz").compiled, 0, "not warm");
 
-    // Now `a::ping → b::pong → a::ping`, introduced by editing one body.
+    // Now `a::ping → b::pong → a::ping`, introduced by editing `a.nz` alone.
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\npub fn ping(n: Int) -> Int { pong(n) }\nfn main() -> Int { pong(1) }\n",
+        "use \"b.nz\";\npub fn ping(n: Int) -> Int { if n == 0 { 0 } else { pong(n - 1) + 1 } }\n\
+         fn main() -> Int { pong(3) }\n",
     );
-    let before = std::fs::metadata(dir.path().join("prog"))
-        .expect("an executable")
-        .len();
-    let (produced, _) = build_in(dir.path(), "a.nz", "prog", &[]);
-    assert!(!produced.ok, "a warm store accepted a recursive program");
+    let (produced, did) = build_in(dir.path(), "a.nz", "prog", &[]);
+    assert!(produced.ok, "{}", produced.stderr);
+    let did = did.expect("a summary");
     assert!(
-        produced.stderr.contains("N0101"),
-        "not the backend's refusal: {}",
-        produced.stderr
+        did.compiled >= 2,
+        "b.nz's object would be reused without the stack check its function now needs: {did:?}"
     );
-    // And the executable that was there is the one that is still there.
-    assert_eq!(
-        std::fs::metadata(dir.path().join("prog"))
-            .expect("kept")
-            .len(),
-        before
-    );
+    let ran = Command::new(dir.path().join("prog")).output().expect("run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "3");
 }
 
 // ---------------------------------------------------------------------------

@@ -184,6 +184,9 @@ struct Failure {
     message: String,
 }
 
+/// What `N0408` says, in both backends' words (N49).
+pub const STACK_EXHAUSTED: &str = "the native call stack is exhausted";
+
 struct Emitter<'a> {
     out: String,
     /// Whether to write the source-position markers `crate::debug` turns into DWARF (N48).
@@ -239,6 +242,8 @@ struct Emitter<'a> {
     tasks: String,
     /// Whether `scope` and `spawn` are reached, and with them the thread helpers.
     needs_tasks: bool,
+    /// Whether a stack check was emitted (N49).
+    needs_stack: bool,
     /// How many trampolines have been generated, which is what names the next one.
     task_count: usize,
     /// Whether a channel is reached.
@@ -1368,6 +1373,22 @@ impl Emitter<'_> {
                 self.join_one(tids);
             }
             mir::StatementKind::CheckFailed { .. } => self.check_failed(),
+            mir::StatementKind::StackCheck { .. } => {
+                // The runtime measures the thread's stack (N49); this only asks it.
+                self.needs_stack = true;
+                let r = self.fresh();
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{r} = call i32 @nz.stack_check()");
+                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{r}, 0");
+                self.guard(
+                    bad,
+                    &Failure {
+                        code: "N0408",
+                        message: STACK_EXHAUSTED.to_owned(),
+                    },
+                    s.at,
+                );
+            }
         }
     }
 
@@ -1703,6 +1724,7 @@ impl Emitter<'_> {
             join: self.needs_join,
             strings: self.needs_strings,
             shims: false,
+            stack: self.needs_stack,
         }
     }
 
@@ -3028,6 +3050,8 @@ pub struct Needs {
     /// The registry's pointer-taking entries and accessors (`crate::runtime`), which code a
     /// second compiler generated calls instead of the aggregate-returning ones (N41).
     pub shims: bool,
+    /// `nz.stack_check`, which a function in a call cycle calls first (N49).
+    pub stack: bool,
 }
 
 impl Needs {
@@ -3042,6 +3066,7 @@ impl Needs {
             join: self.join || other.join,
             strings: self.strings || other.strings,
             shims: self.shims || other.shims,
+            stack: self.stack || other.stack,
         }
     }
 
@@ -3115,6 +3140,7 @@ pub(crate) fn emit_unit_with(
         block_types: String::new(),
         tasks: String::new(),
         needs_tasks: false,
+        needs_stack: false,
         task_count: 0,
         needs_channels: false,
         needs_sequences: false,

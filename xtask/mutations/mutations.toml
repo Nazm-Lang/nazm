@@ -1048,20 +1048,6 @@ find = "                if f.exported || f.reached_from_generic || instance || S
 replace = "                if false {"
 
 [[mutation]]
-name = "the-recursion-check-forgets-the-call-graph"
-why = """
-hands the cycle check no edges, so a recursive call is no longer refused and this backend
-emits a program whose stack it has no plan for. The check is whole-program on purpose —
-`A::f` through `B::g` back to `A::f` is a cycle no single module can see — and per-module
-code generation is not a reason to stop looking
-Repointed by N40: the cycle check walks MIR's call graph, instances included.
-"""
-file = "crates/nazm-lir/src/lower.rs"
-find = "    let edges: Vec<Vec<(mir::FuncId, Span)>> = program.functions.iter().map(callees).collect();"
-replace = """    let edges: Vec<Vec<(mir::FuncId, Span)>> =
-        program.functions.iter().map(|_| Vec::new()).collect();"""
-
-[[mutation]]
 name = "the-object-key-forgets-its-input"
 why = """
 drops the emitted LLVM from a native object's key, so every unit of a program asks for one
@@ -9337,3 +9323,147 @@ file = "crates/nazm-cli/src/inspect.rs"
 find = """            if only.is_some_and(|o| !identity.ends_with(&format!("::fn {o}"))) {"""
 replace = """            if only.is_some_and(|o| !identity.ends_with(&format!("::fn {o}")) && false) {"""
 killers = [{ package = "nazm-cli", test = "debugging", name = "inspect_is_one_deterministic_document_of_the_program_s_facts" }]
+
+
+# --- N49: escapes, the logical operators, native recursion -------------------------------------
+#
+# Each attacks one decision of `docs/architecture.md` §7.51. `the-recursion-check-forgets-the-call-graph`
+# was retired here: the cycle refusal it attacked was deleted, and the stack check that replaced it is
+# attacked below from MIR's placement to the runtime's comparison.
+
+[[mutation]]
+name = "n49-an-escape-is-its-own-text"
+why = "the lexer stops decoding escapes, so `\\n` is two bytes again and every implementation prints a backslash"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "    if !raw.contains('\\\\') {"
+replace = "    if true {"
+killers = [{ package = "nazm-syntax", lib = true, name = "lexer::tests::every_escape_is_the_one_byte_the_specification_names" }]
+
+[[mutation]]
+name = "n49-a-hex-escape-reaches-past-7f"
+why = "`\\x80` to `\\xFF` are decoded instead of refused, a byte the literal's UTF-8 representation cannot hold"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "                    (Some(hi), Some(lo)) if hi * 16 + lo <= 0x7f => {"
+replace = "                    (Some(hi), Some(lo)) if hi * 16 + lo <= 0xff => {"
+killers = [{ package = "nazm-syntax", lib = true, name = "lexer::tests::a_refused_escape_is_reported_at_its_own_bytes_and_decoding_goes_on" }]
+
+[[mutation]]
+name = "n49-an-escaped-quote-ends-the-string"
+why = "the scan no longer skips the byte after a backslash, so `\\\"` closes the literal and the rest of the line is code"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "                if byte(i) == Some(b'\\\\') && byte(i + 1).is_some_and(|n| n != b'\\n') {"
+replace = "                if false && byte(i) == Some(b'\\\\') && byte(i + 1).is_some_and(|n| n != b'\\n') {"
+killers = [{ package = "nazm-syntax", lib = true, name = "lexer::tests::every_escape_is_the_one_byte_the_specification_names" }]
+
+[[mutation]]
+name = "n49-or-binds-tighter-than-and"
+why = "`||` and `&&` swap binding powers, so `true || false && false` is `(true || false) && false`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                TokenKind::PipePipe => (BinOp::Or, 1),"
+replace = "                TokenKind::PipePipe => (BinOp::Or, 2),"
+killers = [{ package = "nazm-cli", test = "usability", name = "logical_operators_short_circuit_and_bind_as_specified_everywhere" }]
+
+[[mutation]]
+name = "n49-and-evaluates-its-right-operand-regardless"
+why = "`a && b` lowers to `if a { false } else { b }`: the right operand runs when the left is false, and the result is wrong"
+file = "crates/nazm-core/src/lower.rs"
+find = "                    self.conditional(lhs, rhs, f, *op_span)"
+replace = "                    self.conditional(lhs, f, rhs, *op_span)"
+killers = [{ package = "nazm-cli", test = "usability", name = "logical_operators_short_circuit_and_bind_as_specified_everywhere" }]
+
+[[mutation]]
+name = "n49-or-is-decided-by-its-right-operand"
+why = "`a || b` lowers to `if a { b } else { true }`, so a true left operand no longer decides it"
+file = "crates/nazm-core/src/lower.rs"
+find = "                    self.conditional(lhs, t, rhs, *op_span)"
+replace = "                    self.conditional(lhs, rhs, t, *op_span)"
+killers = [{ package = "nazm-cli", test = "usability", name = "logical_operators_short_circuit_and_bind_as_specified_everywhere" }]
+
+[[mutation]]
+name = "n49-not-is-the-identity"
+why = "`!e` lowers to `if e { true } else { false }`, which is `e`"
+file = "crates/nazm-core/src/lower.rs"
+find = "                self.conditional(operand, f, t, *op_span)"
+replace = "                self.conditional(operand, t, f, *op_span)"
+killers = [{ package = "nazm-cli", test = "usability", name = "logical_operators_short_circuit_and_bind_as_specified_everywhere" }]
+
+[[mutation]]
+name = "n49-a-logical-operand-may-be-an-int"
+why = "the checker accepts any operands for `&&` and `||`, so `1 && true` reaches Core IR as a branch on an `Int`"
+file = "crates/nazm-core/src/check.rs"
+find = "            BinOp::And | BinOp::Or => lt == Type::Bool && rt == Type::Bool,"
+replace = "            BinOp::And | BinOp::Or => true,"
+killers = [{ package = "nazm-cli", test = "usability", name = "a_logical_operand_that_is_not_bool_is_refused" }]
+
+[[mutation]]
+name = "n49-logical-negation-is-spaced-from-its-operand"
+why = "the formatter prints `! a` for `!a`, a layout that is not the canonical one"
+file = "crates/nazm-syntax/src/format.rs"
+find = "        if matches!(previous, TokenKind::Minus | TokenKind::Bang)"
+replace = "        if matches!(previous, TokenKind::Minus)"
+killers = [{ package = "nazm-cli", test = "usability", name = "the_formatter_spaces_the_logical_operators_and_keeps_the_effect_marker" }]
+
+[[mutation]]
+name = "n49-a-recursive-function-does-not-check-its-stack"
+why = "MIR places no stack check, so unbounded native recursion runs the thread off its stack and the process dies of a signal instead of N0408"
+file = "crates/nazm-mir/src/lower.rs"
+find = "    if facts.recursive.get(f.def.index()).copied().unwrap_or(false) {"
+replace = "    if false && facts.recursive.get(f.def.index()).copied().unwrap_or(false) {"
+killers = [{ package = "nazm-cli", test = "mir", name = "a_function_in_a_call_cycle_checks_its_stack_first_and_no_other_does" }]
+
+[[mutation]]
+name = "n49-only-a-self-call-is-a-cycle"
+why = "a cycle of two or more functions is not one, so mutual recursion runs without a stack check"
+file = "crates/nazm-mir/src/lower.rs"
+find = "                let cycle = members.len() > 1 || edges.get(v).is_some_and(|e| e.contains(&v));"
+replace = "                let cycle = edges.get(v).is_some_and(|e| e.contains(&v));"
+killers = [{ package = "nazm-cli", test = "mir", name = "a_function_in_a_call_cycle_checks_its_stack_first_and_no_other_does" }]
+
+[[mutation]]
+name = "n49-a-spawn-closes-a-cycle"
+why = "a spawn counts as a call, so a function that only spawns itself pays a stack check for a stack its task does not share"
+file = "crates/nazm-mir/src/lower.rs"
+find = "                .filter(|site| !site.spawned)"
+replace = "                .filter(|site| site.spawned || !site.spawned)"
+killers = [{ package = "nazm-cli", test = "mir", name = "a_function_in_a_call_cycle_checks_its_stack_first_and_no_other_does" }]
+
+[[mutation]]
+name = "n49-the-llvm-backend-ignores-the-stack-check"
+why = "the LLVM backend calls the stack check and discards its answer, so exhaustion is a signal again under LLVM"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{r}, 0");"""
+replace = """                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{r}, %{r}");"""
+killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursion_reports_n0408_instead_of_crashing" }]
+
+[[mutation]]
+name = "n49-the-cranelift-backend-ignores-the-stack-check"
+why = "the Cranelift backend asks the runtime and never fails on its answer"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """                self.guard(past, "N0408", nazm_lir::STACK_EXHAUSTED);"""
+replace = """                let _ = past;"""
+killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursion_reports_n0408_instead_of_crashing" }]
+
+[[mutation]]
+name = "n49-the-stack-limit-is-never-reached"
+why = "the runtime compares the frame with zero, so no stack is ever past its limit"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = "  %past = icmp ult i64 %sp, %l"
+replace = "  %past = icmp ult i64 %sp, 0"
+killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursion_reports_n0408_instead_of_crashing" }]
+
+[[mutation]]
+name = "n49-a-task-gets-the-platform-default-stack"
+why = "task threads are started without the 8 MiB the check budgets for, so on a host whose default is smaller (macOS, 512 KiB) a recursive task overruns its stack before the check fires"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = "  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 8388608)"
+replace = ""
+killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::a_task_thread_has_the_stack_the_check_budgets_for_on_every_host" }]
+
+[[mutation]]
+name = "n49-an-instance-declares-itself"
+why = "an instance that calls itself is declared as external by the unit that defines it, and clang refuses the redefinition"
+file = "crates/nazm-lir/src/lower.rs"
+find = "                if !sig.foreign && functions.contains(&callee) {"
+replace = "                if false && !sig.foreign && functions.contains(&callee) {"
+killers = [{ package = "nazm-cli", test = "usability", name = "direct_mutual_generic_and_cross_module_recursion_compile_and_agree" }]
+

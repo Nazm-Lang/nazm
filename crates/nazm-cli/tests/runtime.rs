@@ -311,6 +311,7 @@ fn all() -> nazm_lir::Needs {
         join: true,
         strings: true,
         shims: true,
+        stack: true,
     }
 }
 

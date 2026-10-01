@@ -264,3 +264,156 @@ fn the_formatter_spaces_the_logical_operators_and_keeps_the_effect_marker() {
     assert!(out.contains("!a && b || !(a)"), "{out}");
     assert!(out.contains("-> Bool ! {}"), "{out}");
 }
+
+// --- native recursion ------------------------------------------------------------------
+
+#[test]
+fn direct_mutual_generic_and_cross_module_recursion_compile_and_agree() {
+    let main = r#"
+use "parity.nz";
+struct Node { value: Int, label: Str, }
+fn fact(n: Int) -> Int { if n <= 1 { 1 } else { n * fact(n - 1) } }
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+fn count[T](items: Vec[T], i: Int) -> Int { if i >= vec_len(items) { 0 } else { 1 + count(items, i + 1) } }
+fn depth(n: Int) -> Int { if n == 0 { 0 } else { 1 + depth(n - 1) } }
+fn labels(n: Int) -> Str { if n == 0 { "" } else { str_concat(Node(value: n, label: int_to_str(n)).label, labels(n - 1)) } }
+fn main() -> Int {
+    let v = vec_new[Str]();
+    vec_push(v, "a");
+    vec_push(v, "b");
+    vec_push(v, "c");
+    print(str_concat(labels(5), "\n"));
+    let e = if is_even(10) { 1 } else { 0 };
+    fact(10) % 1000 + fib(15) + count(v, 0) + depth(400) + e
+}
+"#;
+    let parity = r#"
+pub fn is_even(n: Int) -> Bool { if n == 0 { true } else { is_odd(n - 1) } }
+pub fn is_odd(n: Int) -> Bool { if n == 0 { false } else { is_even(n - 1) } }
+"#;
+    // 10! % 1000 = 800, fib(15) = 610, 3, 400, 1 — a depth inside the interpreter's own
+    // budget of 512, which is that implementation's limit and not the language's.
+    agrees_on(
+        &[("main.nz", main), ("parity.nz", parity)],
+        "54321\n1814",
+        0,
+    );
+}
+
+/// Recursion with no base case, built by each backend; it must end with `N0408` at the
+/// function entered, exit status 2, and its frames released — never a signal.
+fn exhausts(src: &str) {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("prog.nz"), src).unwrap();
+    for (backend, opt) in [("llvm", "0"), ("llvm", "2"), ("cranelift", "0")] {
+        let exe = d.path().join(format!("{backend}{opt}"));
+        let b = nazm(
+            d.path(),
+            &[
+                "build",
+                "--no-cache",
+                "--backend",
+                backend,
+                "--opt-level",
+                opt,
+                "prog.nz",
+                "-o",
+                exe.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(b.code, Some(0), "{backend}: {}", b.stderr);
+        let mut c = common::bounded_exe_within(&exe, common::TASKS_ADDRESS_SPACE_KB);
+        c.env(nazm_lir::MEMORY_VARIABLE, "1");
+        let r = run_bounded(&mut c, backend);
+        assert_eq!(r.code, Some(2), "{backend} -O{opt}: {r:?}");
+        assert!(
+            r.stderr
+                .contains("error[N0408]: the native call stack is exhausted at prog.nz:"),
+            "{backend} -O{opt}: {}",
+            r.stderr
+        );
+        let line = r
+            .stderr
+            .lines()
+            .find(|l| l.starts_with("nazm-memory:"))
+            .unwrap();
+        assert!(
+            line.contains("strings allocated=") && !line.contains("live=1"),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn native_recursion_goes_as_deep_as_the_stack_allows() {
+    // Past the interpreter's default budget by two orders of magnitude, and inside a
+    // thread's stack budget at either optimisation level.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "fn depth(n: Int) -> Int { if n == 0 { 0 } else { 1 + depth(n - 1) } }\n\
+         fn main() -> Int { depth(50000) }\n",
+    )
+    .unwrap();
+    for (backend, opt) in [("llvm", "0"), ("llvm", "2"), ("cranelift", "0")] {
+        let exe = d.path().join(format!("{backend}{opt}"));
+        let b = nazm(
+            d.path(),
+            &[
+                "build",
+                "--no-cache",
+                "--backend",
+                backend,
+                "--opt-level",
+                opt,
+                "prog.nz",
+                "-o",
+                exe.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(b.code, Some(0), "{}", b.stderr);
+        let r = run_bounded(&mut common::bounded_exe(&exe), backend);
+        assert_eq!(
+            (r.code, r.stdout.trim()),
+            (Some(0), "50000"),
+            "{backend} -O{opt}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn unbounded_recursion_reports_n0408_instead_of_crashing() {
+    // A string per frame, so the unwinding has something to release at every level.
+    exhausts(
+        "fn down(n: Int, s: Str) -> Int { let t = str_concat(s, \"x\"); down(n + 1, str_slice(t, 0, 1)) + str_len(t) }\n\
+         fn main() -> Int { down(0, \"a\") }\n",
+    );
+    // Mutual, and through a non-recursive helper between the two checks.
+    exhausts(
+        "fn helper(n: Int) -> Int { ping(n) + 1 }\n\
+         fn ping(n: Int) -> Int { pong(n + 1) }\n\
+         fn pong(n: Int) -> Int { helper(n + 1) }\n\
+         fn main() -> Int { ping(0) }\n",
+    );
+}
+
+#[test]
+fn a_task_that_exhausts_its_stack_fails_its_scope_after_the_join() {
+    exhausts(
+        "fn down(n: Int) -> Int { down(n + 1) + 1 }\n\
+         fn job(c: Chan) -> Int { chan_send(c, 1); down(0) }\n\
+         fn main(t: SpawnCap) -> Int { let c = chan_new(4); scope { spawn job(c); spawn job(c); } 0 }\n",
+    );
+}
+
+#[test]
+fn the_interpreter_keeps_its_own_limit() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "fn down(n: Int) -> Int { down(n + 1) + 1 }\nfn main() -> Int { down(0) }\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["run", "prog.nz"]);
+    assert!(r.stderr.contains("N0403"), "{}", r.stderr);
+}

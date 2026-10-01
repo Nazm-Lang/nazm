@@ -3910,27 +3910,29 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
     }
 }
 
-/// The two backends refuse the same recursive programs.
+/// The compiler written in Nazm still refuses recursion, which the reference now compiles.
 ///
-/// `nazm-lir::lower::report_cycles` has always refused a call cycle: that backend emits
-/// one native call per call and has no plan for the stack a recursive one needs. The
-/// compiler written in Nazm did not, and the divergence was not theoretical — it compiled
-/// `fact` calling itself into IR that clang assembled and that ran, printing 120, for a
-/// program `nazm build` rejects outright. Recorded then as "unguarded"; this is the test
-/// that says it is not any more.
+/// `nazm-lir::lower::report_cycles` refused every call cycle until N49, and the compiler
+/// written in Nazm was made to refuse the same programs on 2026-09-21, when it was found
+/// compiling `fact` into IR that ran. N49 gave the reference a stack contract — a check
+/// MIR places first in every function in a call cycle — and the Nazm-written emitter has no
+/// such check, so it still refuses, by name, the reason it always had (`docs/spec.md`,
+/// *Native recursion*). This test holds both halves: the reference builds each shape and its
+/// executable agrees with the interpreter, and the Nazm-written compiler refuses each and
+/// writes nothing.
 ///
-/// Six shapes, because the condition has more than one spelling: a function calling
-/// itself, a recursive function nothing calls, two functions calling each other, a cycle
-/// that only exists across two files, a cycle that goes through a `spawn` (a task is an
-/// edge like any other — a thread does not bound the stack), and one acyclic program that
-/// must keep compiling. The second is what makes "every declared function" a claim rather
-/// than a phrase; the last is the one that fails if a cycle check is written too eagerly.
+/// Five shapes, because the condition has more than one spelling: a function calling itself,
+/// a recursive function nothing calls, two functions calling each other, a cycle through a
+/// `spawn` (which the Nazm-written compiler counts as an edge, and the reference does not,
+/// because a task has its own stack), and a cycle that only exists across two files; and one
+/// acyclic program that must keep compiling with the Nazm-written compiler.
 #[test]
 fn the_nazm_written_compiler_refuses_what_monomorphisation_cannot_do() {
     // N11. The native limits on instantiation, refused by both compilers with the same code
     // at the same position: an instance family that never ends (`N0357`), one past the
-    // stated nesting bound (`N0358`), and ordinary recursion through a generic function,
-    // which is recursion (`N0101`).
+    // stated nesting bound (`N0358`). Ordinary recursion through a generic function was a
+    // third case until N49, when the reference began to compile it; the Nazm-written
+    // compiler's refusal of recursion is held by the test after this one.
     let dir = tempfile::tempdir().expect("tempdir");
     let emitter = build_emitter(dir.path());
     let mut nested = String::from("struct Box[T] { v: T, }\n");
@@ -3950,12 +3952,6 @@ fn the_nazm_written_compiler_refuses_what_monomorphisation_cannot_do() {
             "N0357",
         ),
         (nested, "N0358"),
-        (
-            "fn count[T](x: T, n: Int) -> Int { if n == 0 { 0 } else { count(x, n - 1) + 1 } }\n\
-             fn main() -> Int { count(\"a\", 3) }\n"
-                .to_owned(),
-            "N0101",
-        ),
     ];
     for (source, code) in &cases {
         let file = dir.path().join("m.nz");
@@ -3989,7 +3985,7 @@ fn the_nazm_written_compiler_refuses_what_monomorphisation_cannot_do() {
 }
 
 #[test]
-fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
+fn the_nazm_written_compiler_still_refuses_recursion_which_the_reference_compiles() {
     let dir = tempfile::tempdir().expect("tempdir");
     let emitter = build_emitter(dir.path());
 
@@ -4066,22 +4062,35 @@ fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
             std::fs::write(dir.path().join(name), text).expect("write");
         }
 
-        // The reference first, so the test fails loudly if the contract it mirrors ever
-        // changes rather than quietly asserting the wrong thing about the other.
+        // The reference compiles it (N49), and its executable agrees with the interpreter.
+        let reference_exe = dir.path().join("cycle");
         let reference = Command::new(NAZM)
             .args(["build", case.to_str().unwrap()])
             .arg("-o")
-            .arg(dir.path().join("cycle"))
+            .arg(&reference_exe)
             .output()
             .expect("run nazm build");
-        let reference_err = String::from_utf8_lossy(&reference.stderr).into_owned();
         assert!(
-            !reference.status.success(),
-            "{what}: the reference backend accepted it, so there is no contract to mirror"
+            reference.status.success(),
+            "{what}: the reference refused it: {}",
+            String::from_utf8_lossy(&reference.stderr)
         );
-        assert!(
-            reference_err.contains("N0101") && reference_err.contains(phrase),
-            "{what}: the reference's wording moved: {reference_err}"
+        let (ref_code, ref_out, _) = run_bounded(
+            &mut common::bounded_exe(&reference_exe),
+            std::time::Duration::from_secs(60),
+        )
+        .expect("the reference's program hung");
+        let interp_now = Command::new(NAZM)
+            .args(["run", case.to_str().unwrap()])
+            .output()
+            .expect("run");
+        assert_eq!(
+            (ref_code, ref_out.trim()),
+            (
+                interp_now.status.code(),
+                String::from_utf8_lossy(&interp_now.stdout).trim()
+            ),
+            "{what}: the reference's executable and the interpreter disagree"
         );
 
         let (ours_rc, ours_ir, ours_err) = run_stage(&emitter, &case);
@@ -4103,7 +4112,7 @@ fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
             "{what}: refused with the wrong diagnostic: {ours_err}"
         );
 
-        // The interpreter is unmoved: this is a backend limit, not a language rule.
+        // The interpreter is unmoved: the refusal is this compiler's, not a language rule.
         let interp = Command::new(NAZM)
             .args(["run", case.to_str().unwrap()])
             .output()

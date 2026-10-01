@@ -187,6 +187,7 @@ impl Backend for Cranelift {
             join: true,
             strings: true,
             shims: true,
+            stack: true,
         }
     }
 }

@@ -14,9 +14,10 @@
 //! # Refusal, not partial compilation
 //!
 //! A program reaching here checked and its MIR validated, so it is well-typed. The refusals
-//! below are about this backend's coverage and not about the program being wrong: recursion is
-//! a perfectly good Nazm construct that this backend cannot compile, and saying so is different
-//! from saying it is invalid. Every refusal points at `nazm run`, which still executes all of
+//! below are about this backend's coverage and not about the program being wrong: a construct
+//! outside the subset is a perfectly good Nazm construct this backend cannot compile, and saying
+//! so is different from saying it is invalid. (Recursion was the first of them; since N49 it
+//! compiles, with a stack check MIR places.) Every refusal points at `nazm run`, which still executes all of
 //! it. Every unsupported construct produces a diagnostic and **no output**.
 
 use std::collections::BTreeSet;
@@ -40,7 +41,7 @@ const SUBSET: &str = "`nazm build` currently compiles functions over `Int`, `Boo
                       `-`, the operators `+ - * / %`, the comparisons `== != < <= > >=`, \
                       parentheses, `if` in both statement and value position, the \
                       built-ins `str_len` `str_byte` `str_slice` `str_concat` \
-                      `int_to_str`, non-recursive direct calls, and structured \
+                      `int_to_str`, direct calls, recursive ones included, and structured \
                       concurrency (`scope`, `spawn` and `Chan`) — with \
                       `fn main() -> Int` as the entry point. Everything else still runs \
                       under `nazm run`";
@@ -333,7 +334,6 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
         }
     }
 
-    report_cycles(&program, &mut errors);
     report_foreign_conflicts(&program, &mut errors);
 
     let Some((entry_symbol, entry_roots)) = entry else {
@@ -402,6 +402,12 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
                 // external to it; a module's unit owns its own non-instance functions. A
                 // foreign function is defined by no unit, so every caller declares it.
                 if owns_module && sig.module == module && !sig.instance && !sig.foreign {
+                    continue;
+                }
+                // Nor is a function this unit defines, whatever it is: an instance that calls
+                // itself, which recursion through a generic function does (N49), is defined
+                // here and must not also be declared.
+                if !sig.foreign && functions.contains(&callee) {
                     continue;
                 }
                 if let Some(g) = program.function(callee) {
@@ -508,82 +514,4 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
         entry_roots,
         program,
     })
-}
-
-/// Refuse every call cycle, direct or mutual, naming the call that closes it.
-///
-/// Over MIR's call graph — calls and spawns between concrete functions, generic instances
-/// included — iteratively, so a deep call graph costs heap and not this compiler's stack.
-fn report_cycles(program: &mir::Program, errors: &mut Vec<Diagnostic>) {
-    #[derive(Clone, Copy, PartialEq)]
-    enum Mark {
-        New,
-        Open,
-        Done,
-    }
-    let n = program.functions.len();
-    let edges: Vec<Vec<(mir::FuncId, Span)>> = program.functions.iter().map(callees).collect();
-    let mut mark = vec![Mark::New; n];
-    let mut reported = vec![false; n];
-    for root in 0..n {
-        if mark.get(root).copied() != Some(Mark::New) {
-            continue;
-        }
-        let mut stack = vec![(root, 0usize)];
-        while let Some(&mut (node, ref mut next)) = stack.last_mut().map(|e| &mut *e) {
-            if *next == 0 {
-                if let Some(m) = mark.get_mut(node) {
-                    *m = Mark::Open;
-                }
-            }
-            let edge = edges.get(node).and_then(|e| e.get(*next)).copied();
-            match edge {
-                Some((to, span)) => {
-                    *next += 1;
-                    let to = to.index();
-                    match mark.get(to).copied() {
-                        Some(Mark::Open) => {
-                            if !reported.get(to).copied().unwrap_or(true) {
-                                if let Some(r) = reported.get_mut(to) {
-                                    *r = true;
-                                }
-                                let name = program
-                                    .functions
-                                    .get(to)
-                                    .map_or("this function", |f| f.name.as_str());
-                                let what = if to == node {
-                                    format!("a call to `{name}` from inside itself")
-                                } else {
-                                    format!("a call cycle through `{name}`")
-                                };
-                                errors.push(
-                                    Diagnostic::error(
-                                        codes::UNSUPPORTED_CONSTRUCT,
-                                        span,
-                                        format!("{what} is not in `nazm build`'s subset yet"),
-                                    )
-                                    .primary_label("recursion")
-                                    .help(
-                                        "the interpreter runs recursive programs with a \
-                                         bounded call depth; this backend has no plan for \
-                                         the stack a recursive call needs, so it refuses \
-                                         rather than emitting one it cannot bound. \
-                                         `nazm run` still works",
-                                    ),
-                                );
-                            }
-                        }
-                        Some(Mark::New) => stack.push((to, 0)),
-                        _ => {}
-                    }
-                }
-                None => {
-                    if let Some(m) = mark.get_mut(node) {
-                        *m = Mark::Done;
-                    }
-                    stack.pop();
-                }
-            }
-        }
-    }
 }

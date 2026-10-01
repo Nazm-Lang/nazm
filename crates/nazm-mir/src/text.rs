@@ -230,6 +230,7 @@ pub fn statement(program: &Program, s: &StatementKind) -> String {
         ),
         StatementKind::ScopeJoin { list } => format!("scope_join _{}", list.0),
         StatementKind::CheckFailed { unwind } => format!("check_failed{}", edge(Some(*unwind))),
+        StatementKind::StackCheck { unwind } => format!("stack_check{}", edge(Some(*unwind))),
     }
 }
 
