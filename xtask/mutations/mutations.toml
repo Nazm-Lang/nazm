@@ -9082,15 +9082,15 @@ file = "crates/nazm-cli/src/backend.rs"
 find = """            .env("ZERO_AR_DATE", "1")
 """
 replace = ""
-killers = [{ package = "nazm-cli", test = "packages", name = "two_copies_built_from_empty_caches_are_byte_identical" }]
+killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::the_link_leaves_time_out_of_the_executable_on_every_host" }, { package = "nazm-cli", test = "packages", name = "two_copies_built_from_empty_caches_are_byte_identical" }]
 
 [[mutation]]
 name = "n46-a-temporary-name-reaches-the-executable"
 why = "the executable is linked under a temporary name with the process id in it, which the linker writes into its signature"
 file = "crates/nazm-cli/src/build.rs"
-find = "    let tmp_exe = work.join(output.file_name().unwrap_or_default());"
-replace = """    let tmp_exe = sibling(&output, &format!(".nazm-{stamp}.out"));"""
-killers = [{ package = "nazm-cli", test = "packages", name = "two_copies_built_from_empty_caches_are_byte_identical" }]
+find = "    work.join(output.file_name().unwrap_or_default())"
+replace = """    sibling(output, &format!(".nazm-{}.out", std::process::id()))"""
+killers = [{ package = "nazm-cli", bin = "nazm", name = "build::tests::the_executable_is_linked_under_its_own_name_inside_the_working_directory" }, { package = "nazm-cli", test = "packages", name = "two_copies_built_from_empty_caches_are_byte_identical" }]
 
 [[mutation]]
 name = "n46-the-lockfile-records-an-absolute-path"
@@ -9274,9 +9274,11 @@ killers = [{ package = "nazm-lir", lib = true, name = "debug::tests::markers_bec
 name = "n48-the-debug-information-is-left-behind"
 why = "a macOS debug build does not gather its debug information before the objects holding it are removed, so the debugger finds none"
 file = "crates/nazm-cli/src/build.rs"
-find = """    if choice.debug && cfg!(target_os = "macos") {"""
-replace = """    if choice.debug && cfg!(target_os = "macos") && false {"""
-killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+find = """    debug && os == "macos"
+}"""
+replace = """    debug && os == "macos" && false
+}"""
+killers = [{ package = "nazm-cli", bin = "nazm", name = "build::tests::only_a_debug_build_on_macos_gathers_its_debug_information" }, { package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
 
 [[mutation]]
 name = "n48-cranelift-debug-is-silently-plain"

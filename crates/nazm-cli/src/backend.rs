@@ -155,15 +155,21 @@ impl Backend {
     /// Not cached, and not keyed: a linker does not produce an object, and its version and
     /// options belong to a `LinkKey` that does not exist. It runs on every build.
     pub(crate) fn link(&self, output: &Path, objects: &[PathBuf]) -> Outcome {
-        run(self
-            .command()
+        run(&mut self.link_command(output, objects))
+    }
+
+    /// The link, as a command: what `link` runs, built apart so its environment can be read.
+    fn link_command(&self, output: &Path, objects: &[PathBuf]) -> Command {
+        let mut c = self.command();
+        c
             // The Apple linker otherwise mixes a time into the executable's UUID, so two links
             // of the same objects differ (N46, reproducible builds). Ignored elsewhere.
             .env("ZERO_AR_DATE", "1")
             .args(link_args(self.opt_level))
             .arg("-o")
             .arg(output)
-            .args(objects))
+            .args(objects);
+        c
     }
 
     /// Gather a macOS executable's debug information into a `.dSYM` bundle (N48), with the
@@ -535,5 +541,17 @@ mod tests {
                 "end".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn the_link_leaves_time_out_of_the_executable_on_every_host() {
+        // Checked on the command rather than on two executables, so a host whose linker
+        // ignores the variable still sees it go missing.
+        let c = Backend::unidentified(0).link_command(Path::new("out"), &[]);
+        let zero = c
+            .get_envs()
+            .find(|(k, _)| *k == "ZERO_AR_DATE")
+            .and_then(|(_, v)| v);
+        assert_eq!(zero, Some(std::ffi::OsStr::new("1")));
     }
 }
