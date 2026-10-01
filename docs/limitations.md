@@ -27,7 +27,11 @@ found only by reading all of it.
   backend and the optimisation level (areas 11, 12). *Narrowed in N49, which compiles recursion.*
 - The compiler written in Nazm refuses string escapes, `&&`, `||`, `!`, `::`, `as` and recursion
   by name: its bootstrap subset is narrower than the language (area 31).
-- Allocation is not tracked; no profile can restrict it (areas 4, 18).
+- Allocation is tracked per site, not per byte: `nazm explain-cost` reports each allocation,
+  retain, block, channel, foreign and task site with a count per call that is `at-most-once` or
+  `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
+  whole-program count, and recursion is seen only through its calls' sites (areas 4, 18).
+  *Narrowed in N52.*
 
 ## Effects, authority and information flow
 
@@ -35,8 +39,10 @@ found only by reading all of it.
   revocation (area 6).
 - An undeclared function exercises its caller's authority (N37's bridge) unless a restriction
   profile refuses it (areas 6, 19, 20).
-- Provenance restricts one sink, `write_file`'s path, in functions with declared effects; no
-  declassification; containers are coarse (area 7).
+- Provenance has three sink classes (`path`, `output`, `file-data`) solved through helpers,
+  closures and modules, and one language restriction (`N0372`, the path); the rest is profile
+  policy. Declassification is `str_vouch` under a `VouchCap`, recorded. A container is still
+  coarse: whatever is read out of a sequence or channel is `unknown` (area 7). *Narrowed in N52.*
 
 ## Native code
 
@@ -73,5 +79,6 @@ found only by reading all of it.
 
 ## Profiles
 
-- Five rules; no allocation, stack, determinism, constant-time or declassification rule; a
-  profile costs one extra check (areas 18–20).
+- Eight rules since N52 (`bounded-allocation`, `contents-stay-in-files`,
+  `no-declassification` added); no stack, determinism or constant-time rule; a profile costs
+  one extra check, and `embedded` a MIR lowering (areas 18–20).

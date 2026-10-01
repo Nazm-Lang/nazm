@@ -41,6 +41,7 @@ mod core_ir;
 mod derived;
 mod diagnostics;
 mod docs;
+mod explain;
 mod fix;
 mod fmt;
 mod inspect;
@@ -625,6 +626,21 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         def: Option<String>,
     },
+    /// Print where each function allocates, retains, blocks, talks to a channel, calls C or
+    /// starts a task (N52), read off MIR, each with its count per call — `at-most-once` or
+    /// `unknown`, never a guess. `--json` prints `nazm.cost/1`.
+    ExplainCost {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print every sink — a path written to, standard output, a file's data — and every
+    /// declassification, with the origins that reach it (N52). `--json` prints `nazm.flow/1`.
+    ExplainFlow {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Resolve a package and write its `nazm.lock` (N46): the exact package versions, sources
     /// and digests a `--locked` build is held to. Written only when its bytes would change.
     Lock {
@@ -673,7 +689,9 @@ fn main() -> ExitCode {
             Ok(None) => {}
             Err(code) => return code,
         },
-        Command::Inspect { file, .. } => match package::entry(file, false) {
+        Command::Inspect { file, .. }
+        | Command::ExplainCost { file, .. }
+        | Command::ExplainFlow { file, .. } => match package::entry(file, false) {
             Ok(Some(main)) => *file = main,
             Ok(None) => {}
             Err(code) => return code,
@@ -682,6 +700,12 @@ fn main() -> ExitCode {
     }
     if let Command::Inspect { file, def } = &cli.command {
         return inspect::run(file, def.as_deref());
+    }
+    if let Command::ExplainCost { file, json } = &cli.command {
+        return explain::cost(file, *json);
+    }
+    if let Command::ExplainFlow { file, json } = &cli.command {
+        return explain::flow(file, *json);
     }
     // Restriction profiles (N47): held before the command does its own work, from the facts a
     // full check settles.
@@ -959,6 +983,8 @@ fn main() -> ExitCode {
         | Command::Mir { .. }
         | Command::Capabilities { .. }
         | Command::Lock { .. }
+        | Command::ExplainCost { .. }
+        | Command::ExplainFlow { .. }
         | Command::Inspect { .. } => {
             unreachable!("handled above")
         }

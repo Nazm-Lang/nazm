@@ -101,6 +101,15 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N52, resource facts and information flow.** No code appeared: a vouch without a
+`VouchCap` is the existing `N0369`, and a profile's new rules are the existing `N0510`. Two
+schemas appeared, `nazm.cost/1` (`nazm explain-cost --json`: per function, each site's `kind`,
+`op`, `at`, `count` — `at-most-once` or `unknown`, never a number — and `on_failure`; and per
+kind, totals by count) and `nazm.flow/1` (`nazm explain-flow --json`: each sink's `class`,
+`function`, `at` and `origins`). `nazm.profile-report/1` gains three rule identities, a new value
+of an existing field. The check artefact's sink facts gain an optional `class`, unread by an older
+checker whose entries the semantic epoch already keeps apart.
+
 **Applied to N51, effect parameters.** Two codes appeared, both compatible: `N0388` (an effect
 parameter where none may be: a second one, on a foreign function, on `main`, on a function with
 no declared effect set, or named inside a type's arguments) and `N0389` (a call binding one effect

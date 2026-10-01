@@ -7960,12 +7960,8 @@ killers = [{ package = "nazm-core", test = "provenance", name = "authority_comes
 name = "n38-a-helper-launders-a-path"
 why = "a sink does not make the parameter its path came from reach it, so a function that writes to a path it is given carries no rule to its callers"
 file = "crates/nazm-core/src/provenance.rs"
-find = """        for s in &f.sinks {
-            reach.extend(Program::eval(&s.path, calls).params);
-        }"""
-replace = """        for s in &f.sinks {
-            let _ = Program::eval(&s.path, calls);
-        }"""
+find = "        for s in f.sinks.iter().filter(|s| s.class == SinkClass::Path) {\n            reach.extend(Program::eval(&s.path, calls).params);\n        }"
+replace = "        for s in f.sinks.iter().filter(|s| s.class == SinkClass::Path) {\n            let _ = Program::eval(&s.path, calls);\n        }"
 killers = [{ package = "nazm-core", test = "provenance", name = "a_function_that_writes_to_a_path_it_is_given_carries_the_rule_to_its_callers" }]
 
 [[mutation]]
@@ -8043,10 +8039,11 @@ why = """`SEMANTIC_EPOCH` is not bumped for a checker that now refuses a restric
 Repointed by N42, which moved the epoch to 11 for foreign declarations: an N41 entry must not be filed where an N42 one is looked for.
 Repointed by N49, which moved it to 12 for string escapes: an entry that read a backslash literally must not be reused.
 Repointed by N50, which moved it to 13 for function values: an entry that refused a function named as a value must not be reused.
-Repointed by N51, which moved it to 14 for effect parameters: an entry that refused a captured capability must not be reused."""
+Repointed by N51, which moved it to 14 for effect parameters: an entry that refused a captured capability must not be reused.
+Repointed by N52, which moved it to 15 for declassification: an entry that accepted a function named str_vouch must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 14;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 13;"
+find = "pub const SEMANTIC_EPOCH: u32 = 15;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 14;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -9209,8 +9206,8 @@ killers = [{ package = "nazm-cli", test = "profiles", name = "a_refusal_names_th
 name = "n47-a-rule-is-skipped"
 why = "`embedded` loses `no-spawn`, so a program that starts tasks passes a profile that forbids the scheduler"
 file = "crates/nazm-service/src/profile.rs"
-find = "            Self::Embedded => &[Rule::NoIo, Rule::NoSpawn],"
-replace = "            Self::Embedded => &[Rule::NoIo],"
+find = "            Self::Embedded => &[Rule::NoIo, Rule::NoSpawn, Rule::BoundedAllocation],"
+replace = "            Self::Embedded => &[Rule::NoIo, Rule::BoundedAllocation],"
 killers = [{ package = "nazm-cli", test = "profiles", name = "every_profile_s_rules_and_verdicts" }]
 
 [[mutation]]
@@ -9936,3 +9933,154 @@ file = "crates/nazm-mir/src/verify.rs"
 find = "        got.is_some_and(|g| self.program.types.same_shape(g, want))"
 replace = "        got == Some(want)"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_polymorphic_wrapper_does_what_its_function_does_everywhere" }]
+
+# --- N52: resource facts, the sink registry, declassification ------------------------------
+
+[[mutation]]
+name = "n52-a-site-in-a-loop-counts-once"
+why = "every site is at-most-once per call, so an allocation in a loop reads as bounded"
+file = "crates/nazm-mir/src/cost.rs"
+find = "        let count = if cyclic.get(i).copied().unwrap_or(true) {"
+replace = "        let count = if false {"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "explain_cost_reports_each_site_with_a_count_per_call" }]
+
+[[mutation]]
+name = "n52-a-push-is-no-allocation"
+why = "a push that may grow its sequence is not counted, so the commonest allocation in a loop is invisible"
+file = "crates/nazm-mir/src/cost.rs"
+find = """
+            | Intrinsic::IntsPush
+"""
+replace = """
+"""
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "explain_cost_reports_each_site_with_a_count_per_call" }]
+
+[[mutation]]
+name = "n52-a-closure-object-is-no-allocation"
+why = "making a closure object allocates and is not reported"
+file = "crates/nazm-mir/src/cost.rs"
+find = """            Rvalue::Closure { .. } => push(SiteKind::Allocation, "closure"),"""
+replace = """            Rvalue::Closure { .. } => {}"""
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "explain_cost_reports_each_site_with_a_count_per_call" }]
+
+[[mutation]]
+name = "n52-a-spawn-is-no-task-site"
+why = "starting a task is not a resource site"
+file = "crates/nazm-mir/src/cost.rs"
+find = """        StatementKind::Spawn { .. } => push(SiteKind::Task, "spawn"),"""
+replace = """        StatementKind::Spawn { .. } => {}"""
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "explain_cost_reports_each_site_with_a_count_per_call" }]
+
+[[mutation]]
+name = "n52-bounded-allocation-ignores-its-facts"
+why = "the embedded rule passes whatever allocates in a loop"
+file = "crates/nazm-service/src/profile.rs"
+find = "                    <[Witness]>::to_vec,"
+replace = "                    |_| Vec::new(),"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "profiles_read_resource_and_flow_facts" }]
+
+[[mutation]]
+name = "n52-standard-output-is-no-sink"
+why = "what print writes is no sink, so a file's contents reach standard output unseen"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::Print | Intrinsic::EPrint => &[(0, Self::Output)],"
+replace = "            Intrinsic::Print | Intrinsic::EPrint => &[],"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "every_sink_class_is_solved_through_helpers_closures_and_containers" }]
+
+[[mutation]]
+name = "n52-a-files-data-is-no-sink"
+why = "what write_file writes is no sink"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::WriteFile => &[(0, Self::Path), (1, Self::FileData)],"
+replace = "            Intrinsic::WriteFile => &[(0, Self::Path)],"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "every_sink_class_is_solved_through_helpers_closures_and_containers" }]
+
+[[mutation]]
+name = "n52-the-registry-loses-the-path-sink"
+why = "the registry drops the one restricted sink, so N38's rule never fires"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::WriteFile => &[(0, Self::Path), (1, Self::FileData)],"
+replace = "            Intrinsic::WriteFile => &[(1, Self::FileData)],"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs_its_authority_everywhere_and_is_recorded" }]
+
+[[mutation]]
+name = "n52-a-sink-ignores-what-its-callers-hand-it"
+why = "a helper's sink sees only its own body's origins, not what its callers pass it"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                    origins = origins.union(*r);"
+replace = "                    let _ = r;"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "every_sink_class_is_solved_through_helpers_closures_and_containers" }]
+
+[[mutation]]
+name = "n52-a-vouch-clears-nothing"
+why = "str_vouch passes its argument's origins through, so declassification does nothing"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                            BuiltinFlow::Vouch => Flow::default(),"
+replace = "                            BuiltinFlow::Vouch => all,"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs_its_authority_everywhere_and_is_recorded" }]
+
+[[mutation]]
+name = "n52-an-undeclared-function-vouches-without-authority"
+why = "code that declares no effects vouches with no VouchCap, so declassification is ambient"
+file = "crates/nazm-core/src/effects.rs"
+find = "                && !site.held.contains(CapabilityKind::Vouch)"
+replace = "                && false"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs_its_authority_everywhere_and_is_recorded" }]
+
+[[mutation]]
+name = "n52-a-vouch-is-not-recorded"
+why = "a declassification leaves no evidence, and critical's rule cannot see it"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::StrVouch => &[(0, Self::Vouch)],"
+replace = "            Intrinsic::StrVouch => &[],"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs_its_authority_everywhere_and_is_recorded" }]
+
+[[mutation]]
+name = "n52-contents-may-be-shown"
+why = "cyber's rule watches the path sink instead of standard output"
+file = "crates/nazm-service/src/profile.rs"
+find = "                    .filter(|s| s.class == SinkClass::Output)"
+replace = "                    .filter(|s| s.class == SinkClass::Path)"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "profiles_read_resource_and_flow_facts" }]
+
+[[mutation]]
+name = "n52-declassification-is-admitted"
+why = "critical's rule finds no vouch"
+file = "crates/nazm-service/src/profile.rs"
+find = "                    .filter(|s| s.class == SinkClass::Vouch)"
+replace = "                    .filter(|_| false)"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "profiles_read_resource_and_flow_facts" }]
+
+[[mutation]]
+name = "n52-a-persisted-sink-forgets-its-class"
+why = "a cached module's output sink comes back as a path sink, refusing on reuse what was accepted fresh"
+file = "crates/nazm-iface/src/facts.rs"
+find = "                            class: (s.class != SinkClass::Path).then(|| s.class.name().to_owned()),"
+replace = "                            class: None,"
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_cached_module_keeps_its_sink_classes" }]
+
+[[mutation]]
+name = "n52-the-llvm-vouch-takes-no-reference"
+why = "the LLVM vouch hands back its argument without a reference of its own, so the string is released twice"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+            Builtin::StrVouch => {
+                self.retain(arg(0), Ty::Str);"""
+replace = """
+            Builtin::StrVouch => {"""
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_changes_nothing_at_run_time_everywhere" }]
+
+[[mutation]]
+name = "n52-the-cranelift-vouch-takes-no-reference"
+why = "the Cranelift vouch copies its argument without a reference of its own"
+file = "crates/nazm-codegen-clif/src/prims.rs"
+find = """
+                self.copy(d, s, n);
+                self.retain_at(d, Ty::Str);
+            }
+            Intrinsic::StrSlice => {"""
+replace = """
+                self.copy(d, s, n);
+            }
+            Intrinsic::StrSlice => {"""
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_changes_nothing_at_run_time_everywhere" }]

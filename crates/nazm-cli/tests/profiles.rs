@@ -90,7 +90,14 @@ fn every_profile_s_rules_and_verdicts() {
     assert_eq!(verdicts(AMBIENT, "general"), (true, vec![]));
     assert_eq!(
         verdicts(AMBIENT, "embedded"),
-        (false, pairs(&[("no-io", "fail"), ("no-spawn", "fail")]))
+        (
+            false,
+            pairs(&[
+                ("no-io", "fail"),
+                ("no-spawn", "fail"),
+                ("bounded-allocation", "pass")
+            ])
+        )
     );
     assert_eq!(
         verdicts(AMBIENT, "critical"),
@@ -100,7 +107,8 @@ fn every_profile_s_rules_and_verdicts() {
                 ("declared-effects", "fail"),
                 ("no-spawn", "fail"),
                 ("no-foreign", "pass"),
-                ("locked-build", "fail")
+                ("locked-build", "fail"),
+                ("no-declassification", "pass")
             ])
         )
     );
@@ -111,7 +119,8 @@ fn every_profile_s_rules_and_verdicts() {
             pairs(&[
                 ("declared-effects", "fail"),
                 ("no-foreign", "pass"),
-                ("locked-build", "fail")
+                ("locked-build", "fail"),
+                ("contents-stay-in-files", "pass")
             ])
         )
     );
@@ -119,7 +128,14 @@ fn every_profile_s_rules_and_verdicts() {
     // rule is left, and it is about how the program was built.
     assert_eq!(
         verdicts(PURE, "embedded"),
-        (true, pairs(&[("no-io", "pass"), ("no-spawn", "pass")]))
+        (
+            true,
+            pairs(&[
+                ("no-io", "pass"),
+                ("no-spawn", "pass"),
+                ("bounded-allocation", "pass")
+            ])
+        )
     );
     // `cyber` allows tasks; `critical` does not.
     let (_, cy) = verdicts(DECLARED_TASKS, "cyber");
@@ -180,7 +196,14 @@ fn a_foreign_call_is_refused_where_no_foreign_is_in_force() {
                fn main(f: ForeignCap) -> Int ! { foreign } { c_add(1, 2) }\n";
     assert_eq!(
         verdicts(src, "embedded"),
-        (true, pairs(&[("no-io", "pass"), ("no-spawn", "pass")]))
+        (
+            true,
+            pairs(&[
+                ("no-io", "pass"),
+                ("no-spawn", "pass"),
+                ("bounded-allocation", "pass")
+            ])
+        )
     );
     let (ok, cyber) = verdicts(src, "cyber");
     assert!(!ok);
@@ -202,9 +225,17 @@ fn a_standard_wrapper_carries_its_effect_into_the_profile() {
         e.contains("`no-io`") && e.contains("`io_println` declares `io`"),
         "{e}"
     );
-    // A pure standard function is no obstacle.
-    let pure = "use \"@std/text\";\nfn main() -> Int ! {} { str_len(text_trim(\" a \")) }\n";
+    // A pure standard function that allocates nothing is no obstacle.
+    let pure = "use \"@std/seq\";\nfn main() -> Int ! {} { ints_sum(ints_new()) }\n";
     assert!(verdicts(pure, "embedded").0);
+    // One that allocates in a loop is, since N52: what it allocates is not bounded.
+    let trims = "use \"@std/text\";\nfn main() -> Int ! {} { str_len(text_trim(\" a \")) }\n";
+    let (ok, rules) = verdicts(trims, "embedded");
+    assert!(!ok, "{rules:?}");
+    assert!(
+        rules.contains(&("bounded-allocation".to_owned(), "fail".to_owned())),
+        "{rules:?}"
+    );
 }
 
 fn package(root: &Path, dep_profile: Option<&str>) {
