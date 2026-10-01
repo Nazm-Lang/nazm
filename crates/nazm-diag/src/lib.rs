@@ -302,6 +302,13 @@ pub mod codes {
     /// `nazm run` was asked to run a program that calls a foreign function (N42).
     pub const FOREIGN_NOT_INTERPRETED: Code = Code::new("N0385");
 
+    // Function values and closures (N50, `docs/architecture.md` §7.52)
+    /// A closure captures a `let mut` binding or a capability (N50).
+    pub const CAPTURE_REFUSED: Code = Code::new("N0386");
+    /// A function that cannot be a value — generic, foreign or built-in — is used as one, or
+    /// a closure is written inside a generic function (N50).
+    pub const NOT_A_FUNCTION_VALUE: Code = Code::new("N0387");
+
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.

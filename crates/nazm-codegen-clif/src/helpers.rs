@@ -57,6 +57,23 @@ pub(crate) fn define(
             each_owned(&mut fx, a, t, retain);
             fx.b.ins().return_(&[]);
         }
+        Helper::ClosureRelease(f) => {
+            let carried: Vec<Ty> =
+                fx.g.native
+                    .program
+                    .function(f)
+                    .and_then(|g| g.closure.as_ref())
+                    .map(|c| c.iter().map(|t| Ty::of(*t)).collect())
+                    .unwrap_or_default();
+            let (offsets, _) = fx.closure_layout(&carried);
+            for (t, off) in carried.iter().zip(offsets) {
+                if fx.g.lay.owns(*t) {
+                    let at = fx.b.ins().iadd_imm_s(a, i64::from(off));
+                    fx.release_at(at, *t);
+                }
+            }
+            fx.b.ins().return_(&[]);
+        }
         Helper::ReleaseElement(t) => {
             if in_memory(t) {
                 fx.release_at(a, t);

@@ -110,6 +110,15 @@ impl Signature {
                 type_parameters(res, ParamOwner::Builtin(i), i.generics() as usize),
                 nazm_core::sema::Effect::of_intrinsic(i).map(nazm_core::sema::EffectSet::of),
             ),
+            // Through a function value (N50): its type is the whole signature.
+            Callee::Indirect(t) => (
+                res.types().show(t),
+                Vec::new(),
+                match t {
+                    Type::Fn(f) => res.types().fn_signature(f).map(|s| s.effects),
+                    _ => None,
+                },
+            ),
         };
         Some(Self {
             callee: call.callee,
@@ -135,7 +144,7 @@ impl Signature {
         // what a reader needs, and its effect is always `foreign`.
         let foreign = match self.callee {
             Callee::Function(id) => res.function(id).and_then(|f| f.foreign.clone()),
-            Callee::Builtin(_) => None,
+            Callee::Builtin(_) | Callee::Indirect(_) => None,
         };
         let mut label = if foreign.is_some() {
             format!("extern \"C\" fn {}", self.name)
@@ -238,7 +247,7 @@ fn type_parameters(res: &Resolution, owner: ParamOwner, n: usize) -> Vec<TypePar
 fn named(res: &Resolution, callee: Callee, params: &[Type]) -> Vec<Parameter> {
     let locals = match callee {
         Callee::Function(id) => res.function(id).map(|f| f.locals.as_slice()),
-        Callee::Builtin(_) => None,
+        Callee::Builtin(_) | Callee::Indirect(_) => None,
     };
     params
         .iter()

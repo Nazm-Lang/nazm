@@ -477,6 +477,50 @@ impl Verifier<'_> {
                     self.bad("a value block typed as something its tail does not produce");
                 }
             }
+            // N50: a closure's body is a closure definition, its captures are locals here,
+            // and an indirect call's callee is a function value with as many parameters as
+            // it is given arguments.
+            ExprKind::Closure { func, captures } => {
+                if self.res.function(*func).is_none_or(|d| d.closure.is_none()) {
+                    self.bad("a closure whose body is not a closure definition");
+                }
+                for l in captures {
+                    if self.local_ty(*l).is_none() {
+                        self.bad(format!(
+                            "a closure captures local {}, which does not exist",
+                            l.0
+                        ));
+                    }
+                }
+                if !matches!(e.ty, Some(Type::Fn(_))) {
+                    self.bad("a closure that is not a function value");
+                }
+            }
+            ExprKind::FnValue(func) => {
+                if self.res.function(*func).is_none() {
+                    self.bad("a function value of a function that does not exist");
+                }
+                if !matches!(e.ty, Some(Type::Fn(_))) {
+                    self.bad("a function value that is not one");
+                }
+            }
+            ExprKind::CallIndirect { callee, args, .. } => {
+                self.expr(callee);
+                for a in args {
+                    self.expr(a);
+                }
+                match callee.ty {
+                    Some(Type::Fn(f)) => {
+                        let arity = self.res.types().fn_signature(f).map(|s| s.params.len());
+                        if arity != Some(args.len()) {
+                            self.bad("an indirect call with the wrong number of arguments");
+                        }
+                    }
+                    _ => {
+                        self.bad("an indirect call through something that is not a function value")
+                    }
+                }
+            }
         }
     }
 }

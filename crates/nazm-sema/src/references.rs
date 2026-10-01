@@ -336,7 +336,9 @@ fn definition_of(res: &Resolution, target: ReferenceTarget) -> ReferenceTarget {
             enumeration: enumeration(p.enumeration),
             ..p
         }),
-        other @ (ReferenceTarget::Function(_) | ReferenceTarget::Local(_)) => other,
+        // A closure's copy of a captured binding is that binding (N50).
+        ReferenceTarget::Local(l) => ReferenceTarget::Local(res.binding_of(l)),
+        other @ ReferenceTarget::Function(_) => other,
     }
 }
 

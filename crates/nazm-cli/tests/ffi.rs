@@ -224,9 +224,10 @@ fn a_foreign_call_inside_managed_code_leaks_nothing() {
         .lines()
         .find(|l| l.starts_with("nazm-memory:"))
         .unwrap();
+    // Sequences, strings, channels and — since N50 — closure objects.
     assert_eq!(
         report.matches("live=0").count(),
-        3,
+        4,
         "everything reclaimed: {report}"
     );
 }

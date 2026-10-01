@@ -35,9 +35,10 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 
 use crate::ast::{
-    Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, ForeignDecl, Function,
-    HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program, Qualifier,
-    Record, Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant, While,
+    Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, FnTypeName, ForeignDecl,
+    Function, HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program,
+    Qualifier, Record, Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant,
+    While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -310,8 +311,12 @@ impl<'a> Parser<'a> {
             .iter()
             .take_while(|t| matches!(t.kind, TokenKind::Pub | TokenKind::Fn))
             .count();
-        for t in rest.iter().skip(skip) {
+        for (i, t) in rest.iter().enumerate().skip(skip) {
+            // `fn NAME` begins the next item; `fn(` is a closure or a function type (N50).
+            let item_fn = matches!(t.kind, TokenKind::Fn)
+                && matches!(rest.get(i + 1).map(|n| &n.kind), Some(TokenKind::Ident(_)));
             let (slot, opens) = match t.kind {
+                TokenKind::Fn if !item_fn => continue,
                 TokenKind::Fn | TokenKind::Pub | TokenKind::Eof => break,
                 TokenKind::LBrace => (0, true),
                 TokenKind::RBrace => (0, false),
@@ -551,13 +556,19 @@ impl<'a> Parser<'a> {
     ///
     /// `start` is where the failed item began. If nothing has been consumed since, one
     /// token is, whatever it is: a failure that read nothing, sitting on a token that
+    /// Whether the next tokens begin a function declaration, `fn NAME`, rather than a
+    /// closure or a function type, `fn(` (N50): what recovery stops at.
+    fn at_item_fn(&self) -> bool {
+        self.at(&TokenKind::Fn) && self.ident_at(self.pos + 1)
+    }
+
     /// starts an item, would otherwise be retried at the same place forever.
     fn recover_to_item(&mut self, start: usize) {
         if self.pos == start {
             self.bump();
         }
         while !self.at(&TokenKind::Eof)
-            && !self.at(&TokenKind::Fn)
+            && !self.at_item_fn()
             && !self.at(&TokenKind::Pub)
             && !self.at(&TokenKind::Struct)
             && !self.at(&TokenKind::Enum)
@@ -984,62 +995,7 @@ impl<'a> Parser<'a> {
         };
 
         let type_params = self.type_params()?;
-        let list = self.checkpoint();
-        self.expect(&TokenKind::LParen, "after the function name")?;
-        let mut params = Vec::new();
-        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
-            let param = self.checkpoint();
-            let p_span = self.peek_span();
-            // `fn f(mut x: Int)` is a real thing to try, and "expected a parameter name,
-            // found `mut`" describes the symptom rather than the rule.
-            if self.at(&TokenKind::Mut) {
-                self.advance();
-                self.report(
-                    Diagnostic::error(
-                        codes::MUTABLE_PARAMETER,
-                        p_span,
-                        "parameters cannot be `mut`",
-                    )
-                    .help(
-                        "a mutable parameter is a local copy, which reads as an \
-                         out-parameter. Bind one in the body instead: `let mut n = n;`",
-                    )
-                    .fix_automatically(
-                        p_span,
-                        "",
-                        "remove `mut`",
-                        "a parameter is immutable either way, so removing the word \
-                         changes nothing but whether the program is legal",
-                    ),
-                );
-                return None;
-            }
-            let p_name = match self.advance() {
-                TokenKind::Ident(n) => n,
-                other => {
-                    self.report(Diagnostic::error(
-                        codes::UNEXPECTED_TOKEN,
-                        p_span,
-                        format!("expected a parameter name, found {}", other.describe()),
-                    ));
-                    return None;
-                }
-            };
-            self.expect(&TokenKind::Colon, "after a parameter name")?;
-            let ty = self.type_name()?;
-            self.wrap(param, SyntaxKind::Param);
-            params.push(Param {
-                name: p_name,
-                name_span: p_span,
-                span: p_span.join(ty.span),
-                ty,
-            });
-            if !self.eat(&TokenKind::Comma) {
-                break;
-            }
-        }
-        self.expect(&TokenKind::RParen, "to close the parameter list")?;
-        self.wrap(list, SyntaxKind::ParamList);
+        let params = self.param_list("after the function name")?;
 
         // Required, not optional. A missing return type would have to mean either "infer
         // it" or "returns nothing", and v0.1 has neither.
@@ -1124,6 +1080,67 @@ impl<'a> Parser<'a> {
             foreign: None,
             span: start.join(span),
         })
+    }
+
+    /// `( name: Type, … )` — a declaration's or a closure's parameters (N50: one parser).
+    fn param_list(&mut self, after: &str) -> Option<Vec<Param>> {
+        let list = self.checkpoint();
+        self.expect(&TokenKind::LParen, after)?;
+        let mut params = Vec::new();
+        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+            let param = self.checkpoint();
+            let p_span = self.peek_span();
+            // `fn f(mut x: Int)` is a real thing to try, and "expected a parameter name,
+            // found `mut`" describes the symptom rather than the rule.
+            if self.at(&TokenKind::Mut) {
+                self.advance();
+                self.report(
+                    Diagnostic::error(
+                        codes::MUTABLE_PARAMETER,
+                        p_span,
+                        "parameters cannot be `mut`",
+                    )
+                    .help(
+                        "a mutable parameter is a local copy, which reads as an \
+                         out-parameter. Bind one in the body instead: `let mut n = n;`",
+                    )
+                    .fix_automatically(
+                        p_span,
+                        "",
+                        "remove `mut`",
+                        "a parameter is immutable either way, so removing the word \
+                         changes nothing but whether the program is legal",
+                    ),
+                );
+                return None;
+            }
+            let p_name = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.report(Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        p_span,
+                        format!("expected a parameter name, found {}", other.describe()),
+                    ));
+                    return None;
+                }
+            };
+            self.expect(&TokenKind::Colon, "after a parameter name")?;
+            let ty = self.type_name()?;
+            self.wrap(param, SyntaxKind::Param);
+            params.push(Param {
+                name: p_name,
+                name_span: p_span,
+                span: p_span.join(ty.span),
+                ty,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RParen, "to close the parameter list")?;
+        self.wrap(list, SyntaxKind::ParamList);
+        Some(params)
     }
 
     /// `! { name, … }` after a return type, or nothing (N36).
@@ -1266,6 +1283,63 @@ impl<'a> Parser<'a> {
         Some(Qualifier { name, span })
     }
 
+    /// `fn(T, …) -> R ! {e}` in a type position (N50). The parameter types and the result
+    /// are type names, so a function type nests through [`Self::type_name`], which counts.
+    fn fn_type(&mut self, at: Checkpoint) -> Option<TypeName> {
+        let fn_span = self.peek_span();
+        self.bump();
+        self.expect(&TokenKind::LParen, "after `fn` in a function type")?;
+        let mut params = Vec::new();
+        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+            params.push(self.type_name()?);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RParen, "to close a function type's parameters")?;
+        self.expect(&TokenKind::Arrow, "before a function type's result")?;
+        let ret = self.type_name()?;
+        let effects = self.effect_set()?;
+        let end = effects.as_ref().map_or(ret.span, |e| e.span);
+        self.wrap(at, SyntaxKind::FnType);
+        Some(TypeName {
+            qualifier: None,
+            function: Some(Box::new(FnTypeName {
+                params,
+                ret,
+                effects,
+            })),
+            name: "fn".to_owned(),
+            name_span: fn_span,
+            span: fn_span.join(end),
+            args: None,
+        })
+    }
+
+    /// `fn(x: T, …) -> R ! {e} { body }` in an expression (N50). Its own frame, never
+    /// inlined, for the reason [`Self::ident_primary`] has one.
+    #[inline(never)]
+    fn closure(&mut self, at: Checkpoint) -> Option<Expr> {
+        let fn_span = self.peek_span();
+        self.bump();
+        let params = self.param_list("after `fn` in a closure")?;
+        self.expect(&TokenKind::Arrow, "before a closure's result type")?;
+        let return_type = self.type_name()?;
+        let effects = self.effect_set()?;
+        let body = self.block()?;
+        self.built(self.child() + 1)?;
+        self.wrap(at, SyntaxKind::ClosureExpr);
+        let span = fn_span.join(body.span);
+        Some(Expr::Closure {
+            params,
+            return_type,
+            effects,
+            body: Box::new(body),
+            fn_span,
+            span,
+        })
+    }
+
     fn type_name(&mut self) -> Option<TypeName> {
         if !self.enter() {
             return None;
@@ -1277,6 +1351,9 @@ impl<'a> Parser<'a> {
 
     fn type_name_inner(&mut self) -> Option<TypeName> {
         let at = self.checkpoint();
+        if self.at(&TokenKind::Fn) {
+            return self.fn_type(at);
+        }
         let name_span = self.peek_span();
         let qualifier = self.qualifier_before_name();
         let name_span = if qualifier.is_some() {
@@ -1295,6 +1372,7 @@ impl<'a> Parser<'a> {
                 self.wrap(at, SyntaxKind::Type);
                 Some(TypeName {
                     qualifier,
+                    function: None,
                     name: n,
                     name_span,
                     span: name_span.join(end),
@@ -1516,6 +1594,7 @@ impl<'a> Parser<'a> {
         let mut braces = self.left_open(start);
         loop {
             match self.peek() {
+                TokenKind::Fn if !self.at_item_fn() => self.bump(),
                 TokenKind::Eof | TokenKind::Fn | TokenKind::Pub => return false,
                 TokenKind::RBrace if braces == 0 => return true,
                 TokenKind::RBrace => {
@@ -2499,6 +2578,7 @@ impl<'a> Parser<'a> {
                 Some(Expr::Block(Box::new(b)))
             }
             TokenKind::Ident(name) => self.ident_primary(at, name, span),
+            TokenKind::Fn => self.closure(at),
             TokenKind::Match => {
                 self.advance();
                 self.match_expr(at, span)
@@ -2861,6 +2941,7 @@ mod ast_depth_tests {
                         }
                     }
                     Expr::Block(b) => stack.push((Node::Block(b), d + 1)),
+                    Expr::Closure { body, .. } => stack.push((Node::Block(body), d + 1)),
                 },
             }
         }

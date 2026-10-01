@@ -1006,6 +1006,7 @@ fn main() -> ExitCode {
             ("sequences", c.sequences),
             ("strings", c.strings),
             ("channels", c.channels),
+            ("closures", c.closures),
         ] {
             use std::fmt::Write as _;
             let _ = write!(

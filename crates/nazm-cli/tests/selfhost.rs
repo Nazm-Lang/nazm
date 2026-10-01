@@ -574,6 +574,9 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         }
         E::Str { value, span } => push_node(out, "str", 0, span.start, span.end, value),
         E::Var { name, span } => push_node(out, "var", 0, span.start, span.end, name),
+        // The compiler written in Nazm has no closures (N50): its parser refuses one, so no
+        // agreement corpus holds one.
+        E::Closure { span, .. } => push_node(out, "closure", 0, span.start, span.end, ""),
         E::Construct {
             ty,
             type_args,
@@ -1401,7 +1404,7 @@ fn the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value() {
             );
             assert!(
                 line.as_deref()
-                    .is_some_and(|l| l.matches("live=0").count() == 3),
+                    .is_some_and(|l| l.matches("live=0").count() == 4),
                 "{name}: left something behind: {line:?}"
             );
         } else {

@@ -784,3 +784,65 @@ fn a_declared_set_is_read_back_exactly_and_a_malformed_one_is_refused() {
         ReadError::UnknownEffect(_)
     ));
 }
+
+// --- function types (N50) ----------------------------------------------------------------
+
+#[test]
+fn a_function_type_is_published_with_its_effects_and_read_back_as_the_same_type() {
+    let g = graph();
+    let mut types = UserTypes::default();
+    let io = nazm_sema::EffectSet::of(nazm_sema::Effect::Io);
+    let f = types.fn_of(nazm_sema::FnSignature {
+        params: vec![Type::Int, Type::Str],
+        ret: Type::Bool,
+        effects: io,
+    });
+    let p =
+        PersistentUnitInterface::published(&interface(&g, &[("run", &[f], Type::Int)]), &g, &types)
+            .expect("publishable");
+    let json = p.to_json().unwrap();
+    assert!(
+        json.contains(r#""params":[{"fn":["Int","Str"],"ret":"Bool","effects":["io"]}]"#),
+        "{json}"
+    );
+    let back = PersistentUnitInterface::from_json(&json).unwrap();
+    assert_eq!(back, p);
+
+    // Read into a fresh table, the type is the one it was: parameters, result and effects.
+    let mut fresh = UserTypes::default();
+    let read = back.rehydrate(g.root(), FnId::from_index(0), &mut fresh);
+    let t = read
+        .exports()
+        .first()
+        .and_then(|e| e.params.first().copied())
+        .unwrap();
+    let Type::Fn(id) = t else {
+        panic!("not a function type: {t:?}");
+    };
+    let sig = fresh.fn_signature(id).unwrap();
+    assert_eq!(sig.params, [Type::Int, Type::Str]);
+    assert_eq!(sig.ret, Type::Bool);
+    assert_eq!(sig.effects, io);
+}
+
+#[test]
+fn a_function_type_with_an_unknown_or_unordered_effect_is_refused() {
+    let with = |effects: &str| {
+        format!(
+            r#"{{"schema":"nazm.interface/7","module":"a.nz","dependencies":[],"records":[],"enums":[],"exports":[{{"def":"a.nz::fn f","name":"f","kind":"fn","generics":0,"params":[{{"fn":["Int"],"ret":"Int","effects":{effects}}}],"ret":"Int"}}]}}"#
+        )
+    };
+    assert!(PersistentUnitInterface::from_json(&with("[]")).is_ok());
+    assert!(matches!(
+        refuse(&with(r#"["fly"]"#)),
+        ReadError::Malformed(_)
+    ));
+    assert!(matches!(
+        refuse(&with(r#"["spawn","io"]"#)),
+        ReadError::Malformed(_)
+    ));
+    assert!(matches!(
+        refuse(&with(r#"["io","io"]"#)),
+        ReadError::Malformed(_)
+    ));
+}

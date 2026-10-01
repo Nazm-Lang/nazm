@@ -189,7 +189,8 @@ fn pipeline(
                 .function(g)
                 .filter(|d| d.foreign.is_some())
                 .map(|d| (site.span, d.name.clone())),
-            sema::resolve::Callee::Builtin(_) => None,
+            // A foreign function cannot be a value (N50), so no indirect call reaches C.
+            sema::resolve::Callee::Builtin(_) | sema::resolve::Callee::Indirect(_) => None,
         })
     });
     if let Some((at, name)) = foreign_call {

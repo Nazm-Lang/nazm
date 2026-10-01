@@ -66,6 +66,12 @@ pub struct Function {
     /// The C symbol of a foreign declaration (N42): a function whose body is not Nazm's.
     /// Its `body` is an empty region no consumer walks.
     pub foreign: Option<String>,
+    /// For a closure's body (N50): the locals that hold its captures, in capture order. They
+    /// are filled from the closure when it is called; empty for every other function.
+    pub captures: Vec<LocalId>,
+    /// Whether this is a closure's body (N50): its local 0, a parameter, is the closure
+    /// itself, and its other parameters follow.
+    pub closure: bool,
 }
 
 impl Function {
@@ -402,6 +408,20 @@ pub enum ExprKind {
     },
     /// A block used as a value.
     Block(Block),
+    /// A closure (N50): the function its body was lifted to, and the enclosing body's locals
+    /// it copies, in the order [`Function::captures`] receives them.
+    Closure {
+        func: FnId,
+        captures: Vec<LocalId>,
+    },
+    /// A named function as a value (N50).
+    FnValue(FnId),
+    /// A call through a function value (N50): the callee is a value of function type.
+    CallIndirect {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+        callee_at: Span,
+    },
 }
 
 /// One initialiser: a field or payload field by declaration index, and its value.

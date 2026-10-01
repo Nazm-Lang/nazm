@@ -47,6 +47,9 @@ pub(crate) struct Fx<'g, 'a, 'b> {
     /// The Cranelift block the statement being translated fails to.
     pub unwind: Option<Block>,
     pub at: Span,
+    /// What the closure object of the function being translated carries, if it is a
+    /// function value's code (N50).
+    carried: Vec<Ty>,
 }
 
 pub(crate) fn mem() -> MemFlagsData {
@@ -71,6 +74,7 @@ pub(crate) fn translate(
         sret: None,
         unwind: None,
         at: f.span,
+        carried: f.closure.iter().flatten().map(|t| Ty::of(*t)).collect(),
     };
     let entry = fx.b.create_block();
     fx.b.append_block_params_for_function_params(entry);
@@ -173,6 +177,7 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
             sret: None,
             unwind: None,
             at: Span::synthetic(),
+            carried: Vec::new(),
         }
     }
 
@@ -479,6 +484,18 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
         }
     }
 
+    /// Where each capture sits in a closure object, after its 24-byte header, and the
+    /// object's size (N50). Each in an 8-aligned slot of its own size.
+    pub(crate) fn closure_layout(&self, carried: &[Ty]) -> (Vec<u32>, u32) {
+        let mut off = 24u32;
+        let mut offsets = Vec::with_capacity(carried.len());
+        for t in carried {
+            offsets.push(off);
+            off += self.size(*t).div_ceil(8) * 8;
+        }
+        (offsets, off)
+    }
+
     /// Read a value of type `t` at `addr` into local `dst`, taking a reference of its own.
     fn read_owned(&mut self, dst: mir::LocalId, addr: Value, t: Ty) {
         if in_memory(t) {
@@ -783,6 +800,113 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
             }
             mir::Rvalue::Primitive { op, elem, args } => {
                 self.primitive(dst, *op, elem.map(Ty::of), args);
+            }
+            mir::Rvalue::Closure { func, captures } => {
+                let Some(fid) = self.g.funcs.get(func).copied() else {
+                    self.g
+                        .defect(self.at, "a closure of an undeclared function");
+                    return;
+                };
+                let carried: Vec<Ty> = self
+                    .g
+                    .native
+                    .program
+                    .function(*func)
+                    .and_then(|g| g.closure.as_ref())
+                    .map(|c| c.iter().map(|t| Ty::of(*t)).collect())
+                    .unwrap_or_default();
+                let (offsets, size) = self.closure_layout(&carried);
+                let r = self.func(fid);
+                let code = self.b.ins().func_addr(self.g.ptr, r);
+                let release = if carried.iter().any(|t| self.g.lay.owns(*t)) {
+                    let h = self.g.helper(Helper::ClosureRelease(*func));
+                    let hr = self.func(h);
+                    self.b.ins().func_addr(self.g.ptr, hr)
+                } else {
+                    self.iconst(0)
+                };
+                let n = self.iconst(i64::from(size));
+                self.g.needs.closures = true;
+                let c = self
+                    .rt("nz.closure_new", &[n, code, release])
+                    .unwrap_or_else(|| self.iconst(0));
+                let none = self.b.ins().icmp_imm_s(IntCC::Equal, c, 0);
+                self.guard(none, "N0406", "out of memory");
+                for ((o, t), off) in captures.iter().zip(&carried).zip(&offsets) {
+                    let at = self.b.ins().iadd_imm_s(c, i64::from(*off));
+                    // The object's own reference to each capture.
+                    if in_memory(*t) {
+                        let src = self.place(o);
+                        let n = self.size(*t);
+                        self.copy(at, src, n);
+                        self.retain_at(at, *t);
+                    } else {
+                        let v = self.value(o);
+                        self.b.ins().store(mem(), v, at, 0);
+                        if self.g.lay.owns(*t) {
+                            self.retain_value(v, *t);
+                        }
+                    }
+                }
+                self.set(dst, c);
+            }
+            mir::Rvalue::Capture { env, index } => {
+                let carried = self.carried.clone();
+                let (offsets, _) = self.closure_layout(&carried);
+                let (Some(t), Some(off)) = (
+                    carried.get(*index as usize).copied(),
+                    offsets.get(*index as usize).copied(),
+                ) else {
+                    self.g
+                        .defect(self.at, "a capture the closure does not carry");
+                    return;
+                };
+                let c = self.get(*env);
+                let at = self.b.ins().iadd_imm_s(c, i64::from(off));
+                self.read_owned(dst, at, t);
+            }
+            mir::Rvalue::CallIndirect { callee, args } => {
+                let c = self.value(callee);
+                let fn_ty = self.operand_ty(callee);
+                let Ty::Fn(id) = fn_ty else {
+                    self.g
+                        .defect(self.at, "a call through something not a function value");
+                    return;
+                };
+                let Some(sig) = self
+                    .g
+                    .native
+                    .program
+                    .types
+                    .function(nazm_sema::FnTypeId::from_index(id.0 as usize))
+                    .cloned()
+                else {
+                    self.g.defect(self.at, "a function type with no signature");
+                    return;
+                };
+                let mut params = vec![fn_ty];
+                params.extend(sig.params.iter().map(|t| Ty::of(*t)));
+                let signature = self.g.signature(&params, Ty::of(sig.ret));
+                let sref = self.b.import_signature(signature);
+                let code = self.b.ins().load(types::I64, mem(), c, 8);
+                let mut vals = Vec::with_capacity(args.len() + 2);
+                if in_memory(dt) {
+                    let d = self.addr(dst);
+                    vals.push(d);
+                }
+                vals.push(c);
+                for a in args {
+                    let v = self.argument(a);
+                    vals.push(v);
+                }
+                let inst = self.b.ins().call_indirect(sref, code, &vals);
+                let result = self.b.inst_results(inst).first().copied();
+                self.check_failed();
+                if !in_memory(dt) {
+                    if let Some(v) = result {
+                        self.set(dst, v);
+                    }
+                }
             }
             mir::Rvalue::Record { record, fields } => {
                 let d = self.addr(dst);

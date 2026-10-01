@@ -346,6 +346,65 @@ fn rvalue(cx: &Ctx<'_>, value: &Rvalue, want: Type, arm: Option<(LocalId, u32)>)
             }
         },
         Rvalue::Primitive { op, elem, args } => primitive(cx, *op, *elem, args, want),
+        Rvalue::CallIndirect { callee, args } => {
+            let Some(Type::Fn(f)) = cx.operand(callee) else {
+                return Some("a call through something that is not a function value".to_owned());
+            };
+            let Some(sig) = types.function(f) else {
+                return Some("a call through a function type the program does not have".to_owned());
+            };
+            if sig.params.len() != args.len()
+                || args
+                    .iter()
+                    .zip(&sig.params)
+                    .any(|(a, p)| cx.operand(a) != Some(*p))
+            {
+                return Some("a call through a function value with the wrong arguments".to_owned());
+            }
+            (sig.ret != want)
+                .then(|| "a call through a function value of the wrong result type".to_owned())
+        }
+        Rvalue::Closure { func, captures } => {
+            let Type::Fn(f) = want else {
+                return Some(
+                    "a closure written into something that is not a function value".to_owned(),
+                );
+            };
+            let (Some(g), Some(sig)) = (cx.program.function(*func), types.function(f)) else {
+                return Some(
+                    "a closure of a function or type the program does not have".to_owned(),
+                );
+            };
+            let Some(carried) = &g.closure else {
+                return Some(format!(
+                    "a closure of `{}`, which is not a function value's code",
+                    g.name
+                ));
+            };
+            if carried.len() != captures.len()
+                || captures
+                    .iter()
+                    .zip(carried)
+                    .any(|(c, t)| cx.operand(c) != Some(*t))
+            {
+                return Some("a closure whose captures are not what its code reads".to_owned());
+            }
+            let params: Vec<Type> = g.param_types().skip(1).collect();
+            (params != sig.params || g.ret != sig.ret || g.param_types().next() != Some(want))
+                .then(|| format!("a closure of `{}`, whose signature is not its type", g.name))
+        }
+        Rvalue::Capture { env, index } => {
+            if *env != LocalId(0) || cx.f.params == 0 {
+                return Some("a capture read from something other than the closure".to_owned());
+            }
+            let Some(carried) = &cx.f.closure else {
+                return Some(
+                    "a capture read in a function that is no function value's code".to_owned(),
+                );
+            };
+            (carried.get(*index as usize) != Some(&want))
+                .then(|| "a capture read into a local of another type".to_owned())
+        }
         Rvalue::Record { record, fields } => {
             let Some(r) = types.record(*record) else {
                 return Some("a record the program does not have".to_owned());
@@ -768,6 +827,9 @@ fn rvalue_reads(v: &Rvalue) -> Vec<LocalId> {
         Rvalue::Arith(_, a, b) => vec![a, b],
         Rvalue::Compare { lhs, rhs, .. } => vec![lhs, rhs],
         Rvalue::Call { args, .. } | Rvalue::Primitive { args, .. } => args.iter().collect(),
+        Rvalue::CallIndirect { callee, args } => std::iter::once(callee).chain(args).collect(),
+        Rvalue::Closure { captures, .. } => captures.iter().collect(),
+        Rvalue::Capture { env, .. } => return vec![*env],
         Rvalue::Field { base, .. } => vec![base],
         Rvalue::Payload { base, .. } => return vec![*base],
         Rvalue::Copy(_) | Rvalue::Move(_) | Rvalue::Record { .. } | Rvalue::Variant { .. } => {

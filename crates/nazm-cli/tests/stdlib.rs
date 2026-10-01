@@ -108,7 +108,7 @@ fn agrees(files: &[(&str, &str)], expected: &str) {
                 .lines()
                 .find(|l| l.starts_with("nazm-memory:"))
                 .unwrap_or_else(|| panic!("{label}: {}", r.stderr));
-            assert_eq!(report.matches("live=0").count(), 3, "{label}: {report}");
+            assert_eq!(report.matches("live=0").count(), 4, "{label}: {report}");
         }
     }
 }

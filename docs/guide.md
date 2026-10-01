@@ -506,7 +506,8 @@ accepts.
 | `payload` | `field , { "," , field } , [ "," ]` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
-| `type` | `[ qualifier ] , IDENT , [ type_arguments ]` |
+| `type` | `function_type \| [ qualifier ] , IDENT , [ type_arguments ]` |
+| `function_type` | `"fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ]` |
 | `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
 | `statement` | `let_statement \| assignment \| while_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
@@ -528,7 +529,8 @@ accepts.
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" ] , primary` |
 | `primary` | `atom , { "." , IDENT \| "?" }` |
-| `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| "(" , expression , ")"` |
+| `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| closure \| "(" , expression , ")"` |
+| `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
 | `construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
 | `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
@@ -868,7 +870,7 @@ fn f(n: Int) -> Int { n } fn main() -> Int { f(1) }
 ### `type`
 
 ```ebnf
-type = [ qualifier ] , IDENT , [ type_arguments ] ;
+type = function_type | [ qualifier ] , IDENT , [ type_arguments ] ;
 ```
 
 A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
@@ -889,6 +891,24 @@ fn f(xs: Vec[Vec[Int]]) -> Int { vec_len(xs) } fn main() -> Int { f(vec_new[Vec[
 
 ```nazm
 fn say(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int { say(io, "hi") }
+```
+
+### `function_type`
+
+```ebnf
+function_type = "fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ] ;
+```
+
+A function type (N50): its parameters' types, its result's, and the effects a call
+performs — none when unwritten. Structural: two are one type exactly when all three are
+equal. See `docs/spec.md`, *Function values and closures*.
+
+```nazm
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) } fn main() -> Int { 0 }
+```
+
+```nazm
+fn run(c: IoCap, f: fn(IoCap) -> Int ! { io }) -> Int ! { io } { f(c) } fn main() -> Int { 0 }
 ```
 
 ### `type_arguments`
@@ -1188,11 +1208,26 @@ struct P { x: Int, } fn f(r: Result[P, Str]) -> Result[Int, Str] { Result[Int, S
 ### `atom`
 
 ```ebnf
-atom = INTEGER | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | match_expression | "(" , expression , ")" ;
+atom = INTEGER | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | match_expression | closure | "(" , expression , ")" ;
 ```
 
 ```nazm
 fn main() -> Int { 1 }
+```
+
+### `closure`
+
+```ebnf
+closure = "fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block ;
+```
+
+A closure (N50): a function written where a value is, its parameters and result in
+full, its effects declared or none. Its body may name the bindings around it, each
+copied in when the closure is made; a `let mut` binding or a capability may not be
+(`N0386`).
+
+```nazm
+fn main() -> Int { let k = 2; let f = fn(x: Int) -> Int { x * k }; f(3) }
 ```
 
 ### `call`

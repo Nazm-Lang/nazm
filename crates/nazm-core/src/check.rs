@@ -97,13 +97,30 @@ impl Scopes {
         self.frames.iter().rev().find_map(|f| f.get(name).copied())
     }
 
+    /// The binding a name reaches, and the index of the frame it is in (N50: a closure's
+    /// boundary is a frame index, and a binding before it is captured).
+    fn lookup_at(&self, name: &str) -> Option<(usize, Binding)> {
+        self.frames
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, f)| f.get(name).copied().map(|b| (i, b)))
+    }
+
+    fn depth(&self) -> usize {
+        self.frames.len()
+    }
+
     /// The authority the bindings visible here hold (N37): the kind of every binding a
     /// name reaches whose type is a capability. A shadowed binding is not reachable, so it
     /// holds nothing; a binding of a record that contains one holds nothing either — the
     /// authority is the capability value, and a reader sees it only once it is bound.
-    fn held(&self) -> nazm_sema::CapabilitySet {
+    ///
+    /// Over the frames from `start` in: inside a closure, its own (N50) — a closure cannot
+    /// capture a capability, so the authority it holds is its parameters'.
+    fn held_from(&self, start: usize) -> nazm_sema::CapabilitySet {
         let mut held = nazm_sema::CapabilitySet::EMPTY;
-        for (i, frame) in self.frames.iter().enumerate() {
+        for (i, frame) in self.frames.iter().enumerate().skip(start) {
             for (name, b) in frame {
                 let Type::Cap(k) = b.ty else { continue };
                 let inner = self.frames.get(i + 1..).unwrap_or_default();
@@ -361,6 +378,20 @@ pub struct Checker<'a> {
     /// The type parameters in scope — the current function's — by name, for a type
     /// written inside its body. Empty outside a generic function.
     type_scope: Vec<(String, Type)>,
+    /// The closures whose bodies enclose the expression being checked, innermost last (N50).
+    closures: Vec<ClosureFrame>,
+    /// How many closures the top-level function being checked has, for their names.
+    closure_count: u32,
+}
+
+/// A closure whose body is being checked (N50).
+#[derive(Debug)]
+struct ClosureFrame {
+    id: FnId,
+    /// The scope depth at its body's start: a binding in a frame below it is captured.
+    boundary: usize,
+    /// The enclosing function's slot of each binding already captured, and the closure's.
+    captured: HashMap<u32, u32>,
 }
 
 /// Which modules' bodies actually have to be checked.
@@ -1447,6 +1478,8 @@ fn record_module_names(res: &mut Resolution, module: ModuleId, env: &Env, types:
             candidate: match v.callee {
                 Callee::Builtin(i) => Candidate::Intrinsic(i),
                 Callee::Function(id) => Candidate::Entity(nazm_sema::ReferenceTarget::Function(id)),
+                // An environment holds named functions only; an indirect callee is a value.
+                Callee::Indirect(_) => Candidate::Intrinsic(nazm_sema::Intrinsic::StrLen),
             },
         })
         .collect();
@@ -1612,6 +1645,25 @@ fn resolve_written_inner(
             .map(|w| resolve_written_inner(types, res, w, scope, errors))
             .collect()
     });
+    // `fn(T…) -> R ! {e}` (N50): its parts resolved as any type is, interned.
+    if let Some(f) = &written.function {
+        let params: Vec<Type> = f
+            .params
+            .iter()
+            .map(|p| resolve_written_inner(types, res, p, scope, errors))
+            .collect();
+        let ret = resolve_written_inner(types, res, &f.ret, scope, errors);
+        let effects = f
+            .effects
+            .as_ref()
+            .and_then(|d| crate::effects::declared(d, errors))
+            .unwrap_or(nazm_sema::EffectSet::EMPTY);
+        return res.types_mut().fn_of(nazm_sema::FnSignature {
+            params,
+            ret,
+            effects,
+        });
+    }
     // A qualified type names a module's definition (N49): never a type parameter, never `Vec`
     // or a built-in, which belong to no module — so those branches are for plain names only.
     let qualified = written.qualifier.is_some();
@@ -2008,6 +2060,7 @@ pub fn declare_unit(
             provenance: None,
             mentions: Vec::new(),
             foreign: foreign.clone(),
+            closure: None,
         });
         debug_assert_eq!(declared, id);
         declare_type_params(res, &f.type_params, ParamOwner::Function(id));
@@ -2227,6 +2280,8 @@ pub fn check_unit(
         scope_depth: 0,
         loop_depth: 0,
         type_scope: Vec::new(),
+        closures: Vec::new(),
+        closure_count: 0,
     };
     for (_, f) in &unit.functions {
         c.check_function(f);
@@ -2651,6 +2706,368 @@ impl Checker<'_> {
     /// exist, because it is private where it lives, or because it lives in a module this
     /// one did not import, is [`Self::why_invisible`]'s question — and getting that answer
     /// right is most of what makes the visibility rule usable.
+    /// The authority the bindings visible here hold: inside a closure, its own frames' only
+    /// (N50).
+    fn held(&self) -> nazm_sema::CapabilitySet {
+        let start = self.closures.last().map_or(0, |c| c.boundary);
+        self.scopes.held_from(start)
+    }
+
+    /// The binding `name` reaches here, captured into every closure between it and here
+    /// (N50): a binding of a frame below a closure's boundary is copied into that closure
+    /// when the closure is made, so inside it the name means the closure's copy. A
+    /// `let mut` binding or a capability may not be captured (`N0386`).
+    fn lookup_var(&mut self, name: &str, at: Span) -> Option<Binding> {
+        let (frame, b) = self.scopes.lookup_at(name)?;
+        let crossing: Vec<usize> = self
+            .closures
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| frame < c.boundary)
+            .map(|(i, _)| i)
+            .collect();
+        if crossing.is_empty() {
+            return Some(b);
+        }
+        if b.mutable || matches!(b.ty, Type::Cap(_)) {
+            let what = if b.mutable {
+                "a `let mut` binding"
+            } else {
+                "a capability"
+            };
+            self.errors.push(
+                Diagnostic::error(
+                    codes::CAPTURE_REFUSED,
+                    at,
+                    format!("a closure cannot capture `{name}`, {what}"),
+                )
+                .help(if b.mutable {
+                    "a closure copies what it captures, so a mutable binding would silently \
+                     stop being tracked; bind a copy with `let`, or share a sequence or a \
+                     channel"
+                } else {
+                    "authority is passed, never captured: give the closure a capability \
+                     parameter and pass it at the call"
+                }),
+            );
+            return Some(Binding {
+                mutable: false,
+                declared_at: None,
+                ..b
+            });
+        }
+        let mut slot = b.slot;
+        for i in crossing {
+            let Some(c) = self.closures.get(i) else {
+                continue;
+            };
+            let id = c.id;
+            if let Some(inner) = c.captured.get(&slot).copied() {
+                slot = inner;
+                continue;
+            }
+            let inner = self
+                .res
+                .bind(
+                    id,
+                    // Declared nowhere: the copy is the captured binding's, and the service
+                    // reads it as that binding (`Resolution::binding_of`).
+                    LocalDef {
+                        name: name.to_owned(),
+                        ty: b.ty,
+                        mutable: false,
+                        span: Span::synthetic(),
+                    },
+                )
+                .unwrap_or(0);
+            self.res.record_capture(
+                id,
+                nazm_sema::Capture {
+                    outer: slot,
+                    inner,
+                    ty: b.ty,
+                },
+            );
+            if let Some(c) = self.closures.get_mut(i) {
+                c.captured.insert(slot, inner);
+            }
+            slot = inner;
+        }
+        Some(Binding {
+            mutable: false,
+            declared_at: None,
+            slot,
+            ty: b.ty,
+        })
+    }
+
+    /// A named function written as a value (N50): non-generic, not foreign, not a built-in.
+    /// Its type is its signature's, with its declared effects or, undeclared, none — which
+    /// effects analysis then holds the function to.
+    fn function_value(&mut self, name: &str, at: Span, expected: Option<Type>) -> Type {
+        let Some(v) = self.env.get(name).cloned() else {
+            return expected.unwrap_or(Type::Int);
+        };
+        let refuse = |me: &mut Self, why: &str| {
+            me.errors.push(
+                Diagnostic::error(
+                    codes::NOT_A_FUNCTION_VALUE,
+                    at,
+                    format!("`{name}` is {why}, and cannot be used as a value"),
+                )
+                .help(format!(
+                    "call it as `{name}(...)`, or write a closure that calls it: \
+                     `fn(x: Int) -> Int {{ {name}(x) }}`"
+                )),
+            );
+            expected.unwrap_or(Type::Int)
+        };
+        let Callee::Function(id) = v.callee else {
+            return refuse(self, "a built-in");
+        };
+        let Some(def) = self.res.function(id) else {
+            return expected.unwrap_or(Type::Int);
+        };
+        if def.foreign.is_some() {
+            return refuse(self, "a foreign function");
+        }
+        if v.sig.generics > 0 {
+            return refuse(self, "generic");
+        }
+        // Its thunk is the using module's; an instance of a generic body is an artefact of its
+        // own, which could not reach it (N50).
+        if !self.type_scope.is_empty() {
+            return refuse(self, "named inside a generic function");
+        }
+        // Undeclared: another module's may do anything the bridge covers; this module's is
+        // assumed to do nothing, which effects analysis then holds it to.
+        let assumed = match def.declared_effects {
+            Some(set) => set,
+            None if def.module != self.module => crate::effects::assumed(id, self.res),
+            None => nazm_sema::EffectSet::EMPTY,
+        };
+        let ty = self.res.types_mut().fn_of(nazm_sema::FnSignature {
+            params: v.sig.params.clone(),
+            ret: v.sig.ret,
+            effects: assumed,
+        });
+        self.res.record_fn_value(nazm_sema::FnValueUse {
+            function: id,
+            at,
+            assumed,
+            ty,
+        });
+        if let Some(cur) = self.current {
+            self.res.record_mention(cur, ty);
+        }
+        ty
+    }
+
+    /// A call through a binding of function type (N50).
+    fn check_indirect_call(
+        &mut self,
+        name: &str,
+        at: Span,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Type {
+        let Some(b) = self.lookup_var(name, at) else {
+            return expected.unwrap_or(Type::Int);
+        };
+        self.record_var(at, b.slot);
+        let Type::Fn(f) = b.ty else {
+            return expected.unwrap_or(Type::Int);
+        };
+        let Some(fsig) = self.res.types().fn_signature(f).cloned() else {
+            return expected.unwrap_or(Type::Int);
+        };
+        if args.len() != fsig.params.len() {
+            self.errors.push(Diagnostic::error(
+                codes::WRONG_ARGUMENT_COUNT,
+                span,
+                format!(
+                    "`{name}` takes {} argument{}, but {} {} given",
+                    fsig.params.len(),
+                    if fsig.params.len() == 1 { "" } else { "s" },
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" }
+                ),
+            ));
+        }
+        self.res.record_call(at, Callee::Indirect(b.ty));
+        self.record_site(at, Vec::new(), false);
+        for (i, a) in args.iter().enumerate() {
+            let want = fsig.params.get(i).copied();
+            let got = self.value_type(a, want);
+            if let Some(want) = want {
+                if got != want {
+                    self.errors.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        a.span(),
+                        format!(
+                            "argument {} of `{name}` is `{}`, but this is `{}`",
+                            i + 1,
+                            self.show(want),
+                            self.show(got)
+                        ),
+                    ));
+                }
+            }
+        }
+        let sig = Signature {
+            params: fsig.params.clone(),
+            ret: fsig.ret,
+            name_span: at,
+            generics: 0,
+            owner: None,
+        };
+        self.record_checked_call(at, span, args, &sig, None, false);
+        fsig.ret
+    }
+
+    /// A closure expression (N50): a definition of its own, checked as a function is, with
+    /// what its body names from around it captured.
+    #[allow(clippy::too_many_arguments)]
+    fn check_closure(
+        &mut self,
+        params: &[nazm_syntax::Param],
+        return_type: &TypeName,
+        effects: Option<&nazm_syntax::EffectDecl>,
+        body: &Block,
+        fn_span: Span,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Type {
+        let Some(enclosing) = self.current else {
+            return expected.unwrap_or(Type::Int);
+        };
+        if !self.type_scope.is_empty() {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::NOT_A_FUNCTION_VALUE,
+                    fn_span,
+                    "a closure inside a generic function is not supported yet",
+                )
+                .help(
+                    "a closure there would need an instance per type argument; write it in a \
+                     function that is not generic, or pass a function value in",
+                ),
+            );
+            return expected.unwrap_or(Type::Int);
+        }
+        let param_types: Vec<Type> = params
+            .iter()
+            .map(|p| self.resolve_written_type(&p.ty))
+            .collect();
+        let ret = self.resolve_written_type(return_type);
+        let declared = match effects {
+            Some(d) => crate::effects::declared(d, &mut self.errors),
+            None => Some(nazm_sema::EffectSet::EMPTY),
+        }
+        .unwrap_or(nazm_sema::EffectSet::EMPTY);
+        let (enclosing_name, decl) = self
+            .res
+            .function(enclosing)
+            .map(|d| (d.name.clone(), d.decl))
+            .unwrap_or_default();
+        let base = enclosing_name.split('#').next().unwrap_or("").to_owned();
+        let name = format!("{base}#{}", self.closure_count);
+        self.closure_count += 1;
+        let ty = self.res.types_mut().fn_of(nazm_sema::FnSignature {
+            params: param_types.clone(),
+            ret,
+            effects: declared,
+        });
+        let id = self.res.declare_closure(FnDef {
+            name,
+            module: self.module,
+            visibility: Visibility::Private,
+            params: param_types.clone(),
+            ret,
+            name_span: fn_span,
+            decl,
+            locals: Vec::new(),
+            type_params: Vec::new(),
+            call_sites: Vec::new(),
+            declared_effects: Some(declared),
+            inferred_effects: None,
+            effect_reasons: Vec::new(),
+            provenance: None,
+            mentions: Vec::new(),
+            foreign: None,
+            closure: Some(nazm_sema::ClosureInfo {
+                enclosing,
+                at: span,
+                written_effects: effects.map(|d| d.span),
+                ty,
+                captures: Vec::new(),
+            }),
+        });
+
+        // The closure's body is a function of its own: its own slots, returns, loops and
+        // scopes, and none of the enclosing body's.
+        let saved_current = self.current.replace(id);
+        let saved_return = self.return_type.replace(ret);
+        let saved_span = self.return_span.replace(return_type.span);
+        let saved_scope_depth = std::mem::replace(&mut self.scope_depth, 0);
+        let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+        self.closures.push(ClosureFrame {
+            id,
+            boundary: self.scopes.depth(),
+            captured: HashMap::new(),
+        });
+        self.open_scope(span);
+        for (p, ty) in params.iter().zip(&param_types) {
+            if self.scopes.defined_here(&p.name) {
+                self.errors.push(Diagnostic::error(
+                    codes::ALREADY_DEFINED_IN_SCOPE,
+                    p.span,
+                    format!("`{}` is listed twice in this parameter list", p.name),
+                ));
+            }
+            let slot = self.allocate(&p.name, p.name_span, *ty, false);
+            self.define(&p.name, *ty, false, None, slot, p.name_span.end);
+        }
+        let completion = self.check_block(body, Some(ret));
+        match completion {
+            Completion::Diverges => {}
+            Completion::Value(actual) if actual == ret => {}
+            Completion::Value(actual) => {
+                let (actual, declared) = (self.show(actual), self.show(ret));
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        body.tail.as_ref().map_or(body.span, |t| t.span()),
+                        format!("this closure returns `{actual}`, but its type says `{declared}`"),
+                    )
+                    .secondary(return_type.span, format!("declared `{declared}` here")),
+                );
+            }
+            Completion::Unit => {
+                let declared = self.show(ret);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        body.span,
+                        format!("this closure must produce a `{declared}`, but its body does not"),
+                    )
+                    .secondary(return_type.span, format!("declared `{declared}` here")),
+                );
+            }
+        }
+        self.close_scope();
+        self.closures.pop();
+        self.current = saved_current;
+        self.return_type = saved_return;
+        self.return_span = saved_span;
+        self.scope_depth = saved_scope_depth;
+        self.loop_depth = saved_loop_depth;
+
+        self.res.record_mention(enclosing, ty);
+        ty
+    }
+
     /// The aliases this module imports modules under (N49), for a diagnostic.
     fn alias_names(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self.env.aliases.keys().map(String::as_str).collect();
@@ -3745,6 +4162,7 @@ impl Checker<'_> {
         // Looked up in **this module's** table. Before N2 the name alone was enough,
         // which is the same thing as saying a name meant one function in the program.
         self.current = self.res.definition(self.module, &f.name);
+        self.closure_count = 0;
         // The function's own type parameters are in scope for every type written inside
         // it, and in no other function.
         self.type_scope = self
@@ -4115,7 +4533,7 @@ impl Checker<'_> {
 
     fn check_assign(&mut self, a: &Assign) {
         let place = &a.place;
-        let Some(binding) = self.scopes.lookup(&place.name) else {
+        let Some(binding) = self.lookup_var(&place.name, place.span) else {
             self.errors.push(
                 Diagnostic::error(
                     codes::UNDEFINED_VARIABLE,
@@ -4324,26 +4742,42 @@ impl Checker<'_> {
             Expr::Bool { .. } => Completion::Value(Type::Bool),
             Expr::Str { .. } => Completion::Value(Type::Str),
 
-            Expr::Var { name, span } => match self.scopes.lookup(name) {
+            Expr::Var { name, span } => match self.lookup_var(name, *span) {
                 Some(b) => {
                     // Which binding this mention refers to, recorded where the question
                     // was answered. The backend reads this instead of walking scopes again.
                     self.record_var(*span, b.slot);
                     Completion::Value(b.ty)
                 }
+                None if self.env.contains(name) => {
+                    Completion::Value(self.function_value(name, *span, expected))
+                }
                 None => {
-                    let mut d = Diagnostic::error(
+                    self.errors.push(Diagnostic::error(
                         codes::UNDEFINED_VARIABLE,
                         *span,
                         format!("`{name}` is not defined"),
-                    );
-                    if self.env.contains(name) {
-                        d = d.help(format!("`{name}` is a function — call it as `{name}(...)`"));
-                    }
-                    self.errors.push(d);
+                    ));
                     Completion::Value(expected.unwrap_or(Type::Int))
                 }
             },
+
+            Expr::Closure {
+                params,
+                return_type,
+                effects,
+                body,
+                fn_span,
+                span,
+            } => Completion::Value(self.check_closure(
+                params,
+                return_type,
+                effects.as_ref(),
+                body,
+                *fn_span,
+                *span,
+                expected,
+            )),
 
             Expr::Neg {
                 operand, op_span, ..
@@ -4403,6 +4837,20 @@ impl Checker<'_> {
                 args,
                 span,
             } => {
+                // A binding of function type of that name hides a function of it (N50):
+                // the call is through the value.
+                if qualifier.is_none()
+                    && type_args.is_none()
+                    && matches!(self.scopes.lookup(callee).map(|b| b.ty), Some(Type::Fn(_)))
+                {
+                    return Completion::Value(self.check_indirect_call(
+                        callee,
+                        *callee_span,
+                        args,
+                        *span,
+                        expected,
+                    ));
+                }
                 // `m::f` is looked up as one key (N49); everything below names it as written.
                 let key = written_key(qualifier.as_ref(), callee);
                 let callee = &key;
@@ -4707,7 +5155,7 @@ impl Checker<'_> {
                 callee,
                 type_args,
                 spawned,
-                held: self.scopes.held(),
+                held: self.held(),
             },
         );
     }
@@ -4994,7 +5442,8 @@ impl Checker<'_> {
     }
 
     /// Match a declared parameter type against an argument's type, settling the callee's
-    /// parameters it mentions. Structural through applications and `Vec`; nothing else is.
+    /// parameters it mentions. Structural through applications, `Vec` and function types;
+    /// nothing else is.
     fn unify(
         &self,
         formal: Type,
@@ -5050,6 +5499,31 @@ impl Checker<'_> {
                     return Err(Unify::Mismatch);
                 }
                 for (f, a) in fa.into_iter().zip(aa) {
+                    self.unify(f, a, owner, solved, arg)?;
+                }
+                Ok(())
+            }
+            // Structural through a function type's parameters and result (N50); its effects
+            // are not abstracted over, so they must be the same set.
+            Type::Fn(ff) => {
+                let Type::Fn(af) = actual else {
+                    return Err(Unify::Mismatch);
+                };
+                let (Some(fs), Some(asig)) = (types.fn_signature(ff), types.fn_signature(af))
+                else {
+                    return Err(Unify::Mismatch);
+                };
+                if fs.params.len() != asig.params.len() || fs.effects != asig.effects {
+                    return Err(Unify::Mismatch);
+                }
+                let pairs: Vec<(Type, Type)> = fs
+                    .params
+                    .iter()
+                    .copied()
+                    .zip(asig.params.iter().copied())
+                    .chain(std::iter::once((fs.ret, asig.ret)))
+                    .collect();
+                for (f, a) in pairs {
                     self.unify(f, a, owner, solved, arg)?;
                 }
                 Ok(())

@@ -65,6 +65,9 @@ impl FnId {
 pub enum Callee {
     Builtin(Intrinsic),
     Function(FnId),
+    /// A call through a function value (N50): which function is decided at run time, and
+    /// what the call may do is its function type's — parameters, result and effects.
+    Indirect(Type),
 }
 
 /// One local binding: a parameter or a `let`.
@@ -155,6 +158,48 @@ pub struct FnDef {
     /// The C symbol a foreign declaration names (N42), or `None` for a Nazm function. A
     /// foreign function has no body; its declared effect set is `{ foreign }`.
     pub foreign: Option<String>,
+    /// For a closure (N50): the function whose body wrote it, where, and what it captured.
+    /// A closure has no declaration of its own — `decl` is its enclosing function's — and
+    /// no name a program can write.
+    pub closure: Option<ClosureInfo>,
+}
+
+/// What makes a definition a closure (N50).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureInfo {
+    /// The function or closure whose body the closure expression is in.
+    pub enclosing: FnId,
+    /// The closure expression's span, which is how its syntax is found again.
+    pub at: Span,
+    /// The span of its written effect set, if it wrote one; unwritten, it is `! {}`.
+    pub written_effects: Option<Span>,
+    /// Its type: `fn(params) -> ret ! {declared}`.
+    pub ty: Type,
+    /// Each binding it captures, in order of first mention: the enclosing function's slot,
+    /// and the closure's own slot the copy lives in.
+    pub captures: Vec<Capture>,
+}
+
+/// One captured binding (N50).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capture {
+    /// The binding in the enclosing function.
+    pub outer: u32,
+    /// The closure's slot holding the copy.
+    pub inner: u32,
+    pub ty: Type,
+}
+
+/// A named function written as a value (N50), and the effects its value's type assumes:
+/// its declared set, or none for an undeclared function, which effects analysis then holds
+/// to that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FnValueUse {
+    pub function: FnId,
+    pub at: Span,
+    pub assumed: crate::EffectSet,
+    /// The value's type: the function's signature, with `assumed` as its effects.
+    pub ty: Type,
 }
 
 /// One call in a body: where it is, what it resolved to, and with which type arguments.
@@ -347,6 +392,10 @@ pub struct Resolution {
     /// lookup failed, so a program that checks holds none — the names that did resolve are
     /// already in `fields` and `variants`, whose identities say which record or enum.
     unresolved_members: HashMap<Span, Type>,
+    /// Each closure expression's definition, by the expression's span (N50).
+    closures: HashMap<Span, FnId>,
+    /// Each named function written as a value, by the name's span (N50).
+    fn_values: HashMap<Span, FnValueUse>,
     /// What each written type name the checker resolved to something **no program
     /// declared** is (N23), by the span of that name: a built-in type (`Int`, `Str`, the
     /// `Vec` of `Vec[Int]`) or a type parameter — and, for a type parameter, the span its
@@ -723,6 +772,77 @@ impl Resolution {
         let slot = u32::try_from(f.locals.len()).unwrap_or(u32::MAX);
         f.locals.push(def);
         Some(slot)
+    }
+
+    /// Declare a closure (N50): a definition no module namespace holds, so it is never found
+    /// by name and never collides with one.
+    pub fn declare_closure(&mut self, def: FnDef) -> FnId {
+        let id = FnId::from_index(self.functions.len());
+        if let Some(info) = &def.closure {
+            self.closures.insert(info.at, id);
+        }
+        self.functions.push(def);
+        id
+    }
+
+    /// Record a capture a closure's body just made (N50).
+    pub fn record_capture(&mut self, closure: FnId, capture: Capture) {
+        if let Some(info) = self
+            .functions
+            .get_mut(closure.index())
+            .and_then(|f| f.closure.as_mut())
+        {
+            info.captures.push(capture);
+        }
+    }
+
+    /// The binding a local is: itself, or — for a closure's copy of a captured binding — the
+    /// binding it copies, through every closure between (N50). What a reader means by a
+    /// name, so references and rename see one binding where the backend sees several slots.
+    #[must_use]
+    pub fn binding_of(&self, mut l: LocalRef) -> LocalRef {
+        for _ in 0..=self.functions.len() {
+            let Some(info) = self
+                .functions
+                .get(l.function.index())
+                .and_then(|f| f.closure.as_ref())
+            else {
+                break;
+            };
+            let Some(c) = info.captures.iter().find(|c| c.inner == l.slot) else {
+                break;
+            };
+            l = LocalRef {
+                function: info.enclosing,
+                slot: c.outer,
+            };
+        }
+        l
+    }
+
+    /// The closure an expression at `span` made (N50).
+    #[must_use]
+    pub fn closure_at(&self, span: Span) -> Option<FnId> {
+        self.closures.get(&span).copied()
+    }
+
+    /// Record a named function written as a value (N50).
+    pub fn record_fn_value(&mut self, value: FnValueUse) {
+        self.fn_values.insert(value.at, value);
+    }
+
+    /// The named function a value at `span` is (N50).
+    #[must_use]
+    pub fn fn_value(&self, span: Span) -> Option<FnValueUse> {
+        self.fn_values.get(&span).copied()
+    }
+
+    /// Every named function written as a value, in source order (N50).
+    #[must_use]
+    pub fn fn_values(&self) -> Vec<FnValueUse> {
+        let mut out: Vec<FnValueUse> = self.fn_values.values().copied().collect();
+        out.sort_by_key(|u| (u.at.file, u.at.start));
+        out
     }
 
     pub fn record_call(&mut self, span: Span, callee: Callee) {

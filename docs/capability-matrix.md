@@ -325,6 +325,17 @@ exist.
 
 ### 3. Type system — PARTIAL
 
+**N50 (2026-10-02)** · function values and closures, `architecture.md` §7.52 and `docs/spec.md`,
+*Function values and closures*. `Type::Fn`, interned by parameters, result and effects
+(structural, invariant, no equality, never into a task); a named, monomorphic Nazm function as a
+value; `fn(x: T) -> R ! {e} { … }` closures capturing by copy; calls through a binding of function
+type. `crates/nazm-cli/tests/closures.rs` holds each across the interpreter, LLVM −O0/−O2 and
+Cranelift with the memory report compared line for line, and every refusal (`N0386`, `N0387`, and
+the existing `N0300`, `N0303`, `N0304`, `N0310`, `N0321`, `N0366`, `N0369`, `N0372` with their
+meanings unchanged). Traits and methods: **DESIGNED**, deferred — §7.52 records why and the
+questions they would settle. Closures and function values inside generic functions: refused.
+
+
 **Evidence** · Six built-in types, `crates/nazm-sema/src/types.rs`: `Int`, `Bool`, `Str`,
 `Ints`, `Strs`, `Chan` — **and, since N9, user-defined records; since N10, user-defined
 enums**. Local inference for `let`; parameters and returns always written. Completion
@@ -429,7 +440,8 @@ the law; `architecture.md` §7.16 is the implementation.
 | first-order generics | VERIFIED |
 | a generic parameter that requires the built-in equality capability | VERIFIED |
 | a requirement on a record's or an enum's parameter | refused (`N0101`), deferred |
-| any other capability, user-defined traits, `impl`, methods | absent |
+| any other capability, user-defined traits, `impl`, methods | absent (traits and methods DESIGNED, §7.52) |
+| function types, named functions as values, closures, indirect calls (N50) | VERIFIED (`crates/nazm-cli/tests/closures.rs`) |
 | custom equality, sequence or channel equality, ordering, hashing | absent |
 | higher kinds, const generics, specialisation | absent |
 
@@ -475,6 +487,13 @@ blocks as values in the native backends.*
 ## Semantic core
 
 ### 4. Memory model and reclamation — VERIFIED for the current type universe
+
+**N50 (2026-10-02)** · a function value is a counted closure object; what it captured is released
+when its last reference goes, on a normal exit, a `return`, a loop's next iteration and a failure
+inside the closure's own code (`a_failure_inside_a_closure_reclaims_its_captures_and_its_callers`,
+`an_early_return_and_a_loop_release_the_closures_they_made`). The memory report counts closure
+objects as a fourth class, in the interpreter and in both backends' runtime alike.
+
 
 *This row was "Ownership and resource semantics — MISSING" until N7 (2026-09-22), and
 PARTIAL between N7 and N8 (the same day). The paragraph it used to carry is kept below,
@@ -708,12 +727,18 @@ tree still checking. Seventeen N36 mutations (area 30).
 every effect — so in the multi-module compiler sources 152 of 1,044 function checks come out
 `{ io, spawn }`, most because they call an undeclared import, not because they print or spawn.
 Pure means *no effect*, not *referentially transparent*: a function may write into a sequence it
-was handed. No effect polymorphism and no function values to need it; no handlers; allocation,
+was handed. No effect polymorphism, though since N50 function values need it — a function type's effects are
+fixed, so the higher-order library takes only pure functions; no handlers; allocation,
 channels, traps and divergence are not effects. The Nazm-written compiler does not read effect
 sets. Effects are not authority: since N37 that is area 6, checked apart. Typed diagnostic facts (`nazm.diagnostic-detail/1`)
 stay unavailable; the effect facts are in the packet.
 
-**Next dependency** · For polymorphism and handlers, function values. Authority is area 6.
+**Next dependency** · Effect polymorphism over function values (N51); handlers. Authority is area 6.
+
+*N50, 2026-10-02.* A function type carries an effect set; a call through a function value performs
+it, a closure's body is checked against its own set (`! {}` unwritten), and an undeclared function
+used as a value is held to the none its value's type assumed (`N0366`). A closure's authority is
+its own capability parameters (`N0369`). `a_function_value_carries_its_effects_and_takes_its_authority_as_parameters`.
 
 *Before N36 this row was MISSING. N12 did not change it.* A function's error type is visible because it is inside its
 return type, `Result[T, E]`; a caller may store, pass or ignore that value, and nothing about
@@ -795,6 +820,12 @@ a compile error with a span — met for every function that declares its effects
 ambient one, which is the bridge above.
 
 ### 7. Provenance and information flow, as a language feature — PARTIAL
+
+**N50 (2026-10-02)** · a closure's body is reduced to flows as a function of its own; its
+parameters are of unknown origin, its captures carry what the captured binding carried (unknown
+when that depended on its maker's parameters or calls), and the result of an indirect call is of
+unknown origin — conservative, so a restricted sink reached through a function value is refused
+(`a_path_through_a_function_value_is_of_unknown_origin`).
 
 *N38, 2026-09-30: Provenance identity v1 — VERIFIED; Explicit data-flow propagation v1 — VERIFIED;
 Function summary propagation v1 — VERIFIED; Cross-module provenance summaries v1 — VERIFIED;
@@ -1234,14 +1265,16 @@ without a `use`.
 | Origins preserved through wrappers | VERIFIED | `what_a_standard_function_reads_keeps_its_origin` |
 | Ordinary failure is a value | VERIFIED | `text_parse_int` `Err` for no digits, a non-digit and both ends of the range; `None` for an absent search or an empty maximum |
 | Documented where the spec lists it | VERIFIED | `every_public_standard_function_is_documented_and_listed`; `nazm docs --section spec:std`; the spec's example runs (`the_spec_s_example_runs_everywhere`) |
-| Higher-order helpers, formatting, domains (HTTP, JSON, time, crypto) | MISSING | no function values; out of scope for v1 |
+| Higher-order helpers | PARTIAL | `vec_map`, `vec_filter`, `vec_fold` in `@std/seq` (N50), plain Nazm over function values, on records and enums (`map_filter_and_fold_work_over_records_and_enums`); pure functions only until effects can be abstracted over |
+| Formatting, domains (HTTP, JSON, time, crypto) | MISSING | out of scope for v1 |
 
 **Limitation** · Functions carry their module's name because there are no qualified names. The
 compiler written in Nazm reports an `@std` import as a missing module. Pre-1.0: modules may change.
 *Narrowed in N49:* `use "@std/text" as t;` and `t::text_split` qualify a standard module's
 functions; the functions keep their prefixed names, which a plain import still needs.
 
-**Next dependency** · Function values (for `map`, `filter`, sorting by key).
+**Next dependency** · Effect polymorphism (N51), so a higher-order helper can take an effectful
+function; an ordering capability for sorting by key.
 
 **Accepted when** · For v1: met. For the area: a library a real program can be written against
 without reimplementing collections or text handling, with a stability policy past 1.0.

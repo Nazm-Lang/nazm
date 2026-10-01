@@ -388,6 +388,19 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N50 — First-class functions and closures — **complete, 2026-10-02**
+
+`architecture.md` §7.52 first, amended with the code where the code was simpler. Function types
+`fn(T…) -> R ! {e}`, named functions as values, closures capturing by copy (`N0386` for a `let mut`
+binding or a capability), indirect calls through a binding, and `N0387` for what cannot be a value.
+One lowering: the checker declares each closure, Core IR lifts it, MIR adds the environment and a
+thunk per named function used as a value, and the interpreter and both backends consume that. One
+closure object, counted in the memory report's new `closures` class. `@std/seq` gained `vec_map`,
+`vec_filter` and `vec_fold`, plain Nazm. Semantic epoch 13, runtime ABI 4, interface schema kept at
+`/7` with a fifth type shape. Traits and methods are designed and deferred: function values met
+every need in hand. The compiler written in Nazm has none of it. Next: N51, effects and
+capabilities v2 — effect polymorphism is what keeps the higher-order library pure-only.
+
 ### N49 — Language usability and native completeness — **complete, 2026-10-01**
 
 `architecture.md` §7.51 first. String escapes (`N0004`), `&&`, `||` and `!` (lowered to `if` in

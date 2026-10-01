@@ -90,3 +90,35 @@ pub fn vec_index_of[T: Equality](xs: Vec[T], x: T) -> Option[Int] ! {} {
     }
     if found < 0 { Option[Int].None() } else { Option[Int].Some(value: found) }
 }
+
+// Higher-order (N50). Each takes a function value, so `f` may be a named function or a
+// closure; a function value carries its effects in its type, and these take only ones with
+// none — a pure `f` — until effects can be abstracted over (N51).
+
+/// `f` applied to each element of `xs`, in order, as a new `Vec`. `xs` is unchanged.
+pub fn vec_map[T, U](xs: Vec[T], f: fn(T) -> U) -> Vec[U] ! {} {
+    let out = vec_new[U]();
+    let mut i = 0;
+    while i < vec_len(xs) { vec_push(out, f(vec_get(xs, i))); i = i + 1; }
+    out
+}
+
+/// The elements of `xs` for which `keep` holds, in order, as a new `Vec`.
+pub fn vec_filter[T](xs: Vec[T], keep: fn(T) -> Bool) -> Vec[T] ! {} {
+    let out = vec_new[T]();
+    let mut i = 0;
+    while i < vec_len(xs) {
+        let x = vec_get(xs, i);
+        if keep(x) { vec_push(out, x); }
+        i = i + 1;
+    }
+    out
+}
+
+/// `f(… f(f(init, xs[0]), xs[1]) …, xs[n - 1])`: `init` when `xs` is empty.
+pub fn vec_fold[T, A](xs: Vec[T], init: A, f: fn(A, T) -> A) -> A ! {} {
+    let mut acc = init;
+    let mut i = 0;
+    while i < vec_len(xs) { acc = f(acc, vec_get(xs, i)); i = i + 1; }
+    acc
+}

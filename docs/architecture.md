@@ -5488,17 +5488,20 @@ Function values may not be passed to a task (`N0321`): their type does not say w
 captured may cross into one.
 
 **Effects, authority, provenance.** A closure's body is checked against its own declared effects,
-and creating a closure performs none of them; calling a function value performs its type's. A
-closure's authority is its capability parameters and nothing else. Provenance: the result of an
-indirect call carries what its arguments and the function value carry; inside a closure a captured
-value's origin is unknown, so a restricted sink reached from one is refused, conservatively.
+and creating a closure performs none of them; calling a function value performs its type's. A closure's authority is its capability parameters and nothing else. Provenance: the result of an
+indirect call is of unknown origin, joined with what its arguments and the function value carry —
+which function runs is not known where the call is. A closure's body is walked as a function of
+its own: its parameters are of unknown origin (its callers cannot be named), and a capture carries
+the origins of the binding it copies, or unknown when that binding depended on its maker's
+parameters or calls. A restricted sink reached from either is refused, conservatively.
 
 **One lowering.** The checker registers each closure as a definition of its own — a private
 function of the enclosing function's module, identified by the enclosing definition and its
 position among that body's closures — with its captures recorded in order of first mention. Core IR
 lifts it: a closure expression is `Closure { func, captures }`, a named function used as a value is
 `FnValue(func)`, an indirect call is `CallIndirect { callee, args }`, and the closure's body is a Core
-IR function whose leading locals are its captures. MIR keeps the same three, adds the **environment**:
+IR function marked as one, whose local 0 is the closure itself, a parameter, followed by its declared
+parameters; its captures are locals its body region owns, listed in order. MIR keeps the same three, adds the **environment**:
 every function a function value can reach — a closure's body, and a **thunk** MIR makes for each
 named function used as a value — takes the environment as its first parameter and reads its
 captures from it at entry (`Rvalue::Capture`). Both backends and the interpreter consume exactly
@@ -5506,21 +5509,36 @@ that; none rediscovers a closure.
 
 **The calling convention.** A function value is one pointer to a **closure object**: a reference
 count, the code pointer, a release function, then the captures in order, each at its type's slot
-size. Calling it passes the object as the first argument and the arguments after. Copying a function
-value retains the object and dropping one releases it; the last release calls the release function,
-which releases every managed capture, and frees the object. A named function's value is a static
-object whose count is negative — immortal — so retaining or releasing it does nothing. The runtime
-owns allocation and the reference count (`nz.closure_new`, `nz.closure_retain`, `nz.closure_release`),
-atomically as a string's; the runtime ABI revision moves (3 → 4).
+size. Each backend lays the captures out itself, and an object never crosses from one backend's code to
+the other's. Calling it passes the object as the first argument and the arguments after. Copying a
+function value retains the object and dropping one releases it; the last release calls the release
+function, which releases every managed capture, and frees the object. A named function's value is
+an object like any other, made where the value is written: its code is the thunk, it carries
+nothing, and its release function is null. *(Amended with the code: the constitution first had a
+static immortal object here, which would have given the two kinds of value two ownership laws; one
+law, at the cost of an allocation per use, is the simpler truth.)* Making an object can fail for
+want of memory (`N0406`), so MIR gives `Closure` a failure edge. The runtime owns allocation and the
+reference count (`nz.closure_new`, `nz.closure_retain`, `nz.closure_release`), atomically as a
+string's, and counts objects for the memory report, whose line gains a fourth class, `closures`;
+the runtime ABI revision moves (3 → 4). A function that makes an indirect call checks its stack
+first, as a function in a call cycle does (N49): which function the call reaches is not known, so
+any cycle through one contains such a function.
 
-**Durable interfaces.** A function type in an exported signature, field or payload is persisted, so
-the interface schema moves (`nazm.interface/7` → `/8`): an old reader would misread such a
-signature. A closure is never exported.
+**Durable interfaces.** A function type in an exported signature, field or payload is persisted as
+`{"fn":[…],"ret":…,"effects":[…]}`. *(Amended with the code: the schema does not move.)* A `/7` reader
+that meets that shape cannot read it as any of the four it knows, refuses the file and treats it
+as no entry — never wrong, only unable — so the major is kept, by the rule that a schema moves only
+when an old reader would otherwise be wrong. A closure is never exported. Captured bindings are one
+binding to a reader: `Resolution::binding_of` maps a closure's copy back to what it copies, so
+references and rename see every use.
 
 **The higher-order library.** `@std/seq` gains `vec_map`, `vec_filter` and `vec_fold`, written in
 Nazm over `Vec[T]` and function values, with no compiler knowledge of them.
 
-**The compiler written in Nazm** refuses function types and closures by name.
+**The compiler written in Nazm** has neither: its parser stops at a closure or a function type with
+its ordinary syntax error. That is the recorded parity gap; nothing in it needs a function value.
+Its emitted programs print the memory report's `closures` class, always zero, so the two compilers'
+reports still compare line for line.
 
 **What is not here, and why.** *Traits and methods.* N50's prompt makes them conditional on a need
 generics and higher-order APIs demonstrate. With function values, the needs in hand — mapping,
@@ -5531,8 +5549,9 @@ language cannot already express, so they are **designed and deferred**: the desi
 trait identity as a durable definition, coherence as one impl per trait and type in the trait's or
 the type's module, method syntax as resolution sugar over the same functions, monomorphisation
 before dictionaries — are recorded here and settled when a program needs them. *Function values
-across tasks*, *generic function values*, *closures that call themselves*, and *calling a field
-directly* are refused rather than half-supported.
+across tasks*, *generic function values*, *closures that call themselves*, *calling a field
+directly*, and *a closure or a named function value inside a generic function* (`N0387`: each
+would need an instance or a thunk per type argument) are refused rather than half-supported.
 
 ## 8. Toolchain, and one real incompatibility
 

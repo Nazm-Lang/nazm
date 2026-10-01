@@ -92,6 +92,11 @@ pub struct Function {
     /// The C symbol of a foreign function (N42). A foreign function has its parameters and no
     /// blocks: its body is C's, and a backend declares it and calls it with the C convention.
     pub foreign: Option<String>,
+    /// For the code of a function value — a closure's body, or a named function's thunk
+    /// (N50): the types of what the closure object carries, in order. Its local 0, a
+    /// parameter, is the closure object; its declared parameters follow. `None` for every
+    /// function called directly.
+    pub closure: Option<Vec<Type>>,
 }
 
 impl Function {
@@ -368,6 +373,17 @@ pub enum Rvalue {
     },
     /// A call. The arguments are borrowed; the result is owned. The callee may have failed.
     Call { callee: FuncId, args: Vec<Operand> },
+    /// A call through a function value (N50): its code is handed the closure object, then
+    /// the arguments, all borrowed. The result is owned; the callee may have failed.
+    CallIndirect { callee: Operand, args: Vec<Operand> },
+    /// A new closure object (N50) whose code is `func`, carrying a new reference to each
+    /// capture, in order. The captures are borrowed. It fails when there is no memory for it.
+    Closure {
+        func: FuncId,
+        captures: Vec<Operand>,
+    },
+    /// A new reference to the `index`th thing the closure object in `env` carries (N50).
+    Capture { env: LocalId, index: u32 },
     /// A runtime or compiler primitive. `elem` is the element type of a `Vec[T]` operation.
     Primitive {
         op: Intrinsic,
@@ -404,7 +420,12 @@ impl Rvalue {
     pub const fn can_fail(&self) -> bool {
         matches!(
             self,
-            Self::Neg(_) | Self::Arith(..) | Self::Call { .. } | Self::Primitive { .. }
+            Self::Neg(_)
+                | Self::Arith(..)
+                | Self::Call { .. }
+                | Self::CallIndirect { .. }
+                | Self::Closure { .. }
+                | Self::Primitive { .. }
         )
     }
 }
@@ -416,6 +437,16 @@ pub struct Types {
     pub enums: std::collections::BTreeMap<u32, EnumInfo>,
     /// `Vec` types, by `VecId` index: the element and the element's canonical key.
     pub vecs: std::collections::BTreeMap<u32, VecInfo>,
+    /// Function types, by `FnTypeId` index (N50).
+    pub fns: std::collections::BTreeMap<u32, FnInfo>,
+}
+
+/// A function type's signature, concrete (N50).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnInfo {
+    pub params: Vec<Type>,
+    pub ret: Type,
+    pub source: String,
 }
 
 /// A concrete type's durable name: its definition and its arguments' canonical keys.
@@ -487,6 +518,12 @@ impl Types {
     #[must_use]
     pub fn vec(&self, id: nazm_sema::VecId) -> Option<&VecInfo> {
         self.vecs
+            .get(&(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+    }
+
+    #[must_use]
+    pub fn function(&self, id: nazm_sema::FnTypeId) -> Option<&FnInfo> {
+        self.fns
             .get(&(u32::try_from(id.index()).unwrap_or(u32::MAX)))
     }
 

@@ -79,41 +79,108 @@ pub(crate) fn facts(
                 (false, _) => Flow::param(u32::try_from(i).unwrap_or(u32::MAX)),
             };
         }
-        let n = slots.len();
-        let mut w = Walk {
-            res,
-            read: vec![false; n],
-            stale: false,
-            slots,
-            calls: Vec::new(),
-            call_at: HashMap::new(),
-            sinks: Vec::new(),
-            sink_at: HashMap::new(),
-            result: Flow::default(),
-        };
-        // A walk reads each binding as it stands; one read before that binding grew later in
-        // the same walk is the only thing another walk could change, so walk again only then.
-        // Bounded by what a flow can hold, and capped regardless.
-        for _ in 0..256 {
-            w.stale = false;
-            w.read.iter_mut().for_each(|r| *r = false);
-            let tail = w.block(body);
-            w.returned(&tail);
-            if !w.stale {
+        let (facts, slots, closures) = walk(res, id, slots, body);
+        out.functions.push(facts);
+        // Each closure the body wrote is a function of its own (N50), walked after the body
+        // that made it, whose final flows say what each capture holds.
+        let mut pending: Vec<(&Expr, Vec<Flow>)> =
+            closures.into_iter().map(|c| (c, slots.clone())).collect();
+        let mut guard = 0usize;
+        while let Some((c, outer)) = pending.pop() {
+            guard += 1;
+            if guard > 4096 {
                 break;
             }
+            let Expr::Closure {
+                params, body, span, ..
+            } = c
+            else {
+                continue;
+            };
+            let Some(cid) = res.closure_at(*span) else {
+                continue;
+            };
+            let Some(cdef) = res.function(cid) else {
+                continue;
+            };
+            let mut slots = vec![Flow::default(); cdef.locals.len()];
+            // A closure is called through a value, by callers no analysis here can name, so
+            // what a parameter is handed is unknown — and so is a capture of anything that
+            // depended on its maker's parameters or calls.
+            for (i, p) in params.iter().enumerate() {
+                if let Some(slot) = slots.get_mut(i) {
+                    *slot = Flow::origin(Origin::Unknown, p.name_span);
+                }
+            }
+            if let Some(info) = &cdef.closure {
+                for cap in &info.captures {
+                    let from = outer.get(cap.outer as usize).cloned().unwrap_or_default();
+                    let mut held = Flow {
+                        origins: from.origins,
+                        why: from.why.clone(),
+                        ..Flow::default()
+                    };
+                    if !from.params.is_empty() || !from.calls.is_empty() {
+                        held = held.joined(&Flow::origin(Origin::Unknown, info.at));
+                    }
+                    if let Some(slot) = slots.get_mut(cap.inner as usize) {
+                        *slot = held;
+                    }
+                }
+            }
+            let (facts, slots, nested) = walk(res, cid, slots, body);
+            out.functions.push(facts);
+            pending.extend(nested.into_iter().map(|n| (n, slots.clone())));
         }
-        out.functions.push(FunctionFacts {
-            function: id,
-            calls: w.calls,
-            result: w.result,
-            sinks: w.sinks,
-        });
     }
     out
 }
 
-struct Walk<'a> {
+/// One body's facts, its bindings' final flows, and the closures it wrote.
+fn walk<'b>(
+    res: &Resolution,
+    id: FnId,
+    slots: Vec<Flow>,
+    body: &'b Block,
+) -> (FunctionFacts, Vec<Flow>, Vec<&'b Expr>) {
+    let n = slots.len();
+    let mut w = Walk {
+        res,
+        read: vec![false; n],
+        stale: false,
+        slots,
+        calls: Vec::new(),
+        call_at: HashMap::new(),
+        sinks: Vec::new(),
+        sink_at: HashMap::new(),
+        result: Flow::default(),
+        closures: Vec::new(),
+    };
+    // A walk reads each binding as it stands; one read before that binding grew later in
+    // the same walk is the only thing another walk could change, so walk again only then.
+    // Bounded by what a flow can hold, and capped regardless.
+    for _ in 0..256 {
+        w.stale = false;
+        w.read.iter_mut().for_each(|r| *r = false);
+        let tail = w.block(body);
+        w.returned(&tail);
+        if !w.stale {
+            break;
+        }
+    }
+    (
+        FunctionFacts {
+            function: id,
+            calls: w.calls,
+            result: w.result,
+            sinks: w.sinks,
+        },
+        w.slots,
+        w.closures,
+    )
+}
+
+struct Walk<'a, 'b> {
     res: &'a Resolution,
     slots: Vec<Flow>,
     /// Which bindings this walk has read.
@@ -125,9 +192,11 @@ struct Walk<'a> {
     sinks: Vec<SinkFact>,
     sink_at: HashMap<(u32, u32), usize>,
     result: Flow,
+    /// The closure expressions this body wrote, once each (N50).
+    closures: Vec<&'b Expr>,
 }
 
-impl Walk<'_> {
+impl<'b> Walk<'_, 'b> {
     fn returned(&mut self, v: &Flow) {
         let _ = self.result.join(v);
     }
@@ -143,14 +212,14 @@ impl Walk<'_> {
         }
     }
 
-    fn block(&mut self, b: &Block) -> Flow {
+    fn block(&mut self, b: &'b Block) -> Flow {
         for s in &b.statements {
             self.stmt(s);
         }
         b.tail.as_ref().map(|e| self.expr(e)).unwrap_or_default()
     }
 
-    fn stmt(&mut self, s: &Stmt) {
+    fn stmt(&mut self, s: &'b Stmt) {
         match s {
             Stmt::Let(l) => {
                 let v = self.expr(&l.value);
@@ -220,22 +289,35 @@ impl Walk<'_> {
         }
     }
 
+    fn expr_var(&mut self, span: Span) -> Flow {
+        let Some(s) = self.res.var(span).map(|s| s as usize) else {
+            return Flow::default();
+        };
+        if let Some(r) = self.read.get_mut(s) {
+            *r = true;
+        }
+        self.slots.get(s).cloned().unwrap_or_default()
+    }
+
     fn joined(&mut self, es: impl IntoIterator<Item = Flow>) -> Flow {
         es.into_iter().fold(Flow::default(), |a, b| a.joined(&b))
     }
 
-    fn expr(&mut self, e: &Expr) -> Flow {
+    fn expr(&mut self, e: &'b Expr) -> Flow {
         match e {
-            Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } => Flow::default(),
-            Expr::Var { span, .. } => {
-                let Some(s) = self.res.var(*span).map(|s| s as usize) else {
-                    return Flow::default();
-                };
-                if let Some(r) = self.read.get_mut(s) {
-                    *r = true;
+            // A closure is walked as a function of its own; making one moves no data.
+            Expr::Closure { span, .. } => {
+                if !self
+                    .closures
+                    .iter()
+                    .any(|c| matches!(c, Expr::Closure { span: s, .. } if s == span))
+                {
+                    self.closures.push(e);
                 }
-                self.slots.get(s).cloned().unwrap_or_default()
+                Flow::default()
             }
+            Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } => Flow::default(),
+            Expr::Var { span, .. } => self.expr_var(*span),
             Expr::Neg { operand, .. } => self.expr(operand),
             // The logical operators are the `if`s they lower to (N49): the deciding operand is a
             // condition — walked, contributing no provenance — and the value is the other
@@ -284,6 +366,14 @@ impl Walk<'_> {
                         }
                     }
                     Some(Callee::Function(g)) => self.call(g, *callee_span, flows, false),
+                    // Through a function value (N50): which function is not known here, so
+                    // its result is unknown, and carries its arguments' and the value's own.
+                    Some(Callee::Indirect(_)) => {
+                        let callee = self.expr_var(*callee_span);
+                        Flow::origin(Origin::Unknown, *callee_span)
+                            .joined(&callee)
+                            .joined(&self.joined(flows))
+                    }
                     // A call that did not resolve is already an error.
                     None => self.joined(flows),
                 }

@@ -7,8 +7,14 @@ found only by reading all of it.
 
 ## Language
 
-- No function values, closures, traits or methods: no `map`, `filter` or higher-order library
-  code (areas 3, 16).
+- No traits or methods (designed and deferred, `architecture.md` §7.52). Function values and
+  closures exist since N50, narrowly: a function type's effects are fixed, so `vec_map`,
+  `vec_filter` and `vec_fold` take only pure functions (no effect polymorphism); no closure or
+  named function value inside a generic function (`N0387`); a closure captures by copy and
+  never a `let mut` binding or a capability (`N0386`); a field of function type is called by
+  binding it first; no function value crosses into a task (`N0321`); a path that went through a
+  function value is of unknown origin, conservatively. The compiler written in Nazm has none of
+  it (areas 3, 5, 7, 16). *Narrowed in N50.*
 - A standard module's functions keep their module's name (`text_split`), qualified or not:
   `use "@std/text" as t;` gives `t::text_split`, not `t::split` (areas 2, 16). *Narrowed in N49,
   which added qualified names.*

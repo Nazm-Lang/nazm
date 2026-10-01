@@ -12,9 +12,10 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::{
-    Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, ForeignDecl, Function,
-    HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program, Qualifier,
-    Record, Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant, While,
+    Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, FnTypeName, ForeignDecl,
+    Function, HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program,
+    Qualifier, Record, Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant,
+    While,
 };
 pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;

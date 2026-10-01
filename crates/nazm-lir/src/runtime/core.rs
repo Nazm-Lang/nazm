@@ -18,10 +18,12 @@ use super::os::declarations;
 /// read would put the how into the language.
 pub const MEMORY_VARIABLE: &str = "NAZM_MEMORY_REPORT";
 
-/// What that report says. One line, three numbers, read back by the tests.
+/// What that report says. One line, three numbers a class, read back by the tests. The
+/// closure objects' class came last, in N50.
 pub const MEMORY_FORMAT: &str = "nazm-memory: sequences allocated=%lld reclaimed=%lld \
                                  live=%lld strings allocated=%lld reclaimed=%lld live=%lld \
-                                 channels allocated=%lld reclaimed=%lld live=%lld";
+                                 channels allocated=%lld reclaimed=%lld live=%lld \
+                                 closures allocated=%lld reclaimed=%lld live=%lld";
 use crate::emit::{preamble, Needs};
 
 /// The runtime's own surface, as a unit that does not define it sees it.
@@ -99,6 +101,8 @@ pub fn emit_runtime(needs: Needs) -> String {
         "@nz.str_reclaimed",
         "@nz.chan_allocated",
         "@nz.chan_reclaimed",
+        "@nz.clo_allocated",
+        "@nz.clo_reclaimed",
     ] {
         let _ = writeln!(out, "{c} = hidden global i64 0");
     }
@@ -190,6 +194,7 @@ entry:
 none:
   ret ptr null
 fill:
+  %n = atomicrmw add ptr @nz.clo_allocated, i64 1 monotonic
   store i64 1, ptr %p
   %cp = getelementptr i8, ptr %p, i64 8
   store ptr %code, ptr %cp
@@ -228,6 +233,7 @@ captures:
   br label %object
 object:
   call void @free(ptr %c)
+  %n = atomicrmw add ptr @nz.clo_reclaimed, i64 1 monotonic
   br label %done
 done:
   ret void

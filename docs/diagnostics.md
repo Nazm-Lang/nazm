@@ -101,6 +101,17 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N50, function values and closures.** Two codes appeared, both compatible: `N0386`
+(a closure captures a `let mut` binding or a capability) and `N0387` (a generic, built-in or
+foreign function used as a value, or a closure or named function value written inside a generic
+function). Everything else a function value can get wrong is an existing code with its meaning
+unchanged: a call through one with the wrong arguments is `N0303` or `N0300`, `==` on one is
+`N0304`, passing one to a task is `N0321`, effects its type or body lacks are `N0366`, and missing
+authority is `N0369`. No schema moved: a function type in a persisted interface is a fifth shape
+of type that a `nazm.interface/7` reader refuses rather than misreads. The memory report line gained
+a fourth class, `closures`, after the other three, so a reader that finds classes by name is
+unaffected.
+
 **Applied to N42, foreign functions.** Six codes appeared, all compatible: `N0380` (an ABI
 other than `"C"`), `N0381` (a parameter or result type that cannot cross the C boundary — only
 `Int` and `Bool` can), `N0382` (a symbol that is not a C identifier), `N0383` (two declarations

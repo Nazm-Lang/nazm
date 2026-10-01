@@ -149,7 +149,11 @@ use crate::digest::{self, Framed};
 /// literally and now means an escape (`"a\nb"` was four bytes and is three), and a backslash
 /// that is no escape is refused (`N0004`). `&&`, `||`, `!` and qualified names became accepted
 /// syntax (`N0209`, `N0210`). A cached check from epoch 11 is a check of a different language.
-pub const SEMANTIC_EPOCH: u32 = 12;
+/// `13` — N50, 2026-10-02. Function values: `fn(…) -> T` is a type, a closure `fn(x: T) -> R
+/// { … }` an expression, a named function a value, and a call through a binding of function
+/// type an indirect call. A program naming a function without calling it moved from refused
+/// (`N0301`) to accepted; two codes appeared (`N0386`, `N0387`).
+pub const SEMANTIC_EPOCH: u32 = 13;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -167,6 +171,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "BUILTIN_TYPE_REDEFINED",
     "CANNOT_INFER_TYPE_ARGUMENT",
     "CAPABILITY_CONSTRUCTED",
+    "CAPTURE_REFUSED",
     "CONDITION_NOT_BOOL",
     "CONFLICTING_TYPE_ARGUMENTS",
     "DUPLICATE_EFFECT",
@@ -194,6 +199,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "MISSING_MAIN",
     "MISSING_TYPE_ARGUMENTS",
     "NON_EXHAUSTIVE_MATCH",
+    "NOT_A_FUNCTION_VALUE",
     "NOT_IN_A_LOOP",
     "OWNERSHIP_CYCLE",
     "PRELUDE_TYPE_REDECLARED",

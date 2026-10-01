@@ -214,6 +214,9 @@ struct Emitter<'a> {
     /// The type of every slot in the function being emitted, by local: `None` for a task
     /// list, whose slot is a pointer the runtime owns.
     slot_types: Vec<Option<Ty>>,
+    /// What the closure object of the function being emitted carries, if it is a function
+    /// value's code (N50).
+    carried: Vec<Ty>,
     /// The label a failure in the statement being emitted leaves for: its MIR failure edge.
     unwind_to: String,
     /// The per-record retain and release helpers, generated on demand.
@@ -1402,9 +1405,127 @@ impl Emitter<'_> {
         }
     }
 
+    /// A closure object's LLVM type (N50): the header, then what it carries.
+    fn closure_object(&self, carried: &[Ty]) -> String {
+        let mut fields = vec!["i64".to_owned(), "ptr".to_owned(), "ptr".to_owned()];
+        fields.extend(carried.iter().map(|t| llvm_type(self.types, *t)));
+        format!("{{ {} }}", fields.join(", "))
+    }
+
     /// An rvalue's value, as an LLVM operand to store into its destination.
     fn rvalue(&mut self, v: &mir::Rvalue, at: Span) -> String {
         match v {
+            mir::Rvalue::Closure {
+                func,
+                captures: taken,
+            } => {
+                self.needs_closures = true;
+                let carried: Vec<Ty> = self
+                    .program
+                    .function(*func)
+                    .and_then(|g| g.closure.as_ref())
+                    .map(|c| c.iter().map(|t| Ty::of(*t)).collect())
+                    .unwrap_or_default();
+                let symbol = self
+                    .sigs
+                    .get(func.index())
+                    .map_or_else(|| "@nz.missing".to_owned(), |s| s.symbol.to_string());
+                let object = self.closure_object(&carried);
+                let end = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{end} = getelementptr {object}, ptr null, i32 1"
+                );
+                let size = self.fresh();
+                let _ = writeln!(self.out, "  %{size} = ptrtoint ptr %{end} to i64");
+                let release = if carried.iter().any(|t| owns_anything(self.types, *t)) {
+                    format!("{symbol}.release")
+                } else {
+                    "null".to_owned()
+                };
+                let c = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{c} = call ptr @nz.closure_new(i64 %{size}, ptr {symbol}, ptr {release})"
+                );
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{c}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    at,
+                );
+                for (k, o) in taken.iter().enumerate() {
+                    let (v, t) = self.operand(o);
+                    // The object's own reference to each capture.
+                    self.retain(v, t);
+                    let p = self.fresh();
+                    let _ = writeln!(
+                        self.out,
+                        "  %{p} = getelementptr {object}, ptr %{c}, i32 0, i32 {}",
+                        k + 3
+                    );
+                    let _ = writeln!(
+                        self.out,
+                        "  store {} %{v}, ptr %{p}",
+                        llvm_type(self.types, t)
+                    );
+                }
+                format!("%{c}")
+            }
+            mir::Rvalue::Capture { env, index } => {
+                let carried = self.carried.clone();
+                let object = self.closure_object(&carried);
+                let t = carried.get(*index as usize).copied().unwrap_or(Ty::Int);
+                let c = self.load(*env);
+                let p = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{p} = getelementptr {object}, ptr %{c}, i32 0, i32 {}",
+                    index + 3
+                );
+                let v = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{v} = load {}, ptr %{p}",
+                    llvm_type(self.types, t)
+                );
+                self.retain(v, t);
+                format!("%{v}")
+            }
+            mir::Rvalue::CallIndirect { callee, args } => {
+                let (c, cty) = self.operand(callee);
+                let ret = match cty {
+                    Ty::Fn(f) => self
+                        .program
+                        .types
+                        .function(nazm_sema::FnTypeId::from_index(f.0 as usize))
+                        .map_or(Ty::Int, |s| Ty::of(s.ret)),
+                    _ => Ty::Int,
+                };
+                let vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
+                let mut list = vec![format!("ptr %{c}")];
+                list.extend(
+                    vals.iter()
+                        .map(|(v, t)| format!("{} %{v}", llvm_type(self.types, *t))),
+                );
+                let cp = self.fresh();
+                let _ = writeln!(self.out, "  %{cp} = getelementptr i8, ptr %{c}, i64 8");
+                let code = self.fresh();
+                let _ = writeln!(self.out, "  %{code} = load ptr, ptr %{cp}");
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = call {} %{code}({})",
+                    llvm_type(self.types, ret),
+                    list.join(", ")
+                );
+                self.check_failed();
+                format!("%{out}")
+            }
             mir::Rvalue::Use(o) => format!("%{}", self.operand(o).0),
             mir::Rvalue::Copy(l) => {
                 let ty = self.slot_ty(*l);
@@ -3162,6 +3283,7 @@ pub(crate) fn emit_unit_with(
         needs_tasks: false,
         needs_stack: false,
         needs_closures: false,
+        carried: Vec::new(),
         task_count: 0,
         needs_channels: false,
         needs_sequences: false,
@@ -3173,6 +3295,9 @@ pub(crate) fn emit_unit_with(
     for id in &unit.functions {
         if let (Some(f), Some(sig)) = (native.program.function(*id), native.sigs.get(id.index())) {
             emit_function(&mut e, f, sig);
+            if let Some(carried) = &f.closure {
+                emit_closure_release(&mut e, carried, sig);
+            }
         }
     }
 
@@ -3314,6 +3439,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
     e.next = 0;
     e.current = "entry".to_owned();
     e.slot_types = f.locals.iter().map(|l| l.ty.value().map(Ty::of)).collect();
+    e.carried = f.closure.iter().flatten().map(|t| Ty::of(*t)).collect();
 
     let params = sig
         .params
@@ -3378,6 +3504,39 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
     }
     let _ = writeln!(e.out, "}}");
     e.out.push('\n');
+}
+
+/// The release function of a function value's closure object (N50): it releases each managed
+/// capture, and `nz.closure_release` frees the object after it. None when nothing it carries
+/// is managed — the object's release pointer is null then.
+fn emit_closure_release(e: &mut Emitter<'_>, carried: &[nazm_sema::Type], sig: &Sig) {
+    let carried: Vec<Ty> = carried.iter().map(|t| Ty::of(*t)).collect();
+    if !carried.iter().any(|t| owns_anything(e.types, *t)) {
+        return;
+    }
+    e.next = 0;
+    e.current = "entry".to_owned();
+    let object = e.closure_object(&carried);
+    let _ = writeln!(
+        e.out,
+        "define internal void {}.release(ptr %c) {{\nentry:",
+        sig.symbol
+    );
+    for (k, t) in carried.iter().enumerate() {
+        if !owns_anything(e.types, *t) {
+            continue;
+        }
+        let at = e.fresh();
+        let _ = writeln!(
+            e.out,
+            "  %{at} = getelementptr {object}, ptr %c, i32 0, i32 {}",
+            k + 3
+        );
+        let v = e.fresh();
+        let _ = writeln!(e.out, "  %{v} = load {}, ptr %{at}", llvm_type(e.types, *t));
+        e.release(v, *t);
+    }
+    let _ = writeln!(e.out, "  ret void\n}}\n");
 }
 
 fn rty(r: nazm_sema::RecordId) -> RecordTy {

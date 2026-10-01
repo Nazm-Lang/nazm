@@ -90,10 +90,17 @@ pub(crate) fn declared(decl: &EffectDecl, errors: &mut Vec<Diagnostic>) -> Optio
     known.then_some(set)
 }
 
-/// One of the module's functions, as the analysis sees it.
-struct Node<'a> {
+/// One of the module's functions or closures, as the analysis sees it.
+struct Node {
     id: FnId,
-    f: &'a Function,
+    /// How a message names it: `` `f` ``, or "a closure in `f`" (N50).
+    label: String,
+    name_span: Span,
+    /// Whether its body parsed; one that did not requires nothing anyone can know.
+    has_body: bool,
+    foreign: bool,
+    /// The span of its written effect set. A closure that writes none declares `! {}`.
+    written: Option<Span>,
     declared: Option<EffectSet>,
     /// Effects its body requires directly, each with where, in call order.
     direct: Vec<EffectReason>,
@@ -111,7 +118,7 @@ pub(crate) fn analyse(
     errors: &mut Vec<Diagnostic>,
 ) {
     // This module's functions, once each: a second definition of a name is not declared.
-    let mut nodes: Vec<Node<'_>> = Vec::new();
+    let mut nodes: Vec<Node> = Vec::new();
     for (decl, f) in functions {
         let Some(id) = res.definition(module, &f.name) else {
             continue;
@@ -124,13 +131,43 @@ pub(crate) fn analyse(
         }
         nodes.push(Node {
             id,
-            f,
+            label: format!("`{}`", f.name),
+            name_span: f.name_span,
+            has_body: f.body.is_some(),
+            foreign: f.foreign.is_some(),
+            written: f.effects.as_ref().map(|d| d.span),
             declared: def.declared_effects,
             direct: Vec::new(),
             edges: Vec::new(),
         });
     }
-    let index = |id: FnId, nodes: &[Node<'_>]| nodes.iter().position(|n| n.id == id);
+    // Then the closures their bodies wrote (N50): each a function of its own, with a declared
+    // set — `! {}` unwritten — that its body is checked against. Nothing calls a closure by
+    // name, so none is an edge's target: a call through a value is its type's contract.
+    let closures: Vec<Node> = res
+        .functions()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, d)| {
+            let info = d.closure.as_ref()?;
+            (d.module == module).then(|| Node {
+                id: FnId::from_index(i),
+                label: format!(
+                    "this closure in `{}`",
+                    d.name.split('#').next().unwrap_or("")
+                ),
+                name_span: d.name_span,
+                has_body: true,
+                foreign: false,
+                written: info.written_effects,
+                declared: d.declared_effects,
+                direct: Vec::new(),
+                edges: Vec::new(),
+            })
+        })
+        .collect();
+    nodes.extend(closures);
+    let index = |id: FnId, nodes: &[Node]| nodes.iter().position(|n| n.id == id);
     // What another module publishes for a function: its contract, or nothing.
     let contract = |id: FnId| -> Option<Option<EffectSet>> {
         deps.iter()
@@ -166,6 +203,21 @@ pub(crate) fn analyse(
                         });
                     }
                 }
+                Callee::Indirect(t) => {
+                    // What a function value may do is its type's (N50): a contract.
+                    let effects = match t {
+                        nazm_sema::Type::Fn(f) => res
+                            .types()
+                            .fn_signature(f)
+                            .map_or(EffectSet::EMPTY, |s| s.effects),
+                        _ => EffectSet::EMPTY,
+                    };
+                    direct.extend(effects.iter().map(|effect| EffectReason {
+                        effect,
+                        at,
+                        source: EffectSource::Indirect(t),
+                    }));
+                }
                 Callee::Function(g) => {
                     let local = res
                         .function(g)
@@ -181,7 +233,7 @@ pub(crate) fn analyse(
                             })),
                             // A body that did not parse requires nothing anyone can know;
                             // it is already an error, and guessing would add a second.
-                            None if nodes.get(j).is_some_and(|m| m.f.body.is_none()) => {}
+                            None if nodes.get(j).is_some_and(|m| !m.has_body) => {}
                             None => edges.push((j, at)),
                         },
                         None => match contract(g) {
@@ -265,21 +317,63 @@ pub(crate) fn analyse(
             continue;
         };
         why.sort_by_key(|r| r.effect.id());
-        if node.f.foreign.is_some() {
+        if node.foreign {
             // A foreign function's body is C: what it requires is its contract, `foreign`.
             res.record_effects(node.id, EffectSet::of(Effect::Foreign), Vec::new());
-        } else if node.f.body.is_some() {
+        } else if node.has_body {
             res.record_effects(node.id, set, why.clone());
         }
+    }
+    // A named function used as a value promised its type's effects (N50): an undeclared one
+    // of this module was taken to require none, and is held to it here.
+    for value in res.fn_values() {
+        let Some(n) = index(value.function, &nodes) else {
+            continue;
+        };
+        let (Some(node), Some(set)) = (nodes.get(n), sets.get(n).copied()) else {
+            continue;
+        };
+        if node.declared.is_some() || !node.has_body {
+            continue;
+        }
+        let missing = set.without(value.assumed);
+        if missing.is_empty() {
+            continue;
+        }
+        let listed = missing
+            .iter()
+            .map(|e| format!("`{e}`"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let first = missing.iter().next().unwrap_or(Effect::Io);
+        let mut d = Diagnostic::error(
+            codes::UNDECLARED_EFFECT,
+            value.at,
+            format!(
+                "{} is used as a value whose type requires no effect, but it requires {listed}",
+                node.label
+            ),
+        );
+        if let Some(r) = reasons
+            .get(n)
+            .and_then(|why| why.iter().find(|r| r.effect == first))
+        {
+            d = d.secondary(r.at, describe(*r, res));
+        }
+        errors.push(d.help(format!(
+            "a function value's type carries its effects, and an undeclared function's are \
+             taken to be none: declare `! {missing}` on {}",
+            node.label
+        )));
     }
     for (n, node) in nodes.iter().enumerate() {
         let (Some(set), Some(why)) = (sets.get(n).copied(), reasons.get(n)) else {
             continue;
         };
-        let (Some(declared), Some(decl)) = (node.declared, node.f.effects.as_ref()) else {
+        let Some(declared) = node.declared else {
             continue;
         };
-        if node.f.body.is_none() {
+        if !node.has_body {
             continue;
         }
         // Authority first, then effects: one deterministic order for a body wrong in both.
@@ -288,12 +382,12 @@ pub(crate) fn analyse(
         if missing.is_empty() {
             continue;
         }
-        errors.push(undeclared(node, declared, decl, missing, why, res));
+        errors.push(undeclared(node, declared, missing, why, res));
     }
     // A foreign call needs a `ForeignCap` held, in every function (N42): N37's bridge does not
     // reach it.
     for node in &nodes {
-        if node.f.body.is_none() {
+        if !node.has_body {
             continue;
         }
         let sites = res
@@ -372,14 +466,13 @@ fn carries(t: nazm_sema::Type, kind: CapabilityKind, res: &Resolution, depth: us
 /// The diagnostic for a body that needs more than its declaration allows: at the first
 /// thing that needs the first missing effect, with the rest of its witness as labels.
 fn undeclared(
-    node: &Node<'_>,
+    node: &Node,
     declared: EffectSet,
-    decl: &EffectDecl,
     missing: EffectSet,
     why: &[EffectReason],
     res: &Resolution,
 ) -> Diagnostic {
-    let name = &node.f.name;
+    let name = &node.label;
     let listed = missing
         .iter()
         .map(|e| format!("`{e}`"))
@@ -387,11 +480,11 @@ fn undeclared(
         .join(" and ");
     let first = missing.iter().next().unwrap_or(Effect::Io);
     let reason = why.iter().find(|r| r.effect == first).copied();
-    let at = reason.map_or(node.f.name_span, |r| r.at);
+    let at = reason.map_or(node.name_span, |r| r.at);
     let mut d = Diagnostic::error(
         codes::UNDECLARED_EFFECT,
         at,
-        format!("`{name}` declares `! {declared}`, but its body requires {listed}"),
+        format!("{name} declares `! {declared}`, but its body requires {listed}"),
     );
     if let Some(r) = reason {
         d.primary.message = describe(r, res);
@@ -416,20 +509,33 @@ fn undeclared(
         }
     }
     let wider = declared.union(missing);
-    d.secondary(decl.span, format!("declared `! {declared}` here"))
-        .fix_with_review(
-            decl.span,
-            format!("! {wider}"),
-            format!("declare `! {wider}`"),
-            format!(
-                "`{name}` is meant to exercise {listed}. Widening a contract can break a caller \
-                 whose own declared set lacks {listed}"
+    let d = match node.written {
+        Some(written) => d
+            .secondary(written, format!("declared `! {declared}` here"))
+            .fix_with_review(
+                written,
+                format!("! {wider}"),
+                format!("declare `! {wider}`"),
+                format!(
+                    "{name} is meant to exercise {listed}. Widening a contract can break a \
+                     caller whose own declared set lacks {listed}"
+                ),
             ),
-        )
-        .help(
-            "a declared effect set is a contract: the body may require no effect outside it. \
+        // A closure that writes no set declares `! {}` (N50).
+        None => d
+            .secondary(
+                node.name_span,
+                "a closure that writes no effect set declares `! {}`",
+            )
+            .help(format!(
+                "write `! {wider}` after the closure's result type, and give it the authority \
+                 as a parameter"
+            )),
+    };
+    d.help(
+        "a declared effect set is a contract: the body may require no effect outside it. \
              Declare the effect, or stop calling what requires it",
-        )
+    )
 }
 
 /// One hop of a witness, in words.
@@ -446,6 +552,10 @@ fn describe(r: EffectReason, res: &Resolution) -> String {
         EffectSource::Declared(g) => {
             format!("calls {}, whose declared set includes `{e}`", name(g))
         }
+        EffectSource::Indirect(t) => format!(
+            "calls a function value of type `{}`, whose type includes `{e}`",
+            res.types().show(t)
+        ),
         EffectSource::Undeclared(g) => format!(
             "calls {}, which is in another module and declares no effect set, so every \
              effect is assumed of it",
@@ -483,8 +593,8 @@ enum Needs {
 ///
 /// One diagnostic per missing kind, at the first call that needs it.
 fn authority(
-    node: &Node<'_>,
-    nodes: &[Node<'_>],
+    node: &Node,
+    nodes: &[Node],
     sets: &[EffectSet],
     module: nazm_sema::module::ModuleId,
     contract: &dyn Fn(FnId) -> Option<Option<EffectSet>>,
@@ -503,6 +613,9 @@ fn authority(
         }
         match site.callee {
             Callee::Builtin(b) => needs.push((CapabilityKind::of_intrinsic(b), Needs::Builtin(b))),
+            // A function value's type is a contract (N50): what it may do, it takes the
+            // authority for as parameters, which type checking has made the caller supply.
+            Callee::Indirect(_) => {}
             Callee::Function(g) => {
                 let local = res.function(g).is_some_and(|d| d.module == module);
                 let effects = if local {
@@ -510,7 +623,7 @@ fn authority(
                         let m = nodes.get(j)?;
                         // Declared: the contract carries its own authority. Unparsed: already
                         // an error, and requiring nothing adds no second one.
-                        if m.declared.is_some() || m.f.body.is_none() {
+                        if m.declared.is_some() || !m.has_body {
                             return None;
                         }
                         sets.get(j).copied()
@@ -546,13 +659,13 @@ fn authorised(kind: CapabilityKind) -> Option<Effect> {
 }
 
 fn missing_authority(
-    node: &Node<'_>,
+    node: &Node,
     kind: CapabilityKind,
     at: Span,
     why: Needs,
     res: &Resolution,
 ) -> Diagnostic {
-    let name = &node.f.name;
+    let name = &node.label;
     let name_of = |g: FnId| {
         res.function(g)
             .map_or_else(|| "a function".to_owned(), |d| format!("`{}`", d.name))
@@ -567,7 +680,7 @@ fn missing_authority(
     let mut d = Diagnostic::error(
         codes::MISSING_AUTHORITY,
         at,
-        format!("{what} requires `{kind}` authority, and `{name}` holds no `{kind}` here"),
+        format!("{what} requires `{kind}` authority, and {name} holds no `{kind}` here"),
     );
     d.primary.message = match why {
         Needs::Builtin(b) => format!(
@@ -625,14 +738,14 @@ fn missing_authority(
             }
         }
     }
-    if let Some(decl) = node.f.effects.as_ref() {
+    if let Some(written) = node.written {
         d = d.secondary(
-            decl.span,
+            written,
             "an effect set says what a function does, not what allows it",
         );
     }
     d.help(format!(
-        "authority is a value: give `{name}` {} `{kind}` parameter and have each caller pass \
+        "authority is a value: give {name} {} `{kind}` parameter and have each caller pass \
          one. The only source of one is `main`'s parameters",
         kind.article()
     ))
