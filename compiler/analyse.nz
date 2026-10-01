@@ -2053,6 +2053,8 @@ pub fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: I
     add_builtin(bnames, bret, bfirst, bcount, bparams, "print", t_int(), t_str(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "eprint", t_int(), t_str(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "exit_with", t_int(), t_int(), n, n);
+    // N52: declassification. Its `VouchCap` is the Rust checker's to require.
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "str_vouch", t_str(), t_str(), n, n);
     // `Vec[T]`, N11: the generic built-ins. Their `T` and `Vec[T]` are entries of the type
     // table, which does not exist yet, so they are written as two placeholders here and
     // made real by `generic_builtins` once it does.
