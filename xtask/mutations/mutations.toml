@@ -1028,10 +1028,11 @@ puts the program's runtime support into each module's artefact rather than into 
 every definition that must exist exactly once exists as many times as there are modules.
 A two-module program then has two `@nz.fail`s and the link fails — which is the good case;
 the bad one is a language that quietly grew a per-module failure state
-"""
+
+Repointed by N48: the unit's text is now bound before debug information may be attached, and the runtime is `crate::runtime::emit_runtime` since N43 — whose move left this replacement naming a function `emit.rs` no longer has."""
 file = "crates/nazm-lir/src/emit.rs"
-find = "    (head + &e.out + &e.helpers + &e.tasks, e.needs())"
-replace = "    (head + &e.out + &e.helpers + &e.tasks + &emit_runtime(e.needs()), e.needs())"
+find = "    let text = head + &e.out + &e.helpers + &e.tasks;"
+replace = "    let text = head + &e.out + &e.helpers + &e.tasks + &crate::runtime::emit_runtime(e.needs());"
 
 [[mutation]]
 name = "native-linkage-ignores-visibility"
@@ -9237,3 +9238,76 @@ file = "crates/nazm-service/src/profile.rs"
 find = """        if e.accepted() { "accepted" } else { "refused" }"""
 replace = """        if e.accepted() || true { "accepted" } else { "refused" }"""
 killers = [{ package = "nazm-cli", test = "profiles", name = "every_profile_s_rules_and_verdicts" }]
+
+# --- N48: inspection, debugging and profiling -------------------------------------------------
+
+[[mutation]]
+name = "n48-markers-reach-an-ordinary-build"
+why = "the emitter writes its source-position markers whatever the build, so an ordinary build's text changes"
+file = "crates/nazm-lir/src/emit.rs"
+find = """    fn mark_position(&mut self, at: nazm_span::Span) {
+        if !self.debug {"""
+replace = """    fn mark_position(&mut self, at: nazm_span::Span) {
+        if !self.debug && false {"""
+killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+
+[[mutation]]
+name = "n48-a-statement-takes-its-function-s-line"
+why = "each instruction is given its function's line rather than its statement's, so a debugger cannot stop at a line"
+file = "crates/nazm-lir/src/debug.rs"
+find = """                if let [_, ln, col, ..] = numbers(rest)[..] {
+                    here = (ln, col);"""
+replace = """                if let [_, _ln, col, ..] = numbers(rest)[..] {
+                    here = (fline, col);"""
+killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+
+[[mutation]]
+name = "n48-a-switch-is-given-a-location-mid-instruction"
+why = "a multi-line `switch` gets a location after its first line, inside the instruction, and the unit does not assemble"
+file = "crates/nazm-lir/src/debug.rs"
+find = """        && !line.trim_end().ends_with('[')
+        && !line.trim().is_empty()"""
+replace = "        && !line.trim().is_empty()"
+killers = [{ package = "nazm-lir", lib = true, name = "debug::tests::markers_become_locations_and_nothing_else_moves" }]
+
+[[mutation]]
+name = "n48-the-debug-information-is-left-behind"
+why = "a macOS debug build does not gather its debug information before the objects holding it are removed, so the debugger finds none"
+file = "crates/nazm-cli/src/build.rs"
+find = """    if choice.debug && cfg!(target_os = "macos") {"""
+replace = """    if choice.debug && cfg!(target_os = "macos") && false {"""
+killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+
+[[mutation]]
+name = "n48-cranelift-debug-is-silently-plain"
+why = "`--debug` with Cranelift builds without debug information instead of refusing"
+file = "crates/nazm-cli/src/build.rs"
+find = "    if choice.debug && choice.backend == nazm_lir::backend::BackendId::Cranelift {"
+replace = "    if choice.debug && choice.backend == nazm_lir::backend::BackendId::Cranelift && false {"
+killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+
+[[mutation]]
+name = "n48-a-phase-is-not-timed"
+why = "the MIR phase is not marked, so its time is reported as LIR's and the phases do not account for the build"
+file = "crates/nazm-cli/src/build.rs"
+find = """            clock.mark("mir");
+"""
+replace = ""
+killers = [{ package = "nazm-cli", test = "debugging", name = "timings_account_for_every_phase" }]
+
+[[mutation]]
+name = "n48-inspect-leaves-out-the-runtime-abi"
+why = "the inspector's toolchain section omits the runtime ABI revision, so an artefact's runtime contract cannot be read from it"
+file = "crates/nazm-cli/src/inspect.rs"
+find = """            "runtime_abi": nazm_lir::runtime::RUNTIME_ABI_REVISION,
+"""
+replace = ""
+killers = [{ package = "nazm-cli", test = "debugging", name = "inspect_is_one_deterministic_document_of_the_program_s_facts" }]
+
+[[mutation]]
+name = "n48-inspect-filters-nothing"
+why = "`--def` is ignored, so asking for one definition returns them all"
+file = "crates/nazm-cli/src/inspect.rs"
+find = """            if only.is_some_and(|o| !identity.ends_with(&format!("::fn {o}"))) {"""
+replace = """            if only.is_some_and(|o| !identity.ends_with(&format!("::fn {o}")) && false) {"""
+killers = [{ package = "nazm-cli", test = "debugging", name = "inspect_is_one_deterministic_document_of_the_program_s_facts" }]
