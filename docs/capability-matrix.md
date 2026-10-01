@@ -733,7 +733,14 @@ channels, traps and divergence are not effects. The Nazm-written compiler does n
 sets. Effects are not authority: since N37 that is area 6, checked apart. Typed diagnostic facts (`nazm.diagnostic-detail/1`)
 stay unavailable; the effect facts are in the packet.
 
-**Next dependency** · Effect polymorphism over function values (N51); handlers. Authority is area 6.
+**Next dependency** · Handlers; more than one effect parameter, and effect subtyping, when a
+program needs them. Authority is area 6.
+
+*N51, 2026-10-02: Effect polymorphism v1 — VERIFIED.* One effect parameter per function
+(`effects E`), opaque in the body, bound at each call from the function-typed arguments, the
+callee's declared set performed with it replaced; through a wrapper (`@std/seq`), a module and its
+cached interface, and visible to profiles. `crates/nazm-cli/tests/effect_params.rs`, interpreter
+and both backends; `N0388`, `N0389`.
 
 *N50, 2026-10-02.* A function type carries an effect set; a call through a function value performs
 it, a closure's body is checked against its own set (`! {}` unwritten), and an undeclared function
@@ -760,6 +767,15 @@ failure and panic are effects.
 effectful call refused where a pure one is accepted.
 
 ### 6. Capabilities, as a language feature — PARTIAL
+
+**N51 (2026-10-02)** · a closure holds the capabilities visible where it is written, as captured,
+and its type states what it does with them (`a_closure_holds_the_capabilities_it_captures`);
+making a value of an undeclared function needs the authority its type's effects need, so declared
+code cannot reach the N37 bridge through a value
+(`a_value_of_an_undeclared_import_needs_the_authority_a_call_would`). Attenuated capabilities and
+revocation: **DESIGNED**, deferred (`architecture.md` §7.53 states the missing use case and the
+runtime cost). The trust root is unchanged.
+
 
 *N37, 2026-09-30: Compiler-owned capability kinds v1 — VERIFIED; Explicit authority passing v1 —
 VERIFIED; Effect-capability checking v1 — VERIFIED; Cross-module authority contracts v1 —

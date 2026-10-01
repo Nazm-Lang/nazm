@@ -8,10 +8,11 @@ found only by reading all of it.
 ## Language
 
 - No traits or methods (designed and deferred, `architecture.md` §7.52). Function values and
-  closures exist since N50, narrowly: a function type's effects are fixed, so `vec_map`,
-  `vec_filter` and `vec_fold` take only pure functions (no effect polymorphism); no closure or
-  named function value inside a generic function (`N0387`); a closure captures by copy and
-  never a `let mut` binding or a capability (`N0386`); a field of function type is called by
+  closures exist since N50, and effect parameters since N51 — one per function, named only in
+  function types (`N0388`), with no effect subtyping; no closure or
+    named function value inside a generic function (`N0387`); a closure captures by copy and
+  never a `let mut` binding (`N0386`); no attenuated capabilities and no revocation
+  (`architecture.md` §7.53); a field of function type is called by
   binding it first; no function value crosses into a task (`N0321`); a path that went through a
   function value is of unknown origin, conservatively. The compiler written in Nazm has none of
   it (areas 3, 5, 7, 16). *Narrowed in N50.*

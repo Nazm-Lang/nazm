@@ -92,11 +92,11 @@ pub fn vec_index_of[T: Equality](xs: Vec[T], x: T) -> Option[Int] ! {} {
 }
 
 // Higher-order (N50). Each takes a function value, so `f` may be a named function or a
-// closure; a function value carries its effects in its type, and these take only ones with
-// none — a pure `f` — until effects can be abstracted over (N51).
+// closure, and each is polymorphic in its effects (N51): it does what `f` does, which is
+// `E`, and nothing else — so a caller is held to what the function it passes does.
 
 /// `f` applied to each element of `xs`, in order, as a new `Vec`. `xs` is unchanged.
-pub fn vec_map[T, U](xs: Vec[T], f: fn(T) -> U) -> Vec[U] ! {} {
+pub fn vec_map[T, U, effects E](xs: Vec[T], f: fn(T) -> U ! { E }) -> Vec[U] ! { E } {
     let out = vec_new[U]();
     let mut i = 0;
     while i < vec_len(xs) { vec_push(out, f(vec_get(xs, i))); i = i + 1; }
@@ -104,7 +104,7 @@ pub fn vec_map[T, U](xs: Vec[T], f: fn(T) -> U) -> Vec[U] ! {} {
 }
 
 /// The elements of `xs` for which `keep` holds, in order, as a new `Vec`.
-pub fn vec_filter[T](xs: Vec[T], keep: fn(T) -> Bool) -> Vec[T] ! {} {
+pub fn vec_filter[T, effects E](xs: Vec[T], keep: fn(T) -> Bool ! { E }) -> Vec[T] ! { E } {
     let out = vec_new[T]();
     let mut i = 0;
     while i < vec_len(xs) {
@@ -116,7 +116,7 @@ pub fn vec_filter[T](xs: Vec[T], keep: fn(T) -> Bool) -> Vec[T] ! {} {
 }
 
 /// `f(… f(f(init, xs[0]), xs[1]) …, xs[n - 1])`: `init` when `xs` is empty.
-pub fn vec_fold[T, A](xs: Vec[T], init: A, f: fn(A, T) -> A) -> A ! {} {
+pub fn vec_fold[T, A, effects E](xs: Vec[T], init: A, f: fn(A, T) -> A ! { E }) -> A ! { E } {
     let mut acc = init;
     let mut i = 0;
     while i < vec_len(xs) { acc = f(acc, vec_get(xs, i)); i = i + 1; }

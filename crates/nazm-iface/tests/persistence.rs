@@ -792,11 +792,11 @@ fn a_function_type_is_published_with_its_effects_and_read_back_as_the_same_type(
     let g = graph();
     let mut types = UserTypes::default();
     let io = nazm_sema::EffectSet::of(nazm_sema::Effect::Io);
-    let f = types.fn_of(nazm_sema::FnSignature {
-        params: vec![Type::Int, Type::Str],
-        ret: Type::Bool,
-        effects: io,
-    });
+    let f = types.fn_of(nazm_sema::FnSignature::new(
+        vec![Type::Int, Type::Str],
+        Type::Bool,
+        io,
+    ));
     let p =
         PersistentUnitInterface::published(&interface(&g, &[("run", &[f], Type::Int)]), &g, &types)
             .expect("publishable");
@@ -845,4 +845,30 @@ fn a_function_type_with_an_unknown_or_unordered_effect_is_refused() {
         refuse(&with(r#"["io","io"]"#)),
         ReadError::Malformed(_)
     ));
+}
+
+#[test]
+fn an_effect_parameter_is_written_as_a_star_and_read_back_as_the_function_s_own() {
+    let text = r#"{"schema":"nazm.interface/7","module":"a.nz","dependencies":[],"records":[],"enums":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","generics":0,"params":[{"fn":["Int"],"ret":"Int","effects":["io","*"]}],"ret":"Int","effects":["io","*"]}]}"#;
+    let read = PersistentUnitInterface::from_json(text).expect("reads");
+    assert_eq!(read.to_json().unwrap(), text);
+    let mut types = UserTypes::default();
+    let g = graph();
+    let iface = read.rehydrate(g.root(), FnId::from_index(3), &mut types);
+    let e = iface.exports().first().unwrap();
+    let effects = e.effects.unwrap();
+    assert!(effects.has_param() && effects.contains(nazm_sema::Effect::Io));
+    let Some(Type::Fn(id)) = e.params.first().copied() else {
+        panic!("not a function type");
+    };
+    let sig = types.fn_signature(id).unwrap();
+    assert_eq!(
+        sig.row,
+        Some(nazm_sema::types::ParamOwner::Function(FnId::from_index(3)))
+    );
+    // Out of order, the parameter is not first: refused like any other set.
+    assert!(PersistentUnitInterface::from_json(
+        &text.replace(r#"["io","*"]}],"#, r#"["*","io"]}],"#)
+    )
+    .is_err());
 }
