@@ -135,22 +135,25 @@ fn check_codes(src: &str) -> Vec<String> {
 
 #[test]
 fn five_thousand_short_tasks_finish_and_reclaim_everything() {
-    // Fifty scopes in sequence, a hundred tasks each; every task takes a string it did not
-    // allocate and one it did, and reports on a channel the parent drains after the join.
+    // Two hundred scopes in sequence, twenty-five tasks each; every task takes a string it did
+    // not allocate and one it did, and reports on a channel the parent drains after the join.
+    // Twenty-five at a time, not more: v1 starts one OS thread per task (§7.46), and a host —
+    // the contained gate's 512-process ceiling, shared with every test running beside this
+    // one — may refuse a thread with `N0404`, which is the contract but not this test's subject.
     let src = "fn work(c: Chan, s: Str, n: Int) -> Int { let t = str_concat(s, int_to_str(n)); chan_send(c, str_len(t)); 0 }\n\
                fn main(t: SpawnCap) -> Int {\n\
-                 let c = chan_new(100); let buf = ints_new(); let mut round = 0; let mut total = 0;\n\
-                 while round < 50 {\n\
+                 let c = chan_new(25); let buf = ints_new(); let mut round = 0; let mut total = 0;\n\
+                 while round < 200 {\n\
                    let s = str_concat(\"task\", \"-\");\n\
-                   scope { let mut i = 0; while i < 100 { spawn work(c, s, i); i = i + 1; } }\n\
-                   let mut k = 0; while k < 100 { chan_recv(c, buf); k = k + 1; }\n\
+                   scope { let mut i = 0; while i < 25 { spawn work(c, s, i); i = i + 1; } }\n\
+                   let mut k = 0; while k < 25 { chan_recv(c, buf); k = k + 1; }\n\
                    round = round + 1;\n\
                  }\n\
                  let mut j = 0; while j < ints_len(buf) { total = total + ints_get(buf, j); j = j + 1; }\n\
                  total }\n";
-    // Each string is "task-" (5) and the decimal of 0..99: 10 of one digit and 90 of two.
-    let per_round = 100 * 5 + 10 + 90 * 2;
-    agrees(src, &(50 * per_round).to_string());
+    // Each string is "task-" (5) and the decimal of 0..24: 10 of one digit and 15 of two.
+    let per_round = 25 * 5 + 10 + 15 * 2;
+    agrees(src, &(200 * per_round).to_string());
 }
 
 #[test]
