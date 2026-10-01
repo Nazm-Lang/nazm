@@ -152,6 +152,9 @@ pub struct FnDef {
     /// interned under its substitution before any native code is written. Empty for a
     /// function that is not generic, which needs no substitution.
     pub mentions: Vec<Type>,
+    /// The C symbol a foreign declaration names (N42), or `None` for a Nazm function. A
+    /// foreign function has no body; its declared effect set is `{ foreign }`.
+    pub foreign: Option<String>,
 }
 
 /// One call in a body: where it is, what it resolved to, and with which type arguments.

@@ -19,8 +19,8 @@
   "properties": {
     "schema": { "const": "nazm.check-report/1" },
     "root": {
-      "enum": ["given", "marker", "derived"],
-      "description": "How the source root was decided: named with `--source-root`, found as a `nazm.root` marker, or derived from the file named on the command line. Only the first two make a module's identity independent of which file a compilation started from."
+      "enum": ["given", "marker", "package", "derived"],
+      "description": "How the source root was decided: named with `--source-root`, found as a `nazm.root` marker, declared by a package manifest `nazm.toml` (N46), or derived from the file named on the command line. Only the first three make a module's identity independent of which file a compilation started from."
     },
     "modules": { "type": "integer", "minimum": 0, "description": "Modules in the compilation." },
     "checked": { "type": "integer", "minimum": 0, "description": "Modules whose bodies were checked. `modules` minus `reused`." },

@@ -68,22 +68,22 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 10a | Per-module code generation and linking | VERIFIED |
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
-| 12 | Cranelift backend | DESIGNED |
-| 13 | Runtime | PARTIAL |
+| 12 | Cranelift backend | VERIFIED (v1, native subset, host) |
+| 13 | Runtime | PARTIAL (v1 contract VERIFIED) |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | RESEARCH |
-| 16 | Standard library | MISSING |
-| 17 | FFI and ABI | MISSING |
-| 18 | Embedded support | MISSING |
-| 19 | Critical profile | DESIGNED |
-| 20 | Cybersecurity profile | DESIGNED |
+| 16 | Standard library | PARTIAL (v1 foundation VERIFIED) |
+| 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`) |
+| 18 | Embedded support | MISSING (profile rules PARTIAL) |
+| 19 | Critical profile | PARTIAL (rules v1) |
+| 20 | Cybersecurity profile | PARTIAL (rules v1) |
 | 21 | AI/HPC | RESEARCH |
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | VERIFIED |
 | 25 | LSP and MCP | PARTIAL / PARTIAL |
 | 26 | Package and build tooling | PARTIAL |
-| 27 | Debugger and profiler | MISSING |
+| 27 | Debugger and profiler | PARTIAL |
 | 28 | Performance measurement | PARTIAL |
 | 29 | Differential testing | VERIFIED |
 | 30 | Mutation testing and fuzzing | VERIFIED / MISSING |
@@ -711,7 +711,8 @@ effectful call refused where a pure one is accepted.
 VERIFIED; Effect-capability checking v1 — VERIFIED; Cross-module authority contracts v1 —
 VERIFIED; Capability unforgeability v1 — VERIFIED. Attenuation, resource-specific authority,
 revocation, linearity and runtime enforcement are not here.* Two compiler-owned kinds with stable
-ids, `IoCap` and `SpawnCap`, as built-in types (`crates/nazm-sema/src/capability.rs`); each
+ids, `IoCap` and `SpawnCap` — three since N42 added `ForeignCap`, whose call-site check has no
+compatibility bridge (area 17) — as built-in types (`crates/nazm-sema/src/capability.rs`); each
 built-in's required authority is an exhaustive table on its identity. A function that declares an
 effect set holds exactly the capability values its scope reaches — lexically, recorded per call
 site by the checker — and every built-in, `spawn` and call of an undeclared function needs the
@@ -935,7 +936,7 @@ it. That was accurate, and it is no longer true — see area 10a.*
 its own, and the objects are linked. `crates/nazm-lir/src/lower.rs` splits into a global
 `plan` — signature admissibility and the recursion refusal, both of which span modules —
 and `lower_module`, which reads one module's bodies and every function's *signature*;
-`crates/nazm-lir/src/emit.rs` has `emit_unit`, `emit_runtime` and `emit_entry`;
+`crates/nazm-lir/src/emit.rs` has `emit_unit`, and `crates/nazm-lir/src/runtime/` `emit_runtime` and `emit_entry` (moved by N43);
 `crates/nazm-cli/src/build.rs` runs `clang -c` per artefact and links.
 
 A symbol is a spelling of the definition's `DefKey` (`crates/nazm-lir/src/symbol.rs`), not
@@ -1048,43 +1049,70 @@ without `-g`, so a compiled program cannot be debugged symbolically.
 
 **Accepted when** · Already met for the current subset.
 
-### 12. Cranelift backend — DESIGNED
+### 12. Cranelift backend — VERIFIED (v1, for the native subset, on the host)
 
-**Evidence** · `architecture.md` §1 and `roadmap.md`, *Backends* — one component doing four jobs
-(JIT, comptime evaluator, REPL, hot reload), and an explicit ordering decision that it
-comes after, not instead. `xtask/src/main.rs` gates against a codegen dependency appearing
-unannounced.
+**Evidence** · N41 (2026-10-01). `crates/nazm-codegen-clif` implements `nazm-lir`'s `Backend`
+(`crates/nazm-lir/src/backend.rs`) with Cranelift 0.136.1, pinned exactly: every MIR function body
+of a unit becomes Cranelift IR, verified by Cranelift's verifier, and one object per unit is written
+by `cranelift-object`; the per-type retain, release and equality helpers and the task trampolines
+are generated with it. `nazm build --backend cranelift` selects it; `llvm` stays the default and
+the differential reference. `architecture.md` §7.43 is the constitution, written first.
 
-**Limitation** · None of the four jobs exists. A second backend now would be a second set
-of semantics bugs to keep in agreement for no present benefit.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| A Cranelift-independent backend boundary | VERIFIED | `Backend` names no Cranelift type; `nazm-lir` and `nazm-cli` do not depend on a code generator (`cargo xtask check`, codegen reach) |
+| Cranelift consumes validated MIR, and nothing above it | VERIFIED | `nazm-codegen-clif` depends on `nazm-mir` and `nazm-lir` only (`the_cranelift_backend_reads_mir_and_nothing_above_it`) |
+| The whole native subset compiles with Cranelift | VERIFIED | all 104 programs of the 205-source corpus that build: stdout, stderr, exit status and memory report identical to the LLVM backend's (`performance.md`, N41); `crates/nazm-cli/tests/cranelift.rs` against the interpreter too |
+| Traps and arithmetic edges | VERIFIED | `every_trap_is_the_same_trap` (overflow, `/` and `%` by zero, `MIN / -1`, bounds, capacities), `signed_arithmetic_and_its_edges_agree` (`MIN % -1` is 0) |
+| No silent fallback | VERIFIED | `choosing_cranelift_writes_no_llvm_text_for_any_unit`; a refusal writes nothing (`recursion_is_refused_whichever_backend_is_asked`) |
+| Typed, centralised runtime imports | VERIFIED | every call into the runtime is built from `crates/nazm-lir/src/runtime/mod.rs`; `a_runtime_entry_the_registry_names_is_one_the_runtime_defines` |
+| Object-cache identity and reuse | VERIFIED | a key over each unit's MIR digests, layouts, callee signatures, target, backend version and settings and the runtime ABI revision, known before generation; `an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`, `a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those` |
+| Deterministic objects | VERIFIED | `the_same_mir_gives_the_same_object_bytes` (the compiler's own source) |
+| Debug information | MISSING | no DWARF; function symbols only (N48) |
+| A target other than the host | MISSING | refused by name (area 33) |
 
-**Next dependency** · One of the four jobs becoming real.
+**Limitation** · Every local that is not a scalar lives in a stack slot and is copied by
+`memcpy`-sized loads and stores; no optimisation pass runs beyond Cranelift's own. The runtime
+and the platform entry are still the runtime's LLVM text compiled by clang, and clang links, so a
+Cranelift build still needs clang. A Cranelift build links the whole runtime (a reused object is
+not generated, so it cannot say which parts it reaches). The backend has its own internal calling
+convention and layout; nothing passes a value between code the two backends generated.
 
-**Accepted when** · `nazm test --backend=all` means something — which first requires
-`docs/spec.md`'s backend-semantics questions to be settled.
+**Accepted when** · Already met for the declared set: the native subset, on the host.
 
 ---
 
 ## Runtime and concurrency
 
-### 13. Runtime — PARTIAL
+### 13. Runtime — PARTIAL (the v1 contract VERIFIED; no runtime crate, no scheduler)
 
-**Evidence** · There is no runtime crate; the runtime is LLVM IR generated into each
-program, emitted lazily only when reached — `crates/nazm-lir/src/emit.rs` carries the
-join, I/O, sequence, string, task and channel runtimes. `compiler/emit.nz` does not
-*mirror* them since N8: its copy is **derived** from the Rust one line by line, and
-`cargo xtask check`'s `runtime parity` gate re-derives it and refuses a difference. The
-external surface is 26 libc/pthread symbols plus five overflow intrinsics and `memcpy`.
+**Evidence** · N43 (2026-10-01): `architecture.md` §7.45 is the runtime constitution, written
+first. The runtime is LLVM text generated into each program, emitted only for the parts reached,
+from `crates/nazm-lir/src/runtime/`: `core.rs` (the portable text — state, failure and report,
+sequences, strings, I/O, join, tasks, channels, the second-backend shims), `os.rs` (the operating-
+system adapter: the only C-library and POSIX-threads entry points anything calls), `entry.rs`
+(the platform entry) and `mod.rs` (the contract). `compiler/emit.nz`'s copy is **derived** from
+`core.rs` line by line, re-derived by `cargo xtask check`'s `runtime parity` gate since N8.
 
-**Limitation** · No `nazm-rt` crate, so no scheduler, no allocator, no reactor. *This
-read "No deallocation (area 4)" until N8; the emitted runtime reclaims every heap-backed
-value now, and the remaining gap is the crate rather than the model.*
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| One typed, versioned inventory of every runtime symbol | VERIFIED | `INVENTORY` (32 functions: signature, part, responsibility, ownership, effect, failure, thread safety) and `GLOBALS` (11); units' declarations generated from it; `every_runtime_definition_is_inventoried_with_its_exact_signature`, `every_runtime_global_is_inventoried`, `the_word_view_agrees_with_the_inventory` |
+| Runtime ABI revision in every object key | VERIFIED | `RUNTIME_ABI_REVISION` 2; Cranelift keys (N41) and clang's configuration (`the_runtime_abi_revision_is_part_of_every_configuration`) |
+| Startup and shutdown defined | VERIFIED | arguments stored once without the program's name, roots minted by the entry alone, three distinguished endings (`the_three_ways_a_program_ends_are_distinguished`, `the_arguments_are_stored_once_at_startup_without_the_program_name`, `root_capabilities_come_from_the_entry_alone`) |
+| Memory contract | VERIFIED | strings, sequences, sequences of strings and of records, channels, shared backings across four threads, allocation-failure paths, all counted exactly (`the_runtime_s_services_keep_their_contract_when_called_directly`, a C harness linked against the runtime alone) |
+| Failure classes | VERIFIED | language, host-refused, I/O and explicit exit distinguished; a `Result` never becomes one (`an_err_is_data_and_never_a_failure`) |
+| Portable core, one OS adapter | VERIFIED | `a_runtime_calls_the_operating_system_only_through_the_adapter`; the same POSIX surface on every v1 target |
+| A runtime crate, a scheduler, an allocator | MISSING | one OS thread per task (N44's) |
 
-**Next dependency** · A reason to have a runtime crate — stack switching or a custom
-allocator — since the memory model no longer waits on one.
+**Limitation** · Still no `nazm-rt` crate: the runtime is text, so its tests link it with a C
+harness rather than call it from Rust. Thread safety is by construction (atomic string and channel
+counts, sequences confined by `N0321`), not by a sanitizer run. One OS thread per task.
 
-**Accepted when** · `nazm-rt` exists with a narrow `unsafe` allowance that `xtask check`
-enforces, per `architecture.md` §7.
+**Next dependency** · N44's scheduler, and a reason for a runtime crate (stack switching, a custom
+allocator).
+
+**Accepted when** · For v1: met. For the area: a scheduler beyond one thread per task, with its
+policy stated.
 
 ### 14. Structured concurrency — VERIFIED
 
@@ -1102,6 +1130,17 @@ inside a scope a `break` left was never waited for and its failure never taken o
 reference and the interpreter were right. Held by the `scope_*_joins` cases in
 `crates/nazm-cli/tests/transfers/`.
 
+*N44 (2026-10-01):* `architecture.md` §7.46 is the scheduler contract — task states, scope
+ownership, which failure a scope reports (the first in start order, the body's before any
+task's), no cancellation, the OS as scheduler and why a pool would break the progress guarantee,
+fairness and determinism, authority and provenance across a spawn, what may cross, channels,
+shutdown. `crates/nazm-cli/tests/scheduler.rs` holds it under the interpreter, LLVM `-O0`/`-O2`
+and Cranelift with every native run fully reclaimed: 5,000 short tasks, thirty nested scopes
+joined innermost first, the reported failure in start order not time order, a failure deep in
+nested scopes, records and enums handed to tasks, a waiting receiver woken, authority passed,
+withheld and bridged, provenance through a spawn (`N0372`), nothing mutable crossing (`N0321`,
+transitively), `exit_with` from a task. Peak RSS stays at 3.8 MB from 5,000 to 500,000 tasks.
+
 **Limitation** · One OS thread per task and nothing more. No M:N, no work stealing, no
 fairness, no task density, no timeouts, and **no cancellation beyond closing a channel**.
 `Chan` carries `Int` only. Ownership prevents data races; **that is not deadlock freedom**
@@ -1114,7 +1153,11 @@ and is not claimed as such (`architecture.md` §5).
 ### 15. Advanced scheduler — RESEARCH
 
 **Evidence** · `architecture.md` §5 and `roadmap.md`'s C-4/C-5 rows: M:N tasks, work
-stealing, growable stacks, an event reactor, blocking-FFI handoff.
+stealing, growable stacks, an event reactor, blocking-FFI handoff. N44 measured the baseline any
+of it must beat (`docs/performance.md`, N44): a task started and joined in 13 µs, a channel round
+trip between two tasks 4.6 µs, a streamed value 60 ns, and linear scaling to four tasks; and
+decided against a fixed worker pool, which with blocking channels and no suspendable tasks would
+deadlock programs that are correct today (§7.46).
 
 **Limitation** · None of it exists and none of it is measured. `architecture.md` records
 that the "1M live tasks under 2GB" target was **withdrawn** as arithmetically unsupported —
@@ -1131,42 +1174,68 @@ implementation.
 
 ## Libraries and interop
 
-### 16. Standard library — MISSING
+### 16. Standard library — PARTIAL (v1 foundation VERIFIED)
 
-*Since N12 there is one `.nz` library file, and it is not a standard library:*
-`library/core/prelude.nz` declares `Result` and `Option`, is checked as ordinary source, and
-is special only in its identity and in being imported everywhere (area 2). Nothing can add a
-second declaration to it or a second such module.
+**Evidence** · N45 (2026-10-01), `architecture.md` §7.47 first. Seven toolchain-owned Nazm
+modules in `library/std/`, imported by name — `use "@std/text";` — resolved by the loader
+(`crates/nazm-service/src/load.rs`) to the compiler's copy of their bytes
+(`crates/nazm-sema/src/stdlib.rs`) and keyed `@std/NAME`, which no project path can take. They are
+ordinary source: no compiler support beyond resolution, and the built-in table is unchanged. The
+prelude (`library/core/prelude.nz`, `Result` and `Option`) is still the only module imported
+without a `use`.
 
-**Evidence of absence** · No `.nz` library beyond that prelude. Thirty-one compiler built-ins in
-one table, `crates/nazm-sema/src/intrinsic.rs`, mirrored by the backend in
-`crates/nazm-lir/src/ir.rs`. Every built-in the front end has, the backend lowers — there
-is no coverage gap today, and a test enforces that.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| Found by name and only by name; `@std/` never read from disk | VERIFIED | `every_standard_module_is_found_by_name_and_checks_cleanly`, `no_project_path_is_keyed_as_a_standard_module` |
+| Text, option, result, sequence, I/O, process and channel helpers behave as documented at their edges | VERIFIED | `text_behaves_as_documented_at_its_edges`, `option_result_and_seq_helpers_work_for_every_type`, `chan_take_receives_one_value_at_a_time_across_tasks` — interpreter, LLVM −O0/−O2 and Cranelift, everything reclaimed |
+| Authority visible in every signature | VERIFIED | `io_and_process_need_the_authority_they_show` |
+| Origins preserved through wrappers | VERIFIED | `what_a_standard_function_reads_keeps_its_origin` |
+| Ordinary failure is a value | VERIFIED | `text_parse_int` `Err` for no digits, a non-digit and both ends of the range; `None` for an absent search or an empty maximum |
+| Documented where the spec lists it | VERIFIED | `every_public_standard_function_is_documented_and_listed`; `nazm docs --section spec:std`; the spec's example runs (`the_spec_s_example_runs_everywhere`) |
+| Higher-order helpers, formatting, domains (HTTP, JSON, time, crypto) | MISSING | no function values; out of scope for v1 |
 
-**Limitation** · The table is the library. Names live in the ordinary function namespace
-and cannot be redefined. There are no string escapes, so `str_from_byte` is the only way to
-write a newline.
+**Limitation** · Functions carry their module's name because there are no qualified names. The
+compiler written in Nazm reports an `@std` import as a missing module. Pre-1.0: modules may change.
 
-**Next dependency** · User-defined types, or the library stays a table.
+**Next dependency** · Function values (for `map`, `filter`, sorting by key), and qualified names.
 
-**Accepted when** · A `.nz` library ships, is versioned, and is not special-cased by the
-compiler.
+**Accepted when** · For v1: met. For the area: a library a real program can be written against
+without reimplementing collections or text handling, with a stability policy past 1.0.
 
-### 17. FFI and ABI — MISSING
+### 17. FFI and ABI — PARTIAL (v1: C, `Int` and `Bool`, native builds on the host)
 
-**Evidence of absence** · No `extern`, no ABI annotation, no such token in
-`crates/nazm-syntax/src/lexer.rs`. The 18 libc symbols are emitted *by* the compiler to
-implement built-ins; a user program cannot declare or call anything else. `docs/spec.md`
-lists the FFI boundary under *Open*, so it is not designed either.
+**Evidence** · N42 (2026-10-01). `extern "C" fn name(p: T, …) -> R = "symbol";` declares a C
+function by its signature and its C symbol (`crates/nazm-syntax/src/parser.rs`; `extern` is
+contextual, not a keyword); `architecture.md` §7.44 is the constitution, written first, and
+`docs/spec.md` *Foreign functions* the language rule. `nazm build --link FILE` hands objects and
+libraries to the linker. Both backends declare the symbol with the target's C convention and call
+it with no failure check after it.
 
-**Limitation** · Total. This is the single largest gap between the language and any
-systems, embedded or cybersecurity use.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| A C function is declared and called, with both backends agreeing | VERIFIED | `a_program_calls_c_with_ints_and_bools_and_both_backends_agree` (registers and the stack, `INT64_MAX`, nested calls, C state), clang-compiled fixtures |
+| Only FFI-safe types cross | VERIFIED | `Int` as `int64_t`, `Bool` as zero-extended `bool`; `Str`, sequences, records, enums, capabilities refused, `N0381` (`every_declaration_outside_the_subset_is_refused_by_its_own_code`) |
+| The declaration's shape is checked | VERIFIED | ABI `N0380`, symbol `N0382`, generic or effect-annotated `N0384`, conflicting or runtime-reserved symbol `N0383` in one module and across modules (`two_modules_that_disagree_about_a_symbol_are_refused_before_linking`, `a_reserved_c_symbol_is_every_one_the_runtime_calls`) |
+| Calling C is an effect and needs authority | VERIFIED | effect `foreign`; a `ForeignCap` held at every call, declared set or not (`a_foreign_call_needs_a_foreign_cap_everywhere`, `an_imported_foreign_function_needs_a_foreign_cap_too`) |
+| The provenance question | VERIFIED | what C returns carries `unknown` and its arguments' origins; `N0372` for a restricted `write_file` path computed from it (`what_c_returns_carries_the_unknown_origin`) |
+| Ownership across the call | VERIFIED | nothing managed crosses; values live across calls are reclaimed on every path, a failure after a foreign call included (`a_foreign_call_inside_managed_code_leaks_nothing`) |
+| The interpreter | VERIFIED (refusal) | `nazm run` refuses a program calling C before running any of it, `N0385` (`nazm_run_refuses_a_foreign_call_before_running_anything`) |
+| Link inputs | VERIFIED | `--link` is passed in order; a missing file is refused before compiling; an unresolved symbol is reported as a missing `--link`, not a compiler bug (`the_linker_is_handed_exactly_what_link_names`) |
+| Interface and cache | VERIFIED | `nazm.interface/7` carries a foreign export's symbol; semantic epoch 11; the C symbol enters the object key (`the_c_symbol_enters_the_object_key`) |
+| Pointers, strings, structs, callbacks, variadics, `errno` | MISSING | not designed in v1: no FFI type can express them safely yet |
+| Exporting Nazm functions to C | MISSING | no `extern` definitions; a C caller cannot reach Nazm code |
+| Other ABIs and cross-target | MISSING | `"C"` only; the host only (area 33) |
 
-**Next dependency** · A settled ABI and layout story, which `docs/bootstrap.md`
-deliberately left unfrozen.
+**Limitation** · Two scalar types, by value. C is trusted entirely once called: an abort, a loop or
+memory corruption inside it is outside every Nazm guarantee, and nothing is checked after the call.
+`nazm run` cannot call C at all, so a program that does has one implementation, not two.
 
-**Accepted when** · A C function is declared and called, with the safety boundary stated
-and the provenance question (what label a returned value carries) answered.
+**Next dependency** · A layout story for records (a `repr(C)`-like promise) and a borrowed-string
+type before anything but scalars can cross; a callback needs function values, which the language
+does not have.
+
+**Accepted when** · Met for the v1 set above. The whole area is accepted when a record and a string
+cross with their layout and ownership stated.
 
 ---
 
@@ -1191,7 +1260,7 @@ left as a gap.
 **Systems — MISSING.** Would need explicit control over allocation and layout, no hidden
 allocation where none is declared, and a stated ABI; would grant raw memory access and
 foreign calls inside a named, narrow boundary. Nothing profile-specific exists. Blocked on
-area 17 (FFI and ABI, MISSING) and on area 4, which is now VERIFIED for the current type
+area 17 (FFI and ABI, PARTIAL: scalars only) and on area 4, which is now VERIFIED for the current type
 universe but says nothing about *explicit* control over allocation and layout — a profile
 that must declare where memory comes from needs more than automatic reclamation. The architectural
 commitment that keeps it reachable — field access stays symbolic until the lowest level, so
@@ -1209,6 +1278,20 @@ target, no `no_std` equivalent, no control over allocation. `crates/nazm-cli/src
 emits a module with no triple and lets `clang` supply the host's. The emitted runtime
 declares 18 libc and pthread symbols and cannot currently be built without them.
 
+**N47: the `embedded` profile — PARTIAL.** *N47, 2026-10-01: restriction profiles v1 (`architecture.md` §7.49).* `--profile NAME` on `check`,
+`build` and `run`, or `profile = "NAME"` in any package manifest of the build; rules read semantic
+facts only — `main`'s required effect set, each function's declared contract, the build's lock —
+and refuse with `N0510` and witnesses; `nazm check --profile-report` prints the deterministic
+`nazm.profile-report/1`, marked compiler evidence and not certification. Evidence:
+`crates/nazm-cli/tests/profiles.rs` — every profile's verdicts on one program, the chain of calls
+in a refusal, the ambient bridge refused, foreign calls refused, `io` seen through a standard
+wrapper, a locked package build satisfying the build rule and a tampered one not, a dependency's
+required profile holding the whole program, a profile never changing what runs nor its verdict
+being cached, and the report's bytes and outcome. `embedded` refuses `io` and `spawn` —
+no operating-system services, no scheduler — and allows `foreign`, the way hardware is reached.
+It does **not** restrict allocation (untracked: BLOCKED) or bound the stack, and there is still
+no freestanding target, so a program it accepts still links the host's C library.
+
 **Next dependency** · Cross-compilation (area 33), then a freestanding runtime — which
 means area 13. *This clause added "and therefore area 4" with the sentence "A language that
 never frees cannot run on a device with kilobytes." The first half of that is closed since
@@ -1220,7 +1303,7 @@ allocating.*
 computed rather than hoped for. Native frame counts do not bound stack bytes, and that
 obligation is inherited here.
 
-### 19. Critical profile — DESIGNED
+### 19. Critical profile — PARTIAL (restriction rules v1)
 
 **Read this before the rest.** This profile is an architectural intention. It is **not** a
 claim that Nazm is suitable for any safety-related, airborne, medical, automotive or
@@ -1231,6 +1314,20 @@ anticipating a Critical profile is not evidence for one.**
 **What it would restrict** · No dynamic allocation, no recursion, bounded loops with an
 established bound, total functions, and every failure mode enumerated rather than trapped;
 contracts and invariants checked rather than asserted.
+
+**What `--profile critical` enforces now** · *N47, 2026-10-01: restriction profiles v1 (`architecture.md` §7.49).* `--profile NAME` on `check`,
+`build` and `run`, or `profile = "NAME"` in any package manifest of the build; rules read semantic
+facts only — `main`'s required effect set, each function's declared contract, the build's lock —
+and refuse with `N0510` and witnesses; `nazm check --profile-report` prints the deterministic
+`nazm.profile-report/1`, marked compiler evidence and not certification. Evidence:
+`crates/nazm-cli/tests/profiles.rs` — every profile's verdicts on one program, the chain of calls
+in a refusal, the ambient bridge refused, foreign calls refused, `io` seen through a standard
+wrapper, a locked package build satisfying the build rule and a tampered one not, a dependency's
+required profile holding the whole program, a profile never changing what runs nor its verdict
+being cached, and the report's bytes and outcome. `critical` requires every function of the
+program to declare its effect set (no ambient bridge), forbids `spawn` and `foreign`, and requires a
+package build held to its lockfile. Nothing about allocation, loop bounds, totality or contracts:
+those stay DESIGNED, and the disclaimer above stands in full.
 
 **What exists that is genuinely relevant** · Three things, and they are real. Arithmetic is
 **specified rather than inherited from the hardware** — overflow traps, and
@@ -1246,7 +1343,7 @@ a qualified toolchain, which the bootstrap explicitly does **not** provide — `
 **Accepted when** · A proof obligation is discharged on a real Nazm program and assessed
 against a named standard by someone qualified to make that assessment. Not a test count.
 
-### 20. Cybersecurity profile — DESIGNED
+### 20. Cybersecurity profile — PARTIAL (restriction rules v1)
 
 **What it would restrict** · Untrusted input tracked to its uses; declassification
 explicit and audited; no ambient authority; constant-time obligations honoured where they
@@ -1255,12 +1352,25 @@ are declared.
 **Evidence** · The one real ingredient present is refuse-by-name-with-a-span rather than
 silent degradation, and failures that are diagnostics rather than undefined behaviour.
 
-**Limitation** · Against that: authority is **ambient and labelled as such in the source**
-— `crates/nazm-sema/src/intrinsic.rs` says nothing in the language restricts which
-functions may reach the filesystem.
+**N47: `--profile cyber`** · *N47, 2026-10-01: restriction profiles v1 (`architecture.md` §7.49).* `--profile NAME` on `check`,
+`build` and `run`, or `profile = "NAME"` in any package manifest of the build; rules read semantic
+facts only — `main`'s required effect set, each function's declared contract, the build's lock —
+and refuse with `N0510` and witnesses; `nazm check --profile-report` prints the deterministic
+`nazm.profile-report/1`, marked compiler evidence and not certification. Evidence:
+`crates/nazm-cli/tests/profiles.rs` — every profile's verdicts on one program, the chain of calls
+in a refusal, the ambient bridge refused, foreign calls refused, `io` seen through a standard
+wrapper, a locked package build satisfying the build rule and a tampered one not, a dependency's
+required profile holding the whole program, a profile never changing what runs nor its verdict
+being cached, and the report's bytes and outcome. `cyber` requires declared effect sets everywhere — so no
+ambient authority, and N38's restricted flow (`N0372`) applies to every function — forbids
+`foreign`, and requires a locked, integrity-checked package build. Capabilities (area 6, N37) and
+information flow (area 7, N38) are what it rests on. It is not a sandbox, it does not make a
+program secure, and it claims nothing about side channels, constant time or declassification.
 
-**Next dependency** · Areas 6 and 7 — capabilities and information flow — both MISSING,
-with every design question still open in `docs/spec.md`.
+**Limitation** · Untrusted input is tracked only to `write_file` paths (N38); there is no
+declassification and no constant-time rule.
+
+**Next dependency** · More sinks and an explicit declassification, in N38's framework.
 
 **Accepted when** · Untrusted input is tracked to its uses and declassification is explicit
 and audited, with the approximation's blind spots stated.
@@ -1944,6 +2054,20 @@ few of the questions the service can, and none edits.
 **Evidence** · Multi-file builds work through path-relative `use`, two independent
 implementations: `crates/nazm-service/src/load.rs` and `compiler/module.nz`.
 
+*N46, 2026-10-01: packages v1 — VERIFIED for path dependencies, one host.* `architecture.md`
+§7.48 first. `crates/nazm-package`: the `nazm.package/1` manifest (unknown keys refused), exact
+versions, deterministic name-order resolution with conflicts, mismatches and cycles refused by
+code (`N0500`–`N0504`), BLAKE3 package digests, and the `nazm.lock/1` lockfile `nazm lock` writes;
+`--locked` refuses a missing, mismatched or tampered lock (`N0505`–`N0507`). `use "NAME:path"`
+reaches a declared dependency and nothing else (`N0508`); dependency modules are keyed
+`NAME@VERSION/path`. Evidence: `crates/nazm-cli/tests/packages.rs` — a diamond built from its
+directory by the interpreter and both backends; every refusal by code; visibility; the lockfile's
+bytes independent of the directory and not rewritten when unchanged; tampering refused before
+anything is built; dependency keys; an unchanged dependency reused and a changed one rechecked
+alone; two copies byte-identical from empty caches; 200 packages resolved and locked in name order.
+No registry, no remote sources, no version ranges, no build scripts, no workspaces of several
+roots.
+
 *N31, 2026-09-28: Compact Command Summary v1, `nazm.command-summary/1` — VERIFIED; Compact Test
 Summary v1, `nazm.test-summary/1` — VERIFIED; G76 — PARTIAL.* `--summary-json` on `nazm check`
 and `nazm build` (`crates/nazm-service/src/summary.rs`, `architecture.md` §7.33) prints the
@@ -2001,16 +2125,33 @@ manifest.
 **Accepted when** · A project builds from a manifest and the two resolvers agree on
 identity.
 
-### 27. Debugger and profiler — MISSING
+### 27. Debugger and profiler — PARTIAL
 
-**Evidence of absence** · No DWARF, no `!dbg` metadata, no `-g`; `--emit-ir` writing the
-`.ll` beside the executable is the only debugging affordance
-(`crates/nazm-cli/src/build.rs`). Source positions in compiled programs are baked in as
-string constants at compile time. No profiler integration exists.
+**Evidence** · N48 (2026-10-01), `architecture.md` §7.50 first. `nazm build --debug` emits DWARF
+through the LLVM backend (`crates/nazm-lir/src/debug.rs`): a subprogram per function and a source
+position on every instruction from MIR's spans, gathered into `OUTPUT.dSYM` on macOS. `nazm
+inspect` prints `nazm.inspect/1` (`crates/nazm-cli/src/inspect.rs`); `nazm build --timings` prints
+`nazm.timings/1`.
 
-**Next dependency** · Line tables in the emitted module.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| Line tables: a breakpoint by Nazm function or by `.nz` file and line resolves to that line | VERIFIED (static, lldb on aarch64-apple-darwin) | `a_debugger_finds_nazm_functions_and_lines` |
+| A debug build behaves as an ordinary one; an ordinary build carries no debug metadata | VERIFIED | `a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information` |
+| A live session — run to a breakpoint, backtrace, step | PARTIAL | the line table has one row per statement; launching a process under lldb waited on the operating system's debugger authorisation in a non-interactive session, so no live session was run here |
+| Local variables, types | MISSING | no `DILocalVariable` |
+| Cranelift debug information | MISSING | `--debug` with Cranelift is refused |
+| Deterministic inspection of a program's facts | VERIFIED | `inspect_is_one_deterministic_document_of_the_program_s_facts` |
+| Compiler phase timings | VERIFIED | `timings_account_for_every_phase` |
+| Runtime profiling | PARTIAL | `NAZM_MEMORY_REPORT` counts sequences, strings and channels; no task or scheduler counters, no sampling integration |
 
-**Accepted when** · A native backtrace names a `.nz` line.
+**Limitation** · Function and statement positions only. The runtime and entry objects carry no
+debug information.
+
+**Next dependency** · Variables (`DILocalVariable` for MIR's named locals) and a debugger session
+in an environment that authorises one.
+
+**Accepted when** · A native backtrace taken in a live session names a `.nz` line — the static half
+is met.
 
 ---
 
@@ -2998,6 +3139,14 @@ source lines, runnable executables byte-identical too.
 `MANIFEST.txt`, and validates the package against its own manifest with counts compared
 both ways so a file copied in but not listed fails.
 
+*N46, 2026-10-01: reproducible executables — VERIFIED on one host.* Two copies of one package,
+built from empty caches in two directories, give byte-identical executables under both backends
+(`two_copies_built_from_empty_caches_are_byte_identical`): the link runs with `ZERO_AR_DATE=1` and
+under the final file name, because the Apple linker otherwise mixes a time and a temporary name
+into the executable's UUID and signature. The package lockfile records BLAKE3 digests of every
+package's sources and refuses a changed one. Not claimed across hosts, operating systems or
+toolchain versions.
+
 **Limitation** · Three claims, kept apart. Archive **entry metadata is normalised** — tar
 sorted with zeroed owner and mtime, gzip with no timestamp. Whole-archive
 **bit-reproducibility is not established and cannot be** while the provenance and bootstrap
@@ -3019,9 +3168,12 @@ permanently retired.
 (the latter inside `docker/contained.Dockerfile`). The emitter states its own scope, and
 `crates/nazm-cli/tests/docs.rs` asserts the documented target and the emitter agree.
 
-**Limitation** · **No cross-compilation and no target handling** — `crates/nazm-cli/src/build.rs`
-has no `--target`, and the emitted module carries no triple, so `clang` supplies the host's.
-Other targets are unverified rather than unsupported.
+**Limitation** · **No cross-compilation.** Since N41 `nazm build --target TRIPLE` names a target
+explicitly, and the matrix is closed: `aarch64-apple-darwin`, `aarch64-unknown-linux-gnu`,
+`x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`; any other triple is refused by name, and one
+that is not the host is refused too (`a_target_other_than_the_host_is_refused_and_nothing_is_written`),
+because an object for it would need a foreign linker and runtime. The x86-64 triples are accepted
+by both backends and carry no evidence.
 
 **BLOCKED, and it is a real finding** · `.github/workflows/ci.yml` runs
 `cargo test --workspace` and sets neither `NAZM_CONTAINED` nor `NAZM_ALLOW_UNCONTAINED`,

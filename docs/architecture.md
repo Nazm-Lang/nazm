@@ -324,7 +324,8 @@ step rather than a crate of its own. `nazm-hir`, `nazm-ty` and `nazm-db` are sti
 | 6 | **`nazm-mir`** | **exists** (N40) — MIR, level 6 by responsibility: each concrete function as a typed CFG with every copy, move, drop, scope join and failure edge explicit, validated. Not SSA, and no borrow checking. §7.42 |
 | 6 | `nazm-db` · `nazm-lsp` | planned |
 | 7 | **`nazm-lir`** | **exists** — since N40 it reads validated MIR and holds layout, symbols and LLVM text emission; the structured tree that was once named for this level is gone. See the note below |
-| 7 | `nazm-codegen-clif` · `nazm-link` · `nazm-driver` | planned |
+| 7 | **`nazm-codegen-clif`** | **exists** (N41) — the Cranelift backend behind `nazm-lir`'s `Backend`: every MIR function body to Cranelift IR to one object per unit, in process. §7.43 |
+| 7 | `nazm-link` · `nazm-driver` | planned — clang links, and `nazm-cli` drives |
 | 7 | `nazm-test` | **exists as a subcommand**, `nazm test`, not as a crate |
 | 8 | `nazm-rt` | planned |
 | 9 | `nazm-mono` | planned — and nothing is polymorphic, so there is nothing to monomorphise yet |
@@ -1394,7 +1395,7 @@ computes the same answers as one that does.**
 
 Two hand-kept transcriptions of a memory model is the arrangement that produced that, so
 there is now one. Every line of the Nazm emitter's `runtime`, `task_runtime` and
-`channel_runtime` is a line of `crates/nazm-lir/src/emit.rs`'s runtime constants with
+`channel_runtime` is a line of `crates/nazm-lir/src/runtime/core.rs`'s runtime constants (in `emit.rs` until N43) with
 `hidden` changed to `internal`, and `cargo xtask check`'s **`runtime parity`** gate performs
 the derivation again and refuses a difference by line number.
 
@@ -4791,6 +4792,583 @@ not a responsibility taken away from anywhere.
 failure messages, and nothing of the checker. Remaining exceptions: `nazm-lir` still takes
 `nazm-sema`'s *type and key definitions* (`Type`, `Intrinsic`, `DefKey`) as the vocabulary MIR is
 written in — never a `Resolution`.
+
+## 7.43 The backend boundary and the Cranelift backend — N41, 2026-10-01
+
+Written before the code. `crates/nazm-lir/src/backend.rs` is the interface; `crates/nazm-codegen-clif`
+is the second implementation of it.
+
+```text
+MIR (validated) ─ nazm-lir::lower: layout, symbols, linkage, units ─ Native
+                                                                       │
+                     ┌─────────────────── Backend ─────────────────────┤
+                     ▼                                                 ▼
+          LLVM text (nazm-lir::emit)                      Cranelift (nazm-codegen-clif)
+          → clang -c → object                             → object bytes (cranelift-object)
+                     └──────────── clang links, with the runtime ─────┘
+```
+
+**Backend input.** A `Native`: validated MIR, and what `nazm-lir::lower` settled from it for every
+backend alike — the units (one per module, one per generic instance), each function's symbol and
+linkage, and the refusals of the native subset. A backend reads MIR and nothing of the checker,
+and decides nothing about the language.
+
+**The interface.** `Backend` names itself (`id`, a version string that enters every cache key),
+states its target, and turns a `Native` into artefacts: LLVM text for clang to compile, or object
+bytes. Nothing from Cranelift appears in its signature, or in any crate above `nazm-codegen-clif`.
+
+**Codegen unit.** The unit is `nazm-lir`'s: one per module and one per instance, so object reuse is
+per unit for both backends. The runtime and the platform entry are LLVM text in every build — they
+are the runtime, not code generated from a program's MIR, and N43 owns them.
+
+**Runtime symbol boundary.** Every runtime entry point a backend calls is in one typed registry
+(`crates/nazm-lir/src/runtime/mod.rs` since N43): its symbol, its parameters and result in machine words and
+pointers only, and what it does with ownership. A revision number names the registry; it enters
+every object's cache key. Cranelift code calls the runtime only through it. Where the runtime took
+or returned a first-class aggregate, the registry has a pointer-taking entry (`nz.str_join_to`,
+`nz.read_file_to`, `nz.scope_join_to`) and a scalar accessor for thread-local state
+(`nz.failed_now`), so no aggregate crosses between code two compilers generated.
+
+**Internal calling convention (Cranelift).** The target's default convention. `Int` and a
+capability are an `i64`, `Bool` an `i8`, a handle (`Ints`, `Strs`, `Chan`, `Vec`) a pointer; a `Str`,
+record or enum is passed as a pointer to the caller's memory, which the callee borrows and never
+writes, and returned through a pointer the caller supplies as the first argument. This is the
+Cranelift backend's own convention and says nothing about C (N42).
+
+**Layout (Cranelift).** Every type has a size and an alignment: 8 for a word, 1 for a `Bool`, 24
+for a `Str` (pointer, length, owner); a record is its fields in the canonical order with natural
+alignment; an enum is an 8-byte discriminant followed by the largest payload, each payload laid
+out as a record. Both backends take field positions and discriminants from `nazm-lir`'s canonical
+tables; the byte layouts differ and never meet, because no value crosses between the two in one
+program.
+
+**Object emission and linking.** A Cranelift unit is one object module, written by
+`cranelift-object`. `nazm build` owns nothing past that: clang compiles the LLVM-text artefacts and
+links every object with the runtime, with arguments built as a vector, never through a shell.
+
+**Targets.** The v1 matrix is the host: `aarch64-apple-darwin` (verified on this machine) and
+`aarch64-unknown-linux-gnu` (the contained, authoritative evidence); `x86_64` hosts are accepted by
+the ISA but carry no evidence. A requested target that is not the host is refused: an object for a
+foreign target needs a foreign linker and runtime, and building one here would be a claim with
+nothing behind it. ISA flags are Cranelift's baseline for the triple; no host feature is detected.
+
+**Settings.** `opt_level` none for `--opt-level 0`, speed otherwise; the Cranelift verifier on for
+every function; position-independent code. All of them are in the backend's version string, so a
+change to any of them is a new cache key.
+
+**Choice and fallback.** `nazm build --backend llvm` (the default) or `--backend cranelift`. The
+LLVM backend stays as the default and as the differential reference. A program Cranelift cannot
+compile is refused by name with `N0101` and nothing is written; nothing falls back to the other
+backend without being asked.
+
+**Determinism.** The same MIR, target and settings produce the same object bytes; functions, data
+and relocations are defined in MIR order.
+
+**Failures.** An unsupported target or operation is a diagnostic (`N0101`); a Cranelift verifier
+rejection of generated code is a compiler defect (`N0900`); a link failure is the toolchain's and
+reported as one — none is a program error.
+
+## 7.44 The ABI and the foreign-function interface — N42, 2026-10-01
+
+Written before the code.
+
+**Two ABIs, never one.** The *internal* ABI is how code this compiler generated calls code this
+compiler generated, and it is each backend's own: the LLVM backend passes and returns LLVM
+first-class values (an `Int` an `i64`, a `Bool` an `i1`, a `Str` the `{ ptr, i64, ptr }` it is, a
+record or enum its named struct), and the Cranelift backend follows §7.43 (in-memory values by
+pointer, an in-memory result through a pointer passed first). Neither is C's and neither is
+promised to anything outside one build: the backend's identity and settings are in every object's
+cache key, the runtime's calling contract is `RUNTIME_ABI_REVISION` (`nazm-lir/src/runtime/mod.rs`),
+and no program mixes the two backends' objects. The *external*
+ABI is the C calling convention of the host target, and it is the only one a foreign function is
+called with.
+
+**v1 scope: import only, C only, scalars only.** A Nazm program may call a C function; C may not
+call Nazm (no export, no callbacks, no runtime entry from a foreign thread). Only two types cross:
+
+| Nazm | C | LLVM | Cranelift |
+| --- | --- | --- | --- |
+| `Int` | `int64_t` | `i64` | `i64` |
+| `Bool` | `bool` (`_Bool`, one byte, 0 or 1) | `zeroext i1` | `i8`, zero-extended |
+
+Everything else is refused by name (`N0381`): a `Str` is not a C string and has no NUL; a sequence,
+channel, record or enum has a layout no C declaration states; a capability is authority and must
+never become a forgeable word; generics have no single C signature. No pointer or opaque handle
+exists in v1, so no ownership crosses the boundary and there is nothing to borrow, transfer or free.
+
+**Declaration.** `[pub] extern "C" fn name(p: T, …) -> R = "symbol";` at the top level. `extern` is
+contextual: it is an identifier everywhere except at the start of an item, so no program that
+names something `extern` changes meaning. The ABI string is exactly `"C"` (`N0380` otherwise); the
+symbol is written, never derived, and must be a C identifier — ASCII letters, digits and `_`, not
+starting with a digit, at most 255 bytes — which cannot collide with a Nazm symbol (those contain
+`.`) or the runtime's (`nz.`); anything else is `N0382`, so no malformed name reaches a linker
+command. A foreign declaration has no body, no type parameters and no written effect set (`N0384`).
+Two declarations of one symbol with different signatures are refused (`N0383`); the same signature
+twice is one import.
+
+**Authority and effects.** A foreign function can do anything a C function can, so calling one is
+the effect `foreign` and needs the capability `ForeignCap`, held at the call — in every function,
+with or without a declared effect set: N37's compatibility bridge does not extend to it, because
+there is no older program to stay compatible with. `main` may take a `ForeignCap`, minted by the
+runtime at start-up like `IoCap`; nothing else creates one. A wrapper that takes a `ForeignCap` and
+calls the foreign function is the safe pattern; its callers then see `foreign` in its effects and
+must pass it the capability. Importing a module that declares a foreign function grants nothing.
+
+**Interpreter.** `nazm run` cannot call C. A program that calls a foreign function is refused before
+it runs (`N0385`), not stopped part way; `nazm check` accepts it.
+
+**Linking.** `nazm build --link FILE` adds an object or archive to the link, each as its own
+argument, never through a shell; the path must exist. A symbol no linked file defines is the
+linker's failure, reported with its output as a toolchain failure, never as a program error. No
+search path, no dynamic loading and no library name resolution exist in v1.
+
+**Guarantees kept and lost.** Nazm's checks stop at the boundary. The compiler guarantees the
+declared types and that authority was held; it cannot know what the C function does, and a call
+into C may corrupt memory, block, never return, or longjmp — none of which Nazm's cleanup or failure
+model survives. A foreign call cannot fail the Nazm way, so no failure edge is taken after one.
+
+**Amended during implementation.** Three rules the first draft did not state. *Reserved symbols*:
+a foreign declaration may not name a C symbol the runtime or the platform entry declares itself
+(`main`, `malloc`, `write`, the `pthread_*` family; `nazm_core::check::RESERVED_C_SYMBOLS`, kept
+equal to the runtime's text by a test), because two declarations of one symbol in one link could
+disagree — `N0383`, like any other conflict, which is also checked across modules when the program
+is built, where every unit's declarations are visible at once. *Provenance*: what C returns carries
+the origin `unknown` and every argument's origins, so a restricted `write_file` path computed from
+it is `N0372`; what C does with an argument is not a Nazm sink. *Threads*: a task may call C — it
+is handed the `ForeignCap` like any value — and C then runs on that task's OS thread, so a C
+function called from two tasks must itself be thread-safe; Nazm adds no lock around it. A failed
+link names the program's foreign symbols and `--link`, never "a bug in `nazm build`".
+
+**Interface and versions.** A `pub extern` function is exported with its symbol, so another module
+calls it without seeing the declaration's source: `nazm.interface/7`. The language gained syntax, an
+effect and a capability kind, so the semantic epoch moves from 10 to 11.
+
+## 7.45 The runtime constitution — N43, 2026-10-01
+
+Written before the code. The native runtime is compiler-owned LLVM text linked into every
+executable (`crates/nazm-lir/src/runtime/`); this section is the contract it keeps with the code
+both backends generate, with the operating system, and with the language.
+
+**What the runtime is responsible for, and what it is not.** At run time: the process's entry and
+end; the thread's failure state and the one place a failure is reported; string backings,
+sequences and channels — their allocation, sharing and reclamation; files and the process's
+arguments; starting and joining tasks; the memory accounting. At compile time only, and never in
+the runtime: every check the language makes (types, effects, capabilities, provenance, ownership
+— MIR decides every retain and release, §7.42), layout, and which runtime parts a program links.
+The runtime makes no decision the language specifies: it carries out MIR's.
+
+**One inventory.** Every symbol the runtime defines is listed once in
+`nazm_lir::runtime::INVENTORY` — its exact LLVM signature, the runtime part that defines it, its
+responsibility, what it does with ownership, its failure behaviour, its thread safety, and who
+calls it (generated code of either backend, the entry, or the runtime itself) — and every global
+in `GLOBALS`, with who writes it and how it is synchronised. The declarations every unit sees are
+generated from the inventory, not written beside it; the word-level view Cranelift calls through
+(`IMPORTS`, §7.43) must agree with it entry by entry; and tests hold the runtime text to both, so
+a symbol defined and not inventoried, inventoried and not defined, or declared with a signature
+it is not defined with, fails the build.
+
+**Runtime ABI revision.** `RUNTIME_ABI_REVISION` names this contract: the inventory's signatures,
+the sequence header (`len` at 0, `cap` at 8, `data` at 16, the reference count at 24), a string's
+`(pointer, length, owner)` and a string backing's count at 0. It enters every object key of both
+backends — Cranelift's directly, and clang's through the code generation configuration — so an
+object built against another revision is never reused. N43 moves it to 2 because the inventory is
+now the contract: the numbering says a revision-1 object was built against a contract nobody wrote
+down.
+
+**Startup.** The platform's `main(argc, argv)` is the entry unit's and nothing else is an entry.
+In order: if the program reads its arguments, `nz.argc` (one fewer than `argc`: `argv[0]` is not
+visible) and `nz.argv` are stored — before any task exists, never written again; each root
+capability `main` takes is minted as the word `0` (authority was checked when the program was);
+the program's `main` is called. There is no other initialisation and no lazy one: every other
+global is statically initialised, and every helper set is stateless until called.
+
+**Shutdown.** Three ways to end, distinguished. *Normal return*: every scope `main` opened has
+been joined, the memory report is written to stderr if `NAZM_MEMORY_REPORT` is set, `main`'s
+result is printed to stdout in decimal with a newline, and the process exits 0. *Failure*: the
+memory report as above (the counts are final: nothing is still running), then `nz.report` writes
+the thread's first failure message to stderr and exits 2. *Explicit exit*: `exit_with(code)` ends
+the process at once with that status — no scope is joined, nothing is reclaimed, no report is
+written — as the spec says. Nothing is freed at exit that the program had not already released:
+the operating system reclaims the process.
+
+**Memory.** `malloc`, `realloc` and `free` are the allocator; the runtime owns every block it
+allocates and frees it on the last release. A string backing is a 16-byte header (the reference
+count at 0) and its bytes; a literal and `arg`'s strings are immortal (their owner is null, and
+retaining or releasing null is a no-op). A sequence is a 32-byte header and a data block that grows
+by `realloc`; `nz.vec_release` releases each element with the element type's release function at
+the element's stride, then the sequence. A channel is a 64-byte block (capacity, length, head,
+closed flag, ring, lock, condition, reference count) and three allocations beside it — the ring,
+the lock and the condition — taken in order and released together, with a failure part-way
+through freeing exactly what was taken. Allocation failure is never undefined behaviour: every allocating entry
+returns null or a status, and the call site records `N0406`. Each release decrements and frees on
+zero; a count never underflows because MIR's validator proves every owned value is released
+exactly once (§7.42).
+
+**Thread safety, before N44.** String backings' and channels' counts are atomic (`monotonic` up,
+`release` down with an `acquire` fence before freeing), because both may be shared between
+tasks. Sequence counts are not atomic and need not be: a sequence may not cross into a task
+(`N0321`), so one is only ever touched by one thread. The failure state is thread-local; the
+accounting counters are atomic; `nz.argc`/`nz.argv` are written once before any task starts.
+A channel's operations take its mutex. Nothing else is shared.
+
+**Tasks and channels: the primitive boundary.** The runtime provides `nz.spawn` (start an OS
+thread for a task and record it in its scope's list, record-first), `nz.scope_join` (join every
+task in the list and hand back the first failure), and the channel operations (bounded buffer,
+blocking send and receive, close). *Which* thread runs a task, when, and in what order is not a
+runtime contract before N44: v1 starts one OS thread per task.
+
+**The failure model.** Four classes, never confused:
+
+| Class | Codes | What happens |
+| --- | --- | --- |
+| A language failure the spec defines | `N0400` overflow, `N0401` division by zero, `N0405` index or capacity | recorded (the thread's first), unwound by MIR's failure edges, joined at the scope, reported by the entry, exit 2 |
+| The host refused a resource | `N0406` allocation, `N0404` a thread (in a native build `N0404` means the operating system would not start one; in `nazm run`, that the interpreter could not) | recorded and reported the same way: the program cannot continue, and says why |
+| An I/O failure | `N0407` | the same, for `read_file` and `write_file`; `file_exists` answers instead of failing |
+| Explicit exit | — | `exit_with`: the process ends with the program's status |
+
+A `Result` is data and never any of these: nothing in the runtime turns an `Err` into a failure or
+a failure into an `Err`. A runtime invariant the compiler guarantees (a count underflow, a join of
+a list that was never opened) has no code, because MIR's validator makes it unreachable; a
+foreign function that crashes is outside every class (§7.44).
+
+**Capability roots.** Only the entry mints capabilities, and only for `main`'s parameters. No
+runtime symbol returns one, no built-in constructs one (`N0370`), and none crosses to C (`N0381`).
+
+**Foreign code.** A foreign call is made on the calling task's thread with no runtime state
+touched. C cannot call into the runtime: its symbols are `hidden` and none is a C entry point.
+
+**The operating system.** The runtime reaches it only through the C library and POSIX-threads
+entry points the adapter (`runtime/os.rs`) declares — the same list on every v1 target — and a
+test holds the runtime text to that list. A target outside the v1 matrix is refused before
+generation (§7.43); there is no per-OS code path in the runtime, so there is no per-OS behaviour.
+
+**Not here.** A scheduler, work stealing, task priorities (N44); runtime provenance tags (N38
+provenance is static and erased); a runtime for `nazm run` (the interpreter is its own).
+
+## 7.46 Structured concurrency and the scheduler — N44, 2026-10-01
+
+Written before the code. `docs/spec.md` *Concurrency* is the language rule; this is what both
+implementations — the interpreter and the native runtime (§7.45) — owe it, and what the scheduler
+is and is not.
+
+**Task and scope.** A *task* is a call started by `spawn f(args)` inside a `scope { … }` block. A
+scope owns every task started in it, and **no task outlives its scope**: every exit from the
+block — its closing brace, a `return`, a `break` or `continue` leaving it, a `?`, and a failure
+unwinding through it — joins every task it started, innermost scope first (§7.42's cleanup law).
+There are no detached tasks, no task handles a program can hold, and no way to name a task.
+
+**Task states.** *recorded* (in its scope's list, before its thread exists) → *running* (its
+thread started) → *finished* (its body returned; a failure, if any, published into its block) →
+*joined* (its thread joined by the scope, its block freed). The order is fixed by the runtime:
+`nz.spawn` records first and undoes the record if the thread cannot be started, so no task is
+running and unrecorded; `nz.scope_join` joins in the order tasks were started and frees each block
+after its thread is joined. A task that cannot be started is `N0404` at the `spawn`, and the
+scope still joins every task started before it.
+
+**Failure.** A failed task stops at its failure and publishes it. Its siblings are **not**
+cancelled: they run to completion. At the scope's join, the first failure *in start order* is
+the scope's, and it continues in the parent as the parent's own failure — at the closing brace or
+the exit that joined. Later failures are dropped. A failure in the parent while tasks run is held
+until they are joined, then unwinds — and it, not any task's, is the one reported, because a
+thread keeps only its first failure and the parent's came first on its own thread. So a scope's result is a function of its tasks' outcomes, not
+of the order they happened to finish in.
+
+**Cancellation: none in v1.** There is no cancel operation, no cancellation on sibling failure,
+and no timeout. A blocked `chan_recv` waits until a value arrives or the channel is closed. This
+is a decision, not an omission to fill quietly: cooperative cancellation needs observation
+points in blocking operations, and both implementations would have to agree on every one of them.
+
+**The scheduler is the operating system's.** Each task runs on its own OS thread, started at the
+`spawn` and joined by its scope. There is no worker pool, no run queue and no work stealing in
+Nazm, and the compiler emits no scheduling policy — MIR says `spawn` and `join` (§7.42), the
+backends call `nz.spawn` and `nz.scope_join`, and the runtime starts and joins threads. This is
+the simplest architecture that keeps the language's progress guarantee: channel operations block
+the calling thread, so a fixed pool of *N* workers would deadlock any program with more than *N*
+tasks blocked at once — a program that is correct today. A pool becomes possible only with
+suspendable tasks (stack switching or compiled continuations), which is research, not v1.
+
+**Fairness and determinism.** Nothing is promised about the order tasks run in, interleave, or
+finish, beyond what the OS scheduler does for threads. Program output that depends on task order
+is the program's nondeterminism. What *is* deterministic: which failure a scope reports (first in
+start order), when a scope ends (after every task), and what is reclaimed (everything).
+
+**Blocking.** File I/O, `print` and channel operations block the calling task's thread and no other.
+
+**Authority.** `spawn` is the effect `spawn` and needs a `SpawnCap` in scope (N37); holding one is
+not the effect. A child has exactly the authority its arguments carry: a declared child needs its
+capabilities passed to it (`N0369` otherwise), and an undeclared one exercises the spawner's under
+N37's compatibility bridge, which the spawner must therefore hold (`N0369` at the `spawn`). A task
+inherits nothing else.
+
+**Provenance.** A task's arguments carry their origins into it: N38's summaries treat a spawn as a
+call, so a value from a file handed to a task that writes to a path derived from it is `N0372`
+exactly as a direct call is.
+
+**What may cross into a task.** Scalars, strings (immutable, atomically counted), channels (shared,
+locked), capabilities, and records and enums of those. Not a sequence, nor anything holding one
+(`N0321`): a sequence is shared and mutable, and nothing synchronises it. So **Nazm has no data
+races on its own values**: every value two tasks can reach is immutable or a channel. It does not
+prevent deadlock (two tasks each waiting on a channel the other would fill), livelock or
+starvation, and no diagnostic claims to.
+
+**Channels.** `chan_new(n)` is a bounded FIFO of `Int`s with capacity *n*; `chan_send` blocks while
+it is full (backpressure) and returns `false` once the channel is closed; `chan_recv` blocks while
+it is empty, then appends the oldest value to a sequence and returns `true`, or returns `false`
+once the channel is closed **and** drained — a close never discards what was sent. Every state
+change wakes every waiter (a broadcast under the channel's lock), so no wakeup is lost. Only `Int`s
+are queued, so no managed value is owned by a channel; the channel itself is atomically counted
+and freed by its last holder.
+
+**Shutdown.** `main` returns only after every scope in it has joined, so no task is running when
+the process ends normally or reports a failure. `exit_with` inside a task ends the whole process at
+once, with its siblings still running: that is what `exit_with` means.
+
+**Not here.** Cancellation, timeouts, select over several channels, detached tasks, a worker pool,
+task priorities, async I/O.
+
+## 7.47 The standard library — N45, 2026-10-01
+
+Written before the code. A foundation, not a catalogue: the smallest set of source-backed modules
+real programs were writing for themselves, with every boundary stated.
+
+**Three layers.** *Built-ins* are the compiler's: the operations the language cannot express in
+itself — string bytes and slices, the sequences, channels, the process and file primitives,
+`print` — each an `Intrinsic` with a fixed signature, effect and authority (§7.38–7.40). *The
+prelude* (`@core/prelude`, §7.13) is two enums every module sees without importing them, and stays
+two: `Result` and `Option`. *The standard library* is new: toolchain-owned Nazm modules a program
+imports by name — `use "@std/text";` — and that no module sees unless it writes the `use`. A
+standard module is ordinary source (`library/std/*.nz`), checked by the same checker, compiled by
+the same backends, cached by the same keys; nothing in the compiler knows what any of its
+functions does. So the standard library adds no compiler magic, and the list of true primitives
+is the built-in list, unchanged.
+
+**Naming and resolution.** An import path beginning with `@std/` belongs to the toolchain and is
+never looked for on disk. `@std/NAME` is the standard module `NAME`, keyed `@std/NAME` — a key no
+project path can produce, as `@core` is not (`ModuleKey::relative` refuses both prefixes) — and any
+other `@std/` path is `N0205`, naming the modules there are. *Narrowed during implementation:* the
+first draft reserved every path beginning with `@`, which broke an existing contract — a project
+may keep and import its own files under a directory named `@core` (`prelude.rs`) — so only
+`@std/` is reserved, and every other path resolves on disk as it always has. A standard module may import only standard
+modules. The compiler carries each file's bytes, so a compilation needs no installation directory;
+what is checked is those bytes, parsed as source.
+
+**The v1 modules.** `@std/text` (prefix and suffix tests, find, contains, repeat, split, trim,
+`parse_int`), `@std/option` and `@std/result` (the tests and fallbacks every use of them wrote
+again), `@std/seq` (search, sum, maximum and minimum over `Ints`, `Strs` and `Vec[T]`),
+`@std/io` (`println`, `eprintln`, `read` as a `Result`), `@std/process` (the arguments as one
+sequence), `@std/chan` (one value as an `Option`). Function names carry their module's name —
+`text_split`, `option_unwrap_or` — because Nazm has no qualified names and a module's exports
+enter the importer's namespace: a prefix is the only thing that keeps two modules' names apart.
+
+**Contracts.** Every standard function declares its effect set: `! {}` for everything pure,
+`! { io }` for `@std/io` and `@std/process`, each of which takes the `IoCap` it needs — so a
+wrapper never has authority its signature does not show, and calling one is as visible as calling
+the built-in. Provenance flows through them because they are ordinary calls N38 follows: what
+`io_read` returns is `file`, exactly as `read_file`'s is.
+
+**Errors.** Ordinary failure is a value. `text_parse_int` returns `Err` for no digits, a
+non-digit or a value outside `Int` — never an overflow; `text_find` and `ints_max` return `None`
+rather than a sentinel; `io_read` returns `Err` for a missing file. A standard function traps only
+where the built-in it calls would, and says so: `ints_sum` overflows as `+` does; `io_read`'s read
+of a file that exists and still cannot be read is `N0407`, because the check and the read are two
+steps and the language has no way to make them one.
+
+**What is not here, deliberately.** No `map` or `filter` (Nazm has no function values), no
+formatting framework, no HTTP, JSON, crypto or time. `exit_with`, `print`, `str_concat` and the
+rest are not wrapped: a second name for one thing is a second way to say it.
+
+**Stability.** Pre-1.0: a standard module may change between milestones, and its interface hash
+says when. Its identity is its key and its bytes; no semantic epoch moves for a library change,
+because the checker's rules did not change.
+
+**The compiler written in Nazm** does not resolve `@std` imports: it is a second implementation of
+the front end for the programs in this tree, none of which imports a standard module, and it
+resolves every import against the importing file's directory, so it reports `@std/text` as a
+module it cannot find.
+
+## 7.48 Packages, locking and reproducible builds — N46, 2026-10-01
+
+Written before the code. `crates/nazm-package` holds the model; the loader and the command line
+consume it. No registry, no network, no build scripts.
+
+**A package** is a directory holding `nazm.toml`, its manifest, `nazm.package/1`:
+
+```toml
+schema = "nazm.package/1"
+
+[package]
+name = "geometry"        # [a-z][a-z0-9-]*, at most 64 bytes
+version = "1.2.0"        # MAJOR.MINOR.PATCH, decimal, no pre-release in v1
+root = "src"             # the source root, relative to the manifest; default "src"
+main = "main.nz"         # the entry module, relative to the root; only a binary has one
+
+[dependencies]
+shapes = { path = "../shapes", version = "0.3.1" }
+```
+
+Nothing else is accepted: an unknown key is refused by name, so a manifest cannot carry
+configuration the compiler silently ignores. Descriptive metadata (authors, licence) is out of v1.
+
+**Identity.** A package is its name, its exact version and its source — in v1 always a path,
+relative to the manifest that names it. Two packages of one name in one build are a conflict and
+refused, whatever their versions: a module's durable key is `NAME@VERSION/path`, and a program
+with two `shapes` would have two answers to which one a `use` means. A dependency's declared
+version must equal the version its own manifest states — exactly; there are no ranges in v1, so
+nothing is ever chosen for a program.
+
+**Imports.** `use "shapes:polygon.nz";` imports the module `polygon.nz` of the package the
+importing package declares as `shapes`, resolved against that package's source root. Only a
+package's own dependencies are visible to it: its dependency's dependencies are not. A path with
+no `NAME:` stays relative to the importing file and may not leave its package's source root.
+
+**Resolution** starts at the root package and visits dependencies in name order, depth first,
+reading each manifest once by its canonical directory; a package reached twice by one identity is
+one package (a diamond), by two is a conflict, and a package reached from itself is a cycle,
+reported with its path. The result is a list sorted by name and a graph whose edges are sorted:
+no hash-map iteration, directory listing order or filesystem timestamp enters it.
+
+**Digest.** A package's digest is BLAKE3 over its manifest's bytes and every `.nz` file under its
+source root — each as its path relative to the root with `/` separators, its length and its bytes,
+in path order — under a domain-separation tag. No timestamp, permission, absolute path or
+directory order is an input.
+
+**The lockfile**, `nazm.lock` beside the root manifest, is `nazm.lock/1`: one entry per package in
+name order — name, version, source (a path relative to the root package, `/`-separated) and
+digest — and each package's dependency names. `nazm lock DIR` writes it, and writes it only when
+its bytes would change: resolving the same packages twice gives the same bytes. Nothing else
+writes it. `--locked` makes it authoritative: the build resolves as usual and refuses — before
+compiling anything — if the lockfile is missing, if any package's identity, source or
+dependencies differ from it, or if any package's bytes no longer match its digest (tampering).
+
+**Offline, always.** Every v1 source is a path, so resolution never reaches a network; a missing
+dependency directory is refused by name. There is no download step to disable.
+
+**Builds and caches.** `nazm check|build|run DIR` builds the package in `DIR` from its `main`.
+Module keys of dependency modules carry `NAME@VERSION`, and every cache key already covers a
+module's source bytes and its dependencies' interfaces (§7.6), so a changed dependency invalidates
+its dependents and nothing else, and an unchanged one is reused. The build's configuration — the
+backend, its version and settings, the optimisation level, the target and the runtime ABI — is in
+every object key (§7.43, §7.45): that is the profile, and there is no second profile mechanism.
+
+**Environment.** A build reads no environment variable that changes its output, except the ones
+the C toolchain is handed by name (`nazm-cli/src/backend.rs`, `PASSED`), which the toolchain's own
+identity then covers. There are no build scripts.
+
+**Reproducibility, stated exactly.** The same package sources, lockfile, toolchain, target,
+backend and configuration give byte-identical executables — tested on one host by building two
+copies of a package in two directories from empty caches. Nothing is claimed across operating
+systems or toolchain versions.
+
+**Amended during implementation.** Three facts the first draft did not know. *The linker*: the
+Apple linker gives every link a new UUID unless `ZERO_AR_DATE=1` is in its environment, and
+derives the UUID and the ad-hoc signature from the output's file name — so the link is made with
+that variable set, under the final file name, inside the build's working directory, and renamed
+into place (`two_copies_built_from_empty_caches_are_byte_identical` failed until both were done).
+*Stored keys*: `ModuleKey::parse` read back only the prelude's key and project paths, so neither a
+dependency's module (`NAME@VERSION/…`) nor a standard one (`@std/…`, N45's — a gap N45's tests did
+not cover) was ever reused from the cache; both now read back as themselves. *The first
+component*: only a key's first component may not hold `@`, because `lib/@core/x.nz` was already a
+project's own key. The source-root decision (`nazm-service/src/root.rs`) learned a fourth answer,
+`package`, reported by `--cache-report` and `--build-report` as a new value of `root`.
+
+## 7.49 Restriction profiles — N47, 2026-10-01
+
+Written before the code. One language, and profiles that refuse some of its programs.
+
+**What a profile is.** A named set of rules, each with a stable identity, each reading a fact the
+compiler already settled and passing or failing with witnesses. A profile may reject a program;
+it never changes what an accepted program means, compiles to or does. Every program a profile
+accepts, `general` accepts, and runs identically. There is no profile-specific syntax, built-in or
+code path, and nothing in a profile reads a name: an effect is an `Effect`, a contract is a
+function's `declared_effects`, a build's lock is `nazm-package`'s verification.
+
+**The rules.**
+
+| Rule | Fact | Refuses |
+| --- | --- | --- |
+| `declared-effects` | each function's declared contract | any function of the program's own modules (not the prelude's or a standard module's, all of which declare theirs) with no `! { … }` — the ambient bridge of N37 |
+| `no-io` | the effect set `main` requires | `io` anywhere in the program, through any call |
+| `no-spawn` | the same | `spawn`: tasks, and so the scheduler |
+| `no-foreign` | the same | `foreign`: any call into C |
+| `locked-build` | the build | a build that is not a package build whose lockfile verifies |
+
+`main`'s required effect set is transitive by construction (N36): through every call of every
+module, standard wrappers included — `io_println` carries `io` because it calls `print` — and an
+undeclared function of another module is assumed to have every bridged effect, so an effect rule
+over-refuses rather than misses.
+
+**The profiles.** `general`: no rules. `embedded`: `no-io`, `no-spawn` — no operating-system
+services and no scheduler; C (hardware access) is allowed. `critical`: `declared-effects`,
+`no-spawn`, `no-foreign`, `locked-build`. `cyber`: `declared-effects`, `no-foreign`,
+`locked-build`; because every function then declares its effects, N38's restricted flow (`N0372`)
+applies to every function of the program. None is a certification, a sandbox or a proof of
+anything beyond its rules.
+
+**What is not a rule, and why.** No allocation rule: allocation is not tracked. No determinism
+claim: forbidding `spawn` removes one source of nondeterminism, not every one. No provenance rule
+beyond N38's, which `declared-effects` extends to the whole program.
+
+**Selection and propagation.** `--profile NAME` on `check`, `build` and `run`, and `profile =
+"NAME"` in any package manifest of the build. The profiles in force are all of them; their rules
+are the union, evaluated over the whole program — so a dependency that requires `embedded` holds
+every program it is part of to it. An unknown name is `N0511`. No environment variable selects one.
+
+**When, and caching.** After a full check, before the command does its own work: `nazm build`
+under a profile that refuses writes nothing. The rules read the facts of an uncached check, and
+their verdicts are never cached, so a check cached under one profile can never carry its
+acceptance into another — the cost is one check more whenever a profile other than `general` is in
+force. What is compiled does not depend on the profile, so no object key needs it.
+
+**Diagnostics and the report.** Each failed rule is one `N0510` naming the profiles in force and
+the rule, pointing at its first witness — for an effect, the chain of calls from `main` to the
+built-in, `spawn` or contract where it enters — with the rest as secondary labels. `nazm check
+--profile-report` prints `nazm.profile-report/1`: the profiles, the outcome, and every rule's
+verdict and witnesses in rule order, byte-identical for the same program and build, and marked as
+compiler evidence rather than certification.
+
+## 7.50 Inspection, debugging and profiling — N48, 2026-10-01
+
+Written before the code. Three surfaces over facts the compiler already has, none of which
+changes what a program does.
+
+**The inspector.** `nazm inspect FILE|DIR [--def NAME]` prints `nazm.inspect/1`, one line of JSON
+with sorted keys: the toolchain's identities (compiler version, semantic epoch, interface schema,
+runtime ABI revision, Cranelift version, host target), the package and the state of its lock
+(`verified`, `absent`, `mismatch`) and the profiles its manifests require, whether MIR validated,
+and for each definition in identity order — its durable identity, parameter and result types,
+whether it is generic, declared and required effects, the capabilities it takes, its provenance
+summary (the origins its result carries, the parameters it passes on and those reaching a sink),
+its foreign symbol, its Core IR semantic and body digests, and for each concrete function MIR has
+for it (an instance per type for a generic one) the executable digest and its block, statement
+and local counts. Excluded by construction: absolute paths, times, addresses, process ids,
+iteration order. The same program, toolchain and build give the same bytes.
+
+**Debug information.** `nazm build --debug` emits DWARF through the LLVM backend: a compile unit
+per object, a subprogram per function — the Nazm name, the native symbol as its linkage name, its
+file and the line of its declaration — and a source position on every instruction, taken from the
+span MIR recorded for the statement or terminator it was emitted for. Compiler-made code carries
+the position of the statement it belongs to, or its function's line; nothing is given a position
+the source does not have, and runtime and entry objects carry none. On macOS the executable's
+debug information is gathered into `OUTPUT.dSYM` with `dsymutil` before the objects are removed.
+What is claimed: a debugger resolves a breakpoint by Nazm function name or by file and line, and
+the line table has a row per statement, which is what stepping by statement reads. *Narrowed during
+implementation:* the first draft also claimed frames and stepping in a live session; launching a
+process under lldb waited on macOS's debugger authorisation in the non-interactive environment N48
+ran in, so the live half was not exercised and is not claimed. What is not: local variables (no
+`DILocalVariable`), types, the Cranelift backend (`--debug` with it is refused, never silently
+ignored), and stepping into the runtime. Without `--debug` nothing changes: the emitter writes the
+same text it always did.
+
+**Timings.** `nazm build --timings` writes `nazm.timings/1` to stderr: the wall time of each phase
+in the order it ran — load, front end (parse, check, effects, capabilities, provenance, Core IR),
+MIR, LIR, code generation, native compilation, link — and the total. The front end is one phase
+here because the CLI runs it as one step; the per-pass split of the front end is the benchmark
+`what_each_phase_costs` in-process. The runtime's own counters stay `NAZM_MEMORY_REPORT`.
+
+**The v1 release audit.** N48 also audits what exists against what is claimed: every capability
+area's status, the security and safety wording across the documents, a centralised list of known
+limitations, release-candidate notes and a human release procedure — and freezes the v1
+performance baseline. Nothing is pushed, tagged or published by it.
 
 ## 8. Toolchain, and one real incompatibility
 

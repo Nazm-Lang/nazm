@@ -95,6 +95,58 @@ cannot call, a sequence handed to a task) are raised from MIR now and read exact
 across all 205 sources in the tree, every build diagnostic is byte-identical. The printed MIR,
 `nazm.mir/1`, is a debugging form with its own version and is not one of these schemas.
 
+**Applied to N41, the backend boundary.** No schema moved and no code appeared. A program the
+Cranelift backend cannot compile is refused under `N0101`, naming the construct and the
+backend, and never falls back to LLVM; a target triple that is not the host is refused by name
+before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
+its key counts as reused, exactly as a clang one does.
+
+**Applied to N42, foreign functions.** Six codes appeared, all compatible: `N0380` (an ABI
+other than `"C"`), `N0381` (a parameter or result type that cannot cross the C boundary — only
+`Int` and `Bool` can), `N0382` (a symbol that is not a C identifier), `N0383` (two declarations
+of one C symbol that disagree about its signature — in one module at check time, across modules
+when the program is built — or a symbol the native runtime declares itself), `N0384` (type
+parameters or a written effect set on a foreign declaration) and `N0385` (`nazm run` asked to
+run a program that calls a foreign function, refused before any of it runs). A foreign call
+without a `ForeignCap` held is the existing `N0369`, with or without an effect set; a declared
+set that leaves `foreign` out is the existing `N0366`. One schema moved: the persisted module
+interface is `nazm.interface/7`, because an export may now carry `foreign`, its C symbol, and a
+`/6` reader would take such an export for an ordinary function with no body. `effects` lists
+may contain `"foreign"` — a new value of an existing field, which is compatible. A link that
+fails for a program with foreign calls names the foreign symbols and `--link` rather than
+reporting a compiler bug.
+
+**Applied to N43, the runtime constitution.** No schema moved and no code appeared. The runtime's
+failures keep their codes and now have one written classification (`architecture.md` §7.45):
+`N0400`, `N0401` and `N0405` are the language's; `N0406` and `N0404` are the host refusing memory
+or a thread — `N0404` in a native build means the operating system would not start a task's
+thread, as `nazm run` uses it when the interpreter could not start; `N0407` is I/O. Status 2 is a
+reported failure, `exit_with`'s is the program's, and 0 a normal return.
+
+**Applied to N45, the standard library.** No schema moved and no code appeared. `N0205` (a module
+that cannot be found) gained a case: an import beginning with `@std/` that names no standard module,
+whose help lists the ones there are. A standard module's definitions are named `@std/NAME::…` in
+every packet that names a definition, exactly as a project module's are named by its path.
+
+**Applied to N46, packages.** Ten codes appeared, all compatible: `N0500` (an invalid manifest),
+`N0501` (a dependency that is not there), `N0502` (a version mismatch), `N0503` (two packages of
+one name, or a declared name the package does not have), `N0504` (a cycle), `N0505` (`--locked`
+with no lockfile), `N0506` (other packages than the lockfile records), `N0507` (a package whose
+bytes no longer match its digest), `N0508` (an import naming a package the importer does not
+declare) and `N0509` (a package with no `main`). They are about manifests, directories and the
+lockfile rather than positions in a module, so they carry a synthetic span. Two new formats have
+their own versions and are not these schemas: the manifest, `nazm.package/1`, and the lockfile,
+`nazm.lock/1`. `nazm.check-report/1` and `nazm.build-report/1` gained `"package"` as a value of
+`root`, compatible.
+
+**Applied to N47, restriction profiles.** Two codes appeared, compatible: `N0510` (a rule of a
+profile in force refused the program — one per rule, at its first witness, with the rest as
+secondary labels) and `N0511` (an unknown profile). One new format has its own version:
+`nazm.profile-report/1`, one line of JSON — `schema`, `profiles`, `outcome` (`accepted` or
+`refused`), `rules` (each `id`, `verdict` `pass`/`fail`, `witnesses` of `file`, `start`, `end`,
+`note`), and a `note` that it is not a certification. Rule ids are stable: `declared-effects`,
+`no-io`, `no-spawn`, `no-foreign`, `locked-build`.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.

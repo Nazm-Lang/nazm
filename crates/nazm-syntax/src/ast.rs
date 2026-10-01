@@ -161,7 +161,23 @@ pub struct Function {
     /// parameter and return types instead of reporting that it does not exist. One
     /// mistake should produce one error.
     pub body: Option<Block>,
+    /// `extern "C" … = "symbol";` (N42): a foreign function, declared and not defined here,
+    /// whose body is the C function the symbol names. `None` for every Nazm function. A
+    /// foreign declaration has no `body`, and that absence is not a parse failure.
+    pub foreign: Option<ForeignDecl>,
     pub span: Span,
+}
+
+/// The foreign half of an `extern "C" fn … = "symbol";` declaration, as written (N42).
+///
+/// Words and their spans: whether the ABI is one this compiler calls and whether the symbol
+/// is one a linker can be handed are `nazm_sema`'s and the checker's questions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignDecl {
+    pub abi: String,
+    pub abi_span: Span,
+    pub symbol: String,
+    pub symbol_span: Span,
 }
 
 /// A declared effect set as written: `! {}`, `! { io }`, `! { io, spawn }`.

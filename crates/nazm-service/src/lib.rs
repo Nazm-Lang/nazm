@@ -52,6 +52,7 @@ pub mod hierarchy;
 mod incomplete;
 pub mod load;
 pub mod patch;
+pub mod profile;
 pub mod rename;
 pub mod root;
 pub mod semantic;

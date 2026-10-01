@@ -29,9 +29,13 @@ nazm-cache = { workspace = true }
 nazm-lir = { workspace = true }
 # MIR (N40): what `nazm build` lowers Core IR to, and what `nazm mir` prints.
 nazm-mir = { workspace = true }
+# The Cranelift backend (N41), chosen with `nazm build --backend cranelift`.
+nazm-codegen-clif = { workspace = true }
 # Source roots and module loading, shared with the language service so the two cannot
 # disagree about which files a compilation has (N16).
 nazm-service = { workspace = true }
+# `nazm lock` and package builds (N46).
+nazm-package = { workspace = true }
 clap = { workspace = true }
 # `nazm fix` and `nazm capabilities` emit machine-readable output under their own
 # versioned schemas, the same way diagnostics do.

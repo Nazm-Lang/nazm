@@ -163,6 +163,35 @@ impl<'a> Lower<'a> {
     }
 
     fn function(mut self, f: &AstFn) -> Lowered<cir::Function> {
+        if let Some(symbol) = &self.def.foreign {
+            let def = self.def;
+            return Ok(cir::Function {
+                def: self.id,
+                module: def.module,
+                name: def.name.clone(),
+                type_params: 0,
+                params: u32::try_from(def.params.len()).unwrap_or(u32::MAX),
+                locals: self.locals,
+                ret: def.ret,
+                consts: Vec::new(),
+                loops: 0,
+                effects: cir::Effects {
+                    declared: def.declared_effects,
+                    required: def.inferred_effects.unwrap_or_default(),
+                },
+                body: cir::Block {
+                    stmts: Vec::new(),
+                    tail: None,
+                    ends: cir::Ends::Transfers,
+                    owns: Vec::new(),
+                    at: f.span,
+                },
+                span: f.span,
+                name_span: f.name_span,
+                ret_span: f.return_type.span,
+                foreign: Some(symbol.clone()),
+            });
+        }
         let Some(body) = &f.body else {
             return defect(f.name_span, format!("`{}` has no body", f.name));
         };
@@ -189,6 +218,7 @@ impl<'a> Lower<'a> {
             span: f.span,
             name_span: f.name_span,
             ret_span: f.return_type.span,
+            foreign: None,
         })
     }
 
