@@ -63,7 +63,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 6 | Capabilities (language) | PARTIAL |
 | 7 | Provenance and information flow (language) | PARTIAL |
 | 8 | Core IR | VERIFIED (v1) |
-| 9 | MIR | MISSING |
+| 9 | MIR | VERIFIED (v1) |
 | 10 | LIR and the backend contract | PARTIAL |
 | 10a | Per-module code generation and linking | VERIFIED |
 | 10b | Native object reuse | VERIFIED |
