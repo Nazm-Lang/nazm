@@ -133,6 +133,10 @@ pub mod codes {
     /// so the two implementations report the same sentence.
     pub const IO_FAILED: Code = Code::new("N0407");
 
+    /// A compiled program's call would exhaust its thread's stack (N49): the runtime's
+    /// stack check, made on entry to every function in a call cycle.
+    pub const STACK_EXHAUSTED: Code = Code::new("N0408");
+
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");
     /// A value that may not cross into a task: an `Ints` or a `Strs`, which are handles

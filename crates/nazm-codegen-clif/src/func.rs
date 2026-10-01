@@ -624,6 +624,14 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
                 self.rt("nz.arr_release", &[t]);
             }
             mir::StatementKind::CheckFailed { .. } => self.check_failed(),
+            mir::StatementKind::StackCheck { .. } => {
+                // The runtime measures the thread's stack (N49); this only asks it.
+                self.g.needs.stack = true;
+                let past = self
+                    .rt("nz.stack_check", &[])
+                    .unwrap_or_else(|| self.iconst(0));
+                self.guard(past, "N0408", nazm_lir::STACK_EXHAUSTED);
+            }
         }
     }
 

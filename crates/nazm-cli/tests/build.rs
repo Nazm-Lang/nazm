@@ -156,7 +156,12 @@ fn program(body: &str) -> String {
 /// A program that must succeed, checked against its expected value and the interpreter,
 /// at both optimisation levels.
 fn expect_value(body: &str, expected: &str) {
-    let src = program(body);
+    expect_source_value(&program(body), expected);
+}
+
+/// [`expect_value`], for a whole program rather than `main`'s body.
+fn expect_source_value(src: &str, expected: &str) {
+    let src = src.to_owned();
     let interp = interpret(&src);
     assert_eq!(
         interp.code,
@@ -484,12 +489,9 @@ fn a_program_that_does_not_check_is_a_check_failure_not_a_subset_failure() {
 
 #[test]
 fn build_diagnostics_are_available_as_json() {
-    // Recursion, the construct left outside the subset; a bare block was this case until
-    // N12.1 compiled one.
-    let (dir, src) = write_program(
-        "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\n\
-         fn main() -> Int {\n    f(2)\n}\n",
-    );
+    // A `main` that does not return `Int`, which this backend still refuses; a bare block
+    // was this case until N12.1 compiled one, and recursion until N49.
+    let (dir, src) = write_program("fn main() -> Bool {\n    true\n}\n");
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--json"])
         .arg("-o")
@@ -951,41 +953,19 @@ fn front_end_type_errors_are_not_reported_as_backend_limits() {
 }
 
 #[test]
-fn unsupported_constructs_inside_a_branch_are_refused_by_the_backend() {
-    // A bare block inside a branch was the other construct here until N12.1, which
-    // compiles one. Recursion is what is left, reached from either branch.
-    let cases: &[(&str, &str)] = &[
-        (
-            "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\n\
-             fn main() -> Int {\n    if true { f(3) } else { 0 }\n}\n",
-            "from inside itself",
-        ),
-        (
-            "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\n\
-             fn main() -> Int {\n    if false { 0 } else { f(3) }\n}\n",
-            "from inside itself",
-        ),
-    ];
-
-    for (src, expected) in cases {
-        let (dir, path) = write_program(src);
-        let exe = dir.path().join("prog");
-        let out = Command::new(NAZM)
-            .args(["build", path.to_str().unwrap()])
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .expect("run");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-
-        assert_eq!(out.status.code(), Some(1), "{expected}: {stderr}");
-        assert!(stderr.contains("N0101"), "{expected}: {stderr}");
-        assert!(stderr.contains(expected), "expected {expected:?}: {stderr}");
-        assert!(
-            !exe.exists(),
-            "{expected}: an unsupported program produced an executable"
-        );
-    }
+fn recursion_reached_from_either_branch_compiles() {
+    // A bare block inside a branch was the construct here until N12.1, and recursion
+    // reached from either branch until N49; both compile now.
+    expect_source_value(
+        "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) + 1 } }\n\
+         fn main() -> Int {\n    if true { f(3) } else { 0 }\n}\n",
+        "3",
+    );
+    expect_source_value(
+        "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) + 1 } }\n\
+         fn main() -> Int {\n    if false { 0 } else { f(4) }\n}\n",
+        "4",
+    );
 }
 
 #[test]
@@ -1520,67 +1500,26 @@ fn a_failing_argument_stops_the_callee_body() {
 }
 
 #[test]
-fn recursion_is_refused_by_the_backend_and_still_runs_interpreted() {
-    let cases: &[(&str, &str, &str)] = &[
-        (
-            "direct",
-            "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\n\
-             fn main() -> Int { f(3) }\n",
-            "from inside itself",
-        ),
-        (
-            "mutual",
-            "fn a(n: Int) -> Int { if n < 1 { 0 } else { b(n - 1) } }\n\
-             fn b(n: Int) -> Int { a(n) }\n\
-             fn main() -> Int { a(2) }\n",
-            "call cycle",
-        ),
-        (
-            // The documented policy: every declared function is validated, reachable or
-            // not. Checking only what `main` reaches would make deleting a call elsewhere
-            // silently change whether this is diagnosed.
-            "unreachable",
-            "fn x(n: Int) -> Int { y(n) }\nfn y(n: Int) -> Int { x(n) }\n\
-             fn main() -> Int { 7 }\n",
-            "call cycle",
-        ),
-    ];
-
-    for (what, src, phrase) in cases {
-        let (dir, path) = write_program(src);
-        let exe = dir.path().join("prog");
-        let out = Command::new(NAZM)
-            .args(["build", path.to_str().unwrap()])
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .expect("run");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-
-        assert_eq!(out.status.code(), Some(1), "{what}: {stderr}");
-        assert!(stderr.contains("N0101"), "{what}: {stderr}");
-        assert!(
-            stderr.contains(phrase),
-            "{what}: expected {phrase:?}: {stderr}"
-        );
-        assert!(
-            !exe.exists(),
-            "{what}: a refused program produced an executable"
-        );
-
-        // And the interpreter still runs it — which is what makes this a backend limit
-        // rather than the program being wrong.
-        let ran = Command::new(NAZM)
-            .args(["run", path.to_str().unwrap()])
-            .output()
-            .expect("run");
-        assert_eq!(
-            ran.status.code(),
-            Some(0),
-            "{what}: `nazm run` should still accept it: {}",
-            String::from_utf8_lossy(&ran.stderr)
-        );
-    }
+fn recursion_compiles_and_agrees_with_the_interpreter() {
+    // Refused by this backend until N49, for want of a stack contract; it now has one
+    // (`docs/spec.md`, *Native recursion*) and these are the three shapes it refused.
+    expect_source_value(
+        "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) + 1 } }\n\
+         fn main() -> Int { f(3) }\n",
+        "3",
+    );
+    expect_source_value(
+        "fn a(n: Int) -> Int { if n < 1 { 0 } else { b(n - 1) + 1 } }\n\
+         fn b(n: Int) -> Int { a(n) }\n\
+         fn main() -> Int { a(2) }\n",
+        "2",
+    );
+    // A cycle nothing reaches still compiles; it was refused on the same terms.
+    expect_source_value(
+        "fn x(n: Int) -> Int { y(n) }\nfn y(n: Int) -> Int { x(n) }\n\
+         fn main() -> Int { 7 }\n",
+        "7",
+    );
 }
 
 #[test]
@@ -1622,31 +1561,22 @@ fn call_errors_belong_to_the_checker_not_the_backend() {
 
 #[test]
 fn unsupported_signatures_and_bodies_are_refused_by_name() {
-    for (src, expected) in [
-        // Bare-block bodies were these cases until N12.1, which compiles them.
-        (
-            "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\nfn main() -> Int { f(1) }\n",
-            "from inside itself",
-        ),
-        (
-            "fn main() -> Bool {\n    true\n}\n",
-            "a `main` that does not return `Int`",
-        ),
-    ] {
-        let (dir, path) = write_program(src);
-        let exe = dir.path().join("prog");
-        let out = Command::new(NAZM)
-            .args(["build", path.to_str().unwrap()])
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .expect("run");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "{expected}: {stderr}");
-        assert!(stderr.contains("N0101"), "{expected}: {stderr}");
-        assert!(stderr.contains(expected), "expected {expected:?}: {stderr}");
-        assert!(!exe.exists(), "{expected}: produced an executable");
-    }
+    // Bare-block bodies were cases here until N12.1, and recursion until N49; each now
+    // compiles. What is left is `main`'s shape.
+    let expected = "a `main` that does not return `Int`";
+    let (dir, path) = write_program("fn main() -> Bool {\n    true\n}\n");
+    let exe = dir.path().join("prog");
+    let out = Command::new(NAZM)
+        .args(["build", path.to_str().unwrap()])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{expected}: {stderr}");
+    assert!(stderr.contains("N0101"), "{expected}: {stderr}");
+    assert!(stderr.contains(expected), "expected {expected:?}: {stderr}");
+    assert!(!exe.exists(), "{expected}: produced an executable");
 }
 
 #[test]
@@ -2047,56 +1977,22 @@ fn assignment_and_loop_condition_errors_belong_to_the_checker() {
 }
 
 #[test]
-fn unsupported_control_flow_inside_a_loop_is_refused_and_nothing_is_published() {
-    // What is left after B2 and N12.1. `break`, `continue`, statement `if`, `return`,
-    // `Str`, discarded expressions and — since N12.1 — a bare block all compile now, so
-    // what remains inside a loop is recursion.
-    for (src, expected) in [
-        // Recursion, reached from inside a loop. Still refused, and still for a reason
-        // about the stack rather than about loops.
-        (
-            "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\n\
-             fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + f(2); }\n    i\n}\n",
-            "from inside itself",
-        ),
-        // And through a second function: a cycle, not a self-call.
-        (
-            "fn f(n: Int) -> Int { if n < 1 { return 0; } return g(n - 1); }\n\
-             fn g(n: Int) -> Int { f(n) }\n\
-             fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + g(2); }\n    i\n}\n",
-            "a call cycle through",
-        ),
-    ] {
-        let (dir, path) = write_program(src);
-        let exe = dir.path().join("prog");
-        let out = Command::new(NAZM)
-            .args(["build", path.to_str().unwrap()])
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .expect("run");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "{expected}: {stderr}");
-        assert!(stderr.contains("N0101"), "{expected}: {stderr}");
-        assert!(stderr.contains(expected), "expected {expected:?}: {stderr}");
-        assert!(
-            stderr.contains("nazm run"),
-            "{expected}: a refusal should say what still works: {stderr}"
-        );
-        assert!(!exe.exists(), "{expected}: produced an executable");
-
-        // Refused, not invalid: the interpreter runs every one of these.
-        let ran = Command::new(NAZM)
-            .args(["run", path.to_str().unwrap()])
-            .output()
-            .expect("run");
-        assert_eq!(
-            ran.status.code(),
-            Some(0),
-            "{expected}: `nazm run` should still accept it: {}",
-            String::from_utf8_lossy(&ran.stderr)
-        );
-    }
+fn recursion_reached_from_inside_a_loop_compiles() {
+    // What was left after B2 and N12.1: `break`, `continue`, statement `if`, `return`,
+    // `Str`, discarded expressions and a bare block all compiled, and recursion reached from
+    // inside a loop was refused, for a reason about the stack. Since N49 it compiles,
+    // through itself and through a second function.
+    expect_source_value(
+        "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\n\
+         fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + f(2); }\n    i\n}\n",
+        "3",
+    );
+    expect_source_value(
+        "fn f(n: Int) -> Int { if n < 1 { return 0; } return g(n - 1); }\n\
+         fn g(n: Int) -> Int { f(n) }\n\
+         fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + g(2); }\n    i\n}\n",
+        "3",
+    );
 }
 
 #[test]
@@ -2126,11 +2022,11 @@ fn a_working_loop_executable_survives_a_later_refused_build() {
     );
     let before = std::fs::read(&exe).expect("read the executable");
 
-    // Now edit the source to something the backend refuses.
+    // Now edit the source to something the backend refuses: a `main` that does not return
+    // `Int` (recursion was this case until N49 compiled it).
     std::fs::write(
         &src,
-        "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\n\
-         fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { i = i + 1 + f(1); }\n    i\n}\n",
+        "fn main() -> Bool {\n    let mut i = 0;\n    while i < 5 { i = i + 1; }\n    i == 5\n}\n",
     )
     .expect("write");
     let second = Command::new(NAZM)

@@ -292,21 +292,15 @@ fn main() -> Int {
 }
 
 #[test]
-fn recursion_is_refused_whichever_backend_is_asked() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("prog.nz");
-    std::fs::write(
-        &path,
-        "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) } }\nfn main() -> Int { f(3) }\n",
-    )
-    .unwrap();
-    for backend in ["llvm", "cranelift"] {
-        let exe = dir.path().join(backend);
-        let b = build(&path, backend, &exe, &[]);
-        assert_eq!(b.status.code(), Some(1), "{backend}");
-        assert!(String::from_utf8_lossy(&b.stderr).contains("from inside itself"));
-        assert!(!exe.exists(), "{backend}: a refusal writes nothing");
-    }
+fn recursion_compiles_under_both_backends_and_agrees() {
+    // Refused by both until N49; both now emit the stack check MIR places first in each
+    // function of a call cycle (`docs/spec.md`, *Native recursion*).
+    agree_src(
+        "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) + 1 } }\n\
+         fn even(n: Int) -> Bool { if n == 0 { true } else { odd(n - 1) } }\n\
+         fn odd(n: Int) -> Bool { if n == 0 { false } else { even(n - 1) } }\n\
+         fn main() -> Int { if even(10) { f(30) } else { 0 } }\n",
+    );
 }
 
 #[test]

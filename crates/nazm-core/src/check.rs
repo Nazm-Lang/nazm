@@ -1718,6 +1718,11 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "printf",
     "pthread_cond_broadcast",
     "pthread_cond_destroy",
+    // The stack guard and the task threads' stack size (N49).
+    "getrlimit",
+    "pthread_attr_init",
+    "pthread_attr_setstacksize",
+    "pthread_attr_destroy",
     "pthread_cond_init",
     "pthread_cond_wait",
     "pthread_create",

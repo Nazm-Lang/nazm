@@ -80,6 +80,11 @@ pub fn emit_runtime(needs: Needs) -> String {
     let _ = writeln!(out, "@nz.failed = hidden thread_local global i1 false");
     let _ = writeln!(out, "@nz.errmsg = hidden thread_local global ptr null");
     let _ = writeln!(out, "@nz.errlen = hidden thread_local global i64 0");
+    // The lowest frame address this thread may reach before `nz.stack_check` reports
+    // (N49); zero until the thread's first check sets it. Only where something checks.
+    if needs.stack {
+        let _ = writeln!(out, "@nz.stack_limit = hidden thread_local global i64 0");
+    }
     out.push('\n');
 
     // The accounting, unconditionally. Six counters cost six words in the data segment
@@ -127,6 +132,9 @@ pub fn emit_runtime(needs: Needs) -> String {
     let _ = writeln!(out, "  call void @exit(i32 2)");
     let _ = writeln!(out, "  unreachable");
     let _ = writeln!(out, "}}");
+    if needs.stack {
+        out.push_str(STACK_RUNTIME);
+    }
 
     if needs.sequences {
         out.push_str(SEQUENCE_RUNTIME);
@@ -164,6 +172,47 @@ pub fn emit_runtime(needs: Needs) -> String {
     out.push('\n');
     out
 }
+
+/// The stack guard (N49, `docs/spec.md` *Native recursion*), called first in every function in
+/// a call cycle.
+///
+/// Nonzero when this frame is past the thread's limit. The limit is set on the thread's first
+/// check: this frame's address minus three quarters of the smaller of `RLIMIT_STACK` and 8 MiB.
+/// Task threads are started with 8 MiB (`nz.spawn`), and the main thread's stack is
+/// `RLIMIT_STACK`, so no thread's budget exceeds the stack it has; the quarter left over is the
+/// headroom for the non-recursive calls between two checks. It records nothing: the call site
+/// names the function entered and fails with `N0408` itself.
+const STACK_RUNTIME: &str = r"
+define hidden i32 @nz.stack_check() {
+entry:
+  %rl = alloca [2 x i64], align 8
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %sp = ptrtoint ptr %fp to i64
+  %lim = load i64, ptr @nz.stack_limit
+  %unset = icmp eq i64 %lim, 0
+  br i1 %unset, label %init, label %compare
+init:
+  ; RLIMIT_STACK is 3 on every v1 target, and struct rlimit is two 64-bit words there.
+  %rc = call i32 @getrlimit(i32 3, ptr %rl)
+  %cur = load i64, ptr %rl
+  %ok = icmp eq i32 %rc, 0
+  %cap = select i1 %ok, i64 %cur, i64 8388608
+  %small = icmp ult i64 %cap, 8388608
+  %size = select i1 %small, i64 %cap, i64 8388608
+  %quarter = lshr i64 %size, 2
+  %budget = sub i64 %size, %quarter
+  %under = icmp ult i64 %sp, %budget
+  %raw = sub i64 %sp, %budget
+  %limit = select i1 %under, i64 1, i64 %raw
+  store i64 %limit, ptr @nz.stack_limit
+  br label %compare
+compare:
+  %l = phi i64 [ %lim, %entry ], [ %limit, %init ]
+  %past = icmp ult i64 %sp, %l
+  %r = zext i1 %past to i32
+  ret i32 %r
+}
+";
 
 /// The registry's accessors and pointer-taking entries (`crate::runtime`, N41), for code a
 /// second compiler generated. Each is a thin wrapper over an entry the LLVM text calls
@@ -776,6 +825,9 @@ done:
 const TASK_RUNTIME: &str = r"
 define hidden i32 @nz.spawn(ptr %h, ptr %fn, ptr %blk) {
 entry:
+  ; Every task thread has 8 MiB of stack (N49): the size `nz.stack_check` budgets from, and
+  ; Linux's default already. The attribute object is opaque; 128 bytes covers every v1 target.
+  %attr = alloca [128 x i8], align 16
   %data = call ptr @nz.arr_grow(ptr %h, i64 8)
   %oom = icmp eq ptr %data, null
   br i1 %oom, label %nomem, label %record
@@ -788,7 +840,10 @@ record:
   store i64 %raw, ptr %slot
   %next = add i64 %len, 1
   store i64 %next, ptr %h
-  %rc = call i32 @pthread_create(ptr %blk, ptr null, ptr %fn, ptr %blk)
+  %ai = call i32 @pthread_attr_init(ptr %attr)
+  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 8388608)
+  %rc = call i32 @pthread_create(ptr %blk, ptr %attr, ptr %fn, ptr %blk)
+  %ad = call i32 @pthread_attr_destroy(ptr %attr)
   %bad = icmp ne i32 %rc, 0
   br i1 %bad, label %undo, label %ok
 undo:

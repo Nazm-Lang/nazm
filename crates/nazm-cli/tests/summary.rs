@@ -222,14 +222,16 @@ fn a_build_summary_is_the_builds_outcome_and_absence_of_diagnostics_is_not_succe
     for (text, code_wanted) in [
         (TYPED, "N0304"),
         (NO_MAIN, "N0204"),
-        (
-            "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) } }\nfn main() -> Int { f(3) }\n",
-            "N0101",
-        ),
+        // A `main` that does not return `Int`: the backend's refusal (recursion was this
+        // case until N49 compiled it).
+        ("fn main() -> Bool {\n    true\n}\n", "N0101"),
     ] {
         let dir = project(&[("main.nz", text)]);
         let plain = nazm(dir.path(), &["build", "--json", "main.nz", "-o", "p"]);
-        let (s, code) = summary(dir.path(), &["build", "--summary-json", "main.nz", "-o", "q"]);
+        let (s, code) = summary(
+            dir.path(),
+            &["build", "--summary-json", "main.nz", "-o", "q"],
+        );
         assert_eq!(code, plain.code);
         assert_eq!(s["status"], "rejected", "{s}");
         assert!(ref_codes(&s).contains(&code_wanted.to_owned()), "{s}");
@@ -238,10 +240,7 @@ fn a_build_summary_is_the_builds_outcome_and_absence_of_diagnostics_is_not_succe
         assert!(!dir.path().join("q").exists());
     }
     // The backend's refusal of a construct is the command's: no N30 id.
-    let rec = project(&[(
-        "main.nz",
-        "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) } }\nfn main() -> Int { f(3) }\n",
-    )]);
+    let rec = project(&[("main.nz", "fn main() -> Bool {\n    true\n}\n")]);
     let (s, _) = summary(rec.path(), &["build", "--summary-json", "main.nz"]);
     let unsupported = s["diagnostics"]
         .as_array()
@@ -334,8 +333,8 @@ fn a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pas
         ("d_type", "fn main() -> Int { 1 + true }\n", Some("1\n")),
         (
             "e_native",
-            "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) } }\nfn main() -> Int { f(3) }\n",
-            Some("0\n"),
+            "fn main() -> Bool {\n    true\n}\n",
+            Some("true\n"),
         ),
         ("f_helper", "fn helper() -> Int { 1 }\n", None),
     ]);
@@ -376,7 +375,7 @@ fn a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pas
     assert_eq!(legs("c_runtime").0, "mismatched");
     assert_eq!(legs("d_type").0, "mismatched");
     assert_eq!(legs("d_type").1, "build_failed");
-    // The interpreter agrees; the compiler refuses recursion.
+    // The interpreter agrees; the compiler refuses a `main` that does not return `Int`.
     assert_eq!(legs("e_native"), ("matched".into(), "build_failed".into()));
     // No passed name and no output.
     let text = s.to_string();

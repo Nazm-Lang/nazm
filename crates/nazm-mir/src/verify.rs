@@ -214,7 +214,7 @@ fn structure(program: &Program, f: &Function, out: &mut Vec<String>) {
                         }
                     }
                 }
-                StatementKind::CheckFailed { .. } => {}
+                StatementKind::CheckFailed { .. } | StatementKind::StackCheck { .. } => {}
             }
         }
         for t in b.term.successors() {
@@ -720,7 +720,7 @@ fn ownership(types: &Types, f: &Function, out: &mut Vec<String>) {
                     read(&st, *list, "joins", &mut report);
                     set(&mut st, *list, One::Empty);
                 }
-                StatementKind::CheckFailed { .. } => {}
+                StatementKind::CheckFailed { .. } | StatementKind::StackCheck { .. } => {}
             }
         }
         match &b.term {
