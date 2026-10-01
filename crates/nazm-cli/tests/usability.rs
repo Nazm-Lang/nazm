@@ -210,3 +210,57 @@ fn the_formatter_keeps_an_escape_as_it_was_written() {
     let again = nazm(d.path(), &["fmt", "--check", "prog.nz"]);
     assert_eq!(again.code, Some(0), "idempotent: {}", again.stderr);
 }
+
+// --- logical operators -----------------------------------------------------------------
+
+#[test]
+fn logical_operators_short_circuit_and_bind_as_specified_everywhere() {
+    // `seen` prints when it is evaluated, so the output is a trace of which operands ran.
+    // `boom` divides by zero: reached, it would fail the program, so its absence from the
+    // trace and the program's success are two observations of the same skipped operand.
+    let src = r#"
+fn seen(tag: Str, v: Bool) -> Bool { print(str_concat(tag, "\n")); v }
+fn boom() -> Bool { 1 / (1 - 1) == 0 }
+fn b(v: Bool) -> Int { if v { 1 } else { 0 } }
+fn main() -> Int {
+    let mut n = 0;
+    n = n * 2 + b(seen("a", false) && seen("never-1", true));
+    n = n * 2 + b(seen("b", true) || seen("never-2", true));
+    n = n * 2 + b(seen("c", true) && seen("d", true));
+    n = n * 2 + b(seen("e", false) || seen("f", false));
+    n = n * 2 + b(false && boom());
+    n = n * 2 + b(true || boom());
+    // `||` loosest, then `&&`, then comparison; `!` as tight as `-`.
+    n = n * 2 + b(1 == 2 && 3 < 4 || 5 > 4);
+    n = n * 2 + b(!(1 == 1) || !false && 2 < 1);
+    n = n * 2 + b(!!true);
+    n = n * 2 + b(true || false && false);
+    n
+}
+"#;
+    // a b c d e f, and the bits 0 1 1 0 0 1 1 0 1 1 = 411.
+    agrees(src, "a\nb\nc\nd\ne\nf\n411");
+}
+
+#[test]
+fn a_logical_operand_that_is_not_bool_is_refused() {
+    for src in [
+        "fn main() -> Int { if 1 && true { 1 } else { 0 } }\n",
+        "fn main() -> Int { if true || 0 { 1 } else { 0 } }\n",
+        "fn main() -> Int { if !1 { 1 } else { 0 } }\n",
+    ] {
+        assert_eq!(check_codes(&[("prog.nz", src)]), ["N0304"], "{src}");
+    }
+}
+
+#[test]
+fn the_formatter_spaces_the_logical_operators_and_keeps_the_effect_marker() {
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn f(a: Bool, b: Bool)->Bool ! {} {!a&&b||!(a)}\nfn main()->Int{if f(true,false){1}else{0}}\n";
+    std::fs::write(d.path().join("prog.nz"), src).unwrap();
+    let r = nazm(d.path(), &["fmt", "prog.nz"]);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let out = std::fs::read_to_string(d.path().join("prog.nz")).unwrap();
+    assert!(out.contains("!a && b || !(a)"), "{out}");
+    assert!(out.contains("-> Bool ! {}"), "{out}");
+}

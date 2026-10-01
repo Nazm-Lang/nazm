@@ -219,7 +219,17 @@ spawn_statement = "spawn" , IDENT , "(" , [ arguments ] , ")" , ";" ;
 expression_statement = expression , ";" ;
 
 (* @example fn main() -> Int { 1 + 2 * 3 } *)
-expression = comparison ;
+expression = disjunction ;
+
+(* `||` and `&&` (N49): `Bool` operands, left-associative, and short-circuit — the right
+ * operand is evaluated only when the left does not decide. `||` binds loosest. Each is the
+ * `if` it lowers to; see `docs/spec.md`, *Logical operators*.
+ *)
+(* @example fn main() -> Int { if 1 < 2 || 2 < 1 { 1 } else { 0 } } *)
+disjunction = conjunction , { "||" , conjunction } ;
+
+(* @example fn main() -> Int { if 1 < 2 && 2 < 3 { 1 } else { 0 } } *)
+conjunction = comparison , { "&&" , comparison } ;
 
 (* Each operator gets an example. Listing six and demonstrating one would be a grammar
  * that is right about the alternatives and silent about five of them, which the
@@ -239,8 +249,12 @@ sum = product , { ( "+" | "-" ) , product } ;
 (* @example fn main() -> Int { 2 * 3 / 4 % 5 } *)
 product = unary , { ( "*" | "/" | "%" ) , unary } ;
 
+(* `!` is logical negation, as tight as `-`: `!a && b` is `(!a) && b`. It is never the `!` of
+ * an effect set, which follows a result type, where no expression is.
+ *)
 (* @example fn main() -> Int { -1 } *)
-unary = [ "-" ] , primary ;
+(* @example fn main() -> Int { if !false { 1 } else { 0 } } *)
+unary = [ "-" | "!" ] , primary ;
 
 (* @example fn main() -> Int { (1 + 2) * 3 } *)
 (* @example fn main() -> Int { if true { 1 } else { 0 } } *)

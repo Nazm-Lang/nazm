@@ -234,6 +234,8 @@ fn continues_the_line(next: Option<&TokenKind>) -> bool {
                 | TokenKind::LtEq
                 | TokenKind::Gt
                 | TokenKind::GtEq
+                | TokenKind::AmpAmp
+                | TokenKind::PipePipe
         )
     )
 }
@@ -434,8 +436,11 @@ impl<'a> Printer<'a> {
         let Some(previous) = self.previous else {
             return false;
         };
-        // Negation binds to its operand.
-        if *previous == TokenKind::Minus && !self.before.is_some_and(ends_a_value) {
+        // Negation binds to its operand, arithmetic or logical. A `!` after a value is the
+        // effect-set marker, `-> Int ! {io}`, and keeps its spaces.
+        if matches!(previous, TokenKind::Minus | TokenKind::Bang)
+            && !self.before.is_some_and(ends_a_value)
+        {
             return false;
         }
         // Nothing before a closer or a separator. `.` is here because it binds to what
