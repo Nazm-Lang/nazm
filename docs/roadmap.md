@@ -370,6 +370,29 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### N40 — MIR, the one lowering for the native backend — **complete, 2026-10-01**
+
+`architecture.md` §7.42 was written first. `nazm-mir` holds MIR: each concrete function — every
+generic instance included — as basic blocks with exactly one terminator each, typed locals, and
+every copy, move, drop, scope join and failure edge written out; a validator proves, by a forward
+dataflow over managed locals, no read of an empty local, no overwrite of an owned one, nothing
+owned at a return or unwind, and every task list joined. `nazm-lir` reads MIR only — it no longer
+depends on `nazm-cir` and cannot name a `Resolution` (a `cargo xtask check` rule) — and its LLVM
+emitter was rewritten over it. `nazm mir` prints `nazm.mir/1`. Each function has an executable
+digest that formatting, names and effects do not move. The interpreter stays on Core IR, by
+decision. All 205 sources check, run and build byte-identically to N39, and all 104 buildable
+programs behave identically. No language change: `SEMANTIC_EPOCH` stays 10.
+
+| Settled | Where |
+| --- | --- |
+| the constitution | `architecture.md` §7.42 |
+| the representation, lowering, validator, printer, digest | `crates/nazm-mir/` |
+| native lowering and emission from MIR | `crates/nazm-lir/src/lower.rs`, `emit.rs` |
+| the boundary | `cargo xtask check` *core ir boundary*, `xtask/src/rules.rs` |
+
+Mutation evidence: fifteen new mutations and 44 historical ones repointed to where their rule lives
+now, each for a stated responsibility, seven retired; all 59 caught (`capability-matrix.md` §30).
+
 ### After N39, in dependency order
 
 No item is chosen here; N39 left these standing, beside N38's below.
@@ -417,7 +440,7 @@ retired; 37 selected with a stated link each, all caught (`capability-matrix.md`
 gate ran offline and every stage passed; the campaign needed six sessions, 13,876 s. The interpreter
 is faster on the host and mixed in the Linux container (`performance.md`, N39).
 
-**N40 has not started.**
+N40 followed; see above.
 
 ### After N38, in dependency order
 
