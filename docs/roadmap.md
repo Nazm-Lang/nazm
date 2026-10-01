@@ -388,6 +388,16 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N54 — Select, deadlines, cooperative cancellation and counters — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.56 first. One OS thread per task stays: the stackful pool is DESIGNED, its three
+thread-local prerequisites named, and not built. Built: `chan_select_of` and `chan_select_until`
+over `Vec[Chan[T]]` with the lowest ready index winning and a closed channel always ready — the
+cancellation signal — on a runtime-wide event count that cannot lose a wake-up; `time_now_ms`;
+`TimeCap`, held, and `critical`'s `no-ambient-time`; `NAZM_SCHED_REPORT` counters agreeing across the
+interpreter and both backends. N44's failure rule unchanged. Runtime ABI 6; semantic epoch 17. Next:
+N55, FFI v2.
+
 ### N53 — Runtime crate and generic channels — **complete, 2026-10-02**
 
 `architecture.md` §7.55 first. The runtime is its own crate, `nazm-runtime` — text, inventory,

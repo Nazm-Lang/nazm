@@ -101,6 +101,12 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N54, select, deadlines and the scheduler's counters.** No code appeared: a clock read
+without a `TimeCap` held is the existing `N0369`, with its meaning unchanged, and `critical`'s new
+rule, `no-ambient-time`, is the existing `N0510`. `nazm.profile-report/1` gains that rule's identity,
+a new value of an existing field. No schema moved; the counters are a diagnostic line,
+`nazm-sched:`, on standard error under `NAZM_SCHED_REPORT`, as the memory report is.
+
 **Applied to N53, the runtime component and generic channels.** One code appeared, compatible:
 `N0390` (a `Chan[T]` written or made whose element may not cross into a task — a sequence, a
 closure, or a record or enum holding one — with the path to the offending field). Everything

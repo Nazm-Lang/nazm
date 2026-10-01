@@ -61,13 +61,17 @@ found only by reading all of it.
 
 ## Runtime and concurrency
 
-- One OS thread per task; no worker pool, cancellation, timeouts, select or detached tasks;
-  deadlock is possible and not detected (areas 14, 15). So the tasks alive at once are bounded by
+- One OS thread per task; no worker pool, no detached tasks; deadlock is possible and not
+  detected (areas 14, 15). *Narrowed in N54:* select over typed channels, a select deadline under
+  a `TimeCap`, and cancellation by closing a channel a task selects on exist; nothing is cancelled
+  on a sibling's failure, nothing selects over sends or over the `Int` channel, and the stackful
+  pool §7.56 chose is not built. So the tasks alive at once are bounded by
   the host's thread limit — a container's process ceiling counts every thread — and a `spawn` the
   host refuses is `N0404`, not a wait.
 - A channel carries one element type, and only one that may cross into a task — `Int`, `Bool`,
   `Str`, channels, and records and enums of those (`N0390`); no `select`, no unbounded channel,
   no channel of sequences or closures (area 14). *Narrowed in N53:* until then, `Int` only.
+  *Narrowed in N54:* `select` exists for `Chan[T]` (lowest ready index; receives only).
 - The runtime is its own crate (`nazm-runtime`, N53) but still LLVM text both backends link,
   tested through a C harness; no Rust implementation, no runtime shared across programs as a
   library (area 13).

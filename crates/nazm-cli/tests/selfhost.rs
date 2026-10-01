@@ -2492,6 +2492,11 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("chan_send_of", "Chan[T]"),
         ("chan_recv_of", "Chan[T]"),
         ("chan_close_of", "Chan[T]"),
+        // N54: a select takes a `Vec[Chan[T]]`, and the clock needs a `TimeCap` the Nazm
+        // checker has no notion of; refused by name there too.
+        ("chan_select_of", "Vec[Chan[T]]"),
+        ("chan_select_until", "Vec[Chan[T]]"),
+        ("time_now_ms", "TimeCap"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {

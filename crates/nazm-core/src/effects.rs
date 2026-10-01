@@ -415,22 +415,26 @@ pub(crate) fn analyse(
         }
         errors.push(undeclared(node, declared, missing, why, res));
     }
-    // A vouch needs a `VouchCap` held, in every function (N52): declassification is never
-    // ambient. A declared function's is already its authority check's.
+    // A vouch needs a `VouchCap` held, in every function (N52), and a clock a `TimeCap` (N54):
+    // neither is ever ambient. A declared function's is already its authority check's.
     for node in nodes.iter().filter(|n| n.has_body && n.declared.is_none()) {
         let sites = res
             .function(node.id)
             .map(|d| d.call_sites.clone())
             .unwrap_or_default();
         for site in sites {
-            if site.callee == Callee::Builtin(nazm_sema::Intrinsic::StrVouch)
-                && !site.held.contains(CapabilityKind::Vouch)
-            {
+            let Callee::Builtin(i) = site.callee else {
+                continue;
+            };
+            let Some(kind) = CapabilityKind::held_for(i) else {
+                continue;
+            };
+            if !site.held.contains(kind) {
                 errors.push(missing_authority(
                     node,
-                    CapabilityKind::Vouch,
+                    kind,
                     site.span,
-                    Needs::Builtin(nazm_sema::Intrinsic::StrVouch),
+                    Needs::Builtin(i),
                     res,
                 ));
                 break;

@@ -2473,6 +2473,10 @@ fn environment(
             Some(m) => m,
             None if s == Shape::T => t,
             None if s == Shape::ChanT => res.types_mut().chan_of(t),
+            None if s == Shape::ChansT => {
+                let c = res.types_mut().chan_of(t);
+                res.types_mut().vec_of(c)
+            }
             None => res.types_mut().vec_of(t),
         };
         let params: Vec<Type> = i.params().iter().map(|s| shape(*s)).collect();

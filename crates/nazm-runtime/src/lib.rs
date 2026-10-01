@@ -18,7 +18,10 @@ pub(crate) mod os;
 
 use std::fmt::Write as _;
 
-pub use self::core::{emit_runtime, runtime_declarations, MEMORY_FORMAT, MEMORY_VARIABLE};
+pub use self::core::{
+    emit_runtime, runtime_declarations, MEMORY_FORMAT, MEMORY_VARIABLE, SCHED_FORMAT,
+    SCHED_VARIABLE,
+};
 pub use self::entry::emit_entry;
 pub use self::os::declarations;
 
@@ -123,8 +126,10 @@ pub fn escape(s: &str) -> String {
 /// objects (`nz.closure_new`, `nz.closure_retain`, `nz.closure_release`) and their layout. 5 is
 /// N53's: the runtime is its own component, generic channels (`nz.chanv_*`, a header extended by
 /// the element's stride at 64 and its release at 72), and [`digest`] beside the revision in
-/// every key, so a runtime whose text changed without a bump is still another runtime.
-pub const RUNTIME_ABI_REVISION: u32 = 5;
+/// every key, so a runtime whose text changed without a bump is still another runtime. 6 is
+/// N54's: select (`nz.chanv_select`, `nz.chanv_try`, `nz.chanv_close`, the event count
+/// `nz.sel_*`), the clock, and the scheduler's counters.
+pub const RUNTIME_ABI_REVISION: u32 = 6;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 const EVERYTHING: Needs = Needs {
@@ -248,6 +253,11 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.chanv_send", [Ptr, Ptr], Some(Word::Bit), Channels, "borrows the channel; copies the slot in, taking the reference it holds; false and nothing copied when closed"),
     import!("nz.chanv_recv", [Ptr, Ptr], Some(Word::Bit), Channels, "borrows the channel; copies the oldest slot out, handing over its reference; false once closed and drained"),
     import!("nz.chanv_release", [Ptr], None, Channels, "one reference fewer; the last releases each queued slot and frees the channel"),
+    import!("nz.chanv_close", [Ptr], None, Channels, "borrows the channel; closes it and wakes every select (N54)"),
+    import!("nz.chanv_select", [Ptr, Ptr, I64, I64], Some(Word::I64), Channels, "borrows the channels; copies one slot out to the second pointer, handing over its reference, when it returns an index; -3 - i closed, -1 none, -2 timed out, i64::MIN out of memory"),
+    import!("nz.time_now_ms", [], Some(Word::I64), Channels, "takes nothing"),
+    import!("nz.sched_note_spawn", [], None, Tasks, "counts a started task; takes nothing"),
+    import!("nz.sched_note_join", [Ptr], None, Tasks, "borrows the task list; counts its tasks as joined"),
     import!("write", [I32, Ptr, I64], Some(Word::I64), Libc, "borrows the bytes"),
     import!("exit", [I32], None, Libc, "does not return"),
     import!("strlen", [Ptr], Some(Word::I64), Libc, "borrows the text"),
@@ -377,6 +387,14 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chanv_send", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "send a slot, blocking while full", "borrows the channel; takes the slot's reference when it returns true"),
     rt!("nz.chanv_recv", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "receive a slot, blocking while empty", "borrows the channel; hands the slot's reference to the caller when it returns true"),
     rt!("nz.chanv_release", "void" ("ptr") "", true, Channels, "", Never, Any, "one reference fewer; the last releases the queued slots and frees the channel", "takes a reference, atomically"),
+    rt!("nz.chanv_close", "void" ("ptr") "", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
+    rt!("nz.chanv_select", "i64" ("ptr", "ptr", "i64", "i64") "", true, Channels, "", Status, Locked, "wait for the lowest-indexed ready channel, or a deadline (N54)", "borrows the channels; hands one slot's reference to the caller when it returns an index"),
+    rt!("nz.time_now_ms", "i64" () "", true, Channels, "", Never, Any, "a monotonic clock in milliseconds (N54)", "none"),
+    rt!("nz.sched_note_spawn", "void" () "", true, Tasks, "", Never, Any, "count a started task (N54)", "none"),
+    rt!("nz.sched_note_join", "void" ("ptr") "", true, Tasks, "", Never, Any, "count a scope's tasks as joined (N54)", "borrows the task list"),
+    rt!("nz.sel_sync_get", "ptr" () "", false, Channels, "", Null, Any, "the select lock and condition variable, made on first use", "the process owns it"),
+    rt!("nz.sel_signal", "void" () "", false, Channels, "", Never, Any, "advance the select event count and wake any select", "none"),
+    rt!("nz.chanv_try", "i64" ("ptr", "ptr") "", false, Channels, "", Never, Locked, "one look at a channel without waiting", "borrows the channel; hands the slot's reference over when it returns 1"),
     rt!("nz.failed_now", "i32" () "", false, Base, "", Never, Any, "whether this thread has failed, for a second backend", "none"),
     rt!("nz.format_int", "i64" ("ptr", "i64") "", false, Base, "", Never, Any, "an Int's decimal digits into a 21-byte buffer", "writes into the caller's buffer"),
     rt!("nz.vec_release", "void" ("ptr", "ptr", "i64") "", false, Sequences, "", Never, Owner, "release a sequence, each element with its type's release at its stride", "takes a reference; null is a no-op"),
@@ -482,6 +500,48 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
         ty: "i64",
         thread_local: false,
         writers: "atomic increments; read by the entry after every join",
+    },
+    RuntimeGlobal {
+        symbol: "nz.sched_spawned",
+        ty: "i64",
+        thread_local: false,
+        writers: "an atomic increment after each task starts; read by the entry after every join",
+    },
+    RuntimeGlobal {
+        symbol: "nz.sched_joined",
+        ty: "i64",
+        thread_local: false,
+        writers: "an atomic add before each scope joins; read by the entry after every join",
+    },
+    RuntimeGlobal {
+        symbol: "nz.sched_selects",
+        ty: "i64",
+        thread_local: false,
+        writers: "an atomic increment per select; read by the entry after every join",
+    },
+    RuntimeGlobal {
+        symbol: "nz.sched_timeouts",
+        ty: "i64",
+        thread_local: false,
+        writers: "an atomic increment per select that timed out; read by the entry after every join",
+    },
+    RuntimeGlobal {
+        symbol: "nz.sel_gen",
+        ty: "i64",
+        thread_local: false,
+        writers: "the select event count: a seq_cst increment per typed send or close (N54)",
+    },
+    RuntimeGlobal {
+        symbol: "nz.sel_waiters",
+        ty: "i64",
+        thread_local: false,
+        writers: "how many selects are waiting: seq_cst increments and decrements",
+    },
+    RuntimeGlobal {
+        symbol: "nz.sel_sync",
+        ty: "ptr",
+        thread_local: false,
+        writers: "the select lock and condition variable, made once by compare-and-swap on first use and never freed",
     },
 ];
 
@@ -708,9 +768,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_five_and_its_digest_covers_generic_channels() {
-        // N53's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 5);
+    fn the_runtime_is_revision_six_and_its_digest_covers_select() {
+        // N54's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 6);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.chanv_select("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.chanv_send("));
         let d = crate::digest();
         assert!(

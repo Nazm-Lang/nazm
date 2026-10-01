@@ -638,6 +638,8 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
                     3,
                 ));
                 let o = self.b.ins().stack_addr(self.g.ptr, out, 0);
+                // Counted before the join, while the list still says how many (N54).
+                self.rt("nz.sched_note_join", &[t]);
                 self.rt("nz.scope_join_to", &[t, o]);
                 let msg = self.b.ins().load(types::I64, mem(), o, 0);
                 let has = self.b.ins().icmp_imm_s(IntCC::NotEqual, msg, 0);
@@ -1094,6 +1096,8 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
         self.guard(oom, "N0406", "out of memory");
         let bad = self.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, rc, 0);
         self.guard(bad, "N0404", "this task could not be started");
+        // Started (N54).
+        self.rt("nz.sched_note_spawn", &[]);
     }
 
     // --- terminators ---------------------------------------------------------------------------
