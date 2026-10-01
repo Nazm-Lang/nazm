@@ -527,6 +527,30 @@ impl Types {
             .get(&(u32::try_from(id.index()).unwrap_or(u32::MAX)))
     }
 
+    /// Whether two types are one up to the effects of the function types in them (N51): an
+    /// effect parameter makes no instance, so a callee's parameter `fn(…) ! { E }` is what its
+    /// caller passes as `fn(…) ! { io }`, and below the checker effects mean nothing.
+    #[must_use]
+    pub fn same_shape(&self, a: Type, b: Type) -> bool {
+        if a == b {
+            return true;
+        }
+        let (Type::Fn(x), Type::Fn(y)) = (a, b) else {
+            return false;
+        };
+        match (self.function(x), self.function(y)) {
+            (Some(p), Some(q)) => {
+                p.params.len() == q.params.len()
+                    && p.params
+                        .iter()
+                        .zip(&q.params)
+                        .all(|(a, b)| self.same_shape(*a, *b))
+                    && self.same_shape(p.ret, q.ret)
+            }
+            _ => false,
+        }
+    }
+
     /// The `Vec` type whose element is `elem`, if the program has one.
     #[must_use]
     pub fn vec_of(&self, elem: Type) -> Option<Type> {

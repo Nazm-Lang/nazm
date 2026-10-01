@@ -39,8 +39,11 @@ pub struct Signature {
     pub name_span: Span,
     /// How many type parameters the callee declares; zero for one that is not generic.
     pub generics: u32,
-    /// Whose parameters `params` and `ret` mention, when `generics` is not zero.
+    /// Whose parameters `params` and `ret` mention, when `generics` is not zero or the callee
+    /// has an effect parameter.
     pub owner: Option<ParamOwner>,
+    /// Whether the callee declares an effect parameter (N51), which each call binds.
+    pub effect_param: bool,
 }
 
 /// What is known about a binding.
@@ -382,6 +385,8 @@ pub struct Checker<'a> {
     closures: Vec<ClosureFrame>,
     /// How many closures the top-level function being checked has, for their names.
     closure_count: u32,
+    /// The effect parameter of the function being checked, by name, with its owner (N51).
+    effect_param: Option<(String, ParamOwner)>,
 }
 
 /// A closure whose body is being checked (N50).
@@ -629,6 +634,25 @@ pub fn check_reusing(
             .help(
                 "the process entry is called by nothing that could choose its type \
                  arguments. Make `main` concrete and call a generic function from it",
+            ),
+        );
+    }
+
+    // Nor polymorphic in its effects (N51): nothing calls it to bind the parameter.
+    if let Some(def) = res
+        .definition(graph.root(), "main")
+        .and_then(|id| res.function(id))
+        .filter(|d| polymorphic(d.declared_effects))
+    {
+        errors.push(
+            Diagnostic::error(
+                codes::EFFECT_PARAMETER,
+                def.name_span,
+                "`main` cannot have an effect parameter",
+            )
+            .help(
+                "the process entry is called by nothing that could bind it: declare what \
+                 `main` does, and call an effect-polymorphic function from it",
             ),
         );
     }
@@ -1093,7 +1117,7 @@ fn resolve_fields(
             );
             continue;
         }
-        let ty = resolve_written(types, res, &f.ty, scope, errors);
+        let ty = resolve_written(types, res, &f.ty, scope, None, errors);
         fields.push(FieldDef {
             name: f.name.clone(),
             ty,
@@ -1612,9 +1636,10 @@ fn resolve_written(
     res: &mut Resolution,
     written: &TypeName,
     scope: &[(String, Type)],
+    effect: Option<(&str, ParamOwner)>,
     errors: &mut Vec<Diagnostic>,
 ) -> Type {
-    let t = resolve_written_inner(types, res, written, scope, errors);
+    let t = resolve_written_inner(types, res, written, scope, effect, errors);
     if res.types().nesting(t) > MAX_TYPE_DEPTH {
         errors.push(
             Diagnostic::error(
@@ -1638,30 +1663,53 @@ fn resolve_written_inner(
     res: &mut Resolution,
     written: &TypeName,
     scope: &[(String, Type)],
+    effect: Option<(&str, ParamOwner)>,
     errors: &mut Vec<Diagnostic>,
 ) -> Type {
     let args: Option<Vec<Type>> = written.args.as_ref().map(|a| {
         a.iter()
-            .map(|w| resolve_written_inner(types, res, w, scope, errors))
+            .map(|w| resolve_written_inner(types, res, w, scope, effect, errors))
             .collect()
     });
+    // An effect parameter is named only in function types (N51): inside a type's
+    // arguments it would make two instances of one type that differ only in effects.
+    if let (Some((name, owner)), Some(args)) = (effect, &args) {
+        if args
+            .iter()
+            .any(|a| res.types().names_effect_param(*a, owner))
+        {
+            errors.push(
+                Diagnostic::error(
+                    codes::EFFECT_PARAMETER,
+                    written.span,
+                    format!("the effect parameter `{name}` is named inside this type's arguments"),
+                )
+                .help(
+                    "an effect parameter may be named in a function type that is a \
+                     parameter's or the result's, or one nested in those: write the function \
+                     type there",
+                ),
+            );
+        }
+    }
     // `fn(T…) -> R ! {e}` (N50): its parts resolved as any type is, interned.
     if let Some(f) = &written.function {
         let params: Vec<Type> = f
             .params
             .iter()
-            .map(|p| resolve_written_inner(types, res, p, scope, errors))
+            .map(|p| resolve_written_inner(types, res, p, scope, effect, errors))
             .collect();
-        let ret = resolve_written_inner(types, res, &f.ret, scope, errors);
+        let ret = resolve_written_inner(types, res, &f.ret, scope, effect, errors);
         let effects = f
             .effects
             .as_ref()
-            .and_then(|d| crate::effects::declared(d, errors))
+            .and_then(|d| crate::effects::declared(d, effect.map(|e| e.0), errors))
             .unwrap_or(nazm_sema::EffectSet::EMPTY);
         return res.types_mut().fn_of(nazm_sema::FnSignature {
             params,
             ret,
             effects,
+            row: effect.map(|e| e.1),
         });
     }
     // A qualified type names a module's definition (N49): never a type parameter, never `Vec`
@@ -1920,6 +1968,54 @@ fn check_foreign(
     }
 }
 
+/// The effect parameter a function declares, if any (N51): the first, with every further one
+/// and one a foreign function writes refused (`N0388`), and one on a function that declares no
+/// effect set too — what such a function's body requires would name a parameter its callers
+/// never bind.
+fn declared_effect_param<'f>(f: &'f Function, errors: &mut Vec<Diagnostic>) -> Option<&'f str> {
+    let first = f.effect_params.first()?;
+    for extra in f.effect_params.iter().skip(1) {
+        errors.push(
+            Diagnostic::error(
+                codes::EFFECT_PARAMETER,
+                extra.span,
+                format!("`{}` declares a second effect parameter", f.name),
+            )
+            .secondary(first.span, "the first")
+            .help("a function declares at most one: every set it writes may name that one"),
+        );
+    }
+    if f.foreign.is_some() {
+        errors.push(
+            Diagnostic::error(
+                codes::EFFECT_PARAMETER,
+                first.span,
+                "a foreign function cannot have an effect parameter",
+            )
+            .help("calling C is always the effect `foreign`"),
+        );
+        return None;
+    }
+    if f.effects.is_none() {
+        errors.push(
+            Diagnostic::error(
+                codes::EFFECT_PARAMETER,
+                first.span,
+                format!(
+                    "`{}` has an effect parameter, so it declares its effect set",
+                    f.name
+                ),
+            )
+            .help(format!(
+                "write `! {{ {} }}` after the result type: a function with an effect parameter \
+                 states what it does in terms of it",
+                first.name
+            )),
+        );
+    }
+    Some(first.name.as_str())
+}
+
 fn foreign_type(at: Span, what: &str) -> Diagnostic {
     Diagnostic::error(
         codes::FOREIGN_TYPE,
@@ -1958,16 +2054,20 @@ pub fn declare_unit(
         let id = res.next_function();
         let generics = declared_type_params(&f.type_params, errors);
         let scope = param_scope(&f.type_params, ParamOwner::Function(id));
+        let effect = declared_effect_param(f, errors).map(|n| (n, ParamOwner::Function(id)));
         let params: Vec<Type> = f
             .params
             .iter()
-            .map(|p| resolve_written(&types, res, &p.ty, &scope, errors))
+            .map(|p| resolve_written(&types, res, &p.ty, &scope, effect, errors))
             .collect();
-        let ret = resolve_written(&types, res, &f.return_type, &scope, errors);
+        let ret = resolve_written(&types, res, &f.return_type, &scope, effect, errors);
         let declared_effects = f
             .effects
             .as_ref()
-            .and_then(|d| crate::effects::declared(d, errors));
+            .and_then(|d| crate::effects::declared(d, effect.map(|e| e.0), errors));
+        if let Some((name, owner)) = effect {
+            res.types_mut().name_effect_param(owner, name.to_owned());
+        }
 
         // A built-in has no source span to point at, so "first defined here" would aim
         // at byte zero. Said plainly instead. Built-ins are not a module's definitions,
@@ -2282,6 +2382,7 @@ pub fn check_unit(
         type_scope: Vec::new(),
         closures: Vec::new(),
         closure_count: 0,
+        effect_param: None,
     };
     for (_, f) in &unit.functions {
         c.check_function(f);
@@ -2371,6 +2472,7 @@ fn environment(
                     name_span: Span::synthetic(),
                     generics: i.generics(),
                     owner: (i.generics() > 0).then_some(owner),
+                    effect_param: false,
                 },
                 callee: Callee::Builtin(i),
             },
@@ -2393,7 +2495,9 @@ fn environment(
                     ret: def.ret,
                     name_span: def.name_span,
                     generics: u32::try_from(def.type_params.len()).unwrap_or(u32::MAX),
-                    owner: (!def.type_params.is_empty()).then_some(ParamOwner::Function(id)),
+                    owner: (!def.type_params.is_empty() || polymorphic(def.declared_effects))
+                        .then_some(ParamOwner::Function(id)),
+                    effect_param: polymorphic(def.declared_effects),
                 },
                 callee: Callee::Function(id),
             },
@@ -2456,8 +2560,9 @@ fn environment(
                             ret: e.ret,
                             name_span: e.name_span,
                             generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
-                            owner: (!e.type_params.is_empty())
+                            owner: (!e.type_params.is_empty() || polymorphic(e.effects))
                                 .then_some(ParamOwner::Function(e.def)),
+                            effect_param: polymorphic(e.effects),
                         },
                         callee: Callee::Function(e.def),
                     },
@@ -2517,7 +2622,9 @@ fn environment(
                         ret: e.ret,
                         name_span: e.name_span,
                         generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
-                        owner: (!e.type_params.is_empty()).then_some(ParamOwner::Function(e.def)),
+                        owner: (!e.type_params.is_empty() || polymorphic(e.effects))
+                            .then_some(ParamOwner::Function(e.def)),
+                        effect_param: polymorphic(e.effects),
                     },
                     callee: Callee::Function(e.def),
                 },
@@ -2536,8 +2643,18 @@ fn environment(
 const WRITTEN: usize = usize::MAX;
 
 /// Why an argument's type could not be matched against its declared type.
+/// Whether a declared effect set names its function's effect parameter (N51).
+fn polymorphic(effects: Option<nazm_sema::EffectSet>) -> bool {
+    effects.is_some_and(nazm_sema::EffectSet::has_param)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Unify {
+    /// The callee's effect parameter already bound to another set (N51).
+    EffectConflict {
+        earlier: nazm_sema::EffectSet,
+        from: usize,
+    },
     /// A parameter already settled to another type.
     Conflict {
         param: TypeParam,
@@ -2706,11 +2823,11 @@ impl Checker<'_> {
     /// exist, because it is private where it lives, or because it lives in a module this
     /// one did not import, is [`Self::why_invisible`]'s question — and getting that answer
     /// right is most of what makes the visibility rule usable.
-    /// The authority the bindings visible here hold: inside a closure, its own frames' only
-    /// (N50).
+    /// The authority the bindings visible here hold — inside a closure too (N51): a closure
+    /// holds the capabilities visible where it is written, as captured, and its type states
+    /// what it does with them.
     fn held(&self) -> nazm_sema::CapabilitySet {
-        let start = self.closures.last().map_or(0, |c| c.boundary);
-        self.scopes.held_from(start)
+        self.scopes.held_from(0)
     }
 
     /// The binding `name` reaches here, captured into every closure between it and here
@@ -2729,26 +2846,20 @@ impl Checker<'_> {
         if crossing.is_empty() {
             return Some(b);
         }
-        if b.mutable || matches!(b.ty, Type::Cap(_)) {
-            let what = if b.mutable {
-                "a `let mut` binding"
-            } else {
-                "a capability"
-            };
+        // A capability may be captured since N51: the closure holds it, and its type says
+        // what it does. A mutable binding still may not be: its copy would stop tracking it.
+        if b.mutable {
             self.errors.push(
                 Diagnostic::error(
                     codes::CAPTURE_REFUSED,
                     at,
-                    format!("a closure cannot capture `{name}`, {what}"),
+                    format!("a closure cannot capture `{name}`, a `let mut` binding"),
                 )
-                .help(if b.mutable {
+                .help(
                     "a closure copies what it captures, so a mutable binding would silently \
                      stop being tracked; bind a copy with `let`, or share a sequence or a \
-                     channel"
-                } else {
-                    "authority is passed, never captured: give the closure a capability \
-                     parameter and pass it at the call"
-                }),
+                     channel",
+                ),
             );
             return Some(Binding {
                 mutable: false,
@@ -2841,20 +2952,27 @@ impl Checker<'_> {
         }
         // Undeclared: another module's may do anything the bridge covers; this module's is
         // assumed to do nothing, which effects analysis then holds it to.
+        // Its effect parameter is bound at each call, and a value has no call (N51).
+        if polymorphic(def.declared_effects) {
+            return refuse(self, "polymorphic in its effects");
+        }
         let assumed = match def.declared_effects {
             Some(set) => set,
             None if def.module != self.module => crate::effects::assumed(id, self.res),
             None => nazm_sema::EffectSet::EMPTY,
         };
-        let ty = self.res.types_mut().fn_of(nazm_sema::FnSignature {
-            params: v.sig.params.clone(),
-            ret: v.sig.ret,
-            effects: assumed,
-        });
+        let ty = self.res.types_mut().fn_of(nazm_sema::FnSignature::new(
+            v.sig.params.clone(),
+            v.sig.ret,
+            assumed,
+        ));
+        let held = self.held();
         self.res.record_fn_value(nazm_sema::FnValueUse {
             function: id,
             at,
             assumed,
+            within: self.current,
+            held,
             ty,
         });
         if let Some(cur) = self.current {
@@ -2921,6 +3039,7 @@ impl Checker<'_> {
             name_span: at,
             generics: 0,
             owner: None,
+            effect_param: false,
         };
         self.record_checked_call(at, span, args, &sig, None, false);
         fsig.ret
@@ -2961,8 +3080,11 @@ impl Checker<'_> {
             .map(|p| self.resolve_written_type(&p.ty))
             .collect();
         let ret = self.resolve_written_type(return_type);
+        let effect = self.effect_param.clone();
         let declared = match effects {
-            Some(d) => crate::effects::declared(d, &mut self.errors),
+            Some(d) => {
+                crate::effects::declared(d, effect.as_ref().map(|e| e.0.as_str()), &mut self.errors)
+            }
             None => Some(nazm_sema::EffectSet::EMPTY),
         }
         .unwrap_or(nazm_sema::EffectSet::EMPTY);
@@ -2978,6 +3100,7 @@ impl Checker<'_> {
             params: param_types.clone(),
             ret,
             effects: declared,
+            row: effect.map(|e| e.1),
         });
         let id = self.res.declare_closure(FnDef {
             name,
@@ -3163,6 +3286,19 @@ impl Checker<'_> {
         self.res.types().show(t)
     }
 
+    /// An effect set as source writes it, the effect parameter by its name (N51).
+    fn show_effects(&self, set: nazm_sema::EffectSet) -> String {
+        let mut names: Vec<String> = set.named().names().into_iter().map(str::to_owned).collect();
+        if set.has_param() {
+            names.push(
+                self.res
+                    .types()
+                    .effect_param_name(self.effect_param.as_ref().map(|e| e.1)),
+            );
+        }
+        format!("{{ {} }}", names.join(", "))
+    }
+
     /// The definition a name written as a construction's head or a pattern's enum refers
     /// to — the **definition**, not a type: `Maybe` in `Maybe.Some(value: x)` names the
     /// generic enum whose instance the scrutinee already is, and `Pair` in
@@ -3192,7 +3328,15 @@ impl Checker<'_> {
     fn signature_type(&mut self, written: &TypeName) -> Type {
         let mut discarded = Vec::new();
         let scope = std::mem::take(&mut self.type_scope);
-        let t = resolve_written(&self.types, self.res, written, &scope, &mut discarded);
+        let effect = self.effect_param.clone();
+        let t = resolve_written(
+            &self.types,
+            self.res,
+            written,
+            &scope,
+            effect.as_ref().map(|(n, o)| (n.as_str(), *o)),
+            &mut discarded,
+        );
         self.type_scope = scope;
         t
     }
@@ -3202,7 +3346,15 @@ impl Checker<'_> {
     fn resolve_written_type(&mut self, written: &TypeName) -> Type {
         let mut errors = std::mem::take(&mut self.errors);
         let scope = std::mem::take(&mut self.type_scope);
-        let t = resolve_written(&self.types, self.res, written, &scope, &mut errors);
+        let effect = self.effect_param.clone();
+        let t = resolve_written(
+            &self.types,
+            self.res,
+            written,
+            &scope,
+            effect.as_ref().map(|(n, o)| (n.as_str(), *o)),
+            &mut errors,
+        );
         self.type_scope = scope;
         self.errors = errors;
         t
@@ -4163,6 +4315,11 @@ impl Checker<'_> {
         // which is the same thing as saying a name meant one function in the program.
         self.current = self.res.definition(self.module, &f.name);
         self.closure_count = 0;
+        self.effect_param = self.current.and_then(|id| {
+            f.effect_params
+                .first()
+                .map(|p| (p.name.clone(), ParamOwner::Function(id)))
+        });
         // The function's own type parameters are in scope for every type written inside
         // it, and in no other function.
         self.type_scope = self
@@ -4903,7 +5060,7 @@ impl Checker<'_> {
                     );
                 }
 
-                if sig.generics > 0 {
+                if sig.generics > 0 || sig.effect_param {
                     let ret = self.check_generic_call(
                         callee,
                         *callee_span,
@@ -5185,6 +5342,9 @@ impl Checker<'_> {
         // Each parameter's argument, and where it came from: an argument's index, or
         // `WRITTEN` for an explicit one.
         let mut solved: Vec<Option<(Type, usize)>> = vec![None; n];
+        // The callee's effect parameter, once an argument binds it (N51).
+        let mut bound: Option<(nazm_sema::EffectSet, usize)> = None;
+        let caller = self.effect_param.as_ref().map(|e| e.1);
         let mut explicit = false;
         // Parameters an argument already failed on. One mistake is one error: an argument
         // of the wrong shape is reported as a mismatch, and the parameters its declared
@@ -5215,7 +5375,9 @@ impl Checker<'_> {
             // **written**. A parameter settled by an earlier argument is not "written": the
             // two arguments are unified, so that `same(1, "x")` is a conflict between them
             // rather than the second one read against what the first one happened to say.
-            if explicit || !self.res.types().mentions(formal, owner) {
+            let open = self.res.types().mentions(formal, owner)
+                || (sig.effect_param && self.res.types().names_effect_param(formal, owner));
+            if (explicit && !sig.effect_param) || !open {
                 let now = settled_args(&solved, owner);
                 let want = self.res.types_mut().substitute(formal, owner, &now);
                 let got = self.value_type(a, Some(want));
@@ -5241,55 +5403,85 @@ impl Checker<'_> {
                 self.res.types_mut().substitute(formal, owner, &now)
             });
             match self.check_expr(a, expected) {
-                Completion::Value(got) => match self.unify(formal, got, owner, &mut solved, i) {
-                    Ok(()) => {}
-                    Err(Unify::Conflict {
-                        param,
-                        earlier,
-                        from,
-                    }) => {
-                        let p = self.res.types().param_name(param);
-                        let earlier = self.show(earlier);
-                        let source = if from == WRITTEN {
-                            "the written type arguments".to_owned()
-                        } else {
-                            format!("argument {}", from + 1)
-                        };
-                        let implied =
-                            inferred_from(self.res.types(), formal, got, param).unwrap_or(got);
-                        let implied = self.show(implied);
-                        self.errors.push(
-                            Diagnostic::error(
-                                codes::CONFLICTING_TYPE_ARGUMENTS,
-                                a.span(),
-                                format!(
+                Completion::Value(got) => {
+                    match self.unify(formal, got, owner, &mut solved, &mut bound, caller, i) {
+                        Ok(()) => {}
+                        Err(Unify::EffectConflict { earlier, from }) => {
+                            let pname = self.res.types().effect_param_name(Some(owner));
+                            let shown = |set: nazm_sema::EffectSet, me: &Self| {
+                                if set.is_empty() {
+                                    "none".to_owned()
+                                } else {
+                                    format!("`{}`", me.show_effects(set))
+                                }
+                            };
+                            let earlier = shown(earlier, self);
+                            self.errors.push(
+                                Diagnostic::error(
+                                    codes::CONFLICTING_EFFECT_ARGUMENT,
+                                    a.span(),
+                                    format!(
+                                        "`{pname}` is {earlier} from argument {}, and argument {} \
+                                     binds it to something else",
+                                        from + 1,
+                                        i + 1
+                                    ),
+                                )
+                                .secondary(sig.name_span, "declared here")
+                                .help(format!(
+                                    "every use of `{pname}` in `{name}`'s signature is one set of \
+                                 effects; give the function values the same effects"
+                                )),
+                            );
+                        }
+                        Err(Unify::Conflict {
+                            param,
+                            earlier,
+                            from,
+                        }) => {
+                            let p = self.res.types().param_name(param);
+                            let earlier = self.show(earlier);
+                            let source = if from == WRITTEN {
+                                "the written type arguments".to_owned()
+                            } else {
+                                format!("argument {}", from + 1)
+                            };
+                            let implied =
+                                inferred_from(self.res.types(), formal, got, param).unwrap_or(got);
+                            let implied = self.show(implied);
+                            self.errors.push(
+                                Diagnostic::error(
+                                    codes::CONFLICTING_TYPE_ARGUMENTS,
+                                    a.span(),
+                                    format!(
                                     "`{p}` is `{earlier}` from {source}, but argument {} makes \
                                      it `{implied}`",
                                     i + 1
                                 ),
-                            )
-                            .help(format!(
-                                "every use of `{p}` in `{name}`'s signature is one type. \
+                                )
+                                .help(format!(
+                                    "every use of `{p}` in `{name}`'s signature is one type. \
                                  Inference does not choose the first and convert the rest"
-                            )),
-                        );
+                                )),
+                            );
+                        }
+                        Err(Unify::Mismatch) => {
+                            excuse(self.res.types(), formal, owner, &mut excused);
+                            let partial = settled_args(&solved, owner);
+                            let want = self.res.types_mut().substitute(formal, owner, &partial);
+                            self.errors.push(Diagnostic::error(
+                                codes::TYPE_MISMATCH,
+                                a.span(),
+                                format!(
+                                    "argument {} of `{name}` is `{}`, but this is `{}`",
+                                    i + 1,
+                                    self.show(want),
+                                    self.show(got)
+                                ),
+                            ));
+                        }
                     }
-                    Err(Unify::Mismatch) => {
-                        excuse(self.res.types(), formal, owner, &mut excused);
-                        let partial = settled_args(&solved, owner);
-                        let want = self.res.types_mut().substitute(formal, owner, &partial);
-                        self.errors.push(Diagnostic::error(
-                            codes::TYPE_MISMATCH,
-                            a.span(),
-                            format!(
-                                "argument {} of `{name}` is `{}`, but this is `{}`",
-                                i + 1,
-                                self.show(want),
-                                self.show(got)
-                            ),
-                        ));
-                    }
-                },
+                }
                 Completion::Unit => {
                     excuse(self.res.types(), formal, owner, &mut excused);
                     self.errors.push(
@@ -5424,8 +5616,20 @@ impl Checker<'_> {
                 .collect(),
             ret: self.res.types().substituted(sig.ret, owner, &partial),
         };
+        let mut instance = instance;
+        let mut ret = self.res.types_mut().substitute(sig.ret, owner, &settled);
+        // The effect parameter, as this call bound it (N51): what the call performs, and what
+        // a function type in its result says — which is the result the call has.
+        if sig.effect_param {
+            let binding = bound.map_or(nazm_sema::EffectSet::EMPTY, |(b, _)| b);
+            self.res.record_effect_binding(at, binding);
+            ret = self
+                .res
+                .types_mut()
+                .bind_effects(ret, owner, binding, caller);
+            instance.ret = Some(ret);
+        }
         self.record_checked_call(at, span, args, sig, Some(instance), false);
-        let ret = self.res.types_mut().substitute(sig.ret, owner, &settled);
         self.mention(ret);
         if self.res.types().nesting(ret) > MAX_TYPE_DEPTH {
             self.errors.push(
@@ -5444,16 +5648,19 @@ impl Checker<'_> {
     /// Match a declared parameter type against an argument's type, settling the callee's
     /// parameters it mentions. Structural through applications, `Vec` and function types;
     /// nothing else is.
+    #[allow(clippy::too_many_arguments)]
     fn unify(
         &self,
         formal: Type,
         actual: Type,
         owner: ParamOwner,
         solved: &mut [Option<(Type, usize)>],
+        bound: &mut Option<(nazm_sema::EffectSet, usize)>,
+        caller: Option<ParamOwner>,
         arg: usize,
     ) -> Result<(), Unify> {
         let types = self.res.types();
-        if !types.mentions(formal, owner) {
+        if !types.mentions(formal, owner) && !types.names_effect_param(formal, owner) {
             return if formal == actual {
                 Ok(())
             } else {
@@ -5486,7 +5693,7 @@ impl Checker<'_> {
                 ) else {
                     return Err(Unify::Mismatch);
                 };
-                self.unify(fe, ae, owner, solved, arg)
+                self.unify(fe, ae, owner, solved, bound, caller, arg)
             }
             Type::Record(_) | Type::Enum(_) => {
                 if types.definition_of(formal) != types.definition_of(actual)
@@ -5499,12 +5706,13 @@ impl Checker<'_> {
                     return Err(Unify::Mismatch);
                 }
                 for (f, a) in fa.into_iter().zip(aa) {
-                    self.unify(f, a, owner, solved, arg)?;
+                    self.unify(f, a, owner, solved, bound, caller, arg)?;
                 }
                 Ok(())
             }
-            // Structural through a function type's parameters and result (N50); its effects
-            // are not abstracted over, so they must be the same set.
+            // Structural through a function type's parameters and result (N50). Its effects
+            // are the same set — or, where it names the callee's effect parameter, bind it to
+            // what the argument has beyond the named ones (N51).
             Type::Fn(ff) => {
                 let Type::Fn(af) = actual else {
                     return Err(Unify::Mismatch);
@@ -5513,7 +5721,26 @@ impl Checker<'_> {
                 else {
                     return Err(Unify::Mismatch);
                 };
-                if fs.params.len() != asig.params.len() || fs.effects != asig.effects {
+                if fs.params.len() != asig.params.len() {
+                    return Err(Unify::Mismatch);
+                }
+                if fs.row == Some(owner) {
+                    let named = fs.effects.named();
+                    // A parameter in the argument's effects can only be the caller's own.
+                    if !named.is_within(asig.effects)
+                        || (asig.effects.has_param() && asig.row != caller)
+                    {
+                        return Err(Unify::Mismatch);
+                    }
+                    let binding = asig.effects.without(named);
+                    match *bound {
+                        None => *bound = Some((binding, arg)),
+                        Some((b, _)) if b == binding => {}
+                        Some((earlier, from)) => {
+                            return Err(Unify::EffectConflict { earlier, from });
+                        }
+                    }
+                } else if fs.effects != asig.effects || fs.row != asig.row {
                     return Err(Unify::Mismatch);
                 }
                 let pairs: Vec<(Type, Type)> = fs
@@ -5524,7 +5751,7 @@ impl Checker<'_> {
                     .chain(std::iter::once((fs.ret, asig.ret)))
                     .collect();
                 for (f, a) in pairs {
-                    self.unify(f, a, owner, solved, arg)?;
+                    self.unify(f, a, owner, solved, bound, caller, arg)?;
                 }
                 Ok(())
             }

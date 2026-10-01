@@ -58,6 +58,23 @@ pub struct FnSignature {
     pub params: Vec<Type>,
     pub ret: Type,
     pub effects: crate::EffectSet,
+    /// Whose effect parameter `effects` names, when it names one (N51); `None` otherwise,
+    /// always — [`crate::UserTypes::fn_of`] keeps the two in step, so a type naming one
+    /// function's parameter is never another's.
+    pub row: Option<ParamOwner>,
+}
+
+impl FnSignature {
+    /// A signature whose effects name no effect parameter.
+    #[must_use]
+    pub fn new(params: Vec<Type>, ret: Type, effects: crate::EffectSet) -> Self {
+        Self {
+            params,
+            ret,
+            effects,
+            row: None,
+        }
+    }
 }
 
 /// Which declaration a type parameter belongs to.

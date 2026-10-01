@@ -231,7 +231,18 @@ impl UserTypes {
                     let effects = if sig.effects.is_empty() {
                         String::new()
                     } else {
-                        format!(" ! {}", sig.effects)
+                        // The effect parameter by its declared name (N51).
+                        let mut names: Vec<String> = sig
+                            .effects
+                            .named()
+                            .names()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect();
+                        if sig.effects.has_param() {
+                            names.push(self.effect_param_name(sig.row));
+                        }
+                        format!(" ! {{ {} }}", names.join(", "))
                     };
                     format!(
                         "fn({}) -> {}{effects}",

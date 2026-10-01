@@ -43,6 +43,12 @@ pub enum Effect {
     /// Calling a foreign (C) function (N42): whatever that function does, which Nazm cannot
     /// see.
     Foreign,
+    /// The effect parameter (N51): whatever set a caller binds it to. In a function's declared
+    /// set it is that function's; in a function type, its `row` owner's. Never a built-in's,
+    /// never assumed, and needing no capability — the function value that performs it
+    /// carries its own authority. Not in [`Effect::ALL`], which lists the effects a program
+    /// can name by a fixed word.
+    Param,
 }
 
 impl Effect {
@@ -57,6 +63,7 @@ impl Effect {
             Self::Io => 0,
             Self::Spawn => 1,
             Self::Foreign => 2,
+            Self::Param => 3,
         }
     }
 
@@ -67,6 +74,9 @@ impl Effect {
             Self::Io => "io",
             Self::Spawn => "spawn",
             Self::Foreign => "foreign",
+            // Persisted and shown as `*`: source writes the parameter's declared name, which a
+            // set does not hold.
+            Self::Param => "*",
         }
     }
 
@@ -203,9 +213,49 @@ impl EffectSet {
         self.0 == 0
     }
 
-    /// In id order.
+    /// In id order, the effect parameter last.
     pub fn iter(self) -> impl Iterator<Item = Effect> {
-        Effect::ALL.into_iter().filter(move |e| self.contains(*e))
+        Effect::ALL
+            .into_iter()
+            .chain([Effect::Param])
+            .filter(move |e| self.contains(*e))
+    }
+
+    /// Whether the effect parameter is in it (N51).
+    #[must_use]
+    pub const fn has_param(self) -> bool {
+        self.contains(Effect::Param)
+    }
+
+    /// Its named effects: without the effect parameter.
+    #[must_use]
+    pub const fn named(self) -> Self {
+        Self(self.0 & !Effect::Param.bit())
+    }
+
+    /// `self` with the effect parameter replaced by `binding` (N51); `self` when it has none.
+    #[must_use]
+    pub const fn bound(self, binding: Self) -> Self {
+        if self.has_param() {
+            self.named().union(binding)
+        } else {
+            self
+        }
+    }
+
+    /// The set a persisted name list means: built-in names, and `*` for the parameter.
+    #[must_use]
+    pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
+        let mut out = Self::EMPTY;
+        for n in names {
+            let e = if n == Effect::Param.name() {
+                Effect::Param
+            } else {
+                Effect::by_name(n)?
+            };
+            out = out.with(e);
+        }
+        Some(out)
     }
 
     /// The names, in id order: how a set is persisted and shown.

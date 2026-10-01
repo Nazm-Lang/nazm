@@ -166,6 +166,10 @@ pub struct Function {
     pub pub_span: Option<Span>,
     /// `[T]` after the name. Empty for a function that is not generic.
     pub type_params: Vec<TypeParam>,
+    /// `effects E` in the same brackets (N51), after the type parameters: the function's
+    /// effect parameters, as written. The language allows one; how many may be written is
+    /// the checker's question, so a second parses and is refused there.
+    pub effect_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     /// Always written. Inference across a function boundary would make a signature
     /// change invisible at the definition, which is the opposite of what a reader needs.
@@ -261,6 +265,9 @@ impl TypeName {
 pub struct TypeParam {
     pub name: String,
     pub span: Span,
+    /// Written `effects NAME` (N51): an effect parameter, not a type parameter. Only a
+    /// function's list may hold one.
+    pub effect: bool,
     /// The capability the parameter is required to have, as written — `Equality` — or
     /// `None`. N14. Which names mean a capability, and where a requirement may be written,
     /// is the checker's question.

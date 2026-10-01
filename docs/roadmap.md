@@ -388,6 +388,17 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N51 — Effects and capabilities v2 — **complete, 2026-10-02**
+
+`architecture.md` §7.53 first. One effect parameter per function, `effects E`, opaque in its body
+and bound at each call from its function-typed arguments (`N0388`, `N0389`); `vec_map`,
+`vec_filter` and `vec_fold` take it, so a caller is held to what the function it passes does, and
+a profile sees it. A closure holds the capabilities visible where it is written, as captured
+(`N0386` narrowed to `let mut`). Making a value of an undeclared function needs the authority its
+type's effects need, which bounds the N37 bridge at the edge N50 opened. Attenuation and
+revocation deferred with their cost. Semantic epoch 14; interface `/7` with `*` in effect lists.
+Next: N52, resource cost and information flow.
+
 ### N50 — First-class functions and closures — **complete, 2026-10-02**
 
 `architecture.md` §7.52 first, amended with the code where the code was simpler. Function types

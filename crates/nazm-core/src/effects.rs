@@ -44,11 +44,22 @@ use nazm_syntax::{EffectDecl, Function};
 /// `None` when a name is not an effect: a set with a word in it nobody can interpret is
 /// not a contract, and checking the body against what remains would report the same
 /// mistake a second time. Treated as unwritten, it is reported once.
-pub(crate) fn declared(decl: &EffectDecl, errors: &mut Vec<Diagnostic>) -> Option<EffectSet> {
+pub(crate) fn declared(
+    decl: &EffectDecl,
+    param: Option<&str>,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<EffectSet> {
     let mut set = EffectSet::EMPTY;
     let mut known = true;
     for (i, (name, span)) in decl.names.iter().enumerate() {
-        match Effect::by_name(name) {
+        // The function's effect parameter, by the name it declared (N51), shadows nothing:
+        // it cannot be spelled like a built-in effect's word without being refused there.
+        let effect = if Some(name.as_str()) == param && Effect::by_name(name).is_none() {
+            Some(Effect::Param)
+        } else {
+            Effect::by_name(name)
+        };
+        match effect {
             None => {
                 known = false;
                 errors.push(
@@ -101,6 +112,9 @@ struct Node {
     foreign: bool,
     /// The span of its written effect set. A closure that writes none declares `! {}`.
     written: Option<Span>,
+    /// Its effect parameter's name, for a message (N51): the function's own, or for a
+    /// closure the enclosing function's.
+    param: String,
     declared: Option<EffectSet>,
     /// Effects its body requires directly, each with where, in call order.
     direct: Vec<EffectReason>,
@@ -136,6 +150,9 @@ pub(crate) fn analyse(
             has_body: f.body.is_some(),
             foreign: f.foreign.is_some(),
             written: f.effects.as_ref().map(|d| d.span),
+            param: res
+                .types()
+                .effect_param_name(Some(nazm_sema::ParamOwner::Function(id))),
             declared: def.declared_effects,
             direct: Vec::new(),
             edges: Vec::new(),
@@ -160,6 +177,10 @@ pub(crate) fn analyse(
                 has_body: true,
                 foreign: false,
                 written: info.written_effects,
+                param: res.types().effect_param_name(match info.ty {
+                    nazm_sema::Type::Fn(f) => res.types().fn_signature(f).and_then(|s| s.row),
+                    _ => None,
+                }),
                 declared: d.declared_effects,
                 direct: Vec::new(),
                 edges: Vec::new(),
@@ -224,13 +245,20 @@ pub(crate) fn analyse(
                         .is_some_and(|d| d.module == module)
                         .then(|| index(g, &nodes))
                         .flatten();
+                    // A callee's effect parameter, as this call bound it (N51): the empty set
+                    // where it has none to bind.
+                    let binding = res.effect_binding(at);
                     match local {
                         Some(j) => match nodes.get(j).and_then(|m| m.declared) {
-                            Some(set) => direct.extend(set.iter().map(|effect| EffectReason {
-                                effect,
-                                at,
-                                source: EffectSource::Declared(g),
-                            })),
+                            Some(set) => {
+                                direct.extend(set.bound(binding).iter().map(|effect| {
+                                    EffectReason {
+                                        effect,
+                                        at,
+                                        source: EffectSource::Declared(g),
+                                    }
+                                }));
+                            }
                             // A body that did not parse requires nothing anyone can know;
                             // it is already an error, and guessing would add a second.
                             None if nodes.get(j).is_some_and(|m| !m.has_body) => {}
@@ -238,10 +266,12 @@ pub(crate) fn analyse(
                         },
                         None => match contract(g) {
                             Some(Some(set)) => {
-                                direct.extend(set.iter().map(|effect| EffectReason {
-                                    effect,
-                                    at,
-                                    source: EffectSource::Declared(g),
+                                direct.extend(set.bound(binding).iter().map(|effect| {
+                                    EffectReason {
+                                        effect,
+                                        at,
+                                        source: EffectSource::Declared(g),
+                                    }
                                 }));
                             }
                             // Imported and undeclared, or not found at all: every effect
@@ -362,7 +392,8 @@ pub(crate) fn analyse(
         }
         errors.push(d.help(format!(
             "a function value's type carries its effects, and an undeclared function's are \
-             taken to be none: declare `! {missing}` on {}",
+             taken to be none: declare `! {}` on {}",
+            set_text(missing, "*"),
             node.label
         )));
     }
@@ -473,18 +504,20 @@ fn undeclared(
     res: &Resolution,
 ) -> Diagnostic {
     let name = &node.label;
+    let param = &node.param;
     let listed = missing
         .iter()
-        .map(|e| format!("`{e}`"))
+        .map(|e| format!("`{}`", effect_text(e, param)))
         .collect::<Vec<_>>()
         .join(" and ");
     let first = missing.iter().next().unwrap_or(Effect::Io);
     let reason = why.iter().find(|r| r.effect == first).copied();
     let at = reason.map_or(node.name_span, |r| r.at);
+    let shown = set_text(declared, param);
     let mut d = Diagnostic::error(
         codes::UNDECLARED_EFFECT,
         at,
-        format!("{name} declares `! {declared}`, but its body requires {listed}"),
+        format!("{name} declares `! {shown}`, but its body requires {listed}"),
     );
     if let Some(r) = reason {
         d.primary.message = describe(r, res);
@@ -508,10 +541,10 @@ fn undeclared(
             hop = next;
         }
     }
-    let wider = declared.union(missing);
+    let wider = set_text(declared.union(missing), param);
     let d = match node.written {
         Some(written) => d
-            .secondary(written, format!("declared `! {declared}` here"))
+            .secondary(written, format!("declared `! {shown}` here"))
             .fix_with_review(
                 written,
                 format!("! {wider}"),
@@ -536,6 +569,24 @@ fn undeclared(
         "a declared effect set is a contract: the body may require no effect outside it. \
              Declare the effect, or stop calling what requires it",
     )
+}
+
+/// An effect as source writes it: the effect parameter by its declared name (N51).
+fn effect_text(e: Effect, param: &str) -> String {
+    if e == Effect::Param {
+        param.to_owned()
+    } else {
+        e.name().to_owned()
+    }
+}
+
+/// A set as source writes it, `{}` or `{ io, E }`.
+fn set_text(set: EffectSet, param: &str) -> String {
+    if set.is_empty() {
+        return "{}".to_owned();
+    }
+    let names: Vec<String> = set.iter().map(|e| effect_text(e, param)).collect();
+    format!("{{ {} }}", names.join(", "))
 }
 
 /// One hop of a witness, in words.
@@ -647,6 +698,37 @@ fn authority(
                 reported = reported.with(kind);
                 errors.push(missing_authority(node, kind, site.span, why, res));
             }
+        }
+    }
+    // A value of an undeclared function is made with the authority its type's effects need,
+    // as a call to it would be (N51): calling a value needs none, so this is the one place
+    // declared code could otherwise reach the bridge.
+    for value in res.fn_values() {
+        if value.within != Some(node.id) {
+            continue;
+        }
+        let undeclared = res
+            .function(value.function)
+            .is_some_and(|d| d.declared_effects.is_none() && d.foreign.is_none());
+        if !undeclared {
+            continue;
+        }
+        let local = res
+            .function(value.function)
+            .is_some_and(|d| d.module == module);
+        let required = CapabilitySet::for_effects(value.assumed);
+        for kind in required.without(value.held).without(reported).iter() {
+            reported = reported.with(kind);
+            errors.push(missing_authority(
+                node,
+                kind,
+                value.at,
+                Needs::Ambient {
+                    callee: value.function,
+                    local,
+                },
+                res,
+            ));
         }
     }
 }

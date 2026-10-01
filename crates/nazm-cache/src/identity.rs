@@ -153,7 +153,12 @@ use crate::digest::{self, Framed};
 /// { … }` an expression, a named function a value, and a call through a binding of function
 /// type an indirect call. A program naming a function without calling it moved from refused
 /// (`N0301`) to accepted; two codes appeared (`N0386`, `N0387`).
-pub const SEMANTIC_EPOCH: u32 = 13;
+/// `14` — N51, 2026-10-02. Effect parameters: `effects E` in a function's brackets and its
+/// name in effect sets became accepted (`N0388`, `N0389`); a closure that captures a capability
+/// moved from refused (`N0386`) to accepted, holding it; and making a value of an undeclared
+/// function without the authority its type's effects need moved from accepted to refused
+/// (`N0369`). A cached check from epoch 13 is a check of a different language.
+pub const SEMANTIC_EPOCH: u32 = 14;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -173,6 +178,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CAPABILITY_CONSTRUCTED",
     "CAPTURE_REFUSED",
     "CONDITION_NOT_BOOL",
+    "CONFLICTING_EFFECT_ARGUMENT",
     "CONFLICTING_TYPE_ARGUMENTS",
     "DUPLICATE_EFFECT",
     "DUPLICATE_FIELD",
@@ -181,6 +187,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "DUPLICATE_TYPE",
     "DUPLICATE_TYPE_PARAMETER",
     "DUPLICATE_VARIANT",
+    "EFFECT_PARAMETER",
     "EMPTY_ENUM",
     "FOREIGN_ABI",
     "FOREIGN_CONFLICT",

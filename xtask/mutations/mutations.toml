@@ -7488,8 +7488,8 @@ killers = [{ package = "nazm-sema", lib = true, name = "effect::tests::union_wit
 name = "n36-a-set-is-iterated-backwards"
 why = "a set is iterated against id order, so it is shown, persisted and compared in a spelling that is not canonical"
 file = "crates/nazm-sema/src/effect.rs"
-find = "        Effect::ALL.into_iter().filter(move |e| self.contains(*e))"
-replace = "        Effect::ALL.into_iter().rev().filter(move |e| self.contains(*e))"
+find = "        Effect::ALL\n            .into_iter()\n            .chain([Effect::Param])"
+replace = "        Effect::ALL\n            .into_iter()\n            .rev()\n            .chain([Effect::Param])"
 killers = [{ package = "nazm-sema", lib = true, name = "effect::tests::a_set_is_the_same_whatever_order_or_repetition_built_it" }]
 
 [[mutation]]
@@ -7543,8 +7543,8 @@ killers = [{ package = "nazm-core", test = "effects", name = "every_outside_worl
 name = "n36-an-unknown-effect-is-io"
 why = "a name that is not an effect is read as `io` without a word, so a misspelling becomes a contract"
 file = "crates/nazm-core/src/effects.rs"
-find = "        match Effect::by_name(name) {"
-replace = "        match Effect::by_name(name).or(Some(Effect::Io)) {"
+find = "        match effect {"
+replace = "        match effect.or(Some(Effect::Io)) {"
 killers = [{ package = "nazm-core", test = "effects", name = "an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade" }]
 
 [[mutation]]
@@ -7588,8 +7588,8 @@ killers = [{ package = "nazm-iface", test = "persistence", name = "a_declared_se
 name = "n36-the-reader-drops-effects"
 why = "a persisted declared set is not read back, so a dependent checked against a stored interface sees no contract"
 file = "crates/nazm-iface/src/wire.rs"
-find = "                effects: e.effects.as_ref().map(|names| {"
-replace = "                effects: e.effects.as_ref().filter(|_| false).map(|names| {"
+find = "                effects: e\n                    .effects\n                    .as_ref()\n                    .map(|names|"
+replace = "                effects: e\n                    .effects\n                    .as_ref()\n                    .filter(|_| false)\n                    .map(|names|"
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_declared_set_is_read_back_exactly_and_a_malformed_one_is_refused" }]
 
 [[mutation]]
@@ -8042,10 +8042,11 @@ name = "n38-the-epoch-stays"
 why = """`SEMANTIC_EPOCH` is not bumped for a checker that now refuses a restricted flow, so an N37 entry is filed where an N38 one is looked for
 Repointed by N42, which moved the epoch to 11 for foreign declarations: an N41 entry must not be filed where an N42 one is looked for.
 Repointed by N49, which moved it to 12 for string escapes: an entry that read a backslash literally must not be reused.
-Repointed by N50, which moved it to 13 for function values: an entry that refused a function named as a value must not be reused."""
+Repointed by N50, which moved it to 13 for function values: an entry that refused a function named as a value must not be reused.
+Repointed by N51, which moved it to 14 for effect parameters: an entry that refused a captured capability must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 13;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 12;"
+find = "pub const SEMANTIC_EPOCH: u32 = 14;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 13;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -9558,17 +9559,9 @@ killers = [{ package = "nazm-cli", test = "usability", name = "the_formatter_glu
 name = "n50-a-mutable-binding-may-be-captured"
 why = "a closure copies a `let mut` binding, which then silently stops tracking it"
 file = "crates/nazm-core/src/check.rs"
-find = "        if b.mutable || matches!(b.ty, Type::Cap(_)) {"
-replace = "        if matches!(b.ty, Type::Cap(_)) {"
-killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_may_not_capture_a_mutable_binding_or_a_capability" }]
-
-[[mutation]]
-name = "n50-a-capability-may-be-captured"
-why = "a closure captures authority its type does not show"
-file = "crates/nazm-core/src/check.rs"
-find = "        if b.mutable || matches!(b.ty, Type::Cap(_)) {"
-replace = "        if b.mutable {"
-killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_may_not_capture_a_mutable_binding_or_a_capability" }]
+find = "        if b.mutable {\n            self.errors.push("
+replace = "        if false {\n            self.errors.push("
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_may_not_capture_a_mutable_binding" }]
 
 [[mutation]]
 name = "n50-a-generic-function-is-a-value"
@@ -9603,14 +9596,6 @@ replace = """
         };
         if false {"""
 killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic_nazm_function_is_a_value" }]
-
-[[mutation]]
-name = "n50-a-closure-holds-its-makers-authority"
-why = "the authority a closure holds is every capability its maker can name, not its own parameters'"
-file = "crates/nazm-core/src/check.rs"
-find = "        let start = self.closures.last().map_or(0, |c| c.boundary);"
-replace = "        let start = 0;"
-killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_carries_its_effects_and_takes_its_authority_as_parameters" }]
 
 [[mutation]]
 name = "n50-a-closure-copies-from-its-own-slots"
@@ -9817,3 +9802,137 @@ file = "crates/nazm-core/src/check.rs"
 find = "                    .chain(std::iter::once((fs.ret, asig.ret)))"
 replace = "                    .chain(std::iter::empty())"
 killers = [{ package = "nazm-cli", test = "closures", name = "map_filter_and_fold_work_over_records_and_enums" }]
+
+# --- N51: effect parameters, captured authority, the bounded bridge ------------------------
+
+[[mutation]]
+name = "n51-an-effect-parameter-is-never-bound"
+why = "a call binds nothing to its callee's effect parameter, so a caller is never held to what the function it passes does"
+file = "crates/nazm-core/src/check.rs"
+find = "                        None => *bound = Some((binding, arg)),"
+replace = "                        None => {}"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "a_caller_is_held_to_what_the_function_it_passes_does" }]
+
+[[mutation]]
+name = "n51-a-second-binding-is-not-compared"
+why = "one effect parameter bound to two different sets in one call is accepted, as the first"
+file = "crates/nazm-core/src/check.rs"
+find = """
+                        Some((earlier, from)) => {
+                            return Err(Unify::EffectConflict { earlier, from });
+                        }"""
+replace = """
+                        Some(_) => {}"""
+killers = [{ package = "nazm-cli", test = "effect_params", name = "one_parameter_is_one_set_of_effects" }]
+
+[[mutation]]
+name = "n51-a-parameters-named-effects-are-no-floor"
+why = "an argument lacking the effects a parameter names beside its effect parameter fits anyway"
+file = "crates/nazm-core/src/check.rs"
+find = "                    if !named.is_within(asig.effects)"
+replace = "                    if false"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "one_parameter_is_one_set_of_effects" }]
+
+[[mutation]]
+name = "n51-a-result-type-keeps-the-callees-parameter"
+why = "a function type in a call's result still names the callee's effect parameter, so the caller performs a parameter that is not its own"
+file = "crates/nazm-core/src/check.rs"
+find = "                .bind_effects(ret, owner, binding, caller);\n            instance.ret = Some(ret);"
+replace = "                .bind_effects(ret, ParamOwner::Builtin(Intrinsic::StrLen), binding, caller);\n            instance.ret = Some(ret);"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "a_result_type_carries_the_binding" }]
+
+[[mutation]]
+name = "n51-a-closure-holds-no-captured-authority"
+why = "a closure holds only its own capability parameters, so a captured capability authorises nothing"
+file = "crates/nazm-core/src/check.rs"
+find = "        self.scopes.held_from(0)"
+replace = "        self.scopes.held_from(self.closures.last().map_or(0, |c| c.boundary))"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "a_closure_holds_the_capabilities_it_captures" }]
+
+[[mutation]]
+name = "n51-main-may-have-an-effect-parameter"
+why = "the process entry declares an effect parameter nothing can bind"
+file = "crates/nazm-core/src/check.rs"
+find = "        .filter(|d| polymorphic(d.declared_effects))"
+replace = "        .filter(|_| false)"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_parameter_is_allowed_only_where_it_means_something" }]
+
+[[mutation]]
+name = "n51-a-second-effect-parameter-is-allowed"
+why = "a function declares two effect parameters, and every set it writes may name either"
+file = "crates/nazm-core/src/check.rs"
+find = "    for extra in f.effect_params.iter().skip(1) {"
+replace = "    for extra in f.effect_params.iter().skip(99) {"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_parameter_is_allowed_only_where_it_means_something" }]
+
+[[mutation]]
+name = "n51-an-effect-parameter-hides-in-a-type-argument"
+why = "an effect parameter named inside a Vec's element makes types that differ only in effects"
+file = "crates/nazm-core/src/check.rs"
+find = "            .any(|a| res.types().names_effect_param(*a, owner))"
+replace = "            .any(|_| false)"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_parameter_is_allowed_only_where_it_means_something" }]
+
+[[mutation]]
+name = "n51-a-call-to-an-imported-polymorphic-function-performs-its-unbound-set"
+why = "a call to another module's effect-polymorphic function performs only its named effects, so the wrapper hides what its function does"
+file = "crates/nazm-core/src/effects.rs"
+find = "                            Some(Some(set)) => {\n                                direct.extend(set.bound(binding).iter().map(|effect| {"
+replace = "                            Some(Some(set)) => {\n                                direct.extend(set.named().iter().map(|effect| {"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "a_caller_is_held_to_what_the_function_it_passes_does" }]
+
+[[mutation]]
+name = "n51-a-call-to-a-local-polymorphic-function-performs-its-unbound-set"
+why = "a call to this module's effect-polymorphic function performs only its named effects"
+file = "crates/nazm-core/src/effects.rs"
+find = "                            Some(set) => {\n                                direct.extend(set.bound(binding).iter().map(|effect| {"
+replace = "                            Some(set) => {\n                                direct.extend(set.named().iter().map(|effect| {"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "a_caller_is_held_to_what_the_function_it_passes_does" }]
+
+[[mutation]]
+name = "n51-a-value-of-an-undeclared-import-needs-no-authority"
+why = "declared code makes a value of an undeclared import without the authority its effects need, and reaches the bridge through it"
+file = "crates/nazm-core/src/effects.rs"
+find = "        let required = CapabilitySet::for_effects(value.assumed);"
+replace = "        let required = CapabilitySet::EMPTY;"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "a_value_of_an_undeclared_import_needs_the_authority_a_call_would" }]
+
+[[mutation]]
+name = "n51-the-interface-cannot-read-the-parameter"
+why = "a published `*` is no effect to a reader, so every interface of an effect-polymorphic function is refused"
+file = "crates/nazm-iface/src/wire.rs"
+find = "    if name == nazm_sema::Effect::Param.name() {"
+replace = "    if false {"
+killers = [{ package = "nazm-iface", test = "persistence", name = "an_effect_parameter_is_written_as_a_star_and_read_back_as_the_function_s_own" }]
+
+[[mutation]]
+name = "n51-a-published-parameter-has-no-owner"
+why = "a function type read from an interface names an effect parameter of no function, so no call can bind it"
+file = "crates/nazm-iface/src/wire.rs"
+find = "                row: Some(owner),"
+replace = "                row: None,"
+killers = [{ package = "nazm-iface", test = "persistence", name = "an_effect_parameter_is_written_as_a_star_and_read_back_as_the_function_s_own" }]
+
+[[mutation]]
+name = "n51-effects-is-never-a-word"
+why = "the parser reads `effects E` as two type parameters' worth of tokens, so no effect parameter can be declared"
+file = "crates/nazm-syntax/src/parser.rs"
+find = """                    if w == "effects" && matches!(self.peek(), TokenKind::Ident(_)) =>"""
+replace = """                    if false && w == "effects" && matches!(self.peek(), TokenKind::Ident(_)) =>"""
+killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_polymorphic_wrapper_does_what_its_function_does_everywhere" }]
+
+[[mutation]]
+name = "n51-core-ir-compares-effects-across-a-call"
+why = "Core IR's verifier requires a callee's `fn ! { E }` parameter to be the caller's `fn ! { io }` exactly, refusing every effect-polymorphic call"
+file = "crates/nazm-cir/src/verify.rs"
+find = "            if !a.ty.is_none_or(|t| self.res.types().same_shape(t, p.ty)) {"
+replace = "            if !a.ty.is_none_or(|t| t == p.ty) {"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "a_function_may_forward_its_own_effect_parameter" }]
+
+[[mutation]]
+name = "n51-mir-compares-effects-across-a-call"
+why = "MIR's verifier requires argument types equal including effects, refusing every native build of an effect-polymorphic call"
+file = "crates/nazm-mir/src/verify.rs"
+find = "        got.is_some_and(|g| self.program.types.same_shape(g, want))"
+replace = "        got == Some(want)"
+killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_polymorphic_wrapper_does_what_its_function_does_everywhere" }]

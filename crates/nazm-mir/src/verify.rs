@@ -75,6 +75,11 @@ impl Ctx<'_> {
         self.program.types.managed(t)
     }
 
+    /// Whether `got` is `want` up to effects (N51), for a value crossing a call.
+    fn fits(&self, got: Option<Type>, want: Type) -> bool {
+        got.is_some_and(|g| self.program.types.same_shape(g, want))
+    }
+
     fn block_exists(&self, b: BlockId) -> bool {
         b.index() < self.f.blocks.len()
     }
@@ -282,7 +287,7 @@ fn arguments(cx: &Ctx<'_>, callee: &Function, args: &[Operand]) -> Option<String
         ));
     }
     for (i, (a, p)) in args.iter().zip(&params).enumerate() {
-        if cx.operand(a) != Some(*p) {
+        if !cx.fits(cx.operand(a), *p) {
             return Some(format!(
                 "passes `{}` an argument {i} of the wrong type",
                 callee.name
@@ -342,7 +347,8 @@ fn rvalue(cx: &Ctx<'_>, value: &Rvalue, want: Type, arm: Option<(LocalId, u32)>)
                 if let Some(e) = arguments(cx, g, args) {
                     return Some(e);
                 }
-                (g.ret != want).then(|| format!("a call to `{}` of the wrong result type", g.name))
+                (!cx.fits(Some(g.ret), want))
+                    .then(|| format!("a call to `{}` of the wrong result type", g.name))
             }
         },
         Rvalue::Primitive { op, elem, args } => primitive(cx, *op, *elem, args, want),
@@ -357,11 +363,11 @@ fn rvalue(cx: &Ctx<'_>, value: &Rvalue, want: Type, arm: Option<(LocalId, u32)>)
                 || args
                     .iter()
                     .zip(&sig.params)
-                    .any(|(a, p)| cx.operand(a) != Some(*p))
+                    .any(|(a, p)| !cx.fits(cx.operand(a), *p))
             {
                 return Some("a call through a function value with the wrong arguments".to_owned());
             }
-            (sig.ret != want)
+            (!cx.fits(Some(sig.ret), want))
                 .then(|| "a call through a function value of the wrong result type".to_owned())
         }
         Rvalue::Closure { func, captures } => {
@@ -390,8 +396,14 @@ fn rvalue(cx: &Ctx<'_>, value: &Rvalue, want: Type, arm: Option<(LocalId, u32)>)
                 return Some("a closure whose captures are not what its code reads".to_owned());
             }
             let params: Vec<Type> = g.param_types().skip(1).collect();
-            (params != sig.params || g.ret != sig.ret || g.param_types().next() != Some(want))
-                .then(|| format!("a closure of `{}`, whose signature is not its type", g.name))
+            let same = params.len() == sig.params.len()
+                && params
+                    .iter()
+                    .zip(&sig.params)
+                    .all(|(a, b)| types.same_shape(*a, *b))
+                && types.same_shape(g.ret, sig.ret)
+                && cx.fits(g.param_types().next(), want);
+            (!same).then(|| format!("a closure of `{}`, whose signature is not its type", g.name))
         }
         Rvalue::Capture { env, index } => {
             if *env != LocalId(0) || cx.f.params == 0 {

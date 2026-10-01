@@ -314,6 +314,16 @@ fn persist(t: Type, types: &UserTypes, graph: &ModuleGraph) -> Option<Persistent
     }
 }
 
+/// The effect a persisted name means: a built-in's word, or `*` for the effect parameter
+/// of the function whose signature it is in (N51).
+fn effect_named(name: &str) -> Option<nazm_sema::Effect> {
+    if name == nazm_sema::Effect::Param.name() {
+        Some(nazm_sema::Effect::Param)
+    } else {
+        nazm_sema::Effect::by_name(name)
+    }
+}
+
 /// A definition's durable identity, as a string.
 fn definition_key(node: TypeNode, types: &UserTypes, graph: &ModuleGraph) -> Option<String> {
     match node {
@@ -502,7 +512,7 @@ fn validate_type(
             // Known effects, each once, in effect-id order: the one spelling a set has.
             let mut last: Option<u32> = None;
             for e in effects {
-                let Some(effect) = nazm_sema::Effect::by_name(e) else {
+                let Some(effect) = effect_named(e) else {
                     return Err(ReadError::Malformed(format!(
                         "`{e}` in a function type in {owner} is not an effect"
                     )));
@@ -826,7 +836,7 @@ impl PersistentUnitInterface {
             if let Some(names) = &e.effects {
                 let mut last: Option<u8> = None;
                 for n in names {
-                    let effect = nazm_sema::Effect::by_name(n).ok_or_else(|| {
+                    let effect = effect_named(n).ok_or_else(|| {
                         ReadError::UnknownEffect(format!("`{n}` in the effects of `{}`", e.def))
                     })?;
                     if last.is_some_and(|l| l >= effect.id()) {
@@ -1050,13 +1060,11 @@ impl PersistentUnitInterface {
                 name_span: Span::synthetic(),
                 def,
                 type_params: placeholder(e.generics),
-                // Validated on read: every name is an effect.
-                effects: e.effects.as_ref().map(|names| {
-                    names
-                        .iter()
-                        .filter_map(|n| nazm_sema::Effect::by_name(n))
-                        .collect()
-                }),
+                // Validated on read: every name is an effect, or `*` for the parameter.
+                effects: e
+                    .effects
+                    .as_ref()
+                    .map(|names| names.iter().filter_map(|n| effect_named(n)).collect()),
                 foreign: e.foreign.clone(),
             });
             for &index in &e.requires_equality {
@@ -1199,12 +1207,14 @@ fn read_type(
             let ret = read_type(ret, ids, types, owner);
             let effects = effects
                 .iter()
-                .filter_map(|e| nazm_sema::Effect::by_name(e))
+                .filter_map(|e| effect_named(e))
                 .fold(nazm_sema::EffectSet::EMPTY, nazm_sema::EffectSet::with);
+            // `*` in a published signature is the publishing function's parameter (N51).
             types.fn_of(nazm_sema::FnSignature {
                 params,
                 ret,
                 effects,
+                row: Some(owner),
             })
         }
         PersistentType::Def { def, args } => {

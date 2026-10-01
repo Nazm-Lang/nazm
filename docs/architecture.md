@@ -5588,7 +5588,11 @@ the same rule. So `vec_map(xs, f)` inside `run[effects F](f: fn(Int) -> Int ! { 
 
 **Capabilities a closure captures.** A closure may now capture a capability (`N0386` is narrowed to
 `let mut`): the capability is copied into the closure, as any value is, and the authority the
-closure's body holds is its own capability parameters **and** its captured capabilities. The
+closure's body holds is its own capability parameters **and** its captured capabilities.
+*(Amended with the code: "captured" is lexical — a closure holds the capabilities visible where
+it is written, as a block does, whether or not its body names them. A capability has no run-time
+representation to copy, so the two readings differ only in which programs a reader must study,
+and the lexical one is the rule every other body already follows.)* The
 closure's type still shows what it does — its declared effects — so a function value's type is
 an honest statement of what calling it may do, and the value carries the authority for it.
 Copying a capability confers nothing new: it is a token that already exists. **Delegation** is
@@ -5634,6 +5638,12 @@ parameter's. Substitution replaces it as a type parameter is replaced; the inter
 `"*"` in an effect list, a value a `/7` reader refuses as an unknown effect rather than misreads, so
 the schema does not move. Effects analysis treats it as one more effect in the fixed point — what a
 body requires may include it — and a call's contribution is the callee's set with it bound.
+Below the checker effects mean nothing and a binding makes no instance, so Core IR's and MIR's
+verifiers compare the types crossing a call **up to effects** (`same_shape`): the callee's
+parameter `fn(…) ! { E }` takes the caller's `fn(…) ! { io }`. A call's result type is the bound
+one, recorded on the call. That is also why the parameter may not be named inside a type's
+arguments (`N0388`): `Vec[fn() ! { E }]` and `Vec[fn() ! { io }]` would be two `Vec` types, with
+two element tables, for one value.
 
 **The standard library** takes the parameter: `vec_map`, `vec_filter` and `vec_fold` are
 `effects E` over their function argument, so a printing closure is accepted and its caller is held

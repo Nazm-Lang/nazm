@@ -198,6 +198,10 @@ pub struct FnValueUse {
     pub function: FnId,
     pub at: Span,
     pub assumed: crate::EffectSet,
+    /// The function whose body made the value, and the authority held where it did (N51):
+    /// making a value of an undeclared function needs what calling it would.
+    pub within: Option<FnId>,
+    pub held: crate::CapabilitySet,
     /// The value's type: the function's signature, with `assumed` as its effects.
     pub ty: Type,
 }
@@ -396,6 +400,9 @@ pub struct Resolution {
     closures: HashMap<Span, FnId>,
     /// Each named function written as a value, by the name's span (N50).
     fn_values: HashMap<Span, FnValueUse>,
+    /// What each call to a function with an effect parameter bound it to, by the callee's
+    /// span (N51). An effect parameter in a binding is the caller's own.
+    effect_bindings: HashMap<Span, crate::EffectSet>,
     /// What each written type name the checker resolved to something **no program
     /// declared** is (N23), by the span of that name: a built-in type (`Int`, `Str`, the
     /// `Vec` of `Vec[Int]`) or a type parameter — and, for a type parameter, the span its
@@ -829,6 +836,21 @@ impl Resolution {
     /// Record a named function written as a value (N50).
     pub fn record_fn_value(&mut self, value: FnValueUse) {
         self.fn_values.insert(value.at, value);
+    }
+
+    /// Record what a call bound its callee's effect parameter to (N51).
+    pub fn record_effect_binding(&mut self, at: Span, binding: crate::EffectSet) {
+        self.effect_bindings.insert(at, binding);
+    }
+
+    /// What the call at `at` bound its callee's effect parameter to: the empty set where
+    /// nothing did (N51).
+    #[must_use]
+    pub fn effect_binding(&self, at: Span) -> crate::EffectSet {
+        self.effect_bindings
+            .get(&at)
+            .copied()
+            .unwrap_or(crate::EffectSet::EMPTY)
     }
 
     /// The named function a value at `span` is (N50).

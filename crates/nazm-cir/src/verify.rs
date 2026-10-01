@@ -246,8 +246,10 @@ impl Verifier<'_> {
         if g.type_params > 0 || !type_args.is_empty() {
             return;
         }
+        // Up to effects (N51): a callee's effect parameter is bound per call and makes no
+        // instance, so its `fn(…) ! { E }` parameter takes the caller's `fn(…) ! { io }`.
         for (a, p) in args.iter().zip(g.param_locals()) {
-            if !fits(a, p.ty) {
+            if !a.ty.is_none_or(|t| self.res.types().same_shape(t, p.ty)) {
                 self.bad(format!("an argument to `{}` of another type", g.name));
             }
         }

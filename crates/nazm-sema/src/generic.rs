@@ -70,6 +70,8 @@ pub struct Generics {
     settling: bool,
     /// Every type parameter's name, by owner, for messages only.
     names: HashMap<ParamOwner, Vec<String>>,
+    /// Every effect parameter's name, by owner, for messages only (N51).
+    effect_names: HashMap<ParamOwner, String>,
     /// Instances interned in total, against [`INSTANCE_BUDGET`].
     created: usize,
     /// The type parameters whose declaration requires equality — `T` in
@@ -95,8 +97,12 @@ impl UserTypes {
         Type::Vec(id)
     }
 
-    /// `fn(params) -> ret ! {effects}`, interned (N50).
-    pub fn fn_of(&mut self, sig: FnSignature) -> Type {
+    /// `fn(params) -> ret ! {effects}`, interned (N50). A signature whose effects name no
+    /// effect parameter has no `row`, whatever it was given (N51), so one type is one id.
+    pub fn fn_of(&mut self, mut sig: FnSignature) -> Type {
+        if !sig.effects.has_param() {
+            sig.row = None;
+        }
         let g = self.generics_mut();
         if let Some(id) = g.fn_ids.get(&sig) {
             return Type::Fn(*id);
@@ -129,6 +135,97 @@ impl UserTypes {
     #[must_use]
     pub fn vec_count(&self) -> usize {
         self.generics().vecs.len()
+    }
+
+    /// Record a function's effect parameter's name, for messages (N51).
+    pub fn name_effect_param(&mut self, owner: ParamOwner, name: String) {
+        self.generics_mut().effect_names.insert(owner, name);
+    }
+
+    /// An effect parameter's name as written, or `*` where none was recorded.
+    #[must_use]
+    pub fn effect_param_name(&self, owner: Option<ParamOwner>) -> String {
+        owner
+            .and_then(|o| self.generics().effect_names.get(&o).cloned())
+            .unwrap_or_else(|| "*".to_owned())
+    }
+
+    /// `t` with `owner`'s effect parameter, wherever a function type in it names it, bound to
+    /// `binding` (N51). A binding that itself names an effect parameter names `caller`'s:
+    /// the only parameter a binding can carry is the one in scope where the call is.
+    pub fn bind_effects(
+        &mut self,
+        t: Type,
+        owner: ParamOwner,
+        binding: crate::EffectSet,
+        caller: Option<ParamOwner>,
+    ) -> Type {
+        let Type::Fn(f) = t else {
+            return t;
+        };
+        let Some(sig) = self.fn_signature(f).cloned() else {
+            return t;
+        };
+        let params = sig
+            .params
+            .iter()
+            .map(|p| self.bind_effects(*p, owner, binding, caller))
+            .collect();
+        let ret = self.bind_effects(sig.ret, owner, binding, caller);
+        let (effects, row) = if sig.row == Some(owner) {
+            let effects = sig.effects.bound(binding);
+            (effects, binding.has_param().then_some(caller).flatten())
+        } else {
+            (sig.effects, sig.row)
+        };
+        self.fn_of(FnSignature {
+            params,
+            ret,
+            effects,
+            row,
+        })
+    }
+
+    /// Whether a function type in `t` names `owner`'s effect parameter (N51).
+    #[must_use]
+    pub fn names_effect_param(&self, t: Type, owner: ParamOwner) -> bool {
+        let mut work = vec![t];
+        while let Some(t) = work.pop() {
+            if let Type::Fn(f) = t {
+                if let Some(sig) = self.fn_signature(f) {
+                    if sig.row == Some(owner) {
+                        return true;
+                    }
+                    work.extend(sig.params.iter().copied());
+                    work.push(sig.ret);
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether two types are one up to the effects of the function types in them (N51):
+    /// what MIR compares, since effects mean nothing below the checker and an effect
+    /// parameter makes no instance.
+    #[must_use]
+    pub fn same_shape(&self, a: Type, b: Type) -> bool {
+        if a == b {
+            return true;
+        }
+        match (a, b) {
+            (Type::Fn(x), Type::Fn(y)) => match (self.fn_signature(x), self.fn_signature(y)) {
+                (Some(p), Some(q)) => {
+                    p.params.len() == q.params.len()
+                        && p.params
+                            .iter()
+                            .zip(&q.params)
+                            .all(|(a, b)| self.same_shape(*a, *b))
+                        && self.same_shape(p.ret, q.ret)
+                }
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     /// Record the names of one declaration's type parameters, for messages.
@@ -333,6 +430,7 @@ impl UserTypes {
                     params,
                     ret,
                     effects: sig.effects,
+                    row: sig.row,
                 })
             }
             Type::Record(id) => {
@@ -396,6 +494,7 @@ impl UserTypes {
                     params: params?,
                     ret: self.substituted(sig.ret, owner, args)?,
                     effects: sig.effects,
+                    row: sig.row,
                 };
                 self.generics().fn_ids.get(&want).map(|id| Type::Fn(*id))
             }

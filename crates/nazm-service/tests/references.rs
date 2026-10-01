@@ -1012,10 +1012,17 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                             .into_iter()
                             .filter(|n| n.kind() == K::TypeParam)
                             .filter_map(|n| {
-                                n.child_leaves()
+                                // `effects E` (N51): the parameter is the name after the word.
+                                let idents: Vec<_> = n
+                                    .child_leaves()
                                     .into_iter()
-                                    .find(|l| l.kind == K::Ident)
-                                    .map(|l| l.text.to_owned())
+                                    .filter(|l| l.kind == K::Ident)
+                                    .collect();
+                                match idents.as_slice() {
+                                    [w, e, ..] if w.text == "effects" => Some(e.text.to_owned()),
+                                    [first, ..] => Some(first.text.to_owned()),
+                                    [] => None,
+                                }
                             })
                             .collect();
                         params.push((item.span(), names));
@@ -1042,9 +1049,11 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                                     || leaf.text == "Vec"
                                     || a_type_parameter(span, leaf.text)))
                             || (node.kind() == K::PatternField && leaf.text == "_")
-                            // An effect name is the compiler's, never a program's entity (N36).
+                            // An effect name is the compiler's, never a program's entity (N36);
+                            // an effect parameter is its function's, as a type parameter is (N51).
                             || (node.kind() == K::EffectSet
-                                && nazm_core::sema::Effect::by_name(leaf.text).is_some())
+                                && (nazm_core::sema::Effect::by_name(leaf.text).is_some()
+                                    || a_type_parameter(span, leaf.text)))
                             || matches!(a.resolution.callee(span), Some(Callee::Builtin(_)));
                         if !explained {
                             unexplained.push(format!(

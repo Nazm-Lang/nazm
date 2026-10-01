@@ -87,6 +87,8 @@ impl CapabilityKind {
             Effect::Io => CapabilitySet::of(Self::Io),
             Effect::Spawn => CapabilitySet::of(Self::Spawn),
             Effect::Foreign => CapabilitySet::of(Self::Foreign),
+            // What a bound parameter performs is authorised by the value that performs it.
+            Effect::Param => CapabilitySet::EMPTY,
         }
     }
 

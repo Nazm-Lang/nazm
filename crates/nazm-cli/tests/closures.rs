@@ -468,17 +468,18 @@ fn a_function_type_crosses_a_module_boundary_and_its_interface() {
 // --- refusals ---------------------------------------------------------------------------
 
 #[test]
-fn a_closure_may_not_capture_a_mutable_binding_or_a_capability() {
+fn a_closure_may_not_capture_a_mutable_binding() {
     assert_eq!(
         codes("fn main() -> Int { let mut n = 1; let f = fn(x: Int) -> Int { x + n }; f(1) }\n"),
         ["N0386"]
     );
+    // A capability may be captured since N51 (`effect_params.rs`).
     assert_eq!(
         codes(
             "fn use_it(c: IoCap) -> Int ! {} { 0 }\n\
              fn main(io: IoCap) -> Int ! { io } { let f = fn(x: Int) -> Int { use_it(io) }; f(1) }\n"
         ),
-        ["N0386"]
+        Vec::<String>::new()
     );
     // Assigning a captured binding inside the closure is assigning an immutable one.
     assert_eq!(
@@ -531,11 +532,12 @@ fn a_function_value_carries_its_effects_and_takes_its_authority_as_parameters() 
         ),
         ["N0366"]
     );
-    // Its authority is its own parameters'.
+    // Its authority is what it holds: since N51 a capability visible where it is written
+    // too, so with none visible it holds none.
     assert_eq!(
         codes(
-            "fn main(io: IoCap) -> Int ! { io } \
-             { let f = fn(x: Int) -> Int ! { io } { print(\"a\"); x }; f(1) }\n"
+            "fn helper() -> Int ! { io } { let f = fn(x: Int) -> Int ! { io } { print(\"a\"); x }; f(1) }\n\
+             fn main() -> Int { 0 }\n"
         ),
         ["N0369"]
     );
