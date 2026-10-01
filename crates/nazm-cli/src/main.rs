@@ -1043,6 +1043,14 @@ fn main() -> ExitCode {
         }
         eprintln!("{line}");
     }
+    // The scheduler's counters (N54), on their own variable, as a compiled program has them.
+    if std::env::var_os(nazm_lir::runtime::SCHED_VARIABLE).is_some() {
+        let c = nazm_core::eval::sched_counts();
+        eprintln!(
+            "nazm-sched: spawned={} joined={} selects={} timeouts={}",
+            c.spawned, c.joined, c.selects, c.timeouts
+        );
+    }
 
     match outcome {
         Outcome::Value(v) => report_ok(&v.to_string(), None),

@@ -90,6 +90,9 @@ impl Ctx<'_> {
             Shape::T => elem,
             Shape::VecT => elem.and_then(|e| self.program.types.vec_of(e)),
             Shape::ChanT => elem.and_then(|e| self.program.types.chan_of(e)),
+            Shape::ChansT => elem
+                .and_then(|e| self.program.types.chan_of(e))
+                .and_then(|c| self.program.types.vec_of(c)),
             other => other.monomorphic(),
         }
     }
@@ -511,7 +514,7 @@ fn primitive(
         .params()
         .iter()
         .chain(std::iter::once(&op.ret()))
-        .any(|s| matches!(s, Shape::T | Shape::VecT | Shape::ChanT));
+        .any(|s| matches!(s, Shape::T | Shape::VecT | Shape::ChanT | Shape::ChansT));
     if generic != elem.is_some() {
         return Some(format!("`{}` with the wrong element type", op.name()));
     }

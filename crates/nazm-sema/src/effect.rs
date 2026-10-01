@@ -113,6 +113,11 @@ impl Effect {
             | Intrinsic::StrFromByte
             // Clearing an origin does nothing outside the program (N52).
             | Intrinsic::StrVouch
+            // Reading a clock changes nothing outside the program; its authority is a
+            // `TimeCap`, held (N54). A select waits as a receive does.
+            | Intrinsic::TimeNowMs
+            | Intrinsic::ChanSelectOf
+            | Intrinsic::ChanSelectUntil
             | Intrinsic::IntsNew
             | Intrinsic::IntsLen
             | Intrinsic::IntsGet

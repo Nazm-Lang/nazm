@@ -6,7 +6,9 @@ use std::fmt::Write as _;
 
 use super::core::runtime_declarations;
 use super::os::declarations;
-use crate::{escape, preamble, Needs, MEMORY_FORMAT, MEMORY_VARIABLE};
+use crate::{
+    escape, preamble, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, SCHED_FORMAT, SCHED_VARIABLE,
+};
 
 /// Emit the platform entry point: one per executable, and the only thing that prints.
 ///
@@ -60,6 +62,20 @@ pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
         escape(MEMORY_FORMAT)
     );
     let _ = writeln!(out, "@.membuf = private global [512 x i8] zeroinitializer");
+    // The scheduler's counters (N54), on their own variable: asking for one report is not
+    // asking for the other.
+    let _ = writeln!(
+        out,
+        "@.schedvar = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+        SCHED_VARIABLE.len() + 1,
+        escape(SCHED_VARIABLE)
+    );
+    let _ = writeln!(
+        out,
+        "@.schedfmt = private unnamed_addr constant [{} x i8] c\"{}\\0A\\00\"",
+        SCHED_FORMAT.len() + 2,
+        escape(SCHED_FORMAT)
+    );
     out.push('\n');
 
     let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
@@ -114,6 +130,31 @@ pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
         );
         let _ = writeln!(out, "  br label %nz.checked");
         let _ = writeln!(out, "nz.checked:");
+        let _ = writeln!(out, "  %swant = call ptr @getenv(ptr @.schedvar)");
+        let _ = writeln!(out, "  %squiet = icmp eq ptr %swant, null");
+        let _ = writeln!(
+            out,
+            "  br i1 %squiet, label %nz.scheduled, label %nz.schedreport"
+        );
+        let _ = writeln!(out, "nz.schedreport:");
+        let mut counts = Vec::new();
+        for c in ["spawned", "joined", "selects", "timeouts"] {
+            let _ = writeln!(out, "  %sch{c} = load i64, ptr @nz.sched_{c}");
+            counts.push(format!("i64 %sch{c}"));
+        }
+        let _ = writeln!(
+            out,
+            "  %schout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 512, \
+             ptr @.schedfmt, {})",
+            counts.join(", ")
+        );
+        let _ = writeln!(out, "  %schlen = sext i32 %schout to i64");
+        let _ = writeln!(
+            out,
+            "  %schwrote = call i64 @write(i32 2, ptr @.membuf, i64 %schlen)"
+        );
+        let _ = writeln!(out, "  br label %nz.scheduled");
+        let _ = writeln!(out, "nz.scheduled:");
     }
     // The single place a diagnostic is written. By the time control is here every scope
     // `main` opened has been joined, so nothing is still running when the process ends —

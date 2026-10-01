@@ -1910,6 +1910,28 @@ sequence loop is where the backends differ most: LLVM keeps the loop in register
 holds every local in a stack slot (§7.43), reloads it each iteration. No program's code changed:
 nothing in the tree imports a standard module.
 
+### Select and the event count — N54, measured 2026-10-02
+
+N54 added a process-wide event count that every typed send and close advances (§7.56), so what is
+measured is what that costs a channel and what a select costs over a receive. Host (Apple M1 Pro,
+Apple clang 21.0.0), LLVM `-O2`, three runs of one program at `4ce95f3`+N54, with a contained
+mutation session running beside it, so the spread is wide and the figures are an order of
+magnitude, not a benchmark:
+
+| | three runs |
+| --- | --- |
+| 100,000 typed send-then-receive pairs on one task, a 1-slot `Chan[Int]` | 20–30 ns a pair |
+| 100,000 round trips between two tasks through two `Chan[Int]`, received with `chan_recv_of` | 6.7–7.4 µs each |
+| the same, the worker waiting in `chan_select_of` over one channel | 6.4–7.1 µs each |
+
+- **The event count costs a send one atomic increment and one load** when nobody selects —
+  a single-task pair stays in tens of nanoseconds.
+- **A select costs no more than a receive** at one channel: both wait on a condition variable and
+  are woken by a broadcast; the wake-up dominates.
+- The round trip is slower than N44's `Int`-channel 4.6 µs (best of 5, quiet host); this run did
+  not repeat N44's conditions, so no regression is claimed or excluded. What a pool would change —
+  the thread wake-up behind every figure here — is §7.56's designed and unbuilt part.
+
 ### Tasks and channels — N44, measured 2026-10-01
 
 N44 kept the scheduler — one OS thread per task, joined by its scope — and wrote its contract

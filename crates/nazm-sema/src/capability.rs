@@ -48,11 +48,20 @@ pub enum CapabilityKind {
     /// Authority to declassify (N52): what `str_vouch` needs. No effect is authorised by it —
     /// clearing an origin does nothing outside the program.
     Vouch,
+    /// Authority to read a clock (N54): what `time_now_ms` and a select's deadline need. No
+    /// effect is authorised by it; a profile refuses it to keep a program reproducible.
+    Time,
 }
 
 impl CapabilityKind {
     /// Every kind, in id order.
-    pub const ALL: [Self; 4] = [Self::Io, Self::Spawn, Self::Foreign, Self::Vouch];
+    pub const ALL: [Self; 5] = [
+        Self::Io,
+        Self::Spawn,
+        Self::Foreign,
+        Self::Vouch,
+        Self::Time,
+    ];
 
     /// The kind's stable identity. Never reused and never reordered.
     #[must_use]
@@ -62,6 +71,7 @@ impl CapabilityKind {
             Self::Spawn => 1,
             Self::Foreign => 2,
             Self::Vouch => 3,
+            Self::Time => 4,
         }
     }
 
@@ -73,6 +83,7 @@ impl CapabilityKind {
             Self::Spawn => "SpawnCap",
             Self::Foreign => "ForeignCap",
             Self::Vouch => "VouchCap",
+            Self::Time => "TimeCap",
         }
     }
 
@@ -119,6 +130,8 @@ impl CapabilityKind {
             | Intrinsic::ExitWith => CapabilitySet::of(Self::Io),
             // Declassification is authority of its own (N52).
             Intrinsic::StrVouch => CapabilitySet::of(Self::Vouch),
+            // A clock is authority of its own too (N54).
+            Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => CapabilitySet::of(Self::Time),
             Intrinsic::StrLen
             | Intrinsic::StrByte
             | Intrinsic::StrSlice
@@ -146,12 +159,25 @@ impl CapabilityKind {
             | Intrinsic::ChanSendOf
             | Intrinsic::ChanRecvOf
             | Intrinsic::ChanCloseOf
+            | Intrinsic::ChanSelectOf
             | Intrinsic::VecNew
             | Intrinsic::VecLen
             | Intrinsic::VecGet
             | Intrinsic::VecSet
             | Intrinsic::VecPush
             | Intrinsic::VecPop => CapabilitySet::EMPTY,
+        }
+    }
+
+    /// The authority a built-in needs **held where it is called, in every function**, apart
+    /// from any effect: a declassification (N52) and a clock (N54). Neither performs an
+    /// effect, so no declared set says it, and N37's bridge never supplies it.
+    #[must_use]
+    pub const fn held_for(i: Intrinsic) -> Option<Self> {
+        match i {
+            Intrinsic::StrVouch => Some(Self::Vouch),
+            Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => Some(Self::Time),
+            _ => None,
         }
     }
 
@@ -167,7 +193,7 @@ impl CapabilityKind {
     pub const fn article(self) -> &'static str {
         match self {
             Self::Io => "an",
-            Self::Spawn | Self::Foreign | Self::Vouch => "a",
+            Self::Spawn | Self::Foreign | Self::Vouch | Self::Time => "a",
         }
     }
 
@@ -269,12 +295,9 @@ mod tests {
         for i in Intrinsic::ALL {
             let from_effect =
                 Effect::of_intrinsic(i).map_or(CapabilitySet::EMPTY, CapabilityKind::for_effect);
-            if i == Intrinsic::StrVouch {
+            if let Some(kind) = CapabilityKind::held_for(i) {
                 assert_eq!(from_effect, CapabilitySet::EMPTY);
-                assert_eq!(
-                    CapabilityKind::of_intrinsic(i),
-                    CapabilitySet::of(CapabilityKind::Vouch)
-                );
+                assert_eq!(CapabilityKind::of_intrinsic(i), CapabilitySet::of(kind));
                 continue;
             }
             assert_eq!(CapabilityKind::of_intrinsic(i), from_effect, "{}", i.name());

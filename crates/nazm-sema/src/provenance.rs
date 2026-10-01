@@ -147,6 +147,8 @@ impl Origin {
             | Intrinsic::VecGet
             | Intrinsic::VecPop
             | Intrinsic::ChanRecvOf
+            | Intrinsic::ChanSelectOf
+            | Intrinsic::ChanSelectUntil
             | Intrinsic::ChanRecv => BuiltinFlow::Read,
             // A new, empty handle, or a call that never returns.
             Intrinsic::IntsNew
@@ -154,6 +156,7 @@ impl Origin {
             | Intrinsic::VecNew
             | Intrinsic::ChanNew
             | Intrinsic::ChanNewOf
+            | Intrinsic::TimeNowMs
             | Intrinsic::ExitWith => BuiltinFlow::Fresh,
             // Declassification (N52): no origin, and the clearing recorded.
             Intrinsic::StrVouch => BuiltinFlow::Vouch,
