@@ -5350,8 +5350,11 @@ span MIR recorded for the statement or terminator it was emitted for. Compiler-m
 the position of the statement it belongs to, or its function's line; nothing is given a position
 the source does not have, and runtime and entry objects carry none. On macOS the executable's
 debug information is gathered into `OUTPUT.dSYM` with `dsymutil` before the objects are removed.
-What is claimed: a debugger resolves a breakpoint by Nazm function name or by file and line, shows
-Nazm frames with their files and lines, and steps by statement. What is not: local variables (no
+What is claimed: a debugger resolves a breakpoint by Nazm function name or by file and line, and
+the line table has a row per statement, which is what stepping by statement reads. *Narrowed during
+implementation:* the first draft also claimed frames and stepping in a live session; launching a
+process under lldb waited on macOS's debugger authorisation in the non-interactive environment N48
+ran in, so the live half was not exercised and is not claimed. What is not: local variables (no
 `DILocalVariable`), types, the Cranelift backend (`--debug` with it is refused, never silently
 ignored), and stepping into the runtime. Without `--debug` nothing changes: the emitter writes the
 same text it always did.

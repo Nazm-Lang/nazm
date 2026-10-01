@@ -83,7 +83,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 24 | Machine-applicable fixes | VERIFIED |
 | 25 | LSP and MCP | PARTIAL / PARTIAL |
 | 26 | Package and build tooling | PARTIAL |
-| 27 | Debugger and profiler | MISSING |
+| 27 | Debugger and profiler | PARTIAL |
 | 28 | Performance measurement | PARTIAL |
 | 29 | Differential testing | VERIFIED |
 | 30 | Mutation testing and fuzzing | VERIFIED / MISSING |
@@ -2125,16 +2125,33 @@ manifest.
 **Accepted when** · A project builds from a manifest and the two resolvers agree on
 identity.
 
-### 27. Debugger and profiler — MISSING
+### 27. Debugger and profiler — PARTIAL
 
-**Evidence of absence** · No DWARF, no `!dbg` metadata, no `-g`; `--emit-ir` writing the
-`.ll` beside the executable is the only debugging affordance
-(`crates/nazm-cli/src/build.rs`). Source positions in compiled programs are baked in as
-string constants at compile time. No profiler integration exists.
+**Evidence** · N48 (2026-10-01), `architecture.md` §7.50 first. `nazm build --debug` emits DWARF
+through the LLVM backend (`crates/nazm-lir/src/debug.rs`): a subprogram per function and a source
+position on every instruction from MIR's spans, gathered into `OUTPUT.dSYM` on macOS. `nazm
+inspect` prints `nazm.inspect/1` (`crates/nazm-cli/src/inspect.rs`); `nazm build --timings` prints
+`nazm.timings/1`.
 
-**Next dependency** · Line tables in the emitted module.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| Line tables: a breakpoint by Nazm function or by `.nz` file and line resolves to that line | VERIFIED (static, lldb on aarch64-apple-darwin) | `a_debugger_finds_nazm_functions_and_lines` |
+| A debug build behaves as an ordinary one; an ordinary build carries no debug metadata | VERIFIED | `a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information` |
+| A live session — run to a breakpoint, backtrace, step | PARTIAL | the line table has one row per statement; launching a process under lldb waited on the operating system's debugger authorisation in a non-interactive session, so no live session was run here |
+| Local variables, types | MISSING | no `DILocalVariable` |
+| Cranelift debug information | MISSING | `--debug` with Cranelift is refused |
+| Deterministic inspection of a program's facts | VERIFIED | `inspect_is_one_deterministic_document_of_the_program_s_facts` |
+| Compiler phase timings | VERIFIED | `timings_account_for_every_phase` |
+| Runtime profiling | PARTIAL | `NAZM_MEMORY_REPORT` counts sequences, strings and channels; no task or scheduler counters, no sampling integration |
 
-**Accepted when** · A native backtrace names a `.nz` line.
+**Limitation** · Function and statement positions only. The runtime and entry objects carry no
+debug information.
+
+**Next dependency** · Variables (`DILocalVariable` for MIR's named locals) and a debugger session
+in an environment that authorises one.
+
+**Accepted when** · A native backtrace taken in a live session names a `.nz` line — the static half
+is met.
 
 ---
 
