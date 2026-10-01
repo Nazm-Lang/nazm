@@ -35,6 +35,31 @@ impl VecId {
     }
 }
 
+/// A function type of this compilation, by its session-local interned id (N50). Session-local
+/// like [`VecId`]; the durable spelling of a function type is its parameters, result and effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FnTypeId(u32);
+
+impl FnTypeId {
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    #[must_use]
+    pub fn from_index(i: usize) -> Self {
+        Self(u32::try_from(i).unwrap_or(u32::MAX))
+    }
+}
+
+/// What a function type is: its parameters, its result and the effects a call performs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FnSignature {
+    pub params: Vec<Type>,
+    pub ret: Type,
+    pub effects: crate::EffectSet,
+}
+
 /// Which declaration a type parameter belongs to.
 ///
 /// A parameter is not a name: it is a **position in its owner's list**, and the owner is
@@ -114,6 +139,9 @@ pub enum Type {
     /// with no equality, that no expression can construct — the runtime hands the only
     /// ones to `main`. See [`crate::capability`].
     Cap(CapabilityKind),
+    /// `fn(T…) -> R ! {e}` (N50), interned by parameters, result and effects, so `==` is the
+    /// language's structural equality of function types. A handle to a closure object.
+    Fn(FnTypeId),
 }
 
 impl Type {
@@ -154,7 +182,7 @@ impl Type {
             Self::Strs => Some("Strs"),
             Self::Chan => Some("Chan"),
             Self::Cap(k) => Some(k.type_name()),
-            Self::Record(_) | Self::Enum(_) | Self::Vec(_) | Self::Param(_) => None,
+            Self::Record(_) | Self::Enum(_) | Self::Vec(_) | Self::Param(_) | Self::Fn(_) => None,
         }
     }
 
@@ -215,7 +243,8 @@ impl Type {
     /// definitions are checked once, parametrically*.
     #[must_use]
     pub fn may_cross_into_a_task(self) -> bool {
-        !self.is_sequence() && !self.is_param()
+        // Nor a function value (N50): its type does not say what it captured.
+        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_))
     }
 
     /// Parse a written **built-in** type name. `None` for anything else, including every

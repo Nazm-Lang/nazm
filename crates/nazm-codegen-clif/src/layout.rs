@@ -167,7 +167,9 @@ impl Layouts {
     #[must_use]
     pub(crate) fn lay(&self, t: Ty) -> Option<Lay> {
         match t {
-            Ty::Int | Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) => Some(Lay::new(8, 8)),
+            Ty::Int | Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) => {
+                Some(Lay::new(8, 8))
+            }
             Ty::Bool => Some(Lay::new(1, 1)),
             Ty::Str => Some(Lay::new(24, 8)),
             Ty::Record(RecordTy(id)) => self.records.get(&id).map(|s| s.lay),
@@ -180,7 +182,7 @@ impl Layouts {
     pub(crate) fn owns(&self, t: Ty) -> bool {
         match t {
             Ty::Int | Ty::Bool => false,
-            Ty::Str | Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) => true,
+            Ty::Str | Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) => true,
             Ty::Record(RecordTy(id)) => self.owning_records.get(&id).copied().unwrap_or(false),
             Ty::Enum(EnumTy(id)) => self.owning_enums.get(&id).copied().unwrap_or(false),
         }

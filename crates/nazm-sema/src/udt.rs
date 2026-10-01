@@ -225,6 +225,22 @@ impl UserTypes {
                 }
             }
             Type::Vec(_) => format!("Vec[{}]", shown(self)),
+            Type::Fn(f) => match self.fn_signature(f) {
+                Some(sig) => {
+                    let params: Vec<String> = sig.params.iter().map(|p| self.show(*p)).collect();
+                    let effects = if sig.effects.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ! {}", sig.effects)
+                    };
+                    format!(
+                        "fn({}) -> {}{effects}",
+                        params.join(", "),
+                        self.show(sig.ret)
+                    )
+                }
+                None => "<unknown function type>".to_owned(),
+            },
             Type::Param(p) => self.param_name(p),
             other => other.builtin_name().unwrap_or("<unknown type>").to_owned(),
         }

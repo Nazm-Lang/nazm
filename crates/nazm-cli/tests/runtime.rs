@@ -312,6 +312,7 @@ fn all() -> nazm_lir::Needs {
         strings: true,
         shims: true,
         stack: true,
+        closures: true,
     }
 }
 

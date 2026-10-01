@@ -2294,8 +2294,7 @@ impl<'a> Parser<'a> {
         // `Name(` with the cursor right after the `(` and no label: a probe's hole.
         // The grammar reads a `(` without labels as a call, and so does this; what
         // `Name` is, the checker decides (N26).
-        if self.hole.is_some() && self.at(&TokenKind::LParen) && self.ends_at_hole(self.pos)
-        {
+        if self.hole.is_some() && self.at(&TokenKind::LParen) && self.ends_at_hole(self.pos) {
             return self
                 .call_hole(at, name, span, type_args)
                 .map(|e| qualified(e, qualifier));
@@ -2348,7 +2347,6 @@ impl<'a> Parser<'a> {
             Some(Expr::Var { name, span })
         }
     }
-
 
     /// `at` is the checkpoint taken before the operand's first token, which every form
     /// below wraps its node at.

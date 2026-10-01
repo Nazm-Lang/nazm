@@ -533,7 +533,10 @@ impl Law {
             (false, Type::Str) => Some(Self::Bytes),
             (false, Type::Record(_) | Type::Enum(_)) => Some(Self::Structural),
             (false, Type::Param(_)) => Some(Self::Parametric),
-            (false, Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) | Type::Cap(_)) => None,
+            (
+                false,
+                Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) | Type::Cap(_) | Type::Fn(_),
+            ) => None,
         }
     }
 

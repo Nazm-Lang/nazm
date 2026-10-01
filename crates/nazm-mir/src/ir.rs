@@ -513,7 +513,7 @@ impl Types {
             return true;
         }
         match t {
-            Type::Str | Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) => true,
+            Type::Str | Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) | Type::Fn(_) => true,
             Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) => false,
             Type::Record(id) => self.record(id).is_some_and(|r| {
                 r.fields

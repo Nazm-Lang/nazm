@@ -154,6 +154,9 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.channels {
         out.push_str(CHANNEL_RUNTIME);
     }
+    if needs.closures {
+        out.push_str(CLOSURE_RUNTIME);
+    }
     if needs.shims {
         out.push_str(SHIM_RUNTIME);
         if needs.sequences {
@@ -172,6 +175,64 @@ pub fn emit_runtime(needs: Needs) -> String {
     out.push('\n');
     out
 }
+
+/// Closure objects (N50, `docs/architecture.md` §7.52): `{ i64 count, ptr code, ptr release,
+/// captures… }`. `nz.closure_new` allocates one with a count of one; the caller stores the
+/// captures after the header. The count is atomic, as a string backing's is. The last release
+/// calls the object's release function — generated per closure, it releases each managed
+/// capture — and frees the object.
+const CLOSURE_RUNTIME: &str = r"
+define hidden ptr @nz.closure_new(i64 %size, ptr %code, ptr %release) {
+entry:
+  %p = call ptr @malloc(i64 %size)
+  %oom = icmp eq ptr %p, null
+  br i1 %oom, label %none, label %fill
+none:
+  ret ptr null
+fill:
+  store i64 1, ptr %p
+  %cp = getelementptr i8, ptr %p, i64 8
+  store ptr %code, ptr %cp
+  %rp = getelementptr i8, ptr %p, i64 16
+  store ptr %release, ptr %rp
+  ret ptr %p
+}
+
+define hidden void @nz.closure_retain(ptr %c) {
+entry:
+  %none = icmp eq ptr %c, null
+  br i1 %none, label %done, label %bump
+bump:
+  %old = atomicrmw add ptr %c, i64 1 monotonic
+  br label %done
+done:
+  ret void
+}
+
+define hidden void @nz.closure_release(ptr %c) {
+entry:
+  %none = icmp eq ptr %c, null
+  br i1 %none, label %done, label %drop
+drop:
+  %old = atomicrmw sub ptr %c, i64 1 release
+  %last = icmp eq i64 %old, 1
+  br i1 %last, label %free, label %done
+free:
+  fence acquire
+  %rp = getelementptr i8, ptr %c, i64 16
+  %rel = load ptr, ptr %rp
+  %has = icmp ne ptr %rel, null
+  br i1 %has, label %captures, label %object
+captures:
+  call void %rel(ptr %c)
+  br label %object
+object:
+  call void @free(ptr %c)
+  br label %done
+done:
+  ret void
+}
+";
 
 /// The stack guard (N49, `docs/spec.md` *Native recursion*), called first in every function in
 /// a call cycle.

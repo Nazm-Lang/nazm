@@ -1561,7 +1561,7 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         return true;
     }
     match t {
-        Type::Str | Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) => true,
+        Type::Str | Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) | Type::Fn(_) => true,
         Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) => false,
         Type::Record(id) => res
             .records()

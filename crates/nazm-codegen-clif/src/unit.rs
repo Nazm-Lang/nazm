@@ -224,6 +224,7 @@ impl<'a> Gen<'a> {
             runtime::Part::Join => self.needs.join = true,
             runtime::Part::Tasks => self.needs.tasks = true,
             runtime::Part::Channels => self.needs.channels = true,
+            runtime::Part::Closures => self.needs.closures = true,
             runtime::Part::Base | runtime::Part::Libc => {}
         }
         let word = |w: Word| match w {
