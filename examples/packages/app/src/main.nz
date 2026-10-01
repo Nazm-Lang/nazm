@@ -1,0 +1,5 @@
+// A package (N46): `nazm run examples/packages/app`, `nazm lock examples/packages/app`, then
+// `nazm build --locked examples/packages/app`.
+use "geometry:area.nz";
+
+fn main() -> Int ! {} { rectangle(6, 7) }

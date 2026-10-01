@@ -1,0 +1,2 @@
+// A library package: no `main`, one module others reach as `geometry:area.nz`.
+pub fn rectangle(w: Int, h: Int) -> Int ! {} { w * h }
