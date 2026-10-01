@@ -377,7 +377,7 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 
 | Post-v1 work | Depends on | Why not in v1 |
 | --- | --- | --- |
-| Function values, closures, traits | a calling convention for captures | changes the language; every layer below would move |
+| Function values, closures, traits | a calling convention for captures | changes the language; every layer below would move — N50 |
 | Effect polymorphism, attenuation and revocation of capabilities | function values; a capability with a type argument | the coarse kinds are what N37 settled |
 | Richer information flow: more sinks, declassification | N38's framework | one sink was enough to make the framework real |
 | More targets and cross-compilation | a foreign linker and runtime per target | the host is the only verified one |
@@ -387,6 +387,16 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | Debug variables, a live-debugger workflow, Cranelift DWARF | `DILocalVariable` from MIR locals | function and statement positions were the declared scope |
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
+
+### N49 — Language usability and native completeness — **complete, 2026-10-01**
+
+`architecture.md` §7.51 first. String escapes (`N0004`), `&&`, `||` and `!` (lowered to `if` in
+Core IR), native recursion under both backends with a measured per-thread stack guard (`N0408`,
+runtime ABI 3), and `use "PATH" as NAME;` with `NAME::item` (`N0209`, `N0210`). Semantic epoch
+12. `nazm capabilities` now separates the two implementations only by the interpreter's iteration
+budget and the native-only foreign call. The compiler written in Nazm refuses all of it by name.
+Found on the way: an instance that calls itself was declared and defined by one unit, which
+recursion through a generic function exposed. Next: N50, function values.
 
 ### N48 — Inspector, debug information, timings, and the v1 release audit — **complete, 2026-10-01**
 

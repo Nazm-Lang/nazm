@@ -149,6 +149,30 @@ const CONSTRUCTS: &[ConstructRow] = &[
         evidence: "nazm-cli/tests/build.rs, at -O0 and -O2",
     },
     ConstructRow {
+        name: "string escapes: `\\n` `\\t` `\\r` `\\0` `\\\\` `\\\"` `\\xHH`",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-cli/tests/usability.rs; decoded once, by the lexer (docs/spec.md, String escapes)",
+    },
+    ConstructRow {
+        name: "logical operators: `&&`, `||` (short-circuit) and `!`",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-cli/tests/usability.rs; lowered to `if` in Core IR (docs/spec.md, Logical operators)",
+    },
+    ConstructRow {
+        name: "qualified names: `use \"path\" as m;` and `m::item`",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-cli/tests/usability.rs, nazm-service/tests/qualified.rs",
+    },
+    ConstructRow {
+        name: "a call to a foreign (C) function",
+        interpreted: false,
+        compiled: true,
+        evidence: "deliberate: `nazm run` refuses a foreign call before running anything (N0385); nazm-cli/tests/ffi.rs",
+    },
+    ConstructRow {
         name: "an iteration budget that stops a runaway loop",
         interpreted: true,
         compiled: false,
