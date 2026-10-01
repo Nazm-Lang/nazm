@@ -1831,6 +1831,43 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### The v1 baseline — N48, frozen 2026-10-01
+
+**The numbers a later milestone compares against**, in place of `bench/baseline-linux-aarch64.json`,
+which was recorded at `ada3ae2` — before N1 — and against which every row now reads 2–6× slower for
+reasons forty milestones old (the per-milestone gate runs have been compared with each other, not
+with it, since N33). That file is left as it is; these are the v1 figures.
+
+Contained compiler benchmark (`cargo xtask contained bench`), Linux aarch64, 1 CPU, offline, at
+`74727bb` (`a8a7b3f` and `84d3c80` differ from it in tests and the mutation catalogue only), min /
+median ms:
+
+| program | check | build `-O0` | build `-O2` | interpret | native `-O2` |
+| --- | --- | --- | --- | --- | --- |
+| arith | 2.5 / 2.6 | 88.6 / 89.0 | 95.9 / 96.0 | 2,753.8 / 2,760.9 | 4.5 / 4.5 |
+| calls | 2.6 / 2.7 | 91.4 / 94.4 | 96.6 / 104.6 | 1,466.8 / 1,471.1 | 1.0 / 1.0 |
+| channels | 2.8 / 2.9 | 96.3 / 99.0 | 122.5 / 130.8 | 951.6 / 1,012.0 | 1,203.5 / 1,225.2 |
+| floor | 2.5 / 2.8 | 88.2 / 90.2 | 92.9 / 97.9 | 2.0 / 2.0 | 0.3 / 0.3 |
+| sequences | 2.6 / 2.6 | 90.6 / 94.9 | 102.3 / 104.4 | 764.4 / 771.8 | 2.3 / 2.4 |
+| sieve | 2.7 / 2.7 | 91.0 / 92.6 | 104.4 / 104.8 | 998.7 / 1,025.2 | 2.9 / 3.0 |
+| strings | 2.5 / 2.9 | 101.4 / 102.7 | 111.6 / 115.1 | 49.1 / 51.6 | 7.4 / 7.6 |
+| compiler | 92.3 / 97.1 | 2,045.7 / 2,131.0 | | | |
+
+`sieve/reference-c` 1.7 / 1.8 ms. The run was not on an idle machine (host builds ran beside it),
+so a later comparison should be made on one, or as an interleaved A/B like the one below.
+
+**Against N39's own gate run** the interpreted rows hold within 0.3–6 % (`calls` 1,467 → 1,471,
+`sequences` 770 → 772, `arith` 2,748 → 2,761, `sieve` 999 → 1,025, `strings` 48.7 → 51.6) and
+`compiler/check` 93.0 → 97.1; `compiler/build-O0` moved 1,847 → 2,159 at N40 (2,131 now). An
+interleaved A/B on the host, release, N39's `ab0a761` against HEAD on the same input (N39's
+`compiler/emit.nz`) attributes it: `nazm check` 59.6 / 60.1 ms (1.01), `arith` interpreted
+617.6 / 611.3 ms (0.99), **`nazm build -O0` 1,025 / 1,201 ms (1.17)**. The build's extra time is
+clang's: the MIR emitter (N40) hands it 8.44 MB of LLVM text against 6.77 MB, 177,239
+instructions against 138,522, and 13,836 `alloca`s against 3,275 — a stack slot per MIR local,
+which `-O0` does not promote — and clang's compile is 1,091 ms of the build's 1,256. No program's
+behaviour changed. Promoting locals to SSA in the emitter is the evidence-backed fix, and it is a
+backend change for after v1, not a release-audit one.
+
 ### Restriction profiles — N47, measured 2026-10-01
 
 Host, release, `nazm check --no-cache`, median of 9. The rules themselves cost nothing measurable:
