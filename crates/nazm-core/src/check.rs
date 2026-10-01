@@ -212,6 +212,9 @@ struct Types {
     /// Names refused as an ambiguity or a collision, which mean nothing unambiguously
     /// here. Recorded for the scope trace (N19), which leaves them out.
     refused: Vec<String>,
+    /// Every alias this module imports a module under (N49); its types are in `names` as
+    /// `alias::Name`, which no identifier can collide with.
+    aliases: Vec<String>,
 }
 
 /// What one module may name.
@@ -230,6 +233,9 @@ struct Env {
     names: HashMap<String, Visible>,
     /// Names refused as an ambiguity or a collision. See [`Types::refused`].
     refused: Vec<String>,
+    /// Every alias this module imports a module under, and the module (N49); the module's
+    /// exports are in `names` as `alias::name`.
+    aliases: HashMap<String, ModuleId>,
 }
 
 impl Env {
@@ -1284,10 +1290,35 @@ fn type_environment(
 
     let mut brought_in: HashMap<String, Span> = HashMap::new();
     let mut refused: Vec<String> = Vec::new();
+    let mut aliases: Vec<String> = Vec::new();
     for d in unit.imports {
         let Some(iface) = deps.iter().find(|i| i.module() == d.on) else {
             continue;
         };
+        // Under a name (N49): every nameable type as `alias::Name`, colliding with nothing.
+        for (alias, _) in &d.aliases {
+            aliases.push(alias.clone());
+            let offered = iface
+                .records()
+                .iter()
+                .filter(|e| e.nameable)
+                .map(|e| Type::Record(e.def))
+                .chain(
+                    iface
+                        .enums()
+                        .iter()
+                        .filter(|e| e.nameable)
+                        .map(|e| Type::Enum(e.def)),
+                );
+            for offer in offered {
+                if let Some(name) = type_name_of(res, offer) {
+                    names.insert(qualified_key(alias, &name), offer);
+                }
+            }
+        }
+        if !d.plain {
+            continue;
+        }
         // Records then enums, each the ones this interface makes nameable. One loop body
         // for both: which kind a name refers to changes the `Type` that goes in the map
         // and nothing else about the rule.
@@ -1395,7 +1426,11 @@ fn type_environment(
             names.insert(name, offer);
         }
     }
-    Types { names, refused }
+    Types {
+        names,
+        refused,
+        aliases,
+    }
 }
 
 /// Record what a module may name, as its checker is about to use it (N19): every function
@@ -1499,6 +1534,11 @@ fn resolve_name(
     if let Some(t) = types.names.get(name) {
         return *t;
     }
+    if name.contains("::") {
+        let aliases: Vec<&str> = types.aliases.iter().map(String::as_str).collect();
+        errors.push(unknown_qualified(name, &aliases, span, "type"));
+        return Type::Int;
+    }
     let mut d = Diagnostic::error(codes::UNKNOWN_TYPE, span, format!("`{name}` is not a type"))
         .help(format!(
             "the built-in types are {}, and `struct` and `enum` declare others",
@@ -1572,7 +1612,10 @@ fn resolve_written_inner(
             .map(|w| resolve_written_inner(types, res, w, scope, errors))
             .collect()
     });
-    if let Some((_, t)) = scope.iter().find(|(n, _)| *n == written.name) {
+    // A qualified type names a module's definition (N49): never a type parameter, never `Vec`
+    // or a built-in, which belong to no module — so those branches are for plain names only.
+    let qualified = written.qualifier.is_some();
+    if let Some((_, t)) = scope.iter().find(|(n, _)| !qualified && *n == written.name) {
         if args.is_some() {
             errors.push(not_generic(&written.name, "a type parameter", written.span));
         }
@@ -1582,7 +1625,7 @@ fn resolve_written_inner(
         }
         return *t;
     }
-    if written.name == VEC {
+    if !qualified && written.name == VEC {
         let Some(args) = args else {
             errors.push(
                 Diagnostic::error(
@@ -1603,13 +1646,14 @@ fn resolve_written_inner(
         res.record_written_type(written.name_span, WrittenType::Builtin(vec));
         return vec;
     }
-    let t = resolve_name(types, res, &written.name, written.name_span, errors);
+    let key = written_key(written.qualifier.as_ref(), &written.name);
+    let t = resolve_name(types, res, &key, written.name_span, errors);
     // Which definition this name is, recorded where it was decided (N18). A built-in is
     // not one, and neither is a type parameter, which returned above.
     if let Some(node) = TypeNode::of(t) {
         res.record_type_name(written.name_span, node);
     }
-    if Type::from_name(&written.name).is_some() {
+    if !qualified && Type::from_name(&written.name).is_some() {
         if args.is_some() {
             errors.push(not_generic(&written.name, "a built-in type", written.span));
         }
@@ -2197,6 +2241,45 @@ pub fn check_unit(
 ///
 /// Built-ins, then its own definitions, then the exports of each direct import — in that
 /// order, and every conflict between the last two is reported rather than resolved.
+/// The key a qualified name is held under in a module's environment (N49): `alias::name`.
+/// `::` is in no identifier, so no unqualified name can be the same string.
+fn qualified_key(alias: &str, name: &str) -> String {
+    format!("{alias}::{name}")
+}
+
+/// The key a name written with an optional qualifier is looked up by.
+fn written_key(qualifier: Option<&nazm_syntax::Qualifier>, name: &str) -> String {
+    match qualifier {
+        Some(q) => qualified_key(&q.name, name),
+        None => name.to_owned(),
+    }
+}
+
+/// `NAME::item` that resolves to nothing (N49): `NAME` is no alias, or its module does not
+/// export `item`.
+fn unknown_qualified(key: &str, aliases: &[&str], at: Span, what: &str) -> Diagnostic {
+    let (alias, item) = key.split_once("::").unwrap_or(("", key));
+    if aliases.contains(&alias) {
+        Diagnostic::error(
+            codes::UNKNOWN_QUALIFIED_NAME,
+            at,
+            format!("the module imported as `{alias}` exports no {what} `{item}`"),
+        )
+        .help(format!(
+            "`{alias}::` names what that module marks `pub`; check the name, or export it there"
+        ))
+    } else {
+        Diagnostic::error(
+            codes::UNKNOWN_QUALIFIED_NAME,
+            at,
+            format!("`{alias}` is not the name of an imported module"),
+        )
+        .help(format!(
+            "import one under that name: `use \"path.nz\" as {alias};`"
+        ))
+    }
+}
+
 fn environment(
     unit: &Unit<'_>,
     deps: &[&UnitInterface],
@@ -2267,10 +2350,68 @@ fn environment(
     // first rather than at "somewhere else".
     let mut brought_in: HashMap<&str, Span> = HashMap::new();
     let mut refused: Vec<String> = Vec::new();
+    let mut aliases: HashMap<String, ModuleId> = HashMap::new();
+    let mut alias_at: HashMap<String, Span> = HashMap::new();
     for d in unit.imports {
         let Some(iface) = deps.iter().find(|i| i.module() == d.on) else {
             continue;
         };
+        // Under a name (N49): every export as `alias::name`, colliding with nothing — but the
+        // alias itself may not be a name this module already gives something else.
+        for (alias, at) in &d.aliases {
+            let clash = if let Some(first) = alias_at.get(alias) {
+                Some((*first, "another import already has this name"))
+            } else if names
+                .get(alias)
+                .is_some_and(|v| matches!(v.callee, Callee::Function(_)))
+            {
+                names
+                    .get(alias)
+                    .map(|v| (v.sig.name_span, "a function of this module"))
+            } else if res.records().declared(unit.module, alias).is_some()
+                || res.enums().declared(unit.module, alias).is_some()
+            {
+                Some((*at, "a type of this module"))
+            } else {
+                None
+            };
+            if let Some((other, what)) = clash {
+                errors.push(
+                    Diagnostic::error(
+                        codes::ALIAS_COLLIDES,
+                        *at,
+                        format!("`{alias}` already names {what}"),
+                    )
+                    .secondary(other, "the other meaning")
+                    .help(
+                        "an import's name is written before `::` and must mean only that \
+                         module here: choose another",
+                    ),
+                );
+                continue;
+            }
+            alias_at.insert(alias.clone(), *at);
+            aliases.insert(alias.clone(), d.on);
+            for e in iface.exports() {
+                names.insert(
+                    qualified_key(alias, &e.name),
+                    Visible {
+                        sig: Signature {
+                            params: e.params.clone(),
+                            ret: e.ret,
+                            name_span: e.name_span,
+                            generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
+                            owner: (!e.type_params.is_empty())
+                                .then_some(ParamOwner::Function(e.def)),
+                        },
+                        callee: Callee::Function(e.def),
+                    },
+                );
+            }
+        }
+        if !d.plain {
+            continue;
+        }
         for e in iface.exports() {
             if let Some(own) = res
                 .definition(unit.module, &e.name)
@@ -2329,7 +2470,11 @@ fn environment(
         }
     }
 
-    Env { names, refused }
+    Env {
+        names,
+        refused,
+        aliases,
+    }
 }
 
 /// Where a type argument came from, when it was written rather than inferred.
@@ -2506,6 +2651,13 @@ impl Checker<'_> {
     /// exist, because it is private where it lives, or because it lives in a module this
     /// one did not import, is [`Self::why_invisible`]'s question — and getting that answer
     /// right is most of what makes the visibility rule usable.
+    /// The aliases this module imports modules under (N49), for a diagnostic.
+    fn alias_names(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.env.aliases.keys().map(String::as_str).collect();
+        out.sort_unstable();
+        out
+    }
+
     fn resolve_callee(&mut self, name: &str, at: Span) -> Option<Signature> {
         let visible = self.env.get(name)?.clone();
         self.res.record_call(at, visible.callee);
@@ -3104,7 +3256,9 @@ impl Checker<'_> {
         let mut first_value: Option<(Type, Span)> = None;
 
         for arm in arms {
-            let Some(named) = self.resolve_enum(&arm.ty, arm.ty_span) else {
+            let Some(named) =
+                self.resolve_enum(&written_key(arm.qualifier.as_ref(), &arm.ty), arm.ty_span)
+            else {
                 unresolved = true;
                 continue;
             };
@@ -4242,24 +4396,33 @@ impl Checker<'_> {
             }
 
             Expr::Call {
+                qualifier,
                 callee,
                 callee_span,
                 type_args,
                 args,
                 span,
             } => {
+                // `m::f` is looked up as one key (N49); everything below names it as written.
+                let key = written_key(qualifier.as_ref(), callee);
+                let callee = &key;
                 let Some(sig) = self.resolve_callee(callee, *callee_span) else {
-                    let d = self.why_invisible(callee, *callee_span).unwrap_or_else(|| {
-                        // `IoCap()`: the question is where authority comes from (N37).
-                        if let Some(Type::Cap(k)) = Type::from_name(callee) {
-                            return forged(k, *callee_span);
-                        }
-                        Diagnostic::error(
-                            codes::UNDEFINED_FUNCTION,
-                            *callee_span,
-                            format!("`{callee}` is not a function"),
-                        )
+                    let qualified = qualifier.is_some().then(|| {
+                        unknown_qualified(callee, &self.alias_names(), *callee_span, "function")
                     });
+                    let d = qualified
+                        .or_else(|| self.why_invisible(callee, *callee_span))
+                        .unwrap_or_else(|| {
+                            // `IoCap()`: the question is where authority comes from (N37).
+                            if let Some(Type::Cap(k)) = Type::from_name(callee) {
+                                return forged(k, *callee_span);
+                            }
+                            Diagnostic::error(
+                                codes::UNDEFINED_FUNCTION,
+                                *callee_span,
+                                format!("`{callee}` is not a function"),
+                            )
+                        });
                     self.errors.push(d);
                     // A completion probe's `Name(` with no function `Name` (N26): which
                     // record the module's types name by it, read and applied exactly as a
@@ -4333,12 +4496,19 @@ impl Checker<'_> {
             }
 
             Expr::Construct {
+                qualifier,
                 ty,
                 ty_span,
                 type_args,
                 fields,
                 span,
-            } => match self.check_construction(ty, *ty_span, type_args.as_deref(), fields, *span) {
+            } => match self.check_construction(
+                &written_key(qualifier.as_ref(), ty),
+                *ty_span,
+                type_args.as_deref(),
+                fields,
+                *span,
+            ) {
                 Some(t) => Completion::Value(t),
                 // The type did not resolve, and that is already reported. `Int` is what
                 // every unresolved type continues as, so no second error is raised here.
@@ -4346,6 +4516,7 @@ impl Checker<'_> {
             },
 
             Expr::Variant {
+                qualifier,
                 ty,
                 ty_span,
                 type_args,
@@ -4354,7 +4525,7 @@ impl Checker<'_> {
                 fields,
                 span,
             } => match self.check_variant(
-                ty,
+                &written_key(qualifier.as_ref(), ty),
                 *ty_span,
                 type_args.as_deref(),
                 variant,

@@ -86,6 +86,8 @@ pub enum TokenKind {
     Bang,
     /// `&&` — short-circuit conjunction, N49.
     AmpAmp,
+    /// `::` — between a module alias and the item it names, N49: `t::text_split`.
+    ColonColon,
     /// `||` — short-circuit disjunction, N49.
     PipePipe,
     Arrow,
@@ -157,6 +159,7 @@ impl TokenKind {
         Self::Bang,
         Self::AmpAmp,
         Self::PipePipe,
+        Self::ColonColon,
         Self::Arrow,
         Self::FatArrow,
         Self::Eq,
@@ -216,6 +219,7 @@ impl TokenKind {
             Self::Question => Some("?"),
             Self::Bang => Some("!"),
             Self::AmpAmp => Some("&&"),
+            Self::ColonColon => Some("::"),
             Self::PipePipe => Some("||"),
             Self::Arrow => Some("->"),
             Self::FatArrow => Some("=>"),
@@ -273,6 +277,7 @@ impl TokenKind {
             Self::Question => "`?`".to_owned(),
             Self::Bang => "`!`".to_owned(),
             Self::AmpAmp => "`&&`".to_owned(),
+            Self::ColonColon => "`::`".to_owned(),
             Self::PipePipe => "`||`".to_owned(),
             Self::Arrow => "`->`".to_owned(),
             Self::FatArrow => "`=>`".to_owned(),
@@ -620,6 +625,7 @@ pub fn lex_lossless_in(file: FileId, text: &str) -> (Vec<Lexeme>, Vec<Diagnostic
             Some((b'<', b'=')) => (Some(TokenKind::LtEq), 2),
             Some((b'>', b'=')) => (Some(TokenKind::GtEq), 2),
             Some((b'&', b'&')) => (Some(TokenKind::AmpAmp), 2),
+            Some((b':', b':')) => (Some(TokenKind::ColonColon), 2),
             Some((b'|', b'|')) => (Some(TokenKind::PipePipe), 2),
             _ => (None, 0),
         };

@@ -458,11 +458,13 @@ impl<'a> Printer<'a> {
         ) {
             return false;
         }
-        // Nothing after an opener, or after a `.`.
+        // Nothing after an opener, or after a `.` or a `::`; and nothing before a `::`, which
+        // binds an alias to the item it names: `t::split`, never `t :: split` (N49).
         if matches!(
             previous,
-            TokenKind::LParen | TokenKind::LBracket | TokenKind::Dot
-        ) {
+            TokenKind::LParen | TokenKind::LBracket | TokenKind::Dot | TokenKind::ColonColon
+        ) || *next == TokenKind::ColonColon
+        {
             return false;
         }
         // `Pair[` is one thing: a type argument list is glued to what it applies to, and

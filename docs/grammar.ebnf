@@ -28,7 +28,19 @@
 program = { use_item } , { function | foreign_function | record | enumeration } ;
 
 (* @example use "lib/helpers.nz"; fn main() -> Int { 0 } *)
-use_item = "use" , STRING , ";" ;
+(* `as NAME` imports the module under a name (N49): its exports are written `NAME::item`
+ * and are not brought into scope. `as` is a word here and nowhere else. See `docs/spec.md`,
+ * *Qualified names*.
+ *)
+(* @example use "other.nz" as other; fn main() -> Int { 0 } *)
+use_item = "use" , STRING , [ IDENT , IDENT ] , ";" ;
+
+(* `NAME ::` before the name of a definition: a function, a record, an enum. Nazm has no
+ * module-level values, so a qualified name is never a variable.
+ *)
+(* @example use "geometry.nz" as g; fn main() -> Int { g::area(g::Point(x: 1, y: 2)) } *)
+(* @example use "shapes.nz" as s; fn f(x: s::Shape) -> Int { match x { s::Shape.Dot() => 0, } } fn main() -> Int { 0 } *)
+qualifier = IDENT , "::" ;
 
 (* @example fn main() -> Int { 0 } *)
 (* @example fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
@@ -158,7 +170,7 @@ parameter = IDENT , ":" , type ;
 (* @example fn f(c: Chan) -> Int { 0 } fn main() -> Int { f(chan_new(1)) } *)
 (* @example fn f(xs: Vec[Vec[Int]]) -> Int { vec_len(xs) } fn main() -> Int { f(vec_new[Vec[Int]]()) } *)
 (* @example fn say(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int { say(io, "hi") } *)
-type = IDENT , [ type_arguments ] ;
+type = [ qualifier ] , IDENT , [ type_arguments ] ;
 
 (* Square brackets, and one spelling: there are no angle brackets and no indexing, so
  * `name[` can only begin type arguments. Empty brackets parse — `Vec[]` is a type written
@@ -289,7 +301,7 @@ atom = INTEGER
  *)
 (* @example fn main() -> Int { str_len("abc") } *)
 (* @example fn identity[T](v: T) -> T { v } fn main() -> Int { identity[Int](7) } *)
-call = IDENT , [ type_arguments ] , "(" , [ arguments ] , ")" ;
+call = [ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")" ;
 
 (* Named, never positional, so field order is never an implicit API. Parenthesised rather
  * than `Point { x: 1 }` because `IDENT "{"` is exactly what an `if` whose condition is a
@@ -301,7 +313,7 @@ call = IDENT , [ type_arguments ] , "(" , [ arguments ] , ")" ;
  *)
 (* @example struct P { x: Int, y: Int, } fn main() -> Int { P(x: 1, y: 2).x } *)
 (* @example struct Box[T] { value: T, } fn main() -> Int { Box[Int](value: 7).value } *)
-construction = IDENT , [ type_arguments ] , "(" , initialisers , ")" ;
+construction = [ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")" ;
 
 (* @example struct P { x: Int, } fn main() -> Int { P(x: 1,).x } *)
 initialisers = initialiser , { "," , initialiser } , [ "," ] ;
@@ -318,7 +330,7 @@ initialiser = IDENT , ":" , expression ;
 (* @example enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } } *)
 (* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1 + 1) { E.V(x: n) => n, } } *)
 (* @example enum Maybe[T] { None, Some(value: T), } fn main() -> Int { match Maybe[Int].None() { Maybe.None() => 0, Maybe.Some(value: v) => v, } } *)
-variant_construction = IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")" ;
+variant_construction = [ qualifier ] , IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")" ;
 
 (* @example fn main() -> Int { ints_set(ints_new(), 0, 1) } *)
 arguments = expression , { "," , expression } ;
@@ -347,7 +359,7 @@ match_arms = match_arm , { "," , match_arm } , [ "," ] ;
  * `Maybe[Str]` alike.
  *)
 (* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } } *)
-match_arm = IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
+match_arm = [ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
 
 (* @example enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: a, y: _) => a, } } *)
 pattern_fields = pattern_field , { "," , pattern_field } , [ "," ] ;

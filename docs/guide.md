@@ -488,7 +488,8 @@ accepts.
 | Rule | Definition |
 | --- | --- |
 | `program` | `{ use_item } , { function \| foreign_function \| record \| enumeration }` |
-| `use_item` | `"use" , STRING , ";"` |
+| `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";"` |
+| `qualifier` | `IDENT , "::"` |
 | `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
 | `foreign_function` | `[ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , "=" , STRING , ";"` |
 | `effect_set` | `"!" , "{" , [ effect_name , { "," , effect_name } ] , "}"` |
@@ -505,7 +506,7 @@ accepts.
 | `payload` | `field , { "," , field } , [ "," ]` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
-| `type` | `IDENT , [ type_arguments ]` |
+| `type` | `[ qualifier ] , IDENT , [ type_arguments ]` |
 | `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
 | `statement` | `let_statement \| assignment \| while_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
@@ -528,16 +529,16 @@ accepts.
 | `unary` | `[ "-" \| "!" ] , primary` |
 | `primary` | `atom , { "." , IDENT \| "?" }` |
 | `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| "(" , expression , ")"` |
-| `call` | `IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
-| `construction` | `IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
+| `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
+| `construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
 | `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
 | `initialiser` | `IDENT , ":" , expression` |
-| `variant_construction` | `IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")"` |
+| `variant_construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")"` |
 | `arguments` | `expression , { "," , expression }` |
 | `if_expression` | `"if" , expression , block , [ "else" , ( block \| if_expression ) ]` |
 | `match_expression` | `"match" , expression , "{" , [ match_arms ] , "}"` |
 | `match_arms` | `match_arm , { "," , match_arm } , [ "," ]` |
-| `match_arm` | `IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression` |
+| `match_arm` | `[ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression` |
 | `pattern_fields` | `pattern_field , { "," , pattern_field } , [ "," ]` |
 | `pattern_field` | `IDENT , ":" , IDENT` |
 
@@ -570,11 +571,36 @@ fn identity[T](value: T) -> T { value } fn main() -> Int { identity(7) }
 ### `use_item`
 
 ```ebnf
-use_item = "use" , STRING , ";" ;
+use_item = "use" , STRING , [ IDENT , IDENT ] , ";" ;
 ```
+
+`as NAME` imports the module under a name (N49): its exports are written `NAME::item`
+and are not brought into scope. `as` is a word here and nowhere else. See `docs/spec.md`,
+*Qualified names*.
 
 ```nazm
 use "lib/helpers.nz"; fn main() -> Int { 0 }
+```
+
+```nazm
+use "other.nz" as other; fn main() -> Int { 0 }
+```
+
+### `qualifier`
+
+```ebnf
+qualifier = IDENT , "::" ;
+```
+
+`NAME ::` before the name of a definition: a function, a record, an enum. Nazm has no
+module-level values, so a qualified name is never a variable.
+
+```nazm
+use "geometry.nz" as g; fn main() -> Int { g::area(g::Point(x: 1, y: 2)) }
+```
+
+```nazm
+use "shapes.nz" as s; fn f(x: s::Shape) -> Int { match x { s::Shape.Dot() => 0, } } fn main() -> Int { 0 }
 ```
 
 ### `function`
@@ -842,7 +868,7 @@ fn f(n: Int) -> Int { n } fn main() -> Int { f(1) }
 ### `type`
 
 ```ebnf
-type = IDENT , [ type_arguments ] ;
+type = [ qualifier ] , IDENT , [ type_arguments ] ;
 ```
 
 A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
@@ -1172,7 +1198,7 @@ fn main() -> Int { 1 }
 ### `call`
 
 ```ebnf
-call = IDENT , [ type_arguments ] , "(" , [ arguments ] , ")" ;
+call = [ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")" ;
 ```
 
 Type arguments are written where inference cannot find them from the arguments —
@@ -1190,7 +1216,7 @@ fn identity[T](v: T) -> T { v } fn main() -> Int { identity[Int](7) }
 ### `construction`
 
 ```ebnf
-construction = IDENT , [ type_arguments ] , "(" , initialisers , ")" ;
+construction = [ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")" ;
 ```
 
 Named, never positional, so field order is never an implicit API. Parenthesised rather
@@ -1231,7 +1257,7 @@ struct P { x: Int, } fn main() -> Int { P(x: 1 + 1).x }
 ### `variant_construction`
 
 ```ebnf
-variant_construction = IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")" ;
+variant_construction = [ qualifier ] , IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")" ;
 ```
 
 Always qualified by the enum, and always parenthesised — including for a variant with
@@ -1310,7 +1336,7 @@ enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } }
 ### `match_arm`
 
 ```ebnf
-match_arm = IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
+match_arm = [ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
 ```
 
 A pattern names the enum and never its type arguments: the value being matched already

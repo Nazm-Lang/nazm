@@ -55,13 +55,18 @@ impl ModuleId {
 }
 
 /// One module named by another's `use`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dependency {
     /// The module named.
     pub on: ModuleId,
     /// The quoted path that named it, so a diagnostic about this import can point at the
     /// line that created it rather than at the module it brought in.
     pub at: Span,
+    /// Whether a plain `use "path";` named it, bringing its exports into scope. False when
+    /// every `use` of it gave a name (N49).
+    pub plain: bool,
+    /// Each `as NAME` it was imported under, with where the name is written (N49).
+    pub aliases: Vec<(String, Span)>,
 }
 
 /// One module: where its source came from, and what it directly imports.
@@ -143,12 +148,37 @@ impl ModuleGraph {
     /// none: it already sees all of its own definitions, so the edge would only be a way
     /// for a module to collide with itself. `docs/spec.md` says both.
     pub fn import(&mut self, from: ModuleId, to: ModuleId, at: Span) {
+        self.import_as(from, to, at, None);
+    }
+
+    /// Record that `from` names `to` in a `use`, plainly or — with `alias` — under a name
+    /// (N49). Still one edge per pair: a module imported both ways is one module seen both
+    /// ways, so a second `use` of it adds to the edge rather than making another. A module
+    /// importing itself under a name is refused by the checker, which sees the alias; the
+    /// edge is never made.
+    pub fn import_as(
+        &mut self,
+        from: ModuleId,
+        to: ModuleId,
+        at: Span,
+        alias: Option<(String, Span)>,
+    ) {
         if from == to {
             return;
         }
         if let Some(m) = self.modules.get_mut(from.index()) {
-            if !m.imports.iter().any(|d| d.on == to) {
-                m.imports.push(Dependency { on: to, at });
+            let plain = alias.is_none();
+            match m.imports.iter_mut().find(|d| d.on == to) {
+                Some(d) => {
+                    d.plain |= plain;
+                    d.aliases.extend(alias);
+                }
+                None => m.imports.push(Dependency {
+                    on: to,
+                    at,
+                    plain,
+                    aliases: alias.into_iter().collect(),
+                }),
             }
         }
     }
