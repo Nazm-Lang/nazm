@@ -74,6 +74,16 @@ pub(crate) fn require_containment(stage: &str) {
 /// infrastructure OOM.
 const ADDRESS_SPACE_KB: u64 = 512 * 1024;
 
+/// The ceiling for a program whose subject is many live tasks, in kilobytes: 4 GiB, the
+/// container's own.
+///
+/// v1 starts one OS thread per task, and on Linux each thread costs address space well past
+/// its stack: glibc gives a thread its own malloc arena and reserves 64 MiB for it, so a few
+/// dozen live tasks pass 512 MiB while touching a few megabytes. Measured in the contained gate
+/// (N48): the five-thousand-task test was refused a thread at about forty live tasks
+/// under [`ADDRESS_SPACE_KB`]. A runaway still dies at the container's ceiling.
+pub(crate) const TASKS_ADDRESS_SPACE_KB: u64 = 4 * 1024 * 1024;
+
 /// A `Command` that runs `exe` under that ceiling.
 ///
 /// # What this bounds, and what it does not
@@ -104,7 +114,11 @@ const ADDRESS_SPACE_KB: u64 = 512 * 1024;
 /// A shell wrapper rather than `pre_exec`, because the workspace sets
 /// `unsafe_code = "forbid"` and `pre_exec` is unsafe.
 pub(crate) fn bounded_exe(exe: &std::path::Path) -> std::process::Command {
-    let kb = ADDRESS_SPACE_KB;
+    bounded_exe_within(exe, ADDRESS_SPACE_KB)
+}
+
+/// [`bounded_exe`] under a ceiling of `kb` kilobytes rather than [`ADDRESS_SPACE_KB`].
+pub(crate) fn bounded_exe_within(exe: &std::path::Path, kb: u64) -> std::process::Command {
     let script = format!(
         r#"if [ "$(uname -s)" = Linux ]; then
     ulimit -v {kb} || {{ printf 'bounded_exe: cannot set RLIMIT_AS
