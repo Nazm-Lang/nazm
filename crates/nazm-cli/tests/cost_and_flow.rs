@@ -369,13 +369,21 @@ fn a_vouch_needs_its_authority_everywhere_and_is_recorded() {
 fn a_vouch_changes_nothing_at_run_time_everywhere() {
     agrees(
         r#"
-fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
+fn tag(v: VouchCap) -> Str ! {} {
     let s = str_concat("to", "ken");
-    print(str_vouch(str_slice(s, 0, 3)));
+    str_vouch(str_slice(s, 0, 3))
+}
+fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
+    // The vouched value outlives the string it was cut from, and storage is allocated after:
+    // a vouch that took no reference of its own would print what reused it.
+    let t = tag(v);
+    let other = str_concat("xx", "yyyy");
+    print(t);
+    print(other);
     0
 }
 "#,
-        "tok0",
+        "tokxxyyyy0",
     );
 }
 
