@@ -1278,6 +1278,7 @@ version = "0.0.1"
 dependencies = [
  "nazm-diag",
  "nazm-mir",
+ "nazm-runtime",
  "nazm-sema",
  "nazm-span",
 ]
@@ -1332,6 +1333,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "nazm-runtime"
+version = "0.0.1"
+dependencies = [
+ "blake3",
 ]
 
 [[package]]

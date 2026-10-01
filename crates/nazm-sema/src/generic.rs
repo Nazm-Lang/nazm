@@ -33,7 +33,7 @@ use std::collections::HashMap;
 
 use crate::enums::EnumId;
 use crate::record::RecordId;
-use crate::types::{FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};
+use crate::types::{ChanId, FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};
 use crate::udt::{TypeNode, UserTypes};
 
 /// Which definition an applied entry applies, and to what.
@@ -58,6 +58,9 @@ pub struct Generics {
     /// `Vec` element types, by [`VecId`].
     vecs: Vec<Type>,
     vec_ids: HashMap<Type, VecId>,
+    /// Generic channel element types, by [`ChanId`] (N53).
+    chans: Vec<Type>,
+    chan_ids: HashMap<Type, ChanId>,
     /// Function types, by [`FnTypeId`] (N50).
     fns: Vec<FnSignature>,
     fn_ids: HashMap<FnSignature, FnTypeId>,
@@ -117,6 +120,33 @@ impl UserTypes {
     #[must_use]
     pub fn fn_signature(&self, id: FnTypeId) -> Option<&FnSignature> {
         self.generics().fns.get(id.index())
+    }
+
+    /// `Chan[elem]`, interned (N53).
+    pub fn chan_of(&mut self, elem: Type) -> Type {
+        let g = self.generics_mut();
+        if let Some(id) = g.chan_ids.get(&elem) {
+            return Type::ChanOf(*id);
+        }
+        let id = ChanId::from_index(g.chans.len());
+        g.chans.push(elem);
+        g.chan_ids.insert(elem, id);
+        Type::ChanOf(id)
+    }
+
+    /// `Chan[elem]` if it has been interned already. Never creates one.
+    #[must_use]
+    pub fn find_chan(&self, elem: Type) -> Option<Type> {
+        self.generics()
+            .chan_ids
+            .get(&elem)
+            .map(|id| Type::ChanOf(*id))
+    }
+
+    /// The element type of a generic channel (N53).
+    #[must_use]
+    pub fn chan_element(&self, id: ChanId) -> Option<Type> {
+        self.generics().chans.get(id.index()).copied()
     }
 
     /// `Vec[elem]` if it has been interned already. Never creates one.
@@ -413,6 +443,16 @@ impl UserTypes {
                 let elem = self.substitute(elem, owner, args);
                 self.vec_of(elem)
             }
+            Type::ChanOf(c) => {
+                let Some(elem) = self.chan_element(c) else {
+                    return t;
+                };
+                if !self.mentions(elem, owner) {
+                    return t;
+                }
+                let elem = self.substitute(elem, owner, args);
+                self.chan_of(elem)
+            }
             Type::Fn(f) => {
                 let Some(sig) = self.fn_signature(f).cloned() else {
                     return t;
@@ -479,6 +519,14 @@ impl UserTypes {
                 }
                 let elem = self.substituted(elem, owner, args)?;
                 self.find_vec(elem)
+            }
+            Type::ChanOf(c) => {
+                let elem = self.chan_element(c)?;
+                if !self.mentions(elem, owner) {
+                    return Some(t);
+                }
+                let elem = self.substituted(elem, owner, args)?;
+                self.find_chan(elem)
             }
             Type::Fn(f) => {
                 let sig = self.fn_signature(f)?.clone();
@@ -552,6 +600,7 @@ impl UserTypes {
                     }
                 }
                 Type::Vec(v) => work.extend(self.vec_element(v)),
+                Type::ChanOf(c) => work.extend(self.chan_element(c)),
                 Type::Record(_) | Type::Enum(_) | Type::Fn(_) => {
                     work.extend(self.type_args(t).iter().copied());
                 }
@@ -578,6 +627,7 @@ impl UserTypes {
                 .map(|i| i.args.clone())
                 .unwrap_or_default(),
             Type::Vec(v) => self.vec_element(v).into_iter().collect(),
+            Type::ChanOf(c) => self.chan_element(c).into_iter().collect(),
             // A function type's parts: its parameters, then its result (N50).
             Type::Fn(f) => self
                 .fn_signature(f)

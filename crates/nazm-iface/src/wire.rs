@@ -127,6 +127,7 @@ pub const SCHEMA: &str = "nazm.interface/7";
 /// | parameter | `{"param":0}` | the first type parameter of the definition this type appears in |
 /// | vector | `{"vec":T}` | `Vec[T]` |
 /// | definition | `{"def":"a.nz::record Box","args":[T]}` | that definition applied to those arguments — none for one that is not generic |
+/// | channel | `{"chan":T}` | `Chan[T]` (N53); a `/7` reader refuses it as it refuses any shape it does not know |
 /// | function | `{"fn":[T],"ret":R,"effects":["io"]}` | `fn(T) -> R ! { io }` (N50), its effects by name in effect-id order |
 ///
 /// The function shape arrived in N50 without a schema move: a `/7` reader that meets one
@@ -144,6 +145,10 @@ pub enum PersistentType {
     },
     Vec {
         vec: Box<PersistentType>,
+    },
+    /// `Chan[T]` (N53), written `{"chan":T}`.
+    Chan {
+        chan: Box<PersistentType>,
     },
     Def {
         def: String,
@@ -285,6 +290,9 @@ fn persist(t: Type, types: &UserTypes, graph: &ModuleGraph) -> Option<Persistent
         Type::Param(p) => Some(PersistentType::Param { param: p.index }),
         Type::Vec(v) => Some(PersistentType::Vec {
             vec: Box::new(persist(types.vec_element(v)?, types, graph)?),
+        }),
+        Type::ChanOf(c) => Some(PersistentType::Chan {
+            chan: Box::new(persist(types.chan_element(c)?, types, graph)?),
         }),
         Type::Fn(f) => {
             let sig = types.fn_signature(f)?;
@@ -500,6 +508,9 @@ fn validate_type(
             }
         }
         PersistentType::Vec { vec } => validate_type(vec, params, defined, depth + 1, owner)?,
+        PersistentType::Chan { chan } => {
+            validate_type(chan, params, defined, depth + 1, owner)?;
+        }
         PersistentType::Fn {
             params: ps,
             ret,
@@ -1194,6 +1205,10 @@ fn read_type(
         PersistentType::Vec { vec } => {
             let elem = read_type(vec, ids, types, owner);
             types.vec_of(elem)
+        }
+        PersistentType::Chan { chan } => {
+            let elem = read_type(chan, ids, types, owner);
+            types.chan_of(elem)
         }
         PersistentType::Fn {
             params,

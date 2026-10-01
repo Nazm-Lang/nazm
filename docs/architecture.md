@@ -1395,7 +1395,7 @@ computes the same answers as one that does.**
 
 Two hand-kept transcriptions of a memory model is the arrangement that produced that, so
 there is now one. Every line of the Nazm emitter's `runtime`, `task_runtime` and
-`channel_runtime` is a line of `crates/nazm-lir/src/runtime/core.rs`'s runtime constants (in `emit.rs` until N43) with
+`channel_runtime` is a line of `crates/nazm-runtime/src/core.rs`'s runtime constants (in `emit.rs` until N43, in `nazm-lir` until N53) with
 `hidden` changed to `internal`, and `cargo xtask check`'s **`runtime parity`** gate performs
 the derivation again and refuses a difference by line number.
 
@@ -4822,7 +4822,7 @@ per unit for both backends. The runtime and the platform entry are LLVM text in 
 are the runtime, not code generated from a program's MIR, and N43 owns them.
 
 **Runtime symbol boundary.** Every runtime entry point a backend calls is in one typed registry
-(`crates/nazm-lir/src/runtime/mod.rs` since N43): its symbol, its parameters and result in machine words and
+(`crates/nazm-runtime/src/lib.rs`; in `nazm-lir` from N43 to N52): its symbol, its parameters and result in machine words and
 pointers only, and what it does with ownership. A revision number names the registry; it enters
 every object's cache key. Cranelift code calls the runtime only through it. Where the runtime took
 or returned a first-class aggregate, the registry has a pointer-taking entry (`nz.str_join_to`,
@@ -4878,7 +4878,7 @@ first-class values (an `Int` an `i64`, a `Bool` an `i1`, a `Str` the `{ ptr, i64
 record or enum its named struct), and the Cranelift backend follows §7.43 (in-memory values by
 pointer, an in-memory result through a pointer passed first). Neither is C's and neither is
 promised to anything outside one build: the backend's identity and settings are in every object's
-cache key, the runtime's calling contract is `RUNTIME_ABI_REVISION` (`nazm-lir/src/runtime/mod.rs`),
+cache key, the runtime's calling contract is `RUNTIME_ABI_REVISION` (`nazm-runtime/src/lib.rs`),
 and no program mixes the two backends' objects. The *external*
 ABI is the C calling convention of the host target, and it is the only one a foreign function is
 called with.
@@ -4946,7 +4946,7 @@ effect and a capability kind, so the semantic epoch moves from 10 to 11.
 ## 7.45 The runtime constitution — N43, 2026-10-01
 
 Written before the code. The native runtime is compiler-owned LLVM text linked into every
-executable (`crates/nazm-lir/src/runtime/`); this section is the contract it keeps with the code
+executable (`crates/nazm-runtime/src/`); this section is the contract it keeps with the code
 both backends generate, with the operating system, and with the language.
 
 **What the runtime is responsible for, and what it is not.** At run time: the process's entry and

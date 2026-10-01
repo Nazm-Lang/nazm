@@ -392,7 +392,8 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
             Ty::Ints | Ty::Strs | Ty::Vec(_) => {
                 self.rt("nz.arr_retain", &[v]);
             }
-            Ty::Chan => {
+            // A generic channel's count is where an `Int` channel's is (N53).
+            Ty::Chan | Ty::ChanOf(_) => {
                 self.rt("nz.chan_retain", &[v]);
             }
             Ty::Fn(_) => {
@@ -437,6 +438,9 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
             }
             Ty::Chan => {
                 self.rt("nz.chan_release", &[v]);
+            }
+            Ty::ChanOf(_) => {
+                self.rt("nz.chanv_release", &[v]);
             }
             Ty::Fn(_) => {
                 self.g.needs.closures = true;

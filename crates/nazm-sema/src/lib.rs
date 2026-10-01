@@ -75,7 +75,7 @@ pub use resolve::{
     WrittenType,
 };
 pub use scope::{Candidate, Named, ScopeTrace, Unavailable, Visible};
-pub use types::{FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};
+pub use types::{ChanId, FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};
 pub use udt::{
     CycleEdge, LayoutCycle, NoEquality, OwnershipCycle, Reach, TypeNode, UserTypes, MAX_TYPE_DEPTH,
 };

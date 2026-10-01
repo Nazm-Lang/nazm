@@ -31,7 +31,6 @@ mod emit;
 pub mod ir;
 pub mod lower;
 pub mod names;
-pub mod runtime;
 pub mod symbol;
 
 pub use emit::{emit_unit, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, STACK_EXHAUSTED, TARGET_NOTE};
@@ -41,5 +40,13 @@ pub use ir::{
 };
 pub use lower::{lower, LowerError, Native, Sig};
 pub use names::SourceNames;
-pub use runtime::{emit_entry, emit_runtime};
+/// The runtime component (N53), which both backends depend on and neither owns.
+pub use nazm_runtime as runtime;
+pub use nazm_runtime::emit_runtime;
+
+/// The platform entry calling `entry`, `main`'s symbol.
+#[must_use]
+pub fn emit_entry(entry: &NativeSymbol, roots: usize, needs: Needs) -> String {
+    nazm_runtime::emit_entry(&entry.to_string(), roots, needs)
+}
 pub use symbol::{Linkage, NativeSymbol};

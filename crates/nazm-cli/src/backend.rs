@@ -274,7 +274,10 @@ fn configuration(mut arguments: Vec<String>) -> CodegenConfig {
 }
 
 fn runtime_abi(revision: u32) -> String {
-    format!("nazm-runtime-abi={revision}")
+    format!(
+        "nazm-runtime-abi={revision}+{}",
+        nazm_lir::runtime::digest()
+    )
 }
 
 /// What the driver says it is, minus where it says it is installed.
@@ -490,6 +493,14 @@ mod tests {
     ///
     /// Not a mock: the point of asking the compiler what it will do is that nobody has to
     /// predict the answer, and a test that predicted it would be testing the prediction.
+    #[test]
+    fn the_runtime_s_digest_is_part_of_every_configuration() {
+        // The revision is what a person bumps; the digest is what was emitted (N53).
+        let digest = nazm_lir::runtime::digest();
+        assert_eq!(digest.len(), 64);
+        assert!(runtime_abi(nazm_lir::runtime::RUNTIME_ABI_REVISION).ends_with(digest));
+    }
+
     #[test]
     fn the_runtime_abi_revision_is_part_of_every_configuration() {
         let resolved = vec!["-cc1".to_owned(), "-O0".to_owned()];

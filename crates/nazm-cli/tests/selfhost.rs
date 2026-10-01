@@ -2481,7 +2481,30 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
     // the checker, which would then report a valid call as an unknown function. This is
     // the guard: it reads the Nazm source and requires a signature for every intrinsic.
     let source = std::fs::read_to_string(repo_root().join("compiler/analyse.nz")).expect("read");
-    for i in nazm_core::Intrinsic::ALL {
+    // The built-ins the compiler written in Nazm deliberately does not carry, each with why.
+    // Not an exclusion list in the Nazm source — that stays forbidden below — but this test's
+    // own record, so an omission is a decision someone wrote down and not a gap.
+    const NOT_CARRIED: &[(&str, &str)] = &[
+        // N53: `Chan[T]` is a type form the Nazm checker's type table does not have, and its
+        // runtime is outside the parity gate. A program using one is refused by name there
+        // (an unknown function) rather than mistyped.
+        ("chan_new_of", "Chan[T]"),
+        ("chan_send_of", "Chan[T]"),
+        ("chan_recv_of", "Chan[T]"),
+        ("chan_close_of", "Chan[T]"),
+    ];
+    let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
+    for (name, _) in NOT_CARRIED {
+        assert!(
+            nazm_core::Intrinsic::ALL.iter().any(|i| i.name() == *name),
+            "`{name}` is recorded as not carried, but is not a built-in"
+        );
+        assert!(
+            !source.contains(&format!("\"{name}\"")),
+            "`{name}` is now in compiler/analyse.nz: take it off the list"
+        );
+    }
+    for i in nazm_core::Intrinsic::ALL.iter().filter(|i| carried(i)) {
         let needle = format!("\"{}\"", i.name());
         assert!(
             source.contains(&needle),
@@ -2502,7 +2525,7 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
     );
     // The arity the Nazm table records must match, since a wrong one turns a valid call
     // into `N0303`. Checked by counting the non-`n` arguments on each line.
-    for i in nazm_core::Intrinsic::ALL {
+    for i in nazm_core::Intrinsic::ALL.iter().filter(|i| carried(i)) {
         let line = source
             .lines()
             .find(|l| l.contains(&format!("\"{}\"", i.name())) && l.contains("add_builtin"))
