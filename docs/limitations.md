@@ -42,7 +42,9 @@ found only by reading all of it.
 ## Runtime and concurrency
 
 - One OS thread per task; no worker pool, cancellation, timeouts, select or detached tasks;
-  deadlock is possible and not detected (areas 14, 15).
+  deadlock is possible and not detected (areas 14, 15). So the tasks alive at once are bounded by
+  the host's thread limit — a container's process ceiling counts every thread — and a `spawn` the
+  host refuses is `N0404`, not a wait.
 - Channels carry `Int` only (area 14).
 - No runtime crate: the runtime is LLVM text, tested through a C harness (area 13).
 
