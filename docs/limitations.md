@@ -65,8 +65,12 @@ found only by reading all of it.
   deadlock is possible and not detected (areas 14, 15). So the tasks alive at once are bounded by
   the host's thread limit — a container's process ceiling counts every thread — and a `spawn` the
   host refuses is `N0404`, not a wait.
-- Channels carry `Int` only (area 14).
-- No runtime crate: the runtime is LLVM text, tested through a C harness (area 13).
+- A channel carries one element type, and only one that may cross into a task — `Int`, `Bool`,
+  `Str`, channels, and records and enums of those (`N0390`); no `select`, no unbounded channel,
+  no channel of sequences or closures (area 14). *Narrowed in N53:* until then, `Int` only.
+- The runtime is its own crate (`nazm-runtime`, N53) but still LLVM text both backends link,
+  tested through a C harness; no Rust implementation, no runtime shared across programs as a
+  library (area 13).
 
 ## Packages and builds
 

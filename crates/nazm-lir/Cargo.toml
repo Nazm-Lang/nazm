@@ -18,6 +18,9 @@ nazm-sema = { workspace = true }
 # What it lowers (N40): validated MIR. Not Core IR and not `nazm-syntax`: the backend never
 # sees how a program was written, and makes no language decision MIR has already made.
 nazm-mir = { workspace = true }
+# The runtime component (N53): its text, inventory and entry, which this backend and the
+# Cranelift one both consume.
+nazm-runtime = { workspace = true }
 
 [lints]
 workspace = true

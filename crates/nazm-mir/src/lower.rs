@@ -1777,7 +1777,13 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         return true;
     }
     match t {
-        Type::Str | Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) | Type::Fn(_) => true,
+        Type::Str
+        | Type::Ints
+        | Type::Strs
+        | Type::Chan
+        | Type::ChanOf(_)
+        | Type::Vec(_)
+        | Type::Fn(_) => true,
         Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) => false,
         Type::Record(id) => res
             .records()
@@ -1823,6 +1829,9 @@ fn collect_types(res: &Resolution, graph: &ModuleGraph, functions: &[Function]) 
                             work.push(*t);
                             if let Some(v) = res.types().find_vec(*t) {
                                 work.push(v);
+                            }
+                            if let Some(c) = res.types().find_chan(*t) {
+                                work.push(c);
                             }
                         }
                         Rvalue::Compare { operand, .. } => work.push(*operand),
@@ -1914,6 +1923,22 @@ fn collect_types(res: &Resolution, graph: &ModuleGraph, functions: &[Function]) 
                 let elem = res.types().vec_element(v).unwrap_or(Type::Int);
                 work.push(elem);
                 types.vecs.insert(
+                    key,
+                    VecInfo {
+                        elem,
+                        elem_key: type_key(elem, res.types(), graph),
+                        source: res.types().show(t),
+                    },
+                );
+            }
+            Type::ChanOf(c) => {
+                let key = u32::try_from(c.index()).unwrap_or(u32::MAX);
+                if types.chans.contains_key(&key) {
+                    continue;
+                }
+                let elem = res.types().chan_element(c).unwrap_or(Type::Int);
+                work.push(elem);
+                types.chans.insert(
                     key,
                     VecInfo {
                         elem,

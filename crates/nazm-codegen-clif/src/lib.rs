@@ -91,6 +91,7 @@ impl Cranelift {
         h.update(self.version().as_bytes());
         h.update(self.target.triple.as_bytes());
         h.update(&RUNTIME_ABI_REVISION.to_le_bytes());
+        h.update(nazm_lir::runtime::digest().as_bytes());
         for id in &unit.functions {
             if let (Some(f), Some(sig)) =
                 (native.program.function(*id), native.sigs.get(id.index()))

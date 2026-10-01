@@ -1029,7 +1029,7 @@ it. That was accurate, and it is no longer true — see area 10a.*
 its own, and the objects are linked. `crates/nazm-lir/src/lower.rs` splits into a global
 `plan` — signature admissibility and, until N49, the recursion refusal, both of which span modules —
 and `lower_module`, which reads one module's bodies and every function's *signature*;
-`crates/nazm-lir/src/emit.rs` has `emit_unit`, and `crates/nazm-lir/src/runtime/` `emit_runtime` and `emit_entry` (moved by N43);
+`crates/nazm-lir/src/emit.rs` has `emit_unit`, and `crates/nazm-runtime/src/` `emit_runtime` and `emit_entry` (moved by N43, its own crate since N53);
 `crates/nazm-cli/src/build.rs` runs `clang -c` per artefact and links.
 
 A symbol is a spelling of the definition's `DefKey` (`crates/nazm-lir/src/symbol.rs`), not
@@ -1169,7 +1169,7 @@ the differential reference. `architecture.md` §7.43 is the constitution, writte
 | The whole native subset compiles with Cranelift | VERIFIED | all 104 programs of the 205-source corpus that build: stdout, stderr, exit status and memory report identical to the LLVM backend's (`performance.md`, N41); `crates/nazm-cli/tests/cranelift.rs` against the interpreter too |
 | Traps and arithmetic edges | VERIFIED | `every_trap_is_the_same_trap` (overflow, `/` and `%` by zero, `MIN / -1`, bounds, capacities), `signed_arithmetic_and_its_edges_agree` (`MIN % -1` is 0) |
 | No silent fallback | VERIFIED | `choosing_cranelift_writes_no_llvm_text_for_any_unit`; a refusal writes nothing (`crates/nazm-cli/tests/cranelift.rs`); recursion compiles under both since N49 (`recursion_compiles_under_both_backends_and_agrees`) |
-| Typed, centralised runtime imports | VERIFIED | every call into the runtime is built from `crates/nazm-lir/src/runtime/mod.rs`; `a_runtime_entry_the_registry_names_is_one_the_runtime_defines` |
+| Typed, centralised runtime imports | VERIFIED | every call into the runtime is built from `crates/nazm-runtime/src/lib.rs`; `a_runtime_entry_the_registry_names_is_one_the_runtime_defines` |
 | Object-cache identity and reuse | VERIFIED | a key over each unit's MIR digests, layouts, callee signatures, target, backend version and settings and the runtime ABI revision, known before generation; `an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`, `a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those` |
 | Deterministic objects | VERIFIED | `the_same_mir_gives_the_same_object_bytes` (the compiler's own source) |
 | Debug information | MISSING | no DWARF; function symbols only (N48) |
@@ -1188,14 +1188,19 @@ convention and layout; nothing passes a value between code the two backends gene
 
 ## Runtime and concurrency
 
-### 13. Runtime — PARTIAL (the v1 contract VERIFIED; no runtime crate, no scheduler)
+### 13. Runtime — PARTIAL (the v1 contract VERIFIED; its own crate since N53; no scheduler)
 
 **Evidence** · N43 (2026-10-01): `architecture.md` §7.45 is the runtime constitution, written
 first. The runtime is LLVM text generated into each program, emitted only for the parts reached,
-from `crates/nazm-lir/src/runtime/`: `core.rs` (the portable text — state, failure and report,
+from `crates/nazm-runtime/src/` (in `nazm-lir` from N43 to N52): `core.rs` (the portable text — state, failure and report,
 sequences, strings, I/O, join, tasks, channels, the second-backend shims), `os.rs` (the operating-
 system adapter: the only C-library and POSIX-threads entry points anything calls), `entry.rs`
-(the platform entry) and `mod.rs` (the contract). *N49:* runtime ABI revision 3 — `nz.stack_check`
+(the platform entry) and `lib.rs` (the contract). *N53:* those four files are the
+`nazm-runtime` crate, which depends on nothing of the compiler (`cargo xtask check`, layering);
+`nazm-lir` and `nazm-codegen-clif` consume it. Runtime ABI revision 5, and `digest()` — blake3 of
+the whole runtime text, the platform entry and the inventory — enters every object key beside the
+revision under both backends (`the_runtime_s_digest_is_part_of_every_configuration`,
+`the_runtime_is_revision_five_and_its_digest_covers_generic_channels`). *N49:* runtime ABI revision 3 — `nz.stack_check`
 and its thread-local limit, emitted only where a function in a call cycle calls it, and task
 threads started with an 8 MiB stack (`a_task_thread_has_the_stack_the_check_budgets_for_on_every_host`). `compiler/emit.nz`'s copy is **derived** from
 `core.rs` line by line, re-derived by `cargo xtask check`'s `runtime parity` gate since N8.
@@ -1249,8 +1254,18 @@ transitively), `exit_with` from a task. Peak RSS stays at 3.8 MB from 5,000 to 5
 
 **Limitation** · One OS thread per task and nothing more. No M:N, no work stealing, no
 fairness, no task density, no timeouts, and **no cancellation beyond closing a channel**.
-`Chan` carries `Int` only. Ownership prevents data races; **that is not deadlock freedom**
+`Chan` alone carries `Int`; `Chan[T]` (N53) carries any `T` that may cross into a task, no
+sequence or closure (`N0390`), with no `select`. Ownership prevents data races; **that is not deadlock freedom**
 and is not claimed as such (`architecture.md` §5).
+
+*N53, 2026-10-02: Generic channels — VERIFIED.* `Chan[T]` with `chan_new_of[T]`, `chan_send_of`,
+`chan_recv_of(c, out)` and `chan_close_of`: strings, records and enums with payloads cross tasks
+through typed channels identically under the interpreter, LLVM `-O0`/`-O2` and Cranelift, every
+run fully reclaimed — a value still queued when the last reference goes released exactly once, a
+send after close refused and its value released by the sender. The type persists in interfaces
+(`{"chan":T}`, which a `/7` reader refuses as an unknown shape), and a typed channel's operations
+are `explain-cost` sites. `crates/nazm-cli/tests/generic_channels.rs`, 8 tests; fourteen N53
+mutations.
 
 **Next dependency** · None for the current model; area 15 for anything beyond it.
 

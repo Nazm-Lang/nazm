@@ -162,7 +162,12 @@ use crate::digest::{self, Framed};
 /// names, so a program defining a function or type of either name moved from accepted to
 /// refused, and a vouch without a `VouchCap` held is refused (`N0369`). The check artefact's sink
 /// facts gained a class.
-pub const SEMANTIC_EPOCH: u32 = 15;
+/// `16` — N53, 2026-10-02. Generic channels: `Chan[T]` became a type form and
+/// `chan_new_of`, `chan_send_of`, `chan_recv_of` and `chan_close_of` built-in names, so a program
+/// defining a function of any of those names moved from accepted to refused, `Chan` with
+/// arguments from refused to accepted, and an element that cannot cross into a task is refused
+/// (`N0390`).
+pub const SEMANTIC_EPOCH: u32 = 16;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -181,6 +186,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CANNOT_INFER_TYPE_ARGUMENT",
     "CAPABILITY_CONSTRUCTED",
     "CAPTURE_REFUSED",
+    "CHANNEL_ELEMENT",
     "CONDITION_NOT_BOOL",
     "CONFLICTING_EFFECT_ARGUMENT",
     "CONFLICTING_TYPE_ARGUMENTS",

@@ -37,6 +37,12 @@ pub fn type_key(t: Type, types: &UserTypes, graph: &ModuleGraph) -> String {
                 .vec_element(v)
                 .map_or_else(|| "?".to_owned(), |e| type_key(e, types, graph))
         ),
+        Type::ChanOf(c) => format!(
+            "Chan({})",
+            types
+                .chan_element(c)
+                .map_or_else(|| "?".to_owned(), |e| type_key(e, types, graph))
+        ),
         Type::Record(_) | Type::Enum(_) => {
             let Some(node) = types.definition_of(t) else {
                 return "?".to_owned();

@@ -1933,7 +1933,7 @@ with a one-core mutation container running beside it:
 
 ### The runtime contract — N43, measured 2026-10-01
 
-N43 moved the runtime into `crates/nazm-lir/src/runtime/` and wrote its contract down; it changed
+N43 moved the runtime into `crates/nazm-lir/src/runtime/` (its own crate, `crates/nazm-runtime/`, since N53) and wrote its contract down; it changed
 no instruction, so what is measured is what the runtime costs, now that there is a harness that
 calls it directly.
 

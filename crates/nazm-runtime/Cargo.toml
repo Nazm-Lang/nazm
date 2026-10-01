@@ -1,0 +1,17 @@
+[package]
+name = "nazm-runtime"
+description = "The runtime every native Nazm program links: its LLVM text, its typed inventory, its OS adapter and its platform entry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.nazm]
+docs = ["architecture:7.45", "architecture:7.55"]
+
+[dependencies]
+blake3 = { workspace = true }
+
+[lints]
+workspace = true

@@ -316,6 +316,10 @@ pub mod codes {
     /// A call binds its callee's effect parameter to two different sets (N51).
     pub const CONFLICTING_EFFECT_ARGUMENT: Code = Code::new("N0389");
 
+    // Generic channels (N53, `docs/architecture.md` §7.55)
+    /// A `Chan[T]` whose `T` may not cross into a task (N53).
+    pub const CHANNEL_ELEMENT: Code = Code::new("N0390");
+
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.

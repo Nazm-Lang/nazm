@@ -317,7 +317,102 @@ impl Fx<'_, '_, '_> {
                 let z = self.iconst(0);
                 self.set(dst, z);
             }
+            // A generic channel (N53), as the LLVM backend has it: the runtime copies one slot
+            // of the element's size; a send hands over a reference of its own, given back if
+            // the channel refuses; a receive takes the slot's reference onto the vector.
+            Intrinsic::ChanNewOf => {
+                let t = element(op, elem);
+                let cap = arg(self, 0);
+                let bad = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, cap, 1);
+                self.guard(bad, "N0405", "a channel needs a capacity of at least 1");
+                let stride = self.iconst(i64::from(self.size(t)));
+                let release = if self.g.lay.owns(t) {
+                    let h = self.g.helper(crate::unit::Helper::ReleaseElement(t));
+                    let r = self.func(h);
+                    self.b.ins().func_addr(self.g.ptr, r)
+                } else {
+                    self.iconst(0)
+                };
+                let c = self
+                    .rt("nz.chanv_new", &[cap, stride, release])
+                    .unwrap_or_else(|| self.iconst(0));
+                let null = self.b.ins().icmp_imm_s(IntCC::Equal, c, 0);
+                self.guard(null, "N0406", "out of memory");
+                self.set(dst, c);
+            }
+            Intrinsic::ChanSendOf => {
+                let t = element(op, elem);
+                let c = arg(self, 0);
+                let slot = self.element_slot(t);
+                // The channel's own reference, taken as the value goes into the slot.
+                self.store_element(slot, args.get(1), t, false);
+                let ok = self
+                    .rt("nz.chanv_send", &[c, slot])
+                    .unwrap_or_else(|| self.b.ins().iconst(types::I8, 0));
+                let bit = self.b.ins().band_imm_s(ok, 1);
+                if self.g.lay.owns(t) {
+                    let refused = self.b.create_block();
+                    let cont = self.b.create_block();
+                    self.b.ins().brif(bit, cont, &[], refused, &[]);
+                    self.b.switch_to_block(refused);
+                    self.release_at(slot, t);
+                    self.b.ins().jump(cont, &[]);
+                    self.b.switch_to_block(cont);
+                }
+                self.set(dst, bit);
+            }
+            Intrinsic::ChanRecvOf => {
+                let t = element(op, elem);
+                self.g.needs.sequences = true;
+                let c = arg(self, 0);
+                let h = arg(self, 1);
+                let slot = self.element_slot(t);
+                let got = self
+                    .rt("nz.chanv_recv", &[c, slot])
+                    .unwrap_or_else(|| self.b.ins().iconst(types::I8, 0));
+                let bit = self.b.ins().band_imm_s(got, 1);
+                let take = self.b.create_block();
+                let cont = self.b.create_block();
+                self.b.ins().brif(bit, take, &[], cont, &[]);
+                self.b.switch_to_block(take);
+                let stride = self.iconst(i64::from(self.size(t)));
+                let data = self
+                    .rt("nz.arr_grow", &[h, stride])
+                    .unwrap_or_else(|| self.iconst(0));
+                let null = self.b.ins().icmp_imm_s(IntCC::Equal, data, 0);
+                self.guard(null, "N0406", "out of memory");
+                let len = self.b.ins().load(types::I64, mem(), h, 0);
+                let off = self.b.ins().imul(len, stride);
+                let at = self.b.ins().iadd(data, off);
+                // Moved, not copied: the slot's reference becomes the vector's.
+                let n = self.size(t);
+                self.copy(at, slot, n);
+                let grown = self.b.ins().iadd_imm_s(len, 1);
+                self.b.ins().store(mem(), grown, h, 0);
+                self.b.ins().jump(cont, &[]);
+                self.b.switch_to_block(cont);
+                self.set(dst, bit);
+            }
+            Intrinsic::ChanCloseOf => {
+                let c = arg(self, 0);
+                self.rt("nz.chan_close", &[c]);
+                let z = self.iconst(0);
+                self.set(dst, z);
+            }
         }
+    }
+
+    /// A scratch slot for one element of type `t`, which a generic channel copies through.
+    fn element_slot(&mut self, t: Ty) -> Value {
+        let n = self.size(t).max(8);
+        let ss = self
+            .b
+            .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                n,
+                3,
+            ));
+        self.b.ins().stack_addr(self.g.ptr, ss, 0)
     }
 
     /// A string's pointer and length.

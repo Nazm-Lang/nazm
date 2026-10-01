@@ -64,6 +64,12 @@ impl<'a> Names<'a> {
                     .vec_element(v)
                     .map_or_else(|| "?".to_owned(), |e| self.ty(e))
             ),
+            Type::ChanOf(c) => format!(
+                "Chan[{}]",
+                types
+                    .chan_element(c)
+                    .map_or_else(|| "?".to_owned(), |e| self.ty(e))
+            ),
             Type::Record(_) | Type::Enum(_) => {
                 let head = match types.definition_of(t) {
                     Some(TypeNode::Record(id)) => self.record_definition(id),

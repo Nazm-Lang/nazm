@@ -132,7 +132,9 @@ impl Origin {
             | Intrinsic::VecPush
             | Intrinsic::VecSet
             | Intrinsic::ChanSend
-            | Intrinsic::ChanClose => BuiltinFlow::Derive,
+            | Intrinsic::ChanClose
+            | Intrinsic::ChanSendOf
+            | Intrinsic::ChanCloseOf => BuiltinFlow::Derive,
             // Read out of a shared handle: what is there is whatever any alias wrote.
             Intrinsic::IntsLen
             | Intrinsic::IntsGet
@@ -144,12 +146,14 @@ impl Origin {
             | Intrinsic::VecLen
             | Intrinsic::VecGet
             | Intrinsic::VecPop
+            | Intrinsic::ChanRecvOf
             | Intrinsic::ChanRecv => BuiltinFlow::Read,
             // A new, empty handle, or a call that never returns.
             Intrinsic::IntsNew
             | Intrinsic::StrsNew
             | Intrinsic::VecNew
             | Intrinsic::ChanNew
+            | Intrinsic::ChanNewOf
             | Intrinsic::ExitWith => BuiltinFlow::Fresh,
             // Declassification (N52): no origin, and the clearing recorded.
             Intrinsic::StrVouch => BuiltinFlow::Vouch,

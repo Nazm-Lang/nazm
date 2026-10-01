@@ -882,7 +882,7 @@ type = function_type | [ qualifier ] , IDENT , [ type_arguments ] ;
 ```
 
 A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
-`Str`, `Ints`, `Strs`, `Chan`, the capabilities `IoCap` and `SpawnCap`, `Vec`, a
+`Str`, `Ints`, `Strs`, `Chan` (and `Chan[T]`, N53), the capabilities `IoCap` and `SpawnCap`, `Vec`, a
 declared record or enum, a type parameter in scope — is a *checking* question, not a grammatical one: the parser accepts any
 identifier here and the checker reports `N0305` for one that is not a type. A grammar
 that listed them would be claiming the parser rejects `fn f(x: Widget)`, which it does
@@ -891,6 +891,10 @@ one error. How many arguments a name takes is the checker's too (`N0351` – `N0
 
 ```nazm
 fn f(c: Chan) -> Int { 0 } fn main() -> Int { f(chan_new(1)) }
+```
+
+```nazm
+fn f(c: Chan[Str]) -> Bool { chan_send_of(c, "hi") } fn main() -> Int { if f(chan_new_of[Str](1)) { 0 } else { 1 } }
 ```
 
 ```nazm
