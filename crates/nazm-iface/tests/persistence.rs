@@ -826,6 +826,33 @@ fn a_function_type_is_published_with_its_effects_and_read_back_as_the_same_type(
 }
 
 #[test]
+fn a_channel_type_is_published_and_read_back_as_the_same_type() {
+    // N53: `Chan[T]` is written `{"chan":T}` and read back as a channel, not as anything
+    // else with one type argument.
+    let g = graph();
+    let mut types = UserTypes::default();
+    let c = types.chan_of(Type::Str);
+    let p =
+        PersistentUnitInterface::published(&interface(&g, &[("run", &[c], Type::Int)]), &g, &types)
+            .expect("publishable");
+    let json = p.to_json().unwrap();
+    assert!(json.contains(r#""params":[{"chan":"Str"}]"#), "{json}");
+    let back = PersistentUnitInterface::from_json(&json).unwrap();
+    assert_eq!(back, p);
+    let mut fresh = UserTypes::default();
+    let read = back.rehydrate(g.root(), FnId::from_index(0), &mut fresh);
+    let t = read
+        .exports()
+        .first()
+        .and_then(|e| e.params.first().copied())
+        .unwrap();
+    let Type::ChanOf(id) = t else {
+        panic!("not a channel type: {t:?}");
+    };
+    assert_eq!(fresh.chan_element(id), Some(Type::Str));
+}
+
+#[test]
 fn a_function_type_with_an_unknown_or_unordered_effect_is_refused() {
     let with = |effects: &str| {
         format!(
