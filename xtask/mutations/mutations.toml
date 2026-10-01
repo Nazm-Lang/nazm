@@ -2867,6 +2867,7 @@ the **Nazm-written** emitter releases the operand while the success payload take
 file = "compiler/emit.nz"
 find = "        emit_retain(out, next, value, ok_t, rowns);"
 replace = "        ints_len(vals);"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_propagates_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-the-operand-leaks-on-success"
