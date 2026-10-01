@@ -37,6 +37,19 @@ defines it to the linker. Only `Int` (`int64_t`) and `Bool` (`bool`) cross; ever
 `ForeignCap` in scope and is the effect `foreign`; and `nazm run` refuses such a program rather
 than pretend to run C. See `docs/spec.md`, *Foreign functions*.
 
+### Writing a program the way v1 prefers
+
+Declare what each function does and hand it the authority it needs, rather than relying on a
+caller's: `fn save(io: IoCap, path: Str, data: Str) -> Int ! { io } { write_file(path, data) }`.
+A function that declares `! {}` is pure, and a profile such as `critical` or `cyber` refuses any
+function that declares nothing. Reach for the standard library before writing helpers —
+`use "@std/text";` gives `text_split`, `text_trim` and `text_parse_int`, which returns a `Result`
+rather than failing. A program that grows past one directory becomes a package: a `nazm.toml`
+beside `src/`, dependencies as `use "NAME:path.nz";`, and `nazm lock` before a `--locked` build.
+`nazm build --debug` makes a program a debugger can stop in, `nazm build --timings` says where a
+build's time went, and `nazm inspect` prints everything the compiler knows about a program.
+`docs/limitations.md` lists what v1 does not do.
+
 ## The shape of the language, in six sentences
 
 - **A file is a module.** `use "other.nz";` makes the definitions that file marked `pub`
