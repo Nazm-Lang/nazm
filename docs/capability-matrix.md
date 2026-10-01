@@ -2,13 +2,13 @@
 
 **Status: this file is the current status authority for the tree it is committed in.**
 
-Two things are kept apart here. **`4fb15542dfbf9af0bf34c42fe52783637b3daed4` is a frozen
-historical candidate**: the commit a retained release candidate was built and tested at.
-Its evidence is [`releases/4fb1554.md`](releases/4fb1554.md), which is immutable and is not
-updated by anything that happened since. **The claims below are current-tree claims**, and
-they include behaviour added after that candidate — the milestones N7 through N15, each of
-which changed the compiler and ran its own evidence. They are not grounded in `4fb1554`,
-and nothing here says the tree has changed only in comments since then.
+Two things are kept apart here. **Frozen candidates** are commits a release candidate was tested
+at, each with an immutable record in `releases/` that nothing later updates: the latest is
+**`84d3c801f4b14056297bc6ceadc5f6441873c594`** ([`releases/84d3c80.md`](releases/84d3c80.md), the
+v1 foundation, N40–N48), and the first was `4fb15542dfbf9af0bf34c42fe52783637b3daed4`
+([`releases/4fb1554.md`](releases/4fb1554.md)). **The claims below are current-tree claims**: they
+include behaviour added after any candidate, each milestone having changed the compiler and run its
+own evidence, and a row is checked against its own evidence, not against a candidate commit.
 
 Each row carries the evidence for the milestone that changed it — the tests, the contained
 runs and the dates — so a claim is checked against its row, not against a single commit. A
@@ -39,8 +39,17 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,903 passed, 0 failed, 25 ignored, across 121 suites**, run contained and
-offline at N39 (2026-09-30), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
+**Current suite: 2,021 passed, 0 failed, 29 ignored, across 136 suites**, run contained and
+offline in the N48 release gate (2026-10-01, at `a8a7b3f`, scheduled at P4W2T4). With it: the xtask
+lifecycle tests 19 of 19, selfhost 38 of 38 and bootstrap passed (at `74727bb`), and the mutation
+catalogue **808 of 808 caught**, composed across the commits the gate caused. The durable record of
+that gate, and of N40–N48 as a whole, is [`releases/84d3c80.md`](releases/84d3c80.md): frozen
+release-candidate notes for the tested candidate `84d3c80`, not updated by later commits — the
+documentation commits after it do not change what it says. It is the canonical N40–N48 evidence
+location; the long per-milestone working report used to produce it is kept outside the repository.
+
+*Historical, not current:* N39 ended at 1,903 passed, 0 failed, 25 ignored, across 121 suites, run contained and
+offline (2026-09-30), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
 tests, run on their own (19 of 19 passed, contained), and six are N33's, N34's, N36's, N38's (the
 3,000-request MCP confirmation) and N39's release-build measurements, run by hand or in the
 release-benchmark stage (`performance.md`). N38
@@ -91,14 +100,17 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
 
-After N39: thirteen VERIFIED (areas 4 and 30 with a stated qualification), thirteen PARTIAL,
-three DESIGNED, two RESEARCH, five MISSING. The count that stood here — nine, sixteen, three,
-two, five — had not been kept up since the first era, and what follows is that era's summary,
-kept as it was written: the shape is
+After N48: fifteen VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification), sixteen
+PARTIAL, two RESEARCH, one MISSING, across the 34 rows above.
+
+*Historical, not current — kept as it was written.* After N39 the count read thirteen VERIFIED,
+thirteen PARTIAL, three DESIGNED, two RESEARCH, five MISSING; before that, nine, sixteen, three,
+two, five, not kept up since the first era. The first era's summary follows: the shape is
 worth reading directly: **everything verified is either a front-end capability, a tooling
 interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
 capabilities, provenance — exists at all, and that is the accurate summary of where the
-project stands after the first era.
+project stood after the first era. That stopped being true at N36–N38, and the rows below are the
+current account.
 
 ---
 
