@@ -1831,6 +1831,21 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### MIR — N40, measured 2026-10-01
+
+- **Nothing changed in any program.** All 205 sources, N39 against N40: `check`, `run` and `build`
+  diagnostics identical, and the 104 buildable programs' stdout, stderr, exit status and memory
+  report identical.
+- **What each phase costs**, container, release, median of 15 (`what_each_phase_costs_on_the_compiler`):
+  `compiler/emit.nz` parse 29.3 ms, checking +19.3, Core IR +11.6 (verifying 0.4), **MIR +8.1
+  (verifying 2.3)**, layout +1.2, LLVM text +40.1 — 111.9 ms; a 3,001-function chain 96.8 ms, of
+  which MIR 8.3. On the host during development: MIR 5.6 ms (verifying 2.0) in an 85.7 ms pipeline.
+- **Its size.** `compiler/emit.nz` is 432 MIR functions, 4,633 blocks, 20,077 statements and 13,835
+  locals; the largest function, `check_all`, 427 blocks and 1,238 locals.
+- **Scale.** Linear: 1.5 ms for a function of 250 bindings, 6.9 ms for 1,000 (release, host).
+- **Size.** Contained release: `nazm` 4,920,224 B (+65,536 against N39's 4,854,688), `nazm-mcp`
+  4,265,696 B, unchanged.
+
 ### Core IR — N39, measured 2026-09-30
 
 Core IR is a lowering every checked program now passes through (`architecture.md` §7.41), so what
