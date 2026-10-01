@@ -3044,6 +3044,29 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
 | **Evidence** | Every vouch is recorded with the origins it cleared; `nazm explain-flow` prints them beside every sink |
 | **Policy** | The language refuses one flow (`N0372`); profiles refuse more: `cyber`'s `contents-stay-in-files`, `critical`'s `no-declassification` |
 
+### Generic channels — N53
+<!-- id: generic-channels -->
+
+```nazm
+struct Job { name: Str, size: Int, }
+
+fn worker(jobs: Chan[Job], done: Chan[Str]) -> Int ! {} {
+    let got = vec_new[Job]();
+    while chan_recv_of(jobs, got) {
+        let j = vec_pop(got);
+        chan_send_of(done, str_concat(j.name, "!"));
+    }
+    chan_close_of(done)
+}
+```
+
+| | |
+| --- | --- |
+| **Type** | `Chan[T]`, for a `T` that may cross into a task — the rule a `spawn` argument follows (`N0390` otherwise). `Chan` alone is the `Int` channel, unchanged |
+| **Built-ins** | `chan_new_of[T](capacity: Int) -> Chan[T]`, `chan_send_of(c, v: T) -> Bool`, `chan_recv_of(c, out: Vec[T]) -> Bool`, `chan_close_of(c) -> Int` — `Chan`'s semantics exactly: blocking, closing, draining |
+| **Ownership** | A send copies; a value a closed channel refuses is released; a receive moves the value into `out`; a channel destroyed with values queued releases each |
+| **Equality, tasks** | As `Chan`: no equality; may cross into a task |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 

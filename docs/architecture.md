@@ -5715,6 +5715,44 @@ and a program that declared a type or function of either name moves from accepte
 check artefact's sink facts gain a class; an entry from an older checker is unreachable by the epoch.
 `nazm.cost/1` and `nazm.flow/1` are new schemas.
 
+## 7.55 The runtime component and generic channels — N53, 2026-10-02
+
+Written before the code. Two things the runtime could not do: be a component of its own, and carry
+anything through a channel but an `Int`.
+
+**The boundary.** The runtime — every function and global generated code calls, its typed
+inventory, its OS adapter, the platform entry and its identity — moves out of the LLVM backend's
+crate into **`nazm-runtime`**, which both backends depend on and neither owns. What stays
+compiler-generated is what depends on a program: per-type retain, release and equality helpers,
+closure release functions, task trampolines. The runtime is still LLVM IR text compiled by clang,
+for both backends: rewriting it as Rust compiled to an object would need a `no_std` runtime with
+no unwinding, built per target at `nazm build` time or shipped prebuilt per target, and a linker
+step neither backend has today — a research item (`docs/research-register.md`), not this
+milestone's. The Cranelift backend therefore still needs clang for the runtime object, and both
+need the system C library and linker; that is stated, not hidden.
+
+**Identity.** The runtime ABI revision stays a number a reader can talk about, and beside it the
+runtime gains a **digest** — of every part's text, the entry, the inventory and the globals — that
+enters every object's cache key. A change to the runtime that forgot to bump the revision still
+changes every key, so an object built against another runtime is never reused. Revision 5 is this
+milestone's: generic channels.
+
+**`Chan[T]`.** A channel of any type that may cross into a task (`Int`, `Bool`, `Str`, `Chan`,
+`Chan[U]`, and records and enums of those) — the same rule `spawn` applies to an argument, now
+also the rule for being a channel's element (`N0390` otherwise). `Chan` alone is unchanged: the
+`Int` channel, its four built-ins and its runtime. `Chan[T]` has its own: `chan_new_of[T](capacity)`,
+`chan_send_of(c, v)`, `chan_recv_of(c, out: Vec[T])` and `chan_close_of(c)`, with exactly `Chan`'s
+blocking, closing and draining semantics. **Ownership:** a send copies its value into the channel
+(the sender's binding is untouched, as every argument is); a value refused by a closed channel is
+released at once; a receive moves the value out of the channel into the vector; a channel destroyed
+with values still queued releases each of them, by a release function generated for `T` — the
+helper a `Vec[T]` already has. Equality, ordering and a task's use are as `Chan`'s. The memory
+report counts generic channels with the others.
+
+**Runtime representation.** A generic channel is a ring of fixed-size slots, the slot size and the
+element release function given at creation; send and receive copy one slot under the channel's
+lock. The `Int` channel keeps its own ring, so nothing about existing programs changes.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
