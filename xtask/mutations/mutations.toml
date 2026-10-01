@@ -327,6 +327,7 @@ process dies with no diagnostic
 file = "crates/nazm-syntax/src/parser.rs"
 find = "        if self.depth > MAX_NESTING {"
 replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "cli", name = "deep_trees_and_deep_recursion_report_rather_than_abort" }]
 
 [[mutation]]
 name = "nesting-counter-never-released"
