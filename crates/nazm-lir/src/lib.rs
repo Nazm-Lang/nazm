@@ -34,7 +34,7 @@ pub mod names;
 pub mod runtime;
 pub mod symbol;
 
-pub use emit::{emit_unit, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE};
+pub use emit::{emit_unit, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, STACK_EXHAUSTED, TARGET_NOTE};
 pub use ir::{
     ArithOp, CmpOp, EnumLayout, EnumTy, External, Owns, RecordLayout, RecordTy, Ty, Unit,
     VariantLayout,

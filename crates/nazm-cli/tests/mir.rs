@@ -537,28 +537,45 @@ fn main() -> Int {
 }
 
 #[test]
-fn recursion_lowers_to_mir_and_the_native_subset_still_refuses_it() {
-    let src = "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) + 1 } }\nfn main() -> Int { f(3) }\n";
+fn a_function_in_a_call_cycle_checks_its_stack_first_and_no_other_does() {
+    // N49: MIR places the check, so both backends emit the same thing from it. First in
+    // every function of a cycle, direct or mutual; nowhere in a function outside one; and a
+    // `spawn` closes no cycle, because a task has its own stack.
+    let src = "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) + 1 } }\n\
+               fn a(n: Int) -> Int { if n == 0 { 0 } else { b(n - 1) } }\n\
+               fn b(n: Int) -> Int { a(n) }\n\
+               fn leaf(n: Int) -> Int { n + 1 }\n\
+               fn job(c: Chan) -> Int { chan_send(c, 1); 0 }\n\
+               fn again(c: Chan, t: SpawnCap) -> Int { scope { spawn job(c); } 0 }\n\
+               fn w(n: Int) -> Int { if n <= 0 { 0 } else { scope { spawn w(n - 1); } 0 } }\n\
+               fn main(t: SpawnCap) -> Int { let c = chan_new(2); again(c, t); f(3) + a(2) + leaf(1) + w(2) }\n";
     let p = valid(src);
-    let f = function(&p, "f");
-    assert!(f.blocks.iter().flat_map(|b| &b.stmts).any(|s| matches!(
-        &s.kind,
-        StatementKind::Assign { value: Rvalue::Call { callee, .. }, .. } if *callee == f.id
-    )));
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("prog.nz");
-    std::fs::write(&path, src).unwrap();
-    let out = Command::new(NAZM)
-        .args(["build", path.to_str().unwrap(), "-o"])
-        .arg(dir.path().join("prog"))
-        .output()
-        .expect("build");
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("N0101") && stderr.contains("from inside itself"),
-        "{stderr}"
-    );
+    let first_is_check = |name: &str| {
+        let f = function(&p, name);
+        let entry = f.blocks.first().expect("an entry block");
+        matches!(
+            entry.stmts.first().map(|s| &s.kind),
+            Some(StatementKind::StackCheck { .. })
+        )
+    };
+    let checks = |name: &str| {
+        function(&p, name)
+            .blocks
+            .iter()
+            .flat_map(|b| &b.stmts)
+            .filter(|s| matches!(s.kind, StatementKind::StackCheck { .. }))
+            .count()
+    };
+    for name in ["f", "a", "b"] {
+        assert!(
+            first_is_check(name),
+            "{name} is in a cycle and checks first"
+        );
+        assert_eq!(checks(name), 1, "{name}: once");
+    }
+    for name in ["leaf", "job", "again", "w", "main"] {
+        assert_eq!(checks(name), 0, "{name} is in no call cycle");
+    }
 }
 
 #[test]

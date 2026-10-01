@@ -329,8 +329,8 @@ fn an_import_cycle_still_compiles_and_runs() {
 
 #[test]
 fn a_module_cycle_may_also_be_a_call_cycle_when_it_is_interpreted() {
-    // The language allows both; the *backend* does not allow the second, and says so.
-    // Kept because it is the case a reader would ask about after the test above.
+    // The language allows both, and since N49 so does the native backend. Kept because it
+    // is the case a reader would ask about after the test above.
     let dir = tempfile::tempdir().expect("tempdir");
     write(
         dir.path(),
@@ -361,10 +361,14 @@ fn a_module_cycle_may_also_be_a_call_cycle_when_it_is_interpreted() {
         .args(["build", root.to_str().unwrap(), "-o", exe.to_str().unwrap()])
         .output()
         .expect("build");
-    let refusal = String::from_utf8_lossy(&built.stderr);
-    assert!(!built.status.success(), "{refusal}");
-    assert!(refusal.contains("N0101"), "{refusal}");
-    assert!(refusal.contains("call cycle"), "{refusal}");
+    // Refused natively until N49; compiled since, and the same answer.
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = Command::new(&exe).output().expect("run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "3");
 }
 
 #[test]

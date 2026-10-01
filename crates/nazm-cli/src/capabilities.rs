@@ -75,8 +75,8 @@ const CONSTRUCTS: &[ConstructRow] = &[
     ConstructRow {
         name: "recursion, direct or mutual",
         interpreted: true,
-        compiled: false,
-        evidence: "refused by name; pending a native stack contract (docs/spec.md)",
+        compiled: true,
+        evidence: "nazm-cli/tests/usability.rs; a stack check on entry to every function in a call cycle, N0408 (docs/spec.md, Native recursion)",
     },
     ConstructRow {
         name: "`if` in statement and value position",
