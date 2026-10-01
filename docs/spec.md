@@ -2972,11 +2972,40 @@ fn main() -> Int { str_len(t::text_trim(" a ")) + g::area(g::Point(x: 2, y: 3)) 
 | **`as`** | Recognised only after a `use` path. It takes no identifier from programs |
 | **Built-ins and the prelude** | Not modules a program imports, so never qualified: `str_len`, `Result` and the rest are written as before |
 
+### Function values and closures — N50
+<!-- id: function-values -->
+
+```nazm
+fn double(n: Int) -> Int { n * 2 }
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }
+
+fn main() -> Int {
+    let step = 3;
+    let add = fn(x: Int) -> Int { x + step };
+    twice(double, 5) + twice(add, 1)
+}
+```
+
+| | |
+| --- | --- |
+| **Type** | `fn(T1, …, Tn) -> R`, with `! { e… }` after `R` for a function that performs effects. Unwritten effects are none. Two function types are one exactly when their parameters, result and effects are equal; there is no subtyping between them |
+| **Equality** | None. `==` on a function value is refused, as on a capability |
+| **A named function as a value** | A non-generic function that is not foreign, written without a call: `double`. Its type is its signature's. A generic function, a built-in and a foreign function are not values (`N0387`); write a closure that calls one |
+| **A closure** | `fn(x: Int) -> Int { … }` in expression position, its parameters and result written in full, its effects `! { … }` declared or none. Its body is checked against its declared effects as a declared function's is |
+| **Capture** | A closure may name the bindings of the functions and closures around it. Each it names is **copied** into the closure when the closure is created: a value is a copy, a handle (`Ints`, `Vec`, `Chan`) is the same storage. A `let mut` binding and a capability may not be captured (`N0386`) |
+| **Call** | `f(a, b)`, where `f` is a parameter or binding of function type: the arguments must match its parameters, the result is its result, and the call performs its type's effects. Such a binding hides a function of the same name for calls in its scope. A function stored in a field is called by binding it first: `let g = r.f; g(1)` |
+| **Ownership** | A function value is a handle to its closure; copies share it, and what it captured is released when the last copy goes |
+| **Tasks** | A function value may not be passed to a task (`N0321`) |
+| **Not here** | Traits, methods, generic function values, a closure that names itself, effect-polymorphic function types — see `architecture.md` §7.52 |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, floating point. A
 program using any of them is rejected by name rather than misparsed into something else.
+
+**Corrected 2026-10-01, N50.** Function values and closures exist, specified above; traits and
+methods remain absent and are refused.
 
 **Corrected 2026-10-01, N49.** String escapes, the logical operators `&&`, `||` and `!`, and
 qualified names exist, each specified above; native recursion compiles.

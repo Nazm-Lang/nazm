@@ -5452,6 +5452,88 @@ written in Nazm refuses `as` and `::` by name.
 construct the interpreter runs and a backend refuses is classified as deliberate, a limitation, or
 a bug, and only the gaps above are closed here (`limitations.md` says which remain).
 
+## 7.52 Function values and closures — N50, 2026-10-01
+
+Written before the code. One callable model: a **function value** is a value of a **function type**,
+made from a named function or from a closure expression, and called the way a function is. Traits
+and methods are not part of it, for the reason under *What is not here*.
+
+**The type.** `fn(T1, …, Tn) -> R`, optionally `! { e… }`, is a type wherever a type is written:
+parameters, results, bindings, fields, payloads, `Vec[…]` and type arguments. It is
+**structural** — two function types are one type exactly when their parameter types, result type
+and effect set are equal — and **invariant**: no subtyping, so a pure function is not a
+`fn(Int) -> Int ! {io}` (effect polymorphism and subsumption are N51's). Unwritten effects mean
+the empty set. A function type has **no equality**, as a capability has none: equality of code is
+not decidable, and identity of objects is not a meaning the language has chosen.
+
+**The values.** A non-generic, non-foreign function written as a value (`let f = double;`) is a
+function value of its signature's type. A **closure** is `fn(x: Int) -> Int ! {e} { body }` in
+expression position: parameters and result written in full, as a declaration's are (no inference
+across a function boundary), its effects declared or empty. Its body may name bindings of the
+functions and closures that enclose it; each one it names is **captured by value** when the
+closure is created — a copy, so a handle (`Ints`, `Vec`, `Chan`) is shared and a value is not.
+A `let mut` binding may not be captured (`N0386`): a copy of it would silently stop tracking the
+binding, and sharing state is what handles and channels are for. A capability may not be captured
+either (`N0386`): authority is passed as a parameter, so a closure has no authority its type does
+not show. A generic function, a built-in and a foreign function are not values (`N0387`); a
+closure over them is.
+
+**Calls.** `f(args)` where `f` is a parameter or binding of function type is an **indirect call**:
+arguments are checked against the type's parameters, the result is its result, and the call
+exercises the type's effects exactly as a call to a declared function exercises its declaration's.
+A local of function type hides a function of the same name for calls in its scope, as any binding
+hides an outer one. A function value stored in a field or a payload is called by binding it first
+(`let g = r.f; g(1)`): `r.f(1)` is the shape of a variant construction and keeps that meaning.
+Function values may not be passed to a task (`N0321`): their type does not say whether what they
+captured may cross into one.
+
+**Effects, authority, provenance.** A closure's body is checked against its own declared effects,
+and creating a closure performs none of them; calling a function value performs its type's. A
+closure's authority is its capability parameters and nothing else. Provenance: the result of an
+indirect call carries what its arguments and the function value carry; inside a closure a captured
+value's origin is unknown, so a restricted sink reached from one is refused, conservatively.
+
+**One lowering.** The checker registers each closure as a definition of its own — a private
+function of the enclosing function's module, identified by the enclosing definition and its
+position among that body's closures — with its captures recorded in order of first mention. Core IR
+lifts it: a closure expression is `Closure { func, captures }`, a named function used as a value is
+`FnValue(func)`, an indirect call is `CallIndirect { callee, args }`, and the closure's body is a Core
+IR function whose leading locals are its captures. MIR keeps the same three, adds the **environment**:
+every function a function value can reach — a closure's body, and a **thunk** MIR makes for each
+named function used as a value — takes the environment as its first parameter and reads its
+captures from it at entry (`Rvalue::Capture`). Both backends and the interpreter consume exactly
+that; none rediscovers a closure.
+
+**The calling convention.** A function value is one pointer to a **closure object**: a reference
+count, the code pointer, a release function, then the captures in order, each at its type's slot
+size. Calling it passes the object as the first argument and the arguments after. Copying a function
+value retains the object and dropping one releases it; the last release calls the release function,
+which releases every managed capture, and frees the object. A named function's value is a static
+object whose count is negative — immortal — so retaining or releasing it does nothing. The runtime
+owns allocation and the reference count (`nz.closure_new`, `nz.closure_retain`, `nz.closure_release`),
+atomically as a string's; the runtime ABI revision moves (3 → 4).
+
+**Durable interfaces.** A function type in an exported signature, field or payload is persisted, so
+the interface schema moves (`nazm.interface/7` → `/8`): an old reader would misread such a
+signature. A closure is never exported.
+
+**The higher-order library.** `@std/seq` gains `vec_map`, `vec_filter` and `vec_fold`, written in
+Nazm over `Vec[T]` and function values, with no compiler knowledge of them.
+
+**The compiler written in Nazm** refuses function types and closures by name.
+
+**What is not here, and why.** *Traits and methods.* N50's prompt makes them conditional on a need
+generics and higher-order APIs demonstrate. With function values, the needs in hand — mapping,
+filtering, folding, ordering or rendering by a supplied function — are met by passing the function;
+none requires a constraint the caller cannot supply as an argument. A trait would add a second
+abstraction (dictionaries or instances, coherence, orphan rules, method lookup) for no program the
+language cannot already express, so they are **designed and deferred**: the design questions —
+trait identity as a durable definition, coherence as one impl per trait and type in the trait's or
+the type's module, method syntax as resolution sugar over the same functions, monomorphisation
+before dictionaries — are recorded here and settled when a program needs them. *Function values
+across tasks*, *generic function values*, *closures that call themselves*, and *calling a field
+directly* are refused rather than half-supported.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
