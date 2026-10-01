@@ -4200,6 +4200,20 @@ impl Checker<'_> {
                 Completion::Value(Type::Int)
             }
 
+            Expr::Not {
+                operand, op_span, ..
+            } => {
+                let t = self.value_type(operand, Some(Type::Bool));
+                if t != Type::Bool {
+                    self.errors.push(Diagnostic::error(
+                        codes::INVALID_OPERANDS,
+                        *op_span,
+                        format!("`!` applies to `Bool`, but this is `{}`", self.show(t)),
+                    ));
+                }
+                Completion::Value(Type::Bool)
+            }
+
             Expr::Binary {
                 op,
                 lhs,
@@ -4897,6 +4911,8 @@ impl Checker<'_> {
             // parameter does not: `==` is not valid for every type, and an unconstrained
             // `T` supports only what every type supports.
             BinOp::Eq | BinOp::NotEq => lt == rt && self.res.types().equality(lt).is_ok(),
+            // `&&` and `||` are `Bool` only (N49): no truthiness, so `1 && 2` is a mistake.
+            BinOp::And | BinOp::Or => lt == Type::Bool && rt == Type::Bool,
         };
 
         if !ok {
@@ -4949,14 +4965,14 @@ impl Checker<'_> {
             // the operator's usual one produces a second error about a mismatch the
             // author never wrote — two diagnostics for one mistake, and the second is
             // fiction. Adopt what the context wanted instead.
-            return expected.unwrap_or(if op.is_comparison() {
+            return expected.unwrap_or(if op.is_comparison() || op.is_logical() {
                 Type::Bool
             } else {
                 Type::Int
             });
         }
 
-        if op.is_comparison() {
+        if op.is_comparison() || op.is_logical() {
             Type::Bool
         } else {
             Type::Int

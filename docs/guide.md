@@ -519,11 +519,13 @@ accepts.
 | `scope_statement` | `"scope" , block` |
 | `spawn_statement` | `"spawn" , IDENT , "(" , [ arguments ] , ")" , ";"` |
 | `expression_statement` | `expression , ";"` |
-| `expression` | `comparison` |
+| `expression` | `disjunction` |
+| `disjunction` | `conjunction , { "\|\|" , conjunction }` |
+| `conjunction` | `comparison , { "&&" , comparison }` |
 | `comparison` | `sum , { ( "==" \| "!=" \| "<" \| "<=" \| ">" \| ">=" ) , sum }` |
 | `sum` | `product , { ( "+" \| "-" ) , product }` |
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
-| `unary` | `[ "-" ] , primary` |
+| `unary` | `[ "-" \| "!" ] , primary` |
 | `primary` | `atom , { "." , IDENT \| "?" }` |
 | `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| "(" , expression , ")"` |
 | `call` | `IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
@@ -1016,11 +1018,35 @@ fn main() -> Int { print("hi"); 0 }
 ### `expression`
 
 ```ebnf
-expression = comparison ;
+expression = disjunction ;
 ```
 
 ```nazm
 fn main() -> Int { 1 + 2 * 3 }
+```
+
+### `disjunction`
+
+```ebnf
+disjunction = conjunction , { "||" , conjunction } ;
+```
+
+`||` and `&&` (N49): `Bool` operands, left-associative, and short-circuit — the right
+operand is evaluated only when the left does not decide. `||` binds loosest. Each is the
+`if` it lowers to; see `docs/spec.md`, *Logical operators*.
+
+```nazm
+fn main() -> Int { if 1 < 2 || 2 < 1 { 1 } else { 0 } }
+```
+
+### `conjunction`
+
+```ebnf
+conjunction = comparison , { "&&" , comparison } ;
+```
+
+```nazm
+fn main() -> Int { if 1 < 2 && 2 < 3 { 1 } else { 0 } }
 ```
 
 ### `comparison`
@@ -1080,11 +1106,18 @@ fn main() -> Int { 2 * 3 / 4 % 5 }
 ### `unary`
 
 ```ebnf
-unary = [ "-" ] , primary ;
+unary = [ "-" | "!" ] , primary ;
 ```
+
+`!` is logical negation, as tight as `-`: `!a && b` is `(!a) && b`. It is never the `!` of
+an effect set, which follows a result type, where no expression is.
 
 ```nazm
 fn main() -> Int { -1 }
+```
+
+```nazm
+fn main() -> Int { if !false { 1 } else { 0 } }
 ```
 
 ### `primary`

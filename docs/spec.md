@@ -2947,7 +2947,7 @@ behind by a missing brace — is not reported again. The body is still withheld 
 | --- | --- |
 | **Syntax** | `!e` is a prefix, beside unary `-`. `a && b` and `a \|\| b` are infix and left-associative |
 | **Precedence** | `\|\|` binds loosest, then `&&`, then the comparisons, then `+ -`, then `* / %`, then the prefixes: `a == b && c < d \|\| !e` is `((a == b) && (c < d)) \|\| (!e)` |
-| **Types** | Every operand is `Bool`, and so is the result. Anything else is `N0301`, as for every operator |
+| **Types** | Every operand is `Bool`, and so is the result. Anything else is `N0304`, as for every operator |
 | **Short-circuit** | The left operand is evaluated first. `a && b` evaluates `b` only when `a` is `true`; `a \|\| b` only when `a` is `false`. So the right operand's effects, failures and non-termination happen only then |
 | **Meaning** | `a && b` is `if a { b } else { false }`, `a \|\| b` is `if a { true } else { b }`, and `!e` is `if e { false } else { true }` — not as an analogy: that is what they are, in every analysis and every implementation |
 | **Not** | No bitwise operators, no `and`/`or`/`not` words, and no truthiness: `!0` is a type error |

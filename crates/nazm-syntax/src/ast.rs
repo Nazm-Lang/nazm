@@ -456,6 +456,13 @@ pub enum Expr {
         op_span: Span,
         span: Span,
     },
+    /// `!operand` — logical negation of a `Bool` (N49). Core IR lowers it to
+    /// `if operand { false } else { true }`; nothing below the checker sees it.
+    Not {
+        operand: Box<Expr>,
+        op_span: Span,
+        span: Span,
+    },
     Binary {
         op: BinOp,
         lhs: Box<Expr>,
@@ -563,6 +570,7 @@ impl Expr {
             | Self::Str { span, .. }
             | Self::Var { span, .. }
             | Self::Neg { span, .. }
+            | Self::Not { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
             | Self::Construct { span, .. }
@@ -583,6 +591,7 @@ impl Expr {
             | Self::Str { span, .. }
             | Self::Var { span, .. }
             | Self::Neg { span, .. }
+            | Self::Not { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
             | Self::Construct { span, .. }
@@ -609,6 +618,9 @@ pub enum BinOp {
     LtEq,
     Gt,
     GtEq,
+    /// `&&` and `||` (N49): `Bool` operands, short-circuit, lowered by Core IR to `if`.
+    And,
+    Or,
 }
 
 impl BinOp {
@@ -626,7 +638,16 @@ impl BinOp {
             Self::LtEq => "<=",
             Self::Gt => ">",
             Self::GtEq => ">=",
+            Self::And => "&&",
+            Self::Or => "||",
         }
+    }
+
+    /// Whether the operator is `&&` or `||`: `Bool` operands, and the right one evaluated
+    /// only when the left does not decide the result.
+    #[must_use]
+    pub fn is_logical(self) -> bool {
+        matches!(self, Self::And | Self::Or)
     }
 
     /// Whether the operator produces a `Bool` regardless of its operand type.

@@ -156,6 +156,10 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 // and no source this test reads writes one: `examples/effects/` is not in
                 // its folders, so a disagreement here would be a new file's, and loud.
                 T::Bang => 55,
+                // `&&` and `||` (N49), which the Nazm-written lexer refuses by name; no source
+                // this test reads writes one.
+                T::AmpAmp => 56,
+                T::PipePipe => 57,
                 // The Rust lexer emits a final `Eof`; the Nazm one prints `EOF` and
                 // stops, so there is nothing to compare.
                 T::Eof => return None,
@@ -659,6 +663,11 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         E::Neg { operand, span, .. } => {
             dump_expr(operand, out);
             push_node(out, "neg", 1, span.start, span.end, "");
+        }
+        // Not in the bootstrap subset (N49); named, so a source that wrote one would differ.
+        E::Not { operand, span, .. } => {
+            dump_expr(operand, out);
+            push_node(out, "not", 1, span.start, span.end, "");
         }
         E::Propagate { operand, span, .. } => {
             dump_expr(operand, out);

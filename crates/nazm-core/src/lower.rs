@@ -520,6 +520,31 @@ impl<'a> Lower<'a> {
                 Some(Type::Int),
                 *op_span,
             ),
+            // `!e`, `a && b` and `a || b` are `if`s (`docs/spec.md`, *Logical operators*, N49):
+            // lowered here, so short-circuiting is control flow every later layer already has.
+            AstExpr::Not {
+                operand, op_span, ..
+            } => {
+                let operand = self.expr(operand)?;
+                let (f, t) = (self.boolean(false, *op_span), self.boolean(true, *op_span));
+                self.conditional(operand, f, t, *op_span)
+            }
+            AstExpr::Binary {
+                op: op @ (BinOp::And | BinOp::Or),
+                lhs,
+                rhs,
+                op_span,
+                ..
+            } => {
+                let (lhs, rhs) = (self.expr(lhs)?, self.expr(rhs)?);
+                if *op == BinOp::And {
+                    let f = self.boolean(false, *op_span);
+                    self.conditional(lhs, rhs, f, *op_span)
+                } else {
+                    let t = self.boolean(true, *op_span);
+                    self.conditional(lhs, t, rhs, *op_span)
+                }
+            }
             AstExpr::Binary {
                 op,
                 lhs,
@@ -705,6 +730,38 @@ impl<'a> Lower<'a> {
                 node(ExprKind::Block(b), ty, at)
             }
         })
+    }
+
+    /// The constant `value`, as a `Bool` expression at `at`.
+    fn boolean(&mut self, value: bool, at: Span) -> Expr {
+        Expr {
+            kind: ExprKind::Const(self.constant(Const::Bool(value))),
+            ty: Some(Type::Bool),
+            at,
+        }
+    }
+
+    /// `if cond { then } else { otherwise }`, each branch a block holding only its expression.
+    /// What a logical operator is: the branch not taken is never evaluated.
+    fn conditional(&mut self, cond: Expr, then: Expr, otherwise: Expr, at: Span) -> Expr {
+        let branch = |e: Expr| Block {
+            stmts: Vec::new(),
+            at: e.at,
+            tail: Some(Box::new(e)),
+            ends: Ends::FallsThrough,
+            owns: Vec::new(),
+        };
+        let (then, otherwise) = (branch(then), branch(otherwise));
+        let ty = then.ty().or(otherwise.ty());
+        Expr {
+            kind: ExprKind::If {
+                cond: Box::new(cond),
+                then,
+                otherwise,
+            },
+            ty,
+            at,
+        }
     }
 
     /// A call: to a built-in or to a function of this compilation, as the checker resolved it,
@@ -940,7 +997,14 @@ fn arithmetic(op: BinOp) -> Option<cir::ArithOp> {
         BinOp::Mul => Some(cir::ArithOp::Mul),
         BinOp::Div => Some(cir::ArithOp::Div),
         BinOp::Rem => Some(cir::ArithOp::Rem),
-        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => None,
+        BinOp::Eq
+        | BinOp::NotEq
+        | BinOp::Lt
+        | BinOp::LtEq
+        | BinOp::Gt
+        | BinOp::GtEq
+        | BinOp::And
+        | BinOp::Or => None,
     }
 }
 
@@ -952,9 +1016,15 @@ fn comparison(op: BinOp) -> cir::CmpOp {
         BinOp::LtEq => cir::CmpOp::LtEq,
         BinOp::Gt => cir::CmpOp::Gt,
         // Unreachable for an arithmetic operator, which [`arithmetic`] took first.
-        BinOp::GtEq | BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
-            cir::CmpOp::GtEq
-        }
+        // Unreachable for a logical operator, which the expression lowering took first.
+        BinOp::GtEq
+        | BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Rem
+        | BinOp::And
+        | BinOp::Or => cir::CmpOp::GtEq,
     }
 }
 

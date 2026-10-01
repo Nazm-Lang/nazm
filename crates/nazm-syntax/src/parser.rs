@@ -1974,7 +1974,8 @@ impl<'a> Parser<'a> {
         self.binary(0)
     }
 
-    /// Pratt loop. Comparison binds loosest, then `+`/`-`, then `*`/`/`/`%`.
+    /// Pratt loop. `||` binds loosest, then `&&` (N49), then comparison, then `+`/`-`, then
+    /// `*`/`/`/`%`.
     ///
     /// The loop does not recurse, but the tree it builds does: `1 + 1 + 1` is
     /// `((1 + 1) + 1)`, one level of left spine per operator. So a chain costs nothing
@@ -1992,17 +1993,19 @@ impl<'a> Parser<'a> {
 
         loop {
             let (op, bp) = match self.peek() {
-                TokenKind::EqEq => (BinOp::Eq, 1),
-                TokenKind::NotEq => (BinOp::NotEq, 1),
-                TokenKind::Lt => (BinOp::Lt, 1),
-                TokenKind::LtEq => (BinOp::LtEq, 1),
-                TokenKind::Gt => (BinOp::Gt, 1),
-                TokenKind::GtEq => (BinOp::GtEq, 1),
-                TokenKind::Plus => (BinOp::Add, 2),
-                TokenKind::Minus => (BinOp::Sub, 2),
-                TokenKind::Star => (BinOp::Mul, 3),
-                TokenKind::Slash => (BinOp::Div, 3),
-                TokenKind::Percent => (BinOp::Rem, 3),
+                TokenKind::PipePipe => (BinOp::Or, 1),
+                TokenKind::AmpAmp => (BinOp::And, 2),
+                TokenKind::EqEq => (BinOp::Eq, 3),
+                TokenKind::NotEq => (BinOp::NotEq, 3),
+                TokenKind::Lt => (BinOp::Lt, 3),
+                TokenKind::LtEq => (BinOp::LtEq, 3),
+                TokenKind::Gt => (BinOp::Gt, 3),
+                TokenKind::GtEq => (BinOp::GtEq, 3),
+                TokenKind::Plus => (BinOp::Add, 4),
+                TokenKind::Minus => (BinOp::Sub, 4),
+                TokenKind::Star => (BinOp::Mul, 5),
+                TokenKind::Slash => (BinOp::Div, 5),
+                TokenKind::Percent => (BinOp::Rem, 5),
                 _ => break,
             };
             if bp < min_bp {
@@ -2013,8 +2016,8 @@ impl<'a> Parser<'a> {
             // `bp + 1`: all these operators are left-associative, so `a - b - c` is
             // `(a - b) - c`. Getting this wrong is silent for `+` and wrong for `-`.
             //
-            // This recursion needs no budget of its own: `bp` is at most 3, and a call at
-            // min_bp 4 matches no operator and returns immediately, so the binary-to-
+            // This recursion needs no budget of its own: `bp` is at most 5, and a call at
+            // min_bp 6 matches no operator and returns immediately, so the binary-to-
             // binary chain is at most three frames however long the expression. The
             // unbounded path into an operand goes through `primary`, which `enter`
             // counts.
@@ -2120,6 +2123,22 @@ impl<'a> Parser<'a> {
     /// below wraps its node at.
     fn primary_inner(&mut self, at: Checkpoint) -> Option<Expr> {
         let span = self.peek_span();
+
+        // Prefix logical negation (N49). Binds as tightly as `-`, so `!a && b` is
+        // `(!a) && b`; its operand is a primary, which `enter` counts.
+        if self.at(&TokenKind::Bang) {
+            let op_span = self.peek_span();
+            self.advance();
+            let operand = self.primary()?;
+            self.built(self.child() + 1)?;
+            self.wrap(at, SyntaxKind::NotExpr);
+            let full = op_span.join(operand.span());
+            return Some(Expr::Not {
+                operand: Box::new(operand),
+                op_span,
+                span: full,
+            });
+        }
 
         // Prefix negation, before anything else can claim the `-`.
         if self.at(&TokenKind::Minus) {
@@ -2694,7 +2713,9 @@ mod ast_depth_tests {
                 }
                 Node::Expr(e) => match e {
                     Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } | Expr::Var { .. } => {}
-                    Expr::Neg { operand, .. } => stack.push((Node::Expr(operand), d + 1)),
+                    Expr::Neg { operand, .. } | Expr::Not { operand, .. } => {
+                        stack.push((Node::Expr(operand), d + 1));
+                    }
                     Expr::Binary { lhs, rhs, .. } => {
                         stack.push((Node::Expr(lhs), d + 1));
                         stack.push((Node::Expr(rhs), d + 1));

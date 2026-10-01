@@ -80,9 +80,14 @@ pub enum TokenKind {
     /// `Result`. One character with one meaning; `??` is two of them, not a token of its
     /// own, so `r??` removes two `Result` layers exactly as `(r?)?` does.
     Question,
-    /// `!` — before a function's effect set, N36: `-> Int ! {io}`. It has no other
-    /// meaning, and `!=` is its own token, so neither can be read as the other.
+    /// `!` — before a function's effect set, N36: `-> Int ! {io}`; and, since N49, prefix
+    /// logical negation in an expression, `!done`. The two never meet: an effect set follows
+    /// a result type, and an expression never does. `!=` is its own token.
     Bang,
+    /// `&&` — short-circuit conjunction, N49.
+    AmpAmp,
+    /// `||` — short-circuit disjunction, N49.
+    PipePipe,
     Arrow,
     /// `=>` — between a `match` pattern and the arm it selects.
     ///
@@ -150,6 +155,8 @@ impl TokenKind {
         Self::Semi,
         Self::Question,
         Self::Bang,
+        Self::AmpAmp,
+        Self::PipePipe,
         Self::Arrow,
         Self::FatArrow,
         Self::Eq,
@@ -208,6 +215,8 @@ impl TokenKind {
             Self::Semi => Some(";"),
             Self::Question => Some("?"),
             Self::Bang => Some("!"),
+            Self::AmpAmp => Some("&&"),
+            Self::PipePipe => Some("||"),
             Self::Arrow => Some("->"),
             Self::FatArrow => Some("=>"),
             Self::Eq => Some("="),
@@ -263,6 +272,8 @@ impl TokenKind {
             Self::Semi => "`;`".to_owned(),
             Self::Question => "`?`".to_owned(),
             Self::Bang => "`!`".to_owned(),
+            Self::AmpAmp => "`&&`".to_owned(),
+            Self::PipePipe => "`||`".to_owned(),
             Self::Arrow => "`->`".to_owned(),
             Self::FatArrow => "`=>`".to_owned(),
             Self::Eq => "`=`".to_owned(),
@@ -608,6 +619,8 @@ pub fn lex_lossless_in(file: FileId, text: &str) -> (Vec<Lexeme>, Vec<Diagnostic
             Some((b'!', b'=')) => (Some(TokenKind::NotEq), 2),
             Some((b'<', b'=')) => (Some(TokenKind::LtEq), 2),
             Some((b'>', b'=')) => (Some(TokenKind::GtEq), 2),
+            Some((b'&', b'&')) => (Some(TokenKind::AmpAmp), 2),
+            Some((b'|', b'|')) => (Some(TokenKind::PipePipe), 2),
             _ => (None, 0),
         };
         if let Some(kind) = kind {

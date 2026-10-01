@@ -38,7 +38,7 @@ use nazm_sema::{
     Type,
 };
 use nazm_span::Span;
-use nazm_syntax::{Block, Expr, Function, Stmt};
+use nazm_syntax::{BinOp, Block, Expr, Function, Stmt};
 
 // ---------------------------------------------------------------------------------------
 // One module's facts.
@@ -237,6 +237,22 @@ impl Walk<'_> {
                 self.slots.get(s).cloned().unwrap_or_default()
             }
             Expr::Neg { operand, .. } => self.expr(operand),
+            // The logical operators are the `if`s they lower to (N49): the deciding operand is a
+            // condition — walked, contributing no provenance — and the value is the other
+            // operand's or a constant's.
+            Expr::Not { operand, .. } => {
+                self.expr(operand);
+                Flow::default()
+            }
+            Expr::Binary {
+                op: BinOp::And | BinOp::Or,
+                lhs,
+                rhs,
+                ..
+            } => {
+                self.expr(lhs);
+                self.expr(rhs)
+            }
             Expr::Binary { lhs, rhs, .. } => {
                 let l = self.expr(lhs);
                 let r = self.expr(rhs);

@@ -255,7 +255,14 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
                 i = i + 2;
                 continue;
             }
-            fail("N0001", i, "this character is not part of the language");
+            fail("N0001", i, "`!` is not in the bootstrap subset");
+        }
+        // `&&` and `||` (N49) are not in the bootstrap subset either, and say so by name.
+        if b == 38 {
+            if next == 38 { fail("N0001", i, "`&&` is not in the bootstrap subset"); }
+        }
+        if b == 124 {
+            if next == 124 { fail("N0001", i, "`||` is not in the bootstrap subset"); }
         }
         if b == 60 {
             if next == 61 {
