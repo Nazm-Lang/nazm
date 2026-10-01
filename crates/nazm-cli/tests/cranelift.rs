@@ -17,7 +17,8 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use nazm_lir::backend::{Backend, Code, Target};
 
@@ -49,16 +50,43 @@ fn build(path: &Path, backend: &str, exe: &Path, extra: &[&str]) -> std::process
         .expect("build")
 }
 
-fn run_exe(exe: &Path) -> Ran {
-    let o = common::bounded_exe(exe)
-        .env(nazm_lir::MEMORY_VARIABLE, "1")
-        .output()
-        .expect("run");
-    Ran {
-        code: o.status.code(),
-        stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+/// How long a compiled program may run. Every program here finishes in well under a second; a
+/// miscompiled one that deadlocks fails by name instead of holding the suite until a harness
+/// deadline.
+const DEADLINE: Duration = Duration::from_secs(30);
+
+/// Run a command, killing and reaping it if it outlives [`DEADLINE`].
+fn run_bounded(cmd: &mut Command, what: &str) -> Ran {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let start = Instant::now();
+    loop {
+        if child.try_wait().expect("try_wait").is_some() {
+            let o = child.wait_with_output().expect("collect output");
+            return Ran {
+                code: o.status.code(),
+                stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+            };
+        }
+        if start.elapsed() >= DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{what} did not terminate within {DEADLINE:?}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn run_exe(exe: &Path) -> Ran {
+    run_bounded(
+        common::bounded_exe(exe).env(nazm_lir::MEMORY_VARIABLE, "1"),
+        &exe.display().to_string(),
+    )
 }
 
 /// Build a file with both backends and run both, with the memory report; and interpret it.
@@ -75,16 +103,7 @@ fn three(path: &Path) -> (Ran, Ran, Ran) {
         );
         out.push(run_exe(&exe));
     }
-    let i = Command::new(NAZM)
-        .arg("run")
-        .arg(path)
-        .output()
-        .expect("run");
-    let interp = Ran {
-        code: i.status.code(),
-        stdout: String::from_utf8_lossy(&i.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&i.stderr).into_owned(),
-    };
+    let interp = run_bounded(Command::new(NAZM).arg("run").arg(path), "the interpreter");
     let c = out.pop().unwrap();
     let l = out.pop().unwrap();
     (l, c, interp)
