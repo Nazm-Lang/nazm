@@ -208,8 +208,9 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
             continue;
         }
 
-        // Strings. No escapes, exactly as `docs/spec.md` says — a closing quote or a
-        // newline ends the scan, and a newline is an error.
+        // Strings. A closing quote or a newline ends the scan, and a newline is an error.
+        // This compiler does not decode escapes (N49), so a backslash is refused by name
+        // rather than read as itself, which is what it meant before escapes existed.
         if b == 34 {
             let from = i;
             i = i + 1;
@@ -218,6 +219,7 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
                 if c == 34 { break; }
                 if c == 10 { fail("N0002", from, "this string has no closing quote"); }
                 if c < 0 { fail("N0002", from, "this string has no closing quote"); }
+                if c == 92 { fail("N0004", i, "string escapes are not in the bootstrap subset"); }
                 i = i + 1;
             }
             let text = str_slice(src, from + 1, i);

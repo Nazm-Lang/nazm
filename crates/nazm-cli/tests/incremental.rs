@@ -1281,9 +1281,9 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        11,
-        "N9, N10, N11, N12, N13, N14, N36, N37, N38 and N42 each changed what the checker \
-         accepts, so the epoch moved ten times"
+        12,
+        "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42 and N49 each changed what the checker \
+         accepts, so the epoch moved eleven times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/7");
 }
@@ -1664,6 +1664,7 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     assert!(again.accepted, "{again:?}");
     assert_eq!(again.reused, 0, "an epoch-6 entry was read: {again:?}");
     // N36 moved it again, for effects: `an_entry_from_the_checker_before_effects_is_never_read`,
-    // and N37 for authority, and N38 for provenance, and N42 for foreign functions.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 11);
+    // and N37 for authority, and N38 for provenance, and N42 for foreign functions, and N49
+    // for escapes and the syntax beside them.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 12);
 }
