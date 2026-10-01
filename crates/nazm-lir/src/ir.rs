@@ -89,7 +89,14 @@ pub enum Ty {
     /// elements are `T`'s own representation laid out contiguously. N11. Which `T` is in
     /// the unit's [`VecLayout`] table, by this id.
     Vec(VecTy),
+    /// A function value (N50): a pointer to a closure object, `{ count, code, release,
+    /// captures… }`, by its index in the program's function types. Null when it owns nothing.
+    Fn(FnTy),
 }
+
+/// A function type, by its index in the program's function types (N50).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FnTy(pub u32);
 
 /// An enum type of this compilation, by declaration order. Session-local, like
 /// [`RecordTy`].
@@ -283,6 +290,8 @@ pub enum Owns {
     /// element's law. N11. Releasing the last reference releases each element and then
     /// the storage, through a helper generated once per element type.
     Vec(VecTy),
+    /// A reference to a closure object, which releases its captures on the last one (N50).
+    Closure,
 }
 
 impl Ty {
@@ -309,6 +318,7 @@ impl Ty {
             Self::Enum(id) => Some(Owns::Enum(id)),
             // A handle's storage is its own, whatever it holds.
             Self::Vec(id) => Some(Owns::Vec(id)),
+            Self::Fn(_) => Some(Owns::Closure),
         }
     }
 
@@ -361,7 +371,7 @@ impl Ty {
             Self::Int => "i64",
             Self::Bool => "i1",
             Self::Str => "{ ptr, i64, ptr }",
-            Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) => "ptr",
+            Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) | Self::Fn(_) => "ptr",
             // A record's spelling is its name, which is not static. Every site goes
             // through the emitter's own `ty`, which has the table; this arm exists so
             // that a site which has not been converted is a visible wrong answer in the
@@ -392,7 +402,7 @@ impl Ty {
             // the runtime's release functions. So a zeroed enum slot is safe to release
             // exactly as a zeroed record slot is.
             Self::Str | Self::Record(_) | Self::Enum(_) => "zeroinitializer",
-            Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) => "null",
+            Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) | Self::Fn(_) => "null",
         }
     }
 
@@ -408,6 +418,7 @@ impl Ty {
             Self::Record(_) => "a record",
             Self::Enum(_) => "an enum",
             Self::Vec(_) => "a `Vec`",
+            Self::Fn(_) => "a function value",
         }
     }
 }
@@ -462,6 +473,9 @@ impl Ty {
             }
             nazm_sema::Type::Enum(id) => {
                 Self::Enum(EnumTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+            }
+            nazm_sema::Type::Fn(id) => {
+                Self::Fn(FnTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
             }
         }
     }

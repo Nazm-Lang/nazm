@@ -33,7 +33,7 @@ use std::collections::HashMap;
 
 use crate::enums::EnumId;
 use crate::record::RecordId;
-use crate::types::{ParamOwner, Type, TypeParam, VecId};
+use crate::types::{FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};
 use crate::udt::{TypeNode, UserTypes};
 
 /// Which definition an applied entry applies, and to what.
@@ -58,6 +58,9 @@ pub struct Generics {
     /// `Vec` element types, by [`VecId`].
     vecs: Vec<Type>,
     vec_ids: HashMap<Type, VecId>,
+    /// Function types, by [`FnTypeId`] (N50).
+    fns: Vec<FnSignature>,
+    fn_ids: HashMap<FnSignature, FnTypeId>,
     /// Instances interned and not yet given their fields.
     pending: Vec<TypeNode>,
     /// While set, completion waits: field types are still being resolved.
@@ -90,6 +93,24 @@ impl UserTypes {
         g.vecs.push(elem);
         g.vec_ids.insert(elem, id);
         Type::Vec(id)
+    }
+
+    /// `fn(params) -> ret ! {effects}`, interned (N50).
+    pub fn fn_of(&mut self, sig: FnSignature) -> Type {
+        let g = self.generics_mut();
+        if let Some(id) = g.fn_ids.get(&sig) {
+            return Type::Fn(*id);
+        }
+        let id = FnTypeId::from_index(g.fns.len());
+        g.fns.push(sig.clone());
+        g.fn_ids.insert(sig, id);
+        Type::Fn(id)
+    }
+
+    /// What a function type is (N50).
+    #[must_use]
+    pub fn fn_signature(&self, id: FnTypeId) -> Option<&FnSignature> {
+        self.generics().fns.get(id.index())
     }
 
     /// `Vec[elem]` if it has been interned already. Never creates one.
@@ -295,6 +316,25 @@ impl UserTypes {
                 let elem = self.substitute(elem, owner, args);
                 self.vec_of(elem)
             }
+            Type::Fn(f) => {
+                let Some(sig) = self.fn_signature(f).cloned() else {
+                    return t;
+                };
+                if !self.mentions(t, owner) {
+                    return t;
+                }
+                let params = sig
+                    .params
+                    .iter()
+                    .map(|p| self.substitute(*p, owner, args))
+                    .collect();
+                let ret = self.substitute(sig.ret, owner, args);
+                self.fn_of(FnSignature {
+                    params,
+                    ret,
+                    effects: sig.effects,
+                })
+            }
             Type::Record(id) => {
                 let Some(inst) = self.records().get(id).and_then(|d| d.instance.clone()) else {
                     return t;
@@ -341,6 +381,23 @@ impl UserTypes {
                 }
                 let elem = self.substituted(elem, owner, args)?;
                 self.find_vec(elem)
+            }
+            Type::Fn(f) => {
+                let sig = self.fn_signature(f)?.clone();
+                if !self.mentions(t, owner) {
+                    return Some(t);
+                }
+                let params: Option<Vec<Type>> = sig
+                    .params
+                    .iter()
+                    .map(|p| self.substituted(*p, owner, args))
+                    .collect();
+                let want = FnSignature {
+                    params: params?,
+                    ret: self.substituted(sig.ret, owner, args)?,
+                    effects: sig.effects,
+                };
+                self.generics().fn_ids.get(&want).map(|id| Type::Fn(*id))
             }
             Type::Record(id) => {
                 let inst = self.records().get(id)?.instance.clone();
@@ -396,7 +453,9 @@ impl UserTypes {
                     }
                 }
                 Type::Vec(v) => work.extend(self.vec_element(v)),
-                Type::Record(_) | Type::Enum(_) => work.extend(self.type_args(t).iter().copied()),
+                Type::Record(_) | Type::Enum(_) | Type::Fn(_) => {
+                    work.extend(self.type_args(t).iter().copied());
+                }
                 _ => {}
             }
         }
@@ -420,6 +479,11 @@ impl UserTypes {
                 .map(|i| i.args.clone())
                 .unwrap_or_default(),
             Type::Vec(v) => self.vec_element(v).into_iter().collect(),
+            // A function type's parts: its parameters, then its result (N50).
+            Type::Fn(f) => self
+                .fn_signature(f)
+                .map(|s| s.params.iter().copied().chain([s.ret]).collect())
+                .unwrap_or_default(),
             _ => Vec::new(),
         }
     }

@@ -248,8 +248,10 @@ pub fn reachable_types(types: &UserTypes, roots: impl IntoIterator<Item = Type>)
     work.reverse();
     while let Some(t) = work.pop() {
         match t {
-            // A `Vec` is not a definition: what it reaches is its element's.
+            // A `Vec` is not a definition: what it reaches is its element's. Nor is a
+            // function type: what it reaches is its parameters' and its result's (N50).
             Type::Vec(v) => work.extend(types.vec_element(v)),
+            Type::Fn(_) => work.extend(types.type_args(t)),
             Type::Record(_) | Type::Enum(_) => {
                 // An application reaches the **definition** it applies — which is what an
                 // interface publishes — and everything its arguments reach.

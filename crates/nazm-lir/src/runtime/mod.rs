@@ -27,8 +27,9 @@ pub use self::entry::emit_entry;
 ///
 /// 1 was N41's: the word-level table alone. 2 is N43's, the first revision whose contract is
 /// written down whole. 3 is N49's: generated code calls `nz.stack_check`, the runtime has its
-/// thread-local limit, and task threads are started with an 8 MiB stack.
-pub const RUNTIME_ABI_REVISION: u32 = 3;
+/// thread-local limit, and task threads are started with an 8 MiB stack. 4 is N50's: closure
+/// objects (`nz.closure_new`, `nz.closure_retain`, `nz.closure_release`) and their layout.
+pub const RUNTIME_ABI_REVISION: u32 = 4;
 
 /// One machine-level parameter or result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,8 @@ pub enum Part {
     Join,
     Tasks,
     Channels,
+    /// Closure objects (N50).
+    Closures,
     /// The C library the runtime itself links against.
     Libc,
 }
@@ -86,6 +89,9 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.fail", [Ptr, I64], None, Base, "records the thread's first failure: a static message and its length; takes nothing"),
     import!("nz.failed_now", [], Some(Word::I32), Base, "whether this thread has failed; takes nothing"),
     import!("nz.stack_check", [], Some(Word::I32), Base, "nonzero when this thread's stack is nearly exhausted; takes nothing"),
+    import!("nz.closure_new", [I64, Ptr, Ptr], Some(Word::Ptr), Closures, "a closure object of this many bytes with its code and release, holding one reference the caller owns, or null"),
+    import!("nz.closure_retain", [Ptr], None, Closures, "one more reference to a closure object; null is a no-op"),
+    import!("nz.closure_release", [Ptr], None, Closures, "one reference fewer; the last runs its release and frees it; null is a no-op"),
     import!("nz.format_int", [Ptr, I64], Some(Word::I64), Base, "writes an Int's decimal digits into 21 bytes the caller owns and returns how many"),
     import!("nz.str_alloc", [I64], Some(Word::Ptr), Strings, "a string backing with this many usable bytes after a 16-byte header, holding one reference the caller owns, or null"),
     import!("nz.str_retain", [Ptr], None, Strings, "one more reference to a backing; null is a no-op"),
@@ -211,6 +217,9 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.fail", "void" ("ptr", "i64") "", true, Base, "", Records, Any, "record this thread's first failure", "takes a static message; owns nothing"),
     rt!("nz.report", "void" () "noreturn", true, Base, "", Ends, Entry, "write the thread's failure to stderr and exit 2", "none"),
     rt!("nz.stack_check", "i32" () "", true, Base, "", Never, Any, "whether this thread's stack is past its limit, the limit set on the thread's first check (N49)", "none"),
+    rt!("nz.closure_new", "ptr" ("i64", "ptr", "ptr") "", true, Closures, "", Null, Any, "a closure object with its code and release function (N50)", "one reference, owned by the caller; the caller stores the captures"),
+    rt!("nz.closure_retain", "void" ("ptr") "", true, Closures, "", Never, Any, "one more reference to a closure object", "adds a reference, atomically; null is a no-op"),
+    rt!("nz.closure_release", "void" ("ptr") "", true, Closures, "", Never, Any, "one reference fewer; the last releases the captures and frees it", "takes a reference, atomically; null is a no-op"),
     rt!("nz.str_join", "{ptr, i64, ptr}" ("ptr", "ptr", "i64") "", true, Join, "", Null, Any, "join a sequence of strings with a separator, allocating once", "borrows both; the result is owned by the caller"),
     rt!("nz.file_exists", "i1" ("ptr", "i64") "", true, Io, "io", Status, Any, "whether a path names a readable file", "borrows the path"),
     rt!("nz.read_file", "{ptr, i64, ptr}" ("ptr", "i64") "", true, Io, "io", Status, Any, "a file's contents as a string", "borrows the path; the result is owned by the caller, or null when unreadable"),
@@ -405,6 +414,7 @@ mod tests {
             strings: true,
             shims: true,
             stack: true,
+            closures: true,
         }
     }
 

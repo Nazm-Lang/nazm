@@ -390,6 +390,10 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
             Ty::Chan => {
                 self.rt("nz.chan_retain", &[v]);
             }
+            Ty::Fn(_) => {
+                self.g.needs.closures = true;
+                self.rt("nz.closure_retain", &[v]);
+            }
             _ => {}
         }
     }
@@ -428,6 +432,10 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
             }
             Ty::Chan => {
                 self.rt("nz.chan_release", &[v]);
+            }
+            Ty::Fn(_) => {
+                self.g.needs.closures = true;
+                self.rt("nz.closure_release", &[v]);
             }
             Ty::Vec(id) => {
                 let elem = self
