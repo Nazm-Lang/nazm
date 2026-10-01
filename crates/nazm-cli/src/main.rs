@@ -43,6 +43,7 @@ mod diagnostics;
 mod docs;
 mod fix;
 mod fmt;
+mod inspect;
 mod interface;
 mod lsp;
 mod mir;
@@ -596,6 +597,15 @@ enum Command {
         /// be given more than once; it must exist. Nazm does not compile C.
         #[arg(long = "link", value_name = "FILE")]
         link: Vec<PathBuf>,
+        /// One `nazm.timings/1` line on stderr: each phase's wall time — load, front end, MIR,
+        /// LIR, code generation, native compilation, link — and the total (N48).
+        #[arg(long)]
+        timings: bool,
+        /// Carry DWARF debug information (N48): a subprogram for each function and a source
+        /// position on each instruction, so a debugger stops in Nazm functions and shows their
+        /// lines. LLVM backend only; the same program, with more metadata.
+        #[arg(long)]
+        debug: bool,
         /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
         /// resolves to, with their bytes unchanged (N46).
         #[arg(long)]
@@ -605,6 +615,15 @@ enum Command {
         /// refuses, and never changes what an accepted program does.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
+    },
+    /// Print one program's facts as `nazm.inspect/1` (N48): every definition's identity,
+    /// signature, effects, capabilities, provenance, Core IR and MIR digests, and the toolchain,
+    /// package and lock identities — one deterministic line of JSON.
+    Inspect {
+        file: PathBuf,
+        /// Only the function of this name.
+        #[arg(long, value_name = "NAME")]
+        def: Option<String>,
     },
     /// Resolve a package and write its `nazm.lock` (N46): the exact package versions, sources
     /// and digests a `--locked` build is held to. Written only when its bytes would change.
@@ -645,6 +664,7 @@ fn main() -> ExitCode {
     if let Command::Lock { dir } = &cli.command {
         return package::lock(dir);
     }
+
     match &mut cli.command {
         Command::Run { file, locked, .. }
         | Command::Check { file, locked, .. }
@@ -653,7 +673,15 @@ fn main() -> ExitCode {
             Ok(None) => {}
             Err(code) => return code,
         },
+        Command::Inspect { file, .. } => match package::entry(file, false) {
+            Ok(Some(main)) => *file = main,
+            Ok(None) => {}
+            Err(code) => return code,
+        },
         _ => {}
+    }
+    if let Command::Inspect { file, def } = &cli.command {
+        return inspect::run(file, def.as_deref());
     }
     // Restriction profiles (N47): held before the command does its own work, from the facts a
     // full check settles.
@@ -705,6 +733,8 @@ fn main() -> ExitCode {
         backend,
         target,
         link,
+        timings,
+        debug,
         locked: _,
         profile: _,
     } = cli.command
@@ -723,6 +753,8 @@ fn main() -> ExitCode {
                     .unwrap_or(nazm_lir::backend::BackendId::Llvm),
                 target: target.as_deref(),
                 link: &link,
+                timings,
+                debug,
             },
         );
     }
@@ -926,7 +958,8 @@ fn main() -> ExitCode {
         | Command::CoreIr { .. }
         | Command::Mir { .. }
         | Command::Capabilities { .. }
-        | Command::Lock { .. } => {
+        | Command::Lock { .. }
+        | Command::Inspect { .. } => {
             unreachable!("handled above")
         }
     };

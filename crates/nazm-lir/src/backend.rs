@@ -9,7 +9,7 @@
 
 use nazm_diag::Diagnostic;
 
-use crate::emit::{emit_unit, Needs};
+use crate::emit::Needs;
 use crate::lower::Native;
 use crate::names::SourceNames;
 
@@ -246,12 +246,24 @@ pub fn units(native: &Native) -> Vec<(String, &crate::ir::Unit, bool)> {
 #[derive(Debug, Clone)]
 pub struct LlvmText {
     target: Target,
+    /// Whether each unit carries debug information (N48).
+    debug: bool,
 }
 
 impl LlvmText {
     #[must_use]
     pub const fn new(target: Target) -> Self {
-        Self { target }
+        Self {
+            target,
+            debug: false,
+        }
+    }
+
+    /// The same backend, writing debug information into every unit it generates (N48).
+    #[must_use]
+    pub const fn with_debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
     }
 }
 
@@ -263,7 +275,11 @@ impl Backend for LlvmText {
     fn version(&self) -> String {
         // The object cache already keys LLVM text on its own bytes and on the clang that
         // compiles it (`crates/nazm-cli/src/backend.rs`); this names the emitter.
-        "llvm-text".to_owned()
+        if self.debug {
+            "llvm-text debug".to_owned()
+        } else {
+            "llvm-text".to_owned()
+        }
     }
 
     fn target(&self) -> &Target {
@@ -293,7 +309,7 @@ impl Backend for LlvmText {
                 needs: Needs::default(),
             });
         };
-        let (ir, needs) = emit_unit(native, u, names);
+        let (ir, needs) = crate::emit::emit_unit_with(native, u, names, self.debug);
         Ok(Generated {
             code: Code::Llvm(ir),
             needs,

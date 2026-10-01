@@ -134,7 +134,16 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
-    let llvm = nazm_lir::backend::LlvmText::new(target.clone());
+    // Debug information is the LLVM backend's (N48): refused, rather than silently dropped,
+    // for Cranelift.
+    if choice.debug && choice.backend == nazm_lir::backend::BackendId::Cranelift {
+        eprintln!(
+            "nazm: `--debug` carries debug information through the LLVM backend only; \
+             `--backend cranelift` writes none"
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
+    let llvm = nazm_lir::backend::LlvmText::new(target.clone()).with_debug(choice.debug);
     let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level);
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
         nazm_lir::backend::BackendId::Llvm => &llvm,
@@ -152,6 +161,7 @@ pub(crate) fn run(
             nazm_cache::CodegenConfig::of(&[chosen.target().triple.clone()]),
         )
     };
+    let clock = Clock::start();
     let loaded = match crate::load::load(input, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
@@ -212,13 +222,17 @@ pub(crate) fn run(
     // The foreign symbols the program calls, so a link that cannot resolve them is reported
     // as the missing `--link` it is rather than as a compiler bug (N42).
     let mut foreign: Vec<String> = Vec::new();
+    clock.mark("load");
     let artefacts = match nazm_core::on_lowered(
         map,
         &loaded.graph,
         nazm_core::Entry::Required,
         |core, resolution| {
+            clock.mark("front_end");
             let program = crate::mir::lower(core, resolution, &loaded.graph)?;
+            clock.mark("mir");
             let native = nazm_lir::lower(program, &names).map_err(|e| e.diagnostics)?;
+            clock.mark("lir");
             foreign = native
                 .sigs
                 .iter()
@@ -229,7 +243,9 @@ pub(crate) fn run(
                 Some(ObjectFound::Hit(bytes)) => Some(bytes),
                 _ => None,
             };
-            emit_artefacts(&native, &names, chosen, &cached)
+            let made = emit_artefacts(&native, &names, chosen, &cached);
+            clock.mark("codegen");
+            made
         },
     ) {
         Ok(a) => a,
@@ -452,6 +468,7 @@ pub(crate) fn run(
     // Deterministic: the units are in load order and the support artefacts last, so the
     // command line does not depend on anything the filesystem decided.
     objects.extend(choice.link.iter().cloned());
+    clock.mark("native_compile");
     match backend.link(&tmp_exe, &objects) {
         Outcome::Ran(o) if o.status.success() => {}
         Outcome::Ran(o) if !foreign.is_empty() => {
@@ -507,6 +524,15 @@ pub(crate) fn run(
             }
         }
     }
+    // On macOS the linker leaves debug information in the objects it read, which are about
+    // to go, so a debug build gathers it into `OUTPUT.dSYM` first (N48). Elsewhere it is in
+    // the executable already.
+    if choice.debug && cfg!(target_os = "macos") {
+        let dsym = with_suffix(&output, "dSYM");
+        if let Err(e) = backend.gather_debug_info(&tmp_exe, &dsym) {
+            eprintln!("nazm: the debug information was not gathered: {e}");
+        }
+    }
     // Published last, so an existing executable survives every failure above — and then the
     // intermediates go, the working directory the executable was linked in included.
     let published = std::fs::rename(&tmp_exe, &output);
@@ -533,11 +559,56 @@ pub(crate) fn run(
             Some(output.display().to_string()),
         );
     }
+    clock.mark("link");
     if with_report {
         println!("{}", report(source_root.how(), map.len(), tally));
     }
+    if choice.timings {
+        eprintln!("{}", clock.report());
+    }
     println!("{}", output.display());
     ExitCode::from(exit::OK)
+}
+
+/// Where a build's time went (N48): each phase's wall time since the one before, in the order
+/// the build ran them. `--timings` prints them as `nazm.timings/1`, one line on stderr.
+struct Clock {
+    start: std::time::Instant,
+    last: std::sync::Mutex<(std::time::Instant, Vec<(&'static str, f64)>)>,
+}
+
+impl Clock {
+    fn start() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            start: now,
+            last: std::sync::Mutex::new((now, Vec::new())),
+        }
+    }
+
+    fn mark(&self, phase: &'static str) {
+        if let Ok(mut g) = self.last.lock() {
+            let now = std::time::Instant::now();
+            let ms = now.duration_since(g.0).as_secs_f64() * 1000.0;
+            g.1.push((phase, ms));
+            g.0 = now;
+        }
+    }
+
+    fn report(&self) -> String {
+        let total = self.start.elapsed().as_secs_f64() * 1000.0;
+        let phases = self
+            .last
+            .lock()
+            .map(|g| {
+                g.1.iter()
+                    .map(|(p, ms)| format!("{{\"phase\":\"{p}\",\"ms\":{ms:.3}}}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default();
+        format!("{{\"schema\":\"nazm.timings/1\",\"phases\":[{phases}],\"total_ms\":{total:.3}}}")
+    }
 }
 
 /// One `nazm.build-report/1` object.
@@ -583,6 +654,10 @@ pub(crate) struct Choice<'a> {
     pub(crate) target: Option<&'a str>,
     /// Foreign objects and libraries for the linker (N42), in the order given.
     pub(crate) link: &'a [std::path::PathBuf],
+    /// Print where the build's time went (N48).
+    pub(crate) timings: bool,
+    /// Carry debug information, for a debugger (N48).
+    pub(crate) debug: bool,
 }
 
 /// One generated native unit, ready to be written down.
