@@ -118,6 +118,13 @@ current account.
 
 ### 1. Syntax, parser, CST — PARTIAL
 
+**N49 (2026-10-01)** · string escapes (`\n \t \r \0 \\ \" \xHH` up to `7F`, one byte each, decoded
+once by the lexer, `N0004` otherwise, kept as written by the formatter), the logical operators
+`&&`, `||` and prefix `!` (lowered to `if` in Core IR), and `use "PATH" as NAME;` with `NAME::item`
+(the `::` token). `crates/nazm-cli/tests/usability.rs` holds each across the interpreter and three
+native builds; `crates/nazm-syntax/src/lexer.rs` its unit tests; the grammar and the guide carry
+the rules (`docs/spec.md`, *String escapes*, *Logical operators*, *Qualified names*).
+
 **Evidence** · Hand-written lexer and recursive-descent/Pratt parser,
 `crates/nazm-syntax/src/lexer.rs` and `crates/nazm-syntax/src/parser.rs`. The grammar is a
 tested artefact, not prose: `crates/nazm-syntax/tests/grammar.rs` requires every lexer
@@ -187,7 +194,17 @@ middle of a function.
 `crates/nazm-core/src/check.rs`. `use "relative/path.nz";` resolved by the driver,
 `crates/nazm-service/src/load.rs` — canonical-path keyed, read-once, depth-first, cycles
 terminate rather than erroring. A second resolver written in Nazm, `compiler/module.nz`,
-serves the bootstrap stages. Codes `N0200`–`N0208` in `crates/nazm-diag/src/lib.rs`.
+serves the bootstrap stages. Codes `N0200`–`N0210` in `crates/nazm-diag/src/lib.rs`.
+
+**N49 (2026-10-01)** · qualified names: an import under a name keeps its module's exports out of
+the unqualified namespace and holds them as `alias::name` in the same environments, so `NAME::item`
+resolves to exactly the definition an unqualified import would, at the item's own span — one
+resolver. The graph's edge records whether a plain `use` named the module and each alias.
+`N0209` (an alias that already means something), `N0210` (a qualified name that names nothing).
+Evidence: `crates/nazm-cli/tests/usability.rs` (two modules exporting one name used side by side,
+which was `N0207`; a module imported both ways; `@std`; types, constructions, variants and match
+arms), `crates/nazm-service/tests/qualified.rs` (definition and references at the item's bytes).
+The compiler written in Nazm refuses `::` and `as` by name.
 
 **Resolution is singular as of N1 (2026-09-21).** `nazm_core::check` produces a
 `nazm_sema::Resolution` — function definitions, call targets, and the slot every name
@@ -946,7 +963,7 @@ it. That was accurate, and it is no longer true — see area 10a.*
 
 **Evidence** · As of N5 (2026-09-22) each Nazm module is lowered, emitted and assembled on
 its own, and the objects are linked. `crates/nazm-lir/src/lower.rs` splits into a global
-`plan` — signature admissibility and the recursion refusal, both of which span modules —
+`plan` — signature admissibility and, until N49, the recursion refusal, both of which span modules —
 and `lower_module`, which reads one module's bodies and every function's *signature*;
 `crates/nazm-lir/src/emit.rs` has `emit_unit`, and `crates/nazm-lir/src/runtime/` `emit_runtime` and `emit_entry` (moved by N43);
 `crates/nazm-cli/src/build.rs` runs `clang -c` per artefact and links.
@@ -981,7 +998,8 @@ found by the conformance corpus).
 entirely because there are now several `clang` processes where there was one — measured in
 `performance.md` together with a 10% smaller optimised executable, which is cross-module
 inlining no longer happening. No LTO. `nazm build` still compiles a narrower subset than
-`nazm run`, and the recursion refusal is unchanged and still whole-program.
+`nazm run`. The call-cycle analysis is still whole-program: since N49 it places the stack check
+MIR emits first in every function in a cycle, across modules (area 11).
 
 *Until N6 this row also read "nothing is reused, and no native cache exists". That was
 accurate and is no longer true — see area 10b.*
@@ -1052,6 +1070,16 @@ hands it to `clang`. No LLVM is linked, so there is no build-time LLVM dependenc
 end-to-end tests in `crates/nazm-cli/tests/build.rs`, each at `-O0` **and** `-O2`, against
 a written expectation and against the interpreter.
 
+**N49 (2026-10-01)** · recursion, direct and mutual, across modules and through generic
+instances, compiles: MIR places a `StackCheck` first in every function in a call cycle and both
+backends emit it as a call to the runtime's `nz.stack_check` and a branch to the failure edge, so
+unbounded recursion fails with `N0408` and unwinds instead of dying of a signal (`docs/spec.md`,
+*Native recursion*). Evidence: `crates/nazm-cli/tests/usability.rs` (agreement in four builds, a
+depth of 50,000 natively, `N0408` under both backends at `-O0` and `-O2` and inside a task),
+`crates/nazm-cli/tests/mir.rs` (placement, and none where no cycle is), `native_cache.rs` (an edit
+that puts an unchanged module into a cycle recompiles it). The guarantee is conditional on the
+non-recursive frames between two checks fitting the quarter of the stack kept as headroom.
+
 **Limitation** · The arithmetic contract is the load-bearing part and is deliberately
 conservative: `nsw` is not used, because it would promise overflow cannot happen and
 license an optimiser to delete the trap. No debug info is emitted and `clang` is invoked
@@ -1076,7 +1104,7 @@ the differential reference. `architecture.md` §7.43 is the constitution, writte
 | Cranelift consumes validated MIR, and nothing above it | VERIFIED | `nazm-codegen-clif` depends on `nazm-mir` and `nazm-lir` only (`the_cranelift_backend_reads_mir_and_nothing_above_it`) |
 | The whole native subset compiles with Cranelift | VERIFIED | all 104 programs of the 205-source corpus that build: stdout, stderr, exit status and memory report identical to the LLVM backend's (`performance.md`, N41); `crates/nazm-cli/tests/cranelift.rs` against the interpreter too |
 | Traps and arithmetic edges | VERIFIED | `every_trap_is_the_same_trap` (overflow, `/` and `%` by zero, `MIN / -1`, bounds, capacities), `signed_arithmetic_and_its_edges_agree` (`MIN % -1` is 0) |
-| No silent fallback | VERIFIED | `choosing_cranelift_writes_no_llvm_text_for_any_unit`; a refusal writes nothing (`recursion_is_refused_whichever_backend_is_asked`) |
+| No silent fallback | VERIFIED | `choosing_cranelift_writes_no_llvm_text_for_any_unit`; a refusal writes nothing (`crates/nazm-cli/tests/cranelift.rs`); recursion compiles under both since N49 (`recursion_compiles_under_both_backends_and_agrees`) |
 | Typed, centralised runtime imports | VERIFIED | every call into the runtime is built from `crates/nazm-lir/src/runtime/mod.rs`; `a_runtime_entry_the_registry_names_is_one_the_runtime_defines` |
 | Object-cache identity and reuse | VERIFIED | a key over each unit's MIR digests, layouts, callee signatures, target, backend version and settings and the runtime ABI revision, known before generation; `an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`, `a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those` |
 | Deterministic objects | VERIFIED | `the_same_mir_gives_the_same_object_bytes` (the compiler's own source) |
@@ -1103,7 +1131,9 @@ first. The runtime is LLVM text generated into each program, emitted only for th
 from `crates/nazm-lir/src/runtime/`: `core.rs` (the portable text — state, failure and report,
 sequences, strings, I/O, join, tasks, channels, the second-backend shims), `os.rs` (the operating-
 system adapter: the only C-library and POSIX-threads entry points anything calls), `entry.rs`
-(the platform entry) and `mod.rs` (the contract). `compiler/emit.nz`'s copy is **derived** from
+(the platform entry) and `mod.rs` (the contract). *N49:* runtime ABI revision 3 — `nz.stack_check`
+and its thread-local limit, emitted only where a function in a call cycle calls it, and task
+threads started with an 8 MiB stack (`a_task_thread_has_the_stack_the_check_budgets_for_on_every_host`). `compiler/emit.nz`'s copy is **derived** from
 `core.rs` line by line, re-derived by `cargo xtask check`'s `runtime parity` gate since N8.
 
 | Claim | Status | Evidence |
@@ -1208,8 +1238,10 @@ without a `use`.
 
 **Limitation** · Functions carry their module's name because there are no qualified names. The
 compiler written in Nazm reports an `@std` import as a missing module. Pre-1.0: modules may change.
+*Narrowed in N49:* `use "@std/text" as t;` and `t::text_split` qualify a standard module's
+functions; the functions keep their prefixed names, which a plain import still needs.
 
-**Next dependency** · Function values (for `map`, `filter`, sorting by key), and qualified names.
+**Next dependency** · Function values (for `map`, `filter`, sorting by key).
 
 **Accepted when** · For v1: met. For the area: a library a real program can be written against
 without reimplementing collections or text handling, with a stability policy past 1.0.
@@ -1264,8 +1296,10 @@ reclamation of every heap-backed value with no annotation to write. *That last c
 "no reclamation" until N8.* It
 is the widest profile and every other is a restriction of it. PARTIAL rather than VERIFIED
 for one reason: **the interpreter's subset and the native subset are not the same** —
-recursion runs under `nazm run` and is refused by both compilers. A profile whose two
-implementations accept different programs is not yet a profile. *Accepted when* the two
+recursion ran under `nazm run` and was refused by both compilers until N49; since, the reference
+compiler builds it and the compiler written in Nazm still refuses it, and the interpreter's
+iteration budget remains its own. A profile whose implementations accept different programs is
+not yet a profile. *Accepted when* the two
 subsets coincide, or the difference is itself declared as a profile boundary rather than
 left as a gap.
 
@@ -1343,9 +1377,9 @@ those stay DESIGNED, and the disclaimer above stands in full.
 
 **What exists that is genuinely relevant** · Three things, and they are real. Arithmetic is
 **specified rather than inherited from the hardware** — overflow traps, and
-`crates/nazm-lir/src/emit.rs` refuses `nsw` so no optimiser may delete the check. Recursion
-is already **refused by both compilers**, which is the restriction this profile would want,
-arrived at for an unrelated reason. Everything outside a backend's coverage is **refused by
+`crates/nazm-lir/src/emit.rs` refuses `nsw` so no optimiser may delete the check. Recursion was
+refused by both compilers until N49; it now compiles with a stack guard (`N0408`), so a profile
+that wants it refused would need a rule of its own (none exists yet). Everything outside a backend's coverage is **refused by
 name with a span**, never silently approximated or partially compiled.
 
 **Missing prerequisites** · A memory model; effects; contracts; a bounded-stack story; and
