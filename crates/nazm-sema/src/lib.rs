@@ -69,8 +69,9 @@ pub use provenance::{
 pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
 pub use references::{Coverage, ReferenceIndex, ReferenceTarget};
 pub use resolve::{
-    CallSite, Callee, CheckedCall, FieldRef, FnDef, FnId, Instantiation, LocalDef, LocalRef,
-    PayloadRef, Propagation, Resolution, VariantRef, WrittenType,
+    CallSite, Callee, Capture, CheckedCall, ClosureInfo, FieldRef, FnDef, FnId, FnValueUse,
+    Instantiation, LocalDef, LocalRef, PayloadRef, Propagation, Resolution, VariantRef,
+    WrittenType,
 };
 pub use scope::{Candidate, Named, ScopeTrace, Unavailable, Visible};
 pub use types::{FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};

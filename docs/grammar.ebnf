@@ -170,7 +170,15 @@ parameter = IDENT , ":" , type ;
 (* @example fn f(c: Chan) -> Int { 0 } fn main() -> Int { f(chan_new(1)) } *)
 (* @example fn f(xs: Vec[Vec[Int]]) -> Int { vec_len(xs) } fn main() -> Int { f(vec_new[Vec[Int]]()) } *)
 (* @example fn say(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int { say(io, "hi") } *)
-type = [ qualifier ] , IDENT , [ type_arguments ] ;
+type = function_type | [ qualifier ] , IDENT , [ type_arguments ] ;
+
+(* A function type (N50): its parameters' types, its result's, and the effects a call
+ * performs — none when unwritten. Structural: two are one type exactly when all three are
+ * equal. See `docs/spec.md`, *Function values and closures*.
+ *)
+(* @example fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) } fn main() -> Int { 0 } *)
+(* @example fn run(c: IoCap, f: fn(IoCap) -> Int ! { io }) -> Int ! { io } { f(c) } fn main() -> Int { 0 } *)
+function_type = "fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ] ;
 
 (* Square brackets, and one spelling: there are no angle brackets and no indexing, so
  * `name[` can only begin type arguments. Empty brackets parse — `Vec[]` is a type written
@@ -293,7 +301,16 @@ atom = INTEGER
      | variant_construction
      | if_expression
      | match_expression
+     | closure
      | "(" , expression , ")" ;
+
+(* A closure (N50): a function written where a value is, its parameters and result in
+ * full, its effects declared or none. Its body may name the bindings around it, each
+ * copied in when the closure is made; a `let mut` binding or a capability may not be
+ * (`N0386`).
+ *)
+(* @example fn main() -> Int { let k = 2; let f = fn(x: Int) -> Int { x * k }; f(3) } *)
+closure = "fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block ;
 
 (* Type arguments are written where inference cannot find them from the arguments —
  * `vec_new[Int]()` — or where a reader wants them visible. The expected result type

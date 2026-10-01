@@ -165,7 +165,13 @@ impl PersistentFacts {
         let file = graph.file(module)?;
         let mut functions = Vec::with_capacity(self.functions.len());
         for f in &self.functions {
-            let function = res.definition(module, &f.name)?;
+            // A closure (N50) is in no namespace: it is found by the name its maker gave it.
+            let function = res.definition(module, &f.name).or_else(|| {
+                res.functions()
+                    .iter()
+                    .position(|d| d.module == module && d.closure.is_some() && d.name == f.name)
+                    .map(FnId::from_index)
+            })?;
             let n = f.calls.len();
             let calls = f
                 .calls

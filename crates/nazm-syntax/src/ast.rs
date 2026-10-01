@@ -66,6 +66,15 @@ pub struct Import {
     pub span: Span,
 }
 
+/// A function type as written (N50): `fn(Int, Str) -> Bool ! {io}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnTypeName {
+    pub params: Vec<TypeName>,
+    pub ret: TypeName,
+    /// `! { … }`, or `None`: none written means no effects.
+    pub effects: Option<EffectDecl>,
+}
+
 /// A module alias written before `::` (N49): `t` in `t::text_split`. Its span is the alias's
 /// alone; the item's name keeps its own span, which is what resolution is keyed by.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +230,8 @@ pub struct Param {
 pub struct TypeName {
     /// `m::` before the name (N49).
     pub qualifier: Option<Qualifier>,
+    /// `fn(T…) -> R ! {e}` (N50): a function type, whose `name` is `fn`.
+    pub function: Option<Box<FnTypeName>>,
     pub name: String,
     /// Where the name alone is written, for a diagnostic about the name.
     pub name_span: Span,
@@ -235,6 +246,7 @@ impl TypeName {
     pub fn plain(name: impl Into<String>, span: Span) -> Self {
         Self {
             qualifier: None,
+            function: None,
             name: name.into(),
             name_span: span,
             span,
@@ -274,6 +286,85 @@ pub struct Block {
     /// Present when the block ends in an expression with no `;` after it.
     pub tail: Option<Box<Expr>>,
     pub span: Span,
+}
+
+impl Block {
+    /// The closure expression written at `at` in this block, at any depth (N50): how a layer
+    /// that holds a closure's span finds its syntax again. Iterative, so a deeply nested body
+    /// costs no stack.
+    #[must_use]
+    pub fn closure_at(&self, at: Span) -> Option<&Expr> {
+        let mut exprs: Vec<&Expr> = Vec::new();
+        let mut blocks: Vec<&Self> = vec![self];
+        loop {
+            if let Some(b) = blocks.pop() {
+                for st in &b.statements {
+                    match st {
+                        Stmt::Let(l) => exprs.push(&l.value),
+                        Stmt::Assign(a) => exprs.push(&a.value),
+                        Stmt::While(w) => {
+                            exprs.push(&w.cond);
+                            blocks.push(&w.body);
+                        }
+                        Stmt::Return(r) => exprs.push(&r.value),
+                        Stmt::Expr(e) => exprs.push(e),
+                        Stmt::Scope(sc) => blocks.push(&sc.body),
+                        Stmt::Spawn(sp) => exprs.extend(sp.args.iter()),
+                        Stmt::Break { .. } | Stmt::Continue { .. } => {}
+                    }
+                }
+                if let Some(t) = &b.tail {
+                    exprs.push(t);
+                }
+                continue;
+            }
+            let e = exprs.pop()?;
+            let span = e.span();
+            if span.file != at.file || span.start > at.start || span.end < at.end {
+                continue;
+            }
+            match e {
+                Expr::Closure { span, body, .. } => {
+                    if *span == at {
+                        return Some(e);
+                    }
+                    blocks.push(body);
+                }
+                Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } | Expr::Var { .. } => {}
+                Expr::Neg { operand, .. }
+                | Expr::Not { operand, .. }
+                | Expr::Propagate { operand, .. } => exprs.push(operand),
+                Expr::Field { base, .. } => exprs.push(base),
+                Expr::Binary { lhs, rhs, .. } => {
+                    exprs.push(lhs);
+                    exprs.push(rhs);
+                }
+                Expr::Call { args, .. } => exprs.extend(args.iter()),
+                Expr::Construct { fields, .. } | Expr::Variant { fields, .. } => {
+                    exprs.extend(fields.iter().map(|f| &f.value));
+                }
+                Expr::Match {
+                    scrutinee, arms, ..
+                } => {
+                    exprs.push(scrutinee);
+                    exprs.extend(arms.iter().map(|a| &a.body));
+                }
+                Expr::If {
+                    cond,
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    exprs.push(cond);
+                    blocks.push(then_block);
+                    if let Some(b) = else_block {
+                        blocks.push(b);
+                    }
+                }
+                Expr::Block(b) => blocks.push(b),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -472,6 +563,17 @@ pub enum Expr {
         op_span: Span,
         span: Span,
     },
+    /// `fn(x: Int) -> Int ! {e} { body }` — a closure (N50). Its parameters and result are
+    /// written in full, its effects declared or none; the bindings its body names from the
+    /// functions around it are captured by copy. `fn_span` is the `fn` keyword's.
+    Closure {
+        params: Vec<Param>,
+        return_type: TypeName,
+        effects: Option<EffectDecl>,
+        body: Box<Block>,
+        fn_span: Span,
+        span: Span,
+    },
     /// `!operand` — logical negation of a `Bool` (N49). Core IR lowers it to
     /// `if operand { false } else { true }`; nothing below the checker sees it.
     Not {
@@ -593,6 +695,7 @@ impl Expr {
             | Self::Var { span, .. }
             | Self::Neg { span, .. }
             | Self::Not { span, .. }
+            | Self::Closure { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
             | Self::Construct { span, .. }
@@ -614,6 +717,7 @@ impl Expr {
             | Self::Var { span, .. }
             | Self::Neg { span, .. }
             | Self::Not { span, .. }
+            | Self::Closure { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
             | Self::Construct { span, .. }

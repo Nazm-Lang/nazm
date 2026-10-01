@@ -336,6 +336,18 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
         thread_local: false,
         writers: "atomic increments; read by the entry after every join",
     },
+    RuntimeGlobal {
+        symbol: "nz.clo_allocated",
+        ty: "i64",
+        thread_local: false,
+        writers: "atomic increments; read by the entry after every join",
+    },
+    RuntimeGlobal {
+        symbol: "nz.clo_reclaimed",
+        ty: "i64",
+        thread_local: false,
+        writers: "atomic increments; read by the entry after every join",
+    },
 ];
 
 /// The inventoried entry with this symbol.

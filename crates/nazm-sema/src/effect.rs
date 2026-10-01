@@ -257,6 +257,9 @@ pub enum EffectSource {
     /// A function of another module that declares no effect set, so every effect is
     /// assumed of it: the witness ends there.
     Undeclared(crate::resolve::FnId),
+    /// A call through a function value whose type includes it (N50): the witness ends at
+    /// the type.
+    Indirect(crate::types::Type),
 }
 
 #[cfg(test)]

@@ -199,6 +199,17 @@ fn chain(res: &Resolution, main: FnId, effect: Effect) -> Vec<Witness> {
                 });
                 break;
             }
+            EffectSource::Indirect(t) => {
+                out.push(Witness {
+                    span: r.at,
+                    note: format!(
+                        "a call through a function value of type `{}`, which requires `{}`",
+                        res.types().show(t),
+                        effect.name()
+                    ),
+                });
+                break;
+            }
         }
     }
     out

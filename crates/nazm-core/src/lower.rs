@@ -83,7 +83,14 @@ pub(crate) fn lower(program: &Program, res: &Resolution) -> Result<cir::Program,
         let id = FnId::from_index(i);
         let lowered = program.functions.get(def.decl as usize).map_or_else(
             || defect(def.name_span, format!("`{}` has no declaration", def.name)),
-            |f| Lower::new(res, id, def).function(f),
+            |f| match &def.closure {
+                // A closure's declaration is its maker's; its syntax is found by its span.
+                Some(info) => match f.body.as_ref().and_then(|b| b.closure_at(info.at)) {
+                    Some(c) => Lower::new(res, id, def).closure(c, info),
+                    None => defect(info.at, "a closure whose expression cannot be found"),
+                },
+                None => Lower::new(res, id, def).function(f),
+            },
         );
         match lowered {
             Ok(f) => functions.push(f),
@@ -129,16 +136,25 @@ struct Lower<'a> {
     targets: Vec<LoopId>,
     /// For each open region, the locals bound directly in it.
     owned: Vec<Vec<LocalId>>,
+    /// How far the resolution's slots are from Core IR's locals: 1 in a closure, whose
+    /// local 0 is the closure itself (N50), and 0 everywhere else.
+    shift: u32,
 }
 
 impl<'a> Lower<'a> {
     fn new(res: &'a Resolution, id: FnId, def: &'a FnDef) -> Self {
         let params = def.params.len();
-        let locals = def
-            .locals
-            .iter()
-            .enumerate()
-            .map(|(i, l)| Local {
+        // A closure's body is handed the closure first (N50): what its captures are read from.
+        let env = def.closure.as_ref().map(|info| Local {
+            ty: info.ty,
+            name: "env".to_owned(),
+            origin: LocalOrigin::Param,
+            at: info.at,
+        });
+        let shift = u32::from(env.is_some());
+        let locals = env
+            .into_iter()
+            .chain(def.locals.iter().enumerate().map(|(i, l)| Local {
                 ty: l.ty,
                 name: l.name.clone(),
                 origin: if i < params {
@@ -147,7 +163,7 @@ impl<'a> Lower<'a> {
                     LocalOrigin::Binding { mutable: l.mutable }
                 },
                 at: l.span,
-            })
+            }))
             .collect();
         Self {
             res,
@@ -159,7 +175,56 @@ impl<'a> Lower<'a> {
             loops: 0,
             targets: Vec::new(),
             owned: Vec::new(),
+            shift,
         }
+    }
+
+    /// A closure's body, as a function of its own (N50): the closure, then its parameters,
+    /// then its captures — each filled from the closure as a call begins, and owned by the
+    /// body like any binding.
+    fn closure(mut self, e: &AstExpr, info: &nazm_sema::ClosureInfo) -> Lowered<cir::Function> {
+        let AstExpr::Closure {
+            body,
+            return_type,
+            fn_span,
+            span,
+            ..
+        } = e
+        else {
+            return defect(info.at, "a closure that is not a closure expression");
+        };
+        let Some(required) = self.def.inferred_effects else {
+            return defect(*fn_span, "a closure with no inferred effects");
+        };
+        let captures: Vec<LocalId> = info
+            .captures
+            .iter()
+            .map(|c| LocalId(c.inner + self.shift))
+            .collect();
+        let body = self.value_block(body, captures.clone())?;
+        let def = self.def;
+        Ok(cir::Function {
+            def: self.id,
+            module: def.module,
+            name: def.name.clone(),
+            type_params: 0,
+            params: u32::try_from(def.params.len() + 1).unwrap_or(u32::MAX),
+            locals: self.locals,
+            ret: def.ret,
+            consts: self.consts,
+            loops: self.loops,
+            effects: cir::Effects {
+                declared: def.declared_effects,
+                required,
+            },
+            body,
+            span: *span,
+            name_span: *fn_span,
+            ret_span: return_type.span,
+            foreign: None,
+            captures,
+            closure: true,
+        })
     }
 
     fn function(mut self, f: &AstFn) -> Lowered<cir::Function> {
@@ -190,6 +255,8 @@ impl<'a> Lower<'a> {
                 name_span: f.name_span,
                 ret_span: f.return_type.span,
                 foreign: Some(symbol.clone()),
+                captures: Vec::new(),
+                closure: false,
             });
         }
         let Some(body) = &f.body else {
@@ -219,6 +286,8 @@ impl<'a> Lower<'a> {
             name_span: f.name_span,
             ret_span: f.return_type.span,
             foreign: None,
+            captures: Vec::new(),
+            closure: false,
         })
     }
 
@@ -226,7 +295,9 @@ impl<'a> Lower<'a> {
 
     fn local_at(&self, span: Span) -> Lowered<LocalId> {
         match self.res.var(span) {
-            Some(slot) if (slot as usize) < self.locals.len() => Ok(LocalId(slot)),
+            Some(slot) if ((slot + self.shift) as usize) < self.locals.len() => {
+                Ok(LocalId(slot + self.shift))
+            }
             _ => defect(span, "a name the checker bound to no slot"),
         }
     }
@@ -509,9 +580,35 @@ impl<'a> Lower<'a> {
                 Some(Type::Str),
                 *span,
             ),
+            // A named function as a value (N50): the checker recorded which, and its type.
+            AstExpr::Var { span, .. } if self.res.var(*span).is_none() => {
+                match self.res.fn_value(*span) {
+                    Some(v) => node(ExprKind::FnValue(v.function), Some(v.ty), *span),
+                    None => {
+                        return defect(*span, "a name that is neither a binding nor a function")
+                    }
+                }
+            }
             AstExpr::Var { span, .. } => {
                 let l = self.local_at(*span)?;
                 node(ExprKind::Local(l), Some(self.local_ty(l)?), *span)
+            }
+            AstExpr::Closure { span, .. } => {
+                let (Some(func), Some(info)) = (
+                    self.res.closure_at(*span),
+                    self.res
+                        .closure_at(*span)
+                        .and_then(|f| self.res.function(f))
+                        .and_then(|d| d.closure.as_ref()),
+                ) else {
+                    return defect(*span, "a closure the checker did not declare");
+                };
+                let captures = info
+                    .captures
+                    .iter()
+                    .map(|c| LocalId(c.outer + self.shift))
+                    .collect();
+                node(ExprKind::Closure { func, captures }, Some(info.ty), *span)
             }
             AstExpr::Neg {
                 operand, op_span, ..
@@ -816,6 +913,19 @@ impl<'a> Lower<'a> {
                 ExprKind::Call {
                     callee,
                     type_args: type_args(generic)?,
+                    args,
+                    callee_at,
+                }
+            }
+            // Through a binding of function type (N50).
+            Callee::Indirect(t) => {
+                let l = self.local_at(callee_at)?;
+                ExprKind::CallIndirect {
+                    callee: Box::new(Expr {
+                        kind: ExprKind::Local(l),
+                        ty: Some(t),
+                        at: callee_at,
+                    }),
                     args,
                     callee_at,
                 }

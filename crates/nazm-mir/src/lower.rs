@@ -38,9 +38,9 @@ use nazm_span::Span;
 
 use crate::instance::{plan_instances, InstanceKey, Instances};
 use crate::ir::{
-    Block, BlockId, BlockOrigin, Const, EnumInfo, FieldInfo, FieldRef, FuncId, Function, Identity,
-    LocalDecl, LocalId, LocalOrigin, LocalTy, Operand, Program, RecordInfo, Rvalue, Statement,
-    StatementKind, Terminator, TypeIdentity, Types, VariantInfo, VecInfo,
+    Block, BlockId, BlockOrigin, Const, EnumInfo, FieldInfo, FieldRef, FnInfo, FuncId, Function,
+    Identity, LocalDecl, LocalId, LocalOrigin, LocalTy, Operand, Program, RecordInfo, Rvalue,
+    Statement, StatementKind, Terminator, TypeIdentity, Types, VariantInfo, VecInfo,
 };
 use crate::names::{owner, type_key};
 
@@ -72,10 +72,30 @@ pub fn lower(
         }
     }
     let first_instance = next;
+    // A named function used as a value is called through a thunk (N50): code of a function
+    // value's shape — the closure object first — that calls it. One per (module, function),
+    // in the module that uses it, after every instance.
+    let mut thunks: BTreeMap<(usize, usize), FuncId> = BTreeMap::new();
+    let mut next_thunk = first_instance + u32::try_from(instances.planned.len()).unwrap_or(0);
+    let mut thunk_plan: Vec<(nazm_sema::ModuleId, FnId, Span)> = Vec::new();
+    for use_ in res.fn_values() {
+        let Some(m) = graph.ids().find(|m| graph.file(*m) == Some(use_.at.file)) else {
+            continue;
+        };
+        thunks
+            .entry((m.index(), use_.function.index()))
+            .or_insert_with(|| {
+                thunk_plan.push((m, use_.function, use_.at));
+                let id = FuncId(next_thunk);
+                next_thunk += 1;
+                id
+            });
+    }
     let map = FuncMap {
         plain,
         instances: &instances,
         first_instance,
+        thunks,
     };
 
     // Functions a generic definition's body calls: an instance of that body is an artefact of
@@ -136,6 +156,33 @@ pub fn lower(
             Err(e) => defects.push(*e),
         }
     }
+    for (module, g, at) in thunk_plan {
+        let Some(id) = map.thunk(module, g) else {
+            continue;
+        };
+        let Some(target) = core.function(g) else {
+            defects.push(defect(
+                at,
+                "a function value names a function with no Core IR",
+            ));
+            continue;
+        };
+        let Some(ty) = res.fn_value(at).map(|u| u.ty) else {
+            continue;
+        };
+        let thunk = thunk_of(target, module, ty, graph);
+        let identity = Identity {
+            owner: owner(graph, module, DefKind::Function, &thunk.name),
+            args: Vec::new(),
+        };
+        match lower_function(&res, &map, &thunk, None, id, identity, &facts) {
+            Ok(mut m) => {
+                m.exported = false;
+                functions.push(m);
+            }
+            Err(e) => defects.push(*e),
+        }
+    }
     if !defects.is_empty() {
         return Err(defects);
     }
@@ -159,6 +206,72 @@ pub fn lower(
     })
 }
 
+/// The Core IR of the thunk through which `module` calls `target` as a value (N50): the
+/// closure object, then `target`'s parameters, and a body that is the call.
+fn thunk_of(
+    target: &cir::Function,
+    module: nazm_sema::ModuleId,
+    ty: Type,
+    graph: &ModuleGraph,
+) -> cir::Function {
+    let at = target.name_span;
+    let params = target.param_locals();
+    let mut locals = vec![cir::Local {
+        ty,
+        name: "env".to_owned(),
+        origin: cir::LocalOrigin::Param,
+        at,
+    }];
+    locals.extend(params.iter().cloned());
+    let args = params
+        .iter()
+        .enumerate()
+        .map(|(i, l)| cir::Expr {
+            kind: cir::ExprKind::Local(cir::LocalId(u32::try_from(i + 1).unwrap_or(u32::MAX))),
+            ty: Some(l.ty),
+            at,
+        })
+        .collect();
+    // Named for where the target is, so two functions of one name are two thunks.
+    let home = graph
+        .key(target.module)
+        .map_or_else(|| format!("{}", target.module.index()), |k| k.to_string());
+    cir::Function {
+        def: target.def,
+        module,
+        name: format!("{}#value@{home}", target.name),
+        type_params: 0,
+        params: target.params + 1,
+        locals,
+        ret: target.ret,
+        consts: Vec::new(),
+        loops: 0,
+        effects: target.effects,
+        body: cir::Block {
+            stmts: Vec::new(),
+            tail: Some(Box::new(cir::Expr {
+                kind: cir::ExprKind::Call {
+                    callee: target.def,
+                    type_args: Vec::new(),
+                    args,
+                    callee_at: at,
+                },
+                ty: Some(target.ret),
+                at,
+            })),
+            ends: cir::Ends::FallsThrough,
+            owns: Vec::new(),
+            at,
+        },
+        span: target.span,
+        name_span: at,
+        ret_span: target.ret_span,
+        foreign: None,
+        captures: Vec::new(),
+        closure: true,
+    }
+}
+
 fn defect(at: Span, what: impl Into<String>) -> Diagnostic {
     Diagnostic::error(
         codes::COMPILER_DEFECT,
@@ -175,9 +288,16 @@ struct FuncMap<'a> {
     plain: Vec<Option<FuncId>>,
     instances: &'a Instances,
     first_instance: u32,
+    /// The thunk each module calls a named function through when it uses it as a value
+    /// (N50), by (module, function).
+    thunks: BTreeMap<(usize, usize), FuncId>,
 }
 
 impl FuncMap<'_> {
+    fn thunk(&self, module: nazm_sema::ModuleId, g: FnId) -> Option<FuncId> {
+        self.thunks.get(&(module.index(), g.index())).copied()
+    }
+
     fn instance(&self, key: &InstanceKey) -> Option<FuncId> {
         self.instances
             .position(key)
@@ -267,8 +387,19 @@ fn in_call_cycles(res: &Resolution) -> Vec<bool> {
                 .collect()
         })
         .collect();
+    // A call through a function value may reach anything (N50): which function it calls is
+    // decided at run time, so any cycle through one contains a function that makes one.
+    let indirect: Vec<bool> = fns
+        .iter()
+        .map(|f| {
+            f.call_sites
+                .iter()
+                .any(|s| !s.spawned && matches!(s.callee, Callee::Indirect(_)))
+        })
+        .collect();
     let mut index = vec![usize::MAX; n];
     let mut low = vec![0usize; n];
+
     let mut on_stack = vec![false; n];
     let mut stack: Vec<usize> = Vec::new();
     let mut out = vec![false; n];
@@ -333,6 +464,9 @@ fn in_call_cycles(res: &Resolution) -> Vec<bool> {
             }
         }
     }
+    for (o, i) in out.iter_mut().zip(indirect) {
+        *o |= i;
+    }
     out
 }
 
@@ -377,6 +511,7 @@ fn lower_function(
             span: f.span,
             ret_span: f.ret_span,
             foreign: Some(symbol.clone()),
+            closure: None,
         });
     }
     let mut fx = Fx {
@@ -420,6 +555,22 @@ fn lower_function(
         fx.push(StatementKind::StackCheck { unwind }, f.name_span);
     }
 
+    // A function value's code reads what its closure object carries into its own locals,
+    // which it then owns like bindings (N50).
+    if f.closure {
+        for (k, l) in f.captures.iter().enumerate() {
+            let l = LocalId(l.0);
+            fx.assign(
+                l,
+                Rvalue::Capture {
+                    env: LocalId(0),
+                    index: u32::try_from(k).unwrap_or(u32::MAX),
+                },
+                f.name_span,
+            );
+            fx.own(l);
+        }
+    }
     let result = fx.temp(fx.ret, f.body.at, "result");
     fx.block_into(&f.body, Some(result));
     if fx.cur.is_some() {
@@ -436,6 +587,17 @@ fn lower_function(
         return Err(Box::new(defect(at, format!("in `{}`: {what}", f.name))));
     }
     let def = res.function(f.def);
+    let closure: Option<Vec<Type>> = f.closure.then(|| {
+        f.captures
+            .iter()
+            .map(|l| {
+                fx.locals
+                    .get(l.index())
+                    .and_then(|d| d.ty.value())
+                    .unwrap_or(Type::Int)
+            })
+            .collect()
+    });
     Ok(Function {
         id,
         def: f.def,
@@ -461,6 +623,7 @@ fn lower_function(
         span: f.span,
         ret_span: f.ret_span,
         foreign: None,
+        closure,
     })
 }
 
@@ -1058,7 +1221,13 @@ impl Fx<'_> {
     /// region can hold a statement, so only an expression containing one can.
     fn hazardous(e: &cir::Expr) -> bool {
         match &e.kind {
-            cir::ExprKind::Const(_) | cir::ExprKind::Local(_) => false,
+            cir::ExprKind::Const(_)
+            | cir::ExprKind::Local(_)
+            | cir::ExprKind::Closure { .. }
+            | cir::ExprKind::FnValue(_) => false,
+            cir::ExprKind::CallIndirect { callee, args, .. } => {
+                Self::hazardous(callee) || args.iter().any(Self::hazardous)
+            }
             cir::ExprKind::Neg(x) => Self::hazardous(x),
             cir::ExprKind::Arith { lhs, rhs, .. } | cir::ExprKind::Compare { lhs, rhs, .. } => {
                 Self::hazardous(lhs) || Self::hazardous(rhs)
@@ -1238,6 +1407,53 @@ impl Fx<'_> {
                 args,
                 ..
             } => self.builtin(*op, type_args, args, dst, at),
+            cir::ExprKind::Closure { func, captures } => {
+                let Some(target) = self.map.plain.get(func.index()).copied().flatten() else {
+                    self.fail(at, "a closure with no MIR function");
+                    return;
+                };
+                let captures = captures
+                    .iter()
+                    .map(|l| Operand::Local(LocalId(l.0)))
+                    .collect();
+                self.write(
+                    dst,
+                    Rvalue::Closure {
+                        func: target,
+                        captures,
+                    },
+                    at,
+                );
+            }
+            cir::ExprKind::FnValue(g) => {
+                let Some(target) = self.map.thunk(self.f.module, *g) else {
+                    self.fail(at, "a function value with no thunk");
+                    return;
+                };
+                self.write(
+                    dst,
+                    Rvalue::Closure {
+                        func: target,
+                        captures: Vec::new(),
+                    },
+                    at,
+                );
+            }
+            cir::ExprKind::CallIndirect {
+                callee,
+                args,
+                callee_at,
+            } => {
+                let mut all = Vec::with_capacity(args.len() + 1);
+                all.push((**callee).clone());
+                all.extend(args.iter().cloned());
+                let Some((mut ops, held)) = self.operands(&all) else {
+                    return;
+                };
+                let callee = ops.remove(0);
+                self.write(dst, Rvalue::CallIndirect { callee, args: ops }, *callee_at);
+                self.release_all(held, at);
+            }
             cir::ExprKind::Record { fields, .. } => {
                 let Some(Type::Record(rid)) = e.ty.map(|t| self.ty(t, at)) else {
                     self.fail(at, "a record construction whose type is not a record");
@@ -1610,6 +1826,11 @@ fn collect_types(res: &Resolution, graph: &ModuleGraph, functions: &[Function]) 
                             }
                         }
                         Rvalue::Compare { operand, .. } => work.push(*operand),
+                        Rvalue::Closure { func, .. } => {
+                            if let Some(g) = functions.get(func.index()) {
+                                work.extend(g.closure.iter().flatten().copied());
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1697,6 +1918,25 @@ fn collect_types(res: &Resolution, graph: &ModuleGraph, functions: &[Function]) 
                     VecInfo {
                         elem,
                         elem_key: type_key(elem, res.types(), graph),
+                        source: res.types().show(t),
+                    },
+                );
+            }
+            Type::Fn(f) => {
+                let key = u32::try_from(f.index()).unwrap_or(u32::MAX);
+                if types.fns.contains_key(&key) {
+                    continue;
+                }
+                let Some(sig) = res.types().fn_signature(f).cloned() else {
+                    continue;
+                };
+                work.extend(sig.params.iter().copied());
+                work.push(sig.ret);
+                types.fns.insert(
+                    key,
+                    FnInfo {
+                        params: sig.params,
+                        ret: sig.ret,
                         source: res.types().show(t),
                     },
                 );

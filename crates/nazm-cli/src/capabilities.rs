@@ -167,6 +167,12 @@ const CONSTRUCTS: &[ConstructRow] = &[
         evidence: "nazm-cli/tests/usability.rs, nazm-service/tests/qualified.rs",
     },
     ConstructRow {
+        name: "function values: closures, named functions as values, indirect calls",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-cli/tests/closures.rs; one closure object and calling convention under both backends (docs/spec.md, Function values and closures)",
+    },
+    ConstructRow {
         name: "a call to a foreign (C) function",
         interpreted: false,
         compiled: true,

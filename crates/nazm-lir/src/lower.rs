@@ -203,6 +203,11 @@ fn callees(f: &mir::Function) -> Vec<(mir::FuncId, Span)> {
                     value: mir::Rvalue::Call { callee, .. },
                     ..
                 } => out.push((*callee, s.at)),
+                // A closure names its code, in its own module (N50).
+                mir::StatementKind::Assign {
+                    value: mir::Rvalue::Closure { func, .. },
+                    ..
+                } => out.push((*func, s.at)),
                 mir::StatementKind::Spawn {
                     callee, callee_at, ..
                 } => out.push((*callee, *callee_at)),
@@ -386,6 +391,12 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
                                 used.extend(program.types.vec_of(*e));
                             }
                             mir::Rvalue::Compare { operand, .. } => used.push(*operand),
+                            mir::Rvalue::Closure { func, .. } => used.extend(
+                                program
+                                    .function(*func)
+                                    .and_then(|g| g.closure.clone())
+                                    .unwrap_or_default(),
+                            ),
                             _ => {}
                         }
                     }

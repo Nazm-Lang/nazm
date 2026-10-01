@@ -127,6 +127,11 @@ pub const SCHEMA: &str = "nazm.interface/7";
 /// | parameter | `{"param":0}` | the first type parameter of the definition this type appears in |
 /// | vector | `{"vec":T}` | `Vec[T]` |
 /// | definition | `{"def":"a.nz::record Box","args":[T]}` | that definition applied to those arguments — none for one that is not generic |
+/// | function | `{"fn":[T],"ret":R,"effects":["io"]}` | `fn(T) -> R ! { io }` (N50), its effects by name in effect-id order |
+///
+/// The function shape arrived in N50 without a schema move: a `/7` reader that meets one
+/// cannot read it as any other shape, refuses the file, and so treats it as no entry — it is
+/// never wrong, only unable, which is what an older reader of a newer file may be.
 ///
 /// A parameter is a **position**, never a name: that is what makes renaming `T` to
 /// `Value` leave every byte, and so the fingerprint, unchanged.
@@ -143,6 +148,12 @@ pub enum PersistentType {
     Def {
         def: String,
         args: Vec<PersistentType>,
+    },
+    Fn {
+        #[serde(rename = "fn")]
+        params: Vec<PersistentType>,
+        ret: Box<PersistentType>,
+        effects: Vec<String>,
     },
 }
 
@@ -275,6 +286,18 @@ fn persist(t: Type, types: &UserTypes, graph: &ModuleGraph) -> Option<Persistent
         Type::Vec(v) => Some(PersistentType::Vec {
             vec: Box::new(persist(types.vec_element(v)?, types, graph)?),
         }),
+        Type::Fn(f) => {
+            let sig = types.fn_signature(f)?;
+            Some(PersistentType::Fn {
+                params: sig
+                    .params
+                    .iter()
+                    .map(|p| persist(*p, types, graph))
+                    .collect::<Option<Vec<_>>>()?,
+                ret: Box::new(persist(sig.ret, types, graph)?),
+                effects: sig.effects.names().into_iter().map(str::to_owned).collect(),
+            })
+        }
         Type::Record(_) | Type::Enum(_) => {
             let node = types.definition_of(t)?;
             let def = definition_key(node, types, graph)?;
@@ -467,6 +490,32 @@ fn validate_type(
             }
         }
         PersistentType::Vec { vec } => validate_type(vec, params, defined, depth + 1, owner)?,
+        PersistentType::Fn {
+            params: ps,
+            ret,
+            effects,
+        } => {
+            for p in ps {
+                validate_type(p, params, defined, depth + 1, owner)?;
+            }
+            validate_type(ret, params, defined, depth + 1, owner)?;
+            // Known effects, each once, in effect-id order: the one spelling a set has.
+            let mut last: Option<u32> = None;
+            for e in effects {
+                let Some(effect) = nazm_sema::Effect::by_name(e) else {
+                    return Err(ReadError::Malformed(format!(
+                        "`{e}` in a function type in {owner} is not an effect"
+                    )));
+                };
+                let id = u32::from(effect.id());
+                if last.is_some_and(|l| l >= id) {
+                    return Err(ReadError::Malformed(format!(
+                        "a function type's effects in {owner} are not in effect order"
+                    )));
+                }
+                last = Some(id);
+            }
+        }
         PersistentType::Def { def, args } => {
             let Some(arity) = defined.get(def.as_str()) else {
                 return Err(ReadError::UnknownType(def.clone()));
@@ -1137,6 +1186,26 @@ fn read_type(
         PersistentType::Vec { vec } => {
             let elem = read_type(vec, ids, types, owner);
             types.vec_of(elem)
+        }
+        PersistentType::Fn {
+            params,
+            ret,
+            effects,
+        } => {
+            let params = params
+                .iter()
+                .map(|p| read_type(p, ids, types, owner))
+                .collect();
+            let ret = read_type(ret, ids, types, owner);
+            let effects = effects
+                .iter()
+                .filter_map(|e| nazm_sema::Effect::by_name(e))
+                .fold(nazm_sema::EffectSet::EMPTY, nazm_sema::EffectSet::with);
+            types.fn_of(nazm_sema::FnSignature {
+                params,
+                ret,
+                effects,
+            })
         }
         PersistentType::Def { def, args } => {
             let Some(node) = ids.get(def.as_str()).copied() else {

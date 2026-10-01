@@ -574,6 +574,7 @@ fn effects_of(s: &Snapshot, paths: &Paths, id: nazm_core::sema::FnId) -> Option<
                 EffectSource::Inferred(g) => ("inferred", None, Some(g)),
                 EffectSource::Declared(g) => ("declared", None, Some(g)),
                 EffectSource::Undeclared(g) => ("undeclared", None, Some(g)),
+                EffectSource::Indirect(_) => ("indirect", None, None),
             };
             ContextEffectReason {
                 effect: r.effect.name(),

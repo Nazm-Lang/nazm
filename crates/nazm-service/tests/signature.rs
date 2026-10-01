@@ -631,6 +631,15 @@ fn signature_help_never_reinterprets_a_call() {
                                 }
                             }
                         }
+                        // Through a function value (N50): the value's type is the signature.
+                        Callee::Indirect(t) => {
+                            let Type::Fn(f) = t else {
+                                panic!("an indirect call through a `{t:?}`");
+                            };
+                            let sig = res.types().fn_signature(f).unwrap();
+                            assert_eq!(call.params, sig.params);
+                            assert_eq!(call.ret, sig.ret);
+                        }
                     }
                     if let Some(instance) = &call.instance {
                         generic += 1;

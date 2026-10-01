@@ -32,6 +32,8 @@ pub(crate) enum Helper {
     Equal(Ty),
     /// Release one element of a `Vec`, for the runtime's walk.
     ReleaseElement(Ty),
+    /// Release what the closure object of this function value's code carries (N50).
+    ClosureRelease(mir::FuncId),
 }
 
 /// A spawn site's trampoline, to define after the functions.
@@ -170,7 +172,11 @@ impl<'a> Gen<'a> {
                                 value: mir::Rvalue::Call { callee, .. },
                                 ..
                             }
-                            | mir::StatementKind::Spawn { callee, .. } => wanted.push(*callee),
+                            | mir::StatementKind::Spawn { callee, .. }
+                            | mir::StatementKind::Assign {
+                                value: mir::Rvalue::Closure { func: callee, .. },
+                                ..
+                            } => wanted.push(*callee),
                             _ => {}
                         }
                     }
@@ -361,6 +367,7 @@ impl<'a> Gen<'a> {
             Helper::Release(t) => ("rel", self.type_name(t), 1, None),
             Helper::Equal(t) => ("eq", self.type_name(t), 2, Some(types::I8)),
             Helper::ReleaseElement(t) => ("vel", self.type_name(t), 1, None),
+            Helper::ClosureRelease(f) => ("clo", format!("{}", f.0), 1, None),
         };
         let mut s = self.module.make_signature();
         for _ in 0..params {

@@ -234,11 +234,13 @@ why = """
 leaves the counter raised after a call returns, so a long sequence of sibling calls hits
 the depth limit although nothing is nested
 Repointed by N39: the interpreter walks Core IR, and a call is `ExprKind::Call` there.
+Repointed by N50: a direct call and a call through a function value share the frame-building
+code, so the call is made with the frame it built.
 """
 file = "crates/nazm-core/src/eval.rs"
-find = """                let out = self.call_body(g, frame(g, values));
+find = """                let out = self.call_body(g, fr);
                 self.depth -= 1;"""
-replace = "                let out = self.call_body(g, frame(g, values));"
+replace = "                let out = self.call_body(g, fr);"
 
 [[mutation]]
 name = "a-returned-value-is-discarded"
@@ -7529,8 +7531,12 @@ killers = [{ package = "nazm-core", test = "effects", name = "recursion_reaches_
 name = "n36-a-contract-is-not-held"
 why = "a body requiring an effect its declared set lacks is accepted, so a declared set means nothing"
 file = "crates/nazm-core/src/effects.rs"
-find = "        if missing.is_empty() {"
-replace = "        if missing.is_empty() || true {"
+find = """
+        let missing = set.without(declared);
+        if missing.is_empty() {"""
+replace = """
+        let missing = set.without(declared);
+        if missing.is_empty() || true {"""
 killers = [{ package = "nazm-core", test = "effects", name = "every_outside_world_built_in_requires_io_and_a_pure_function_may_call_none_of_them" }]
 
 [[mutation]]
@@ -8035,10 +8041,11 @@ killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_
 name = "n38-the-epoch-stays"
 why = """`SEMANTIC_EPOCH` is not bumped for a checker that now refuses a restricted flow, so an N37 entry is filed where an N38 one is looked for
 Repointed by N42, which moved the epoch to 11 for foreign declarations: an N41 entry must not be filed where an N42 one is looked for.
-Repointed by N49, which moved it to 12 for string escapes: an entry that read a backslash literally must not be reused."""
+Repointed by N49, which moved it to 12 for string escapes: an entry that read a backslash literally must not be reused.
+Repointed by N50, which moved it to 13 for function values: an entry that refused a function named as a value must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 12;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 11;"
+find = "pub const SEMANTIC_EPOCH: u32 = 13;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 12;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -8159,14 +8166,21 @@ killers = [{ package = "nazm-core", test = "enums", name = "a_variant_is_built_b
 [[mutation]]
 name = "n39-the-effect-contract-is-dropped"
 why = """a function's declared effect set does not survive into Core IR, so a later pass would see an ambient function where the source wrote a contract
-Widened by N42: a foreign function's Core IR (no body) carries its contract the same way, so the body-bearing site is named."""
+Widened by N42: a foreign function's Core IR (no body) carries its contract the same way, so the body-bearing site is named.
+Narrowed by N50: a closure's Core IR carries its contract the same way too; this is the named function's."""
 file = "crates/nazm-core/src/lower.rs"
 find = """            effects: cir::Effects {
                 declared: def.declared_effects,
-                required,"""
+                required,
+            },
+            body,
+            span: f.span,"""
 replace = """            effects: cir::Effects {
                 declared: None,
-                required,"""
+                required,
+            },
+            body,
+            span: f.span,"""
 killers = [{ package = "nazm-core", test = "core_ir", name = "effects_and_authority_survive_as_function_metadata" }]
 
 [[mutation]]
@@ -8453,11 +8467,13 @@ file = "crates/nazm-codegen-clif/src/func.rs"
 find = """                for a in args {
                     let v = self.argument(a);
                     vals.push(v);
-                }"""
+                }
+                let r = self.func(fid);"""
 replace = """                for a in args.iter().rev() {
                     let v = self.argument(a);
                     vals.push(v);
-                }"""
+                }
+                let r = self.func(fid);"""
 killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter" }]
 
 [[mutation]]
@@ -9535,3 +9551,269 @@ find = "        ) || *next == TokenKind::ColonColon"
 replace = "        )"
 killers = [{ package = "nazm-cli", test = "usability", name = "the_formatter_glues_a_qualified_name" }]
 
+
+# --- N50: function values and closures ---------------------------------------------------
+
+[[mutation]]
+name = "n50-a-mutable-binding-may-be-captured"
+why = "a closure copies a `let mut` binding, which then silently stops tracking it"
+file = "crates/nazm-core/src/check.rs"
+find = "        if b.mutable || matches!(b.ty, Type::Cap(_)) {"
+replace = "        if matches!(b.ty, Type::Cap(_)) {"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_may_not_capture_a_mutable_binding_or_a_capability" }]
+
+[[mutation]]
+name = "n50-a-capability-may-be-captured"
+why = "a closure captures authority its type does not show"
+file = "crates/nazm-core/src/check.rs"
+find = "        if b.mutable || matches!(b.ty, Type::Cap(_)) {"
+replace = "        if b.mutable {"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_may_not_capture_a_mutable_binding_or_a_capability" }]
+
+[[mutation]]
+name = "n50-a-generic-function-is-a-value"
+why = "a generic function is taken as a value, with a type that names its parameters"
+file = "crates/nazm-core/src/check.rs"
+find = "        if v.sig.generics > 0 {"
+replace = "        if v.sig.generics > 99 {"
+killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic_nazm_function_is_a_value" }]
+
+[[mutation]]
+name = "n50-a-function-value-may-be-named-in-a-generic-body"
+why = "a generic body names a function as a value, whose thunk its instances cannot reach"
+file = "crates/nazm-core/src/check.rs"
+find = """
+        // own, which could not reach it (N50).
+        if !self.type_scope.is_empty() {"""
+replace = """
+        // own, which could not reach it (N50).
+        if false {"""
+killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic_nazm_function_is_a_value" }]
+
+[[mutation]]
+name = "n50-a-closure-may-be-written-in-a-generic-body"
+why = "a closure is accepted inside a generic function, which N50 does not instantiate"
+file = "crates/nazm-core/src/check.rs"
+find = """
+            return expected.unwrap_or(Type::Int);
+        };
+        if !self.type_scope.is_empty() {"""
+replace = """
+            return expected.unwrap_or(Type::Int);
+        };
+        if false {"""
+killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic_nazm_function_is_a_value" }]
+
+[[mutation]]
+name = "n50-a-closure-holds-its-makers-authority"
+why = "the authority a closure holds is every capability its maker can name, not its own parameters'"
+file = "crates/nazm-core/src/check.rs"
+find = "        let start = self.closures.last().map_or(0, |c| c.boundary);"
+replace = "        let start = 0;"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_carries_its_effects_and_takes_its_authority_as_parameters" }]
+
+[[mutation]]
+name = "n50-a-closure-copies-from-its-own-slots"
+why = "a closure expression copies the closure's slot numbers out of its maker's frame"
+file = "crates/nazm-core/src/lower.rs"
+find = "                    .map(|c| LocalId(c.outer + self.shift))"
+replace = "                    .map(|c| LocalId(c.inner + self.shift))"
+killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+
+[[mutation]]
+name = "n50-native-captures-are-never-read"
+why = "a function value's code never reads its captures out of the closure object"
+file = "crates/nazm-mir/src/lower.rs"
+find = "    if f.closure {"
+replace = "    if f.closure && f.captures.is_empty() {"
+killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+
+[[mutation]]
+name = "n50-the-thunk-passes-the-closure-as-an-argument"
+why = "a named function's thunk hands its target the closure object as the first argument"
+file = "crates/nazm-mir/src/lower.rs"
+find = "            kind: cir::ExprKind::Local(cir::LocalId(u32::try_from(i + 1).unwrap_or(u32::MAX))),"
+replace = "            kind: cir::ExprKind::Local(cir::LocalId(u32::try_from(i).unwrap_or(u32::MAX))),"
+killers = [{ package = "nazm-cli", test = "closures", name = "function_values_live_in_records_and_vecs_and_compose" }]
+
+[[mutation]]
+name = "n50-an-indirect-call-closes-no-cycle"
+why = "a function that calls through a value checks no stack, so recursion through one overflows"
+file = "crates/nazm-mir/src/lower.rs"
+find = "        *o |= i;"
+replace = "        *o |= i && false;"
+killers = [{ package = "nazm-cli", test = "closures", name = "recursion_through_a_function_value_checks_the_stack_natively" }]
+
+[[mutation]]
+name = "n50-the-llvm-closure-does-not-retain-its-captures"
+why = "the LLVM closure object stores its captures without a reference of its own"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+                    // The object's own reference to each capture.
+                    self.retain(v, t);"""
+replace = """
+                    // The object's own reference to each capture.
+                    let _ = t;"""
+killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+
+[[mutation]]
+name = "n50-the-llvm-closure-release-forgets-its-captures"
+why = "the last release of an LLVM closure object frees it and leaks what it captured"
+file = "crates/nazm-lir/src/emit.rs"
+find = "        e.release(v, *t);"
+replace = "        let _ = v;"
+killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+
+[[mutation]]
+name = "n50-the-llvm-indirect-call-ignores-a-failure"
+why = "under LLVM a failure inside a function value's code is not noticed by its caller"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+                    list.join(", ")
+                );
+                self.check_failed();"""
+replace = """
+                    list.join(", ")
+                );"""
+killers = [{ package = "nazm-cli", test = "closures", name = "a_failure_inside_a_closure_reclaims_its_captures_and_its_callers" }]
+
+[[mutation]]
+name = "n50-the-cranelift-closure-does-not-retain-its-captures"
+why = "the Cranelift closure object copies an in-memory capture without a reference of its own"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = "                        self.retain_at(at, *t);"
+replace = "                        let _ = at;"
+killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+
+[[mutation]]
+name = "n50-the-cranelift-closure-release-forgets-its-captures"
+why = "the Cranelift release helper frees nothing a closure object carried"
+file = "crates/nazm-codegen-clif/src/helpers.rs"
+find = "                    fx.release_at(at, *t);"
+replace = "                    let _ = at;"
+killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+
+[[mutation]]
+name = "n50-the-cranelift-indirect-call-ignores-a-failure"
+why = "under Cranelift a failure inside a function value's code is not noticed by its caller"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """
+                let inst = self.b.ins().call_indirect(sref, code, &vals);
+                let result = self.b.inst_results(inst).first().copied();
+                self.check_failed();"""
+replace = """
+                let inst = self.b.ins().call_indirect(sref, code, &vals);
+                let result = self.b.inst_results(inst).first().copied();"""
+killers = [{ package = "nazm-cli", test = "closures", name = "a_failure_inside_a_closure_reclaims_its_captures_and_its_callers" }]
+
+[[mutation]]
+name = "n50-an-indirect-call-performs-no-effects"
+why = "a call through a function value performs none of its type's effects"
+file = "crates/nazm-core/src/effects.rs"
+find = "                            .map_or(EffectSet::EMPTY, |s| s.effects),"
+replace = "                            .map_or(EffectSet::EMPTY, |_| EffectSet::EMPTY),"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_carries_its_effects_and_takes_its_authority_as_parameters" }]
+
+[[mutation]]
+name = "n50-a-closure-body-is-not-checked-for-effects"
+why = "a closure's body is held to no effect set, so a pure function type hides an effect"
+file = "crates/nazm-core/src/effects.rs"
+find = "    nodes.extend(closures);"
+replace = "    nodes.extend(closures.into_iter().take(0));"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_carries_its_effects_and_takes_its_authority_as_parameters" }]
+
+[[mutation]]
+name = "n50-an-undeclared-function-value-is-not-held-to-its-type"
+why = "an undeclared function taken as a pure value may perform effects its value's type denies"
+file = "crates/nazm-core/src/effects.rs"
+find = "        let missing = set.without(value.assumed);"
+replace = "        let missing = set.without(set);"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_carries_its_effects_and_takes_its_authority_as_parameters" }]
+
+[[mutation]]
+name = "n50-the-interpreter-forgets-captures"
+why = "the interpreter calls a closure's body without the copies it captured"
+file = "crates/nazm-core/src/eval.rs"
+find = "                    for (l, v) in slots.iter().zip(&fv.carried) {"
+replace = "                    for (l, v) in slots.iter().zip(&fv.carried).take(0) {"
+killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+
+[[mutation]]
+name = "n50-references-miss-a-capture"
+why = "a use of a captured binding inside a closure is a reference to the closure's copy, so references and rename miss it"
+file = "crates/nazm-sema/src/references.rs"
+find = "        ReferenceTarget::Local(l) => ReferenceTarget::Local(res.binding_of(l)),"
+replace = "        ReferenceTarget::Local(l) => ReferenceTarget::Local(l),"
+killers = [{ package = "nazm-service", test = "closures", name = "a_captured_binding_is_one_binding_to_references" }]
+
+[[mutation]]
+name = "n50-an-interface-forgets-a-function-types-effects"
+why = "a published function type loses its effects, so an importer reads a pure type"
+file = "crates/nazm-iface/src/wire.rs"
+find = "                effects: sig.effects.names().into_iter().map(str::to_owned).collect(),"
+replace = "                effects: Vec::new(),"
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_function_type_is_published_with_its_effects_and_read_back_as_the_same_type" }]
+
+[[mutation]]
+name = "n50-an-indirect-result-has-a-known-origin"
+why = "the result of a call through a function value is taken to come only from its arguments"
+file = "crates/nazm-core/src/provenance.rs"
+find = """
+                        Flow::origin(Origin::Unknown, *callee_span)
+                            .joined(&callee)"""
+replace = """
+                        Flow::default()
+                            .joined(&callee)"""
+killers = [{ package = "nazm-cli", test = "closures", name = "a_path_through_a_function_value_is_of_unknown_origin" }]
+
+[[mutation]]
+name = "n50-a-closure-parameter-has-a-known-origin"
+why = "a closure's parameter is taken to carry nothing, though any caller may hand it anything"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                    *slot = Flow::origin(Origin::Unknown, p.name_span);"
+replace = "                    *slot = Flow::default();"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_path_through_a_function_value_is_of_unknown_origin" }]
+
+[[mutation]]
+name = "n50-a-function-value-may-cross-into-a-task"
+why = "a function value is handed to a task though its type does not say what it captured"
+file = "crates/nazm-sema/src/types.rs"
+find = "        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_))"
+replace = "        !self.is_sequence() && !self.is_param()"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_has_no_equality_and_never_crosses_into_a_task" }]
+
+[[mutation]]
+name = "n50-a-function-type-drops-its-effects"
+why = "the parser forgets a function type's written effects, so it reads as pure"
+file = "crates/nazm-syntax/src/parser.rs"
+find = """
+                ret,
+                effects,
+            })),"""
+replace = """
+                ret,
+                effects: None,
+            })),"""
+killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_carries_its_effects_and_takes_its_authority_as_parameters" }]
+
+[[mutation]]
+name = "n50-a-closure-drops-its-effects"
+why = "the parser forgets a closure's written effects, so its body is held to none"
+file = "crates/nazm-syntax/src/parser.rs"
+find = """
+            return_type,
+            effects,
+            body: Box::new(body),"""
+replace = """
+            return_type,
+            effects: None,
+            body: Box::new(body),"""
+killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_carries_its_effects_and_takes_its_authority_as_parameters" }]
+
+[[mutation]]
+name = "n50-a-function-types-result-does-not-unify"
+why = "a generic call infers nothing from a function value's result, so `vec_map` cannot learn `U`"
+file = "crates/nazm-core/src/check.rs"
+find = "                    .chain(std::iter::once((fs.ret, asig.ret)))"
+replace = "                    .chain(std::iter::empty())"
+killers = [{ package = "nazm-cli", test = "closures", name = "map_filter_and_fold_work_over_records_and_enums" }]
