@@ -84,6 +84,11 @@ pub mod codes {
     pub const AMBIGUOUS_IMPORT: Code = Code::new("N0207");
     /// An import brings in a name this module also defines.
     pub const IMPORT_COLLIDES_WITH_DEFINITION: Code = Code::new("N0208");
+    /// `use "PATH" as NAME;` where `NAME` is already a function, a type or another import's
+    /// name in the importing module (N49).
+    pub const ALIAS_COLLIDES: Code = Code::new("N0209");
+    /// `NAME::item` where `NAME` is no alias, or the aliased module exports no `item` (N49).
+    pub const UNKNOWN_QUALIFIED_NAME: Code = Code::new("N0210");
 
     // Types
     pub const TYPE_MISMATCH: Code = Code::new("N0300");
