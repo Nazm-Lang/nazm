@@ -3067,6 +3067,37 @@ fn worker(jobs: Chan[Job], done: Chan[Str]) -> Int ! {} {
 | **Ownership** | A send copies; a value a closed channel refuses is released; a receive moves the value into `out`; a channel destroyed with values queued releases each |
 | **Equality, tasks** | As `Chan`: no equality; may cross into a task |
 
+### Select, deadlines and cancellation — N54
+<!-- id: select-deadlines -->
+
+```nazm
+fn worker(stop: Chan[Int], jobs: Chan[Int], out: Chan[Int]) -> Int ! {} {
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, stop);
+    vec_push(cs, jobs);
+    let got = vec_new[Int]();
+    let mut running = true;
+    while running {
+        let i = chan_select_of(cs, got);
+        if i == 1 && vec_len(got) > 0 {
+            chan_send_of(out, vec_pop(got) * 2);
+        } else {
+            running = false;
+        }
+    }
+    chan_close_of(out)
+}
+```
+
+| | |
+| --- | --- |
+| **`chan_select_of(cs: Vec[Chan[T]], out: Vec[T]) -> Int`** | Waits until a channel in `cs` is ready — holds a value, or is closed and drained — and returns the lowest ready index; a value is moved onto `out`, a closed channel gives nothing. `-1` for an empty `cs`. Schedule-dependent, deterministically tie-broken |
+| **`chan_select_until(cs, out, ms: Int) -> Int`** | As `chan_select_of`, or `-2` once at least `ms` milliseconds pass; `ms <= 0` looks once. No effect; needs a `TimeCap` held where it is written, in every function (`N0369` otherwise) |
+| **`time_now_ms() -> Int`** | A monotonic clock, in milliseconds. No effect; needs a `TimeCap` |
+| **`TimeCap`** | A built-in capability type, like `IoCap`; `critical`'s `no-ambient-time` refuses any use |
+| **Cancellation** | Cooperative: close a channel the task selects on. Observed only where a task waits; a sibling's failure cancels nothing (N44 unchanged) |
+| **Counters** | `NAZM_SCHED_REPORT=1`: `nazm-sched: spawned=… joined=… selects=… timeouts=…` on standard error at exit |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
