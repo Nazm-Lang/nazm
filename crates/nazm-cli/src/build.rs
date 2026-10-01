@@ -289,7 +289,7 @@ pub(crate) fn run(
     // Linked inside the working directory under the output's own file name (N46): the
     // Mach-O linker writes that name into the executable's code signature and derives its
     // UUID from it, so a temporary name would make two builds of one program differ.
-    let tmp_exe = work.join(output.file_name().unwrap_or_default());
+    let tmp_exe = link_name(&work, &output);
     if let Err(e) = std::fs::create_dir_all(&work) {
         eprintln!("nazm: cannot create {}: {e}", work.display());
         if summary {
@@ -527,7 +527,7 @@ pub(crate) fn run(
     // On macOS the linker leaves debug information in the objects it read, which are about
     // to go, so a debug build gathers it into `OUTPUT.dSYM` first (N48). Elsewhere it is in
     // the executable already.
-    if choice.debug && cfg!(target_os = "macos") {
+    if gathers_debug_information(choice.debug, std::env::consts::OS) {
         let dsym = with_suffix(&output, "dSYM");
         if let Err(e) = backend.gather_debug_info(&tmp_exe, &dsym) {
             eprintln!("nazm: the debug information was not gathered: {e}");
@@ -801,9 +801,40 @@ fn sibling(output: &Path, suffix: &str) -> PathBuf {
     output.with_file_name(name)
 }
 
+/// Where the executable is linked: inside the working directory, under the output's own file
+/// name, which the Mach-O linker writes into the executable (N46).
+fn link_name(work: &Path, output: &Path) -> PathBuf {
+    work.join(output.file_name().unwrap_or_default())
+}
+
+/// Whether a build gathers its debug information beside the executable before the objects
+/// holding it are removed: a debug build on macOS, whose linker leaves it in the objects (N48).
+fn gathers_debug_information(debug: bool, os: &str) -> bool {
+    debug && os == "macos"
+}
+
 fn with_suffix(output: &Path, ext: &str) -> PathBuf {
     let mut name = output.file_name().unwrap_or_default().to_os_string();
     name.push(".");
     name.push(ext);
     output.with_file_name(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_executable_is_linked_under_its_own_name_inside_the_working_directory() {
+        let work = Path::new("/tmp/build/.nazm-7");
+        let at = link_name(work, Path::new("/tmp/build/prog"));
+        assert_eq!(at, Path::new("/tmp/build/.nazm-7/prog"));
+    }
+
+    #[test]
+    fn only_a_debug_build_on_macos_gathers_its_debug_information() {
+        assert!(gathers_debug_information(true, "macos"));
+        assert!(!gathers_debug_information(false, "macos"));
+        assert!(!gathers_debug_information(true, "linux"));
+    }
 }
