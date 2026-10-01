@@ -393,8 +393,9 @@ key; the steps are in [`docs/runbook.md`](docs/runbook.md). Nothing that ships d
 
 Almost everything. Specifically:
 
-- **The language is an interpreter and a native path over *overlapping* subsets** —
-  not the same one: recursion runs interpreted and is refused natively. Lexer, parser,
+- **The language is an interpreter and a native path over *almost* the same subset** —
+  since N49 recursion compiles too, and what separates them is the interpreter's iteration
+  budget and the native-only foreign call (`nazm capabilities` lists both). Lexer, parser,
   type checker, one lowering to Core IR (`nazm-cir`), and an evaluator over Core IR;
   `nazm build` compiles everything in the list above from the same Core IR. Two IR levels
   (Core IR and `nazm-lir`), one backend (LLVM IR as text → `clang`), two verified

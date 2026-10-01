@@ -9,10 +9,17 @@ found only by reading all of it.
 
 - No function values, closures, traits or methods: no `map`, `filter` or higher-order library
   code (areas 3, 16).
-- No qualified names: a standard module's functions carry its name (`text_split`) (area 16).
-- No string escapes: `str_from_byte(10)` is the newline (area 1).
-- No logical operators: `&&`, `||` and `!` do not exist; conditions nest (area 1).
-- Recursion runs under `nazm run` and is refused by both native backends (areas 11, 12).
+- A standard module's functions keep their module's name (`text_split`), qualified or not:
+  `use "@std/text" as t;` gives `t::text_split`, not `t::split` (areas 2, 16). *Narrowed in N49,
+  which added qualified names.*
+- String escapes stop at `\x7F`; a byte above 127 that UTF-8 source does not spell needs
+  `str_from_byte`, and there is no `\u{…}` (area 1). *Narrowed in N49, which added escapes.*
+- Native recursion is bounded by the thread's stack, not by the language: `N0408` arrives before
+  the stack is exhausted only while the non-recursive calls between two checks fit the quarter
+  kept as headroom; no tail-call optimisation; the depth at which it arrives depends on the
+  backend and the optimisation level (areas 11, 12). *Narrowed in N49, which compiles recursion.*
+- The compiler written in Nazm refuses string escapes, `&&`, `||`, `!`, `::`, `as` and recursion
+  by name: its bootstrap subset is narrower than the language (area 31).
 - Allocation is not tracked; no profile can restrict it (areas 4, 18).
 
 ## Effects, authority and information flow
