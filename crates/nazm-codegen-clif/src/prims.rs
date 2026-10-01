@@ -58,6 +58,15 @@ impl Fx<'_, '_, '_> {
                 let byte = self.b.ins().uload8(types::I64, mem(), at, 0);
                 self.set(dst, byte);
             }
+            // Declassification is the checker's, and nothing at run time (N52): the argument,
+            // as a reference of its own.
+            Intrinsic::StrVouch => {
+                let s = place(self, 0);
+                let d = self.addr(dst);
+                let n = self.size(Ty::Str);
+                self.copy(d, s, n);
+                self.retain_at(d, Ty::Str);
+            }
             Intrinsic::StrSlice => {
                 let s = place(self, 0);
                 let from = arg(self, 1);

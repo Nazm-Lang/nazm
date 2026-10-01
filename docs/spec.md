@@ -1537,7 +1537,8 @@ two implementations end up disagreeing:
 | **Concatenation** | `str_concat(a, b)` is the bytes of `a` followed by the bytes of `b` |
 | **Conversion** | `int_to_str(n)` is the decimal form, with a leading `-` when negative. `int_to_str(0)` is `"0"`, and the full `Int` range round-trips |
 | **Construction** | `str_from_byte(b)` is a one-byte `Str`, and fails with `N0405` unless `0 <= b <= 255`. Since N49 a literal may write a byte below 128 with an escape (*String escapes*, below); `str_from_byte` remains the way to make one above 127 that UTF-8 source does not already spell |
-| **Allocation** | `str_concat`, `int_to_str` and `str_from_byte` allocate; `str_slice` does not. A compiled program reports `N0406` if the allocator refuses. The interpreter cannot: its host aborts on allocation failure, and that difference is stated rather than papered over |
+| **Declassification** | `str_vouch(s)` is `s` with no origin, needing a `VouchCap` held (N52, *Declassification*) |
+| **Allocation** | `str_concat`, `int_to_str` and `str_from_byte` allocate; `str_slice` and `str_vouch` do not. A compiled program reports `N0406` if the allocator refuses. The interpreter cannot: its host aborts on allocation failure, and that difference is stated rather than papered over |
 | **Ownership** | Values, not references. Passing, returning, binding and copying a `Str` produce a string with the same bytes, and there is no way to observe whether a copy was made |
 | **Mutation** | There is none. No operation changes an existing `Str` |
 
@@ -2608,9 +2609,10 @@ capabilities**.
 | `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` | `io` |
 | `Spawn` | `SpawnCap` | a `spawn` statement: starting a task | `spawn` |
 | `Foreign` | `ForeignCap` | a call to a foreign function: running C (N42) | `foreign` |
+| `Vouch` | `VouchCap` | `str_vouch`: declassifying a string (N52), in every function | none |
 
 A kind is identified by the compiler, never by how its type is spelled. `IoCap`,
-`SpawnCap` and `ForeignCap` are **built-in type names**, like `Chan`: they mean the same in every module, and a
+`SpawnCap`, `ForeignCap` and `VouchCap` are **built-in type names**, like `Chan`: they mean the same in every module, and a
 module may not declare a type of either name (`N0331`). Which authority a built-in needs is a
 property of the built-in's identity, decided by an exhaustive table the checker reads — a
 program's own function cannot be named `print`, so a call spelled `print` is the built-in.

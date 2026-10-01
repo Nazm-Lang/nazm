@@ -104,6 +104,10 @@ pub enum Intrinsic {
     /// there is no way to produce a newline, and a compiler that cannot emit a newline
     /// cannot emit LLVM IR.
     StrFromByte,
+    /// `str_vouch(s: Str) -> Str` — its argument, with no origin (N52). Declassification:
+    /// needs a `VouchCap` held where it is written, in every function, and every use is
+    /// recorded with the origins it cleared. Makes no copy.
+    StrVouch,
 
     // --- sequences ---------------------------------------------------------------
     /// `ints_new() -> Ints` — an empty sequence.
@@ -214,13 +218,14 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
         Self::StrConcat,
         Self::IntToStr,
         Self::StrFromByte,
+        Self::StrVouch,
         Self::IntsNew,
         Self::IntsLen,
         Self::IntsGet,
@@ -263,6 +268,7 @@ impl Intrinsic {
             Self::StrConcat => "str_concat",
             Self::IntToStr => "int_to_str",
             Self::StrFromByte => "str_from_byte",
+            Self::StrVouch => "str_vouch",
             Self::IntsNew => "ints_new",
             Self::IntsLen => "ints_len",
             Self::IntsGet => "ints_get",
@@ -315,7 +321,7 @@ impl Intrinsic {
     #[must_use]
     pub fn params(self) -> &'static [Shape] {
         match self {
-            Self::StrLen => &[Shape::Str],
+            Self::StrLen | Self::StrVouch => &[Shape::Str],
             Self::StrByte => &[Shape::Str, Shape::Int],
             Self::StrSlice => &[Shape::Str, Shape::Int, Shape::Int],
             Self::StrConcat => &[Shape::Str, Shape::Str],
@@ -350,7 +356,11 @@ impl Intrinsic {
     pub fn ret(self) -> Shape {
         match self {
             Self::StrLen | Self::StrByte => Shape::Int,
-            Self::StrSlice | Self::StrConcat | Self::IntToStr | Self::StrFromByte => Shape::Str,
+            Self::StrSlice
+            | Self::StrConcat
+            | Self::IntToStr
+            | Self::StrFromByte
+            | Self::StrVouch => Shape::Str,
             Self::IntsLen
             | Self::StrsLen
             | Self::IntsGet

@@ -403,6 +403,8 @@ pub struct Resolution {
     /// What each call to a function with an effect parameter bound it to, by the callee's
     /// span (N51). An effect parameter in a binding is the caller's own.
     effect_bindings: HashMap<Span, crate::EffectSet>,
+    /// Every sink as provenance solved it, in module and body order (N52).
+    sinks: Vec<crate::SinkReport>,
     /// What each written type name the checker resolved to something **no program
     /// declared** is (N23), by the span of that name: a built-in type (`Int`, `Str`, the
     /// `Vec` of `Vec[Int]`) or a type parameter — and, for a type parameter, the span its
@@ -836,6 +838,17 @@ impl Resolution {
     /// Record a named function written as a value (N50).
     pub fn record_fn_value(&mut self, value: FnValueUse) {
         self.fn_values.insert(value.at, value);
+    }
+
+    /// Record a solved sink (N52).
+    pub fn record_sink(&mut self, report: crate::SinkReport) {
+        self.sinks.push(report);
+    }
+
+    /// Every solved sink, in the order provenance reported them (N52).
+    #[must_use]
+    pub fn sinks(&self) -> &[crate::SinkReport] {
+        &self.sinks
     }
 
     /// Record what a call bound its callee's effect parameter to (N51).

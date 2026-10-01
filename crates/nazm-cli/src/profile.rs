@@ -29,6 +29,29 @@ fn unknown(name: &str, whose: &str) -> ExitCode {
     ExitCode::from(exit::CHECK_FAILED)
 }
 
+/// Every allocation site whose count per call is unknown, as a profile's witnesses (N52).
+fn unbounded_allocations(program: &nazm_mir::ir::Program) -> Vec<profile::Witness> {
+    nazm_mir::cost::of(program)
+        .into_iter()
+        .flat_map(|fc| {
+            let name = program
+                .function(fc.func)
+                .map(|f| f.name.clone())
+                .unwrap_or_default();
+            fc.sites
+                .into_iter()
+                .filter(|s| {
+                    s.kind == nazm_mir::cost::SiteKind::Allocation
+                        && s.count == nazm_mir::cost::Count::Unknown
+                })
+                .map(move |s| profile::Witness {
+                    span: s.at,
+                    note: format!("`{}` allocates here in a loop of `{name}`", s.op),
+                })
+        })
+        .collect()
+}
+
 /// Hold the program rooted at `file` to the profiles in force.
 ///
 /// # Errors
@@ -72,9 +95,39 @@ pub(crate) fn enforce(
         return Ok(());
     };
     let map = &loaded.map;
-    let evaluated = nazm_core::on_checked_map(map, &loaded.graph, |_, res| {
-        Ok(profile::evaluate(&profiles, &loaded.graph, res, locked))
-    });
+    // A rule over resource facts reads MIR (N52): lowered only when one is in force.
+    let needs_cost = profiles
+        .iter()
+        .any(|p| p.rules().contains(&profile::Rule::BoundedAllocation));
+    let evaluated = if needs_cost {
+        nazm_core::on_lowered(
+            map,
+            &loaded.graph,
+            nazm_core::Entry::Required,
+            |core, res| {
+                let unbounded = crate::mir::lower(core, res, &loaded.graph)
+                    .ok()
+                    .map(|program| unbounded_allocations(&program));
+                Ok(profile::evaluate(
+                    &profiles,
+                    &loaded.graph,
+                    res,
+                    locked,
+                    unbounded.as_deref(),
+                ))
+            },
+        )
+    } else {
+        nazm_core::on_checked_map(map, &loaded.graph, |_, res| {
+            Ok(profile::evaluate(
+                &profiles,
+                &loaded.graph,
+                res,
+                locked,
+                None,
+            ))
+        })
+    };
     let Ok(evaluation) = evaluated else {
         // A program that does not check is refused by the command, which says why.
         return Ok(());

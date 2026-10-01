@@ -34,8 +34,8 @@ use std::collections::{BTreeSet, HashMap};
 use nazm_diag::{codes, Diagnostic};
 use nazm_sema::resolve::{Callee, FnId, Resolution};
 use nazm_sema::{
-    BuiltinFlow, CallFact, Flow, FunctionFacts, ModuleFacts, Origin, OriginSet, SinkFact, Summary,
-    Type,
+    BuiltinFlow, CallFact, Flow, FunctionFacts, ModuleFacts, Origin, OriginSet, SinkClass,
+    SinkFact, SinkReport, Summary, Type,
 };
 use nazm_span::Span;
 use nazm_syntax::{BinOp, Block, Expr, Function, Stmt};
@@ -190,7 +190,7 @@ struct Walk<'a, 'b> {
     calls: Vec<CallFact>,
     call_at: HashMap<(u32, u32), usize>,
     sinks: Vec<SinkFact>,
-    sink_at: HashMap<(u32, u32), usize>,
+    sink_at: HashMap<(u32, u32, SinkClass), usize>,
     result: Flow,
     /// The closure expressions this body wrote, once each (N50).
     closures: Vec<&'b Expr>,
@@ -276,8 +276,8 @@ impl<'b> Walk<'_, 'b> {
         Flow::call(u32::try_from(index).unwrap_or(u32::MAX))
     }
 
-    fn sink(&mut self, at: Span, path: &Flow) {
-        let key = (at.start, at.end);
+    fn sink(&mut self, at: Span, class: SinkClass, path: &Flow) {
+        let key = (at.start, at.end, class);
         if let Some(s) = self.sink_at.get(&key).and_then(|&i| self.sinks.get_mut(i)) {
             let _ = s.path.join(path);
         } else {
@@ -285,6 +285,7 @@ impl<'b> Walk<'_, 'b> {
             self.sinks.push(SinkFact {
                 at,
                 path: path.clone(),
+                class,
             });
         }
     }
@@ -350,6 +351,12 @@ impl<'b> Walk<'_, 'b> {
                         for f in &flows {
                             let _ = all.join(f);
                         }
+                        // Every argument that takes data out of the program, by class (N52).
+                        for &(arg, class) in SinkClass::of_intrinsic(b) {
+                            if let Some(flow) = flows.get(arg) {
+                                self.sink(*callee_span, class, flow);
+                            }
+                        }
                         match Origin::of_intrinsic(b) {
                             BuiltinFlow::Source(o) => Flow::origin(o, *callee_span).joined(&all),
                             BuiltinFlow::Derive => all,
@@ -357,12 +364,9 @@ impl<'b> Walk<'_, 'b> {
                                 Flow::origin(Origin::Unknown, *callee_span).joined(&all)
                             }
                             BuiltinFlow::Fresh => Flow::default(),
-                            BuiltinFlow::WritePath => {
-                                if let Some(path) = flows.first() {
-                                    self.sink(*callee_span, path);
-                                }
-                                all
-                            }
+                            BuiltinFlow::WritePath => all,
+                            // Cleared, and recorded above as a `vouch` (N52).
+                            BuiltinFlow::Vouch => Flow::default(),
                         }
                     }
                     Some(Callee::Function(g)) => self.call(g, *callee_span, flows, false),
@@ -633,7 +637,7 @@ pub(crate) fn solve(
             .map(|s| s.reaches.iter().copied().collect())
             .unwrap_or_default();
         let before = reach.len();
-        for s in &f.sinks {
+        for s in f.sinks.iter().filter(|s| s.class == SinkClass::Path) {
             reach.extend(Program::eval(&s.path, calls).params);
         }
         for c in &f.calls {
@@ -700,6 +704,27 @@ pub(crate) fn solve(
             break;
         }
     }
+    // Every sink of every class, with what reaches it (N52): its own flow's origins, and what
+    // every caller — transitively — hands the parameters it depends on. Recorded for profiles
+    // and `nazm explain-flow`; the language's own restriction is the path rule below.
+    for (k, f) in program.facts.iter().enumerate() {
+        let Some(calls) = values.get(k) else { continue };
+        for s in &f.sinks {
+            let v = Program::eval(&s.path, calls);
+            let mut origins = v.origins;
+            for p in &v.params {
+                if let Some(r) = receives.get(k).and_then(|r| r.get(*p as usize)) {
+                    origins = origins.union(*r);
+                }
+            }
+            res.record_sink(SinkReport {
+                function: f.function,
+                class: s.class,
+                at: s.at,
+                origins,
+            });
+        }
+    }
     for (k, f) in program.facts.iter().enumerate() {
         if let (Some(s), Some(r)) = (
             program.summaries.get_mut(f.function.index()),
@@ -720,7 +745,7 @@ pub(crate) fn solve(
         }
         let Some(calls) = values.get(k) else { continue };
         let mut found: Vec<(Span, Diagnostic)> = Vec::new();
-        for s in &f.sinks {
+        for s in f.sinks.iter().filter(|s| s.class == SinkClass::Path) {
             let v = Program::eval(&s.path, calls);
             if let Some(o) = v.origins.intersection(OriginSet::RESTRICTED).iter().next() {
                 found.push((s.at, direct(&program, res, f, s, o)));
@@ -891,7 +916,7 @@ fn reaching(
     }
     let Some(f) = p.facts_of(g) else { return };
     let calls = p.calls_of(f);
-    for s in &f.sinks {
+    for s in f.sinks.iter().filter(|s| s.class == SinkClass::Path) {
         if Program::eval(&s.path, &calls).params.contains(&i) {
             labels.push((
                 s.at,

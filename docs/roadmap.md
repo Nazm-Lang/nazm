@@ -388,6 +388,15 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N52 — Resource cost and information flow v2 — **complete, 2026-10-02**
+
+`architecture.md` §7.54 first. Resource sites read off MIR with a count per call that is
+`at-most-once` or `unknown` (`nazm explain-cost`, `nazm.cost/1`); a sink registry — `path`,
+`output`, `file-data` — solved through helpers, closures and modules (`nazm explain-flow`,
+`nazm.flow/1`); `str_vouch` under a new `VouchCap`, recorded; three profile rules over the new
+facts. Containers stay whole-container conservative, by statement. Semantic epoch 15. Next: N53,
+the runtime crate.
+
 ### N51 — Effects and capabilities v2 — **complete, 2026-10-02**
 
 `architecture.md` §7.53 first. One effect parameter per function, `effects E`, opaque in its body

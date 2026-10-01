@@ -111,6 +111,8 @@ impl Effect {
             | Intrinsic::StrConcat
             | Intrinsic::IntToStr
             | Intrinsic::StrFromByte
+            // Clearing an origin does nothing outside the program (N52).
+            | Intrinsic::StrVouch
             | Intrinsic::IntsNew
             | Intrinsic::IntsLen
             | Intrinsic::IntsGet

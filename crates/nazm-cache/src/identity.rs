@@ -158,7 +158,11 @@ use crate::digest::{self, Framed};
 /// moved from refused (`N0386`) to accepted, holding it; and making a value of an undeclared
 /// function without the authority its type's effects need moved from accepted to refused
 /// (`N0369`). A cached check from epoch 13 is a check of a different language.
-pub const SEMANTIC_EPOCH: u32 = 14;
+/// `15` — N52, 2026-10-02. Declassification: `str_vouch` and `VouchCap` became built-in
+/// names, so a program defining a function or type of either name moved from accepted to
+/// refused, and a vouch without a `VouchCap` held is refused (`N0369`). The check artefact's sink
+/// facts gained a class.
+pub const SEMANTIC_EPOCH: u32 = 15;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

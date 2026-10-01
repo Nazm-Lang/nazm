@@ -415,6 +415,28 @@ pub(crate) fn analyse(
         }
         errors.push(undeclared(node, declared, missing, why, res));
     }
+    // A vouch needs a `VouchCap` held, in every function (N52): declassification is never
+    // ambient. A declared function's is already its authority check's.
+    for node in nodes.iter().filter(|n| n.has_body && n.declared.is_none()) {
+        let sites = res
+            .function(node.id)
+            .map(|d| d.call_sites.clone())
+            .unwrap_or_default();
+        for site in sites {
+            if site.callee == Callee::Builtin(nazm_sema::Intrinsic::StrVouch)
+                && !site.held.contains(CapabilityKind::Vouch)
+            {
+                errors.push(missing_authority(
+                    node,
+                    CapabilityKind::Vouch,
+                    site.span,
+                    Needs::Builtin(nazm_sema::Intrinsic::StrVouch),
+                    res,
+                ));
+                break;
+            }
+        }
+    }
     // A foreign call needs a `ForeignCap` held, in every function (N42): N37's bridge does not
     // reach it.
     for node in &nodes {

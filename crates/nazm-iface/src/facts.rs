@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use nazm_sema::key::ModuleKey;
 use nazm_sema::module::{ModuleGraph, ModuleId};
 use nazm_sema::resolve::{FnId, Resolution};
-use nazm_sema::{CallFact, Flow, FunctionFacts, ModuleFacts, Origin, OriginSet, SinkFact};
+use nazm_sema::{
+    CallFact, Flow, FunctionFacts, ModuleFacts, Origin, OriginSet, SinkClass, SinkFact,
+};
 use nazm_span::{FileId, Span};
 
 /// A module's facts, persisted.
@@ -48,6 +50,10 @@ pub struct PersistentCall {
 pub struct PersistentSink {
     pub at: [u32; 2],
     pub path: PersistentFlow,
+    /// Which sink (N52): `path`, `output`, `file-data` or `vouch`. **Absent** for a path sink,
+    /// so a facts entry with only path sinks is written as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -145,6 +151,7 @@ impl PersistentFacts {
                         .map(|s| PersistentSink {
                             at: [s.at.start, s.at.end],
                             path: PersistentFlow::of(&s.path),
+                            class: (s.class != SinkClass::Path).then(|| s.class.name().to_owned()),
                         })
                         .collect(),
                 })
@@ -206,6 +213,11 @@ impl PersistentFacts {
                     Some(SinkFact {
                         at: Span::new(file, a, b),
                         path: s.path.back(file, n)?,
+                        // An unknown class is no entry at all, never a path sink by default.
+                        class: match &s.class {
+                            None => SinkClass::Path,
+                            Some(c) => SinkClass::by_name(c)?,
+                        },
                     })
                 })
                 .collect::<Option<Vec<_>>>()?;
