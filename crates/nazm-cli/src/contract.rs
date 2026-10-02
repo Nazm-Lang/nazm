@@ -115,7 +115,10 @@ pub(crate) fn upgrade_check(new: &Path, old: &Path) -> ExitCode {
             "changes": changes,
         })
     );
-    for c in changes.iter().filter(|c| at(c, "verdict") == "incompatible") {
+    for c in changes
+        .iter()
+        .filter(|c| at(c, "verdict") == "incompatible")
+    {
         eprintln!(
             "error[{}]: `{}` cannot be upgraded in place: {}",
             codes::EVM_UNSUPPORTED.as_str(),
@@ -138,10 +141,17 @@ pub(crate) fn run(
     txs: Option<&Path>,
     evm: Option<&Path>,
     wasm: Option<&Path>,
+    accounts: Option<&Path>,
 ) -> ExitCode {
     // The profile first, by the same path every command enforces one: a contract that is not
     // deterministic is not run at all.
-    if let Err(code) = crate::profile::enforce(file, Some("web3"), false, false) {
+    // An account-oriented target is held to `accounts` (N72): `web3`, and signed writes.
+    let profile = if accounts.is_some() {
+        "accounts"
+    } else {
+        "web3"
+    };
+    if let Err(code) = crate::profile::enforce(file, Some(profile), false, false) {
         return code;
     }
     let source_root = match crate::root::decide(file, None) {
@@ -215,6 +225,60 @@ pub(crate) fn run(
                 "conserved": c.conserved,
                 "external_calls": "none: an entrypoint calls only Nazm functions, so nothing can re-enter it",
             });
+            if let Some(dir) = accounts {
+                let fields_meta: Vec<Json> = c
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(k, name)| {
+                        let is_bool = state_def
+                            .and_then(|d| d.fields.get(k))
+                            .is_some_and(|f| f.ty == nazm_core::sema::Type::Bool);
+                        json!({ "name": name, "offset": 1 + 8 * k, "size": 8, "type": if is_bool { "bool as u64" } else { "i64 little-endian" } })
+                    })
+                    .collect();
+                let instructions: Vec<Json> = c
+                    .entrypoints
+                    .iter()
+                    .map(|e| {
+                        let h = nazm_service::keccak::keccak256(format!("nazm.instruction.{}", e.name).as_bytes());
+                        let writable = e.writes.as_ref().is_none_or(|w| !w.is_empty());
+                        let args: Vec<Json> = e
+                            .args
+                            .iter()
+                            .enumerate()
+                            .map(|(k, a)| json!({ "name": a, "offset": 8 + 8 * k, "type": "i64 little-endian" }))
+                            .collect();
+                        json!({
+                            "name": e.name,
+                            "discriminator": nazm_service::keccak::hex(h.get(..8).unwrap_or(&[])),
+                            "args": args,
+                            "accounts": [
+                                { "name": "state", "writable": writable, "signer": false, "owner": "this program" },
+                                { "name": "caller", "writable": false, "signer": e.caller_checked },
+                            ],
+                        })
+                    })
+                    .collect();
+                let doc = json!({
+                    "schema": "nazm.sbpf-accounts/1",
+                    "profile": "accounts",
+                    "state_account": {
+                        "owner": "this program",
+                        "data": { "version": 1, "size": 1 + 8 * c.fields.len(), "layout": "byte 0 the layout version, then each field's 8 bytes by declaration index", "fields": fields_meta },
+                    },
+                    "instructions": instructions,
+                    "cross_program_calls": "none: an entrypoint calls only Nazm functions",
+                    "execution": "BLOCKED: no sBPF toolchain, validator or emulator on this host; this metadata is the target-neutral part",
+                });
+                if let Err(e) = std::fs::create_dir_all(dir)
+                    .and_then(|()| std::fs::write(dir.join("accounts.json"), doc.to_string()))
+                {
+                    eprintln!("nazm: cannot write {}: {e}", dir.display());
+                    return Err(Vec::new());
+                }
+                return Ok((doc, None));
+            }
             if wasm.is_some() {
                 let fields = state_def
                     .map(|d| {

@@ -36,6 +36,8 @@ found only by reading all of it.
   loose gas bound and none for loops; an asset is a declared conserved quantity checked per
   transaction, not a linear type; no events, external calls or signers beyond `caller` (area 34).
   WebAssembly contracts (N71) run under the reference host only; no chain's host interface is bound.
+  Account-oriented (sBPF) contracts have signer analysis and metadata only: no sBPF toolchain or
+  validator exists here, so none is built or run (N72).
   *Narrowed in N69, N70 and N71:* until then, no contract model, then no backend.
 - Layout specialisation is one opt-in layout: `--layout soa` lays out every `Vec` of a record of
   `Int`s and `Bool`s one array per field, whether or not its loops gain — it is 2× slower for a loop

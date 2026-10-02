@@ -47,11 +47,14 @@ pub enum Rule {
     NoBlocking,
     /// Every `while` has a trip bound the compiler establishes (N63, §7.65); `unknown` otherwise.
     BoundedLoops,
+    /// Every contract entrypoint that writes the state decides on its `caller` (N72, §7.74): a
+    /// write no signer constraint guards is refused by name.
+    SignedWrites,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -65,6 +68,7 @@ impl Rule {
         Self::NoSelect,
         Self::NoBlocking,
         Self::BoundedLoops,
+        Self::SignedWrites,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -84,6 +88,7 @@ impl Rule {
             Self::NoSelect => "no-select",
             Self::NoBlocking => "no-blocking",
             Self::BoundedLoops => "bounded-loops",
+            Self::SignedWrites => "signed-writes",
         }
     }
 
@@ -102,7 +107,8 @@ impl Rule {
             | Self::NoRecursion
             | Self::NoSelect
             | Self::NoBlocking
-            | Self::BoundedLoops => None,
+            | Self::BoundedLoops
+            | Self::SignedWrites => None,
         }
     }
 }
@@ -120,16 +126,20 @@ pub enum Profile {
     /// Deterministic contracts (N69, §7.71): every contract declared, no outside world, no tasks,
     /// channels, clock or C, and no call cycle.
     Web3,
+    /// Account-oriented contracts (N72, §7.74): `web3`, and no state write without a decision on
+    /// the signer.
+    Accounts,
 }
 
 impl Profile {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::General,
         Self::Embedded,
         Self::Critical,
         Self::Cyber,
         Self::Realtime,
         Self::Web3,
+        Self::Accounts,
     ];
 
     #[must_use]
@@ -141,6 +151,7 @@ impl Profile {
             Self::Cyber => "cyber",
             Self::Realtime => "realtime",
             Self::Web3 => "web3",
+            Self::Accounts => "accounts",
         }
     }
 
@@ -193,6 +204,16 @@ impl Profile {
                 Rule::NoRecursion,
                 Rule::NoBlocking,
             ],
+            Self::Accounts => &[
+                Rule::DeclaredEffects,
+                Rule::NoIo,
+                Rule::NoSpawn,
+                Rule::NoForeign,
+                Rule::NoAmbientTime,
+                Rule::NoRecursion,
+                Rule::NoBlocking,
+                Rule::SignedWrites,
+            ],
         }
     }
 }
@@ -227,6 +248,8 @@ pub struct MirFacts {
     pub indirect: Vec<Witness>,
     /// What the bounds report states (N63, §7.65).
     pub bounds: Bounds,
+    /// Contract entrypoints that write the state without deciding on their caller (N72).
+    pub unsigned_writes: Vec<Witness>,
 }
 
 /// The static bounds a program's facts establish (N63, §7.65): counts and bounds, never a
@@ -475,6 +498,16 @@ pub fn evaluate(
                             .collect()
                     }
                 }
+            } else if rule == Rule::SignedWrites {
+                if let Some(f) = facts {
+                    f.unsigned_writes.clone()
+                } else {
+                    unknown = true;
+                    vec![Witness {
+                        span: at_main(),
+                        note: "the program's contract facts were not computed".to_owned(),
+                    }]
+                }
             } else if rule == Rule::ContentsStayInFiles {
                 let restricted = nazm_core::sema::OriginSet::RESTRICTED;
                 res.sinks()
@@ -624,6 +657,7 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::NoRecursion => "a call cycle has no stack bound the compiler can state, and a call through a function value has a target it does not know; call each function directly, without a cycle".to_owned(),
                 Rule::NoSelect => "this profile admits no select: receive from one channel, so the order is the program's".to_owned(),
                 Rule::NoBlocking => "this profile admits nothing whose latency is another task's or the scheduler's: no channel send, receive or select".to_owned(),
+                Rule::SignedWrites => "compare `caller` with the state's owner, or another signer it names, before writing; an unguarded write lets anyone change the state".to_owned(),
                 Rule::BoundedLoops => "write the loop as a counter from a literal, compared with a literal and stepped towards it once per turn by a positive literal (§7.65); `nazm check --profile-report` lists every loop's bound".to_owned(),
             })
         })
