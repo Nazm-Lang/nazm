@@ -42,11 +42,16 @@ pub enum Rule {
     NoRecursion,
     /// No select (N60): its result depends on which channels are ready when it looks.
     NoSelect,
+    /// No channel send, receive or select (N63): their latency is another task's or the host
+    /// scheduler's, not the program's.
+    NoBlocking,
+    /// Every `while` has a trip bound the compiler establishes (N63, §7.65); `unknown` otherwise.
+    BoundedLoops,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -58,6 +63,8 @@ impl Rule {
         Self::NoAmbientTime,
         Self::NoRecursion,
         Self::NoSelect,
+        Self::NoBlocking,
+        Self::BoundedLoops,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -75,6 +82,8 @@ impl Rule {
             Self::NoAmbientTime => "no-ambient-time",
             Self::NoRecursion => "no-recursion",
             Self::NoSelect => "no-select",
+            Self::NoBlocking => "no-blocking",
+            Self::BoundedLoops => "bounded-loops",
         }
     }
 
@@ -91,7 +100,9 @@ impl Rule {
             | Self::NoDeclassification
             | Self::NoAmbientTime
             | Self::NoRecursion
-            | Self::NoSelect => None,
+            | Self::NoSelect
+            | Self::NoBlocking
+            | Self::BoundedLoops => None,
         }
     }
 }
@@ -103,10 +114,19 @@ pub enum Profile {
     Embedded,
     Critical,
     Cyber,
+    /// An analysable subset with stated bounds (N63, §7.65): `embedded`'s rules, no blocking, no
+    /// clock, and bounded loops.
+    Realtime,
 }
 
 impl Profile {
-    pub const ALL: [Self; 4] = [Self::General, Self::Embedded, Self::Critical, Self::Cyber];
+    pub const ALL: [Self; 5] = [
+        Self::General,
+        Self::Embedded,
+        Self::Critical,
+        Self::Cyber,
+        Self::Realtime,
+    ];
 
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -115,6 +135,7 @@ impl Profile {
             Self::Embedded => "embedded",
             Self::Critical => "critical",
             Self::Cyber => "cyber",
+            Self::Realtime => "realtime",
         }
     }
 
@@ -149,6 +170,15 @@ impl Profile {
                 Rule::LockedBuild,
                 Rule::ContentsStayInFiles,
             ],
+            Self::Realtime => &[
+                Rule::NoIo,
+                Rule::NoSpawn,
+                Rule::BoundedAllocation,
+                Rule::NoAmbientTime,
+                Rule::NoRecursion,
+                Rule::NoBlocking,
+                Rule::BoundedLoops,
+            ],
         }
     }
 }
@@ -181,6 +211,25 @@ pub struct MirFacts {
     pub recursive: Vec<Witness>,
     /// Calls through a function value, whose target the compiler does not know.
     pub indirect: Vec<Witness>,
+    /// What the bounds report states (N63, §7.65).
+    pub bounds: Bounds,
+}
+
+/// The static bounds a program's facts establish (N63, §7.65): counts and bounds, never a
+/// measurement, and `None` where the compiler does not know.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bounds {
+    /// Every loop, with its trip bound per entry.
+    pub loops: Vec<crate::bounds::LoopBound>,
+    /// The longest chain of direct calls from `main`, counting `main`: `None` with a cycle or a
+    /// call through a function value.
+    pub call_depth: Option<usize>,
+    /// Allocation sites in the program's MIR — sites, not executions or bytes.
+    pub allocation_sites: usize,
+    /// `spawn` sites.
+    pub task_sites: usize,
+    /// Channel creation sites.
+    pub queue_sites: usize,
 }
 
 /// Every verdict for a build under `profiles`.
@@ -190,6 +239,8 @@ pub struct Evaluation {
     pub profiles: Vec<Profile>,
     /// One verdict per rule any of them has, in rule order.
     pub verdicts: Vec<Verdict>,
+    /// The bounds the facts establish, where they were computed (N63).
+    pub bounds: Option<Bounds>,
 }
 
 impl Evaluation {
@@ -370,6 +421,46 @@ pub fn evaluate(
                             .to_owned(),
                     })
                     .collect()
+            } else if rule == Rule::NoBlocking {
+                res.functions()
+                    .iter()
+                    .flat_map(|f| f.call_sites.iter())
+                    .filter(|s| {
+                        matches!(
+                            s.callee,
+                            nazm_core::sema::Callee::Builtin(i) if blocks(i)
+                        )
+                    })
+                    .map(|s| Witness {
+                        span: s.span,
+                        note: "this waits for another task or the scheduler".to_owned(),
+                    })
+                    .collect()
+            } else if rule == Rule::BoundedLoops {
+                match facts {
+                    None => {
+                        unknown = true;
+                        vec![Witness {
+                            span: at_main(),
+                            note: "the program's loops were not analysed".to_owned(),
+                        }]
+                    }
+                    Some(f) => {
+                        unknown = true;
+                        f.bounds
+                            .loops
+                            .iter()
+                            .filter(|l| l.bound.is_none())
+                            .map(|l| Witness {
+                                span: l.at,
+                                note: format!(
+                                    "this loop of `{}` has no bound the compiler establishes: {}",
+                                    l.function, l.reason
+                                ),
+                            })
+                            .collect()
+                    }
+                }
             } else if rule == Rule::ContentsStayInFiles {
                 let restricted = nazm_core::sema::OriginSet::RESTRICTED;
                 res.sinks()
@@ -446,7 +537,26 @@ pub fn evaluate(
             }
         })
         .collect();
-    Evaluation { profiles, verdicts }
+    Evaluation {
+        profiles,
+        verdicts,
+        bounds: facts.map(|f| f.bounds.clone()),
+    }
+}
+
+/// Whether a built-in waits for another task or the scheduler (N63): every channel send,
+/// receive and select. A close does not wait.
+const fn blocks(i: nazm_core::sema::Intrinsic) -> bool {
+    use nazm_core::sema::Intrinsic as I;
+    matches!(
+        i,
+        I::ChanSend
+            | I::ChanRecv
+            | I::ChanSendOf
+            | I::ChanRecvOf
+            | I::ChanSelectOf
+            | I::ChanSelectUntil
+    )
 }
 
 /// One diagnostic per failed rule: the profiles in force, the rule, and its witnesses.
@@ -499,6 +609,8 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::NoAmbientTime => "this profile admits no clock: a deadline or a time read makes the program's behaviour depend on when it runs".to_owned(),
                 Rule::NoRecursion => "a call cycle has no stack bound the compiler can state, and a call through a function value has a target it does not know; call each function directly, without a cycle".to_owned(),
                 Rule::NoSelect => "this profile admits no select: receive from one channel, so the order is the program's".to_owned(),
+                Rule::NoBlocking => "this profile admits nothing whose latency is another task's or the scheduler's: no channel send, receive or select".to_owned(),
+                Rule::BoundedLoops => "write the loop as a counter from a literal, compared with a literal and stepped towards it once per turn by a positive literal (§7.65); `nazm check --profile-report` lists every loop's bound".to_owned(),
             })
         })
         .collect()
@@ -570,6 +682,41 @@ pub fn report(e: &Evaluation, map: &SourceMap) -> String {
         }
         s.push_str("]}");
     }
-    s.push_str("],\"note\":\"compiler-enforced restriction profile: evidence from the checker's facts, not a certification\"}");
+    s.push(']');
+    if let Some(b) = &e.bounds {
+        let _ = write!(s, ",\"bounds\":{{\"loops\":[");
+        for (i, l) in b.loops.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let file = if l.at == Span::synthetic() {
+                "null".to_owned()
+            } else {
+                format!("\"{}\"", esc(map.name(l.at.file)))
+            };
+            let bound = l.bound.map_or_else(|| "null".to_owned(), |n| n.to_string());
+            let _ = write!(
+                s,
+                "{{\"function\":\"{}\",\"file\":{file},\"start\":{},\"end\":{},\"bound\":{bound},\"reason\":{}}}",
+                esc(&l.function),
+                l.at.start,
+                l.at.end,
+                if l.reason.is_empty() {
+                    "null".to_owned()
+                } else {
+                    format!("\"{}\"", esc(l.reason))
+                }
+            );
+        }
+        let _ = write!(
+            s,
+            "],\"call_depth\":{},\"allocation_sites\":{},\"task_sites\":{},\"queue_sites\":{},\"stack_bytes\":null,\"wcet\":null,\"kinds\":{{\"loops\":\"static bound per entry\",\"call_depth\":\"static bound\",\"sites\":\"static count of sites, not executions\",\"stack_bytes\":\"unknown here: a board build states it (bounds.json)\",\"wcet\":\"unknown: not computed\"}}}}",
+            b.call_depth.map_or_else(|| "null".to_owned(), |n| n.to_string()),
+            b.allocation_sites,
+            b.task_sites,
+            b.queue_sites
+        );
+    }
+    s.push_str(",\"note\":\"compiler-enforced restriction profile: evidence from the checker's facts, not a certification\"}");
     s
 }

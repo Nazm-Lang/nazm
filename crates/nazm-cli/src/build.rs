@@ -159,6 +159,17 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
+    // The watermark is the board's (N63): a hosted program has an operating system's stack.
+    if choice.stack_watermark && target.os != nazm_lir::backend::Os::None {
+        if summary {
+            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+        }
+        eprintln!(
+            "nazm: `--stack-watermark` measures the board's stack; it needs \
+             `--target aarch64-unknown-none`"
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
     // A target other than the host (N57): clang is told it, and where the host cannot link it
     // the build writes objects instead, or is refused by name before compiling anything.
     let host = nazm_lir::backend::Target::host().ok();
@@ -313,6 +324,7 @@ pub(crate) fn run(
                 &cached,
                 choice.library,
                 freestanding.then_some(&mut unhosted),
+                choice.stack_watermark,
             );
             clock.mark("codegen");
             made
@@ -414,9 +426,14 @@ pub(crate) fn run(
     };
     // A backend that would not say what it is gets no cache. Guessing a configuration is
     // how one target's objects end up in another's build.
+    //
+    // Nor does a board build (N63): its stack bound reads the frame sizes clang reports while
+    // compiling, which a reused object would not report.
     let store: Option<ObjectStore> = backend
         .settled()
+        .filter(|_| !freestanding)
         .map(|_| crate::derived::objects(source_root.path()));
+    let mut frames = std::collections::BTreeMap::new();
 
     let mut tally = Native {
         units: artefacts.len(),
@@ -513,8 +530,14 @@ pub(crate) fn run(
             }
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
-        match backend.compile(&ll, &obj) {
+        let compiled = if freestanding {
+            backend.compile_reporting_frames(&ll, &obj)
+        } else {
+            backend.compile(&ll, &obj)
+        };
+        match compiled {
             Outcome::Ran(o) if o.status.success() => {
+                crate::stack::frames(&String::from_utf8_lossy(&o.stderr), &mut frames);
                 tally.compiled += 1;
                 if artefact.instance {
                     tally.instances_compiled += 1;
@@ -562,7 +585,22 @@ pub(crate) fn run(
     // Objects for the target's own toolchain (N57): every object in link order, renamed by its
     // position so the order survives, and `link.txt` saying what to link them with.
     if let Some(dir) = choice.objects {
-        let written = write_objects(dir, &objects, &target);
+        let mut written = write_objects(dir, &objects, &target);
+        if freestanding && written.is_ok() {
+            let texts: Vec<&str> = artefacts
+                .iter()
+                .filter_map(|a| match &a.code {
+                    nazm_lir::backend::Code::Llvm(ir) => Some(ir.as_str()),
+                    nazm_lir::backend::Code::Object(_) => None,
+                })
+                .collect();
+            let calls = crate::stack::calls(&texts);
+            let bound = crate::stack::bound("nz_board_main", &frames, &calls);
+            written = std::fs::write(
+                dir.join("bounds.json"),
+                crate::stack::report(&target.triple, &bound, &frames),
+            );
+        }
         cleanup(false);
         return match written {
             Ok(()) => {
@@ -796,6 +834,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) library: bool,
     /// Objects for the target's own toolchain, not an executable (N57).
     pub(crate) objects: Option<&'a Path>,
+    /// Measure the board's stack on the board (N63).
+    pub(crate) stack_watermark: bool,
     /// Print where the build's time went (N48).
     pub(crate) timings: bool,
     /// Carry debug information, for a debugger (N48).
@@ -833,6 +873,7 @@ fn emit_artefacts(
     cached: &dyn Fn(&str) -> Option<Vec<u8>>,
     library: bool,
     unhosted: Option<&mut Vec<&'static str>>,
+    watermark: bool,
 ) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
     let mut needs = backend.baseline();
@@ -896,6 +937,7 @@ fn emit_artefacts(
                 code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::board::emit_entry(
                     &native.entry.to_string(),
                     native.entry_roots,
+                    watermark,
                 )),
                 instance: false,
                 key: None,

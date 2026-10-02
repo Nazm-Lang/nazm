@@ -121,6 +121,12 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N63, real-time bounds.** No code appeared: `no-blocking` and `bounded-loops` refuse with
+the existing `N0510`, an unbounded loop as `unknown` with its reason, the meaning unchanged.
+`nazm.profile-report/1` gains a profile name (`realtime`), two rule identities and an optional
+`bounds` object — new values and a new field, compatible. `nazm.bounds/1` is new, written by a board
+build beside `link.ld`; `nazm-stack:` is a UART line under `--stack-watermark`, not a schema.
+
 **Applied to N62, a freestanding target.** One code appeared, compatible: `N0392` (`mmio_read32` or
 `mmio_write32` reached by `nazm run` or a hosted build, which have no device registers). A register
 access without an `MmioCap` held is the existing `N0369`; a board program's overflow and stack
