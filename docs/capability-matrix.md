@@ -83,7 +83,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 15 | Advanced scheduler | RESEARCH |
 | 16 | Standard library | PARTIAL (v1 foundation VERIFIED) |
 | 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`) |
-| 18 | Embedded support | MISSING (profile rules PARTIAL) |
+| 18 | Embedded support | PARTIAL — one board, emulated, VERIFIED (N62); profile rules PARTIAL |
 | 19 | Critical profile | PARTIAL (rules v1) |
 | 20 | Cybersecurity profile | PARTIAL (rules v1) |
 | 21 | AI/HPC | RESEARCH |
@@ -1420,7 +1420,13 @@ commitment that keeps it reachable — field access stays symbolic until the low
 layout selection remains possible — is already honoured and must be preserved rather than
 undone when this profile arrives.
 
-### 18. Embedded support — MISSING
+### 18. Embedded support — PARTIAL
+
+**N62: a freestanding target — VERIFIED on QEMU's `virt` board, one board.** `aarch64-unknown-none`
+builds to objects and `link.ld`, links with `ld.lld` and boots under `qemu-system-aarch64`: no OS, no
+C library, no heap; device registers through `mmio_read32`/`mmio_write32` under an `MmioCap`. The
+evidence and its limits are in area 33's N62 paragraph. Atomics, interrupts, a heap and `@std` are
+DESIGNED only (§7.64); no hardware was run.
 
 **What it would restrict** · No allocation after startup, or none at all; a stack bound
 that is computed; no I/O except through declared capabilities; a freestanding target with

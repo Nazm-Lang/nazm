@@ -50,6 +50,11 @@ found only by reading all of it.
   selection; a target the host has no linker for is built to objects (`--objects`) for its own
   toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here
   (area 33). *Narrowed in N57:* until then, the host only.
+- One freestanding target, `aarch64-unknown-none`, verified only on QEMU's `virt` board: objects and
+  `link.ld`, linked by `ld.lld` outside this host; no atomics, interrupts, heap or `@std`; a board
+  program that reaches allocation, input and output, tasks, channels, closures or the C library is
+  refused; Cranelift builds no board (areas 18, 33). *Narrowed in N62:* until then, no target
+  without an operating system.
 - Cranelift keeps every non-scalar local in a stack slot; its loops are slower than LLVM's
   (area 12, `performance.md`).
 - Both backends still need clang for the runtime's LLVM text and the C compiler driver for the
