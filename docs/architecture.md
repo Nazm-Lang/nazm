@@ -6452,6 +6452,39 @@ richer than `Int`; *kernels in the language* (a `kernel` modifier, launched from
 handle as a capability, designed on `MmioCap`'s pattern and not built; *occupancy* is not reported by
 the API version here.
 
+## 7.70 Layout: a `Vec` of records, one array per field — N68, 2026-10-02
+
+Written before the code is committed (the code was prototyped first, for N66's lesson that a
+measurement must precede a claim; this text, and the register's prior art, precede the commit).
+A layout choice is sound only where no program can observe it. In Nazm a `Vec` element has no
+address, cannot cross the FFI (`Int` and `Bool` only, N55), is never serialised, and a record's
+layout is already by field name (§7.9) — so for an element that owns nothing, the layout of a
+`Vec`'s storage is unobservable by construction.
+
+**Eligibility.** A `Vec[R]` where `R` is a record with at least one field and every field an `Int`
+or a `Bool`. An element that owns storage (a `Str`, a sequence, a `Vec`, a closure) is excluded,
+not because it is observable but because its release walks elements, and splitting that walk is
+not done here; an enum or a non-record element is excluded likewise. Each excluded type says why.
+
+**The layout.** `--layout soa` stores an eligible `Vec[R]` as one 8-byte array per field in one
+allocation, field `k` of element `i` at `data + (k · cap + i) · 8`; `nz.soa_grow` relays the arrays
+out when the vector grows. Get gathers, set scatters, push and pop do both; bounds and failures are
+exactly the element-by-element layout's, checked before any field is touched. The header — `len`,
+`cap`, `data`, the count — is unchanged, so every sequence operation that does not touch elements
+(length, release, sharing) is the same code.
+
+**Choice and identity.** Opt-in, by name, LLVM backend only (Cranelift refuses it), and applied to
+every eligible type: the access pattern decides whether it wins, and the compiler has no cost model
+for that yet, so it does not choose. The layout changes the emitted text of every unit that touches
+such a `Vec`, and an object is keyed by its text, so the layout is in every affected object's
+identity and in the emitter's; it is not in the semantic identity, because no program's meaning
+changes. `nazm explain-cost` reports, per `Vec` type, whether `--layout soa` lays it out field by
+field or why not.
+
+**Not here, and why.** Automatic selection (a cost model over access patterns); elements that own
+storage; enums; hybrid (AoSoA) blocking; layouts for a single record value, which LLVM already
+scalarises.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
