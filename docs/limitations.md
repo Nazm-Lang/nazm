@@ -125,8 +125,12 @@ found only by reading all of it.
 - A local registry and four requirement forms (N56); no remote registry or network source, no
   signatures, no features or pre-releases, one version per package and no backtracking solve, no
   multi-root workspaces (area 26). *Narrowed in N56:* until then, path dependencies only.
-- Reproducibility is verified on one host; nothing is claimed across hosts or toolchains
-  (area 32).
+- Reproducibility is verified on one host. Across toolchains it is measured, not claimed: Apple
+  clang 21 and clang 19 give the same program objects and a different runtime object (N73, area 32).
+  A provenance record is evidence of what a build read and wrote, not a proof; Nazm neither signs nor
+  verifies an attestation.
+- Fuzzing is seeded generation, not coverage-guided; the differential generator writes `Int` and
+  `Bool` programs only (N73, area 30). *Narrowed in N73:* until then, no fuzzing.
 - The compiler written in Nazm understands neither packages nor `@std` imports nor foreign
   declarations (areas 16, 17, 26).
 
