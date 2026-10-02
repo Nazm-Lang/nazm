@@ -7,6 +7,7 @@
 mod bench;
 mod campaign;
 mod contained;
+mod evidence;
 mod gate;
 mod guide;
 mod metadata;
@@ -136,6 +137,10 @@ fn main() -> ExitCode {
             let rest: Vec<String> = args.collect();
             run_contained(&rest)
         }
+        Some("evidence") => {
+            let rest: Vec<String> = args.collect();
+            evidence::run(&rest)
+        }
         Some("help" | "--help" | "-h") | None => {
             help();
             ExitCode::SUCCESS
@@ -170,6 +175,7 @@ fn help() {
            check-corpus    the documentation corpus sections: every document there, every\n  \
                            id unique, every link resolved, the grammar parsed\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
+           evidence DIR    write DIR/sbom.json and DIR/index.json (every file's BLAKE3); --verify checks them\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
                            --runs N sets the repetitions (default 5)\n  \
            mutate          inject catalogued defects; each must be caught. Run it as\n  \
