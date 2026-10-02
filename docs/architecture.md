@@ -6714,6 +6714,12 @@ printed. Wrappers, not emulation: nothing of C's semantics is reproduced in Nazm
 **`nazm publish --dry-run`** resolves, checks and digests exactly as a publish would, and writes
 nothing to the registry.
 
+**A library is checked as modules** (amended before its code: the `library` template found that a
+package with no `main` could be tested and locked but not checked). `nazm check DIR` on such a package
+checks every module of its source root as a module — the root need not have `main`, everything it
+imports is checked with it — and reports each diagnostic once. `run` and `build` still refuse it
+with `N0509`: there is nothing to run.
+
 **An editor client, standard protocols only.** `editors/vscode` is a client for `nazm lsp` (the
 Language Server Protocol) and a launch configuration for N58's debugger through an existing LLDB
 debug adapter; all language logic stays in the compiler's service. The language service is already
