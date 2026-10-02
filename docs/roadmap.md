@@ -393,8 +393,9 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 `architecture.md` §7.75 first. A front-end robustness fuzzer and a differential fuzzer across the
 interpreter and three native tiers, both seeded, with a replayed regression corpus; three injected
 faults found by them alone. `nazm build --provenance` writes a deterministic record of a build's inputs,
-toolchain and outputs, and `--attest-with` hands it to a local signer. Cross-toolchain objects measured
-and classified. Not here: coverage-guided fuzzing, sanitizers, Miri, Loom. Next: N74, ecosystem.
+toolchain and outputs, and `--attest-with` hands it to a local signer; `cargo xtask evidence` indexes an
+evidence bundle with checksums and writes the compiler's bill of materials from `Cargo.lock`.
+Cross-toolchain objects measured and classified. Not here: coverage-guided fuzzing, sanitizers, Miri, Loom. Next: N74, ecosystem.
 
 ### N72 — sBPF account backend — **PARTIAL: analysis and metadata; execution BLOCKED, 2026-10-02**
 
