@@ -99,7 +99,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
-| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70) |
+| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71) |
 
 After N48: fifteen VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification), sixteen
 PARTIAL, two RESEARCH, one MISSING, across the 34 rows above.
@@ -3533,4 +3533,17 @@ zero divisor and `i64::MIN / -1` on the EVM, and measured gas inside every state
 `transfer` 21,598 of 63,806). **Limitation**: one reference EVM (py-evm, Shanghai); no events, value
 or external calls (none in the model); the gas bound is loose (worst-case `SSTORE`s) and open for
 loops; the EVM's execution semantics are held by the ignored test only.
+
+*N71, 2026-10-02: contracts on WebAssembly — VERIFIED with the reference host, one engine.*
+`architecture.md` §7.73 first. `nazm contract --wasm DIR` builds the contract with the ordinary
+WebAssembly backend (§7.66) and appends one generated adapter to its own unit: `nazm_init` and a
+`nazm_call_<entry>` per entrypoint, moving the state across `nazm_host.state_get`/`state_set` by
+declaration index, reverting through `nazm_host.revert`, checking `conserved` in the module, and
+reporting failures through `report`. `contract.json` (`nazm.wasm-contract/1`) records fields,
+exports, imports and status codes; `contract_host.mjs` keeps the state and runs each transaction in
+a fresh instance. Evidence, `crates/nazm-cli/tests/wasm_contract.rs` (2 anywhere — the metadata, the
+unit's host imports, the same bytes twice, the ordinary build without the adapter; 1 ignored, run in
+`nazm-wasm:n64` — 14 transactions with the simulator's outcomes, codes and final state, a run-time
+overflow reverting with `N0400`, and the linked module importing exactly the four host functions).
+**Limitation**: no chain's own host interface is bound to the four imports; one engine (Node).
 

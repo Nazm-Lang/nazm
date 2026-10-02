@@ -11695,3 +11695,40 @@ file = "crates/nazm-cli/src/contract.rs"
 find = '            None => changes.push(json!({ "field": name, "verdict": "incompatible"'
 replace = '            None => changes.push(json!({ "field": name, "verdict": "compatible"'
 killers = [{ package = "nazm-cli", test = "evm", name = "the_upgrade_check_allows_an_added_field_and_refuses_a_removed_or_retyped_one" }]
+
+
+# --- N71: contracts on WebAssembly — a host adapter -------------------------------------------
+# The adapter's commit, revert and rejection branches are held by the ignored WebAssembly run
+# (tests/wasm_contract.rs); only what a test on any host observes is catalogued here.
+
+[[mutation]]
+name = "n71-the-state-import-is-another"
+why = "the adapter asks its host for an import the host does not grant, so the module is refused"
+file = "crates/nazm-cli/src/contract_wasm.rs"
+find = '''        "\"wasm-import-module\"=\"nazm_host\" \"wasm-import-name\"=\"state_get\"".to_owned(),'''
+replace = '''        "\"wasm-import-module\"=\"nazm_host\" \"wasm-import-name\"=\"storage_read\"".to_owned(),'''
+killers = [{ package = "nazm-cli", test = "wasm_contract", name = "the_contract_builds_for_webassembly_with_its_adapter_and_metadata" }]
+
+[[mutation]]
+name = "n71-the-adapter-is-not-appended"
+why = "the contract's unit is built without its adapter, so the module exports no entrypoint"
+file = "crates/nazm-cli/src/build.rs"
+find = '                        Ok(text) => ir.push_str(&text),'
+replace = '                        Ok(text) => drop(text),'
+killers = [{ package = "nazm-cli", test = "wasm_contract", name = "the_adapter_leaves_the_ordinary_build_alone" }]
+
+[[mutation]]
+name = "n71-fields-are-placed-by-declaration"
+why = "the adapter builds the state with fields in declaration order, where the record is laid out by name"
+file = "crates/nazm-cli/src/contract_wasm.rs"
+find = '    let layout = |name: &str| by_name.iter().position(|n| *n == name).unwrap_or(0);'
+replace = '    let layout = |name: &str| shape.fields.iter().position(|(n, _)| n == name).unwrap_or(0);'
+killers = [{ package = "nazm-cli", test = "wasm_contract", name = "the_contract_builds_for_webassembly_with_its_adapter_and_metadata" }]
+
+[[mutation]]
+name = "n71-the-metadata-names-another-export"
+why = "contract.json names an export the module does not have, so no host can call the entrypoint"
+file = "crates/nazm-cli/src/contract.rs"
+find = '"export": format!("nazm_call_{}", enc(&name))'
+replace = '"export": format!("call_{}", enc(&name))'
+killers = [{ package = "nazm-cli", test = "wasm_contract", name = "the_contract_builds_for_webassembly_with_its_adapter_and_metadata" }]

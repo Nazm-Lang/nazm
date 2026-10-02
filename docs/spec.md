@@ -3236,6 +3236,16 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **Semantics** | Exactly the contract model's: `caller` is the EVM's `CALLER` (a sender address that is not an `Int` reverts, `N0397`); malformed calldata reverts (`N0398`); a runtime failure reverts with its five-byte code, an `Err(code)` with the 32-byte word `code`; a change to `conserved` reverts with `N0396`; every revert discards the transaction's writes |
 | **Upgrades** | `nazm contract NEW --upgrade-check OLD`: `nazm.evm-upgrade/1`; a removed or retyped field is incompatible (`N0399`), an added field compatible, a reordering nothing |
 
+### Contracts on WebAssembly — N71
+<!-- id: wasm-contract -->
+
+`nazm contract FILE --wasm DIR` builds the contract for `wasm32-unknown-unknown` with an adapter:
+exports `nazm_init()` and `nazm_call_NAME(caller, args…) -> i64` — `0` committed, `1` reverted (the code
+through `nazm_host.revert`), `2` rejected for a change to `conserved`, `3` failed at run time (its text
+through `nazm_host.report`) — and imports only `nazm_host.state_get(index) -> i64` and
+`state_set(index, value)` besides. A field's index is its declaration index; a `Bool` is 0 or 1.
+`contract.json` (`nazm.wasm-contract/1`) and `contract_host.mjs` are written beside the objects.
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 

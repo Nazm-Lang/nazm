@@ -35,7 +35,8 @@ found only by reading all of it.
 - Contracts run on one chain backend, the EVM, verified against one reference EVM (py-evm), with a
   loose gas bound and none for loops; an asset is a declared conserved quantity checked per
   transaction, not a linear type; no events, external calls or signers beyond `caller` (area 34).
-  *Narrowed in N69 and N70:* until then, no contract model, then no backend.
+  WebAssembly contracts (N71) run under the reference host only; no chain's host interface is bound.
+  *Narrowed in N69, N70 and N71:* until then, no contract model, then no backend.
 - Layout specialisation is one opt-in layout: `--layout soa` lays out every `Vec` of a record of
   `Int`s and `Bool`s one array per field, whether or not its loops gain — it is 2× slower for a loop
   reading every field; the compiler does not choose; LLVM only (area 4). *Narrowed in N68:* until

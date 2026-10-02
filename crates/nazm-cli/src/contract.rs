@@ -16,6 +16,11 @@ use serde_json::{json, Value as Json};
 
 use crate::exit;
 
+/// `v[key]`, or `null`: a JSON field read without the index operator.
+fn at(v: &Json, key: &str) -> Json {
+    v.get(key).cloned().unwrap_or(Json::Null)
+}
+
 fn put(record: &mut Json, key: &str, value: Json) {
     if let Some(o) = record.as_object_mut() {
         o.insert(key.to_owned(), value);
@@ -101,7 +106,7 @@ pub(crate) fn upgrade_check(new: &Path, old: &Path) -> ExitCode {
     {
         changes.push(json!({ "field": name, "verdict": "compatible", "why": "added: its slot is its own, and starts at zero" }));
     }
-    let incompatible = changes.iter().any(|c| c["verdict"] == "incompatible");
+    let incompatible = changes.iter().any(|c| at(c, "verdict") == "incompatible");
     println!(
         "{}",
         json!({
@@ -110,12 +115,12 @@ pub(crate) fn upgrade_check(new: &Path, old: &Path) -> ExitCode {
             "changes": changes,
         })
     );
-    for c in changes.iter().filter(|c| c["verdict"] == "incompatible") {
+    for c in changes.iter().filter(|c| at(c, "verdict") == "incompatible") {
         eprintln!(
             "error[{}]: `{}` cannot be upgraded in place: {}",
             codes::EVM_UNSUPPORTED.as_str(),
-            c["field"].as_str().unwrap_or("?"),
-            c["why"].as_str().unwrap_or("?")
+            at(c, "field").as_str().unwrap_or("?"),
+            at(c, "why").as_str().unwrap_or("?")
         );
     }
     if incompatible {
@@ -132,6 +137,7 @@ pub(crate) fn run(
     interface: bool,
     txs: Option<&Path>,
     evm: Option<&Path>,
+    wasm: Option<&Path>,
 ) -> ExitCode {
     // The profile first, by the same path every command enforces one: a contract that is not
     // deterministic is not run at all.
@@ -168,6 +174,8 @@ pub(crate) fn run(
         },
     };
     let root = loaded.graph.module_of(nazm_span::FileId::ROOT);
+    let mut shape: Option<crate::contract_wasm::Shape> = None;
+    let shape_out = &mut shape;
     let outcome = nazm_core::on_lowered(
         &loaded.map,
         &loaded.graph,
@@ -207,6 +215,26 @@ pub(crate) fn run(
                 "conserved": c.conserved,
                 "external_calls": "none: an entrypoint calls only Nazm functions, so nothing can re-enter it",
             });
+            if wasm.is_some() {
+                let fields = state_def
+                    .map(|d| {
+                        d.fields
+                            .iter()
+                            .map(|f| (f.name.clone(), f.ty == nazm_core::sema::Type::Bool))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                *shape_out = Some(crate::contract_wasm::Shape {
+                    fields,
+                    entries: c
+                        .entrypoints
+                        .iter()
+                        .map(|e| (e.name.clone(), e.args.len()))
+                        .collect(),
+                    conserved: c.conserved,
+                });
+                return Ok((facts, None));
+            }
             if let Some(dir) = evm {
                 let compiled = nazm_service::evm::compile(core, res, root, &c).map_err(|r| {
                     vec![Diagnostic::error(
@@ -383,6 +411,9 @@ pub(crate) fn run(
             ))
         },
     );
+    if let (Some(dir), Some(shape), Ok((facts, _))) = (wasm, shape.as_ref(), outcome.as_ref()) {
+        return wasm_build(file, dir, shape, facts);
+    }
     match outcome {
         Ok((doc, broken)) => {
             println!("{doc}");
@@ -406,4 +437,84 @@ pub(crate) fn run(
             ExitCode::from(exit::CHECK_FAILED)
         }
     }
+}
+
+/// `nazm contract FILE --wasm DIR` (N71): the ordinary WebAssembly build of the contract with its
+/// adapter appended, its metadata, and the reference host.
+fn wasm_build(
+    file: &Path,
+    dir: &Path,
+    shape: &crate::contract_wasm::Shape,
+    facts: &Json,
+) -> ExitCode {
+    let output = dir.join("contract");
+    let built = crate::build::run(
+        file,
+        Some(&output),
+        false,
+        false,
+        2,
+        true,
+        false,
+        false,
+        crate::build::Choice {
+            backend: nazm_lir::backend::BackendId::Llvm,
+            target: Some("wasm32-unknown-unknown"),
+            link: &[],
+            library: false,
+            objects: Some(dir),
+            stack_watermark: false,
+            layout: "aos",
+            adapter: Some(shape),
+            timings: false,
+            debug: false,
+        },
+    );
+    if built != ExitCode::SUCCESS {
+        return built;
+    }
+    let enc = |name: &str| {
+        name.bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() {
+                    char::from(b).to_string()
+                } else {
+                    format!("_{b:02X}")
+                }
+            })
+            .collect::<String>()
+    };
+    let fields: Vec<Json> = shape
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(k, (name, is_bool))| json!({ "index": k, "name": name, "type": if *is_bool { "Bool" } else { "Int" } }))
+        .collect();
+    let entries: Vec<Json> = at(facts, "entrypoints")
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| {
+            let name = at(&e, "name").as_str().unwrap_or_default().to_owned();
+            json!({ "name": name, "export": format!("nazm_call_{}", enc(&name)), "args": at(&e, "args"), "reads": at(&e, "reads"), "writes": at(&e, "writes") })
+        })
+        .collect();
+    let meta = json!({
+        "schema": "nazm.wasm-contract/1",
+        "version": 1,
+        "state": { "fields": fields, "serialisation": "one i64 per field, by declaration index; a Bool as 0 or 1" },
+        "entrypoints": entries,
+        "init": "nazm_init",
+        "imports": ["nazm_host.state_get", "nazm_host.state_set", "nazm_host.revert", "nazm_host.report"],
+        "status": { "0": "committed", "1": "reverted by Err(code)", "2": "rejected: the conserved quantity changed", "3": "failed at run time" },
+    });
+    let written = std::fs::write(dir.join("contract.json"), meta.to_string())
+        .and_then(|()| std::fs::write(dir.join("contract_host.mjs"), crate::contract_wasm::HOST));
+    if let Err(e) = written {
+        eprintln!("nazm: cannot write {}: {e}", dir.display());
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
+    println!("{meta}");
+    ExitCode::SUCCESS
 }
