@@ -5882,6 +5882,70 @@ callback called after its environment is gone. *`errno`* is a per-thread locatio
 differs by platform (`__error` on macOS, `__errno_location` on Linux) and belongs with N57's target
 model. Dynamic libraries and exporting to anything but C are also not here.
 
+## 7.58 Packages v2: a local registry and version requirements — N56, 2026-10-02
+
+Written before the code. §7.48 made every dependency an exact path. N56 adds the second source a
+package ecosystem needs — a registry — and the version requirements that make it useful, while
+keeping every N46 guarantee: no network, deterministic resolution, digests, a lockfile that is
+authoritative under `--locked`.
+
+**A registry is a directory**, named by the root manifest's `[registry] path = "…"` (relative to
+it; a dependency's own `[registry]` is ignored, so one build has one registry):
+
+```text
+REGISTRY/index/NAME.toml              nazm.registry-index/1: name, and every version with its digest
+REGISTRY/packages/NAME/VERSION/…      the published copy: its manifest and its sources, nothing else
+```
+
+There is no remote registry and no download: a registry somewhere else is a directory someone
+copied here, and the copy is checked, not trusted. A correctness test never needs a public service.
+
+**Coordinates and requirements.** A package is still its name and exact version. A registry
+dependency names a requirement instead of a path: `shapes = { version = "^1.2.0" }`. Four forms:
+`1.2.3` and `=1.2.3` (exactly), `^1.2.3` (the same left-most non-zero component: `>=1.2.3,<2.0.0`;
+`^0.2.3` is `<0.3.0`; `^0.0.3` is exact), `~1.2.3` (`>=1.2.3,<1.3.0`). No pre-releases, no
+arbitrary comparators, no features. A path dependency is unchanged: a path and an exact version.
+
+**Resolution** visits the path graph as N46 does, then solves the registry requirements in rounds:
+each round collects every requirement on every registry name — from the path packages and from the
+registry packages chosen so far — and chooses, per name, the version the lockfile records if it
+still satisfies them all, else the **highest non-yanked** published version that does. It stops
+when a round changes nothing. **One version per name** stays the rule (§7.48), and there is **no
+backtracking**: if no version satisfies every requirement, resolution is refused naming each
+requirement and who made it (`N0513`). This can refuse a graph a backtracking solver would find;
+it never chooses a surprising version, and its answer is a function of the manifests, the index and
+the lockfile alone — not of their order on disk.
+
+**The store refuses what a store must.** A published version is immutable: publishing it again is
+refused (`N0512`). Every package is fetched through its index entry and checked before use: its
+manifest names that package and version, it holds only regular files and directories (a symbolic
+link is `N0514`: it could point anywhere), and its bytes match the digest the index records
+(`N0507`: tampered after publishing). An index that is not `nazm.registry-index/1`, names another
+package, records a version twice or a malformed digest is `N0512`; a version is parsed, so it can
+never be a path. A published package depends only on the registry: a path means nothing in another
+checkout. A registry package and a path package of one name in one build conflict (`N0503`); a
+cycle through registry edges is `N0504`.
+
+**Identity.** A registry package's source in the lockfile is `registry+NAME@VERSION`, and its
+modules' durable keys are `NAME@VERSION/…` as every dependency's: where the registry is on disk
+enters neither. The digest is N46's, over the published copy.
+
+**Lock, frozen, yank.** `nazm lock` records the chosen versions; a later resolution prefers them
+while they still satisfy the manifests, so publishing a newer version changes nothing until the
+lockfile is rewritten. `--locked` refuses any difference, a stale lockfile included. `nazm yank
+NAME@VERSION --registry DIR` withdraws a version: never chosen anew, still used where a lockfile
+names it, and `--undo` restores it. `nazm publish DIR --registry REG` copies a package's manifest
+and sources into the registry and records its digest; it writes the index by rename, so a reader
+never sees half of one.
+
+**The self-hosted compiler** reads no manifest: its resolver knows relative imports only. Teaching
+it packages needs a TOML reader and a package graph written in Nazm — designed (the graph is
+`nazm.lock/1`, which a later milestone can hand it already resolved) and not built here.
+
+**Not here.** A network registry, signatures (a digest is integrity, not authorship), features,
+pre-releases, version ranges beyond the four forms, multiple versions of one package, workspaces
+with several roots, build scripts.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
