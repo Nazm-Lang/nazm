@@ -1,0 +1,3 @@
+use "../src/fib.nz";
+
+fn main() -> Int ! {} { fib(10) }

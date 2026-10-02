@@ -1,0 +1,6 @@
+use "greet.nz";
+
+fn main(io: IoCap) -> Int ! { io } {
+    print(greeting("world"));
+    0
+}

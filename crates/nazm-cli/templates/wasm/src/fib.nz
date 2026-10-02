@@ -1,0 +1,2 @@
+// Pure, so `nazm test` runs it on this machine as well as in the module.
+pub fn fib(n: Int) -> Int ! {} { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }

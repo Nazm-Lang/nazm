@@ -1,0 +1,24 @@
+// A contract (the `web3` profile): ordinary Nazm, deterministic and bounded. The state is a
+// record of `Int`s and `Bool`s; each `pub fn` taking it and a `caller` is an entrypoint.
+//
+//     nazm contract src/main.nz                  its facts: entrypoints, reads, writes
+//     nazm contract src/main.nz --txs txs.txt    a deterministic run of those transactions
+//     nazm contract src/main.nz --evm out        EVM bytecode (N70)
+pub struct State { owner: Int, alice: Int, bob: Int, paused: Bool }
+
+fn init() -> State ! {} { State(owner: 1, alice: 100, bob: 0, paused: false) }
+
+// Move `amount` from alice to bob; only the owner may, and not while paused.
+pub fn transfer(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {
+    if caller != s.owner { return Result[State, Int].Err(error: 1); }
+    if s.paused { return Result[State, Int].Err(error: 3); }
+    if amount < 0 || s.alice < amount { return Result[State, Int].Err(error: 2); }
+    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount, bob: s.bob + amount, paused: s.paused))
+}
+
+pub fn pause(s: State, caller: Int, on: Int) -> Result[State, Int] ! {} {
+    if caller != s.owner { return Result[State, Int].Err(error: 1); }
+    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob, paused: on == 1))
+}
+
+fn main() -> Int ! {} { 0 }

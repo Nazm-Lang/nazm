@@ -31,6 +31,14 @@ struct Inventory {
     /// What `nazm build` has been verified against, verbatim from the emitter.
     native_target: &'static str,
     types: Vec<&'static str>,
+    /// Every capability type — the authority a parameter can carry — whether or not it is in
+    /// `types` (N74): `types` is the checker's fixed vocabulary, unchanged since it entered the
+    /// checker's identity.
+    authority: Vec<&'static str>,
+    /// Every target `nazm build --target` accepts.
+    targets: Vec<String>,
+    /// Every subcommand of this build, by name.
+    commands: Vec<String>,
     builtins: Vec<BuiltinRow>,
     constructs: Vec<ConstructRow>,
 }
@@ -212,6 +220,18 @@ fn inventory() -> Inventory {
         // inventory of what the *compiler* has with an inventory of what a *source file*
         // declares. `docs/spec.md` keeps the two apart.
         types: Type::ALL.iter().filter_map(|t| t.builtin_name()).collect(),
+        authority: nazm_core::sema::CapabilityKind::ALL
+            .iter()
+            .map(|k| k.type_name())
+            .collect(),
+        targets: crate::inspect::TARGETS
+            .iter()
+            .map(|t| (*t).to_owned())
+            .collect(),
+        commands: <crate::Cli as clap::CommandFactory>::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_owned())
+            .collect(),
         builtins: Intrinsic::ALL
             .iter()
             .map(|i| BuiltinRow {
@@ -241,6 +261,9 @@ fn render(i: &Inventory) {
     println!("native target: {}", i.native_target);
     println!();
     println!("types: {}", i.types.join(", "));
+    println!("authority: {}", i.authority.join(", "));
+    println!("targets: {}", i.targets.join(", "));
+    println!("commands: {}", i.commands.join(", "));
 
     // Column widths come from the contents. A constant would be right until the first
     // entry longer than it, and a misaligned table is read wrong rather than not at all.

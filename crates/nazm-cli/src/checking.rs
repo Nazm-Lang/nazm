@@ -362,3 +362,51 @@ pub(crate) fn run(
     eprintln!("nazm: {n} error{}", if n == 1 { "" } else { "s" });
     ExitCode::from(exit::CHECK_FAILED)
 }
+
+/// `nazm check DIR` for a library package (N74, `docs/architecture.md` §7.76): each module of its
+/// source root checked as a module — no `main` required — with everything it imports, and each
+/// diagnostic reported once however many modules reach it.
+pub(crate) fn library(modules: &[std::path::PathBuf], json: bool) -> ExitCode {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut errors = 0usize;
+    for path in modules {
+        let source_root = match crate::root::decide(path, None) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("nazm: {e}");
+                return ExitCode::from(exit::NO_SUCH_FILE);
+            }
+        };
+        let loaded = match crate::load::load(path, source_root.path()) {
+            Ok(l) => l,
+            Err((partial, diagnostics)) => {
+                crate::emit(&diagnostics, &partial.map, json);
+                return ExitCode::from(exit::NO_SUCH_FILE);
+            }
+        };
+        let map = &loaded.map;
+        let Err(diagnostics) = nazm_core::on_module_map(map, &loaded.graph, |_, _| Ok(())) else {
+            continue;
+        };
+        let fresh: Vec<_> = diagnostics
+            .into_iter()
+            .filter(|d| {
+                let s = d.primary.span;
+                seen.insert((
+                    map.name(s.file).to_owned(),
+                    s.start,
+                    s.end,
+                    d.code.to_string(),
+                ))
+            })
+            .collect();
+        errors += fresh.len();
+        crate::emit(&fresh, map, json);
+    }
+    if errors == 0 {
+        println!("ok");
+        return ExitCode::from(exit::OK);
+    }
+    eprintln!("nazm: {errors} error{}", if errors == 1 { "" } else { "s" });
+    ExitCode::from(exit::CHECK_FAILED)
+}

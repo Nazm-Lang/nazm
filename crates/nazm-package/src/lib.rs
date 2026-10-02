@@ -16,7 +16,7 @@ use nazm_span::Span;
 use serde::Deserialize;
 
 pub mod registry;
-pub use registry::{publish, yank, Index, VersionReq};
+pub use registry::{publish, publish_dry_run, yank, Index, VersionReq};
 
 /// The manifest's file name.
 pub const MANIFEST: &str = "nazm.toml";

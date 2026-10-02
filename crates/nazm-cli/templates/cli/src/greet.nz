@@ -1,0 +1,1 @@
+pub fn greeting(name: Str) -> Str ! {} { str_concat("hello, ", str_concat(name, "\n")) }

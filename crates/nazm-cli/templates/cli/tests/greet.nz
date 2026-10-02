@@ -1,0 +1,6 @@
+use "../src/greet.nz";
+
+fn main(io: IoCap) -> Int ! { io } {
+    print(greeting("test"));
+    0
+}
