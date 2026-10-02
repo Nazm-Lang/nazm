@@ -222,6 +222,10 @@ fn link_args(opt_level: u8) -> Vec<String> {
     vec![format!("-O{opt_level}"), "-Wno-override-module".to_owned()]
 }
 
+pub(crate) fn run_command(command: &mut Command) -> Outcome {
+    run(command)
+}
+
 fn run(command: &mut Command) -> Outcome {
     match command.output() {
         Ok(o) => Outcome::Ran(o),

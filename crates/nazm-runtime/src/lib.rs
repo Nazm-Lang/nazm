@@ -128,8 +128,9 @@ pub fn escape(s: &str) -> String {
 /// the element's stride at 64 and its release at 72), and [`digest`] beside the revision in
 /// every key, so a runtime whose text changed without a bump is still another runtime. 6 is
 /// N54's: select (`nz.chanv_select`, `nz.chanv_try`, `nz.chanv_close`, the event count
-/// `nz.sel_*`), the clock, and the scheduler's counters.
-pub const RUNTIME_ABI_REVISION: u32 = 6;
+/// `nz.sel_*`), the clock, and the scheduler's counters. 7 is N55's: `nz.cstr_borrow`, a `Str`
+/// argument to C.
+pub const RUNTIME_ABI_REVISION: u32 = 7;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 const EVERYTHING: Needs = Needs {
@@ -220,6 +221,7 @@ macro_rules! import {
 pub const IMPORTS: &[Import] = &[
     import!("nz.fail", [Ptr, I64], None, Base, "records the thread's first failure: a static message and its length; takes nothing"),
     import!("nz.failed_now", [], Some(Word::I32), Base, "whether this thread has failed; takes nothing"),
+    import!("nz.report", [], None, Base, "writes this thread's failure and ends the process with status 2; does not return (an export's C entry, N55)"),
     import!("nz.stack_check", [], Some(Word::I32), Base, "nonzero when this thread's stack is nearly exhausted; takes nothing"),
     import!("nz.closure_new", [I64, Ptr, Ptr], Some(Word::Ptr), Closures, "a closure object of this many bytes with its code and release, holding one reference the caller owns, or null"),
     import!("nz.closure_retain", [Ptr], None, Closures, "one more reference to a closure object; null is a no-op"),
@@ -253,6 +255,8 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.chanv_send", [Ptr, Ptr], Some(Word::Bit), Channels, "borrows the channel; copies the slot in, taking the reference it holds; false and nothing copied when closed"),
     import!("nz.chanv_recv", [Ptr, Ptr], Some(Word::Bit), Channels, "borrows the channel; copies the oldest slot out, handing over its reference; false once closed and drained"),
     import!("nz.chanv_release", [Ptr], None, Channels, "one reference fewer; the last releases each queued slot and frees the channel"),
+    import!("nz.cstr_has_nul", [Ptr, I64], Some(Word::Bit), Strings, "borrows the bytes; whether they hold a NUL (N55)"),
+    import!("nz.cstr_borrow", [Ptr, I64], Some(Word::Ptr), Strings, "borrows the bytes; a NUL-terminated copy the caller owns and frees, or null (N55)"),
     import!("nz.chanv_close", [Ptr], None, Channels, "borrows the channel; closes it and wakes every select (N54)"),
     import!("nz.chanv_select", [Ptr, Ptr, I64, I64], Some(Word::I64), Channels, "borrows the channels; copies one slot out to the second pointer, handing over its reference, when it returns an index; -3 - i closed, -1 none, -2 timed out, i64::MIN out of memory"),
     import!("nz.time_now_ms", [], Some(Word::I64), Channels, "takes nothing"),
@@ -387,6 +391,8 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chanv_send", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "send a slot, blocking while full", "borrows the channel; takes the slot's reference when it returns true"),
     rt!("nz.chanv_recv", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "receive a slot, blocking while empty", "borrows the channel; hands the slot's reference to the caller when it returns true"),
     rt!("nz.chanv_release", "void" ("ptr") "", true, Channels, "", Never, Any, "one reference fewer; the last releases the queued slots and frees the channel", "takes a reference, atomically"),
+    rt!("nz.cstr_has_nul", "i1" ("ptr", "i64") "", true, Strings, "foreign", Status, Any, "whether a Str argument to C holds a NUL byte (N55)", "borrows the bytes"),
+    rt!("nz.cstr_borrow", "ptr" ("ptr", "i64") "", true, Strings, "foreign", Null, Any, "a Str argument as a C string, for one foreign call (N55)", "borrows the bytes; the copy is the caller's to free"),
     rt!("nz.chanv_close", "void" ("ptr") "", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
     rt!("nz.chanv_select", "i64" ("ptr", "ptr", "i64", "i64") "", true, Channels, "", Status, Locked, "wait for the lowest-indexed ready channel, or a deadline (N54)", "borrows the channels; hands one slot's reference to the caller when it returns an index"),
     rt!("nz.time_now_ms", "i64" () "", true, Channels, "", Never, Any, "a monotonic clock in milliseconds (N54)", "none"),
@@ -768,9 +774,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_six_and_its_digest_covers_select() {
-        // N54's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 6);
+    fn the_runtime_is_revision_seven_and_its_digest_covers_c_strings() {
+        // N55's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 7);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cstr_borrow("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.chanv_select("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.chanv_send("));
         let d = crate::digest();

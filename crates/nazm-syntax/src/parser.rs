@@ -1007,7 +1007,9 @@ impl<'a> Parser<'a> {
         let effects = self.effect_set()?;
 
         // A foreign declaration ends where a body would begin: `= "symbol";`. The symbol is
-        // written, never derived from the name.
+        // written, never derived from the name. A body after the symbol makes it an export
+        // instead (N55): a Nazm function C may call, parsed as any other function from here.
+        let mut export: Option<ForeignDecl> = None;
         if let Some((abi, abi_span)) = foreign_abi {
             self.expect(&TokenKind::Eq, "before a foreign function's symbol")?;
             let symbol_span = self.peek_span();
@@ -1025,27 +1027,33 @@ impl<'a> Parser<'a> {
                     return None;
                 }
             };
-            let end = self.peek_span();
-            self.expect(&TokenKind::Semi, "after a foreign function's symbol")?;
-            self.wrap(at, SyntaxKind::FnItem);
-            return Some(Function {
-                name,
-                name_span,
-                pub_span,
-                type_params,
-                effect_params,
-                params,
-                return_type,
-                effects,
-                body: None,
-                foreign: Some(ForeignDecl {
-                    abi,
-                    abi_span,
-                    symbol,
-                    symbol_span,
-                }),
-                span: start.join(end),
-            });
+            let decl = ForeignDecl {
+                abi,
+                abi_span,
+                symbol,
+                symbol_span,
+            };
+            if self.at(&TokenKind::LBrace) {
+                export = Some(decl);
+            } else {
+                let end = self.peek_span();
+                self.expect(&TokenKind::Semi, "after a foreign function's symbol")?;
+                self.wrap(at, SyntaxKind::FnItem);
+                return Some(Function {
+                    name,
+                    name_span,
+                    pub_span,
+                    type_params,
+                    effect_params,
+                    params,
+                    return_type,
+                    effects,
+                    body: None,
+                    foreign: Some(decl),
+                    export: None,
+                    span: start.join(end),
+                });
+            }
         }
 
         // Deliberately not `?`. A parse error inside the body would otherwise drop the
@@ -1081,6 +1089,7 @@ impl<'a> Parser<'a> {
             effects,
             body,
             foreign: None,
+            export,
             span: start.join(span),
         })
     }

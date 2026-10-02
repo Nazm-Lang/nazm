@@ -325,3 +325,59 @@ pub(crate) fn trampoline(
     let cfg = fx.g.module.target_config();
     fx.b.finalize(cfg);
 }
+
+/// An export's C entry (N55, §7.57): the C convention outside, the Nazm function inside, and a
+/// failure reported and the process ended rather than a stand-in returned into C.
+pub(crate) fn export(
+    g: &mut Gen<'_>,
+    ctx: &mut Context,
+    fctx: &mut FunctionBuilderContext,
+    callee: nazm_mir::FuncId,
+    params: &[Ty],
+    ret: Ty,
+) {
+    ctx.func.signature = g.c_signature(params, ret);
+    let b = FunctionBuilder::new(&mut ctx.func, fctx);
+    let mut fx = Fx::helper(g, b);
+    let entry = fx.b.create_block();
+    fx.b.append_block_params_for_function_params(entry);
+    fx.b.switch_to_block(entry);
+    let args: Vec<cranelift_codegen::ir::Value> = fx.b.block_params(entry).to_vec();
+    let Some(fid) = fx.g.funcs.get(&callee).copied() else {
+        fx.g.defect(fx.at, "an export of an undeclared function");
+        let z = fx.b.ins().iconst(Gen::clif(ret), 0);
+        fx.b.ins().return_(&[z]);
+        fx.b.seal_all_blocks();
+        let cfg = fx.g.module.target_config();
+        fx.b.finalize(cfg);
+        return;
+    };
+    let r = fx.func(fid);
+    let inst = fx.b.ins().call(r, &args);
+    let result =
+        fx.b.inst_results(inst)
+            .first()
+            .copied()
+            .unwrap_or_else(|| fx.iconst(0));
+    let failed = fx
+        .rt("nz.failed_now", &[])
+        .unwrap_or_else(|| fx.b.ins().iconst(types::I32, 0));
+    let bad = fx.b.create_block();
+    let done = fx.b.create_block();
+    fx.b.ins().brif(failed, bad, &[], done, &[]);
+    fx.b.switch_to_block(bad);
+    fx.rt("nz.report", &[]);
+    fx.b.ins()
+        .trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+    fx.b.switch_to_block(done);
+    // C's `bool` is exactly 0 or 1; Nazm promises only the low bit.
+    let out = if ret == Ty::Bool {
+        fx.b.ins().band_imm_s(result, 1)
+    } else {
+        result
+    };
+    fx.b.ins().return_(&[out]);
+    fx.b.seal_all_blocks();
+    let cfg = fx.g.module.target_config();
+    fx.b.finalize(cfg);
+}

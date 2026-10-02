@@ -267,6 +267,7 @@ fn thunk_of(
         name_span: at,
         ret_span: target.ret_span,
         foreign: None,
+        export: None,
         captures: Vec::new(),
         closure: true,
     }
@@ -511,6 +512,7 @@ fn lower_function(
             span: f.span,
             ret_span: f.ret_span,
             foreign: Some(symbol.clone()),
+            export: None,
             closure: None,
         });
     }
@@ -623,6 +625,7 @@ fn lower_function(
         span: f.span,
         ret_span: f.ret_span,
         foreign: None,
+        export: f.export.clone(),
         closure,
     })
 }

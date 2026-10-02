@@ -598,6 +598,11 @@ enum Command {
         /// be given more than once; it must exist. Nazm does not compile C.
         #[arg(long = "link", value_name = "FILE")]
         link: Vec<PathBuf>,
+        /// Build a static library instead of an executable (N55): no `main` is needed, `-o`
+        /// names the archive, and a C header declaring every `extern "C"` export is written
+        /// beside it with the extension `.h`.
+        #[arg(long)]
+        lib: bool,
         /// One `nazm.timings/1` line on stderr: each phase's wall time — load, front end, MIR,
         /// LIR, code generation, native compilation, link — and the total (N48).
         #[arg(long)]
@@ -757,6 +762,7 @@ fn main() -> ExitCode {
         backend,
         target,
         link,
+        lib,
         timings,
         debug,
         locked: _,
@@ -777,6 +783,7 @@ fn main() -> ExitCode {
                     .unwrap_or(nazm_lir::backend::BackendId::Llvm),
                 target: target.as_deref(),
                 link: &link,
+                library: lib,
                 timings,
                 debug,
             },
