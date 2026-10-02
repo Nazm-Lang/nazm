@@ -1885,6 +1885,9 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "pthread_attr_destroy",
     "pthread_cond_init",
     "pthread_cond_wait",
+    // Select's deadline and the clock (N54).
+    "pthread_cond_timedwait",
+    "clock_gettime",
     "pthread_create",
     "pthread_join",
     "pthread_mutex_destroy",
