@@ -117,15 +117,19 @@ pub enum Profile {
     /// An analysable subset with stated bounds (N63, §7.65): `embedded`'s rules, no blocking, no
     /// clock, and bounded loops.
     Realtime,
+    /// Deterministic contracts (N69, §7.71): every contract declared, no outside world, no tasks,
+    /// channels, clock or C, and no call cycle.
+    Web3,
 }
 
 impl Profile {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::General,
         Self::Embedded,
         Self::Critical,
         Self::Cyber,
         Self::Realtime,
+        Self::Web3,
     ];
 
     #[must_use]
@@ -136,6 +140,7 @@ impl Profile {
             Self::Critical => "critical",
             Self::Cyber => "cyber",
             Self::Realtime => "realtime",
+            Self::Web3 => "web3",
         }
     }
 
@@ -178,6 +183,15 @@ impl Profile {
                 Rule::NoRecursion,
                 Rule::NoBlocking,
                 Rule::BoundedLoops,
+            ],
+            Self::Web3 => &[
+                Rule::DeclaredEffects,
+                Rule::NoIo,
+                Rule::NoSpawn,
+                Rule::NoForeign,
+                Rule::NoAmbientTime,
+                Rule::NoRecursion,
+                Rule::NoBlocking,
             ],
         }
     }
