@@ -101,6 +101,10 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N58, debugger and profiler v2.** No code appeared. One schema did: `nazm.profile/1`
+(`nazm profile FILE`): `schema`, `backend`, `exit`, `wall_ms`, `stdout_bytes`, `memory` (per class:
+`allocated`, `reclaimed`, `live`) and `scheduler` (`spawned`, `joined`, `selects`, `timeouts`).
+
 **Applied to N56, packages v2.** Three codes appeared, compatible: `N0512` (a registry index that
 is not `nazm.registry-index/1`, names another package, records a version twice or a malformed
 digest; or a publish of a version already there), `N0513` (no published version satisfies every

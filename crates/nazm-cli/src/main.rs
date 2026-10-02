@@ -52,6 +52,7 @@ mod package;
 mod patch;
 mod profile;
 mod repo;
+mod run_profile;
 mod snapshot;
 mod summary;
 // Moved to `nazm-service` in N16, so `nazm lsp` loads exactly as every command does.
@@ -638,6 +639,14 @@ enum Command {
     /// Print where each function allocates, retains, blocks, talks to a channel, calls C or
     /// starts a task (N52), read off MIR, each with its count per call — `at-most-once` or
     /// `unknown`, never a guess. `--json` prints `nazm.cost/1`.
+    /// Build the program and run it once with its memory and scheduler counters on (N58), and
+    /// print `nazm.profile/1`: its exit status, wall time and the counts — events, not samples.
+    Profile {
+        file: PathBuf,
+        /// The code generator, as `nazm build --backend`.
+        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
+        backend: String,
+    },
     ExplainCost {
         file: PathBuf,
         #[arg(long)]
@@ -740,6 +749,9 @@ fn main() -> ExitCode {
     }
     if let Command::Inspect { file, def } = &cli.command {
         return inspect::run(file, def.as_deref());
+    }
+    if let Command::Profile { file, backend } = &cli.command {
+        return run_profile::run(file, backend);
     }
     if let Command::ExplainCost { file, json } = &cli.command {
         return explain::cost(file, *json);
@@ -1031,6 +1043,7 @@ fn main() -> ExitCode {
         | Command::Yank { .. }
         | Command::ExplainCost { .. }
         | Command::ExplainFlow { .. }
+        | Command::Profile { .. }
         | Command::Inspect { .. } => {
             unreachable!("handled above")
         }

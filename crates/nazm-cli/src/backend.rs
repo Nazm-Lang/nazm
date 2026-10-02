@@ -539,7 +539,9 @@ mod tests {
             // No `clang`. `nazm build` says so for itself; this has nothing to measure.
             return;
         };
-        let two = Backend::discover(2, dir.path(), None).settled().expect("settled");
+        let two = Backend::discover(2, dir.path(), None)
+            .settled()
+            .expect("settled");
 
         // One machine, one compiler: the identity does not move between two runs or two
         // optimisation levels.
