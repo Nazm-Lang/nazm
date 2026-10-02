@@ -154,3 +154,24 @@ fn a_published_version_cannot_be_published_again_and_nothing_satisfiable_is_name
     assert!(!y.status.success());
     assert!(err(&y).contains("NAME@VERSION"), "{}", err(&y));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_registry_package_holding_a_link_is_refused_by_the_build() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    publish(root, "1.0.0", 10);
+    app(root, "^1.0.0");
+    write(
+        &root.join("secret.nz"),
+        "pub fn sides(n: Int) -> Int { 0 }\n",
+    );
+    std::os::unix::fs::symlink(
+        root.join("secret.nz"),
+        root.join("registry/packages/shapes/1.0.0/src/linked.nz"),
+    )
+    .unwrap();
+    let r = nazm(root, &["check", "app"]);
+    assert!(!r.status.success());
+    assert!(err(&r).contains("N0514"), "{}", err(&r));
+}
