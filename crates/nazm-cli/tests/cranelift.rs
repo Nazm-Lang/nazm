@@ -304,7 +304,8 @@ fn recursion_compiles_under_both_backends_and_agrees() {
 }
 
 #[test]
-fn a_target_other_than_the_host_is_refused_and_nothing_is_written() {
+fn a_target_the_host_cannot_link_is_refused_without_objects_and_nothing_is_written() {
+    // Until N57 every other target was refused; since, one the host has no linker for is.
     let host = Target::host().unwrap();
     let foreign = if host.triple.starts_with("aarch64") {
         "x86_64-unknown-linux-gnu"
@@ -314,7 +315,7 @@ fn a_target_other_than_the_host_is_refused_and_nothing_is_written() {
     let dir = tempfile::tempdir().expect("tempdir");
     let exe = dir.path().join("prog");
     for (triple, says) in [
-        (foreign, "cross-compilation is not supported"),
+        (foreign, "has no linker for"),
         ("riscv64gc-unknown-linux-gnu", "not a target"),
     ] {
         for backend in ["llvm", "cranelift"] {

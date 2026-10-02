@@ -22,7 +22,7 @@ nazm-mir = { workspace = true }
 nazm-lir = { workspace = true }
 # Pinned exactly (N41): a code generator is part of every object's cache key, and a floating
 # version would change machine code under an unchanged key.
-cranelift-codegen = { version = "=0.136.1" }
+cranelift-codegen = { version = "=0.136.1", features = ["x86", "arm64"] }
 cranelift-frontend = { version = "=0.136.1" }
 cranelift-module = { version = "=0.136.1" }
 cranelift-object = { version = "=0.136.1" }

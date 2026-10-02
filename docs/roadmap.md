@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N57 — Targets and cross-compilation — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.59 first. Four targets, both backends, from any host in the matrix; an
+executable where the host links the target, objects and `link.txt` where it cannot; the triple in
+every key; `nazm inspect` names each target's output. Run-verified on three (host, x86_64 macOS
+under Rosetta, aarch64 Linux in the container), compile-only on x86_64 Linux. No language change:
+semantic epoch unchanged. Next: N58, debugger and profiler v2.
+
 ### N56 — Packages v2: a local registry — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.58 first. A registry is a directory: an index per package and an immutable,

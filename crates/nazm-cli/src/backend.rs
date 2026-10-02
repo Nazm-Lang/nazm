@@ -94,6 +94,10 @@ pub(crate) enum Outcome {
 #[derive(Debug, Clone)]
 pub(crate) struct Backend {
     opt_level: u8,
+    /// The triple to generate for when it is not the host's (N57): handed to clang as
+    /// `-target`, and so part of the resolved configuration every key carries. `None` for a
+    /// host build, whose command lines are unchanged.
+    cross: Option<String>,
     /// What this backend is and how it is configured, where that could be established.
     ///
     /// `None` is not an error: the build compiles everything and reuses nothing. A
@@ -115,10 +119,11 @@ impl Backend {
     /// `work` is the build's own temporary directory; a small file is written into it for
     /// the driver to resolve a command line against, because `-###` refuses an input that
     /// does not exist. Nothing else is written and nothing outside it is touched.
-    pub(crate) fn discover(opt_level: u8, work: &Path) -> Self {
+    pub(crate) fn discover(opt_level: u8, work: &Path, cross: Option<&str>) -> Self {
         Self {
             opt_level,
-            settled: probe(opt_level, work),
+            cross: cross.map(str::to_owned),
+            settled: probe(opt_level, work, cross),
         }
     }
 
@@ -127,9 +132,10 @@ impl Backend {
     /// The probe is skipped rather than ignored, so a cache-disabled build runs exactly
     /// the processes the build ran before there was a cache. That is what makes it a
     /// usable baseline for the equivalence tests.
-    pub(crate) fn unidentified(opt_level: u8) -> Self {
+    pub(crate) fn unidentified(opt_level: u8, cross: Option<&str>) -> Self {
         Self {
             opt_level,
+            cross: cross.map(str::to_owned),
             settled: None,
         }
     }
@@ -143,11 +149,10 @@ impl Backend {
     /// **Independently generated.** No other unit's IR is in scope, which is what makes
     /// this separate code generation rather than concatenation with extra steps.
     pub(crate) fn compile(&self, ir: &Path, object: &Path) -> Outcome {
-        run(self.command().args(compile_args(self.opt_level)).args([
-            "-o".as_ref(),
-            object.as_os_str(),
-            ir.as_os_str(),
-        ]))
+        run(self
+            .command()
+            .args(compile_args(self.opt_level, self.cross.as_deref()))
+            .args(["-o".as_ref(), object.as_os_str(), ir.as_os_str()]))
     }
 
     /// Link the objects into an executable.
@@ -165,7 +170,7 @@ impl Backend {
             // The Apple linker otherwise mixes a time into the executable's UUID, so two links
             // of the same objects differ (N46, reproducible builds). Ignored elsewhere.
             .env("ZERO_AR_DATE", "1")
-            .args(link_args(self.opt_level))
+            .args(link_args(self.opt_level, self.cross.as_deref()))
             .arg("-o")
             .arg(output)
             .args(objects);
@@ -208,18 +213,27 @@ impl Backend {
 /// One function, used by the compilation and by the probe that describes it. Two lists
 /// would be two lists that can differ, and the difference would be a key describing an
 /// invocation nobody ran.
-fn compile_args(opt_level: u8) -> Vec<String> {
-    vec![
+fn compile_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
+    let mut a = vec![
         format!("-O{opt_level}"),
         // The units carry no target triple, so clang supplies the host's and would
         // otherwise warn about overriding nothing.
         "-Wno-override-module".to_owned(),
         "-c".to_owned(),
-    ]
+    ];
+    a.extend(target_args(cross));
+    a
 }
 
-fn link_args(opt_level: u8) -> Vec<String> {
-    vec![format!("-O{opt_level}"), "-Wno-override-module".to_owned()]
+fn link_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
+    let mut a = vec![format!("-O{opt_level}"), "-Wno-override-module".to_owned()];
+    a.extend(target_args(cross));
+    a
+}
+
+/// `-target TRIPLE` for a cross build (N57), nothing for the host's.
+fn target_args(cross: Option<&str>) -> Vec<String> {
+    cross.map_or_else(Vec::new, |t| vec!["-target".to_owned(), t.to_owned()])
 }
 
 pub(crate) fn run_command(command: &mut Command) -> Outcome {
@@ -235,7 +249,7 @@ fn run(command: &mut Command) -> Outcome {
 }
 
 /// Ask the driver to resolve a compilation without performing it.
-fn probe(opt_level: u8, work: &Path) -> Option<Settled> {
+fn probe(opt_level: u8, work: &Path, cross: Option<&str>) -> Option<Settled> {
     let input = work.join(format!("{PROBE}.ll"));
     let output = work.join(format!("{PROBE}.o"));
     // Empty is enough: `-###` resolves a command line and never reads the file.
@@ -250,7 +264,7 @@ fn probe(opt_level: u8, work: &Path) -> Option<Settled> {
     }
     let out = c
         .arg("-###")
-        .args(compile_args(opt_level))
+        .args(compile_args(opt_level, cross))
         .args(["-o".as_ref(), output.as_os_str(), input.as_os_str()])
         .output()
         .ok()?;
@@ -521,18 +535,18 @@ mod tests {
     #[test]
     fn this_machine_s_backend_identifies_itself_and_its_configuration() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let Some(zero) = Backend::discover(0, dir.path()).settled() else {
+        let Some(zero) = Backend::discover(0, dir.path(), None).settled() else {
             // No `clang`. `nazm build` says so for itself; this has nothing to measure.
             return;
         };
-        let two = Backend::discover(2, dir.path()).settled().expect("settled");
+        let two = Backend::discover(2, dir.path(), None).settled().expect("settled");
 
         // One machine, one compiler: the identity does not move between two runs or two
         // optimisation levels.
         assert_eq!(zero.identity, two.identity);
         assert_eq!(
             zero.identity,
-            Backend::discover(0, dir.path())
+            Backend::discover(0, dir.path(), None)
                 .settled()
                 .expect("again")
                 .identity
@@ -562,7 +576,7 @@ mod tests {
     fn the_link_leaves_time_out_of_the_executable_on_every_host() {
         // Checked on the command rather than on two executables, so a host whose linker
         // ignores the variable still sees it go missing.
-        let c = Backend::unidentified(0).link_command(Path::new("out"), &[]);
+        let c = Backend::unidentified(0, None).link_command(Path::new("out"), &[]);
         let zero = c
             .get_envs()
             .find(|(k, _)| *k == "ZERO_AR_DATE")
