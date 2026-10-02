@@ -32,7 +32,8 @@ found only by reading all of it.
   `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
   whole-program count, and recursion is seen only through its calls' sites (areas 4, 18).
   *Narrowed in N52.*
-- Contracts are a model and a simulator: no chain backend runs them yet (N70–N72); an asset is a
+- Contracts run on one chain backend, the EVM, verified against one reference EVM (py-evm), with a
+  loose gas bound and none for loops (N70); an asset is a
   declared conserved quantity checked per transaction, not a linear type; no events, external
   calls, signers beyond `caller`, or gas (area 34). *Narrowed in N69:* until then, no contract model.
 - Layout specialisation is one opt-in layout: `--layout soa` lays out every `Vec` of a record of
