@@ -6366,6 +6366,46 @@ a `restart`, named with what changed. One `nazm.reload-check/1` line, with the r
 a non-zero exit when anything needs a restart. Nothing is reloaded: the check is the rule a hot
 reloader would be held to, stated and tested before any reloader exists.
 
+## 7.68 Vectorisation under checked arithmetic — N66, 2026-10-02
+
+Written before the code. Nazm's `Int` arithmetic is checked: every `+` is LLVM's overflow
+intrinsic and a branch (§7.43), so a loop over a sequence carries a failure edge per element, and no
+code generator vectorises it. N66 makes one idiom vectorise without changing what any program means,
+and says for every other loop why it did not.
+
+**No vector types in the language.** A source-level vector would be a new kind of value with its own
+overflow, bounds and layout rules, and nothing needs one yet. The semantic addition is one built-in,
+`ints_sum(start: Int, v: Ints) -> Int`: `start` plus every element of `v`, left to right, failing
+with `N0400` exactly when one of those running sums would overflow — what the loop computing it
+means, as a function. It is also the manual escape: a program may call it.
+
+**Legality, exactly.** A vectorised sum reorders additions, and a reordered checked sum can succeed
+where the ordered one fails (`[MAX, 1, -1]`). The runtime keeps the ordered meaning by bounding, not
+reordering, the checks: a block of 64 elements whose magnitudes are all at most 2^56, added to a
+running sum whose magnitude is below 2^62, has every partial sum inside `Int` — 64 · 2^56 = 2^62 —
+so the block's total is exactly what the 64 checked additions give, and it is added without checks,
+in a loop the code generator vectorises. Any other block is added one checked element at a time,
+and the first overflow is the failure. A tail shorter than a block is checked. Bounds need no check:
+the sum reads `0..len`.
+
+**Automatic, for one idiom, in native builds.** The counted loop `while i < ints_len(v) { s = s +
+ints_get(v, i); i = i + 1; }`, with `i` started at `0` in the loop's block and nothing else in the
+body, is replaced in Core IR before MIR by `s = ints_sum(s, v); i = ints_len(v);`, the call at the
+addition's span — so an overflow is the same diagnostic at the same place, and the loop's bounds
+checks could never fail. The interpreter keeps the loop, so its iteration budget still counts each
+turn. Every other loop is left alone, and `nazm explain-cost` names the reason for each.
+
+**Targets and identity.** The vectorised code is what clang produces for each target's baseline —
+NEON on `aarch64`, SSE2 on `x86_64` — at `--opt-level 2` or above; nothing asks for a host's own CPU
+features, so no object depends on the machine that built it, and the object key's triple and
+optimisation level already separate what differs. At `-O0` the same code runs unvectorised, with
+the same results. Choosing wider features (AVX2, SVE) per build is designed — a target feature list
+in the object key and in `link.txt` — and not built.
+
+**Not here, and why.** Element-wise maps (`out[i] = a[i] + b[i]`) need the store's failure to stop the
+stores after it, which the same block bound gives, but the idiom's recogniser is not written. Floating
+point does not exist. GPU offload is N67.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
