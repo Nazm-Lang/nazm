@@ -1910,6 +1910,24 @@ sequence loop is where the backends differ most: LLVM keeps the loop in register
 holds every local in a stack slot (§7.43), reloads it each iteration. No program's code changed:
 nothing in the tree imports a standard module.
 
+### Scalar temporaries — N59, measured 2026-10-02
+
+The LLVM emitter now gives no slot to a scalar temporary assigned once and read only in its block
+(§7.61). M1 Pro, Apple clang 21.0.0, the debug `nazm` before (`0acdf20`) and after, interleaved,
+on a host also running a contained mutation session — so the spread is wide:
+
+| | before | after |
+| --- | --- | --- |
+| `compiler/emit.nz` at `-O0`: `alloca`s | 13,867 | 6,328 |
+| its LLVM text | 8.47 MB, 177,531 instructions | 7.69 MB, 157,328 |
+| `nazm build -O0` of it, five runs | 1,992 / 2,067 / 2,087 / 2,091 / 2,101 ms | 1,937 / 1,982 / 1,983 / 2,011 / 2,993 ms |
+| a 20 M-iteration loop and `fib(27)`, built `-O0`, three runs | 133 / 144 / 759 ms | 103 / 105 / 443 ms |
+
+The build's median moved 5 %: clang's `-O0` time is not mostly slots. The `-O0` program is about a
+quarter faster, because a promoted temporary is a register and not a store and a load. `-O2` is
+unchanged in kind — LLVM promoted these already. Cranelift was not touched: its scalar locals were
+already SSA variables.
+
 ### Targets — N57, measured 2026-10-02
 
 One program (a recursive `fib(20)` and a task sending a string through a `Chan[Str]`), built on an

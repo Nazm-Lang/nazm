@@ -10840,3 +10840,26 @@ find = '''
 '''
 replace = ''
 killers = [{ package = "nazm-cli", test = "debugger", name = "a_profile_reports_what_one_run_did_under_both_backends" }]
+
+
+# --- N59: backend performance --------------------------------------------------------------------
+
+[[mutation]]
+name = "n59-a-binding-is-promoted"
+why = "a source binding loses its slot, so a debugger has nothing to read"
+file = "crates/nazm-lir/src/emit.rs"
+find = '            let temp = matches!(local.origin, mir::LocalOrigin::Temp) && i >= f.params as usize;'
+replace = '            let temp = !matches!(local.origin, mir::LocalOrigin::Param) && i >= f.params as usize;'
+killers = [{ package = "nazm-cli", test = "promotion", name = "a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one" }]
+
+[[mutation]]
+name = "n59-a-load-reads-a-slot-that-is-not-there"
+why = "a promoted temporary is loaded from a slot it was never given"
+file = "crates/nazm-lir/src/emit.rs"
+find = '''
+        if self.promoted.get(l.index()).copied().unwrap_or(false) {
+            if let Some(v) = self.ssa.get(l.index()).copied().flatten() {'''
+replace = '''
+        if false {
+            if let Some(v) = self.ssa.get(l.index()).copied().flatten() {'''
+killers = [{ package = "nazm-cli", test = "promotion", name = "a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one" }]
