@@ -6663,6 +6663,17 @@ the same bytes (N46). Across toolchains — Apple clang 21 on macOS and clang 19
 the same target triple — objects are expected to differ, and are measured and classified rather than
 assumed.
 
+**An evidence bundle and the compiler's own bill of materials** (amended before their code, the same
+day). `cargo xtask evidence DIR` adds two files to a directory of evidence — provenance records, gate
+logs, mutation journals, measurements, artefacts. `sbom.json` (`nazm.sbom/1`): every crate the compiler
+is built from, read from `Cargo.lock` — name, version, source and checksum — and the toolchain pin;
+offline, so a crate the lockfile does not name is not in it. `index.json` (`nazm.evidence/1`): every
+other file of DIR by relative path, with its size, BLAKE3 digest and a kind read from its name
+(`provenance`, `sbom`, `tests`, `mutation`, `measurement`, `artefact`), sorted, with no time in it.
+`cargo xtask evidence --verify DIR` recomputes each and refuses a changed, missing or unlisted file by
+name. Who vouches for a bundle is an attestation over `index.json` (the `--attest-with` hook's
+convention), never a field a bundle writes about itself.
+
 **Not here, and why.** Sanitizers over generated code, Miri and Loom: the compiler has no `unsafe`
 code (`unsafe_code = "forbid"`), so Miri's subject is absent; sanitizing the C-compiled runtime is a
 separate experiment, not run. Coverage-guided fuzzing (`cargo fuzz`) needs a nightly toolchain and a
