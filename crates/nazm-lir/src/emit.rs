@@ -3364,6 +3364,34 @@ impl Emitter<'_> {
                     ty: Ty::Int,
                 };
             }
+            // A device register (N62): one volatile access, in the runtime so that no
+            // optimisation of this module can merge, move or drop it. Only a freestanding
+            // build reaches here; a hosted one was refused before it was lowered.
+            Builtin::MmioRead32 => {
+                let t = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{t} = call i64 @nz.mmio_read32(i64 %{})",
+                    arg(0)
+                );
+                return Val::Of {
+                    value: t,
+                    ty: Ty::Int,
+                };
+            }
+            Builtin::MmioWrite32 => {
+                let t = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{t} = call i64 @nz.mmio_write32(i64 %{}, i64 %{})",
+                    arg(0),
+                    arg(1)
+                );
+                return Val::Of {
+                    value: t,
+                    ty: Ty::Int,
+                };
+            }
             Builtin::IntToStr => {
                 // 20 digits is the widest `Int` (`-9223372036854775808`), plus the NUL
                 // `snprintf` insists on writing.

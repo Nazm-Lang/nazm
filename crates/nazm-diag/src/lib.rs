@@ -323,6 +323,11 @@ pub mod codes {
     /// a type other than `Int` and `Bool`.
     pub const EXPORT_SHAPE: Code = Code::new("N0391");
 
+    // A freestanding target (N62, `docs/architecture.md` §7.64)
+    /// A device-register built-in (`mmio_read32`, `mmio_write32`) reached by something that
+    /// has no device registers: `nazm run`, or a build for a hosted target.
+    pub const MACHINE_ONLY: Code = Code::new("N0392");
+
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.

@@ -205,6 +205,12 @@ fn pipeline(
         )]);
     }
 
+    // Nor has it device registers (N62): a program that touches one is refused as a
+    // foreign call is, before it starts.
+    if let Some((at, name)) = machine_only_call(&resolution) {
+        return Outcome::CheckFailed(vec![machine_only(at, &name, "`nazm run`")]);
+    }
+
     // The one lowering, and then nothing of the front end is needed: the tree and the
     // resolution are dropped here, before the program runs, rather than kept alive beside
     // the Core IR for the length of the run.
@@ -544,4 +550,32 @@ where
             format!("could not start the checker: {e}"),
         )])
     })
+}
+
+/// The first call to a device-register built-in (N62), with its span and name: what neither
+/// the interpreter nor a hosted build can perform.
+#[must_use]
+pub fn machine_only_call(
+    resolution: &sema::resolve::Resolution,
+) -> Option<(nazm_span::Span, String)> {
+    resolution.functions().iter().find_map(|f| {
+        f.call_sites.iter().find_map(|site| match site.callee {
+            sema::resolve::Callee::Builtin(
+                b @ (sema::Intrinsic::MmioRead32 | sema::Intrinsic::MmioWrite32),
+            ) => Some((site.span, b.name().to_owned())),
+            _ => None,
+        })
+    })
+}
+
+/// `N0392`: the built-in `name` reached by `what`, which has no device registers.
+#[must_use]
+pub fn machine_only(at: nazm_span::Span, name: &str, what: &str) -> nazm_diag::Diagnostic {
+    nazm_diag::Diagnostic::error(
+        nazm_diag::codes::MACHINE_ONLY,
+        at,
+        format!("{what} cannot perform the built-in `{name}`: it has no device registers"),
+    )
+    .primary_label("a device register")
+    .help("device registers exist only in a freestanding build: `nazm build --target aarch64-unknown-none`")
 }

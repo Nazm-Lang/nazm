@@ -134,7 +134,9 @@ impl Origin {
             | Intrinsic::ChanSend
             | Intrinsic::ChanClose
             | Intrinsic::ChanSendOf
-            | Intrinsic::ChanCloseOf => BuiltinFlow::Derive,
+            | Intrinsic::ChanCloseOf
+            // A store's result is a constant; what reaches the device is the caller's (N62).
+            | Intrinsic::MmioWrite32 => BuiltinFlow::Derive,
             // Read out of a shared handle: what is there is whatever any alias wrote.
             Intrinsic::IntsLen
             | Intrinsic::IntsGet
@@ -149,7 +151,9 @@ impl Origin {
             | Intrinsic::ChanRecvOf
             | Intrinsic::ChanSelectOf
             | Intrinsic::ChanSelectUntil
-            | Intrinsic::ChanRecv => BuiltinFlow::Read,
+            | Intrinsic::ChanRecv
+            // A device register holds whatever the device put there (N62).
+            | Intrinsic::MmioRead32 => BuiltinFlow::Read,
             // A new, empty handle, or a call that never returns.
             Intrinsic::IntsNew
             | Intrinsic::StrsNew

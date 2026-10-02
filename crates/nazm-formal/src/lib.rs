@@ -225,7 +225,10 @@ pub fn arith(op: Op, m: i64, k: i64) -> Outcome {
 /// The mathematical value of an arithmetic expression without traps, for P3: 128-bit, so every
 /// `i64` operation's exact result fits.
 #[must_use]
-#[allow(clippy::integer_division, reason = "the language's `/` and `%` truncate toward zero")]
+#[allow(
+    clippy::integer_division,
+    reason = "the language's `/` and `%` truncate toward zero"
+)]
 pub fn exact(op: Op, m: i64, k: i64) -> Option<i128> {
     let (m, k) = (i128::from(m), i128::from(k));
     match op {
