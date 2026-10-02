@@ -1,11 +1,11 @@
 //! Vectorisation (N66, `docs/architecture.md` §7.68): one loop idiom, recognised in Core IR and
-//! replaced by `ints_sum`, whose runtime is vectorised and exact; every other loop is left as it
+//! replaced by `ints_sum_from`, whose runtime is vectorised and exact; every other loop is left as it
 //! is, with the reason.
 //!
 //! The idiom: a counter from `0`, compared with `ints_len(v)`, whose body is exactly
-//! `s = s + ints_get(v, i); i = i + 1;`. The replacement is `s = ints_sum(s, v); i = ints_len(v);`
+//! `s = s + ints_get(v, i); i = i + 1;`. The replacement is `s = ints_sum_from(s, v); i = ints_len(v);`
 //! with the call at the addition's span, so an overflow is reported where the loop's addition
-//! would have reported it: `ints_sum` fails exactly when one of the loop's running sums would.
+//! would have reported it: `ints_sum_from` fails exactly when one of the loop's running sums would.
 //! The bounds checks the loop made are unnecessary — `i` never reaches `ints_len(v)` — and the
 //! only effect of the loop's turns is on `s` and `i`, which the replacement sets.
 //!

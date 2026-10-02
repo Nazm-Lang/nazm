@@ -1,6 +1,6 @@
 //! N66: vectorisation under checked arithmetic.
 //!
-//! `docs/architecture.md` §7.68. What whole builds show: `ints_sum` gives the ordered checked sum —
+//! `docs/architecture.md` §7.68. What whole builds show: `ints_sum_from` gives the ordered checked sum —
 //! the same value as a scalar loop for every length across the 64-element block boundaries and
 //! every magnitude either side of the fast path's bound, and the same failure, at the same place,
 //! wherever a running sum overflows, including where the total would fit — under the interpreter,
@@ -106,7 +106,7 @@ fn main() -> Int {\n\
                 k = k + 1;\n\
             }\n\
             let start = if n % 3 == 0 { 0 } else { 4611686018427387000 - n * 1000 };\n\
-            if ints_sum(start, v) != scalar(start, v) { bad = bad + 1; }\n\
+            if ints_sum_from(start, v) != scalar(start, v) { bad = bad + 1; }\n\
             m = m + 1;\n\
         }\n\
         n = n + 1;\n\
@@ -130,7 +130,7 @@ fn overflow_program(count: i64, big: &str, after: &str) -> String {
          \x20   while i < {count} {{ ints_push(v, 1); i = i + 1; }}\n\
          \x20   ints_push(v, {big});\n\
          \x20   ints_push(v, {after});\n\
-         \x20   ints_sum(0, v)\n\
+         \x20   ints_sum_from(0, v)\n\
          }}\n"
     )
 }
@@ -169,8 +169,8 @@ fn a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fit
     // fast path's 2^56 bound, overflow at the sixteenth; and small elements onto a start too
     // close to `MAX` for the fast path's room, overflowing at the eleventh.
     for src in [
-        "fn main() -> Int { let v = ints_new(); let mut i = 0; while i < 64 { ints_push(v, 576460752303423488); i = i + 1; } ints_sum(0, v) }\n",
-        "fn main() -> Int { let v = ints_new(); let mut i = 0; while i < 64 { ints_push(v, 1); i = i + 1; } ints_sum(9223372036854775797, v) }\n",
+        "fn main() -> Int { let v = ints_new(); let mut i = 0; while i < 64 { ints_push(v, 576460752303423488); i = i + 1; } ints_sum_from(0, v) }\n",
+        "fn main() -> Int { let v = ints_new(); let mut i = 0; while i < 64 { ints_push(v, 1); i = i + 1; } ints_sum_from(9223372036854775797, v) }\n",
     ] {
         for (tier, stdout, status) in everywhere(src) {
             assert_eq!(status, Some(2), "{tier}: {stdout}");

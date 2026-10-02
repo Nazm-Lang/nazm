@@ -274,7 +274,7 @@ done:
 /// `nz.ints_sum` (N66, `docs/architecture.md` §7.68): the ordered checked sum, vectorisable.
 const SUM_RUNTIME: &str = r"
 
-; `ints_sum(start, v)` (N66): `start` plus every element of `v`, left to right, with the checked
+; `ints_sum_from(start, v)` (N66): `start` plus every element of `v`, left to right, with the checked
 ; addition's exact failure — `*ovf` set to 1 at the first running sum that overflows. A block of 64
 ; elements whose magnitudes are all at most 2^56 is added without checks while the running sum's
 ; magnitude is below 2^62: then no partial sum inside it can leave `Int`, so the block's total is

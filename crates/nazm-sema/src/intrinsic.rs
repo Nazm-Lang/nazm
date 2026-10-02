@@ -193,7 +193,7 @@ pub enum Intrinsic {
     /// `mmio_write32(addr: Int, value: Int) -> Int` (N62) — one volatile 32-bit store of
     /// `value`'s low half to a device register; `0`. Needs an `MmioCap`; freestanding only.
     MmioWrite32,
-    /// `ints_sum(start: Int, v: Ints) -> Int` (N66) — `start` plus every element of `v`, left to
+    /// `ints_sum_from(start: Int, v: Ints) -> Int` (N66) — `start` plus every element of `v`, left to
     /// right, failing exactly where one of those running sums would overflow. Vectorised in
     /// native builds without changing that.
     IntsSum,
@@ -354,7 +354,7 @@ impl Intrinsic {
             Self::TimeNowMs => "time_now_ms",
             Self::MmioRead32 => "mmio_read32",
             Self::MmioWrite32 => "mmio_write32",
-            Self::IntsSum => "ints_sum",
+            Self::IntsSum => "ints_sum_from",
         }
     }
 

@@ -2384,7 +2384,7 @@ is met.
 
 
 *N66, 2026-10-02: vectorisation — VERIFIED for one idiom, `Ints` sums, on `aarch64-apple-darwin`.*
-`architecture.md` §7.68 first. `ints_sum(start, v)` keeps the ordered checked sum's meaning exactly
+`architecture.md` §7.68 first. `ints_sum_from(start, v)` keeps the ordered checked sum's meaning exactly
 — a 64-element block is added unchecked only when every partial sum is provably inside `Int` — and a
 native build replaces the counted summation loop with it; `nazm explain-cost` names every other
 loop's reason. Evidence, `crates/nazm-cli/tests/simd.rs` (5): every length 0–200 at three magnitudes
