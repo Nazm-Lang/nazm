@@ -966,6 +966,13 @@ impl Interpreter {
         self
     }
 
+    /// Give both budgets afresh (N67): a reference evaluated element by element holds each
+    /// element to the budget a single run would have, not the whole sequence to one.
+    pub fn reset_limits(&mut self, limits: Limits) {
+        self.iterations_left = limits.max_iterations;
+        self.max_depth = limits.max_depth;
+    }
+
     /// Evaluate `main` and return its value.
     pub fn run_main(&mut self) -> Result<Value, RuntimeError> {
         let core = Arc::clone(&self.core);
@@ -1006,6 +1013,23 @@ impl Interpreter {
             ));
         };
         self.call_body(func, frame(func, Vec::new()))
+    }
+
+    /// Call `f` with `args` (N67: the reference an accelerator's results are held to). The caller
+    /// passes values of the parameters' types; a function holding a capability is not called.
+    pub fn call(&mut self, f: nazm_sema::FnId, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let core = Arc::clone(&self.core);
+        let Some(func) = core
+            .function(f)
+            .filter(|g| g.params as usize == args.len() && g.authority().is_empty())
+        else {
+            return Err(fail(
+                codes::MISSING_MAIN,
+                Span::synthetic(),
+                "no function of that arity to call",
+            ));
+        };
+        self.call_body(func, frame(func, args))
     }
 
     /// Run a function body and produce its value.

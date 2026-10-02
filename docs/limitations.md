@@ -32,6 +32,9 @@ found only by reading all of it.
   `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
   whole-program count, and recursion is seen only through its calls' sites (areas 4, 18).
   *Narrowed in N52.*
+- Accelerators are one command over one API: `nazm accel` maps a pure `(Int) -> Int` function over
+  `Int`s through macOS's OpenCL on Apple's GPU; no kernels in the language, no other vendor, API or
+  operating system, no layout specialisation (area 21). *Narrowed in N67:* until then, no GPU path.
 - Vectorisation is one idiom: the counted `Ints` summation loop, replaced by `ints_sum_from` in native
   builds at `--opt-level 2` and above; no element-wise maps, no vector types, baseline target
   features only, and a fallback 1.33× slower than the scalar loop when elements exceed 2^56

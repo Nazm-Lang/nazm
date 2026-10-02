@@ -307,6 +307,7 @@ business raising the floor for the crates that ship.
 | `nazm publish DIR --registry REG` | Copy the package in `DIR` into the local registry `REG` and record its version and digest in `REG/index/NAME.toml`, `nazm.registry-index/1`; a published version never changes (N56) |
 | `nazm yank NAME@VERSION --registry REG` | Withdraw a published version: never chosen anew, still used where a lockfile names it; `--undo` restores it (N56) |
 | `nazm mir FILE` | What `nazm build` lowers a checked program to — its MIR, `nazm.mir/1`: each concrete function (generic instances included) as basic blocks with every copy, move, drop, scope join and failure edge written out, after the validator accepted it. A debugging view; `--spans`, `--json` |
+| `nazm accel FILE KERNEL --input FILE` | Map a pure `(Int) -> Int` function over `Int`s on the GPU through OpenCL (macOS); `nazm.accel/1` names every transfer, the synchronisation, timings and the kernel's identity, and holds the results to the interpreter's; `--print-kernel` shows the OpenCL C (N67) |
 | `nazm repl` | Definitions and expressions a line at a time, checked as one program on every edit; a redefinition that breaks another definition is refused by its name (N65) |
 | `nazm comptime FILE FUNCTION` | Evaluate a parameterless pure function under the interpreter's budgets; anything that could reach the host is refused (`N0393`) (N65) |
 | `nazm reload-check OLD NEW` | `nazm.reload-check/1`: per definition, whether a running image could take the change or needs a restart, and why (N65) |

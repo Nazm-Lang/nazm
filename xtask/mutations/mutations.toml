@@ -11428,3 +11428,70 @@ file = "crates/nazm-cli/src/build.rs"
 find = '            nazm_service::vectorize::rewrite(&mut core);'
 replace = '            let _ = &mut core;'
 killers = [{ package = "nazm-cli", test = "simd", name = "a_native_build_replaces_the_summation_loop_and_reports_its_failure_at_the_addition" }]
+
+
+# --- N67: accelerator kernels -----------------------------------------------------------------------
+
+[[mutation]]
+name = "n67-an-effect-reaches-the-device"
+why = "a function that is not pure is accepted as a kernel, so the device would run code that reaches the host"
+file = "crates/nazm-service/src/kernel.rs"
+find = '    if !f.effects.is_pure() {'
+replace = '    if false {'
+killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_function_is_refused_by_name_before_any_device" }]
+
+[[mutation]]
+name = "n67-a-value-type-is-not-checked"
+why = "a function holding a record or enum value is not refused for its type, so the refusal names another reason"
+file = "crates/nazm-service/src/kernel.rs"
+find = '        if !matches!(l.ty, Type::Int | Type::Bool) {'
+replace = '        if false {'
+killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_function_is_refused_by_name_before_any_device" }]
+
+[[mutation]]
+name = "n67-the-signature-is-not-checked"
+why = "a kernel of two parameters is accepted, though the map hands it one element"
+file = "crates/nazm-service/src/kernel.rs"
+find = '    if entry.params != 1'
+replace = '    if entry.params > 2'
+killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_function_is_refused_by_name_before_any_device" }]
+
+[[mutation]]
+name = "n67-the-highest-failing-index-wins"
+why = "the failure word keeps the highest failing index, so a parallel run reports a failure the sequential map never reaches"
+file = "crates/nazm-service/src/kernel.rs"
+find = 'atomic_min(nz_fail, (int)(nz_index * 256 + (site)))'
+replace = 'atomic_max(nz_fail, (int)(nz_index * 256 + (site)))'
+killers = [{ package = "nazm-cli", test = "accel", name = "the_kernel_carries_every_checked_operation_and_the_lowest_index_rule" }]
+
+[[mutation]]
+name = "n67-a-helper-s-failure-is-ignored"
+why = "a failure inside a called function does not stop its caller, which computes on with the failed value"
+file = "crates/nazm-service/src/kernel.rs"
+find = '                let _ = writeln!(out, "{pad}if (*nz_failed) return 0;");'
+replace = '                let _ = writeln!(out, "{pad}(void)0;");'
+killers = [{ package = "nazm-cli", test = "accel", name = "the_kernel_carries_every_checked_operation_and_the_lowest_index_rule" }]
+
+[[mutation]]
+name = "n67-multiplication-is-unchecked"
+why = "a kernel's multiplication wraps on the device where the language fails"
+file = "crates/nazm-service/src/kernel.rs"
+find = '''                            "{pad}if (mul_hi({a}, {b}) != ({t} >> 63)) NZ_FAIL({s});"'''
+replace = '''                            "{pad}(void){s};"'''
+killers = [{ package = "nazm-cli", test = "accel", name = "the_kernel_carries_every_checked_operation_and_the_lowest_index_rule" }]
+
+[[mutation]]
+name = "n67-remainder-by-minus-one-is-c-s"
+why = "`i64::MIN % -1` is C's undefined remainder on the device, where the language defines 0"
+file = "crates/nazm-service/src/kernel.rs"
+find = '''writeln!(out, "{pad}long {t} = ({b} == -1L) ? 0L : {a} {sym} {b};");'''
+replace = '''writeln!(out, "{pad}long {t} = {a} {sym} {b};");'''
+killers = [{ package = "nazm-cli", test = "accel", name = "the_kernel_carries_every_checked_operation_and_the_lowest_index_rule" }]
+
+[[mutation]]
+name = "n67-the-identity-forgets-the-device"
+why = "a kernel's identity leaves out the device, so a binary built for one GPU would be taken for another's"
+file = "crates/nazm-cache/src/object.rs"
+find = '                .bytes(device.as_bytes())'
+replace = '                .bytes(b"")'
+killers = [{ package = "nazm-cache", lib = true, name = "object::tests::a_kernel_s_identity_is_every_part_of_what_runs_it" }]

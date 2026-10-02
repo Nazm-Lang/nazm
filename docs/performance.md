@@ -1949,6 +1949,23 @@ M1 Pro (macOS, Apple clang 21.0.0) by both backends for each target:
 
 Cross-host reproducibility — the same target's objects from two hosts — was not measured.
 
+### A GPU map — N67, measured 2026-10-02
+
+`collatz` (steps to 1, plus a helper call) over 1..=1,000,000 on the M1 Pro's GPU through macOS's
+OpenCL 1.2 (`nazm accel --no-check`, three runs), against the same sum by a native `-O2` build on one
+CPU core:
+
+| | GPU | CPU, one core |
+| --- | --- | --- |
+| kernel build | 1.6–3.3 ms (the driver's cache warm; 300 ms cold) | — |
+| host to device, 8,000,004 B | 2.3–4.4 ms | — |
+| run, to the synchronisation | 22.6–29.6 ms | 190 ms |
+| device to host, 8,000,004 B | 1.0–1.8 ms | — |
+| checksum | 144434412 | 144434412 |
+
+End to end about 6× one core; not compared against all cores, and not a claim about any other
+kernel: a map whose elements do little work loses to its transfers.
+
 ### Vectorised sums — N66, measured 2026-10-02
 
 `total(v)`, the counted summation loop, against the same loop with its operands swapped

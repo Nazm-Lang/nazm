@@ -32,6 +32,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod accel;
 mod backend;
 mod build;
 mod capabilities;
@@ -505,6 +506,24 @@ enum Command {
         #[arg(long, default_value_t = nazm_core::eval::DEFAULT_MAX_DEPTH, value_parser = max_depth)]
         max_depth: usize,
     },
+    /// Map a kernel over `Int`s on the GPU (N67): an eligible pure `(Int) -> Int` function of the
+    /// file, as an OpenCL kernel, over the whitespace-separated `Int`s of `--input`. One
+    /// `nazm.accel/1` line: the device, every transfer and the synchronisation, timings, the
+    /// kernel's identity, and whether the results agree with the interpreter's. macOS only.
+    Accel {
+        file: PathBuf,
+        /// The function to run as a kernel, in the file's own module.
+        kernel: String,
+        /// The input: whitespace-separated `Int`s, at most 8,000,000.
+        #[arg(long, value_name = "FILE")]
+        input: PathBuf,
+        /// Do not hold the results to the interpreter's.
+        #[arg(long)]
+        no_check: bool,
+        /// Print the generated OpenCL C kernel and stop: no device is used, on any host.
+        #[arg(long)]
+        print_kernel: bool,
+    },
     /// Whether a running image could take a new version of a program (N65): one
     /// `nazm.reload-check/1` line naming each change as `reloadable` or `restart`, and why. Exits
     /// non-zero when any change needs a restart.
@@ -897,6 +916,13 @@ fn main() -> ExitCode {
             source_root,
         } => return interface::run(&file, hash, source_root.as_deref()),
         Command::Repl => return live::repl(),
+        Command::Accel {
+            file,
+            kernel,
+            input,
+            no_check,
+            print_kernel,
+        } => return accel::run(&file, &kernel, &input, !no_check, print_kernel),
         Command::Comptime {
             file,
             function,
@@ -1083,6 +1109,7 @@ fn main() -> ExitCode {
         | Command::Test { .. }
         | Command::Interface { .. }
         | Command::Repl
+        | Command::Accel { .. }
         | Command::Comptime { .. }
         | Command::ReloadCheck { .. }
         | Command::Lsp { .. }

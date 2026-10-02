@@ -86,7 +86,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 18 | Embedded support | PARTIAL — one board, emulated, VERIFIED (N62); profile rules PARTIAL |
 | 19 | Critical profile | PARTIAL (rules v1) |
 | 20 | Cybersecurity profile | PARTIAL (rules v1) |
-| 21 | AI/HPC | RESEARCH |
+| 21 | AI/HPC | PARTIAL — one GPU map kernel, OpenCL on Apple M1 Pro (N67); vectorised sums (N66) |
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | VERIFIED |
@@ -1583,9 +1583,26 @@ declassification and no constant-time rule.
 **Accepted when** · Untrusted input is tracked to its uses and declassification is explicit
 and audited, with the approximation's blind spots stated.
 
-### 21. AI/HPC — RESEARCH
+### 21. AI/HPC — PARTIAL
 
-**Evidence of absence** · No tensors, no GPU path, no vectorisation work, no measurement.
+*N67, 2026-10-02: accelerator kernels — VERIFIED on one GPU, OpenCL on an Apple M1 Pro.*
+`architecture.md` §7.69 first. `nazm accel FILE KERNEL --input FILE` runs a pure `(Int) -> Int`
+function — and the functions it calls — as an OpenCL C kernel generated from Core IR, over up to
+8,000,000 `Int`s; checked arithmetic is carried, and a failure is the lowest failing index's at its
+site, as a sequential map's. Ineligible functions are refused by name before any device (`N0394`).
+`nazm.accel/1` names the device, both transfers with their bytes and time, the one
+synchronisation, the build and run times, the kernel's identity (`nazm.kernel/1`), and whether the
+results agree with the interpreter's, which they are always held to unless `--no-check`. Evidence,
+`crates/nazm-cli/tests/accel.rs` (3 on any host — the kernel's checked operations and failure rule,
+six refusals, bad input; 2 ignored, run on the M1 Pro — 20,000 Collatz kernels agreeing with the
+interpreter and with an independent Rust computation, transfer bytes, identity stable and distinct;
+the lowest failing index for overflow and division by zero, `i64::MIN` edges). Measured
+(`performance.md`, N67): 1,000,000 elements in 23–30 ms on the GPU plus 3–6 ms of transfers, against
+190 ms on one CPU core. **Limitation**: one API on one vendor's GPU, deprecated by that vendor; maps
+of `Int` only; no kernels in the language; no layout specialisation or occupancy; Linux and CI cannot
+run it.
+
+**Evidence of absence (before N66)** · No tensors, no GPU path, no vectorisation work, no measurement.
 
 **Next dependency** · A reason. `architecture.md` §1 says MLIR should be revisited *only
 if* Nazm pivots toward tensor/accelerator codegen, and nothing proposes that pivot.
