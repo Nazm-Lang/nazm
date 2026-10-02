@@ -118,6 +118,7 @@ fn mir_facts(program: &nazm_mir::ir::Program) -> profile::MirFacts {
             task_sites,
             ..profile::Bounds::default()
         },
+        unsigned_writes: Vec::new(),
     }
 }
 
@@ -209,6 +210,7 @@ pub(crate) fn enforce(
         p.rules().contains(&profile::Rule::BoundedAllocation)
             || p.rules().contains(&profile::Rule::NoRecursion)
             || p.rules().contains(&profile::Rule::BoundedLoops)
+            || p.rules().contains(&profile::Rule::SignedWrites)
     });
     let evaluated = if needs_cost {
         nazm_core::on_lowered(
@@ -238,6 +240,25 @@ pub(crate) fn enforce(
                         let mut f = mir_facts(&program);
                         f.bounds.loops = loops;
                         f.bounds.queue_sites = queue_sites;
+                        // A contract's unguarded writes (N72): only where the module is one.
+                        let root = loaded.graph.module_of(nazm_span::FileId::ROOT);
+                        if let Ok(c) = nazm_service::contract::of(core, res, root) {
+                            f.unsigned_writes = c
+                                .entrypoints
+                                .iter()
+                                .filter(|e| {
+                                    !e.caller_checked
+                                        && e.writes.as_ref().is_none_or(|w| !w.is_empty())
+                                })
+                                .map(|e| profile::Witness {
+                                    span: e.at,
+                                    note: format!(
+                                        "`{}` writes the state and never decides on its caller",
+                                        e.name
+                                    ),
+                                })
+                                .collect();
+                        }
                         f
                     });
                 Ok(profile::evaluate(
