@@ -207,7 +207,28 @@ macro_rules! hex {
     )*};
 }
 
+/// An accelerator kernel's identity (N67, `nazm.kernel/1`): its device source, the device and
+/// driver that compile it, and the host program that runs it — what a cache of the driver's
+/// binaries would be keyed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KernelKey([u8; 32]);
+
+impl KernelKey {
+    #[must_use]
+    pub fn of(source: &str, device: &str, driver: &str, host: &str) -> Self {
+        Self(
+            Framed::new("nazm.kernel/1")
+                .bytes(source.as_bytes())
+                .bytes(device.as_bytes())
+                .bytes(driver.as_bytes())
+                .bytes(host.as_bytes())
+                .finish(),
+        )
+    }
+}
+
 hex!(
+    KernelKey,
     LlvmInput,
     BackendIdentity,
     CodegenConfig,
@@ -219,6 +240,20 @@ hex!(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_kernel_s_identity_is_every_part_of_what_runs_it() {
+        let k = |s, d, v, h| KernelKey::of(s, d, v, h);
+        let base = k("src", "Apple M1 Pro", "1.2 1.0", "host");
+        assert_eq!(base, k("src", "Apple M1 Pro", "1.2 1.0", "host"));
+        assert_ne!(base, k("src2", "Apple M1 Pro", "1.2 1.0", "host"));
+        assert_ne!(base, k("src", "Another GPU", "1.2 1.0", "host"));
+        assert_ne!(base, k("src", "Apple M1 Pro", "1.2 2.0", "host"));
+        assert_ne!(base, k("src", "Apple M1 Pro", "1.2 1.0", "host2"));
+        // Framed, so a boundary cannot move between parts.
+        assert_ne!(k("ab", "c", "d", "e"), k("a", "bc", "d", "e"));
+        assert_eq!(base.to_string().len(), 64);
+    }
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
