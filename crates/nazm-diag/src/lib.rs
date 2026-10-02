@@ -333,6 +333,11 @@ pub mod codes {
     /// could reach the host through authority it holds or borrows.
     pub const COMPTIME_REFUSED: Code = Code::new("N0393");
 
+    // Accelerators (N67, `docs/architecture.md` §7.69)
+    /// A function `nazm accel` will not run as a kernel: not a pure `(Int) -> Int` over `Int`s
+    /// and `Bool`s, or reaching something with no device form.
+    pub const KERNEL_INELIGIBLE: Code = Code::new("N0394");
+
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.

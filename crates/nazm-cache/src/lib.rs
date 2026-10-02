@@ -86,7 +86,9 @@ pub mod store;
 pub use artifact::{CheckArtifact, Invalid, Reusable, SCHEMA};
 pub use identity::{CheckerIdentity, CHECKER_CODES, SEMANTIC_EPOCH};
 pub use key::{CheckKey, Dependency};
-pub use object::{BackendIdentity, CodegenConfig, LlvmInput, ObjectFingerprint, ObjectKey};
+pub use object::{
+    BackendIdentity, CodegenConfig, KernelKey, LlvmInput, ObjectFingerprint, ObjectKey,
+};
 pub use objects::{ObjectArtifact, ObjectFound, ObjectInvalid, ObjectStore};
 pub use source::SourceFingerprint;
 pub use store::{Found, Store};

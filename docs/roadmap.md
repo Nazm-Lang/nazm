@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N67 — GPU/HPC — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.69 first. A kernel is a pure `(Int) -> Int` function meeting a stated
+eligibility, refused by name otherwise; `nazm accel` generates OpenCL C from Core IR carrying checked
+arithmetic, runs it on the M1 Pro's GPU with every transfer and the synchronisation in its report,
+recovers the sequential map's first failure from a parallel run, and holds every result to the
+interpreter's. About 6× one CPU core on a Collatz map. Next: N68, adaptive representation.
+
 ### N66 — Vectorisation — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.68 first. Checked arithmetic kept every loop scalar; `ints_sum_from` keeps the

@@ -51,6 +51,7 @@ pub mod durable;
 pub mod fixes;
 pub mod hierarchy;
 mod incomplete;
+pub mod kernel;
 pub mod load;
 pub mod patch;
 pub mod profile;

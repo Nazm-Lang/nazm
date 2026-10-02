@@ -3207,6 +3207,16 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **`nazm comptime FILE FUNCTION`** | Evaluates a function of the file's module that has no parameters and is pure, under `--max-iterations` and `--max-depth`; prints its value. Any other function is refused (`N0393`); exhausting a budget is `N0402` or `N0403` |
 | **`nazm reload-check OLD NEW`** | `nazm.reload-check/1`: each definition of the root module that changed, `reloadable` (a body, or something added) or `restart` (a signature — types or effects — a removal, or a record's or enum's fields by name and type), with why; exit status non-zero when any needs a restart |
 
+### Accelerator kernels: `nazm accel` — N67
+<!-- id: accel -->
+
+| | |
+| --- | --- |
+| **A kernel** | A function of the file's module that is pure and maps one `Int` to an `Int`, reaching only functions that are pure functions of `Int`s and `Bool`s — no recursion, built-ins, records, enums, closures, tasks or C. Anything else is `N0394`, naming why and where |
+| **The map** | `nazm accel FILE KERNEL --input FILE` applies it to each whitespace-separated `Int` of the input (at most 8,000,000) on the GPU: the results in order, or the failure of the lowest failing element — `N0400`/`N0401` at the operation's span, "at element *i*" — as the interpreter mapping in order would give |
+| **The report** | One `nazm.accel/1` line: device, each transfer (direction, bytes, ms), the synchronisation, build and run times, the kernel's identity, and `reference` — the interpreter's agreement, checked unless `--no-check` |
+| **Where it runs** | macOS's OpenCL; elsewhere it is refused, never run on the CPU instead. `--print-kernel` shows the OpenCL C on any host |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
