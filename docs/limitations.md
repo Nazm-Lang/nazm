@@ -97,6 +97,8 @@ found only by reading all of it.
 
 ## Profiles
 
-- Eight rules since N52 (`bounded-allocation`, `contents-stay-in-files`,
-  `no-declassification` added); no stack, determinism or constant-time rule; a profile costs
-  one extra check, and `embedded` a MIR lowering (areas 18–20).
+- Eleven rules since N60 (`no-recursion`, `no-select` and `no-ambient-time` added to N52's); the
+  stack rule bounds depth, not bytes, and is `unknown` through a function value; no constant-time
+  rule, no bounded-loop, queue or task rule; `critical` stays a restriction set, not a
+  certification; a profile costs one extra check, `embedded` a MIR lowering (+13 % on the compiler's
+  source) (areas 18–20).

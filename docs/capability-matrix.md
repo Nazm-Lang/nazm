@@ -1471,6 +1471,16 @@ anticipating a Critical profile is not evidence for one.**
 established bound, total functions, and every failure mode enumerated rather than trapped;
 contracts and invariants checked rather than asserted.
 
+*N60, 2026-10-02: restriction profiles v2 — VERIFIED for the rules named.* `architecture.md` §7.62
+first. A verdict is `pass`, `fail` or `unknown`, `unknown` refused and reported as such.
+`embedded` adds `no-recursion` — a cycle of MIR's direct call and spawn edges, each function in it
+named; `unknown` where a call goes through a function value — and `critical` adds `no-select`, by
+call site, so with `no-spawn` and `no-ambient-time` a `critical` program's behaviour is a function of
+its inputs. Composition: a dependency declaring `general` does not weaken a root requiring
+`embedded`. Evidence: `crates/nazm-cli/tests/profiles_v2.rs` (4), the profile tables in
+`profiles.rs`; overhead on `compiler/emit.nz`: `general` 652, `critical` 653, `embedded` 739 ms
+(medians of five). Constant-time rules are RESEARCH; bounded loops, queues and tasks are N63's.
+
 **What `--profile critical` enforces now** · *N47, 2026-10-01: restriction profiles v1 (`architecture.md` §7.49).* `--profile NAME` on `check`,
 `build` and `run`, or `profile = "NAME"` in any package manifest of the build; rules read semantic
 facts only — `main`'s required effect set, each function's declared contract, the build's lock —

@@ -2130,14 +2130,17 @@ with `--profile NAME` on `check`, `build` and `run`, or required by a package's 
 | Profile | Rules |
 | --- | --- |
 | `general` | none |
-| `embedded` | `no-io`, `no-spawn` |
-| `critical` | `declared-effects`, `no-spawn`, `no-foreign`, `locked-build` |
-| `cyber` | `declared-effects`, `no-foreign`, `locked-build` |
+| `embedded` | `no-io`, `no-spawn`, `bounded-allocation` (N52), `no-recursion` (N60) |
+| `critical` | `declared-effects`, `no-spawn`, `no-foreign`, `locked-build`, `no-declassification` (N52), `no-ambient-time` (N54), `no-select` (N60) |
+| `cyber` | `declared-effects`, `no-foreign`, `locked-build`, `contents-stay-in-files` (N52) |
 
 `no-io`, `no-spawn` and `no-foreign` refuse a program whose `main` requires that effect, through
 any call, standard functions included. `declared-effects` refuses any function of the program that
 writes no `! { … }`, so no function exercises its caller's authority. `locked-build` refuses a
-build that is not a package build whose lockfile verifies. A refusal is `N0510`, naming the profile,
+build that is not a package build whose lockfile verifies. `no-recursion` refuses a cycle of direct
+calls or spawns, and is `unknown` where a call goes through a function value; `no-select` refuses
+any select (N60). Each rule's verdict is `pass`, `fail` or `unknown`, and `unknown` is refused: a
+rule the compiler could not establish is not met. A refusal is `N0510`, naming the profile,
 the rule and where it comes from; an unknown profile is `N0511`. `nazm check --profile-report`
 prints `nazm.profile-report/1`. A profile is compiler-enforced evidence about these rules and
 nothing more: not a certification, not a sandbox.
