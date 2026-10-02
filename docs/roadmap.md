@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N62 — Embedded bare metal — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.64 first. `aarch64-unknown-none`: a board runtime without thread-local storage
+or a C library, failure on the UART and semihosting's exit, `_start` and `link.ld`, a stack check
+against the image's own stack; volatile `mmio_read32`/`mmio_write32` under an `MmioCap`, refused
+where there is no device (`N0392`). A Nazm program boots on QEMU's `virt` board and prints through
+its UART. Atomics, interrupts, a heap and `@std` designed, not built. Next: N63, real-time bounds.
+
 ### N61 — Formal semantics — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.63 and `docs/formal-core.md` first. A core's typing and evaluation rules,
