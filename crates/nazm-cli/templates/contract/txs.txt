@@ -1,0 +1,7 @@
+# CALLER ENTRY ARG…, one transaction per line
+1 transfer 30
+2 transfer 10
+1 pause 1
+1 transfer 5
+1 pause 0
+1 transfer 5

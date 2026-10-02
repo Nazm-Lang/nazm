@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.publish-plan-1.json",
+  "title": "nazm.publish-plan/1",
+  "description": "What a publish would record, from `nazm publish --dry-run` (N74). Nothing is written.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "version",
+    "digest",
+    "files",
+    "written"
+  ],
+  "properties": {
+    "schema": {
+      "const": "nazm.publish-plan/1"
+    },
+    "name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "version": {
+      "type": "string"
+    },
+    "digest": {
+      "type": "string"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "written": {
+      "const": false
+    }
+  }
+}

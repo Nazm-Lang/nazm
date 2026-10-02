@@ -1,0 +1,7 @@
+schema = "nazm.package/1"
+
+[package]
+name = "{{name}}"
+version = "0.1.0"
+main = "main.nz"
+profile = "web3"

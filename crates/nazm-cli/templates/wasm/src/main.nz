@@ -1,0 +1,11 @@
+// A WebAssembly module (`wasm32-unknown-unknown`). Its authority is its imports: printing is
+// `nz.host_write`, which the generated `build/host.mjs` provides.
+//
+//     nazm build --target wasm32-unknown-unknown . --objects build
+//     then link and run as build/link.txt says
+use "fib.nz";
+
+fn main(io: IoCap) -> Int ! { io } {
+    print("hello from wasm\n");
+    fib(20)
+}

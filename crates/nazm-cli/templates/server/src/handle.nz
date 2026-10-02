@@ -1,0 +1,23 @@
+// What the server does with one request: pure, so it is tested without a pool.
+pub fn handle(request: Int) -> Int ! {} { request * request }
+
+// The requests in `text`: one decimal number per line; anything else on a line is skipped.
+pub fn requests(text: Str) -> Ints ! {} {
+    let out = ints_new();
+    let mut i = 0;
+    let mut n = 0;
+    let mut digits = 0;
+    while i < str_len(text) {
+        let b = str_byte(text, i);
+        if b >= 48 && b <= 57 {
+            n = n * 10 + (b - 48);
+            digits = digits + 1;
+        } else {
+            if b == 10 && digits > 0 { ints_push(out, n); }
+            if b == 10 { n = 0; digits = 0; }
+        }
+        i = i + 1;
+    }
+    if digits > 0 { ints_push(out, n); }
+    out
+}

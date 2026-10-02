@@ -1,0 +1,50 @@
+// A worker pool serving the requests in a file: `server requests.txt`. Nazm has no sockets and no
+// way to read standard input, so a request arrives as a line of a file.
+use "handle.nz";
+
+fn worker(jobs: Chan, results: Chan) -> Int ! {} {
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        chan_send(results, handle(ints_pop(buf)));
+    }
+    0
+}
+
+// A task is given values that may cross — the text, not the parsed list — and parses its own copy.
+fn feed(jobs: Chan, text: Str) -> Int ! {} {
+    let work = requests(text);
+    let mut i = 0;
+    while i < ints_len(work) {
+        chan_send(jobs, ints_get(work, i));
+        i = i + 1;
+    }
+    chan_close(jobs);
+    0
+}
+
+fn main(io: IoCap, s: SpawnCap) -> Int ! { io, spawn } {
+    if args_count() == 0 {
+        eprint("usage: server FILE\n");
+        return exit_with(2);
+    }
+    let text = read_file(arg(0));
+    let count = ints_len(requests(text));
+    let jobs = chan_new(4);
+    let results = chan_new(4);
+    let buf = ints_new();
+    let mut total = 0;
+    scope {
+        spawn feed(jobs, text);
+        spawn worker(jobs, results);
+        spawn worker(jobs, results);
+        let mut got = 0;
+        while got < count {
+            chan_recv(results, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+        }
+    }
+    chan_close(results);
+    print(str_concat(int_to_str(count), " requests served\n"));
+    total
+}

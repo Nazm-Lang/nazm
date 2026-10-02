@@ -1,0 +1,16 @@
+// A freestanding program for a board with no operating system (`aarch64-unknown-none`, QEMU's
+// `virt` machine): no heap, no C library. A register is reached only with an `MmioCap`, and
+// `nazm run` refuses to perform one — the program runs on the board.
+//
+//     nazm build --target aarch64-unknown-none . --objects build
+//     then link with build/link.ld as build/link.txt says
+use "board.nz";
+
+fn main(m: MmioCap) -> Int ! {} {
+    let mut i = 0;
+    while greeting(i) >= 0 {
+        mmio_write32(uart_data(), greeting(i));
+        i = i + 1;
+    }
+    100
+}

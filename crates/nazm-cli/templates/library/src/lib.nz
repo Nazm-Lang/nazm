@@ -1,0 +1,19 @@
+// A library package: no `main`. Another package depends on it by path and writes
+// `use "library:lib.nz";`.
+
+// The greatest common divisor of two non-negative numbers.
+pub fn gcd(a: Int, b: Int) -> Int ! {} {
+    let mut x = a;
+    let mut y = b;
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+// `n` held to the range `lo..=hi`.
+pub fn clamp(n: Int, lo: Int, hi: Int) -> Int ! {} {
+    if n < lo { lo } else { if n > hi { hi } else { n } }
+}

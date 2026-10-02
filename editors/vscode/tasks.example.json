@@ -1,0 +1,11 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "nazm: build --debug",
+      "type": "shell",
+      "command": "nazm build --debug . -o build/app",
+      "problemMatcher": []
+    }
+  ]
+}

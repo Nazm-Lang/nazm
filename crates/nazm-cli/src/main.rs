@@ -33,7 +33,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod accel;
+mod apidoc;
 mod backend;
+mod bindgen;
 mod build;
 mod capabilities;
 mod checking;
@@ -47,6 +49,7 @@ mod docs;
 mod explain;
 mod fix;
 mod fmt;
+mod init;
 mod inspect;
 mod interface;
 mod live;
@@ -609,6 +612,33 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
+    /// Document a program's public API (N74), from its semantic definitions: every exported
+    /// function, record and enum of its own modules, with effects, capabilities, foreign symbols and
+    /// a link to the source. One `nazm.api-doc/1` line on stdout, or `api.json` and `api.md` in
+    /// `-o DIR`. Not `nazm docs`, which reads Nazm's own documentation.
+    Doc {
+        /// A source file, or a package's directory.
+        path: PathBuf,
+        #[arg(short, long, value_name = "DIR")]
+        out: Option<PathBuf>,
+    },
+    /// Declare the safe subset of a C header as `extern "C"` functions (N74): prototypes of
+    /// `int64_t` and `bool` (and `const char *` arguments). Everything else is refused with the
+    /// reason, never widened. With `-o FILE`, the module is written there and one `nazm.bindgen/1`
+    /// line is printed; exits 1 when anything was refused.
+    Bindgen {
+        header: PathBuf,
+        #[arg(short, long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
+    /// Create a project from a template (N74): `cli`, `library`, `server`, `embedded`, `wasm` or
+    /// `contract`. The directory is the package's name; it must not exist or must be empty. Its
+    /// README.md names the commands that check, test, build and document it.
+    Init {
+        dir: PathBuf,
+        #[arg(long, default_value = "cli", value_name = "NAME")]
+        template: String,
+    },
     /// Report what this build of the compiler actually supports.
     ///
     /// Read from the compiler's own tables rather than from a written list, so it cannot
@@ -767,6 +797,10 @@ enum Command {
         /// The registry's directory.
         #[arg(long, value_name = "DIR")]
         registry: PathBuf,
+        /// Make every check a publish makes and print what it would record — one
+        /// `nazm.publish-plan/1` line: the name, version, digest and files — writing nothing (N74).
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Withdraw a published version (N56): never chosen anew, still used where a lockfile names it.
     Yank {
@@ -812,7 +846,15 @@ fn main() -> ExitCode {
     if let Command::Lock { dir } = &cli.command {
         return package::lock(dir);
     }
-    if let Command::Publish { dir, registry } = &cli.command {
+    if let Command::Publish {
+        dir,
+        registry,
+        dry_run,
+    } = &cli.command
+    {
+        if *dry_run {
+            return package::publish_dry_run(dir, registry);
+        }
         return package::publish(dir, registry);
     }
     if let Command::Yank {
@@ -824,6 +866,12 @@ fn main() -> ExitCode {
         return package::yank(which, registry, *undo);
     }
 
+    // A library package — no `main` — is checked as its modules (N74, §7.76).
+    if let Command::Check { file, json, .. } = &cli.command {
+        if let Some(modules) = package::library_modules(file) {
+            return checking::library(&modules, *json);
+        }
+    }
     match &mut cli.command {
         Command::Run { file, locked, .. }
         | Command::Check { file, locked, .. }
@@ -991,6 +1039,9 @@ fn main() -> ExitCode {
             source_root,
         } => return interface::run(&file, hash, source_root.as_deref()),
         Command::Repl => return live::repl(),
+        Command::Init { dir, template } => return init::run(&dir, &template),
+        Command::Doc { path, out } => return apidoc::run(&path, out.as_deref()),
+        Command::Bindgen { header, out } => return bindgen::run(&header, out.as_deref()),
         Command::Contract {
             file,
             interface,
@@ -1192,6 +1243,9 @@ fn main() -> ExitCode {
         // Handled above; `main` keeps its original shape for the commands whose
         // behaviour these increments must not change.
         Command::Build { .. }
+        | Command::Init { .. }
+        | Command::Doc { .. }
+        | Command::Bindgen { .. }
         | Command::Check { .. }
         | Command::Fix { .. }
         | Command::Context { .. }

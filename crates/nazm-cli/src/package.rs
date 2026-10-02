@@ -38,6 +38,34 @@ pub(crate) fn graph_for(path: &Path) -> Option<Result<nazm_package::Graph, Vec<D
     nazm_service::load::package_context(root.path())
 }
 
+/// Every module of a library package — one with no `main` — for `nazm check DIR` (N74,
+/// `docs/architecture.md` §7.76): the `.nz` files under its source root, sorted. `None` for
+/// anything else, which takes the ordinary route and its ordinary refusals.
+pub(crate) fn library_modules(path: &Path) -> Option<Vec<PathBuf>> {
+    if !path.is_dir() || !nazm_package::is_package(path) {
+        return None;
+    }
+    let graph = nazm_package::resolve(path).ok()?;
+    let root = graph.root_package()?;
+    if root.main.is_some() {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![root.source_root.clone()];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).ok()?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "nz") {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    Some(out)
+}
+
 /// The file a command should start from: the `main` of the package `path` names, when it is a
 /// package's directory; `None` to use `path` as it is.
 ///
@@ -96,6 +124,31 @@ pub(crate) fn publish(dir: &Path, registry: &Path) -> ExitCode {
             eprintln!(
                 "nazm: published {version} into {} ({digest})",
                 registry.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(d) => report(&[*d]),
+    }
+}
+
+/// `nazm publish DIR --registry REG --dry-run` (N74): what a publish would record, written to
+/// nothing.
+pub(crate) fn publish_dry_run(dir: &Path, registry: &Path) -> ExitCode {
+    match nazm_package::publish_dry_run(dir, registry) {
+        Ok((version, digest, files)) => {
+            let name = nazm_package::resolve(dir)
+                .ok()
+                .and_then(|g| g.root_package().map(|p| p.name.clone()));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "nazm.publish-plan/1",
+                    "name": name,
+                    "version": version.to_string(),
+                    "digest": digest,
+                    "files": files,
+                    "written": false,
+                })
             );
             ExitCode::SUCCESS
         }

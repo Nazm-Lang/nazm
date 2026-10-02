@@ -15,7 +15,20 @@ use serde_json::{json, Map, Value};
 
 use crate::{exit, load};
 
-fn effects(set: Option<nazm_core::sema::EffectSet>) -> Value {
+/// Every target `--target` accepts, in the order a reader should meet them; `nazm capabilities`
+/// lists the same (N74).
+pub(crate) const TARGETS: &[&str] = &[
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    // A board, with no operating system (N62, §7.64): always objects and `link.ld`.
+    "aarch64-unknown-none",
+    // WebAssembly (N64, §7.66): objects, `wasm-ld`'s line and a reference host.
+    "wasm32-unknown-unknown",
+];
+
+pub(crate) fn effects(set: Option<nazm_core::sema::EffectSet>) -> Value {
     set.map_or(Value::Null, |s| json!(s.names()))
 }
 
@@ -147,23 +160,14 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
     let target = host.as_ref().map_or(Value::Null, |t| json!(t.triple));
     // Every target `--target` accepts, and whether this host links it or builds it to objects
     // (N57, §7.59).
-    let targets: Vec<Value> = [
-        "aarch64-apple-darwin",
-        "x86_64-apple-darwin",
-        "aarch64-unknown-linux-gnu",
-        "x86_64-unknown-linux-gnu",
-        // A board, with no operating system (N62, §7.64): always objects and `link.ld`.
-        "aarch64-unknown-none",
-        // WebAssembly (N64, §7.66): objects, `wasm-ld`'s line and a reference host.
-        "wasm32-unknown-unknown",
-    ]
-    .iter()
-    .filter_map(|t| nazm_lir::backend::Target::parse(t).ok())
-    .map(|t| {
-        let links = host.as_ref().is_some_and(|h| t.links_on(h));
-        json!({ "triple": t.triple, "output": if links { "executable" } else { "objects" } })
-    })
-    .collect();
+    let targets: Vec<Value> = TARGETS
+        .iter()
+        .filter_map(|t| nazm_lir::backend::Target::parse(t).ok())
+        .map(|t| {
+            let links = host.as_ref().is_some_and(|h| t.links_on(h));
+            json!({ "triple": t.triple, "output": if links { "executable" } else { "objects" } })
+        })
+        .collect();
     let doc = json!({
         "schema": "nazm.inspect/1",
         "root": root_key,

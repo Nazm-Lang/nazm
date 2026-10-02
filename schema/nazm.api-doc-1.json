@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.api-doc-1.json",
+  "title": "nazm.api-doc/1",
+  "description": "A program's public API from its semantic definitions, from `nazm doc` (N74).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "package",
+    "modules"
+  ],
+  "properties": {
+    "schema": {
+      "const": "nazm.api-doc/1"
+    },
+    "package": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "profiles"
+          ],
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "profiles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "module",
+          "items"
+        ],
+        "properties": {
+          "module": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "anchor",
+                "kind",
+                "name",
+                "signature",
+                "description",
+                "source"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "anchor": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "fn",
+                    "struct",
+                    "enum"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "signature": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ret": {
+                  "type": "string"
+                },
+                "generic": {
+                  "type": "boolean"
+                },
+                "effects": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "declared",
+                    "required"
+                  ],
+                  "properties": {
+                    "declared": {
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
+                    "required": {
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "capabilities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "foreign": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "export": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fields": {
+                  "type": "array"
+                },
+                "variants": {
+                  "type": "array"
+                },
+                "source": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "line"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "line": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

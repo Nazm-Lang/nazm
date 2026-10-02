@@ -3265,6 +3265,17 @@ through `nazm_host.report`) — and imports only `nazm_host.state_get(index) -> 
 | **Determinism** | No absolute path, time or host name: one program and one toolchain give one record |
 | **`--attest-with CMD`** | Needs `--provenance`. CMD's words, no shell, with the record's path appended; its standard output is written to `FILE.sig`. A failing CMD fails the command and writes no `FILE.sig`; the record and the output stay |
 
+### Project tooling — N74
+<!-- id: project-tooling -->
+
+| | |
+| --- | --- |
+| **`nazm init DIR --template T`** | `cli`, `library`, `server`, `embedded`, `wasm` or `contract`; the directory's name is the package's (`[a-z][a-z0-9-]*`); an existing non-empty directory is refused and nothing is written |
+| **`nazm check DIR` on a library** | A package with no `main` is checked as every module of its source root, each needing no `main`, each diagnostic once; `run` and `build` refuse it (`N0509`) |
+| **`nazm doc PATH [-o DIR]`** | `nazm.api-doc/1`: per module key, every exported function, record and enum of the program's own modules — signature as written, the comment lines directly above it as its description, parameter and result types, declared and required effects, capabilities, foreign symbol, C export, the source path (relative to the package, or to the file's directory) and line; `-o` writes `api.json` and `api.md`, each definition anchored by its identity. A program that does not check is refused |
+| **`nazm bindgen HEADER [-o FILE]`** | A prototype is translated when every parameter is `int64_t`, `bool` or `const char *` and its result `int64_t` or `bool`, and the checker accepts its declaration; anything else — other integer widths, `void`, other pointers, floating point, structs, variadics, function pointers, macros, a declaration the checker refuses — is refused with the reason. Exit 1 when anything was refused |
+| **`nazm publish DIR --registry REG --dry-run`** | Every check a publish makes, and `nazm.publish-plan/1` — the version, the digest the index would record, the files it would copy — with nothing written |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 

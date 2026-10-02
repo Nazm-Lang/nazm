@@ -1,0 +1,9 @@
+// What the board is, as numbers: pure, so `nazm test` checks it on this machine.
+
+// The PL011 UART's data register on QEMU's `virt` machine.
+pub fn uart_data() -> Int ! {} { 150994944 }
+
+// The `i`th byte of the greeting the program writes, or -1 past its end.
+pub fn greeting(i: Int) -> Int ! {} {
+    if i == 0 { 72 } else { if i == 1 { 105 } else { if i == 2 { 10 } else { -1 } } }
+}

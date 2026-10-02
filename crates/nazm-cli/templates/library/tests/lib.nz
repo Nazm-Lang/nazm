@@ -1,0 +1,3 @@
+use "../src/lib.nz";
+
+fn main() -> Int ! {} { gcd(84, 36) * 100 + clamp(150, 0, 99) }
