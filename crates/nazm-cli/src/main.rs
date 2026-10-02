@@ -38,6 +38,7 @@ mod build;
 mod capabilities;
 mod checking;
 mod context;
+mod contract;
 mod core_ir;
 mod derived;
 mod diagnostics;
@@ -506,6 +507,18 @@ enum Command {
         #[arg(long, default_value_t = nazm_core::eval::DEFAULT_MAX_DEPTH, value_parser = max_depth)]
         max_depth: usize,
     },
+    /// A contract (N69): its facts as `nazm.contract/1` (`--interface`, the default), or a
+    /// deterministic run of the transactions in `--txs` — `CALLER ENTRY ARG…` per line — as
+    /// `nazm.contract-run/1`. The module is held to the `web3` profile first.
+    Contract {
+        file: PathBuf,
+        /// Print the contract's facts (the default when `--txs` is not given).
+        #[arg(long)]
+        interface: bool,
+        /// Run these transactions, one per line, against a fresh `init()` state.
+        #[arg(long, value_name = "FILE")]
+        txs: Option<PathBuf>,
+    },
     /// Map a kernel over `Int`s on the GPU (N67): an eligible pure `(Int) -> Int` function of the
     /// file, as an OpenCL kernel, over the whitespace-separated `Int`s of `--input`. One
     /// `nazm.accel/1` line: the device, every transfer and the synchronisation, timings, the
@@ -923,6 +936,11 @@ fn main() -> ExitCode {
             source_root,
         } => return interface::run(&file, hash, source_root.as_deref()),
         Command::Repl => return live::repl(),
+        Command::Contract {
+            file,
+            interface,
+            txs,
+        } => return contract::run(&file, interface, txs.as_deref()),
         Command::Accel {
             file,
             kernel,
@@ -1117,6 +1135,7 @@ fn main() -> ExitCode {
         | Command::Interface { .. }
         | Command::Repl
         | Command::Accel { .. }
+        | Command::Contract { .. }
         | Command::Comptime { .. }
         | Command::ReloadCheck { .. }
         | Command::Lsp { .. }

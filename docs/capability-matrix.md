@@ -99,6 +99,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
+| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69) |
 
 After N48: fifteen VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification), sixteen
 PARTIAL, two RESEARCH, one MISSING, across the 34 rows above.
@@ -3498,3 +3499,22 @@ test on a third.
 
 **Accepted when** · CI runs green on a stated target and the stated target is one the
 project verifies.
+
+### 34. Smart contracts — PARTIAL
+
+*N69, 2026-10-02: the chain-neutral model — VERIFIED for the model and its simulator.*
+`architecture.md` §7.71 first. A contract is an ordinary module — a `State` record of `Int`s and
+`Bool`s, `init`, and pure entrypoints returning `Result[State, Int]` — held to the `web3` profile
+(declared effects; no `io`, tasks, channels, clock, C or recursion). `nazm contract` writes
+`nazm.contract/1`: the state, each entrypoint's arguments, and its read and write sets, exact for a
+state built in the result and conservative ("all") where the analysis does not follow it; external
+calls do not exist in the model, so no reentrancy is claimed or analysed. `nazm contract --txs` runs
+transactions deterministically on the interpreter: `Ok` commits, `Err` and runtime failures revert
+with their codes, a declared `conserved` quantity must hold or the transaction is rejected (`N0396`),
+and a meter counts calls and loop turns. Evidence, `crates/nazm-cli/tests/contract.rs` (7): the
+facts for six entrypoints; thirteen transactions — commits, reverts by code, the owner's authority,
+a conservation breach rejected with the state unchanged, malformed lines — and the same bytes twice;
+a runtime failure reverting with `N0400`; five profile refusals; four not-a-contract refusals; a pure
+function the same under `web3`. **Limitation**: no chain backend yet; assets are a conserved
+quantity checked per transaction, not a linear type; no events, external calls or gas.
+

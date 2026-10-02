@@ -11558,3 +11558,79 @@ file = "crates/nazm-lir/src/lib.rs"
 find = '                    Some(l) if l.fields.iter().all(|f| matches!(f, ir::Ty::Int | ir::Ty::Bool)) => None,'
 replace = '                    Some(l) if l.fields.iter().all(|f| matches!(f, ir::Ty::Int | ir::Ty::Bool)) => Some("never"),'
 killers = [{ package = "nazm-cli", test = "layout", name = "an_ineligible_element_stays_whole_and_the_reason_is_reported" }]
+
+
+# --- N69: contracts — the web3 profile, facts and the simulator --------------------------------
+
+[[mutation]]
+name = "n69-web3-admits-a-clock"
+why = "the web3 profile loses `no-ambient-time`, so a contract whose result depends on when it runs is admitted"
+file = "crates/nazm-service/src/profile.rs"
+find = '''
+                Rule::NoForeign,
+                Rule::NoAmbientTime,
+                Rule::NoRecursion,'''
+replace = '''
+                Rule::NoForeign,
+                Rule::NoRecursion,'''
+killers = [{ package = "nazm-cli", test = "contract", name = "the_web3_profile_refuses_nondeterminism_and_outside_authority" }]
+
+[[mutation]]
+name = "n69-a-revert-commits"
+why = "an entrypoint's `Err` is taken for a new state, so a refused transaction replaces the contract's state with its error code"
+file = "crates/nazm-cli/src/contract.rs"
+find = '                Ok(nazm_core::Value::Enum(r)) if r.variant() == 0 => {'
+replace = '                Ok(nazm_core::Value::Enum(r)) if r.variant() <= 1 => {'
+killers = [{ package = "nazm-cli", test = "contract", name = "transactions_run_deterministically_and_a_revert_changes_nothing" }]
+
+[[mutation]]
+name = "n69-conservation-is-not-checked"
+why = "a transaction that mints from nothing commits, so an asset is duplicated silently"
+file = "crates/nazm-cli/src/contract.rs"
+find = '                    if before == after {'
+replace = '                    if true {'
+killers = [{ package = "nazm-cli", test = "contract", name = "transactions_run_deterministically_and_a_revert_changes_nothing" }]
+
+[[mutation]]
+name = "n69-the-signer-is-not-passed"
+why = "every transaction runs as caller 0, so the owner's authority is never recognised"
+file = "crates/nazm-cli/src/contract.rs"
+find = '            let mut call = vec![state.clone(), nazm_core::Value::Int(caller)];'
+replace = '            let mut call = vec![state.clone(), nazm_core::Value::Int(0)];'
+killers = [{ package = "nazm-cli", test = "contract", name = "transactions_run_deterministically_and_a_revert_changes_nothing" }]
+
+[[mutation]]
+name = "n69-a-passthrough-is-a-write"
+why = "`field: s.field` is reported as a write, so every entrypoint seems to write the whole state"
+file = "crates/nazm-service/src/contract.rs"
+find = '                        if passthrough {'
+replace = '                        if false {'
+killers = [{ package = "nazm-cli", test = "contract", name = "a_contracts_facts_name_each_entrypoints_reads_and_writes" }]
+
+[[mutation]]
+name = "n69-a-helper-hides-a-read"
+why = "the state handed to a helper is not counted as read, so the read set omits what the helper may read"
+file = "crates/nazm-service/src/contract.rs"
+find = '''
+                if !result {
+                    self.reads = None;
+                }'''
+replace = '''
+                let _ = result;'''
+killers = [{ package = "nazm-cli", test = "contract", name = "a_contracts_facts_name_each_entrypoints_reads_and_writes" }]
+
+[[mutation]]
+name = "n69-an-unfollowed-state-writes-nothing"
+why = "a state returned from a local the analysis did not follow is reported as writing nothing"
+file = "crates/nazm-service/src/contract.rs"
+find = '            ExprKind::Local(_) if result => self.writes = None,'
+replace = '            ExprKind::Local(_) if result => {}'
+killers = [{ package = "nazm-cli", test = "contract", name = "a_state_the_analysis_does_not_follow_may_write_every_field" }]
+
+[[mutation]]
+name = "n69-the-meter-counts-no-call"
+why = "the interpreter counts no call, so the meter reports a transaction that calls a helper as calling nothing"
+file = "crates/nazm-core/src/eval.rs"
+find = '                self.calls += 1;'
+replace = '                self.calls += 0;'
+killers = [{ package = "nazm-cli", test = "contract", name = "transactions_run_deterministically_and_a_revert_changes_nothing" }]

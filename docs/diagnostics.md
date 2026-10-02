@@ -121,6 +121,11 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N69, contracts.** Two codes appeared, compatible: `N0395` (a module `nazm contract`
+was given that is not a contract, naming what it lacks) and `N0396` (a transaction changed the
+conserved quantity and was rejected). The `web3` profile refuses with the existing `N0510`.
+`nazm.contract/1` and `nazm.contract-run/1` are new; `nazm.profile-report/1` gains a profile name.
+
 **Applied to N68, layout specialisation.** No code appeared: a field-by-field `Vec`'s failures are
 the existing `N0405` and `N0406`, unchanged. `nazm.cost/1` gains `layouts` — each `Vec` type and
 whether `--layout soa` lays it out field by field, or why not — a new field, compatible.

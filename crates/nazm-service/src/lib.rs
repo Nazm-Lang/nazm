@@ -45,6 +45,7 @@
 pub mod bounds;
 pub mod completion;
 pub mod context;
+pub mod contract;
 pub mod delta;
 pub mod diagnostics;
 pub mod durable;
