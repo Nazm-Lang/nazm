@@ -6050,6 +6050,41 @@ documents and are never added together.
 instances by name in the debugger, foreign frames' variables, DWARF from Cranelift, and the Mac's
 live session.
 
+## 7.61 Backend performance and what the native build still needs — N59, 2026-10-02
+
+Written before the code. N40 measured the cost of lowering through MIR: at `-O0` the LLVM emitter
+gives every MIR local a stack slot, and clang at `-O0` promotes none of them, so the compiler
+written in Nazm emitted 13,836 `alloca`s where N39's tree walk emitted 3,275, and clang's compile
+grew 17 %. N59 removes the part of that cost that needs no new analysis, and states what the native
+build still depends on.
+
+**Scalar temporaries become SSA values.** MIR keeps its slot-per-local model — it is the authority
+for ownership and control flow, and nothing here changes it. The LLVM emitter, deciding how to
+represent a local, gives no slot to a local that MIR lowering made (`Temp`), of type `Int` or
+`Bool`, assigned exactly once, and read only later in the block that assigns it: such a value is
+already in a register, the store and load around it are pure overhead, and SSA's dominance rule is
+satisfied by construction — a use in the same block after the definition. Everything else keeps its
+slot: parameters, source bindings (a debugger reads them, §7.60), managed values (a failure edge's
+cleanup reads and zeroes them), records and enums, and any local read in another block, including a
+cleanup block. The rule is decided per function from MIR alone, so the emitted text is a
+deterministic function of MIR, and its digest of what was emitted (the object key) is unchanged in
+kind.
+
+**Measured, not assumed.** The gain is counted — slots and instructions in the compiler's own
+text — and timed as an interleaved A/B on one host, with the variance stated; it is claimed for the
+workloads measured and nothing else. Cranelift needed no counterpart: it already keeps every scalar
+local in an SSA variable (§7.43) and optimises at `-O1` and above; its remaining gap on sequence
+loops is its register allocator and lack of loop-invariant motion over memory, which N59 measures
+and does not claim to close.
+
+**What the native build still needs.** The runtime is LLVM text (§7.55), so both backends still run
+clang to compile it, and both run the system C compiler driver to link. N59 does not remove either:
+a runtime precompiled per target, or a linker driven directly, is the next step, and the build
+reports both dependencies by name (`nazm inspect`'s toolchain) rather than hiding them.
+
+**Not here.** Promoting locals across blocks (phi construction), promoting managed values, an
+optimisation pipeline of Nazm's own, a precompiled runtime, a built-in linker.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
