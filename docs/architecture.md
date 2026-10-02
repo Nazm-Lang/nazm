@@ -6120,6 +6120,35 @@ not a partial claim. *Bounded loops, queues and tasks* need a declared, checked 
 subject, N63). *Byte bounds* on allocation stay N52's `at-most-once`/`unknown` counts. Nothing here is
 a certification.
 
+## 7.63 A formal core and bounded model checking — N61, 2026-10-02
+
+Written before the code. Nazm's meaning is its specification and its two implementations' agreement;
+nothing about it was machine-checked against a definition independent of both. N61 states a small
+core formally — `docs/formal-core.md`: syntax, typing rules, big-step evaluation rules with traps —
+and checks five properties of it, mechanically, over every program of the core up to a size.
+
+**Why bounded model checking and not a proof assistant.** No proof assistant is part of the
+toolchain, and adding one is a dependency decision the project has not made. A checker that
+enumerates every program of the core up to `BOUND` nodes and checks each property on each is
+mechanical, deterministic, runs in the ordinary test suite, and says exactly what it covers: every
+program up to the bound, and nothing beyond it. That is weaker than a proof and stronger than a
+sample, and it is stated as such.
+
+**Correspondence.** The semantics is transcribed into `crates/nazm-formal`, one arm per rule, with no
+dependency on the compiler: the compiler cannot be its own oracle. Each core program is printed as a
+Nazm program, and the properties hold the real checker and the real interpreter to the formal
+definition: the checker accepts exactly what the typing rules type, and the interpreter's outcome
+— value or trap code — is the evaluation rules'. A change to either side that the other does not
+share is found by the enumeration.
+
+**What the critical profile may cite.** A property of the core is evidence about the core's
+constructs — integer and boolean arithmetic with traps, comparison, short-circuit `&&`, `if`,
+`let` — and only those. The profile report names no proof; the matrix records the core's scope.
+
+**Not here.** Functions, recursion, loops, mutation, strings, sequences, records, enums, effects,
+tasks, closures, memory, and the native backends' code generation; a proof of any property beyond
+the bound.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
