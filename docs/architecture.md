@@ -6531,6 +6531,51 @@ ownership facts (§7.41) — RESEARCH until a backend needs it.
 (N70–N72); metering in gas is the EVM's (N70); signer and account constraints beyond `caller` are
 N72's.
 
+## 7.72 The EVM backend: the contract model as bytecode — N70, 2026-10-02
+
+Written before the code. The contract model (§7.71) compiled to EVM bytecode, run in a local EVM,
+and held to the simulator. Nothing of the EVM reaches the language: words, selectors, storage slots
+and gas are the backend's.
+
+**Route: direct, from Core IR.** No Yul and no `solc`: neither is in this toolchain, and a contract's
+body is the small, already-checked Core IR of §7.71 — `Int`/`Bool` arithmetic, `if`, `let`,
+`while`, calls to pure helpers (which `web3` makes acyclic, so the backend inlines them), and the
+entrypoint's `Result[State, Int]`. The backend emits opcodes with labels and resolves them. What it
+does not support — the state used other than through `s.field` and as the returned `Ok(value: s)`
+or `Ok(value: State(…))`, a record or enum other than those, any built-in — is refused before
+emission, by name.
+
+**Integers.** An `Int` is a 256-bit word holding a sign-extended `i64`. Every arithmetic result is
+held to `i64` exactly as the language holds it: addition, subtraction, multiplication and negation
+are exact in 256 bits for `i64` operands, then checked with `SIGNEXTEND(7, r) == r`; division and
+remainder are `SDIV`/`SMOD` — truncating, the remainder taking the dividend's sign, as `docs/spec.md`
+says — after the zero and `i64::MIN / -1` checks. A failure reverts with the five bytes of its
+diagnostic code (`N0400`); an `Err(code)` reverts with the 32-byte word `code`; the two are told apart
+by length. Every revert discards the transaction's writes: the EVM's own rule, and the simulator's.
+
+**The ABI.** Each entrypoint is a function `name(int64,…)` — its arguments after `caller`, which is the
+EVM's `CALLER`, not an argument anyone can choose. The selector is the first four bytes of
+`keccak256` of that signature, computed by the compiler (its own keccak, tested on known vectors). An
+argument whose 32-byte word is not a sign-extended `i64` reverts before the body runs.
+
+**Storage.** Field `f` of `State` lives at slot `keccak256("nazm.state." + f)`: by name, so reordering
+fields moves nothing (§7.9's rule, kept), and adding one never moves another. `storage.json`
+(`nazm.evm-storage/1`) records each field's name, type and slot; `nazm contract --upgrade-check OLD NEW`
+refuses a change that would misread live storage — a field removed, or its type changed — and allows
+one that adds a field. `init()`'s state is written by the deployment's constructor.
+
+**Gas.** For an entrypoint without a loop, the backend states a static upper bound on its execution
+gas — the costliest path's opcodes, a cold `SLOAD` per field read, the worst `SSTORE` per field written,
+and its memory — beside the intrinsic cost; a loop makes it `null`. The EVM's measured gas is reported
+beside it, and a test holds measured ≤ bound.
+
+**Held to the simulator.** A test harness (`docker/evm.Dockerfile`, py-evm) deploys the bytecode, runs the
+same transactions from the same senders, and the test compares each outcome, revert code and the final
+storage with `nazm contract --txs`.
+
+**Not here.** Events, value transfer and external calls do not exist in the model (§7.71); an
+optimiser; Yul output for audit.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
