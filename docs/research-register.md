@@ -451,6 +451,28 @@ literature shows the win is already available without the constraint.
 at the lowest level — is already honoured and is the hardest thing here to reverse, so
 keeping it costs nothing today and buys the experiment later.
 
+### N68 ran a first experiment, 2026-10-02. Status: **SUPPORTED for one layout, not for automatic selection.**
+
+*Prior art, recorded before choosing* (from the literature as known to this project; the
+citations were not re-fetched in this session, and no novelty is claimed): structure splitting
+and field reordering for cache behaviour — Chilimbi, Davidson and Larus, *Cache-Conscious
+Structure Definition*, PLDI 1999; Hundt, Mannarswamy and Chakrabarti, *Practical Structure Layout
+Optimization and Advice*, CGO 2006; GCC's `-fipa-struct-reorg` (structure peeling, removed in
+GCC 4.8 for lack of a safe eligibility analysis); Lattner and Adve's data-structure analysis for
+pool allocation. Language-level and library SoA: ISPC's `soa<N>` types, Zig's
+`std.MultiArrayList`, Jai's announced SoA, Halide's separation of an algorithm from its storage
+schedule. None of them needs a constraint Nazm does not already have: the *eligibility* is what
+the literature finds hard in C (addresses, casts, separate compilation), and in Nazm it is nearly
+trivial — a `Vec` element has no address, crosses no FFI, is never serialised, and layout was
+already by field name (§7.9). That is the finding, and it is about the language, not the idea.
+
+*What was built and measured* (§7.70): `--layout soa` lays out every `Vec[R]` whose fields are
+`Int`s and `Bool`s one array per field. Same results and failures everywhere tested; a one-field
+scan over 1,000,000 eight-field records is 2.8× faster and equal to hand-written per-field
+`Ints`; a scan reading all eight fields is 2× **slower**. So the layout is a win only by access
+pattern, which is the cost model the compiler does not yet have — the invalidating half of the
+hypothesis (*automatic* selection wins) is untested, and the option stays opt-in.
+
 ---
 
 ## R5 · An M:N scheduler with growable stacks beats one OS thread per task
@@ -517,6 +539,14 @@ rather than drift in through the phrase "AI-native"**, which law 6 defines as
 machine-consumable compiler interfaces and not as an argument for syntax or for hardware.
 
 **Status: RESEARCH, and presumed no.**
+
+### N67 tested the narrowest version, 2026-10-02. Status: **SUPPORTED for one map, still RESEARCH in general.**
+
+A kernel as an eligibility over existing functions, not a second language: `nazm accel` runs a
+pure `(Int) -> Int` function as an OpenCL kernel on the M1 Pro's GPU with the language's checked
+arithmetic and the sequential map's failure carried exactly, about 6× one CPU core on a Collatz
+map (§7.69). It fits the small semantic kernel; whether it is worth more than a library call is
+what a workload of the project's own would decide, and none exists yet.
 
 ---
 
