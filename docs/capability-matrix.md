@@ -3412,6 +3412,20 @@ the image and `qemu-system-aarch64 -M virt -cpu cortex-a53 -semihosting` boots i
 UART, status 2. **Limitation**: one board; no atomics, interrupts, heap or `@std` (§7.64,
 DESIGNED); semihosting stops the machine only under a debugger or QEMU; Cranelift builds no board.
 
+*N64, 2026-10-02: WebAssembly — VERIFIED for the freestanding subset, one engine.*
+`architecture.md` §7.66 first. `wasm32-unknown-unknown` from the LLVM backend with the board's
+freestanding law; a runtime that reaches its host only through `nazm_host.write` and
+`nazm_host.report`, a `__multi3` of its own for checked multiplication; `host.mjs`, a reference host
+granting exactly those. Evidence, `crates/nazm-cli/tests/wasm.rs` (5, plus two ignored run in
+`nazm-wasm:n64` — `wasm-ld` 19, Node 20): the objects, link line and host; a bound rooted at
+`nazm_main`; the same bytes twice; DWARF in the objects under `--debug`; each refusal. **Run**: the
+linked module's import section read from its bytes — `write` and `report` with `print`, `report`
+alone without an `IoCap`; 64 corpus programs (`transfers`, `compiler/conformance`,
+`bench/programs`, `examples`): 14 run with the interpreter's exact standard output and status,
+50 refused by part, none disagree. **Limitation**: no heap, so most programs are refused; no WASI;
+exports beyond `nazm_main`; no other engine run; a debugger's source mapping not exercised, only
+the sections' presence.
+
 **Limitation** · No Windows, 32-bit, big-endian or CPU-feature targets; no bundled linker or
 sysroot, so a Linux target from macOS is objects only; cross-host byte reproducibility not
 measured.

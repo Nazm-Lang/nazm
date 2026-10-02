@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N64 — WebAssembly — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.66 first. `wasm32-unknown-unknown` through the LLVM backend, carrying checked
+arithmetic and failure unchanged, with every capability of the outside a `nazm_host` import present
+only where used — a module with no `IoCap` has no `write`. A reference host grants exactly those.
+Fourteen corpus programs run as WebAssembly with the interpreter's output; fifty are refused by
+part, for want of a heap, which is designed and not built. Next: N65, a JIT and REPL tier.
+
 ### N63 — Real-time bounds — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.65 first. A `realtime` profile — `embedded` plus no blocking, no clock and

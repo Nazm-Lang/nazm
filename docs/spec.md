@@ -3185,6 +3185,18 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **Where there is no device** | `nazm run` and every hosted build refuse a program that calls either (`N0392`) |
 | **The board's contract** | `_start` sets the stack and enables floating point, calls `main`, writes its result in decimal and a newline to the PL011 UART at `0x09000000`, and stops the machine with status 0 by ARM semihosting; a failure writes its diagnostic there and stops with status 2 |
 
+### WebAssembly: a module whose outside is its imports — N64
+<!-- id: webassembly -->
+
+| | |
+| --- | --- |
+| **`wasm32-unknown-unknown`** | A WebAssembly 1.0 module from the LLVM backend. `nazm build --target wasm32-unknown-unknown --objects DIR` writes the objects, `link.txt` (its `wasm-ld` line), `host.mjs` and `bounds.json`; Cranelift builds none |
+| **What builds** | As on the board: `Int` and `Bool`, records and enums of them, functions — recursion under a stack check against the module's own 64 KiB stack (`N0408`) — loops, static strings, `print` and `eprint` of them. Allocation, sequences, strings built at run time, channels, tasks, closures and every other outside built-in are refused, naming the part and its symbols |
+| **Imports** | From `nazm_host` only: `write(fd, ptr, len)` where the program writes (an `IoCap`), and `report(ptr, len)`, always. No `IoCap` used, no `write` import |
+| **Exports** | `memory` and `nazm_main() -> i64`: `main`'s result, or `0` after `report` |
+| **Device registers** | None: `mmio_read32` and `mmio_write32` are refused (`N0392`) |
+| **The reference host** | `node host.mjs module.wasm` grants exactly `write` and `report`, refuses a module asking for anything else, prints the result and exits 0, or 2 after a failure — the interpreter's output and status |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
