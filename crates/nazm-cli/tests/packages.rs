@@ -266,6 +266,34 @@ fn every_resolution_refusal_has_its_own_code() {
         "N0504",
     );
     assert!(e.contains("a → b → a"), "{e}");
+    // Reached through a package outside it, the cycle is still named alone: the path from the
+    // root is not part of it.
+    let e = refused(
+        |r| {
+            write(
+                r,
+                "app/nazm.toml",
+                &manifest("app", "1.0.0", true, &[("a", "../a", "1.0.0")]),
+            );
+            write(r, "app/src/main.nz", "fn main() -> Int { 0 }\n");
+            write(
+                r,
+                "a/nazm.toml",
+                &manifest("a", "1.0.0", false, &[("b", "../b", "1.0.0")]),
+            );
+            write(r, "a/src/lib.nz", "pub fn f() -> Int { 0 }\n");
+            write(
+                r,
+                "b/nazm.toml",
+                &manifest("b", "1.0.0", false, &[("a", "../a", "1.0.0")]),
+            );
+            write(r, "b/src/lib.nz", "pub fn g() -> Int { 0 }\n");
+        },
+        &["run", "app"],
+        "N0504",
+    );
+    assert!(e.contains("a dependency cycle: a → b → a"), "{e}");
+    assert!(!e.contains("app →"), "{e}");
     // A package with no entry, and a directory that is not a package.
     refused(
         |r| {
