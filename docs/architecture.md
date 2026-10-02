@@ -6406,6 +6406,52 @@ in the object key and in `link.txt` — and not built.
 stores after it, which the same block bound gives, but the idiom's recogniser is not written. Floating
 point does not exist. GPU offload is N67.
 
+## 7.69 Accelerators: kernels, transfers and one GPU — N67, 2026-10-02
+
+Written before the code. No ordinary Nazm function becomes GPU code by itself. A **kernel** is a
+function that meets a stated eligibility, run over a sequence by an explicit command, with every
+movement of data and every synchronisation named in its report.
+
+**Eligibility, statically.** A kernel is pure, maps one `Int` to an `Int`, and reaches only
+functions that are themselves pure functions of `Int`s and `Bool`s, without recursion (a work item
+has no stack to recurse on), built-ins (none has a device form), records, enums, closures, tasks or
+C. Anything else is refused before a device is touched, by name and with the span that makes it
+ineligible (`N0394`).
+
+**Meaning, carried.** Arithmetic is checked on the device exactly as on the host: addition and
+subtraction by the sign rule on wrapping two's-complement results, multiplication by comparing the
+high word with the low word's sign, division and remainder by zero and `i64::MIN / -1`, and
+`i64::MIN % -1` is 0 (the spec's, where C's is undefined). A map is a function of each element alone,
+so its sequential meaning — results in order, or the first element's failure — is recovered from a
+parallel run by recording each failure as `index · 256 + site` with `atomic_min`: the lowest index
+wins, and its site names the operation. Sites and indices are bounded by that one 32-bit word,
+which caps a launch at 8,000,000 elements.
+
+**Memory and transfers.** The input is copied host to device once, the results device to host
+once, and a failure word each way; the device never sees host memory, and nothing persists between
+runs. One synchronisation — every work item finished — precedes every read. The report states the
+bytes and the time of each transfer, the kernel's build, and the run.
+
+**The first backend: OpenCL on Apple's GPU.** The tooling that exists here is macOS's OpenCL 1.2
+on the M1 Pro's GPU; the kernel is OpenCL C, generated from Core IR. OpenCL is deprecated on macOS
+and absent elsewhere, so this backend is a first, scoped one: SPIR-V (Vulkan) and Metal are its
+portable and native successors, designed, not built. The host side is a C program compiled against
+the system framework and run as a process: the compiler links no GPU API and keeps its `unsafe_code
+= "forbid"` law.
+
+**Identity.** A kernel's identity is its OpenCL C source, the device's name and driver version, and
+the host program — hashed together (`nazm.kernel/1`); the driver compiles the source on every run,
+and the identity is what a cache of its binaries would be keyed on.
+
+**The reference, and no silent fallback.** The command holds the device's results to the
+interpreter's, element by element, or the same failure at the same index, and says which. A host
+without the device refuses; nothing runs elsewhere instead.
+
+**Not here, and why.** *Layout specialisation* (coalescing, structure-of-arrays) needs a value
+richer than `Int`; *kernels in the language* (a `kernel` modifier, launched from Nazm) need a device
+handle as a capability, designed on `MmioCap`'s pattern and not built; *occupancy* is not reported by
+the API version here.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
