@@ -52,7 +52,9 @@ found only by reading all of it.
   (area 33). *Narrowed in N57:* until then, the host only.
 - Cranelift keeps every non-scalar local in a stack slot; its loops are slower than LLVM's
   (area 12, `performance.md`).
-- A Cranelift build still needs clang for the runtime and the link (area 12).
+- Both backends still need clang for the runtime's LLVM text and the C compiler driver for the
+  link; `nazm inspect` names both (areas 11, 12). The LLVM emitter promotes only scalar temporaries
+  within one block; other locals keep a slot at `-O0` (N59).
 - Debug information through the LLVM backend only (Cranelift refuses `--debug`): functions, lines,
   and `Int`, `Bool` and `Str` variables, with no lexical scopes; a live session verified with gdb in
   the Linux container, not under lldb on macOS, whose developer mode a non-interactive run cannot

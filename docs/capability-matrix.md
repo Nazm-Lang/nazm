@@ -1144,6 +1144,15 @@ depth of 50,000 natively, `N0408` under both backends at `-O0` and `-O2` and ins
 that puts an unchanged module into a cycle recompiles it). The guarantee is conditional on the
 non-recursive frames between two checks fitting the quarter of the stack kept as headroom.
 
+**N59 (2026-10-02)** · `architecture.md` §7.61 first. A scalar temporary MIR assigns once and reads
+only later in its block has no slot: the compiler written in Nazm's text at `-O0` went from 13,867
+`alloca`s to 6,328 and from 177.5k instructions to 157.3k; `nazm build -O0` of it, interleaved A/B,
+five runs each, debug compiler: medians 2,087 → 1,983 ms; a loop program built at `-O0` ran
+133–144 → 103–105 ms with the same output (`docs/performance.md`, N59). Bindings, parameters,
+managed values and anything read across blocks keep their slots
+(`a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one`). Both backends still need clang
+for the runtime's text and the C driver for the link; `nazm inspect` names both.
+
 **Limitation** · The arithmetic contract is the load-bearing part and is deliberately
 conservative: `nsw` is not used, because it would promise overflow cannot happen and
 license an optimiser to delete the trap. No debug info is emitted and `clang` is invoked

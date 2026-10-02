@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N59 — Backend performance — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.61 first. Scalar temporaries assigned once and read in their block have no
+slot in the LLVM emitter: 54 % fewer `alloca`s in the compiler's own text, a 5 % faster `-O0`
+build, a quarter faster `-O0` program, the same output. MIR's ownership model untouched; Cranelift
+already SSA. The native build still needs clang for the runtime and the C driver for the link,
+named by `nazm inspect`. Next: N60, advanced restriction profiles.
+
 ### N58 — Debugger and profiler v2 — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.60 first. `Int`, `Bool` and `Str` parameters and bindings described in DWARF;
