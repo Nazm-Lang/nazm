@@ -33,6 +33,7 @@ members = [
     "crates/nazm-core",
     "crates/nazm-lir",
     "crates/nazm-runtime",
+    "crates/nazm-formal",
     "crates/nazm-mir",
     "crates/nazm-codegen-clif",
     "crates/nazm-package",
