@@ -351,6 +351,14 @@ pub mod codes {
     pub const PROFILE_VIOLATION: Code = Code::new("N0510");
     /// A profile named on the command line or in a manifest that does not exist.
     pub const UNKNOWN_PROFILE: Code = Code::new("N0511");
+    // A local registry (N56, `docs/architecture.md` §7.58)
+    /// A registry index that is not `nazm.registry-index/1`, names another package, records a
+    /// version twice or a digest of the wrong shape; or a publish of a version already there.
+    pub const REGISTRY_INVALID: Code = Code::new("N0512");
+    /// No version in the registry satisfies every requirement on a package.
+    pub const VERSION_UNSATISFIABLE: Code = Code::new("N0513");
+    /// A registry package holding a symbolic link or anything but files and directories.
+    pub const PACKAGE_UNSAFE: Code = Code::new("N0514");
 
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no

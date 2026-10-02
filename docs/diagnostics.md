@@ -101,6 +101,17 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N56, packages v2.** Three codes appeared, compatible: `N0512` (a registry index that
+is not `nazm.registry-index/1`, names another package, records a version twice or a malformed
+digest; or a publish of a version already there), `N0513` (no published version satisfies every
+requirement on a package, each named with who made it) and `N0514` (a registry package holding a
+link or anything but files and directories). A copy changed after publishing is the existing
+`N0507`; a registry package conflicting with a path package of its name is `N0503`; a cycle through
+the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.registry-index/1` is new;
+`nazm.package/1` gains an optional `[registry]` table and path-less dependencies, which an older
+reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
+`registry+NAME@VERSION`.
+
 **Applied to N55, FFI v2.** One code appeared, compatible: `N0391` (an `extern "C"` export that is
 not `pub`, does not declare `! {}`, is generic, or takes or returns a type other than `Int` and
 `Bool`). A `Str` holding a NUL byte passed to C is the existing `N0405` at run time; an export's
