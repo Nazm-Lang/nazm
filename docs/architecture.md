@@ -6319,6 +6319,12 @@ source as a native one does.
 not yet exported — `nazm_main` alone is. *The browser*: no DOM, no event loop. *Cranelift*: its
 WebAssembly support is as a source, not a target.
 
+**As built (N64), where it differs from the above.** *`__multi3`*: LLVM's checked `i64` multiply on
+wasm32 calls compiler-rt's 128-bit multiply, and there is no compiler-rt; the runtime defines it from
+64-bit pieces. *The stack bound* of §7.65 is stated for a module too, rooted at `nazm_main`; a host
+import uses the host's stack, not the module's, and adds nothing. *The freestanding refusal names
+each part's symbols*, on the board as here.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

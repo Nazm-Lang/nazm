@@ -16,6 +16,7 @@ pub mod board;
 pub(crate) mod core;
 pub(crate) mod entry;
 pub(crate) mod os;
+pub mod wasm;
 
 use std::fmt::Write as _;
 

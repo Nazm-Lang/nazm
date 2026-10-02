@@ -10752,9 +10752,9 @@ name = "n57-linux-needs-no-threads"
 why = "link.txt omits -lpthread for a Linux target"
 file = "crates/nazm-cli/src/build.rs"
 find = """
-        nazm_lir::backend::Os::Linux => "-lpthread","""
+        nazm_lir::backend::Os::Linux => "-lpthread".to_owned(),"""
 replace = """
-        nazm_lir::backend::Os::Linux => "","""
+        nazm_lir::backend::Os::Linux => String::new(),"""
 killers = [{ package = "nazm-cli", test = "cross", name = "every_target_is_built_by_both_backends_in_its_own_format" }]
 
 [[mutation]]
@@ -10982,7 +10982,7 @@ killers = [{ package = "nazm-formal", test = "exhaustive", name = "p5_the_checke
 name = "n62-a-hosted-build-performs-a-register"
 why = "a build for a hosted target lowers `mmio_write32` instead of refusing it with N0392, so a program writes to an address the operating system owns"
 file = "crates/nazm-cli/src/build.rs"
-find = '            if !freestanding {'
+find = '            if !target.is_board() {'
 replace = '            if false {'
 killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_register_is_refused_where_there_is_none" }]
 
@@ -11022,8 +11022,8 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runt
 name = "n62-the-board-gets-the-hosted-runtime"
 why = "a build for the board links the hosted runtime and entry, which call the C library and use thread-local storage"
 file = "crates/nazm-cli/src/build.rs"
-find = '                freestanding.then_some(&mut unhosted),'
-replace = "                None::<&mut Vec<&'static str>>,"
+find = '                freestanding.then_some(Freestanding {'
+replace = '                (freestanding && false).then_some(Freestanding {'
 killers = [{ package = "nazm-cli", test = "freestanding", name = "a_unit_for_the_board_refers_to_no_thread_local_storage" }]
 
 [[mutation]]
@@ -11070,8 +11070,8 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "cranelift_buil
 name = "n62-no-linker-script"
 why = "objects for the board are written without `link.ld`, so nothing says where the image is loaded or where its stack is"
 file = "crates/nazm-cli/src/build.rs"
-find = '    if target.os == nazm_lir::backend::Os::None {'
-replace = '    if target.os != nazm_lir::backend::Os::None {'
+find = '    if target.is_board() {'
+replace = '    if !target.is_board() {'
 killers = [
     { package = "nazm-cli", test = "freestanding", name = "a_board_program_is_built_to_objects_a_link_list_and_a_linker_script" },
     { package = "nazm-cli", test = "freestanding", name = "a_hosted_target_writes_no_linker_script" },
@@ -11199,3 +11199,78 @@ file = "crates/nazm-runtime/src/board.rs"
 find = '            "module asm \"  ldr x2, =0x5a5a5a5a5a5a5a5a\"",'
 replace = '            "module asm \"  ldr x2, =0\"",'
 killers = [{ package = "nazm-cli", test = "realtime", name = "the_watermark_is_the_board_s" }]
+
+
+# --- N64: WebAssembly — one more freestanding target, authority as imports ------------------------
+
+[[mutation]]
+name = "n64-a-module-is-a-board"
+why = "WebAssembly is taken for the board, so a module may touch device registers it does not have"
+file = "crates/nazm-lir/src/backend.rs"
+find = '        self.os == Os::None && self.arch == Arch::Aarch64'
+replace = '        self.os == Os::None'
+killers = [{ package = "nazm-cli", test = "wasm", name = "what_a_module_cannot_have_is_refused_by_name" }]
+
+[[mutation]]
+name = "n64-a-module-gets-the-board-runtime"
+why = "a module links the board's runtime, which writes to a UART address and stops by semihosting instead of asking its host"
+file = "crates/nazm-cli/src/build.rs"
+find = '        let runtime = if wasm {'
+replace = '        let runtime = if false {'
+killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
+
+[[mutation]]
+name = "n64-write-is-another-import"
+why = "the runtime's output import is not the one the reference host grants, so the module asks for authority under another name"
+file = "crates/nazm-runtime/src/wasm.rs"
+find = '''attributes #0 = {{ "wasm-import-module"="{HOST_MODULE}" "wasm-import-name"="write" }}'''
+replace = '''attributes #0 = {{ "wasm-import-module"="{HOST_MODULE}" "wasm-import-name"="fd_write" }}'''
+killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
+
+[[mutation]]
+name = "n64-the-host-grants-more"
+why = "the reference host knows imports no module is meant to ask for, so a module asking for them is instantiated"
+file = "crates/nazm-runtime/src/wasm.rs"
+find = "const known = new Set(['write', 'report']);"
+replace = "const known = new Set(['write', 'report', 'args', 'clock']);"
+killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
+
+[[mutation]]
+name = "n64-a-host-import-is-missing"
+why = "the host's imports are counted as symbols the module lacks, so every module is refused"
+file = "crates/nazm-cli/src/build.rs"
+find = '                && !s.starts_with("nz.host_")'
+replace = '                && !s.starts_with("nz.host_never")'
+killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
+
+[[mutation]]
+name = "n64-a-host-import-has-no-bound"
+why = "a host import is taken for an undefined function, so no module that can fail has a stack bound"
+file = "crates/nazm-cli/src/stack.rs"
+find = '    if f.starts_with("nz.host_") {'
+replace = '    if f.starts_with("nz.host_never") {'
+killers = [{ package = "nazm-cli", test = "wasm", name = "a_module_s_bound_is_rooted_at_its_export" }]
+
+[[mutation]]
+name = "n64-a-module-has-no-host"
+why = "objects for WebAssembly are written without the reference host, so nothing says which imports may be granted"
+file = "crates/nazm-cli/src/build.rs"
+find = '    if target.is_wasm() {'
+replace = '    if !target.is_wasm() {'
+killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
+
+[[mutation]]
+name = "n64-a-module-is-linked-as-the-board"
+why = "link.txt tells a module's toolchain to link it with the board's linker script"
+file = "crates/nazm-cli/src/build.rs"
+find = '        nazm_lir::backend::Os::None if target.is_wasm() => {'
+replace = '        nazm_lir::backend::Os::None if false => {'
+killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
+
+[[mutation]]
+name = "n64-the-bound-is-rooted-at-the-board"
+why = "a module's stack bound is searched from the board's entry, which a module does not have"
+file = "crates/nazm-cli/src/build.rs"
+find = '                ("nazm_main", nazm_lir::runtime::wasm::STACK)'
+replace = '                ("nz_board_main", nazm_lir::runtime::wasm::STACK)'
+killers = [{ package = "nazm-cli", test = "wasm", name = "a_module_s_bound_is_rooted_at_its_export" }]
