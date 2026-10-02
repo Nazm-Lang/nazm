@@ -188,7 +188,9 @@ fn what_a_board_cannot_have_is_refused_by_name() {
         e.contains("`aarch64-unknown-none` has no operating system"),
         "{e}"
     );
-    assert!(e.contains("strings, sequences"), "{e}");
+    // Each part, with the symbols that reach it.
+    assert!(e.contains("strings (`nz.str_alloc`"), "{e}");
+    assert!(e.contains("), sequences (`nz.arr_grow`"), "{e}");
     assert!(
         !d.path().join("out").exists(),
         "objects were written for a refused build"
@@ -202,7 +204,7 @@ fn what_a_board_cannot_have_is_refused_by_name() {
     assert_eq!(o.status.code(), Some(4), "{}", err(&o));
     // `print` of a static string is a C library call: nothing allocates, but `write` is libc's.
     assert!(
-        err(&o).contains("only a hosted runtime has: C library"),
+        err(&o).contains("only a hosted runtime has: C library (`write`)"),
         "{}",
         err(&o)
     );

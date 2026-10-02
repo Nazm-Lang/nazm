@@ -121,6 +121,12 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N64, WebAssembly.** No code appeared: device registers in a module are the existing
+`N0392`, a stack exhausted is `N0408`, an overflow `N0400`, each reported through the host's
+`report`. What a module cannot have is the freestanding refusal (§7.64), which now names each part's
+symbols. `nazm inspect` lists one more target; `nazm.bounds/1` is written for a module too, rooted at
+`nazm_main`. No schema moved.
+
 **Applied to N63, real-time bounds.** No code appeared: `no-blocking` and `bounded-loops` refuse with
 the existing `N0510`, an unbounded loop as `unknown` with its reason, the meaning unchanged.
 `nazm.profile-report/1` gains a profile name (`realtime`), two rule identities and an optional

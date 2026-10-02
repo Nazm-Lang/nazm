@@ -160,7 +160,7 @@ pub(crate) fn run(
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
     // The watermark is the board's (N63): a hosted program has an operating system's stack.
-    if choice.stack_watermark && target.os != nazm_lir::backend::Os::None {
+    if choice.stack_watermark && !target.is_board() {
         if summary {
             return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
         }
@@ -270,7 +270,7 @@ pub(crate) fn run(
     // A freestanding target (N62) has no operating system under it: the runtime parts a
     // program reaches beyond the board's, named, refuse the build after code generation.
     let freestanding = target.os == nazm_lir::backend::Os::None;
-    let mut unhosted: Vec<&'static str> = Vec::new();
+    let mut unhosted: Vec<String> = Vec::new();
     clock.mark("load");
     let artefacts = match nazm_core::on_lowered(
         map,
@@ -282,8 +282,9 @@ pub(crate) fn run(
         },
         |core, resolution| {
             clock.mark("front_end");
-            // A device register exists only on a board (N62).
-            if !freestanding {
+            // A device register exists only on a board (N62): not on a hosted target, and not
+            // in a WebAssembly module, whose only outside is its imports (N64).
+            if !target.is_board() {
                 if let Some((at, name)) = nazm_core::machine_only_call(resolution) {
                     return Err(vec![nazm_core::machine_only(
                         at,
@@ -323,8 +324,11 @@ pub(crate) fn run(
                 chosen,
                 &cached,
                 choice.library,
-                freestanding.then_some(&mut unhosted),
-                choice.stack_watermark,
+                freestanding.then_some(Freestanding {
+                    unhosted: &mut unhosted,
+                    watermark: choice.stack_watermark,
+                    wasm: target.is_wasm(),
+                }),
             );
             clock.mark("codegen");
             made
@@ -343,8 +347,8 @@ pub(crate) fn run(
             eprintln!(
                 "nazm: `{}` has no operating system, and this program reaches what only a hosted \
                  runtime has: {}; \
-                 a freestanding program computes with `Int` and `Bool`, functions, loops and \
-                 device registers",
+                 a freestanding program computes with `Int` and `Bool`, functions, loops, static \
+                 strings and, on the board, device registers",
                 target.triple,
                 unhosted.join(", ")
             );
@@ -595,10 +599,16 @@ pub(crate) fn run(
                 })
                 .collect();
             let calls = crate::stack::calls(&texts);
-            let bound = crate::stack::bound("nz_board_main", &frames, &calls);
+            // The image's root: the board's entry, or the module's one export (N64).
+            let (root, reserved) = if target.is_wasm() {
+                ("nazm_main", nazm_lir::runtime::wasm::STACK)
+            } else {
+                ("nz_board_main", nazm_lir::runtime::board::STACK)
+            };
+            let bound = crate::stack::bound(root, &frames, &calls);
             written = std::fs::write(
                 dir.join("bounds.json"),
-                crate::stack::report(&target.triple, &bound, &frames),
+                crate::stack::report(&target.triple, &bound, &frames, reserved),
             );
         }
         cleanup(false);
@@ -842,6 +852,14 @@ pub(crate) struct Choice<'a> {
     pub(crate) debug: bool,
 }
 
+/// A freestanding build's choices (N62, N64): where the parts it cannot have are named, whether
+/// the board measures its stack, and whether the image is WebAssembly rather than the board.
+struct Freestanding<'a> {
+    unhosted: &'a mut Vec<String>,
+    watermark: bool,
+    wasm: bool,
+}
+
 /// One generated native unit, ready to be written down.
 struct Artefact {
     /// The file name to use, without an extension.
@@ -872,8 +890,7 @@ fn emit_artefacts(
     backend: &dyn nazm_lir::backend::Backend,
     cached: &dyn Fn(&str) -> Option<Vec<u8>>,
     library: bool,
-    unhosted: Option<&mut Vec<&'static str>>,
-    watermark: bool,
+    freestanding: Option<Freestanding<'_>>,
 ) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
     let mut needs = backend.baseline();
@@ -912,8 +929,18 @@ fn emit_artefacts(
     }
     // A freestanding image (N62): the board's runtime and entry in place of the hosted ones,
     // or the parts it cannot have, named. A library has no board entry; nor does it need one.
-    if let Some(refused) = unhosted {
-        let runtime = nazm_lir::runtime::board::emit_runtime(needs.stack);
+    if let Some(Freestanding {
+        unhosted: refused,
+        watermark,
+        wasm,
+    }) = freestanding
+    {
+        // WebAssembly's runtime reaches its host through imports (N64, §7.66).
+        let runtime = if wasm {
+            nazm_lir::runtime::wasm::emit_runtime(needs.stack)
+        } else {
+            nazm_lir::runtime::board::emit_runtime(needs.stack)
+        };
         let foreign: Vec<&str> = native
             .sigs
             .iter()
@@ -934,11 +961,18 @@ fn emit_artefacts(
         if !library {
             out.push(Artefact {
                 name: "entry".to_owned(),
-                code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::board::emit_entry(
-                    &native.entry.to_string(),
-                    native.entry_roots,
-                    watermark,
-                )),
+                code: nazm_lir::backend::Code::Llvm(if wasm {
+                    nazm_lir::runtime::wasm::emit_entry(
+                        &native.entry.to_string(),
+                        native.entry_roots,
+                    )
+                } else {
+                    nazm_lir::runtime::board::emit_entry(
+                        &native.entry.to_string(),
+                        native.entry_roots,
+                        watermark,
+                    )
+                }),
                 instance: false,
                 key: None,
                 reused: false,
@@ -978,7 +1012,7 @@ fn emit_artefacts(
 /// unit and not the board's runtime defines, apart from LLVM's intrinsics and the program's own
 /// foreign functions, which `--link` supplies. Read from the generated text, so it is exactly
 /// what the link would leave unresolved — a static string printed is a C library call there.
-fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) -> Vec<&'static str> {
+fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) -> Vec<String> {
     use nazm_lir::runtime::Part;
     let texts: Vec<&str> = units
         .iter()
@@ -1018,6 +1052,8 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
             named.contains(*s)
                 && !defined.contains(*s)
                 && !s.starts_with("llvm.")
+                // The host's imports (N64): undefined in the module by design.
+                && !s.starts_with("nz.host_")
                 && !foreign.contains(&s.as_str())
         })
         .collect();
@@ -1040,7 +1076,15 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
     ]
     .into_iter()
     .filter(|(part, _)| missing.iter().any(|s| part_of(s) == *part))
-    .map(|(_, label)| label)
+    .map(|(part, label)| {
+        // Each part with the symbols that reach it, so the refusal says what to remove.
+        let symbols: Vec<String> = missing
+            .iter()
+            .filter(|s| part_of(s) == part)
+            .map(|s| format!("`{s}`"))
+            .collect();
+        format!("{label} ({})", symbols.join(", "))
+    })
     .collect()
 }
 
@@ -1128,10 +1172,14 @@ fn write_objects(
         listed.push(to);
     }
     let libs = match target.os {
-        nazm_lir::backend::Os::Linux => "-lpthread",
-        nazm_lir::backend::Os::Macos => "",
+        nazm_lir::backend::Os::Linux => "-lpthread".to_owned(),
+        nazm_lir::backend::Os::Macos => String::new(),
+        // A WebAssembly module links nothing but itself, by `wasm-ld` (N64).
+        nazm_lir::backend::Os::None if target.is_wasm() => {
+            format!("none; {}", nazm_lir::runtime::wasm::LINK)
+        }
         // A freestanding image links nothing but itself, by `link.ld` (N62).
-        nazm_lir::backend::Os::None => "none; ld.lld -T link.ld",
+        nazm_lir::backend::Os::None => "none; ld.lld -T link.ld".to_owned(),
     };
     let text = format!(
         "# Written by nazm build --objects. Link these, in this order, with the target's toolchain.\n\
@@ -1140,8 +1188,12 @@ fn write_objects(
         listed.join(" ")
     );
     std::fs::write(dir.join("link.txt"), text)?;
+    // A module's reference host (N64): exactly the imports it may grant.
+    if target.is_wasm() {
+        std::fs::write(dir.join("host.mjs"), nazm_lir::runtime::wasm::HOST)?;
+    }
     // The board's memory map, for `ld.lld -T link.ld` (N62).
-    if target.os == nazm_lir::backend::Os::None {
+    if target.is_board() {
         std::fs::write(
             dir.join("link.ld"),
             nazm_lir::runtime::board::linker_script(),

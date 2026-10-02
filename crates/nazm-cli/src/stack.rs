@@ -108,6 +108,11 @@ fn deepest(
     if let Some(r) = memo.get(f) {
         return Ok(r.clone());
     }
+    // A WebAssembly host import (N64) runs on the host's stack, not the module's shadow stack:
+    // it uses none of the bytes this bound is about.
+    if f.starts_with("nz.host_") {
+        return Ok((0, vec![f.to_owned()]));
+    }
     if on_path.iter().any(|g| g == f) {
         return Err(format!("`{f}` is in a call cycle"));
     }
@@ -141,8 +146,12 @@ fn deepest(
 
 /// `nazm.bounds/1`: one line of canonical JSON — the stack bound or why there is none, every
 /// frame, and what is not bounded, each number labelled with its kind.
-pub(crate) fn report(triple: &str, bound: &StackBound, frames: &BTreeMap<String, u64>) -> String {
-    let reserved = nazm_lir::runtime::board::STACK;
+pub(crate) fn report(
+    triple: &str,
+    bound: &StackBound,
+    frames: &BTreeMap<String, u64>,
+    reserved: u64,
+) -> String {
     let stack = match bound {
         StackBound::Bytes { bytes, path } => format!(
             "{{\"kind\":\"static bound\",\"bytes\":{bytes},\"path\":[{}],\"reserved\":{reserved},\"within\":{}}}",

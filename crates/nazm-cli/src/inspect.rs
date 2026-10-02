@@ -154,6 +154,8 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
         "x86_64-unknown-linux-gnu",
         // A board, with no operating system (N62, §7.64): always objects and `link.ld`.
         "aarch64-unknown-none",
+        // WebAssembly (N64, §7.66): objects, `wasm-ld`'s line and a reference host.
+        "wasm32-unknown-unknown",
     ]
     .iter()
     .filter_map(|t| nazm_lir::backend::Target::parse(t).ok())

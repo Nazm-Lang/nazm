@@ -46,6 +46,8 @@ impl BackendId {
 pub enum Arch {
     Aarch64,
     X86_64,
+    /// WebAssembly, 32-bit linear memory (N64, §7.66).
+    Wasm32,
 }
 
 /// An operating system this compiler links for.
@@ -79,12 +81,13 @@ impl Target {
             "x86_64-apple-darwin" => (Arch::X86_64, Os::Macos),
             "x86_64-unknown-linux-gnu" => (Arch::X86_64, Os::Linux),
             "aarch64-unknown-none" => (Arch::Aarch64, Os::None),
+            "wasm32-unknown-unknown" => (Arch::Wasm32, Os::None),
             other => {
                 return Err(format!(
                     "`{other}` is not a target this compiler generates code for; the \
                      targets are aarch64-apple-darwin, aarch64-unknown-linux-gnu, \
                      x86_64-apple-darwin, x86_64-unknown-linux-gnu and, freestanding, \
-                     aarch64-unknown-none"
+                     aarch64-unknown-none and wasm32-unknown-unknown"
                 ))
             }
         };
@@ -93,6 +96,19 @@ impl Target {
             arch,
             os,
         })
+    }
+
+    /// Whether this is the board (N62): the one target with device registers, a linker script
+    /// and a UART.
+    #[must_use]
+    pub fn is_board(&self) -> bool {
+        self.os == Os::None && self.arch == Arch::Aarch64
+    }
+
+    /// Whether this is WebAssembly (N64): freestanding, its outside reached only by imports.
+    #[must_use]
+    pub fn is_wasm(&self) -> bool {
+        self.arch == Arch::Wasm32
     }
 
     /// The machine this compiler is running on.
