@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N66 — Vectorisation — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.68 first. Checked arithmetic kept every loop scalar; `ints_sum` keeps the
+ordered checked sum's meaning while adding a block unchecked only where every partial sum is provably
+in range, and native builds replace the counted summation loop with it — 1.9× on an M1 Pro at `-O2`,
+the same values and failures everywhere. Every other loop's reason is in `nazm explain-cost`.
+Next: N67, GPU/HPC.
+
 ### N65 — The interactive tier — **complete as scoped, JIT BLOCKED, 2026-10-02**
 
 `architecture.md` §7.67 first. A REPL that checks its session as one program on every edit and

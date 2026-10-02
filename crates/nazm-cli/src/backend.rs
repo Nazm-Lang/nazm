@@ -419,6 +419,32 @@ fn split(line: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn no_compile_line_asks_for_the_host_s_own_cpu() {
+        // N66 (§7.68): vectorised code is each target's baseline — NEON, SSE2 — so no object
+        // depends on the machine that built it, and the object key's triple and level suffice.
+        for opt in [0, 2, 3] {
+            for cross in [
+                None,
+                Some("x86_64-apple-darwin"),
+                Some("aarch64-unknown-none"),
+            ] {
+                for a in compile_args(opt, cross)
+                    .iter()
+                    .chain(link_args(opt, cross).iter())
+                {
+                    assert!(
+                        !a.starts_with("-march")
+                            && !a.starts_with("-mcpu")
+                            && !a.starts_with("-mtune")
+                            && !a.contains("native"),
+                        "{a}"
+                    );
+                }
+            }
+        }
+    }
+
     const REPORT: &str = concat!(
         "Apple clang version 21.0.0 (clang-2100.3.34.2)\n",
         "Target: arm64-apple-darwin27.2.0\n",

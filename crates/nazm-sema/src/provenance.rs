@@ -153,7 +153,9 @@ impl Origin {
             | Intrinsic::ChanSelectUntil
             | Intrinsic::ChanRecv
             // A device register holds whatever the device put there (N62).
-            | Intrinsic::MmioRead32 => BuiltinFlow::Read,
+            | Intrinsic::MmioRead32
+            // Read out of a shared handle, as `ints_get` is (N66).
+            | Intrinsic::IntsSum => BuiltinFlow::Read,
             // A new, empty handle, or a call that never returns.
             Intrinsic::IntsNew
             | Intrinsic::StrsNew

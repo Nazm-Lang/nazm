@@ -1949,6 +1949,23 @@ M1 Pro (macOS, Apple clang 21.0.0) by both backends for each target:
 
 Cross-host reproducibility — the same target's objects from two hosts — was not measured.
 
+### Vectorised sums — N66, measured 2026-10-02
+
+`total(v)`, the counted summation loop, against the same loop with its operands swapped
+(`s = ints_get(v, i) + s` — the same work and checks, not the idiom), each summing `v` until 2·10⁹
+elements are added, `--opt-level 2`, Apple M1 Pro, Apple clang 21. Seconds, steady state (the median
+of the last four of five runs; the first run of each is ~0.35 s slower, warming):
+
+| elements | scalar | vectorised | |
+| --- | --- | --- | --- |
+| 1,000 | 0.77 | 0.40 | 1.9× |
+| 100,000 | 0.75 | 0.39 | 1.9× |
+| 10,000,000 | 0.79 | 0.45 | 1.75× (memory-bound) |
+| 100,000 of ±2^60 (every block on the checked path) | 0.75 | 1.00 | 0.75× — the fallback's scan |
+
+The executables differ by 24 bytes: `nz.ints_sum` is in every runtime that has sequences, used or not.
+x86_64 was not measured. At `-O0` the runtime is not vectorised and the speed-up is not claimed.
+
 ### Stack: the stated bound and a painted run — N63, measured 2026-10-02
 
 `crates/nazm-cli/tests/realtime.rs`'s ignored test: each program built for `aarch64-unknown-none`

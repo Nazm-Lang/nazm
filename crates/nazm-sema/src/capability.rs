@@ -159,6 +159,7 @@ impl CapabilityKind {
             | Intrinsic::IntsPop
             | Intrinsic::StrsPop
             | Intrinsic::StrJoin
+            | Intrinsic::IntsSum
             | Intrinsic::ChanNew
             | Intrinsic::ChanSend
             | Intrinsic::ChanRecv
