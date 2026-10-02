@@ -1,6 +1,7 @@
-# Known limitations of the v1 foundation
+# Known limitations
 
-One list, kept current, of what Nazm v1 does **not** do or does only partly. Each line names the
+One list, kept current, of what Nazm does **not** do or does only partly — the v1 foundation and
+everything N49–N74 added to it, as audited in N75. Each line names the
 capability-matrix area that owns it (`capability-matrix.md`), where the evidence and the status
 live; this file adds nothing a reader could not find there, and exists so nothing material is
 found only by reading all of it.
@@ -76,8 +77,8 @@ found only by reading all of it.
 
 ## Native code
 
-- Four targets, no others: `aarch64`/`x86_64` × macOS/Linux, no Windows, 32-bit or CPU-feature
-  selection; a target the host has no linker for is built to objects (`--objects`) for its own
+- Six targets, no others: four hosted — `aarch64`/`x86_64` × macOS/Linux — and two freestanding,
+  below; no Windows, 32-bit or CPU-feature selection; a target the host has no linker for is built to objects (`--objects`) for its own
   toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here
   (area 33). *Narrowed in N57:* until then, the host only.
 - One freestanding target, `aarch64-unknown-none`, verified only on QEMU's `virt` board: objects and
@@ -113,8 +114,8 @@ found only by reading all of it.
   the host's thread limit — a container's process ceiling counts every thread — and a `spawn` the
   host refuses is `N0404`, not a wait.
 - A channel carries one element type, and only one that may cross into a task — `Int`, `Bool`,
-  `Str`, channels, and records and enums of those (`N0390`); no `select`, no unbounded channel,
-  no channel of sequences or closures (area 14). *Narrowed in N53:* until then, `Int` only.
+  `Str`, channels, and records and enums of those (`N0390`); no unbounded channel, no channel of
+  sequences or closures (area 14). *Narrowed in N53:* until then, `Int` only.
   *Narrowed in N54:* `select` exists for `Chan[T]` (lowest ready index; receives only).
 - The runtime is its own crate (`nazm-runtime`, N53) but still LLVM text both backends link,
   tested through a C harness; no Rust implementation, no runtime shared across programs as a
@@ -147,8 +148,9 @@ found only by reading all of it.
   checker; no proof assistant, nothing beyond the bound, and nothing about functions, loops,
   strings, effects, tasks or the native backends' code (area 19).
 
-- Eleven rules since N60 (`no-recursion`, `no-select` and `no-ambient-time` added to N52's); the
+- Fourteen rules: N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
+  `no-blocking` and `bounded-loops` (the `realtime` profile), N72 `signed-writes` (`accounts`); the
   stack rule bounds depth, not bytes, and is `unknown` through a function value; no constant-time
-  rule, no bounded-loop, queue or task rule; `critical` stays a restriction set, not a
+  rule, and a loop is bounded only in its counted form; `critical` stays a restriction set, not a
   certification; a profile costs one extra check, `embedded` a MIR lowering (+13 % on the compiler's
   source) (areas 18–20).
