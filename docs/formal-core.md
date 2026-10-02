@@ -49,7 +49,7 @@ values. Evaluation is left to right; a trap propagates.
 | E-Lit | ρ ⊢ n ⇓ n, ρ ⊢ true ⇓ true, ρ ⊢ false ⇓ false |
 | E-Var | ρ ⊢ x ⇓ ρ(x) |
 | E-Arith | ρ ⊢ a ⇓ m, ρ ⊢ b ⇓ k ⟹ ρ ⊢ a ⊕ b ⇓ m ⊕ k when the mathematical result is in range, else trap(N0400) |
-| E-Div | `/` and `%` truncate toward zero; k = 0 is trap(N0401); `i64::MIN / -1` (and `% -1`) is trap(N0400) |
+| E-Div | `/` and `%` truncate toward zero; k = 0 is trap(N0401); `i64::MIN / -1` is trap(N0400); `i64::MIN % -1` is 0, which is representable (`docs/spec.md`) |
 | E-Lt, E-Eq | compare; `==` on Bool is equality of truth values |
 | E-Not | ρ ⊢ a ⇓ b ⟹ ρ ⊢ !a ⇓ ¬b |
 | E-And | ρ ⊢ a ⇓ false ⟹ ρ ⊢ a && b ⇓ false (b not evaluated); ρ ⊢ a ⇓ true, ρ ⊢ b ⇓ v ⟹ ρ ⊢ a && b ⇓ v |

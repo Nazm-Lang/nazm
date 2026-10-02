@@ -1,0 +1,19 @@
+[package]
+name = "nazm-formal"
+description = "The formal core of Nazm (docs/formal-core.md): its typing rules and big-step semantics, transcribed rule by rule, and a bounded enumeration of its programs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.nazm]
+docs = ["architecture:7.63"]
+
+[dependencies]
+
+[dev-dependencies]
+nazm-core = { workspace = true }
+
+[lints]
+workspace = true
