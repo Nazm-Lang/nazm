@@ -6022,6 +6022,16 @@ reads `0`. Both are the slot's real contents, not a claim about the variable's v
 scope ranges (`DILexicalBlock`) are not emitted, so every described variable is visible for its
 whole function.
 
+**Amended during implementation.** Two facts the live session taught. *Names*: with the native
+symbol as the subprogram's `linkageName`, gdb named every frame and resolved every breakpoint by
+the symbol (`nz.m.v_2Enz.greet`) and not by `greet`; the subprogram now carries the Nazm name alone,
+and the symbol stays in the object's symbol table. *The prologue*: LLVM marks the end of a
+function's prologue at the entry block's first instruction with a line, and when none has one it
+uses the function's line at its first instruction — so a breakpoint on a function stopped before
+its parameters were stored, and gdb showed `times=0`. The prologue now carries no line and the
+entry block's branch takes the first statement's position, so the breakpoint lands after every
+slot is written.
+
 **Optimised builds.** At `-O2` LLVM may delete or move a slot; a variable it removed reads as
 "optimized out" in the debugger, which is the debugger's word for it and the honest answer. Nothing
 is claimed about values at `-O2`.

@@ -10755,3 +10755,88 @@ if links { "executable" } else { "objects" }"""
 replace = """
 if links || !links { "executable" } else { "objects" }"""
 killers = [{ package = "nazm-cli", test = "cross", name = "inspect_names_every_target_and_what_this_host_makes_of_it" }]
+
+
+# --- N58: debugger and profiler v2 -----------------------------------------------------------------
+
+[[mutation]]
+name = "n58-a-parameter-has-no-position"
+why = "a parameter is described as a local, so a debugger shows no arguments"
+file = "crates/nazm-lir/src/emit.rs"
+find = '                mir::LocalOrigin::Param => Some(i + 1),'
+replace = '                mir::LocalOrigin::Param => Some(0),'
+killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bindings_are_described_and_temporaries_are_not" }]
+
+[[mutation]]
+name = "n58-a-bool-is-an-int"
+why = "a Bool variable is described as a 64-bit integer, so the debugger reads seven bytes past it"
+file = "crates/nazm-lir/src/emit.rs"
+find = '                Some(Ty::Bool) => Some("bool"),'
+replace = '                Some(Ty::Bool) => Some("int"),'
+killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bindings_are_described_and_temporaries_are_not" }]
+
+[[mutation]]
+name = "n58-a-str-is-two-words"
+why = "a Str is described as 128 bits, so its owner is not shown"
+file = "crates/nazm-lir/src/debug.rs"
+find = '                    "!DICompositeType(tag: DW_TAG_structure_type, name: \"Str\", size: 192, elements: !{members})"'
+replace = '                    "!DICompositeType(tag: DW_TAG_structure_type, name: \"Str\", size: 128, elements: !{members})"'
+killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bindings_are_described_and_temporaries_are_not" }]
+
+[[mutation]]
+name = "n58-a-function-is-named-by-its-symbol"
+why = "a subprogram is named by its native symbol, so a breakpoint by the Nazm name finds nothing"
+file = "crates/nazm-lir/src/debug.rs"
+find = '''
+            escape(&name)
+'''
+replace = '''
+            escape(&symbol)
+'''
+killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bindings_are_described_and_temporaries_are_not" }]
+
+[[mutation]]
+name = "n58-a-variable-is-never-declared"
+why = "the variables are described and never declared on their slots"
+file = "crates/nazm-lir/src/debug.rs"
+find = '                            "  call void @llvm.dbg.declare(metadata ptr %slot{slot}, metadata !{var}, metadata !DIExpression()), !dbg !{loc}"'
+replace = '                            "  ; nz.var dropped {slot} {var} {loc}"'
+killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bindings_are_described_and_temporaries_are_not" }]
+
+[[mutation]]
+name = "n58-the-prologue-has-a-line"
+why = "the prologue's stores carry a line, so a breakpoint stops before the parameters are stored"
+file = "crates/nazm-lir/src/debug.rs"
+find = '''
+            if prologue
+                && instruction(l)'''
+replace = '''
+            if false
+                && instruction(l)'''
+killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+
+[[mutation]]
+name = "n58-the-entry-branch-has-no-line"
+why = "the entry block has no line, so LLVM marks the prologue's end at the function's start"
+file = "crates/nazm-lir/src/debug.rs"
+find = '            if prologue && l.trim_start().starts_with("br ") {'
+replace = '            if false && prologue && l.trim_start().starts_with("br ") {'
+killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+
+[[mutation]]
+name = "n58-the-profile-reads-the-wrong-line"
+why = "the profile's scheduler counts are parsed from the memory line"
+file = "crates/nazm-cli/src/run_profile.rs"
+find = 'counts(&err, "nazm-sched:")'
+replace = 'counts(&err, "nazm-memory:")'
+killers = [{ package = "nazm-cli", test = "debugger", name = "a_profile_reports_what_one_run_did_under_both_backends" }]
+
+[[mutation]]
+name = "n58-the-profile-runs-without-the-scheduler"
+why = "the profiled run is not asked for its scheduler counts"
+file = "crates/nazm-cli/src/run_profile.rs"
+find = '''
+        .env(nazm_lir::runtime::SCHED_VARIABLE, "1")
+'''
+replace = ''
+killers = [{ package = "nazm-cli", test = "debugger", name = "a_profile_reports_what_one_run_did_under_both_backends" }]

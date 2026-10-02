@@ -87,11 +87,15 @@ fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_in
     ] {
         assert!(debug_ir.contains(want), "{want}: {debug_ir}");
     }
-    // Every instruction of a function with a subprogram has a location.
+    // Every instruction of a function with a subprogram has a location — except its prologue
+    // (N58): the slots and the stores into them carry none, and the entry block's branch takes
+    // the first statement's, so a breakpoint on the function stops after its slots are written.
     let mut inside = false;
+    let mut prologue = false;
     for line in debug_ir.lines() {
         if line.starts_with("define ") {
             inside = line.contains("!dbg");
+            prologue = inside;
             continue;
         }
         if line == "}" {
@@ -103,10 +107,24 @@ fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_in
             && !line.trim_start().starts_with(';')
             && !line.trim_end().ends_with('[');
         if inside && is_instruction {
-            assert!(
-                line.contains("!dbg"),
-                "an instruction without a location: {line}"
-            );
+            let call = line.contains(" call ") || line.trim_start().starts_with("call ");
+            if prologue && line.trim_start().starts_with("br ") {
+                assert!(
+                    line.contains("!dbg"),
+                    "the entry branch has no location: {line}"
+                );
+                prologue = false;
+            } else if prologue && !call {
+                assert!(
+                    !line.contains("!dbg"),
+                    "a prologue instruction with a line: {line}"
+                );
+            } else {
+                assert!(
+                    line.contains("!dbg"),
+                    "an instruction without a location: {line}"
+                );
+            }
         }
     }
     if cfg!(target_os = "macos") {

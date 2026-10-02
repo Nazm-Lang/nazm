@@ -53,8 +53,10 @@ found only by reading all of it.
 - Cranelift keeps every non-scalar local in a stack slot; its loops are slower than LLVM's
   (area 12, `performance.md`).
 - A Cranelift build still needs clang for the runtime and the link (area 12).
-- Debug information: function and statement positions through the LLVM backend only; no
-  variables; no live debugger session verified (area 27).
+- Debug information through the LLVM backend only (Cranelift refuses `--debug`): functions, lines,
+  and `Int`, `Bool` and `Str` variables, with no lexical scopes; a live session verified with gdb in
+  the Linux container, not under lldb on macOS, whose developer mode a non-interactive run cannot
+  enable; profiling is counts of one run, not sampling (area 27). *Narrowed in N58.*
 
 ## FFI
 

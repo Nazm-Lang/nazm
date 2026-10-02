@@ -2301,18 +2301,18 @@ inspect` prints `nazm.inspect/1` (`crates/nazm-cli/src/inspect.rs`); `nazm build
 | --- | --- | --- |
 | Line tables: a breakpoint by Nazm function or by `.nz` file and line resolves to that line | VERIFIED (static, lldb on aarch64-apple-darwin) | `a_debugger_finds_nazm_functions_and_lines` |
 | A debug build behaves as an ordinary one; an ordinary build carries no debug metadata | VERIFIED | `a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information` |
-| A live session — run to a breakpoint, backtrace, step | PARTIAL | the line table has one row per statement; launching a process under lldb waited on the operating system's debugger authorisation in a non-interactive session, so no live session was run here |
-| Local variables, types | MISSING | no `DILocalVariable` |
-| Cranelift debug information | MISSING | `--debug` with Cranelift is refused |
+| A live session — run to a breakpoint, backtrace, step (N58) | VERIFIED (gdb, aarch64-unknown-linux-gnu, in the `nazm-debug` image) | a breakpoint by Nazm function name stops on its first statement with the parameters stored; the backtrace names Nazm functions with files and lines through two calls; `next` and `step` by statement (`a_live_session_shows_nazm_frames_lines_and_variables`, run with `--ignored` where Docker is). On macOS, launching under lldb still waits on developer-mode authorisation and is not exercised |
+| Local variables, types (N58) | VERIFIED for `Int`, `Bool`, `Str` | parameters (with their positions) and source bindings, never temporaries; `Str` as `{data, len, owner}`; a dropped or not-yet-bound slot reads as its zeroed contents, never freed storage (`parameters_and_bindings_are_described_and_temporaries_are_not`, and the live test). Records, enums, sequences, channels and closures not described; no lexical scopes, so a variable is visible for its whole function |
+| Cranelift debug information | BLOCKED | `--debug` with Cranelift is refused by name: Cranelift 0.136's object module exposes no DWARF emission through the API this backend uses |
 | Deterministic inspection of a program's facts | VERIFIED | `inspect_is_one_deterministic_document_of_the_program_s_facts` |
 | Compiler phase timings | VERIFIED | `timings_account_for_every_phase` |
-| Runtime profiling | PARTIAL | `NAZM_MEMORY_REPORT` counts sequences, strings and channels; no task or scheduler counters, no sampling integration |
+| Runtime profiling (N58) | PARTIAL | `nazm profile FILE` prints `nazm.profile/1`: one run's exit, wall time, output size, memory counts and scheduler counts (tasks spawned and joined, selects, timeouts), under either backend (`a_profile_reports_what_one_run_did_under_both_backends`); counts of events, never samples; no sampling profiler, timeline or event trace |
 
 **Limitation** · Function and statement positions only. The runtime and entry objects carry no
 debug information.
 
-**Next dependency** · Variables (`DILocalVariable` for MIR's named locals) and a debugger session
-in an environment that authorises one.
+**Next dependency** · Lexical scopes and the remaining types; Cranelift's DWARF; a sampling
+profiler with a stated overhead.
 
 **Accepted when** · A native backtrace taken in a live session names a `.nz` line — the static half
 is met.

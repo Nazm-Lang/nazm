@@ -3781,8 +3781,9 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
     let _ = writeln!(e.out, "entry:");
     if e.debug {
         if let Some((file, line, _)) = e.names.position(f.span) {
+            // No location marker here (N58): the prologue carries no line, so a breakpoint
+            // on the function lands after its slots are written.
             let _ = writeln!(e.out, "  ; nz.fn {file} {line}");
-            let _ = writeln!(e.out, "  ; nz.loc {file} {line} 1");
         }
     }
     for (i, local) in f.locals.iter().enumerate() {
@@ -3797,6 +3798,33 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
             "  %slot{i} = alloca {ty}            ; {} : {shown}",
             local.name
         );
+        // A variable a debugger can read (N58): a parameter or a source binding of a type DWARF
+        // is told about. Temporaries have no name a reader wrote.
+        if e.debug {
+            let kind = match local.ty.value().map(Ty::of) {
+                Some(Ty::Int) => Some("int"),
+                Some(Ty::Bool) => Some("bool"),
+                Some(Ty::Str) => Some("str"),
+                _ => None,
+            };
+            let arg = match local.origin {
+                mir::LocalOrigin::Param => Some(i + 1),
+                mir::LocalOrigin::Binding { .. } => Some(0),
+                mir::LocalOrigin::Temp => None,
+            };
+            if let (Some(kind), Some(arg), Some((_, line, _))) =
+                (kind, arg, e.names.position(local.at))
+            {
+                if !local.name.is_empty()
+                    && local
+                        .name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    let _ = writeln!(e.out, "  ; nz.var {i} {arg} {line} {kind} {}", local.name);
+                }
+            }
+        }
     }
     // One scratch slot per element type a generic channel's send or receive here copies
     // through (N53), in the entry block.
