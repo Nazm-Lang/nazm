@@ -1949,6 +1949,19 @@ M1 Pro (macOS, Apple clang 21.0.0) by both backends for each target:
 
 Cross-host reproducibility — the same target's objects from two hosts — was not measured.
 
+### Field-by-field vectors — N68, measured 2026-10-02
+
+1,000,000 records of eight `Int` fields in a `Vec`, `--opt-level 2`, Apple M1 Pro; seconds, the
+median of the last four of five runs (fill included, ~0.13 s of each):
+
+| loop | element by element (`aos`) | field by field (`soa`) | hand-written, eight `Ints` |
+| --- | --- | --- | --- |
+| sum of one field, 500 passes | 0.58 | 0.21 | 0.21 |
+| sum of all eight fields, 50 passes | 0.10 | 0.20 | — |
+
+The layout wins where a loop reads few fields of wide records and loses where it reads them all;
+nothing here chooses between them for a program.
+
 ### A GPU map — N67, measured 2026-10-02
 
 `collatz` (steps to 1, plus a helper call) over 1..=1,000,000 on the M1 Pro's GPU through macOS's

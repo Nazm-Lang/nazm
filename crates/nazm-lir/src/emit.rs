@@ -191,6 +191,8 @@ struct Emitter<'a> {
     out: String,
     /// Whether to write the source-position markers `crate::debug` turns into DWARF (N48).
     debug: bool,
+    /// Whether an eligible `Vec[R]` is laid out one array per field (N68, §7.70).
+    soa: bool,
     /// Next SSA value number. LLVM requires unnamed values to be numbered consecutively
     /// within a function.
     next: u32,
@@ -2646,6 +2648,13 @@ impl Emitter<'_> {
         let arg = |i: usize| vals.get(i).copied().unwrap_or_default();
         let t = llvm_type(self.types, elem);
         self.needs_sequences = true;
+        // One array per field (N68, §7.70), where the build asked for it and the element owns
+        // nothing: its layout is then unobservable, and no element has a release to split.
+        if let Some(fields) = self.soa_fields(elem) {
+            if let Some(v) = self.soa_op(op, elem, &t, &fields, vals, span) {
+                return v;
+            }
+        }
         match op {
             Builtin::VecNew => {
                 let h = self.fresh();
@@ -2778,6 +2787,153 @@ impl Emitter<'_> {
                 Val::Transferred
             }
         }
+    }
+
+    /// The fields of `elem` in layout order, if this build lays a `Vec` of it out field by field:
+    /// a record of `Int`s and `Bool`s only (N68).
+    fn soa_fields(&self, elem: Ty) -> Option<Vec<Ty>> {
+        if !self.soa {
+            return None;
+        }
+        let Ty::Record(r) = elem else { return None };
+        let l = record_layout(self.types.records, r)?;
+        (!l.fields.is_empty() && l.fields.iter().all(|f| matches!(f, Ty::Int | Ty::Bool)))
+            .then(|| l.fields.clone())
+    }
+
+    /// Where field `k` of element `i` lives: `data + (k · cap + i) · 8`.
+    fn soa_slot(&mut self, h: u32, k: usize, i: u32) -> u32 {
+        let capp = self.fresh();
+        let _ = writeln!(self.out, "  %{capp} = getelementptr i8, ptr %{h}, i64 8");
+        let cap = self.fresh();
+        let _ = writeln!(self.out, "  %{cap} = load i64, ptr %{capp}");
+        let dp = self.fresh();
+        let _ = writeln!(self.out, "  %{dp} = getelementptr i8, ptr %{h}, i64 16");
+        let data = self.fresh();
+        let _ = writeln!(self.out, "  %{data} = load ptr, ptr %{dp}");
+        let base = self.fresh();
+        let _ = writeln!(self.out, "  %{base} = mul i64 %{cap}, {k}");
+        let at = self.fresh();
+        let _ = writeln!(self.out, "  %{at} = add i64 %{base}, %{i}");
+        let p = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{p} = getelementptr i64, ptr %{data}, i64 %{at}"
+        );
+        p
+    }
+
+    /// The element at `i`, gathered from its field arrays.
+    fn soa_gather(&mut self, h: u32, i: u32, t: &str, fields: &[Ty]) -> u32 {
+        let mut agg = String::from("poison");
+        for (k, f) in fields.iter().enumerate() {
+            let p = self.soa_slot(h, k, i);
+            let ft = llvm_type(self.types, *f);
+            let v = self.fresh();
+            let _ = writeln!(self.out, "  %{v} = load {ft}, ptr %{p}");
+            let next = self.fresh();
+            let _ = writeln!(
+                self.out,
+                "  %{next} = insertvalue {t} {agg}, {ft} %{v}, {k}"
+            );
+            agg = format!("%{next}");
+        }
+        agg.trim_start_matches('%').parse().unwrap_or_default()
+    }
+
+    /// The element `v`, scattered into its field arrays at `i`.
+    fn soa_scatter(&mut self, h: u32, i: u32, v: u32, t: &str, fields: &[Ty]) {
+        for (k, f) in fields.iter().enumerate() {
+            let ft = llvm_type(self.types, *f);
+            let x = self.fresh();
+            let _ = writeln!(self.out, "  %{x} = extractvalue {t} %{v}, {k}");
+            let p = self.soa_slot(h, k, i);
+            let _ = writeln!(self.out, "  store {ft} %{x}, ptr %{p}");
+        }
+    }
+
+    /// The bounds check every indexed `Vec` operation makes, before any field is touched.
+    fn soa_bounds(&mut self, h: u32, i: u32, span: Span) {
+        let len = self.fresh();
+        let _ = writeln!(self.out, "  %{len} = load i64, ptr %{h}");
+        let neg = self.fresh();
+        let _ = writeln!(self.out, "  %{neg} = icmp slt i64 %{i}, 0");
+        let past = self.fresh();
+        let _ = writeln!(self.out, "  %{past} = icmp sge i64 %{i}, %{len}");
+        let bad = self.fresh();
+        let _ = writeln!(self.out, "  %{bad} = or i1 %{neg}, %{past}");
+        self.require(bad, "this index is outside the sequence", span);
+    }
+
+    /// A `Vec[R]` operation over the field-by-field layout, or `None` for one that does not
+    /// touch the elements' storage (new, len), which is the same in both layouts.
+    fn soa_op(
+        &mut self,
+        op: Builtin,
+        elem: Ty,
+        t: &str,
+        fields: &[Ty],
+        vals: &[u32],
+        span: Span,
+    ) -> Option<Val> {
+        let arg = |i: usize| vals.get(i).copied().unwrap_or_default();
+        Some(match op {
+            Builtin::VecGet => {
+                self.soa_bounds(arg(0), arg(1), span);
+                let v = self.soa_gather(arg(0), arg(1), t, fields);
+                Val::Of { value: v, ty: elem }
+            }
+            Builtin::VecSet => {
+                self.soa_bounds(arg(0), arg(1), span);
+                self.soa_scatter(arg(0), arg(1), arg(2), t, fields);
+                Val::Of {
+                    value: arg(1),
+                    ty: Ty::Int,
+                }
+            }
+            Builtin::VecPush => {
+                let data = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{data} = call ptr @nz.soa_grow(ptr %{}, i64 {})",
+                    arg(0),
+                    fields.len()
+                );
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{data}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span,
+                );
+                let len = self.fresh();
+                let _ = writeln!(self.out, "  %{len} = load i64, ptr %{}", arg(0));
+                self.soa_scatter(arg(0), len, arg(1), t, fields);
+                let grown = self.fresh();
+                let _ = writeln!(self.out, "  %{grown} = add i64 %{len}, 1");
+                let _ = writeln!(self.out, "  store i64 %{grown}, ptr %{}", arg(0));
+                Val::Of {
+                    value: grown,
+                    ty: Ty::Int,
+                }
+            }
+            Builtin::VecPop => {
+                let len = self.fresh();
+                let _ = writeln!(self.out, "  %{len} = load i64, ptr %{}", arg(0));
+                let empty = self.fresh();
+                let _ = writeln!(self.out, "  %{empty} = icmp sle i64 %{len}, 0");
+                self.require(empty, "this sequence is empty", span);
+                let last = self.fresh();
+                let _ = writeln!(self.out, "  %{last} = sub i64 %{len}, 1");
+                let v = self.soa_gather(arg(0), last, t, fields);
+                let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
+                Val::Of { value: v, ty: elem }
+            }
+            _ => return None,
+        })
     }
 
     /// One built-in, with its arguments already evaluated.
@@ -3605,7 +3761,7 @@ impl Emitter<'_> {
 /// Emit one unit: its type definitions, its external declarations, its functions' bodies from
 /// MIR, their helpers and trampolines, and the constants they interned.
 pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
-    emit_unit_with(native, unit, names, false)
+    emit_unit_with(native, unit, names, false, false)
 }
 
 /// [`emit_unit`], with debug information when `debug` is set (N48): the same instructions, a
@@ -3616,10 +3772,12 @@ pub(crate) fn emit_unit_with(
     unit: &Unit,
     names: &SourceNames<'_>,
     debug: bool,
+    soa: bool,
 ) -> (String, Needs) {
     let mut e = Emitter {
         out: String::new(),
         debug,
+        soa,
         next: 0,
         next_label: 0,
         current: "entry".to_owned(),

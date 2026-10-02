@@ -267,6 +267,8 @@ pub struct LlvmText {
     target: Target,
     /// Whether each unit carries debug information (N48).
     debug: bool,
+    /// Whether an eligible `Vec[R]` is laid out field by field (N68, §7.70).
+    soa: bool,
 }
 
 impl LlvmText {
@@ -275,7 +277,15 @@ impl LlvmText {
         Self {
             target,
             debug: false,
+            soa: false,
         }
+    }
+
+    /// The same backend, laying out every eligible `Vec[R]` as one array per field (N68).
+    #[must_use]
+    pub const fn with_soa(mut self, soa: bool) -> Self {
+        self.soa = soa;
+        self
     }
 
     /// The same backend, writing debug information into every unit it generates (N48).
@@ -294,10 +304,11 @@ impl Backend for LlvmText {
     fn version(&self) -> String {
         // The object cache already keys LLVM text on its own bytes and on the clang that
         // compiles it (`crates/nazm-cli/src/backend.rs`); this names the emitter.
-        if self.debug {
-            "llvm-text debug".to_owned()
-        } else {
-            "llvm-text".to_owned()
+        match (self.debug, self.soa) {
+            (true, true) => "llvm-text debug soa".to_owned(),
+            (true, false) => "llvm-text debug".to_owned(),
+            (false, true) => "llvm-text soa".to_owned(),
+            (false, false) => "llvm-text".to_owned(),
         }
     }
 
@@ -328,7 +339,7 @@ impl Backend for LlvmText {
                 needs: Needs::default(),
             });
         };
-        let (ir, needs) = crate::emit::emit_unit_with(native, u, names, self.debug);
+        let (ir, needs) = crate::emit::emit_unit_with(native, u, names, self.debug, self.soa);
         // A freestanding image has one thread and no thread-local storage (N62, §7.64): the
         // failure state the unit declares is an ordinary global there.
         let ir = if self.target.os == Os::None {

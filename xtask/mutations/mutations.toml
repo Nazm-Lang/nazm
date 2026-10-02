@@ -10294,11 +10294,12 @@ why = """the generic channel runtime ships under N50's revision, so an object bu
 Repointed by N54, which moved the revision to 6 for select: an object built against N53's runtime must not be reused.
 Repointed by N55, which moved it to 7 for C-string arguments.
 Repointed by N62, which moved it to 8 for the device-register helpers.
-Repointed by N66, which moved it to 9 for the ordered sum."""
+Repointed by N66, which moved it to 9 for the ordered sum.
+Repointed by N68, which moved it to 10 for the field-by-field layout."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = "pub const RUNTIME_ABI_REVISION: u32 = 9;"
-replace = "pub const RUNTIME_ABI_REVISION: u32 = 8;"
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_nine_and_its_digest_covers_c_strings" }]
+find = "pub const RUNTIME_ABI_REVISION: u32 = 10;"
+replace = "pub const RUNTIME_ABI_REVISION: u32 = 9;"
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_ten_and_its_digest_covers_c_strings" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -11495,3 +11496,65 @@ file = "crates/nazm-cache/src/object.rs"
 find = '                .bytes(device.as_bytes())'
 replace = '                .bytes(b"")'
 killers = [{ package = "nazm-cache", lib = true, name = "object::tests::a_kernel_s_identity_is_every_part_of_what_runs_it" }]
+
+
+# --- N68: layout specialisation — a Vec of records, one array per field ------------------------
+
+[[mutation]]
+name = "n68-every-field-shares-one-array"
+why = "every field of an element is stored at the same place, so one field overwrites the others"
+file = "crates/nazm-lir/src/emit.rs"
+find = '        let _ = writeln!(self.out, "  %{base} = mul i64 %{cap}, {k}");'
+replace = '        let _ = writeln!(self.out, "  %{base} = mul i64 %{cap}, 0");'
+killers = [{ package = "nazm-cli", test = "layout", name = "the_field_by_field_layout_changes_no_answer" }]
+
+[[mutation]]
+name = "n68-growth-copies-nothing"
+why = "growing a field-by-field vector moves no element, so everything pushed before is lost"
+file = "crates/nazm-runtime/src/core.rs"
+find = '  %n = mul i64 %len, 8'
+replace = '  %n = mul i64 %len, 0'
+killers = [{ package = "nazm-cli", test = "layout", name = "the_field_by_field_layout_changes_no_answer" }]
+
+[[mutation]]
+name = "n68-growth-moves-one-field"
+why = "growing a field-by-field vector moves only its first field's array"
+file = "crates/nazm-runtime/src/core.rs"
+find = '  %more = icmp slt i64 %k.next, %nf'
+replace = '  %more = icmp slt i64 %k.next, 1'
+killers = [{ package = "nazm-cli", test = "layout", name = "the_field_by_field_layout_changes_no_answer" }]
+
+[[mutation]]
+name = "n68-a-field-by-field-read-is-unchecked"
+why = "a read of a field-by-field vector skips the bounds check and returns whatever lies past the end"
+file = "crates/nazm-lir/src/emit.rs"
+find = '''
+            Builtin::VecGet => {
+                self.soa_bounds(arg(0), arg(1), span);'''
+replace = '''
+            Builtin::VecGet => {'''
+killers = [{ package = "nazm-cli", test = "layout", name = "the_field_by_field_layout_changes_no_failure" }]
+
+[[mutation]]
+name = "n68-an-owning-element-is-split"
+why = "a record holding a `Str` is laid out field by field, splitting a value whose fields are wider than a slot and whose release walks the element"
+file = "crates/nazm-lir/src/emit.rs"
+find = '        (!l.fields.is_empty() && l.fields.iter().all(|f| matches!(f, Ty::Int | Ty::Bool)))'
+replace = '        (!l.fields.is_empty())'
+killers = [{ package = "nazm-cli", test = "layout", name = "an_ineligible_element_stays_whole_and_the_reason_is_reported" }]
+
+[[mutation]]
+name = "n68-cranelift-takes-the-layout-silently"
+why = "`--layout soa` under Cranelift is not refused, so the build silently keeps the other layout"
+file = "crates/nazm-cli/src/build.rs"
+find = '    if soa && choice.backend == nazm_lir::backend::BackendId::Cranelift {'
+replace = '    if false && choice.backend == nazm_lir::backend::BackendId::Cranelift {'
+killers = [{ package = "nazm-cli", test = "layout", name = "the_layout_is_asked_for_by_name_and_is_the_llvm_backends" }]
+
+[[mutation]]
+name = "n68-the-report-refuses-an-eligible-type"
+why = "explain-cost says an eligible `Vec` stays element by element"
+file = "crates/nazm-lir/src/lib.rs"
+find = '                    Some(l) if l.fields.iter().all(|f| matches!(f, ir::Ty::Int | ir::Ty::Bool)) => None,'
+replace = '                    Some(l) if l.fields.iter().all(|f| matches!(f, ir::Ty::Int | ir::Ty::Bool)) => Some("never"),'
+killers = [{ package = "nazm-cli", test = "layout", name = "an_ineligible_element_stays_whole_and_the_reason_is_reported" }]

@@ -3391,6 +3391,13 @@ facts across modules, the separation from effects and authority, and one restric
 - Behaviour under address identity, escaping references, FFI, serialization, atomics, and
   separate compilation (`architecture.md` §4).
 
+**Settled in part, N68.** A `Vec[R]` whose record `R` has only `Int` and `Bool` fields may be laid
+out one array per field: its elements have no address, cross no FFI, are never serialised, and a
+record's layout was already by field name, so no program can tell. `nazm build --layout soa` asks
+for it (LLVM backend; `aos`, the default, keeps each element whole); every other `Vec` stays element
+by element, and `nazm explain-cost` says which and why. Neither layout changes a result or a
+failure. Automatic selection and owning elements remain open.
+
 ### Backend semantics
 <!-- id: open-backend -->
 

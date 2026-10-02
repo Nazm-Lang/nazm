@@ -557,6 +557,18 @@ dispatches on. No program that was legal before changed its meaning.
 | an **enum** | none of its own — an inline discriminant and payload slots; only the active variant's payload owns anything | **VERIFIED** since N10: one generated helper pair per enum that owns anything, dispatching on the discriminant |
 | an applied **record** or **enum** | as its definition's, with the substituted field types | **VERIFIED** since N11: its own helpers, generated from the substituted fields |
 | `Vec[T]` | the sequence header an `Ints` has, holding elements of `T`'s layout | **VERIFIED** since N11: one release helper per owning element type, releasing each element before the storage; a `Vec` of non-owning elements is released as an `Ints` is |
+
+*N68, 2026-10-02: layout specialisation — VERIFIED for one layout, opt-in.* `architecture.md`
+§7.70 and research register R4 (with its prior art) first. `--layout soa` stores a `Vec[R]` of a
+record of `Int`s and `Bool`s one array per field (`nz.soa_grow`; runtime ABI 10). Evidence,
+`crates/nazm-cli/tests/layout.rs` (6): the same answers and the same `N0405` failures as the
+interpreter and the element-by-element layout at `-O0` and `-O2`, through growth past 1,000
+elements, set, pop, get; reordered fields giving identical code; the differing unit recompiled
+for the other layout and every unit reused for the same; an owning element staying whole with
+its reason; refusals. Measured (`performance.md`, N68): a one-field scan of 1,000,000 eight-field
+records 2.8× faster than element by element and equal to hand-written per-field `Ints`; reading
+all eight fields 2× slower. **Limitation**: opt-in, every eligible type at once; no cost model,
+no owning elements, no enums, no hybrid blocking; LLVM only.
 | a `spawn`'s argument block, a file path's terminated copy | runtime-internal | **VERIFIED** — freed since N8; each was one `malloc` per operation before |
 | a literal's constant, the process's `argv` | not this program's | **not reclaimed, correctly.** Nothing allocated them and nothing may free them |
 
