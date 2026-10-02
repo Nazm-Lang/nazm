@@ -55,6 +55,9 @@ fn escape(s: &str) -> String {
 struct Meta<'a> {
     nodes: Vec<String>,
     next: usize,
+    /// The DWARF type of each kind a variable has, made on first use (N58).
+    types: BTreeMap<&'static str, usize>,
+    vars: bool,
     files: BTreeMap<u32, usize>,
     locations: BTreeMap<(usize, u32, u32), usize>,
     name: &'a dyn Fn(u32) -> String,
@@ -76,6 +79,53 @@ impl Meta<'_> {
         let id = self.node(format!("!DIFile(filename: \"{shown}\", directory: \".\")"));
         self.files.insert(idx, id);
         id
+    }
+
+    /// The DWARF type of a variable of `kind`: `int`, `bool` or `str` (N58).
+    fn ty(&mut self, kind: &str) -> Option<usize> {
+        let key: &'static str = match kind {
+            "int" => "int",
+            "bool" => "bool",
+            "str" => "str",
+            _ => return None,
+        };
+        if let Some(&id) = self.types.get(key) {
+            return Some(id);
+        }
+        let id = match key {
+            "int" => self
+                .node("!DIBasicType(name: \"Int\", size: 64, encoding: DW_ATE_signed)".to_owned()),
+            "bool" => self
+                .node("!DIBasicType(name: \"Bool\", size: 8, encoding: DW_ATE_boolean)".to_owned()),
+            _ => {
+                let int = self.ty("int")?;
+                let byte = self.node(
+                    "!DIBasicType(name: \"u8\", size: 8, encoding: DW_ATE_unsigned_char)"
+                        .to_owned(),
+                );
+                let bytes = self.node(format!(
+                    "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: !{byte}, size: 64)"
+                ));
+                let opaque = self.node(
+                    "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64)".to_owned(),
+                );
+                let data = self.node(format!(
+                    "!DIDerivedType(tag: DW_TAG_member, name: \"data\", baseType: !{bytes}, size: 64, offset: 0)"
+                ));
+                let len = self.node(format!(
+                    "!DIDerivedType(tag: DW_TAG_member, name: \"len\", baseType: !{int}, size: 64, offset: 64)"
+                ));
+                let owner = self.node(format!(
+                    "!DIDerivedType(tag: DW_TAG_member, name: \"owner\", baseType: !{opaque}, size: 64, offset: 128)"
+                ));
+                let members = self.node(format!("!{{!{data}, !{len}, !{owner}}}"));
+                self.node(format!(
+                    "!DICompositeType(tag: DW_TAG_structure_type, name: \"Str\", size: 192, elements: !{members})"
+                ))
+            }
+        };
+        self.types.insert(key, id);
+        Some(id)
     }
 
     fn location(&mut self, sp: usize, line: u32, column: u32) -> usize {
@@ -103,6 +153,8 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
     let mut meta = Meta {
         nodes: Vec::new(),
         next: 5,
+        types: BTreeMap::new(),
+        vars: false,
         files: BTreeMap::new(),
         locations: BTreeMap::new(),
         name: file,
@@ -150,22 +202,82 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
         let (fidx, fline) = declared.unwrap_or((0, 0));
         let fnode = meta.file(fidx);
         let sp = meta.node(format!(
-            "distinct !DISubprogram(name: \"{}\", linkageName: \"{}\", scope: !{fnode}, file: !{fnode}, line: {fline}, type: !3, scopeLine: {fline}, spFlags: DISPFlagDefinition, unit: !0)",
-            escape(&name),
-            escape(&symbol)
+            "distinct !DISubprogram(name: \"{}\", scope: !{fnode}, file: !{fnode}, line: {fline}, type: !3, scopeLine: {fline}, spFlags: DISPFlagDefinition, unit: !0)",
+            escape(&name)
         ));
         any = true;
         let (head, tail) = line.split_at(open);
         let _ = writeln!(out, "{head} !dbg !{sp}{tail}");
         let mut here = (fline, 0u32);
+        // The prologue — slots, parameter stores, zeroing — until the first statement's marker:
+        // it carries no line (N58), so a debugger's breakpoint on the function lands on its first
+        // statement, after the parameters are in their slots, never on a slot not yet written.
+        // A call there still needs a location, and gets the function's line.
+        let mut prologue = true;
+        // The first statement's position, which the entry block's branch takes: LLVM marks the
+        // end of the prologue at the entry block's first instruction with a line, and the branch
+        // is the one after every slot is written.
+        let first = lines
+            .get(i + 1..end)
+            .unwrap_or(&[])
+            .iter()
+            .find_map(|l| l.trim().strip_prefix("; nz.loc "))
+            .and_then(|rest| match numbers(rest)[..] {
+                [_, ln, col, ..] => Some((ln, col)),
+                _ => None,
+            })
+            .unwrap_or((fline, 0));
         for l in lines.get(i + 1..end).unwrap_or(&[]) {
             if let Some(rest) = l.trim().strip_prefix("; nz.loc ") {
                 if let [_, ln, col, ..] = numbers(rest)[..] {
                     here = (ln, col);
                 }
+                prologue = false;
+                continue;
+            }
+            if prologue && l.trim_start().starts_with("br ") {
+                let loc = meta.location(sp, first.0, first.1);
+                out.push_str(&with_location(l, loc));
+                out.push('\n');
+                continue;
+            }
+            if prologue
+                && instruction(l)
+                && !l.contains(" call ")
+                && !l.trim_start().starts_with("call ")
+            {
+                out.push_str(l);
+                out.push('\n');
                 continue;
             }
             if l.trim().starts_with("; nz.fn ") {
+                continue;
+            }
+            // A variable (N58): `; nz.var SLOT ARG LINE KIND NAME` becomes its declaration on
+            // the slot, positioned at the binding's line.
+            if let Some(rest) = l.trim().strip_prefix("; nz.var ") {
+                let parts: Vec<&str> = rest.split(' ').collect();
+                if let [slot, arg, line, kind, name] = parts[..] {
+                    if let (Some(t), Ok(arg), Ok(line)) =
+                        (meta.ty(kind), arg.parse::<u32>(), line.parse::<u32>())
+                    {
+                        let argument = if arg > 0 {
+                            format!("arg: {arg}, ")
+                        } else {
+                            String::new()
+                        };
+                        let var = meta.node(format!(
+                            "!DILocalVariable(name: \"{}\", {argument}scope: !{sp}, file: !{fnode}, line: {line}, type: !{t})",
+                            escape(name)
+                        ));
+                        let loc = meta.location(sp, line, 0);
+                        meta.vars = true;
+                        let _ = writeln!(
+                            out,
+                            "  call void @llvm.dbg.declare(metadata ptr %slot{slot}, metadata !{var}, metadata !DIExpression()), !dbg !{loc}"
+                        );
+                    }
+                }
                 continue;
             }
             if instruction(l) {
@@ -187,6 +299,9 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
     }
     let unit_file = meta.files.values().next().copied().unwrap_or(5);
     out.push('\n');
+    if meta.vars {
+        out.push_str("declare void @llvm.dbg.declare(metadata, metadata, metadata)\n");
+    }
     out.push_str("!llvm.dbg.cu = !{!0}\n");
     out.push_str("!llvm.module.flags = !{!1, !2}\n");
     let _ = writeln!(
@@ -214,7 +329,11 @@ mod tests {
         let text = "define i64 @f(i64 %p0) {   ; f\nentry:\n  ; nz.fn 0 3\n  %slot0 = alloca i64            ; n : Int\n  ; nz.loc 0 4 5\n  %1 = add i64 %p0, 1\n  switch i64 %1, label %d [\n    i64 0, label %a\n  ]\n  ret i64 %1\n}\n";
         let out = attach(text, &|_| "prog.nz".to_owned());
         assert!(out.contains("define i64 @f(i64 %p0) !dbg !"), "{out}");
-        assert!(out.contains("%slot0 = alloca i64, !dbg !"), "{out}");
+        // The prologue carries no line (N58).
+        assert!(
+            out.contains("  %slot0 = alloca i64            ; n : Int\n"),
+            "{out}"
+        );
         assert!(
             out.contains("; n : Int"),
             "the comment is kept after the location: {out}"

@@ -388,6 +388,15 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N58 — Debugger and profiler v2 — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.60 first. `Int`, `Bool` and `Str` parameters and bindings described in DWARF;
+the prologue carries no line, so a breakpoint on a function stops after its slots are written; a
+subprogram is named by its Nazm name. A live gdb session verified in the Linux container — names,
+lines, backtraces, stepping and variables; lldb on macOS still blocked by developer mode. `nazm
+profile` prints one run's memory and scheduler counts as `nazm.profile/1`. Cranelift's DWARF is
+BLOCKED by name. Next: N59, backend performance.
+
 ### N57 — Targets and cross-compilation — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.59 first. Four targets, both backends, from any host in the matrix; an
