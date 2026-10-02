@@ -121,6 +121,9 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N71, contracts on WebAssembly.** No code appeared: a failure is the existing code,
+through the host's `report`. `nazm.wasm-contract/1` and `nazm.wasm-contract-run/1` are new.
+
 **Applied to N70, the EVM backend.** Three codes appeared, compatible: `N0397` (a sender address
 that is not an `Int`), `N0398` (calldata that is not an entrypoint's selector and `int64`
 arguments), `N0399` (a construct the backend does not emit, or a storage upgrade it refuses). On the

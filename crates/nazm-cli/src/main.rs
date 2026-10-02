@@ -39,6 +39,7 @@ mod capabilities;
 mod checking;
 mod context;
 mod contract;
+mod contract_wasm;
 mod core_ir;
 mod derived;
 mod diagnostics;
@@ -525,6 +526,10 @@ enum Command {
         /// Whether this contract's storage can take over OLD's (N70): `nazm.evm-upgrade/1`.
         #[arg(long, value_name = "OLD")]
         upgrade_check: Option<PathBuf>,
+        /// Build for WebAssembly with the contract adapter (N71): the objects, `link.txt`,
+        /// `contract.json` and the reference host `contract_host.mjs` into DIR.
+        #[arg(long, value_name = "DIR")]
+        wasm: Option<PathBuf>,
     },
     /// Map a kernel over `Int`s on the GPU (N67): an eligible pure `(Int) -> Int` function of the
     /// file, as an OpenCL kernel, over the whitespace-separated `Int`s of `--input`. One
@@ -910,6 +915,7 @@ fn main() -> ExitCode {
                 objects: objects.as_deref(),
                 stack_watermark,
                 layout: &layout,
+                adapter: None,
                 timings,
                 debug,
             },
@@ -949,11 +955,18 @@ fn main() -> ExitCode {
             txs,
             evm,
             upgrade_check,
+            wasm,
         } => {
             if let Some(old) = upgrade_check {
                 return contract::upgrade_check(&file, &old);
             }
-            return contract::run(&file, interface, txs.as_deref(), evm.as_deref());
+            return contract::run(
+                &file,
+                interface,
+                txs.as_deref(),
+                evm.as_deref(),
+                wasm.as_deref(),
+            );
         }
         Command::Accel {
             file,

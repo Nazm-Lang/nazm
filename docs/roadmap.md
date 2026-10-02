@@ -388,6 +388,13 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N71 — WASM contract adapter — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.73 first. The ordinary WebAssembly backend, unchanged, plus a generated adapter
+appended to the contract's own unit: exports per entrypoint, the state across two typed host imports,
+conservation in the module. The reference host's run equals the simulator's. Next: N72, an
+account-oriented BPF backend.
+
 ### N70 — EVM backend — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.72 first. Contracts compile directly from Core IR to EVM bytecode — `i64` held

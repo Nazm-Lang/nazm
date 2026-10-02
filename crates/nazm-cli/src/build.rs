@@ -353,6 +353,7 @@ pub(crate) fn run(
                     unhosted: &mut unhosted,
                     watermark: choice.stack_watermark,
                     wasm: target.is_wasm(),
+                    adapter: choice.adapter,
                 }),
             );
             clock.mark("codegen");
@@ -873,6 +874,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) stack_watermark: bool,
     /// `aos` or `soa`: how a `Vec` of records is laid out (N68).
     pub(crate) layout: &'a str,
+    /// A contract's WebAssembly adapter (N71).
+    pub(crate) adapter: Option<&'a crate::contract_wasm::Shape>,
     /// Print where the build's time went (N48).
     pub(crate) timings: bool,
     /// Carry debug information, for a debugger (N48).
@@ -885,6 +888,8 @@ struct Freestanding<'a> {
     unhosted: &'a mut Vec<String>,
     watermark: bool,
     wasm: bool,
+    /// A contract's WebAssembly adapter, appended to the unit that defines its `init` (N71).
+    adapter: Option<&'a crate::contract_wasm::Shape>,
 }
 
 /// One generated native unit, ready to be written down.
@@ -960,8 +965,25 @@ fn emit_artefacts(
         unhosted: refused,
         watermark,
         wasm,
+        adapter,
     }) = freestanding
     {
+        // The contract adapter (N71, §7.73): text appended to the contract's own unit, so it can
+        // call what that unit defines; the backend's code is unchanged.
+        if let Some(shape) = adapter {
+            let unit = out.iter_mut().find(|a| {
+                matches!(&a.code, nazm_lir::backend::Code::Llvm(ir) if ir.contains(".init() {"))
+            });
+            match unit.map(|a| &mut a.code) {
+                Some(nazm_lir::backend::Code::Llvm(ir)) => {
+                    match crate::contract_wasm::adapter(ir, shape) {
+                        Ok(text) => ir.push_str(&text),
+                        Err(why) => refused.push(format!("contract adapter ({why})")),
+                    }
+                }
+                _ => refused.push("contract adapter (no unit defines `init`)".to_owned()),
+            }
+        }
         // WebAssembly's runtime reaches its host through imports (N64, §7.66).
         let runtime = if wasm {
             nazm_lir::runtime::wasm::emit_runtime(needs.stack)
