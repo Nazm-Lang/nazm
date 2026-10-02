@@ -2382,6 +2382,21 @@ is met.
 
 ## Evidence and infrastructure
 
+
+*N66, 2026-10-02: vectorisation — VERIFIED for one idiom, `Ints` sums, on `aarch64-apple-darwin`.*
+`architecture.md` §7.68 first. `ints_sum(start, v)` keeps the ordered checked sum's meaning exactly
+— a 64-element block is added unchecked only when every partial sum is provably inside `Int` — and a
+native build replaces the counted summation loop with it; `nazm explain-cost` names every other
+loop's reason. Evidence, `crates/nazm-cli/tests/simd.rs` (5): every length 0–200 at three magnitudes
+about the fast path's bound, equal to a scalar loop under the interpreter and both backends at `-O0`
+and `-O2`; overflows at eight positions about the block boundaries, a block that would wrap, a start
+too close to `MAX`, and a prefix overflow whose total fits — all failing where the loop fails; the
+rewrite's IR and failure location; the interpreter's loop kept; the explain facts. A C harness of
+200,000 random cases against a checked scalar sum found no difference. Measured (`performance.md`,
+N66): 1.9× at 1,000 and 100,000 elements, 1.75× at 10,000,000, at `-O2`; the fallback for elements
+past 2^56 is 1.33× *slower* than the scalar loop. **Limitation**: one idiom; no element-wise maps;
+baseline target features only (NEON, SSE2), no per-build feature selection; x86_64 not measured.
+
 ### 28. Performance measurement — PARTIAL
 
 **Evidence** · `xtask/src/bench.rs` times five stages per program plus the compiler's own

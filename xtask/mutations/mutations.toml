@@ -7853,8 +7853,8 @@ killers = [{ package = "nazm-core", test = "provenance", name = "the_sources_are
 name = "n38-shared-storage-is-followed"
 why = "a value read out of a sequence is taken to carry only what the read's arguments carry, as though no alias could have written it"
 file = "crates/nazm-sema/src/provenance.rs"
-find = "            | Intrinsic::MmioRead32 => BuiltinFlow::Read,"
-replace = "            | Intrinsic::MmioRead32 => BuiltinFlow::Derive,"
+find = "            | Intrinsic::IntsSum => BuiltinFlow::Read,"
+replace = "            | Intrinsic::IntsSum => BuiltinFlow::Derive,"
 killers = [{ package = "nazm-core", test = "provenance", name = "shared_storage_is_not_followed_and_is_unknown" }]
 
 [[mutation]]
@@ -7864,9 +7864,12 @@ file = "crates/nazm-sema/src/provenance.rs"
 find = '''
             | Intrinsic::ChanRecv
             // A device register holds whatever the device put there (N62).
-            | Intrinsic::MmioRead32 => BuiltinFlow::Read,'''
+            | Intrinsic::MmioRead32
+            // Read out of a shared handle, as `ints_get` is (N66).
+            | Intrinsic::IntsSum => BuiltinFlow::Read,'''
 replace = '''
-            | Intrinsic::MmioRead32 => BuiltinFlow::Read,
+            | Intrinsic::MmioRead32
+            | Intrinsic::IntsSum => BuiltinFlow::Read,
             Intrinsic::ChanRecv => BuiltinFlow::Fresh,'''
 killers = [{ package = "nazm-core", test = "provenance", name = "shared_storage_is_not_followed_and_is_unknown" }]
 
@@ -8054,10 +8057,11 @@ Repointed by N52, which moved it to 15 for declassification: an entry that accep
 Repointed by N53, which moved it to 16 for generic channels: an entry that refused `Chan[Str]` must not be reused.
 Repointed by N54, which moved it to 17 for select and the clock: an entry that accepted a function named time_now_ms must not be reused.
 Repointed by N55, which moved it to 18 for FFI v2: an entry that refused a Str argument to C must not be reused.
-Repointed by N62, which moved it to 19 for a freestanding target: an entry that accepted a function named mmio_read32 must not be reused."""
+Repointed by N62, which moved it to 19 for a freestanding target: an entry that accepted a function named mmio_read32 must not be reused.
+Repointed by N66, which moved it to 20 for `ints_sum`: an entry that accepted a function of that name must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 19;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 18;"
+find = "pub const SEMANTIC_EPOCH: u32 = 20;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 19;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10289,11 +10293,12 @@ name = "n53-the-runtime-abi-stays"
 why = """the generic channel runtime ships under N50's revision, so an object built before it is reused
 Repointed by N54, which moved the revision to 6 for select: an object built against N53's runtime must not be reused.
 Repointed by N55, which moved it to 7 for C-string arguments.
-Repointed by N62, which moved it to 8 for the device-register helpers."""
+Repointed by N62, which moved it to 8 for the device-register helpers.
+Repointed by N66, which moved it to 9 for the ordered sum."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = "pub const RUNTIME_ABI_REVISION: u32 = 8;"
-replace = "pub const RUNTIME_ABI_REVISION: u32 = 7;"
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_eight_and_its_digest_covers_c_strings" }]
+find = "pub const RUNTIME_ABI_REVISION: u32 = 9;"
+replace = "pub const RUNTIME_ABI_REVISION: u32 = 8;"
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_nine_and_its_digest_covers_c_strings" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -11336,3 +11341,90 @@ file = "crates/nazm-cli/src/live.rs"
 find = '            None => push(n, "restart", "removed: running code may still call it".to_owned()),'
 replace = '            None => push(n, "reloadable", "removed: running code may still call it".to_owned()),'
 killers = [{ package = "nazm-cli", bin = "nazm", name = "live::tests::a_reload_tells_a_body_from_a_signature_and_a_layout" }]
+
+
+# --- N66: vectorisation under checked arithmetic ----------------------------------------------------
+
+[[mutation]]
+name = "n66-the-fast-path-bound-is-loose"
+why = "a block of elements up to 2^60 is added unchecked, so 64 of them wrap where the ordered sum overflows"
+file = "crates/nazm-runtime/src/core.rs"
+find = '  %small = icmp ule i64 %m.next, 72057594037927936'
+replace = '  %small = icmp ule i64 %m.next, 1152921504606846976'
+killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
+
+[[mutation]]
+name = "n66-the-running-sum-has-no-room-check"
+why = "a block is added unchecked onto a running sum near `MAX`, so the sum wraps instead of failing"
+file = "crates/nazm-runtime/src/core.rs"
+find = '  %safe = and i1 %small, %room'
+replace = '  %safe = and i1 %small, true'
+killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
+
+[[mutation]]
+name = "n66-a-slow-block-is-unchecked"
+why = "a block that takes the checked path ignores its overflow, so a running sum wraps"
+file = "crates/nazm-runtime/src/core.rs"
+find = '  br i1 %o, label %overflow, label %slow.step'
+replace = '  br i1 false, label %overflow, label %slow.step'
+killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
+
+[[mutation]]
+name = "n66-the-tail-is-unchecked"
+why = "the elements after the last whole block are added without checking, so an overflow there wraps"
+file = "crates/nazm-runtime/src/core.rs"
+find = '  br i1 %to, label %overflow, label %tail.step'
+replace = '  br i1 false, label %overflow, label %tail.step'
+killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
+
+[[mutation]]
+name = "n66-the-llvm-flag-is-never-raised"
+why = "the LLVM backend reads the sum's overflow flag and never fails on it"
+file = "crates/nazm-lir/src/emit.rs"
+find = '                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{flag}, 0");'
+replace = '                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{flag}, %{flag}");'
+killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
+
+[[mutation]]
+name = "n66-the-cranelift-flag-is-never-raised"
+why = "the Cranelift backend does not fail on the sum's overflow flag"
+file = "crates/nazm-codegen-clif/src/prims.rs"
+find = '                self.guard(raised, "N0400", "this addition overflows `Int`");'
+replace = '                let _ = raised;'
+killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
+
+[[mutation]]
+name = "n66-the-counter-may-start-anywhere"
+why = "a loop whose counter starts past 0 is replaced by the whole sum, adding elements it skipped"
+file = "crates/nazm-service/src/vectorize.rs"
+find = '    if start != Some(Some(0)) {'
+replace = '    if start.is_none() {'
+killers = [{ package = "nazm-cli", test = "simd", name = "explain_cost_says_what_became_of_every_loop" }]
+
+[[mutation]]
+name = "n66-the-step-is-ignored"
+why = "a loop stepping by 2 is replaced by the whole sum, adding the elements it skipped"
+file = "crates/nazm-service/src/vectorize.rs"
+find = '    if local(si) != Some(i) || int(consts, one) != Some(1) {'
+replace = '    if local(si) != Some(i) {'
+killers = [{ package = "nazm-cli", test = "simd", name = "explain_cost_says_what_became_of_every_loop" }]
+
+[[mutation]]
+name = "n66-the-failure-is-at-the-element"
+why = "the replacement's failure names the element read, not the addition the loop failed at"
+file = "crates/nazm-service/src/vectorize.rs"
+find = '''
+        // The addition's span: an overflow is reported where the loop reported it.
+        at: add.at,'''
+replace = '''
+        // The addition's span: an overflow is reported where the loop reported it.
+        at: get.at,'''
+killers = [{ package = "nazm-cli", test = "simd", name = "a_native_build_replaces_the_summation_loop_and_reports_its_failure_at_the_addition" }]
+
+[[mutation]]
+name = "n66-a-native-build-keeps-the-loop"
+why = "a native build is not rewritten, so the summation idiom stays scalar"
+file = "crates/nazm-cli/src/build.rs"
+find = '            nazm_service::vectorize::rewrite(&mut core);'
+replace = '            let _ = &mut core;'
+killers = [{ package = "nazm-cli", test = "simd", name = "a_native_build_replaces_the_summation_loop_and_reports_its_failure_at_the_addition" }]
