@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N74 — ecosystem, IDE and migration tooling — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.76 first. `nazm init` and six templates, each held by its own commands; a library
+package checked as its modules; `nazm doc` from the checker's facts; `nazm bindgen` for the C subset
+that crosses, refusing the rest; `nazm publish --dry-run`; the language service tested across packages;
+an LSP client for one editor. Not here: a network registry, rename across packages, a debug adapter,
+an agent-efficiency claim. Next: N75, the release-candidate audit.
+
 ### N73 — compiler trust and supply chain — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.75 first. A front-end robustness fuzzer and a differential fuzzer across the

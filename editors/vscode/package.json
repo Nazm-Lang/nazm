@@ -1,0 +1,34 @@
+{
+  "name": "nazm",
+  "displayName": "Nazm",
+  "description": "Nazm through the compiler's own language server: `nazm lsp`. No language logic lives here.",
+  "version": "0.1.0",
+  "publisher": "nazm",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:nazm"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "nazm",
+        "aliases": ["Nazm"],
+        "extensions": [".nz"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "Nazm",
+      "properties": {
+        "nazm.path": {
+          "type": "string",
+          "default": "nazm",
+          "description": "The `nazm` executable whose `nazm lsp` serves this editor."
+        }
+      }
+    }
+  },
+  "dependencies": { "vscode-languageclient": "^9.0.1" }
+}

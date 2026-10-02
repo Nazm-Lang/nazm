@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.bindgen-1.json",
+  "title": "nazm.bindgen/1",
+  "description": "Which prototypes of a C header became `extern \"C\"` declarations and why the rest did not, from `nazm bindgen HEADER -o FILE` (N74).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "header",
+    "translated",
+    "refused"
+  ],
+  "properties": {
+    "schema": {
+      "const": "nazm.bindgen/1"
+    },
+    "header": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "translated": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "c",
+          "nazm"
+        ],
+        "properties": {
+          "c": {
+            "type": "string"
+          },
+          "nazm": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "refused": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "c",
+          "reason"
+        ],
+        "properties": {
+          "c": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

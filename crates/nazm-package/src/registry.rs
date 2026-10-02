@@ -329,7 +329,9 @@ fn published_files(package: &Path, manifest: &Manifest) -> Vec<String> {
 /// `N0500` for an invalid manifest or a path dependency (a published package depends only on the
 /// registry), `N0514` for a link in it, `N0512` when the version is already published — a
 /// published version never changes — and the filesystem's, as `N0512`.
-pub fn publish(dir: &Path, registry: &Path) -> Result<(Version, String), Box<Diagnostic>> {
+/// Every check a publish makes before it writes anything, shared by [`publish`] and
+/// [`publish_dry_run`] so the two cannot disagree about what would be refused.
+fn prepare(dir: &Path, registry: &Path) -> Result<(Manifest, String, Vec<Entry>), Box<Diagnostic>> {
     let manifest_path = dir.join(MANIFEST);
     let text = std::fs::read_to_string(&manifest_path).map_err(|_| {
         Box::new(error(
@@ -353,16 +355,10 @@ pub fn publish(dir: &Path, registry: &Path) -> Result<(Version, String), Box<Dia
         )));
     }
     only_files(dir)?;
-    let io = |e: std::io::Error| {
-        Box::new(error(
-            codes::REGISTRY_INVALID,
-            format!("the registry at `{}`: {e}", registry.display()),
-        ))
-    };
     let index_path = registry
         .join("index")
         .join(format!("{}.toml", manifest.name));
-    let mut entries = if index_path.is_file() {
+    let entries = if index_path.is_file() {
         Index::read(registry, &manifest.name)?.entries
     } else {
         Vec::new()
@@ -376,6 +372,17 @@ pub fn publish(dir: &Path, registry: &Path) -> Result<(Version, String), Box<Dia
             ),
         )));
     }
+    Ok((manifest, text, entries))
+}
+
+pub fn publish(dir: &Path, registry: &Path) -> Result<(Version, String), Box<Diagnostic>> {
+    let (manifest, text, mut entries) = prepare(dir, registry)?;
+    let io = |e: std::io::Error| {
+        Box::new(error(
+            codes::REGISTRY_INVALID,
+            format!("the registry at `{}`: {e}", registry.display()),
+        ))
+    };
     let target = registry
         .join("packages")
         .join(&manifest.name)
@@ -395,6 +402,22 @@ pub fn publish(dir: &Path, registry: &Path) -> Result<(Version, String), Box<Dia
     });
     write_index(registry, &manifest.name, &mut entries).map_err(io)?;
     Ok((manifest.version, d))
+}
+
+/// What [`publish`] would do, writing nothing (N74): the same checks, the version, the digest the
+/// index would record, and the files it would copy, relative to `dir`.
+///
+/// # Errors
+///
+/// Exactly [`publish`]'s refusals.
+pub fn publish_dry_run(
+    dir: &Path,
+    registry: &Path,
+) -> Result<(Version, String, Vec<String>), Box<Diagnostic>> {
+    let (manifest, text, _) = prepare(dir, registry)?;
+    let files = published_files(dir, &manifest);
+    let d = digest(text.as_bytes(), &dir.join(&manifest.root));
+    Ok((manifest.version, d, files))
 }
 
 /// Mark `name` `version` yanked, or not: it stays published and keeps its digest.

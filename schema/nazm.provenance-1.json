@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.provenance-1.json",
+  "title": "nazm.provenance/1",
+  "description": "What one build read and wrote, from `nazm build --provenance FILE` (N73). Deterministic: no absolute path, time or host name.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "digest_algorithm",
+    "sources",
+    "packages",
+    "target",
+    "compiler",
+    "semantic_epoch",
+    "c_compiler",
+    "runtime",
+    "backend",
+    "linked",
+    "profiles",
+    "output"
+  ],
+  "properties": {
+    "schema": {
+      "const": "nazm.provenance/1"
+    },
+    "digest_algorithm": {
+      "type": "string"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "module",
+          "digest"
+        ],
+        "properties": {
+          "module": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^blake3:[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "version",
+          "digest"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "string"
+    },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "nazm"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "semantic_epoch": {
+      "type": "integer"
+    },
+    "c_compiler": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "driver",
+            "version",
+            "report_digest"
+          ],
+          "properties": {
+            "driver": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "report_digest": {
+              "type": "string",
+              "pattern": "^blake3:[0-9a-f]{64}$"
+            }
+          }
+        }
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "abi_revision",
+        "digest"
+      ],
+      "properties": {
+        "abi_revision": {
+          "type": "integer"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "opt_level",
+        "layout",
+        "debug",
+        "stack_watermark",
+        "cranelift"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "llvm",
+            "cranelift"
+          ]
+        },
+        "opt_level": {
+          "type": "integer"
+        },
+        "layout": {
+          "type": "string"
+        },
+        "debug": {
+          "type": "boolean"
+        },
+        "stack_watermark": {
+          "type": "boolean"
+        },
+        "cranelift": {
+          "type": "string"
+        }
+      }
+    },
+    "linked": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "digest"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "files"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "executable",
+            "library",
+            "objects"
+          ]
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "digest"
+            ],
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "digest": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

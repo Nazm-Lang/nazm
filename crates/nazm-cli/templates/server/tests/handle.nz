@@ -1,0 +1,6 @@
+use "../src/handle.nz";
+
+fn main() -> Int ! {} {
+    let r = requests("3\n4\nnot a number\n5");
+    handle(ints_get(r, 0)) + handle(ints_get(r, 1)) + handle(ints_get(r, 2)) + ints_len(r)
+}

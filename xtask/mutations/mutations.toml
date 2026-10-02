@@ -11889,3 +11889,109 @@ file = "xtask/src/evidence.rs"
 find = '"version": field("version"),'
 replace = '"version": Value::Null,'
 killers = [{ package = "xtask", test = "evidence", name = "the_bill_of_materials_is_the_lockfiles_crates_and_the_pin" }]
+
+# --- N74: ecosystem tooling — init, the library check, API docs, bindgen, the dry run -----------
+
+[[mutation]]
+name = "n74-init-overwrites-a-directory"
+why = "init writes into a directory that already holds a project, overwriting its files"
+file = "crates/nazm-cli/src/init.rs"
+find = "    if std::fs::read_dir(dir).is_ok_and(|mut e| e.next().is_some()) {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "init_refuses_rather_than_overwrite_or_guess" }]
+
+[[mutation]]
+name = "n74-a-template-keeps-its-placeholder"
+why = "the package's name is not written into the template, so its manifest names no valid package"
+file = "crates/nazm-cli/src/init.rs"
+find = 'text.replace("{{name}}", name)'
+replace = "text.to_owned()"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "every_template_is_a_project_its_own_commands_hold" }]
+
+[[mutation]]
+name = "n74-a-library-cannot-be-checked"
+why = "a package with no main takes the ordinary route and is refused with N0509, so a library cannot be checked"
+file = "crates/nazm-cli/src/package.rs"
+find = "    if root.main.is_some() {\n        return None;"
+replace = "    if true {\n        return None;"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "every_template_is_a_project_its_own_commands_hold" }]
+
+[[mutation]]
+name = "n74-a-shared-error-is-reported-per-module"
+why = "an error two modules of a library reach is reported once for each"
+file = "crates/nazm-cli/src/checking.rs"
+find = "                seen.insert(("
+replace = "                true || seen.insert(("
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "a_library_is_checked_as_its_modules_each_error_once" }]
+
+[[mutation]]
+name = "n74-the-api-includes-private-definitions"
+why = "the API document lists a private function as if another module could call it"
+file = "crates/nazm-cli/src/apidoc.rs"
+find = "            if def.closure.is_some() || !exported || !own(file) {"
+replace = "            if def.closure.is_some() || !own(file) {"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_api_document_is_the_public_definitions_with_their_facts_and_sources" }]
+
+[[mutation]]
+name = "n74-the-api-includes-the-toolchain"
+why = "the prelude's definitions are documented as the program's own API"
+file = "crates/nazm-cli/src/apidoc.rs"
+find = "        let own = |file: nazm_span::FileId| !map.name(file).starts_with('@');"
+replace = "        let own = |_file: nazm_span::FileId| true;"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_api_document_is_the_public_definitions_with_their_facts_and_sources" }]
+
+[[mutation]]
+name = "n74-a-description-reaches-past-code"
+why = "a definition's description gathers comments above code that separates them, describing the wrong definition"
+file = "crates/nazm-cli/src/apidoc.rs"
+find = '        let Some(c) = t.strip_prefix("//") else { break };'
+replace = '        let Some(c) = t.strip_prefix("//") else { continue };'
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_api_document_is_the_public_definitions_with_their_facts_and_sources" }]
+
+[[mutation]]
+name = "n74-a-source-link-is-off-by-one"
+why = "every link back to the source names the line before the definition"
+file = "crates/nazm-cli/src/apidoc.rs"
+find = "    text.get(..at).map_or(1, |t| t.matches('\\n').count() + 1)"
+replace = "    text.get(..at).map_or(1, |t| t.matches('\\n').count())"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_api_document_is_the_public_definitions_with_their_facts_and_sources" }]
+
+[[mutation]]
+name = "n74-bindgen-widens-an-int"
+why = "C's `int` is declared as Nazm's `Int`, so C receives a 64-bit value where it reads 32 bits"
+file = "crates/nazm-cli/src/bindgen.rs"
+find = "    match ty {\n        \"int64_t\" => Ok(\"Int\"),\n        \"bool\" | \"_Bool\" => Ok(\"Bool\"),\n        \"const char *\""
+replace = "    match ty {\n        \"int64_t\" | \"int\" => Ok(\"Int\"),\n        \"bool\" | \"_Bool\" => Ok(\"Bool\"),\n        \"const char *\""
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "bindgen_translates_what_crosses_and_refuses_the_rest_by_name" }]
+
+[[mutation]]
+name = "n74-bindgen-accepts-a-variadic"
+why = "a variadic prototype is translated with its fixed parameters, so a call passes C nothing it expects"
+file = "crates/nazm-cli/src/bindgen.rs"
+find = '                return Err("variadic: a variable argument list does not cross".to_owned());'
+replace = "                continue;"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "bindgen_translates_what_crosses_and_refuses_the_rest_by_name" }]
+
+[[mutation]]
+name = "n74-bindgen-trusts-its-declarations"
+why = "a declaration is written without the checker holding it, so a symbol the runtime declares is emitted"
+file = "crates/nazm-cli/src/bindgen.rs"
+find = '            Ok(d) => match nazm_core::check_source(&format!("{d}\nfn main() -> Int {{ 0 }}\n")).first() {'
+replace = '            Ok(d) => match None::<&nazm_diag::Diagnostic> {'
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "bindgen_translates_what_crosses_and_refuses_the_rest_by_name" }]
+
+[[mutation]]
+name = "n74-a-dry-run-publishes"
+why = "`--dry-run` publishes, so a look at what would be recorded changes the registry"
+file = "crates/nazm-cli/src/main.rs"
+find = "        if *dry_run {"
+replace = "        if !*dry_run {"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "a_dry_run_publish_writes_nothing_and_records_what_the_publish_does" }]
+
+[[mutation]]
+name = "n74-the-inventory-omits-new-authority"
+why = "the capability inventory lists only the first two kinds of authority, hiding TimeCap and MmioCap"
+file = "crates/nazm-cli/src/capabilities.rs"
+find = "            .map(|k| k.type_name())"
+replace = "            .filter(|k| k.id() < 2)\n            .map(|k| k.type_name())"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_capability_inventory_names_every_authority_target_and_command" }]

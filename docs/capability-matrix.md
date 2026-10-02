@@ -82,7 +82,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | RESEARCH |
 | 16 | Standard library | PARTIAL (v1 foundation VERIFIED) |
-| 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`) |
+| 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`; header bindings for that subset, N74) |
 | 18 | Embedded support | PARTIAL — one board, emulated, VERIFIED (N62); profile rules PARTIAL |
 | 19 | Critical profile | PARTIAL (rules v1) |
 | 20 | Cybersecurity profile | PARTIAL (rules v1) |
@@ -90,8 +90,8 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | VERIFIED |
-| 25 | LSP and MCP | PARTIAL / PARTIAL |
-| 26 | Package and build tooling | PARTIAL |
+| 25 | LSP and MCP | PARTIAL / PARTIAL — across package boundaries tested; an editor client (N74) |
+| 26 | Package and build tooling | PARTIAL — templates, a library check, API docs and a publish dry run (N74) |
 | 27 | Debugger and profiler | PARTIAL |
 | 28 | Performance measurement | PARTIAL |
 | 29 | Differential testing | VERIFIED |
@@ -3585,3 +3585,24 @@ cold-path splitting). **Limitation**: not coverage-guided (`cargo fuzz` needs ni
 dependency); the differential generator covers `Int`/`Bool` programs only; no sanitizer, Miri or Loom
 run (no `unsafe` code to run them on); an attestation is whatever the local command printed — Nazm
 neither signs nor verifies.
+
+*N74, 2026-10-02: ecosystem tooling — VERIFIED as scoped (areas 17, 25, 26).* `architecture.md` §7.76
+first, amended twice before code. `nazm init` writes six templates — `cli`, `library`, `server`,
+`embedded`, `wasm`, `contract` — each a package whose own commands check, test, lock and document it,
+and build or run it where the target allows; a library package is checked as its modules. `nazm doc`
+documents exactly the public definitions, from the checker's facts, anchored by identity and linked
+to source lines; `nazm bindgen` translates the `int64_t`/`bool`/`const char *` subset of a C header
+and refuses the rest by name; `nazm publish --dry-run` writes nothing and names the digest the publish
+then records; `nazm capabilities` lists every authority type, target and command. The language
+service is tested across a package boundary — definition, references, hover and workspace symbols reach
+the dependency, its errors are published against it, and renaming its public function is refused —
+and `editors/vscode` is a client for `nazm lsp` with a launch configuration for an LLDB adapter.
+Evidence: `crates/nazm-cli/tests/ecosystem.rs` (10: every template end to end, init's refusals, every
+template file written, the library check reporting a shared error once, the API document's members,
+facts, sources, anchors, determinism and size, bindgen's translations and nine refusals, its output
+linked against real C and run, the dry run, the inventory, the editor client), `nazm-service`'s
+`tests/across_packages.rs` (3), and four new schemas validated against real output in
+`tests/schemas.rs`. **Limitation**: the editor client is not exercised inside an editor here and is
+not published; no Nazm debug adapter; rename across packages is refused, not performed; `bindgen`
+reads declarations, not the C preprocessor; no network registry; the agent benchmark was not re-run,
+and no efficiency claim is made.

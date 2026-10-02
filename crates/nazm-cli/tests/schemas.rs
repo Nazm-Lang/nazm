@@ -168,6 +168,15 @@ fn validate(value: &Value, node: &Value, root: &Value, at: &str, problems: &mut 
                     && s.bytes()
                         .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             }),
+            // A BLAKE3 digest as the N73 records write it.
+            "^blake3:[0-9a-f]{64}$" => value
+                .as_str()
+                .and_then(|s| s.strip_prefix("blake3:"))
+                .is_some_and(|s| {
+                    s.len() == 64
+                        && s.bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                }),
             other => panic!("{at}: the test does not know the pattern {other:?}"),
         };
         if !ok {
@@ -1014,4 +1023,81 @@ fn a_repository_map_and_a_task_context_are_their_schemas_in_every_status() {
         assert!(tasks.iter().any(|t| t["status"] == status), "{status}");
     }
     check_against("nazm.task-context-1.json", &tasks);
+}
+
+// --- N73 and N74: the build record, the API document, the binding report, the publish plan ---
+
+fn nazm_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let o = Command::new(env!("CARGO_BIN_EXE_nazm"))
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success() || args.first() == Some(&"bindgen"),
+        "nazm {args:?}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    o
+}
+
+#[test]
+fn a_provenance_record_matches_the_published_schema() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("p.nz"), "fn main() -> Int { 1 }\n").unwrap();
+    nazm_in(
+        d.path(),
+        &["build", "p.nz", "-o", "p", "--provenance", "p.json"],
+    );
+    let v: Value =
+        serde_json::from_str(&std::fs::read_to_string(d.path().join("p.json")).unwrap()).unwrap();
+    check_against("nazm.provenance-1.json", &[v]);
+}
+
+#[test]
+fn an_api_document_matches_the_published_schema() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("m.nz"),
+        "// A point.\npub struct P { x: Int }\npub enum E { A, B(p: P) }\n\
+         pub extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\n\
+         pub extern \"C\" fn tri(x: Int) -> Int ! {} = \"tri\" { x * 3 }\n\
+         pub fn say(io: IoCap) -> Int ! { io } { print(\"x\"); 0 }\nfn main() -> Int { 0 }\n",
+    )
+    .unwrap();
+    let o = nazm_in(d.path(), &["doc", "m.nz"]);
+    check_against(
+        "nazm.api-doc-1.json",
+        &lines(&String::from_utf8_lossy(&o.stdout)),
+    );
+}
+
+#[test]
+fn a_binding_report_matches_the_published_schema() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("m.h"),
+        "#include <stdint.h>\nint64_t add(int64_t a, int64_t b);\nint small(int x);\n",
+    )
+    .unwrap();
+    let o = nazm_in(d.path(), &["bindgen", "m.h", "-o", "m.nz"]);
+    check_against(
+        "nazm.bindgen-1.json",
+        &lines(&String::from_utf8_lossy(&o.stdout)),
+    );
+}
+
+#[test]
+fn a_publish_plan_matches_the_published_schema() {
+    let d = tempfile::tempdir().unwrap();
+    nazm_in(d.path(), &["init", "lib", "--template", "library"]);
+    std::fs::create_dir(d.path().join("reg")).unwrap();
+    let o = nazm_in(
+        d.path(),
+        &["publish", "--registry", "reg", "lib", "--dry-run"],
+    );
+    check_against(
+        "nazm.publish-plan-1.json",
+        &lines(&String::from_utf8_lossy(&o.stdout)),
+    );
 }

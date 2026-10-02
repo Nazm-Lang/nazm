@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Nazm: debug main (LLDB)",
+      "type": "lldb",
+      "request": "launch",
+      "preLaunchTask": "nazm: build --debug",
+      "program": "${workspaceFolder}/build/app",
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+// The entrypoints are ordinary functions: called directly, without a chain.
+use "../src/main.nz";
+
+fn after(r: Result[State, Int]) -> Int ! {} {
+    match r {
+        Result.Ok(value: s) => s.bob,
+        Result.Err(error: e) => 0 - e,
+    }
+}
+
+fn main() -> Int ! {} {
+    let s = State(owner: 1, alice: 100, bob: 0, paused: false);
+    // The owner moves 30; anyone else is refused with 1; more than alice holds with 2.
+    after(transfer(s, 1, 30)) * 100 + after(transfer(s, 2, 30)) * 10 + after(transfer(s, 1, 500))
+}
