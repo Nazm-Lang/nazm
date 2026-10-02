@@ -6688,7 +6688,8 @@ semantic epoch, the interface schema and the runtime ABI stay.
 and a `tests/` corpus `nazm test` replays. Six templates, each built only from what the toolchain
 supports and each checked by the template's own commands in the tests: `cli` (a program with
 `IoCap`), `library` (a package with no `main`, `pub` functions), `server` (a worker pool over
-channels reading lines from standard input — Nazm has no sockets, and the template says so),
+channels serving the requests in a file named on its command line — Nazm has neither sockets nor a
+way to read standard input, and the template says so),
 `embedded` (`aarch64-unknown-none`, `MmioCap`, built to objects), `wasm`
 (`wasm32-unknown-unknown`, built to objects) and `contract` (the `web3` profile, run by
 `nazm contract --txs`). An existing non-empty directory is refused; nothing is overwritten.
