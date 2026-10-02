@@ -187,6 +187,12 @@ pub enum Intrinsic {
     ChanSelectUntil,
     /// `time_now_ms() -> Int` (N54) — a monotonic clock in milliseconds. Needs a `TimeCap`.
     TimeNowMs,
+    /// `mmio_read32(addr: Int) -> Int` (N62) — one volatile 32-bit load from a device
+    /// register, zero-extended. Needs an `MmioCap`, and exists only in a freestanding build.
+    MmioRead32,
+    /// `mmio_write32(addr: Int, value: Int) -> Int` (N62) — one volatile 32-bit store of
+    /// `value`'s low half to a device register; `0`. Needs an `MmioCap`; freestanding only.
+    MmioWrite32,
 
     // --- the outside world -------------------------------------------------------
     //
@@ -243,7 +249,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 47] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -275,6 +281,8 @@ impl Intrinsic {
         Self::ChanSelectOf,
         Self::ChanSelectUntil,
         Self::TimeNowMs,
+        Self::MmioRead32,
+        Self::MmioWrite32,
         Self::ArgsCount,
         Self::Arg,
         Self::ReadFile,
@@ -339,6 +347,8 @@ impl Intrinsic {
             Self::ChanSelectOf => "chan_select_of",
             Self::ChanSelectUntil => "chan_select_until",
             Self::TimeNowMs => "time_now_ms",
+            Self::MmioRead32 => "mmio_read32",
+            Self::MmioWrite32 => "mmio_write32",
         }
     }
 
@@ -401,6 +411,8 @@ impl Intrinsic {
             Self::ChanSelectOf => &[Shape::ChansT, Shape::VecT],
             Self::ChanSelectUntil => &[Shape::ChansT, Shape::VecT, Shape::Int],
             Self::TimeNowMs => &[],
+            Self::MmioRead32 => &[Shape::Int],
+            Self::MmioWrite32 => &[Shape::Int, Shape::Int],
         }
     }
 
@@ -437,9 +449,12 @@ impl Intrinsic {
             Self::VecGet | Self::VecPop => Shape::T,
             Self::ChanNewOf => Shape::ChanT,
             Self::ChanSendOf | Self::ChanRecvOf => Shape::Bool,
-            Self::ChanCloseOf | Self::ChanSelectOf | Self::ChanSelectUntil | Self::TimeNowMs => {
-                Shape::Int
-            }
+            Self::ChanCloseOf
+            | Self::ChanSelectOf
+            | Self::ChanSelectUntil
+            | Self::TimeNowMs
+            | Self::MmioRead32
+            | Self::MmioWrite32 => Shape::Int,
         }
     }
 

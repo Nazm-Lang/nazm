@@ -51,16 +51,20 @@ pub enum CapabilityKind {
     /// Authority to read a clock (N54): what `time_now_ms` and a select's deadline need. No
     /// effect is authorised by it; a profile refuses it to keep a program reproducible.
     Time,
+    /// Authority to touch a device register (N62): what `mmio_read32` and `mmio_write32`
+    /// need. No effect is authorised by it; only a freestanding build has registers at all.
+    Mmio,
 }
 
 impl CapabilityKind {
     /// Every kind, in id order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Io,
         Self::Spawn,
         Self::Foreign,
         Self::Vouch,
         Self::Time,
+        Self::Mmio,
     ];
 
     /// The kind's stable identity. Never reused and never reordered.
@@ -72,6 +76,7 @@ impl CapabilityKind {
             Self::Foreign => 2,
             Self::Vouch => 3,
             Self::Time => 4,
+            Self::Mmio => 5,
         }
     }
 
@@ -84,6 +89,7 @@ impl CapabilityKind {
             Self::Foreign => "ForeignCap",
             Self::Vouch => "VouchCap",
             Self::Time => "TimeCap",
+            Self::Mmio => "MmioCap",
         }
     }
 
@@ -132,6 +138,8 @@ impl CapabilityKind {
             Intrinsic::StrVouch => CapabilitySet::of(Self::Vouch),
             // A clock is authority of its own too (N54).
             Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => CapabilitySet::of(Self::Time),
+            // And a device register (N62).
+            Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => CapabilitySet::of(Self::Mmio),
             Intrinsic::StrLen
             | Intrinsic::StrByte
             | Intrinsic::StrSlice
@@ -177,6 +185,7 @@ impl CapabilityKind {
         match i {
             Intrinsic::StrVouch => Some(Self::Vouch),
             Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => Some(Self::Time),
+            Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => Some(Self::Mmio),
             _ => None,
         }
     }
@@ -194,6 +203,7 @@ impl CapabilityKind {
         match self {
             Self::Io => "an",
             Self::Spawn | Self::Foreign | Self::Vouch | Self::Time => "a",
+            Self::Mmio => "an",
         }
     }
 

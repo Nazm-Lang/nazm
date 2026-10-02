@@ -1949,6 +1949,22 @@ M1 Pro (macOS, Apple clang 21.0.0) by both backends for each target:
 
 Cross-host reproducibility — the same target's objects from two hosts — was not measured.
 
+### A freestanding image — N62, measured 2026-10-02
+
+`crates/nazm-cli/tests/freestanding.rs`'s program (`Hi` through `mmio_write32`, a loop and a
+recursive `fib(10)`), built on the host with `--target aarch64-unknown-none --objects`, linked with
+`ld.lld -T link.ld` and booted with `qemu-system-aarch64 -M virt -cpu cortex-a53 -nographic -nic none
+-semihosting` in `nazm-qemu:n62` (`docker/qemu.Dockerfile`, `docker run --network none`):
+
+| | |
+| --- | --- |
+| image | `.text` 1,424 B, `.rodata` 583 B, `.bss` 24 B — 2,421 B, plus the 64 KiB stack the script reserves |
+| output | `Hi`, `100`; status 0 |
+| QEMU start to exit, three runs | 50, 27, 29 ms — QEMU's own start-up, not the program |
+| an overflow, a deep recursion | `N0400`, `N0408` on the UART; status 2 |
+
+One board, emulated: no hardware was run, and the timing says nothing about one.
+
 ### Select and the event count — N54, measured 2026-10-02
 
 N54 added a process-wide event count that every typed send and close advances (§7.56), so what is

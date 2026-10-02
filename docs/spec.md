@@ -3144,6 +3144,25 @@ geometry = { path = "../geometry", version = "0.3.1" }
 | **Commands** | `nazm publish DIR --registry REG`; `nazm yank NAME@VERSION --registry REG [--undo]`; `nazm lock`, `--locked` as N46 |
 | **Imports** | unchanged: `use "shapes:polygon.nz";` |
 
+### A freestanding target: device registers and no operating system — N62
+<!-- id: freestanding -->
+
+```nazm
+fn put(m: MmioCap, c: Int) -> Int ! {} { mmio_write32(150994944, c) }
+
+fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
+```
+
+| | |
+| --- | --- |
+| **`aarch64-unknown-none`** | A 64-bit ARM machine with no operating system, verified on QEMU's `virt` board. `nazm build --target aarch64-unknown-none --objects DIR` writes the objects, `link.txt` and `link.ld`; LLVM backend only |
+| **What builds** | `Int` and `Bool`, records and enums of them, functions — recursion too, under a stack check against the image's own 64 KiB stack (`N0408` past it) — loops, static strings, and device registers. A program that reaches allocation, input and output, tasks, channels, closures or the C library is refused, naming what it reaches |
+| **`mmio_read32(addr: Int) -> Int`** | One volatile 32-bit load from a device register, zero-extended. No effect; needs an `MmioCap` held where it is written, in every function (`N0369` otherwise) |
+| **`mmio_write32(addr: Int, value: Int) -> Int`** | One volatile 32-bit store of `value`'s low 32 bits; `0`. As `mmio_read32` |
+| **`MmioCap`** | A built-in capability type, like `TimeCap`; handed to `main` |
+| **Where there is no device** | `nazm run` and every hosted build refuse a program that calls either (`N0392`) |
+| **The board's contract** | `_start` sets the stack and enables floating point, calls `main`, writes its result in decimal and a newline to the PL011 UART at `0x09000000`, and stops the machine with status 0 by ARM semihosting; a failure writes its diagnostic there and stops with status 2 |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 

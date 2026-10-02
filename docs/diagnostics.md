@@ -121,6 +121,14 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N62, a freestanding target.** One code appeared, compatible: `N0392` (`mmio_read32` or
+`mmio_write32` reached by `nazm run` or a hosted build, which have no device registers). A register
+access without an `MmioCap` held is the existing `N0369`; a board program's overflow and stack
+exhaustion are the existing `N0400` and `N0408`, written to the UART. What a board cannot have is a
+build refusal by name with exit status 4, not a code: it is a fact of the target, as a host without
+a linker is (§7.59). No schema moved; `nazm inspect` lists one more target, a new value of an
+existing field.
+
 **Applied to N55, FFI v2.** One code appeared, compatible: `N0391` (an `extern "C"` export that is
 not `pub`, does not declare `! {}`, is generic, or takes or returns a type other than `Int` and
 `Bool`). A `Str` holding a NUL byte passed to C is the existing `N0405` at run time; an export's

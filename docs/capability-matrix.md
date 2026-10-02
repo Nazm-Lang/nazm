@@ -3376,6 +3376,21 @@ cache entry; triples outside the matrix refused. **Run-verified**: `aarch64-appl
 `aarch64-unknown-linux-gnu` from macOS-built objects linked and run in the Linux container
 (both backends, by hand: `performance.md`, N57). **Compile-only**: `x86_64-unknown-linux-gnu`.
 
+*N62, 2026-10-02: a freestanding target — VERIFIED on QEMU, one board.* `architecture.md` §7.64
+first. `aarch64-unknown-none`: objects, `link.txt` and `link.ld` (image at `0x40080000`, `_start`
+first, a 64 KiB stack); a board runtime with no thread-local storage and nothing of a C library —
+failure state in plain globals, reported on the PL011 UART, the machine stopped by semihosting —
+and a stack check against the linker's `__stack_bottom`. `mmio_read32`/`mmio_write32` are volatile,
+need an `MmioCap` held, and are refused by `nazm run` and hosted builds (`N0392`). What a board
+program reaches beyond that is read from the generated units' unresolved symbols and refused by
+part. Evidence, `crates/nazm-cli/tests/freestanding.rs` (10, plus one ignored): the objects' ELF
+headers, the linker script, no `STT_TLS` symbol in a board unit or runtime against a hosted one that
+has them, each refusal; **run-verified** by the ignored test in `nazm-qemu:n62` — `ld.lld` links
+the image and `qemu-system-aarch64 -M virt -cpu cortex-a53 -semihosting` boots it: `Hi` written by
+`mmio_write32`, then `100`, status 0; an overflow's `N0400` and a deep recursion's `N0408` on the
+UART, status 2. **Limitation**: one board; no atomics, interrupts, heap or `@std` (§7.64,
+DESIGNED); semihosting stops the machine only under a debugger or QEMU; Cranelift builds no board.
+
 **Limitation** · No Windows, 32-bit, big-endian or CPU-feature targets; no bundled linker or
 sysroot, so a Linux target from macOS is objects only; cross-host byte reproducibility not
 measured.

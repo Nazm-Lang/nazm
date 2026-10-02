@@ -2497,6 +2497,10 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("chan_select_of", "Vec[Chan[T]]"),
         ("chan_select_until", "Vec[Chan[T]]"),
         ("time_now_ms", "TimeCap"),
+        // N62: a device register needs an `MmioCap`, and exists only on a freestanding target
+        // the compiler written in Nazm does not build for.
+        ("mmio_read32", "MmioCap"),
+        ("mmio_write32", "MmioCap"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {

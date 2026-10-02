@@ -53,6 +53,8 @@ pub enum Arch {
 pub enum Os {
     Macos,
     Linux,
+    /// No operating system and no C library (N62, §7.64): a freestanding image.
+    None,
 }
 
 /// A target, by its explicit triple.
@@ -76,11 +78,13 @@ impl Target {
             "aarch64-unknown-linux-gnu" => (Arch::Aarch64, Os::Linux),
             "x86_64-apple-darwin" => (Arch::X86_64, Os::Macos),
             "x86_64-unknown-linux-gnu" => (Arch::X86_64, Os::Linux),
+            "aarch64-unknown-none" => (Arch::Aarch64, Os::None),
             other => {
                 return Err(format!(
-                    "`{other}` is not a target this compiler generates code for; the v1 \
+                    "`{other}` is not a target this compiler generates code for; the \
                      targets are aarch64-apple-darwin, aarch64-unknown-linux-gnu, \
-                     x86_64-apple-darwin and x86_64-unknown-linux-gnu"
+                     x86_64-apple-darwin, x86_64-unknown-linux-gnu and, freestanding, \
+                     aarch64-unknown-none"
                 ))
             }
         };
@@ -309,6 +313,23 @@ impl Backend for LlvmText {
             });
         };
         let (ir, needs) = crate::emit::emit_unit_with(native, u, names, self.debug);
+        // A freestanding image has one thread and no thread-local storage (N62, §7.64): the
+        // failure state the unit declares is an ordinary global there.
+        let ir = if self.target.os == Os::None {
+            ir.lines()
+                .map(|l| {
+                    if l.starts_with('@') && l.contains(" = external thread_local global ") {
+                        l.replacen(" thread_local ", " ", 1)
+                    } else {
+                        l.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+        } else {
+            ir
+        };
         Ok(Generated {
             code: Code::Llvm(ir),
             needs,

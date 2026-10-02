@@ -143,6 +143,22 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
+    // A freestanding image is the LLVM backend's (N62): Cranelift's object writer knows no
+    // binary format for a target without an operating system, so it is refused by name here
+    // rather than by Cranelift after the program is lowered.
+    if choice.backend == nazm_lir::backend::BackendId::Cranelift
+        && target.os == nazm_lir::backend::Os::None
+    {
+        if summary {
+            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+        }
+        eprintln!(
+            "nazm: `--backend cranelift` builds no freestanding target; `{}` is the LLVM \
+             backend's",
+            target.triple
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
     // A target other than the host (N57): clang is told it, and where the host cannot link it
     // the build writes objects instead, or is refused by name before compiling anything.
     let host = nazm_lir::backend::Target::host().ok();
@@ -240,6 +256,10 @@ pub(crate) fn run(
     let mut foreign: Vec<String> = Vec::new();
     // Each export's symbol and C signature, for a library's header (N55).
     let mut exported: Vec<(String, Vec<nazm_lir::Ty>, nazm_lir::Ty)> = Vec::new();
+    // A freestanding target (N62) has no operating system under it: the runtime parts a
+    // program reaches beyond the board's, named, refuse the build after code generation.
+    let freestanding = target.os == nazm_lir::backend::Os::None;
+    let mut unhosted: Vec<&'static str> = Vec::new();
     clock.mark("load");
     let artefacts = match nazm_core::on_lowered(
         map,
@@ -251,6 +271,16 @@ pub(crate) fn run(
         },
         |core, resolution| {
             clock.mark("front_end");
+            // A device register exists only on a board (N62).
+            if !freestanding {
+                if let Some((at, name)) = nazm_core::machine_only_call(resolution) {
+                    return Err(vec![nazm_core::machine_only(
+                        at,
+                        &name,
+                        &format!("a build for `{}`", target.triple),
+                    )]);
+                }
+            }
             let program = crate::mir::lower(core, resolution, &loaded.graph)?;
             clock.mark("mir");
             let native =
@@ -276,11 +306,38 @@ pub(crate) fn run(
                 Some(ObjectFound::Hit(bytes)) => Some(bytes),
                 _ => None,
             };
-            let made = emit_artefacts(&native, &names, chosen, &cached, choice.library);
+            let made = emit_artefacts(
+                &native,
+                &names,
+                chosen,
+                &cached,
+                choice.library,
+                freestanding.then_some(&mut unhosted),
+            );
             clock.mark("codegen");
             made
         },
     ) {
+        Ok(_) if !unhosted.is_empty() => {
+            if summary {
+                return summarized(
+                    Status::Refused,
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    Some(map),
+                    None,
+                );
+            }
+            eprintln!(
+                "nazm: `{}` has no operating system, and this program reaches what only a hosted \
+                 runtime has: {}; \
+                 a freestanding program computes with `Int` and `Bool`, functions, loops and \
+                 device registers",
+                target.triple,
+                unhosted.join(", ")
+            );
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
         Ok(a) => a,
         Err(diagnostics) => {
             // `N0101` is this backend's "not yet", and it reads differently from a
@@ -775,6 +832,7 @@ fn emit_artefacts(
     backend: &dyn nazm_lir::backend::Backend,
     cached: &dyn Fn(&str) -> Option<Vec<u8>>,
     library: bool,
+    unhosted: Option<&mut Vec<&'static str>>,
 ) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
     let mut needs = backend.baseline();
@@ -811,6 +869,41 @@ fn emit_artefacts(
     if !errors.is_empty() {
         return Err(errors);
     }
+    // A freestanding image (N62): the board's runtime and entry in place of the hosted ones,
+    // or the parts it cannot have, named. A library has no board entry; nor does it need one.
+    if let Some(refused) = unhosted {
+        let runtime = nazm_lir::runtime::board::emit_runtime(needs.stack);
+        let foreign: Vec<&str> = native
+            .sigs
+            .iter()
+            .filter(|s| s.foreign)
+            .map(|s| s.symbol.as_str())
+            .collect();
+        refused.extend(freestanding_refusals(&out, &runtime, &foreign));
+        if !refused.is_empty() {
+            return Ok(out);
+        }
+        out.push(Artefact {
+            name: "runtime".to_owned(),
+            code: nazm_lir::backend::Code::Llvm(runtime),
+            instance: false,
+            key: None,
+            reused: false,
+        });
+        if !library {
+            out.push(Artefact {
+                name: "entry".to_owned(),
+                code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::board::emit_entry(
+                    &native.entry.to_string(),
+                    native.entry_roots,
+                )),
+                instance: false,
+                key: None,
+                reused: false,
+            });
+        }
+        return Ok(out);
+    }
     // After every unit, because what the runtime must define is the union of what the
     // modules reached — a whole-program fact, and the only one emission needs.
     out.push(Artefact {
@@ -836,6 +929,77 @@ fn emit_artefacts(
         reused: false,
     });
     Ok(out)
+}
+
+/// What the units call that a board without an operating system does not have (N62), by the
+/// runtime part each symbol belongs to, in a fixed order: every symbol a unit declares that no
+/// unit and not the board's runtime defines, apart from LLVM's intrinsics and the program's own
+/// foreign functions, which `--link` supplies. Read from the generated text, so it is exactly
+/// what the link would leave unresolved — a static string printed is a C library call there.
+fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) -> Vec<&'static str> {
+    use nazm_lir::runtime::Part;
+    let texts: Vec<&str> = units
+        .iter()
+        .filter_map(|a| match &a.code {
+            nazm_lir::backend::Code::Llvm(ir) => Some(ir.as_str()),
+            nazm_lir::backend::Code::Object(_) => None,
+        })
+        .chain(std::iter::once(runtime))
+        .collect();
+    let name = |rest: &str| -> String {
+        rest.chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '$' | '-'))
+            .collect()
+    };
+    // A unit declares the whole inventory; what it needs is what a line other than a
+    // declaration names.
+    let mut defined = std::collections::BTreeSet::new();
+    let mut declared = std::collections::BTreeSet::new();
+    let mut named = std::collections::BTreeSet::new();
+    for line in texts.iter().flat_map(|t| t.lines()) {
+        if line.starts_with("declare ") {
+            if let Some((_, rest)) = line.split_once('@') {
+                declared.insert(name(rest));
+            }
+            continue;
+        }
+        if line.starts_with("define ") {
+            if let Some((_, rest)) = line.split_once('@') {
+                defined.insert(name(rest));
+            }
+        }
+        named.extend(line.split('@').skip(1).map(name));
+    }
+    let missing: Vec<&String> = declared
+        .iter()
+        .filter(|s| {
+            named.contains(*s)
+                && !defined.contains(*s)
+                && !s.starts_with("llvm.")
+                && !foreign.contains(&s.as_str())
+        })
+        .collect();
+    let part_of = |s: &str| {
+        nazm_lir::runtime::IMPORTS
+            .iter()
+            .find(|i| i.symbol == s)
+            .map_or(Part::Base, |i| i.part)
+    };
+    [
+        (Part::Strings, "strings"),
+        (Part::Sequences, "sequences"),
+        (Part::Io, "input and output"),
+        (Part::Tasks, "tasks"),
+        (Part::Channels, "channels"),
+        (Part::Join, "task joins"),
+        (Part::Closures, "closures"),
+        (Part::Libc, "C library"),
+        (Part::Base, "hosted base"),
+    ]
+    .into_iter()
+    .filter(|(part, _)| missing.iter().any(|s| part_of(s) == *part))
+    .map(|(_, label)| label)
+    .collect()
 }
 
 /// Explain a `clang` failure, keeping the IR when its complaint is about it.
@@ -924,6 +1088,8 @@ fn write_objects(
     let libs = match target.os {
         nazm_lir::backend::Os::Linux => "-lpthread",
         nazm_lir::backend::Os::Macos => "",
+        // A freestanding image links nothing but itself, by `link.ld` (N62).
+        nazm_lir::backend::Os::None => "none; ld.lld -T link.ld",
     };
     let text = format!(
         "# Written by nazm build --objects. Link these, in this order, with the target's toolchain.\n\
@@ -931,7 +1097,15 @@ fn write_objects(
         target.triple,
         listed.join(" ")
     );
-    std::fs::write(dir.join("link.txt"), text)
+    std::fs::write(dir.join("link.txt"), text)?;
+    // The board's memory map, for `ld.lld -T link.ld` (N62).
+    if target.os == nazm_lir::backend::Os::None {
+        std::fs::write(
+            dir.join("link.ld"),
+            nazm_lir::runtime::board::linker_script(),
+        )?;
+    }
+    Ok(())
 }
 
 /// A static archive of `objects` (N55), with the system `ar` and the timestamps zeroed so two

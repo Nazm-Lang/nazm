@@ -3040,9 +3040,10 @@ fn the_emitted_ir_for_a_return_heavy_function_is_well_formed() {
     // now one failure exit each in `classify` and `main` plus `@nz.fail`'s `ret void`.
     // A failure leaves a function by an ordinary `ret` — the emitted code has no other
     // way out of one — so a function that can fail has one more return site than it has
-    // `return`s. `@nz.report` is not counted: it ends in `unreachable` after `@exit`.
+    // `return`s. `@nz.report` is not counted: it ends in `unreachable` after `@exit`. Since
+    // N62 the runtime defines the two device-register helpers too, one `ret` each.
     let rets = ir.lines().filter(|l| l.trim().starts_with("ret ")).count();
-    assert_eq!(rets, 8, "expected one `ret` per return site:\n{ir}");
+    assert_eq!(rets, 10, "expected one `ret` per return site:\n{ir}");
     // The specific regression: a terminator written *after* a `ret`. Checked as that
     // adjacency rather than by looking for `unreachable` anywhere — the `@nz.fail`
     // helper ends in one legitimately, and an assertion that cannot tell the two apart

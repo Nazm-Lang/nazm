@@ -7853,17 +7853,21 @@ killers = [{ package = "nazm-core", test = "provenance", name = "the_sources_are
 name = "n38-shared-storage-is-followed"
 why = "a value read out of a sequence is taken to carry only what the read's arguments carry, as though no alias could have written it"
 file = "crates/nazm-sema/src/provenance.rs"
-find = "            | Intrinsic::ChanRecv => BuiltinFlow::Read,"
-replace = "            | Intrinsic::ChanRecv => BuiltinFlow::Derive,"
+find = "            | Intrinsic::MmioRead32 => BuiltinFlow::Read,"
+replace = "            | Intrinsic::MmioRead32 => BuiltinFlow::Derive,"
 killers = [{ package = "nazm-core", test = "provenance", name = "shared_storage_is_not_followed_and_is_unknown" }]
 
 [[mutation]]
 name = "n38-a-channel-drops-provenance"
 why = "what a task receives from a channel carries nothing, so a value loses its origin crossing between tasks"
 file = "crates/nazm-sema/src/provenance.rs"
-find = "            | Intrinsic::ChanRecv => BuiltinFlow::Read,"
-replace = """            => BuiltinFlow::Read,
-            Intrinsic::ChanRecv => BuiltinFlow::Fresh,"""
+find = '''
+            | Intrinsic::ChanRecv
+            // A device register holds whatever the device put there (N62).
+            | Intrinsic::MmioRead32 => BuiltinFlow::Read,'''
+replace = '''
+            | Intrinsic::MmioRead32 => BuiltinFlow::Read,
+            Intrinsic::ChanRecv => BuiltinFlow::Fresh,'''
 killers = [{ package = "nazm-core", test = "provenance", name = "shared_storage_is_not_followed_and_is_unknown" }]
 
 [[mutation]]
@@ -8049,10 +8053,11 @@ Repointed by N51, which moved it to 14 for effect parameters: an entry that refu
 Repointed by N52, which moved it to 15 for declassification: an entry that accepted a function named str_vouch must not be reused.
 Repointed by N53, which moved it to 16 for generic channels: an entry that refused `Chan[Str]` must not be reused.
 Repointed by N54, which moved it to 17 for select and the clock: an entry that accepted a function named time_now_ms must not be reused.
-Repointed by N55, which moved it to 18 for FFI v2: an entry that refused a Str argument to C must not be reused."""
+Repointed by N55, which moved it to 18 for FFI v2: an entry that refused a Str argument to C must not be reused.
+Repointed by N62, which moved it to 19 for a freestanding target: an entry that accepted a function named mmio_read32 must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 18;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 17;"
+find = "pub const SEMANTIC_EPOCH: u32 = 19;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 18;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10283,11 +10288,12 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::the_run
 name = "n53-the-runtime-abi-stays"
 why = """the generic channel runtime ships under N50's revision, so an object built before it is reused
 Repointed by N54, which moved the revision to 6 for select: an object built against N53's runtime must not be reused.
-Repointed by N55, which moved it to 7 for C-string arguments."""
+Repointed by N55, which moved it to 7 for C-string arguments.
+Repointed by N62, which moved it to 8 for the device-register helpers."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = "pub const RUNTIME_ABI_REVISION: u32 = 7;"
-replace = "pub const RUNTIME_ABI_REVISION: u32 = 6;"
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_seven_and_its_digest_covers_c_strings" }]
+find = "pub const RUNTIME_ABI_REVISION: u32 = 8;"
+replace = "pub const RUNTIME_ABI_REVISION: u32 = 7;"
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_eight_and_its_digest_covers_c_strings" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -10968,3 +10974,105 @@ file = "crates/nazm-formal/src/lib.rs"
 find = '        Expr::Eq(a, b) => (type_of(a, env)? == type_of(b, env)?).then_some(Ty::Bool),'
 replace = '        Expr::Eq(a, b) => { let _ = (type_of(a, env)?, type_of(b, env)?); Some(Ty::Bool) },'
 killers = [{ package = "nazm-formal", test = "exhaustive", name = "p5_the_checker_accepts_exactly_what_the_rules_type" }]
+
+
+# --- N62: a freestanding target — no OS, no libc, no heap ----------------------------------------
+
+[[mutation]]
+name = "n62-a-hosted-build-performs-a-register"
+why = "a build for a hosted target lowers `mmio_write32` instead of refusing it with N0392, so a program writes to an address the operating system owns"
+file = "crates/nazm-cli/src/build.rs"
+find = '            if !freestanding {'
+replace = '            if false {'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_register_is_refused_where_there_is_none" }]
+
+[[mutation]]
+name = "n62-the-interpreter-performs-a-register"
+why = "`nazm run` starts a program that touches a device register instead of refusing it before it starts"
+file = "crates/nazm-core/src/lib.rs"
+find = '    if let Some((at, name)) = machine_only_call(&resolution) {'
+replace = '    if let Some((at, name)) = None::<(nazm_span::Span, String)> {'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_register_is_refused_where_there_is_none" }]
+
+[[mutation]]
+name = "n62-a-register-needs-no-authority"
+why = "a function holding no `MmioCap` may write a device register"
+file = "crates/nazm-sema/src/capability.rs"
+find = '            Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => Some(Self::Mmio),'
+replace = '            Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => None,'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_register_needs_an_mmio_cap_held" }]
+
+[[mutation]]
+name = "n62-a-board-unit-keeps-thread-local-storage"
+why = "a unit for the board declares its failure state thread-local, which a machine with no thread pointer set up cannot address"
+file = "crates/nazm-lir/src/backend.rs"
+find = '                        l.replacen(" thread_local ", " ", 1)'
+replace = '                        l.to_owned()'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "a_unit_for_the_board_refers_to_no_thread_local_storage" }]
+
+[[mutation]]
+name = "n62-the-board-runtime-is-thread-local"
+why = "the board's runtime defines its failure state thread-local"
+file = "crates/nazm-runtime/src/board.rs"
+find = '@nz.failed = hidden global i1 false'
+replace = '@nz.failed = hidden thread_local global i1 false'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runtime_has_no_thread_local_storage_and_no_c_library" }]
+
+[[mutation]]
+name = "n62-the-board-gets-the-hosted-runtime"
+why = "a build for the board links the hosted runtime and entry, which call the C library and use thread-local storage"
+file = "crates/nazm-cli/src/build.rs"
+find = '                freestanding.then_some(&mut unhosted),'
+replace = "                None::<&mut Vec<&'static str>>,"
+killers = [{ package = "nazm-cli", test = "freestanding", name = "a_unit_for_the_board_refers_to_no_thread_local_storage" }]
+
+[[mutation]]
+name = "n62-a-board-may-call-the-c-library"
+why = "a board program that reaches libc's `write` is built anyway and fails at the link with an undefined symbol"
+file = "crates/nazm-cli/src/build.rs"
+find = '    .filter(|(part, _)| missing.iter().any(|s| part_of(s) == *part))'
+replace = '    .filter(|(part, _)| *part != Part::Libc && missing.iter().any(|s| part_of(s) == *part))'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "what_a_board_cannot_have_is_refused_by_name" }]
+
+[[mutation]]
+name = "n62-every-declaration-is-needed"
+why = "the whole declared inventory counts as reached, so every board program is refused"
+file = "crates/nazm-cli/src/build.rs"
+find = '            named.contains(*s)'
+replace = '            true'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "a_board_program_is_built_to_objects_a_link_list_and_a_linker_script" }]
+
+[[mutation]]
+name = "n62-a-register-read-is-not-volatile"
+why = "a device register is read with an ordinary load, which optimisation may merge, hoist or drop"
+file = "crates/nazm-runtime/src/board.rs"
+find = '  %v = load volatile i32, ptr %p'
+replace = '  %v = load i32, ptr %p'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runtime_has_no_thread_local_storage_and_no_c_library" }]
+
+[[mutation]]
+name = "n62-floating-point-stays-trapped"
+why = "`_start` leaves CPACR_EL1 at its reset value, so the first SIMD instruction code generation emits traps"
+file = "crates/nazm-runtime/src/board.rs"
+find = '        "module asm \"  msr cpacr_el1, x1\"",'
+replace = ''
+killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runtime_has_no_thread_local_storage_and_no_c_library" }]
+
+[[mutation]]
+name = "n62-cranelift-tries-the-board"
+why = "Cranelift is handed the board and fails with its own unknown binary format instead of a refusal by name"
+file = "crates/nazm-cli/src/build.rs"
+find = '        && target.os == nazm_lir::backend::Os::None'
+replace = '        && false'
+killers = [{ package = "nazm-cli", test = "freestanding", name = "cranelift_builds_no_board" }]
+
+[[mutation]]
+name = "n62-no-linker-script"
+why = "objects for the board are written without `link.ld`, so nothing says where the image is loaded or where its stack is"
+file = "crates/nazm-cli/src/build.rs"
+find = '    if target.os == nazm_lir::backend::Os::None {'
+replace = '    if target.os != nazm_lir::backend::Os::None {'
+killers = [
+    { package = "nazm-cli", test = "freestanding", name = "a_board_program_is_built_to_objects_a_link_list_and_a_linker_script" },
+    { package = "nazm-cli", test = "freestanding", name = "a_hosted_target_writes_no_linker_script" },
+]

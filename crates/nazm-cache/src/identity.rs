@@ -174,7 +174,10 @@ use crate::digest::{self, Framed};
 /// `18` — N55, 2026-10-02. FFI v2: a `Str` parameter on a foreign declaration moved from refused
 /// (`N0381`) to accepted, and an `extern "C"` declaration with a body — an export — from refused
 /// to accepted under its own rules (`N0391`).
-pub const SEMANTIC_EPOCH: u32 = 18;
+/// `19` — N62, 2026-10-02. A freestanding target: `MmioCap` became a built-in type name and
+/// `mmio_read32` and `mmio_write32` built-in names, so a program defining any of them moved from
+/// accepted to refused, and a register access without an `MmioCap` held is refused (`N0369`).
+pub const SEMANTIC_EPOCH: u32 = 19;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

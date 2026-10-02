@@ -446,6 +446,24 @@ impl Fx<'_, '_, '_> {
                     .unwrap_or_else(|| self.iconst(0));
                 self.set(dst, t);
             }
+            // A device register (N62), volatile in the runtime. Cranelift builds only
+            // hosted targets, which refuse these before lowering; the arms exist so the
+            // table is whole.
+            Intrinsic::MmioRead32 => {
+                let a = arg(self, 0);
+                let t = self
+                    .rt("nz.mmio_read32", &[a])
+                    .unwrap_or_else(|| self.iconst(0));
+                self.set(dst, t);
+            }
+            Intrinsic::MmioWrite32 => {
+                let a = arg(self, 0);
+                let v = arg(self, 1);
+                let t = self
+                    .rt("nz.mmio_write32", &[a, v])
+                    .unwrap_or_else(|| self.iconst(0));
+                self.set(dst, t);
+            }
             Intrinsic::ChanCloseOf => {
                 let c = arg(self, 0);
                 // The generic close, which also wakes a select (N54).
