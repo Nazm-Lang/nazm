@@ -3098,6 +3098,22 @@ fn worker(stop: Chan[Int], jobs: Chan[Int], out: Chan[Int]) -> Int ! {} {
 | **Cancellation** | Cooperative: close a channel the task selects on. Observed only where a task waits; a sibling's failure cancels nothing (N44 unchanged) |
 | **Counters** | `NAZM_SCHED_REPORT=1`: `nazm-sched: spawned=… joined=… selects=… timeouts=…` on standard error at exit |
 
+### Foreign functions v2: strings in, exports out — N55
+<!-- id: ffi-v2 -->
+
+```nazm
+extern "C" fn c_strlen(s: Str) -> Int = "strlen_of";
+
+pub extern "C" fn nazm_triple(x: Int) -> Int ! {} = "nazm_triple" { x * 3 }
+```
+
+| | |
+| --- | --- |
+| **`Str` argument** | A NUL-terminated copy for the call's duration; C borrows it. A `Str` holding a NUL byte fails the call before C runs (`N0405`). A `Str` result is still refused (`N0381`) |
+| **Export** | `pub extern "C" fn … ! {} = "symbol" { … }`: a C-callable function of `Int`s and `Bool`s, public, effect-free and not generic (`N0391` otherwise) |
+| **Failure in an export** | Reported on standard error; the process exits with status 2. Nothing unwinds into C |
+| **Library** | `nazm build --lib OUT.a FILE` writes the static archive and `OUT.h`; no `main` needed |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
