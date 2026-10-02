@@ -6679,6 +6679,52 @@ code (`unsafe_code = "forbid"`), so Miri's subject is absent; sanitizing the C-c
 separate experiment, not run. Coverage-guided fuzzing (`cargo fuzz`) needs a nightly toolchain and a
 new dependency; the seeded generators stand in for it, and are said to.
 
+## 7.76 Ecosystem tooling: init, API docs, C headers, an editor client — N74, 2026-10-02
+
+Written before the code. Tooling over what the compiler already knows; no language rule moves, so the
+semantic epoch, the interface schema and the runtime ABI stay.
+
+**`nazm init DIR --template T`** writes a project a fresh user can run at once: `nazm.toml`, `src/`
+and a `tests/` corpus `nazm test` replays. Six templates, each built only from what the toolchain
+supports and each checked by the template's own commands in the tests: `cli` (a program with
+`IoCap`), `library` (a package with no `main`, `pub` functions), `server` (a worker pool over
+channels reading lines from standard input — Nazm has no sockets, and the template says so),
+`embedded` (`aarch64-unknown-none`, `MmioCap`, built to objects), `wasm`
+(`wasm32-unknown-unknown`, built to objects) and `contract` (the `web3` profile, run by
+`nazm contract --txs`). An existing non-empty directory is refused; nothing is overwritten.
+
+**`nazm doc FILE|DIR [-o OUT]`** documents a program's public API from its semantic definitions,
+not from its text: each module's exported functions, records and enums, with the checker's declared
+and required effects, the capabilities a function takes, its foreign symbol or C export, the
+package's profiles, and a link back to the source — the path relative to the package and the line.
+The only text read is the signature as written and the comment lines directly above a definition,
+shown as its description (a convention of the tool; the language has no doc comments). One
+`nazm.api-doc/1` JSON document, and with `-o` that and `api.md`, whose anchors are the definitions'
+identities, so a link survives a rebuild and moves only when the definition does.
+
+**`nazm bindgen HEADER`** turns the safe subset of a C header into `extern "C"` declarations: a
+prototype whose parameters are `int64_t` or `bool` (or `const char *`, as N55's borrowed `Str`) and
+whose result is `int64_t` or `bool`. Anything else — `int`, `long`, `void`, a pointer to anything
+else, a struct, a variadic, a function pointer, a macro — is refused by name with the reason, never
+widened or guessed; the output names every prototype as translated or refused
+(`nazm.bindgen/1`), and the declarations it writes are checked by the checker before they are
+printed. Wrappers, not emulation: nothing of C's semantics is reproduced in Nazm.
+
+**`nazm publish --dry-run`** resolves, checks and digests exactly as a publish would, and writes
+nothing to the registry.
+
+**An editor client, standard protocols only.** `editors/vscode` is a client for `nazm lsp` (the
+Language Server Protocol) and a launch configuration for N58's debugger through an existing LLDB
+debug adapter; all language logic stays in the compiler's service. The language service is already
+package-aware — definition, references, hover and workspace symbols reach a dependency's sources, and
+renaming a dependency's public function is refused (`Exported`: its other importers are programs no
+open document loads) — and is tested so.
+
+**Not here, and why.** A registry over the network, `nazm update` (versions are exact and the lock
+is rewritten by `nazm lock`), translating C semantics or another language into Nazm, rename across a
+package boundary, and the agent benchmark: no claim of improved agent efficiency is made, so it is
+not re-run.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
