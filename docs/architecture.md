@@ -6576,6 +6576,34 @@ storage with `nazm contract --txs`.
 **Not here.** Events, value transfer and external calls do not exist in the model (§7.71); an
 optimiser; Yul output for audit.
 
+## 7.73 Contracts on WebAssembly: the ordinary backend and a host adapter — N71, 2026-10-02
+
+Written before the code. A contract (§7.71) compiled by the ordinary WebAssembly backend (§7.66), with
+nothing chain-specific in the compiler but one generated adapter: the contract's own unit, its code
+unchanged, gains exported entry functions that move the state across typed host imports.
+
+**The adapter.** For each entrypoint `name`, an export `nazm_call_name(caller: i64, a: i64, …) -> i64`
+that reads every state field with `nazm_host.state_get(index) -> i64`, builds the `State`, calls the
+entrypoint, and on `Ok` — after comparing `conserved` before and after, where declared — writes every
+field back with `nazm_host.state_set(index, value)` and returns `0`; on `Err(code)` it calls
+`nazm_host.revert(code)` and returns `1`; a conservation change returns `2` with nothing written; a
+runtime failure is the module's ordinary `report` (§7.66) and returns `3`. `nazm_init()` writes
+`init()`'s state. A field's `index` is its declaration index, and its value an `i64` (`Bool` as 0 or 1):
+the serialisation is the state's declared shape, deterministic and versioned in the metadata.
+
+**The host.** The module imports exactly `nazm_host.state_get`, `state_set`, `revert` and `report` —
+read from its import section, and nothing else is granted. The reference host (`contract_host.mjs`)
+keeps the state, instantiates the module afresh for each transaction (a failure leaves nothing behind),
+and applies the result only on `0`. Its run is compared with the simulator's: the same outcomes, codes
+and final state.
+
+**Shared, not forked.** The adapter is text appended to a unit the ordinary backend emits; the backend
+itself is unchanged, and the same contract built for the ordinary `wasm32-unknown-unknown` target without
+the adapter is the same unit without it — which a test holds.
+
+**Not here.** A chain's own host interface (storage keys, events, crypto) is a binding of these four
+imports to it; none is bound.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
