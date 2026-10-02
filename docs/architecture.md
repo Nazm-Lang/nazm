@@ -6485,6 +6485,52 @@ field or why not.
 storage; enums; hybrid (AoSoA) blocking; layouts for a single record value, which LLVM already
 scalarises.
 
+## 7.71 Contracts: a chain-neutral model over ordinary Nazm — N69, 2026-10-02
+
+Written before the code. A smart contract is an ordinary Nazm module held to a profile and run by a
+simulator that owns its persistent state. No Web3 dialect: the same pure function means the same
+under every profile, and nothing below is syntax.
+
+**The `web3` profile.** `declared-effects`, `no-io`, `no-spawn`, `no-foreign`, `no-ambient-time`,
+`no-blocking` and `no-recursion` (§7.49, §7.62, §7.65): no ambient authority, no clock, no tasks or
+channels, no C, every contract declared, and a call graph whose depth the compiler can state.
+Arithmetic is already deterministic and checked everywhere; nothing changes for it.
+
+**A contract.** A module with a record `State` whose fields are `Int`s and `Bool`s, a `fn init() ->
+State`, and entrypoints: every `pub fn` of the form `fn name(s: State, caller: Int, a: Int, …) ->
+Result[State, Int]`, pure (`! {}`). Persistent state is therefore not a global: it is the first
+argument and the `Ok` result, and an entrypoint's authority over it is exactly what its body does with
+`s`. `caller` is the signer, handed by the host. `Err(code)` reverts with `code`; a runtime failure
+(`N0400`, `N0401`, `N0405`) reverts with its diagnostic code; a revert leaves the state as it was. An
+optional `fn conserved(s: State) -> Int` names the quantity every successful transaction must leave
+unchanged — the contract's asset.
+
+**Machine-readable facts.** `nazm contract FILE --interface` writes `nazm.contract/1`: the state's
+fields, each entrypoint's arguments, and its **read and write sets** — a field it projects from `s`
+is read; a field of an `Ok(State(…))` it builds other than as `s.field` itself is written; anything it
+cannot see through (a helper given `s`, a state built elsewhere) makes the whole state "may read" and
+"may write", never omitted. External calls do not exist in this model: an entrypoint calls only Nazm
+functions, so there is no reentrancy to analyse, and that is stated rather than claimed as safety.
+
+**The simulator.** `nazm contract FILE --txs FILE` runs transactions in order — `CALLER ENTRY ARGS…`
+per line — on the interpreter, threading the state, each from the state the last successful one left.
+`nazm.contract-run/1` reports, per transaction: the outcome (`ok`, `revert` with the code, or `fail`
+with the diagnostic code), the **dynamic meter** (the interpreter's steps, a count, not gas), the
+fields it changed, and — where `conserved` exists — whether the conserved quantity held. The run is a
+pure function of the module and the transactions: two runs give the same bytes.
+
+**Assets, designed and checked dynamically.** A linear asset kind — a value that cannot be copied,
+only moved, and cannot be dropped except by an explicit destruction — is a type-system change this
+milestone does not make. In the implemented scope an asset is the declared conserved quantity, and the
+simulator refuses every transaction that changes it (`N0395`); duplication or silent loss of an asset
+is a conservation failure, found at the first transaction that commits it. Static linearity is
+designed: a built-in `Asset[T]` with move-only semantics, its own drop rule, and the checker's existing
+ownership facts (§7.41) — RESEARCH until a backend needs it.
+
+**Not here, and why.** Chain host calls (storage, events, crypto) belong to each backend's adapter
+(N70–N72); metering in gas is the EVM's (N70); signer and account constraints beyond `caller` are
+N72's.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
