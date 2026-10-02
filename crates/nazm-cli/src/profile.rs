@@ -30,6 +30,73 @@ fn unknown(name: &str, whose: &str) -> ExitCode {
 }
 
 /// Every allocation site whose count per call is unknown, as a profile's witnesses (N52).
+/// What the profile rules read off MIR (N60): the unbounded allocations; the functions in a
+/// cycle of direct calls and spawns, from MIR's own call edges; and the calls through a function
+/// value, whose targets the compiler does not know. MIR's stack checks are not the fact here:
+/// they are also placed, conservatively, where an indirect call might close a cycle.
+fn mir_facts(program: &nazm_mir::ir::Program) -> profile::MirFacts {
+    let n = program.functions.len();
+    let index = |id: nazm_mir::ir::FuncId| program.functions.iter().position(|f| f.id == id);
+    let mut edges: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut indirect = Vec::new();
+    for (i, f) in program.functions.iter().enumerate() {
+        for b in &f.blocks {
+            for s in &b.stmts {
+                match &s.kind {
+                    nazm_mir::ir::StatementKind::Assign {
+                        value: nazm_mir::ir::Rvalue::Call { callee, .. },
+                        ..
+                    }
+                    | nazm_mir::ir::StatementKind::Spawn { callee, .. } => {
+                        if let (Some(j), Some(e)) = (index(*callee), edges.get_mut(i)) {
+                            e.push(j);
+                        }
+                    }
+                    nazm_mir::ir::StatementKind::Assign {
+                        value: nazm_mir::ir::Rvalue::CallIndirect { .. },
+                        ..
+                    } => indirect.push(profile::Witness {
+                        span: s.at,
+                        note: format!("`{}` calls a function value here", f.name),
+                    }),
+                    _ => {}
+                }
+            }
+        }
+    }
+    // A function is in a cycle when it reaches itself: a search from each, bounded by `n`.
+    let mut recursive = Vec::new();
+    for (i, f) in program.functions.iter().enumerate() {
+        let mut seen = vec![false; n];
+        let mut stack: Vec<usize> = edges.get(i).cloned().unwrap_or_default();
+        let mut cycle = false;
+        while let Some(j) = stack.pop() {
+            if j == i {
+                cycle = true;
+                break;
+            }
+            if seen.get(j).copied().unwrap_or(true) {
+                continue;
+            }
+            if let Some(s) = seen.get_mut(j) {
+                *s = true;
+            }
+            stack.extend(edges.get(j).into_iter().flatten().copied());
+        }
+        if cycle {
+            recursive.push(profile::Witness {
+                span: f.span,
+                note: format!("`{}` is in a call cycle", f.name),
+            });
+        }
+    }
+    profile::MirFacts {
+        unbounded: unbounded_allocations(program),
+        recursive,
+        indirect,
+    }
+}
+
 fn unbounded_allocations(program: &nazm_mir::ir::Program) -> Vec<profile::Witness> {
     nazm_mir::cost::of(program)
         .into_iter()
@@ -96,24 +163,25 @@ pub(crate) fn enforce(
     };
     let map = &loaded.map;
     // A rule over resource facts reads MIR (N52): lowered only when one is in force.
-    let needs_cost = profiles
-        .iter()
-        .any(|p| p.rules().contains(&profile::Rule::BoundedAllocation));
+    let needs_cost = profiles.iter().any(|p| {
+        p.rules().contains(&profile::Rule::BoundedAllocation)
+            || p.rules().contains(&profile::Rule::NoRecursion)
+    });
     let evaluated = if needs_cost {
         nazm_core::on_lowered(
             map,
             &loaded.graph,
             nazm_core::Entry::Required,
             |core, res| {
-                let unbounded = crate::mir::lower(core, res, &loaded.graph)
+                let facts = crate::mir::lower(core, res, &loaded.graph)
                     .ok()
-                    .map(|program| unbounded_allocations(&program));
+                    .map(|program| mir_facts(&program));
                 Ok(profile::evaluate(
                     &profiles,
                     &loaded.graph,
                     res,
                     locked,
-                    unbounded.as_deref(),
+                    facts.as_ref(),
                 ))
             },
         )

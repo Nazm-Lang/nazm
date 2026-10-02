@@ -388,6 +388,13 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N60 — Restriction profiles v2 — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.62 first. `pass`/`fail`/`unknown` verdicts, `unknown` refused; `embedded`'s
+`no-recursion` over MIR's direct call graph, `unknown` through a function value; `critical`'s
+`no-select`; a dependency cannot weaken the root's profile. Constant-time RESEARCH; bounded loops,
+queues and tasks to N63. Next: N61, formal semantics.
+
 ### N59 — Backend performance — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.61 first. Scalar temporaries assigned once and read in their block have no
