@@ -121,6 +121,18 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N74, ecosystem tooling.** No code appeared: `nazm check DIR` on a package with no `main`
+now checks its modules, so `N0509` is raised by `run` and `build` alone; `nazm bindgen` reports the
+checker's own code for a declaration it refuses. `nazm.api-doc/1` (`nazm doc`), `nazm.bindgen/1`
+(`nazm bindgen -o`) and `nazm.publish-plan/1` (`nazm publish --dry-run`) are new, each with a schema
+in `schema/` checked against real output; `nazm.capabilities/1` gains `authority`, `targets` and
+`commands` — new fields, compatible.
+
+**Applied to N73, trust evidence.** No code appeared. `nazm.provenance/1` (`nazm build --provenance`)
+is new, with a schema checked against real output; `cargo xtask evidence` writes `nazm.evidence/1`
+and `nazm.sbom/1`, tooling of the repository rather than of the compiler, tested by
+`xtask/tests/evidence.rs`.
+
 **Applied to N72, account-oriented contracts.** No code appeared: `signed-writes` refuses with the
 existing `N0510`. `nazm.sbpf-accounts/1` is new; `nazm.profile-report/1` gains a profile and a rule.
 

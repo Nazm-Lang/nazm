@@ -101,8 +101,14 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
-After N48: fifteen VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification), sixteen
-PARTIAL, two RESEARCH, one MISSING, across the 34 rows above.
+After N75's audit, 2026-10-02, across the 37 rows above (34 areas, with 2a, 10a and 10b): fifteen
+VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification — area 30 for mutation testing, its
+fuzzing PARTIAL), twenty-one PARTIAL, one RESEARCH (15, the advanced scheduler), none MISSING. No
+row says DESIGNED or BLOCKED as its whole status; the blocked parts are named inside areas 12 (no JIT:
+`unsafe_code = "forbid"`, N65) and 34 (no sBPF toolchain, N72).
+
+*Historical, not current.* After N48 the count read fifteen VERIFIED, sixteen PARTIAL, two RESEARCH,
+one MISSING, written as "across the 34 rows" though the table then had the same 37.
 
 *Historical, not current — kept as it was written.* After N39 the count read thirteen VERIFIED,
 thirteen PARTIAL, three DESIGNED, two RESEARCH, five MISSING; before that, nine, sixteen, three,
