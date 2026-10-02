@@ -121,6 +121,10 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N68, layout specialisation.** No code appeared: a field-by-field `Vec`'s failures are
+the existing `N0405` and `N0406`, unchanged. `nazm.cost/1` gains `layouts` — each `Vec` type and
+whether `--layout soa` lays it out field by field, or why not — a new field, compatible.
+
 **Applied to N67, accelerator kernels.** One code appeared, compatible: `N0394` (a function `nazm
 accel` will not run as a kernel, naming why). A kernel's failures are the existing `N0400` and
 `N0401`, with "at element *i*" added to the message. `nazm.accel/1` and `nazm.kernel/1` are new.

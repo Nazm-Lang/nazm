@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N68 — Adaptive representation — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.70 and research register R4 first, with the prior art. A `Vec` of a record of
+`Int`s and `Bool`s has an unobservable layout, so `--layout soa` stores it one array per field: the
+same results and failures, the layout in every affected object's identity, 2.8× on a one-field scan
+and 2× slower on an all-field one — which is why the compiler does not choose yet. Next: N69, the
+Web3 semantic contract model.
+
 ### N67 — GPU/HPC — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.69 first. A kernel is a pure `(Int) -> Int` function meeting a stated

@@ -158,6 +158,7 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.sequences {
         out.push_str(SEQUENCE_RUNTIME);
         out.push_str(SUM_RUNTIME);
+        out.push_str(SOA_RUNTIME);
     }
     if needs.strings {
         out.push_str(STRING_RUNTIME);
@@ -271,6 +272,54 @@ done:
 /// `RLIMIT_STACK`, so no thread's budget exceeds the stack it has; the quarter left over is the
 /// headroom for the non-recursive calls between two checks. It records nothing: the call site
 /// names the function entered and fails with `N0408` itself.
+/// `nz.soa_grow` (N68, `docs/architecture.md` §7.70): room for one more element of a `Vec` laid
+/// out one 8-byte array per field. The arrays share one allocation, field `k` at `k · cap`; a
+/// full vector moves to twice the capacity, each field's `len` elements copied to its new place.
+const SOA_RUNTIME: &str = r"
+define hidden ptr @nz.soa_grow(ptr %h, i64 %nf) {
+entry:
+  %len = load i64, ptr %h
+  %capp = getelementptr i8, ptr %h, i64 8
+  %cap = load i64, ptr %capp
+  %dp = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %dp
+  %full = icmp sge i64 %len, %cap
+  br i1 %full, label %grow, label %have
+have:
+  ret ptr %data
+grow:
+  %empty = icmp eq i64 %cap, 0
+  %dbl = shl i64 %cap, 1
+  %nc = select i1 %empty, i64 4, i64 %dbl
+  %row = mul i64 %nc, 8
+  %bytes = mul i64 %row, %nf
+  %new = call ptr @malloc(i64 %bytes)
+  %oom = icmp eq ptr %new, null
+  br i1 %oom, label %fail, label %copy
+fail:
+  ret ptr null
+copy:
+  %n = mul i64 %len, 8
+  br label %field
+field:
+  %k = phi i64 [ 0, %copy ], [ %k.next, %field ]
+  %to.off = mul i64 %k, %row
+  %to = getelementptr i8, ptr %new, i64 %to.off
+  %from.row = mul i64 %cap, 8
+  %from.off = mul i64 %k, %from.row
+  %from = getelementptr i8, ptr %data, i64 %from.off
+  call void @llvm.memcpy.p0.p0.i64(ptr %to, ptr %from, i64 %n, i1 false)
+  %k.next = add i64 %k, 1
+  %more = icmp slt i64 %k.next, %nf
+  br i1 %more, label %field, label %done
+done:
+  call void @free(ptr %data)
+  store ptr %new, ptr %dp
+  store i64 %nc, ptr %capp
+  ret ptr %new
+}
+";
+
 /// `nz.ints_sum` (N66, `docs/architecture.md` §7.68): the ordered checked sum, vectorisable.
 const SUM_RUNTIME: &str = r"
 

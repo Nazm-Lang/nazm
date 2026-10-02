@@ -50,3 +50,27 @@ pub fn emit_entry(entry: &NativeSymbol, roots: usize, needs: Needs) -> String {
     nazm_runtime::emit_entry(&entry.to_string(), roots, needs)
 }
 pub use symbol::{Linkage, NativeSymbol};
+
+/// Every `Vec` type of a program, by its source spelling, and whether `--layout soa` lays it out
+/// one array per field — `None` — or why not (N68, `docs/architecture.md` §7.70). The same rule
+/// the emitter applies, stated once for the report.
+#[must_use]
+pub fn layouts(native: &Native) -> Vec<(String, Option<&'static str>)> {
+    let mut out: std::collections::BTreeMap<String, Option<&'static str>> =
+        std::collections::BTreeMap::new();
+    for u in native.units.iter().chain(native.instances.iter()) {
+        for v in &u.vecs {
+            let why = match v.elem {
+                ir::Ty::Record(r) => match u.records.iter().find(|l| l.id == r) {
+                    Some(l) if l.fields.is_empty() => Some("its record has no fields"),
+                    Some(l) if l.fields.iter().all(|f| matches!(f, ir::Ty::Int | ir::Ty::Bool)) => None,
+                    Some(_) => Some("a field is not an `Int` or a `Bool`: the element owns storage or holds a value of its own layout"),
+                    None => Some("its record's layout is not in this unit"),
+                },
+                _ => Some("its element is not a record"),
+            };
+            out.entry(v.source.clone()).or_insert(why);
+        }
+    }
+    out.into_iter().collect()
+}
