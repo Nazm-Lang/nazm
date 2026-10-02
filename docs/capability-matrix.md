@@ -95,9 +95,9 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 27 | Debugger and profiler | PARTIAL |
 | 28 | Performance measurement | PARTIAL |
 | 29 | Differential testing | VERIFIED |
-| 30 | Mutation testing and fuzzing | VERIFIED / MISSING |
+| 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — seeded front-end and differential fuzzers (N73); not coverage-guided |
 | 31 | Bootstrap | VERIFIED |
-| 32 | Reproducibility and provenance | PARTIAL |
+| 32 | Reproducibility and provenance | PARTIAL — build provenance records and attestation hook (N73); across toolchains measured, not equal |
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
@@ -2539,7 +2539,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 **Accepted when** · Met.
 
-### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
+### 30. Mutation testing — VERIFIED · Fuzzing — PARTIAL (N73; MISSING until then)
 
 **Evidence** · `xtask/mutations/mutations.toml` holds **686** catalogued defects (158 when
 this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33, 612 at N34, 628 at N35, 643 at N36, 662 at N37), **498** of them with a verified killer and all
@@ -3558,3 +3558,27 @@ Evidence, `crates/nazm-cli/tests/accounts.rs` (3): an unguarded write refused wh
 offsets and constraints. **BLOCKED**: no sBPF toolchain, validator or emulator here; upstream `bpfel`
 is not sBPF, so no object or run is claimed.
 
+*N73, 2026-10-02: trust evidence — fuzzing PARTIAL (area 30), build provenance VERIFIED (area 32),
+cross-toolchain reproducibility measured.* `architecture.md` §7.75 first. Two seeded fuzzers, the same
+inputs on every host. `crates/nazm-core/tests/fuzz_front.rs` mutates every source of six corpora
+(deletions, duplications, swaps, replaced characters, inserted tokens) and checks each in process: no
+panic, shrunk if one is found; 1,500 cases per run, 60,000 run clean once. `crates/nazm-cli/tests/fuzz_diff.rs`
+generates well-typed, terminating programs (every `Int` operator from edge literals, comparisons,
+`&&`/`||`, `let`, `if`, bounded `while`, calls, a record) and requires one answer from the interpreter,
+LLVM at `-O0` and `-O2` and Cranelift — the value, or the failure code and place; a disagreement is
+shrunk by lines, and `tests/fuzz-corpus/` is replayed first. 24 cases per run; 150 on another seed agree.
+**Shown to find faults**: an unsigned `<` injected into either backend is caught by the differential
+fuzzer (Cranelift's by N41's named test as well), and a lexer panic on one character by the robustness
+fuzzer and by no `nazm-syntax` or `nazm-core` test — three mutants whose named killer is a fuzzer. `nazm build --provenance FILE` writes `nazm.provenance/1` — sources and packages with BLAKE3
+digests, target, compiler, C compiler, runtime ABI and digest, backend and options, profiles, output
+digests — and `--attest-with CMD` keeps a local command's output as `FILE.sig`.
+Evidence, `crates/nazm-cli/tests/build_provenance.rs` (5): digests recomputed from the files, two clean
+directories giving one record, a change seen in its own digest and the output's, the backend recorded,
+a failing signer leaving no signature, a failed build leaving no record. *Across toolchains*: one
+program built for `aarch64-unknown-linux-gnu` by Apple clang 21 (host) and clang 19 (Linux image) —
+the program's and the entry's objects byte-identical at `-O0` and `-O2`; the runtime's object differs,
+at `-O0` by one symbol-table byte (a mapping symbol's type) and at `-O2` by code layout (clang 21's
+cold-path splitting). **Limitation**: not coverage-guided (`cargo fuzz` needs nightly and a new
+dependency); the differential generator covers `Int`/`Bool` programs only; no sanitizer, Miri or Loom
+run (no `unsafe` code to run them on); an attestation is whatever the local command printed — Nazm
+neither signs nor verifies.

@@ -148,7 +148,10 @@ fn the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice() {
     // The runtime raises its own two codes as five-byte reverts: `N0397` for a sender that is not
     // an `Int`, `N0398` for calldata that is no entrypoint's.
     for (code, bytes) in [("N0397", "4e30333937"), ("N0398", "4e30333938")] {
-        assert!(runtime.contains(bytes), "{code} is not raised by the runtime");
+        assert!(
+            runtime.contains(bytes),
+            "{code} is not raised by the runtime"
+        );
     }
     // And it copies the runtime from exactly where it starts: `PUSH2 offset; PUSH1 0; CODECOPY`.
     let start = (deploy.len() - runtime.len()) >> 1;

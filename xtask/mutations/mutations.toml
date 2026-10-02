@@ -11778,3 +11778,80 @@ file = "crates/nazm-cli/src/contract.rs"
 find = '"signer": e.caller_checked'
 replace = '"signer": true'
 killers = [{ package = "nazm-cli", test = "accounts", name = "the_account_metadata_states_every_instructions_constraints" }]
+
+
+# --- N73: trust evidence — faults the fuzzers find with no test written for them ------------------
+
+[[mutation]]
+name = "n73-the-fuzzer-finds-an-unsigned-llvm-ordering"
+why = "the LLVM backend's `<` is unsigned; no test names it — the differential fuzzer's generated programs disagree with the interpreter"
+file = "crates/nazm-lir/src/emit.rs"
+find = '        mir::CmpOp::Lt => "slt",'
+replace = '        mir::CmpOp::Lt => "ult",'
+killers = [{ package = "nazm-cli", test = "fuzz_diff", name = "every_tier_gives_a_generated_program_the_same_answer" }]
+
+[[mutation]]
+name = "n73-the-fuzzer-finds-an-unsigned-cranelift-ordering"
+why = "Cranelift's `<` is unsigned; found by the differential fuzzer as well as by N41's named test"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = "                            mir::CmpOp::Lt => IntCC::SignedLessThan,"
+replace = "                            mir::CmpOp::Lt => IntCC::UnsignedLessThan,"
+killers = [{ package = "nazm-cli", test = "fuzz_diff", name = "every_tier_gives_a_generated_program_the_same_answer" }]
+
+[[mutation]]
+name = "n73-the-fuzzer-finds-a-lexer-panic"
+why = "the lexer panics on one character no hand-written test feeds it; the robustness fuzzer's mutated inputs reach it, and a panic is never an answer"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "                i += ch.len_utf8();\n                out.push(Lexeme::Invalid"
+replace = "                i += ch.len_utf8();\n                assert!(ch != '^');\n                out.push(Lexeme::Invalid"
+killers = [{ package = "nazm-core", test = "fuzz_front", name = "no_mutated_source_makes_the_front_end_panic" }]
+
+# --- N73: provenance -------------------------------------------------------------------------------
+
+[[mutation]]
+name = "n73-the-output-is-not-digested"
+why = "the record names the output but not its digest, so it cannot be checked against the bytes"
+file = "crates/nazm-cli/src/provenance.rs"
+find = 'let mut files = vec![json!({ "name": name, "digest": file_digest(&path) })];'
+replace = 'let mut files = vec![json!({ "name": name, "digest": Value::Null })];'
+killers = [{ package = "nazm-cli", test = "build_provenance", name = "the_record_names_what_reached_the_output_with_digests_anyone_can_recompute" }]
+
+[[mutation]]
+name = "n73-a-source-digest-is-not-of-its-bytes"
+why = "every module's digest is of nothing, so a changed source leaves the record unchanged"
+file = "crates/nazm-cli/src/provenance.rs"
+find = '"digest": digest(map.text(id).as_bytes()),'
+replace = '"digest": digest(b""),'
+killers = [{ package = "nazm-cli", test = "build_provenance", name = "the_record_names_what_reached_the_output_with_digests_anyone_can_recompute" }]
+
+[[mutation]]
+name = "n73-the-commands-profile-is-not-recorded"
+why = "a profile asked for on the command line is held but missing from the record"
+file = "crates/nazm-cli/src/provenance.rs"
+find = "    profiles.extend(r.profile.map(str::to_owned));\n"
+replace = "\n"
+killers = [{ package = "nazm-cli", test = "build_provenance", name = "the_record_names_what_reached_the_output_with_digests_anyone_can_recompute" }]
+
+[[mutation]]
+name = "n73-the-backend-is-assumed"
+why = "the record says LLVM whatever built the output"
+file = "crates/nazm-cli/src/provenance.rs"
+find = '"name": r.backend,'
+replace = '"name": "llvm",'
+killers = [{ package = "nazm-cli", test = "build_provenance", name = "the_backend_that_built_it_is_the_one_recorded" }]
+
+[[mutation]]
+name = "n73-a-failing-signer-still-attests"
+why = "a signer that failed leaves its output as an attestation and the command succeeds"
+file = "crates/nazm-cli/src/provenance.rs"
+find = "        Ok(o) if o.status.success() => {"
+replace = "        Ok(o) if o.status.success() || true => {"
+killers = [{ package = "nazm-cli", test = "build_provenance", name = "an_attestation_is_the_local_commands_output_and_a_failing_one_leaves_none" }]
+
+[[mutation]]
+name = "n73-a-failed-build-has-a-record"
+why = "a record is written for a build that produced nothing"
+file = "crates/nazm-cli/src/main.rs"
+find = "        if built != ExitCode::from(exit::OK) {\n            return built;\n        }"
+replace = "        if false {\n            return built;\n        }"
+killers = [{ package = "nazm-cli", test = "build_provenance", name = "a_failed_build_writes_no_record" }]

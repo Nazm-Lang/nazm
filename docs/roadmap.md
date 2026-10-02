@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N73 — compiler trust and supply chain — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.75 first. A front-end robustness fuzzer and a differential fuzzer across the
+interpreter and three native tiers, both seeded, with a replayed regression corpus; three injected
+faults found by them alone. `nazm build --provenance` writes a deterministic record of a build's inputs,
+toolchain and outputs, and `--attest-with` hands it to a local signer. Cross-toolchain objects measured
+and classified. Not here: coverage-guided fuzzing, sanitizers, Miri, Loom. Next: N74, ecosystem.
+
 ### N72 — sBPF account backend — **PARTIAL: analysis and metadata; execution BLOCKED, 2026-10-02**
 
 `architecture.md` §7.74 first. A `signed-writes` rule refuses a state write no signer decision guards,

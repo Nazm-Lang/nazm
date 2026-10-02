@@ -36,6 +36,8 @@ nazm-codegen-clif = { workspace = true }
 nazm-service = { workspace = true }
 # `nazm lock` and package builds (N46).
 nazm-package = { workspace = true }
+# `nazm build --provenance` (N73): each digest is plain BLAKE3 over the bytes, so `b3sum` checks it.
+blake3 = { workspace = true }
 clap = { workspace = true }
 # `nazm fix` and `nazm capabilities` emit machine-readable output under their own
 # versioned schemas, the same way diagnostics do.
