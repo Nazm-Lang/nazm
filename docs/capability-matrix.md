@@ -99,7 +99,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
-| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69) |
+| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70) |
 
 After N48: fifteen VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification), sixteen
 PARTIAL, two RESEARCH, one MISSING, across the 34 rows above.
@@ -3517,4 +3517,20 @@ a conservation breach rejected with the state unchanged, malformed lines — and
 a runtime failure reverting with `N0400`; five profile refusals; four not-a-contract refusals; a pure
 function the same under `web3`. **Limitation**: no chain backend yet; assets are a conserved
 quantity checked per transaction, not a linear type; no events, external calls or gas.
+
+*N70, 2026-10-02: the EVM backend — VERIFIED against py-evm for the contract model's subset.*
+`architecture.md` §7.72 first. `nazm contract --evm DIR` compiles a contract directly from Core IR
+to deployment and runtime bytecode (no Yul or `solc`): `i64` held exactly in 256-bit words, helpers
+inlined, the state read and written at name-derived slots, `conserved` enforced on-chain, failures
+and `Err` reverting distinguishably. `abi.json` gives each `name(int64,…)` and its selector from the
+compiler's keccak-256 (agreeing with `eth_hash`); `storage.json` the slots; `--upgrade-check` refuses a
+removed or retyped field and allows an added one. Evidence, `crates/nazm-cli/tests/evm.rs` (3 on any
+host — selectors and a slot pinned, a bound for every loop-free entrypoint and none for a loop, the
+deployment copying its runtime from the right offset, the same bytes twice, a refusal before
+emission, the upgrade check; 1 ignored, run in `nazm-evm:n70` — 19 transactions with the
+simulator's outcomes, codes and final storage, the language's truncating division, remainder sign,
+zero divisor and `i64::MIN / -1` on the EVM, and measured gas inside every stated bound, e.g.
+`transfer` 21,598 of 63,806). **Limitation**: one reference EVM (py-evm, Shanghai); no events, value
+or external calls (none in the model); the gas bound is loose (worst-case `SSTORE`s) and open for
+loops; the EVM's execution semantics are held by the ignored test only.
 

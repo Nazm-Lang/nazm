@@ -11634,3 +11634,64 @@ file = "crates/nazm-core/src/eval.rs"
 find = '                self.calls += 1;'
 replace = '                self.calls += 0;'
 killers = [{ package = "nazm-cli", test = "contract", name = "transactions_run_deterministically_and_a_revert_changes_nothing" }]
+
+
+# --- N70: the EVM backend ------------------------------------------------------------------------
+# The bytecode's execution is held by the ignored py-evm differential (tests/evm.rs); only what a
+# test on any host observes is catalogued here.
+
+[[mutation]]
+name = "n70-keccak-pads-as-sha3"
+why = "the hash pads with SHA-3's 0x06 instead of Keccak's 0x01, so every selector and slot is another chain's"
+file = "crates/nazm-service/src/keccak.rs"
+find = '    padded.push(0x01);'
+replace = '    padded.push(0x06);'
+killers = [{ package = "nazm-service", lib = true, name = "keccak::tests::keccak256_matches_known_vectors" }]
+
+[[mutation]]
+name = "n70-a-slot-is-not-by-name"
+why = "a field's slot ignores its name, so every field shares one slot"
+file = "crates/nazm-service/src/evm.rs"
+find = '    keccak256(format!("nazm.state.{name}").as_bytes())'
+replace = '    keccak256(format!("nazm.state.{}", name.len()).as_bytes())'
+killers = [{ package = "nazm-cli", test = "evm", name = "the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice" }]
+
+[[mutation]]
+name = "n70-a-selector-is-the-wrong-four-bytes"
+why = "the selector is the hash's last four bytes, so no ABI-encoded call reaches an entrypoint"
+file = "crates/nazm-service/src/evm.rs"
+find = '        let selector = [h[0], h[1], h[2], h[3]];'
+replace = '        let selector = [h[28], h[29], h[30], h[31]];'
+killers = [{ package = "nazm-cli", test = "evm", name = "the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice" }]
+
+[[mutation]]
+name = "n70-a-loop-has-a-gas-bound"
+why = "a loop does not open the bound, so an entrypoint whose gas depends on its input states one"
+file = "crates/nazm-service/src/evm.rs"
+find = '                self.bounded = false;'
+replace = '                self.bounded = true;'
+killers = [{ package = "nazm-cli", test = "evm", name = "the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice" }]
+
+[[mutation]]
+name = "n70-the-runtime-is-not-carried"
+why = "the deployment code keeps its own trailing byte, so the runtime it returns starts one byte late"
+file = "crates/nazm-service/src/evm.rs"
+find = '    deploy.pop();'
+replace = '    let _ = &deploy;'
+killers = [{ package = "nazm-cli", test = "evm", name = "the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice" }]
+
+[[mutation]]
+name = "n70-a-retyped-field-upgrades"
+why = "a field whose type changed is let through the upgrade check, so the live word is misread"
+file = "crates/nazm-cli/src/contract.rs"
+find = '            Some((_, t)) if t != ty => changes.push('
+replace = '            Some((_, t)) if t != ty && false => changes.push('
+killers = [{ package = "nazm-cli", test = "evm", name = "the_upgrade_check_allows_an_added_field_and_refuses_a_removed_or_retyped_one" }]
+
+[[mutation]]
+name = "n70-a-removed-field-upgrades"
+why = "a removed field is let through the upgrade check, so its value is stranded"
+file = "crates/nazm-cli/src/contract.rs"
+find = '            None => changes.push(json!({ "field": name, "verdict": "incompatible"'
+replace = '            None => changes.push(json!({ "field": name, "verdict": "compatible"'
+killers = [{ package = "nazm-cli", test = "evm", name = "the_upgrade_check_allows_an_added_field_and_refuses_a_removed_or_retyped_one" }]

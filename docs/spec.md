@@ -3227,6 +3227,15 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **Facts** | `nazm contract FILE` → `nazm.contract/1`: state fields, entrypoints, read and write sets (`"all"` where not followed) |
 | **Transactions** | `nazm contract FILE --txs FILE`, one `CALLER ENTRY ARG…` per line: `Ok` commits; `Err(code)` reverts with `code`; a runtime failure reverts with its diagnostic code; changing `conserved` rejects (`N0396`); a revert or rejection leaves the state as it was. `nazm.contract-run/1`, the same bytes for the same inputs |
 
+### The EVM backend — N70
+<!-- id: evm -->
+
+| | |
+| --- | --- |
+| **`nazm contract FILE --evm DIR`** | Compiles a contract to `deploy.hex` and `runtime.hex`, with `abi.json` (`nazm.evm-abi/1`: each entrypoint as `name(int64,…)`, its selector — the first four bytes of its keccak-256 — and a gas bound or `null`), `storage.json` (`nazm.evm-storage/1`: field `f` at slot `keccak256("nazm.state." + f)`) and `evm_run.py`. Anything the backend does not emit is `N0399`, before emission |
+| **Semantics** | Exactly the contract model's: `caller` is the EVM's `CALLER` (a sender address that is not an `Int` reverts, `N0397`); malformed calldata reverts (`N0398`); a runtime failure reverts with its five-byte code, an `Err(code)` with the 32-byte word `code`; a change to `conserved` reverts with `N0396`; every revert discards the transaction's writes |
+| **Upgrades** | `nazm contract NEW --upgrade-check OLD`: `nazm.evm-upgrade/1`; a removed or retyped field is incompatible (`N0399`), an added field compatible, a reordering nothing |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 

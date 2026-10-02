@@ -518,6 +518,13 @@ enum Command {
         /// Run these transactions, one per line, against a fresh `init()` state.
         #[arg(long, value_name = "FILE")]
         txs: Option<PathBuf>,
+        /// Compile to EVM bytecode (N70): write `deploy.hex`, `runtime.hex`, `abi.json`,
+        /// `storage.json` and the py-evm harness `evm_run.py` into DIR.
+        #[arg(long, value_name = "DIR")]
+        evm: Option<PathBuf>,
+        /// Whether this contract's storage can take over OLD's (N70): `nazm.evm-upgrade/1`.
+        #[arg(long, value_name = "OLD")]
+        upgrade_check: Option<PathBuf>,
     },
     /// Map a kernel over `Int`s on the GPU (N67): an eligible pure `(Int) -> Int` function of the
     /// file, as an OpenCL kernel, over the whitespace-separated `Int`s of `--input`. One
@@ -940,7 +947,14 @@ fn main() -> ExitCode {
             file,
             interface,
             txs,
-        } => return contract::run(&file, interface, txs.as_deref()),
+            evm,
+            upgrade_check,
+        } => {
+            if let Some(old) = upgrade_check {
+                return contract::upgrade_check(&file, &old);
+            }
+            return contract::run(&file, interface, txs.as_deref(), evm.as_deref());
+        }
         Command::Accel {
             file,
             kernel,
