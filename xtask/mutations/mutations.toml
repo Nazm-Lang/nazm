@@ -10933,3 +10933,38 @@ file = "crates/nazm-service/src/profile.rs"
 find = '                                nazm_core::sema::Intrinsic::ChanSelectOf'
 replace = '                                nazm_core::sema::Intrinsic::TimeNowMs'
 killers = [{ package = "nazm-cli", test = "profiles_v2", name = "critical_refuses_a_select_by_its_call_site" }]
+
+
+# --- N61: the formal core -------------------------------------------------------------------------
+
+[[mutation]]
+name = "n61-and-evaluates-its-right-side-first"
+why = "`a && b` is lowered with `b` as the condition, so `false && 1 / 0 == 0` traps"
+file = "crates/nazm-core/src/lower.rs"
+find = '                    self.conditional(lhs, rhs, f, *op_span)'
+replace = '                    self.conditional(rhs, lhs, f, *op_span)'
+killers = [{ package = "nazm-formal", test = "exhaustive", name = "p4_holds_where_a_right_operand_can_trap" }]
+
+[[mutation]]
+name = "n61-the-formal-remainder-traps"
+why = "the formal core traps `i64::MIN % -1`, which the language defines as 0"
+file = "crates/nazm-formal/src/lib.rs"
+find = '        Op::Rem if k == -1 => Some(0),'
+replace = '        Op::Rem if false => Some(0),'
+killers = [{ package = "nazm-formal", test = "exhaustive", name = "p4_the_interpreter_means_what_the_semantics_says" }]
+
+[[mutation]]
+name = "n61-the-formal-else-is-the-then"
+why = "the formal core's E-If takes the then branch both ways"
+file = "crates/nazm-formal/src/lib.rs"
+find = '            Ok(false) => eval(b, rho)?,'
+replace = '            Ok(false) => eval(a, rho)?,'
+killers = [{ package = "nazm-formal", test = "exhaustive", name = "p4_the_interpreter_means_what_the_semantics_says" }]
+
+[[mutation]]
+name = "n61-the-formal-equality-ignores-types"
+why = "the formal core's T-Eq types any two operands, so the checker's refusal of `1 == true` disagrees with it"
+file = "crates/nazm-formal/src/lib.rs"
+find = '        Expr::Eq(a, b) => (type_of(a, env)? == type_of(b, env)?).then_some(Ty::Bool),'
+replace = '        Expr::Eq(a, b) => { let _ = (type_of(a, env)?, type_of(b, env)?); Some(Ty::Bool) },'
+killers = [{ package = "nazm-formal", test = "exhaustive", name = "p5_the_checker_accepts_exactly_what_the_rules_type" }]

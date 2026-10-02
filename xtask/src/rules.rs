@@ -66,6 +66,9 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // The runtime component (N53): text, inventory and entry, depending on nothing of the
         // compiler — a program's runtime is not a function of how it was compiled.
         "nazm-runtime" => &[],
+        // The formal core (N61): its semantics owes nothing to the compiler; only its tests —
+        // a dev-dependency — run the compiler, to hold it to the semantics.
+        "nazm-formal" => &["nazm-core"],
         // The Cranelift backend, N41: validated MIR and the backend boundary `nazm-lir` holds,
         // and nothing above them — not Core IR, not the checker, not the syntax tree. The one
         // crate besides `xtask` that may depend on a code generator (`may_depend_on_codegen`).

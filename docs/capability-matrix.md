@@ -1471,6 +1471,17 @@ anticipating a Critical profile is not evidence for one.**
 established bound, total functions, and every failure mode enumerated rather than trapped;
 contracts and invariants checked rather than asserted.
 
+*N61, 2026-10-02: a formal core — PARTIAL (bounded, machine-checked; no proof).* `docs/formal-core.md`
+states integers and booleans with traps, comparison, short-circuit `&&`, `if` and `let` by typing and
+big-step rules; `crates/nazm-formal` transcribes them with no dependency on the compiler, and
+`crates/nazm-formal/tests/exhaustive.rs` checks five properties over **every** program of the core
+up to five nodes — 94,352 programs, 27,680 well-typed: soundness (never stuck, the right type),
+determinism, checked arithmetic against 128-bit integers, the interpreter's outcome equal to the
+rules' for every typed program, and the checker accepting exactly what the rules type. The check's
+first run found an error in the formal transcription, not the compiler — `i64::MIN % -1` is 0 by
+the spec, and the transcription trapped — which is the correspondence working in both directions.
+No proof assistant, nothing beyond the bound, no function, loop, string, effect or backend in the core.
+
 *N60, 2026-10-02: restriction profiles v2 — VERIFIED for the rules named.* `architecture.md` §7.62
 first. A verdict is `pass`, `fail` or `unknown`, `unknown` refused and reported as such.
 `embedded` adds `no-recursion` — a cycle of MIR's direct call and spawn edges, each function in it

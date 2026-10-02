@@ -1262,6 +1262,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nazm-formal"
+version = "0.0.1"
+dependencies = [
+ "nazm-core",
+]
+
+[[package]]
 name = "nazm-iface"
 version = "0.0.1"
 dependencies = [

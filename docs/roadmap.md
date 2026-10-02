@@ -388,6 +388,13 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N61 — Formal semantics — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.63 and `docs/formal-core.md` first. A core's typing and evaluation rules,
+transcribed with no compiler dependency, and five properties checked over all 94,352 programs up to
+five nodes, holding Nazm's interpreter and checker to them. Its first run found the transcription
+wrong against the spec (`i64::MIN % -1`). A model check, not a proof. Next: N62, embedded bare metal.
+
 ### N60 — Restriction profiles v2 — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.62 first. `pass`/`fail`/`unknown` verdicts, `unknown` refused; `embedded`'s

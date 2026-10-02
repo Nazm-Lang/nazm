@@ -1910,6 +1910,13 @@ sequence loop is where the backends differ most: LLVM keeps the loop in register
 holds every local in a stack slot (§7.43), reloads it each iteration. No program's code changed:
 nothing in the tree imports a standard module.
 
+### The formal core's check — N61, measured 2026-10-02
+
+`cargo test -p nazm-formal`, debug, M1 Pro: 94,352 programs enumerated, 27,680 well-typed, each
+typed program checked and run in-process by the interpreter and each program checked by the
+checker — 54 s for the five properties. The bound is five nodes; six would be roughly twenty times
+as many programs.
+
 ### Scalar temporaries — N59, measured 2026-10-02
 
 The LLVM emitter now gives no slot to a scalar temporary assigned once and read only in its block
