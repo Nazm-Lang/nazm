@@ -345,6 +345,14 @@ pub mod codes {
     /// unchanged.
     pub const CONSERVATION_BROKEN: Code = Code::new("N0396");
 
+    // The EVM backend (N70, `docs/architecture.md` §7.72)
+    /// A sender whose address is not an `Int`, as the language's `caller` must be.
+    pub const CALLER_NOT_INT: Code = Code::new("N0397");
+    /// Calldata that is not a known entrypoint's selector and `int64` arguments.
+    pub const BAD_CALLDATA: Code = Code::new("N0398");
+    /// A contract construct the EVM backend does not emit, or a storage upgrade it refuses.
+    pub const EVM_UNSUPPORTED: Code = Code::new("N0399");
+
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.

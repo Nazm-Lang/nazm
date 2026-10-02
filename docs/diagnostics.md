@@ -121,6 +121,12 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N70, the EVM backend.** Three codes appeared, compatible: `N0397` (a sender address
+that is not an `Int`), `N0398` (calldata that is not an entrypoint's selector and `int64`
+arguments), `N0399` (a construct the backend does not emit, or a storage upgrade it refuses). On the
+EVM a failure reverts with its existing code's five bytes. `nazm.evm/1`, `nazm.evm-abi/1`,
+`nazm.evm-storage/1`, `nazm.evm-upgrade/1` and `nazm.evm-run/1` are new.
+
 **Applied to N69, contracts.** Two codes appeared, compatible: `N0395` (a module `nazm contract`
 was given that is not a contract, naming what it lacks) and `N0396` (a transaction changed the
 conserved quantity and was rejected). The `web3` profile refuses with the existing `N0510`.

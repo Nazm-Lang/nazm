@@ -38,7 +38,101 @@ fn fields_of(v: &nazm_core::Value, n: usize) -> Vec<String> {
     }
 }
 
-pub(crate) fn run(file: &Path, interface: bool, txs: Option<&Path>) -> ExitCode {
+/// The storage layout of `file`'s contract, by field name, for an upgrade check.
+fn layout_of(file: &Path) -> Result<Vec<(String, String)>, ExitCode> {
+    let source_root = crate::root::decide(file, None).map_err(|e| {
+        eprintln!("nazm: {e}");
+        ExitCode::from(exit::NO_SUCH_FILE)
+    })?;
+    let loaded = crate::load::load(file, source_root.path()).map_err(|(partial, d)| {
+        crate::emit(&d, &partial.map, false);
+        ExitCode::from(exit::NO_SUCH_FILE)
+    })?;
+    let root = loaded.graph.module_of(nazm_span::FileId::ROOT);
+    nazm_core::on_lowered(
+        &loaded.map,
+        &loaded.graph,
+        nazm_core::Entry::Absent,
+        |core, res| {
+            let c = nazm_service::contract::of(core, res, root).map_err(|why| {
+                vec![Diagnostic::error(
+                    codes::NOT_A_CONTRACT,
+                    Span::synthetic(),
+                    format!("this module is not a contract: {why}"),
+                )]
+            })?;
+            Ok(res
+                .records()
+                .get(c.state)
+                .map(|d| {
+                    d.fields
+                        .iter()
+                        .map(|f| (f.name.clone(), res.types().show(f.ty)))
+                        .collect()
+                })
+                .unwrap_or_default())
+        },
+    )
+    .map_err(|d| {
+        crate::emit(&d, &loaded.map, false);
+        ExitCode::from(exit::CHECK_FAILED)
+    })
+}
+
+/// `nazm contract NEW --upgrade-check OLD`: whether NEW's storage can take over OLD's live
+/// storage. Slots are by field name, so order is free and an added field moves nothing; a removed
+/// field strands its value and a changed type misreads it.
+pub(crate) fn upgrade_check(new: &Path, old: &Path) -> ExitCode {
+    let (before, after) = match (layout_of(old), layout_of(new)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return e,
+    };
+    let mut changes = Vec::new();
+    for (name, ty) in &before {
+        match after.iter().find(|(n, _)| n == name) {
+            None => changes.push(json!({ "field": name, "verdict": "incompatible", "why": format!("removed: the value stored for `{name}` would be stranded") })),
+            Some((_, t)) if t != ty => changes.push(json!({ "field": name, "verdict": "incompatible", "why": format!("its type changed from `{ty}` to `{t}`: the stored word would be misread") })),
+            Some(_) => {}
+        }
+    }
+    for (name, _) in after
+        .iter()
+        .filter(|(n, _)| !before.iter().any(|(b, _)| b == n))
+    {
+        changes.push(json!({ "field": name, "verdict": "compatible", "why": "added: its slot is its own, and starts at zero" }));
+    }
+    let incompatible = changes.iter().any(|c| c["verdict"] == "incompatible");
+    println!(
+        "{}",
+        json!({
+            "schema": "nazm.evm-upgrade/1",
+            "outcome": if incompatible { "incompatible" } else { "compatible" },
+            "changes": changes,
+        })
+    );
+    for c in changes.iter().filter(|c| c["verdict"] == "incompatible") {
+        eprintln!(
+            "error[{}]: `{}` cannot be upgraded in place: {}",
+            codes::EVM_UNSUPPORTED.as_str(),
+            c["field"].as_str().unwrap_or("?"),
+            c["why"].as_str().unwrap_or("?")
+        );
+    }
+    if incompatible {
+        ExitCode::from(exit::CHECK_FAILED)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+const EVM_RUN: &str = include_str!("evm_run.py");
+
+pub(crate) fn run(
+    file: &Path,
+    interface: bool,
+    txs: Option<&Path>,
+    evm: Option<&Path>,
+) -> ExitCode {
     // The profile first, by the same path every command enforces one: a contract that is not
     // deterministic is not run at all.
     if let Err(code) = crate::profile::enforce(file, Some("web3"), false, false) {
@@ -113,6 +207,53 @@ pub(crate) fn run(file: &Path, interface: bool, txs: Option<&Path>) -> ExitCode 
                 "conserved": c.conserved,
                 "external_calls": "none: an entrypoint calls only Nazm functions, so nothing can re-enter it",
             });
+            if let Some(dir) = evm {
+                let compiled = nazm_service::evm::compile(core, res, root, &c).map_err(|r| {
+                    vec![Diagnostic::error(
+                        codes::EVM_UNSUPPORTED,
+                        r.at,
+                        format!("`{}` cannot be compiled to the EVM: {}", r.function, r.why),
+                    )
+                    .primary_label("not emitted")]
+                })?;
+                let hex = nazm_service::keccak::hex;
+                let abi: Vec<Json> = compiled
+                    .abi
+                    .iter()
+                    .map(|a| json!({ "name": a.name, "signature": a.signature, "selector": hex(&a.selector), "args": a.args, "gas_bound": a.gas_bound }))
+                    .collect();
+                let storage: Vec<Json> = compiled
+                    .storage
+                    .iter()
+                    .map(|s| json!({ "name": s.field, "type": s.ty, "slot": hex(&s.slot) }))
+                    .collect();
+                let abi_doc = json!({ "schema": "nazm.evm-abi/1", "entrypoints": abi });
+                let storage_doc =
+                    json!({ "schema": "nazm.evm-storage/1", "version": 1, "fields": storage });
+                let written = std::fs::create_dir_all(dir)
+                    .and_then(|()| std::fs::write(dir.join("deploy.hex"), hex(&compiled.deploy)))
+                    .and_then(|()| std::fs::write(dir.join("runtime.hex"), hex(&compiled.runtime)))
+                    .and_then(|()| std::fs::write(dir.join("abi.json"), abi_doc.to_string()))
+                    .and_then(|()| {
+                        std::fs::write(dir.join("storage.json"), storage_doc.to_string())
+                    })
+                    .and_then(|()| std::fs::write(dir.join("evm_run.py"), EVM_RUN));
+                if let Err(e) = written {
+                    eprintln!("nazm: cannot write {}: {e}", dir.display());
+                    return Err(Vec::new());
+                }
+                return Ok((
+                    json!({
+                        "schema": "nazm.evm/1",
+                        "deploy_bytes": compiled.deploy.len(),
+                        "runtime_bytes": compiled.runtime.len(),
+                        "abi": abi_doc,
+                        "storage": storage_doc,
+                        "gas": "gas_bound is a static upper bound on an entrypoint's execution gas, intrinsic and calldata costs apart; null where a loop leaves it open",
+                    }),
+                    None,
+                ));
+            }
             if interface || txs.is_none() {
                 return Ok((facts, None));
             }
@@ -200,8 +341,16 @@ pub(crate) fn run(file: &Path, interface: bool, txs: Option<&Path>) -> ExitCode 
                             state = next;
                         } else {
                             put(&mut record, "outcome", json!("rejected"));
-                            put(&mut record, "code", json!(codes::CONSERVATION_BROKEN.as_str()));
-                            put(&mut record, "conserved", json!({ "before": before, "after": after }));
+                            put(
+                                &mut record,
+                                "code",
+                                json!(codes::CONSERVATION_BROKEN.as_str()),
+                            );
+                            put(
+                                &mut record,
+                                "conserved",
+                                json!({ "before": before, "after": after }),
+                            );
                             broken.push((*line, entry.to_owned(), before, after));
                         }
                     }

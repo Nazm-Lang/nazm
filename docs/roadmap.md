@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N70 — EVM backend — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.72 first. Contracts compile directly from Core IR to EVM bytecode — `i64` held
+exactly in 256-bit words, conservation enforced on-chain, selectors from the compiler's own keccak,
+storage slots by field name so order and additions move nothing — and run in py-evm with the
+simulator's outcomes, codes and storage, inside their stated gas bounds. Next: N71, a WASM contract
+adapter.
+
 ### N69 — The Web3 semantic contract model — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.71 first. A contract is ordinary Nazm under a `web3` profile of existing
