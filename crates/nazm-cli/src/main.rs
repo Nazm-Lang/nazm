@@ -530,6 +530,11 @@ enum Command {
         /// `contract.json` and the reference host `contract_host.mjs` into DIR.
         #[arg(long, value_name = "DIR")]
         wasm: Option<PathBuf>,
+        /// The account-oriented metadata (N72): each instruction's discriminator, arguments and
+        /// accounts with their signer and writable constraints, as `DIR/accounts.json`. The module
+        /// is held to the `accounts` profile.
+        #[arg(long, value_name = "DIR")]
+        accounts: Option<PathBuf>,
     },
     /// Map a kernel over `Int`s on the GPU (N67): an eligible pure `(Int) -> Int` function of the
     /// file, as an OpenCL kernel, over the whitespace-separated `Int`s of `--input`. One
@@ -956,6 +961,7 @@ fn main() -> ExitCode {
             evm,
             upgrade_check,
             wasm,
+            accounts,
         } => {
             if let Some(old) = upgrade_check {
                 return contract::upgrade_check(&file, &old);
@@ -966,6 +972,7 @@ fn main() -> ExitCode {
                 txs.as_deref(),
                 evm.as_deref(),
                 wasm.as_deref(),
+                accounts.as_deref(),
             );
         }
         Command::Accel {

@@ -121,6 +121,9 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N72, account-oriented contracts.** No code appeared: `signed-writes` refuses with the
+existing `N0510`. `nazm.sbpf-accounts/1` is new; `nazm.profile-report/1` gains a profile and a rule.
+
 **Applied to N71, contracts on WebAssembly.** No code appeared: a failure is the existing code,
 through the host's `report`. `nazm.wasm-contract/1` and `nazm.wasm-contract-run/1` are new.
 

@@ -99,7 +99,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
-| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71) |
+| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
 After N48: fifteen VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification), sixteen
 PARTIAL, two RESEARCH, one MISSING, across the 34 rows above.
@@ -3546,4 +3546,15 @@ unit's host imports, the same bytes twice, the ordinary build without the adapte
 `nazm-wasm:n64` — 14 transactions with the simulator's outcomes, codes and final state, a run-time
 overflow reverting with `N0400`, and the linked module importing exactly the four host functions).
 **Limitation**: no chain's own host interface is bound to the four imports; one engine (Node).
+
+*N72, 2026-10-02: account-oriented contracts — VERIFIED for signed writes and metadata; sBPF execution
+BLOCKED.* `architecture.md` §7.74 first. The `accounts` profile adds `signed-writes`: an entrypoint that
+writes the state must decide on its `caller` in its own body, or is refused by name; a check made only
+in a helper is not trusted. `nazm contract --accounts DIR` writes `accounts.json`
+(`nazm.sbpf-accounts/1`): the state account's layout, each instruction's discriminator and argument
+offsets, and its accounts' writable and signer constraints derived from the read and write sets.
+Evidence, `crates/nazm-cli/tests/accounts.rs` (3): an unguarded write refused while three others pass,
+`web3` alone not asking for signers; a helper's check not trusted; the metadata's layout, discriminator,
+offsets and constraints. **BLOCKED**: no sBPF toolchain, validator or emulator here; upstream `bpfel`
+is not sBPF, so no object or run is claimed.
 

@@ -388,6 +388,13 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N72 — sBPF account backend — **PARTIAL: analysis and metadata; execution BLOCKED, 2026-10-02**
+
+`architecture.md` §7.74 first. A `signed-writes` rule refuses a state write no signer decision guards,
+and account metadata states each instruction's discriminator, arguments and account constraints. No
+sBPF toolchain, validator or emulator exists here, and upstream eBPF is not sBPF: the backend is
+designed by the metadata and not built. Next: N73, compiler trust and supply chain.
+
 ### N71 — WASM contract adapter — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.73 first. The ordinary WebAssembly backend, unchanged, plus a generated adapter

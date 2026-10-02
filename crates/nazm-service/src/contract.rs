@@ -23,6 +23,12 @@ pub struct Entrypoint {
     pub reads: Option<BTreeSet<String>>,
     /// Fields written, by name, or `None` for "may write every field".
     pub writes: Option<BTreeSet<String>>,
+    /// Whether `caller` appears in a condition of the entrypoint's own body (N72): a write the
+    /// signer could be refused is one the body decides on by who signed. A helper given `caller` is
+    /// not looked into, so it does not count.
+    pub caller_checked: bool,
+    /// The entrypoint's name, for a witness.
+    pub at: nazm_span::Span,
 }
 
 /// A contract's shape.
@@ -101,6 +107,8 @@ pub fn of(
             .filter_map(|i| f.local(LocalId(i)).map(|l| l.name.clone()))
             .collect();
         let mut sets = Sets {
+            caller: LocalId(1),
+            caller_checked: false,
             state: LocalId(0),
             fields: &fields,
             state_record: state,
@@ -113,6 +121,8 @@ pub fn of(
             args,
             reads: sets.reads,
             writes: sets.writes,
+            caller_checked: sets.caller_checked,
+            at: f.name_span,
         });
     }
     if entrypoints.is_empty() {
@@ -135,6 +145,8 @@ pub fn of(
 }
 
 struct Sets<'a> {
+    caller: LocalId,
+    caller_checked: bool,
     state: LocalId,
     fields: &'a [String],
     state_record: RecordId,
@@ -142,7 +154,36 @@ struct Sets<'a> {
     writes: Option<BTreeSet<String>>,
 }
 
+/// Whether `l` is read anywhere in `e`, its regions' values included.
+fn mentions(e: &Expr, l: LocalId) -> bool {
+    match &e.kind {
+        ExprKind::Local(x) => *x == l,
+        ExprKind::Neg(x) | ExprKind::Field { base: x, .. } => mentions(x, l),
+        ExprKind::Arith { lhs, rhs, .. } | ExprKind::Compare { lhs, rhs, .. } => {
+            mentions(lhs, l) || mentions(rhs, l)
+        }
+        ExprKind::If {
+            cond,
+            then,
+            otherwise,
+        } => mentions(cond, l) || block_mentions(then, l) || block_mentions(otherwise, l),
+        ExprKind::Block(b) => block_mentions(b, l),
+        // A value passed to a call is not a decision the entrypoint made on it.
+        _ => false,
+    }
+}
+
+fn block_mentions(b: &Block, l: LocalId) -> bool {
+    b.tail.as_ref().is_some_and(|t| mentions(t, l))
+}
+
 impl Sets<'_> {
+    fn condition(&mut self, cond: &Expr) {
+        if mentions(cond, self.caller) {
+            self.caller_checked = true;
+        }
+    }
+
     fn read(&mut self, field: u32) {
         if let (Some(r), Some(n)) = (self.reads.as_mut(), self.fields.get(field as usize)) {
             r.insert(n.clone());
@@ -182,6 +223,7 @@ impl Sets<'_> {
                 otherwise,
                 ..
             } => {
+                self.condition(cond);
                 self.expr(cond, false);
                 self.block(then, false);
                 if let Some(o) = otherwise {
@@ -189,6 +231,7 @@ impl Sets<'_> {
                 }
             }
             Stmt::Loop { cond, body, .. } => {
+                self.condition(cond);
                 self.expr(cond, false);
                 self.block(body, false);
             }
@@ -282,6 +325,7 @@ impl Sets<'_> {
                 then,
                 otherwise,
             } => {
+                self.condition(cond);
                 self.expr(cond, false);
                 self.block(then, result);
                 self.block(otherwise, result);

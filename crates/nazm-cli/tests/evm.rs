@@ -145,12 +145,20 @@ fn the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice() {
         deploy.ends_with(&runtime),
         "the deployment code returns the runtime it carries"
     );
+    // The runtime raises its own two codes as five-byte reverts: `N0397` for a sender that is not
+    // an `Int`, `N0398` for calldata that is no entrypoint's.
+    for (code, bytes) in [("N0397", "4e30333937"), ("N0398", "4e30333938")] {
+        assert!(runtime.contains(bytes), "{code} is not raised by the runtime");
+    }
     // And it copies the runtime from exactly where it starts: `PUSH2 offset; PUSH1 0; CODECOPY`.
     let start = (deploy.len() - runtime.len()) >> 1;
     let at = deploy.find("600039").expect("a CODECOPY");
     assert_eq!(&deploy[at - 6..at - 4], "61", "the offset is a PUSH2");
     let offset = usize::from_str_radix(&deploy[at - 4..at], 16).unwrap();
-    assert_eq!(offset, start, "the runtime is copied from {offset}, but starts at {start}");
+    assert_eq!(
+        offset, start,
+        "the runtime is copied from {offset}, but starts at {start}"
+    );
     assert!(nazm(d.path(), &["contract", "c.nz", "--evm", "again"])
         .status
         .success());

@@ -3246,6 +3246,15 @@ through `nazm_host.report`) — and imports only `nazm_host.state_get(index) -> 
 `state_set(index, value)` besides. A field's index is its declaration index; a `Bool` is 0 or 1.
 `contract.json` (`nazm.wasm-contract/1`) and `contract_host.mjs` are written beside the objects.
 
+### Account-oriented contracts — N72
+<!-- id: accounts -->
+
+| | |
+| --- | --- |
+| **`accounts`** | A profile: `web3`'s rules and `signed-writes` — an entrypoint whose write set is not empty must use `caller` in a condition of its own body (`N0510` otherwise); a check made only in a helper does not count |
+| **`nazm contract FILE --accounts DIR`** | `accounts.json` (`nazm.sbpf-accounts/1`): the state account (a version byte, then 8 bytes per field by declaration index), and per instruction its discriminator (the first 8 bytes of `keccak256("nazm.instruction." + name)`), its arguments' offsets, and its accounts — the state writable exactly when written, the caller a signer exactly when decided on |
+| **Execution** | Not available: no sBPF target is built |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
