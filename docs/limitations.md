@@ -32,6 +32,10 @@ found only by reading all of it.
   `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
   whole-program count, and recursion is seen only through its calls' sites (areas 4, 18).
   *Narrowed in N52.*
+- Real-time bounds cover an analysable subset only: a loop is bounded only in the one counted
+  form (`realtime`'s `bounded-loops`), a stack bound exists only for a board image without a call
+  cycle or a call through a value, and no execution time, latency or jitter is bounded — `wcet` is
+  always `null` (area 18). *Narrowed in N63:* until then, no loop or stack bound was stated.
 
 ## Effects, authority and information flow
 

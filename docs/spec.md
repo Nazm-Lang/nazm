@@ -2133,6 +2133,7 @@ with `--profile NAME` on `check`, `build` and `run`, or required by a package's 
 | `embedded` | `no-io`, `no-spawn`, `bounded-allocation` (N52), `no-recursion` (N60) |
 | `critical` | `declared-effects`, `no-spawn`, `no-foreign`, `locked-build`, `no-declassification` (N52), `no-ambient-time` (N54), `no-select` (N60) |
 | `cyber` | `declared-effects`, `no-foreign`, `locked-build`, `contents-stay-in-files` (N52) |
+| `realtime` (N63) | `no-io`, `no-spawn`, `bounded-allocation`, `no-ambient-time`, `no-recursion`, `no-blocking`, `bounded-loops` |
 
 `no-io`, `no-spawn` and `no-foreign` refuse a program whose `main` requires that effect, through
 any call, standard functions included. `declared-effects` refuses any function of the program that
@@ -2144,6 +2145,27 @@ rule the compiler could not establish is not met. A refusal is `N0510`, naming t
 the rule and where it comes from; an unknown profile is `N0511`. `nazm check --profile-report`
 prints `nazm.profile-report/1`. A profile is compiler-enforced evidence about these rules and
 nothing more: not a certification, not a sandbox.
+
+**Bounds (N63).** `no-blocking` refuses every channel send, receive and select by its call site.
+`bounded-loops` requires every `while` to have a trip bound the compiler establishes, and is
+`unknown` — refused — for any other, naming why. The bounded form: a counter `i` whose last write
+before the loop, in the loop's block, is `let mut i = A` or `i = A`; the condition `i < B`, `i <= B`,
+`i > B` or `i >= B`; and the body's only write to `i`, at its top level, `i = i + C` (towards a `<`
+or `<=` limit) or `i = i - C` (towards `>`, `>=`), with no `continue` to the loop. `A`, `B` and `C` are
+`Int` literals, a negated literal, or `B` an immutable local bound to one, and `C` is positive. The
+bound is the exact number of turns one entry to the loop makes, computed without overflow; a
+`break` or `return` ends it sooner. Wherever MIR facts are computed — `embedded`, `realtime` — the
+report carries `bounds`: each loop's bound or `null` with its reason, the longest chain of direct
+calls from `main` (`null` with a cycle or a call through a value), the allocation, task and queue
+sites as static counts, and `stack_bytes` and `wcet` as `null`, with each number's kind named.
+
+**The board's stack (N63).** `nazm build --target aarch64-unknown-none --objects DIR` also writes
+`DIR/bounds.json` (`nazm.bounds/1`): every function's frame size as the code generator reported it,
+and the stack bound — those frames summed along the image's deepest call path from `nz_board_main`,
+with the path and the 64 KiB reserved — or `null` with the reason (a call cycle, a call through a
+value, a callee outside the image). A board build does not reuse cached objects. `--stack-watermark`
+paints the board's stack at start and writes `nazm-stack: used=N` after `main`'s result: a
+measurement of that run, not a bound; refused for any other target.
 
 ### Durable identity: what makes this the same module, or the same definition
 <!-- id: durable-identity -->

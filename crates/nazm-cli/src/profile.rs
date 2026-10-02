@@ -90,11 +90,53 @@ fn mir_facts(program: &nazm_mir::ir::Program) -> profile::MirFacts {
             });
         }
     }
+    // The longest chain of direct calls from `main` (N63): only where there is no cycle and no
+    // call through a value, so the search below terminates and means what it says.
+    let call_depth = (recursive.is_empty() && indirect.is_empty())
+        .then(|| program.entry.and_then(index))
+        .flatten()
+        .map(|root| depth(root, &edges, &mut vec![None; n]));
+    let sites = nazm_mir::cost::of(program);
+    let allocation_sites = sites
+        .iter()
+        .flat_map(|fc| fc.sites.iter())
+        .filter(|s| s.kind == nazm_mir::cost::SiteKind::Allocation)
+        .count();
+    let task_sites = program
+        .functions
+        .iter()
+        .flat_map(|f| f.blocks.iter().flat_map(|b| b.stmts.iter()))
+        .filter(|s| matches!(s.kind, nazm_mir::ir::StatementKind::Spawn { .. }))
+        .count();
     profile::MirFacts {
         unbounded: unbounded_allocations(program),
         recursive,
         indirect,
+        bounds: profile::Bounds {
+            call_depth,
+            allocation_sites,
+            task_sites,
+            ..profile::Bounds::default()
+        },
     }
+}
+
+/// The longest chain of calls from `f`, counting `f`, over an acyclic graph.
+fn depth(f: usize, edges: &[Vec<usize>], memo: &mut Vec<Option<usize>>) -> usize {
+    if let Some(Some(d)) = memo.get(f) {
+        return *d;
+    }
+    let d = 1 + edges
+        .get(f)
+        .into_iter()
+        .flatten()
+        .map(|&g| depth(g, edges, memo))
+        .max()
+        .unwrap_or(0);
+    if let Some(m) = memo.get_mut(f) {
+        *m = Some(d);
+    }
+    d
 }
 
 fn unbounded_allocations(program: &nazm_mir::ir::Program) -> Vec<profile::Witness> {
@@ -166,6 +208,7 @@ pub(crate) fn enforce(
     let needs_cost = profiles.iter().any(|p| {
         p.rules().contains(&profile::Rule::BoundedAllocation)
             || p.rules().contains(&profile::Rule::NoRecursion)
+            || p.rules().contains(&profile::Rule::BoundedLoops)
     });
     let evaluated = if needs_cost {
         nazm_core::on_lowered(
@@ -173,9 +216,30 @@ pub(crate) fn enforce(
             &loaded.graph,
             nazm_core::Entry::Required,
             |core, res| {
+                // Loops are read off Core IR (§7.65), before it is lowered.
+                let loops = nazm_service::bounds::loops(core);
+                let queue_sites = res
+                    .functions()
+                    .iter()
+                    .flat_map(|f| f.call_sites.iter())
+                    .filter(|s| {
+                        matches!(
+                            s.callee,
+                            nazm_core::sema::Callee::Builtin(
+                                nazm_core::sema::Intrinsic::ChanNew
+                                    | nazm_core::sema::Intrinsic::ChanNewOf
+                            )
+                        )
+                    })
+                    .count();
                 let facts = crate::mir::lower(core, res, &loaded.graph)
                     .ok()
-                    .map(|program| mir_facts(&program));
+                    .map(|program| {
+                        let mut f = mir_facts(&program);
+                        f.bounds.loops = loops;
+                        f.bounds.queue_sites = queue_sites;
+                        f
+                    });
                 Ok(profile::evaluate(
                     &profiles,
                     &loaded.graph,

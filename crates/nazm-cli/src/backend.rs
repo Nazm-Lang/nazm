@@ -155,6 +155,16 @@ impl Backend {
             .args(["-o".as_ref(), object.as_os_str(), ir.as_os_str()]))
     }
 
+    /// [`Self::compile`], with the code generator's frame size for every function on standard
+    /// error (N63): clang's `prologepilog` remarks, which the board's stack bound reads.
+    pub(crate) fn compile_reporting_frames(&self, ir: &Path, object: &Path) -> Outcome {
+        run(self
+            .command()
+            .args(compile_args(self.opt_level, self.cross.as_deref()))
+            .arg("-Rpass-analysis=prologepilog")
+            .args(["-o".as_ref(), object.as_os_str(), ir.as_os_str()]))
+    }
+
     /// Link the objects into an executable.
     ///
     /// Not cached, and not keyed: a linker does not produce an object, and its version and

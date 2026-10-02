@@ -9224,12 +9224,12 @@ name = "n47-a-rule-is-skipped"
 why = "`embedded` loses `no-spawn`, so a program that starts tasks passes a profile that forbids the scheduler"
 file = "crates/nazm-service/src/profile.rs"
 find = '''
+            Self::Embedded => &[
                 Rule::NoIo,
-                Rule::NoSpawn,
-                Rule::BoundedAllocation,'''
+                Rule::NoSpawn,'''
 replace = '''
-                Rule::NoIo,
-                Rule::BoundedAllocation,'''
+            Self::Embedded => &[
+                Rule::NoIo,'''
 killers = [{ package = "nazm-cli", test = "profiles", name = "every_profile_s_rules_and_verdicts" }]
 
 [[mutation]]
@@ -11076,3 +11076,126 @@ killers = [
     { package = "nazm-cli", test = "freestanding", name = "a_board_program_is_built_to_objects_a_link_list_and_a_linker_script" },
     { package = "nazm-cli", test = "freestanding", name = "a_hosted_target_writes_no_linker_script" },
 ]
+
+
+# --- N63: real-time bounds — bounded, measured, unknown -------------------------------------------
+
+[[mutation]]
+name = "n63-realtime-forgets-bounded-loops"
+why = "`realtime` loses `bounded-loops`, so a loop the compiler cannot bound passes a profile that promises bounds"
+file = "crates/nazm-service/src/profile.rs"
+find = '''
+                Rule::NoBlocking,
+                Rule::BoundedLoops,
+            ],'''
+replace = '''
+                Rule::NoBlocking,
+            ],'''
+killers = [{ package = "nazm-cli", test = "realtime", name = "an_unknown_loop_is_refused_with_its_reason" }]
+
+[[mutation]]
+name = "n63-an-unbounded-loop-passes"
+why = "a loop with no established bound is not a witness, so `bounded-loops` passes it"
+file = "crates/nazm-service/src/profile.rs"
+find = '                            .filter(|l| l.bound.is_none())'
+replace = '                            .filter(|l| l.bound.is_none() && l.reason.is_empty())'
+killers = [{ package = "nazm-cli", test = "realtime", name = "an_unknown_loop_is_refused_with_its_reason" }]
+
+[[mutation]]
+name = "n63-a-send-does-not-wait"
+why = "a channel send is not a blocking operation, so `realtime` admits a program whose latency is another task's"
+file = "crates/nazm-service/src/profile.rs"
+find = '''
+        I::ChanSend
+            | I::ChanRecv'''
+replace = '''
+        I::ChanRecv'''
+killers = [{ package = "nazm-cli", test = "realtime", name = "realtime_refuses_waiting_and_the_clock_by_site" }]
+
+[[mutation]]
+name = "n63-an-inclusive-bound-misses-the-last-turn"
+why = "`i <= B` is bounded as `i < B`, one turn short — a bound the program exceeds"
+file = "crates/nazm-service/src/bounds.rs"
+find = '        span / c + 1'
+replace = '        span / c'
+killers = [{ package = "nazm-cli", test = "realtime", name = "a_counted_loop_s_bound_is_its_exact_trip_count" }]
+
+[[mutation]]
+name = "n63-a-strict-bound-rounds-down"
+why = "a step that does not divide the span is rounded down, so the last partial turn is not counted"
+file = "crates/nazm-service/src/bounds.rs"
+find = '        (span + c - 1) / c'
+replace = '        span / c'
+killers = [{ package = "nazm-cli", test = "realtime", name = "a_counted_loop_s_bound_is_its_exact_trip_count" }]
+
+[[mutation]]
+name = "n63-a-step-away-is-bounded"
+why = "a counter stepped away from its limit is bounded as though it approached it"
+file = "crates/nazm-service/src/bounds.rs"
+find = '    if c <= 0 || !steps_right {'
+replace = '    if c <= 0 {'
+killers = [{ package = "nazm-cli", test = "realtime", name = "a_loop_without_the_counted_form_is_unknown_and_says_why" }]
+
+[[mutation]]
+name = "n63-a-continue-is-ignored"
+why = "a `continue` that skips the counter's step is not seen, so a loop that may turn forever is bounded"
+file = "crates/nazm-service/src/bounds.rs"
+find = '    if continues(body, id) {'
+replace = '    if false {'
+killers = [{ package = "nazm-cli", test = "realtime", name = "a_loop_without_the_counted_form_is_unknown_and_says_why" }]
+
+[[mutation]]
+name = "n63-a-second-write-is-allowed"
+why = "a counter written more than once in the body is bounded by its first step alone"
+file = "crates/nazm-service/src/bounds.rs"
+find = '    if total != 1 {'
+replace = '    if total == 0 {'
+killers = [{ package = "nazm-cli", test = "realtime", name = "a_loop_without_the_counted_form_is_unknown_and_says_why" }]
+
+[[mutation]]
+name = "n63-a-conditional-start-is-skipped"
+why = "a write to the counter the compiler does not follow is passed over in finding its start"
+file = "crates/nazm-service/src/bounds.rs"
+find = '            s if writes(s, i) > 0 => {'
+replace = '            s if false && writes(s, i) > 0 => {'
+killers = [{ package = "nazm-cli", test = "realtime", name = "a_loop_without_the_counted_form_is_unknown_and_says_why" }]
+
+[[mutation]]
+name = "n63-the-first-path-is-the-bound"
+why = "the stack bound follows each function's first callee rather than its deepest, so it can be less than a run uses"
+file = "crates/nazm-cli/src/stack.rs"
+find = '        if r.0 > best.0 || best.1.is_empty() {'
+replace = '        if best.1.is_empty() {'
+killers = [{ package = "nazm-cli", bin = "nazm", name = "stack::tests::the_bound_is_the_deepest_path_not_the_first" }]
+
+[[mutation]]
+name = "n63-a-cycle-is-bounded"
+why = "a call cycle is taken to cost nothing, so recursion gets a stack bound"
+file = "crates/nazm-cli/src/stack.rs"
+find = '        return Err(format!("`{f}` is in a call cycle"));'
+replace = '        return Ok((0, Vec::new()));'
+killers = [{ package = "nazm-cli", bin = "nazm", name = "stack::tests::a_cycle_a_value_call_or_an_undefined_callee_has_no_bound" }]
+
+[[mutation]]
+name = "n63-the-board-reuses-objects"
+why = "a board build reads cached objects, which report no frame sizes, so its stack bound is computed from nothing"
+file = "crates/nazm-cli/src/build.rs"
+find = '        .filter(|_| !freestanding)'
+replace = '        .filter(|_| true)'
+killers = [{ package = "nazm-cli", test = "realtime", name = "a_board_build_states_its_stack_bound_with_the_path" }]
+
+[[mutation]]
+name = "n63-frames-are-not-asked-for"
+why = "clang is not asked for its frame sizes, so every function's frame is missing and the bound is wrong"
+file = "crates/nazm-cli/src/backend.rs"
+find = '            .arg("-Rpass-analysis=prologepilog")'
+replace = '            .arg("-Wno-override-module")'
+killers = [{ package = "nazm-cli", test = "realtime", name = "a_board_build_states_its_stack_bound_with_the_path" }]
+
+[[mutation]]
+name = "n63-the-watermark-paints-nothing"
+why = "`_start` does not paint the stack, so the watermark reads every word as touched"
+file = "crates/nazm-runtime/src/board.rs"
+find = '            "module asm \"  ldr x2, =0x5a5a5a5a5a5a5a5a\"",'
+replace = '            "module asm \"  ldr x2, =0\"",'
+killers = [{ package = "nazm-cli", test = "realtime", name = "the_watermark_is_the_board_s" }]

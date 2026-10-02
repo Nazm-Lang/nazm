@@ -1949,6 +1949,22 @@ M1 Pro (macOS, Apple clang 21.0.0) by both backends for each target:
 
 Cross-host reproducibility — the same target's objects from two hosts — was not measured.
 
+### Stack: the stated bound and a painted run — N63, measured 2026-10-02
+
+`crates/nazm-cli/tests/realtime.rs`'s ignored test: each program built for `aarch64-unknown-none`
+with `--stack-watermark`, `bounds.json` read, the image booted on QEMU `virt` (`nazm-qemu:n62`),
+and the deepest painted word the run overwrote reported on the UART. Bytes, measured / bound:
+
+| program | `-O0` | `-O2` |
+| --- | --- | --- |
+| three counted loops and a call (`BOUNDED`) | 176 / 192 | 24 / 48 |
+| a four-deep call chain in a 1,000-turn loop | 304 / 320 | 24 / 48 |
+| a nine-argument call in a loop | 264 / 288 | 24 / 48 |
+
+The bound is the claim; each measurement is one run on an emulator and says only that this run
+stayed inside it. The gap is the deepest path's frames that this run's path did not take (at `-O2`,
+the failure path through `nz.fail`). No timing is reported: an emulator's is not a machine's.
+
 ### A freestanding image — N62, measured 2026-10-02
 
 `crates/nazm-cli/tests/freestanding.rs`'s program (`Hi` through `mmio_write32`, a loop and a
