@@ -328,6 +328,11 @@ pub mod codes {
     /// has no device registers: `nazm run`, or a build for a hosted target.
     pub const MACHINE_ONLY: Code = Code::new("N0392");
 
+    // The interactive tier (N65, `docs/architecture.md` §7.67)
+    /// A function `nazm comptime` will not evaluate: it has parameters, or it is not pure, so it
+    /// could reach the host through authority it holds or borrows.
+    pub const COMPTIME_REFUSED: Code = Code::new("N0393");
+
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.
