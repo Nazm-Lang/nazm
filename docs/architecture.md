@@ -5996,6 +5996,50 @@ agree — and claims nothing it did not measure.
 selection, a bundled linker or sysroot, target-conditional source, and emulation inside the
 compiler.
 
+## 7.60 Debugger and profiler v2 — N58, 2026-10-02
+
+Written before the code. §7.50 gave a `--debug` build functions and lines, and left two things
+unclaimed: a live session and variables. N58 claims both, for what it can show, and says where the
+evidence comes from.
+
+**Where a live session is verified.** On the development Mac, launching a process under lldb waits
+on the operating system's developer-mode authorisation, which a non-interactive agent cannot give
+and must not change; that remains unexercised there. The live session is verified instead in the
+Linux container — a separate image, `nazm-debug`, that adds gdb to the gate's image without
+changing it — on objects built for `aarch64-unknown-linux-gnu` (§7.59) and linked there: a
+breakpoint by file and line and by function, a backtrace naming Nazm functions with their files
+and lines through several calls, `next` and `step` by statement, and variables read while live.
+
+**Variables.** A `--debug` build describes every parameter and every source binding of type `Int`,
+`Bool` or `Str` with a `DILocalVariable` on its stack slot — a parameter with its position — and the
+types as DWARF: `Int` a signed 64-bit integer, `Bool` an 8-bit boolean, `Str` a structure of its
+three words (`data`, a pointer to bytes; `len`; `owner`). Temporaries are not described: they have
+no name a reader wrote. Records, enums, sequences, channels and closures are not described yet.
+**No stale value is shown as live**: a managed local's slot is zeroed when it is dropped and before
+its storage is released, so after its last use a `Str` reads as `{data = 0x0, len = 0}`, never as
+the bytes of freed memory; and a slot is zeroed at entry, so a binding read before its statement
+reads `0`. Both are the slot's real contents, not a claim about the variable's value at that point:
+scope ranges (`DILexicalBlock`) are not emitted, so every described variable is visible for its
+whole function.
+
+**Optimised builds.** At `-O2` LLVM may delete or move a slot; a variable it removed reads as
+"optimized out" in the debugger, which is the debugger's word for it and the honest answer. Nothing
+is claimed about values at `-O2`.
+
+**Cranelift.** `--debug` with Cranelift stays refused by name: Cranelift 0.136 exposes no DWARF
+emission for an object module through the API this backend uses, so there is no line table to
+write. A blocker with its reason, not a silent difference.
+
+**Scheduler and runtime counters in the profiler.** `nazm profile FILE` builds the program,
+runs it once with `NAZM_MEMORY_REPORT` and `NAZM_SCHED_REPORT` set, and prints `nazm.profile/1`: the
+exit status, the wall time, and the memory and scheduler counts parsed from those lines — counts of
+events, not samples. The compiler's phase timings stay `nazm.timings/1`; the two are separate
+documents and are never added together.
+
+**Not here.** Sampling profilers, timelines, an event trace, closure environments and generic
+instances by name in the debugger, foreign frames' variables, DWARF from Cranelift, and the Mac's
+live session.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
