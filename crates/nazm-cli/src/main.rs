@@ -603,6 +603,10 @@ enum Command {
         /// beside it with the extension `.h`.
         #[arg(long)]
         lib: bool,
+        /// Write every object and `DIR/link.txt` instead of linking (N57): for a `--target` this
+        /// host has no linker for, linked by that target's own toolchain.
+        #[arg(long, value_name = "DIR")]
+        objects: Option<PathBuf>,
         /// One `nazm.timings/1` line on stderr: each phase's wall time — load, front end, MIR,
         /// LIR, code generation, native compilation, link — and the total (N48).
         #[arg(long)]
@@ -794,6 +798,7 @@ fn main() -> ExitCode {
         target,
         link,
         lib,
+        objects,
         timings,
         debug,
         locked: _,
@@ -815,6 +820,7 @@ fn main() -> ExitCode {
                 target: target.as_deref(),
                 link: &link,
                 library: lib,
+                objects: objects.as_deref(),
                 timings,
                 debug,
             },

@@ -1910,6 +1910,20 @@ sequence loop is where the backends differ most: LLVM keeps the loop in register
 holds every local in a stack slot (§7.43), reloads it each iteration. No program's code changed:
 nothing in the tree imports a standard module.
 
+### Targets — N57, measured 2026-10-02
+
+One program (a recursive `fib(20)` and a task sending a string through a `Chan[Str]`), built on an
+M1 Pro (macOS, Apple clang 21.0.0) by both backends for each target:
+
+| target | how | result |
+| --- | --- | --- |
+| `aarch64-apple-darwin` | built and run on the host | `from task 6765`, all reclaimed |
+| `x86_64-apple-darwin` | built and linked on the host, run under Rosetta | the same, both backends |
+| `aarch64-unknown-linux-gnu` | `--objects` on the host; `cc 00-m0.o 01-runtime.o 02-entry.o -lpthread` and run in `nazm-contained:1.98.1` (`docker run --network none`) | the same, both backends |
+| `x86_64-unknown-linux-gnu` | `--objects` on the host; ELF x86-64 objects | compile-only: no amd64 image or emulator here |
+
+Cross-host reproducibility — the same target's objects from two hosts — was not measured.
+
 ### Select and the event count — N54, measured 2026-10-02
 
 N54 added a process-wide event count that every typed send and close advances (§7.56), so what is

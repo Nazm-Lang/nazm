@@ -8591,11 +8591,16 @@ killers = [{ package = "nazm-cli", test = "cranelift", name = "choosing_cranelif
 
 [[mutation]]
 name = "n41-a-foreign-target-is-built-for-the-host"
-why = "a requested target that is not the host is accepted, and the build produces a host executable under the other target's name"
+why = """a requested target that is not the host is accepted, and the build produces a host executable under the other target's name
+Repointed by N57, which made every target of the matrix buildable: the defect is now a requested triple quietly replaced by the host's."""
 file = "crates/nazm-lir/src/backend.rs"
-find = "        if wanted != host {"
-replace = "        if false && wanted != host {"
-killers = [{ package = "nazm-cli", test = "cranelift", name = "a_target_other_than_the_host_is_refused_and_nothing_is_written" }]
+find = """
+        Self::parse(t)
+    }"""
+replace = """
+        Self::parse(t).map(|_| host)
+    }"""
+killers = [{ package = "nazm-lir", lib = true, name = "backend::tests::a_foreign_target_is_itself_and_linked_only_where_the_host_can" }]
 
 # --- N42: the ABI and the foreign-function interface ------------------------------------------
 
@@ -10673,3 +10678,80 @@ file = "crates/nazm-package/src/lib.rs"
 find = "                    if i < path_count {"
 replace = "                    if false {"
 killers = [{ package = "nazm-package", test = "registry", name = "a_path_package_and_a_registry_dependency_of_one_name_conflict" }]
+
+
+# --- N57: targets and cross-compilation ------------------------------------------------------------
+
+[[mutation]]
+name = "n57-clang-is-not-told-the-target"
+why = "a cross build's LLVM units are compiled for the host"
+file = "crates/nazm-cli/src/backend.rs"
+find = """
+    cross.map_or_else(Vec::new, |t| vec!["-target".to_owned(), t.to_owned()])"""
+replace = "    cross.map_or_else(Vec::new, |_t| Vec::new())"
+killers = [{ package = "nazm-cli", test = "cross", name = "every_target_is_built_by_both_backends_in_its_own_format" }]
+
+[[mutation]]
+name = "n57-every-target-is-linked-here"
+why = "a Linux target is handed to the host's linker on macOS"
+file = "crates/nazm-lir/src/backend.rs"
+find = "        self == host || (self.os == Os::Macos && host.os == Os::Macos)"
+replace = "        true"
+killers = [{ package = "nazm-lir", lib = true, name = "backend::tests::a_foreign_target_is_itself_and_linked_only_where_the_host_can" }]
+
+[[mutation]]
+name = "n57-the-other-macos-is-not-linked"
+why = "an x86_64 macOS build on an ARM Mac is refused an executable its toolchain can link"
+file = "crates/nazm-lir/src/backend.rs"
+find = """
+        self == host || (self.os == Os::Macos && host.os == Os::Macos)
+    }"""
+replace = """
+        self == host
+    }"""
+killers = [{ package = "nazm-lir", lib = true, name = "backend::tests::a_foreign_target_is_itself_and_linked_only_where_the_host_can" }]
+
+[[mutation]]
+name = "n57-cranelift-builds-for-the-host"
+why = "Cranelift ignores the target and emits the host's architecture"
+file = "crates/nazm-codegen-clif/src/lib.rs"
+find = "        let builder = cranelift_codegen::isa::lookup(triple).map_err(|e| e.to_string())?;"
+replace = "        let builder = cranelift_codegen::isa::lookup(target_lexicon::Triple::host()).map_err(|e| e.to_string())?;"
+killers = [{ package = "nazm-cli", test = "cross", name = "every_target_is_built_by_both_backends_in_its_own_format" }]
+
+[[mutation]]
+name = "n57-the-probe-ignores-the-target"
+why = "LLVM's object key is taken from a host command line, so two targets' objects share one entry"
+file = "crates/nazm-cli/src/backend.rs"
+find = "        .args(compile_args(opt_level, cross))"
+replace = "        .args(compile_args(opt_level, None))"
+killers = [{ package = "nazm-cli", test = "cross", name = "objects_for_two_targets_are_never_one_cache_entry" }]
+
+[[mutation]]
+name = "n57-objects-lose-their-order"
+why = "the written objects keep their names, so link.txt's order is lost"
+file = "crates/nazm-cli/src/build.rs"
+find = """
+        let to = format!("{i:02}-{name}");"""
+replace = "        let to = name.clone();"
+killers = [{ package = "nazm-cli", test = "cross", name = "every_target_is_built_by_both_backends_in_its_own_format" }]
+
+[[mutation]]
+name = "n57-linux-needs-no-threads"
+why = "link.txt omits -lpthread for a Linux target"
+file = "crates/nazm-cli/src/build.rs"
+find = """
+        nazm_lir::backend::Os::Linux => "-lpthread","""
+replace = """
+        nazm_lir::backend::Os::Linux => "","""
+killers = [{ package = "nazm-cli", test = "cross", name = "every_target_is_built_by_both_backends_in_its_own_format" }]
+
+[[mutation]]
+name = "n57-inspect-says-every-target-links"
+why = "inspect promises an executable for a target this host cannot link"
+file = "crates/nazm-cli/src/inspect.rs"
+find = """
+if links { "executable" } else { "objects" }"""
+replace = """
+if links || !links { "executable" } else { "objects" }"""
+killers = [{ package = "nazm-cli", test = "cross", name = "inspect_names_every_target_and_what_this_host_makes_of_it" }]

@@ -143,6 +143,22 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
+    // A target other than the host (N57): clang is told it, and where the host cannot link it
+    // the build writes objects instead, or is refused by name before compiling anything.
+    let host = nazm_lir::backend::Target::host().ok();
+    let cross = (host.as_ref() != Some(&target)).then(|| target.triple.clone());
+    let links_here = host.as_ref().is_some_and(|h| target.links_on(h));
+    if !links_here && choice.objects.is_none() && !choice.library {
+        if summary {
+            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+        }
+        eprintln!(
+            "nazm: this host has no linker for `{}`; build it with `--objects DIR`, which writes \
+             every object and `DIR/link.txt` for that target's own toolchain to link",
+            target.triple
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
     let llvm = nazm_lir::backend::LlvmText::new(target.clone()).with_debug(choice.debug);
     let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level);
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
@@ -335,9 +351,9 @@ pub(crate) fn run(
     // do. `crate::backend` says why the answer comes from the compiler rather than from
     // the three arguments this one passes.
     let backend = if cache {
-        Backend::discover(opt_level, &work)
+        Backend::discover(opt_level, &work, cross.as_deref())
     } else {
-        Backend::unidentified(opt_level)
+        Backend::unidentified(opt_level, cross.as_deref())
     };
     // A backend that would not say what it is gets no cache. Guessing a configuration is
     // how one target's objects end up in another's build.
@@ -486,6 +502,39 @@ pub(crate) fn run(
     // command line does not depend on anything the filesystem decided.
     objects.extend(choice.link.iter().cloned());
     clock.mark("native_compile");
+    // Objects for the target's own toolchain (N57): every object in link order, renamed by its
+    // position so the order survives, and `link.txt` saying what to link them with.
+    if let Some(dir) = choice.objects {
+        let written = write_objects(dir, &objects, &target);
+        cleanup(false);
+        return match written {
+            Ok(()) => {
+                if with_report {
+                    println!(
+                        "{}",
+                        report(source_root.how(), map.len(), tally).replace(
+                            r#""link":{"performed":true}"#,
+                            r#""link":{"performed":false}"#
+                        )
+                    );
+                }
+                if !summary {
+                    eprintln!(
+                        "nazm: wrote {} objects for {} to {}; link them as {}/link.txt says",
+                        objects.len(),
+                        target.triple,
+                        dir.display(),
+                        dir.display()
+                    );
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("nazm: cannot write {}: {e}", dir.display());
+                ExitCode::from(exit::TOOLCHAIN_FAILED)
+            }
+        };
+    }
     let linked = if choice.library {
         archive(&tmp_exe, &objects)
     } else {
@@ -688,6 +737,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) link: &'a [std::path::PathBuf],
     /// A static library and its header, not an executable (N55).
     pub(crate) library: bool,
+    /// Objects for the target's own toolchain, not an executable (N57).
+    pub(crate) objects: Option<&'a Path>,
     /// Print where the build's time went (N48).
     pub(crate) timings: bool,
     /// Carry debug information, for a debugger (N48).
@@ -850,6 +901,37 @@ fn link_name(work: &Path, output: &Path) -> PathBuf {
 /// holding it are removed: a debug build on macOS, whose linker leaves it in the objects (N48).
 fn gathers_debug_information(debug: bool, os: &str) -> bool {
     debug && os == "macos"
+}
+
+/// `DIR/NN-NAME.o` for each object in link order, and `DIR/link.txt` (N57): the target, the
+/// objects in order, and the system libraries the runtime needs on it.
+fn write_objects(
+    dir: &Path,
+    objects: &[PathBuf],
+    target: &nazm_lir::backend::Target,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let mut listed = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        let name = o
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let to = format!("{i:02}-{name}");
+        std::fs::copy(o, dir.join(&to))?;
+        listed.push(to);
+    }
+    let libs = match target.os {
+        nazm_lir::backend::Os::Linux => "-lpthread",
+        nazm_lir::backend::Os::Macos => "",
+    };
+    let text = format!(
+        "# Written by nazm build --objects. Link these, in this order, with the target's toolchain.\n\
+         target {}\nobjects {}\nlibraries {libs}\n",
+        target.triple,
+        listed.join(" ")
+    );
+    std::fs::write(dir.join("link.txt"), text)
 }
 
 /// A static archive of `objects` (N55), with the system `ar` and the timestamps zeroed so two

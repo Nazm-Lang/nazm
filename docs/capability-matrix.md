@@ -3332,12 +3332,23 @@ permanently retired.
 (the latter inside `docker/contained.Dockerfile`). The emitter states its own scope, and
 `crates/nazm-cli/tests/docs.rs` asserts the documented target and the emitter agree.
 
-**Limitation** · **No cross-compilation.** Since N41 `nazm build --target TRIPLE` names a target
-explicitly, and the matrix is closed: `aarch64-apple-darwin`, `aarch64-unknown-linux-gnu`,
-`x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`; any other triple is refused by name, and one
-that is not the host is refused too (`a_target_other_than_the_host_is_refused_and_nothing_is_written`),
-because an object for it would need a foreign linker and runtime. The x86-64 triples are accepted
-by both backends and carry no evidence.
+*N57, 2026-10-02: cross-compilation — VERIFIED for four targets, with run evidence for three.*
+`architecture.md` §7.59 first. `--target` builds any of the four triples with both backends from
+this host: clang is told the triple, Cranelift is built with its `x86` and `arm64` backends, and
+the runtime text is one for all four under a stated portability rule. An executable where the
+host's toolchain links the target (the host and the other macOS architecture); otherwise
+`--objects DIR` writes every object and `link.txt`, and an executable is refused by name. The
+triple is in every object key under both backends; `nazm inspect` lists each target and what this
+host makes of it. Evidence, `crates/nazm-cli/tests/cross.rs`: all four triples by both backends,
+each object's format and architecture read from its header; the refusal; two targets never one
+cache entry; triples outside the matrix refused. **Run-verified**: `aarch64-apple-darwin` (host),
+`x86_64-apple-darwin` under Rosetta (both backends, `a_program_for_the_other_macos_architecture_runs_where_rosetta_does`),
+`aarch64-unknown-linux-gnu` from macOS-built objects linked and run in the Linux container
+(both backends, by hand: `performance.md`, N57). **Compile-only**: `x86_64-unknown-linux-gnu`.
+
+**Limitation** · No Windows, 32-bit, big-endian or CPU-feature targets; no bundled linker or
+sysroot, so a Linux target from macOS is objects only; cross-host byte reproducibility not
+measured.
 
 **BLOCKED, and it is a real finding** · `.github/workflows/ci.yml` runs
 `cargo test --workspace` and sets neither `NAZM_CONTAINED` nor `NAZM_ALLOW_UNCONTAINED`,
