@@ -5831,6 +5831,55 @@ generated code after a task starts and before a scope joins.
 operations or over the `Int` channel, timers other than a select's deadline, async I/O, deadlock
 detection.
 
+## 7.57 FFI v2: C strings in, exported functions out — N55, 2026-10-02
+
+Written before the code. §7.44 let a program call C with `Int` and `Bool`. N55 widens the boundary
+in the two directions programs most need, and settles — without building — the shapes that need a
+memory model Nazm does not have yet.
+
+**A `Str` argument is a borrowed C string.** A foreign parameter may be `Str`. At the call the
+caller makes a NUL-terminated copy of the string's bytes, passes C a `const char *` to it, and frees
+the copy when the call returns: C borrows it for the call and must not keep it. A string containing
+a NUL byte cannot be a C string, so such a call fails before C runs (`N0405`, at the call) — the
+copy is never truncated silently. The cost is one allocation and one copy per string argument,
+stated rather than hidden; zero-copy would need every Nazm string NUL-terminated, which a slice
+cannot be. A `Str` **result** stays refused (`N0381`): who frees a `char *` C returns is a fact no
+declaration states.
+
+**An exported function is a Nazm function C may call.** `pub extern "C" fn name(p: Int, …) -> R ! {}
+= "symbol" { body }` — an `extern` declaration *with* a body — defines `symbol` with the C calling
+convention, its parameters and result the v1 scalars (`Int` as `int64_t`, `Bool` as `bool`). Its
+body is ordinary Nazm, with three rules, all checked (`N0391`):
+
+- **It is public and declares `! {}`.** C cannot hand Nazm a capability, so an export takes none and
+  performs no effect: it computes, calling pure functions.
+- **It is not generic and takes no `Str`.** A C caller has one signature and owns its own memory; a
+  borrowed string *into* Nazm needs the lifetime rule a callback would, and is not here.
+- **No failure unwinds into C.** A Nazm failure inside an export — an overflow, an out-of-bounds
+  index, out of memory — cannot propagate through C frames, which have no cleanup Nazm knows of. The
+  export's C entry reports it on standard error exactly as `main`'s entry does, and ends the process
+  with status 2. An export either returns its declared value or the process ends with a Nazm
+  diagnostic; it never returns a stand-in.
+
+**Libraries.** `nazm build --lib OUT.a FILE` builds the program's modules without requiring a `main`,
+writes a static archive of every unit's object and the runtime's, and `OUT.h`, a C header declaring
+each export with `<stdint.h>` and `<stdbool.h>` types, in a fixed order. The archive's other symbols
+stay hidden; only the exports are visible to a C link. One Nazm library per C program: two would
+both carry the runtime. Either backend builds a library, and the header is the same text for both.
+
+**Identity.** An export's symbol and signature are part of its function's interface entry (the
+existing `extern` field) and of its unit's object key. Accepting syntax that was refused, and a
+`Str` where `N0381` was, moves the semantic epoch (17 → 18).
+
+**Not here, and why.** *Opaque handles* need a nominal type whose values Nazm never dereferences or
+frees — designed (`extern "C" type T;`, a word at run time, no equality, not crossing into a task,
+freed only by a C function the program calls) and not built. *C structs* need a layout guarantee
+distinct from Nazm's records, which §7.43 deliberately leaves free. *Callbacks* — C calling a Nazm
+function value — need a trampoline that finds its closure from a C `void *` and a rule for a
+callback called after its environment is gone. *`errno`* is a per-thread location whose symbol
+differs by platform (`__error` on macOS, `__errno_location` on Linux) and belongs with N57's target
+model. Dynamic libraries and exporting to anything but C are also not here.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
