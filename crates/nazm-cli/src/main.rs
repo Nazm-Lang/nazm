@@ -46,6 +46,7 @@ mod fix;
 mod fmt;
 mod inspect;
 mod interface;
+mod live;
 mod lsp;
 mod mir;
 mod package;
@@ -486,6 +487,28 @@ enum Command {
         #[arg(long, conflicts_with = "json")]
         summary_json: bool,
     },
+    /// An interactive session (N65): definitions and expressions a line at a time on standard
+    /// input, checked as one program on every edit and evaluated by the interpreter. A
+    /// redefinition that breaks another definition is refused by that one's name. `:defs`,
+    /// `:reset`, `:quit`.
+    Repl,
+    /// Evaluate a function at compile time (N65): one of no parameters, declared or inferred pure,
+    /// under the interpreter's budgets — so it holds no capability and reaches nothing of the host.
+    Comptime {
+        file: PathBuf,
+        /// The function to evaluate, in the file's own module.
+        function: String,
+        /// As `nazm run --max-iterations`: a runaway evaluation stops with `N0402`.
+        #[arg(long, default_value_t = nazm_core::eval::DEFAULT_MAX_ITERATIONS)]
+        max_iterations: u64,
+        /// As `nazm run --max-depth`.
+        #[arg(long, default_value_t = nazm_core::eval::DEFAULT_MAX_DEPTH, value_parser = max_depth)]
+        max_depth: usize,
+    },
+    /// Whether a running image could take a new version of a program (N65): one
+    /// `nazm.reload-check/1` line naming each change as `reloadable` or `restart`, and why. Exits
+    /// non-zero when any change needs a restart.
+    ReloadCheck { old: PathBuf, new: PathBuf },
     /// Write a module's published interface: what it offers, durably.
     ///
     /// The file named is the root, so the source root is its directory. Output is one
@@ -873,6 +896,23 @@ fn main() -> ExitCode {
             hash,
             source_root,
         } => return interface::run(&file, hash, source_root.as_deref()),
+        Command::Repl => return live::repl(),
+        Command::Comptime {
+            file,
+            function,
+            max_iterations,
+            max_depth,
+        } => {
+            return live::comptime(
+                &file,
+                &function,
+                nazm_core::eval::Limits {
+                    max_iterations,
+                    max_depth,
+                },
+            )
+        }
+        Command::ReloadCheck { old, new } => return live::reload_check(&old, &new),
         Command::Capabilities { json } => return capabilities::run(json),
         Command::CoreIr {
             file,
@@ -1042,6 +1082,9 @@ fn main() -> ExitCode {
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }
+        | Command::Repl
+        | Command::Comptime { .. }
+        | Command::ReloadCheck { .. }
         | Command::Lsp { .. }
         | Command::CoreIr { .. }
         | Command::Mir { .. }

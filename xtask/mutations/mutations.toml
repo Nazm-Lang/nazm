@@ -11274,3 +11274,65 @@ file = "crates/nazm-cli/src/build.rs"
 find = '                ("nazm_main", nazm_lir::runtime::wasm::STACK)'
 replace = '                ("nz_board_main", nazm_lir::runtime::wasm::STACK)'
 killers = [{ package = "nazm-cli", test = "wasm", name = "a_module_s_bound_is_rooted_at_its_export" }]
+
+
+# --- N65: the interactive tier — a REPL, comptime, reload checks ----------------------------------
+
+[[mutation]]
+name = "n65-a-redefinition-is-not-applied"
+why = "a redefinition is reported but the session keeps the old one, so callers run a definition that is gone"
+file = "crates/nazm-cli/src/live.rs"
+find = '            self.defs = next;'
+replace = '            if replaced.is_none() { self.defs = next; }'
+killers = [{ package = "nazm-cli", test = "live", name = "a_session_is_checked_as_one_program_on_every_edit" }]
+
+[[mutation]]
+name = "n65-a-broken-caller-is-not-named"
+why = "a redefinition that breaks a caller is refused without naming the caller"
+file = "crates/nazm-cli/src/live.rs"
+find = '                    .filter(|o| *o != name)'
+replace = '                    .filter(|o| *o == name)'
+killers = [{ package = "nazm-cli", test = "live", name = "a_session_is_checked_as_one_program_on_every_edit" }]
+
+[[mutation]]
+name = "n65-comptime-admits-an-effect"
+why = "comptime evaluates a function that declares an effect, so it could reach the host"
+file = "crates/nazm-cli/src/live.rs"
+find = '            } else if !f.effects.is_pure() {'
+replace = '            } else if false {'
+killers = [{ package = "nazm-cli", test = "live", name = "comptime_evaluates_a_pure_constant_and_refuses_anything_that_could_reach_the_host" }]
+
+[[mutation]]
+name = "n65-comptime-admits-a-parameter"
+why = "comptime admits a function of one parameter, which may be a capability"
+file = "crates/nazm-cli/src/live.rs"
+find = '            let reason = if f.params > 0 {'
+replace = '            let reason = if f.params > 1 {'
+killers = [{ package = "nazm-cli", test = "live", name = "comptime_evaluates_a_pure_constant_and_refuses_anything_that_could_reach_the_host" }]
+
+[[mutation]]
+name = "n65-a-signature-change-reloads"
+why = "a changed signature is not seen, so a running image would call a function with the old arguments"
+file = "crates/nazm-cli/src/live.rs"
+find = '            Some((s, _)) if s != sig => push('
+replace = '            Some((s, _)) if s != sig && false => push('
+killers = [{ package = "nazm-cli", test = "live", name = "a_reload_check_names_what_a_running_image_can_take_and_what_needs_a_restart" }]
+
+[[mutation]]
+name = "n65-field-order-is-layout"
+why = "a record's fields are compared in declaration order, so reordering them — no change to its layout — demands a restart"
+file = "crates/nazm-cli/src/live.rs"
+find = '''
+                // Layout is by name (§7.9): declaration order is not part of it.
+                fields.sort();'''
+replace = '''
+                // Layout is by name (§7.9): declaration order is not part of it.'''
+killers = [{ package = "nazm-cli", test = "live", name = "a_reload_check_names_what_a_running_image_can_take_and_what_needs_a_restart" }]
+
+[[mutation]]
+name = "n65-a-removed-function-reloads"
+why = "a removed function is reloadable, though running code may still call it"
+file = "crates/nazm-cli/src/live.rs"
+find = '            None => push(n, "restart", "removed: running code may still call it".to_owned()),'
+replace = '            None => push(n, "reloadable", "removed: running code may still call it".to_owned()),'
+killers = [{ package = "nazm-cli", bin = "nazm", name = "live::tests::a_reload_tells_a_body_from_a_signature_and_a_layout" }]

@@ -993,6 +993,21 @@ impl Interpreter {
         self.call_body(main, frame(main, roots))
     }
 
+    /// Evaluate the parameterless function `f` and return its value (N65, comptime): a function
+    /// of no parameters holds no capability, so whatever it reaches, it reaches by computing.
+    /// The caller has held it to that; the budgets of [`Self::with_limits`] still bound it.
+    pub fn run_constant(&mut self, f: nazm_sema::FnId) -> Result<Value, RuntimeError> {
+        let core = Arc::clone(&self.core);
+        let Some(func) = core.function(f).filter(|g| g.params == 0) else {
+            return Err(fail(
+                codes::MISSING_MAIN,
+                Span::synthetic(),
+                "no parameterless function to evaluate",
+            ));
+        };
+        self.call_body(func, frame(func, Vec::new()))
+    }
+
     /// Run a function body and produce its value.
     ///
     /// `return` and falling off the end with a tail are the two ways a function produces

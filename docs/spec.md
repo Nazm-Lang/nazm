@@ -3197,6 +3197,15 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **Device registers** | None: `mmio_read32` and `mmio_write32` are refused (`N0392`) |
 | **The reference host** | `node host.mjs module.wasm` grants exactly `write` and `report`, refuses a module asking for anything else, prints the result and exits 0, or 2 after a failure — the interpreter's output and status |
 
+### The interactive tier: `repl`, `comptime`, `reload-check` — N65
+<!-- id: interactive -->
+
+| | |
+| --- | --- |
+| **`nazm repl`** | One line at a time: a line beginning `fn`, `struct` or `enum` (or `pub` before one) defines; any other is an expression, evaluated as the body of a `main(io: IoCap)` and shown as an `Int`, a `Bool` or a `Str`. The session is checked as one program on every line; a redefinition takes its predecessor's place, and one that breaks another definition is refused naming it, the session unchanged. `main` is the REPL's. `:defs`, `:reset`, `:quit` |
+| **`nazm comptime FILE FUNCTION`** | Evaluates a function of the file's module that has no parameters and is pure, under `--max-iterations` and `--max-depth`; prints its value. Any other function is refused (`N0393`); exhausting a budget is `N0402` or `N0403` |
+| **`nazm reload-check OLD NEW`** | `nazm.reload-check/1`: each definition of the root module that changed, `reloadable` (a body, or something added) or `restart` (a signature — types or effects — a removal, or a record's or enum's fields by name and type), with why; exit status non-zero when any needs a restart |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
