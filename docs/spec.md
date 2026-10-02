@@ -3255,6 +3255,16 @@ through `nazm_host.report`) — and imports only `nazm_host.state_get(index) -> 
 | **`nazm contract FILE --accounts DIR`** | `accounts.json` (`nazm.sbpf-accounts/1`): the state account (a version byte, then 8 bytes per field by declaration index), and per instruction its discriminator (the first 8 bytes of `keccak256("nazm.instruction." + name)`), its arguments' offsets, and its accounts — the state writable exactly when written, the caller a signer exactly when decided on |
 | **Execution** | Not available: no sBPF target is built |
 
+### Build provenance — N73
+<!-- id: provenance-record -->
+
+| | |
+| --- | --- |
+| **`nazm build … --provenance FILE`** | After a successful build only, `FILE` holds `nazm.provenance/1`: every source module (the prelude included) and package with its digest, the target, the compiler's version and semantic epoch, the C compiler's first `--version` line and a digest of its report, the runtime's ABI revision and digest, the backend with its optimisation level, layout, debug and watermark options, every `--link` file's digest, the profiles in force, and the output — an executable, a library and its header, or each file of `--objects` — with its digest |
+| **Digests** | `blake3:` and 64 hex digits, BLAKE3 over the file's bytes: recomputable without Nazm |
+| **Determinism** | No absolute path, time or host name: one program and one toolchain give one record |
+| **`--attest-with CMD`** | Needs `--provenance`. CMD's words, no shell, with the record's path appended; its standard output is written to `FILE.sig`. A failing CMD fails the command and writes no `FILE.sig`; the record and the output stay |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 

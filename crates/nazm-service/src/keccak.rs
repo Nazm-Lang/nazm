@@ -33,7 +33,10 @@ const ROTATIONS: [u32; 25] = [
     0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
 ];
 
-#[allow(clippy::indexing_slicing, reason = "x and y are below 5, so every lane index is below 25")]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "x and y are below 5, so every lane index is below 25"
+)]
 fn permute(a: &mut [u64; 25]) {
     for rc in ROUNDS {
         // θ

@@ -1194,6 +1194,7 @@ dependencies = [
 name = "nazm-cli"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "clap",
  "lsp-server",
  "lsp-types",

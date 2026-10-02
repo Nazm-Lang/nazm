@@ -55,6 +55,7 @@ mod mir;
 mod package;
 mod patch;
 mod profile;
+mod provenance;
 mod repo;
 mod run_profile;
 mod snapshot;
@@ -709,6 +710,16 @@ enum Command {
         /// refuses, and never changes what an accepted program does.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
+        /// After a successful build, write `nazm.provenance/1` to FILE (N73): every source module
+        /// and package with its BLAKE3 digest, the target, the compiler and C compiler, the
+        /// runtime's ABI revision and digest, the backend and its options, the profiles and the
+        /// output's digest. Deterministic: no path, time or host name.
+        #[arg(long, value_name = "FILE")]
+        provenance: Option<PathBuf>,
+        /// Run CMD (its words, no shell) with the provenance file's path appended, and keep its
+        /// standard output as `FILE.sig` — a hook for any local signer. Needs `--provenance`.
+        #[arg(long, value_name = "CMD", requires = "provenance")]
+        attest_with: Option<String>,
     },
     /// Print one program's facts as `nazm.inspect/1` (N48): every definition's identity,
     /// signature, effects, capabilities, provenance, Core IR and MIR digests, and the toolchain,
@@ -899,10 +910,12 @@ fn main() -> ExitCode {
         timings,
         debug,
         locked: _,
-        profile: _,
+        profile,
+        provenance,
+        attest_with,
     } = cli.command
     {
-        return build::run(
+        let built = build::run(
             &file,
             out.as_deref(),
             json,
@@ -924,6 +937,30 @@ fn main() -> ExitCode {
                 timings,
                 debug,
             },
+        );
+        let Some(record) = provenance else {
+            return built;
+        };
+        if built != ExitCode::from(exit::OK) {
+            return built;
+        }
+        return provenance::write(
+            &provenance::Request {
+                source: &file,
+                out: out.as_deref(),
+                opt_level,
+                backend: &backend,
+                target: target.as_deref(),
+                layout: &layout,
+                debug,
+                library: lib,
+                objects: objects.as_deref(),
+                stack_watermark,
+                link: &link,
+                profile: profile.as_deref(),
+            },
+            &record,
+            attest_with.as_deref(),
         );
     }
     match cli.command {
