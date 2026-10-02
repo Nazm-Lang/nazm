@@ -6325,6 +6325,47 @@ wasm32 calls compiler-rt's 128-bit multiply, and there is no compiler-rt; the ru
 import uses the host's stack, not the module's, and adds nothing. *The freestanding refusal names
 each part's symbols*, on the board as here.
 
+## 7.67 The interactive tier: a REPL, comptime and reload checks — and a JIT, blocked — N65, 2026-10-02
+
+Written before the code is committed. Native AOT stays the foundation (Goals G02): nothing here
+changes what `nazm build` produces or what a program means. The interactive tier is the
+interpreter and the checker — the settled Core IR every build starts from, never a second meaning.
+
+**The JIT is BLOCKED, by a law of this repository.** An in-process JIT writes machine code to memory
+and calls it: that is `unsafe` Rust, and the workspace forbids `unsafe` code (`unsafe_code =
+"forbid"`, `Cargo.toml`). Lifting the law for one audited crate is a decision about the project's
+safety rules, not a milestone's implementation detail, and it is not made here. Designed for when it
+is: Cranelift (already the second backend) compiles MIR to code in memory through `cranelift-jit`;
+the runtime's LLVM text is compiled once by clang into a shared library keyed by the runtime's
+digest and loaded beside it; the entry's call to `main` goes through a pointer the JIT sets; the
+JIT's cache key is the object key Cranelift already uses (MIR, settings, triple, runtime digest), so
+no code survives a semantic, runtime or version change. Until then the fast interactive tier is the
+interpreter, whose agreement with native code the existing differential suites hold.
+
+**The REPL.** `nazm repl` reads definitions and expressions a line at a time. The session is one
+program — its definitions in the order first given — checked whole on every edit, so a definition's
+identity is its name in the session's module (§7.10) and a redefinition is checked against every
+definition that uses it. One that breaks another is refused by the other's name and leaves the
+session as it was: no definition is ever checked against a predecessor that has gone. An expression
+is the body of a `main` holding an `IoCap`, evaluated by the interpreter as an `Int`, a `Bool` or a
+`Str`; `main` itself is the REPL's. Nothing is cached between lines, so nothing can be stale.
+
+**Comptime.** `nazm comptime FILE FUNCTION` evaluates a function of no parameters that is pure —
+declared `! {}` or inferred so — under the interpreter's iteration and depth budgets. That is the
+whole sandbox, and it is the language's own: authority is a value (§7.39), so a function of no
+parameters holds none, and a pure one cannot exercise its caller's through the ambient bridge, so
+files, the clock, the network, tasks and C are unreachable without any check of their own. Anything
+else is refused, by name, with `N0393`; a runaway evaluation stops at its budget with `N0402`.
+In-language comptime (a constant evaluated during checking) is designed on this rule and not built.
+
+**Reload checks.** `nazm reload-check OLD NEW` compares two versions of a program's root module, per
+definition: a function whose body changed and whose signature — parameter and result types, and
+effects — did not is `reloadable`, as is anything added; a changed signature, a removed function, or
+a record or enum whose layout changed (its fields by name and type; order is not layout, §7.9) needs
+a `restart`, named with what changed. One `nazm.reload-check/1` line, with the runtime ABI revision;
+a non-zero exit when anything needs a restart. Nothing is reloaded: the check is the rule a hot
+reloader would be held to, stated and tested before any reloader exists.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
