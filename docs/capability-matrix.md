@@ -3571,8 +3571,11 @@ shrunk by lines, and `tests/fuzz-corpus/` is replayed first. 24 cases per run; 1
 fuzzer (Cranelift's by N41's named test as well), and a lexer panic on one character by the robustness
 fuzzer and by no `nazm-syntax` or `nazm-core` test — three mutants whose named killer is a fuzzer. `nazm build --provenance FILE` writes `nazm.provenance/1` — sources and packages with BLAKE3
 digests, target, compiler, C compiler, runtime ABI and digest, backend and options, profiles, output
-digests — and `--attest-with CMD` keeps a local command's output as `FILE.sig`.
-Evidence, `crates/nazm-cli/tests/build_provenance.rs` (5): digests recomputed from the files, two clean
+digests — and `--attest-with CMD` keeps a local command's output as `FILE.sig`. `cargo xtask evidence
+DIR` writes an evidence bundle's `index.json` (`nazm.evidence/1`: every file's path, size, BLAKE3 and
+kind) and the compiler's `sbom.json` (`nazm.sbom/1`: the 261 crates `Cargo.lock` pins, and the
+toolchain), offline; `--verify` refuses a changed, missing or unindexed file by name
+(`xtask/tests/evidence.rs`, 3). Evidence, `crates/nazm-cli/tests/build_provenance.rs` (5): digests recomputed from the files, two clean
 directories giving one record, a change seen in its own digest and the output's, the backend recorded,
 a failing signer leaving no signature, a failed build leaving no record. *Across toolchains*: one
 program built for `aarch64-unknown-linux-gnu` by Apple clang 21 (host) and clang 19 (Linux image) —

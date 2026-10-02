@@ -11855,3 +11855,37 @@ file = "crates/nazm-cli/src/main.rs"
 find = "        if built != ExitCode::from(exit::OK) {\n            return built;\n        }"
 replace = "        if false {\n            return built;\n        }"
 killers = [{ package = "nazm-cli", test = "build_provenance", name = "a_failed_build_writes_no_record" }]
+
+# --- N73: the evidence bundle and the compiler's bill of materials ---------------------------------
+
+[[mutation]]
+name = "n73-a-changed-file-verifies"
+why = "verifying checks only that a file is there, so a changed artefact passes as the one indexed"
+file = "xtask/src/evidence.rs"
+find = "            Ok(bytes) if &digest(&bytes) == want => {}"
+replace = "            Ok(_) => {}"
+killers = [{ package = "xtask", test = "evidence", name = "verifying_refuses_a_changed_a_missing_and_an_unindexed_file_by_name" }]
+
+[[mutation]]
+name = "n73-an-unindexed-file-is-ignored"
+why = "a file added to a bundle after it was indexed passes verification"
+file = "xtask/src/evidence.rs"
+find = "        if !listed.iter().any(|(l, _)| l == p) {"
+replace = "        if false && !listed.iter().any(|(l, _)| l == p) {"
+killers = [{ package = "xtask", test = "evidence", name = "verifying_refuses_a_changed_a_missing_and_an_unindexed_file_by_name" }]
+
+[[mutation]]
+name = "n73-the-index-is-out-of-order"
+why = "the index is not in path order, so a reader cannot rely on where an entry is"
+file = "xtask/src/evidence.rs"
+find = "    out.sort();\n    Ok(out)"
+replace = "    out.reverse();\n    Ok(out)"
+killers = [{ package = "xtask", test = "evidence", name = "the_index_names_every_file_with_its_digest_and_kind" }]
+
+[[mutation]]
+name = "n73-the-sbom-drops-versions"
+why = "the bill of materials names crates without the versions the lockfile pins"
+file = "xtask/src/evidence.rs"
+find = '"version": field("version"),'
+replace = '"version": Value::Null,'
+killers = [{ package = "xtask", test = "evidence", name = "the_bill_of_materials_is_the_lockfiles_crates_and_the_pin" }]

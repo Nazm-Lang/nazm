@@ -128,7 +128,8 @@ found only by reading all of it.
 - Reproducibility is verified on one host. Across toolchains it is measured, not claimed: Apple
   clang 21 and clang 19 give the same program objects and a different runtime object (N73, area 32).
   A provenance record is evidence of what a build read and wrote, not a proof; Nazm neither signs nor
-  verifies an attestation.
+  verifies an attestation. The compiler's bill of materials is what `Cargo.lock` claims; nothing
+  checks a crate against its upstream.
 - Fuzzing is seeded generation, not coverage-guided; the differential generator writes `Int` and
   `Bool` programs only (N73, area 30). *Narrowed in N73:* until then, no fuzzing.
 - The compiler written in Nazm understands neither packages nor `@std` imports nor foreign
