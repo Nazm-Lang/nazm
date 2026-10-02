@@ -269,7 +269,7 @@ fn every_declaration_outside_the_subset_is_refused_by_its_own_code() {
     let cases: &[(&str, &str)] = &[
         ("extern \"Rust\" fn a(x: Int) -> Int = \"a\";", "N0380"),
         ("extern \"c\" fn a(x: Int) -> Int = \"a\";", "N0380"),
-        ("extern \"C\" fn a(x: Str) -> Int = \"a\";", "N0381"),
+        ("extern \"C\" fn a(x: Ints) -> Int = \"a\";", "N0381"),
         ("extern \"C\" fn a(x: Int) -> Str = \"a\";", "N0381"),
         ("extern \"C\" fn a(x: Ints) -> Int = \"a\";", "N0381"),
         ("extern \"C\" fn a(x: ForeignCap) -> Int = \"a\";", "N0381"),
