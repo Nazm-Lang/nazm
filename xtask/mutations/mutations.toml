@@ -9218,8 +9218,13 @@ killers = [{ package = "nazm-cli", test = "profiles", name = "a_refusal_names_th
 name = "n47-a-rule-is-skipped"
 why = "`embedded` loses `no-spawn`, so a program that starts tasks passes a profile that forbids the scheduler"
 file = "crates/nazm-service/src/profile.rs"
-find = "            Self::Embedded => &[Rule::NoIo, Rule::NoSpawn, Rule::BoundedAllocation],"
-replace = "            Self::Embedded => &[Rule::NoIo, Rule::BoundedAllocation],"
+find = '''
+                Rule::NoIo,
+                Rule::NoSpawn,
+                Rule::BoundedAllocation,'''
+replace = '''
+                Rule::NoIo,
+                Rule::BoundedAllocation,'''
 killers = [{ package = "nazm-cli", test = "profiles", name = "every_profile_s_rules_and_verdicts" }]
 
 [[mutation]]
@@ -9987,8 +9992,8 @@ killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "explain_cost_
 name = "n52-bounded-allocation-ignores-its-facts"
 why = "the embedded rule passes whatever allocates in a loop"
 file = "crates/nazm-service/src/profile.rs"
-find = "                    <[Witness]>::to_vec,"
-replace = "                    |_| Vec::new(),"
+find = "                    f.unbounded.clone()"
+replace = "                    Vec::new()"
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "profiles_read_resource_and_flow_facts" }]
 
 [[mutation]]
@@ -10402,13 +10407,13 @@ killers = [{ package = "nazm-cli", test = "select", name = "a_clock_needs_a_time
 name = "n54-critical-admits-a-clock"
 why = "the critical profile forgets its no-ambient-time rule"
 file = "crates/nazm-service/src/profile.rs"
-find = """
+find = '''
                 Rule::NoDeclassification,
                 Rule::NoAmbientTime,
-            ],"""
-replace = """
+                Rule::NoSelect,'''
+replace = '''
                 Rule::NoDeclassification,
-            ],"""
+                Rule::NoSelect,'''
 killers = [{ package = "nazm-cli", test = "select", name = "critical_refuses_a_clock" }]
 
 [[mutation]]
@@ -10863,3 +10868,68 @@ replace = '''
         if false {
             if let Some(v) = self.ssa.get(l.index()).copied().flatten() {'''
 killers = [{ package = "nazm-cli", test = "promotion", name = "a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one" }]
+
+
+# --- N60: restriction profiles v2 -----------------------------------------------------------------
+
+[[mutation]]
+name = "n60-a-cycle-is-never-found"
+why = "no function is ever found in a call cycle"
+file = "crates/nazm-cli/src/profile.rs"
+find = '''
+            if j == i {
+                cycle = true;'''
+replace = '''
+            if false {
+                cycle = true;'''
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "embedded_refuses_a_call_cycle_and_names_each_function_in_it" }]
+
+[[mutation]]
+name = "n60-an-indirect-call-is-known"
+why = "a call through a function value counts as known, so the rule fails where it cannot know"
+file = "crates/nazm-service/src/profile.rs"
+find = '                        unknown = !f.indirect.is_empty();'
+replace = '                        unknown = false;'
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "a_call_through_a_function_value_is_unknown_and_unknown_refuses" }]
+
+[[mutation]]
+name = "n60-the-report-never-says-unknown"
+why = "the report calls an unknown verdict a failure"
+file = "crates/nazm-service/src/profile.rs"
+find = '            } else if v.unknown {'
+replace = '            } else if false {'
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "a_call_through_a_function_value_is_unknown_and_unknown_refuses" }]
+
+[[mutation]]
+name = "n60-embedded-forgets-recursion"
+why = "embedded has no no-recursion rule"
+file = "crates/nazm-service/src/profile.rs"
+find = '''
+                Rule::BoundedAllocation,
+                Rule::NoRecursion,
+            ],'''
+replace = '''
+                Rule::BoundedAllocation,
+            ],'''
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "embedded_refuses_a_call_cycle_and_names_each_function_in_it" }]
+
+[[mutation]]
+name = "n60-critical-admits-a-select"
+why = "critical has no no-select rule"
+file = "crates/nazm-service/src/profile.rs"
+find = '''
+                Rule::NoAmbientTime,
+                Rule::NoSelect,
+            ],'''
+replace = '''
+                Rule::NoAmbientTime,
+            ],'''
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "critical_refuses_a_select_by_its_call_site" }]
+
+[[mutation]]
+name = "n60-a-select-is-not-a-site"
+why = "chan_select_of is not counted a select"
+file = "crates/nazm-service/src/profile.rs"
+find = '                                nazm_core::sema::Intrinsic::ChanSelectOf'
+replace = '                                nazm_core::sema::Intrinsic::TimeNowMs'
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "critical_refuses_a_select_by_its_call_site" }]

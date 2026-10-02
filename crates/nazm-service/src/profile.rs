@@ -37,11 +37,16 @@ pub enum Rule {
     /// No clock (N54): nothing that needs a `TimeCap` — a program whose behaviour depends on
     /// time is not reproducible.
     NoAmbientTime,
+    /// No call cycle (N60): a stack bound the compiler can state. `unknown` where a call goes
+    /// through a function value, whose target the compiler does not know.
+    NoRecursion,
+    /// No select (N60): its result depends on which channels are ready when it looks.
+    NoSelect,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -51,6 +56,8 @@ impl Rule {
         Self::ContentsStayInFiles,
         Self::NoDeclassification,
         Self::NoAmbientTime,
+        Self::NoRecursion,
+        Self::NoSelect,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -66,6 +73,8 @@ impl Rule {
             Self::ContentsStayInFiles => "contents-stay-in-files",
             Self::NoDeclassification => "no-declassification",
             Self::NoAmbientTime => "no-ambient-time",
+            Self::NoRecursion => "no-recursion",
+            Self::NoSelect => "no-select",
         }
     }
 
@@ -80,7 +89,9 @@ impl Rule {
             | Self::BoundedAllocation
             | Self::ContentsStayInFiles
             | Self::NoDeclassification
-            | Self::NoAmbientTime => None,
+            | Self::NoAmbientTime
+            | Self::NoRecursion
+            | Self::NoSelect => None,
         }
     }
 }
@@ -117,7 +128,12 @@ impl Profile {
     pub const fn rules(self) -> &'static [Rule] {
         match self {
             Self::General => &[],
-            Self::Embedded => &[Rule::NoIo, Rule::NoSpawn, Rule::BoundedAllocation],
+            Self::Embedded => &[
+                Rule::NoIo,
+                Rule::NoSpawn,
+                Rule::BoundedAllocation,
+                Rule::NoRecursion,
+            ],
             Self::Critical => &[
                 Rule::DeclaredEffects,
                 Rule::NoSpawn,
@@ -125,6 +141,7 @@ impl Profile {
                 Rule::LockedBuild,
                 Rule::NoDeclassification,
                 Rule::NoAmbientTime,
+                Rule::NoSelect,
             ],
             Self::Cyber => &[
                 Rule::DeclaredEffects,
@@ -148,7 +165,22 @@ pub struct Witness {
 pub struct Verdict {
     pub rule: Rule,
     pub pass: bool,
+    /// The facts the rule needs were not established (N60): not a pass, and not a proof of a
+    /// violation either. A profile refuses it.
+    pub unknown: bool,
     pub witnesses: Vec<Witness>,
+}
+
+/// What the profile rules read off MIR (N52, N60), computed by the caller when a rule in force
+/// needs it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MirFacts {
+    /// Allocation sites whose count per call is unknown.
+    pub unbounded: Vec<Witness>,
+    /// Functions in a call cycle: those MIR gives a stack check.
+    pub recursive: Vec<Witness>,
+    /// Calls through a function value, whose target the compiler does not know.
+    pub indirect: Vec<Witness>,
 }
 
 /// Every verdict for a build under `profiles`.
@@ -248,16 +280,15 @@ fn chain(res: &Resolution, main: FnId, effect: Effect) -> Vec<Witness> {
 /// Evaluate `profiles` over a checked program. `locked` is whether this build is a package
 /// build whose lockfile was verified.
 ///
-/// `unbounded` is every allocation site whose count per call is unknown, read off MIR by the
-/// caller (N52); `None` where it was not computed, which a rule needing it fails on rather than
-/// passing vacuously.
+/// `facts` is what MIR established, read off it by the caller (N52, N60); `None` where it was
+/// not computed, which a rule needing it reports as `unknown` rather than passing vacuously.
 #[must_use]
 pub fn evaluate(
     profiles: &[Profile],
     graph: &ModuleGraph,
     res: &Resolution,
     locked: bool,
-    unbounded: Option<&[Witness]>,
+    facts: Option<&MirFacts>,
 ) -> Evaluation {
     let mut profiles: Vec<Profile> = profiles.to_vec();
     profiles.sort_unstable();
@@ -273,9 +304,14 @@ pub fn evaluate(
         .and_then(|m| res.function(m))
         .and_then(|f| f.inferred_effects.or(f.declared_effects))
         .unwrap_or_default();
+    let at_main = || {
+        main.and_then(|m| res.function(m))
+            .map_or(Span::synthetic(), |f| f.name_span)
+    };
     let verdicts = rules
         .into_iter()
         .map(|rule| {
+            let mut unknown = false;
             let witnesses = if let Some(effect) = rule.effect() {
                 match main {
                     Some(m) if required.contains(effect) => {
@@ -291,17 +327,49 @@ pub fn evaluate(
                     _ => Vec::new(),
                 }
             } else if rule == Rule::BoundedAllocation {
-                unbounded.map_or_else(
-                    || {
+                if let Some(f) = facts {
+                    f.unbounded.clone()
+                } else {
+                    unknown = true;
+                    vec![Witness {
+                        span: at_main(),
+                        note: "the program's resource facts were not computed".to_owned(),
+                    }]
+                }
+            } else if rule == Rule::NoRecursion {
+                match facts {
+                    None => {
+                        unknown = true;
                         vec![Witness {
-                            span: main
-                                .and_then(|m| res.function(m))
-                                .map_or(Span::synthetic(), |f| f.name_span),
-                            note: "the program's resource facts were not computed".to_owned(),
+                            span: at_main(),
+                            note: "the program's call graph was not computed".to_owned(),
                         }]
-                    },
-                    <[Witness]>::to_vec,
-                )
+                    }
+                    Some(f) if !f.recursive.is_empty() => f.recursive.clone(),
+                    Some(f) => {
+                        unknown = !f.indirect.is_empty();
+                        f.indirect.clone()
+                    }
+                }
+            } else if rule == Rule::NoSelect {
+                res.functions()
+                    .iter()
+                    .flat_map(|f| f.call_sites.iter())
+                    .filter(|s| {
+                        matches!(
+                            s.callee,
+                            nazm_core::sema::Callee::Builtin(
+                                nazm_core::sema::Intrinsic::ChanSelectOf
+                                    | nazm_core::sema::Intrinsic::ChanSelectUntil
+                            )
+                        )
+                    })
+                    .map(|s| Witness {
+                        span: s.span,
+                        note: "this select's result depends on which channel is ready first"
+                            .to_owned(),
+                    })
+                    .collect()
             } else if rule == Rule::ContentsStayInFiles {
                 let restricted = nazm_core::sema::OriginSet::RESTRICTED;
                 res.sinks()
@@ -373,6 +441,7 @@ pub fn evaluate(
             Verdict {
                 rule,
                 pass: witnesses.is_empty(),
+                unknown: unknown && !witnesses.is_empty(),
                 witnesses,
             }
         })
@@ -389,7 +458,7 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
         .filter(|v| !v.pass)
         .map(|v| {
             let first = v.witnesses.first();
-            let mut d = Diagnostic::error(
+            let d = Diagnostic::error(
                 codes::PROFILE_VIOLATION,
                 first.map_or(Span::synthetic(), |w| w.span),
                 format!(
@@ -402,6 +471,16 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                     v.rule.id()
                 ),
             );
+            let d = if v.unknown {
+                // Not a proof of a violation: the facts the rule needs are missing (N60).
+                d.secondary(
+                    first.map_or(Span::synthetic(), |w| w.span),
+                    "unknown: the compiler could not establish what this rule needs, so it is not met",
+                )
+            } else {
+                d
+            };
+            let mut d = d;
             if let Some(w) = first {
                 d = d.primary_label(&w.note);
             }
@@ -418,6 +497,8 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::ContentsStayInFiles => "a file's contents may be written to a file, never shown; `nazm explain-flow` lists every sink and what reaches it".to_owned(),
                 Rule::NoDeclassification => "this profile admits no declassification: the value keeps its origin".to_owned(),
                 Rule::NoAmbientTime => "this profile admits no clock: a deadline or a time read makes the program's behaviour depend on when it runs".to_owned(),
+                Rule::NoRecursion => "a call cycle has no stack bound the compiler can state, and a call through a function value has a target it does not know; call each function directly, without a cycle".to_owned(),
+                Rule::NoSelect => "this profile admits no select: receive from one channel, so the order is the program's".to_owned(),
             })
         })
         .collect()
@@ -462,7 +543,13 @@ pub fn report(e: &Evaluation, map: &SourceMap) -> String {
             s,
             "{{\"id\":\"{}\",\"verdict\":\"{}\",\"witnesses\":[",
             v.rule.id(),
-            if v.pass { "pass" } else { "fail" }
+            if v.pass {
+                "pass"
+            } else if v.unknown {
+                "unknown"
+            } else {
+                "fail"
+            }
         );
         for (j, w) in v.witnesses.iter().enumerate() {
             if j > 0 {

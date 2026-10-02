@@ -95,7 +95,8 @@ fn every_profile_s_rules_and_verdicts() {
             pairs(&[
                 ("no-io", "fail"),
                 ("no-spawn", "fail"),
-                ("bounded-allocation", "pass")
+                ("bounded-allocation", "pass"),
+                ("no-recursion", "pass")
             ])
         )
     );
@@ -109,7 +110,8 @@ fn every_profile_s_rules_and_verdicts() {
                 ("no-foreign", "pass"),
                 ("locked-build", "fail"),
                 ("no-declassification", "pass"),
-                ("no-ambient-time", "pass")
+                ("no-ambient-time", "pass"),
+                ("no-select", "pass")
             ])
         )
     );
@@ -134,7 +136,8 @@ fn every_profile_s_rules_and_verdicts() {
             pairs(&[
                 ("no-io", "pass"),
                 ("no-spawn", "pass"),
-                ("bounded-allocation", "pass")
+                ("bounded-allocation", "pass"),
+                ("no-recursion", "pass")
             ])
         )
     );
@@ -202,7 +205,8 @@ fn a_foreign_call_is_refused_where_no_foreign_is_in_force() {
             pairs(&[
                 ("no-io", "pass"),
                 ("no-spawn", "pass"),
-                ("bounded-allocation", "pass")
+                ("bounded-allocation", "pass"),
+                ("no-recursion", "pass")
             ])
         )
     );

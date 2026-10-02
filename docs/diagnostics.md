@@ -101,6 +101,11 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N60, restriction profiles v2.** No code appeared: a rule's refusal is `N0510`, and an
+`unknown` verdict is `N0510` too, with a label saying the rule's facts could not be established.
+`nazm.profile-report/1` gains two rule identities (`no-recursion`, `no-select`) and one verdict
+value (`unknown`), new values of existing fields.
+
 **Applied to N58, debugger and profiler v2.** No code appeared. One schema did: `nazm.profile/1`
 (`nazm profile FILE`): `schema`, `backend`, `exit`, `wall_ms`, `stdout_bytes`, `memory` (per class:
 `allocated`, `reclaimed`, `live`) and `scheduler` (`spawned`, `joined`, `selects`, `timeouts`).
