@@ -6375,7 +6375,7 @@ and says for every other loop why it did not.
 
 **No vector types in the language.** A source-level vector would be a new kind of value with its own
 overflow, bounds and layout rules, and nothing needs one yet. The semantic addition is one built-in,
-`ints_sum(start: Int, v: Ints) -> Int`: `start` plus every element of `v`, left to right, failing
+`ints_sum_from(start: Int, v: Ints) -> Int`: `start` plus every element of `v`, left to right, failing
 with `N0400` exactly when one of those running sums would overflow — what the loop computing it
 means, as a function. It is also the manual escape: a program may call it.
 
@@ -6390,7 +6390,7 @@ the sum reads `0..len`.
 
 **Automatic, for one idiom, in native builds.** The counted loop `while i < ints_len(v) { s = s +
 ints_get(v, i); i = i + 1; }`, with `i` started at `0` in the loop's block and nothing else in the
-body, is replaced in Core IR before MIR by `s = ints_sum(s, v); i = ints_len(v);`, the call at the
+body, is replaced in Core IR before MIR by `s = ints_sum_from(s, v); i = ints_len(v);`, the call at the
 addition's span — so an overflow is the same diagnostic at the same place, and the loop's bounds
 checks could never fail. The interpreter keeps the loop, so its iteration budget still counts each
 turn. Every other loop is left alone, and `nazm explain-cost` names the reason for each.

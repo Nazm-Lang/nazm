@@ -3961,7 +3961,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
             }
         }
     }
-    // The overflow flag `ints_sum` writes (N66), once, in the entry block.
+    // The overflow flag `ints_sum_from` writes (N66), once, in the entry block.
     if f.blocks.iter().flat_map(|b| b.stmts.iter()).any(|s| {
         matches!(
             &s.kind,

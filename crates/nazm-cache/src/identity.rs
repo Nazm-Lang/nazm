@@ -177,7 +177,7 @@ use crate::digest::{self, Framed};
 /// `19` — N62, 2026-10-02. A freestanding target: `MmioCap` became a built-in type name and
 /// `mmio_read32` and `mmio_write32` built-in names, so a program defining any of them moved from
 /// accepted to refused, and a register access without an `MmioCap` held is refused (`N0369`).
-/// `20` — N66, 2026-10-02. Vectorisation: `ints_sum` became a built-in name, so a program defining
+/// `20` — N66, 2026-10-02. Vectorisation: `ints_sum_from` became a built-in name, so a program defining
 /// a function of that name moved from accepted to refused.
 pub const SEMANTIC_EPOCH: u32 = 20;
 
