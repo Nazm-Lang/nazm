@@ -6201,6 +6201,63 @@ nothing defines, by runtime part, with exit status 4 rather than `N0101`. *`_sta
 floating point and SIMD* (`CPACR_EL1`), trapped at reset, since code generation may use them.
 *Cranelift is refused for the board by name*: its object writer has no format for it.
 
+## 7.65 Real-time bounds: what is bounded, what is measured, what is unknown — N63, 2026-10-02
+
+Written before the code. "Fast" is not "real-time": a real-time claim is an upper bound that holds
+on every run, and Nazm states one only where the compiler or the code generator establishes it. N63
+targets an **analysable subset** — a program on the board (§7.64) whose loops, calls, allocation,
+tasks, queues and blocking the compiler can bound — not hard-real-time certification of anything.
+
+**Three kinds of number, never mixed.** A *static bound* is established from the program or its
+generated code and holds on every run of that build. A *measurement* is what one run observed; it is
+evidence that a bound is not violated there, never a bound. An *unknown* is a quantity the compiler
+does not establish, reported as `null` with the reason. Every report below names which each number is.
+
+**The `realtime` profile.** `embedded`'s rules (no `io`, no `spawn`, bounded allocation, no
+recursion) and three more, each an existing fact or a new one read the same way:
+
+- `no-blocking`: no channel send, receive or select — the operations whose latency depends on
+  another task or the host scheduler (§7.56). Without tasks they either complete at once or wait
+  forever; either way their latency is not the program's.
+- `no-ambient-time`: as `critical` (§7.56) — a deadline makes behaviour depend on when it runs.
+- `bounded-loops`: every `while` has a trip bound the compiler establishes, or the rule is
+  `unknown` and refused. The bounded form, read off Core IR: a counter `i`, set by `let mut i = A`
+  or `i = A` (`A` an `Int` literal) as the last write to `i` before the loop in its block; the
+  condition `i < B`, `i <= B`, `i > B` or `i >= B` (`B` an `Int` literal, or an immutable local bound
+  to one); and the body's one write to `i`, a top-level `i = i + C` (or `- C` for `>`, `>=`), `C` a
+  positive literal, with no `continue` to the loop. The bound per entry to the loop is the exact
+  trip count of that arithmetic, computed in 128 bits; a `break` or `return` only ends it sooner, and
+  an overflow on the last step traps, which is failure, not another turn. Anything else — a
+  condition on data, a counter written twice — is `unknown`, by loop, with its span.
+
+**The bounds report.** `nazm check --profile-report` gains `bounds` whenever a rule needing MIR or
+Core IR facts is in force: each loop's bound or `null`; the longest chain of direct calls from
+`main` (or `null` with a cycle or an indirect call); the allocation, task and queue *sites*, counted
+statically (a count of sites, not of bytes or of executions); and `wcet: null` — no execution-time
+bound is computed, and none is implied.
+
+**The stack bound (board only).** A board build (§7.64) writes `bounds.json` (`nazm.bounds/1`) beside
+`link.ld`: the code generator's frame size for every function of the image — clang's own
+`prologepilog` figures, read at compile time, so the board build does not reuse cached objects — and
+the deepest path through the image's call graph, read from the generated code from `nz_board_main`.
+The sum along that path is a static upper bound on stack bytes for that build, stated with its path,
+beside the 64 KiB the linker script reserves. A call cycle, a call through a value, or a function
+without a reported frame makes it `null` with the reason. Interrupts do not exist (§7.64), so no
+nesting is added.
+
+**Measured beside it.** `--stack-watermark` (board only) paints the stack in `_start` and, after
+`main`, writes `nazm-stack: used=N` to the UART: the deepest byte the run touched. A test holds
+measured ≤ bound on QEMU; that is evidence about the bound, and the bound is the claim.
+
+**Exhaustion is deterministic.** On the board a stack past the reserve fails with `N0408` and status
+2 (§7.64); no allocation exists to exhaust. That is behaviour, not a bound.
+
+**Not here, and why.** *WCET*: no cycle model of any core is built, and an emulator's timing is not
+one; `null`, always. *Scheduler latency and jitter*: the hosted scheduler's wake-up is measured in
+`performance.md` as a distribution, never a bound, and `realtime` refuses tasks. *Byte bounds on the
+heap*: the board has no heap; a hosted bound is N52's site counts. *Resource annotations*: none are
+needed for the subset; none are added. Nothing here is a certification.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
