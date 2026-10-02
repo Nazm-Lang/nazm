@@ -285,7 +285,88 @@ pub enum Terminator {
     Exit(Operand),
 }
 
+/// The locals an operand names.
+fn operand_locals(o: &Operand, out: &mut Vec<LocalId>) {
+    if let Operand::Local(l) = o {
+        out.push(*l);
+    }
+}
+
+impl Rvalue {
+    /// Every local this rvalue reads, in order (N59): a backend deciding how to represent a
+    /// local needs every place it is mentioned, and this is the one list of them.
+    #[must_use]
+    pub fn reads(&self) -> Vec<LocalId> {
+        let mut out = Vec::new();
+        match self {
+            Self::Use(o) | Self::Neg(o) => operand_locals(o, &mut out),
+            Self::Copy(l) | Self::Move(l) | Self::Capture { env: l, .. } => out.push(*l),
+            Self::Arith(_, a, b) | Self::Compare { lhs: a, rhs: b, .. } => {
+                operand_locals(a, &mut out);
+                operand_locals(b, &mut out);
+            }
+            Self::Call { args, .. } | Self::Primitive { args, .. } => {
+                for a in args {
+                    operand_locals(a, &mut out);
+                }
+            }
+            Self::CallIndirect { callee, args } => {
+                operand_locals(callee, &mut out);
+                for a in args {
+                    operand_locals(a, &mut out);
+                }
+            }
+            Self::Closure { captures, .. } => {
+                for a in captures {
+                    operand_locals(a, &mut out);
+                }
+            }
+            Self::Record { fields, .. } | Self::Variant { fields, .. } => {
+                out.extend(fields.iter().map(|(_, l)| *l));
+            }
+            Self::Field { base, .. } => operand_locals(base, &mut out),
+            Self::Payload { base, .. } => out.push(*base),
+        }
+        out
+    }
+}
+
+impl StatementKind {
+    /// Every local this statement mentions other than the one an `Assign` defines (N59).
+    #[must_use]
+    pub fn mentions(&self) -> Vec<LocalId> {
+        match self {
+            Self::Assign { value, .. } => value.reads(),
+            Self::SetField { base, value, .. } => vec![*base, *value],
+            Self::Drop(l) | Self::ScopeOpen { list: l, .. } | Self::ScopeJoin { list: l } => {
+                vec![*l]
+            }
+            Self::Spawn { list, args, .. } => {
+                let mut out = vec![*list];
+                for a in args {
+                    operand_locals(a, &mut out);
+                }
+                out
+            }
+            Self::CheckFailed { .. } | Self::StackCheck { .. } => Vec::new(),
+        }
+    }
+}
+
 impl Terminator {
+    /// Every local this terminator reads (N59).
+    #[must_use]
+    pub fn reads(&self) -> Vec<LocalId> {
+        let mut out = Vec::new();
+        match self {
+            Self::Branch { cond, .. } => operand_locals(cond, &mut out),
+            Self::Switch { scrutinee, .. } | Self::Return(scrutinee) => out.push(*scrutinee),
+            Self::Exit(o) => operand_locals(o, &mut out),
+            Self::Goto(_) | Self::Unwind => {}
+        }
+        out
+    }
+
     /// Every block this terminator may transfer to, in a fixed order.
     #[must_use]
     pub fn successors(&self) -> Vec<BlockId> {

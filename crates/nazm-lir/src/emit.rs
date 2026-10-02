@@ -214,6 +214,10 @@ struct Emitter<'a> {
     /// The type of every slot in the function being emitted, by local: `None` for a task
     /// list, whose slot is a pointer the runtime owns.
     slot_types: Vec<Option<Ty>>,
+    /// The locals of the function being emitted that have no slot (N59): scalar temporaries
+    /// defined once and read only later in their block, held as the SSA value they were given.
+    promoted: Vec<bool>,
+    ssa: Vec<Option<u32>>,
     /// What the closure object of the function being emitted carries, if it is a function
     /// value's code (N50).
     carried: Vec<Ty>,
@@ -1252,6 +1256,11 @@ impl Emitter<'_> {
     }
 
     fn load(&mut self, l: mir::LocalId) -> u32 {
+        if self.promoted.get(l.index()).copied().unwrap_or(false) {
+            if let Some(v) = self.ssa.get(l.index()).copied().flatten() {
+                return v;
+            }
+        }
         let ty = self.slot_llvm(l);
         let v = self.fresh();
         let _ = writeln!(self.out, "  %{v} = load {ty}, ptr %slot{}", l.0);
@@ -1260,6 +1269,23 @@ impl Emitter<'_> {
 
     fn store(&mut self, l: mir::LocalId, value: &str) {
         let ty = self.slot_llvm(l);
+        if self.promoted.get(l.index()).copied().unwrap_or(false) {
+            // The value itself, named: a register already, or a constant given one.
+            let v = match value.strip_prefix('%').and_then(|n| n.parse::<u32>().ok()) {
+                Some(n) => n,
+                None => {
+                    let v = self.fresh();
+                    let op = if ty == "i1" { "or" } else { "add" };
+                    let zero = if ty == "i1" { "false" } else { "0" };
+                    let _ = writeln!(self.out, "  %{v} = {op} {ty} {value}, {zero}");
+                    v
+                }
+            };
+            if let Some(slot) = self.ssa.get_mut(l.index()) {
+                *slot = Some(v);
+            }
+            return;
+        }
         let _ = writeln!(self.out, "  store {ty} {value}, ptr %slot{}", l.0);
     }
 
@@ -3551,6 +3577,8 @@ pub(crate) fn emit_unit_with(
         program: &native.program,
         sigs: &native.sigs,
         slot_types: Vec::new(),
+        promoted: Vec::new(),
+        ssa: Vec::new(),
         unwind_to: String::new(),
         helpers: String::new(),
         generated: std::collections::BTreeSet::new(),
@@ -3757,8 +3785,54 @@ fn emit_export(e: &mut Emitter<'_>, sig: &Sig, symbol: &NativeSymbol) {
     e.out.push('\n');
 }
 
+/// Which locals need no slot (N59, §7.61): a temporary MIR lowering made, of type `Int` or
+/// `Bool`, assigned exactly once and read only later in the block that assigns it. Everything
+/// else keeps its slot — parameters, bindings, managed values, and anything another block reads.
+fn promotable(f: &mir::Function) -> Vec<bool> {
+    let n = f.locals.len();
+    let mut defs: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+    let mut uses: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+    for (b, block) in f.blocks.iter().enumerate() {
+        for (s, st) in block.stmts.iter().enumerate() {
+            if let mir::StatementKind::Assign { dst, .. } = &st.kind {
+                if let Some(d) = defs.get_mut(dst.index()) {
+                    d.push((b, s));
+                }
+            }
+            for l in st.kind.mentions() {
+                if let Some(u) = uses.get_mut(l.index()) {
+                    u.push((b, s));
+                }
+            }
+        }
+        for l in block.term.reads() {
+            if let Some(u) = uses.get_mut(l.index()) {
+                u.push((b, usize::MAX));
+            }
+        }
+    }
+    f.locals
+        .iter()
+        .enumerate()
+        .map(|(i, local)| {
+            let scalar = matches!(local.ty.value().map(Ty::of), Some(Ty::Int | Ty::Bool));
+            let temp = matches!(local.origin, mir::LocalOrigin::Temp) && i >= f.params as usize;
+            let (Some(d), Some(u)) = (defs.get(i), uses.get(i)) else {
+                return false;
+            };
+            scalar
+                && temp
+                && d.len() == 1
+                && d.first()
+                    .is_some_and(|&(db, ds)| u.iter().all(|&(ub, us)| ub == db && us > ds))
+        })
+        .collect()
+}
+
 fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
     e.next = 0;
+    e.promoted = promotable(f);
+    e.ssa = vec![None; f.locals.len()];
     e.current = "entry".to_owned();
     e.slot_types = f.locals.iter().map(|l| l.ty.value().map(Ty::of)).collect();
     e.carried = f.closure.iter().flatten().map(|t| Ty::of(*t)).collect();
@@ -3793,6 +3867,10 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
             Some(t) => Ty::of(t).name(),
             None => "tasks",
         };
+        if e.promoted.get(i).copied().unwrap_or(false) {
+            // No slot (N59): its value is the register its one definition produces.
+            continue;
+        }
         let _ = writeln!(
             e.out,
             "  %slot{i} = alloca {ty}            ; {} : {shown}",
@@ -3858,6 +3936,9 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
     // holds nothing then releases the zero, which the runtime ignores.
     for (i, _) in f.locals.iter().enumerate().skip(f.params as usize) {
         let l = mir::LocalId(u32::try_from(i).unwrap_or(u32::MAX));
+        if e.promoted.get(i).copied().unwrap_or(false) {
+            continue;
+        }
         let owning = match e.slot_types.get(i).copied().flatten() {
             Some(t) => owns_anything(e.types, t),
             None => true,

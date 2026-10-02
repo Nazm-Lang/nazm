@@ -171,6 +171,12 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
             "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
             "target": target,
             "targets": targets,
+            // What a native build still runs besides this compiler (N59, §7.61): the C
+            // compiler driver, for the runtime's LLVM text under both backends and for the link.
+            "needs": {
+                "runtime": "clang compiles the runtime's LLVM text, under both backends",
+                "link": "the C compiler driver links every executable",
+            },
         },
         "package": package,
         "mir": mir_state,
