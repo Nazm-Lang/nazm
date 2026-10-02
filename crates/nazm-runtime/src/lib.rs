@@ -132,8 +132,8 @@ pub fn escape(s: &str) -> String {
 /// N54's: select (`nz.chanv_select`, `nz.chanv_try`, `nz.chanv_close`, the event count
 /// `nz.sel_*`), the clock, and the scheduler's counters. 7 is N55's: `nz.cstr_borrow`, a `Str`
 /// argument to C. 8 is N62's: `nz.mmio_read32`/`nz.mmio_write32`, defined by the hosted runtime and
-/// the freestanding one alike.
-pub const RUNTIME_ABI_REVISION: u32 = 8;
+/// the freestanding one alike. 9 is N66's: `nz.ints_sum`, the ordered checked sum.
+pub const RUNTIME_ABI_REVISION: u32 = 9;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 const EVERYTHING: Needs = Needs {
@@ -239,6 +239,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.vec_release", [Ptr, Ptr, I64], None, Sequences, "releases a sequence; on the last reference calls the release function on each element at the stride given, then frees it"),
     import!("nz.arr_new", [], Some(Word::Ptr), Sequences, "an empty internal list, one reference, not counted as a program sequence; or null"),
     import!("nz.arr_grow", [Ptr, I64], Some(Word::Ptr), Sequences, "room for one more element of this size; the data pointer, or null with the sequence unchanged"),
+    import!("nz.ints_sum", [Ptr, I64, Ptr], Some(Word::I64), Sequences, "borrows the sequence; the sum, or 0 with the flag set at the first running sum that overflows (N66)"),
     import!("nz.arr_retain", [Ptr], None, Sequences, "one more reference to a sequence header"),
     import!("nz.arr_release", [Ptr], Some(Word::Bit), Sequences, "one reference fewer to an internal list; frees it on the last"),
     import!("nz.read_file_to", [Ptr, Ptr, I64], None, Io, "writes the file's contents as a string the caller owns, or a null pointer if it could not be read"),
@@ -376,6 +377,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.write_file", "i64" ("ptr", "i64", "ptr", "i64") "", true, Io, "io", Status, Any, "write a string to a file, truncating", "borrows both; returns the byte count or a negative status"),
     rt!("nz.arr_new", "ptr" () "", true, Sequences, "", Null, Any, "an empty internal list, not counted as a program sequence", "one reference, owned by the caller"),
     rt!("nz.arr_grow", "ptr" ("ptr", "i64") "", true, Sequences, "", Null, Owner, "room for one more element of this size", "borrows the sequence; returns its data pointer"),
+    rt!("nz.ints_sum", "i64" ("ptr", "i64", "ptr") "", true, Sequences, "", Never, Owner, "the ordered checked sum of an `Ints` onto a start, vectorised where every partial sum is provably in range (N66)", "borrows the sequence; writes the overflow flag"),
     rt!("nz.arr_retain", "void" ("ptr") "", true, Sequences, "", Never, Owner, "one more reference to a sequence header", "adds a reference"),
     rt!("nz.arr_release", "i1" ("ptr") "", true, Sequences, "", Never, Owner, "one reference fewer to an internal list; frees it on the last", "takes a reference; true when it was the last"),
     rt!("nz.seq_new", "ptr" () "", true, Sequences, "", Null, Any, "an empty program sequence, counted", "one reference, owned by the caller"),
@@ -781,9 +783,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_eight_and_its_digest_covers_c_strings() {
-        // N55's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 8);
+    fn the_runtime_is_revision_nine_and_its_digest_covers_c_strings() {
+        // N66's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 9);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.ints_sum("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cstr_borrow("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.chanv_select("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.chanv_send("));

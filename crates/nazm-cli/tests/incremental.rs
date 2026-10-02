@@ -1281,9 +1281,9 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        19,
-        "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42, N49, N50, N51, N52, N53, N54, N55 \
-         and N62 each changed what the checker accepts, so the epoch moved eighteen times"
+        20,
+        "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42, N49, N50, N51, N52, N53, N54, N55, \
+         N62 and N66 each changed what the checker accepts, so the epoch moved nineteen times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/7");
 }
@@ -1667,6 +1667,6 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     // and N37 for authority, and N38 for provenance, and N42 for foreign functions, and N49
     // for escapes and the syntax beside them, N50 for function values, N51 for effect
     // parameters, and N52 for declassification, N53–N55 for channels, the clock and FFI v2,
-    // and N62 for device registers.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 19);
+    // N62 for device registers, and N66 for `ints_sum`.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 20);
 }

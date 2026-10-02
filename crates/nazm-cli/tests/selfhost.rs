@@ -2501,6 +2501,9 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         // the compiler written in Nazm does not build for.
         ("mmio_read32", "MmioCap"),
         ("mmio_write32", "MmioCap"),
+        // N66: the ordered sum is a native build's vectorisation target; the compiler written
+        // in Nazm sums with its own loops and has no use for it.
+        ("ints_sum", "vectorisation"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {

@@ -121,6 +121,10 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N66, vectorisation.** No code appeared: `ints_sum`'s overflow is the existing
+`N0400`, at the addition a replaced loop failed at. `nazm.cost/1` gains `loops` — each loop, whether
+it was vectorised and by which idiom, or why not — a new field, compatible.
+
 **Applied to N65, the interactive tier.** One code appeared, compatible: `N0393` (a function
 `nazm comptime` will not evaluate: it has parameters, or it is not pure). A runaway comptime
 evaluation is the interpreter's existing `N0402`; a REPL line's errors are the checker's own codes.

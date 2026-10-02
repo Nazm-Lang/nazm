@@ -446,6 +446,18 @@ impl Fx<'_, '_, '_> {
                     .unwrap_or_else(|| self.iconst(0));
                 self.set(dst, t);
             }
+            // The ordered checked sum (N66), through the runtime, its flag in a stack slot.
+            Intrinsic::IntsSum => {
+                let start = arg(self, 0);
+                let v = arg(self, 1);
+                let flag = self.element_slot(Ty::Int);
+                let t = self
+                    .rt("nz.ints_sum", &[v, start, flag])
+                    .unwrap_or_else(|| self.iconst(0));
+                let raised = self.b.ins().load(types::I32, mem(), flag, 0);
+                self.guard(raised, "N0400", "this addition overflows `Int`");
+                self.set(dst, t);
+            }
             // A device register (N62), volatile in the runtime. Cranelift builds only
             // hosted targets, which refuse these before lowering; the arms exist so the
             // table is whole.

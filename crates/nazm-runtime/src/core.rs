@@ -157,6 +157,7 @@ pub fn emit_runtime(needs: Needs) -> String {
 
     if needs.sequences {
         out.push_str(SEQUENCE_RUNTIME);
+        out.push_str(SUM_RUNTIME);
     }
     if needs.strings {
         out.push_str(STRING_RUNTIME);
@@ -270,6 +271,121 @@ done:
 /// `RLIMIT_STACK`, so no thread's budget exceeds the stack it has; the quarter left over is the
 /// headroom for the non-recursive calls between two checks. It records nothing: the call site
 /// names the function entered and fails with `N0408` itself.
+/// `nz.ints_sum` (N66, `docs/architecture.md` §7.68): the ordered checked sum, vectorisable.
+const SUM_RUNTIME: &str = r"
+
+; `ints_sum(start, v)` (N66): `start` plus every element of `v`, left to right, with the checked
+; addition's exact failure — `*ovf` set to 1 at the first running sum that overflows. A block of 64
+; elements whose magnitudes are all at most 2^56 is added without checks while the running sum's
+; magnitude is below 2^62: then no partial sum inside it can leave `Int`, so the block's total is
+; exactly what the checked additions would give, and the check-free loop is the one the code
+; generator vectorises. Any other block is added one checked element at a time.
+define hidden i64 @nz.ints_sum(ptr %h, i64 %start, ptr %ovf) {
+entry:
+  %len = load i64, ptr %h
+  %df = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %df
+  store i32 0, ptr %ovf
+  br label %block
+
+block:
+  %i = phi i64 [ 0, %entry ], [ %i.next, %fast.done ], [ %i.slow, %slow.done ]
+  %s = phi i64 [ %start, %entry ], [ %s.fast, %fast.done ], [ %s.slowout, %slow.done ]
+  %rest = sub i64 %len, %i
+  %whole = icmp sge i64 %rest, 64
+  br i1 %whole, label %scan, label %tail
+
+; The block's largest magnitude, as unsigned (so `i64::MIN`'s is 2^63).
+scan:
+  br label %scan.loop
+scan.loop:
+  %k = phi i64 [ 0, %scan ], [ %k.next, %scan.loop ]
+  %m = phi i64 [ 0, %scan ], [ %m.next, %scan.loop ]
+  %at = add i64 %i, %k
+  %p = getelementptr i64, ptr %data, i64 %at
+  %x = load i64, ptr %p
+  %neg = sub i64 0, %x
+  %isneg = icmp slt i64 %x, 0
+  %mag = select i1 %isneg, i64 %neg, i64 %x
+  %bigger = icmp ugt i64 %mag, %m
+  %m.next = select i1 %bigger, i64 %mag, i64 %m
+  %k.next = add i64 %k, 1
+  %scanned = icmp eq i64 %k.next, 64
+  br i1 %scanned, label %decide, label %scan.loop
+
+decide:
+  %small = icmp ule i64 %m.next, 72057594037927936
+  %sneg = sub i64 0, %s
+  %sisneg = icmp slt i64 %s, 0
+  %smag = select i1 %sisneg, i64 %sneg, i64 %s
+  %room = icmp ult i64 %smag, 4611686018427387904
+  %safe = and i1 %small, %room
+  br i1 %safe, label %fast, label %slow
+
+fast:
+  br label %fast.loop
+fast.loop:
+  %j = phi i64 [ 0, %fast ], [ %j.next, %fast.loop ]
+  %acc = phi i64 [ 0, %fast ], [ %acc.next, %fast.loop ]
+  %fat = add i64 %i, %j
+  %fp = getelementptr i64, ptr %data, i64 %fat
+  %fx = load i64, ptr %fp
+  %acc.next = add i64 %acc, %fx
+  %j.next = add i64 %j, 1
+  %fdone = icmp eq i64 %j.next, 64
+  br i1 %fdone, label %fast.done, label %fast.loop
+fast.done:
+  %s.fast = add i64 %s, %acc.next
+  %i.next = add i64 %i, 64
+  br label %block
+
+; One block of 64, checked element by element.
+slow:
+  br label %slow.loop
+slow.loop:
+  %q = phi i64 [ 0, %slow ], [ %q.next, %slow.step ]
+  %ss = phi i64 [ %s, %slow ], [ %ss.next, %slow.step ]
+  %sat = add i64 %i, %q
+  %sp = getelementptr i64, ptr %data, i64 %sat
+  %sx = load i64, ptr %sp
+  %r = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %ss, i64 %sx)
+  %ss.next = extractvalue { i64, i1 } %r, 0
+  %o = extractvalue { i64, i1 } %r, 1
+  br i1 %o, label %overflow, label %slow.step
+slow.step:
+  %q.next = add i64 %q, 1
+  %sdone = icmp eq i64 %q.next, 64
+  br i1 %sdone, label %slow.done, label %slow.loop
+slow.done:
+  %s.slowout = phi i64 [ %ss.next, %slow.step ]
+  %i.slow = add i64 %i, 64
+  br label %block
+
+; Fewer than 64 left: checked, one at a time.
+tail:
+  %t = phi i64 [ %i, %block ], [ %t.next, %tail.step ]
+  %ts = phi i64 [ %s, %block ], [ %ts.next, %tail.step ]
+  %tend = icmp sge i64 %t, %len
+  br i1 %tend, label %done, label %tail.body
+tail.body:
+  %tp = getelementptr i64, ptr %data, i64 %t
+  %tx = load i64, ptr %tp
+  %tr = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %ts, i64 %tx)
+  %ts.next = extractvalue { i64, i1 } %tr, 0
+  %to = extractvalue { i64, i1 } %tr, 1
+  br i1 %to, label %overflow, label %tail.step
+tail.step:
+  %t.next = add i64 %t, 1
+  br label %tail
+
+overflow:
+  store i32 1, ptr %ovf
+  ret i64 0
+done:
+  ret i64 %ts
+}
+";
+
 const STACK_RUNTIME: &str = r"
 define hidden i32 @nz.stack_check() {
 entry:

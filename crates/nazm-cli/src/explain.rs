@@ -66,6 +66,18 @@ pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
     let graph = &loaded.graph;
     let names = nazm_lir::SourceNames::of(map, graph);
     let built = nazm_core::on_lowered(map, graph, nazm_core::Entry::Absent, |core, res| {
+        // What a native build's vectorisation does with every loop (N66, §7.68), and why not.
+        let loops: Vec<Value> = nazm_service::vectorize::explain(core)
+            .into_iter()
+            .map(|l| {
+                json!({
+                    "function": l.function,
+                    "at": place(&names, l.at),
+                    "vectorised": l.vectorised,
+                    "reason": if l.reason.is_empty() { Value::Null } else { json!(l.reason) },
+                })
+            })
+            .collect();
         let program = crate::mir::lower(core, res, graph)?;
         let mut functions = Vec::new();
         let mut totals: std::collections::BTreeMap<&str, (u64, u64)> =
@@ -107,16 +119,16 @@ pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
                 )
             })
             .collect();
-        Ok((functions, totals))
+        Ok((functions, totals, loops))
     });
-    let (functions, totals) = match built {
+    let (functions, totals, loops) = match built {
         Ok(x) => x,
         Err(d) => return failed(&d, map),
     };
     if as_json {
         println!(
             "{}",
-            json!({ "schema": "nazm.cost/1", "functions": functions, "totals": totals })
+            json!({ "schema": "nazm.cost/1", "functions": functions, "totals": totals, "loops": loops })
         );
         return ExitCode::SUCCESS;
     }
@@ -139,6 +151,16 @@ pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
                     ""
                 },
             );
+        }
+    }
+    for l in &loops {
+        match field(l, "vectorised").as_str() {
+            Some(how) => println!("loop {}  vectorised ({how})", shown(field(l, "at"))),
+            None => println!(
+                "loop {}  not vectorised: {}",
+                shown(field(l, "at")),
+                field(l, "reason").as_str().unwrap_or("?")
+            ),
         }
     }
     ExitCode::SUCCESS

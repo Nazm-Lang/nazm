@@ -63,6 +63,7 @@ pub mod snapshot;
 pub mod structure;
 pub mod summary;
 pub mod symbols;
+pub mod vectorize;
 
 pub use completion::{Completion, CompletionCandidate, Context, NoCompletion};
 pub use context::{ContextPacket, ContextResult, NoContext};

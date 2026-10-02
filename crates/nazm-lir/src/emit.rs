@@ -3364,6 +3364,35 @@ impl Emitter<'_> {
                     ty: Ty::Int,
                 };
             }
+            // The ordered checked sum (N66): the runtime's vectorised loop, and the failure it
+            // reports raised here, at this call's span — the addition's, where a loop was
+            // replaced by it — with the addition's own message.
+            Builtin::IntsSum => {
+                self.needs_sequences = true;
+                let t = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{t} = call i64 @nz.ints_sum(ptr %{}, i64 %{}, ptr %sumflag)",
+                    arg(1),
+                    arg(0)
+                );
+                let flag = self.fresh();
+                let _ = writeln!(self.out, "  %{flag} = load i32, ptr %sumflag");
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{flag}, 0");
+                self.guard(
+                    bad,
+                    &Failure {
+                        code: "N0400",
+                        message: "this addition overflows `Int`".to_owned(),
+                    },
+                    span,
+                );
+                return Val::Of {
+                    value: t,
+                    ty: Ty::Int,
+                };
+            }
             // A device register (N62): one volatile access, in the runtime so that no
             // optimisation of this module can merge, move or drop it. Only a freestanding
             // build reaches here; a hosted one was refused before it was lowered.
@@ -3931,6 +3960,21 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
                 }
             }
         }
+    }
+    // The overflow flag `ints_sum` writes (N66), once, in the entry block.
+    if f.blocks.iter().flat_map(|b| b.stmts.iter()).any(|s| {
+        matches!(
+            &s.kind,
+            mir::StatementKind::Assign {
+                value: mir::Rvalue::Primitive {
+                    op: Builtin::IntsSum,
+                    ..
+                },
+                ..
+            }
+        )
+    }) {
+        let _ = writeln!(e.out, "  %sumflag = alloca i32");
     }
     // One scratch slot per element type a generic channel's send or receive here copies
     // through (N53), in the entry block.

@@ -293,7 +293,11 @@ pub(crate) fn run(
                     )]);
                 }
             }
-            let program = crate::mir::lower(core, resolution, &loaded.graph)?;
+            // The summation idiom, vectorised (N66, §7.68): a native build's rewrite of Core IR,
+            // so the interpreter, reading the same program, still runs the loop.
+            let mut core = core.clone();
+            nazm_service::vectorize::rewrite(&mut core);
+            let program = crate::mir::lower(&core, resolution, &loaded.graph)?;
             clock.mark("mir");
             let native =
                 nazm_lir::lower_as(program, &names, choice.library).map_err(|e| e.diagnostics)?;

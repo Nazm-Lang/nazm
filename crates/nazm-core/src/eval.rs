@@ -1343,6 +1343,29 @@ impl Interpreter {
             (Intrinsic::StrsLen, [Value::Strs(a)]) => seq(a)
                 .and_then(|a| index_fits(a.len()))
                 .map_or_else(|| Err(bug("a sequence that could not be read")), Ok),
+            // The left-to-right checked sum (N66): the loop it stands for, as a function, failing
+            // with that loop's addition's diagnostic at the first running sum that overflows.
+            (Intrinsic::IntsSum, [Value::Int(start), Value::Ints(a)]) => {
+                let Some(a) = seq(a) else {
+                    return Err(bug("a sequence that could not be read"));
+                };
+                let mut sum = *start;
+                for x in a.iter() {
+                    sum = sum.checked_add(*x).ok_or_else(|| RuntimeError {
+                        diagnostic: Box::new(
+                            Diagnostic::error(
+                                codes::INTEGER_OVERFLOW,
+                                span,
+                                "this addition overflows `Int`",
+                            )
+                            .help(
+                                "`Int` is a 64-bit signed integer; overflow stops the program rather than wrapping",
+                            ),
+                        ),
+                    })?;
+                }
+                Ok(Value::Int(sum))
+            }
             (Intrinsic::IntsGet, [Value::Ints(a), Value::Int(at)]) => {
                 let Some(a) = seq(a) else {
                     return Err(bug("a sequence that could not be read"));

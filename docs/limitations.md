@@ -32,6 +32,10 @@ found only by reading all of it.
   `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
   whole-program count, and recursion is seen only through its calls' sites (areas 4, 18).
   *Narrowed in N52.*
+- Vectorisation is one idiom: the counted `Ints` summation loop, replaced by `ints_sum` in native
+  builds at `--opt-level 2` and above; no element-wise maps, no vector types, baseline target
+  features only, and a fallback 1.33× slower than the scalar loop when elements exceed 2^56
+  (area 28). *Narrowed in N66:* until then, checked arithmetic kept every loop scalar.
 - No JIT: an in-process JIT needs `unsafe` code, which the workspace forbids; the interactive tier
   is the interpreter. Comptime is a command, not a language construct; nothing is hot-reloaded —
   `nazm reload-check` states the rule a reloader would follow (area 12). *Narrowed in N65:* until
