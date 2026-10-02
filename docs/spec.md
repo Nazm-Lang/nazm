@@ -3217,6 +3217,16 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **The report** | One `nazm.accel/1` line: device, each transfer (direction, bytes, ms), the synchronisation, build and run times, the kernel's identity, and `reference` — the interpreter's agreement, checked unless `--no-check` |
 | **Where it runs** | macOS's OpenCL; elsewhere it is refused, never run on the CPU instead. `--print-kernel` shows the OpenCL C on any host |
 
+### Contracts: the `web3` profile and `nazm contract` — N69
+<!-- id: contracts -->
+
+| | |
+| --- | --- |
+| **`web3`** | A profile: `declared-effects`, `no-io`, `no-spawn`, `no-foreign`, `no-ambient-time`, `no-recursion`, `no-blocking` |
+| **A contract** | A module with `pub struct State` (fields `Int`/`Bool`), `fn init() -> State`, and entrypoints `pub fn name(s: State, caller: Int, a: Int, …) -> Result[State, Int] ! {}`; optionally `fn conserved(s: State) -> Int`. Anything else is `N0395` |
+| **Facts** | `nazm contract FILE` → `nazm.contract/1`: state fields, entrypoints, read and write sets (`"all"` where not followed) |
+| **Transactions** | `nazm contract FILE --txs FILE`, one `CALLER ENTRY ARG…` per line: `Ok` commits; `Err(code)` reverts with `code`; a runtime failure reverts with its diagnostic code; changing `conserved` rejects (`N0396`); a revert or rejection leaves the state as it was. `nazm.contract-run/1`, the same bytes for the same inputs |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 

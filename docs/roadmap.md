@@ -388,6 +388,13 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N69 — The Web3 semantic contract model — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.71 first. A contract is ordinary Nazm under a `web3` profile of existing
+rules; its read and write sets are facts, conservative where unseen; a deterministic simulator runs
+transactions, reverting by code and rejecting any that changes a declared conserved quantity. Static
+asset linearity is designed. Next: N70, an EVM backend.
+
 ### N68 — Adaptive representation — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.70 and research register R4 first, with the prior art. A `Vec` of a record of

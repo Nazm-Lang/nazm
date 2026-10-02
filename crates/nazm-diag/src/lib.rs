@@ -338,6 +338,13 @@ pub mod codes {
     /// and `Bool`s, or reaching something with no device form.
     pub const KERNEL_INELIGIBLE: Code = Code::new("N0394");
 
+    // Contracts (N69, `docs/architecture.md` §7.71)
+    /// A module `nazm contract` was given that does not have a contract's shape.
+    pub const NOT_A_CONTRACT: Code = Code::new("N0395");
+    /// A transaction that would change the contract's conserved quantity: rejected, the state
+    /// unchanged.
+    pub const CONSERVATION_BROKEN: Code = Code::new("N0396");
+
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.

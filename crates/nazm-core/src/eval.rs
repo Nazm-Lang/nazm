@@ -913,6 +913,8 @@ pub struct Interpreter {
     /// does not bound iteration. With no `break` and no I/O, a non-terminating program
     /// produces nothing whatsoever, and a tool that hangs is worse than one that reports.
     iterations_left: u64,
+    /// Calls made, for a meter (N69): every function body entered, `main` excepted.
+    calls: u64,
     /// The program's own arguments, **excluding** the program name — `nazm run f.nz --
     /// a b` gives `["a", "b"]`. Excluding it is what makes `arg(i)` mean the same thing
     /// interpreted and compiled: a native `argv[0]` is a path nobody should depend on.
@@ -947,6 +949,7 @@ impl Interpreter {
             depth: 0,
             max_depth: DEFAULT_MAX_DEPTH,
             iterations_left: DEFAULT_MAX_ITERATIONS,
+            calls: 0,
             args: Vec::new(),
         }
     }
@@ -964,6 +967,19 @@ impl Interpreter {
         self.iterations_left = limits.max_iterations;
         self.max_depth = limits.max_depth;
         self
+    }
+
+    /// What remains of the iteration budget (N69: the simulator's meter is what one transaction
+    /// spent of a fresh one).
+    #[must_use]
+    pub fn iterations_left(&self) -> u64 {
+        self.iterations_left
+    }
+
+    /// How many calls have been made (N69).
+    #[must_use]
+    pub fn calls(&self) -> u64 {
+        self.calls
     }
 
     /// Give both budgets afresh (N67): a reference evaluated element by element holds each
@@ -1792,6 +1808,7 @@ impl Interpreter {
                     depth: 0,
                     max_depth,
                     iterations_left,
+                    calls: 0,
                     // A task has no arguments of its own: `arg(i)` is the program's
                     // command line, and a task is not a program.
                     args: Vec::new(),
@@ -2173,6 +2190,7 @@ impl Interpreter {
                 };
 
                 self.depth += 1;
+                self.calls += 1;
                 if self.depth > self.max_depth {
                     self.depth -= 1;
                     return Err(RuntimeError {

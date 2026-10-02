@@ -32,6 +32,9 @@ found only by reading all of it.
   `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
   whole-program count, and recursion is seen only through its calls' sites (areas 4, 18).
   *Narrowed in N52.*
+- Contracts are a model and a simulator: no chain backend runs them yet (N70–N72); an asset is a
+  declared conserved quantity checked per transaction, not a linear type; no events, external
+  calls, signers beyond `caller`, or gas (area 34). *Narrowed in N69:* until then, no contract model.
 - Layout specialisation is one opt-in layout: `--layout soa` lays out every `Vec` of a record of
   `Int`s and `Bool`s one array per field, whether or not its loops gain — it is 2× slower for a loop
   reading every field; the compiler does not choose; LLVM only (area 4). *Narrowed in N68:* until
