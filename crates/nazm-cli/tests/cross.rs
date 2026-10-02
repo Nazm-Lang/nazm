@@ -289,7 +289,8 @@ fn inspect_names_every_target_and_what_this_host_makes_of_it() {
     assert!(o.status.success(), "{}", err(&o));
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     let listed = v["toolchain"]["targets"].as_array().unwrap();
-    assert_eq!(listed.len(), 4);
+    // The four hosted triples and, since N62, the board.
+    assert_eq!(listed.len(), 5);
     for t in listed {
         let target = Target::parse(t["triple"].as_str().unwrap()).unwrap();
         let want = if target.links_on(&host) {

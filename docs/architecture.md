@@ -6192,6 +6192,15 @@ parameters and no result, `! {}`, holding at most an `MmioCap`, run on its own s
 *A heap*: a startup-only arena is the next policy; none is built, so a freestanding program allocates
 nothing. *A standard library subset*: every `@std` module allocates, so none is available.
 
+**As built (N62), where it differs from the above.** *Recursion builds*: the board runtime carries
+its own `nz.stack_check`, against the linker script's `__stack_bottom` with a quarter of the stack
+in reserve, so a call cycle is checked rather than refused and exhaustion is `N0408` on the UART.
+*The refusal reads symbols, not `Needs`*: `Needs` is coarse — `print` of a static string sets no
+flag yet calls the C library's `write` — so the build refuses what the generated units name and
+nothing defines, by runtime part, with exit status 4 rather than `N0101`. *`_start` enables
+floating point and SIMD* (`CPACR_EL1`), trapped at reset, since code generation may use them.
+*Cranelift is refused for the board by name*: its object writer has no format for it.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

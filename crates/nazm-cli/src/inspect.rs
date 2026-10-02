@@ -152,6 +152,8 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
         "x86_64-apple-darwin",
         "aarch64-unknown-linux-gnu",
         "x86_64-unknown-linux-gnu",
+        // A board, with no operating system (N62, §7.64): always objects and `link.ld`.
+        "aarch64-unknown-none",
     ]
     .iter()
     .filter_map(|t| nazm_lir::backend::Target::parse(t).ok())

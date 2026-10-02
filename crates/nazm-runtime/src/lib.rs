@@ -12,6 +12,7 @@
 //! pair, the registry's entry writes it through a pointer (`nz.read_file_to`), because code two
 //! compilers generated must agree about nothing but words.
 
+pub mod board;
 pub(crate) mod core;
 pub(crate) mod entry;
 pub(crate) mod os;
@@ -129,8 +130,9 @@ pub fn escape(s: &str) -> String {
 /// every key, so a runtime whose text changed without a bump is still another runtime. 6 is
 /// N54's: select (`nz.chanv_select`, `nz.chanv_try`, `nz.chanv_close`, the event count
 /// `nz.sel_*`), the clock, and the scheduler's counters. 7 is N55's: `nz.cstr_borrow`, a `Str`
-/// argument to C.
-pub const RUNTIME_ABI_REVISION: u32 = 7;
+/// argument to C. 8 is N62's: `nz.mmio_read32`/`nz.mmio_write32`, defined by the hosted runtime and
+/// the freestanding one alike.
+pub const RUNTIME_ABI_REVISION: u32 = 8;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 const EVERYTHING: Needs = Needs {
@@ -255,6 +257,8 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.chanv_send", [Ptr, Ptr], Some(Word::Bit), Channels, "borrows the channel; copies the slot in, taking the reference it holds; false and nothing copied when closed"),
     import!("nz.chanv_recv", [Ptr, Ptr], Some(Word::Bit), Channels, "borrows the channel; copies the oldest slot out, handing over its reference; false once closed and drained"),
     import!("nz.chanv_release", [Ptr], None, Channels, "one reference fewer; the last releases each queued slot and frees the channel"),
+    import!("nz.mmio_read32", [I64], Some(Word::I64), Base, "reads a device register; takes nothing (N62)"),
+    import!("nz.mmio_write32", [I64, I64], Some(Word::I64), Base, "writes a device register; takes nothing (N62)"),
     import!("nz.cstr_has_nul", [Ptr, I64], Some(Word::Bit), Strings, "borrows the bytes; whether they hold a NUL (N55)"),
     import!("nz.cstr_borrow", [Ptr, I64], Some(Word::Ptr), Strings, "borrows the bytes; a NUL-terminated copy the caller owns and frees, or null (N55)"),
     import!("nz.chanv_close", [Ptr], None, Channels, "borrows the channel; closes it and wakes every select (N54)"),
@@ -391,6 +395,8 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chanv_send", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "send a slot, blocking while full", "borrows the channel; takes the slot's reference when it returns true"),
     rt!("nz.chanv_recv", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "receive a slot, blocking while empty", "borrows the channel; hands the slot's reference to the caller when it returns true"),
     rt!("nz.chanv_release", "void" ("ptr") "", true, Channels, "", Never, Any, "one reference fewer; the last releases the queued slots and frees the channel", "takes a reference, atomically"),
+    rt!("nz.mmio_read32", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 32-bit read of a device register (N62); reached only in a freestanding image", "none"),
+    rt!("nz.mmio_write32", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 32-bit write of a device register (N62); reached only in a freestanding image", "none"),
     rt!("nz.cstr_has_nul", "i1" ("ptr", "i64") "", true, Strings, "", Status, Any, "whether a Str argument to C holds a NUL byte (N55)", "borrows the bytes"),
     rt!("nz.cstr_borrow", "ptr" ("ptr", "i64") "", true, Strings, "", Null, Any, "a Str argument as a C string, for one foreign call (N55)", "borrows the bytes; the copy is the caller's to free"),
     rt!("nz.chanv_close", "void" ("ptr") "", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
@@ -774,9 +780,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_seven_and_its_digest_covers_c_strings() {
+    fn the_runtime_is_revision_eight_and_its_digest_covers_c_strings() {
         // N55's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 7);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 8);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cstr_borrow("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.chanv_select("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.chanv_send("));

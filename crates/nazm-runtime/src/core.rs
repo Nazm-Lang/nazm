@@ -151,6 +151,9 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.stack {
         out.push_str(STACK_RUNTIME);
     }
+    // The device-register built-ins (N62): unreachable in a hosted program, which a hosted build
+    // refuses for using them, and defined here so one inventory describes every runtime.
+    out.push_str(crate::board::MMIO_RUNTIME);
 
     if needs.sequences {
         out.push_str(SEQUENCE_RUNTIME);
