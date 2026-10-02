@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N65 — The interactive tier — **complete as scoped, JIT BLOCKED, 2026-10-02**
+
+`architecture.md` §7.67 first. A REPL that checks its session as one program on every edit and
+refuses a redefinition that breaks a caller, by name; comptime for parameterless pure functions,
+sandboxed by the authority model itself; a reload check naming what a running image could take. The
+JIT is blocked by the workspace's `unsafe_code = "forbid"`, which is the project's to lift, and is
+designed. Next: N66, SIMD and vectorisation.
+
 ### N64 — WebAssembly — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.66 first. `wasm32-unknown-unknown` through the LLVM backend, carrying checked

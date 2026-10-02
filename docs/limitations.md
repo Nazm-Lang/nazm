@@ -32,6 +32,10 @@ found only by reading all of it.
   `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
   whole-program count, and recursion is seen only through its calls' sites (areas 4, 18).
   *Narrowed in N52.*
+- No JIT: an in-process JIT needs `unsafe` code, which the workspace forbids; the interactive tier
+  is the interpreter. Comptime is a command, not a language construct; nothing is hot-reloaded —
+  `nazm reload-check` states the rule a reloader would follow (area 12). *Narrowed in N65:* until
+  then, no REPL, comptime or reload rule existed.
 - WebAssembly is the freestanding subset only: no heap, so strings built at run time, sequences,
   channels, tasks and closures are refused; imports are `nazm_host.write` and `.report` alone, no
   WASI; only `nazm_main` is exported; verified on Node's engine only, linked by `wasm-ld` outside

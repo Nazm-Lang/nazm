@@ -121,6 +121,11 @@ the registry is `N0504` — each with its meaning unchanged. Schemas: `nazm.regi
 reader refuses as unknown rather than misreads; `nazm.lock/1` gains a source form,
 `registry+NAME@VERSION`.
 
+**Applied to N65, the interactive tier.** One code appeared, compatible: `N0393` (a function
+`nazm comptime` will not evaluate: it has parameters, or it is not pure). A runaway comptime
+evaluation is the interpreter's existing `N0402`; a REPL line's errors are the checker's own codes.
+`nazm.reload-check/1` is new.
+
 **Applied to N64, WebAssembly.** No code appeared: device registers in a module are the existing
 `N0392`, a stack exhausted is `N0408`, an overflow `N0400`, each reported through the host's
 `report`. What a module cannot have is the freestanding refusal (§7.64), which now names each part's

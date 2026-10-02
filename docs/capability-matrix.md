@@ -1164,6 +1164,16 @@ without `-g`, so a compiled program cannot be debugged symbolically.
 
 ### 12. Cranelift backend — VERIFIED (v1, for the native subset, on the host)
 
+*N65, 2026-10-02: the interactive tier — VERIFIED for the REPL, comptime and reload checks; the JIT
+BLOCKED.* `architecture.md` §7.67 first. `nazm repl` checks the session as one program on every
+edit and refuses a redefinition that breaks a caller by the caller's name; `nazm comptime`
+evaluates parameterless pure functions under budgets and refuses anything else (`N0393`), a runaway
+stopping with `N0402`; `nazm reload-check` names each change `reloadable` or `restart`
+(`nazm.reload-check/1`). Evidence: `crates/nazm-cli/tests/live.rs` (5), `live.rs`'s unit tests (5).
+**BLOCKED**: an in-process JIT needs `unsafe` code, which the workspace forbids
+(`unsafe_code = "forbid"`); lifting that is the project's decision. Designed in §7.67; no JIT
+differential exists, and none is claimed. Nothing is hot-reloaded: the reload check is the rule.
+
 **Evidence** · N41 (2026-10-01). `crates/nazm-codegen-clif` implements `nazm-lir`'s `Backend`
 (`crates/nazm-lir/src/backend.rs`) with Cranelift 0.136.1, pinned exactly: every MIR function body
 of a unit becomes Cranelift IR, verified by Cranelift's verifier, and one object per unit is written
