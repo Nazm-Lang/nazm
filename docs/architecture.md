@@ -6631,6 +6631,43 @@ upstream eBPF object would not be evidence of an sBPF program. The backend — t
 deserialised into the `State`, the entrypoint called, the data written back, the verifier's constraints —
 is designed by this metadata and not built.
 
+## 7.75 Trust evidence: fuzzing, provenance and reproducibility — N73, 2026-10-02
+
+Written before the code. Evidence that a build is what it says, and that the compiler survives
+inputs nobody wrote by hand — never a proof, and labelled as what it is.
+
+**Two fuzzers, deterministic.** *Front-end robustness*: every source in the repository's corpora,
+mutated by a seeded generator (bytes deleted, duplicated, swapped, replaced with tokens of the
+language), is parsed and checked in process; the property is that nothing panics — a diagnostic is
+the right answer to any input. *Semantic differential*: a generator of well-typed programs (`Int` and
+`Bool` arithmetic and comparison, `let`, `if`, bounded `while`, calls between generated functions,
+records) — every one terminating by construction — run under the interpreter, the LLVM backend at
+`-O0` and `-O2` and Cranelift; the property is one answer (value, or failure code and place). Both are
+seeded: a seed names a run, and the same seed is the same inputs on every host. A failing input is
+shrunk — statements and subexpressions removed while it still fails — and the shrunk input is printed to
+be added to the regression corpus, which every run replays first. Resource bounds are the test
+harness's and, contained, the gate's.
+
+**Shown to find a fault.** A backend fault injected on purpose — a signed comparison emitted unsigned —
+is found by the differential fuzzer without any test written for it; it is catalogued as a mutant whose
+only killer is the fuzzer.
+
+**Provenance.** `nazm build --provenance FILE` writes `nazm.provenance/1`: every source module with its
+digest, every package with its version and digest, the target, the compiler's version, the C
+compiler's identity, the runtime's ABI revision and digest, the backend and its options, the profiles in
+force, and the output's digest. `--attest-with CMD` runs CMD with the provenance file's path and records
+its standard output as the attestation — a hook for any local signer; nothing online is needed or used.
+
+**Reproducibility, scoped.** Two builds of one program in two clean directories with one toolchain are
+the same bytes (N46). Across toolchains — Apple clang 21 on macOS and clang 19 in the Linux image, for
+the same target triple — objects are expected to differ, and are measured and classified rather than
+assumed.
+
+**Not here, and why.** Sanitizers over generated code, Miri and Loom: the compiler has no `unsafe`
+code (`unsafe_code = "forbid"`), so Miri's subject is absent; sanitizing the C-compiled runtime is a
+separate experiment, not run. Coverage-guided fuzzing (`cargo fuzz`) needs a nightly toolchain and a
+new dependency; the seeded generators stand in for it, and are said to.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
