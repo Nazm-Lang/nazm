@@ -6604,6 +6604,33 @@ the adapter is the same unit without it — which a test holds.
 **Not here.** A chain's own host interface (storage keys, events, crypto) is a binding of these four
 imports to it; none is bound.
 
+## 7.74 Account-oriented contracts: signer constraints and metadata; execution blocked — N72, 2026-10-02
+
+Written before the code is committed. An account-oriented chain hands a program its accounts —
+state it may read, state it may write, keys that signed — and refuses a transaction whose accounts do
+not meet the program's declared constraints. The chain-neutral model (§7.71) already knows most of
+what those constraints must be; this milestone states them and checks the one the model can decide.
+
+**Signed writes, statically.** The `accounts` profile is `web3` with one more rule, `signed-writes`:
+an entrypoint whose write set is not empty must decide on its `caller` — `caller` must appear in a
+condition of its own body — or it is refused (`N0510`), naming the entrypoint. A helper handed
+`caller` is not looked into, so a check made only there does not count: the rule refuses rather than
+trusts what it cannot see. A read-only entrypoint needs no signer. This is a missing-signer check in the
+target-neutral model; it is not proof that the decision is the right one.
+
+**Account metadata.** `nazm contract FILE --accounts DIR` writes `accounts.json`
+(`nazm.sbpf-accounts/1`): the state account, owned by the program, its data laid out as a version byte
+and then each field's 8 bytes by declaration index; and for each instruction its discriminator (the first
+8 bytes of `keccak256("nazm.instruction." + name)`), its arguments' offsets, and its accounts — the state,
+writable exactly when its write set is not empty, and the caller, a signer exactly when the
+entrypoint decides on it. Cross-program calls do not exist in the model and are reported as none.
+
+**Execution is BLOCKED.** There is no sBPF toolchain, validator or emulator on this host. Upstream LLVM's
+`bpfel` target exists, but Solana's sBPF differs from it in its program ABI, syscalls and verifier, so an
+upstream eBPF object would not be evidence of an sBPF program. The backend — the account input
+deserialised into the `State`, the entrypoint called, the data written back, the verifier's constraints —
+is designed by this metadata and not built.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
