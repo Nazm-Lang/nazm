@@ -6149,6 +6149,49 @@ constructs — integer and boolean arithmetic with traps, comparison, short-circ
 tasks, closures, memory, and the native backends' code generation; a proof of any property beyond
 the bound.
 
+## 7.64 A freestanding target: no OS, no libc, no heap — N62, 2026-10-02
+
+Written before the code. Every target so far runs on an operating system through its C library.
+N62 adds one that runs on neither: `aarch64-unknown-none`, a 64-bit ARM machine with no OS, verified
+on QEMU's `virt` board.
+
+**What a freestanding program is.** A Nazm program that needs nothing of the hosted runtime: no
+allocation (so no strings built at run time, sequences, channels or closures), no tasks, no files,
+arguments or standard streams, no C, and no call cycle — a stack bound is what a machine without
+an OS needs, and the hosted stack check reads a limit from an OS that is not there. The build reads
+which runtime parts a program reaches (the same `Needs` every build computes) and refuses any beyond
+the freestanding set by name, before anything is linked (`N0101`). `embedded` (§7.49, §7.62) is the
+profile that states the same restrictions as rules; a freestanding build applies them as facts of
+what can be built.
+
+**The freestanding runtime.** A failure is recorded in plain globals — there is one thread, and no
+thread-local storage without an OS — and reported by writing its message to the board's UART and
+stopping the machine with status 2. The platform entry is `_start`: it sets the stack pointer to the
+top of a stack the linker reserves, calls `main`, writes its result to the UART in decimal and a
+newline, and stops the machine with status 0. Stopping is ARM semihosting's `SYS_EXIT_EXTENDED`,
+which QEMU honours with `-semihosting`; on a board without a debugger attached it would trap, which
+is stated as the target's contract, not hidden. There are no hidden constructors: every global is a
+constant the linker places, and the entry runs nothing before `main` but setting the stack.
+
+**MMIO.** `mmio_read32(addr: Int) -> Int` and `mmio_write32(addr: Int, value: Int) -> Int` read and
+write a 32-bit device register — a volatile access, never merged, removed or reordered with another
+volatile access — and need an `MmioCap` held where they are written (as `TimeCap` and `VouchCap` are):
+reaching a device is authority, and it performs no effect a Nazm function's contract names, so an
+`embedded` program can use it. They are refused where there is no device: by `nazm run` and by any
+hosted build (`N0392`). Ordinary loads and stores never become volatile; only these two are.
+
+**Linking.** The build writes objects (§7.59) and, beside `link.txt`, the linker script `link.ld`: the
+image at `0x40080000` (where QEMU's `virt` loads a kernel), `_start` first, and a 64 KiB stack above
+the image. The host has no ELF linker, so the image is linked by `ld.lld` in the QEMU image and run
+there; the build itself never runs it.
+
+**Deferred, and why.** *Atomics*: one thread and no interrupts make them unobservable; their memory
+orders need the model §7.46 does not yet state for shared memory. *Interrupt handlers*: an ABI, a
+reentrancy rule and a stack requirement are designed here in outline — a handler is a function of no
+parameters and no result, `! {}`, holding at most an `MmioCap`, run on its own stack — and not built.
+*A heap*: a startup-only arena is the next policy; none is built, so a freestanding program allocates
+nothing. *A standard library subset*: every `@std` module allocates, so none is available.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
