@@ -92,6 +92,8 @@ pub struct Function {
     /// The C symbol of a foreign function (N42). A foreign function has its parameters and no
     /// blocks: its body is C's, and a backend declares it and calls it with the C convention.
     pub foreign: Option<String>,
+    /// The C symbol an exported function is also callable as (N55).
+    pub export: Option<String>,
     /// For the code of a function value — a closure's body, or a named function's thunk
     /// (N50): the types of what the closure object carries, in order. Its local 0, a
     /// parameter, is the closure object; its declared parameters follow. `None` for every

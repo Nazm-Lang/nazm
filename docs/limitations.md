@@ -56,8 +56,11 @@ found only by reading all of it.
 
 ## FFI
 
-- `Int` and `Bool` only; no pointers, strings, structs, callbacks, variadics or `errno`; import
-  only; C is trusted entirely once called; `nazm run` cannot call C (area 17).
+- `Int` and `Bool`, and a `Str` *argument* as a borrowed C string (N55); no pointers or opaque
+  handles, `Str` results, structs, callbacks, variadics or `errno`; C is trusted entirely once
+  called; `nazm run` cannot call C (area 17). *Narrowed in N55:* until then, import only and no
+  strings. Exports exist — public, `! {}`, `Int`/`Bool` only — and `nazm build --lib` writes a
+  static archive and its header; one Nazm library per C program, no dynamic library.
 
 ## Runtime and concurrency
 

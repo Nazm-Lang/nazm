@@ -146,9 +146,13 @@ impl<'a> Gen<'a> {
     /// A foreign function's C signature (N42): only `Int` (`int64_t`) and `Bool` (C's `bool`,
     /// a zero-extended byte) cross, both by value, so no pointer and no sret appear.
     pub(crate) fn c_signature(&self, params: &[Ty], ret: Ty) -> Signature {
+        let ptr = self.ptr;
         let c = |t: Ty| {
             if t == Ty::Bool {
                 AbiParam::new(types::I8).uext()
+            } else if t == Ty::Str {
+                // A borrowed C string (N55).
+                AbiParam::new(ptr)
             } else {
                 AbiParam::new(types::I64)
             }
@@ -436,6 +440,28 @@ impl<'a> Gen<'a> {
             let mut ctx = self.module.make_context();
             crate::func::translate(&mut self, &mut ctx, &mut fctx, f, sig);
             self.define(fid, &mut ctx, verify, &f.name);
+            // An export's C entry, beside the function it calls (N55).
+            if let Some(symbol) = &sig.export {
+                let c = self.c_signature(&sig.params, sig.ret);
+                match self
+                    .module
+                    .declare_function(symbol.as_str(), Linkage::Export, &c)
+                {
+                    Ok(eid) => {
+                        let mut ctx = self.module.make_context();
+                        crate::helpers::export(
+                            &mut self,
+                            &mut ctx,
+                            &mut fctx,
+                            id,
+                            &sig.params,
+                            sig.ret,
+                        );
+                        self.define(eid, &mut ctx, verify, "an export's C entry");
+                    }
+                    Err(e) => self.defect(Span::synthetic(), e.to_string()),
+                }
+            }
         }
         // Helpers can ask for helpers (a record's release releases its fields'), so this is a
         // worklist; each is defined once.

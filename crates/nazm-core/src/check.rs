@@ -1901,13 +1901,9 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
 ];
 
 /// The rules a foreign declaration must meet (N42, `docs/architecture.md` §7.44).
-fn check_foreign(
-    f: &Function,
-    d: &nazm_syntax::ForeignDecl,
-    params: &[Type],
-    ret: Type,
-    errors: &mut Vec<Diagnostic>,
-) {
+/// The ABI and the symbol of a foreign declaration or an export (N42, N55): `"C"`, a C
+/// identifier, and none the runtime declares itself.
+fn c_abi_and_symbol(d: &nazm_syntax::ForeignDecl, errors: &mut Vec<Diagnostic>) {
     if d.abi != "C" {
         errors.push(
             Diagnostic::error(
@@ -1956,6 +1952,16 @@ fn check_foreign(
             ),
         );
     }
+}
+
+fn check_foreign(
+    f: &Function,
+    d: &nazm_syntax::ForeignDecl,
+    params: &[Type],
+    ret: Type,
+    errors: &mut Vec<Diagnostic>,
+) {
+    c_abi_and_symbol(d, errors);
     if let (Some(first), Some(last)) = (f.type_params.first(), f.type_params.last()) {
         errors.push(
             Diagnostic::error(
@@ -1978,7 +1984,8 @@ fn check_foreign(
     }
     let safe = |t: Type| matches!(t, Type::Int | Type::Bool);
     for (t, p) in params.iter().zip(&f.params) {
-        if !safe(*t) {
+        // A `Str` argument is a borrowed C string (N55); a `Str` result stays refused.
+        if !safe(*t) && *t != Type::Str {
             errors.push(foreign_type(p.ty.span, "take"));
         }
     }
@@ -2033,6 +2040,67 @@ fn declared_effect_param<'f>(f: &'f Function, errors: &mut Vec<Diagnostic>) -> O
         );
     }
     Some(first.name.as_str())
+}
+
+/// The rules an export meets (N55, `docs/architecture.md` §7.57): the foreign declaration's ABI
+/// and symbol rules, and — since C can hand Nazm no capability and has no cleanup Nazm knows of —
+/// public, `! {}`, not generic, and only `Int` and `Bool` across.
+fn check_export(
+    f: &Function,
+    d: &nazm_syntax::ForeignDecl,
+    params: &[Type],
+    ret: Type,
+    errors: &mut Vec<Diagnostic>,
+) {
+    c_abi_and_symbol(d, errors);
+    let shape = |at: Span, what: String| {
+        Diagnostic::error(codes::EXPORT_SHAPE, at, what).help(
+            "an export is called by C, which can hand Nazm no capability and has no cleanup \
+             Nazm knows of: it is `pub`, declares `! {}`, is not generic, and takes and \
+             returns only `Int` and `Bool`",
+        )
+    };
+    if f.pub_span.is_none() {
+        errors.push(shape(
+            f.name_span,
+            format!("`{}` is exported to C, so it is `pub`", f.name),
+        ));
+    }
+    match &f.effects {
+        Some(e) if e.names.is_empty() => {}
+        Some(e) => errors.push(shape(
+            e.span,
+            format!("`{}` is exported to C, so it performs no effect", f.name),
+        )),
+        None => errors.push(shape(
+            f.return_type.span,
+            format!("`{}` is exported to C, so it declares `! {{}}`", f.name),
+        )),
+    }
+    if let (Some(first), Some(last)) = (f.type_params.first(), f.type_params.last()) {
+        errors.push(shape(
+            first.span.join(last.span),
+            format!("`{}` is exported to C, so it cannot be generic", f.name),
+        ));
+    }
+    let scalar = |t: Type| matches!(t, Type::Int | Type::Bool);
+    for (t, p) in params.iter().zip(&f.params) {
+        if !scalar(*t) {
+            errors.push(shape(
+                p.ty.span,
+                format!("`{}` is exported to C, so it cannot take this type", f.name),
+            ));
+        }
+    }
+    if !scalar(ret) {
+        errors.push(shape(
+            f.return_type.span,
+            format!(
+                "`{}` is exported to C, so it cannot return this type",
+                f.name
+            ),
+        ));
+    }
 }
 
 fn foreign_type(at: Span, what: &str) -> Diagnostic {
@@ -2155,6 +2223,11 @@ pub fn declare_unit(
             }
             d.symbol.clone()
         });
+        // An export (N55): a Nazm function C may call, under the rules §7.57 states.
+        let export = f.export.as_ref().map(|d| {
+            check_export(f, d, &params, ret, errors);
+            d.symbol.clone()
+        });
         let declared_effects = if foreign.is_some() {
             Some(nazm_sema::EffectSet::of(nazm_sema::Effect::Foreign))
         } else {
@@ -2179,6 +2252,7 @@ pub fn declare_unit(
             provenance: None,
             mentions: Vec::new(),
             foreign: foreign.clone(),
+            export,
             closure: None,
         });
         debug_assert_eq!(declared, id);
@@ -3163,6 +3237,7 @@ impl Checker<'_> {
             provenance: None,
             mentions: Vec::new(),
             foreign: None,
+            export: None,
             closure: Some(nazm_sema::ClosureInfo {
                 enclosing,
                 at: span,

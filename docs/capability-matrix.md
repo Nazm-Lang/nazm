@@ -1342,7 +1342,7 @@ function; an ordering capability for sorting by key.
 **Accepted when** · For v1: met. For the area: a library a real program can be written against
 without reimplementing collections or text handling, with a stability policy past 1.0.
 
-### 17. FFI and ABI — PARTIAL (v1: C, `Int` and `Bool`, native builds on the host)
+### 17. FFI and ABI — PARTIAL (C, `Int` and `Bool`, `Str` arguments, exports and static libraries; native builds on the host)
 
 **Evidence** · N42 (2026-10-01). `extern "C" fn name(p: T, …) -> R = "symbol";` declares a C
 function by its signature and its C symbol (`crates/nazm-syntax/src/parser.rs`; `extern` is
@@ -1362,17 +1362,19 @@ it with no failure check after it.
 | The interpreter | VERIFIED (refusal) | `nazm run` refuses a program calling C before running any of it, `N0385` (`nazm_run_refuses_a_foreign_call_before_running_anything`) |
 | Link inputs | VERIFIED | `--link` is passed in order; a missing file is refused before compiling; an unresolved symbol is reported as a missing `--link`, not a compiler bug (`the_linker_is_handed_exactly_what_link_names`) |
 | Interface and cache | VERIFIED | `nazm.interface/7` carries a foreign export's symbol; semantic epoch 11; the C symbol enters the object key (`the_c_symbol_enters_the_object_key`) |
-| Pointers, strings, structs, callbacks, variadics, `errno` | MISSING | not designed in v1: no FFI type can express them safely yet |
-| Exporting Nazm functions to C | MISSING | no `extern` definitions; a C caller cannot reach Nazm code |
+| `Str` arguments (N55) | VERIFIED | a borrowed NUL-terminated copy for the call, freed after it, under both backends with a balanced memory report; a NUL byte refused before C runs, `N0405`; a `Str` result still `N0381` (`a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends`, `a_str_holding_a_nul_is_refused_before_c_runs`, `a_str_result_from_c_is_still_refused`) |
+| Exporting Nazm functions to C (N55) | VERIFIED | `pub extern "C" fn … ! {} = "sym" { … }`, `Int`/`Bool` only, `N0391` otherwise; one symbol per program (`N0383`); a failure ends the process with status 2 instead of unwinding into C (`an_export_is_public_effect_free_scalar_and_not_generic`, `an_export_symbol_is_defined_once_in_a_program`) |
+| Static libraries (N55) | VERIFIED | `nazm build --lib -o OUT.a` with no `main`, and `OUT.h` in a fixed order; a C program links and calls it under both backends; two builds are the same bytes (`a_library_and_its_header_link_into_a_c_program_under_both_backends`, `a_library_is_the_same_bytes_on_every_build_and_needs_no_main`) |
+| Opaque handles, structs, callbacks, variadics, `errno` | DESIGNED | §7.57: a nominal `extern "C" type`, a layout promise distinct from records, a trampoline with an environment rule, and a per-target `errno` location; none built |
 | Other ABIs and cross-target | MISSING | `"C"` only; the host only (area 33) |
 
 **Limitation** · Two scalar types, by value. C is trusted entirely once called: an abort, a loop or
 memory corruption inside it is outside every Nazm guarantee, and nothing is checked after the call.
 `nazm run` cannot call C at all, so a program that does has one implementation, not two.
 
-**Next dependency** · A layout story for records (a `repr(C)`-like promise) and a borrowed-string
-type before anything but scalars can cross; a callback needs function values, which the language
-does not have.
+**Next dependency** · A layout story for records (a `repr(C)`-like promise) before a struct can
+cross; an opaque handle type before a C pointer can be held; function values exist since N50, so a
+callback needs only the environment rule §7.57 states; `errno` needs N57's target model.
 
 **Accepted when** · Met for the v1 set above. The whole area is accepted when a record and a string
 cross with their layout and ownership stated.

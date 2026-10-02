@@ -189,6 +189,9 @@ pub struct Function {
     /// whose body is the C function the symbol names. `None` for every Nazm function. A
     /// foreign declaration has no `body`, and that absence is not a parse failure.
     pub foreign: Option<ForeignDecl>,
+    /// `extern "C" … = "symbol" { … }` (N55): a Nazm function with a body that C may also call,
+    /// under `symbol`. `None` for every other function; never set together with `foreign`.
+    pub export: Option<ForeignDecl>,
     pub span: Span,
 }
 

@@ -319,6 +319,9 @@ pub mod codes {
     // Generic channels (N53, `docs/architecture.md` §7.55)
     /// A `Chan[T]` whose `T` may not cross into a task (N53).
     pub const CHANNEL_ELEMENT: Code = Code::new("N0390");
+    /// An export (N55) that is not public, declares an effect, is generic, or takes or returns
+    /// a type other than `Int` and `Bool`.
+    pub const EXPORT_SHAPE: Code = Code::new("N0391");
 
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or

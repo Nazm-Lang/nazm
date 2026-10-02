@@ -32,6 +32,9 @@ pub fn canonical(program: &Program, f: &Function) -> String {
     if let Some(sym) = &f.foreign {
         let _ = writeln!(s, "foreign {sym}");
     }
+    if let Some(sym) = &f.export {
+        let _ = writeln!(s, "export {sym}");
+    }
     let args: Vec<String> = f.type_args.iter().map(|t| text::ty(program, *t)).collect();
     let _ = writeln!(s, "args [{}]", args.join(","));
     let _ = writeln!(s, "params {}", f.params);
