@@ -652,6 +652,26 @@ enum Command {
         /// The package's directory, holding `nazm.toml`.
         dir: PathBuf,
     },
+    /// Publish a package into a local registry (N56): copy its manifest and sources and record
+    /// the version and its digest. A published version never changes.
+    Publish {
+        /// The package's directory, holding `nazm.toml`.
+        dir: PathBuf,
+        /// The registry's directory.
+        #[arg(long, value_name = "DIR")]
+        registry: PathBuf,
+    },
+    /// Withdraw a published version (N56): never chosen anew, still used where a lockfile names it.
+    Yank {
+        /// `NAME@VERSION`.
+        package: String,
+        /// The registry's directory.
+        #[arg(long, value_name = "DIR")]
+        registry: PathBuf,
+        /// Restore a yanked version instead.
+        #[arg(long)]
+        undo: bool,
+    },
 }
 
 /// Parse `--max-depth`, refusing a budget no machine would grant the stack for.
@@ -684,6 +704,17 @@ fn main() -> ExitCode {
     // its lockfile — both settled before any command sees the file.
     if let Command::Lock { dir } = &cli.command {
         return package::lock(dir);
+    }
+    if let Command::Publish { dir, registry } = &cli.command {
+        return package::publish(dir, registry);
+    }
+    if let Command::Yank {
+        package: which,
+        registry,
+        undo,
+    } = &cli.command
+    {
+        return package::yank(which, registry, *undo);
     }
 
     match &mut cli.command {
@@ -990,6 +1021,8 @@ fn main() -> ExitCode {
         | Command::Mir { .. }
         | Command::Capabilities { .. }
         | Command::Lock { .. }
+        | Command::Publish { .. }
+        | Command::Yank { .. }
         | Command::ExplainCost { .. }
         | Command::ExplainFlow { .. }
         | Command::Inspect { .. } => {

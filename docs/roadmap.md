@@ -388,6 +388,16 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N56 — Packages v2: a local registry — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.58 first. A registry is a directory: an index per package and an immutable,
+digest-checked copy per version. Four requirement forms, solved per name to the lockfile's version
+while it satisfies or the highest non-yanked, one version per name, no backtracking. `nazm publish`
+and `nazm yank`; tampering, links, malformed or equivocating indexes, double publishing and name
+conflicts refused by code. No network, no signatures, no multi-root workspaces; the self-hosted
+compiler's package support is DESIGNED. Semantic epoch unchanged: no checker rule moved. Next: N57,
+cross-compilation.
+
 ### N55 — FFI v2: C strings in, exports out — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.57 first. A `Str` argument to C is a borrowed NUL-terminated copy, freed after

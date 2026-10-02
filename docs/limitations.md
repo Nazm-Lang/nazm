@@ -81,8 +81,9 @@ found only by reading all of it.
 
 ## Packages and builds
 
-- Path dependencies only: no registry, no remote sources, no version ranges, no multi-root
-  workspaces (area 26).
+- A local registry and four requirement forms (N56); no remote registry or network source, no
+  signatures, no features or pre-releases, one version per package and no backtracking solve, no
+  multi-root workspaces (area 26). *Narrowed in N56:* until then, path dependencies only.
 - Reproducibility is verified on one host; nothing is claimed across hosts or toolchains
   (area 32).
 - The compiler written in Nazm understands neither packages nor `@std` imports nor foreign

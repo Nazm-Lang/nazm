@@ -2215,6 +2215,23 @@ alone; two copies byte-identical from empty caches; 200 packages resolved and lo
 No registry, no remote sources, no version ranges, no build scripts, no workspaces of several
 roots.
 
+*N56, 2026-10-02: packages v2 — VERIFIED for a local registry, one host.* `architecture.md` §7.58
+first. `crates/nazm-package/src/registry.rs`: `nazm.registry-index/1` indexes and an immutable copy
+per version; `^`, `~`, `=` and exact requirements; per name, the lockfile's version while it still
+satisfies, else the highest non-yanked, one version per name and no backtracking (`N0513` naming
+every requirement); `nazm publish` and `nazm yank`. Refused by code: a version published twice and
+a malformed or equivocating index (`N0512`), a copy changed after publishing (`N0507`), a link in a
+package (`N0514`), a path package and a registry dependency of one name (`N0503`), a cycle through
+registry edges (`N0504`), a path dependency in a published package. A registry source is
+`registry+NAME@VERSION`, so where the registry is enters no lockfile. Evidence:
+`crates/nazm-package/tests/registry.rs` (14) — choice by operator, transitive narrowing and a named
+conflict, reordered index entries, two registry locations, lockfile preference after a newer
+publish, a stale lockfile under `--locked`, yanking with and without a lockfile, immutability,
+tampering by edit and by addition, a symbolic link, five malformed indexes and equivocation, a name
+that is a path, a cycle, a name conflict — and `crates/nazm-cli/tests/registry.rs` (3): publish,
+resolve, lock, `--locked` run and build, yank; tampering refused before anything is written; the
+commands' refusals. The compiler written in Nazm reads no manifest (DESIGNED: hand it `nazm.lock/1`).
+
 *N31, 2026-09-28: Compact Command Summary v1, `nazm.command-summary/1` — VERIFIED; Compact Test
 Summary v1, `nazm.test-summary/1` — VERIFIED; G76 — PARTIAL.* `--summary-json` on `nazm check`
 and `nazm build` (`crates/nazm-service/src/summary.rs`, `architecture.md` §7.33) prints the
