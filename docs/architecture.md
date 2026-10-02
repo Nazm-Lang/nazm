@@ -6264,6 +6264,61 @@ so it adds nothing and the search continues through what it called, now called f
 frames; only a callee outside the image makes the bound `null`. *Negated literals* count as
 literals. *`embedded` reports `bounds` too*, since it computes the same MIR facts.
 
+## 7.66 WebAssembly: one more freestanding target, and authority as imports — N64, 2026-10-02
+
+Written before the code. N64 adds `wasm32-unknown-unknown`: a WebAssembly module, compiled by the
+LLVM backend from the same MIR and LIR as every other target. Nothing in the language changes for
+it — no browser semantics, no source construct of its own.
+
+**The baseline.** WebAssembly 1.0 (MVP) with the features clang 21's `wasm32` default enables
+(mutable globals, sign extension, multivalue off); `i64` is a WebAssembly `i64`, a pointer is 32
+bits, memory is one linear memory the module defines and exports. The verified toolchain: the host's
+clang for the objects, `wasm-ld` (LLD 19) to link, Node (V8) as the engine — all recorded in
+`docker/wasm.Dockerfile`; another engine is unverified, not unsupported.
+
+**Semantics carried, not reinterpreted.** A WebAssembly module has no operating system, so it is a
+freestanding target in §7.64's sense and shares its law: what the program reaches beyond the
+module's runtime is refused by part, before anything is linked. Arithmetic is checked exactly as
+on every target (overflow is LLVM's intrinsic and a branch, not WebAssembly's wrapping `i64.add`),
+and a failure is recorded in plain globals — the module has one thread. Recursion builds under a
+stack check against the linker's `__stack_low`, so exhaustion is `N0408`, not the engine's own
+trap. Static strings are bytes in the module's data. Allocation, sequences, strings built at run
+time, channels, tasks and closures are refused, as on the board: a heap is designed (a bump
+allocator over `memory.grow`, freeing nothing until §7.41's release is ported) and not built.
+
+**Authority is an import.** A module imports from one module, `nazm_host`, and only what it uses:
+`write(fd: i32, ptr: i32, len: i32)` exactly where the program writes to standard output or error
+(which needs an `IoCap`, as everywhere), and `report(ptr: i32, len: i32)`, always — the entry
+checks for a failure after `main`, so every module can report one. A program that holds no `IoCap` therefore has no `write` import at all — absent authority
+is an absent import, which a test reads from the module itself. Files, arguments, the clock, the
+network and randomness have no import: the built-ins that need them are refused for this target by
+part, so the host is never asked. Every import is named in the module's import section, in a fixed
+order, so the module's bytes say what it can ask of its host.
+
+**The host interface.** The module exports `memory` and `nazm_main() -> i64`: `main`'s result, or —
+after calling `report` with the failure's text — `0`, with the host told by `report` that it
+failed. A string crosses as a pointer into `memory` and a byte length; the host copies, never keeps.
+`--objects DIR` writes the objects, `link.txt` (the `wasm-ld` line) and `host.mjs`, a reference host
+for Node that provides exactly the imports the module declares and refuses to instantiate a module
+asking for any other. It prints `main`'s result and a newline, and exits with status 0, or 2 after a
+failure's text on standard error — the board's contract, carried.
+
+**WebAssembly is not the boundary here.** The engine isolates memory and control; what the module
+can do outside is what its host's imports do. The reference host's `write` writes to its own
+process's streams; nothing else is provided. A different host is a different trust boundary, and the
+module's import section is the contract it is checked against.
+
+**Identity and source mapping.** The module is a function of its objects and the link line, which
+are a function of the source and the toolchain; two builds give the same bytes. `--debug` carries
+DWARF in the objects' custom sections, which `wasm-ld` keeps, so a WebAssembly debugger maps code to
+source as a native one does.
+
+**Not here, and why.** *WASI*: its interfaces are a host this milestone does not choose; the
+`nazm_host` imports are the contract. *A heap*: designed above. *Exported Nazm functions*
+(`pub extern "C"`, N55) over the module boundary: the same ABI applies to `i64`/`i32`, and they are
+not yet exported — `nazm_main` alone is. *The browser*: no DOM, no event loop. *Cranelift*: its
+WebAssembly support is as a source, not a target.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
