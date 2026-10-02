@@ -89,6 +89,41 @@ pub(crate) fn entry(path: &Path, locked: bool) -> Result<Option<PathBuf>, ExitCo
     }
 }
 
+/// `nazm publish DIR --registry REG` (N56).
+pub(crate) fn publish(dir: &Path, registry: &Path) -> ExitCode {
+    match nazm_package::publish(dir, registry) {
+        Ok((version, digest)) => {
+            eprintln!(
+                "nazm: published {version} into {} ({digest})",
+                registry.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(d) => report(&[*d]),
+    }
+}
+
+/// `nazm yank NAME@VERSION --registry REG [--undo]` (N56).
+pub(crate) fn yank(which: &str, registry: &Path, undo: bool) -> ExitCode {
+    let parsed = which
+        .split_once('@')
+        .and_then(|(n, v)| nazm_package::Version::parse(v).map(|v| (n, v)));
+    let Some((name, version)) = parsed else {
+        eprintln!("nazm: `{which}` is not NAME@VERSION");
+        return ExitCode::from(exit::CHECK_FAILED);
+    };
+    match nazm_package::yank(registry, name, version, !undo) {
+        Ok(()) => {
+            eprintln!(
+                "nazm: {} {name} {version}",
+                if undo { "restored" } else { "yanked" }
+            );
+            ExitCode::SUCCESS
+        }
+        Err(d) => report(&[*d]),
+    }
+}
+
 /// `nazm lock DIR`.
 pub(crate) fn lock(dir: &Path) -> ExitCode {
     let graph = match nazm_package::resolve(dir) {

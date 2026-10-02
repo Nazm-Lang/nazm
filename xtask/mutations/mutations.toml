@@ -9129,10 +9129,13 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "build::tests::the_execu
 
 [[mutation]]
 name = "n46-the-lockfile-records-an-absolute-path"
-why = "a package's source is recorded as its absolute directory, so the same packages lock to different bytes in every checkout"
+why = """a package's source is recorded as its absolute directory, so the same packages lock to different bytes in every checkout
+Repointed by N56, which made the source either a registry coordinate or the path."""
 file = "crates/nazm-package/src/lib.rs"
-find = """            source: format!("path+{}", relative(&root_dir, dir)),"""
-replace = """            source: format!("path+{}", dir.display()),"""
+find = """                format!("path+{}", relative(&root_dir, dir))
+            },"""
+replace = """                format!("path+{}", dir.display())
+            },"""
 killers = [{ package = "nazm-cli", test = "packages", name = "the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it" }]
 
 [[mutation]]
@@ -10563,3 +10566,110 @@ replace = """
             nazm_core::Entry::Absent
         } else {"""
 killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_is_the_same_bytes_on_every_build_and_needs_no_main" }]
+
+
+# --- N56: packages v2, a local registry --------------------------------------------------------
+
+[[mutation]]
+name = "n56-a-caret-crosses-its-major"
+why = "`^1.2.3` admits 2.0.0"
+file = "crates/nazm-package/src/registry.rs"
+find = "                        v.major == base.major"
+replace = "                        true"
+killers = [{ package = "nazm-package", lib = true, name = "registry::tests::a_requirement_admits_exactly_what_its_operator_says" }]
+
+[[mutation]]
+name = "n56-a-yanked-version-is-chosen-anew"
+why = "a yanked version is chosen for a build with no lockfile"
+file = "crates/nazm-package/src/registry.rs"
+find = "            .find(|e| !e.yanked && ok(e.version))"
+replace = "            .find(|e| ok(e.version))"
+killers = [{ package = "nazm-package", test = "registry", name = "a_yanked_version_is_never_chosen_anew_and_a_locked_one_stands" }]
+
+[[mutation]]
+name = "n56-the-lowest-version-wins"
+why = "the solve takes the lowest satisfying version"
+file = "crates/nazm-package/src/registry.rs"
+find = """
+            .rev()
+            .find(|e| !e.yanked"""
+replace = "            .find(|e| !e.yanked"
+killers = [{ package = "nazm-package", test = "registry", name = "the_highest_version_satisfying_every_requirement_is_chosen" }]
+
+[[mutation]]
+name = "n56-one-requirement-is-enough"
+why = "a version satisfying any requirement is chosen, so a transitive requirement narrows nothing"
+file = "crates/nazm-package/src/registry.rs"
+find = "        let ok = |v: Version| reqs.iter().all(|r| r.matches(v));"
+replace = "        let ok = |v: Version| reqs.iter().any(|r| r.matches(v));"
+killers = [{ package = "nazm-package", test = "registry", name = "a_transitive_requirement_narrows_the_choice_and_a_conflict_is_refused_naming_both" }]
+
+[[mutation]]
+name = "n56-the-lockfile-is-not-preferred"
+why = "a newer publish changes a locked build's versions"
+file = "crates/nazm-package/src/lib.rs"
+find = "    let preferred = locked_registry_versions(&root_dir.join(LOCKFILE));"
+replace = "    let preferred: BTreeMap<String, Version> = BTreeMap::new();"
+killers = [{ package = "nazm-package", test = "registry", name = "a_locked_version_is_kept_after_a_newer_one_is_published" }]
+
+[[mutation]]
+name = "n56-the-digest-is-not-checked"
+why = "a registry copy changed after publishing is used"
+file = "crates/nazm-package/src/registry.rs"
+find = "        if have != entry.digest {"
+replace = "        if false {"
+killers = [{ package = "nazm-package", test = "registry", name = "a_tampered_package_is_refused_by_its_digest" }]
+
+[[mutation]]
+name = "n56-a-link-is-accepted"
+why = "a symbolic link in a registry package is followed"
+file = "crates/nazm-package/src/registry.rs"
+find = "                Ok(t) if t.is_file() => {}"
+replace = "                Ok(t) if t.is_file() || t.is_symlink() => {}"
+killers = [{ package = "nazm-package", test = "registry", name = "a_registry_package_holding_a_link_is_refused" }]
+
+[[mutation]]
+name = "n56-a-version-is-published-twice"
+why = "a published version's copy is overwritten"
+file = "crates/nazm-package/src/registry.rs"
+find = "    if entries.iter().any(|e| e.version == manifest.version) {"
+replace = "    if false {"
+killers = [{ package = "nazm-package", test = "registry", name = "a_published_version_never_changes" }]
+
+[[mutation]]
+name = "n56-a-duplicate-index-entry-is-kept"
+why = "an index recording one version twice is read"
+file = "crates/nazm-package/src/registry.rs"
+find = "            if seen.contains_key(&v) {"
+replace = "            if false {"
+killers = [{ package = "nazm-package", test = "registry", name = "a_malformed_or_equivocating_index_is_refused" }]
+
+[[mutation]]
+name = "n56-a-registry-source-is-a-path"
+why = "a registry package's lockfile source is its path, so moving the registry changes the lock"
+file = "crates/nazm-package/src/lib.rs"
+find = """
+                format!("registry+{}@{}", m.name, m.version)"""
+replace = """
+                format!("path+{}", relative(&root_dir, dir))"""
+killers = [{ package = "nazm-package", test = "registry", name = "where_the_registry_is_does_not_enter_the_lockfile" }]
+
+[[mutation]]
+name = "n56-a-registry-cycle-is-accepted"
+why = "a cycle through registry edges is not refused"
+file = "crates/nazm-package/src/lib.rs"
+find = """
+        self.refuse_cycles()
+    }"""
+replace = """
+        Ok(())
+    }"""
+killers = [{ package = "nazm-package", test = "registry", name = "a_cycle_through_the_registry_is_refused" }]
+
+[[mutation]]
+name = "n56-a-path-and-registry-package-share-a-name"
+why = "a registry dependency resolves onto a path package of the same name"
+file = "crates/nazm-package/src/lib.rs"
+find = "                    if i < path_count {"
+replace = "                    if false {"
+killers = [{ package = "nazm-package", test = "registry", name = "a_path_package_and_a_registry_dependency_of_one_name_conflict" }]

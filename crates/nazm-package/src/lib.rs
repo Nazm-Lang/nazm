@@ -15,6 +15,9 @@ use nazm_diag::{codes, Code, Diagnostic};
 use nazm_span::Span;
 use serde::Deserialize;
 
+pub mod registry;
+pub use registry::{publish, yank, Index, VersionReq};
+
 /// The manifest's file name.
 pub const MANIFEST: &str = "nazm.toml";
 /// The lockfile's file name, beside the root manifest.
@@ -88,6 +91,14 @@ struct RawManifest {
     package: RawPackage,
     #[serde(default)]
     dependencies: BTreeMap<String, RawDependency>,
+    /// Where registry dependencies come from (N56); read from the root manifest only.
+    registry: Option<RawRegistry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRegistry {
+    path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,8 +114,17 @@ struct RawPackage {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawDependency {
-    path: String,
+    path: Option<String>,
     version: String,
+}
+
+/// How a manifest names a dependency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dependency {
+    /// N46's: a directory, relative to the manifest, at exactly this version.
+    Path { path: String, version: Version },
+    /// N56's: a package from the registry, at a version satisfying this requirement.
+    Registry(VersionReq),
 }
 
 /// A manifest, validated.
@@ -116,14 +136,16 @@ pub struct Manifest {
     pub root: String,
     /// The entry module, relative to the source root.
     pub main: Option<String>,
-    /// Each dependency's name, with its path relative to this manifest and its exact version.
-    pub dependencies: BTreeMap<String, (String, Version)>,
+    /// Each dependency, by name.
+    pub dependencies: BTreeMap<String, Dependency>,
+    /// The registry's directory, relative to this manifest (N56); only the root's is read.
+    pub registry: Option<String>,
     /// The restriction profile this package requires of every program it is part of (N47),
     /// by name; validated by the command line, which knows the profiles.
     pub profile: Option<String>,
 }
 
-fn error(code: Code, message: String) -> Diagnostic {
+pub(crate) fn error(code: Code, message: String) -> Diagnostic {
     Diagnostic::error(code, Span::synthetic(), message)
 }
 
@@ -186,16 +208,28 @@ impl Manifest {
             if !valid_name(&name) {
                 return Err(bad(format!("`{name}` is not a package name")));
             }
-            let v = Version::parse(&d.version).ok_or_else(|| {
-                bad(format!(
-                    "the dependency `{name}`'s version `{}` is not MAJOR.MINOR.PATCH",
-                    d.version
-                ))
-            })?;
             if name == raw.package.name {
                 return Err(bad(format!("`{name}` depends on itself")));
             }
-            dependencies.insert(name, (d.path, v));
+            let dep = match d.path {
+                Some(path) => Dependency::Path {
+                    path,
+                    version: Version::parse(&d.version).ok_or_else(|| {
+                        bad(format!(
+                            "the dependency `{name}`'s version `{}` is not MAJOR.MINOR.PATCH",
+                            d.version
+                        ))
+                    })?,
+                },
+                None => Dependency::Registry(VersionReq::parse(&d.version).ok_or_else(|| {
+                    bad(format!(
+                        "the dependency `{name}`'s version `{}` is not a requirement: \
+                         `1.2.3`, `=1.2.3`, `^1.2.3` or `~1.2.3`",
+                        d.version
+                    ))
+                })?),
+            };
+            dependencies.insert(name, dep);
         }
         Ok(Self {
             name: raw.package.name,
@@ -203,6 +237,7 @@ impl Manifest {
             root,
             main: raw.package.main,
             dependencies,
+            registry: raw.registry.map(|r| r.path),
             profile: raw.package.profile,
         })
     }
@@ -259,9 +294,227 @@ struct Resolver {
     /// Canonical directories on the current path, for cycles.
     path: Vec<PathBuf>,
     edges: Vec<BTreeMap<String, usize>>,
+    /// Which of `found` came from the registry (N56).
+    from_registry: std::collections::BTreeSet<usize>,
 }
 
+/// How many rounds the registry solve may take before it is refused as not settling.
+const MAX_ROUNDS: usize = 64;
+
 impl Resolver {
+    /// Solve every registry dependency (N56, §7.58), once every path package is known: in rounds,
+    /// each choosing for every required name the version [`Index::choose`] picks for the
+    /// requirements on it, until a round changes nothing. No backtracking: the highest version
+    /// that satisfies every requirement wins, or the solve is refused naming them.
+    fn solve_registry(
+        &mut self,
+        root_dir: &Path,
+        preferred: &BTreeMap<String, Version>,
+    ) -> Result<(), Box<Diagnostic>> {
+        let path_count = self.found.len();
+        let registry = self
+            .found
+            .first()
+            .and_then(|f| f.0.registry.clone())
+            .map(|r| root_dir.join(r));
+        let mut chosen: BTreeMap<String, (Version, Manifest, PathBuf)> = BTreeMap::new();
+        let mut indexes: BTreeMap<String, Index> = BTreeMap::new();
+        for round in 0..=MAX_ROUNDS {
+            // Every requirement on a registry package, from the path packages and from the
+            // registry packages they reach.
+            let mut reqs: BTreeMap<String, Vec<(VersionReq, String)>> = BTreeMap::new();
+            let mut frontier: Vec<&Manifest> =
+                self.found.iter().take(path_count).map(|f| &f.0).collect();
+            let mut reached: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            while let Some(m) = frontier.pop() {
+                for (name, d) in &m.dependencies {
+                    let Dependency::Registry(r) = d else {
+                        continue;
+                    };
+                    reqs.entry(name.clone())
+                        .or_default()
+                        .push((*r, m.name.clone()));
+                    if reached.insert(name.clone()) {
+                        if let Some((_, cm, _)) = chosen.get(name) {
+                            frontier.push(cm);
+                        }
+                    }
+                }
+            }
+            if reqs.is_empty() {
+                break;
+            }
+            let Some(registry) = registry.as_deref() else {
+                let name = reqs.keys().next().cloned().unwrap_or_default();
+                return Err(Box::new(error(
+                    codes::PACKAGE_NOT_FOUND,
+                    format!(
+                        "`{name}` is a registry dependency, and the root manifest names no \
+                         `[registry]`"
+                    ),
+                )));
+            };
+            let before: BTreeMap<String, Version> =
+                chosen.iter().map(|(n, c)| (n.clone(), c.0)).collect();
+            let mut next: BTreeMap<String, (Version, Manifest, PathBuf)> = BTreeMap::new();
+            for (name, rs) in &reqs {
+                if let Some(&i) = self.by_name.get(name) {
+                    if i < path_count {
+                        return Err(Box::new(error(
+                            codes::PACKAGE_CONFLICT,
+                            format!(
+                                "`{name}` is a path package and also a registry dependency of `{}`; \
+                                 one build has one package of each name",
+                                rs.first().map(|r| r.1.as_str()).unwrap_or("")
+                            ),
+                        )));
+                    }
+                }
+                if !indexes.contains_key(name) {
+                    indexes.insert(name.clone(), Index::read(registry, name)?);
+                }
+                let Some(index) = indexes.get(name) else {
+                    continue;
+                };
+                let only: Vec<VersionReq> = rs.iter().map(|r| r.0).collect();
+                let Some(v) = index.choose(&only, preferred.get(name).copied()) else {
+                    let said: Vec<String> = rs
+                        .iter()
+                        .map(|(r, by)| format!("`{by}` requires {r}"))
+                        .collect();
+                    return Err(Box::new(
+                        error(
+                            codes::VERSION_UNSATISFIABLE,
+                            format!(
+                                "no published version of `{name}` satisfies every requirement: {}",
+                                said.join(", ")
+                            ),
+                        )
+                        .help("one build has one version of each package; the requirements must overlap"),
+                    ));
+                };
+                let entry = match chosen.remove(name) {
+                    Some(c) if c.0 == v => c,
+                    _ => {
+                        let (m, dir) = index.fetch(v)?;
+                        if let Some((dep, _)) = m
+                            .dependencies
+                            .iter()
+                            .find(|(_, d)| matches!(d, Dependency::Path { .. }))
+                        {
+                            return Err(Box::new(error(
+                                codes::MANIFEST_INVALID,
+                                format!(
+                                    "the registry's `{name}` {v} depends on `{dep}` by path; a \
+                                     registry package depends only on the registry"
+                                ),
+                            )));
+                        }
+                        (v, m, dir)
+                    }
+                };
+                next.insert(name.clone(), entry);
+            }
+            let same =
+                next.len() == before.len() && next.iter().all(|(n, c)| before.get(n) == Some(&c.0));
+            chosen = next;
+            if same && round > 0 {
+                break;
+            }
+            if round == MAX_ROUNDS {
+                return Err(Box::new(error(
+                    codes::VERSION_UNSATISFIABLE,
+                    format!("the registry dependencies did not settle in {MAX_ROUNDS} rounds"),
+                )));
+            }
+        }
+        for (name, (_, m, dir)) in chosen {
+            let index = self.found.len();
+            self.by_name.insert(name, index);
+            self.by_dir.insert(dir.clone(), index);
+            self.found.push((m, dir));
+            self.edges.push(BTreeMap::new());
+            self.from_registry.insert(index);
+        }
+        for i in 0..self.found.len() {
+            let deps: Vec<String> = self
+                .found
+                .get(i)
+                .map(|f| {
+                    f.0.dependencies
+                        .iter()
+                        .filter(|(_, d)| matches!(d, Dependency::Registry(_)))
+                        .map(|(n, _)| n.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for n in deps {
+                if let (Some(&to), Some(e)) = (self.by_name.get(&n), self.edges.get_mut(i)) {
+                    e.insert(n, to);
+                }
+            }
+        }
+        self.refuse_cycles()
+    }
+
+    /// A cycle through registry edges, which no directory walk saw (N56).
+    fn refuse_cycles(&self) -> Result<(), Box<Diagnostic>> {
+        let n = self.found.len();
+        // 0 unvisited, 1 on the path, 2 done; an explicit stack.
+        let mut state = vec![0u8; n];
+        for start in 0..n {
+            if state.get(start).copied() != Some(0) {
+                continue;
+            }
+            let mut stack: Vec<(usize, Vec<usize>)> = vec![(
+                start,
+                self.edges
+                    .get(start)
+                    .map(|e| e.values().copied().collect())
+                    .unwrap_or_default(),
+            )];
+            if let Some(s) = state.get_mut(start) {
+                *s = 1;
+            }
+            while let Some((v, rest)) = stack.last_mut() {
+                let v = *v;
+                let Some(w) = rest.pop() else {
+                    if let Some(s) = state.get_mut(v) {
+                        *s = 2;
+                    }
+                    stack.pop();
+                    continue;
+                };
+                match state.get(w).copied() {
+                    Some(1) => {
+                        let names: Vec<String> = stack
+                            .iter()
+                            .filter_map(|(i, _)| self.found.get(*i).map(|f| f.0.name.clone()))
+                            .chain(self.found.get(w).map(|f| f.0.name.clone()))
+                            .collect();
+                        return Err(Box::new(error(
+                            codes::PACKAGE_CYCLE,
+                            format!("a dependency cycle: {}", names.join(" → ")),
+                        )));
+                    }
+                    Some(0) => {
+                        if let Some(s) = state.get_mut(w) {
+                            *s = 1;
+                        }
+                        let next = self
+                            .edges
+                            .get(w)
+                            .map(|e| e.values().copied().collect())
+                            .unwrap_or_default();
+                        stack.push((w, next));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn visit(
         &mut self,
         dir: &Path,
@@ -359,9 +612,16 @@ impl Resolver {
         self.found.push((manifest.clone(), canonical.clone()));
         self.edges.push(BTreeMap::new());
         self.path.push(canonical.clone());
-        // In name order: a BTreeMap iterates sorted.
-        for (name, (path, v)) in &manifest.dependencies {
-            let child = self.visit(&canonical.join(path), Some((name, *v, &manifest.name)))?;
+        // In name order: a BTreeMap iterates sorted. A registry dependency is solved once every
+        // path package is known (N56).
+        for (name, dep) in &manifest.dependencies {
+            let Dependency::Path { path, version } = dep else {
+                continue;
+            };
+            let child = self.visit(
+                &canonical.join(path),
+                Some((name, *version, &manifest.name)),
+            )?;
             if let Some(e) = self.edges.get_mut(index) {
                 e.insert(name.clone(), child);
             }
@@ -397,7 +657,7 @@ fn relative(from: &Path, to: &Path) -> String {
 
 /// Every `.nz` file under `root`, as (path relative to `root`, `/`-separated; absolute path), in
 /// path order.
-fn sources(root: &Path) -> Vec<(String, PathBuf)> {
+pub(crate) fn sources(root: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), String::new())];
     while let Some((dir, prefix)) = stack.pop() {
@@ -456,9 +716,15 @@ pub fn resolve(dir: &Path) -> Result<Graph, Vec<Diagnostic>> {
         by_name: BTreeMap::new(),
         path: Vec::new(),
         edges: Vec::new(),
+        from_registry: std::collections::BTreeSet::new(),
     };
     let root = r.visit(dir, None).map_err(|d| vec![*d])?;
     let root_dir = r.found.get(root).map(|f| f.1.clone()).unwrap_or_default();
+    // A lockfile's registry versions are preferred while they still satisfy the manifests, so
+    // locking and building again chooses nothing new (N56).
+    let preferred = locked_registry_versions(&root_dir.join(LOCKFILE));
+    r.solve_registry(&root_dir, &preferred)
+        .map_err(|d| vec![*d])?;
     // Sorted by name: the order a lockfile lists them in, and the only order anything sees.
     let mut order: Vec<usize> = (0..r.found.len()).collect();
     order.sort_by_key(|&i| r.found.get(i).map(|f| f.0.name.clone()));
@@ -488,7 +754,11 @@ pub fn resolve(dir: &Path) -> Result<Graph, Vec<Diagnostic>> {
             main: m.main.as_ref().map(|p| source_root.join(p)),
             digest: digest(&manifest_bytes, &source_root),
             source_root,
-            source: format!("path+{}", relative(&root_dir, dir)),
+            source: if r.from_registry.contains(&old) {
+                format!("registry+{}@{}", m.name, m.version)
+            } else {
+                format!("path+{}", relative(&root_dir, dir))
+            },
             profile: m.profile.clone(),
             dependencies: r
                 .edges
@@ -524,6 +794,22 @@ struct RawLocked {
     digest: String,
     #[serde(default)]
     dependencies: Vec<String>,
+}
+
+/// The registry versions a lockfile records, by name; empty when there is none or it cannot be
+/// read — a preference, never a requirement (`--locked` is the requirement).
+fn locked_registry_versions(path: &Path) -> BTreeMap<String, Version> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    let Ok(raw) = toml::from_str::<RawLock>(&text) else {
+        return BTreeMap::new();
+    };
+    raw.package
+        .into_iter()
+        .filter(|l| l.source.starts_with("registry+"))
+        .filter_map(|l| Version::parse(&l.version).map(|v| (l.name, v)))
+        .collect()
 }
 
 impl Graph {
