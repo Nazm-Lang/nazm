@@ -101,6 +101,10 @@ struct Layouts<'a> {
 /// A parameter's or result's LLVM type at a call or declaration: a foreign function's
 /// `Bool` is C's `bool`, which the C ABI zero-extends (N42); everything else as [`llvm_type`].
 fn c_type(layouts: Layouts<'_>, t: Ty, foreign: bool, result: bool) -> String {
+    // A `Str` argument is a `const char *` to a borrowed copy (N55).
+    if foreign && t == Ty::Str {
+        return "ptr".to_owned();
+    }
     match (foreign && t == Ty::Bool, result) {
         (true, true) => "zeroext i1".to_owned(),
         (true, false) => "i1 zeroext".to_owned(),
@@ -1613,8 +1617,49 @@ impl Emitter<'_> {
                 format!("%{out}")
             }
             mir::Rvalue::Call { callee, args } => {
-                let vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
+                let mut vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
                 let foreign = self.sigs.get(callee.index()).is_some_and(|s| s.foreign);
+                // Each `Str` argument to C becomes a NUL-terminated copy C borrows, freed after
+                // the call (N55, §7.57). A string holding a NUL fails the call before C runs.
+                let mut copies: Vec<u32> = Vec::new();
+                if foreign {
+                    for (v, t) in &mut vals {
+                        if *t != Ty::Str {
+                            continue;
+                        }
+                        let (p, n) = (self.fresh(), self.fresh());
+                        let _ = writeln!(
+                            self.out,
+                            "  %{p} = extractvalue {{ ptr, i64, ptr }} %{v}, 0"
+                        );
+                        let _ = writeln!(
+                            self.out,
+                            "  %{n} = extractvalue {{ ptr, i64, ptr }} %{v}, 1"
+                        );
+                        let nul = self.fresh();
+                        let _ = writeln!(
+                            self.out,
+                            "  %{nul} = call i1 @nz.cstr_has_nul(ptr %{p}, i64 %{n})"
+                        );
+                        self.foreign_guard(
+                            nul,
+                            "N0405",
+                            "a string holding a NUL byte cannot be passed to C",
+                            &copies,
+                            at,
+                        );
+                        let c = self.fresh();
+                        let _ = writeln!(
+                            self.out,
+                            "  %{c} = call ptr @nz.cstr_borrow(ptr %{p}, i64 %{n})"
+                        );
+                        let oom = self.fresh();
+                        let _ = writeln!(self.out, "  %{oom} = icmp eq ptr %{c}, null");
+                        self.foreign_guard(oom, "N0406", "out of memory", &copies, at);
+                        copies.push(c);
+                        *v = c;
+                    }
+                }
                 let list = vals
                     .iter()
                     .map(|(v, t)| format!("{} %{v}", c_type(self.types, *t, foreign, false)))
@@ -1632,6 +1677,9 @@ impl Emitter<'_> {
                     "  %{out} = call {} {symbol}({list})",
                     c_type(self.types, ret, foreign, true)
                 );
+                for c in &copies {
+                    let _ = writeln!(self.out, "  call void @free(ptr %{c})");
+                }
                 // A callee that failed has already unwound to its own `ret` and handed back
                 // a stand-in value. This is where that is noticed. A foreign callee cannot
                 // fail the Nazm way, so nothing is checked after one (N42).
@@ -1923,6 +1971,35 @@ impl Emitter<'_> {
             self.names.name(span.file)
         );
         self.intern(&text)
+    }
+
+    /// A guard before a foreign call (N55): the C-string copies already made for the call are
+    /// freed on the failing path, before the failure unwinds.
+    fn foreign_guard(
+        &mut self,
+        cond: u32,
+        code: &'static str,
+        message: &str,
+        copies: &[u32],
+        span: Span,
+    ) {
+        let (sym, len) = self.failure_text(
+            &Failure {
+                code,
+                message: message.to_owned(),
+            },
+            span,
+        );
+        let fail = self.fresh_label();
+        let cont = self.fresh_label();
+        let _ = writeln!(self.out, "  br i1 %{cond}, label %b{fail}, label %b{cont}");
+        self.open(&format!("b{fail}"));
+        for c in copies {
+            let _ = writeln!(self.out, "  call void @free(ptr %{c})");
+        }
+        let _ = writeln!(self.out, "  call void @nz.fail(ptr {sym}, i64 {len})");
+        self.unwind();
+        self.open(&format!("b{cont}"));
     }
 
     fn guard(&mut self, cond: u32, failure: &Failure, span: Span) {
@@ -3500,6 +3577,9 @@ pub(crate) fn emit_unit_with(
     for id in &unit.functions {
         if let (Some(f), Some(sig)) = (native.program.function(*id), native.sigs.get(id.index())) {
             emit_function(&mut e, f, sig);
+            if let Some(symbol) = &sig.export {
+                emit_export(&mut e, sig, symbol);
+            }
             if let Some(carried) = &f.closure {
                 emit_closure_release(&mut e, carried, sig);
             }
@@ -3640,6 +3720,43 @@ fn constants(head: &mut String, e: &Emitter<'_>) {
 /// Every local gets a slot in the entry block; the ones that can own anything are zeroed
 /// there, and the parameters are stored into theirs. Then each MIR block becomes a label with
 /// its statements and its terminator, in MIR's order.
+/// An export's C entry (N55, §7.57): the C convention outside, the Nazm function inside, and a
+/// failure reported and the process ended rather than a stand-in returned into C.
+fn emit_export(e: &mut Emitter<'_>, sig: &Sig, symbol: &NativeSymbol) {
+    let params = sig
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, t)| format!("{} %a{i}", c_type(e.types, *t, true, false)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let args = sig
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, t)| format!("{} %a{i}", llvm_type(e.types, *t)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ret = llvm_type(e.types, sig.ret);
+    let _ = writeln!(
+        e.out,
+        "define {} {symbol}({params}) {{   ; the C entry of {}",
+        c_type(e.types, sig.ret, true, true),
+        sig.symbol
+    );
+    let _ = writeln!(e.out, "entry:");
+    let _ = writeln!(e.out, "  %r = call {ret} {}({args})", sig.symbol);
+    let _ = writeln!(e.out, "  %f = load i1, ptr @nz.failed");
+    let _ = writeln!(e.out, "  br i1 %f, label %failed, label %done");
+    let _ = writeln!(e.out, "failed:");
+    let _ = writeln!(e.out, "  call void @nz.report()");
+    let _ = writeln!(e.out, "  unreachable");
+    let _ = writeln!(e.out, "done:");
+    let _ = writeln!(e.out, "  ret {ret} %r");
+    let _ = writeln!(e.out, "}}");
+    e.out.push('\n');
+}
+
 fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
     e.next = 0;
     e.current = "entry".to_owned();

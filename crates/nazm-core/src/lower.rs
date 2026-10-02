@@ -222,6 +222,7 @@ impl<'a> Lower<'a> {
             name_span: *fn_span,
             ret_span: return_type.span,
             foreign: None,
+            export: None,
             captures,
             closure: true,
         })
@@ -255,6 +256,7 @@ impl<'a> Lower<'a> {
                 name_span: f.name_span,
                 ret_span: f.return_type.span,
                 foreign: Some(symbol.clone()),
+                export: None,
                 captures: Vec::new(),
                 closure: false,
             });
@@ -286,6 +288,7 @@ impl<'a> Lower<'a> {
             name_span: f.name_span,
             ret_span: f.return_type.span,
             foreign: None,
+            export: def.export.clone(),
             captures: Vec::new(),
             closure: false,
         })

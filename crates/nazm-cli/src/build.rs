@@ -38,7 +38,7 @@
 
 use nazm_service::summary::Status;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 use nazm_cache::{LlvmInput, ObjectArtifact, ObjectFound, ObjectKey, ObjectStore};
 
@@ -222,16 +222,23 @@ pub(crate) fn run(
     // The foreign symbols the program calls, so a link that cannot resolve them is reported
     // as the missing `--link` it is rather than as a compiler bug (N42).
     let mut foreign: Vec<String> = Vec::new();
+    // Each export's symbol and C signature, for a library's header (N55).
+    let mut exported: Vec<(String, Vec<nazm_lir::Ty>, nazm_lir::Ty)> = Vec::new();
     clock.mark("load");
     let artefacts = match nazm_core::on_lowered(
         map,
         &loaded.graph,
-        nazm_core::Entry::Required,
+        if choice.library {
+            nazm_core::Entry::Absent
+        } else {
+            nazm_core::Entry::Required
+        },
         |core, resolution| {
             clock.mark("front_end");
             let program = crate::mir::lower(core, resolution, &loaded.graph)?;
             clock.mark("mir");
-            let native = nazm_lir::lower(program, &names).map_err(|e| e.diagnostics)?;
+            let native =
+                nazm_lir::lower_as(program, &names, choice.library).map_err(|e| e.diagnostics)?;
             clock.mark("lir");
             foreign = native
                 .sigs
@@ -239,11 +246,21 @@ pub(crate) fn run(
                 .filter(|s| s.foreign)
                 .map(|s| s.symbol.as_str().to_owned())
                 .collect();
+            exported = native
+                .sigs
+                .iter()
+                .filter_map(|s| {
+                    s.export
+                        .as_ref()
+                        .map(|e| (e.as_str().to_owned(), s.params.clone(), s.ret))
+                })
+                .collect();
+            exported.sort_by(|a, b| a.0.cmp(&b.0));
             let cached = |k: &str| match clif_store.as_ref().map(|s| s.get(&clif_key(k))) {
                 Some(ObjectFound::Hit(bytes)) => Some(bytes),
                 _ => None,
             };
-            let made = emit_artefacts(&native, &names, chosen, &cached);
+            let made = emit_artefacts(&native, &names, chosen, &cached, choice.library);
             clock.mark("codegen");
             made
         },
@@ -469,7 +486,12 @@ pub(crate) fn run(
     // command line does not depend on anything the filesystem decided.
     objects.extend(choice.link.iter().cloned());
     clock.mark("native_compile");
-    match backend.link(&tmp_exe, &objects) {
+    let linked = if choice.library {
+        archive(&tmp_exe, &objects)
+    } else {
+        backend.link(&tmp_exe, &objects)
+    };
+    match linked {
         Outcome::Ran(o) if o.status.success() => {}
         Outcome::Ran(o) if !foreign.is_empty() => {
             // A program that calls C links against what `--link` named, so an unresolved
@@ -531,6 +553,16 @@ pub(crate) fn run(
         let dsym = with_suffix(&output, "dSYM");
         if let Err(e) = backend.gather_debug_info(&tmp_exe, &dsym) {
             eprintln!("nazm: the debug information was not gathered: {e}");
+        }
+    }
+    // A library's header, beside it (N55): written before the archive is published, so a
+    // published archive always has its header.
+    if choice.library {
+        let header = output.with_extension("h");
+        if let Err(e) = std::fs::write(&header, c_header(&output, &exported)) {
+            cleanup(false);
+            eprintln!("nazm: cannot write {}: {e}", header.display());
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
     }
     // Published last, so an existing executable survives every failure above — and then the
@@ -654,6 +686,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) target: Option<&'a str>,
     /// Foreign objects and libraries for the linker (N42), in the order given.
     pub(crate) link: &'a [std::path::PathBuf],
+    /// A static library and its header, not an executable (N55).
+    pub(crate) library: bool,
     /// Print where the build's time went (N48).
     pub(crate) timings: bool,
     /// Carry debug information, for a debugger (N48).
@@ -689,6 +723,7 @@ fn emit_artefacts(
     names: &nazm_lir::SourceNames<'_>,
     backend: &dyn nazm_lir::backend::Backend,
     cached: &dyn Fn(&str) -> Option<Vec<u8>>,
+    library: bool,
 ) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
     let mut needs = backend.baseline();
@@ -734,6 +769,10 @@ fn emit_artefacts(
         key: None,
         reused: false,
     });
+    // A library has no process entry: C's `main` is the caller's (N55).
+    if library {
+        return Ok(out);
+    }
     out.push(Artefact {
         name: "entry".to_owned(),
         code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_entry(
@@ -811,6 +850,66 @@ fn link_name(work: &Path, output: &Path) -> PathBuf {
 /// holding it are removed: a debug build on macOS, whose linker leaves it in the objects (N48).
 fn gathers_debug_information(debug: bool, os: &str) -> bool {
     debug && os == "macos"
+}
+
+/// A static archive of `objects` (N55), with the system `ar` and the timestamps zeroed so two
+/// builds of one library are the same bytes.
+fn archive(output: &Path, objects: &[PathBuf]) -> Outcome {
+    let mut c = Command::new("ar");
+    c.env("ZERO_AR_DATE", "1")
+        .arg("rcs")
+        .arg(output)
+        .args(objects);
+    crate::backend::run_command(&mut c)
+}
+
+/// A library's C header (N55): every export, by symbol, in `<stdint.h>` and `<stdbool.h>` types.
+fn c_header(output: &Path, exported: &[(String, Vec<nazm_lir::Ty>, nazm_lir::Ty)]) -> String {
+    let c = |t: &nazm_lir::Ty| {
+        if *t == nazm_lir::Ty::Bool {
+            "bool"
+        } else {
+            "int64_t"
+        }
+    };
+    let stem: String = output
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let guard = format!("NAZM_{stem}_H");
+    let mut s = String::new();
+    s.push_str("/* Generated by nazm build --lib. Do not edit. */\n");
+    s.push_str(&format!("#ifndef {guard}\n#define {guard}\n\n"));
+    s.push_str("#include <stdbool.h>\n#include <stdint.h>\n\n");
+    s.push_str("#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n");
+    s.push_str(
+        "/* A Nazm failure inside any of these is reported on standard error and ends the\n   \
+         process with status 2: nothing unwinds into C. */\n",
+    );
+    for (sym, params, ret) in exported {
+        let ps = if params.is_empty() {
+            "void".to_owned()
+        } else {
+            params
+                .iter()
+                .enumerate()
+                .map(|(i, t)| format!("{} a{i}", c(t)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        s.push_str(&format!("{} {sym}({ps});\n", c(ret)));
+    }
+    s.push_str("\n#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
+    s
 }
 
 fn with_suffix(output: &Path, ext: &str) -> PathBuf {

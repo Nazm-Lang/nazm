@@ -159,6 +159,11 @@ impl<'a> Canon<'a> {
             self.tag("foreign");
             self.tag(sym);
         }
+        // An export's C entry is code too (N55).
+        if let Some(sym) = &f.export {
+            self.tag("export");
+            self.tag(sym);
+        }
         self.n(u64::from(f.type_params));
         self.n(u64::from(f.params));
         self.ty(f.ret);

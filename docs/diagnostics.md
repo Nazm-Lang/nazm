@@ -101,6 +101,13 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N55, FFI v2.** One code appeared, compatible: `N0391` (an `extern "C"` export that is
+not `pub`, does not declare `! {}`, is generic, or takes or returns a type other than `Int` and
+`Bool`). A `Str` holding a NUL byte passed to C is the existing `N0405` at run time; an export's
+symbol defined twice or also imported is the existing `N0383`; its ABI and symbol rules are
+`N0380` and `N0382`, unchanged. No schema moved; `nazm build --lib` writes a C header, which is C,
+not a Nazm schema.
+
 **Applied to N54, select, deadlines and the scheduler's counters.** No code appeared: a clock read
 without a `TimeCap` held is the existing `N0369`, with its meaning unchanged, and `critical`'s new
 rule, `no-ambient-time`, is the existing `N0510`. `nazm.profile-report/1` gains that rule's identity,

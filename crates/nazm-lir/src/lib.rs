@@ -38,7 +38,7 @@ pub use ir::{
     ArithOp, CmpOp, EnumLayout, EnumTy, External, Owns, RecordLayout, RecordTy, Ty, Unit,
     VariantLayout,
 };
-pub use lower::{lower, LowerError, Native, Sig};
+pub use lower::{lower, lower_as, LowerError, Native, Sig};
 pub use names::SourceNames;
 /// The runtime component (N53), which both backends depend on and neither owns.
 pub use nazm_runtime as runtime;

@@ -343,6 +343,20 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
         self.b.switch_to_block(cont);
     }
 
+    /// A guard before a foreign call (N55): the C-string copies already made for the call are
+    /// freed on the failing path.
+    fn foreign_guard(&mut self, bad: Value, code: &str, message: &str, copies: &[Value]) {
+        let failing = self.b.create_block();
+        let cont = self.b.create_block();
+        self.b.ins().brif(bad, failing, &[], cont, &[]);
+        self.b.switch_to_block(failing);
+        for c in copies {
+            self.rt("free", &[*c]);
+        }
+        self.fail(code, message);
+        self.b.switch_to_block(cont);
+    }
+
     /// Leave along the failure edge if this thread has failed.
     pub(crate) fn check_failed(&mut self) {
         let f = self
@@ -780,12 +794,46 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
                     let d = self.addr(dst);
                     vals.push(d);
                 }
+                let foreign = self
+                    .g
+                    .native
+                    .sigs
+                    .get(callee.index())
+                    .is_some_and(|s| s.foreign);
+                // A `Str` argument to C is a NUL-terminated copy C borrows, freed after the
+                // call (N55, §7.57); one holding a NUL fails the call before C runs.
+                let mut copies: Vec<Value> = Vec::new();
                 for a in args {
                     let v = self.argument(a);
+                    if foreign && self.operand_ty(a) == Ty::Str {
+                        let p = self.b.ins().load(self.g.ptr, mem(), v, 0);
+                        let n = self.b.ins().load(types::I64, mem(), v, 8);
+                        let nul = self
+                            .rt("nz.cstr_has_nul", &[p, n])
+                            .unwrap_or_else(|| self.b.ins().iconst(types::I8, 0));
+                        let nul = self.b.ins().band_imm_s(nul, 1);
+                        self.foreign_guard(
+                            nul,
+                            "N0405",
+                            "a string holding a NUL byte cannot be passed to C",
+                            &copies,
+                        );
+                        let c = self
+                            .rt("nz.cstr_borrow", &[p, n])
+                            .unwrap_or_else(|| self.iconst(0));
+                        let oom = self.b.ins().icmp_imm_s(IntCC::Equal, c, 0);
+                        self.foreign_guard(oom, "N0406", "out of memory", &copies);
+                        copies.push(c);
+                        vals.push(c);
+                        continue;
+                    }
                     vals.push(v);
                 }
                 let r = self.func(fid);
                 let inst = self.b.ins().call(r, &vals);
+                for c in &copies {
+                    self.rt("free", &[*c]);
+                }
                 let result = self.b.inst_results(inst).first().copied();
                 // A callee that failed returned a stand-in; this is where that is noticed. A
                 // foreign callee cannot fail the Nazm way, so nothing is checked (N42).

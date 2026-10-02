@@ -664,9 +664,10 @@ Caught by `arguments_are_not_swapped`, which uses noncommutative operations: `su
 is 7 and the transposition makes it -7. `mix(1, 2, 3)` catches a rotation as well.
 Repointed by N40: a call's operands are MIR's, loaded in order by the backend.
 
-Repointed by N42: the call site now also decides whether the callee is foreign; a C call's arguments are the same operands in the same order."""
+Repointed by N42: the call site now also decides whether the callee is foreign; a C call's arguments are the same operands in the same order.
+Repointed by N55: the operands are now mutable, since a Str argument to C is replaced by its borrowed copy."""
 file = "crates/nazm-lir/src/emit.rs"
-find = """                let vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
+find = """                let mut vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
                 let foreign = self.sigs.get(callee.index()).is_some_and(|s| s.foreign);"""
 replace = """                let mut vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
                 if vals.len() >= 2 && vals[0].1 == vals[1].1 {
@@ -8047,10 +8048,11 @@ Repointed by N50, which moved it to 13 for function values: an entry that refuse
 Repointed by N51, which moved it to 14 for effect parameters: an entry that refused a captured capability must not be reused.
 Repointed by N52, which moved it to 15 for declassification: an entry that accepted a function named str_vouch must not be reused.
 Repointed by N53, which moved it to 16 for generic channels: an entry that refused `Chan[Str]` must not be reused.
-Repointed by N54, which moved it to 17 for select and the clock: an entry that accepted a function named time_now_ms must not be reused."""
+Repointed by N54, which moved it to 17 for select and the clock: an entry that accepted a function named time_now_ms must not be reused.
+Repointed by N55, which moved it to 18 for FFI v2: an entry that refused a Str argument to C must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 17;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 16;"
+find = "pub const SEMANTIC_EPOCH: u32 = 18;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 17;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -8467,18 +8469,13 @@ killers = [{ package = "nazm-cli", test = "cranelift", name = "signed_arithmetic
 
 [[mutation]]
 name = "n41-call-arguments-are-reversed"
-why = "a call passes its arguments last first, which is well typed whenever they share a type and wrong whenever the callee is not symmetric"
+why = """a call passes its arguments last first, which is well typed whenever they share a type and wrong whenever the callee is not symmetric
+Repointed by N55: the loop now also turns a Str argument to C into its borrowed copy."""
 file = "crates/nazm-codegen-clif/src/func.rs"
-find = """                for a in args {
-                    let v = self.argument(a);
-                    vals.push(v);
-                }
-                let r = self.func(fid);"""
-replace = """                for a in args.iter().rev() {
-                    let v = self.argument(a);
-                    vals.push(v);
-                }
-                let r = self.func(fid);"""
+find = """                let mut copies: Vec<Value> = Vec::new();
+                for a in args {"""
+replace = """                let mut copies: Vec<Value> = Vec::new();
+                for a in args.iter().rev() {"""
 killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter" }]
 
 [[mutation]]
@@ -10272,11 +10269,12 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::the_run
 [[mutation]]
 name = "n53-the-runtime-abi-stays"
 why = """the generic channel runtime ships under N50's revision, so an object built before it is reused
-Repointed by N54, which moved the revision to 6 for select: an object built against N53's runtime must not be reused."""
+Repointed by N54, which moved the revision to 6 for select: an object built against N53's runtime must not be reused.
+Repointed by N55, which moved it to 7 for C-string arguments."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = "pub const RUNTIME_ABI_REVISION: u32 = 6;"
-replace = "pub const RUNTIME_ABI_REVISION: u32 = 5;"
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_six_and_its_digest_covers_select" }]
+find = "pub const RUNTIME_ABI_REVISION: u32 = 7;"
+replace = "pub const RUNTIME_ABI_REVISION: u32 = 6;"
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_seven_and_its_digest_covers_c_strings" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -10442,3 +10440,126 @@ find = """
 replace = """
                         | Intrinsic::ChanRecvOf"""
 killers = [{ package = "nazm-cli", test = "select", name = "a_select_s_operations_are_resource_sites" }]
+
+
+# --- N55: FFI v2, C strings in and exported functions out ---------------------------------------
+
+[[mutation]]
+name = "n55-a-str-result-is-accepted"
+why = "a foreign function may return a Str, a char * nobody knows who frees"
+file = "crates/nazm-core/src/check.rs"
+find = """
+    if !safe(ret) {
+        errors.push(foreign_type(f.return_type.span, "return"));"""
+replace = """
+    if !safe(ret) && ret != Type::Str {
+        errors.push(foreign_type(f.return_type.span, "return"));"""
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_result_from_c_is_still_refused" }]
+
+[[mutation]]
+name = "n55-a-nul-is-never-found"
+why = "a string holding a NUL byte reaches C, which reads it as a shorter string"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  br i1 %nul, label %found, label %look"
+replace = "  br i1 false, label %found, label %look"
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_holding_a_nul_is_refused_before_c_runs" }]
+
+[[mutation]]
+name = "n55-the-c-string-copies-nothing"
+why = "the borrowed copy holds only its terminator, so C sees an empty string"
+file = "crates/nazm-runtime/src/core.rs"
+find = """
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %p, i64 %n, i1 false)
+  %stop = getelementptr i8, ptr %buf, i64 %n"""
+replace = """
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %p, i64 0, i1 false)
+  %stop = getelementptr i8, ptr %buf, i64 %n"""
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends" }]
+
+[[mutation]]
+name = "n55-the-llvm-c-string-has-no-length"
+why = "the LLVM call copies a string of length zero, whatever the Str holds"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                            "  %{n} = extractvalue {{ ptr, i64, ptr }} %{v}, 1""""
+replace = """                            "  %{n} = add i64 0, 0""""
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends" }]
+
+[[mutation]]
+name = "n55-the-cranelift-c-string-has-no-length"
+why = "the Cranelift call copies a string of length zero, whatever the Str holds"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = "                        let n = self.b.ins().load(types::I64, mem(), v, 8);"
+replace = "                        let n = self.iconst(0);"
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends" }]
+
+[[mutation]]
+name = "n55-an-export-may-be-private"
+why = "an export need not be pub, so a module's private function becomes a C symbol"
+file = "crates/nazm-core/src/check.rs"
+find = """
+    if f.pub_span.is_none() {
+        errors.push(shape("""
+replace = """
+    if false {
+        errors.push(shape("""
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "an_export_is_public_effect_free_scalar_and_not_generic" }]
+
+[[mutation]]
+name = "n55-an-export-may-perform-effects"
+why = "an export may declare io, an authority C has no way to give it"
+file = "crates/nazm-core/src/check.rs"
+find = "        Some(e) if e.names.is_empty() => {}"
+replace = "        Some(_) => {}"
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "an_export_is_public_effect_free_scalar_and_not_generic" }]
+
+[[mutation]]
+name = "n55-the-llvm-export-returns-a-stand-in"
+why = "the LLVM C entry returns the failed function's stand-in value into C"
+file = "crates/nazm-lir/src/emit.rs"
+find = """let _ = writeln!(e.out, "  br i1 %f, label %failed, label %done");"""
+replace = """let _ = writeln!(e.out, "  br i1 false, label %failed, label %done");"""
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_and_its_header_link_into_a_c_program_under_both_backends" }]
+
+[[mutation]]
+name = "n55-the-cranelift-export-returns-a-stand-in"
+why = "the Cranelift C entry returns the failed function's stand-in value into C"
+file = "crates/nazm-codegen-clif/src/helpers.rs"
+find = "    fx.b.ins().brif(failed, bad, &[], done, &[]);"
+replace = "    fx.b.ins().brif(failed, done, &[], done, &[]);"
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_and_its_header_link_into_a_c_program_under_both_backends" }]
+
+[[mutation]]
+name = "n55-two-exports-may-share-a-symbol"
+why = "two exports of one symbol reach the linker, which reports a duplicate definition as its own failure"
+file = "crates/nazm-lir/src/lower.rs"
+find = "        if let Some(first) = defined.get(sym).copied().or(imported) {"
+replace = "        if let Some(first) = None::<&mir::Function> {"
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "an_export_symbol_is_defined_once_in_a_program" }]
+
+[[mutation]]
+name = "n55-the-header-has-no-bool"
+why = "the header declares a Bool export as int64_t, an ABI mismatch C cannot see"
+file = "crates/nazm-cli/src/build.rs"
+find = """
+        if *t == nazm_lir::Ty::Bool {
+            "bool"
+        } else {"""
+replace = """
+        if *t == nazm_lir::Ty::Bool {
+            "int64_t"
+        } else {"""
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_and_its_header_link_into_a_c_program_under_both_backends" }]
+
+[[mutation]]
+name = "n55-a-library-needs-a-main"
+why = "a library build still requires main"
+file = "crates/nazm-cli/src/build.rs"
+find = """
+        if choice.library {
+            nazm_core::Entry::Absent
+        } else {"""
+replace = """
+        if false {
+            nazm_core::Entry::Absent
+        } else {"""
+killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_is_the_same_bytes_on_every_build_and_needs_no_main" }]

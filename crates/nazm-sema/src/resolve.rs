@@ -158,6 +158,9 @@ pub struct FnDef {
     /// The C symbol a foreign declaration names (N42), or `None` for a Nazm function. A
     /// foreign function has no body; its declared effect set is `{ foreign }`.
     pub foreign: Option<String>,
+    /// The C symbol an exported function is also callable as (N55), or `None`. An export has a
+    /// Nazm body and is called by Nazm as any function is.
+    pub export: Option<String>,
     /// For a closure (N50): the function whose body wrote it, where, and what it captured.
     /// A closure has no declaration of its own — `decl` is its enclosing function's — and
     /// no name a program can write.

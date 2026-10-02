@@ -171,7 +171,10 @@ use crate::digest::{self, Framed};
 /// `chan_select_of`, `chan_select_until` and `time_now_ms` built-in names, so a program defining
 /// any of them moved from accepted to refused, and a clock read without a `TimeCap` held is
 /// refused (`N0369`).
-pub const SEMANTIC_EPOCH: u32 = 17;
+/// `18` — N55, 2026-10-02. FFI v2: a `Str` parameter on a foreign declaration moved from refused
+/// (`N0381`) to accepted, and an `extern "C"` declaration with a body — an export — from refused
+/// to accepted under its own rules (`N0391`).
+pub const SEMANTIC_EPOCH: u32 = 18;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -191,6 +194,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CAPABILITY_CONSTRUCTED",
     "CAPTURE_REFUSED",
     "CHANNEL_ELEMENT",
+    "EXPORT_SHAPE",
     "CONDITION_NOT_BOOL",
     "CONFLICTING_EFFECT_ARGUMENT",
     "CONFLICTING_TYPE_ARGUMENTS",

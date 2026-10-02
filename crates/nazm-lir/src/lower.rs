@@ -68,6 +68,9 @@ pub struct Sig {
     /// Whether this is a foreign (C) function (N42): declared wherever it is called, defined
     /// nowhere in the program, and called with the C convention.
     pub foreign: bool,
+    /// The C symbol an exported function's C entry is defined under (N55), in the unit that
+    /// defines the function.
+    pub export: Option<NativeSymbol>,
 }
 
 /// Everything one `nazm build` generates, before any of it is written down.
@@ -228,6 +231,34 @@ fn callees(f: &mir::Function) -> Vec<(mir::FuncId, Span)> {
 /// signature, and the linker binds them all to one definition without comparing them, so a
 /// disagreement is a call with the wrong ABI that nothing downstream would notice.
 fn report_foreign_conflicts(program: &mir::Program, errors: &mut Vec<Diagnostic>) {
+    // An export's symbol is defined by Nazm (N55): once in the program, and never one the
+    // program also imports from C.
+    let mut defined: std::collections::BTreeMap<&str, &mir::Function> =
+        std::collections::BTreeMap::new();
+    for f in &program.functions {
+        let Some(sym) = f.export.as_deref() else {
+            continue;
+        };
+        let imported = program
+            .functions
+            .iter()
+            .find(|g| g.foreign.as_deref() == Some(sym));
+        if let Some(first) = defined.get(sym).copied().or(imported) {
+            errors.push(
+                Diagnostic::error(
+                    codes::FOREIGN_CONFLICT,
+                    f.span,
+                    format!(
+                        "the C symbol `{sym}` is exported here and defined or declared elsewhere"
+                    ),
+                )
+                .secondary(first.span, "also here")
+                .help("a C symbol has one definition in a program"),
+            );
+            continue;
+        }
+        defined.insert(sym, f);
+    }
     let mut seen: std::collections::BTreeMap<&str, &mir::Function> =
         std::collections::BTreeMap::new();
     for f in &program.functions {
@@ -260,6 +291,20 @@ fn report_foreign_conflicts(program: &mir::Program, errors: &mut Vec<Diagnostic>
 }
 
 pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, LowerError> {
+    lower_as(program, names, false)
+}
+
+/// [`lower`], for a static library when `library` (N55): no `main` is required, and the entry
+/// symbol is never emitted.
+///
+/// # Errors
+///
+/// As [`lower`].
+pub fn lower_as(
+    program: mir::Program,
+    names: &SourceNames<'_>,
+    library: bool,
+) -> Result<Native, LowerError> {
     let mut errors = Vec::new();
     let entry_id = program.entry;
 
@@ -289,6 +334,7 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
                 module: f.module,
                 instance,
                 foreign: f.foreign.is_some(),
+                export: f.export.as_deref().map(NativeSymbol::foreign),
             }
         })
         .collect();
@@ -341,6 +387,7 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
 
     report_foreign_conflicts(&program, &mut errors);
 
+    let entry = entry.or_else(|| library.then(|| (NativeSymbol::missing(), 0)));
     let Some((entry_symbol, entry_roots)) = entry else {
         if errors.is_empty() {
             errors.push(Diagnostic::error(

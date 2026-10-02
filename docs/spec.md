@@ -3112,7 +3112,7 @@ pub extern "C" fn nazm_triple(x: Int) -> Int ! {} = "nazm_triple" { x * 3 }
 | **`Str` argument** | A NUL-terminated copy for the call's duration; C borrows it. A `Str` holding a NUL byte fails the call before C runs (`N0405`). A `Str` result is still refused (`N0381`) |
 | **Export** | `pub extern "C" fn … ! {} = "symbol" { … }`: a C-callable function of `Int`s and `Bool`s, public, effect-free and not generic (`N0391` otherwise) |
 | **Failure in an export** | Reported on standard error; the process exits with status 2. Nothing unwinds into C |
-| **Library** | `nazm build --lib OUT.a FILE` writes the static archive and `OUT.h`; no `main` needed |
+| **Library** | `nazm build --lib FILE -o OUT.a` writes the static archive and `OUT.h`; no `main` needed |
 
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

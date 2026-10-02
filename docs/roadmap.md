@@ -388,6 +388,15 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N55 — FFI v2: C strings in, exports out — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.57 first. A `Str` argument to C is a borrowed NUL-terminated copy, freed after
+the call; a NUL byte is refused before C runs. `pub extern "C" fn … ! {} = "sym" { … }` exports a
+scalar Nazm function, and a failure inside one ends the process instead of unwinding into C.
+`nazm build --lib -o OUT.a` writes a static archive and `OUT.h`, the same bytes on every build,
+under both backends. Opaque handles, C structs, callbacks and `errno` are DESIGNED with their
+reasons. Runtime ABI 7; semantic epoch 18. Next: N56, packages v2.
+
 ### N54 — Select, deadlines, cooperative cancellation and counters — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.56 first. One OS thread per task stays: the stackful pool is DESIGNED, its three

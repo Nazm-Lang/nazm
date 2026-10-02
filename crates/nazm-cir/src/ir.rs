@@ -66,6 +66,8 @@ pub struct Function {
     /// The C symbol of a foreign declaration (N42): a function whose body is not Nazm's.
     /// Its `body` is an empty region no consumer walks.
     pub foreign: Option<String>,
+    /// The C symbol an exported function is also callable as (N55): a Nazm body with a C entry.
+    pub export: Option<String>,
     /// For a closure's body (N50): the locals that hold its captures, in capture order. They
     /// are filled from the closure when it is called; empty for every other function.
     pub captures: Vec<LocalId>,

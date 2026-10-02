@@ -173,6 +173,9 @@ pub fn emit_runtime(needs: Needs) -> String {
         out.push_str(GENERIC_CHANNEL_RUNTIME);
         out.push_str(SELECT_RUNTIME);
     }
+    if needs.strings {
+        out.push_str(FOREIGN_STRING_RUNTIME);
+    }
     if needs.closures {
         out.push_str(CLOSURE_RUNTIME);
     }
@@ -1277,6 +1280,48 @@ entry:
   %frac = sdiv i64 %nsec, 1000000
   %t = add i64 %msec, %frac
   ret i64 %t
+}
+";
+
+/// A `Str` argument to a foreign function (N55, §7.57). `nz.cstr_has_nul` says whether the bytes
+/// hold a NUL, which no C string can; `nz.cstr_borrow` makes the NUL-terminated copy C borrows for
+/// the call, or null out of memory, and the caller frees it after the call. Their own part,
+/// outside the string runtime the self-hosted compiler's parity gate holds.
+const FOREIGN_STRING_RUNTIME: &str = r"
+define hidden i1 @nz.cstr_has_nul(ptr %p, i64 %n) {
+entry:
+  br label %scan
+scan:
+  %i = phi i64 [ 0, %entry ], [ %inext, %look ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %look_at, label %clean
+look_at:
+  %at = getelementptr i8, ptr %p, i64 %i
+  %byte = load i8, ptr %at
+  %nul = icmp eq i8 %byte, 0
+  br i1 %nul, label %found, label %look
+look:
+  %inext = add i64 %i, 1
+  br label %scan
+found:
+  ret i1 true
+clean:
+  ret i1 false
+}
+
+define hidden ptr @nz.cstr_borrow(ptr %p, i64 %n) {
+entry:
+  %room = add i64 %n, 1
+  %buf = call ptr @malloc(i64 %room)
+  %oom = icmp eq ptr %buf, null
+  br i1 %oom, label %nomem, label %fill
+nomem:
+  ret ptr null
+fill:
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %p, i64 %n, i1 false)
+  %stop = getelementptr i8, ptr %buf, i64 %n
+  store i8 0, ptr %stop
+  ret ptr %buf
 }
 ";
 

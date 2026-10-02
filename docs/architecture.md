@@ -5861,14 +5861,16 @@ body is ordinary Nazm, with three rules, all checked (`N0391`):
   with status 2. An export either returns its declared value or the process ends with a Nazm
   diagnostic; it never returns a stand-in.
 
-**Libraries.** `nazm build --lib OUT.a FILE` builds the program's modules without requiring a `main`,
+**Libraries.** `nazm build --lib FILE -o OUT.a` builds the program's modules without requiring a `main`,
 writes a static archive of every unit's object and the runtime's, and `OUT.h`, a C header declaring
 each export with `<stdint.h>` and `<stdbool.h>` types, in a fixed order. The archive's other symbols
 stay hidden; only the exports are visible to a C link. One Nazm library per C program: two would
 both carry the runtime. Either backend builds a library, and the header is the same text for both.
 
-**Identity.** An export's symbol and signature are part of its function's interface entry (the
-existing `extern` field) and of its unit's object key. Accepting syntax that was refused, and a
+**Identity.** An export's symbol enters its function's Core IR and MIR digests and so its unit's
+object key. It is not persisted in the interface: to another Nazm module an export is an ordinary
+function, called by the internal ABI, and its C entry lives in the unit that defines it. Two exports
+of one symbol, or one also imported from C, are refused when the program is built (`N0383`). Accepting syntax that was refused, and a
 `Str` where `N0381` was, moves the semantic epoch (17 → 18).
 
 **Not here, and why.** *Opaque handles* need a nominal type whose values Nazm never dereferences or
