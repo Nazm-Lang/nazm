@@ -159,6 +159,25 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
+    // The field-by-field layout (N68, §7.70) is the LLVM emitter's, and asked for by name.
+    let soa = match choice.layout {
+        "aos" => false,
+        "soa" => true,
+        other => {
+            if summary {
+                return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+            }
+            eprintln!("nazm: `--layout {other}` is not a layout; the layouts are `aos` and `soa`");
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
+    };
+    if soa && choice.backend == nazm_lir::backend::BackendId::Cranelift {
+        if summary {
+            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+        }
+        eprintln!("nazm: `--layout soa` is the LLVM backend's; `--backend cranelift` lays out every `Vec` element whole");
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
     // The watermark is the board's (N63): a hosted program has an operating system's stack.
     if choice.stack_watermark && !target.is_board() {
         if summary {
@@ -186,7 +205,9 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
-    let llvm = nazm_lir::backend::LlvmText::new(target.clone()).with_debug(choice.debug);
+    let llvm = nazm_lir::backend::LlvmText::new(target.clone())
+        .with_debug(choice.debug)
+        .with_soa(soa);
     let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level);
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
         nazm_lir::backend::BackendId::Llvm => &llvm,
@@ -850,6 +871,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) objects: Option<&'a Path>,
     /// Measure the board's stack on the board (N63).
     pub(crate) stack_watermark: bool,
+    /// `aos` or `soa`: how a `Vec` of records is laid out (N68).
+    pub(crate) layout: &'a str,
     /// Print where the build's time went (N48).
     pub(crate) timings: bool,
     /// Carry debug information, for a debugger (N48).

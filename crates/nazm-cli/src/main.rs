@@ -656,6 +656,11 @@ enum Command {
         /// `aarch64-unknown-none` only.
         #[arg(long)]
         stack_watermark: bool,
+        /// How a `Vec` of records is laid out (N68): `aos`, each element whole, or `soa`, one
+        /// array per field for every record of `Int`s and `Bool`s. Unobservable to the program;
+        /// part of every object's identity. LLVM backend only.
+        #[arg(long, value_name = "LAYOUT", default_value = "aos")]
+        layout: String,
         /// One `nazm.timings/1` line on stderr: each phase's wall time — load, front end, MIR,
         /// LIR, code generation, native compilation, link — and the total (N48).
         #[arg(long)]
@@ -860,6 +865,7 @@ fn main() -> ExitCode {
         lib,
         objects,
         stack_watermark,
+        layout,
         timings,
         debug,
         locked: _,
@@ -883,6 +889,7 @@ fn main() -> ExitCode {
                 library: lib,
                 objects: objects.as_deref(),
                 stack_watermark,
+                layout: &layout,
                 timings,
                 debug,
             },

@@ -32,6 +32,10 @@ found only by reading all of it.
   `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
   whole-program count, and recursion is seen only through its calls' sites (areas 4, 18).
   *Narrowed in N52.*
+- Layout specialisation is one opt-in layout: `--layout soa` lays out every `Vec` of a record of
+  `Int`s and `Bool`s one array per field, whether or not its loops gain — it is 2× slower for a loop
+  reading every field; the compiler does not choose; LLVM only (area 4). *Narrowed in N68:* until
+  then, every element was laid out whole.
 - Accelerators are one command over one API: `nazm accel` maps a pure `(Int) -> Int` function over
   `Int`s through macOS's OpenCL on Apple's GPU; no kernels in the language, no other vendor, API or
   operating system, no layout specialisation (area 21). *Narrowed in N67:* until then, no GPU path.

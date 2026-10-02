@@ -79,6 +79,18 @@ pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
             })
             .collect();
         let program = crate::mir::lower(core, res, graph)?;
+        // How `--layout soa` would lay out each `Vec` type (N68, §7.70), and why not.
+        let layouts: Vec<Value> = nazm_lir::lower_as(program.clone(), &names, true)
+            .map(|native| nazm_lir::layouts(&native))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(ty, why)| {
+                json!({
+                    "type": ty,
+                    "soa": why.map_or(json!("eligible"), |w| json!(w)),
+                })
+            })
+            .collect();
         let mut functions = Vec::new();
         let mut totals: std::collections::BTreeMap<&str, (u64, u64)> =
             std::collections::BTreeMap::new();
@@ -119,16 +131,16 @@ pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
                 )
             })
             .collect();
-        Ok((functions, totals, loops))
+        Ok((functions, totals, loops, layouts))
     });
-    let (functions, totals, loops) = match built {
+    let (functions, totals, loops, layouts) = match built {
         Ok(x) => x,
         Err(d) => return failed(&d, map),
     };
     if as_json {
         println!(
             "{}",
-            json!({ "schema": "nazm.cost/1", "functions": functions, "totals": totals, "loops": loops })
+            json!({ "schema": "nazm.cost/1", "functions": functions, "totals": totals, "loops": loops, "layouts": layouts })
         );
         return ExitCode::SUCCESS;
     }
@@ -151,6 +163,19 @@ pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
                     ""
                 },
             );
+        }
+    }
+    for l in &layouts {
+        match field(l, "soa").as_str() {
+            Some("eligible") => println!(
+                "layout {}  `--layout soa` lays it out one array per field",
+                field(l, "type").as_str().unwrap_or("?")
+            ),
+            why => println!(
+                "layout {}  element by element: {}",
+                field(l, "type").as_str().unwrap_or("?"),
+                why.unwrap_or("?")
+            ),
         }
     }
     for l in &loops {
