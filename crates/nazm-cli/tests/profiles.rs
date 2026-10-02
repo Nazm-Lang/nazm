@@ -108,7 +108,8 @@ fn every_profile_s_rules_and_verdicts() {
                 ("no-spawn", "fail"),
                 ("no-foreign", "pass"),
                 ("locked-build", "fail"),
-                ("no-declassification", "pass")
+                ("no-declassification", "pass"),
+                ("no-ambient-time", "pass")
             ])
         )
     );
