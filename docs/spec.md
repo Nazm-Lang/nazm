@@ -3114,6 +3114,33 @@ pub extern "C" fn nazm_triple(x: Int) -> Int ! {} = "nazm_triple" { x * 3 }
 | **Failure in an export** | Reported on standard error; the process exits with status 2. Nothing unwinds into C |
 | **Library** | `nazm build --lib FILE -o OUT.a` writes the static archive and `OUT.h`; no `main` needed |
 
+### Packages v2: a registry and version requirements — N56
+<!-- id: registry -->
+
+```toml
+schema = "nazm.package/1"
+
+[package]
+name = "app"
+version = "1.0.0"
+main = "main.nz"
+
+[registry]
+path = "../registry"
+
+[dependencies]
+shapes = { version = "^1.2.0" }
+geometry = { path = "../geometry", version = "0.3.1" }
+```
+
+| | |
+| --- | --- |
+| **Requirement** | `1.2.3` / `=1.2.3` exactly; `^1.2.3` the same left-most non-zero component; `~1.2.3` the same minor |
+| **Choice** | per name, the lockfile's version while it satisfies every requirement, else the highest non-yanked one that does; one version per name, no backtracking (`N0513` otherwise) |
+| **Store** | `REGISTRY/index/NAME.toml` and an immutable copy per version, checked against its digest (`N0507`), refused if it holds a link (`N0514`) or its index is malformed (`N0512`) |
+| **Commands** | `nazm publish DIR --registry REG`; `nazm yank NAME@VERSION --registry REG [--undo]`; `nazm lock`, `--locked` as N46 |
+| **Imports** | unchanged: `use "shapes:polygon.nz";` |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
