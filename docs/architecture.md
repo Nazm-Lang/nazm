@@ -6085,6 +6085,41 @@ reports both dependencies by name (`nazm inspect`'s toolchain) rather than hidin
 **Not here.** Promoting locals across blocks (phi construction), promoting managed values, an
 optimisation pipeline of Nazm's own, a precompiled runtime, a built-in linker.
 
+## 7.62 Restriction profiles v2: stack, determinism, unknowns — N60, 2026-10-02
+
+Written before the code. §7.49's profiles refuse effects, the ambient bridge and unlocked builds;
+N52 and N54 added allocation, flow, declassification and time. N60 adds the rules those facts
+make possible next, and gives a verdict a third value.
+
+**A verdict is `pass`, `fail` or `unknown`.** A rule whose facts were not established — MIR did not
+lower, or a call target cannot be known — is `unknown`, and a profile treats `unknown` as a refusal
+(`N0510`, with the reason): a restriction that cannot be checked is not met. The report carries the
+three values, so a reader sees which refusals are proofs of a violation and which are absences of a
+proof. `general` has no rules and is unchanged.
+
+**Stack: `no-recursion` (embedded).** A program whose call graph has a cycle has no stack bound the
+compiler can state. The facts are MIR's: a function in a call cycle is exactly one MIR gives a
+`StackCheck` (N49), and the witness names it. A call through a function value (`CallIndirect`) has a
+target the compiler does not know, so where one exists the rule is `unknown` rather than `pass`. A
+frame-size estimate per function is not computed here: the bound on depth is the claim, not bytes.
+
+**Determinism: `no-select` (critical).** `critical` already refuses spawning a task, reading a clock and
+declassifying; a select's result depends on which channels are ready when it looks (§7.56), so it is
+refused too, by its call site. What is left inside `critical` — no tasks, no clock, no select — is a
+program whose observable behaviour is a function of its inputs, its files and its arguments; those
+stay allowed under `io`, and refusing them is `embedded`'s `no-io`. Random numbers and the network
+do not exist in the language.
+
+**Composition.** A profile only adds rules, and every package's required profile is in force for any
+program it is part of (§7.49): a dependency cannot weaken what the root requires, because nothing a
+dependency declares removes a rule. This was true since N47 and is now tested from the root's side.
+
+**Not here, and why.** *Constant-time* rules — no branch or index depending on a secret — need a
+secret-origin lattice that N52's origins (file, argument, unknown) do not express; a research item,
+not a partial claim. *Bounded loops, queues and tasks* need a declared, checked bound (§7.63's
+subject, N63). *Byte bounds* on allocation stay N52's `at-most-once`/`unknown` counts. Nothing here is
+a certification.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
