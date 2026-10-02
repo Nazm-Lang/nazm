@@ -143,7 +143,23 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
         .module_of(nazm_span::FileId::ROOT)
         .and_then(|m| graph.key(m))
         .map_or(Value::Null, |k| json!(k.as_str()));
-    let target = nazm_lir::backend::Target::host().map_or(Value::Null, |t| json!(t.triple));
+    let host = nazm_lir::backend::Target::host().ok();
+    let target = host.as_ref().map_or(Value::Null, |t| json!(t.triple));
+    // Every target `--target` accepts, and whether this host links it or builds it to objects
+    // (N57, §7.59).
+    let targets: Vec<Value> = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ]
+    .iter()
+    .filter_map(|t| nazm_lir::backend::Target::parse(t).ok())
+    .map(|t| {
+        let links = host.as_ref().is_some_and(|h| t.links_on(h));
+        json!({ "triple": t.triple, "output": if links { "executable" } else { "objects" } })
+    })
+    .collect();
     let doc = json!({
         "schema": "nazm.inspect/1",
         "root": root_key,
@@ -154,6 +170,7 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
             "runtime_abi": nazm_lir::runtime::RUNTIME_ABI_REVISION,
             "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
             "target": target,
+            "targets": targets,
         },
         "package": package,
         "mir": mir_state,

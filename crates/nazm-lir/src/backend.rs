@@ -111,26 +111,25 @@ impl Target {
         Self::parse(triple)
     }
 
-    /// The target a build asked for: the host, or a named triple that must be the host.
+    /// The target a build asked for: the host, or any triple of the matrix (N57, §7.59).
     ///
     /// # Errors
     ///
-    /// An unknown triple, or one that is not the host: an object for a foreign target needs a
-    /// foreign linker and a foreign runtime, and v1 has neither.
+    /// A triple outside the matrix, or a host outside it.
     pub fn requested(triple: Option<&str>) -> Result<Self, String> {
         let host = Self::host()?;
         let Some(t) = triple else {
             return Ok(host);
         };
-        let wanted = Self::parse(t)?;
-        if wanted != host {
-            return Err(format!(
-                "cross-compilation is not supported: `{t}` was requested on a \
-                 {} host, and v1 links only for the host",
-                host.triple
-            ));
-        }
-        Ok(wanted)
+        Self::parse(t)
+    }
+
+    /// Whether the host's own toolchain links an executable for this target (N57): the host
+    /// itself, or the other macOS architecture, whose SDK the Apple toolchain carries. Any other
+    /// target is built to objects for its own toolchain to link.
+    #[must_use]
+    pub fn links_on(&self, host: &Self) -> bool {
+        self == host || (self.os == Os::Macos && host.os == Os::Macos)
     }
 }
 
@@ -333,16 +332,29 @@ mod tests {
     }
 
     #[test]
-    fn a_foreign_target_is_refused_rather_than_built_for_the_host() {
+    fn a_foreign_target_is_itself_and_linked_only_where_the_host_can() {
+        // N57: a requested triple is that target, never the host in disguise.
         let host = Target::host().unwrap();
-        let foreign = if host.arch == Arch::Aarch64 {
-            "x86_64-unknown-linux-gnu"
-        } else {
-            "aarch64-unknown-linux-gnu"
-        };
-        let e = Target::requested(Some(foreign)).unwrap_err();
-        assert!(e.contains("cross-compilation"), "{e}");
+        for t in [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+        ] {
+            assert_eq!(
+                Target::requested(Some(t)).unwrap(),
+                Target::parse(t).unwrap()
+            );
+        }
         assert_eq!(Target::requested(None).unwrap(), host);
-        assert_eq!(Target::requested(Some(&host.triple)).unwrap(), host);
+        // The Apple toolchain links both macOS architectures; nothing else is linked from
+        // another operating system or another Linux architecture.
+        let mac_arm = Target::parse("aarch64-apple-darwin").unwrap();
+        let mac_x86 = Target::parse("x86_64-apple-darwin").unwrap();
+        let linux_arm = Target::parse("aarch64-unknown-linux-gnu").unwrap();
+        let linux_x86 = Target::parse("x86_64-unknown-linux-gnu").unwrap();
+        assert!(mac_x86.links_on(&mac_arm) && mac_arm.links_on(&mac_x86));
+        assert!(!linux_arm.links_on(&mac_arm) && !mac_arm.links_on(&linux_arm));
+        assert!(!linux_x86.links_on(&linux_arm) && linux_arm.links_on(&linux_arm));
     }
 }

@@ -46,8 +46,10 @@ found only by reading all of it.
 
 ## Native code
 
-- Host target only (aarch64-apple-darwin verified); other v1 triples parse and are refused for
-  building (area 33).
+- Four targets, no others: `aarch64`/`x86_64` × macOS/Linux, no Windows, 32-bit or CPU-feature
+  selection; a target the host has no linker for is built to objects (`--objects`) for its own
+  toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here
+  (area 33). *Narrowed in N57:* until then, the host only.
 - Cranelift keeps every non-scalar local in a stack slot; its loops are slower than LLVM's
   (area 12, `performance.md`).
 - A Cranelift build still needs clang for the runtime and the link (area 12).
