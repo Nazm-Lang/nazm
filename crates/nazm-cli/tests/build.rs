@@ -2143,10 +2143,19 @@ fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
         .and_then(|f| f.get("locals").and_then(serde_json::Value::as_array))
         .map_or(0, Vec::len);
     assert!(locals >= 5, "at least the five bindings: {mir}");
-    assert_eq!(
-        allocas, locals,
-        "one slot per MIR local, no more and no fewer:\n{ir}"
+    // At most one slot per MIR local: since N59 a scalar temporary read only in its block has
+    // none (§7.61), and every binding still has its own.
+    assert!(
+        allocas <= locals,
+        "more slots than MIR locals ({allocas} > {locals}):\n{ir}"
     );
+    for binding in ["i : Int", "total : Int", "a : Int", "b : Int", "c : Int"] {
+        assert!(
+            body.lines()
+                .any(|l| l.contains(" = alloca ") && l.ends_with(binding)),
+            "the binding {binding} has no slot:\n{ir}"
+        );
+    }
 
     // The loop really does go round: some branch targets a block that is already open
     // above it. Phrased as the property rather than as a literal label, because the
