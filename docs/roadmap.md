@@ -388,6 +388,14 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N63 — Real-time bounds — **complete as scoped, 2026-10-02**
+
+`architecture.md` §7.65 first. A `realtime` profile — `embedded` plus no blocking, no clock and
+bounded loops — and a bounds report: exact trip bounds for the counted loop form, call depth, site
+counts, `wcet` null. A board build states its stack bound from the code generator's frames along the
+deepest path; a painted stack on QEMU stays below it at `-O0` and `-O2`. Measurement is never the
+bound. Next: N64, WebAssembly.
+
 ### N62 — Embedded bare metal — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.64 first. `aarch64-unknown-none`: a board runtime without thread-local storage

@@ -120,7 +120,7 @@ fn the_board_runtime_has_no_thread_local_storage_and_no_c_library() {
         assert!(rt.contains("load volatile i32"), "{rt}");
         assert!(rt.contains("store volatile i32"), "{rt}");
     }
-    let entry = board::emit_entry("@nz.m.m0.main", 1);
+    let entry = board::emit_entry("@nz.m.m0.main", 1, false);
     assert!(entry.contains("_start:"), "{entry}");
     assert!(entry.contains("ldr x0, =__stack_top"), "{entry}");
     assert!(entry.contains("msr cpacr_el1"), "{entry}");
@@ -261,8 +261,15 @@ fn a_device_register_needs_an_mmio_cap_held() {
         "fn poke() -> Int { mmio_write32(0, 0) }\nfn main(m: MmioCap) -> Int ! {} { poke() }\n",
     );
     let o = nazm(d.path(), &["check", "prog.nz"]);
-    assert!(!o.status.success(), "an undeclared helper used its caller's MmioCap");
-    assert!(err(&o).contains("`poke` holds no `MmioCap` here"), "{}", err(&o));
+    assert!(
+        !o.status.success(),
+        "an undeclared helper used its caller's MmioCap"
+    );
+    assert!(
+        err(&o).contains("`poke` holds no `MmioCap` here"),
+        "{}",
+        err(&o)
+    );
 }
 
 #[test]

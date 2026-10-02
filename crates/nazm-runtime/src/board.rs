@@ -191,9 +191,17 @@ entry:
 }
 ";
 
+/// What `_start` paints the stack with when the run measures it (N63): a word no frame is
+/// likely to hold, so the deepest overwritten word is the deepest the run reached.
+pub const STACK_PAINT: u64 = 0x5a5a_5a5a_5a5a_5a5a;
+
 /// The freestanding entry: `_start`, then `main`, its result on the UART, and the machine stopped.
+///
+/// With `watermark` (N63), `_start` first paints the whole stack with [`STACK_PAINT`], and after
+/// `main`'s result the entry writes `nazm-stack: used=N`: the bytes between the stack's top and
+/// the lowest word no longer painted — a measurement of that run, not a bound.
 #[must_use]
-pub fn emit_entry(entry: &str, roots: usize) -> String {
+pub fn emit_entry(entry: &str, roots: usize, watermark: bool) -> String {
     let mut out = String::new();
     preamble(&mut out, "<nazm freestanding entry>");
     for line in [
@@ -206,6 +214,24 @@ pub fn emit_entry(entry: &str, roots: usize) -> String {
         "module asm \"  msr cpacr_el1, x1\"",
         "module asm \"  isb\"",
         "module asm \"  mov sp, x0\"",
+    ] {
+        let _ = writeln!(out, "{line}");
+    }
+    if watermark {
+        for line in [
+            "module asm \"  ldr x0, =__stack_bottom\"",
+            "module asm \"  ldr x1, =__stack_top\"",
+            "module asm \"  ldr x2, =0x5a5a5a5a5a5a5a5a\"",
+            "module asm \"2: cmp x0, x1\"",
+            "module asm \"  b.hs 3f\"",
+            "module asm \"  str x2, [x0], #8\"",
+            "module asm \"  b 2b\"",
+            "module asm \"3:\"",
+        ] {
+            let _ = writeln!(out, "{line}");
+        }
+    }
+    for line in [
         "module asm \"  bl nz_board_main\"",
         "module asm \"1: b 1b\"",
     ] {
@@ -230,8 +256,51 @@ pub fn emit_entry(entry: &str, roots: usize) -> String {
     let _ = writeln!(out, "finished:");
     let _ = writeln!(out, "  call void @nz.uart_int(i64 %result)");
     let _ = writeln!(out, "  call void @nz.uart_byte(i8 10)");
+    if watermark {
+        let _ = writeln!(out, "  %used = call i64 @nz.stack_used()");
+        let _ = writeln!(
+            out,
+            "  call void @nz.uart_write(ptr @.nz.stack_label, i64 17)"
+        );
+        let _ = writeln!(out, "  call void @nz.uart_int(i64 %used)");
+        let _ = writeln!(out, "  call void @nz.uart_byte(i8 10)");
+    }
     let _ = writeln!(out, "  call void @nz.board_exit(i64 0)");
     let _ = writeln!(out, "  unreachable");
     let _ = writeln!(out, "}}");
+    if watermark {
+        let _ = write!(
+            out,
+            r#"
+@__stack_bottom = external global i8
+@__stack_top = external global i8
+@.nz.stack_label = private constant [17 x i8] c"nazm-stack: used="
+declare void @nz.uart_write(ptr, i64)
+
+; The bytes between the stack's top and the lowest word no longer painted.
+define internal i64 @nz.stack_used() {{
+entry:
+  %bottom = ptrtoint ptr @__stack_bottom to i64
+  %top = ptrtoint ptr @__stack_top to i64
+  br label %scan
+scan:
+  %a = phi i64 [ %bottom, %entry ], [ %n, %next ]
+  %done = icmp uge i64 %a, %top
+  br i1 %done, label %found, label %look
+look:
+  %p = inttoptr i64 %a to ptr
+  %w = load volatile i64, ptr %p
+  %painted = icmp eq i64 %w, {STACK_PAINT}
+  br i1 %painted, label %next, label %found
+next:
+  %n = add i64 %a, 8
+  br label %scan
+found:
+  %used = sub i64 %top, %a
+  ret i64 %used
+}}
+"#
+        );
+    }
     out
 }

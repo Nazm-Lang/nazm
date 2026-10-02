@@ -42,6 +42,7 @@
 //! Nothing here decides what a program means: that is `nazm-core`'s, reached through
 //! [`nazm_core::analyse`], the same parse and check every command runs.
 
+pub mod bounds;
 pub mod completion;
 pub mod context;
 pub mod delta;

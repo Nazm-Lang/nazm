@@ -1428,7 +1428,22 @@ C library, no heap; device registers through `mmio_read32`/`mmio_write32` under 
 evidence and its limits are in area 33's N62 paragraph. Atomics, interrupts, a heap and `@std` are
 DESIGNED only (§7.64); no hardware was run.
 
+**N63: real-time bounds — PARTIAL, an analysable subset.** `architecture.md` §7.65 first. The
+`realtime` profile adds `no-blocking` and `bounded-loops` to `embedded`'s rules and `no-ambient-time`;
+the profile report states each loop's exact trip bound for the counted form, the call depth and the
+site counts, with `wcet` `null`. A board build states a static stack bound from clang's own frame
+sizes along the image's deepest call path (`bounds.json`). Evidence:
+`crates/nazm-cli/tests/realtime.rs` (9 + 1 ignored) — bounds against hand-computed trip counts,
+including the widest `Int` span; every unbounded shape refused as `unknown` with its reason; the
+board's bound equal to its path's frames and the same twice; recursion `null`; the search's own
+four unit tests (`crates/nazm-cli/src/stack.rs`). **Run-checked**, the ignored test in
+`nazm-qemu:n62`: three programs at `-O0` and `-O2`, the stack painted, the measured use below the
+stated bound in every run (176/192, 304/320, 264/288 bytes at `-O0`; 24/48 at `-O2`). **Not
+claimed**: WCET, latency or jitter bounds, interrupt nesting, certification; the loop form is one
+form.
+
 **What it would restrict** · No allocation after startup, or none at all; a stack bound
+that is computed;**What it would restrict** · No allocation after startup, or none at all; a stack bound
 that is computed; no I/O except through declared capabilities; a freestanding target with
 no libc.
 

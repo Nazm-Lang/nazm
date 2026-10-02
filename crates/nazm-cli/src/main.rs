@@ -54,6 +54,7 @@ mod profile;
 mod repo;
 mod run_profile;
 mod snapshot;
+mod stack;
 mod summary;
 // Moved to `nazm-service` in N16, so `nazm lsp` loads exactly as every command does.
 use nazm_service::{load, root};
@@ -608,6 +609,11 @@ enum Command {
         /// host has no linker for, linked by that target's own toolchain.
         #[arg(long, value_name = "DIR")]
         objects: Option<PathBuf>,
+        /// Paint the board's stack in `_start` and write `nazm-stack: used=N` to its UART after
+        /// `main` (N63): the deepest byte the run touched, beside `bounds.json`'s static bound.
+        /// `aarch64-unknown-none` only.
+        #[arg(long)]
+        stack_watermark: bool,
         /// One `nazm.timings/1` line on stderr: each phase's wall time — load, front end, MIR,
         /// LIR, code generation, native compilation, link — and the total (N48).
         #[arg(long)]
@@ -811,6 +817,7 @@ fn main() -> ExitCode {
         link,
         lib,
         objects,
+        stack_watermark,
         timings,
         debug,
         locked: _,
@@ -833,6 +840,7 @@ fn main() -> ExitCode {
                 link: &link,
                 library: lib,
                 objects: objects.as_deref(),
+                stack_watermark,
                 timings,
                 debug,
             },

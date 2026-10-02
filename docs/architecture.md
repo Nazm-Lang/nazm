@@ -6258,6 +6258,12 @@ one; `null`, always. *Scheduler latency and jitter*: the hosted scheduler's wake
 heap*: the board has no heap; a hosted bound is N52's site counts. *Resource annotations*: none are
 needed for the subset; none are added. Nothing here is a certification.
 
+**As built (N63), where it differs from the above.** *A function the generated text defines but the
+code generator reports no frame for* was inlined into every caller and removed — at `-O2` most are —
+so it adds nothing and the search continues through what it called, now called from its callers'
+frames; only a callee outside the image makes the bound `null`. *Negated literals* count as
+literals. *`embedded` reports `bounds` too*, since it computes the same MIR facts.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
