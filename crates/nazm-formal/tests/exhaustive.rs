@@ -124,13 +124,13 @@ fn the_bound_covers_what_it_says() {
 #[test]
 fn p4_holds_where_a_right_operand_can_trap() {
     // Beyond the bound, one family where evaluation order is observable: every `a && b` whose
-    // left side is a boolean of at most two nodes and whose right side is a boolean of four —
+    // left side is a boolean of at most two nodes and whose right side is a boolean of five — the smallest that can trap —
     // among them every `false && (1 / 0 == 0)`-like program, which short-circuiting decides.
     let lefts: Vec<Expr> = (1..=2)
         .flat_map(|n| enumerate(n, &[]))
         .filter(|e| type_of(e, &[]) == Some(Ty::Bool))
         .collect();
-    let rights: Vec<Expr> = enumerate(4, &[])
+    let rights: Vec<Expr> = enumerate(5, &[])
         .into_iter()
         .filter(|e| type_of(e, &[]) == Some(Ty::Bool))
         .collect();
