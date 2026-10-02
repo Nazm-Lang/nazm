@@ -5946,6 +5946,56 @@ it packages needs a TOML reader and a package graph written in Nazm — designed
 pre-releases, version ranges beyond the four forms, multiple versions of one package, workspaces
 with several roots, build scripts.
 
+## 7.59 Targets and cross-compilation — N57, 2026-10-02
+
+Written before the code. Since N41 a build named its target and refused every one but the host.
+N57 makes a target a real input: four triples, each built by both backends from any host in the
+matrix, linked where a linker for it is present and handed back as objects where none is.
+
+**The target is a value, not the host.** `--target TRIPLE` is one of `aarch64-apple-darwin`,
+`x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`: an architecture
+(64-bit ARM or x86, little-endian, 64-bit pointers), an operating system (macOS or Linux) and an
+ABI (Darwin's, or glibc's System V). No CPU feature beyond the triple's baseline is used by either
+backend, so an object does not depend on the machine that built it. Anything else is refused by
+name before anything is compiled.
+
+**What changes per target, and what does not.** The runtime text is the same for all four: it
+names only what both C libraries share under the same values (`RLIMIT_STACK` 3,
+`CLOCK_REALTIME` 0, `CLOCK_MONOTONIC_RAW` 4, `struct timespec` two 64-bit words, an attribute
+object of at most 128 bytes) — a fact §7.45 already relied on, now stated as the portability rule
+the runtime keeps. What changes is the code generator's: clang is told the triple (`-target`), and
+Cranelift is built for it (its `x86` and `arm64` backends both compiled in). The object format —
+Mach-O or ELF — follows.
+
+**Host tools and target artefacts are separate.** A build runs the compiler, clang and the linker
+— host tools — and never runs what it produced: there is no build script, and nothing in a build
+executes a target binary. Whether a produced program can run on the host is the test harness's
+question, answered separately: an x86_64 macOS program on an ARM Mac runs under Rosetta when it is
+installed; a Linux program runs in a Linux container. The two are reported apart, as
+**run-verified** and **compile-only**.
+
+**Linking.** A target linked by the host's own toolchain — the host's triple, or the other macOS
+architecture, whose SDK the Apple toolchain carries — produces an executable. A target the host has
+no linker for (Linux from macOS, macOS from Linux) produces **objects**: `nazm build --objects DIR`
+writes every unit's object, the runtime's and the entry's, and `DIR/link.txt` listing them in link
+order with the system libraries the target needs (`-lpthread`), for the target's own toolchain to
+link. Asking for an executable for such a target is refused by name, not attempted with a host
+linker that would produce the wrong thing. No linker is found on `PATH` by accident: the one used
+is the driver's own, and the driver's resolved command line for the target is in every key.
+
+**Identity.** The target triple is in every object's key under both backends — LLVM's through the
+driver's resolved configuration, Cranelift's directly — so an object built for one target is never
+reused for another. `nazm inspect` and the build report name the target. A package's lockfile is
+target-independent: a package's sources do not depend on the target in v1, and none may yet.
+
+**Reproducibility across hosts.** Same-target builds from different hosts are a separate claim from
+same-host reproducibility. N57 records what it measured — for which targets two hosts' objects
+agree — and claims nothing it did not measure.
+
+**Not here.** Windows, 32-bit or big-endian targets, a target-specific runtime part, CPU feature
+selection, a bundled linker or sysroot, target-conditional source, and emulation inside the
+compiler.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
