@@ -7257,6 +7257,63 @@ replaced, on any program in the repository.
   with identical codes on every one. A cold check of `compiler/emit.nz` costs 1.125×, measured in
   `performance.md`; later rounds re-solve only the functions that read a grown cell.
 
+## 7.82 The backend contract v2, stage one: bytes, ownership and a printed LIR — N81, 2026-10-03
+
+Written before the code. Area 10 is PARTIAL because LIR is not a level of its own. `nazm-lir` settles
+units, symbols, linkage and canonical field order from validated MIR, and then **each backend
+translates MIR's operations itself**: `emit.rs` for LLVM, `func.rs`, `prims.rs` and `helpers.rs`
+for Cranelift. Three responsibilities are duplicated or orphaned:
+
+- **Bytes.** Cranelift decides every record's and enum's byte layout in its own `layout.rs` (an
+  enum a tagged union at a fixed payload offset), with an 8-byte pointer assumed. LLVM never
+  decides bytes: it writes named aggregates and lets LLVM lay them out, an enum as the product of
+  every variant's payload. No value ever crosses between the two, so neither is wrong, but no one
+  owns "what are the bytes of this type on this target", and `wasm32`'s 4-byte pointer is known
+  only to LLVM.
+- **Ownership.** Whether a value of a type owns anything a drop must give back is computed twice,
+  as a fixed point in each backend.
+- **Visibility.** Nothing prints what LIR decided, and nothing validates it.
+
+**What N81 settles (stage one).** `nazm-lir` becomes the one owner of the target's **data layout**
+(pointer width, word, `Bool`, the three-word `Str`), of every record's and enum's **byte layout**
+on that target (offsets, size, alignment; an enum a tag word then a payload area aligned for its
+widest variant), and of the **ownership table**. Both backends read them: Cranelift's `layout.rs`
+keeps only how a byte layout becomes Cranelift values, and both backends' ownership fixed points
+are deleted. A **validator** checks every layout on every native build — fields ascending, inside
+their structure, aligned, sizes multiples of alignment, every variant inside its enum's payload
+area, ownership closed under containment — and a broken table is a compiler bug (`N0900`), never a
+miscompilation. `nazm lir FILE [--target T]` prints `nazm.lir/1`: the target's data layout, every
+unit with its symbols and linkage, every layout and the ownership table, deterministic, with a
+schema checked against real output. The differential fuzzer (N73) gains records with `Bool` and
+`Str` fields and an enum with payloads, so layouts are exercised on the interpreter, LLVM at
+`-O0` and `-O2`, and Cranelift against each other.
+
+**What N81 does not settle, stated before the code.** The prompt's acceptance is one MIR→LIR
+lowering into an instruction level that both backends consume, with no semantic path from MIR into
+either backend, an LIR oracle interpreter, and LIR-backed mutations. That is a rewrite of both code
+generators (about 7,400 lines) and of everything they carry — DWARF positions, the struct-of-arrays
+layout, the vectoriser's patterns, exports, the freestanding and WebAssembly targets — and this
+stage does not attempt it: risking the reference compiler's correctness is not a trade this
+programme makes for a dashboard. **N81 is therefore not accepted under its own criteria.** Area 10
+stays PARTIAL, named: operations are still translated per backend, guarded by differential testing
+rather than by construction; LLVM's enum is still the product of its variants. The instruction
+level is recorded as the remaining work.
+
+**Observable and versioned.** Nothing a program does changes. `nazm lir` and `nazm.lir/1` are new
+(there was no `/1` before: the prompt's `/2` assumed one). Semantic epoch, interface, Core IR, MIR
+and runtime ABI unchanged: no language rule, interface shape, IR or runtime moved. Cranelift's
+objects are byte-identical, because the layouts are the same numbers computed in one place; the
+object cache keys on bytes, so no key moves. LLVM text is byte-identical.
+
+**Negative example.** A record whose field offset the validator finds outside its size is refused
+as `N0900` before any code is generated. **Boundary example.** On `wasm32-unknown-unknown` a `Str`
+is `{ptr: 0, len: 8, owner: 16}` in 24 bytes, its pointers four bytes each and the length still
+eight; on every 64-bit target the same three words are 0, 8, 16 of 24.
+
+**What would prove this unsuitable.** Any Cranelift object byte that differs from before, on any
+program in the repository; any program both backends compile correctly that the validator refuses;
+any layout whose printed offsets disagree with the bytes Cranelift writes.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
