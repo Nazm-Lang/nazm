@@ -16,6 +16,7 @@ pub mod board;
 pub(crate) mod core;
 pub(crate) mod entry;
 pub(crate) mod os;
+pub mod switch;
 pub mod wasm;
 
 use std::fmt::Write as _;
@@ -185,8 +186,10 @@ pub fn escape(s: &str) -> String {
 /// `nz.sel_*`), the clock, and the scheduler's counters. 7 is N55's: `nz.cstr_borrow`, a `Str`
 /// argument to C. 8 is N62's: `nz.mmio_read32`/`nz.mmio_write32`, defined by the hosted runtime and
 /// the freestanding one alike. 9 is N66's: `nz.ints_sum`, the ordered checked sum. 10 is N68's: `nz.soa_grow` and the
-/// field-by-field `Vec` layout it grows.
-pub const RUNTIME_ABI_REVISION: u32 = 10;
+/// field-by-field `Vec` layout it grows. 11 is N83's: the task pool — `nz.cwait`, `nz.ctimedwait`
+/// and `nz.cwake` around every wait, a task record in the argument block's head when the pool
+/// runs, and the per-target `switch` artefact every build reaching tasks or channels links.
+pub const RUNTIME_ABI_REVISION: u32 = 11;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -215,6 +218,9 @@ pub fn digest() -> &'static str {
         h.update(&RUNTIME_ABI_REVISION.to_le_bytes());
         h.update(emit_runtime(EVERYTHING).as_bytes());
         h.update(emit_entry("@nz_main", 1, EVERYTHING).as_bytes());
+        for t in switch::SwitchTarget::ALL {
+            h.update(switch::emit_switch(t).as_bytes());
+        }
         for i in INVENTORY {
             h.update(format!("{i:?}").as_bytes());
         }
@@ -468,6 +474,29 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.sel_signal", "void" () "", false, Channels, "", Never, Any, "advance the select event count and wake any select", "none"),
     rt!("nz.chanv_try", "i64" ("ptr", "ptr") "", false, Channels, "", Never, Locked, "one look at a channel without waiting", "borrows the channel; hands the slot's reference over when it returns 1"),
     rt!("nz.failed_now", "i32" () "", false, Base, "", Never, Any, "whether this thread has failed, for a second backend", "none"),
+    rt!("nz.pool_mode_get", "i64" () "", false, Tasks, "", Never, Any, "which scheduler this process runs, decided once from NAZM_SCHEDULER (N83)", "none"),
+    rt!("nz.pool_env", "i64" ("ptr", "i64") "", false, Tasks, "", Never, Any, "a positive count from an environment variable, or a default (N83)", "borrows the name"),
+    rt!("nz.pool_sync", "ptr" () "", false, Tasks, "", Null, Any, "a mutex and a condition variable in one allocation (N83)", "the process owns it"),
+    rt!("nz.pool_start", "i1" () "", false, Tasks, "", Status, Any, "start the pool's tables and workers (N83)", "the process owns them"),
+    rt!("nz.pool_push", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue a runnable task on its worker and wake it (N83)", "the worker's queue holds the task"),
+    rt!("nz.pool_now", "i64" () "", false, Tasks, "", Never, Any, "the wall clock in nanoseconds (N83)", "none"),
+    rt!("nz.pool_timers", "i1" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", "none"),
+    rt!("nz.task_enter", "void" ("ptr") "", false, Tasks, "", Never, Owner, "make a task this thread's, with its own failure state and stack limit (N83)", "borrows the task"),
+    rt!("nz.task_leave", "void" ("ptr") "", false, Tasks, "", Never, Owner, "save a task's failure state and stack limit and clear the thread's (N83)", "borrows the task"),
+    rt!("nz.worker_main", "ptr" ("ptr") "", false, Tasks, "", Never, Owner, "a pool worker: run its tasks first in, first out (N83)", "the worker owns its tasks' stacks"),
+    rt!("nz.task_start", "i32" ("ptr", "ptr") "", false, Tasks, "", Status, Any, "start a task on the pool with a guarded stack (N83)", "takes the argument block; 0, or 1 when no stack could be had"),
+    rt!("nz_task_main", "void" ("ptr") "", false, Tasks, "", Never, Owner, "a task's body on its own stack, then its end (N83)", "borrows the task"),
+    rt!("nz.task_suspend", "void" ("ptr") "", false, Tasks, "", Never, Owner, "switch from a task back to its worker (N83)", "none"),
+    rt!("nz.task_wake", "void" ("ptr") "", false, Tasks, "", Never, Any, "make a parked task runnable, or note the wake (N83)", "none"),
+    rt!("nz.pool_bucket", "ptr" ("ptr") "", false, Tasks, "", Never, Any, "the waiter list a condition variable hashes to (N83)", "none"),
+    rt!("nz.pool_unwait", "void" ("ptr") "", false, Tasks, "", Never, Any, "take a task off the waiters it is still on (N83)", "none"),
+    rt!("nz.cwait", "i32" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "wait on a condition variable: park a pool task, block a thread (N83)", "the mutex is held again on return"),
+    rt!("nz.ctimedwait", "i32" ("ptr", "ptr", "ptr") "", false, Tasks, "", Never, Locked, "as nz.cwait, until a wall-clock time (N83)", "the mutex is held again on return"),
+    rt!("nz.pool_park", "void" ("ptr", "ptr", "ptr", "i64") "", false, Tasks, "", Never, Locked, "register a task as a waiter, park it and give its worker back (N83)", "releases and retakes the mutex"),
+    rt!("nz.cwake", "void" ("ptr") "", false, Tasks, "", Never, Any, "wake every thread and pool task waiting on a condition variable (N83)", "none"),
+    rt!("nz.task_yield", "void" () "", false, Tasks, "", Never, Owner, "let a pool task's worker run its other tasks first (N83)", "none"),
+    rt!("nz.pool_report", "void" () "", false, Tasks, "", Never, Entry, "the pool's line of the schedule report, where it ran (N83)", "none"),
+    rt!("nz.join_one", "i32" ("ptr") "", false, Tasks, "", Status, Any, "wait for one task to end, its thread joined or its record freed (N83)", "frees the pool task's record"),
     rt!("nz.format_int", "i64" ("ptr", "i64") "", false, Base, "", Never, Any, "an Int's decimal digits into a 21-byte buffer", "writes into the caller's buffer"),
     rt!("nz.vec_release", "void" ("ptr", "ptr", "i64") "", false, Sequences, "", Never, Owner, "release a sequence, each element with its type's release at its stride", "takes a reference; null is a no-op"),
     rt!("nz.read_file_to", "void" ("ptr", "ptr", "i64") "", false, Io, "io", Status, Any, "`nz.read_file`, written through a pointer", "as `nz.read_file`"),
@@ -489,6 +518,18 @@ pub struct RuntimeGlobal {
 
 /// Every global the runtime defines, in the order every unit declares them (§7.45).
 pub const GLOBALS: &[RuntimeGlobal] = &[
+    RuntimeGlobal { symbol: "nz.pool_mode", ty: "i64", thread_local: false, writers: "`nz.pool_mode_get`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_workers", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_count", ty: "i64", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_next", ty: "i64", thread_local: false, writers: "`nz.task_start`, atomically (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_stack", ty: "i64", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_page", ty: "i64", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_live", ty: "i64", thread_local: false, writers: "`nz.task_start` and `nz_task_main`, atomically (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_peak", ty: "i64", thread_local: false, writers: "`nz.task_start`, atomically (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_wait", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_buckets", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_join", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.cur_task", ty: "ptr", thread_local: true, writers: "`nz.task_enter` and `nz.task_leave`, on its own worker only (N83)" },
     RuntimeGlobal {
         symbol: "nz.failed",
         ty: "i1",
@@ -840,9 +881,15 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_ten_and_its_digest_covers_c_strings() {
-        // N68's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 10);
+    fn the_runtime_is_revision_eleven_and_its_digest_covers_the_pool() {
+        // N83's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 11);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cwait("));
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.task_start("));
+        // Every task switch is in the digest: another switch is another runtime.
+        for t in crate::switch::SwitchTarget::ALL {
+            assert!(crate::switch::emit_switch(t).contains("nz_ctx_switch"));
+        }
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.soa_grow("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.ints_sum("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cstr_borrow("));

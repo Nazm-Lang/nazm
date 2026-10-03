@@ -169,14 +169,36 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.join {
         out.push_str(JOIN_RUNTIME);
     }
+    if needs.tasks || needs.channels {
+        let (restore, save, set) = if needs.stack {
+            (
+                "  %slp = getelementptr i8, ptr %t, i64 104\n  %sl = load i64, ptr %slp\n  store i64 %sl, ptr @nz.stack_limit",
+                "  %sl = load i64, ptr @nz.stack_limit\n  %slp = getelementptr i8, ptr %t, i64 104\n  store i64 %sl, ptr %slp\n  store i64 0, ptr @nz.stack_limit",
+                "  %quarter = lshr i64 %size, 2\n  %lo = getelementptr i8, ptr %base, i64 %pg\n  %loi = ptrtoint ptr %lo to i64\n  %lim = add i64 %loi, %quarter\n  %limp = getelementptr i8, ptr %t, i64 104\n  store i64 %lim, ptr %limp",
+            )
+        } else {
+            ("", "", "")
+        };
+        out.push_str(
+            &POOL_RUNTIME
+                .replace("{RESTORE_LIMIT}", restore)
+                .replace("{SAVE_LIMIT}", save)
+                .replace("{SET_LIMIT}", set),
+        );
+    }
+    // With the pool's text present, every wait, wake and join goes through it (N83). The texts
+    // themselves are the thread model's, unchanged — `compiler/emit.nz` carries them line by line
+    // (the `runtime parity` gate) — and the pool is joined to them here, as they are emitted.
+    let pooled = needs.tasks || needs.channels;
+    let text = |t: &str| if pooled { pool_hooked(t) } else { t.to_owned() };
     if needs.tasks {
-        out.push_str(TASK_RUNTIME);
+        out.push_str(&text(TASK_RUNTIME));
         out.push_str(SCHED_RUNTIME);
     }
     if needs.channels {
-        out.push_str(CHANNEL_RUNTIME);
-        out.push_str(GENERIC_CHANNEL_RUNTIME);
-        out.push_str(SELECT_RUNTIME);
+        out.push_str(&text(CHANNEL_RUNTIME));
+        out.push_str(&text(GENERIC_CHANNEL_RUNTIME));
+        out.push_str(&text(SELECT_RUNTIME));
     }
     if needs.strings {
         out.push_str(FOREIGN_STRING_RUNTIME);
@@ -1495,6 +1517,827 @@ fill:
 
 /// The scheduler's counters (N54): called by generated code after a task starts and before a
 /// scope joins, so the runtime's task text — under the self-hosted parity gate — is untouched.
+/// The task pool (N83, `docs/architecture.md` §7.84): an opt-in M:N scheduler beside one OS
+/// thread per task. `{RESTORE_LIMIT}`, `{SAVE_LIMIT}` and `{SET_LIMIT}` become the stack limit's
+/// save, restore and first value where the stack check is reached, and nothing otherwise.
+const POOL_RUNTIME: &str = r#"
+@nz.pool_mode = hidden global i64 0
+@nz.pool_workers = hidden global ptr null
+@nz.pool_count = hidden global i64 0
+@nz.pool_next = hidden global i64 0
+@nz.pool_stack = hidden global i64 0
+@nz.pool_page = hidden global i64 0
+@nz.pool_live = hidden global i64 0
+@nz.pool_peak = hidden global i64 0
+@nz.pool_wait = hidden global ptr null
+@nz.pool_buckets = hidden global ptr null
+@nz.pool_join = hidden global ptr null
+@nz.cur_task = hidden thread_local global ptr null
+@.pool.env.sched = private unnamed_addr constant [15 x i8] c"NAZM_SCHEDULER\00"
+@.pool.env.workers = private unnamed_addr constant [13 x i8] c"NAZM_WORKERS\00"
+@.pool.env.stack = private unnamed_addr constant [16 x i8] c"NAZM_TASK_STACK\00"
+@.pool.word = private unnamed_addr constant [5 x i8] c"pool\00"
+@.pool.fmt = private unnamed_addr constant [46 x i8] c"nazm-pool: workers=%lld peak=%lld stack=%lld\0A\00"
+
+declare void @nz_ctx_switch(ptr, ptr)
+declare ptr @nz_ctx_prepare(ptr, ptr)
+
+; The scheduler this process runs (N83, §7.84): 1 one OS thread per task, 2 the pool, 4 a pool
+; that was asked for and could not start. Decided once, at the first question; 3 while deciding.
+define hidden i64 @nz.pool_mode_get() {
+entry:
+  br label %top
+top:
+  %m = load atomic i64, ptr @nz.pool_mode acquire, align 8
+  %settled = icmp eq i64 %m, 0
+  br i1 %settled, label %decide, label %known
+known:
+  %deciding = icmp eq i64 %m, 3
+  br i1 %deciding, label %spin, label %done
+done:
+  ret i64 %m
+spin:
+  br label %top
+decide:
+  %pair = cmpxchg ptr @nz.pool_mode, i64 0, i64 3 acq_rel acquire
+  %won = extractvalue {i64, i1} %pair, 1
+  br i1 %won, label %ask, label %top
+ask:
+  %v = call ptr @getenv(ptr @.pool.env.sched)
+  %unset = icmp eq ptr %v, null
+  br i1 %unset, label %threads, label %len
+len:
+  %n = call i64 @strlen(ptr %v)
+  %four = icmp eq i64 %n, 4
+  br i1 %four, label %cmp, label %threads
+cmp:
+  %c = call i32 @memcmp(ptr %v, ptr @.pool.word, i64 4)
+  %is = icmp eq i32 %c, 0
+  br i1 %is, label %start, label %threads
+threads:
+  store atomic i64 1, ptr @nz.pool_mode release, align 8
+  ret i64 1
+start:
+  %ok = call i1 @nz.pool_start()
+  %mode = select i1 %ok, i64 2, i64 4
+  store atomic i64 %mode, ptr @nz.pool_mode release, align 8
+  ret i64 %mode
+}
+
+; A positive count from the environment variable at `%v`, or `%dflt`.
+define hidden i64 @nz.pool_env(ptr %name, i64 %dflt) {
+entry:
+  %v = call ptr @getenv(ptr %name)
+  %unset = icmp eq ptr %v, null
+  br i1 %unset, label %default, label %parse
+parse:
+  %n = call i64 @atoll(ptr %v)
+  %pos = icmp sgt i64 %n, 0
+  br i1 %pos, label %have, label %default
+have:
+  ret i64 %n
+default:
+  ret i64 %dflt
+}
+
+; A mutex at 0 and a condition variable at 128, in 256 bytes, or null.
+define hidden ptr @nz.pool_sync() {
+entry:
+  %s = call ptr @malloc(i64 256)
+  %oom = icmp eq ptr %s, null
+  br i1 %oom, label %none, label %init
+none:
+  ret ptr null
+init:
+  %mi = call i32 @pthread_mutex_init(ptr %s, ptr null)
+  %cv = getelementptr i8, ptr %s, i64 128
+  %ci = call i32 @pthread_cond_init(ptr %cv, ptr null)
+  ret ptr %s
+}
+
+; Start the pool: its waiter table, its join lock, and its workers. False if any of it could not be
+; made; the workers already started then wait for tasks that never come.
+define hidden i1 @nz.pool_start() {
+entry:
+  %attr = alloca [128 x i8], align 16
+  %pg32 = call i32 @getpagesize()
+  %pg = sext i32 %pg32 to i64
+  store i64 %pg, ptr @nz.pool_page
+  %wanted = call i64 @nz.pool_env(ptr @.pool.env.workers, i64 4)
+  %big = icmp sgt i64 %wanted, 64
+  %count = select i1 %big, i64 64, i64 %wanted
+  %asked = call i64 @nz.pool_env(ptr @.pool.env.stack, i64 262144)
+  %min = mul i64 %pg, 4
+  %small = icmp slt i64 %asked, %min
+  %raw = select i1 %small, i64 %min, i64 %asked
+  %pm1 = sub i64 %pg, 1
+  %up = add i64 %raw, %pm1
+  %pages = udiv i64 %up, %pg
+  %stack = mul i64 %pages, %pg
+  store i64 %stack, ptr @nz.pool_stack
+  %wl = call ptr @nz.pool_sync()
+  %bk = call ptr @malloc(i64 2048)
+  %js = call ptr @nz.pool_sync()
+  %wsz = mul i64 %count, 8
+  %arr = call ptr @malloc(i64 %wsz)
+  %n1 = icmp eq ptr %wl, null
+  %n2 = icmp eq ptr %bk, null
+  %n3 = icmp eq ptr %js, null
+  %n4 = icmp eq ptr %arr, null
+  %o1 = or i1 %n1, %n2
+  %o2 = or i1 %n3, %n4
+  %any = or i1 %o1, %o2
+  br i1 %any, label %fail, label %tables
+fail:
+  ret i1 false
+tables:
+  call void @llvm.memset.p0.i64(ptr %bk, i8 0, i64 2048, i1 false)
+  store ptr %wl, ptr @nz.pool_wait
+  store ptr %bk, ptr @nz.pool_buckets
+  store ptr %js, ptr @nz.pool_join
+  br label %make
+make:
+  %i = phi i64 [ 0, %tables ], [ %inext, %made ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %one, label %publish
+one:
+  %w = call ptr @malloc(i64 320)
+  %wnull = icmp eq ptr %w, null
+  br i1 %wnull, label %fail, label %winit
+winit:
+  call void @llvm.memset.p0.i64(ptr %w, i8 0, i64 320, i1 false)
+  %wmi = call i32 @pthread_mutex_init(ptr %w, ptr null)
+  %wcv = getelementptr i8, ptr %w, i64 128
+  %wci = call i32 @pthread_cond_init(ptr %wcv, ptr null)
+  %ip = getelementptr i8, ptr %w, i64 288
+  store i64 %i, ptr %ip
+  %slot = getelementptr ptr, ptr %arr, i64 %i
+  store ptr %w, ptr %slot
+  br label %made
+made:
+  %inext = add i64 %i, 1
+  br label %make
+publish:
+  store ptr %arr, ptr @nz.pool_workers
+  store i64 %count, ptr @nz.pool_count
+  br label %spawnw
+spawnw:
+  %j = phi i64 [ 0, %publish ], [ %jnext, %started ]
+  %jmore = icmp slt i64 %j, %count
+  br i1 %jmore, label %thread, label %ok
+thread:
+  %wp = getelementptr ptr, ptr %arr, i64 %j
+  %ww = load ptr, ptr %wp
+  %th = getelementptr i8, ptr %ww, i64 296
+  %ai = call i32 @pthread_attr_init(ptr %attr)
+  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 1048576)
+  %rc = call i32 @pthread_create(ptr %th, ptr %attr, ptr @nz.worker_main, ptr %ww)
+  %ad = call i32 @pthread_attr_destroy(ptr %attr)
+  %bad = icmp ne i32 %rc, 0
+  br i1 %bad, label %fail, label %started
+started:
+  %jnext = add i64 %j, 1
+  br label %spawnw
+ok:
+  ret i1 true
+}
+
+; Queue a runnable task at its worker's tail and wake the worker. The worker's lock is held.
+define hidden void @nz.pool_push(ptr %w, ptr %t) {
+entry:
+  %np = getelementptr i8, ptr %t, i64 48
+  store ptr null, ptr %np
+  %hp = getelementptr i8, ptr %w, i64 256
+  %tp = getelementptr i8, ptr %w, i64 264
+  %tail = load ptr, ptr %tp
+  %empty = icmp eq ptr %tail, null
+  br i1 %empty, label %first, label %append
+first:
+  store ptr %t, ptr %hp
+  br label %linked
+append:
+  %tn = getelementptr i8, ptr %tail, i64 48
+  store ptr %t, ptr %tn
+  br label %linked
+linked:
+  store ptr %t, ptr %tp
+  %cv = getelementptr i8, ptr %w, i64 128
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  ret void
+}
+
+; The wall clock in nanoseconds, as `pthread_cond_timedwait` measures it.
+define hidden i64 @nz.pool_now() {
+entry:
+  %ts = alloca [2 x i64], align 8
+  %r = call i32 @clock_gettime(i32 0, ptr %ts)
+  %s = load i64, ptr %ts
+  %np = getelementptr i8, ptr %ts, i64 8
+  %n = load i64, ptr %np
+  %sn = mul i64 %s, 1000000000
+  %t = add i64 %sn, %n
+  ret i64 %t
+}
+
+; Every parked task on this worker whose deadline has passed is queued again; entries for tasks no
+; longer parked with a deadline leave the list. The worker's lock is held. Writes the soonest
+; remaining deadline into `%ts` and says whether there is one.
+define hidden i1 @nz.pool_timers(ptr %w, ptr %ts) {
+entry:
+  %now = call i64 @nz.pool_now()
+  %headp = getelementptr i8, ptr %w, i64 280
+  %first = load ptr, ptr %headp
+  store ptr null, ptr %headp
+  br label %walk
+walk:
+  %t = phi ptr [ %first, %entry ], [ %next, %keep ], [ %next, %drop ]
+  %soon = phi i64 [ 0, %entry ], [ %soon2, %keep ], [ %soon, %drop ]
+  %atend = icmp eq ptr %t, null
+  br i1 %atend, label %finish, label %look
+look:
+  %nxp = getelementptr i8, ptr %t, i64 136
+  %next = load ptr, ptr %nxp
+  %stp = getelementptr i8, ptr %t, i64 24
+  %st = load i64, ptr %stp
+  %dp = getelementptr i8, ptr %t, i64 112
+  %d = load i64, ptr %dp
+  %parked = icmp eq i64 %st, 3
+  %timed = icmp ne i64 %d, 0
+  %live = and i1 %parked, %timed
+  br i1 %live, label %due, label %drop
+due:
+  %passed = icmp sle i64 %d, %now
+  br i1 %passed, label %fire, label %keep
+fire:
+  store i64 0, ptr %dp
+  store i64 0, ptr %stp
+  call void @nz.pool_push(ptr %w, ptr %t)
+  br label %drop
+drop:
+  %inp = getelementptr i8, ptr %t, i64 144
+  store i64 0, ptr %inp
+  store ptr null, ptr %nxp
+  br label %walk
+keep:
+  %h = load ptr, ptr %headp
+  store ptr %h, ptr %nxp
+  store ptr %t, ptr %headp
+  %none = icmp eq i64 %soon, 0
+  %earlier = icmp slt i64 %d, %soon
+  %take = or i1 %none, %earlier
+  %soon2 = select i1 %take, i64 %d, i64 %soon
+  br label %walk
+finish:
+  %have = icmp ne i64 %soon, 0
+  br i1 %have, label %fill, label %out
+fill:
+  %sec = sdiv i64 %soon, 1000000000
+  %nsec = srem i64 %soon, 1000000000
+  store i64 %sec, ptr %ts
+  %tn = getelementptr i8, ptr %ts, i64 8
+  store i64 %nsec, ptr %tn
+  br label %out
+out:
+  ret i1 %have
+}
+
+; Into a task: it becomes this thread's current task, with its own failure state and stack limit.
+define hidden void @nz.task_enter(ptr %t) {
+entry:
+  store ptr %t, ptr @nz.cur_task
+  %fp = getelementptr i8, ptr %t, i64 80
+  %f = load i64, ptr %fp
+  %fb = trunc i64 %f to i1
+  store i1 %fb, ptr @nz.failed
+  %mp = getelementptr i8, ptr %t, i64 88
+  %m = load ptr, ptr %mp
+  store ptr %m, ptr @nz.errmsg
+  %lp = getelementptr i8, ptr %t, i64 96
+  %l = load i64, ptr %lp
+  store i64 %l, ptr @nz.errlen
+{RESTORE_LIMIT}
+  ret void
+}
+
+; Out of a task: its failure state and stack limit are saved into it, and the worker's are clean.
+define hidden void @nz.task_leave(ptr %t) {
+entry:
+  %fb = load i1, ptr @nz.failed
+  %f = zext i1 %fb to i64
+  %fp = getelementptr i8, ptr %t, i64 80
+  store i64 %f, ptr %fp
+  %m = load ptr, ptr @nz.errmsg
+  %mp = getelementptr i8, ptr %t, i64 88
+  store ptr %m, ptr %mp
+  %l = load i64, ptr @nz.errlen
+  %lp = getelementptr i8, ptr %t, i64 96
+  store i64 %l, ptr %lp
+{SAVE_LIMIT}
+  store i1 false, ptr @nz.failed
+  store ptr null, ptr @nz.errmsg
+  store i64 0, ptr @nz.errlen
+  store ptr null, ptr @nz.cur_task
+  ret void
+}
+
+; A worker: run its tasks first in, first out, each until it parks, yields or ends.
+define hidden ptr @nz.worker_main(ptr %w) {
+entry:
+  %ts = alloca [2 x i64], align 8
+  %l0 = call i32 @pthread_mutex_lock(ptr %w)
+  br label %look
+look:
+  %timed = call i1 @nz.pool_timers(ptr %w, ptr %ts)
+  %hp = getelementptr i8, ptr %w, i64 256
+  %h = load ptr, ptr %hp
+  %empty = icmp eq ptr %h, null
+  br i1 %empty, label %idle, label %take
+idle:
+  %cv = getelementptr i8, ptr %w, i64 128
+  br i1 %timed, label %tw, label %fw
+tw:
+  %a = call i32 @pthread_cond_timedwait(ptr %cv, ptr %w, ptr %ts)
+  br label %look
+fw:
+  %b = call i32 @pthread_cond_wait(ptr %cv, ptr %w)
+  br label %look
+take:
+  %np = getelementptr i8, ptr %h, i64 48
+  %n = load ptr, ptr %np
+  store ptr %n, ptr %hp
+  %last = icmp eq ptr %n, null
+  br i1 %last, label %cleartail, label %go
+cleartail:
+  %tp = getelementptr i8, ptr %w, i64 264
+  store ptr null, ptr %tp
+  br label %go
+go:
+  store ptr null, ptr %np
+  %sp = getelementptr i8, ptr %h, i64 24
+  store i64 1, ptr %sp
+  %u = call i32 @pthread_mutex_unlock(ptr %w)
+  call void @nz.task_enter(ptr %h)
+  %wsp = getelementptr i8, ptr %w, i64 272
+  %tsp = load ptr, ptr %h
+  call void @nz_ctx_switch(ptr %wsp, ptr %tsp)
+  call void @nz.task_leave(ptr %h)
+  %st = load i64, ptr %sp
+  %ended = icmp eq i64 %st, 4
+  br i1 %ended, label %finish, label %relock
+relock:
+  %l2 = call i32 @pthread_mutex_lock(ptr %w)
+  %parking = icmp eq i64 %st, 2
+  br i1 %parking, label %park, label %yielded
+park:
+  %wk = getelementptr i8, ptr %h, i64 32
+  %woken = load i64, ptr %wk
+  %was = icmp ne i64 %woken, 0
+  br i1 %was, label %requeue, label %rest
+requeue:
+  store i64 0, ptr %wk
+  store i64 0, ptr %sp
+  call void @nz.pool_push(ptr %w, ptr %h)
+  br label %look
+rest:
+  store i64 3, ptr %sp
+  %dp = getelementptr i8, ptr %h, i64 112
+  %d = load i64, ptr %dp
+  %inp = getelementptr i8, ptr %h, i64 144
+  %in = load i64, ptr %inp
+  %hasd = icmp ne i64 %d, 0
+  %notin = icmp eq i64 %in, 0
+  %add = and i1 %hasd, %notin
+  br i1 %add, label %addtimer, label %look
+addtimer:
+  store i64 1, ptr %inp
+  %th = getelementptr i8, ptr %w, i64 280
+  %old = load ptr, ptr %th
+  %tnx = getelementptr i8, ptr %h, i64 136
+  store ptr %old, ptr %tnx
+  store ptr %h, ptr %th
+  br label %look
+yielded:
+  store i64 0, ptr %sp
+  call void @nz.pool_push(ptr %w, ptr %h)
+  br label %look
+finish:
+  ; The task's stack goes, then it is marked done, last: a joiner may free its record at once.
+  %base = getelementptr i8, ptr %h, i64 8
+  %stk = load ptr, ptr %base
+  %pg = load i64, ptr @nz.pool_page
+  %rw = call i32 @mprotect(ptr %stk, i64 %pg, i32 3)
+  call void @free(ptr %stk)
+  %js = load ptr, ptr @nz.pool_join
+  %jl = call i32 @pthread_mutex_lock(ptr %js)
+  %donep = getelementptr i8, ptr %h, i64 72
+  store i64 1, ptr %donep
+  %jcv = getelementptr i8, ptr %js, i64 128
+  call void @nz.cwake(ptr %jcv)
+  %ju = call i32 @pthread_mutex_unlock(ptr %js)
+  %l3 = call i32 @pthread_mutex_lock(ptr %w)
+  br label %look
+}
+
+; Start a task on the pool: a record, a guarded stack, a first frame, a worker by round robin, and
+; its place in the argument block's head, where a thread's handle goes otherwise. 0, or 1 when no
+; stack could be had.
+define hidden i32 @nz.task_start(ptr %fn, ptr %blk) {
+entry:
+  %slot = alloca ptr, align 8
+  %t = call ptr @malloc(i64 192)
+  %tnull = icmp eq ptr %t, null
+  br i1 %tnull, label %nothread, label %zero
+nothread:
+  ret i32 1
+zero:
+  call void @llvm.memset.p0.i64(ptr %t, i8 0, i64 192, i1 false)
+  %pg = load i64, ptr @nz.pool_page
+  %size = load i64, ptr @nz.pool_stack
+  %total = add i64 %size, %pg
+  %rc = call i32 @posix_memalign(ptr %slot, i64 %pg, i64 %total)
+  %bad = icmp ne i32 %rc, 0
+  br i1 %bad, label %nostack, label %guard
+nostack:
+  call void @free(ptr %t)
+  ret i32 1
+guard:
+  %base = load ptr, ptr %slot
+  %g = call i32 @mprotect(ptr %base, i64 %pg, i32 0)
+  %bp = getelementptr i8, ptr %t, i64 8
+  store ptr %base, ptr %bp
+  %tot = getelementptr i8, ptr %t, i64 16
+  store i64 %total, ptr %tot
+  %top = getelementptr i8, ptr %base, i64 %total
+  %sp = call ptr @nz_ctx_prepare(ptr %top, ptr %t)
+  store ptr %sp, ptr %t
+  %fp = getelementptr i8, ptr %t, i64 56
+  store ptr %fn, ptr %fp
+  %blp = getelementptr i8, ptr %t, i64 64
+  store ptr %blk, ptr %blp
+{SET_LIMIT}
+  %k = atomicrmw add ptr @nz.pool_next, i64 1 monotonic
+  %count = load i64, ptr @nz.pool_count
+  %idx = urem i64 %k, %count
+  %arr = load ptr, ptr @nz.pool_workers
+  %wp = getelementptr ptr, ptr %arr, i64 %idx
+  %w = load ptr, ptr %wp
+  %wfield = getelementptr i8, ptr %t, i64 40
+  store ptr %w, ptr %wfield
+  store ptr %t, ptr %blk
+  %live = atomicrmw add ptr @nz.pool_live, i64 1 monotonic
+  %now = add i64 %live, 1
+  %pk = atomicrmw max ptr @nz.pool_peak, i64 %now monotonic
+  %l = call i32 @pthread_mutex_lock(ptr %w)
+  call void @nz.pool_push(ptr %w, ptr %t)
+  %u = call i32 @pthread_mutex_unlock(ptr %w)
+  ret i32 0
+}
+
+; What the entry stub calls, on the task's own stack: the task's start routine, then the end.
+define hidden void @nz_task_main(ptr %t) {
+entry:
+  %fp = getelementptr i8, ptr %t, i64 56
+  %fn = load ptr, ptr %fp
+  %bp = getelementptr i8, ptr %t, i64 64
+  %blk = load ptr, ptr %bp
+  %r = call ptr %fn(ptr %blk)
+  %live = atomicrmw sub ptr @nz.pool_live, i64 1 monotonic
+  %wp = getelementptr i8, ptr %t, i64 40
+  %w = load ptr, ptr %wp
+  %l = call i32 @pthread_mutex_lock(ptr %w)
+  %sp = getelementptr i8, ptr %t, i64 24
+  store i64 4, ptr %sp
+  %u = call i32 @pthread_mutex_unlock(ptr %w)
+  %wsp = getelementptr i8, ptr %w, i64 272
+  %back = load ptr, ptr %wsp
+  call void @nz_ctx_switch(ptr %t, ptr %back)
+  unreachable
+}
+
+; Back to the worker, the task's state already set under its worker's lock.
+define hidden void @nz.task_suspend(ptr %t) {
+entry:
+  %wp = getelementptr i8, ptr %t, i64 40
+  %w = load ptr, ptr %wp
+  %wsp = getelementptr i8, ptr %w, i64 272
+  %back = load ptr, ptr %wsp
+  call void @nz_ctx_switch(ptr %t, ptr %back)
+  ret void
+}
+
+; Make a parked task runnable, or note that it was woken while still running or parking.
+define hidden void @nz.task_wake(ptr %t) {
+entry:
+  %wp = getelementptr i8, ptr %t, i64 40
+  %w = load ptr, ptr %wp
+  %l = call i32 @pthread_mutex_lock(ptr %w)
+  %sp = getelementptr i8, ptr %t, i64 24
+  %st = load i64, ptr %sp
+  %parked = icmp eq i64 %st, 3
+  br i1 %parked, label %run, label %busy
+run:
+  %dp = getelementptr i8, ptr %t, i64 112
+  store i64 0, ptr %dp
+  store i64 0, ptr %sp
+  call void @nz.pool_push(ptr %w, ptr %t)
+  br label %out
+busy:
+  %running = icmp eq i64 %st, 1
+  %parking = icmp eq i64 %st, 2
+  %either = or i1 %running, %parking
+  br i1 %either, label %note, label %out
+note:
+  %wk = getelementptr i8, ptr %t, i64 32
+  store i64 1, ptr %wk
+  br label %out
+out:
+  %u = call i32 @pthread_mutex_unlock(ptr %w)
+  ret void
+}
+
+define hidden ptr @nz.pool_bucket(ptr %cv) {
+entry:
+  %a = ptrtoint ptr %cv to i64
+  %h = lshr i64 %a, 4
+  %i = and i64 %h, 255
+  %bk = load ptr, ptr @nz.pool_buckets
+  %slot = getelementptr ptr, ptr %bk, i64 %i
+  ret ptr %slot
+}
+
+; Take `%t` off the waiters of whatever it waits on, if it is still on them.
+define hidden void @nz.pool_unwait(ptr %t) {
+entry:
+  %wl = load ptr, ptr @nz.pool_wait
+  %l = call i32 @pthread_mutex_lock(ptr %wl)
+  %cvp = getelementptr i8, ptr %t, i64 128
+  %cv = load ptr, ptr %cvp
+  %none = icmp eq ptr %cv, null
+  br i1 %none, label %out, label %find
+find:
+  %slot = call ptr @nz.pool_bucket(ptr %cv)
+  br label %walk
+walk:
+  %link = phi ptr [ %slot, %find ], [ %nlink, %next ]
+  %cur = load ptr, ptr %link
+  %end = icmp eq ptr %cur, null
+  br i1 %end, label %clear, label %test
+test:
+  %hit = icmp eq ptr %cur, %t
+  %nlink = getelementptr i8, ptr %cur, i64 120
+  br i1 %hit, label %unlink, label %next
+next:
+  br label %walk
+unlink:
+  %after = load ptr, ptr %nlink
+  store ptr %after, ptr %link
+  br label %clear
+clear:
+  store ptr null, ptr %cvp
+  %np = getelementptr i8, ptr %t, i64 120
+  store ptr null, ptr %np
+  br label %out
+out:
+  %u = call i32 @pthread_mutex_unlock(ptr %wl)
+  ret void
+}
+
+; Wait on a condition variable, its mutex held. On a pool task the task parks and its worker runs
+; others; anywhere else the thread waits. Either way the mutex is held again on return, and the
+; caller looks at its condition again, as with any condition variable.
+define hidden i32 @nz.cwait(ptr %cv, ptr %m) {
+entry:
+  %t = load ptr, ptr @nz.cur_task
+  %isthread = icmp eq ptr %t, null
+  br i1 %isthread, label %thread, label %task
+thread:
+  %r = call i32 @pthread_cond_wait(ptr %cv, ptr %m)
+  ret i32 %r
+task:
+  call void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 0)
+  ret i32 0
+}
+
+; As `nz.cwait`, giving up at the wall-clock time `%ts`.
+define hidden i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts) {
+entry:
+  %t = load ptr, ptr @nz.cur_task
+  %isthread = icmp eq ptr %t, null
+  br i1 %isthread, label %thread, label %task
+thread:
+  %r = call i32 @pthread_cond_timedwait(ptr %cv, ptr %m, ptr %ts)
+  ret i32 %r
+task:
+  %s = load i64, ptr %ts
+  %np = getelementptr i8, ptr %ts, i64 8
+  %n = load i64, ptr %np
+  %sn = mul i64 %s, 1000000000
+  %d0 = add i64 %sn, %n
+  %zero = icmp eq i64 %d0, 0
+  %d = select i1 %zero, i64 1, i64 %d0
+  call void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %d)
+  ret i32 0
+}
+
+; Register as a waiter on `%cv`, mark the task parking under its worker's lock, let go of `%m`,
+; and switch to the worker; on resuming, take `%m` again and leave the waiters if still there.
+; The order makes a wake-up between the caller's last look and the switch impossible to lose: a
+; waker needs `%m` to change anything, and finds the task registered and parking.
+define hidden void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %deadline) {
+entry:
+  %wl = load ptr, ptr @nz.pool_wait
+  %l = call i32 @pthread_mutex_lock(ptr %wl)
+  %slot = call ptr @nz.pool_bucket(ptr %cv)
+  %head = load ptr, ptr %slot
+  %np = getelementptr i8, ptr %t, i64 120
+  store ptr %head, ptr %np
+  %cvp = getelementptr i8, ptr %t, i64 128
+  store ptr %cv, ptr %cvp
+  store ptr %t, ptr %slot
+  %u = call i32 @pthread_mutex_unlock(ptr %wl)
+  %wp = getelementptr i8, ptr %t, i64 40
+  %w = load ptr, ptr %wp
+  %wlk = call i32 @pthread_mutex_lock(ptr %w)
+  %dp = getelementptr i8, ptr %t, i64 112
+  store i64 %deadline, ptr %dp
+  %sp = getelementptr i8, ptr %t, i64 24
+  store i64 2, ptr %sp
+  %wu = call i32 @pthread_mutex_unlock(ptr %w)
+  %mu = call i32 @pthread_mutex_unlock(ptr %m)
+  call void @nz.task_suspend(ptr %t)
+  call void @nz.pool_unwait(ptr %t)
+  %ml = call i32 @pthread_mutex_lock(ptr %m)
+  ret void
+}
+
+; Wake every waiter on a condition variable: threads, by the variable, and pool tasks registered
+; on it.
+define hidden void @nz.cwake(ptr %cv) {
+entry:
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
+  %pool = icmp eq i64 %mode, 2
+  br i1 %pool, label %tasks, label %out
+tasks:
+  %wl = load ptr, ptr @nz.pool_wait
+  %l = call i32 @pthread_mutex_lock(ptr %wl)
+  %slot = call ptr @nz.pool_bucket(ptr %cv)
+  br label %walk
+walk:
+  %link = phi ptr [ %slot, %tasks ], [ %nlink, %skip ], [ %link, %woke ]
+  %cur = load ptr, ptr %link
+  %end = icmp eq ptr %cur, null
+  br i1 %end, label %done, label %test
+test:
+  %cvp = getelementptr i8, ptr %cur, i64 128
+  %on = load ptr, ptr %cvp
+  %mine = icmp eq ptr %on, %cv
+  %nlink = getelementptr i8, ptr %cur, i64 120
+  br i1 %mine, label %take, label %skip
+skip:
+  br label %walk
+take:
+  %after = load ptr, ptr %nlink
+  store ptr %after, ptr %link
+  store ptr null, ptr %nlink
+  store ptr null, ptr %cvp
+  call void @nz.task_wake(ptr %cur)
+  br label %woke
+woke:
+  br label %walk
+done:
+  %u = call i32 @pthread_mutex_unlock(ptr %wl)
+  br label %out
+out:
+  ret void
+}
+
+; A pool task that looked and did not wait lets the rest of its worker's tasks run first.
+define hidden void @nz.task_yield() {
+entry:
+  %t = load ptr, ptr @nz.cur_task
+  %none = icmp eq ptr %t, null
+  br i1 %none, label %out, label %yield
+yield:
+  %wp = getelementptr i8, ptr %t, i64 40
+  %w = load ptr, ptr %wp
+  %l = call i32 @pthread_mutex_lock(ptr %w)
+  %sp = getelementptr i8, ptr %t, i64 24
+  store i64 5, ptr %sp
+  %u = call i32 @pthread_mutex_unlock(ptr %w)
+  call void @nz.task_suspend(ptr %t)
+  br label %out
+out:
+  ret void
+}
+
+; With the schedule report asked for, the pool's line: its workers, the most tasks alive at once,
+; and each task's stack — only where the pool ran.
+define hidden void @nz.pool_report() {
+entry:
+  %buf = alloca [128 x i8], align 8
+  %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
+  %pool = icmp eq i64 %mode, 2
+  br i1 %pool, label %say, label %out
+say:
+  %w = load i64, ptr @nz.pool_count
+  %p = load i64, ptr @nz.pool_peak
+  %s = load i64, ptr @nz.pool_stack
+  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 128, ptr @.pool.fmt, i64 %w, i64 %p, i64 %s)
+  %len = sext i32 %n to i64
+  %wr = call i64 @write(i32 2, ptr %buf, i64 %len)
+  br label %out
+out:
+  ret void
+}
+
+; Wait for one task to end: its thread joined, or its pool record marked done and freed.
+define hidden i32 @nz.join_one(ptr %tid) {
+entry:
+  %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
+  %pool = icmp eq i64 %mode, 2
+  br i1 %pool, label %wait, label %thread
+thread:
+  %rc = call i32 @pthread_join(ptr %tid, ptr null)
+  ret i32 %rc
+wait:
+  %js = load ptr, ptr @nz.pool_join
+  %jcv = getelementptr i8, ptr %js, i64 128
+  %l = call i32 @pthread_mutex_lock(ptr %js)
+  br label %check
+check:
+  %dp = getelementptr i8, ptr %tid, i64 72
+  %d = load i64, ptr %dp
+  %done = icmp ne i64 %d, 0
+  br i1 %done, label %free, label %sleep
+sleep:
+  %w = call i32 @nz.cwait(ptr %jcv, ptr %js)
+  br label %check
+free:
+  %u = call i32 @pthread_mutex_unlock(ptr %js)
+  call void @free(ptr %tid)
+  ret i32 0
+}
+"#;
+
+/// The thread model's task, channel and select texts joined to the pool (N83, §7.84): every
+/// condition wait, timed wait and broadcast through `nz.cwait`, `nz.ctimedwait` and `nz.cwake`; a
+/// scope's join through `nz.join_one`; `nz.spawn` starting a pool task when the pool runs; and a
+/// select that does not wait yielding its worker. Applied as the text is emitted, so the
+/// constants stay the thread model's, line for line.
+fn pool_hooked(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 1024);
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed
+            .split_once(" = call i32 @pthread_cond_broadcast(")
+            .map(|(_, r)| r)
+        {
+            out.push_str("  call void @nz.cwake(");
+            out.push_str(rest);
+        } else if line.contains("call i32 @pthread_cond_wait(") {
+            out.push_str(&line.replace("@pthread_cond_wait(", "@nz.cwait("));
+        } else if line.contains("call i32 @pthread_cond_timedwait(") {
+            out.push_str(&line.replace("@pthread_cond_timedwait(", "@nz.ctimedwait("));
+        } else if line == "  %rc = call i32 @pthread_join(ptr %tid, ptr null)" {
+            out.push_str("  %rc = call i32 @nz.join_one(ptr %tid)");
+        } else if line == "  %ai = call i32 @pthread_attr_init(ptr %attr)" {
+            out.push_str(POOL_SPAWN);
+            out.push_str(line);
+        } else if line == "  ret i64 -2" {
+            out.push_str(POOL_YIELD);
+            out.push_str(line);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// What `nz.spawn` does before creating a thread, when the pool's text is present: start a
+/// pool task if the pool runs, refuse if it was asked for and could not start.
+const POOL_SPAWN: &str =
+    "  ; The pool (N83, §7.84), when the environment asked for it; a pool that could not start
+  ; starts nothing, as a thread that could not be created does.
+  %mode = call i64 @nz.pool_mode_get()
+  %pooled = icmp eq i64 %mode, 2
+  br i1 %pooled, label %pool, label %nopool
+pool:
+  %prc = call i32 @nz.task_start(ptr %fn, ptr %blk)
+  %pbad = icmp ne i32 %prc, 0
+  br i1 %pbad, label %undo, label %ok
+nopool:
+  %broken = icmp eq i64 %mode, 4
+  br i1 %broken, label %undo, label %thread
+thread:
+";
+
+/// What a select's timeout does first, when the pool's text is present: a pool task that did not
+/// wait lets its worker's other tasks run (N83, §7.84).
+const POOL_YIELD: &str = "  call void @nz.task_yield()
+";
+
 const SCHED_RUNTIME: &str = r"
 define hidden void @nz.sched_note_spawn() {
 entry:
