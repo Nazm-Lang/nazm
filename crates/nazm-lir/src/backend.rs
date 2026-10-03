@@ -339,6 +339,17 @@ impl Backend for LlvmText {
                 needs: Needs::default(),
             });
         };
+        // The unit's byte layouts on this target, validated before any code (N81): LLVM lays its
+        // aggregates out itself, and the tables are still the contract every backend is held to.
+        if let Err(e) =
+            crate::abi::ByteLayouts::of(u, crate::abi::DataLayout::of(&self.target)).verify()
+        {
+            return Err(vec![Diagnostic::error(
+                nazm_diag::codes::COMPILER_DEFECT,
+                nazm_span::Span::synthetic(),
+                format!("the layout tables of unit `{}` do not hold: {e}", u.source),
+            )]);
+        }
         let (ir, needs) = crate::emit::emit_unit_with(native, u, names, self.debug, self.soa);
         // A freestanding image has one thread and no thread-local storage (N62, §7.64): the
         // failure state the unit declares is an ordinary global there.

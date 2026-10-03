@@ -25,6 +25,7 @@
 //! `nazm capabilities`, both read from the implementation; `docs/capability-matrix.md` carries
 //! the architectural view.
 
+pub mod abi;
 pub mod backend;
 mod debug;
 mod emit;

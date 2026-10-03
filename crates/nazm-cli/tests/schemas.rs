@@ -1144,3 +1144,32 @@ fn resolved_units_and_references_match_the_published_schemas() {
     }
     check_against("nazm.references-1.json", &refs);
 }
+
+#[test]
+fn the_lir_tables_match_the_published_schema_on_every_target_class() {
+    // N81: one program with a record of three widths, an enum with a payload and a `Vec`,
+    // printed for a 64-bit target and for wasm32.
+    let (dir, src) = write_program(
+        "struct Q { flag: Bool, name: Str, n: Int, xs: Ints }\n\
+         enum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\n\
+         fn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => q.n + k, S.Empty() => 0, } }\n\
+         fn main() -> Int { let v = vec_new[Str](); vec_push(v, \"a\"); val(S.Pair(q: Q(flag: true, name: \"x\", n: 1, xs: ints_new()), k: 2)) + vec_len(v) }\n",
+    );
+    let mut objects = Vec::new();
+    for target in ["aarch64-apple-darwin", "wasm32-unknown-unknown"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_nazm"))
+            .args(["lir", "--target", target])
+            .arg(&src)
+            .current_dir(dir.path())
+            .output()
+            .expect("run nazm lir");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        objects.extend(lines(&String::from_utf8_lossy(&out.stdout)));
+    }
+    assert_eq!(objects.len(), 2);
+    check_against("nazm.lir-1.json", &objects);
+}

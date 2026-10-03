@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.lir-1.json",
+  "title": "nazm.lir/1",
+  "description": "What LIR decided for a checked program on one target (N81, `docs/architecture.md` §7.82): the target's data layout, and for every unit its functions' symbols and linkage, what it declares from elsewhere, every record's and enum's byte layout, and which types own anything. Written by `nazm lir` as one line; deterministic. These are the tables both backends read, validated as every native build validates them. The operations each backend still translates on its own are not here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "target", "data_layout", "entry", "units"],
+  "$defs": {
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "offset"],
+      "properties": {
+        "type": { "type": "string", "description": "The field's type as the source spells it; `fn` for a function value." },
+        "offset": { "type": "integer", "minimum": 0, "description": "Bytes from the start of its structure." }
+      }
+    },
+    "structure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size", "align", "fields"],
+      "properties": {
+        "name": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 },
+        "align": { "type": "integer", "minimum": 1 },
+        "owns": { "type": "boolean", "description": "Whether a value of it owns anything a drop must give back." },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" }, "description": "In canonical order, which is layout order." }
+      }
+    }
+  },
+  "properties": {
+    "schema": { "const": "nazm.lir/1" },
+    "target": { "type": "string", "description": "The target triple." },
+    "data_layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pointer", "int", "bool", "str"],
+      "properties": {
+        "pointer": { "type": "integer", "description": "A pointer's width in bytes: 8 on every 64-bit target, 4 on wasm32." },
+        "int": { "const": 8 },
+        "bool": { "const": 1 },
+        "str": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size", "align", "pointer", "length", "owner"],
+          "properties": {
+            "size": { "type": "integer" },
+            "align": { "type": "integer" },
+            "pointer": { "type": "integer", "description": "The offset of the pointer to the bytes." },
+            "length": { "type": "integer", "description": "The offset of the 8-byte length." },
+            "owner": { "type": "integer", "description": "The offset of the owning allocation, or null." }
+          }
+        }
+      }
+    },
+    "entry": { "type": "string", "description": "The symbol of the root module's `main`." },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artefact", "source", "instance", "functions", "externals", "records", "enums"],
+        "properties": {
+          "artefact": { "type": "string", "description": "`mN` for a module's unit, `gN` for a generic instance's." },
+          "source": { "type": "string" },
+          "instance": { "type": "boolean" },
+          "functions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["symbol", "linkage", "params", "ret"],
+              "properties": {
+                "symbol": { "type": "string" },
+                "linkage": { "enum": ["internal", "hidden"] },
+                "params": { "type": "array", "items": { "type": "string" } },
+                "ret": { "type": "string" }
+              }
+            }
+          },
+          "externals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["symbol", "foreign"],
+              "properties": {
+                "symbol": { "type": "string" },
+                "foreign": { "type": "boolean" }
+              }
+            }
+          },
+          "records": { "type": "array", "items": { "$ref": "#/$defs/structure" } },
+          "enums": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "size", "align", "tag", "payload", "owns", "variants"],
+              "properties": {
+                "name": { "type": "string" },
+                "size": { "type": "integer" },
+                "align": { "type": "integer" },
+                "tag": { "const": 0, "description": "The offset of the 8-byte tag." },
+                "payload": { "type": "integer", "description": "The offset of the payload area; each variant's field offsets are relative to it." },
+                "owns": { "type": "boolean" },
+                "variants": { "type": "array", "items": { "$ref": "#/$defs/structure" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
