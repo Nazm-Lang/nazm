@@ -131,6 +131,10 @@
         "abi_revision": {
           "type": "integer"
         },
+        "archive": {
+          "type": "string",
+          "description": "The BLAKE3 digest of the runtime artifact linked instead of a generated runtime (`nazm build --runtime`, N82); absent when the runtime was generated."
+        },
         "digest": {
           "type": "string",
           "pattern": "^blake3:[0-9a-f]{64}$"

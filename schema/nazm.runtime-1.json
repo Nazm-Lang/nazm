@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.runtime-1.json",
+  "title": "nazm.runtime/1",
+  "description": "A runtime artifact's manifest (N82, `docs/architecture.md` §7.83): what `libnazmrt.a` beside it is. Written by `nazm runtime build`; read by `nazm build --runtime` and `nazm runtime verify`, which refuse an artifact whose schema, ABI revision, runtime digest, target, profile or archive bytes do not fit, or that lacks a service the program reaches.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "abi", "runtime", "target", "profile", "services", "opt_level", "toolchain", "text", "archive"],
+  "properties": {
+    "schema": { "const": "nazm.runtime/1" },
+    "abi": { "type": "integer", "description": "The runtime ABI revision it was built at." },
+    "runtime": { "type": "string", "description": "The runtime digest of the compiler that built it: BLAKE3 over every runtime text, the entry and the inventory, hex." },
+    "target": { "type": "string" },
+    "profile": { "enum": ["hosted", "board", "wasm"] },
+    "services": {
+      "type": "array",
+      "items": { "enum": ["tasks", "channels", "sequences", "io", "join", "strings", "shims", "stack", "closures"] },
+      "description": "The services it provides: every one for `hosted`; `stack` for a board or WebAssembly, whose missing services the freestanding build itself refuses."
+    },
+    "opt_level": { "type": "integer" },
+    "toolchain": { "type": "string", "description": "The first line of the C compiler's `--version`." },
+    "text": { "type": "string", "description": "BLAKE3 of the runtime text compiled, hex." },
+    "archive": { "type": "string", "description": "BLAKE3 of `libnazmrt.a`, hex: what the archive's bytes must hash to." }
+  }
+}

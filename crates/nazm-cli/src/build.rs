@@ -292,6 +292,7 @@ pub(crate) fn run(
     // program reaches beyond the board's, named, refuse the build after code generation.
     let freestanding = target.os == nazm_lir::backend::Os::None;
     let mut unhosted: Vec<String> = Vec::new();
+    let mut reached = nazm_lir::Needs::default();
     clock.mark("load");
     let artefacts = match nazm_core::on_lowered(
         map,
@@ -355,6 +356,8 @@ pub(crate) fn run(
                     wasm: target.is_wasm(),
                     adapter: choice.adapter,
                 }),
+                choice.runtime.is_some(),
+                &mut reached,
             );
             clock.mark("codegen");
             made
@@ -410,6 +413,29 @@ pub(crate) fn run(
             }
             return ExitCode::from(exit::CHECK_FAILED);
         }
+    };
+
+    // A runtime artifact (N82, §7.83): checked against this compiler, the target and everything
+    // the program reached before any file is written; refused by name, never replaced by a
+    // generated runtime.
+    let prebuilt = match choice.runtime {
+        None => None,
+        Some(dir) => match crate::runtime_artifact::fits(dir, &target, Some(reached)) {
+            Ok(f) => Some(f.archive),
+            Err(why) => {
+                if summary {
+                    return summarized(
+                        Status::ToolchainFailed,
+                        exit::TOOLCHAIN_FAILED,
+                        &[],
+                        Some(map),
+                        None,
+                    );
+                }
+                eprintln!("nazm: {why}");
+                return ExitCode::from(exit::TOOLCHAIN_FAILED);
+            }
+        },
     };
 
     // Temporaries beside the output, so the final move is a rename within one filesystem
@@ -610,6 +636,8 @@ pub(crate) fn run(
 
     // Deterministic: the units are in load order and the support artefacts last, so the
     // command line does not depend on anything the filesystem decided.
+    // The runtime artifact after every object that calls it, and before the foreign inputs.
+    objects.extend(prebuilt);
     objects.extend(choice.link.iter().cloned());
     clock.mark("native_compile");
     // Objects for the target's own toolchain (N57): every object in link order, renamed by its
@@ -880,6 +908,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) timings: bool,
     /// Carry debug information, for a debugger (N48).
     pub(crate) debug: bool,
+    /// A runtime artifact to link instead of generating one (N82, §7.83).
+    pub(crate) runtime: Option<&'a Path>,
 }
 
 /// A freestanding build's choices (N62, N64): where the parts it cannot have are named, whether
@@ -916,6 +946,7 @@ struct Artefact {
 /// The order is load order, then the runtime, then the entry. Nothing here reads a
 /// directory, so the same program produces the same artefacts in the same order. A unit the
 /// backend can key before generating it, and whose object is in the store, is not generated.
+#[allow(clippy::too_many_arguments)]
 fn emit_artefacts(
     native: &nazm_lir::Native,
     names: &nazm_lir::SourceNames<'_>,
@@ -923,6 +954,8 @@ fn emit_artefacts(
     cached: &dyn Fn(&str) -> Option<Vec<u8>>,
     library: bool,
     freestanding: Option<Freestanding<'_>>,
+    prebuilt: bool,
+    reached: &mut nazm_lir::Needs,
 ) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
     let mut needs = backend.baseline();
@@ -997,16 +1030,20 @@ fn emit_artefacts(
             .map(|s| s.symbol.as_str())
             .collect();
         refused.extend(freestanding_refusals(&out, &runtime, &foreign));
+        *reached = needs;
         if !refused.is_empty() {
             return Ok(out);
         }
-        out.push(Artefact {
-            name: "runtime".to_owned(),
-            code: nazm_lir::backend::Code::Llvm(runtime),
-            instance: false,
-            key: None,
-            reused: false,
-        });
+        // A runtime artifact (N82) is linked instead, once it is checked to fit.
+        if !prebuilt {
+            out.push(Artefact {
+                name: "runtime".to_owned(),
+                code: nazm_lir::backend::Code::Llvm(runtime),
+                instance: false,
+                key: None,
+                reused: false,
+            });
+        }
         if !library {
             out.push(Artefact {
                 name: "entry".to_owned(),
@@ -1030,14 +1067,18 @@ fn emit_artefacts(
         return Ok(out);
     }
     // After every unit, because what the runtime must define is the union of what the
-    // modules reached — a whole-program fact, and the only one emission needs.
-    out.push(Artefact {
-        name: "runtime".to_owned(),
-        code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),
-        instance: false,
-        key: None,
-        reused: false,
-    });
+    // modules reached — a whole-program fact, and the only one emission needs. A runtime
+    // artifact (N82) is linked instead, once it is checked to provide all of it.
+    *reached = needs;
+    if !prebuilt {
+        out.push(Artefact {
+            name: "runtime".to_owned(),
+            code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),
+            instance: false,
+            key: None,
+            reused: false,
+        });
+    }
     // A library has no process entry: C's `main` is the caller's (N55).
     if library {
         return Ok(out);

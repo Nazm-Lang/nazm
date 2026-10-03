@@ -1173,3 +1173,33 @@ fn the_lir_tables_match_the_published_schema_on_every_target_class() {
     assert_eq!(objects.len(), 2);
     check_against("nazm.lir-1.json", &objects);
 }
+
+#[test]
+fn a_runtime_manifest_matches_the_published_schema_for_every_profile() {
+    // N82: a hosted, a board and a WebAssembly artifact.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut objects = Vec::new();
+    for (name, target) in [
+        ("hosted", None),
+        ("board", Some("aarch64-unknown-none")),
+        ("wasm", Some("wasm32-unknown-unknown")),
+    ] {
+        let mut c = Command::new(NAZM);
+        c.args(["runtime", "build", "-o", name])
+            .current_dir(dir.path());
+        if let Some(t) = target {
+            c.args(["--target", t]);
+        }
+        let out = c.output().expect("run nazm runtime build");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = std::fs::read_to_string(dir.path().join(name).join("nazm-runtime.json"))
+            .expect("manifest");
+        objects.extend(lines(&text));
+    }
+    assert_eq!(objects.len(), 3);
+    check_against("nazm.runtime-1.json", &objects);
+}
