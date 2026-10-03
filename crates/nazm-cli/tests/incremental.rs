@@ -1667,6 +1667,6 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     // and N37 for authority, and N38 for provenance, and N42 for foreign functions, and N49
     // for escapes and the syntax beside them, N50 for function values, N51 for effect
     // parameters, and N52 for declassification, N53–N55 for channels, the clock and FFI v2,
-    // N62 for device registers, and N66 for `ints_sum`.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 20);
+    // N62 for device registers, N66 for `ints_sum`, and N76 for Unicode escapes.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 21);
 }

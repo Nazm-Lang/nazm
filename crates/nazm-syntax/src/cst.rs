@@ -35,9 +35,15 @@
 //! layer on top. Its types stay in this module — the rest of the workspace sees [`Cst`],
 //! [`CstNode`], [`Leaf`] and [`SyntaxKind`].
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use cstree::build::GreenNodeBuilder;
+use cstree::green::{GreenNode, GreenToken};
+use cstree::interning::{InternKey, Interner, Resolver, TokenKey};
 use cstree::syntax::{ResolvedNode, SyntaxNode};
 use cstree::text::TextRange;
+use cstree::util::NodeOrToken;
 use cstree::{RawSyntaxKind, Syntax};
 use nazm_span::{FileId, Span};
 
@@ -403,7 +409,61 @@ impl Syntax for SyntaxKind {
 pub struct Cst {
     root: ResolvedNode<SyntaxKind>,
     file: FileId,
+    /// The strings every leaf's key resolves to, kept so a later revision can extend them
+    /// and still resolve this tree's leaves (N76).
+    strings: Arc<Strings>,
 }
+
+/// The leaf texts of one or more trees: an append-only table, so a key handed out once
+/// resolves to the same text for as long as any copy of the table lives (N76).
+///
+/// cstree's own interner cannot be copied, and a reused green node keeps the keys it was
+/// built with — so incremental reparse clones this table, extends it with the new
+/// region's texts, and resolves old and new leaves through the one extended copy.
+#[derive(Debug, Clone, Default)]
+pub struct Strings {
+    texts: Vec<Box<str>>,
+    index: HashMap<Box<str>, u32>,
+}
+
+/// More distinct leaf texts than a [`TokenKey`] can name.
+#[derive(Debug, Clone, Copy)]
+pub struct TooManyStrings;
+
+impl Resolver<TokenKey> for Strings {
+    fn try_resolve(&self, key: TokenKey) -> Option<&str> {
+        self.texts
+            .get(usize::try_from(key.into_u32()).ok()?)
+            .map(|t| &**t)
+    }
+}
+
+impl Interner<TokenKey> for Strings {
+    type Error = TooManyStrings;
+
+    fn try_get_or_intern(&mut self, text: &str) -> Result<TokenKey, Self::Error> {
+        if let Some(&k) = self.index.get(text) {
+            return TokenKey::try_from_u32(k).ok_or(TooManyStrings);
+        }
+        let k = u32::try_from(self.texts.len()).map_err(|_| TooManyStrings)?;
+        let key = TokenKey::try_from_u32(k).ok_or(TooManyStrings)?;
+        self.texts.push(text.into());
+        self.index.insert(text.into(), k);
+        Ok(key)
+    }
+}
+
+/// A tree's resolver: the table it shares with the [`Cst`] that owns it.
+struct Shared(Arc<Strings>);
+
+impl Resolver<TokenKey> for Shared {
+    fn try_resolve(&self, key: TokenKey) -> Option<&str> {
+        self.0.try_resolve(key)
+    }
+}
+
+/// One root-level child of a tree, owned: what incremental reparse moves between trees.
+pub(crate) type GreenChild = NodeOrToken<GreenNode, GreenToken>;
 
 /// The result of parsing one file into its concrete tree.
 #[derive(Debug, Clone)]
@@ -430,6 +490,40 @@ pub struct CstNode<'a> {
 }
 
 impl Cst {
+    /// A tree of `file` whose root is `green`, its leaves resolved through `strings`.
+    pub(crate) fn from_green(file: FileId, green: GreenNode, strings: Strings) -> Self {
+        let strings = Arc::new(strings);
+        Self {
+            root: SyntaxNode::new_root_with_resolver(green, Shared(Arc::clone(&strings))),
+            file,
+            strings,
+        }
+    }
+
+    /// A tree of `file` assembled from root-level children, which may come from other trees
+    /// whose keys `strings` extends.
+    pub(crate) fn from_children(file: FileId, children: Vec<GreenChild>, strings: Strings) -> Self {
+        let green = GreenNode::new(SyntaxKind::SourceFile.into_raw(), children);
+        Self::from_green(file, green, strings)
+    }
+
+    /// The root's children, owned: cheap, each is a reference-counted green node or token.
+    pub(crate) fn root_children(&self) -> Vec<GreenChild> {
+        self.root
+            .green()
+            .children()
+            .map(|c| match c {
+                NodeOrToken::Node(n) => NodeOrToken::Node(n.clone()),
+                NodeOrToken::Token(t) => NodeOrToken::Token(t.clone()),
+            })
+            .collect()
+    }
+
+    /// A copy of the strings this tree's leaves resolve through, for a tree built from it.
+    pub(crate) fn strings(&self) -> Strings {
+        (*self.strings).clone()
+    }
+
     /// The file this tree is of.
     #[must_use]
     pub const fn file(&self) -> FileId {
@@ -637,8 +731,10 @@ impl<'a> Sink<'a> {
         self.events.push(Event::Close);
     }
 
-    /// Build the tree: every lexeme in order, the nodes around them, trailing trivia last.
-    pub(crate) fn finish(self, file: FileId) -> Cst {
+    /// Build the tree: every lexeme in order, the nodes around them, and — when the parse
+    /// reached the end of the file — the trailing trivia last. Returns a `SourceFile` node
+    /// and the strings its leaves use, which extend `strings` (N76).
+    pub(crate) fn finish_green(self, strings: Strings, at_end: bool) -> (GreenNode, Strings) {
         let Self {
             text,
             lexemes,
@@ -667,7 +763,7 @@ impl<'a> Sink<'a> {
             text,
             lexemes,
             next: 0,
-            builder: GreenNodeBuilder::new(),
+            builder: GreenNodeBuilder::from_interner(strings),
         };
         b.builder.start_node(SyntaxKind::SourceFile);
         let mut pending = sorted.iter().peekable();
@@ -684,20 +780,19 @@ impl<'a> Sink<'a> {
             }
         }
         // Every lexeme after the last token: trailing whitespace and comments, and `Eof`,
-        // which owns no byte and is not a leaf.
-        while b.next < lexemes.len() {
+        // which owns no byte and is not a leaf. A region that stopped before the end owns
+        // none of them: they are the leading trivia of the item it stopped at.
+        while at_end && b.next < lexemes.len() {
             b.trivia();
             b.next += 1;
         }
         b.builder.finish_node();
         let (green, cache) = b.builder.finish();
-        let root = match cache.and_then(cstree::build::NodeCache::into_interner) {
-            Some(interner) => SyntaxNode::new_root_with_resolver(green, interner),
-            // `GreenNodeBuilder::new` owns its cache, so it always hands it back; an
-            // empty interner would resolve nothing, which the round-trip tests would see.
-            None => SyntaxNode::new_root_with_resolver(green, cstree::interning::new_interner()),
-        };
-        Cst { root, file }
+        // `from_interner` owns its cache, so it always hands it back.
+        let strings = cache
+            .and_then(cstree::build::NodeCache::into_interner)
+            .unwrap_or_default();
+        (green, strings)
     }
 }
 
@@ -708,7 +803,7 @@ struct Builder<'a> {
     lexemes: &'a [Lexeme],
     /// The next lexeme not yet in the tree.
     next: usize,
-    builder: GreenNodeBuilder<'static, 'static, SyntaxKind>,
+    builder: GreenNodeBuilder<'static, 'static, SyntaxKind, Strings>,
 }
 
 impl Builder<'_> {

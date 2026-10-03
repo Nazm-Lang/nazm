@@ -8,6 +8,7 @@
 pub mod ast;
 pub mod cst;
 pub mod format;
+pub mod incremental;
 pub mod lexer;
 pub mod parser;
 
@@ -19,6 +20,7 @@ pub use ast::{
 };
 pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;
+pub use incremental::{EditError, ParseStats, Revision, TextEdit};
 pub use lexer::{
     lex, lex_in, lex_lossless_in, lex_with_comments, lex_with_comments_in, Lexeme, Token, TokenKind,
 };

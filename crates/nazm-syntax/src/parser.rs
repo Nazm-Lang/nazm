@@ -79,8 +79,9 @@ const SUPPORTED: &str = concat!(
 pub struct Parser<'a> {
     /// The file being read, for spans invented where no token exists.
     file: FileId,
-    /// The scan's tokens, borrowed from its lexemes rather than copied out of them.
-    tokens: &'a [&'a Token],
+    /// The scan's tokens, borrowed from its lexemes rather than copied out of them, behind
+    /// a view that remembers the furthest one read (N76).
+    tokens: Toks<'a>,
     pos: usize,
     errors: Vec<Diagnostic>,
     /// Current parser recursion, against [`MAX_NESTING`].
@@ -110,6 +111,100 @@ pub struct Parser<'a> {
     hole_open: bool,
 }
 
+/// The parser's view of the token list: every read goes through it, and it remembers the
+/// furthest index read since it was last reset.
+///
+/// That high-water mark is how far an item's parse *looked*, which is not how far it
+/// consumed: the delimiter-balance scan behind cascade muting reads forward to the next
+/// item that must begin a new one. Incremental reparse (N76) may reuse an item only if
+/// nothing it read has changed, so it needs exactly this number, and the convergence tests
+/// are what would notice a read that bypassed it.
+#[derive(Debug)]
+struct Toks<'a> {
+    all: &'a [&'a Token],
+    seen: std::cell::Cell<usize>,
+}
+
+impl<'a> Toks<'a> {
+    fn get(&self, index: usize) -> Option<&'a Token> {
+        // Past the end is `Eof`'s business: reading there is reading the end of the file.
+        let noted = index.min(self.all.len().saturating_sub(1));
+        if noted > self.seen.get() {
+            self.seen.set(noted);
+        }
+        self.all.get(index).copied()
+    }
+
+    /// The tokens `from..to`, every one of them counted as read.
+    fn range(&self, from: usize, to: usize) -> &'a [&'a Token] {
+        if to > from {
+            let _ = self.get(to - 1);
+        }
+        self.all.get(from..to).unwrap_or_default()
+    }
+
+    /// Start counting again, from `index`.
+    fn reset(&self, index: usize) {
+        self.seen.set(index);
+    }
+}
+
+/// One top-level item's parse: what [`crate::incremental`] keeps per chunk (N76).
+#[derive(Debug, Clone)]
+pub(crate) struct ChunkParse {
+    /// Its first token's index, and one past its last consumed token's.
+    pub start: usize,
+    pub end: usize,
+    /// The furthest token its parse read.
+    pub seen: usize,
+    /// Whether diagnostics were muted as cascades when it began.
+    pub muted: bool,
+    /// Whether they were muted when it ended — the next chunk's entry state.
+    pub muted_after: bool,
+    /// The abstract item it produced, if it produced one.
+    pub item: Option<Item>,
+    /// Every syntax diagnostic reported while parsing it, in order.
+    pub errors: Vec<Diagnostic>,
+}
+
+/// One top-level item of the abstract tree.
+///
+/// Sized by its largest variant on purpose: an item is built once and moved straight into
+/// the `Arc` its chunk keeps, so boxing a function would be one allocation more per item
+/// and nothing saved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum Item {
+    Function(Function),
+    Record(Record),
+    Enum(Enum),
+    Import(Import),
+}
+
+/// Where a parse of top-level items starts and where it may stop (N76).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Region<'r> {
+    /// The token the first item begins at.
+    pub start: usize,
+    /// The cascade mute in force there.
+    pub muted: bool,
+    /// Ascending `(token, mute)` pairs: the parse stops at the first item boundary that is
+    /// one of these tokens with that mute in force. Empty for a full parse.
+    pub landings: &'r [(usize, bool)],
+}
+
+/// The result of parsing a [`Region`].
+#[derive(Debug)]
+pub(crate) struct RegionParse {
+    pub chunks: Vec<ChunkParse>,
+    /// The token the parse stopped at: a landing, or the end of the file.
+    pub stop: usize,
+    /// The root-level green children of the region, in order, and the strings they use.
+    pub green: cstree::green::GreenNode,
+    pub strings: crate::cst::Strings,
+    pub hole: Option<HoleSite>,
+}
+
 /// What one position in a block turned out to hold.
 #[derive(Debug)]
 enum Parsed {
@@ -130,30 +225,104 @@ pub(crate) fn parse_lossless(
     tokens: &[&Token],
     hole: Option<u32>,
 ) -> (Program, Vec<Diagnostic>, Cst) {
+    let region = Region {
+        start: 0,
+        muted: false,
+        landings: &[],
+    };
+    let parsed = parse_region(
+        file,
+        text,
+        lexemes,
+        tokens,
+        region,
+        hole,
+        crate::cst::Strings::default(),
+    );
+    let mut program = Program {
+        functions: Vec::new(),
+        records: Vec::new(),
+        enums: Vec::new(),
+        imports: Vec::new(),
+        hole: parsed.hole,
+    };
+    let mut errors = Vec::new();
+    for c in parsed.chunks {
+        errors.extend(c.errors);
+        if let Some(item) = c.item {
+            item.push_into(&mut program);
+        }
+    }
+    (
+        program,
+        errors,
+        Cst::from_green(file, parsed.green, parsed.strings),
+    )
+}
+
+impl Item {
+    /// Put this item where a [`Program`] keeps its kind, after the ones already there.
+    pub(crate) fn push_into(self, program: &mut Program) {
+        match self {
+            Self::Function(f) => program.functions.push(f),
+            Self::Record(r) => program.records.push(r),
+            Self::Enum(e) => program.enums.push(e),
+            Self::Import(i) => program.imports.push(i),
+        }
+    }
+}
+
+/// Parse top-level items from `region.start` until a landing or the end of the file.
+///
+/// `lexemes` begins at the lexeme the region's first item owns — its leading trivia, or
+/// its first token — and `tokens` is the **whole** file's token list, because an item's
+/// parse may read past its own end. The green tree returned is a `SourceFile` node whose
+/// children are the region's root-level children: what a full parse puts at the root for
+/// these items, and, when the region reaches the end of the file, the trailing trivia.
+pub(crate) fn parse_region(
+    file: FileId,
+    text: &str,
+    lexemes: &[Lexeme],
+    tokens: &[&Token],
+    region: Region<'_>,
+    hole: Option<u32>,
+    strings: crate::cst::Strings,
+) -> RegionParse {
     let mut p = Parser {
         file,
-        tokens,
-        pos: 0,
+        tokens: Toks {
+            all: tokens,
+            seen: std::cell::Cell::new(region.start),
+        },
+        pos: region.start,
         errors: Vec::new(),
         depth: 0,
         built: 0,
         reported_too_deep: false,
         sink: Sink::new(text, lexemes),
         poisoned: false,
-        item_start: 0,
-        muted: false,
+        item_start: region.start,
+        muted: region.muted,
         hole,
         hole_site: None,
         hole_open: false,
     };
-    let mut functions = Vec::new();
-    let mut records = Vec::new();
-    let mut enums = Vec::new();
-    let mut imports = Vec::new();
+    let mut chunks = Vec::new();
+    let mut landings = region.landings.iter().peekable();
 
     while !p.at(&TokenKind::Eof) {
+        // A landing behind the parse was crossed by an item that grew past it.
+        while landings.next_if(|(at, _)| *at < p.pos).is_some() {}
+        if landings
+            .peek()
+            .is_some_and(|(at, muted)| *at == p.pos && *muted == p.muted)
+        {
+            break;
+        }
         let at = p.checkpoint();
         let start = p.pos;
+        let entry_muted = p.muted;
+        p.tokens.reset(start);
         // Per item: abandoning one function unwinds out of `leave()` calls that never
         // ran, and a stale count would shrink the budget for every function after it.
         p.depth = 0;
@@ -169,8 +338,8 @@ pub(crate) fn parse_lossless(
         ) {
             p.muted = false;
         }
-        let parsed = if p.at(&TokenKind::Use) {
-            p.import().map(|i| imports.push(i)).is_some()
+        let item = if p.at(&TokenKind::Use) {
+            p.import().map(Item::Import)
         } else {
             // `struct`/`enum`, each optionally behind a `pub`. Looking one token past a
             // `pub` is what keeps the kinds of item apart without any grammar knowing
@@ -181,37 +350,42 @@ pub(crate) fn parse_lossless(
                 Some(p.peek().clone())
             };
             match after_pub {
-                Some(TokenKind::Struct) => p.record().map(|r| records.push(r)).is_some(),
-                Some(TokenKind::Enum) => p.enumeration().map(|e| enums.push(e)).is_some(),
-                _ => p.function().map(|f| functions.push(f)).is_some(),
+                Some(TokenKind::Struct) => p.record().map(Item::Record),
+                Some(TokenKind::Enum) => p.enumeration().map(Item::Enum),
+                _ => p.function().map(Item::Function),
             }
         };
-        if !parsed {
+        if item.is_none() {
             // Skip to the next plausible item so one bad item does not cascade into an
             // error per token for the rest of the file. What was read and what was
             // skipped are one error node: they are the author's bytes either way.
             p.recover_to_item(start);
             p.wrap(at, SyntaxKind::Error);
         }
+        chunks.push(ChunkParse {
+            start,
+            end: p.pos,
+            seen: p.tokens.seen.get().max(p.pos),
+            muted: entry_muted,
+            muted_after: p.muted,
+            item,
+            errors: std::mem::take(&mut p.errors),
+        });
     }
 
+    let stop = p.pos;
+    let at_end = p.at(&TokenKind::Eof);
     let Parser {
-        errors,
-        sink,
-        hole_site,
-        ..
+        sink, hole_site, ..
     } = p;
-    (
-        Program {
-            functions,
-            records,
-            enums,
-            imports,
-            hole: hole_site,
-        },
-        errors,
-        sink.finish(file),
-    )
+    let (green, strings) = sink.finish_green(strings, at_end);
+    RegionParse {
+        chunks,
+        stop,
+        green,
+        strings,
+        hole: hole_site,
+    }
 }
 
 /// How deep the syntax tree may be.
@@ -304,17 +478,22 @@ impl<'a> Parser<'a> {
     /// start an item (`fn`, `pub`) or the end of the file.
     fn delimiters_balanced(&self) -> bool {
         let mut open = [0usize; 3];
-        let rest = self.tokens.get(self.item_start..).unwrap_or_default();
+        // Every token read through the view, one at a time, so the furthest one this scan
+        // reached is exactly what incremental reparse sees it reached (N76).
+        let rest = |i: usize| self.tokens.get(self.item_start + i);
         // The item's own leading `pub` and `fn` are where it starts, not where the next
         // one does.
-        let skip = rest
-            .iter()
-            .take_while(|t| matches!(t.kind, TokenKind::Pub | TokenKind::Fn))
+        let skip = (0..)
+            .take_while(|&i| {
+                rest(i).is_some_and(|t| matches!(t.kind, TokenKind::Pub | TokenKind::Fn))
+            })
             .count();
-        for (i, t) in rest.iter().enumerate().skip(skip) {
+        let mut i = skip;
+        while let Some(t) = rest(i) {
+            i += 1;
             // `fn NAME` begins the next item; `fn(` is a closure or a function type (N50).
             let item_fn = matches!(t.kind, TokenKind::Fn)
-                && matches!(rest.get(i + 1).map(|n| &n.kind), Some(TokenKind::Ident(_)));
+                && matches!(rest(i).map(|n| &n.kind), Some(TokenKind::Ident(_)));
             let (slot, opens) = match t.kind {
                 TokenKind::Fn if !item_fn => continue,
                 TokenKind::Fn | TokenKind::Pub | TokenKind::Eof => break,
@@ -1683,7 +1862,7 @@ impl<'a> Parser<'a> {
     /// Braces opened and not closed by the tokens consumed since `start`.
     fn left_open(&self, start: usize) -> usize {
         let mut braces = 0usize;
-        for t in self.tokens.get(start..self.pos).unwrap_or_default() {
+        for t in self.tokens.range(start, self.pos) {
             match t.kind {
                 TokenKind::LBrace => braces += 1,
                 TokenKind::RBrace => braces = braces.saturating_sub(1),
