@@ -50,11 +50,15 @@ pub enum Rule {
     /// Every contract entrypoint that writes the state decides on its `caller` (N72, §7.74): a
     /// write no signer constraint guards is refused by name.
     SignedWrites,
+    /// No function of the program's own modules exercises authority it does not hold (N79,
+    /// §7.80): its recorded inherited authority is empty, so `main`'s parameters are the only
+    /// root.
+    ExplicitAuthority,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -69,6 +73,7 @@ impl Rule {
         Self::NoBlocking,
         Self::BoundedLoops,
         Self::SignedWrites,
+        Self::ExplicitAuthority,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -89,6 +94,7 @@ impl Rule {
             Self::NoBlocking => "no-blocking",
             Self::BoundedLoops => "bounded-loops",
             Self::SignedWrites => "signed-writes",
+            Self::ExplicitAuthority => "explicit-authority",
         }
     }
 
@@ -108,7 +114,8 @@ impl Rule {
             | Self::NoSelect
             | Self::NoBlocking
             | Self::BoundedLoops
-            | Self::SignedWrites => None,
+            | Self::SignedWrites
+            | Self::ExplicitAuthority => None,
         }
     }
 }
@@ -129,10 +136,12 @@ pub enum Profile {
     /// Account-oriented contracts (N72, §7.74): `web3`, and no state write without a decision on
     /// the signer.
     Accounts,
+    /// Authority only by holding it (N79, §7.80): no function inherits its caller's.
+    Authority,
 }
 
 impl Profile {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::General,
         Self::Embedded,
         Self::Critical,
@@ -140,6 +149,7 @@ impl Profile {
         Self::Realtime,
         Self::Web3,
         Self::Accounts,
+        Self::Authority,
     ];
 
     #[must_use]
@@ -152,6 +162,7 @@ impl Profile {
             Self::Realtime => "realtime",
             Self::Web3 => "web3",
             Self::Accounts => "accounts",
+            Self::Authority => "authority",
         }
     }
 
@@ -214,6 +225,7 @@ impl Profile {
                 Rule::NoBlocking,
                 Rule::SignedWrites,
             ],
+            Self::Authority => &[Rule::ExplicitAuthority],
         }
     }
 }
@@ -551,6 +563,32 @@ pub fn evaluate(
                         note: "this reads a clock".to_owned(),
                     })
                     .collect()
+            } else if rule == Rule::ExplicitAuthority {
+                // The recorded contract (§7.80), never a re-derivation: what `nazm inspect`
+                // shows is what this refuses.
+                (0..res.functions().len())
+                    .map(FnId::from_index)
+                    .filter(|&g| !toolchain(graph, res, g))
+                    .filter_map(|g| {
+                        let f = res.function(g)?;
+                        let held = res.inherits(g);
+                        if held.is_empty() {
+                            return None;
+                        }
+                        let kinds: Vec<String> = held
+                            .iter()
+                            .map(|k| format!("`{}`", k.type_name()))
+                            .collect();
+                        Some(Witness {
+                            span: res.inherited_at(g).first().copied().unwrap_or(f.name_span),
+                            note: format!(
+                                "`{}` exercises {} it does not hold: its caller's, inherited",
+                                f.name,
+                                kinds.join(", ")
+                            ),
+                        })
+                    })
+                    .collect()
             } else if rule == Rule::DeclaredEffects {
                 res.functions()
                     .iter()
@@ -657,6 +695,7 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::NoRecursion => "a call cycle has no stack bound the compiler can state, and a call through a function value has a target it does not know; call each function directly, without a cycle".to_owned(),
                 Rule::NoSelect => "this profile admits no select: receive from one channel, so the order is the program's".to_owned(),
                 Rule::NoBlocking => "this profile admits nothing whose latency is another task's or the scheduler's: no channel send, receive or select".to_owned(),
+                Rule::ExplicitAuthority => "take the capability as a parameter and pass it from `main`: under this profile a function holds only what its scope holds (`nazm inspect` shows each function's `inherits`)".to_owned(),
                 Rule::SignedWrites => "compare `caller` with the state's owner, or another signer it names, before writing; an unguarded write lets anyone change the state".to_owned(),
                 Rule::BoundedLoops => "write the loop as a counter from a literal, compared with a literal and stepped towards it once per turn by a positive literal (§7.65); `nazm check --profile-report` lists every loop's bound".to_owned(),
             })

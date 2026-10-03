@@ -83,10 +83,16 @@ impl Verifier<'_> {
         }
         self.region(&f.body, Region::Value);
         if let Some(t) = &f.body.tail {
-            if !fits(t, f.ret) {
+            if !self.returns(t) {
                 self.bad("the body's value is not the declared result type");
             }
         }
+    }
+
+    /// Whether a result fits the declared one up to effects, as an argument does (N79): the
+    /// checker accepts a function value whose effects are a subset of the declared result's.
+    fn returns(&self, e: &Expr) -> bool {
+        e.ty.is_none_or(|t| self.res.types().same_shape(t, self.f.ret))
     }
 
     fn local_ty(&mut self, id: crate::ir::LocalId) -> Option<Type> {
@@ -213,7 +219,7 @@ impl Verifier<'_> {
             }
             Stmt::Return { value, .. } => {
                 self.expr(value);
-                if !fits(value, self.f.ret) {
+                if !self.returns(value) {
                     self.bad("a `return` of a value that is not the declared result type");
                 }
             }

@@ -403,6 +403,8 @@ pub struct Resolution {
     closures: HashMap<Span, FnId>,
     /// Traits, impls, bounds and calls through a bound (N78).
     traits: crate::traits::Traits,
+    /// Each undeclared function's inherited authority (N79), with the sites that need it.
+    inherits: HashMap<FnId, (crate::CapabilitySet, Vec<Span>)>,
     /// Each named function written as a value, by the name's span (N50).
     fn_values: HashMap<Span, FnValueUse>,
     /// What each call to a function with an effect parameter bound it to, by the callee's
@@ -447,6 +449,30 @@ impl Resolution {
     #[must_use]
     pub fn types(&self) -> &UserTypes {
         &self.types
+    }
+
+    /// Record what an undeclared function's body exercises without holding it (N79).
+    pub fn record_inherits(&mut self, id: FnId, set: crate::CapabilitySet, at: Vec<Span>) {
+        if set.is_empty() {
+            self.inherits.remove(&id);
+        } else {
+            self.inherits.insert(id, (set, at));
+        }
+    }
+
+    /// A function's inherited authority (N79): empty for a declared function, and for one
+    /// whose body holds everything it exercises.
+    #[must_use]
+    pub fn inherits(&self, id: FnId) -> crate::CapabilitySet {
+        self.inherits
+            .get(&id)
+            .map_or(crate::CapabilitySet::EMPTY, |(s, _)| *s)
+    }
+
+    /// Where a function exercises inherited authority, first site per kind (N79).
+    #[must_use]
+    pub fn inherited_at(&self, id: FnId) -> &[Span] {
+        self.inherits.get(&id).map_or(&[], |(_, at)| at.as_slice())
     }
 
     /// Every trait and impl of the compilation (N78).

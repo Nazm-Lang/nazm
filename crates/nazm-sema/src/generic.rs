@@ -254,6 +254,9 @@ impl UserTypes {
                 }
                 _ => false,
             },
+            // A capability of any kind is one word below the checker (N79): which authority
+            // it is, is the checker's question, settled before Core IR.
+            (Type::Cap(_), Type::Cap(_)) => true,
             _ => false,
         }
     }

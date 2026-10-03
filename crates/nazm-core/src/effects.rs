@@ -408,12 +408,30 @@ pub(crate) fn analyse(
             continue;
         }
         // Authority first, then effects: one deterministic order for a body wrong in both.
-        authority(node, &nodes, &sets, module, &contract, res, errors);
+        for (kind, at, why) in authority(node, &nodes, &sets, module, &contract, res) {
+            errors.push(missing_authority(node, kind, at, why, res));
+        }
         let missing = set.without(declared);
         if missing.is_empty() {
             continue;
         }
         errors.push(undeclared(node, declared, missing, why, res));
+    }
+    // Inherited authority (N79): what each undeclared body exercises without holding it —
+    // the bridge, recorded as part of the function's contract rather than left ambient.
+    let inherited: Vec<(FnId, CapabilitySet, Vec<Span>)> = nodes
+        .iter()
+        .filter(|n| n.has_body && n.declared.is_none())
+        .map(|node| {
+            let found = authority(node, &nodes, &sets, module, &contract, res);
+            let set = found
+                .iter()
+                .fold(CapabilitySet::EMPTY, |s, (k, _, _)| s.with(*k));
+            (node.id, set, found.iter().map(|(_, at, _)| *at).collect())
+        })
+        .collect();
+    for (id, set, at) in inherited {
+        res.record_inherits(id, set, at);
     }
     // A vouch needs a `VouchCap` held, in every function (N52), and a clock a `TimeCap` (N54):
     // neither is ever ambient. A declared function's is already its authority check's.
@@ -672,7 +690,10 @@ enum Needs {
 /// from being a backdoor — code that states its contract cannot reach ambient authority
 /// through code that does not.
 ///
-/// One diagnostic per missing kind, at the first call that needs it.
+/// Returns every kind `node`'s body exercises without holding it, once each, with the first
+/// site that needs it and why. Held kinds count with what they imply: an `IoCap` gives an
+/// `OutCap`. For a declared function each is an `N0369`; for an undeclared one, the kinds are
+/// its **inherited authority** (N79, `architecture.md` §7.80).
 fn authority(
     node: &Node,
     nodes: &[Node],
@@ -680,8 +701,8 @@ fn authority(
     module: nazm_sema::module::ModuleId,
     contract: &dyn Fn(FnId) -> Option<Option<EffectSet>>,
     res: &Resolution,
-    errors: &mut Vec<Diagnostic>,
-) {
+) -> Vec<(CapabilityKind, Span, Needs)> {
+    let mut out = Vec::new();
     let sites = res
         .function(node.id)
         .map(|d| d.call_sites.clone())
@@ -724,9 +745,13 @@ fn authority(
             }
         }
         for (required, why) in needs {
-            for kind in required.without(site.held).without(reported).iter() {
+            for kind in required
+                .without(site.held.implied())
+                .without(reported)
+                .iter()
+            {
                 reported = reported.with(kind);
-                errors.push(missing_authority(node, kind, site.span, why, res));
+                out.push((kind, site.span, why));
             }
         }
     }
@@ -747,20 +772,23 @@ fn authority(
             .function(value.function)
             .is_some_and(|d| d.module == module);
         let required = CapabilitySet::for_effects(value.assumed);
-        for kind in required.without(value.held).without(reported).iter() {
+        for kind in required
+            .without(value.held.implied())
+            .without(reported)
+            .iter()
+        {
             reported = reported.with(kind);
-            errors.push(missing_authority(
-                node,
+            out.push((
                 kind,
                 value.at,
                 Needs::Ambient {
                     callee: value.function,
                     local,
                 },
-                res,
             ));
         }
     }
+    out
 }
 
 /// The effect a capability kind authorises, for a witness to follow.
