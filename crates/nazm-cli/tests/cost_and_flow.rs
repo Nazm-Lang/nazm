@@ -298,7 +298,7 @@ fn main(io: IoCap) -> Int ! { io } {
 }
 "#;
     let flow = json_of(&[("prog.nz", src)], &["explain-flow"]);
-    assert_eq!(flow["schema"], "nazm.flow/1");
+    assert_eq!(flow["schema"], "nazm.flow/2");
     let sinks = flow["sinks"].as_array().unwrap();
     let at = |class: &str, function: &str, origin: &str| {
         sinks.iter().any(|s| {
@@ -311,10 +311,47 @@ fn main(io: IoCap) -> Int ! { io } {
     };
     // Through a helper's parameter, from its caller.
     assert!(at("output", "show", "file"), "{flow}");
-    // Out of a container: the whole container stands for every element.
-    assert!(at("output", "main", "unknown"), "{flow}");
-    // A closure's parameter is of unknown origin: its callers cannot be named.
-    assert!(at("output", "main#0", "unknown"), "{flow}");
+    // Out of a container, and through a closure's parameter: each carries what was written
+    // into its cell, or handed by the calls that may reach it (N80) — here, literals.
+    assert!(
+        !sinks.iter().any(|s| s["origins"]
+            .as_array()
+            .is_some_and(|o| o.iter().any(|x| x == "unknown"))),
+        "{flow}"
+    );
+    assert!(
+        sinks.iter().any(
+            |s| s["function"] == "main#0" && s["origins"].as_array().is_some_and(Vec::is_empty)
+        ),
+        "{flow}"
+    );
+    // Each origin at a sink carries its chain, from where it entered to the sink (N80).
+    let shown = sinks
+        .iter()
+        .find(|s| s["class"] == "output" && s["function"] == "show")
+        .unwrap();
+    let trace = &shown["traces"][0];
+    assert_eq!(trace["origin"], "file", "{shown}");
+    let steps = trace["steps"].as_array().unwrap();
+    assert_eq!(
+        steps.first().unwrap()["note"],
+        "a file's contents are read here",
+        "{shown}"
+    );
+    assert!(
+        steps.last().unwrap()["note"]
+            .as_str()
+            .unwrap()
+            .contains("standard output"),
+        "{shown}"
+    );
+    assert!(
+        steps.iter().any(|s| s["note"]
+            .as_str()
+            .unwrap()
+            .contains("`show` is called here")),
+        "{shown}"
+    );
     assert!(at("file-data", "main", "file"), "{flow}");
     assert!(at("output", "main", "argument"), "{flow}");
     // The path is computed in the program: nothing restricted reaches it.
