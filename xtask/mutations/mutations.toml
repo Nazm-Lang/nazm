@@ -4068,11 +4068,14 @@ killers = [{ package = "nazm-syntax", test = "cst", name = "the_formatters_comme
 
 [[mutation]]
 name = "n15-a-refused-character-owns-no-bytes"
-why = "the lexer reports an unknown character and keeps no lexeme for it, so its bytes vanish from the tree"
+why = "the lexer reports an unknown character and keeps no lexeme for it, so its bytes vanish from the tree Repointed by N76, which made the scan one lexeme per call (scan_one): the refused character keeps a lexeme that owns none of its bytes."
 file = "crates/nazm-syntax/src/lexer.rs"
-find = """                i += ch.len_utf8();
-                out.push(Lexeme::Invalid(Span::new(file, at(start), at(i))));"""
-replace = """                i += ch.len_utf8();"""
+find = """            format!("`{ch}` is not valid here"),
+            ));
+            emit!(Lexeme::Invalid(Span::new(file, at(start), at(i))));"""
+replace = """            format!("`{ch}` is not valid here"),
+            ));
+            emit!(Lexeme::Invalid(Span::new(file, at(start), at(start))));"""
 killers = [{ package = "nazm-syntax", test = "cst", name = "text_the_lexer_refuses_is_kept_as_the_bytes_it_was" }]
 
 [[mutation]]
@@ -4097,9 +4100,9 @@ killers = [{ package = "nazm-syntax", lib = true, name = "cst::tests::no_kind_ha
 
 [[mutation]]
 name = "n15-trailing-trivia-is-dropped"
-why = "whitespace and comments after the last token are never emitted, so the end of a file is lost"
+why = "whitespace and comments after the last token are never emitted, so the end of a file is lost Repointed by N76, whose region parse emits the trailing trivia only when it reaches the end of the file."
 file = "crates/nazm-syntax/src/cst.rs"
-find = """        while b.next < lexemes.len() {
+find = """        while at_end && b.next < lexemes.len() {
             b.trivia();
             b.next += 1;
         }"""
@@ -4142,10 +4145,18 @@ killers = [{ package = "nazm-syntax", test = "cst", name = "a_lossless_tree_pres
 
 [[mutation]]
 name = "n15-recovery-stops-where-it-failed"
-why = "the skip consumes nothing, so the rest of a malformed statement is parsed again as statements of its own and reported again"
+why = "the skip consumes nothing, so the rest of a malformed statement is parsed again as statements of its own and reported again Repointed by N76: member recovery added a second skip loop, so the find names the statement skip arm."
 file = "crates/nazm-syntax/src/parser.rs"
-find = "                _ => self.bump(),"
-replace = "                _ => return true,"
+find = """                    if braces == 0 && self.pos > start =>
+                {
+                    return true;
+                }
+                _ => self.bump(),"""
+replace = """                    if braces == 0 && self.pos > start =>
+                {
+                    return true;
+                }
+                _ => return true,"""
 killers = [{ package = "nazm-syntax", test = "cst", name = "two_independent_mistakes_in_one_function_are_two_diagnostics" }]
 
 [[mutation]]
@@ -5680,10 +5691,10 @@ killers = [{ package = "nazm-service", test = "incomplete", name = "a_record_and
 
 [[mutation]]
 name = "n26-a-pattern-hole-needs-an-arm"
-why = "a pattern's hole must be followed by `=>` and a body, so the payload labels of a pattern being written are never offered"
+why = "a pattern's hole must be followed by `=>` and a body, so the payload labels of a pattern being written are never offered Repointed by N76, which moved an arm into its own method (match_arm)."
 file = "crates/nazm-syntax/src/parser.rs"
-find = "            let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);"
-replace = "            let hole_arm = false && holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);"
+find = "        let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);"
+replace = "        let hole_arm = false && holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);"
 killers = [{ package = "nazm-service", test = "incomplete", name = "a_bare_paren_after_a_variant_offers_its_payload_labels" }]
 
 [[mutation]]
@@ -9400,10 +9411,10 @@ killers = [{ package = "nazm-syntax", lib = true, name = "lexer::tests::a_refuse
 
 [[mutation]]
 name = "n49-an-escaped-quote-ends-the-string"
-why = "the scan no longer skips the byte after a backslash, so `\\\"` closes the literal and the rest of the line is code"
+why = "the scan no longer skips the byte after a backslash, so `\\\"` closes the literal and the rest of the line is code Repointed by N76, which moved the scan into scan_one."
 file = "crates/nazm-syntax/src/lexer.rs"
-find = "                if byte(i) == Some(b'\\\\') && byte(i + 1).is_some_and(|n| n != b'\\n') {"
-replace = "                if false && byte(i) == Some(b'\\\\') && byte(i + 1).is_some_and(|n| n != b'\\n') {"
+find = "            if byte(i) == Some(b'\\\\') && byte(i + 1).is_some_and(|n| n != b'\\n') {"
+replace = "            if false && byte(i) == Some(b'\\\\') && byte(i + 1).is_some_and(|n| n != b'\\n') {"
 killers = [{ package = "nazm-syntax", lib = true, name = "lexer::tests::every_escape_is_the_one_byte_the_specification_names" }]
 
 [[mutation]]
@@ -11804,10 +11815,10 @@ killers = [{ package = "nazm-cli", test = "fuzz_diff", name = "every_tier_gives_
 
 [[mutation]]
 name = "n73-the-fuzzer-finds-a-lexer-panic"
-why = "the lexer panics on one character no hand-written test feeds it; the robustness fuzzer's mutated inputs reach it, and a panic is never an answer"
+why = "the lexer panics on one character no hand-written test feeds it; the robustness fuzzer's mutated inputs reach it, and a panic is never an answer Repointed by N76, which moved the scan into scan_one."
 file = "crates/nazm-syntax/src/lexer.rs"
-find = "                i += ch.len_utf8();\n                out.push(Lexeme::Invalid"
-replace = "                i += ch.len_utf8();\n                assert!(ch != '^');\n                out.push(Lexeme::Invalid"
+find = "            i += ch.len_utf8();\n            errors.push(Diagnostic::error(\n                codes::UNKNOWN_CHARACTER,"
+replace = "            i += ch.len_utf8();\n            assert!(ch != '^');\n            errors.push(Diagnostic::error(\n                codes::UNKNOWN_CHARACTER,"
 killers = [{ package = "nazm-core", test = "fuzz_front", name = "no_mutated_source_makes_the_front_end_panic" }]
 
 # --- N73: provenance -------------------------------------------------------------------------------
@@ -11999,3 +12010,154 @@ file = "crates/nazm-cli/src/capabilities.rs"
 find = "            .map(|k| k.type_name())"
 replace = "            .filter(|k| k.id() < 2)\n            .map(|k| k.type_name())"
 killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_capability_inventory_names_every_authority_target_and_command" }]
+
+# --- N76: incremental reparse, recovery inside lists, Unicode escapes ---------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.77: a revision equals a fresh parse, an item
+# is reused only if nothing it read changed, a malformed member costs the member, a declaration
+# that needed recovery stays out of the abstract tree, `\u{…}` is a scalar value's UTF-8 bytes,
+# and the editor's buffer moves by ranges without being parsed again.
+
+[[mutation]]
+name = "n76-an-items-lookahead-is-not-recorded"
+why = "an item's reuse is decided by how far it consumed, not how far it read, so an edit to the name recovery skipped to leaves the broken item's stale tree in place"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '            seen: p.tokens.seen.get().max(p.pos),'
+replace = '            seen: p.pos,'
+killers = [{ package = "nazm-syntax", test = "incremental", name = "an_edit_past_an_item_that_its_lookahead_read_reparses_that_item" }]
+
+[[mutation]]
+name = "n76-the-lexeme-ending-at-the-edit-is-kept"
+why = "the lexeme whose end is the edit's start is kept although the lexer read the byte the edit changed, so typing after a name makes two tokens where a fresh scan makes one"
+file = "crates/nazm-syntax/src/incremental.rs"
+find = '        let first_changed = old.partition_point(|l| (l.span().end as usize) < a);'
+replace = '        let first_changed = old.partition_point(|l| (l.span().end as usize) <= a);'
+killers = [{ package = "nazm-syntax", test = "incremental", name = "edits_at_the_hard_places_converge" }]
+
+[[mutation]]
+name = "n76-the-tail-is-not-moved"
+why = "an item kept after the edit keeps its old positions, so every span after the edit is stale by the edit's length"
+file = "crates/nazm-syntax/src/incremental.rs"
+find = '                c.shift += delta;'
+replace = '                let _ = delta;'
+killers = [{ package = "nazm-syntax", test = "incremental", name = "a_one_literal_edit_reuses_the_items_around_it" }]
+
+[[mutation]]
+name = "n76-a-landing-ignores-the-mute"
+why = "the reparse stops at an old boundary whatever cascade mute is in force there, so an item kept after an unbalanced one reports what a fresh parse withholds"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '            .is_some_and(|(at, muted)| *at == p.pos && *muted == p.muted)'
+replace = '            .is_some_and(|(at, _)| *at == p.pos)'
+killers = [{ package = "nazm-syntax", test = "incremental", name = "seeded_edit_sequences_converge_to_a_fresh_parse_over_the_whole_repository" }]
+
+[[mutation]]
+name = "n76-an-edit-is-always-a-full-parse"
+why = "every edit parses the whole file, so an editor's revision is correct and nothing is reused"
+file = "crates/nazm-syntax/src/incremental.rs"
+find = '        let f = owner.min(reader);'
+replace = '        let f = { let _ = owner.min(reader); 0 };'
+killers = [{ package = "nazm-syntax", test = "incremental", name = "an_edit_inside_one_function_of_a_large_file_reparses_that_function_alone" }]
+
+[[mutation]]
+name = "n76-an-empty-unicode-escape-is-nul"
+why = "`\\u{}` is accepted as the scalar value 0, so a typo is a NUL byte instead of a refusal"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = '    if digits == 0 || digits > 6 {'
+replace = '    if digits > 6 {'
+killers = [{ package = "nazm-syntax", lib = true, name = "lexer::tests::a_unicode_escape_outside_the_scalar_values_is_refused_at_its_bytes" }]
+
+[[mutation]]
+name = "n76-a-unicode-escape-is-one-byte"
+why = "a Unicode escape keeps only its low byte, so `\\u{e9}` is one byte and not the two of `é`"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = '                    out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());'
+replace = """
+                    out.push(u8::try_from(u32::from(c) & 0xff).unwrap_or(0));
+                    let _ = &mut buf;"""
+killers = [{ package = "nazm-syntax", lib = true, name = "lexer::tests::a_unicode_escape_is_the_utf8_bytes_of_its_scalar_value" }]
+
+[[mutation]]
+name = "n76-a-member-skips-past-its-comma"
+why = "member recovery does not stop at the member's `,`, so one bad field swallows every field after it"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '                TokenKind::Comma if open == 0 => return true,'
+replace = '                TokenKind::Comma if open == usize::MAX => return true,'
+killers = [{ package = "nazm-syntax", test = "recovery", name = "two_bad_fields_in_one_record_are_two_diagnostics_and_the_good_ones_stay_fields" }]
+
+[[mutation]]
+name = "n76-a-recovered-record-reaches-the-checker"
+why = "a record whose field list needed recovery is handed to the checker with the bad field missing"
+file = "crates/nazm-syntax/src/parser.rs"
+find = """
+        self.wrap(at, SyntaxKind::RecordItem);
+        self.drop_item = self.poisoned;"""
+replace = """
+        self.wrap(at, SyntaxKind::RecordItem);
+        self.drop_item = false;"""
+killers = [{ package = "nazm-syntax", test = "recovery", name = "two_bad_fields_in_one_record_are_two_diagnostics_and_the_good_ones_stay_fields" }]
+
+[[mutation]]
+name = "n76-a-recovered-signature-reaches-the-checker"
+why = "a function whose parameter list needed recovery is handed to the checker with a parameter missing, so its callers are checked against the wrong arity"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '        self.drop_item = header_recovered;'
+replace = '        self.drop_item = { let _ = header_recovered; false };'
+killers = [{ package = "nazm-syntax", test = "recovery", name = "a_bad_parameter_leaves_the_function_out_and_its_body_still_reports" }]
+
+[[mutation]]
+name = "n76-recovery-runs-past-the-next-import"
+why = "recovery does not stop at `use`, so a broken import swallows the import after it"
+file = "crates/nazm-syntax/src/parser.rs"
+find = """
+            || self.at(&TokenKind::Enum)
+            || self.at(&TokenKind::Use)"""
+replace = '            || self.at(&TokenKind::Enum)'
+killers = [{ package = "nazm-syntax", test = "recovery", name = "a_broken_import_ends_at_its_semicolon_and_the_next_import_is_read" }]
+
+[[mutation]]
+name = "n76-an-argument-costs-its-statement"
+why = "a malformed call argument abandons the call, so the next argument's independent mistake is never reported"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '                        if !self.recover_member(arg, start, &TokenKind::RParen) {'
+replace = '                        if { let _ = (arg, start); true } {'
+killers = [{ package = "nazm-syntax", test = "recovery", name = "bad_arguments_cost_the_argument_not_the_statement" }]
+
+[[mutation]]
+name = "n76-a-stale-revision-is-the-roots-parse"
+why = "an editor's revision is taken as the root's parse whatever text it is of, so a compilation is checked against text it does not contain"
+file = "crates/nazm-syntax/src/lib.rs"
+find = '            && map.text(nazm_span::FileId::ROOT) == r.text()'
+replace = '            && !map.text(nazm_span::FileId::ROOT).is_empty()'
+killers = [{ package = "nazm-syntax", test = "incremental", name = "a_revision_is_the_roots_parse_only_when_it_is_of_the_roots_text" }]
+
+[[mutation]]
+name = "n76-the-service-parses-the-buffer-again"
+why = "the service ignores the document's revision and parses its text in full on every change"
+file = "crates/nazm-service/src/service.rs"
+find = '                Some(&doc.revision),'
+replace = '                None,'
+killers = [{ package = "nazm-service", test = "unsaved", name = "ranged_edits_answer_exactly_as_whole_document_changes_do" }]
+
+[[mutation]]
+name = "n76-a-failed-edit-is-half-applied"
+why = "the edits before a refused one are kept, so the service's text and the editor's diverge silently"
+file = "crates/nazm-service/src/service.rs"
+find = '            revision = revision.edit(e).map_err(Some)?;'
+replace = '            match revision.edit(e) { Ok(r) => revision = r, Err(_) => break }'
+killers = [{ package = "nazm-service", test = "unsaved", name = "an_edit_that_does_not_fit_the_text_changes_nothing" }]
+
+[[mutation]]
+name = "n76-full-synchronisation-is-advertised"
+why = "the server advertises whole-document synchronisation, so no client sends a range and nothing is reused"
+file = "crates/nazm-cli/src/lsp.rs"
+find = '                change: Some(TextDocumentSyncKind::INCREMENTAL),'
+replace = '                change: Some(TextDocumentSyncKind::FULL),'
+killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
+
+[[mutation]]
+name = "n76-a-change-range-is-a-byte-column"
+why = "a change's UTF-16 column is taken as a byte offset, so an edit after non-ASCII text lands in the wrong place"
+file = "crates/nazm-cli/src/lsp.rs"
+find = '                            (index.offset(r.start), index.offset(r.end))'
+replace = '                            { let _ = index; let col = |p: lsp_types::Position| u32::try_from(text.lines().take(p.line as usize).map(|l| l.len() + 1).sum::<usize>()).unwrap_or(0) + p.character; (col(r.start), col(r.end)) }'
+killers = [{ package = "nazm-cli", test = "lsp", name = "ranged_changes_in_utf16_move_the_buffer_as_whole_ones_would" }]

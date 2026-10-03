@@ -63,7 +63,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 
 | # | Area | Status |
 | --- | --- | --- |
-| 1 | Syntax, parser, CST | PARTIAL |
+| 1 | Syntax, parser, CST | VERIFIED — the reference parser: incremental reparse and recovery (N76); the compiler written in Nazm's syntax is N98's |
 | 2 | Name resolution and modules | PARTIAL |
 | 2a | Incremental semantic checking | VERIFIED |
 | 3 | Type system | PARTIAL |
@@ -101,7 +101,10 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
-After N75's audit, 2026-10-02, across the 37 rows above (34 areas, with 2a, 10a and 10b): fifteen
+After N76, 2026-10-03: sixteen VERIFIED (area 1 moved, for the reference parser), twenty PARTIAL,
+one RESEARCH; nothing else moved.
+
+*Historical, not current.* After N75's audit, 2026-10-02, across the 37 rows above (34 areas, with 2a, 10a and 10b): fifteen
 VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification — area 30 for mutation testing, its
 fuzzing PARTIAL), twenty-one PARTIAL, one RESEARCH (15, the advanced scheduler), none MISSING. No
 row says DESIGNED or BLOCKED as its whole status; the blocked parts are named inside areas 12 (no JIT:
@@ -123,7 +126,33 @@ current account.
 
 ## Front end
 
-### 1. Syntax, parser, CST — PARTIAL
+### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
+
+**N76 (2026-10-03)** · *Incremental reparse, finer recovery, `\u{…}`* (`architecture.md` §7.77).
+`nazm_syntax::Revision` is one file's parse kept per top-level item; `Revision::edit` relexes from
+the first lexeme the lexer read past and reparses from the first item that read a changed token,
+until both land on old boundaries, keeping the rest (green nodes by reference, items and diagnostics
+moved by the edit's length). Its contract is **equality with a fresh parse** — lexemes, every node
+and leaf of the concrete tree with kind, span and bytes, the abstract tree with every span, and the
+diagnostics in order — held by `crates/nazm-syntax/tests/incremental.rs`: seeded edit sequences over
+every `.nz` file in the repository (220 files, 2,604 edits, each compared field by field with
+`Revision::new` and `parse_both` of the same text), sixteen edits at the hard places (an item's first
+byte, merged tokens, an unclosed delimiter, inside a string and a comment, the whole file), and the
+one cross-item read, recovery skipping to the next `fn NAME`, with a test that fails if an item's
+lookahead is not recorded. A one-word edit in the middle of `compiler/emit.nz` reparses one of 126
+items and 618 of 40,284 tokens, relexes 2 lexemes, and takes 1.2 ms against 8.2 ms for a full parse
+in a release build (`performance.md`, *Incremental reparse*).
+Recovery reaches inside lists: a malformed record field, enum variant or payload field, parameter,
+call argument, field initialiser or `match` arm is an `Error` node of its own beside typed siblings,
+and a later independent mistake in the same list is its own diagnostic; a broken `use` ends at its
+`;` and recovery stops at `use` (`crates/nazm-syntax/tests/recovery.rs`). The abstract tree's
+contract is unchanged on purpose: a declaration that needed recovery is absent, a body that needed
+it is. `\u{H…}` is the UTF-8 encoding of a scalar value, refused (`N0004`) for surrogates, values
+above `10FFFF` and malformed forms, the same bytes in the interpreter and three native builds
+(`usability.rs`); semantic epoch 21. `nazm lsp` synchronises incrementally: the service keeps a
+revision per open document, applies each ranged change to it, and analyses the root file from it,
+equal to a whole-document change in every published diagnostic and every answer
+(`crates/nazm-service/tests/unsaved.rs`, `crates/nazm-cli/tests/lsp.rs`).
 
 **N49 (2026-10-01)** · string escapes (`\n \t \r \0 \\ \" \xHH` up to `7F`, one byte each, decoded
 once by the lexer, `N0004` otherwise, kept as written by the formatter), the logical operators
@@ -177,23 +206,30 @@ real programs give the same first diagnostic and abstract tree in every case and
 diagnostic in one (`architecture.md` §7.17). Sixteen N15 mutations were caught with verified
 killers; the campaign is in area 30.
 
-**Limitation** · Full-file parsing only: no incremental relexing or reparse, no reuse of
-green nodes. Recovery is local at statements inside blocks; a mistake in a signature, a
-record, an enum or a `use` still skips to the next item, and one inside an expression costs
-its whole statement. After an item's first recovery, if its delimiters do not balance, its
-further syntax diagnostics are withheld as cascades. The abstract tree still has no body for
-a function whose body had a syntax error. The concrete tree is built on every parse and
-costs about 2× the parse time and 1.8× the peak parse heap (`performance.md`). The compiler
-written in Nazm has no concrete tree and does not recover. Parse nesting is bounded at 512
-with a 24 MiB parse stack. The language server that reads this tree to find the token under a
-position is area 25.
+**Limitation** · *Narrowed in N76:* until then, full-file parsing only, and recovery at
+statements alone. Incremental reparse is per top-level item, so an edit inside one item reparses
+that whole item; an edit that leaves a delimiter open reparses to the end of the file; the scan is
+copied and its suffix moved on every edit, which is linear in the file's lexemes (`performance.md`).
+Imported files in an editor's compilation are parsed in full on every analysis, and every command
+outside the language service parses in full. Recovery inside an expression is at list members:
+a mistake in an operand that is not a list member (`1 + * 2`) still costs its statement. After an
+item's first recovery, if its delimiters do not balance, its further syntax diagnostics are withheld
+as cascades. **Deliberate, not debt:** the abstract tree has no body for a function whose body
+needed recovery, and no declaration whose header or member list did — the checker is never shown a
+declaration with a hole, so recovery adds syntax diagnostics and never semantic cascades; a
+hole-tolerant checker is not attempted. The concrete tree is built on every parse and costs about 2×
+the parse time and 1.8× the peak parse heap (`performance.md`). The compiler written in Nazm has no
+concrete tree, does not recover, and refuses every escape (N98). Parse nesting is bounded at 512 with
+a 24 MiB parse stack. `\x` above `7F` stays refused (`spec.md`, *String escapes*).
 
-**Next dependency** · None for the tree. Structured edits and incremental reparse are
-separate items (`roadmap.md`).
+**Next dependency** · None inside this area's scope. Parity of the compiler written in Nazm is N98.
 
-**Accepted when** · Met, 2026-09-25 (N15): a round trip through the tree preserves every byte
-including trivia, and the parser produces a usable tree for a file with an error in the
-middle of a function.
+**Accepted when** · Met, 2026-10-03 (N76), for the reference parser: an edit sequence converges
+exactly to a fresh parse in lexemes, both trees and diagnostics, so no stale node or span survives;
+the round trip stays lossless and the formatter's tests are unchanged and green; an edit inside one
+item reparses that item; recovery reaches every delimited list; the escape policy is decided. Met
+before that, 2026-09-25 (N15): a round trip through the tree preserves every byte including trivia,
+and the parser produces a usable tree for a file with an error in the middle of a function.
 
 ### 2. Name resolution and modules — PARTIAL
 

@@ -388,6 +388,27 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### After N75: N76–N100, closing what is PARTIAL or RESEARCH
+
+One milestone at a time, each constitution first, each ending with its own evidence and the
+capability row decided against that evidence rather than its title. The order is
+`docs/nazm_N76_N100_FULL_prompts/MASTER_EXECUTION_ORDER.md`'s: the front end (N76–N80); execution,
+runtime and interoperability (N81–N85); embedded, assurance and AI/HPC (N86–N88); tooling,
+ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the compiler written in Nazm
+and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
+honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
+
+### N76 — syntax completion: incremental reparse, finer recovery, `\u{…}` — **complete as scoped, 2026-10-03**
+
+`architecture.md` §7.77 first. `nazm_syntax::Revision` and `Revision::edit`: a file's next parse from
+its previous one, relexing and reparsing only from the first item an edit can reach to the first old
+boundary it lands on, held **equal to a fresh parse** over every `.nz` file in the repository under
+seeded edit sequences. Recovery inside record, enum, parameter, argument, initialiser and arm lists,
+and at a broken `use`'s `;`; the abstract tree's contract unchanged. `\u{…}` escapes, epoch 21.
+`nazm lsp` synchronises incrementally through the service's per-document revision. Not here: a
+hole-tolerant checker, incremental parsing outside an editor's open document, the compiler written
+in Nazm (N98). Next: N77, resolution and modules.
+
 ### N75 — production-readiness audit and release gate — **complete: candidate `cf664fd`, not released, 2026-10-03**
 
 An audit, not a feature: every matrix status against its evidence, `limitations.md` line by line, the

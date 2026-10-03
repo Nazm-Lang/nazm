@@ -20,8 +20,15 @@ found only by reading all of it.
 - A standard module's functions keep their module's name (`text_split`), qualified or not:
   `use "@std/text" as t;` gives `t::text_split`, not `t::split` (areas 2, 16). *Narrowed in N49,
   which added qualified names.*
-- String escapes stop at `\x7F`; a byte above 127 that UTF-8 source does not spell needs
-  `str_from_byte`, and there is no `\u{…}` (area 1). *Narrowed in N49, which added escapes.*
+- `\xHH` stops at `\x7F`; a lone byte above 127 needs `str_from_byte`. `\u{…}` (N76) spells a
+  scalar value's UTF-8 bytes, so every valid UTF-8 literal is writable in ASCII (area 1).
+  *Narrowed in N49, which added escapes, and N76, which added `\u{…}`.*
+- Parsing is incremental only inside the language service, for an open document's own text, per
+  top-level item: an edit reparses its whole item, one that leaves a delimiter open reparses to the
+  end of the file, imported files and every other command parse in full. Recovery reaches list
+  members, not a lone operand (`1 + * 2` costs its statement); a declaration or body that needed
+  recovery is absent from the abstract tree by design (area 1). *Narrowed in N76:* until then,
+  whole-file parsing only, and recovery only at statements.
 - Native recursion is bounded by the thread's stack, not by the language: `N0408` arrives before
   the stack is exhausted only while the non-recursive calls between two checks fit the quarter
   kept as headroom; no tail-call optimisation; the depth at which it arrives depends on the
