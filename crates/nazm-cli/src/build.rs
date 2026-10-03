@@ -1078,6 +1078,20 @@ fn emit_artefacts(
             key: None,
             reused: false,
         });
+        // The task pool's context switch (N83, §7.84), for this target, wherever the runtime
+        // has tasks or channels.
+        let settled = needs.settled();
+        if settled.tasks || settled.channels {
+            if let Some(t) = switch_target(backend.target()) {
+                out.push(Artefact {
+                    name: "switch".to_owned(),
+                    code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::switch::emit_switch(t)),
+                    instance: false,
+                    key: None,
+                    reused: false,
+                });
+            }
+        }
     }
     // A library has no process entry: C's `main` is the caller's (N55).
     if library {
@@ -1095,6 +1109,22 @@ fn emit_artefacts(
         reused: false,
     });
     Ok(out)
+}
+
+/// The task pool's switch for a hosted target (N83); `None` for a freestanding one, which has no
+/// tasks.
+pub(crate) fn switch_target(
+    t: &nazm_lir::backend::Target,
+) -> Option<nazm_lir::runtime::switch::SwitchTarget> {
+    use nazm_lir::backend::{Arch, Os};
+    use nazm_lir::runtime::switch::SwitchTarget;
+    match (t.arch, t.os) {
+        (Arch::Aarch64, Os::Macos) => Some(SwitchTarget::Aarch64Darwin),
+        (Arch::Aarch64, Os::Linux) => Some(SwitchTarget::Aarch64Linux),
+        (Arch::X86_64, Os::Macos) => Some(SwitchTarget::X86_64Darwin),
+        (Arch::X86_64, Os::Linux) => Some(SwitchTarget::X86_64Linux),
+        _ => None,
+    }
 }
 
 /// What the units call that a board without an operating system does not have (N62), by the

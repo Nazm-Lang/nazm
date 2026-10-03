@@ -359,8 +359,13 @@ fn choosing_cranelift_writes_no_llvm_text_for_any_unit() {
         .filter(|n| n.ends_with(".ll"))
         .collect();
     ll.sort();
-    // Only the runtime and the platform entry are LLVM text; every unit is an object.
-    assert_eq!(ll, ["prog.entry.ll", "prog.runtime.ll"], "{ll:?}");
+    // Only the runtime, the platform entry and the task pool's switch (N83) are LLVM text;
+    // every unit is an object.
+    assert_eq!(
+        ll,
+        ["prog.entry.ll", "prog.runtime.ll", "prog.switch.ll"],
+        "{ll:?}"
+    );
 }
 
 /// The native program for a source, as a backend sees it.

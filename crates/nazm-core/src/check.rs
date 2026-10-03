@@ -2349,6 +2349,15 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     // Select's deadline and the clock (N54).
     "pthread_cond_timedwait",
     "clock_gettime",
+    // The task pool: its settings, its tasks' guarded stacks, and their zeroing (N83).
+    "atoll",
+    "getpagesize",
+    "posix_memalign",
+    "mprotect",
+    "memset",
+    "nz_ctx_switch",
+    "nz_ctx_prepare",
+    "nz_task_main",
     "pthread_create",
     "pthread_join",
     "pthread_mutex_destroy",

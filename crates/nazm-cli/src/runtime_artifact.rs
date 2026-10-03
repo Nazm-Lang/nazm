@@ -144,6 +144,24 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
     let cross = (host.as_ref().map(|h| &h.triple) != Some(&target.triple))
         .then_some(target.triple.as_str());
     let backend = Backend::discover(opt, &work, cross);
+    // The hosted runtime has tasks, so it carries its target's task switch (N83) as a second
+    // member of the archive.
+    let switch = (profile == Profile::Hosted)
+        .then(|| crate::build::switch_target(&target))
+        .flatten()
+        .map(nazm_lir::runtime::switch::emit_switch);
+    let mut members = vec![obj.clone()];
+    if let Some(text) = &switch {
+        let sll = work.join("switch.ll");
+        let sobj = work.join("switch.o");
+        if let Err(e) = std::fs::write(&sll, text) {
+            return finish(refuse(format!("cannot write {}: {e}", sll.display())));
+        }
+        match backend.compile(&sll, &sobj) {
+            Outcome::Ran(o) if o.status.success() => members.push(sobj),
+            _ => return finish(refuse("the toolchain refused the task switch".to_owned())),
+        }
+    }
     match backend.compile(&ll, &obj) {
         Outcome::Ran(o) if o.status.success() => {}
         Outcome::Ran(o) => {
@@ -168,7 +186,7 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
         .env("ZERO_AR_DATE", "1")
         .arg("rcs")
         .arg(&archive)
-        .arg(&obj)
+        .args(&members)
         .output();
     match archived {
         Ok(o) if o.status.success() => {}
@@ -195,7 +213,7 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
         "services": if profile == Profile::Hosted { EVERYTHING.names() } else { vec!["stack"] },
         "opt_level": opt,
         "toolchain": toolchain(),
-        "text": digest(text.as_bytes()),
+        "text": digest(format!("{text}{}", switch.as_deref().unwrap_or("")).as_bytes()),
         "archive": digest(&bytes),
     });
     if let Err(e) = std::fs::write(out.join(MANIFEST), format!("{manifest}\n")) {

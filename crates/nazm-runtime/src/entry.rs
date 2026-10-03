@@ -78,6 +78,9 @@ pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
     );
     out.push('\n');
 
+    if needs.tasks || needs.channels {
+        let _ = writeln!(out, "declare void @nz.pool_report()");
+    }
     let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
     let _ = writeln!(out, "entry:");
     if needs.io {
@@ -153,6 +156,10 @@ pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
             out,
             "  %schwrote = call i64 @write(i32 2, ptr @.membuf, i64 %schlen)"
         );
+        // The pool's own line (N83), only where it ran.
+        if needs.tasks || needs.channels {
+            let _ = writeln!(out, "  call void @nz.pool_report()");
+        }
         let _ = writeln!(out, "  br label %nz.scheduled");
         let _ = writeln!(out, "nz.scheduled:");
     }
