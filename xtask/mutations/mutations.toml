@@ -8022,18 +8022,21 @@ killers = [{ package = "nazm-cli", test = "incremental", name = "a_callees_prove
 
 [[mutation]]
 name = "n38-an-entry-drops-the-facts"
-why = "an entry is written without the module's provenance facts, so a later run that reuses it sees a module with no flows"
+why = "an entry is written without the module's provenance facts, so a later run that reuses it sees a module with no flows Repointed by N77, whose entry also carries the resolved unit."
 file = "crates/nazm-cli/src/checking.rs"
-find = "        let artifact = artifact.with_provenance(persisted);"
-replace = "        let _ = persisted;"
+find = """
+            .with_provenance(persisted)
+            .with_resolved(unit.clone());"""
+replace = """
+            .with_resolved({ let _ = persisted; unit.clone() });"""
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_keeps_the_modules_provenance_facts" }]
 
 [[mutation]]
 name = "n38-the-entry-schema-stays"
-why = "the check entry keeps the `/1` name for a shape that now carries facts, so an entry without them is read as one with none"
+why = "the check entry keeps the `/1` name for a shape that now carries facts, so an entry without them is read as one with none. Repointed by N77, which moved the entry to `/3` for its resolved unit: an entry without one must not be read under the new name."
 file = "crates/nazm-cache/src/artifact.rs"
-find = """pub const SCHEMA: &str = "nazm.check/2";"""
-replace = """pub const SCHEMA: &str = "nazm.check/1";"""
+find = """pub const SCHEMA: &str = "nazm.check/3";"""
+replace = """pub const SCHEMA: &str = "nazm.check/2";"""
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_keeps_the_modules_provenance_facts" }]
 
 [[mutation]]
@@ -12161,3 +12164,73 @@ file = "crates/nazm-cli/src/lsp.rs"
 find = '                            (index.offset(r.start), index.offset(r.end))'
 replace = '                            { let _ = index; let col = |p: lsp_types::Position| u32::try_from(text.lines().take(p.line as usize).map(|l| l.len() + 1).sum::<usize>()).unwrap_or(0) + p.character; (col(r.start), col(r.end)) }'
 killers = [{ package = "nazm-cli", test = "lsp", name = "ranged_changes_in_utf16_move_the_buffer_as_whole_ones_would" }]
+
+# --- N77: resolution, persisted -------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.78: a resolved unit is the checker's answer by
+# durable identity, stored with its check and read only for its own module and text, the same
+# bytes in any process, and the compiler written in Nazm refuses what it does not resolve.
+
+[[mutation]]
+name = "n77-a-unit-of-other-text-is-read"
+why = "an entry's unit is read whatever source text it claims, so its ranges point into text the module does not contain"
+file = "crates/nazm-cache/src/artifact.rs"
+find = '        if unit.module != self.module || unit.source != self.source {'
+replace = '        if unit.module != self.module {'
+killers = [{ package = "nazm-cache", test = "store", name = "a_unit_of_another_module_or_other_text_is_never_read" }]
+
+[[mutation]]
+name = "n77-a-reused-module-forgets-its-unit"
+why = "a reused module's stored unit is dropped, so a reader of its names finds none"
+file = "crates/nazm-cli/src/checking.rs"
+find = '                        resolved = Some(r.resolved);'
+replace = '                        let _ = r.resolved;'
+killers = [{ package = "nazm-cli", test = "resolved_units", name = "references_read_a_reused_modules_unit_instead_of_checking_it" }]
+
+[[mutation]]
+name = "n77-a-unit-names-what-its-module-never-mentions"
+why = "every target of the compilation is translated for every unit, so a module that never mentions a keyless module's definitions loses its unit and its entry"
+file = "crates/nazm-iface/src/resolved.rs"
+find = '            if declared_here.is_none() && !uses.iter().any(|u| u.file == file) {'
+replace = '            if false && declared_here.is_none() && !uses.iter().any(|u| u.file == file) {'
+killers = [{ package = "nazm-cli", test = "incremental", name = "a_module_with_no_durable_identity_is_checked_every_time" }]
+
+[[mutation]]
+name = "n77-occurrences-keep-the-indexs-order"
+why = "occurrences are written in the index's hash order, so two processes write different bytes for one module"
+file = "crates/nazm-iface/src/resolved.rs"
+find = '        occurrences.sort();'
+replace = '        occurrences.reverse();'
+killers = [{ package = "nazm-cli", test = "resolved_units", name = "a_unit_is_the_same_bytes_in_two_processes_and_two_checkouts" }]
+
+[[mutation]]
+name = "n77-an-alias-is-dropped"
+why = "an import's alias is not recorded, so the unit cannot say through which name a module was imported"
+file = "crates/nazm-iface/src/resolved.rs"
+find = '                    alias: d.aliases.first().map(|(a, _)| a.clone()),'
+replace = '                    alias: None,'
+killers = [{ package = "nazm-cli", test = "resolved_units", name = "an_alias_is_part_of_the_importers_source_and_its_unit" }]
+
+[[mutation]]
+name = "n77-an-import-forgets-its-interface"
+why = "an import records no interface hash, so a unit does not say what it was checked against"
+file = "crates/nazm-iface/src/resolved.rs"
+find = '                    interface: interface(d.on),'
+replace = '                    interface: None,'
+killers = [{ package = "nazm-cli", test = "resolved_units", name = "a_unit_names_every_target_durably_and_no_local" }]
+
+[[mutation]]
+name = "n77-references-ignore-the-member"
+why = "an entity's references include every member of its item, so a variant's are its enum's"
+file = "crates/nazm-cli/src/resolved.rs"
+find = '    let is_it = |t: &nazm_iface::resolved::DurableTarget| t.item == item && t.member == member;'
+replace = '    let is_it = |t: &nazm_iface::resolved::DurableTarget| t.item == item;'
+killers = [{ package = "nazm-cli", test = "resolved_units", name = "a_member_is_its_own_entity_apart_from_its_item" }]
+
+[[mutation]]
+name = "n77-the-nazm-loader-looks-for-std-as-a-file"
+why = "the compiler written in Nazm looks for `@std/text` as a file again and reports it missing instead of refusing it by name"
+file = "compiler/module.nz"
+find = '                    if str_len(why) > 0 {'
+replace = '                    if str_len(why) > 1000 {'
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_refuses_std_and_package_imports_by_name" }]

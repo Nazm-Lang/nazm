@@ -257,6 +257,11 @@ declared root to change.
   `./x.nz`, `x.nz` and `a/../x.nz` are one file; two names reaching one file through a
   symbolic link are two, and it would be read twice. The Rust driver keys by the canonical
   path instead, because it can — the emitted runtime has no `realpath`.
+- **Only relative imports.** The reference resolves `@std/NAME` and a package's `NAME:path`
+  (`load.rs`); this loader refuses both **by name** since N77 ("the compiler written in Nazm does not
+  resolve `@std/text`: it names a standard library module", exit 2), where until then it looked for
+  a file of that name and reported it missing. Aliases (`as`) and qualified names (`::`) are refused
+  by its parser.
 - **Nothing is freed** — *until N8, which closed it*. See §1; the design stated it, and
   `capability-matrix.md` area 4 carries the current status and the acceptance condition.
 - **A record's or an enum's native type name is its index**, `%nz.t<n>`, exactly as a

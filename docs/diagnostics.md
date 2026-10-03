@@ -26,6 +26,8 @@ against them — so these documents are tested rather than described.
 | `nazm.repository-map/1` | `nazm repo --map --json`, and the `nazm-mcp` tool `nazm.repository_map` | stdout; the tool result's structured content | one object |
 | `nazm.task-context/1` | `nazm repo --task --seed ID --json`, and the `nazm-mcp` tool `nazm.task_context` | stdout; the tool result's structured content | one object |
 | `nazm.token-cost/1` | `nazm-tokens measure` (the text on standard input) and `nazm-tokens list`, a separate tool beside the compiler | stdout | one object |
+| `nazm.resolved/1` | `nazm resolve FILE`, and stored in each `nazm.check/3` entry (N77) | stdout | one object per module, per line |
+| `nazm.references/1` | `nazm references DEF FILE` (N77) | stdout | one object |
 | `nazm.agent-benchmark/1` | `nazm-agent-bench suite`, its journal records (`journal.jsonl` in the local evidence directory) and `nazm-agent-bench report`; evaluation tooling beside the compiler | stdout, and one record per journal line | one object, or one record per line |
 
 Every object carries its own `schema` field. Not a header: the output is a stream of
@@ -287,6 +289,15 @@ secondary labels) and `N0511` (an unknown profile). One new format has its own v
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.
+
+**Applied to N76, syntax.** No schema moved and no code appeared. `N0004` also covers a refused
+`\u{…}` escape, at the escape's own bytes. Recovery inside lists reports existing codes at new
+positions: a later independent mistake in the same item is now its own diagnostic.
+
+**Applied to N77, persisted resolution.** Two schemas appeared: `nazm.resolved/1`, a module's
+imports, definitions and resolved occurrences by durable identity, and `nazm.references/1`, one
+entity's occurrences read from those units. The cache's own entry moved to `nazm.check/3`, and a
+`/2` entry is a miss. No code appeared, and the interface stays `nazm.interface/7`.
 
 ## Spans are byte offsets
 

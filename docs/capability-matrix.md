@@ -233,6 +233,24 @@ and the parser produces a usable tree for a file with an error in the middle of 
 
 ### 2. Name resolution and modules — PARTIAL
 
+**N77 (2026-10-03)** · *Resolution, persisted* (`architecture.md` §7.78). A module that checks
+cleanly leaves a **resolved unit**, `nazm.resolved/1`: its imports (as written, alias, target
+key, target interface hash), its definitions and every resolved occurrence of a declared entity,
+each by durable identity (`DefKey`, with a member name for a variant, field or payload field), no
+session id, no path, no local. It is written from the checker's own `Resolution` and reference
+index (`crates/nazm-iface/src/resolved.rs`) and stored in the module's check entry, now
+`nazm.check/3`, under the same key. Its invalidation is therefore the check's, and the table in
+§7.78 is held by `crates/nazm-cli/tests/resolved_units.rs`. The same bytes come out of two
+processes and two checkouts. A private body change re-checks its module and leaves the importer's
+unit byte-identical. An exported change re-checks every direct importer. An alias is part of the
+importer's unit. A unit forged to claim other text is never read. `nazm references DEF FILE` reads
+reused modules' units instead of checking their bodies: warm, `checked` is 0, and the answer
+equals the language service's references from a fresh in-process check, the independent oracle.
+`nazm resolve FILE` prints the units. Both schemas are validated against real output
+(`schemas.rs`); a missing, foreign or mis-versioned unit is a miss (`crates/nazm-cache/tests/store.rs`).
+The compiler written in Nazm's loader, `compiler/module.nz`, refuses `@std/` and `NAME:` imports by
+name (`selfhost.rs`), where it used to report a missing file; it resolves relative paths only.
+
 **Evidence** · Lexical scoping with shadowing rules and a separate function namespace,
 `crates/nazm-core/src/check.rs`. `use "relative/path.nz";` resolved by the driver,
 `crates/nazm-service/src/load.rs` — canonical-path keyed, read-once, depth-first, cycles
@@ -310,9 +328,13 @@ marker, or `--source-root DIR`, fixes the root a module's key is relative to, so
 neither, the root is derived from the named file exactly as before. The marker must be
 empty and is refused otherwise: it says where a project begins and owns nothing else.
 
-**Limitation** · A module still cannot export a name under another one, re-export, or be
-named by anything but a relative path. *The sentence that stood here — that nothing is
-separately compiled — was true until N5 and is now area 10a.*
+**Limitation** · A module still cannot export a name under another one or re-export one: both
+are language decisions with no settled design, and they are why this area stays PARTIAL. A module
+is named by a relative path, `@std/NAME` or a package's `NAME:path`; the compiler written in Nazm
+resolves only the first (N98). A resolved unit carries no types and no slots, so `nazm build` and
+`nazm run` still check every module (area 2a); locals have no persisted resolution; the language
+service never reads or writes a unit (an unsaved buffer is not cache state). *The sentence that
+stood here — that nothing is separately compiled — was true until N5 and is now area 10a.*
 
 **Next dependency** · Aliasing and re-export are language decisions; separate code
 generation needs a linking model (area 10).
@@ -344,11 +366,12 @@ module is invisible — the interface other modules' keys depend on, and whether
 compilation has a `main`, are recomputed rather than recalled.
 
 **Limitation** · **This is not incremental native compilation, and no such claim is made.**
-`nazm run` and `nazm build` reuse *this* cache not at all: both need the resolution that
-only checking a body produces, and nothing persists one. (`nazm build` reuses objects as of
-N6 — a different cache, a different key, area 10b — and a build that reused every object
-still checked every module.) There is no IR, LIR or resolution cache, no query database, no
-scheduler and no eviction policy. A module with no durable identity is checked every time.
+`nazm run` and `nazm build` reuse *this* cache not at all: both need the typed resolution that
+only checking a body produces. Since N77 a module's *names* persist, as its resolved unit
+(area 2), but its types and slots do not, and lowering needs them. (`nazm build` reuses objects as
+of N6 — a different cache, a different key, area 10b — and a build that reused every object
+still checked every module.) There is no IR or LIR cache, no query database, no scheduler and no
+eviction policy. A module with no durable identity is checked every time.
 
 **And the measured gain is about a millisecond.** On the compiler's own five modules,
 `performance.md` records 40.5 ms with the cache disabled against 38.9 ms warm — 18% of the
@@ -358,8 +381,9 @@ the saving is small because parsing and declaring happen every run and are most 
 cost. Recorded rather than averaged away: a reader deciding whether to depend on this
 should know it buys correctness of invalidation, not speed.
 
-**Next dependency** · A written form for name resolution, which is what would let a build
-skip a module's bodies the way a check can. Not a `CodegenKey`: N6 found that native reuse
+**Next dependency** · *Met in part by N77:* name resolution now has a written form, the resolved
+unit, and `nazm references` reads it instead of checking a reused module's bodies. A build that
+skips bodies needs typed Core IR to be persisted too, which a resolved unit deliberately is not. Not a `CodegenKey`: N6 found that native reuse
 needed no semantic key at all (area 10b), so the dependency this row once named is gone
 rather than met.
 
