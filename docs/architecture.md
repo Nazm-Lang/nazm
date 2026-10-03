@@ -6928,6 +6928,116 @@ oracle: the service's index is computed in-process from a fresh check.
 no settled design. A build that skips bodies. A persisted resolution for locals. Making the
 compiler written in Nazm resolve `@std` or packages (N98).
 
+## 7.79 Traits and methods: named capabilities of a type, resolved before Core IR — N78, 2026-10-03
+
+Written before the code. §7.52 designed traits and deferred them until a program needed one. The
+need is now named. With `[T: Equality]` the only requirement a type parameter can carry, generic
+code cannot ask anything else of `T`: it cannot render, order, hash or measure one. A program that
+wants to print every element of a `Vec[T]` must take a rendering function as an argument at every
+call, through every layer of generic code in between. That is the problem a nominal capability
+solves, and no larger one is attempted. Coherence, orphan rules and method lookup are therefore
+the smallest that make one answer per call.
+
+**Syntax.** Three new forms, and `trait` and `impl` become keywords:
+
+- `[pub] trait Name { fn m(self: Self, p: T) -> R [! {e}]; … }` declares a trait. Each method is a
+  signature ending in `;`, and its first parameter is `self: Self`.
+- `impl Name for Type { fn m(self: Type, p: T) -> R { … } … }` implements one.
+- `recv.m(a, …)` calls a method on a value. `Name.m(recv, a, …)` calls a trait's method by its
+  trait (UFCS).
+
+A bound names a trait the way it names `Equality`: `fn f[T: Show](x: T)`, at most one requirement
+per parameter, as before.
+
+**Identity.** A trait is a durable definition, `module::trait Name`, a new `DefKind`. A trait
+method is its trait's key and its name. An impl is identified by its trait and its type. Each
+method an impl defines is an ordinary function of the impl's module, keyed
+`module::fn Trait/Type/m`: `/` is in no identifier, so the key can never be an ordinary function's.
+
+**What an impl is for.** An impl's type is a non-generic record or enum, or `Int`, `Bool` or `Str`.
+A generic type, a `Vec`, a channel, a function type, a capability or a type parameter is refused
+(`N0604`). That keeps overlap decidable by equality: there are no impls over a pattern of types.
+An impl defines every method of its trait exactly once, with the trait's signature with `Self`
+replaced by its type, effects included (`N0602` missing, `N0603` extra or mismatched).
+
+**Coherence.** At most one impl of a trait for a type in a compilation (`N0600`, with the other
+impl as a secondary label). The orphan rule: an impl must be in the module that declares the trait
+or the module that declares the type, and for `Int`, `Bool` and `Str` only the trait's module
+(`N0601`). Both rules are checked over the whole compilation, so a module's impls are part of its
+interface.
+
+**Method lookup.** `recv.m(args)`: let `R` be `recv`'s type. Candidates are the traits **in
+scope** — declared in this module or imported — that declare `m` and have an impl for `R`. When
+`R` is a type parameter, the candidates are the traits its bound names. Exactly one candidate is
+the call. None is `N0605`, naming the traits that would have one if imported. More than one is
+`N0606`, and UFCS chooses. `Name.m(recv, args)` takes the trait from the written name and the type
+from `recv`. An enum's variant still wins where `Name` is an enum (`E.A()`), so no program that
+checked before changes meaning: `Name.m(…)` with `Name` a value, or with unlabelled arguments, was
+refused before this milestone. A field of function type is not a method: `r.f(1)` with no method
+`f` is refused as before, with the existing help to bind it first.
+
+**Not here, deliberately.** A trait is not a type (`N0607`): no trait objects, no dynamic dispatch,
+no `dyn`. Default method bodies, associated types and constants, generic traits, generic methods,
+supertraits, impls with bounds, inherent impls without a trait, and methods as values (`x.m`
+without a call, `N0608`) are all out. Each is a language decision this milestone does not need, and
+each is refused by name rather than half-supported. Generic function values and closures inside
+generic functions (`N0387`) stay **outside the supported model**. Each would need a thunk per
+instance, and a bound now covers the programs that wanted them (pass `T: Show` instead of a
+rendering closure). `N0387` is retained with that reason, not retired.
+
+**Lowering, one representation per layer.** The checker resolves every method call before Core IR.
+A call on a concrete type becomes an ordinary call of the impl's function, with the receiver first:
+Core IR, MIR, both backends and the interpreter see a call they already understand, and `calls`
+records the impl function at the method's span, so definition, hover and references work unchanged.
+A call on a type parameter becomes the one new Core IR form, `CallTrait { trait, method, self_ty,
+args }`. MIR resolves it per instance: `self_ty` substituted, the impl looked up, a direct call
+emitted. MIR never contains it. The interpreter resolves it per frame, from the frame's type
+arguments, in the same table. Dictionaries are not used: monomorphisation already exists, and it
+makes every trait call a direct call in native code. The impl table (trait, type) → functions is
+the checker's, in `Resolution`, and nothing downstream builds another.
+
+**Effects, authority, provenance.** A method's effects are its declaration's, and a call exercises
+them as any call does. An impl must declare exactly the trait's effects, so a call through a bound
+cannot exercise more than the bound says. Authority is passed as parameters, as everywhere. For
+provenance, a call on a concrete type is a call of a known function. A call through a bound is of
+unknown origin joined with its arguments, conservatively, as an indirect call's is.
+
+**Persisted.** An exported trait, and every impl a module declares, are in its interface, because
+an importer's method lookup and coherence check need them: `nazm.interface/7 → /8`. The resolved
+unit (§7.78) gains the kinds `trait` and `trait method`; its schema stays `/1` because the kinds
+are values of an existing field, and a reader that does not know them is incomplete, not wrong.
+Core IR's printed form gains `CallTrait`: `nazm.core-ir/1 → /2`, since an old reader would misread
+a call it does not know. MIR's printed form is unchanged, because it never contains one.
+
+**Versions.** Semantic epoch `21 → 22`: `trait` and `impl` declarations, method calls and trait
+bounds moved from refused to accepted, and a program using `trait` as a name moved from accepted to
+refused. Interface `/7 → /8`. Core IR print `/1 → /2`. Runtime ABI unchanged, since no runtime
+entry point moves. MIR, LIR, objects and package schemas unchanged. An object's key covers its LLVM
+input, which changes exactly when the code does.
+
+**Libraries.** `@std/show` gains `pub trait Show { fn show(self: Self) -> Str; }`, impls for `Int`,
+`Bool` and `Str`, and `show_all[T: Show](v: Vec[T], sep: Str) -> Str`, all written in Nazm. It is
+the higher-order library use this milestone is held to.
+
+**Tooling.** A trait's name, its methods' declarations, and a method call through a bound are
+indexed: `ReferenceTarget::Trait`, `ReferenceTarget::TraitMethod`. A concrete call refers to its
+impl's function. The language service's definition, hover and references, and MCP's context
+packets, read those as they read every other target.
+
+**The compiler written in Nazm** refuses `trait` and `impl` by its ordinary syntax error. That is
+the recorded parity gap (N98).
+
+**Negative examples.** Two impls of `Show` for `Point` (`N0600`). An impl of `Show` for `Int` in a
+third module (`N0601`). `x.show()` where no trait in scope has an impl for `x`'s type (`N0605`).
+`fn f(s: Show)` (`N0607`). **Boundary examples.** `Show.show(1)` with `Show` imported under an
+alias, `s::Show.show(1)`. An impl in the type's module of a trait from `@std`. A generic call
+`show_all[Point]` that reaches `CallTrait` through two levels of generic functions.
+
+**What would prove this unsuitable.** A program whose method call resolves differently in the
+checker, the interpreter and a native build. A coherence violation accepted because its impls are
+in different modules. A generic body that checks under its bound but cannot be instantiated for a
+type that satisfies it.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
