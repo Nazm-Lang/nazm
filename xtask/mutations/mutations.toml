@@ -12898,3 +12898,66 @@ file = "crates/nazm-runtime/src/switch.rs"
 find = "  stp x19, x20, [sp, #0]"
 replace = "  nop"
 killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "every_concurrency_shape_behaves_the_same_on_the_pool_on_both_backends" }]
+
+
+# --- N84: the standard library 1.0 --------------------------------------------------------------
+#
+# Each attacks one documented behaviour of `docs/architecture.md` §7.85: the sort's stability, the
+# map's search, lexical `..`, JSON's refusal of a leading zero, a line's carriage return, a prefix
+# sorting first, and the 1.0 manifest's guard on the surface.
+
+[[mutation]]
+name = "n84-the-sort-is-unstable"
+why = "equal elements are taken from the right run first, so a sort by key reorders records with the same key"
+file = "library/std/sort.nz"
+find = "                let left = if a < mid { if b < hi { !less(vec_get(src, b), vec_get(src, a)) } else { true } } else { false };"
+replace = "                let left = if a < mid { if b < hi { less(vec_get(src, a), vec_get(src, b)) } else { true } } else { false };"
+killers = [{ package = "nazm-cli", test = "stdlib_1_0", name = "the_sort_is_stable_does_what_its_function_does_and_the_seq_helpers_clamp" }]
+
+[[mutation]]
+name = "n84-the-map-searches-the-wrong-half"
+why = "the binary search moves the wrong bound, so a key that is present is reported absent and inserted again"
+file = "library/std/map.nz"
+find = "        if c == 0 { at = mid; } else { if c < 0 { lo = mid + 1; } else { hi = mid; } }"
+replace = "        if c == 0 { at = mid; } else { if c > 0 { lo = mid + 1; } else { hi = mid; } }"
+killers = [{ package = "nazm-cli", test = "stdlib_1_0", name = "map_path_fs_time_test_and_chan_behave_as_documented" }]
+
+[[mutation]]
+name = "n84-dot-dot-removes-nothing"
+why = "`..` no longer takes away the component before it, so a normalised path still climbs through it"
+file = "library/std/path.nz"
+find = '                    if k > 0 && strs_get(kept, k - 1) != ".." { let gone = strs_pop(kept); } else {'
+replace = '                    if false && k > 0 && strs_get(kept, k - 1) != ".." { let gone = strs_pop(kept); } else {'
+killers = [{ package = "nazm-cli", test = "stdlib_1_0", name = "map_path_fs_time_test_and_chan_behave_as_documented" }]
+
+[[mutation]]
+name = "n84-json-takes-a-leading-zero"
+why = "`01` parses as one, where JSON refuses a number with a leading zero"
+file = "library/std/json.nz"
+find = '            if str_len(body) > 1 && str_byte(body, 0) == 48 { fail(p, "a number with a leading zero") } else {'
+replace = '            if false { fail(p, "a number with a leading zero") } else {'
+killers = [{ package = "nazm-cli", test = "stdlib_1_0", name = "json_round_trips_and_names_where_malformed_text_went_wrong" }]
+
+[[mutation]]
+name = "n84-a-line-keeps-its-carriage-return"
+why = "`text_lines` keeps the `\\r` of a `\\r\\n` ending, so a line read from a Windows file is one byte longer"
+file = "library/std/text.nz"
+find = "            if text_ends_with(line, str_from_byte(13)) {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "stdlib_1_0", name = "text_1_0_behaves_as_documented_at_its_edges" }]
+
+[[mutation]]
+name = "n84-a-prefix-sorts-last"
+why = "`text_compare` puts a prefix after the longer string, against the documented byte order"
+file = "library/std/text.nz"
+find = "            r = if i == m { 2 } else { 0 - 1 };"
+replace = "            r = if i == m { 2 } else { 1 };"
+killers = [{ package = "nazm-cli", test = "stdlib_1_0", name = "text_1_0_behaves_as_documented_at_its_edges" }]
+
+[[mutation]]
+name = "n84-the-manifest-forgets-an-item"
+why = "an item leaves the 1.0 manifest while the library still has it, so a later removal would pass unnoticed"
+file = "library/std/API-1.0"
+find = "@std/text pub fn text_compare(a: Str, b: Str) -> Int ! {}\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "stdlib_1_0", name = "every_public_standard_item_is_in_the_1_0_manifest" }]

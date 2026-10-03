@@ -2648,6 +2648,22 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### The standard library 1.0 — N84, measured 2026-10-04
+
+**Workloads:** `ints_sort` of 100,000 pseudo-random integers; 10,000 `map_set`s of distinct keys in a
+scrambled order; `json_parse` then `json_encode` of a 128 KB array of 2,000 small objects, five times.
+**Method:** release build, LLVM `-O2`, five runs, median. Apple M1 Pro, macOS 27.2.
+
+| Operation | Median |
+| --- | ---: |
+| `ints_sort`, 100,000 | 19.6 ms |
+| `map_set` × 10,000 | 390.6 ms |
+| JSON parse + encode, 128 KB × 5 | 69.8 ms |
+
+The map is a sorted array: an insertion moves every entry after it, so building one of `n` keys is
+quadratic; at 10,000 keys that is the cost above. A hash map needs hashing in the library, and is not
+in 1.0. Sorting is a merge sort through `vec_sort_by`, its comparison an indirect call.
+
 ### The task pool — N83, measured 2026-10-04
 
 **Hypothesis:** tasks on a bounded pool start faster than threads, wait as cheaply, and let far more

@@ -81,7 +81,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 13 | Runtime | PARTIAL (v1 contract VERIFIED; a built, versioned, verified artifact, N82) — one OS thread per task |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83): an opt-in M:N pool, `NAZM_SCHEDULER=pool`, macOS aarch64 and x86-64; Linux compile-only; no stealing or preemption |
-| 16 | Standard library | PARTIAL (v1 foundation VERIFIED) |
+| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; no networking, cryptography or floats |
 | 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`; header bindings for that subset, N74) |
 | 18 | Embedded support | PARTIAL — one board, emulated, VERIFIED (N62); profile rules PARTIAL |
 | 19 | Critical profile | PARTIAL (rules v1) |
@@ -101,8 +101,11 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
-After N83, 2026-10-04: seventeen VERIFIED (area 15 moved, as scoped: an opt-in pool, macOS),
-twenty PARTIAL, none RESEARCH; nothing else moved between N77 and N82.
+After N84, 2026-10-04: eighteen VERIFIED (area 16 moved, as scoped: the standard library 1.0),
+nineteen PARTIAL, none RESEARCH.
+
+*Historical.* After N83, 2026-10-04: seventeen VERIFIED (area 15 moved, as scoped: an opt-in pool,
+macOS), twenty PARTIAL, none RESEARCH; nothing else moved between N77 and N82.
 
 *Historical.* After N76, 2026-10-03: sixteen VERIFIED (area 1 moved, for the reference parser),
 twenty PARTIAL, one RESEARCH.
@@ -1539,7 +1542,25 @@ implementation.
 
 ## Libraries and interop
 
-### 16. Standard library — PARTIAL (v1 foundation VERIFIED)
+### 16. Standard library — VERIFIED as scoped (1.0, N84)
+
+*N84, 2026-10-04: The standard library 1.0 — VERIFIED as scoped.* `architecture.md` §7.85 first.
+Seventeen modules, 126 public items (`library/std/API-1.0`): text grown (case, trimming either end,
+replace, count, padding, lines, comparison, byte classes), seq grown (reverse, slice, concat, any,
+all), a new `sort` (a stable sort by a caller's ordering, polymorphic in its effects; `Int` and `Str`
+sorts — its own module so that `@std/seq` stays importable under `embedded`), and
+`fmt`, `num`, `map` (ordered by key), `path` (lexical), `fs` (`IoCap`, failures as values), `time`
+(`TimeCap`), `json` (an arena document, integers only, every malformed input an `Err` naming its byte
+offset) and `test`; channel helpers for `Int` and `Str`. Evidence: `crates/nazm-cli/tests/stdlib_1_0.rs`
+— every new function at its edges on the interpreter, LLVM `-O0` and `-O2` and Cranelift with
+everything reclaimed; a JSON round trip and nine malformed inputs; four representative programs under
+`examples/std/` — a word counter, a table summer, a channel service and a package-manifest tool —
+written against the library for all their plumbing and giving the same output on every tier; and the
+manifest regenerated and compared, so a 1.x change to a listed item fails. `stdlib.rs` keeps every
+module checking cleanly, documented and listed. Measured (`performance.md`): sorting 100,000 integers
+19.6 ms; 10,000 map insertions 391 ms (an insertion moves the entries after it); parsing and
+re-encoding 128 KB of JSON about 14 ms. **Scope**: no networking, cryptography or floating point, by
+decision; the map's insertion is linear; the compiler written in Nazm cannot import any of it.
 
 **Evidence** · N45 (2026-10-01), `architecture.md` §7.47 first. Seven toolchain-owned Nazm
 modules in `library/std/`, imported by name — `use "@std/text";` — resolved by the loader

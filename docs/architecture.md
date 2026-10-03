@@ -7523,6 +7523,17 @@ stable, as the documentation says.
 **What would prove this unsuitable.** A representative program that still needs a helper the library
 should have provided; a 1.x change to a listed signature that the manifest test does not stop.
 
+**As built (N84, 2026-10-04).** Four amendments. **Sorting is `@std/sort`**, not part of `@std/seq`: a
+restriction profile checks every function of every module a program imports, and a sort allocates in
+a loop and calls through a function value, so in `@std/seq` it made a program that only sums a
+sequence fail `embedded`. Seventeen modules, then; the surface is the same 126 items. **No epoch moves**: `spec.md` already says a
+standard module's changes are carried by its interface hash, as N45 settled, and that holds; the
+constitution's epoch 25 was not needed. **Channel helpers are written for `Int` and `Str`**: a
+channel cannot carry a type parameter (`N0390`), so `chan_send_all`, `chan_collect` and `chan_drain`
+are each two functions. **`num_pow` returns `None` for `Int`'s minimum**: its overflow check is on
+magnitudes, and the documentation says so rather than the check growing a special case. A standard
+module may import another (`@std/fs` imports `@std/text`).
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
