@@ -398,6 +398,16 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N79 — effects and capabilities v3 — **complete as scoped, 2026-10-03; areas 5 and 6 stay PARTIAL**
+
+`architecture.md` §7.80 first, amended as built. The ambient bridge became a recorded contract: each
+function's inherited authority is computed, recorded and shown by `nazm inspect`, and the
+`authority` profile's `explicit-authority` refuses it by name. `OutCap` attenuates `IoCap` to the
+standard streams, by passing; nothing widens it back. A function value with fewer effects than
+expected is accepted where one is passed or returned. Revocation is declared outside the model.
+Epoch 23. Not here: refusing the bridge by default (the corpus and the compiler written in Nazm
+rely on it), per-resource capabilities, subsumption inside other types. Next: N80.
+
 ### N78 — traits and methods — **complete as scoped, 2026-10-03; area 3 stays PARTIAL**
 
 `architecture.md` §7.79 first. Nominal traits, `impl Trait for Type`, `recv.m(…)`, `Trait.m(recv, …)`

@@ -78,7 +78,7 @@ build's time went, and `nazm inspect` prints everything the compiler knows about
 | a `struct` you declare | A **record**: a value with named fields, each keeping its own type's rules |
 | an `enum` you declare | One of a fixed set of named **variants**, each with its own named fields |
 | `Vec[T]` | A growable sequence of **any** type — records, enums, strings, other `Vec`s — by reference |
-| `IoCap`, `SpawnCap` | **Capabilities**: authority to reach the outside world, and to start a task. Only `main` receives them; nothing constructs one |
+| `IoCap`, `OutCap`, `SpawnCap` | **Capabilities**: authority to reach the outside world, only its standard streams, and to start a task. Only `main` receives them; nothing constructs one, and an `IoCap` is accepted where an `OutCap` is expected |
 
 `Ints`, `Strs`, `Vec[T]` and `Chan` are handles: two bindings of one sequence are the same storage,
 and `==` is not offered on them, because it would have to mean either identity or
@@ -381,7 +381,12 @@ fn main(io: IoCap) -> Int ! { io } {
 Declaring `! { io }` without holding an `IoCap` is refused, and so is holding one while
 declaring `! {}` — two different mistakes, two different errors. A function that declares
 nothing uses its caller's authority, which is how programs written without any of this keep
-working; one that declares a set may call it only while holding what it needs. The checking
+working; one that declares a set may call it only while holding what it needs. `nazm inspect`
+shows what each function inherits that way, and `--profile authority` refuses it.
+
+Hand a function less than everything: an `OutCap` authorises `print` and `eprint` and nothing
+else, and an `IoCap` is accepted wherever one is expected —
+`fn log(o: OutCap, n: Int) -> Int ! { io }`, called as `log(io, 42)`, cannot read or write a file. The checking
 is static: a capability costs nothing at runtime, and it does not sandbox the program.
 `docs/spec.md`, *Effects* and *Capabilities*, is the law.
 

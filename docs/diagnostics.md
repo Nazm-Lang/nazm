@@ -310,6 +310,15 @@ in a new block because N03xx is full. The persisted interface moved to `nazm.int
 IR's printed form to `nazm.core-ir/2`. No other schema moved; `nazm.resolved/1` gained the target
 kinds `trait` and `trait method`.
 
+**Applied to N79, effects and capabilities v3.** No code appeared. An `OutCap` that is asked to
+authorise a file, the arguments or exit is the existing `N0369`, naming the `IoCap` it lacks; an
+`OutCap` given for an `IoCap`, and a function value with more effects than expected, are the
+existing `N0300`; a program defining `OutCap` is the existing `N0331`; the `authority` profile's
+`explicit-authority` refuses with the existing `N0510`, naming the function, the kinds it inherits
+and where it first exercises them. `nazm inspect` gains `inherits` per definition, a new field and
+compatible; `nazm.profile-report/1` gains a profile and a rule. The interface stays
+`nazm.interface/8`.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

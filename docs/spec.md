@@ -2185,10 +2185,13 @@ with `--profile NAME` on `check`, `build` and `run`, or required by a package's 
 | `critical` | `declared-effects`, `no-spawn`, `no-foreign`, `locked-build`, `no-declassification` (N52), `no-ambient-time` (N54), `no-select` (N60) |
 | `cyber` | `declared-effects`, `no-foreign`, `locked-build`, `contents-stay-in-files` (N52) |
 | `realtime` (N63) | `no-io`, `no-spawn`, `bounded-allocation`, `no-ambient-time`, `no-recursion`, `no-blocking`, `bounded-loops` |
+| `authority` (N79) | `explicit-authority` |
 
 `no-io`, `no-spawn` and `no-foreign` refuse a program whose `main` requires that effect, through
 any call, standard functions included. `declared-effects` refuses any function of the program that
-writes no `! { … }`, so no function exercises its caller's authority. `locked-build` refuses a
+writes no `! { … }`, so no function exercises its caller's authority. `explicit-authority` (N79)
+is narrower: it refuses only a function whose recorded inherited authority is not empty, so an
+undeclared function that exercises no authority is accepted (*The bridge is a recorded contract*). `locked-build` refuses a
 build that is not a package build whose lockfile verifies. `no-recursion` refuses a cycle of direct
 calls or spawns, and is `unknown` where a call goes through a function value; `no-select` refuses
 any select (N60). Each rule's verdict is `pass`, `fail` or `unknown`, and `unknown` is refused: a
@@ -2677,19 +2680,23 @@ fn main(io: IoCap) -> Int ! { io } {
 
 #### The capabilities
 
-There are exactly three, and they are the compiler's. There are **no user-defined
+There are exactly seven, and they are the compiler's. There are **no user-defined
 capabilities**.
 
 | Kind | Type | Authorises | Effect it authorises |
 | --- | --- | --- | --- |
-| `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` | `io` |
+| `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` — and implies `OutCap` | `io` |
+| `Out` | `OutCap` | the standard streams only: `print` and `eprint` (N79) | `io` |
 | `Spawn` | `SpawnCap` | a `spawn` statement: starting a task | `spawn` |
 | `Foreign` | `ForeignCap` | a call to a foreign function: running C (N42) | `foreign` |
 | `Vouch` | `VouchCap` | `str_vouch`: declassifying a string (N52), in every function | none |
+| `Time` | `TimeCap` | `time_now_ms` and `chan_select_until`: reading a clock (N54), in every function | none |
+| `Mmio` | `MmioCap` | `mmio_read32` and `mmio_write32`: a device register (N62), in every function | none |
 
-A kind is identified by the compiler, never by how its type is spelled. `IoCap`,
-`SpawnCap`, `ForeignCap` and `VouchCap` are **built-in type names**, like `Chan`: they mean the same in every module, and a
-module may not declare a type of either name (`N0331`). Which authority a built-in needs is a
+A kind is identified by the compiler, never by how its type is spelled. `IoCap`, `OutCap`,
+`SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap` and `MmioCap` are **built-in type names**, like
+`Chan`: they mean the same in every module, and a module may not declare a type of any of those
+names (`N0331`). Which authority a built-in needs is a
 property of the built-in's identity, decided by an exhaustive table the checker reads — a
 program's own function cannot be named `print`, so a call spelled `print` is the built-in.
 
@@ -2698,6 +2705,26 @@ standard streams and ending the process alike: it is not least privilege, and it
 distinguish a read from a write, one file from another, or output from exit. A capability
 authorises its **kind**; a resource-specific capability — one file, one directory — would be
 a kind with a type argument, and none exists yet.
+
+#### Attenuation: `OutCap` (N79)
+
+**Authority is a preorder.** Holding an `IoCap` is holding everything an `OutCap` authorises,
+so an `IoCap` is accepted wherever an `OutCap` is expected — as an argument, a `spawn` argument
+or a result. That is the only way to obtain an `OutCap`: there is no constructor (`N0370`) and no
+conversion built-in, and `main` may also take one as a root. Nothing implies an `IoCap`, so an
+`OutCap` given where an `IoCap` is expected is `N0300`, and there is no path back.
+
+```nazm
+fn shout(o: OutCap) -> Int ! { io } { print("loud\n"); 1 }   // the streams, and nothing else
+fn main(io: IoCap) -> Int ! { io } { shout(io) }            // attenuated by passing
+```
+
+A function holding only an `OutCap` that reads the arguments, touches a file or ends the
+process is `N0369`, naming the `IoCap` it lacks. So is one that calls an undeclared function
+performing `io`, even one that only prints: across a call, authority is read from effects, and
+`io` does not say which part of the outside world. The effect stays `io`: attenuation narrows
+authority, not the effect vocabulary. Inside a type — a `Vec[IoCap]` where a `Vec[OutCap]` is
+expected — nothing is converted, and that is `N0300`.
 
 #### Authority is a value in scope
 
@@ -2763,6 +2790,12 @@ exceptions:
 - **No representation a program can read.** No built-in takes one, and nothing converts one
   to an `Int` or a `Str`, so a capability cannot be printed, written to a file or persisted.
 
+**There is no revocation, deliberately (N79).** A capability has no identity: copies are
+indistinguishable and nothing records a grant, so there is nothing to revoke. Revocation would
+need a cell per grant and a check at every authorised call — runtime state the static model does
+not have. A program that needs a revocable grant passes ordinary data it can invalidate, such as a
+channel it closes; that is data, not authority.
+
 #### The compatibility bridge: a function with no declared set
 
 A function that declares no effect set is **ambient**: it has no authority of its own and
@@ -2776,6 +2809,19 @@ an import it cannot read. So code that states its contract never reaches authori
 hold by calling code that states none, in its own module or another. Declaring a set is how a
 function leaves the bridge; nothing makes a function leave it silently, and nothing lets one
 re-enter it.
+
+**The bridge is a recorded contract (N79).** Each function's **inherited authority** is the set
+of capability kinds its body exercises without holding them lexically, computed by the same rule
+that checks a declared function's authority. It is part of the function's contract, recorded in
+the resolution and reported by `nazm inspect` as each definition's `inherits`. A function that
+declares an effect set always inherits nothing, since missing authority is `N0369` for it. So
+which functions use the bridge, and for which kinds, is stated rather than ambient.
+
+**Strict authority is a profile.** Under `--profile authority`, the rule `explicit-authority`
+refuses (`N0510`) every function of the program's own modules whose inherited authority is not
+empty, naming the function, the kinds and where it first exercises them. Under it, a function
+holds only what its scope holds, and `main`'s parameters are the only root. Outside the profile
+the bridge behaves exactly as before.
 
 #### Across modules
 
@@ -3066,7 +3112,8 @@ fn main() -> Int {
 
 | | |
 | --- | --- |
-| **Type** | `fn(T1, …, Tn) -> R`, with `! { e… }` after `R` for a function that performs effects. Unwritten effects are none. Two function types are one exactly when their parameters, result and effects are equal; there is no subtyping between them |
+| **Type** | `fn(T1, …, Tn) -> R`, with `! { e… }` after `R` for a function that performs effects. Unwritten effects are none. Two function types are one exactly when their parameters, result and effects are equal |
+| **Effect subsumption** (N79) | Where a function value is passed — as an argument or a `spawn` argument — or returned, a value whose effects are a **subset** of the expected type's is accepted: `fn(Int) -> Int ! {}` where `fn(Int) -> Int ! { io }` is expected. Parameters and results stay invariant, a type with an effect parameter is matched only by binding, and inside another type (`Vec[fn() -> Int]`) nothing is converted. A value with more effects than expected is `N0300` |
 | **Equality** | None. `==` on a function value is refused, as on a capability |
 | **A named function as a value** | A non-generic function that is not foreign, written without a call: `double`. Its type is its signature's. A generic function, a built-in and a foreign function are not values (`N0387`); write a closure that calls one |
 | **A closure** | `fn(x: Int) -> Int { … }` in expression position, its parameters and result written in full, its effects `! { … }` declared or none. Its body is checked against its declared effects as a declared function's is |
