@@ -7464,6 +7464,65 @@ under Cranelift, whose runtime is its whole baseline — and carried by a hosted
 (N82) as a second archive member. A test program that waits inside a scope for a task that fails
 first deadlocks on both models, as §7.56 says it must; the pool's tests receive after the scope.
 
+## 7.85 The standard library 1.0 — N84, 2026-10-04
+
+Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough
+to show how the library works, not enough to write a real program against. A program that counts
+words, reads a table, serves requests over channels or edits a package manifest today reimplements
+sorting, a map, number formatting, path handling and data encoding itself. This milestone fixes the
+**1.0 surface**: what a program may rely on, what is deliberately absent, and how the surface may
+change.
+
+**What 1.0 contains.** Ordinary Nazm in `library/std/`, each module imported by name, each function
+documented, total where it can be, and explicit about its effects and authority:
+
+- `@std/text` grows: case (ASCII), trimming either end, replacing, padding, lines, comparison, and
+  byte classes. `@std/seq` grows: a **stable sort by a caller's ordering**, polymorphic in that
+  function's effects; reversal; slices; concatenation; `any` and `all`; and the same for `Ints` and
+  `Strs` where they need their own.
+- New: `@std/fmt` (integers padded to a width, hexadecimal, lists with separators and brackets),
+  `@std/num` (absolute value, sign, clamp, checked power, greatest common divisor), `@std/map` (a map
+  from `Str` keys, ordered by key, found by binary search: `map_new`, `map_get`, `map_set`,
+  `map_remove`, `map_keys`, `map_len`), `@std/path` (join, base name, directory, extension, stem,
+  normalising `.` and `..` lexically), `@std/fs` (reading, writing and testing a file under an
+  `IoCap`, each failure a `Result` value), `@std/time` (a clock reading and elapsed time under a
+  `TimeCap`), `@std/json` (parsing and encoding JSON into an **arena document** — nodes in one
+  `Vec`, children as indices, because a type that owns itself through a `Vec` is refused (`N0359`) —
+  with accessors by key and index), and `@std/test` (expectations that return a `Result` naming what
+  differed).
+- **Concurrency utilities stay channel helpers.** A function value may not cross into a task
+  (`N0321`), so a library cannot spawn a caller's function; what it can do — collect, drain and send
+  many — it does, in `@std/chan`.
+
+**What 1.0 does not contain.** Networking: there is no network authority or runtime, and none is
+designed here. Cryptography: only an audited external implementation would do, and there is none to
+bind. Floating point: the language has none. Selective adoption by the compiler written in Nazm: it
+refuses every `@std` import by name (N77), and stays so.
+
+**Stability.** `library/std/API-1.0` lists every public function of 1.0 with its signature, one per
+line, sorted; a test regenerates it from the modules and requires equality, so the surface changes
+only by editing that file in the same commit. The policy, written into `spec.md`: within 1.x a function
+may be added, never removed or changed in its signature, effects or documented behaviour; a removal or
+change is 2.0. An edition, if the language ever needs one, would be how 2.0 is opted into.
+
+**Evidence that it is enough.** Four representative programs under `examples/std/` — a word counter (a
+CLI over a file: split, count in a map, sort, format), a table summer (data: lines, fields, parse,
+fold), a channel service (concurrency: workers over channels, results collected), and a package tool
+(paths and a JSON manifest read, changed and written) — each written only against the library for its
+plumbing, run on the interpreter and both native backends with the same output. The library's own
+tests check every function at its edges on every tier, and the core operations are measured.
+
+**Versions.** Semantic epoch `24 → 25`: names a program could not import before, it now can, and a
+standard module's bytes are part of every importer's check. Interface, IR, runtime ABI unchanged:
+the library is source.
+
+**Negative example.** `json_parse("[1, 2")` is an `Err` naming the offset where the input ended, never
+a trap. **Boundary example.** `vec_sort_by` on a vector of records with equal keys keeps their order:
+stable, as the documentation says.
+
+**What would prove this unsuitable.** A representative program that still needs a helper the library
+should have provided; a 1.x change to a listed signature that the manifest test does not stop.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
