@@ -179,7 +179,10 @@ use crate::digest::{self, Framed};
 /// accepted to refused, and a register access without an `MmioCap` held is refused (`N0369`).
 /// `20` — N66, 2026-10-02. Vectorisation: `ints_sum_from` became a built-in name, so a program defining
 /// a function of that name moved from accepted to refused.
-pub const SEMANTIC_EPOCH: u32 = 20;
+/// `21` — N76, 2026-10-03. Unicode escapes: a literal containing `\u{H…}` moved from refused
+/// (`N0004`) to accepted, its bytes the UTF-8 encoding of the scalar value. A cached check from
+/// epoch 20 refused a program this one accepts.
+pub const SEMANTIC_EPOCH: u32 = 21;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
