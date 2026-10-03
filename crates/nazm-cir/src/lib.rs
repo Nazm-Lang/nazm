@@ -31,7 +31,8 @@ pub mod verify;
 pub use digest::{digests, Digests};
 pub use ir::{
     ArithOp, Arm, Binding, Block, CmpOp, Const, ConstId, Effects, Ends, Expr, ExprKind, Function,
-    Init, Law, Local, LocalId, LocalOrigin, LoopId, Match, MatchOrigin, Program, Step, Stmt, Temp,
+    ImplRow, Init, Law, Local, LocalId, LocalOrigin, LoopId, Match, MatchOrigin, Program, Step,
+    Stmt, Temp,
 };
 pub use names::Names;
 pub use print::{print, Options};
@@ -39,4 +40,6 @@ pub use verify::verify;
 
 /// The printed form's version. Internal: it names what this build writes, and promises no
 /// reader outside the workspace that a later build writes the same.
-pub const SCHEMA: &str = "nazm.core-ir/1";
+/// `/2` since N78: a call through a type parameter's bound, `call_trait`, which a `/1`
+/// reader would misread as a call it does not know.
+pub const SCHEMA: &str = "nazm.core-ir/2";

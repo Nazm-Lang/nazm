@@ -157,6 +157,11 @@ fn expr_all(e: &cir::Expr, out: &mut Vec<cir::Expr>) {
                 expr_all(a, out);
             }
         }
+        ExprKind::CallTrait { args, .. } => {
+            for a in args {
+                expr_all(a, out);
+            }
+        }
         ExprKind::Const(_)
         | ExprKind::Local(_)
         | ExprKind::Closure { .. }
@@ -594,7 +599,7 @@ fn the_printed_form_is_the_same_every_time() {
     for _ in 0..5 {
         assert_eq!(printed(&src, true), a);
     }
-    assert!(a.starts_with("{\"schema\":\"nazm.core-ir/1\""), "{a}");
+    assert!(a.starts_with("{\"schema\":\"nazm.core-ir/2\""), "{a}");
 }
 
 #[test]

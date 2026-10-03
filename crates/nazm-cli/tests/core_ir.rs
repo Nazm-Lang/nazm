@@ -49,7 +49,7 @@ fn the_printed_core_ir_is_the_same_bytes_in_every_process() {
         assert!(first.status.success(), "{example}: {first:?}");
         let text = String::from_utf8(first.stdout.clone()).expect("UTF-8");
         assert!(
-            text.starts_with("{\"schema\":\"nazm.core-ir/1\""),
+            text.starts_with("{\"schema\":\"nazm.core-ir/2\""),
             "{example}"
         );
         assert_eq!(text.lines().count(), 1, "--json is one line");

@@ -182,7 +182,10 @@ use crate::digest::{self, Framed};
 /// `21` — N76, 2026-10-03. Unicode escapes: a literal containing `\u{H…}` moved from refused
 /// (`N0004`) to accepted, its bytes the UTF-8 encoding of the scalar value. A cached check from
 /// epoch 20 refused a program this one accepts.
-pub const SEMANTIC_EPOCH: u32 = 21;
+/// `22` — N78, 2026-10-03. Traits and methods: `trait` and `impl` declarations, method calls and
+/// trait bounds moved from refused to accepted, and a program using `trait` as a name moved from
+/// accepted to refused. A cached check from epoch 21 is a check of a language without them.
+pub const SEMANTIC_EPOCH: u32 = 22;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -195,6 +198,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "ALIAS_COLLIDES",
     "ALREADY_DEFINED_IN_SCOPE",
     "AMBIGUOUS_IMPORT",
+    "AMBIGUOUS_METHOD",
     "ASSIGN_TO_IMMUTABLE",
     "BRANCH_TYPES_DIFFER",
     "BUILTIN_TYPE_REDEFINED",
@@ -222,18 +226,26 @@ pub const CHECKER_CODES: &[&str] = &[
     "FOREIGN_TYPE",
     "GENERIC_MAIN",
     "ILLEGAL_TASK_CAPTURE",
+    "IMPL_CONFLICT",
+    "IMPL_METHOD_MISMATCH",
+    "IMPL_MISSING_METHOD",
+    "IMPL_ORPHAN",
+    "IMPL_TYPE_REFUSED",
     "IMPORT_COLLIDES_WITH_DEFINITION",
     "INVALID_OPERANDS",
     "INVALID_PROJECTION",
     "MAIN_PARAMETER",
     "MATCH_ON_NON_ENUM",
+    "METHOD_NOT_A_VALUE",
     "MISSING_AUTHORITY",
     "MISSING_FIELD",
     "MISSING_MAIN",
     "MISSING_TYPE_ARGUMENTS",
     "NON_EXHAUSTIVE_MATCH",
     "NOT_A_FUNCTION_VALUE",
+    "NOT_A_TRAIT",
     "NOT_IN_A_LOOP",
+    "NO_METHOD",
     "OWNERSHIP_CYCLE",
     "PRELUDE_TYPE_REDECLARED",
     "PRIVATE_DEFINITION",
@@ -244,6 +256,8 @@ pub const CHECKER_CODES: &[&str] = &[
     "RECURSIVE_RECORD",
     "RESTRICTED_FLOW",
     "SPAWN_OUTSIDE_SCOPE",
+    "TRAIT_METHOD_SELF",
+    "TRAIT_NOT_A_TYPE",
     "TYPE_ARGUMENTS_ON_NON_GENERIC",
     "TYPE_MISMATCH",
     "TYPE_NESTING_TOO_DEEP",

@@ -506,6 +506,32 @@ impl Verifier<'_> {
                     self.bad("a function value that is not one");
                 }
             }
+            ExprKind::CallTrait {
+                trait_id,
+                method,
+                self_ty,
+                args,
+                ..
+            } => {
+                for a in args {
+                    self.expr(a);
+                }
+                let arity = self
+                    .res
+                    .traits()
+                    .get(*trait_id)
+                    .and_then(|d| d.methods.get(*method as usize))
+                    .map(|m| m.params.len() + 1);
+                if arity != Some(args.len()) {
+                    self.bad("a trait call with no such method, or the wrong number of arguments");
+                }
+                if args.first().and_then(|r| r.ty) != Some(*self_ty) {
+                    self.bad("a trait call whose receiver is not of its `Self` type");
+                }
+                if !matches!(self_ty, Type::Param(_)) {
+                    self.bad("a trait call on a concrete type, which is an ordinary call");
+                }
+            }
             ExprKind::CallIndirect { callee, args, .. } => {
                 self.expr(callee);
                 for a in args {

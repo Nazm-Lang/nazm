@@ -52,7 +52,7 @@ pub(crate) fn facts(
 ) -> ModuleFacts {
     let mut out = ModuleFacts::default();
     for (decl, f) in functions {
-        let Some(id) = res.definition(module, &f.name) else {
+        let Some(id) = crate::check::defined(res, module, f) else {
             continue;
         };
         let Some(def) = res.function(id) else {
@@ -300,6 +300,19 @@ impl<'b> Walk<'_, 'b> {
         self.slots.get(s).cloned().unwrap_or_default()
     }
 
+    /// A method call's flow (N78), receiver first: on a concrete type the impl's function
+    /// is known and is a call like any other; through a bound which function runs is not,
+    /// and the result is of unknown origin joined with its arguments — an indirect call's.
+    fn method(&mut self, at: Span, flows: Vec<Flow>) -> Flow {
+        match self.res.callee(at) {
+            Some(Callee::Function(g)) => self.call(g, at, flows, false),
+            Some(Callee::Indirect(_)) => {
+                Flow::origin(Origin::Unknown, at).joined(&self.joined(flows))
+            }
+            _ => self.joined(flows),
+        }
+    }
+
     fn joined(&mut self, es: impl IntoIterator<Item = Flow>) -> Flow {
         es.into_iter().fold(Flow::default(), |a, b| a.joined(&b))
     }
@@ -381,6 +394,37 @@ impl<'b> Walk<'_, 'b> {
                     // A call that did not resolve is already an error.
                     None => self.joined(flows),
                 }
+            }
+            // `x.m()` the checker read as a method call (N78).
+            Expr::Variant {
+                ty_span,
+                variant_span,
+                fields,
+                ..
+            } if fields.is_empty() && self.res.callee(*variant_span).is_some() => {
+                let flows = if self.res.var(*ty_span).is_some() {
+                    vec![self.expr_var(*ty_span)]
+                } else {
+                    Vec::new()
+                };
+                self.method(*variant_span, flows)
+            }
+            Expr::MethodCall {
+                receiver,
+                method_span,
+                args,
+                ..
+            } => {
+                // `Trait.m(recv, …)` names no value before the `.`; its receiver is an
+                // argument.
+                let mut flows = Vec::new();
+                let ufcs =
+                    matches!(&**receiver, Expr::Var { span, .. } if self.res.var(*span).is_none());
+                if !ufcs {
+                    flows.push(self.expr(receiver));
+                }
+                flows.extend(args.iter().map(|a| self.expr(a)));
+                self.method(*method_span, flows)
             }
             Expr::Construct { fields, .. } | Expr::Variant { fields, .. } => {
                 let flows: Vec<Flow> = fields.iter().map(|f| self.expr(&f.value)).collect();

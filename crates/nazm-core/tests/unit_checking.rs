@@ -52,6 +52,7 @@ fn interface_of_b(module: nazm_core::sema::ModuleId) -> UnitInterface {
     UnitInterface::new(
         module,
         vec![Export {
+            bounds: Vec::new(),
             name: "twice".to_owned(),
             params: vec![Type::Int],
             ret: Type::Int,

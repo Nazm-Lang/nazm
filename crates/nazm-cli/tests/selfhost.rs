@@ -162,6 +162,10 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::PipePipe => 57,
                 // `::` (N49), which the Nazm-written lexer refuses by name.
                 T::ColonColon => 58,
+                // `trait` and `impl` (N78): words to the Nazm-written lexer, which has no traits.
+                // No source this test reads writes one outside `library/std/show.nz`, which is
+                // not in its folders.
+                T::Trait | T::Impl => 3,
                 // The Rust lexer emits a final `Eof`; the Nazm one prints `EOF` and
                 // stops, so there is nothing to compare.
                 T::Eof => return None,
@@ -718,6 +722,11 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         E::Block(b) => {
             dump_block(b, out);
             push_node(out, "blockexpr", 1, b.span.start, b.span.end, "");
+        }
+        // A method call (N78), which the compiler written in Nazm does not parse: no source
+        // the parity tests read writes one, and the dump says so if one ever does.
+        E::MethodCall { span, method, .. } => {
+            push_node(out, "method-call", 0, span.start, span.end, method);
         }
     }
 }
