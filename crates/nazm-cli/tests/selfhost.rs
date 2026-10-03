@@ -3768,6 +3768,32 @@ fn the_nazm_written_compiler_refuses_an_import_it_cannot_find() {
     );
 }
 
+/// N77: an import only the reference resolves — a standard module, a package's module — is
+/// refused by name, not looked for as a file and reported missing.
+#[test]
+fn the_nazm_written_compiler_refuses_std_and_package_imports_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    for (import, names) in [
+        ("@std/text", "a standard library module"),
+        ("dep:util.nz", "a module of another package"),
+    ] {
+        let prog = dir.path().join("bad.nz");
+        std::fs::write(
+            &prog,
+            format!("use \"{import}\";\nfn main() -> Int {{ 0 }}\n"),
+        )
+        .expect("write");
+        let (rc, _, err) = run_stage(&emitter, &prog);
+        assert_eq!(rc, Some(2), "{import}: {err}");
+        assert!(
+            err.contains(names) && err.contains(import),
+            "{import}: {err}"
+        );
+        assert!(!err.contains("cannot find"), "{import}: {err}");
+    }
+}
+
 /// The compiler written in Nazm compiles a concurrent program.
 ///
 /// It could parse and check one before this; it could not lower one. The programs below

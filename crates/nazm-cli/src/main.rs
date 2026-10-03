@@ -60,6 +60,7 @@ mod patch;
 mod profile;
 mod provenance;
 mod repo;
+mod resolved;
 mod run_profile;
 mod snapshot;
 mod stack;
@@ -562,6 +563,26 @@ enum Command {
     /// `nazm.reload-check/1` line naming each change as `reloadable` or `restart`, and why. Exits
     /// non-zero when any change needs a restart.
     ReloadCheck { old: PathBuf, new: PathBuf },
+    /// Print the compilation's resolved units (N77): one `nazm.resolved/1` line per module
+    /// with a durable identity — its imports, definitions and every resolved occurrence, by
+    /// durable identity. Runs the cached check; a reused module's unit is its entry's.
+    Resolve {
+        file: PathBuf,
+        /// Where this project begins. As `nazm check --source-root`.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
+    },
+    /// Every occurrence of one entity in the compilation (N77), from its modules' resolved
+    /// units: `nazm.references/1`. `DEF` is a durable key, `module::kind name`, with
+    /// `.member` for a variant, field or payload field (`Variant.field`). A module whose
+    /// check is reused is not checked again; the output says how many were.
+    References {
+        def: String,
+        file: PathBuf,
+        /// Where this project begins. As `nazm check --source-root`.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
+    },
     /// Write a module's published interface: what it offers, durably.
     ///
     /// The file named is the root, so the source root is its directory. Output is one
@@ -1038,6 +1059,14 @@ fn main() -> ExitCode {
             hash,
             source_root,
         } => return interface::run(&file, hash, source_root.as_deref()),
+        Command::Resolve { file, source_root } => {
+            return resolved::resolve(&file, source_root.as_deref())
+        }
+        Command::References {
+            def,
+            file,
+            source_root,
+        } => return resolved::references(&def, &file, source_root.as_deref()),
         Command::Repl => return live::repl(),
         Command::Init { dir, template } => return init::run(&dir, &template),
         Command::Doc { path, out } => return apidoc::run(&path, out.as_deref()),
@@ -1258,6 +1287,8 @@ fn main() -> ExitCode {
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }
+        | Command::Resolve { .. }
+        | Command::References { .. }
         | Command::Repl
         | Command::Accel { .. }
         | Command::Contract { .. }

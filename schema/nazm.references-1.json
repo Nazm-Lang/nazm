@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.references-1.json",
+  "title": "nazm.references/1",
+  "description": "Every occurrence of one entity in a compilation (N77), read from its modules' resolved units (`nazm.resolved/1`). One object on stdout from `nazm references DEF FILE`. A module whose check entry was reused contributes its stored unit and is not checked again; `checked` and `reused` say how many were.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "item", "member", "kind", "declaration", "uses", "checked", "reused"],
+  "$defs": {
+    "at": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "start", "end"],
+      "properties": {
+        "module": { "type": "string", "description": "The durable key of the module the bytes are in." },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "properties": {
+    "schema": { "const": "nazm.references/1" },
+    "item": { "type": "string", "description": "The entity's item, `module::kind name`." },
+    "member": { "type": ["string", "null"] },
+    "kind": { "enum": ["function", "record", "enum", "variant", "field", "payload field"] },
+    "declaration": { "oneOf": [{ "$ref": "#/$defs/at" }, { "type": "null" }], "description": "Where its name is declared, or null when no module of the compilation declares it in source." },
+    "uses": { "type": "array", "items": { "$ref": "#/$defs/at" }, "description": "Every other occurrence, in module order then by range." },
+    "checked": { "type": "integer", "minimum": 0, "description": "Modules whose bodies were checked this run." },
+    "reused": { "type": "integer", "minimum": 0, "description": "Modules whose stored unit was read instead." }
+  }
+}
