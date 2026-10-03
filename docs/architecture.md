@@ -7382,6 +7382,77 @@ exit 4, as a missing toolchain is. The falsifier ran: every program in the repos
 generated runtime and with the artifact, on both backends — 228 builds — printed, ended and reported
 memory identically.
 
+## 7.84 The task pool: M:N tasks on bounded workers — N83, 2026-10-04
+
+Written before the code. Area 15 is RESEARCH: §7.56 chose the model — stackful tasks on guarded
+`mmap`'d stacks with a small per-target switch — and named what must have a task-local home before a
+pool exists. This section settles the pool, as an **opt-in mode of the native runtime**, beside the
+default of one OS thread per task, which does not change.
+
+**Selecting it.** A native program whose environment has `NAZM_SCHEDULER=pool` runs its tasks on a
+pool of `NAZM_WORKERS` OS threads (default: the online processors, at most 64), started at the first
+`spawn`. Anything else, or no variable, is today's model. The choice is the runtime's, made once per
+process; the compiler, both backends and the interpreter are unaffected, and so is every program's
+meaning.
+
+**Tasks.** A task is a record and a guarded stack: `NAZM_TASK_STACK` bytes (default 256 KiB, rounded
+to pages) above one inaccessible page, `mmap`'d at `spawn` and released when the task ends. A task is
+**pinned to one worker** — the one `spawn` assigned it, round robin — for its whole life. Pinning is
+what makes the runtime's thread-local state sound without rewriting how compiled code reads it: a
+compiler may keep a thread-local's address across a call, so a task must never resume on another
+thread. The four thread-local words the runtime promises — the first-failure flag, message and
+length, and the stack limit — are saved into the task when it leaves its worker and restored when it
+returns, so each task has its own. A task's stack limit is set from its own stack, so `nz.stack_check`
+reports recursion that would reach the guard page as it does on a thread (`N0408`).
+
+**States and suspension.** A task is runnable, running, parking, parked or done. The operations that
+wait are exactly §7.56's suspension points: a full channel's send, an empty channel's receive, a select
+with no channel ready, and a scope's join. In a task, each **parks the task and frees its worker**
+instead of blocking it: the task records itself as a waiter on what it waits for, under that thing's
+own lock, then switches to its worker. Whoever changes that state wakes every task waiting on it, as
+the condition variable is broadcast today. A wake that arrives while the task is still switching out is
+not lost: the worker finishes the park and sees it. A select with a deadline parks with that deadline,
+and its worker wakes it when it passes. A select that does not wait — `ms <= 0` — yields its worker
+before returning, so a task polling for another on the same worker cannot starve it. The program's
+`main` is not a task: its waits block its own thread, as now.
+
+**Scheduling.** Each worker runs its own tasks in first-in, first-out order until each parks, yields
+or ends. There is no preemption and no work stealing: a task that computes without waiting holds its
+worker until it does, and only its own worker's tasks wait for it. That is the fairness this pool
+promises — first in, first out among a worker's runnable tasks — and no more.
+
+**Failure, cancellation and shutdown.** Unchanged in meaning: a failure is the task's own, its scope
+joins every task and reports the first by start order; cancellation is a closed channel. Workers never
+exit; the process ends as it does today, when `main` returns.
+
+**What is refused or not covered.** A foreign (C) call that blocks holds its worker: there is no
+hand-off, and it is stated, not hidden. A task's stack is fixed: recursion past it is `N0408`, and a
+program that recursed deeply in a task under the thread model may need a larger `NAZM_TASK_STACK`.
+The interpreter keeps a thread per task. Only aarch64 and x86-64 are covered; the switch is verified on
+`aarch64-apple-darwin`, and on `x86_64-apple-darwin` under Rosetta, and compiled but not run for the
+two Linux targets. **Deadlock freedom is not claimed**: a program that deadlocks on threads deadlocks
+on the pool.
+
+**Versions.** Runtime ABI revision `10 → 11`: the waits and wakes go through three new runtime
+functions, a task record exists, and the per-target switch is a new artefact `switch` that every
+native build reaching tasks links (and every runtime artifact carries). Semantic epoch, interface,
+Core IR, MIR and LIR unchanged: no language rule moved. `nazm.runtime/1` gains nothing: the archive
+holds the switch for its target. `NAZM_SCHED_REPORT` gains `workers=` and `peak=`, the most tasks alive
+at once.
+
+**Negative example.** Ten thousand tasks each waiting on a channel `main` fills: under the thread model
+that is ten thousand OS threads; under the pool, `NAZM_WORKERS` threads, every waiting task parked.
+**Boundary example.** A task in `while true { chan_select_until(cs, out, 0) }` waiting for a sibling on
+the same worker still sees the sibling run, because a non-waiting select yields.
+
+**Accepted when** (§7.56's, kept): many more logical tasks than OS threads with no supported waiting
+operation holding a worker, and spawn latency, switch cost and task memory measured as resident set
+size, with the page size, against the thread model.
+
+**What would prove this unsuitable.** A program whose output, ending or memory report differs between
+the two models; a waiting task that holds its worker; a lost wake-up; a task observing another's
+failure or stack limit.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
