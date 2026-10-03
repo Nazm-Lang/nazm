@@ -327,6 +327,39 @@ fn an_impl_in_a_module_not_imported_is_not_in_scope() {
 }
 
 #[test]
+fn an_impl_out_of_scope_is_not_a_candidate_even_when_another_trait_has_the_method() {
+    // Two traits in scope declare `sides`, and both impls for `Tri` are in a module `main`
+    // does not import: neither is usable, so this is no method, never an ambiguity between
+    // impls the module cannot use.
+    let shape = "pub trait Shape { fn sides(self: Self) -> Int; }\n";
+    let poly = "pub trait Poly { fn sides(self: Self) -> Int; }\n";
+    let tri = "use \"shape.nz\";\nuse \"poly.nz\";\npub struct Tri { a: Int, }\n\
+               impl Shape for Tri { fn sides(self: Tri) -> Int { 3 } }\n\
+               impl Poly for Tri { fn sides(self: Tri) -> Int { 4 } }\n";
+    let make = "use \"tri.nz\";\npub fn make() -> Tri { Tri(a: 1) }\n";
+    let main = "use \"shape.nz\";\nuse \"poly.nz\";\nuse \"make.nz\";\nfn main() -> Int { make().sides() }\n";
+    assert_eq!(
+        check_codes(&[
+            ("main.nz", main),
+            ("shape.nz", shape),
+            ("poly.nz", poly),
+            ("tri.nz", tri),
+            ("make.nz", make)
+        ]),
+        ["N0605"]
+    );
+}
+
+#[test]
+fn an_enum_keeps_its_variant_calls_beside_an_imported_trait_of_its_name() {
+    // A module may declare an enum `E` and import a trait `E`: `E.A()` is the variant.
+    let t = "pub trait E { fn A(self: Self) -> Int; }\n";
+    let main = "use \"t.nz\";\nenum E { A, B, }\n\
+                fn main() -> Int { match E.A() { E.A() => 1, E.B() => 2, } }\n";
+    agrees_on(&[("main.nz", main), ("t.nz", t)], "1", 0);
+}
+
+#[test]
 fn a_trait_is_not_a_type_and_a_method_is_not_a_value() {
     let src = format!("{SHOW}fn f(s: Show) -> Int {{ 0 }}\nfn main() -> Int {{ 0 }}\n");
     assert_eq!(check_codes(&[("p.nz", &src)]), ["N0607"]);
