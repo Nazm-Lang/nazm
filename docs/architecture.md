@@ -7050,6 +7050,79 @@ of its own may call it through a bound. The interpreter keeps no type arguments 
 dispatches a `CallTrait` on the receiver value's runtime type. That type is the one the bound was
 instantiated at, because impls exist only for types whose values carry their type.
 
+## 7.80 Effects and capabilities v3: the bridge made a contract, attenuation, subsumption — N79, 2026-10-03
+
+Written before the code. Areas 5 and 6 are PARTIAL for four named reasons. First, **the ambient
+bridge**: a function that declares no effect set exercises its caller's authority, and nothing says
+so. Second, **no attenuation**: the only authority is a whole kind. Third, **no effect
+subsumption**: a pure function value is refused where an effectful one is allowed. Fourth, **no
+revocation**. This section settles each, and states plainly what stays.
+
+**The bridge, made a representable contract.** Deleting inheritance outright would refuse every
+undeclared function in the repository that prints (more than a thousand checks, the compiler written
+in Nazm among them, whose checker reads no capabilities). That is a migration of the language's
+whole corpus and of the second compiler, which this milestone does not attempt. What it does
+instead:
+
+- Every function's contract now has three parts. Its effects, declared or inferred. Its capability
+  parameters. And its **inherited authority**: the capability kinds its body exercises without
+  holding them lexically, computed by the same rule a declared function's authority is checked by.
+  A declared function's inherited authority is always empty, because missing authority is
+  `N0369`.
+- The inherited authority is recorded in the resolution. It is published in the interface (each
+  export's `inherits`, `nazm.interface/8 → /9`, since a `/8` reader would take an inheriting
+  function for one that inherits nothing). `nazm inspect` reports it. So the bridge is no longer
+  ambient: it is a named part of a callable's type-level contract, and tools and reviewers see
+  exactly which functions use it.
+- **Strict authority is available and enforceable.** The restriction-profile rule
+  `explicit-authority` refuses any function in its package whose inherited authority is not
+  empty. Under it, authority is only what a function's scope holds. Undeclared inheritance is gone
+  for that code, and `main`'s parameters are the only root.
+- **The default does not change.** A program not under the profile still inherits as before, so
+  area 6 stays PARTIAL. Migrating the corpus, and teaching the compiler written in Nazm
+  capabilities, are named as the remaining work.
+
+**Attenuation.** One narrower kind, `OutCap`, authorises the standard streams only: `print` and
+`eprint`. It is derived, never constructed: `cap_out(io: IoCap) -> OutCap` is the only way to make
+one (`N0370` still refuses construction), and `main` may take one as a root. Authority is a
+preorder, monotone by construction. Holding an `IoCap` is holding the authority an `OutCap` gives,
+because `print` asks for `OutCap` and an `IoCap` implies it. Nothing implies `IoCap`, and there is
+no built-in from `OutCap` to `IoCap`. A function given only an `OutCap` cannot read a file, write
+one, read the arguments or exit, and each of those is `N0369`. The effect stays `io`: attenuation
+narrows authority, not the effect vocabulary. Its scope is lexical, like every capability's.
+
+**Effect subsumption.** Where a value of function type is passed or returned, a function type whose
+effect set is a subset of the expected one is accepted: `fn() -> Int ! {}` where `fn() -> Int !
+{io}` is expected. Parameters and results stay invariant, and so does an effect parameter in either
+type, because a row is matched by binding and not by inclusion. Below the checker, effects are
+metadata and every verifier compares types up to effects (§7.53), so nothing downstream moves.
+
+**Callable polymorphism and traits.** One effect parameter per function, as N51 settled. A trait
+method's declared effects are its contract, and an impl's must equal them (N78). Capabilities cross
+traits, closures and methods as ordinary parameters and captures, and the profile rule applies to
+an impl's methods like any function.
+
+**Revocation: outside the model, deliberately.** A capability has no identity: copies are
+indistinguishable, and nothing records a grant. Revocation would need an allocated cell per grant, a
+check at every authorised call, and runtime state. Nazm's capabilities are static, and the language
+does not offer revocation. A program that needs a revocable grant passes a channel or a value it can
+invalidate. That is ordinary data, not authority.
+
+**Versions.** Semantic epoch `22 → 23`: `cap_out` and `OutCap` became built-in names (a program
+defining either moved from accepted to refused), and a subsumed function value moved from refused to
+accepted. Interface `/8 → /9` for `inherits`. Runtime ABI unchanged: a capability erases to a word,
+and `cap_out` returns one. Core IR, MIR and LIR schemas unchanged: `cap_out` is a built-in, and
+built-ins are named, not schematised. Profile rule ids gain `explicit-authority`.
+
+**Negative example.** `fn log(o: OutCap) -> Int ! {io} { write_file(…) }` is `N0369`: `OutCap`
+does not authorise a file. **Boundary example.** Under `explicit-authority`, `fn helper() -> Int {
+print("x"); 0 }` called from `main(io: IoCap)` is refused, with `helper`'s inherited authority named.
+Outside the profile it is accepted exactly as before.
+
+**What would prove this unsuitable.** A function that exercises authority it does not hold
+lexically, with an empty recorded `inherits`. Any path from `OutCap` to `IoCap`'s authority. A
+subsumed value whose call performs an effect its expected type does not allow.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
