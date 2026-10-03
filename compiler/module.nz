@@ -122,7 +122,15 @@ fn imports_of(src: Str, dir: Str, at: Ints) -> Strs {
         if ints_get(kinds, i) == k_use() {
             if i + 1 < ints_len(kinds) {
                 if ints_get(kinds, i + 1) == k_str() {
-                    strs_push(out, resolve_import(dir, strs_get(texts, i + 1)));
+                    let written = strs_get(texts, i + 1);
+                    let why = refused_import(written);
+                    if str_len(why) > 0 {
+                        eprint(str_concat(str_concat(str_concat(str_concat(
+                                "the compiler written in Nazm does not resolve `", written),
+                                "`: it names "), why), str_from_byte(10)));
+                        exit_with(2);
+                    }
+                    strs_push(out, resolve_import(dir, written));
                     ints_push(at, ints_get(starts, i + 1));
                 }
             }
@@ -130,6 +138,22 @@ fn imports_of(src: Str, dir: Str, at: Ints) -> Strs {
         i = i + 1;
     }
     out
+}
+
+/// What an import names that only the reference compiler resolves (N77), or `""`: a
+/// standard module, `@std/NAME`, or a module of a package, `NAME:path`. The reference
+/// resolves both (`load.rs`); this loader resolves relative paths only, and says so by name
+/// rather than looking for a file called `@std/text` and reporting it missing.
+fn refused_import(path: Str) -> Str {
+    if str_len(path) >= 5 {
+        if str_slice(path, 0, 5) == "@std/" { return "a standard library module"; }
+    }
+    let mut i = 0;
+    while i < str_len(path) {
+        if str_byte(path, i) == 58 { return "a module of another package"; }
+        i = i + 1;
+    }
+    ""
 }
 
 /// Which module owns the byte at `offset`.

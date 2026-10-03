@@ -607,7 +607,7 @@ fn an_entry_keeps_the_modules_provenance_facts() {
         .map(|(_, a)| a)
         .find(|a| a.module == "b.nz")
         .expect("b's entry");
-    assert_eq!(b.schema, "nazm.check/2");
+    assert_eq!(b.schema, "nazm.check/3");
     let f = &b.provenance.functions[0];
     assert_eq!(f.name, "load");
     assert_eq!(f.result.origins.len(), 1);
@@ -877,7 +877,7 @@ fn a_damaged_entry_is_recomputed_rather_than_believed() {
         ("emptied", |_| String::new()),
         ("not json at all", |_| "nonsense".to_owned()),
         ("a schema from the future", |t| {
-            t.replace("nazm.check/2", "nazm.check/9")
+            t.replace("nazm.check/3", "nazm.check/9")
         }),
         ("an edited interface", |t| {
             t.replace(r#""ret":"Int""#, r#""ret":"Str""#)

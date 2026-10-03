@@ -30,10 +30,12 @@
 
 pub mod facts;
 pub mod fingerprint;
+pub mod resolved;
 pub mod wire;
 
 pub use facts::PersistentFacts;
 pub use fingerprint::InterfaceHash;
+pub use resolved::ResolvedUnit;
 pub use wire::{
     PersistentExport, PersistentType, PersistentUnitInterface, ReadError, Rehydrated, SCHEMA,
 };
