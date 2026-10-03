@@ -532,6 +532,7 @@ fn wasm_build(
             adapter: Some(shape),
             timings: false,
             debug: false,
+            runtime: None,
         },
     );
     if built != ExitCode::SUCCESS {

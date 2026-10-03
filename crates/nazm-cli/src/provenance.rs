@@ -33,6 +33,24 @@ pub(crate) struct Request<'a> {
     pub stack_watermark: bool,
     pub link: &'a [PathBuf],
     pub profile: Option<&'a str>,
+    /// The runtime artifact linked instead of a generated runtime (N82), if one was.
+    pub runtime: Option<&'a Path>,
+}
+
+/// The runtime the build linked: its ABI revision and digest, and — when an artifact was linked
+/// instead of a generated runtime (N82) — that archive's own digest.
+fn runtime_record(artifact: Option<&Path>) -> Value {
+    let mut r = json!({
+        "abi_revision": nazm_lir::runtime::RUNTIME_ABI_REVISION,
+        "digest": format!("blake3:{}", nazm_lir::runtime::digest()),
+    });
+    if let (Some(dir), Some(map)) = (artifact, r.as_object_mut()) {
+        map.insert(
+            "archive".into(),
+            file_digest(&dir.join(crate::runtime_artifact::ARCHIVE)),
+        );
+    }
+    r
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -170,10 +188,7 @@ fn record(r: &Request<'_>) -> Result<Value, String> {
         "compiler": { "name": "nazm", "version": env!("CARGO_PKG_VERSION") },
         "semantic_epoch": nazm_cache::SEMANTIC_EPOCH,
         "c_compiler": c_compiler(),
-        "runtime": {
-            "abi_revision": nazm_lir::runtime::RUNTIME_ABI_REVISION,
-            "digest": format!("blake3:{}", nazm_lir::runtime::digest()),
-        },
+        "runtime": runtime_record(r.runtime),
         "backend": {
             "name": r.backend,
             "opt_level": r.opt_level,

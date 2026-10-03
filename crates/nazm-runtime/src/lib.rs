@@ -75,6 +75,58 @@ impl Needs {
         }
     }
 
+    /// Each service reached, by its stable name, in a fixed order (N82): what a runtime
+    /// artifact's manifest lists.
+    #[must_use]
+    pub fn names(self) -> Vec<&'static str> {
+        [
+            (self.tasks, "tasks"),
+            (self.channels, "channels"),
+            (self.sequences, "sequences"),
+            (self.io, "io"),
+            (self.join, "join"),
+            (self.strings, "strings"),
+            (self.shims, "shims"),
+            (self.stack, "stack"),
+            (self.closures, "closures"),
+        ]
+        .into_iter()
+        .filter_map(|(on, n)| on.then_some(n))
+        .collect()
+    }
+
+    /// The services named, or `None` for a name that is not one.
+    #[must_use]
+    pub fn by_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
+        let mut n = Self::default();
+        for name in names {
+            match name {
+                "tasks" => n.tasks = true,
+                "channels" => n.channels = true,
+                "sequences" => n.sequences = true,
+                "io" => n.io = true,
+                "join" => n.join = true,
+                "strings" => n.strings = true,
+                "shims" => n.shims = true,
+                "stack" => n.stack = true,
+                "closures" => n.closures = true,
+                _ => return None,
+            }
+        }
+        Some(n)
+    }
+
+    /// The services `self` needs that `have` does not provide, by name (N82).
+    #[must_use]
+    pub fn missing_from(self, have: Self) -> Vec<&'static str> {
+        let have = have.names();
+        self.settled()
+            .names()
+            .into_iter()
+            .filter(|n| !have.contains(n))
+            .collect()
+    }
+
     /// What the helper sets imply about each other.
     ///
     /// Both the task and the channel runtimes grow a sequence, so either one reaching
@@ -137,7 +189,9 @@ pub fn escape(s: &str) -> String {
 pub const RUNTIME_ABI_REVISION: u32 = 10;
 
 /// Every part of the runtime this component can emit, for [`digest`].
-const EVERYTHING: Needs = Needs {
+/// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
+/// (`nazm runtime build`, N82) holds.
+pub const EVERYTHING: Needs = Needs {
     tasks: true,
     channels: true,
     sequences: true,
