@@ -670,8 +670,14 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                     }
                 }
                 Expr::Block(b) => stack.push(Node::Block(b)),
-                Expr::Closure { body, span, .. } => {
+                Expr::Closure {
+                    params, body, span, ..
+                } => {
                     spans.push((SyntaxKind::ClosureExpr, *span));
+                    // A closure's parameters are constructs as a function's are.
+                    for p in params {
+                        spans.push((SyntaxKind::Param, p.span));
+                    }
                     stack.push(Node::Block(body));
                 }
                 Expr::MethodCall {
@@ -729,7 +735,10 @@ fn the_abstract_and_concrete_trees_agree_on_every_construct() {
                 .filter(|n| {
                     matches!(
                         n.kind(),
-                        SyntaxKind::BinaryExpr | SyntaxKind::NegExpr | SyntaxKind::PropagateExpr
+                        SyntaxKind::BinaryExpr
+                            | SyntaxKind::NegExpr
+                            | SyntaxKind::NotExpr
+                            | SyntaxKind::PropagateExpr
                     )
                 })
                 .filter_map(|n| {
@@ -743,9 +752,10 @@ fn the_abstract_and_concrete_trees_agree_on_every_construct() {
             // A folded `-9223372036854775808` is one abstract `Int` and a concrete `-`
             // over a literal, so the concrete side may have operators the abstract has
             // folded away; every abstract operator is a concrete one.
+            let missing: Vec<&Span> = operators.iter().filter(|o| !ops.contains(o)).collect();
             assert!(
-                operators.iter().all(|o| ops.contains(o)),
-                "{name}: an operator the checker sees is not an operator in the tree"
+                missing.is_empty(),
+                "{name}: an operator the checker sees is not an operator in the tree: {missing:?}"
             );
             constructs += want.len();
         }

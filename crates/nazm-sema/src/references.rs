@@ -179,7 +179,11 @@ impl ReferenceIndex {
         let mut index = Self::default();
         for (d, f) in res.functions().iter().enumerate() {
             let function = FnId::from_index(d);
-            index.declare(ReferenceTarget::Function(function), f.name_span);
+            // A closure has no name to declare (N50): its `fn` is a keyword, not a definition
+            // a reader could go to. Its parameters and locals are still declarations.
+            if f.closure.is_none() {
+                index.declare(ReferenceTarget::Function(function), f.name_span);
+            }
             for (slot, l) in f.locals.iter().enumerate() {
                 let slot = u32::try_from(slot).unwrap_or(u32::MAX);
                 index.declare(ReferenceTarget::Local(LocalRef { function, slot }), l.span);

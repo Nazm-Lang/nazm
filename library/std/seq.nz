@@ -122,3 +122,50 @@ pub fn vec_fold[T, A, effects E](xs: Vec[T], init: A, f: fn(A, T) -> A ! { E }) 
     while i < vec_len(xs) { acc = f(acc, vec_get(xs, i)); i = i + 1; }
     acc
 }
+
+/// A new vector holding `xs` in reverse order.
+pub fn vec_reverse[T](xs: Vec[T]) -> Vec[T] ! {} {
+    let out = vec_new[T]();
+    let mut i = vec_len(xs);
+    while i > 0 { i = i - 1; vec_push(out, vec_get(xs, i)); }
+    out
+}
+
+/// A new vector holding the elements of `xs` from index `from` up to, not including, `to`; both
+/// are clamped to `0..len`, and an empty range is an empty vector.
+pub fn vec_slice[T](xs: Vec[T], from: Int, to: Int) -> Vec[T] ! {} {
+    let n = vec_len(xs);
+    let a = if from < 0 { 0 } else { if from > n { n } else { from } };
+    let b = if to < a { a } else { if to > n { n } else { to } };
+    let out = vec_new[T]();
+    let mut i = a;
+    while i < b { vec_push(out, vec_get(xs, i)); i = i + 1; }
+    out
+}
+
+/// A new vector holding `a`'s elements, then `b`'s.
+pub fn vec_concat[T](a: Vec[T], b: Vec[T]) -> Vec[T] ! {} {
+    let out = vec_new[T]();
+    let mut i = 0;
+    while i < vec_len(a) { vec_push(out, vec_get(a, i)); i = i + 1; }
+    i = 0;
+    while i < vec_len(b) { vec_push(out, vec_get(b, i)); i = i + 1; }
+    out
+}
+
+/// Whether `test` holds for some element, asking in order and stopping at the first that does.
+pub fn vec_any[T, effects E](xs: Vec[T], test: fn(T) -> Bool ! { E }) -> Bool ! { E } {
+    let mut i = 0;
+    let mut found = false;
+    while !found && i < vec_len(xs) { found = test(vec_get(xs, i)); i = i + 1; }
+    found
+}
+
+/// Whether `test` holds for every element, asking in order and stopping at the first that does
+/// not. Every element of an empty vector passes.
+pub fn vec_all[T, effects E](xs: Vec[T], test: fn(T) -> Bool ! { E }) -> Bool ! { E } {
+    let mut i = 0;
+    let mut ok = true;
+    while ok && i < vec_len(xs) { ok = test(vec_get(xs, i)); i = i + 1; }
+    ok
+}
