@@ -6837,6 +6837,17 @@ Also: a common one-item edit on the compiler's own sources that reparses most of
 covers saved modules), incremental parsing of imported files, a concrete tree or recovery in the
 compiler written in Nazm, and `\x` above `7F`.
 
+**As built (amended after the code).** Relexing starts at the first lexeme whose end reaches the
+edit, not at the affected chunk's first lexeme. The lexer is context-free from every boundary, so
+that is exact, and a one-word edit relexes two lexemes instead of its whole item. The reparse still
+starts at the chunk. The one cross-item read the convergence tests found is not the balance scan
+but recovery: `fn ,` skips to the next `fn NAME`, reading the next item's name. The recorded
+lookahead covers both, and each has a test that fails if lookahead goes unrecorded. Reuse of green
+nodes is by construction (`Revision::edit` clones the old children). cstree exposes no node
+identity without `unsafe`, so the tests observe reuse as chunk counts and equality, not as
+pointers. A declaration dropped from the abstract tree keeps its own concrete node (`RecordItem`,
+`FnItem`) with the malformed member inside it as an `Error`, rather than becoming one `Error` node.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
