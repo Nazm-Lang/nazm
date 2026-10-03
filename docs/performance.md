@@ -2648,6 +2648,33 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### The task pool — N83, measured 2026-10-04
+
+**Hypothesis:** tasks on a bounded pool start faster than threads, wait as cheaply, and let far more
+of them be alive at once. **Workloads:** `spawns.nz` (start and join one empty task, 50,000 times),
+`pingpong.nz` (50,000 round trips between `main` and a task over two `Chan`s), `many.nz` (N tasks
+each waiting for one job, all alive before the first is sent). **Method:** release build, `-O2`; five
+runs each, median; resident set size from `/usr/bin/time -l`. Apple M1 Pro, macOS 27.2, page size
+16 KiB.
+
+| Model | Spawn + join | Round trip |
+| --- | ---: | ---: |
+| One thread per task | 25.44 µs | 6.74 µs |
+| Pool, 1 / 2 / 4 workers | 7.43 / 7.38 / 7.40 µs | 4.98 / 4.99 / 4.97 µs |
+
+| Tasks alive at once | Pool (4 workers), resident | Threads, resident |
+| ---: | ---: | ---: |
+| 1,000 | 19.9 MB | 20.3 MB |
+| 4,000 | — | 75.5 MB |
+| 10,000 | 179.8 MB | did not finish 6,000 within 40 s |
+| 50,000 | 891.1 MB | — |
+
+About 17.8 KB per pooled task (one 16 KiB page of stack touched, and the record), against about
+18.4 KB per thread: the pool does not save memory per task here, it saves OS threads, starts faster,
+and keeps going where threads stop. The switch is 22 instructions each way; a round trip with `main`
+still crosses threads, so it is not a pure switch cost. Not measured: work stealing (there is none),
+Linux.
+
 ### The runtime artifact — N82, measured 2026-10-03
 
 **Hypothesis:** a prebuilt runtime saves the runtime's compile on every build that does not already

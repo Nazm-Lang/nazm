@@ -7453,6 +7453,17 @@ size, with the page size, against the thread model.
 the two models; a waiting task that holds its worker; a lost wake-up; a task observing another's
 failure or stack limit.
 
+**As built (N83, 2026-10-04).** Three amendments. **The default worker count is 4**, not the online
+processors: the call that reports them takes a constant that differs between macOS and Linux, and
+the runtime text is target-independent. **The pool is joined to the thread model's texts as they are
+emitted**, not written into them: `compiler/emit.nz` carries the task and channel texts line by line
+(`runtime parity`), so those constants are unchanged and the Rust runtime rewrites their waits, wakes,
+join and spawn when it emits them; the compiler written in Nazm keeps one thread per task. **The
+switch is its own artefact**, `switch`, linked wherever the runtime has tasks or channels — always
+under Cranelift, whose runtime is its whole baseline — and carried by a hosted runtime artifact
+(N82) as a second archive member. A test program that waits inside a scope for a task that fails
+first deadlocks on both models, as §7.56 says it must; the pool's tests receive after the scope.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

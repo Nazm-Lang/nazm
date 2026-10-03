@@ -334,6 +334,12 @@ environment failure, not a program error — exit 4 and one sentence naming the 
 toolchain is. `nazm.runtime/1` is new, with `schema/nazm.runtime-1.json` checked against real
 manifests of every profile; `nazm.provenance/1` gains an optional `runtime.archive`.
 
+**Applied to N83, the task pool.** No code appeared: a task past its stack is the existing
+`N0408`, a pool that was asked for and could not start makes `spawn` fail as a thread that could not
+be created does (`N0404`), and five C symbols the pool calls join the reserved list (`N0383`).
+`NAZM_SCHED_REPORT` gains a second line, `nazm-pool: workers=… peak=… stack=…`, printed only where
+the pool ran; the first line is unchanged.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

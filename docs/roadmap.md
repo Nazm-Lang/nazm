@@ -398,6 +398,15 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N83 — the task pool — **complete as scoped, 2026-10-04; area 15 VERIFIED as scoped**
+
+`architecture.md` §7.84 first. `NAZM_SCHEDULER=pool`: tasks on bounded workers, each a guarded stack
+pinned to its worker, a per-target switch, every wait parking the task; ten thousand tasks alive at
+once on two workers; the whole CLI suite passes on the pool. Faster spawn (7.4 µs against 25.4 µs).
+Not here: the default stays a thread per task, no work stealing or preemption, no hand-off for a
+blocking foreign call, Linux unverified, the interpreter and the compiler written in Nazm unchanged.
+Runtime ABI 11. Next: N84, the standard library 1.0.
+
 ### N82 — runtime v2: the runtime as an artifact — **complete as scoped, 2026-10-03; area 13 stays PARTIAL**
 
 `architecture.md` §7.83 first. `nazm runtime build` compiles the whole runtime for a target and

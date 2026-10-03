@@ -80,7 +80,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 12 | Cranelift backend | VERIFIED (v1, native subset, host) |
 | 13 | Runtime | PARTIAL (v1 contract VERIFIED; a built, versioned, verified artifact, N82) — one OS thread per task |
 | 14 | Structured concurrency | VERIFIED |
-| 15 | Advanced scheduler | RESEARCH |
+| 15 | Advanced scheduler | VERIFIED as scoped (N83): an opt-in M:N pool, `NAZM_SCHEDULER=pool`, macOS aarch64 and x86-64; Linux compile-only; no stealing or preemption |
 | 16 | Standard library | PARTIAL (v1 foundation VERIFIED) |
 | 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`; header bindings for that subset, N74) |
 | 18 | Embedded support | PARTIAL — one board, emulated, VERIFIED (N62); profile rules PARTIAL |
@@ -101,8 +101,11 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
-After N76, 2026-10-03: sixteen VERIFIED (area 1 moved, for the reference parser), twenty PARTIAL,
-one RESEARCH; nothing else moved.
+After N83, 2026-10-04: seventeen VERIFIED (area 15 moved, as scoped: an opt-in pool, macOS),
+twenty PARTIAL, none RESEARCH; nothing else moved between N77 and N82.
+
+*Historical.* After N76, 2026-10-03: sixteen VERIFIED (area 1 moved, for the reference parser),
+twenty PARTIAL, one RESEARCH.
 
 *Historical, not current.* After N75's audit, 2026-10-02, across the 37 rows above (34 areas, with 2a, 10a and 10b): fifteen
 VERIFIED (areas 4, 8, 9, 12 and 30 with a stated qualification — area 30 for mutation testing, its
@@ -1482,7 +1485,31 @@ and Cranelift agree on it. `crates/nazm-cli/tests/select.rs`, 9 tests; sixteen N
 
 **Accepted when** · Met for the model as specified.
 
-### 15. Advanced scheduler — RESEARCH
+### 15. Advanced scheduler — VERIFIED as scoped (N83)
+
+*N83, 2026-10-04: M:N tasks on bounded workers v1 — VERIFIED (opt-in); suspension instead of a
+blocked worker — VERIFIED; per-task failure state and stack limit — VERIFIED; deadlines on parked
+tasks — VERIFIED; work stealing, preemption, blocking-FFI hand-off, a model checker — not here.*
+`architecture.md` §7.84 is the constitution, written first. With `NAZM_SCHEDULER=pool` a native
+program's tasks run on `NAZM_WORKERS` threads (default 4), each task a guarded stack
+(`NAZM_TASK_STACK`, default 256 KiB) pinned to one worker, switched by a per-target routine
+(`crates/nazm-runtime/src/switch.rs`); the four suspension points park the task and free the worker
+(`nz.cwait`, `nz.ctimedwait`, `nz.cwake`, `nz.join_one`), its failure state and stack limit saved and
+restored at every switch. The thread model's runtime texts are unchanged and the pool is joined to
+them as they are emitted, so `compiler/emit.nz`'s copy still matches (`runtime parity`). Evidence:
+`crates/nazm-cli/tests/scheduler_pool.rs` — four concurrency shapes (fan-in, a three-stage pipeline
+of `Chan[Str]`, a select, nested scopes) giving the same output, ending and memory report on the pool
+as on threads, on both backends; ten thousand tasks all alive at once on two workers
+(`nazm-pool: workers=2 peak=10000`); a failing task and a sibling on one worker, and recursion past a
+task's stack reported as `N0408` rather than a crash; a polling select letting a sibling on its worker
+run; a parked task's deadline firing; every run under a deadline, so a lost wake-up fails rather than
+hangs. The whole `nazm-cli` suite also passed with `NAZM_SCHEDULER=pool` exported, every native
+program it builds running on the pool. Measured (`performance.md`): spawn and join 7.4 µs against
+25.4 µs on threads, a round trip 5.0 µs against 6.7 µs, about 17.8 KB resident per task against 18.4
+KB, page 16 KiB; 50,000 tasks on four workers in 891 MB, where threads did not finish 6,000 within
+40 s. **Scope**: opt-in, the default unchanged; verified on `aarch64-apple-darwin` and on
+`x86_64-apple-darwin` under Rosetta, compiled and not run for Linux; the interpreter and the compiler
+written in Nazm keep a thread per task.
 
 **Evidence** · `architecture.md` §5 and `roadmap.md`'s C-4/C-5 rows: M:N tasks, work
 stealing, growable stacks, an event reactor, blocking-FFI handoff. N44 measured the baseline any
