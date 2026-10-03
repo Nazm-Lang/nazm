@@ -1555,17 +1555,28 @@ without a conversion step that could be got wrong.
 | `\n` | 10 | | `\0` | 0 |
 | `\t` | 9 | | `\\` | 92 |
 | `\r` | 13 | | `\"` | 34 |
-| `\xHH` | `0xHH`, for `HH` in `00`–`7F`, either case | | | |
+| `\xHH` | `0xHH`, for `HH` in `00`–`7F`, either case | | `\u{H…}` | the UTF-8 encoding of the scalar value `H…` (N76) |
 
 Each escape is **one byte**. Everything else in a literal is its own bytes, so `"é"` is still the
 two bytes of its UTF-8 encoding. A backslash followed by anything else, `\x` with fewer than two
 hexadecimal digits, and `\x80`–`\xFF` are refused (`N0004`) at the escape. `\xHH` stops at `7F`
 because a literal's bytes are UTF-8 text throughout this implementation and `str_from_byte` already
-makes any byte; there is no `\u{…}`, because `Str` is bytes and a Unicode escape would be a text
-encoding decision this specification has not made. `"\0"` is a one-byte string, as *Embedded NUL*
+makes any byte. `"\0"` is a one-byte string, as *Embedded NUL*
 above says any NUL is. Diagnostics point at the bytes written, and the formatter keeps a literal
 exactly as written. **Changed meaning:** before N49 a backslash in a literal was itself, so
 `"a\nb"` was four bytes; it is now three.
+
+**Unicode escapes — N76.** `\u{H…}` is one to six hexadecimal digits (either case) naming a Unicode
+scalar value, and it stands for that value's UTF-8 encoding: one to four bytes, exactly the bytes the
+same character written directly in the (UTF-8) source would give. So `"\u{e9}" == "é"`, and both are
+two bytes. The encoding decision was already made when a literal's bytes were specified as its source
+text's UTF-8 bytes. The escape adds an ASCII spelling and no new value: an invisible or
+bidirectional character (`\u{200B}`, `\u{202E}`) can be written visibly. Refused (`N0004`, at the
+escape): no `{`, no digits (`\u{}`), more than six digits, a non-hexadecimal digit, no closing `}`, a
+surrogate (`D800`–`DFFF`) and a value above `10FFFF`. `\xHH` keeps its limit of `7F`. A `\x80`
+meaning one byte would contradict `\u{80}` meaning the two bytes `C2 80`, so a lone byte above 127 is
+still made only by `str_from_byte`. The compiler written in Nazm refuses every escape, this one
+included (its subset, *Bootstrap*).
 
 #### What an implementation may not infer from its host
 
