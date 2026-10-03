@@ -65,8 +65,9 @@ pub use intrinsic::{Intrinsic, Shape};
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
 pub use provenance::{
-    BuiltinFlow, CallFact, Flow, FunctionFacts, ModuleFacts, Origin, OriginSet, SinkClass,
-    SinkFact, SinkReport, Summary,
+    BuiltinFlow, CallFact, ContainerUse, Flow, FlowRule, FunctionFacts, IndirectFact, MakeFact,
+    ModuleFacts, Origin, OriginSet, RuleScope, SinkClass, SinkFact, SinkReport, Step, StoreFact,
+    Summary, METHOD_TARGET, VALUE_TARGET, WILD_CELL,
 };
 pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
 pub use references::{Coverage, ReferenceIndex, ReferenceTarget};

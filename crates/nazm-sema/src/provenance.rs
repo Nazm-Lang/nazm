@@ -42,9 +42,9 @@ pub enum Origin {
     File,
     /// The runtime's root authority: a capability `main` was handed (N37).
     Authority,
-    /// Not followed: a value read out of shared mutable storage — a sequence or a channel —
-    /// whose writers a local analysis cannot see, or a function whose facts are missing. It
-    /// may be any of the others, and a restriction treats it as the worst of them.
+    /// Not followed: a device register, what a foreign (C) function returns, or a function
+    /// whose facts are missing. It may be any of the others, and a restriction treats it as
+    /// the worst of them. Since N80 a container's contents are followed, by cell (§7.81).
     Unknown,
 }
 
@@ -87,7 +87,7 @@ impl Origin {
             Self::Argument => "the command line",
             Self::File => "the contents of a file",
             Self::Authority => "the runtime's root authority",
-            Self::Unknown => "shared storage or foreign code the checker does not follow",
+            Self::Unknown => "a device or foreign code the checker does not follow",
         }
     }
 
@@ -98,9 +98,7 @@ impl Origin {
             Self::Argument => "the command line is read here",
             Self::File => "a file's contents are read here",
             Self::Authority => "the runtime's root authority is handed over here",
-            Self::Unknown => {
-                "this is read out of a sequence or channel, which the checker does not follow"
-            }
+            Self::Unknown => "a device register is read here, which the checker does not follow",
         }
     }
 
@@ -137,7 +135,8 @@ impl Origin {
             | Intrinsic::ChanCloseOf
             // A store's result is a constant; what reaches the device is the caller's (N62).
             | Intrinsic::MmioWrite32 => BuiltinFlow::Derive,
-            // Read out of a shared handle: what is there is whatever any alias wrote.
+            // Read out of a handle: what is there is whatever was written into any container
+            // of its type — its cell (N80, §7.81). Which cell is [`Origin::container`]'s.
             Intrinsic::IntsLen
             | Intrinsic::IntsGet
             | Intrinsic::IntsPop
@@ -152,10 +151,10 @@ impl Origin {
             | Intrinsic::ChanSelectOf
             | Intrinsic::ChanSelectUntil
             | Intrinsic::ChanRecv
-            // A device register holds whatever the device put there (N62).
-            | Intrinsic::MmioRead32
-            // Read out of a shared handle, as `ints_get` is (N66).
+            // Read out of a handle, as `ints_get` is (N66).
             | Intrinsic::IntsSum => BuiltinFlow::Read,
+            // A device register holds whatever the device put there (N62): not followed.
+            Intrinsic::MmioRead32 => BuiltinFlow::Source(Self::Unknown),
             // A new, empty handle, or a call that never returns.
             Intrinsic::IntsNew
             | Intrinsic::StrsNew
@@ -169,10 +168,112 @@ impl Origin {
         }
     }
 
+    /// How a built-in touches a container's cell (N80, §7.81), by argument position.
+    /// Exhaustive on purpose: a built-in that reads or writes a container says so here, and
+    /// one that does neither says so too.
+    #[must_use]
+    pub const fn container(i: Intrinsic) -> ContainerUse {
+        match i {
+            Intrinsic::IntsLen
+            | Intrinsic::IntsGet
+            | Intrinsic::IntsPop
+            | Intrinsic::StrsLen
+            | Intrinsic::StrsGet
+            | Intrinsic::StrsPop
+            | Intrinsic::StrJoin
+            | Intrinsic::VecLen
+            | Intrinsic::VecGet
+            | Intrinsic::VecPop => ContainerUse::Read { handle: 0 },
+            Intrinsic::IntsSum => ContainerUse::Read { handle: 1 },
+            Intrinsic::IntsPush
+            | Intrinsic::StrsPush
+            | Intrinsic::VecPush
+            | Intrinsic::ChanSend
+            | Intrinsic::ChanSendOf => ContainerUse::Write {
+                handle: 0,
+                value: 1,
+            },
+            Intrinsic::IntsSet | Intrinsic::StrsSet | Intrinsic::VecSet => ContainerUse::Write {
+                handle: 0,
+                value: 2,
+            },
+            // A receive moves a value from the channel onto `out`, and says whether it did.
+            Intrinsic::ChanRecv | Intrinsic::ChanRecvOf => {
+                ContainerUse::Receive { from: 0, into: 1 }
+            }
+            // A select moves a value from one of the channels onto `out`; its index is which
+            // channel was ready — control, not data, as a condition is.
+            Intrinsic::ChanSelectOf | Intrinsic::ChanSelectUntil => {
+                ContainerUse::Select { from: 0, into: 1 }
+            }
+            Intrinsic::StrLen
+            | Intrinsic::StrByte
+            | Intrinsic::StrSlice
+            | Intrinsic::StrConcat
+            | Intrinsic::IntToStr
+            | Intrinsic::StrFromByte
+            | Intrinsic::Print
+            | Intrinsic::EPrint
+            | Intrinsic::ChanClose
+            | Intrinsic::ChanCloseOf
+            | Intrinsic::MmioWrite32
+            | Intrinsic::MmioRead32
+            | Intrinsic::IntsNew
+            | Intrinsic::StrsNew
+            | Intrinsic::VecNew
+            | Intrinsic::ChanNew
+            | Intrinsic::ChanNewOf
+            | Intrinsic::TimeNowMs
+            | Intrinsic::ExitWith
+            | Intrinsic::StrVouch
+            | Intrinsic::ArgsCount
+            | Intrinsic::Arg
+            | Intrinsic::ReadFile
+            | Intrinsic::FileExists
+            | Intrinsic::WriteFile => ContainerUse::None,
+        }
+    }
+
     const fn bit(self) -> u8 {
         1 << self.id()
     }
 }
+
+/// How a built-in touches a container's cell (N80): which argument is the handle, and
+/// which is the value written. A cell is named by the handle's type (§7.81).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerUse {
+    None,
+    /// Its result carries the cell of argument `handle`'s container.
+    Read {
+        handle: usize,
+    },
+    /// Argument `value` is written into the cell of argument `handle`'s container.
+    Write {
+        handle: usize,
+        value: usize,
+    },
+    /// A value moves from `from`'s cell into `into`'s; the result carries `from`'s.
+    Receive {
+        from: usize,
+        into: usize,
+    },
+    /// A value moves from the channels of `from` — a `Vec[Chan[T]]`, so its elements' cell —
+    /// into `into`'s; the result is an index and carries nothing.
+    Select {
+        from: usize,
+        into: usize,
+    },
+}
+
+/// The cell every container whose type mentions a type parameter shares (N80): a write to it
+/// reaches every cell, and a read of it reads every cell.
+pub const WILD_CELL: &str = "*";
+
+/// The prefix of an indirect target named by a function type (N80).
+pub const VALUE_TARGET: &str = "fn ";
+/// The prefix of an indirect target named by a trait method: `trait Name.method`.
+pub const METHOD_TARGET: &str = "trait ";
 
 impl fmt::Display for Origin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -318,6 +419,12 @@ pub struct Flow {
     pub params: Vec<u32>,
     /// The calls whose results this carries, by index into [`FunctionFacts::calls`], sorted.
     pub calls: Vec<u32>,
+    /// The container cells this was read out of, by name, sorted, each with where it was first
+    /// read (N80).
+    pub cells: Vec<(String, Span)>,
+    /// The indirect calls whose results this carries, by index into
+    /// [`FunctionFacts::indirect`], sorted (N80).
+    pub via: Vec<u32>,
 }
 
 impl Flow {
@@ -349,10 +456,32 @@ impl Flow {
         }
     }
 
+    /// The contents of the cell `name`, first read at `at` (N80).
+    #[must_use]
+    pub fn cell(name: &str, at: Span) -> Self {
+        Self {
+            cells: vec![(name.to_owned(), at)],
+            ..Self::default()
+        }
+    }
+
+    /// An indirect call's result (N80).
+    #[must_use]
+    pub fn indirect(i: u32) -> Self {
+        Self {
+            via: vec![i],
+            ..Self::default()
+        }
+    }
+
     /// Whether this carries nothing at all.
     #[must_use]
     pub fn is_local(&self) -> bool {
-        self.origins.is_empty() && self.params.is_empty() && self.calls.is_empty()
+        self.origins.is_empty()
+            && self.params.is_empty()
+            && self.calls.is_empty()
+            && self.cells.is_empty()
+            && self.via.is_empty()
     }
 
     /// Join `other` into this one, and say whether anything was added. Commutative,
@@ -377,6 +506,16 @@ impl Flow {
         self.origins = origins;
         grew |= merge(&mut self.params, &other.params);
         grew |= merge(&mut self.calls, &other.calls);
+        grew |= merge(&mut self.via, &other.via);
+        for (name, at) in &other.cells {
+            if let Err(i) = self
+                .cells
+                .binary_search_by(|(n, _)| n.as_str().cmp(name.as_str()))
+            {
+                self.cells.insert(i, (name.clone(), *at));
+                grew = true;
+            }
+        }
         grew
     }
 
@@ -423,12 +562,54 @@ pub struct SinkFact {
 
 /// A sink as solved (N52): which function, which class, where, and the origins that reach
 /// it. What profiles and `nazm explain-flow` read; never cached, like every solved fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SinkReport {
     pub function: crate::resolve::FnId,
     pub class: SinkClass,
     pub at: Span,
     pub origins: OriginSet,
+    /// For each origin that reaches it, in id order, one chain from where it entered to here
+    /// (N80): each step a place and what happened there.
+    pub trace: Vec<(Origin, Vec<Step>)>,
+}
+
+/// One step of a trace (N80).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Step {
+    pub at: Span,
+    pub note: String,
+}
+
+/// A value written into a container's cell (N80).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreFact {
+    /// The cell's name: the container's type, or [`WILD_CELL`].
+    pub cell: String,
+    /// The built-in's name at the call.
+    pub at: Span,
+    pub value: Flow,
+}
+
+/// A call whose callee is not named (N80): through a function value or a trait bound.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndirectFact {
+    /// Which functions it may run: [`VALUE_TARGET`] and the function type up to effects, or
+    /// [`METHOD_TARGET`] and `Trait.method`.
+    pub target: String,
+    pub at: Span,
+    /// Each argument's flow, receiver first for a method.
+    pub args: Vec<Flow>,
+}
+
+/// A function value made (N80): a named function written as a value, or a closure, with what
+/// a closure captures, in its capture order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MakeFact {
+    pub function: FnId,
+    /// [`VALUE_TARGET`] and its type up to effects: which indirect calls may run it.
+    pub target: String,
+    pub at: Span,
+    pub captures: Vec<Flow>,
 }
 
 /// One function's body, reduced to flows.
@@ -438,6 +619,62 @@ pub struct FunctionFacts {
     pub calls: Vec<CallFact>,
     pub result: Flow,
     pub sinks: Vec<SinkFact>,
+    /// What it writes into containers (N80).
+    pub stores: Vec<StoreFact>,
+    /// Its calls through values and bounds (N80).
+    pub indirect: Vec<IndirectFact>,
+    /// The function values it makes (N80).
+    pub makes: Vec<MakeFact>,
+}
+
+/// Where a policy rule applies (N80).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleScope {
+    /// In a function that declares an effect set, at its own sinks and at every call that
+    /// hands a parameter reaching one: the language's rule, N37's functions.
+    Declared,
+    /// At every sink of the program, with everything that reaches it.
+    Every,
+}
+
+/// One rule of a flow policy (N80, §7.81): a sink class may not receive these origins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlowRule {
+    pub class: SinkClass,
+    pub forbidden: OriginSet,
+    pub scope: RuleScope,
+}
+
+impl FlowRule {
+    /// The language's policy: one rule, `N0372`.
+    pub const LANGUAGE: Self = Self {
+        class: SinkClass::Path,
+        forbidden: OriginSet::RESTRICTED,
+        scope: RuleScope::Declared,
+    };
+
+    /// `cyber`'s `contents-stay-in-files` (N52): nothing restricted is shown.
+    pub const CONTENTS_STAY_IN_FILES: Self = Self {
+        class: SinkClass::Output,
+        forbidden: OriginSet::RESTRICTED,
+        scope: RuleScope::Every,
+    };
+
+    /// `cyber`'s `checked-paths` (N80): the language's rule, in every function.
+    pub const CHECKED_PATHS: Self = Self {
+        class: SinkClass::Path,
+        forbidden: OriginSet::RESTRICTED,
+        scope: RuleScope::Every,
+    };
+
+    /// The origin of `report` this rule refuses first, if any: for a rule over every sink.
+    #[must_use]
+    pub fn refuses(&self, report: &SinkReport) -> Option<Origin> {
+        if report.class != self.class {
+            return None;
+        }
+        report.origins.intersection(self.forbidden).iter().next()
+    }
 }
 
 /// Every function of one module, reduced to flows. A function of the module the facts, and
@@ -507,12 +744,25 @@ mod tests {
         assert_eq!(
             sources,
             [
+                // A device register is not followed (N62); since N80 it is the only built-in
+                // whose result is `unknown`.
+                ("mmio_read32", Origin::Unknown),
                 ("args_count", Origin::Argument),
                 ("arg", Origin::Argument),
                 ("read_file", Origin::File),
                 ("file_exists", Origin::File)
             ]
         );
+        // Every container built-in names its handle, and no other built-in claims one (N80).
+        for i in Intrinsic::ALL {
+            let reads = matches!(Origin::of_intrinsic(i), BuiltinFlow::Read);
+            let touches = !matches!(Origin::container(i), ContainerUse::None);
+            assert!(
+                !reads || touches,
+                "{} reads a handle it does not name",
+                i.name()
+            );
+        }
         // Output is not input: `print` is not a source.
         assert_eq!(Origin::of_intrinsic(Intrinsic::Print), BuiltinFlow::Derive);
         assert_eq!(

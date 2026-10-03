@@ -169,11 +169,11 @@ fn a_schema_this_build_does_not_implement_is_refused_rather_than_reinterpreted()
         .artifact
         .to_json()
         .expect("json")
-        .replace("nazm.check/3", "nazm.check/4");
+        .replace("nazm.check/4", "nazm.check/5");
     tamper(&f.store, &f.key, &text);
     assert_eq!(
         rejected(&f.store, &f.key),
-        Invalid::UnknownSchema("nazm.check/4".to_owned())
+        Invalid::UnknownSchema("nazm.check/5".to_owned())
     );
 }
 

@@ -610,13 +610,20 @@ fn an_indirect_call_is_checked_against_the_values_type() {
 // --- provenance -------------------------------------------------------------------------
 
 #[test]
-fn a_path_through_a_function_value_is_of_unknown_origin() {
-    // Which function an indirect call reaches is not known where it is, so neither is where
-    // its result came from; nor where a closure's parameter came from.
+fn a_path_through_a_function_value_carries_what_the_values_it_may_be_carry() {
+    // An indirect call may run every function value of its type the program makes (N80):
+    // its result carries what they return, and a closure's parameter what such calls hand it.
     assert_eq!(
         codes(
             "fn main(io: IoCap) -> Int ! { io } \
              { let p = fn(x: Int) -> Str { \"out.txt\" }; write_file(p(1), \"x\") }\n"
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        codes(
+            "fn main(io: IoCap) -> Int ! { io } \
+             { let p = fn(c: IoCap) -> Str ! { io } { read_file(\"cfg\") }; write_file(p(io), \"x\") }\n"
         ),
         ["N0372"]
     );
@@ -625,15 +632,30 @@ fn a_path_through_a_function_value_is_of_unknown_origin() {
             "fn main(io: IoCap) -> Int ! { io } \
              { let w = fn(c: IoCap, p: Str) -> Int ! { io } { write_file(p, \"x\") }; w(io, \"o\") }\n"
         ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        codes(
+            "fn main(io: IoCap) -> Int ! { io } \
+             { let w = fn(c: IoCap, p: Str) -> Int ! { io } { write_file(p, \"x\") }; w(io, read_file(\"cfg\")) }\n"
+        ),
         ["N0372"]
     );
-    // A captured binding carries its own origins: a literal path is not restricted.
+    // A captured binding carries its own origins: a literal path is not restricted, and a
+    // file's contents captured are, at the closure that captures them.
     assert_eq!(
         codes(
             "fn main(io: IoCap) -> Int ! { io } \
              { let path = \"out.txt\"; let w = fn(c: IoCap) -> Int ! { io } { write_file(path, \"x\") }; w(io) }\n"
         ),
         Vec::<String>::new()
+    );
+    assert_eq!(
+        codes(
+            "fn main(io: IoCap) -> Int ! { io } \
+             { let path = read_file(\"cfg\"); let w = fn(c: IoCap) -> Int ! { io } { write_file(path, \"x\") }; w(io) }\n"
+        ),
+        ["N0372"]
     );
 }
 

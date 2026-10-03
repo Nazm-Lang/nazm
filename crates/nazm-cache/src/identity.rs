@@ -189,7 +189,10 @@ use crate::digest::{self, Framed};
 /// a program defining it moved from accepted to refused; an `IoCap` where an `OutCap` is expected
 /// and a function value whose effects are a subset of the expected ones moved from refused
 /// (`N0300`) to accepted.
-pub const SEMANTIC_EPOCH: u32 = 23;
+/// `24` — N80, 2026-10-03. Provenance v3: a path read out of a container, through a function
+/// value, a trait bound or a closure's parameter or capture, or out of a record's other field,
+/// moved from refused (`N0372`) to accepted where what reaches it is not restricted.
+pub const SEMANTIC_EPOCH: u32 = 24;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

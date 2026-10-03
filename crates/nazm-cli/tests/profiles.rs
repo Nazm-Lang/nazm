@@ -123,7 +123,8 @@ fn every_profile_s_rules_and_verdicts() {
                 ("declared-effects", "fail"),
                 ("no-foreign", "pass"),
                 ("locked-build", "fail"),
-                ("contents-stay-in-files", "pass")
+                ("contents-stay-in-files", "pass"),
+                ("checked-paths", "pass")
             ])
         )
     );

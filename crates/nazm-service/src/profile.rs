@@ -54,11 +54,14 @@ pub enum Rule {
     /// §7.80): its recorded inherited authority is empty, so `main`'s parameters are the only
     /// root.
     ExplicitAuthority,
+    /// No path `write_file` writes to, in any function, comes from a file's contents or what
+    /// the checker does not follow (N80, §7.81): the language's rule over every function.
+    CheckedPaths,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -74,6 +77,7 @@ impl Rule {
         Self::BoundedLoops,
         Self::SignedWrites,
         Self::ExplicitAuthority,
+        Self::CheckedPaths,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -95,6 +99,7 @@ impl Rule {
             Self::BoundedLoops => "bounded-loops",
             Self::SignedWrites => "signed-writes",
             Self::ExplicitAuthority => "explicit-authority",
+            Self::CheckedPaths => "checked-paths",
         }
     }
 
@@ -115,7 +120,8 @@ impl Rule {
             | Self::NoBlocking
             | Self::BoundedLoops
             | Self::SignedWrites
-            | Self::ExplicitAuthority => None,
+            | Self::ExplicitAuthority
+            | Self::CheckedPaths => None,
         }
     }
 }
@@ -196,6 +202,7 @@ impl Profile {
                 Rule::NoForeign,
                 Rule::LockedBuild,
                 Rule::ContentsStayInFiles,
+                Rule::CheckedPaths,
             ],
             Self::Realtime => &[
                 Rule::NoIo,
@@ -520,18 +527,26 @@ pub fn evaluate(
                         note: "the program's contract facts were not computed".to_owned(),
                     }]
                 }
-            } else if rule == Rule::ContentsStayInFiles {
-                let restricted = nazm_core::sema::OriginSet::RESTRICTED;
+            } else if let Some((policy, what)) = flow_rule(rule) {
+                // One engine for every flow rule (N80, §7.81): the sink as solved, and the
+                // chain that brought the origin to it.
                 res.sinks()
                     .iter()
-                    .filter(|s| s.class == SinkClass::Output)
                     .filter_map(|s| {
-                        let o = s.origins.intersection(restricted).iter().next()?;
-                        Some(Witness {
+                        let o = policy.refuses(s)?;
+                        let mut w = vec![Witness {
                             span: s.at,
-                            note: format!("this writes to standard output what {}", o.describe()),
-                        })
+                            note: format!("{what} {}", o.describe()),
+                        }];
+                        if let Some((_, steps)) = s.trace.iter().find(|(x, _)| *x == o) {
+                            w.extend(steps.iter().filter(|st| st.at != s.at).map(|st| Witness {
+                                span: st.at,
+                                note: st.note.clone(),
+                            }));
+                        }
+                        Some(w)
                     })
+                    .flatten()
                     .collect()
             } else if rule == Rule::NoDeclassification {
                 res.sinks()
@@ -629,6 +644,19 @@ pub fn evaluate(
     }
 }
 
+/// The flow policy a rule is, and how its witness begins (N80).
+fn flow_rule(rule: Rule) -> Option<(nazm_core::sema::FlowRule, &'static str)> {
+    use nazm_core::sema::FlowRule;
+    match rule {
+        Rule::ContentsStayInFiles => Some((
+            FlowRule::CONTENTS_STAY_IN_FILES,
+            "this writes to standard output what comes from",
+        )),
+        Rule::CheckedPaths => Some((FlowRule::CHECKED_PATHS, "this path comes from")),
+        _ => None,
+    }
+}
+
 /// Whether a built-in waits for another task or the scheduler (N63): every channel send,
 /// receive and select. A close does not wait.
 const fn blocks(i: nazm_core::sema::Intrinsic) -> bool {
@@ -689,6 +717,7 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                     "the chain shows where the effect enters; a profile refuses, it never rewrites".to_owned()
                 }
                 Rule::BoundedAllocation => "each site allocates inside a loop, a number of times the compiler does not know; allocate before the loop, or reuse what was allocated (`nazm explain-cost` lists every site)".to_owned(),
+                Rule::CheckedPaths => "in every function, the path a program writes to may come from the command line or be computed in it, never from a file's contents or what the checker does not follow; `nazm explain-flow` shows the chain".to_owned(),
                 Rule::ContentsStayInFiles => "a file's contents may be written to a file, never shown; `nazm explain-flow` lists every sink and what reaches it".to_owned(),
                 Rule::NoDeclassification => "this profile admits no declassification: the value keeps its origin".to_owned(),
                 Rule::NoAmbientTime => "this profile admits no clock: a deadline or a time read makes the program's behaviour depend on when it runs".to_owned(),

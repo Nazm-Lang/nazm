@@ -3,7 +3,7 @@
 //! Both print facts the compiler already settled, for a reader or — with `--json` — for a tool:
 //! where each function allocates, retains, blocks, talks to a channel, calls C or starts a task,
 //! read off MIR (`nazm.cost/1`); and every sink and declassification with the origins that reach
-//! it, as provenance solved them (`nazm.flow/1`). A count is per call of its function, and is
+//! it, as provenance solved them, with how each origin got there (`nazm.flow/2`, N80). A count is per call of its function, and is
 //! `at-most-once` or `unknown` — never a number the compiler does not know. Paths are durable
 //! module names, so the output does not depend on where the checkout is.
 
@@ -204,11 +204,26 @@ pub(crate) fn flow(path: &Path, as_json: bool) -> ExitCode {
             .sinks()
             .iter()
             .map(|s| {
+                // How each origin got here (N80): from where it entered, in order.
+                let traces: Vec<Value> = s
+                    .trace
+                    .iter()
+                    .map(|(o, steps)| {
+                        json!({
+                            "origin": o.name(),
+                            "steps": steps
+                                .iter()
+                                .map(|st| json!({ "at": place(&names, st.at), "note": st.note }))
+                                .collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
                 json!({
                     "class": s.class.name(),
                     "function": res.function(s.function).map(|d| d.name.clone()),
                     "at": place(&names, s.at),
                     "origins": s.origins.names(),
+                    "traces": traces,
                 })
             })
             .collect();
@@ -220,7 +235,7 @@ pub(crate) fn flow(path: &Path, as_json: bool) -> ExitCode {
         Err(d) => return failed(&d, map),
     };
     if as_json {
-        println!("{}", json!({ "schema": "nazm.flow/1", "sinks": sinks }));
+        println!("{}", json!({ "schema": "nazm.flow/2", "sinks": sinks }));
         return ExitCode::SUCCESS;
     }
     if sinks.is_empty() {
@@ -252,6 +267,16 @@ pub(crate) fn flow(path: &Path, as_json: bool) -> ExitCode {
                 origins.join(", ")
             },
         );
+        for t in field(s, "traces").as_array().into_iter().flatten() {
+            println!("    {}:", field(t, "origin").as_str().unwrap_or("?"));
+            for st in field(t, "steps").as_array().into_iter().flatten() {
+                println!(
+                    "      {}  {}",
+                    shown(field(st, "at")),
+                    field(st, "note").as_str().unwrap_or("?")
+                );
+            }
+        }
     }
     ExitCode::SUCCESS
 }
