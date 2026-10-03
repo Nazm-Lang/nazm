@@ -329,6 +329,11 @@ captures, callers and exports. `checked-paths` refuses with the existing `N0510`
 not hold is the existing `N0900`, a compiler defect, raised before any code is generated.
 `nazm.lir/1` is new (`nazm lir`), with `schema/nazm.lir-1.json` checked against real output.
 
+**Applied to N82, the runtime as an artifact.** No code appeared: an artifact that does not fit is an
+environment failure, not a program error — exit 4 and one sentence naming the mismatch, as a missing
+toolchain is. `nazm.runtime/1` is new, with `schema/nazm.runtime-1.json` checked against real
+manifests of every profile; `nazm.provenance/1` gains an optional `runtime.archive`.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of
