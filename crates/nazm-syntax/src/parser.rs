@@ -97,6 +97,9 @@ pub struct Parser<'a> {
     poisoned: bool,
     /// Where the current item began, for [`Parser::delimiters_balanced`].
     item_start: usize,
+    /// Whether the current item's declaration — its header or member list — needed
+    /// recovery (N76): its concrete node stands, and it is left out of the abstract tree.
+    drop_item: bool,
     /// Whether syntax diagnostics are being withheld as cascades of one already reported.
     /// See [`Parser::report`].
     muted: bool,
@@ -302,6 +305,7 @@ pub(crate) fn parse_region(
         sink: Sink::new(text, lexemes),
         poisoned: false,
         item_start: region.start,
+        drop_item: false,
         muted: region.muted,
         hole,
         hole_site: None,
@@ -329,6 +333,7 @@ pub(crate) fn parse_region(
         p.built = 0;
         p.reported_too_deep = false;
         p.poisoned = false;
+        p.drop_item = false;
         p.item_start = start;
         // A cascade ends where a new item visibly begins. Anything else here is what an
         // item whose braces did not balance left behind, and stays muted.
@@ -355,7 +360,10 @@ pub(crate) fn parse_region(
                 _ => p.function().map(Item::Function),
             }
         };
-        if item.is_none() {
+        // A declaration that needed recovery is in the concrete tree and not the abstract
+        // one: the checker never sees a declaration with a hole in it (N76).
+        let item = item.filter(|_| !p.drop_item);
+        if item.is_none() && !p.drop_item {
             // Skip to the next plausible item so one bad item does not cascade into an
             // error per token for the rest of the file. What was read and what was
             // skipped are one error node: they are the author's bytes either way.
@@ -746,12 +754,7 @@ impl<'a> Parser<'a> {
         if self.pos == start {
             self.bump();
         }
-        while !self.at(&TokenKind::Eof)
-            && !self.at_item_fn()
-            && !self.at(&TokenKind::Pub)
-            && !self.at(&TokenKind::Struct)
-            && !self.at(&TokenKind::Enum)
-        {
+        while !self.at(&TokenKind::Eof) && !self.at_item_start() {
             self.bump();
         }
     }
@@ -779,6 +782,34 @@ impl<'a> Parser<'a> {
     /// identifier chain, so there is no module-path grammar to design and nothing that
     /// could be mistaken for one.
     fn import(&mut self) -> Option<Import> {
+        let first = self.pos;
+        let parsed = self.import_inner();
+        if parsed.is_none() {
+            // A broken import ends at its own `;` when it has one before the next item
+            // (N76): the item after it is not the import's to lose.
+            while self.pos > first
+                && !self.at(&TokenKind::Semi)
+                && !self.at(&TokenKind::Eof)
+                && !self.at_item_start()
+            {
+                self.bump();
+            }
+            self.eat(&TokenKind::Semi);
+        }
+        parsed
+    }
+
+    /// Whether the next token can only begin a top-level item: `fn NAME`, `pub`, `struct`,
+    /// `enum` or `use`.
+    fn at_item_start(&self) -> bool {
+        self.at_item_fn()
+            || self.at(&TokenKind::Pub)
+            || self.at(&TokenKind::Struct)
+            || self.at(&TokenKind::Enum)
+            || self.at(&TokenKind::Use)
+    }
+
+    fn import_inner(&mut self) -> Option<Import> {
         let at = self.checkpoint();
         let start = self.expect(&TokenKind::Use, "to start an import")?;
         let path_span = self.peek_span();
@@ -931,30 +962,15 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
             let field = self.checkpoint();
-            let field_span = self.peek_span();
-            let field_name = match self.advance() {
-                TokenKind::Ident(n) => n,
-                other => {
-                    self.report(
-                        Diagnostic::error(
-                            codes::UNEXPECTED_TOKEN,
-                            field_span,
-                            format!("expected a field name, found {}", other.describe()),
-                        )
-                        .help("each field is written `name: Type,`"),
-                    );
-                    return None;
+            let start = self.pos;
+            match self.field_decl("each field is written `name: Type,`", "after a field name") {
+                Some(f) => fields.push(f),
+                None => {
+                    if !self.recover_member(field, start, &TokenKind::RBrace) {
+                        return None;
+                    }
                 }
-            };
-            self.expect(&TokenKind::Colon, "after a field name")?;
-            let ty = self.type_name()?;
-            self.wrap(field, SyntaxKind::Field);
-            fields.push(Field {
-                name: field_name,
-                name_span: field_span,
-                span: field_span.join(ty.span),
-                ty,
-            });
+            }
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
@@ -962,6 +978,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&TokenKind::RBrace, "to close the fields")?;
         self.wrap(list, SyntaxKind::FieldList);
         self.wrap(at, SyntaxKind::RecordItem);
+        self.drop_item = self.poisoned;
         Some(Record {
             name,
             name_span,
@@ -1015,91 +1032,15 @@ impl<'a> Parser<'a> {
         let mut variants = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
             let variant = self.checkpoint();
-            let variant_span = self.peek_span();
-            let variant_name = match self.advance() {
-                TokenKind::Ident(n) => n,
-                other => {
-                    self.report(
-                        Diagnostic::error(
-                            codes::UNEXPECTED_TOKEN,
-                            variant_span,
-                            format!("expected a variant name, found {}", other.describe()),
-                        )
-                        .help(
-                            "a variant is written `Name,` or `Name(field: Type,),` — the \
-                             parentheses are the payload, so a variant without one has none",
-                        ),
-                    );
-                    return None;
-                }
-            };
-            let mut fields = Vec::new();
-            let mut last = variant_span;
-            if self.at(&TokenKind::LParen) {
-                let payload = self.checkpoint();
-                self.bump();
-                // `Eof()` is refused rather than read as a variant with no payload. One
-                // concept gets one spelling, and the spelling for *no payload* is no
-                // brackets — `docs/spec.md` says so, and a record with no fields is
-                // refused for the same reason.
-                if self.at(&TokenKind::RParen) {
-                    let close = self.peek_span();
-                    self.advance();
-                    self.report(
-                        Diagnostic::error(
-                            codes::UNSUPPORTED_CONSTRUCT,
-                            variant_span.join(close),
-                            format!("`{variant_name}` has an empty payload, which is written by writing nothing"),
-                        )
-                        .help(
-                            "a variant with no payload is declared `Name,` — the brackets \
-                             are the payload. Construction and patterns write them anyway, \
-                             because there they are what separates a variant from a field \
-                             read",
-                        ),
-                    );
-                    return None;
-                }
-                while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
-                    let field = self.checkpoint();
-                    let field_span = self.peek_span();
-                    let field_name = match self.advance() {
-                        TokenKind::Ident(n) => n,
-                        other => {
-                            self.report(
-                                Diagnostic::error(
-                                    codes::UNEXPECTED_TOKEN,
-                                    field_span,
-                                    format!("expected a field name, found {}", other.describe()),
-                                )
-                                .help("each payload field is written `name: Type,`"),
-                            );
-                            return None;
-                        }
-                    };
-                    self.expect(&TokenKind::Colon, "after a payload field name")?;
-                    let ty = self.type_name()?;
-                    self.wrap(field, SyntaxKind::Field);
-                    fields.push(Field {
-                        name: field_name,
-                        name_span: field_span,
-                        span: field_span.join(ty.span),
-                        ty,
-                    });
-                    if !self.eat(&TokenKind::Comma) {
-                        break;
+            let start = self.pos;
+            match self.variant_decl() {
+                Some(v) => variants.push(v),
+                None => {
+                    if !self.recover_member(variant, start, &TokenKind::RBrace) {
+                        return None;
                     }
                 }
-                last = self.expect(&TokenKind::RParen, "to close the payload")?;
-                self.wrap(payload, SyntaxKind::FieldList);
             }
-            self.wrap(variant, SyntaxKind::Variant);
-            variants.push(Variant {
-                name: variant_name,
-                name_span: variant_span,
-                fields,
-                span: variant_span.join(last),
-            });
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
@@ -1107,6 +1048,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&TokenKind::RBrace, "to close the variants")?;
         self.wrap(list, SyntaxKind::VariantList);
         self.wrap(at, SyntaxKind::EnumItem);
+        self.drop_item = self.poisoned;
         Some(Enum {
             name,
             name_span,
@@ -1115,6 +1057,185 @@ impl<'a> Parser<'a> {
             variants,
             span: start.join(close),
         })
+    }
+
+    /// One variant of an enum declaration: `Name` or `Name(field: Type, …)`.
+    fn variant_decl(&mut self) -> Option<Variant> {
+        let variant = self.checkpoint();
+        let variant_span = self.peek_span();
+        let variant_name = match self.advance() {
+            TokenKind::Ident(n) => n,
+            other => {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        variant_span,
+                        format!("expected a variant name, found {}", other.describe()),
+                    )
+                    .help(
+                        "a variant is written `Name,` or `Name(field: Type,),` — the \
+                         parentheses are the payload, so a variant without one has none",
+                    ),
+                );
+                return None;
+            }
+        };
+        let mut fields = Vec::new();
+        let mut last = variant_span;
+        if self.at(&TokenKind::LParen) {
+            let payload = self.checkpoint();
+            self.bump();
+            // `Eof()` is refused rather than read as a variant with no payload. One
+            // concept gets one spelling, and the spelling for *no payload* is no
+            // brackets — `docs/spec.md` says so, and a record with no fields is
+            // refused for the same reason.
+            if self.at(&TokenKind::RParen) {
+                let close = self.peek_span();
+                self.advance();
+                self.report(
+                    Diagnostic::error(
+                        codes::UNSUPPORTED_CONSTRUCT,
+                        variant_span.join(close),
+                        format!("`{variant_name}` has an empty payload, which is written by writing nothing"),
+                    )
+                    .help(
+                        "a variant with no payload is declared `Name,` — the brackets \
+                         are the payload. Construction and patterns write them anyway, \
+                         because there they are what separates a variant from a field \
+                         read",
+                    ),
+                );
+                return None;
+            }
+            while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+                let field = self.checkpoint();
+                let start = self.pos;
+                match self.field_decl(
+                    "each payload field is written `name: Type,`",
+                    "after a payload field name",
+                ) {
+                    Some(f) => fields.push(f),
+                    None => {
+                        if !self.recover_member(field, start, &TokenKind::RParen) {
+                            return None;
+                        }
+                    }
+                }
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            last = self.expect(&TokenKind::RParen, "to close the payload")?;
+            self.wrap(payload, SyntaxKind::FieldList);
+        }
+        self.wrap(variant, SyntaxKind::Variant);
+        Some(Variant {
+            name: variant_name,
+            name_span: variant_span,
+            fields,
+            span: variant_span.join(last),
+        })
+    }
+
+    /// One field of a record or a payload: `name: Type`. `help` and `after` name which.
+    fn field_decl(&mut self, help: &str, after: &str) -> Option<Field> {
+        let field = self.checkpoint();
+        let field_span = self.peek_span();
+        let field_name = match self.advance() {
+            TokenKind::Ident(n) => n,
+            other => {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        field_span,
+                        format!("expected a field name, found {}", other.describe()),
+                    )
+                    .help(help.to_owned()),
+                );
+                return None;
+            }
+        };
+        self.expect(&TokenKind::Colon, after)?;
+        let ty = self.type_name()?;
+        self.wrap(field, SyntaxKind::Field);
+        Some(Field {
+            name: field_name,
+            name_span: field_span,
+            span: field_span.join(ty.span),
+            ty,
+        })
+    }
+
+    /// A member of a delimited list did not parse (N76). Mark the item recovered, skip what
+    /// is left of the member — to its `,` or the list's `close`, at the nesting it began at
+    /// — and keep its bytes in an error node. Returns `false` when the skip met something
+    /// no list can hold — the next item, a statement boundary, a `}` that is not the list's,
+    /// the end of the file — so the list has no closer here and the caller gives it up, as
+    /// it did before recovery reached inside lists.
+    ///
+    /// The first recovery of an item decides, as a statement's does, whether its later
+    /// diagnostics are cascades: they are when its delimiters do not balance.
+    fn recover_member(&mut self, at: Checkpoint, start: usize, close: &TokenKind) -> bool {
+        if !self.poisoned && !self.delimiters_balanced() {
+            self.muted = true;
+        }
+        self.poisoned = true;
+        let resumable = self.skip_member(start, close);
+        if self.pos > start {
+            self.wrap(at, SyntaxKind::Error);
+        }
+        resumable
+    }
+
+    /// Skip to the end of a member that began at token `start`: see
+    /// [`Parser::recover_member`]. Every delimiter opened since `start` must close first.
+    fn skip_member(&mut self, start: usize, close: &TokenKind) -> bool {
+        let mut open = self
+            .tokens
+            .range(start, self.pos)
+            .iter()
+            .fold(0usize, |n, t| match t.kind {
+                TokenKind::LParen | TokenKind::LBrace | TokenKind::LBracket => n + 1,
+                TokenKind::RParen | TokenKind::RBrace | TokenKind::RBracket => n.saturating_sub(1),
+                _ => n,
+            });
+        loop {
+            let here = self.peek();
+            let closes = std::mem::discriminant(here) == std::mem::discriminant(close);
+            match here {
+                TokenKind::Fn if !self.at_item_fn() => self.bump(),
+                TokenKind::Eof
+                | TokenKind::Fn
+                | TokenKind::Pub
+                | TokenKind::Struct
+                | TokenKind::Enum
+                | TokenKind::Use => return false,
+                TokenKind::Comma if open == 0 => return true,
+                _ if closes && open == 0 => return true,
+                TokenKind::RBrace
+                | TokenKind::Semi
+                | TokenKind::Let
+                | TokenKind::While
+                | TokenKind::Return
+                | TokenKind::Break
+                | TokenKind::Continue
+                | TokenKind::Scope
+                | TokenKind::Spawn
+                    if open == 0 =>
+                {
+                    return false;
+                }
+                TokenKind::LParen | TokenKind::LBrace | TokenKind::LBracket => {
+                    open += 1;
+                    self.bump();
+                }
+                TokenKind::RParen | TokenKind::RBrace | TokenKind::RBracket => {
+                    open = open.saturating_sub(1);
+                    self.bump();
+                }
+                _ => self.bump(),
+            }
+        }
     }
 
     fn function(&mut self) -> Option<Function> {
@@ -1218,6 +1339,7 @@ impl<'a> Parser<'a> {
                 let end = self.peek_span();
                 self.expect(&TokenKind::Semi, "after a foreign function's symbol")?;
                 self.wrap(at, SyntaxKind::FnItem);
+                self.drop_item = self.poisoned;
                 return Some(Function {
                     name,
                     name_span,
@@ -1234,6 +1356,10 @@ impl<'a> Parser<'a> {
                 });
             }
         }
+
+        // A header that needed recovery (a parameter, N76) leaves the function out of the
+        // abstract tree; its body is still parsed, for its own mistakes and its tree.
+        let header_recovered = self.poisoned;
 
         // Deliberately not `?`. A parse error inside the body would otherwise drop the
         // whole declaration, and every call to it would then report that the function
@@ -1257,6 +1383,7 @@ impl<'a> Parser<'a> {
         };
         let span = body.as_ref().map_or(return_type.span, |b| b.span);
         self.wrap(at, SyntaxKind::FnItem);
+        self.drop_item = header_recovered;
         Some(Function {
             name,
             name_span,
@@ -1280,51 +1407,15 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
             let param = self.checkpoint();
-            let p_span = self.peek_span();
-            // `fn f(mut x: Int)` is a real thing to try, and "expected a parameter name,
-            // found `mut`" describes the symptom rather than the rule.
-            if self.at(&TokenKind::Mut) {
-                self.advance();
-                self.report(
-                    Diagnostic::error(
-                        codes::MUTABLE_PARAMETER,
-                        p_span,
-                        "parameters cannot be `mut`",
-                    )
-                    .help(
-                        "a mutable parameter is a local copy, which reads as an \
-                         out-parameter. Bind one in the body instead: `let mut n = n;`",
-                    )
-                    .fix_automatically(
-                        p_span,
-                        "",
-                        "remove `mut`",
-                        "a parameter is immutable either way, so removing the word \
-                         changes nothing but whether the program is legal",
-                    ),
-                );
-                return None;
-            }
-            let p_name = match self.advance() {
-                TokenKind::Ident(n) => n,
-                other => {
-                    self.report(Diagnostic::error(
-                        codes::UNEXPECTED_TOKEN,
-                        p_span,
-                        format!("expected a parameter name, found {}", other.describe()),
-                    ));
-                    return None;
+            let start = self.pos;
+            match self.param() {
+                Some(p) => params.push(p),
+                None => {
+                    if !self.recover_member(param, start, &TokenKind::RParen) {
+                        return None;
+                    }
                 }
-            };
-            self.expect(&TokenKind::Colon, "after a parameter name")?;
-            let ty = self.type_name()?;
-            self.wrap(param, SyntaxKind::Param);
-            params.push(Param {
-                name: p_name,
-                name_span: p_span,
-                span: p_span.join(ty.span),
-                ty,
-            });
+            }
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
@@ -1332,6 +1423,56 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::RParen, "to close the parameter list")?;
         self.wrap(list, SyntaxKind::ParamList);
         Some(params)
+    }
+
+    /// One parameter: `name: Type`.
+    fn param(&mut self) -> Option<Param> {
+        let param = self.checkpoint();
+        let p_span = self.peek_span();
+        // `fn f(mut x: Int)` is a real thing to try, and "expected a parameter name,
+        // found `mut`" describes the symptom rather than the rule.
+        if self.at(&TokenKind::Mut) {
+            self.advance();
+            self.report(
+                Diagnostic::error(
+                    codes::MUTABLE_PARAMETER,
+                    p_span,
+                    "parameters cannot be `mut`",
+                )
+                .help(
+                    "a mutable parameter is a local copy, which reads as an \
+                     out-parameter. Bind one in the body instead: `let mut n = n;`",
+                )
+                .fix_automatically(
+                    p_span,
+                    "",
+                    "remove `mut`",
+                    "a parameter is immutable either way, so removing the word \
+                     changes nothing but whether the program is legal",
+                ),
+            );
+            return None;
+        }
+        let p_name = match self.advance() {
+            TokenKind::Ident(n) => n,
+            other => {
+                self.report(Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    p_span,
+                    format!("expected a parameter name, found {}", other.describe()),
+                ));
+                return None;
+            }
+        };
+        self.expect(&TokenKind::Colon, "after a parameter name")?;
+        let ty = self.type_name()?;
+        self.wrap(param, SyntaxKind::Param);
+        Some(Param {
+            name: p_name,
+            name_span: p_span,
+            span: p_span.join(ty.span),
+            ty,
+        })
     }
 
     /// `! { name, … }` after a return type, or nothing (N36).
@@ -2082,34 +2223,18 @@ impl<'a> Parser<'a> {
         let mut deepest = 0;
         while !empty && !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
             let field = self.checkpoint();
-            let name_span = self.peek_span();
-            let name = match self.advance() {
-                TokenKind::Ident(n) => n,
-                other => {
-                    self.report(
-                        Diagnostic::error(
-                            codes::UNEXPECTED_TOKEN,
-                            name_span,
-                            format!("expected a field name, found {}", other.describe()),
-                        )
-                        .help(
-                            "every field is named when a value is built: \
-                             `Point(x: 1, y: 2)`, `State.Failed(code: 1)`",
-                        ),
-                    );
-                    return None;
+            let start = self.pos;
+            match self.field_init() {
+                Some(f) => {
+                    fields.push(f);
+                    deepest = deepest.max(self.child());
                 }
-            };
-            self.expect(&TokenKind::Colon, "after a field name")?;
-            let value = self.expr()?;
-            deepest = deepest.max(self.child());
-            self.wrap(field, SyntaxKind::FieldInit);
-            fields.push(FieldInit {
-                name,
-                name_span,
-                span: name_span.join(value.span()),
-                value,
-            });
+                None => {
+                    if !self.recover_member(field, start, &TokenKind::RParen) {
+                        return None;
+                    }
+                }
+            }
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
@@ -2117,6 +2242,38 @@ impl<'a> Parser<'a> {
         let close = self.expect(&TokenKind::RParen, "to close the fields")?;
         self.wrap(list, SyntaxKind::FieldInitList);
         Some((fields, close, deepest))
+    }
+
+    /// One field initialiser: `name: value`.
+    fn field_init(&mut self) -> Option<FieldInit> {
+        let field = self.checkpoint();
+        let name_span = self.peek_span();
+        let name = match self.advance() {
+            TokenKind::Ident(n) => n,
+            other => {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        name_span,
+                        format!("expected a field name, found {}", other.describe()),
+                    )
+                    .help(
+                        "every field is named when a value is built: \
+                         `Point(x: 1, y: 2)`, `State.Failed(code: 1)`",
+                    ),
+                );
+                return None;
+            }
+        };
+        self.expect(&TokenKind::Colon, "after a field name")?;
+        let value = self.expr()?;
+        self.wrap(field, SyntaxKind::FieldInit);
+        Some(FieldInit {
+            name,
+            name_span,
+            span: name_span.join(value.span()),
+            value,
+        })
     }
 
     /// `Name(field: value, …)`, the `(` already seen by the caller's lookahead.
@@ -2172,6 +2329,76 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// One arm of a `match`: its pattern and its body, and whether it is a probe's
+    /// unfinished arm (N26).
+    fn match_arm(&mut self) -> Option<(MatchArm, bool)> {
+        let arm = self.checkpoint();
+        let qualifier = self.qualifier_before_name();
+        let ty_span = self.peek_span();
+        let ty = match self.advance() {
+            TokenKind::Ident(n) => n,
+            other => {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        ty_span,
+                        format!("expected an enum name, found {}", other.describe()),
+                    )
+                    .help(
+                        "every arm names the variant it selects, qualified by its \
+                         enum: `State.Ready() => 0,`",
+                    ),
+                );
+                return None;
+            }
+        };
+        self.expect(&TokenKind::Dot, "between an enum and one of its variants")?;
+        let variant_span = self.peek_span();
+        let variant = match self.advance() {
+            TokenKind::Ident(n) => n,
+            other => {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        variant_span,
+                        format!("expected a variant name, found {}", other.describe()),
+                    )
+                    .help("an arm selects one variant: `State.Failed(code: c) => c,`"),
+                );
+                return None;
+            }
+        };
+        let holed = self.hole.is_some();
+        let fields = self.pattern_fields(variant_span)?;
+        self.wrap(arm, SyntaxKind::Pattern);
+        // A probe's hole in this pattern, with no `=>` written yet: the arm has no body
+        // to read, and is given a zero-width `0` so the pattern can be checked (N26).
+        let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);
+        let body = if hole_arm {
+            Expr::Int {
+                value: 0,
+                span: Span::new(self.file, variant_span.end, variant_span.end),
+            }
+        } else {
+            self.expect(&TokenKind::FatArrow, "between a pattern and its arm")?;
+            self.expr()?
+        };
+        self.wrap(arm, SyntaxKind::MatchArm);
+        Some((
+            MatchArm {
+                qualifier,
+                ty,
+                ty_span,
+                variant,
+                variant_span,
+                fields,
+                span: ty_span.join(body.span()),
+                body,
+            },
+            hole_arm,
+        ))
+    }
+
     /// `match scrutinee { Enum.Variant(field: binding) => body, … }`
     ///
     /// The `match` keyword is already consumed. The scrutinee is an ordinary expression and
@@ -2185,68 +2412,20 @@ impl<'a> Parser<'a> {
         let mut arms = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
             let arm = self.checkpoint();
-            let qualifier = self.qualifier_before_name();
-            let ty_span = self.peek_span();
-            let ty = match self.advance() {
-                TokenKind::Ident(n) => n,
-                other => {
-                    self.report(
-                        Diagnostic::error(
-                            codes::UNEXPECTED_TOKEN,
-                            ty_span,
-                            format!("expected an enum name, found {}", other.describe()),
-                        )
-                        .help(
-                            "every arm names the variant it selects, qualified by its \
-                             enum: `State.Ready() => 0,`",
-                        ),
-                    );
-                    return None;
+            let start = self.pos;
+            let hole_arm = match self.match_arm() {
+                Some((a, hole_arm)) => {
+                    arms.push(a);
+                    deepest = deepest.max(self.child());
+                    hole_arm
+                }
+                None => {
+                    if !self.recover_member(arm, start, &TokenKind::RBrace) {
+                        return None;
+                    }
+                    false
                 }
             };
-            self.expect(&TokenKind::Dot, "between an enum and one of its variants")?;
-            let variant_span = self.peek_span();
-            let variant = match self.advance() {
-                TokenKind::Ident(n) => n,
-                other => {
-                    self.report(
-                        Diagnostic::error(
-                            codes::UNEXPECTED_TOKEN,
-                            variant_span,
-                            format!("expected a variant name, found {}", other.describe()),
-                        )
-                        .help("an arm selects one variant: `State.Failed(code: c) => c,`"),
-                    );
-                    return None;
-                }
-            };
-            let holed = self.hole.is_some();
-            let fields = self.pattern_fields(variant_span)?;
-            self.wrap(arm, SyntaxKind::Pattern);
-            // A probe's hole in this pattern, with no `=>` written yet: the arm has no body
-            // to read, and is given a zero-width `0` so the pattern can be checked (N26).
-            let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);
-            let body = if hole_arm {
-                Expr::Int {
-                    value: 0,
-                    span: Span::new(self.file, variant_span.end, variant_span.end),
-                }
-            } else {
-                self.expect(&TokenKind::FatArrow, "between a pattern and its arm")?;
-                self.expr()?
-            };
-            deepest = deepest.max(self.child());
-            self.wrap(arm, SyntaxKind::MatchArm);
-            arms.push(MatchArm {
-                qualifier,
-                ty,
-                ty_span,
-                variant,
-                variant_span,
-                fields,
-                span: ty_span.join(body.span()),
-                body,
-            });
             if !self.eat(&TokenKind::Comma) && !(hole_arm && !self.at(&TokenKind::RBrace)) {
                 break;
             }
@@ -2618,8 +2797,19 @@ impl<'a> Parser<'a> {
             let mut args = Vec::new();
             let mut deepest = 0;
             while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
-                args.push(self.expr()?);
-                deepest = deepest.max(self.child());
+                let arg = self.checkpoint();
+                let start = self.pos;
+                match self.expr() {
+                    Some(e) => {
+                        args.push(e);
+                        deepest = deepest.max(self.child());
+                    }
+                    None => {
+                        if !self.recover_member(arg, start, &TokenKind::RParen) {
+                            return None;
+                        }
+                    }
+                }
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }
