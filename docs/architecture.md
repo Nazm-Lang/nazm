@@ -6848,6 +6848,86 @@ identity without `unsafe`, so the tests observe reuse as chunk counts and equali
 pointers. A declaration dropped from the abstract tree keeps its own concrete node (`RecordItem`,
 `FnItem`) with the malformed member inside it as an `Error`, rather than becoming one `Error` node.
 
+## 7.78 Resolution, persisted: one resolved unit per module, one resolver — N77, 2026-10-03
+
+Written before the code. Area 2 is PARTIAL, and area 2a names the gap: no written form of name
+resolution exists, so nothing a check decides about a body outlives the process that checked it.
+The answers are the checker's (`Resolution`), addressed by session ids no other process can read.
+
+**One resolver, restated.** `nazm_core::check` decides what every name means. `load.rs` decides which
+module every `use` names: a relative path, `@std/NAME`, `NAME:path` into a declared package, or the
+core prelude. Nothing else decides either. `compiler/module.nz` is the bootstrap subset's own loader,
+and it is not a second answer: it resolves relative paths only. From now on it **refuses `@std/` and
+`NAME:` imports by name**, where until now it looked for a file of that name and reported it missing.
+It still keys modules by a textually normalised path, not a canonical one (`bootstrap.md`). No
+semantic rule is copied into the resolved unit: it is written from the checker's answers and read
+back as data.
+
+**The product, `nazm.resolved/1`.** One per module that checked cleanly, holding only durable
+facts:
+
+- the module's durable key (which carries its package, `ModuleKey::in_package`);
+- its source fingerprint, and the checker identity (semantic epoch included);
+- its imports in source order: the path as written, the alias if any, the target's durable key, and
+  the target's interface hash;
+- its definitions, each a `DefKey` with the byte range of its declaration and its name;
+- every resolved occurrence of a declared entity in its text: the byte range, and the target as a
+  durable identity. A function, record or enum is its `DefKey`. A variant, field or payload field is
+  its owner's `DefKey` and its member's name. A built-in is its name.
+
+Locals are absent: their identity is a slot in one body, and they are not durable. Session ids,
+absolute paths, timestamps and load order are absent. Occurrences sort by range, then target.
+Ranges are byte offsets into the fingerprinted source, so they mean something exactly as long as
+the fingerprint does.
+
+**Where it lives, and why its invalidation is already sound.** The resolved unit is a function of
+exactly what a `CheckKey` covers: the source, the checker, and each direct dependency's interface.
+A body change in a dependency leaves the `DefKey`s it offers, and so every importer's targets,
+unchanged. So the unit is stored in the check entry, under the same key. The check entry becomes
+`nazm.check/3`: a `/2` entry has no unit and is a miss. The unit is validated against the entry's
+own fingerprint and module on read. By change:
+
+| Change | Invalidated |
+| --- | --- |
+| a private body | its own module |
+| an exported signature | its module and every direct importer |
+| an alias or a `use` line | the importing module, through its source |
+| a package's version or name | every module of it, through `ModuleKey` |
+| a semantic epoch | every entry |
+| a profile, a target, an optimisation level | nothing: no checking rule reads them (`key.rs`), and profiles run after checking and are never cached |
+
+**Consumers.** `nazm check` writes the unit and reads it back for every module it reuses. `nazm
+references DEF [FILE]` is new. It lists every occurrence of the entity `DEF` (a durable key,
+`module::kind name`) in the compilation as `nazm.references/1`, built from the modules' resolved
+units. A module whose check entry is reused contributes its stored unit, and its body is **not
+checked again**: the output reports how many modules were checked and how many reused. `nazm
+resolve FILE --json` prints the compilation's units as they would be stored.
+
+**What does not consume it, deliberately.** `nazm build` needs the typed Core IR of every body it
+lowers, and a resolved unit carries no types or slots, so a build still checks every module
+(area 2a's limitation, unchanged). The language service never persists or reads a cache: an unsaved
+buffer is not state a cache may record (§7.18).
+
+**Versions.** Semantic epoch: unchanged, because no program moves between accepted and refused. The
+check entry goes `nazm.check/2 → /3`. New machine schemas: `nazm.resolved/1`,
+`nazm.references/1`. Interface schema, runtime ABI and Core/MIR/LIR schemas: unchanged, because
+nothing they describe moved. Object and build identity: unchanged, because the build does not read
+the unit.
+
+**Negative example.** A `/2` entry from before N77 is a miss and the module is checked again. A
+unit whose fingerprint differs from the entry's is a miss. **Boundary example.** A dependency whose
+private body changes is checked again, and its importer's unit is reused byte for byte: its
+occurrences of the dependency's functions name the same `DefKey`s.
+
+**What would prove this unsuitable.** Two processes, or two checkouts, writing different bytes for
+one module. A reused unit that names a target a fresh check would not. `nazm references` disagreeing
+with the language service's references over the same saved compilation, which is the independent
+oracle: the service's index is computed in-process from a fresh check.
+
+**Not here.** Re-exporting a name and exporting it under another name, both language decisions with
+no settled design. A build that skips bodies. A persisted resolution for locals. Making the
+compiler written in Nazm resolve `@std` or packages (N98).
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
