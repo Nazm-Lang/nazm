@@ -306,6 +306,17 @@ is **not yet justified** by any program here — the next one would have to be f
 that needs behaviour the language cannot derive (an ordering it has not chosen, a conversion
 between error types), not by the symmetry of having one bound.
 
+**N78 update (2026-10-03).** Traits were built (`architecture.md` §7.79), against a program named
+before the code: rendering every element of a `Vec[T]` from generic code (`@std/show`'s
+`show_all`). Recorded honestly, that program could also be written by passing a rendering
+function, as N50 allowed; what a bound saves is threading that function through every generic
+layer, not a capability the language lacked. So the hypothesis "user-defined traits pay for
+themselves" is **still open**. The design is deliberately small — nominal, static, coherent, no
+dictionaries — so that it costs little if the answer is no. *Falsifier:* after N84's standard
+library, count the generic standard functions that take a bound against those that take a
+function argument for the same job. If bounds are not the common shape, the trait system is
+ceremony and should not grow.
+
 ---
 
 ## R2 · Content-addressed semantic IR pays for itself

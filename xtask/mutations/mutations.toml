@@ -775,11 +775,19 @@ why = """
 ignores `pub` and treats every top-level definition as part of its module's interface —
 the pre-N2 language, reachable by deleting one word. A module's private helper becomes
 callable from anywhere that imports it, and two modules that each keep a `size` start
-colliding through an import
+colliding through an import.
+Repointed by N78, whose impl methods are always private: an ordinary function's `pub` is the
+`else` arm.
 """
 file = "crates/nazm-core/src/check.rs"
-find = "        let visibility = Visibility::from_keyword(f.pub_span);"
-replace = "        let visibility = Visibility::Exported;"
+find = """
+        } else {
+            Visibility::from_keyword(f.pub_span)
+        };"""
+replace = """
+        } else {
+            Visibility::Exported
+        };"""
 
 [[mutation]]
 name = "imports-become-transitive"
@@ -4193,11 +4201,11 @@ killers = [{ package = "nazm-syntax", test = "cst", name = "one_mistaken_token_i
 
 [[mutation]]
 name = "n15-recovery-forgets-the-braces-it-is-inside"
-why = "the skip starts counting braces from zero, so a `match` the failed statement opened ends the block early"
+why = "the skip starts counting braces from zero, so a `match` the failed statement opened ends the block early. Given a second killer by N78: since N76 a call argument recovers on its own, so the first killer's input no longer reaches the statement skip with a brace open; an arms list given up at a `let` does"
 file = "crates/nazm-syntax/src/parser.rs"
 find = "        let mut braces = self.left_open(start);"
 replace = "        let mut braces = { let _ = self.left_open(start); 0 };"
-killers = [{ package = "nazm-syntax", test = "cst", name = "recovery_resumes_inside_the_block_it_started_in" }]
+killers = [{ package = "nazm-syntax", test = "recovery", name = "a_list_given_up_inside_a_statement_still_resumes_inside_its_block" }, { package = "nazm-syntax", test = "cst", name = "recovery_resumes_inside_the_block_it_started_in" }]
 
 # --- N16: the language service and `nazm lsp` --------------------------------------------
 #
@@ -7631,10 +7639,11 @@ killers = [{ package = "nazm-service", test = "context", name = "a_functions_pac
 [[mutation]]
 name = "n36-the-interface-schema-stays"
 why = """the interface keeps the `/5` name for a shape whose absent `effects` now means undeclared, so a `/5` file is read as a `/6` one
-Repointed by N42, whose `/7` adds foreign exports: the rule is the same, one version on — a `/6` file must not be read as a `/7` one."""
+Repointed by N42, whose `/7` adds foreign exports: the rule is the same, one version on — a `/6` file must not be read as a `/7` one.
+Repointed by N78, whose `/8` adds traits and impls: a `/7` file must not be read as an `/8` one."""
 file = "crates/nazm-iface/src/wire.rs"
-find = """pub const SCHEMA: &str = "nazm.interface/7";"""
-replace = """pub const SCHEMA: &str = "nazm.interface/6";"""
+find = """pub const SCHEMA: &str = "nazm.interface/8";"""
+replace = """pub const SCHEMA: &str = "nazm.interface/7";"""
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
 
 # `n36-the-epoch-stays` is retired: N37 moved the epoch to 9, and the rule it pinned — the epoch
@@ -8076,10 +8085,11 @@ Repointed by N54, which moved it to 17 for select and the clock: an entry that a
 Repointed by N55, which moved it to 18 for FFI v2: an entry that refused a Str argument to C must not be reused.
 Repointed by N62, which moved it to 19 for a freestanding target: an entry that accepted a function named mmio_read32 must not be reused.
 Repointed by N66, which moved it to 20 for `ints_sum_from`: an entry that accepted a function of that name must not be reused.
-Repointed by N76, which moved it to 21 for Unicode escapes: an entry that refused `\\u{e9}` must not be reused."""
+Repointed by N76, which moved it to 21 for Unicode escapes: an entry that refused `\\u{e9}` must not be reused.
+Repointed by N78, which moved it to 22 for traits: an entry that refused a method call must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 21;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 20;"
+find = "pub const SEMANTIC_EPOCH: u32 = 22;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 21;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -12234,3 +12244,177 @@ file = "compiler/module.nz"
 find = '                    if str_len(why) > 0 {'
 replace = '                    if str_len(why) > 1000 {'
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_refuses_std_and_package_imports_by_name" }]
+
+# --- N78: traits and methods --------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.79: coherence, the orphan rule, an impl's
+# completeness and signatures, lookup over what is in scope, dispatch per instance and per value,
+# the bound, the interface, and the meanings that did not move.
+
+[[mutation]]
+name = "n78-two-impls-coexist"
+why = "a second impl of a trait for a type is filed beside the first, so which function a call means depends on declaration order"
+file = "crates/nazm-sema/src/traits.rs"
+find = '            Some(first) => Err(*first),'
+replace = '            Some(_) => Ok(id),'
+killers = [{ package = "nazm-cli", test = "traits", name = "two_impls_of_one_trait_for_one_type_are_refused" }]
+
+[[mutation]]
+name = "n78-orphans-are-welcome"
+why = "an impl may live in a module declaring neither the trait nor the type, so two unrelated modules can each supply one"
+file = "crates/nazm-core/src/check.rs"
+find = '    if tr.module != unit.module && home != Some(unit.module) {'
+replace = '    if false && tr.module != unit.module && home != Some(unit.module) {'
+killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_in_a_third_module_is_an_orphan" }]
+
+[[mutation]]
+name = "n78-an-impl-may-skip-a-method"
+why = "an impl that leaves out a trait method is accepted, so a call through a bound reaches nothing"
+file = "crates/nazm-core/src/check.rs"
+find = """
+        .map(|(m, _)| m.name.as_str())
+        .collect();
+    if !missing.is_empty() {"""
+replace = """
+        .map(|(m, _)| m.name.as_str())
+        .collect();
+    if false && !missing.is_empty() {"""
+killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_must_define_exactly_its_traits_methods_with_its_signatures" }]
+
+[[mutation]]
+name = "n78-an-impl-signature-is-unchecked"
+why = "an impl method's parameters, result and effects are not held to the trait's, so a call through a bound passes the wrong values"
+file = "crates/nazm-core/src/check.rs"
+find = """
+        if def.params != params
+            || def.ret != ret
+            || !self_named
+            || !effects_match"""
+replace = """
+        if false
+            || false
+            || !self_named
+            || false"""
+killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_must_define_exactly_its_traits_methods_with_its_signatures" }]
+
+[[mutation]]
+name = "n78-an-impl-for-any-type"
+why = "an impl is accepted for a `Vec`, a channel or a capability, whose values carry no type a call could dispatch on"
+file = "crates/nazm-core/src/check.rs"
+find = '        _ => Err("a built-in type other than `Int`, `Bool` or `Str`"),'
+replace = '        _ => Ok(None),'
+killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_for_a_type_that_cannot_have_one_is_refused" }]
+
+[[mutation]]
+name = "n78-ambiguity-picks-the-first"
+why = "a method two traits in scope provide is resolved to whichever the table yields first"
+file = "crates/nazm-core/src/check.rs"
+find = '            [one] => Ok(*one),'
+replace = '            [one, ..] => Ok(*one),'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_method_no_trait_in_scope_gives_is_refused_and_two_are_ambiguous" }]
+
+[[mutation]]
+name = "n78-an-impl-is-used-from-anywhere"
+why = "an impl in a module the caller does not import resolves its calls, so a cached check depends on a module outside its key"
+file = "crates/nazm-core/src/check.rs"
+find = """
+                .is_some_and(|d| self.impl_modules.contains(&d.module));
+            if in_scope && usable {"""
+replace = """
+                .is_some();
+            if in_scope && usable {"""
+killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_in_a_module_not_imported_is_not_in_scope" }]
+
+[[mutation]]
+name = "n78-mir-dispatches-on-int"
+why = "MIR resolves a call through a bound at `Int` whatever the instance, so a generic body runs another type's method"
+file = "crates/nazm-mir/src/lower.rs"
+find = '                let concrete = self.ty(*self_ty, at);'
+replace = '                let concrete = { let _ = self.ty(*self_ty, at); nazm_sema::Type::Int };'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_call_through_a_bound_runs_the_instances_impl_through_two_generic_levels" }]
+
+[[mutation]]
+name = "n78-the-interpreter-dispatches-on-int"
+why = "the interpreter resolves a call through a bound at `Int`, ignoring the receiver"
+file = "crates/nazm-core/src/eval.rs"
+find = '                        .and_then(Value::runtime_type)'
+replace = '                        .map(|_| nazm_sema::Type::Int)'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_call_through_a_bound_runs_the_instances_impl_through_two_generic_levels" }]
+
+[[mutation]]
+name = "n78-impl-methods-are-internal"
+why = "an impl's methods get internal linkage, so a generic instance in an object of its own cannot call them"
+file = "crates/nazm-mir/src/lower.rs"
+find = '        for g in imp.methods.iter().flatten() {'
+replace = '        for g in imp.methods.iter().flatten().take(0) {'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_call_through_a_bound_runs_the_instances_impl_through_two_generic_levels" }]
+
+[[mutation]]
+name = "n78-a-bound-gives-no-methods"
+why = "a type parameter's bound is not consulted, so a generic body cannot call its trait's methods"
+file = "crates/nazm-core/src/check.rs"
+find = '            let bound = self.res.traits().bound_of(p);'
+replace = '            let bound = { let _ = p; None::<TraitId> };'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_method_takes_arguments_and_returns_any_type" }]
+
+[[mutation]]
+name = "n78-a-bound-is-never-checked"
+why = "a generic call's type argument is not held to its trait bound, so a type with no impl reaches a call through it"
+file = "crates/nazm-core/src/check.rs"
+find = '                if !satisfied {'
+replace = '                if false && !satisfied {'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_bound_is_satisfied_by_an_impl_in_scope_or_by_the_same_bound_and_nothing_else" }]
+
+[[mutation]]
+name = "n78-the-interface-forgets-impls"
+why = "a module's interface omits its impls, so adding one leaves its importers' keys unchanged"
+file = "crates/nazm-iface/src/wire.rs"
+find = """
+            traits,
+            impls,
+        })"""
+replace = """
+            traits,
+            impls: { let _ = impls; Vec::new() },
+        })"""
+killers = [{ package = "nazm-cli", test = "traits", name = "the_interface_carries_exported_traits_impls_and_bounds" }]
+
+[[mutation]]
+name = "n78-the-core-ir-schema-stays"
+why = "Core IR's printed form keeps `/1` for a shape with `call_trait`, which a `/1` reader misreads"
+file = "crates/nazm-cir/src/lib.rs"
+find = 'pub const SCHEMA: &str = "nazm.core-ir/2";'
+replace = 'pub const SCHEMA: &str = "nazm.core-ir/1";'
+killers = [{ package = "nazm-core", test = "core_ir", name = "the_printed_form_is_the_same_every_time" }]
+
+[[mutation]]
+name = "n78-a-trait-is-a-type"
+why = "a trait written where a type is expected is reported as an unknown type, hiding that there are no trait objects"
+file = "crates/nazm-core/src/check.rs"
+find = '    if let Some((_, t)) = res.traits().iter().find(|(_, t)| t.name == bare) {'
+replace = '    if let Some((_, t)) = res.traits().iter().find(|(_, t)| t.name == bare && false) {'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_trait_is_not_a_type_and_a_method_is_not_a_value" }]
+
+[[mutation]]
+name = "n78-a-method-is-a-field"
+why = "`x.show` without a call is reported as a missing field, hiding that methods are not values"
+file = "crates/nazm-core/src/check.rs"
+find = '        if !is_field && a_method {'
+replace = '        if false && !is_field && a_method {'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_trait_is_not_a_type_and_a_method_is_not_a_value" }]
+
+[[mutation]]
+name = "n78-a-variant-call-becomes-a-method"
+why = "`E.A()` is read as a method call when a trait in scope has a method `A`, changing a program that checked before"
+file = "crates/nazm-core/src/check.rs"
+find = '        let enum_visible = matches!(self.types.names.get(&key), Some(Type::Enum(_)));'
+replace = '        let enum_visible = { let _ = &key; false };'
+killers = [{ package = "nazm-cli", test = "traits", name = "trait_is_a_keyword_now_and_an_enum_keeps_its_variant_calls" }]
+
+[[mutation]]
+name = "n78-a-trait-call-has-no-references"
+why = "calls through a bound are not indexed, so references to a trait method miss them"
+file = "crates/nazm-sema/src/references.rs"
+find = '            index.used(at, ReferenceTarget::TraitMethod(c.trait_id, c.method));'
+replace = '            let _ = (at, c);'
+killers = [{ package = "nazm-cli", test = "traits", name = "a_method_call_refers_to_its_impls_function_and_a_bound_call_to_the_trait_method" }]

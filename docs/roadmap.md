@@ -398,6 +398,17 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N78 — traits and methods — **complete as scoped, 2026-10-03; area 3 stays PARTIAL**
+
+`architecture.md` §7.79 first. Nominal traits, `impl Trait for Type`, `recv.m(…)`, `Trait.m(recv, …)`
+and trait bounds; coherence over the compilation (one impl per trait and type, in the trait's or the
+type's module); methods resolved before Core IR — a concrete call is the impl's function, a call
+through a bound is `CallTrait`, resolved per instance by MIR and per value by the interpreter. The
+same results in the interpreter, LLVM and Cranelift. `@std/show` is the first standard trait;
+interfaces carry traits, impls and bounds (`/8`); epoch 22. Not here: trait objects, default
+methods, associated items, generic traits, generic function values (`N0387` stays outside the
+model), the compiler written in Nazm (N98). Next: N79, effects and capabilities v3.
+
 ### N77 — resolution, persisted — **complete as scoped, 2026-10-03; area 2 stays PARTIAL**
 
 `architecture.md` §7.78 first. A module that checks cleanly leaves `nazm.resolved/1`, its names by

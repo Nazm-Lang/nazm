@@ -8,15 +8,19 @@ found only by reading all of it.
 
 ## Language
 
-- No traits or methods (designed and deferred, `architecture.md` §7.52). Function values and
+- Traits and methods (N78) are nominal and static: no trait objects or dynamic dispatch, no default
+  methods, associated items, generic traits or methods, supertraits, impls with bounds or for
+  generic types, or inherent impls; one bound per type parameter; an impl is usable where its
+  module is the caller's or one it imports directly. A persisted interface's traits are not
+  rehydrated. *Narrowed in N78:* until then, no traits or methods. Function values and
   closures exist since N50, and effect parameters since N51 — one per function, named only in
   function types (`N0388`), with no effect subtyping; no closure or
     named function value inside a generic function (`N0387`); a closure captures by copy and
   never a `let mut` binding (`N0386`); no attenuated capabilities and no revocation
   (`architecture.md` §7.53); a field of function type is called by
   binding it first; no function value crosses into a task (`N0321`); a path that went through a
-  function value is of unknown origin, conservatively. The compiler written in Nazm has none of
-  it (areas 3, 5, 7, 16). *Narrowed in N50.*
+  function value is of unknown origin, conservatively, and so is a call through a trait bound. The
+  compiler written in Nazm has none of it (areas 3, 5, 7, 16). *Narrowed in N50.*
 - A module cannot re-export a name or export one under another name (area 2). A module's
   persisted resolution (N77, `nazm.resolved/1`) holds its names, not its types: `nazm build` and
   `nazm run` still check every module, and only `nazm check` and `nazm references` read it.
