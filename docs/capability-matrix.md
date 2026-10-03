@@ -66,7 +66,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 1 | Syntax, parser, CST | VERIFIED — the reference parser: incremental reparse and recovery (N76); the compiler written in Nazm's syntax is N98's |
 | 2 | Name resolution and modules | PARTIAL |
 | 2a | Incremental semantic checking | VERIFIED |
-| 3 | Type system | PARTIAL |
+| 3 | Type system | PARTIAL — traits, impls and methods (N78); no trait objects, generic traits or default methods |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe |
 | 5 | Effects | PARTIAL |
 | 6 | Capabilities (language) | PARTIAL |
@@ -392,6 +392,26 @@ exist.
 
 ### 3. Type system — PARTIAL
 
+**N78 (2026-10-03)** · *Traits and methods* (`architecture.md` §7.79, `spec.md`, *Traits and
+methods*). `trait Name { fn m(self: Self, …) -> R; }`, `impl Name for Type { … }`, `recv.m(…)` and
+`Trait.m(recv, …)`, and a type parameter's bound naming a trait (`[T: Show]`). Coherence holds over
+the whole compilation: at most one impl of a trait for a type (`N0600`), in the trait's module or
+the type's (`N0601`). An impl defines exactly its trait's methods with its signatures and effects
+(`N0602`, `N0603`), for a non-generic record or enum, `Int`, `Bool` or `Str` (`N0604`). Method
+lookup is over the traits in scope and the impls of this module and its direct imports, which keeps
+a cached check sound (`N0605`, `N0606`). There are no trait objects (`N0607`), and methods are not
+values (`N0608`). A concrete call is resolved before Core IR to the impl's ordinary function; a call
+through a bound is Core IR's one new form, `CallTrait`, which MIR resolves per instance and the
+interpreter per value. The same program prints the same in the interpreter, LLVM at -O0 and -O2,
+and Cranelift, with every allocation reclaimed (`crates/nazm-cli/tests/traits.rs`, 17 tests: impls
+on a record, an enum and a built-in, calls through two levels of generic code, cross-module and
+aliased traits, `@std/show`'s `show_all` over a `Vec` of a program's records, and each refusal by
+code). `@std/show` is the first standard trait. Traits, trait methods and calls through bounds are
+reference targets (`nazm resolve`, `nazm references`, the language service; semantic tokens
+`interface` and `method`). The persisted interface carries exported traits, every impl and every
+bound (`nazm.interface/8`), and adding an impl moves its fingerprint. Semantic epoch 22; Core IR
+print `nazm.core-ir/2`.
+
 **N50 (2026-10-02)** · function values and closures, `architecture.md` §7.52 and `docs/spec.md`,
 *Function values and closures*. `Type::Fn`, interned by parameters, result and effects
 (structural, invariant, no equality, never into a task); a named, monomorphic Nazm function as a
@@ -520,17 +540,22 @@ signature is a return type, and area 5 is unchanged.
 
 **Limitation** · Generics remain narrowly constrained: N14 adds exactly one compiler-owned
 requirement, `Equality`, on a function's type parameters, and that is not a trait system.
-There are still no user-defined traits, no `impl`, no methods, no other capability
-requirement, and no higher kinds, const generics, defaults, variance or specialisation —
-so apart from `==` on a parameter that requires it, a generic body can do only what every
-type can. A requirement cannot be written on a record's or an enum's parameter (`N0101`).
+*Narrowed in N78:* until then there were no user-defined traits, no `impl` and no methods. What
+remains is deliberate, and each is refused by name: no trait objects or dynamic dispatch, no
+default methods, no associated types or constants, no generic traits or methods, no supertraits,
+no impls with bounds or for generic types, no inherent impls without a trait, no methods as values,
+one requirement per type parameter. Calling a field of function type as `r.f(1)` stays refused.
+Generic function values and closures inside generic functions (`N0387`) are outside the supported
+model: each would need a thunk per instance, and a bound covers the programs that wanted one. No
+higher kinds, const generics, defaults, variance or specialisation. A persisted interface's traits
+are not rehydrated, so a module checked against one (rather than its source) cannot use them. The
+compiler written in Nazm has no traits (N98). A requirement cannot be written on a record's or an enum's parameter (`N0101`).
 `Option` has no `?`, `Result` no
 methods and no conversion between error types, and `main` cannot return one; no
 indexing syntax on a `Vec`; no `spawn` of a generic function. No closures or function
 values, no unit type, no `Never`.
-Equality is the only thing a generic definition can require of `T` (N14): nothing can say
-"`T` can be ordered", "hashed" or "passed to a task", and no program can declare a
-capability of its own. No ordering, hashing or custom equality on any user type, and no
+Since N78 a generic definition can require a trait of `T`, and a program can declare traits of its
+own; nothing can say "`T` can be passed to a task". No ordering, hashing or custom equality on any user type, and no
 equality at all on a sequence, a `Vec` or a `Chan`. No field-level or per-variant visibility, no
 default field values, no record update syntax. The pattern language is variant selection
 with named payload bindings and `_` — no top-level wildcard arm, no guards, no or-patterns,
@@ -997,7 +1022,7 @@ exist.
 ### 8. Core IR — VERIFIED (v1)
 
 **Evidence** · N39 (2026-09-30). `crates/nazm-cir` is the representation, its invariants
-(`verify.rs`), its printed form `nazm.core-ir/1` (`print.rs`, `nazm core-ir`) and each
+(`verify.rs`), its printed form `nazm.core-ir/2` since N78, `/1` before (`print.rs`, `nazm core-ir`) and each
 function's digests (`digest.rs`); `crates/nazm-core/src/lower.rs` is **the one lowering** from a
 checked program, private to `nazm-core` and reached only after checking succeeded;
 `crates/nazm-core/src/eval.rs` runs Core IR and nothing else; `crates/nazm-lir/src/lower.rs`
