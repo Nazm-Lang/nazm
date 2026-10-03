@@ -325,6 +325,10 @@ that captures what reaches a path, with a message saying which; its secondary la
 captures, callers and exports. `checked-paths` refuses with the existing `N0510`. `nazm.flow/1 →
 /2` adds `traces`; the check entry moved to `nazm.check/4`; `nazm.profile-report/1` gains a rule.
 
+**Applied to N81, the backend contract v2, stage one.** No code appeared: a layout table that does
+not hold is the existing `N0900`, a compiler defect, raised before any code is generated.
+`nazm.lir/1` is new (`nazm lir`), with `schema/nazm.lir-1.json` checked against real output.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

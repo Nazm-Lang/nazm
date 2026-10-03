@@ -73,7 +73,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 7 | Provenance and information flow (language) | PARTIAL — explicit flow by cell, target and field (N80); no implicit flow, no labels a program writes |
 | 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | VERIFIED (v1) |
-| 10 | LIR and the backend contract | PARTIAL |
+| 10 | LIR and the backend contract | PARTIAL — bytes, ownership and `nazm.lir/1` owned by LIR and validated (N81); operations still translated per backend |
 | 10a | Per-module code generation and linking | VERIFIED |
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
@@ -1145,6 +1145,24 @@ partial-construction slots and `?` completion rules, and the emitter's cleanup b
 gone; a validator and a mechanical gate keep the boundary.
 
 ### 10. LIR and the backend contract — PARTIAL
+
+*N81, 2026-10-03: Target data layout v1 — VERIFIED; Byte layouts owned by LIR v1 — VERIFIED;
+Ownership table v1 — VERIFIED; Layout validator v1 — VERIFIED; `nazm.lir/1` — VERIFIED. One
+instruction-level LIR both backends consume — MISSING; LIR oracle interpreter — MISSING.*
+`architecture.md` §7.82 is the constitution, written before the code and stating that N81 is not
+accepted under its own criteria. `crates/nazm-lir/src/abi.rs` owns a target's data layout (a pointer
+8 bytes, or 4 on `wasm32`), every record's and enum's byte layout on it, and whether a type owns
+anything; the Cranelift backend reads them (its `layout.rs` decides nothing now) and the LLVM backend
+reads ownership, and both validate the tables before generating any code (`N0900` if broken). `nazm
+lir` prints `nazm.lir/1` (`schema/nazm.lir-1.json`). Evidence: `crates/nazm-cli/tests/lir.rs` —
+determinism, canonical order at natural alignment, an enum's tag and payload, wasm32's narrower
+handles with nothing else moving, ownership through containment, refusals, and a program using
+every shape agreeing on the interpreter, LLVM and Cranelift; `abi::tests` — the validator naming
+each broken invariant; `schemas.rs`; the N73 fuzzer generating a three-width record inside an
+enum's payload on every tier. **Falsifier, run:** every program in the repository built with both
+backends by N79 and by N81 produced byte-identical objects. **Still PARTIAL**: each backend still
+translates MIR's operations itself, so their agreement is tested, not constructed; LLVM's enum is
+the product of its variants, not the tagged union these tables describe.
 
 **Evidence** · Since N40 `crates/nazm-lir` reads **validated MIR** (area 9) and nothing of the
 checker: `lower.rs` settles layout (canonical by name, from the order MIR carries), symbols from

@@ -105,6 +105,10 @@ found only by reading all of it.
   below; no Windows, 32-bit or CPU-feature selection; a target the host has no linker for is built to objects (`--objects`) for its own
   toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here
   (area 33). *Narrowed in N57:* until then, the host only.
+- The two native backends each translate MIR's operations themselves; their agreement rests on
+  differential testing (N73, N81), not on one lowering. Byte layouts and ownership are `nazm-lir`'s
+  and validated on every build (N81), but LLVM lays its own aggregates out, an enum as the product
+  of its variants (area 10).
 - One freestanding target, `aarch64-unknown-none`, verified only on QEMU's `virt` board: objects and
   `link.ld`, linked by `ld.lld` outside this host; no atomics, interrupts, heap or `@std`; a board
   program that reaches allocation, input and output, tasks, channels, closures or the C library is
