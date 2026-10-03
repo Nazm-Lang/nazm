@@ -7726,18 +7726,20 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "starting_a_ta
 
 [[mutation]]
 name = "n37-an-effect-set-grants-authority"
-why = "a declared effect counts as the capability for it, so `! { io }` alone authorises `print`"
+why = """a declared effect counts as the capability for it, so `! { io }` alone authorises `print`.
+Repointed by N79, which made held kinds count with what they imply."""
 file = "crates/nazm-core/src/effects.rs"
-find = "            for kind in required.without(site.held).without(reported).iter() {"
-replace = "            for kind in required.without(site.held.union(CapabilitySet::for_effects(node.declared.unwrap_or_default()))).without(reported).iter() {"
+find = "                .without(site.held.implied())"
+replace = "                .without(site.held.implied().union(CapabilitySet::for_effects(node.declared.unwrap_or_default())))"
 killers = [{ package = "nazm-core", test = "capabilities", name = "an_effect_declared_without_authority_is_an_authority_error_and_not_an_effect_one" }]
 
 [[mutation]]
 name = "n37-a-pure-contract-needs-no-authority"
-why = "authority is checked only for a function declaring some effect, so one declaring `! {}` that exercises authority is reported only for its effect"
+why = """authority is checked only for a function declaring some effect, so one declaring `! {}` that exercises authority is reported only for its effect.
+Repointed by N79, which made the check return what is missing rather than push it."""
 file = "crates/nazm-core/src/effects.rs"
-find = "        authority(node, &nodes, &sets, module, &contract, res, errors);"
-replace = "        if !declared.is_empty() { authority(node, &nodes, &sets, module, &contract, res, errors); }"
+find = "        for (kind, at, why) in authority(node, &nodes, &sets, module, &contract, res) {"
+replace = "        for (kind, at, why) in authority(node, &nodes, &sets, module, &contract, res).into_iter().filter(|_| !declared.is_empty()) {"
 killers = [{ package = "nazm-core", test = "capabilities", name = "authority_without_the_effect_is_an_effect_error_and_both_missing_is_both_in_order" }]
 
 [[mutation]]
@@ -8086,10 +8088,11 @@ Repointed by N55, which moved it to 18 for FFI v2: an entry that refused a Str a
 Repointed by N62, which moved it to 19 for a freestanding target: an entry that accepted a function named mmio_read32 must not be reused.
 Repointed by N66, which moved it to 20 for `ints_sum_from`: an entry that accepted a function of that name must not be reused.
 Repointed by N76, which moved it to 21 for Unicode escapes: an entry that refused `\\u{e9}` must not be reused.
-Repointed by N78, which moved it to 22 for traits: an entry that refused a method call must not be reused."""
+Repointed by N78, which moved it to 22 for traits: an entry that refused a method call must not be reused.
+Repointed by N79, which moved it to 23 for attenuation: an entry that refused an IoCap given for an OutCap must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 22;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 21;"
+find = "pub const SEMANTIC_EPOCH: u32 = 23;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 22;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -12418,3 +12421,116 @@ file = "crates/nazm-sema/src/references.rs"
 find = '            index.used(at, ReferenceTarget::TraitMethod(c.trait_id, c.method));'
 replace = '            let _ = (at, c);'
 killers = [{ package = "nazm-cli", test = "traits", name = "a_method_call_refers_to_its_impls_function_and_a_bound_call_to_the_trait_method" }]
+
+
+# --- N79: effects and capabilities v3 ------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.80 as built: an `IoCap` implies an `OutCap` and
+# nothing implies an `IoCap`; `print` asks for the narrower kind; a function value with fewer effects
+# is accepted where it is passed or returned and one with more is refused; inherited authority is
+# recorded, shown and refused by the `authority` profile; and nothing below the checker undoes
+# what it accepted.
+
+[[mutation]]
+name = "n79-an-io-cap-implies-nothing"
+why = "holding an `IoCap` no longer gives an `OutCap`, so passing one where an `OutCap` is expected is refused and attenuation is gone"
+file = "crates/nazm-sema/src/capability.rs"
+find = "            self.with(CapabilityKind::Out)"
+replace = "            self"
+killers = [{ package = "nazm-cli", test = "authority", name = "an_out_cap_prints_and_authorises_nothing_else" }]
+
+[[mutation]]
+name = "n79-print-asks-for-the-whole-io"
+why = "`print` asks for an `IoCap` again, so an `OutCap` authorises nothing and `main(o: OutCap)` cannot print"
+file = "crates/nazm-sema/src/capability.rs"
+find = "            Intrinsic::Print | Intrinsic::EPrint => CapabilitySet::of(Self::Out),"
+replace = "            Intrinsic::Print | Intrinsic::EPrint => CapabilitySet::of(Self::Io),"
+killers = [{ package = "nazm-cli", test = "authority", name = "main_may_hold_only_an_out_cap_on_every_engine" }]
+
+[[mutation]]
+name = "n79-an-out-cap-widens"
+why = "any capability is accepted for any other, so an `OutCap` stands in for an `IoCap` and reaches files"
+file = "crates/nazm-core/src/check.rs"
+find = "            (Type::Cap(g), Type::Cap(w)) => nazm_sema::CapabilitySet::of(g).implied().contains(w),"
+replace = "            (Type::Cap(_g), Type::Cap(_w)) => true,"
+killers = [{ package = "nazm-cli", test = "authority", name = "an_io_cap_is_accepted_for_an_out_cap_and_never_the_reverse" }]
+
+[[mutation]]
+name = "n79-no-attenuation-by-passing"
+why = "an `IoCap` is refused where an `OutCap` is expected, so the only way to make an `OutCap` is gone"
+file = "crates/nazm-core/src/check.rs"
+find = "            (Type::Cap(g), Type::Cap(w)) => nazm_sema::CapabilitySet::of(g).implied().contains(w),"
+replace = "            (Type::Cap(_g), Type::Cap(_w)) => false,"
+killers = [{ package = "nazm-cli", test = "authority", name = "an_out_cap_prints_and_authorises_nothing_else" }]
+
+[[mutation]]
+name = "n79-more-effects-subsume"
+why = "a function value with more effects than expected is accepted, so a call through it performs an effect its type does not allow"
+file = "crates/nazm-core/src/check.rs"
+find = "                    && gs.effects.without(ws.effects).is_empty()"
+replace = "                    && true"
+killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_with_more_effects_is_refused" }]
+
+[[mutation]]
+name = "n79-no-effect-subsumption"
+why = "a function value with fewer effects is refused where more are allowed, as before N79"
+file = "crates/nazm-core/src/check.rs"
+find = "                    && gs.effects.without(ws.effects).is_empty()"
+replace = "                    && gs.effects == ws.effects"
+killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_with_fewer_effects_is_accepted_passed_or_returned" }]
+
+[[mutation]]
+name = "n79-a-held-io-cap-is-read-alone"
+why = "the authority check reads held kinds without what they imply, so a function holding an `IoCap` cannot print"
+file = "crates/nazm-core/src/effects.rs"
+find = "                .without(site.held.implied())"
+replace = "                .without(site.held)"
+killers = [{ package = "nazm-cli", test = "authority", name = "an_out_cap_prints_and_authorises_nothing_else" }]
+
+[[mutation]]
+name = "n79-inheritance-is-not-recorded"
+why = "inherited authority is computed and dropped, so the bridge is ambient again and every function reports `inherits: []`"
+file = "crates/nazm-core/src/effects.rs"
+find = "        res.record_inherits(id, set, at);"
+replace = "        let _ = (id, set, at);"
+killers = [{ package = "nazm-cli", test = "authority", name = "inherited_authority_is_recorded_and_inspect_shows_it" }]
+
+[[mutation]]
+name = "n79-inspect-hides-inherits"
+why = "`nazm inspect` no longer reports inherited authority, so a reviewer cannot see which functions use the bridge"
+file = "crates/nazm-cli/src/inspect.rs"
+find = '            o.insert("inherits".into(), json!(inherits));'
+replace = '            let _ = inherits;'
+killers = [{ package = "nazm-cli", test = "authority", name = "inherited_authority_is_recorded_and_inspect_shows_it" }]
+
+[[mutation]]
+name = "n79-the-rule-passes-inheritance"
+why = "`explicit-authority` passes a function that inherits, so the strict profile enforces nothing"
+file = "crates/nazm-service/src/profile.rs"
+find = "                        if held.is_empty() {"
+replace = "                        if true {"
+killers = [{ package = "nazm-cli", test = "authority", name = "the_authority_profile_refuses_inheritance_by_name_and_general_does_not" }]
+
+[[mutation]]
+name = "n79-the-profile-has-no-rule"
+why = "the `authority` profile holds no rule, so naming it refuses nothing"
+file = "crates/nazm-service/src/profile.rs"
+find = "            Self::Authority => &[Rule::ExplicitAuthority],"
+replace = "            Self::Authority => &[],"
+killers = [{ package = "nazm-cli", test = "authority", name = "the_authority_profile_refuses_inheritance_by_name_and_general_does_not" }]
+
+[[mutation]]
+name = "n79-core-ir-results-are-exact"
+why = "Core IR's verifier compares results exactly again, so a subsumed result the checker accepted fails lowering with N0900"
+file = "crates/nazm-cir/src/verify.rs"
+find = "        e.ty.is_none_or(|t| self.res.types().same_shape(t, self.f.ret))"
+replace = "        e.ty.is_none_or(|t| t == self.f.ret)"
+killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_with_fewer_effects_is_accepted_passed_or_returned" }]
+
+[[mutation]]
+name = "n79-capabilities-differ-below-the-checker"
+why = "Core IR and MIR compare capability kinds again, so an `IoCap` passed for an `OutCap` fails lowering"
+file = "crates/nazm-sema/src/generic.rs"
+find = "            (Type::Cap(_), Type::Cap(_)) => true,"
+replace = "            (Type::Cap(_), Type::Cap(_)) => false,"
+killers = [{ package = "nazm-cli", test = "authority", name = "an_out_cap_prints_and_authorises_nothing_else" }]

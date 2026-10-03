@@ -7123,6 +7123,26 @@ Outside the profile it is accepted exactly as before.
 lexically, with an empty recorded `inherits`. Any path from `OutCap` to `IoCap`'s authority. A
 subsumed value whose call performs an effect its expected type does not allow.
 
+**As built (N79, 2026-10-03).** Four amendments, each narrower or simpler than the text above:
+
+- **No `cap_out`.** Attenuation is by passing: the checker's one relation `assignable` accepts an
+  `IoCap` where an `OutCap` is expected (`CapabilitySet::implied`), at every argument, `spawn`
+  argument and result. A built-in would have been a second spelling of the same fact. `OutCap`
+  is still never constructed (`N0370`), and `main` may take one as a root.
+- **The interface stays `/8`.** Inherited authority depends on a body, and an interface publishes
+  declarations. A declared export inherits nothing by construction, and an undeclared import is
+  already every effect to its importer (§7.38), so a `/8` reader loses nothing it relied on. The
+  record is the resolution, and `nazm inspect` reports it as each definition's `inherits`.
+- **The profile is `authority`.** `explicit-authority` is enforced by a profile of that name with
+  that one rule. It is not added to `critical` or `cyber`, whose `declared-effects` already
+  implies it for the program's own modules. It applies to the program's own modules, not the
+  prelude and the standard library, which declare every effect.
+- **Core IR's verifier compares results up to effects**, as it already compared arguments
+  (§7.53). The checker's acceptance of a subsumed result reached a verifier that compared results
+  exactly, and lowering refused it (`N0900`). Nothing else below the checker moved.
+
+The epoch is 23 for `OutCap` becoming a built-in type name and for the two new acceptances.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

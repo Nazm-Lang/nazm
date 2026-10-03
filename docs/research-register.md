@@ -317,6 +317,15 @@ library, count the generic standard functions that take a bound against those th
 function argument for the same job. If bounds are not the common shape, the trait system is
 ceremony and should not grow.
 
+**N79 (2026-10-03): is the ambient bridge still load-bearing?** The bridge was kept as the default
+and made visible rather than deleted, because removing it would refuse most of the repository's
+undeclared functions, the compiler written in Nazm among them. The open question is whether that
+cost is a migration or a design signal. *Measure:* with `inherits` recorded per function, count
+across the corpus how many undeclared functions inherit anything, and of which kinds. *Falsifier
+for keeping it:* if, after the compiler written in Nazm learns capabilities (N98), nearly every
+inheriting function inherits only `OutCap` for diagnostics, a strict default with one threaded
+`OutCap` is cheap, and the bridge should go.
+
 ---
 
 ## R2 · Content-addressed semantic IR pays for itself
@@ -597,5 +606,5 @@ here.
 | What must be settled before `nazm test --backend=all` means anything | `docs/spec.md` *Open* → Backend semantics |
 | Surface syntax, and novelty as a budget | `docs/spec.md` *Open* → Syntax |
 | Where the performance headroom is, ranked with confidence labels | `docs/performance.md` |
-| Authority: ambient today, capability parameter as the growth path | `docs/spec.md`, and `capability-matrix.md` area 6 |
+| Authority: ambient by default, recorded as inherited authority and refusable by profile since N79; making the default strict is open | `docs/spec.md`, `architecture.md` §7.80, and `capability-matrix.md` area 6 |
 | Visibility: private-by-default is a known future break | `docs/spec.md` |
