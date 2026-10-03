@@ -12724,3 +12724,95 @@ file = "crates/nazm-codegen-clif/src/unit.rs"
 find = "        let lay = Layouts::of(unit, DataLayout::with_pointer_bits(ptr.bits()));"
 replace = "        let lay = Layouts::of(unit, DataLayout::WASM32);"
 killers = [{ package = "nazm-cli", test = "lir", name = "every_shape_in_the_tables_runs_the_same_on_both_backends" }]
+
+
+# --- N82: the runtime as an artifact ------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.83: every check `nazm build --runtime` makes
+# before linking, the profile a target's runtime is, a build that links the artifact instead of — not
+# beside — a generated runtime, and the provenance record that names it.
+
+[[mutation]]
+name = "n82-an-altered-archive-links"
+why = "an archive whose bytes are not the ones its manifest describes is linked"
+file = "crates/nazm-cli/src/runtime_artifact.rs"
+find = '    if field("archive") != actual {'
+replace = '    if false && field("archive") != actual {'
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "every_artifact_that_does_not_fit_is_refused_by_name_and_nothing_is_written" }]
+
+[[mutation]]
+name = "n82-another-abi-revision-links"
+why = "a runtime built at another ABI revision is linked against code that expects this one"
+file = "crates/nazm-cli/src/runtime_artifact.rs"
+find = "    if abi != Some(u64::from(RUNTIME_ABI_REVISION)) {"
+replace = "    if false && abi != Some(u64::from(RUNTIME_ABI_REVISION)) {"
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "every_artifact_that_does_not_fit_is_refused_by_name_and_nothing_is_written" }]
+
+[[mutation]]
+name = "n82-another-runtime-links"
+why = "a runtime another compiler's text built is linked, though its symbols may mean something else"
+file = "crates/nazm-cli/src/runtime_artifact.rs"
+find = '    if field("runtime") != ours {'
+replace = '    if false && field("runtime") != ours {'
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "every_artifact_that_does_not_fit_is_refused_by_name_and_nothing_is_written" }]
+
+[[mutation]]
+name = "n82-another-target-links"
+why = "a runtime built for another target is handed to this target's linker"
+file = "crates/nazm-cli/src/runtime_artifact.rs"
+find = '    if field("target") != target.triple {'
+replace = '    if false && field("target") != target.triple {'
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "a_targets_profile_is_its_own_and_a_board_links_its_archive" }]
+
+[[mutation]]
+name = "n82-a-missing-service-links"
+why = "an artifact without a service the program reaches is linked, and the link fails or the call has no runtime"
+file = "crates/nazm-cli/src/runtime_artifact.rs"
+find = "    if let Some(needs) = needs.filter(|_| profile == Profile::Hosted) {"
+replace = "    if let Some(needs) = needs.filter(|_| false) {"
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "every_artifact_that_does_not_fit_is_refused_by_name_and_nothing_is_written" }]
+
+[[mutation]]
+name = "n82-any-profile-is-built"
+why = "a target's runtime is built under a profile that is not its own"
+file = "crates/nazm-cli/src/runtime_artifact.rs"
+find = "            Some(p) if p == own => p,"
+replace = "            Some(p) if p == own || own != p => p,"
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "a_targets_profile_is_its_own_and_a_board_links_its_archive" }]
+
+[[mutation]]
+name = "n82-the-artifact-is-not-linked"
+why = "the build checks the artifact and then links neither it nor a generated runtime"
+file = "crates/nazm-cli/src/build.rs"
+find = "    objects.extend(prebuilt);"
+replace = "    let _ = prebuilt;"
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "a_program_reaching_every_service_behaves_the_same_with_the_artifact_on_both_backends" }]
+
+[[mutation]]
+name = "n82-a-runtime-is-generated-beside-the-artifact"
+why = "the build generates its runtime as well as linking the artifact, and every runtime symbol is defined twice"
+file = "crates/nazm-cli/src/build.rs"
+find = """
+    if !prebuilt {
+        out.push(Artefact {
+            name: "runtime".to_owned(),
+            code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),"""
+replace = """
+    if !prebuilt || true {
+        out.push(Artefact {
+            name: "runtime".to_owned(),
+            code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),"""
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "a_program_reaching_every_service_behaves_the_same_with_the_artifact_on_both_backends" }]
+
+[[mutation]]
+name = "n82-provenance-forgets-the-archive"
+why = "a build that linked an artifact records only the runtime digest, so which archive was linked is lost"
+file = "crates/nazm-cli/src/provenance.rs"
+find = """
+        map.insert(
+            "archive".into(),"""
+replace = """
+        let _ = map;
+        std::collections::BTreeMap::<String, Value>::new().insert(
+            "archive".into(),"""
+killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "the_provenance_record_names_the_archive_linked" }]

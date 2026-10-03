@@ -78,7 +78,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
 | 12 | Cranelift backend | VERIFIED (v1, native subset, host) |
-| 13 | Runtime | PARTIAL (v1 contract VERIFIED) |
+| 13 | Runtime | PARTIAL (v1 contract VERIFIED; a built, versioned, verified artifact, N82) — one OS thread per task |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | RESEARCH |
 | 16 | Standard library | PARTIAL (v1 foundation VERIFIED) |
@@ -1414,7 +1414,8 @@ threads started with an 8 MiB stack (`a_task_thread_has_the_stack_the_check_budg
 | Memory contract | VERIFIED | strings, sequences, sequences of strings and of records, channels, shared backings across four threads, allocation-failure paths, all counted exactly (`the_runtime_s_services_keep_their_contract_when_called_directly`, a C harness linked against the runtime alone) |
 | Failure classes | VERIFIED | language, host-refused, I/O and explicit exit distinguished; a `Result` never becomes one (`an_err_is_data_and_never_a_failure`) |
 | Portable core, one OS adapter | VERIFIED | `a_runtime_calls_the_operating_system_only_through_the_adapter`; the same POSIX surface on every v1 target |
-| A runtime crate, a scheduler, an allocator | MISSING | one OS thread per task (N44's) |
+| A built, versioned, verified runtime artifact (N82) | VERIFIED | `nazm runtime build` writes `libnazmrt.a` and a `nazm.runtime/1` manifest per target and profile (hosted, board, wasm); `nazm build --runtime DIR` links it on both backends and refuses every artifact that does not fit, by name, before writing anything; `nazm runtime verify`. `crates/nazm-cli/tests/runtime_artifact.rs` (build and determinism, a program reaching every service identical with the artifact on both backends, nine refusals, profiles and a board's archive, provenance), `schemas.rs`; every program in the repository built both ways, 228 builds, identical output, ending and memory report |
+| A runtime crate, a scheduler, an allocator | MISSING | one OS thread per task (N44's); the runtime is still LLVM text, one implementation for every target |
 
 **Limitation** · Still no `nazm-rt` crate: the runtime is text, so its tests link it with a C
 harness rather than call it from Rust. Thread safety is by construction (atomic string and channel

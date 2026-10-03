@@ -7374,6 +7374,14 @@ links into a freestanding image, and a hosted build given it is refused for the 
 **What would prove this unsuitable.** A program whose output, ending or memory report differs between
 a generated runtime and the artifact; a mismatched or altered artifact that links.
 
+**As built (N82, 2026-10-03).** As constituted. Three details the code settled: a board's and
+WebAssembly's manifests list only `stack`, since what those runtimes lack is refused by the
+freestanding build itself (N62), and the service check applies to the hosted profile; the archive is
+written with `ZERO_AR_DATE`, so the same runtime archives to the same bytes; an unknown target is
+exit 4, as a missing toolchain is. The falsifier ran: every program in the repository built with a
+generated runtime and with the artifact, on both backends — 228 builds — printed, ended and reported
+memory identically.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
