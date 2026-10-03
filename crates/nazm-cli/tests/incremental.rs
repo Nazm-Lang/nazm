@@ -1281,9 +1281,9 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        20,
+        21,
         "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42, N49, N50, N51, N52, N53, N54, N55, \
-         N62 and N66 each changed what the checker accepts, so the epoch moved nineteen times"
+         N62, N66 and N76 each changed what the checker accepts, so the epoch moved twenty times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/7");
 }
