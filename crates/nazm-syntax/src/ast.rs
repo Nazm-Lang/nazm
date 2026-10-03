@@ -29,9 +29,56 @@ pub struct Program {
     /// `Program` reaches the checker every import has already been loaded and merged,
     /// so these are here for tooling and for the diagnostic when one cannot be found.
     pub imports: Vec<Import>,
+    /// `trait` declarations, in source order (N78). Traits share the type namespace with
+    /// records and enums, and the checker is what says so.
+    pub traits: Vec<Trait>,
+    /// `impl Trait for Type` headers, in source order (N78). An impl's methods are in
+    /// [`Program::functions`], each with [`Function::method_of`] naming its impl.
+    pub impls: Vec<ImplDecl>,
     /// The completion hole a probe parse was asked about and found (N26); `None` for every
     /// ordinary parse. See [`HoleSite`].
     pub hole: Option<HoleSite>,
+}
+
+/// `[pub] trait Name { fn m(self: Self, …) -> R; … }` (N78, `architecture.md` §7.79).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trait {
+    pub name: String,
+    pub name_span: Span,
+    pub pub_span: Option<Span>,
+    pub methods: Vec<TraitMethod>,
+    pub span: Span,
+}
+
+/// One method a trait requires: a signature, no body. Its first parameter is `self: Self`,
+/// which the checker holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitMethod {
+    pub name: String,
+    pub name_span: Span,
+    pub params: Vec<Param>,
+    pub return_type: TypeName,
+    pub effects: Option<EffectDecl>,
+    pub span: Span,
+}
+
+/// The header of `impl Trait for Type { … }` (N78). The methods are functions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImplDecl {
+    pub trait_name: TypeName,
+    pub self_ty: TypeName,
+    /// The `impl` keyword: what the impl is identified by in diagnostics, and what each of
+    /// its methods' [`MethodOf::impl_span`] names.
+    pub impl_span: Span,
+    pub span: Span,
+}
+
+/// Which impl a function is a method of (N78).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodOf {
+    pub trait_name: TypeName,
+    pub self_ty: TypeName,
+    pub impl_span: Span,
 }
 
 /// Where a completion probe's hole is, as the parser read it (N26).
@@ -192,6 +239,8 @@ pub struct Function {
     /// `extern "C" … = "symbol" { … }` (N55): a Nazm function with a body that C may also call,
     /// under `symbol`. `None` for every other function; never set together with `foreign`.
     pub export: Option<ForeignDecl>,
+    /// The impl this function is a method of, for one declared inside `impl … { }` (N78).
+    pub method_of: Option<Box<MethodOf>>,
     pub span: Span,
 }
 
@@ -350,6 +399,10 @@ impl Block {
                     exprs.push(rhs);
                 }
                 Expr::Call { args, .. } => exprs.extend(args.iter()),
+                Expr::MethodCall { receiver, args, .. } => {
+                    exprs.push(receiver);
+                    exprs.extend(args.iter());
+                }
                 Expr::Construct { fields, .. } | Expr::Variant { fields, .. } => {
                     exprs.extend(fields.iter().map(|f| &f.value));
                 }
@@ -692,6 +745,18 @@ pub enum Expr {
         span: Span,
     },
     Block(Box<Block>),
+    /// `receiver.method(args)`, or `Trait.method(receiver, args)` written with a trait's
+    /// name as the receiver (N78). Which it is, and which function it calls, is the
+    /// checker's to decide; `E.A()` with no arguments parses as a variant and the checker
+    /// reads it as a call when `E` is a value.
+    MethodCall {
+        qualifier: Option<Qualifier>,
+        receiver: Box<Expr>,
+        method: String,
+        method_span: Span,
+        args: Vec<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -713,7 +778,8 @@ impl Expr {
             | Self::Match { span, .. }
             | Self::Field { span, .. }
             | Self::Propagate { span, .. }
-            | Self::If { span, .. } => span,
+            | Self::If { span, .. }
+            | Self::MethodCall { span, .. } => span,
             Self::Block(b) => &b.span,
         }
     }
@@ -735,7 +801,8 @@ impl Expr {
             | Self::Match { span, .. }
             | Self::Field { span, .. }
             | Self::Propagate { span, .. }
-            | Self::If { span, .. } => *span,
+            | Self::If { span, .. }
+            | Self::MethodCall { span, .. } => *span,
             Self::Block(b) => b.span,
         }
     }

@@ -36,9 +36,9 @@ use nazm_span::{FileId, Span};
 
 use crate::ast::{
     Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, FnTypeName, ForeignDecl,
-    Function, HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program,
-    Qualifier, Record, Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant,
-    While,
+    Function, HoleSite, ImplDecl, Import, Let, MatchArm, MethodOf, Param, PatternField, Place,
+    PlaceField, Program, Qualifier, Record, Requirement, Return, Scope, Spawn, Stmt, Trait,
+    TraitMethod, TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -60,7 +60,7 @@ const RESERVED: &[(&str, &str)] = &[
         "mod",
         "a file is the module; import one with `use \"other.nz\";`",
     ),
-    ("impl", "there are no methods yet"),
+    // `impl` left this list in N78, when it became the keyword it was reserving.
     // `print` left this list when `print` became a built-in. The entry existed to refuse
     // a name people would reach for before it worked; now it works, and refusing it
     // would be refusing the thing it was reserving.
@@ -182,6 +182,10 @@ pub(crate) enum Item {
     Record(Record),
     Enum(Enum),
     Import(Import),
+    /// A trait declaration (N78).
+    Trait(Trait),
+    /// An impl: its header and its methods, each a function marked as the impl's.
+    Impl(ImplDecl, Vec<Function>),
 }
 
 /// Where a parse of top-level items starts and where it may stop (N76).
@@ -247,6 +251,8 @@ pub(crate) fn parse_lossless(
         records: Vec::new(),
         enums: Vec::new(),
         imports: Vec::new(),
+        traits: Vec::new(),
+        impls: Vec::new(),
         hole: parsed.hole,
     };
     let mut errors = Vec::new();
@@ -271,6 +277,11 @@ impl Item {
             Self::Record(r) => program.records.push(r),
             Self::Enum(e) => program.enums.push(e),
             Self::Import(i) => program.imports.push(i),
+            Self::Trait(t) => program.traits.push(t),
+            Self::Impl(decl, methods) => {
+                program.impls.push(decl);
+                program.functions.extend(methods);
+            }
         }
     }
 }
@@ -339,12 +350,20 @@ pub(crate) fn parse_region(
         // item whose braces did not balance left behind, and stays muted.
         if matches!(
             p.peek(),
-            TokenKind::Fn | TokenKind::Pub | TokenKind::Struct | TokenKind::Enum | TokenKind::Use
+            TokenKind::Fn
+                | TokenKind::Pub
+                | TokenKind::Struct
+                | TokenKind::Enum
+                | TokenKind::Use
+                | TokenKind::Trait
+                | TokenKind::Impl
         ) {
             p.muted = false;
         }
         let item = if p.at(&TokenKind::Use) {
             p.import().map(Item::Import)
+        } else if p.at(&TokenKind::Impl) {
+            p.impl_decl().map(|(d, m)| Item::Impl(d, m))
         } else {
             // `struct`/`enum`, each optionally behind a `pub`. Looking one token past a
             // `pub` is what keeps the kinds of item apart without any grammar knowing
@@ -357,6 +376,7 @@ pub(crate) fn parse_region(
             match after_pub {
                 Some(TokenKind::Struct) => p.record().map(Item::Record),
                 Some(TokenKind::Enum) => p.enumeration().map(Item::Enum),
+                Some(TokenKind::Trait) => p.trait_decl().map(Item::Trait),
                 _ => p.function().map(Item::Function),
             }
         };
@@ -807,6 +827,8 @@ impl<'a> Parser<'a> {
             || self.at(&TokenKind::Struct)
             || self.at(&TokenKind::Enum)
             || self.at(&TokenKind::Use)
+            || self.at(&TokenKind::Trait)
+            || self.at(&TokenKind::Impl)
     }
 
     fn import_inner(&mut self) -> Option<Import> {
@@ -1057,6 +1079,173 @@ impl<'a> Parser<'a> {
             variants,
             span: start.join(close),
         })
+    }
+
+    /// `[pub] trait Name { fn m(self: Self, …) -> R [! {e}]; … }` (N78).
+    ///
+    /// A method is a signature ended by `;`: a body here is the one thing a reader might
+    /// write by habit, and it is refused with the expected `;` rather than read.
+    fn trait_decl(&mut self) -> Option<Trait> {
+        let at = self.checkpoint();
+        let start = self.peek_span();
+        let pub_span = self.at(&TokenKind::Pub).then(|| {
+            let s = self.peek_span();
+            self.advance();
+            s
+        });
+        self.expect(&TokenKind::Trait, "to start a trait")?;
+        let name_span = self.peek_span();
+        let name = match self.advance() {
+            TokenKind::Ident(n) => {
+                if self.reserved(&n, name_span) {
+                    return None;
+                }
+                n
+            }
+            other => {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        name_span,
+                        format!("expected a trait name, found {}", other.describe()),
+                    )
+                    .help("a trait is declared `trait Show { fn show(self: Self) -> Str; }`"),
+                );
+                return None;
+            }
+        };
+        self.expect(&TokenKind::LBrace, "to start the trait's methods")?;
+        let mut methods = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            methods.push(self.trait_method()?);
+        }
+        let close = self.expect(&TokenKind::RBrace, "to close the trait")?;
+        self.wrap(at, SyntaxKind::TraitItem);
+        Some(Trait {
+            name,
+            name_span,
+            pub_span,
+            methods,
+            span: start.join(close),
+        })
+    }
+
+    /// One method of a trait: `fn m(params) -> R [! {e}];`.
+    fn trait_method(&mut self) -> Option<TraitMethod> {
+        let at = self.checkpoint();
+        let start = self.expect(&TokenKind::Fn, "to start a trait method")?;
+        let name_span = self.peek_span();
+        let name = match self.advance() {
+            TokenKind::Ident(n) => n,
+            other => {
+                self.report(Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    name_span,
+                    format!("expected a method name, found {}", other.describe()),
+                ));
+                return None;
+            }
+        };
+        let params = self.param_list("after the method name")?;
+        let ret = self.checkpoint();
+        self.expect(&TokenKind::Arrow, "before the return type")?;
+        let return_type = self.type_name()?;
+        self.wrap(ret, SyntaxKind::RetType);
+        let effects = self.effect_set()?;
+        let end = self.peek_span();
+        if !self.at(&TokenKind::Semi) {
+            self.report(
+                Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    end,
+                    format!(
+                        "expected `;` after a trait method's signature, found {}",
+                        self.peek().describe()
+                    ),
+                )
+                .help(
+                    "a trait method has no body: each `impl` of the trait writes one. \
+                     There are no default methods",
+                ),
+            );
+            return None;
+        }
+        self.advance();
+        self.wrap(at, SyntaxKind::TraitMethod);
+        Some(TraitMethod {
+            name,
+            name_span,
+            params,
+            return_type,
+            effects,
+            span: start.join(end),
+        })
+    }
+
+    /// `impl Trait for Type { fn … }` (N78): the header, and each method as a function
+    /// marked as this impl's.
+    fn impl_decl(&mut self) -> Option<(ImplDecl, Vec<Function>)> {
+        let at = self.checkpoint();
+        let impl_span = self.expect(&TokenKind::Impl, "to start an impl")?;
+        let trait_name = self.type_name()?;
+        // `for` is a word here and nowhere else: a reserved name everywhere a name may be
+        // declared, so no program can mean anything else by it.
+        if matches!(self.peek(), TokenKind::Ident(w) if w == "for") {
+            self.advance();
+        } else {
+            let found = self.peek().describe();
+            self.report(
+                Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    self.peek_span(),
+                    format!("expected `for` after the trait's name, found {found}"),
+                )
+                .help("an impl is written `impl Show for Point { … }`"),
+            );
+            return None;
+        }
+        let self_ty = self.type_name()?;
+        self.expect(&TokenKind::LBrace, "to start the impl's methods")?;
+        let mut methods = Vec::new();
+        let mut recovered = false;
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            if !self.at_item_fn() {
+                let found = self.peek().describe();
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        self.peek_span(),
+                        format!("expected a method, `fn NAME(…)`, found {found}"),
+                    )
+                    .help("an impl holds the trait's methods and nothing else"),
+                );
+                return None;
+            }
+            // Each method is its own function: what one body needed recovery for is not
+            // the next one's header.
+            self.poisoned = false;
+            self.drop_item = false;
+            let mut f = self.function()?;
+            recovered |= self.drop_item;
+            f.method_of = Some(Box::new(MethodOf {
+                trait_name: trait_name.clone(),
+                self_ty: self_ty.clone(),
+                impl_span,
+            }));
+            methods.push(f);
+        }
+        let close = self.expect(&TokenKind::RBrace, "to close the impl")?;
+        self.wrap(at, SyntaxKind::ImplItem);
+        self.drop_item = recovered;
+        Some((
+            ImplDecl {
+                trait_name,
+                self_ty,
+                impl_span,
+                span: impl_span.join(close),
+            },
+            methods,
+        ))
     }
 
     /// One variant of an enum declaration: `Name` or `Name(field: Type, …)`.
@@ -1352,6 +1541,7 @@ impl<'a> Parser<'a> {
                     body: None,
                     foreign: Some(decl),
                     export: None,
+                    method_of: None,
                     span: start.join(end),
                 });
             }
@@ -1396,6 +1586,7 @@ impl<'a> Parser<'a> {
             body,
             foreign: None,
             export,
+            method_of: None,
             span: start.join(span),
         })
     }
@@ -2244,6 +2435,52 @@ impl<'a> Parser<'a> {
         Some((fields, close, deepest))
     }
 
+    /// The argument list of a method call whose receiver and method name are read, and the
+    /// call (N78). Arguments recover one by one, as a call's do.
+    fn method_call(
+        &mut self,
+        at: Checkpoint,
+        qualifier: Option<Qualifier>,
+        receiver: Expr,
+        method: String,
+        method_span: Span,
+    ) -> Option<Expr> {
+        let mut deepest = self.child();
+        let args_at = self.checkpoint();
+        self.expect(&TokenKind::LParen, "to start the arguments")?;
+        let mut args = Vec::new();
+        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+            let arg = self.checkpoint();
+            let start = self.pos;
+            match self.expr() {
+                Some(e) => {
+                    args.push(e);
+                    deepest = deepest.max(self.child());
+                }
+                None => {
+                    if !self.recover_member(arg, start, &TokenKind::RParen) {
+                        return None;
+                    }
+                }
+            }
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let close = self.expect(&TokenKind::RParen, "to close the argument list")?;
+        self.wrap(args_at, SyntaxKind::ArgList);
+        self.built(deepest + 1)?;
+        self.wrap(at, SyntaxKind::MethodCallExpr);
+        Some(Expr::MethodCall {
+            qualifier,
+            span: receiver.span().join(close),
+            receiver: Box::new(receiver),
+            method,
+            method_span,
+            args,
+        })
+    }
+
     /// One field initialiser: `name: value`.
     fn field_init(&mut self) -> Option<FieldInit> {
         let field = self.checkpoint();
@@ -2651,6 +2888,12 @@ impl<'a> Parser<'a> {
                     return None;
                 }
             };
+            if self.at(&TokenKind::LParen) {
+                // `receiver.m(args)` (N78): a method call on any receiver.
+                out = self.method_call(at, None, out, name, name_span)?;
+                depth = self.built;
+                continue;
+            }
             depth += 1;
             self.built(depth)?;
             self.wrap(at, SyntaxKind::FieldExpr);
@@ -2758,6 +3001,42 @@ impl<'a> Parser<'a> {
                 self.tokens.get(self.pos + 2).map(|t| &t.kind),
                 Some(TokenKind::LParen)
             );
+        // `name.m(arg, …)` with an unlabelled argument is a method call (N78): a variant's
+        // payload is always labelled, so the token after the `(` decides it. `name.m()` has
+        // nothing to decide by and stays a variant; the checker reads it as a call when
+        // `name` is a value rather than an enum.
+        let unlabelled = variant
+            && !matches!(
+                self.tokens.get(self.pos + 3).map(|t| &t.kind),
+                Some(TokenKind::RParen)
+            )
+            && !self.label_at(self.pos + 3)
+            && !(self.hole.is_some() && self.ends_at_hole(self.pos + 2));
+        if unlabelled {
+            if type_args.is_some() {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        span,
+                        format!(
+                            "type arguments cannot be written on `{name}` before a method call"
+                        ),
+                    )
+                    .help("a method's types come from its receiver: `x.show()`"),
+                );
+                return None;
+            }
+            let receiver = Expr::Var { name, span };
+            self.built(1)?;
+            self.wrap(at, SyntaxKind::NameRef);
+            self.advance();
+            let method_span = self.peek_span();
+            let method = match self.advance() {
+                TokenKind::Ident(m) => m,
+                _ => return None,
+            };
+            return self.method_call(at, qualifier, receiver, method, method_span);
+        }
         if variant {
             return self
                 .variant_construction(at, name, span, type_args)
@@ -3364,6 +3643,12 @@ mod ast_depth_tests {
                     }
                     Expr::Block(b) => stack.push((Node::Block(b), d + 1)),
                     Expr::Closure { body, .. } => stack.push((Node::Block(body), d + 1)),
+                    Expr::MethodCall { receiver, args, .. } => {
+                        stack.push((Node::Expr(receiver), d + 1));
+                        for a in args {
+                            stack.push((Node::Expr(a), d + 1));
+                        }
+                    }
                 },
             }
         }
