@@ -1072,7 +1072,8 @@ would need a propagation protocol, and traits do not exist.
 ### The standard library — `use "@std/…"`
 <!-- id: std -->
 
-A **standard module** is a toolchain-owned Nazm module a program imports by name. There are seven,
+A **standard module** is a toolchain-owned Nazm module a program imports by name. There are seventeen
+(N84: the 1.0 surface),
 each ordinary source checked like any module, and none is visible unless a module writes its `use`:
 
 ```nazm
@@ -1108,16 +1109,31 @@ that exists but cannot be read is `N0407`.
 
 | Module | Functions |
 | --- | --- |
-| `@std/text` | `text_starts_with(s, prefix) -> Bool`, `text_ends_with(s, suffix) -> Bool`, `text_find(s, needle) -> Option[Int]`, `text_contains(s, needle) -> Bool`, `text_repeat(s, n) -> Str`, `text_split(s, sep) -> Strs`, `text_is_space(byte) -> Bool`, `text_trim(s) -> Str`, `text_parse_int(s) -> Result[Int, Str]` |
+| `@std/text` | `text_starts_with(s, prefix) -> Bool`, `text_ends_with(s, suffix) -> Bool`, `text_find(s, needle) -> Option[Int]`, `text_contains(s, needle) -> Bool`, `text_repeat(s, n) -> Str`, `text_split(s, sep) -> Strs`, `text_is_space(byte) -> Bool`, `text_trim(s) -> Str`, `text_parse_int(s) -> Result[Int, Str]`, and (N84) `text_trim_start(s)`, `text_trim_end(s)`, `text_is_digit(byte)`, `text_is_alpha(byte)`, `text_to_upper(s)`, `text_to_lower(s)` (ASCII), `text_replace(s, from, to)`, `text_count(s, needle)`, `text_pad_left(s, width, fill)`, `text_pad_right(s, width, fill)`, `text_lines(s) -> Strs`, `text_compare(a, b) -> Int` (byte order) |
 | `@std/option` | `option_is_some[T](o) -> Bool`, `option_is_none[T](o) -> Bool`, `option_unwrap_or[T](o, fallback) -> T` |
 | `@std/result` | `result_is_ok[T, E](r) -> Bool`, `result_is_err[T, E](r) -> Bool`, `result_unwrap_or[T, E](r, fallback) -> T`, `result_ok[T, E](r) -> Option[T]`, `result_err[T, E](r) -> Option[E]` |
-| `@std/seq` | `ints_index_of(xs, x) -> Option[Int]`, `ints_contains(xs, x) -> Bool`, `ints_sum(xs) -> Int`, `ints_max(xs) -> Option[Int]`, `ints_min(xs) -> Option[Int]`, `strs_index_of(xs, x) -> Option[Int]`, `strs_contains(xs, x) -> Bool`, `vec_index_of[T: Equality](xs, x) -> Option[Int]`, and (N50) `vec_map[T, U](xs, f: fn(T) -> U) -> Vec[U]`, `vec_filter[T](xs, keep: fn(T) -> Bool) -> Vec[T]`, `vec_fold[T, A](xs, init: A, f: fn(A, T) -> A) -> A` — each, since N51, polymorphic in the effects of the function it takes (`effects E`), and doing exactly what that function does |
+| `@std/seq` | `ints_index_of(xs, x) -> Option[Int]`, `ints_contains(xs, x) -> Bool`, `ints_sum(xs) -> Int`, `ints_max(xs) -> Option[Int]`, `ints_min(xs) -> Option[Int]`, `strs_index_of(xs, x) -> Option[Int]`, `strs_contains(xs, x) -> Bool`, `vec_index_of[T: Equality](xs, x) -> Option[Int]`, and (N50) `vec_map[T, U](xs, f: fn(T) -> U) -> Vec[U]`, `vec_filter[T](xs, keep: fn(T) -> Bool) -> Vec[T]`, `vec_fold[T, A](xs, init: A, f: fn(A, T) -> A) -> A` — each, since N51, polymorphic in the effects of the function it takes (`effects E`), and doing exactly what that function does; and (N84) `vec_reverse[T](xs)`, `vec_slice[T](xs, from, to)` (clamped), `vec_concat[T](a, b)`, `vec_any[T](xs, test)`, `vec_all[T](xs, test)` |
+| `@std/sort` | (N84) `vec_sort_by[T](xs, less: fn(T, T) -> Bool) -> Vec[T]` (stable, effect-polymorphic), `ints_sort(xs) -> Ints`, `strs_sort(xs) -> Strs` — a module of its own because a sort allocates in a loop and calls through a function value, and a restriction profile refusing either refuses every function of a module it imports |
 | `@std/io` | `io_println(io, s) -> Int`, `io_eprintln(io, s) -> Int`, `io_read(io, path) -> Result[Str, Str]` — each `! { io }` |
 | `@std/process` | `process_args(io) -> Strs` — `! { io }` |
-| `@std/chan` | `chan_take(c) -> Option[Int]`: the next value, or `None` once closed and drained |
+| `@std/chan` | `chan_take(c) -> Option[Int]`: the next value, or `None` once closed and drained; and (N84) `chan_send_all_ints(c, xs) -> Int`, `chan_collect_ints(c, n) -> Vec[Int]`, `chan_drain_ints(c) -> Vec[Int]`, `chan_send_all_strs(c, xs) -> Int`, `chan_collect_strs(c, n) -> Vec[Str]`, `chan_drain_strs(c) -> Vec[Str]` — for `Int` and `Str` because a channel cannot carry a type parameter (`N0390`) |
+| `@std/show` | the `Show` trait and `show_all[T: Show](v, sep) -> Str` (N78) |
+| `@std/fmt` | (N84) `fmt_int_zero(n, width)`, `fmt_int_width(n, width)`, `fmt_hex(n)` (two's complement for a negative), `fmt_bool(b)`, `fmt_list(items, sep, open, close)`, `fmt_ints(xs, sep)` |
+| `@std/num` | (N84) `num_abs(n)`, `num_sign(n)`, `num_min(a, b)`, `num_max(a, b)`, `num_clamp(n, lo, hi)`, `num_pow(base, exp) -> Option[Int]` (`None` past `Int`'s magnitude), `num_gcd(a, b)` |
+| `@std/map` | (N84) `StrMap[T]` and `Entry[T]`: `map_new[T]()`, `map_len`, `map_get -> Option[T]`, `map_has`, `map_set -> Bool` (whether it replaced), `map_remove -> Option[T]`, `map_keys -> Strs`, `map_values -> Vec[T]` — ordered by key, found by binary search, shared like any handle |
+| `@std/path` | (N84) `path_join(base, rest)`, `path_base(p)`, `path_dir(p)`, `path_ext(p)`, `path_stem(p)`, `path_normalize(p)` — pure, lexical, `/`-separated |
+| `@std/fs` | (N84) `fs_exists(io, path) -> Bool`, `fs_read(io, path) -> Result[Str, Str]`, `fs_read_lines(io, path) -> Result[Strs, Str]`, `fs_write(io, path, text) -> Result[Int, Str]`, `fs_write_lines(io, path, lines) -> Result[Int, Str]` — each `! { io }` |
+| `@std/time` | (N84) `time_ms(t)`, `time_since(t, start)`, `time_deadline(t, ms)`, `time_passed(t, deadline) -> Bool` — each taking the `TimeCap` that allows it, and no effect |
+| `@std/json` | (N84) `JsonDoc` and `JsonNode`, an arena document: `json_parse(text) -> Result[JsonDoc, Str]` (an `Err` names the byte offset; integers only), `json_encode(doc)`, `json_encode_node(doc, node)`, `json_quote(s)`, `json_root`, `json_kind`, `json_len`, `json_at`, `json_get`, `json_key_at`, `json_value_at`, `json_int`, `json_str`, `json_bool`, and the builders `json_new`, `json_with_root`, `json_add_null`, `json_add_bool`, `json_add_int`, `json_add_str`, `json_add_array`, `json_add_object` |
+| `@std/test` | (N84) `test_int(what, actual, expected) -> Result[Int, Str]`, `test_str(what, actual, expected) -> Result[Str, Str]`, `test_true(what, cond) -> Result[Bool, Str]` |
 
-**Stability.** Pre-1.0. A standard module may change between milestones; its interface hash says
-when, and no semantic epoch moves for it.
+**Stability: 1.0 (N84).** `library/std/API-1.0` lists every public item of every standard module
+with its declaration; a test regenerates it and requires equality. Within 1.x an item may be
+**added**, never removed or changed — not its signature, its effects or its documented behaviour.
+A removal or a change is **2.0**; if the language ever needs an edition, it is how a program would opt
+into 2.0. A standard module's interface hash says when it changed, and no semantic epoch moves for it.
+Not in 1.0, deliberately: networking (no network authority exists), cryptography (only an audited
+external implementation would do), floating point (the language has none).
 
 ### Equality is derived — `==` on the value types that can have it
 <!-- id: equality -->
