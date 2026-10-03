@@ -440,6 +440,74 @@ impl Fx<'_, '_, '_> {
                 let result = self.b.ins().select(shut, index, r);
                 self.set(dst, result);
             }
+            // What the last foreign call on this thread left in `errno` (N85).
+            Intrinsic::CErrno => {
+                let t = self
+                    .rt("nz.errno_last", &[])
+                    .unwrap_or_else(|| self.iconst(0));
+                self.set(dst, t);
+            }
+            // A pointer C promised was not null (N85): `N0409` before Nazm sees it.
+            Intrinsic::ForeignNonNull => {
+                let a = arg(self, 0);
+                let null = self.b.ins().icmp_imm_s(IntCC::Equal, a, 0);
+                self.guard(
+                    null,
+                    "N0409",
+                    "a foreign function returned null where its declaration promised a value",
+                );
+                self.set(dst, a);
+            }
+            // A `const char *` C still owns, copied into a string Nazm owns (N85).
+            Intrinsic::CStrCopy => {
+                let p = arg(self, 0);
+                let n = self
+                    .rt("nz.cstr_len", &[p])
+                    .unwrap_or_else(|| self.iconst(0));
+                let room = self.b.ins().iadd_imm_s(n, 1);
+                let (owner, buf) = self.string_backing(room);
+                self.rt("memcpy", &[buf, p, n]);
+                self.write_str(dst, buf, n, owner);
+            }
+            // An export's C entry as a function pointer (N85), named by the constant symbol
+            // Core IR lowering wrote. Declared with the entry's own C signature, so a unit that
+            // also defines it merges the two declarations.
+            Intrinsic::CallbackAddress => {
+                let symbol = match args.first() {
+                    Some(mir::Operand::Const(mir::Const::Str(b))) => {
+                        String::from_utf8_lossy(b).into_owned()
+                    }
+                    _ => {
+                        self.g.defect(self.at, "a callback address with no symbol");
+                        return;
+                    }
+                };
+                let entry = self
+                    .g
+                    .native
+                    .sigs
+                    .iter()
+                    .find(|s| s.export.as_ref().is_some_and(|x| x.as_str() == symbol))
+                    .map(|s| (s.params.clone(), s.ret));
+                let Some((params, ret)) = entry else {
+                    self.g
+                        .defect(self.at, format!("`{symbol}` is not an export"));
+                    return;
+                };
+                let c = self.g.c_signature(&params, ret);
+                match self
+                    .g
+                    .module
+                    .declare_function(&symbol, cranelift_module::Linkage::Import, &c)
+                {
+                    Ok(fid) => {
+                        let r = self.g.module.declare_func_in_func(fid, self.b.func);
+                        let a = self.b.ins().func_addr(self.g.ptr, r);
+                        self.set(dst, a);
+                    }
+                    Err(e) => self.g.defect(self.at, e.to_string()),
+                }
+            }
             Intrinsic::TimeNowMs => {
                 let t = self
                     .rt("nz.time_now_ms", &[])

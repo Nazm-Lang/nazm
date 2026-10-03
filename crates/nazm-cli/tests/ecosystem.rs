@@ -256,9 +256,13 @@ fn bindgen_translates_what_crosses_and_refuses_the_rest_by_name() {
     assert_eq!(
         translated,
         [
+            // A complete struct of `int64_t` fields is a C struct since N85, declared first.
+            "pub extern \"C\" struct point { x: Int, y: Int }",
             "pub extern \"C\" fn m_add(a: Int, b: Int) -> Int = \"m_add\";",
             "pub extern \"C\" fn m_is_even(n: Int) -> Bool = \"m_is_even\";",
             "pub extern \"C\" fn m_len(s: Str) -> Int = \"m_len\";",
+            // And a `const char *` result a copy, which a header never promises is not null.
+            "pub extern \"C\" fn m_name() -> Option[Str] = \"m_name\";",
         ]
     );
     let refused = |c: &str| {
@@ -272,11 +276,9 @@ fn bindgen_translates_what_crosses_and_refuses_the_rest_by_name() {
     };
     assert!(refused("m_small").contains("`int` is not `int64_t`"));
     assert!(refused("m_log").contains("returns nothing"));
-    assert!(refused("m_name").contains("only as an argument"));
     assert!(refused("m_half").contains("no floating-point"));
     assert!(refused("m_sum").contains("variadic"));
     assert!(refused("m_on").contains("function pointer"));
-    assert!(refused("struct point").contains("type declaration"));
     assert!(refused("m_buf").contains("`char *` is a pointer"));
     assert!(refused("LIMIT").contains("macro"));
     assert!(refused("malloc").contains("N0383"), "{}", refused("malloc"));

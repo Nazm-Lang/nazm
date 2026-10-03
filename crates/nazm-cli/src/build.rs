@@ -694,7 +694,9 @@ pub(crate) fn run(
             }
         };
     }
-    let linked = if choice.library {
+    let linked = if choice.library && choice.shared {
+        backend.link_shared(&tmp_exe, &objects)
+    } else if choice.library {
         archive(&tmp_exe, &objects)
     } else {
         backend.link(&tmp_exe, &objects)
@@ -896,6 +898,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) link: &'a [std::path::PathBuf],
     /// A static library and its header, not an executable (N55).
     pub(crate) library: bool,
+    /// With `library`, a shared library instead of a static one (N85).
+    pub(crate) shared: bool,
     /// Objects for the target's own toolchain, not an executable (N57).
     pub(crate) objects: Option<&'a Path>,
     /// Measure the board's stack on the board (N63).
@@ -1092,6 +1096,18 @@ fn emit_artefacts(
                 });
             }
         }
+        // Where this target keeps `errno` (N85, §7.86), wherever C is called.
+        if settled.foreign {
+            if let Some(t) = switch_target(backend.target()) {
+                out.push(Artefact {
+                    name: "errno".to_owned(),
+                    code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::switch::emit_errno(t)),
+                    instance: false,
+                    key: None,
+                    reused: false,
+                });
+            }
+        }
     }
     // A library has no process entry: C's `main` is the caller's (N55).
     if library {
@@ -1191,6 +1207,10 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
         (Part::Channels, "channels"),
         (Part::Join, "task joins"),
         (Part::Closures, "closures"),
+        (
+            Part::Foreign,
+            "`c_errno()` (N0613: no C library keeps an `errno`)",
+        ),
         (Part::Libc, "C library"),
         (Part::Base, "hosted base"),
     ]

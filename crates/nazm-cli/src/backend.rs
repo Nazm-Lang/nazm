@@ -173,6 +173,32 @@ impl Backend {
         run(&mut self.link_command(output, objects))
     }
 
+    /// Link the objects into a shared library (N85, §7.86): `-shared`, everything else as an
+    /// executable's link. Only the exports are visible outside it — every other symbol the
+    /// compiler and the runtime define is hidden — so nothing else is its interface.
+    ///
+    /// The library names itself by its file name, found through the loader's search path
+    /// (`@rpath/NAME` on macOS, the soname `NAME` elsewhere), never by the temporary path it
+    /// was linked at: a C program links it with `-L` or its path and runs it with an rpath.
+    pub(crate) fn link_shared(&self, output: &Path, objects: &[PathBuf]) -> Outcome {
+        let mut c = self.link_command(output, objects);
+        let name = output
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let apple = self
+            .cross
+            .as_deref()
+            .map_or(std::env::consts::OS == "macos", |t| t.contains("apple"));
+        c.arg("-shared");
+        if apple {
+            c.arg(format!("-Wl,-install_name,@rpath/{name}"));
+        } else {
+            c.arg(format!("-Wl,-soname,{name}"));
+        }
+        run(&mut c)
+    }
+
     /// The link, as a command: what `link` runs, built apart so its environment can be read.
     fn link_command(&self, output: &Path, objects: &[PathBuf]) -> Command {
         let mut c = self.command();

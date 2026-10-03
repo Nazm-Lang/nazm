@@ -23,7 +23,7 @@ use nazm_sema::interface::{
 };
 use nazm_sema::intrinsic::{Intrinsic, Shape};
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
-use nazm_sema::record::{FieldDef, RecordDef, RecordId};
+use nazm_sema::record::{CRepr, FieldDef, RecordDef, RecordId, OPAQUE_FIELD};
 use nazm_sema::resolve::{
     CallSite, Callee, CheckedCall, FieldRef, FnDef, FnId, Instantiation, LocalDef, LocalRef,
     PayloadRef, Propagation, Resolution, VariantRef, WrittenType,
@@ -773,6 +773,11 @@ pub fn declare_types(
                 decl: *decl,
                 params: params.clone(),
                 instance: None,
+                repr: match &r.foreign {
+                    None => CRepr::Nazm,
+                    Some(f) if f.opaque => CRepr::Opaque,
+                    Some(_) => CRepr::Layout,
+                },
             });
             res.types_mut().name_params(ParamOwner::Record(id), params);
             declared_requirements(
@@ -1456,7 +1461,21 @@ pub fn resolve_type_fields(
         declare_type_params(res, &r.type_params, ParamOwner::Record(id));
         let scope = param_scope(&r.type_params, ParamOwner::Record(id));
         record_type_scope(res, r.span, &scope, &types);
-        let fields = resolve_fields(&types, res, &r.name, &r.fields, &scope, errors);
+        let mut fields = resolve_fields(&types, res, &r.name, &r.fields, &scope, errors);
+        // A record C sees (N85, §7.86): the C ABI, not generic, and — with fields — only
+        // fields C has a layout for. An opaque handle's one field is a pointer no program
+        // can name.
+        if let Some(f) = &r.foreign {
+            foreign_struct(r, f, &fields, res, errors);
+            if f.opaque {
+                fields = vec![FieldDef {
+                    name: OPAQUE_FIELD.to_owned(),
+                    ty: Type::Int,
+                    name_span: r.name_span,
+                    ty_span: r.name_span,
+                }];
+            }
+        }
         // A record with no fields. Refused rather than allowed, and the reason is the
         // grammar: `Marker()` is exactly what a call to a function named `Marker` looks
         // like, and types and functions are separate namespaces, so the two forms would
@@ -1533,6 +1552,82 @@ pub fn resolve_type_fields(
             });
         }
         res.enums_mut().complete(id, variants);
+    }
+}
+
+/// The rules an `extern "C" struct` meets (N85, §7.86): the C ABI; no type parameters, since
+/// C has one layout per struct; and for a C-layout record, fields of `Int`, `Bool`, an opaque
+/// handle or another C-layout record — each of which has the layout C gives `int64_t`, `bool`,
+/// a pointer and the nested struct.
+fn foreign_struct(
+    r: &nazm_syntax::Record,
+    f: &nazm_syntax::ForeignStruct,
+    fields: &[FieldDef],
+    res: &Resolution,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if f.abi != "C" {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_ABI,
+                f.abi_span,
+                format!("`\"{}\"` is not an ABI this compiler lays out", f.abi),
+            )
+            .help("the one foreign ABI is `\"C\"`"),
+        );
+    }
+    if let (Some(first), Some(last)) = (r.type_params.first(), r.type_params.last()) {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_SHAPE,
+                first.span.join(last.span),
+                "a C struct cannot be generic",
+            )
+            .help("C has one layout per struct; declare one per type"),
+        );
+    }
+    for field in fields {
+        if !c_layout_type(res, field.ty) {
+            errors.push(
+                Diagnostic::error(
+                    codes::FOREIGN_TYPE,
+                    field.ty_span,
+                    format!(
+                        "a C struct cannot have a field of this type (`{}`)",
+                        field.name
+                    ),
+                )
+                .primary_label("no C layout")
+                .help(
+                    "a C struct's fields are `Int` (`int64_t`), `Bool` (`bool`), an opaque \
+                     handle (a pointer) or another C struct; a `Str`, a sequence, an enum or \
+                     an ordinary record has no layout C shares",
+                ),
+            );
+        }
+    }
+}
+
+/// `N0611`: an opaque handle built or taken apart (N85).
+fn opaque_refused(at: Span, ty: &str, what: &str) -> Diagnostic {
+    Diagnostic::error(
+        codes::OPAQUE_HANDLE,
+        at,
+        format!("`{ty}` is an opaque C handle, which cannot be {what}"),
+    )
+    .help(
+        "a handle declared `extern \"C\" struct Name;` is a C pointer Nazm never reads: only a \
+         foreign function returns one, and only C reads what it points to",
+    )
+}
+
+/// Whether a value of `t` has a C layout (N85): `Int`, `Bool`, or a record declared
+/// `extern "C"` — a C-layout record or an opaque handle.
+fn c_layout_type(res: &Resolution, t: Type) -> bool {
+    match t {
+        Type::Int | Type::Bool => true,
+        Type::Record(id) => res.records().get(id).is_some_and(|d| d.repr != CRepr::Nazm),
+        _ => false,
     }
 }
 
@@ -2358,6 +2453,10 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "nz_ctx_switch",
     "nz_ctx_prepare",
     "nz_task_main",
+    // Where `errno` is (N85): the runtime's own question, and each target's answer to it.
+    "nz_errno_location",
+    "__error",
+    "__errno_location",
     "pthread_create",
     "pthread_join",
     "pthread_mutex_destroy",
@@ -2429,6 +2528,8 @@ fn check_foreign(
     d: &nazm_syntax::ForeignDecl,
     params: &[Type],
     ret: Type,
+    res: &Resolution,
+    option: Option<EnumId>,
     errors: &mut Vec<Diagnostic>,
 ) {
     c_abi_and_symbol(d, errors);
@@ -2452,16 +2553,94 @@ fn check_foreign(
             .help("calling one is always the effect `foreign`, which needs a `ForeignCap`"),
         );
     }
-    let safe = |t: Type| matches!(t, Type::Int | Type::Bool);
     for (t, p) in params.iter().zip(&f.params) {
-        // A `Str` argument is a borrowed C string (N55); a `Str` result stays refused.
-        if !safe(*t) && *t != Type::Str {
+        if foreign_param(res, *t).is_none() {
             errors.push(foreign_type(p.ty.span, "take"));
         }
     }
-    if !safe(ret) {
+    if foreign_result(res, option, ret).is_none() {
         errors.push(foreign_type(f.return_type.span, "return"));
     }
+}
+
+/// How a foreign function's parameter of type `t` crosses (N42, N55, N85), or `None` when it
+/// cannot: the one table every consumer — the checker, Core IR lowering — reads.
+#[must_use]
+pub fn foreign_param(res: &Resolution, t: Type) -> Option<CrossIn> {
+    match t {
+        Type::Int | Type::Bool => Some(CrossIn::Scalar),
+        Type::Str => Some(CrossIn::CString),
+        Type::Record(id) => match res.records().get(id)?.repr {
+            CRepr::Opaque => Some(CrossIn::Handle(id)),
+            CRepr::Layout => Some(CrossIn::Struct),
+            CRepr::Nazm => None,
+        },
+        // A C function pointer (N85): an export's C entry, its parameters and result scalars.
+        Type::Fn(id) => {
+            let sig = res.types().fn_signature(id)?;
+            let scalar = |t: &Type| matches!(t, Type::Int | Type::Bool);
+            (sig.params.iter().all(scalar) && scalar(&sig.ret)).then_some(CrossIn::Callback)
+        }
+        _ => None,
+    }
+}
+
+/// How a foreign function's result of type `t` crosses back (N85), or `None` when it cannot.
+#[must_use]
+pub fn foreign_result(res: &Resolution, option: Option<EnumId>, t: Type) -> Option<CrossOut> {
+    let handle = |t: Type| match t {
+        Type::Record(id) if res.records().get(id)?.repr == CRepr::Opaque => Some(id),
+        _ => None,
+    };
+    match t {
+        Type::Int | Type::Bool => Some(CrossOut::Scalar),
+        Type::Str => Some(CrossOut::CString { nullable: false }),
+        Type::Record(_) => handle(t).map(|id| CrossOut::Handle {
+            record: id,
+            nullable: false,
+        }),
+        Type::Enum(_) => {
+            let def = option?;
+            if res.types().definition_of(t) != Some(TypeNode::Enum(def)) {
+                return None;
+            }
+            match res.types().type_args(t).as_slice() {
+                [Type::Str] => Some(CrossOut::CString { nullable: true }),
+                [inner] => handle(*inner).map(|id| CrossOut::Handle {
+                    record: id,
+                    nullable: true,
+                }),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A foreign parameter's crossing (N85).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrossIn {
+    /// `Int` or `Bool`, by value.
+    Scalar,
+    /// A `Str`, as a borrowed NUL-terminated copy (N55).
+    CString,
+    /// An opaque handle: its pointer.
+    Handle(RecordId),
+    /// A C-layout record, as a borrowed pointer to a copy.
+    Struct,
+    /// An export's C entry, as a C function pointer.
+    Callback,
+}
+
+/// A foreign result's crossing (N85).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrossOut {
+    /// `Int` or `Bool`, by value.
+    Scalar,
+    /// A `const char *` C keeps, copied; null is `None` when `nullable`, a failure otherwise.
+    CString { nullable: bool },
+    /// A pointer, as a handle; null is `None` when `nullable`, a failure otherwise.
+    Handle { record: RecordId, nullable: bool },
 }
 
 /// The effect parameter a function declares, if any (N51): the first, with every further one
@@ -2581,9 +2760,10 @@ fn foreign_type(at: Span, what: &str) -> Diagnostic {
     )
     .primary_label("not FFI-safe")
     .help(
-        "only `Int` (C `int64_t`) and `Bool` (C `bool`) cross the C boundary in v1; a `Str` is \
-         not a C string, a record or enum has no C layout, and a capability is never a word \
-         C can forge",
+        "an argument is `Int`, `Bool`, a `Str` (borrowed), an opaque handle, an `extern \"C\" \
+         struct` (by borrowed pointer) or an export's function type; a result is `Int`, `Bool`, \
+         a handle or a `Str` (copied), or an `Option` of either when C may return null. An \
+         ordinary record or enum has no C layout, and a capability is never a word C can forge",
     )
 }
 
@@ -2741,8 +2921,11 @@ pub fn declare_unit(
         // A foreign declaration (N42): its shape, its ABI, its symbol and its types, each
         // refused by name. What it declares is a contract with no body — the effect
         // `foreign` and nothing else.
+        let option = unit
+            .prelude
+            .and_then(|m| res.enums().declared(m, nazm_sema::prelude::OPTION));
         let foreign = f.foreign.as_ref().map(|d| {
-            check_foreign(f, d, &params, ret, errors);
+            check_foreign(f, d, &params, ret, res, option, errors);
             match foreign_seen.get(d.symbol.as_str()) {
                 Some((p, r, at)) if (p.as_slice(), *r) != (params.as_slice(), ret) => {
                     errors.push(
@@ -4637,6 +4820,19 @@ impl Checker<'_> {
             return None;
         };
         self.res.record_construction(ty_span, id);
+        // Only C makes a handle (N85): it has no field a program could give a value.
+        if self
+            .res
+            .records()
+            .get(id)
+            .is_some_and(|d| d.repr == CRepr::Opaque)
+        {
+            for f in fields {
+                self.check_expr(&f.value, None);
+            }
+            self.errors.push(opaque_refused(ty_span, ty, "built"));
+            return Some(Type::Record(id));
+        }
 
         let mut given: Vec<(String, Span)> = Vec::new();
         for f in fields {
@@ -6206,6 +6402,7 @@ impl Checker<'_> {
                     }
                 }
                 self.record_checked_call(*callee_span, *span, args, &sig, None, false);
+                self.check_callbacks(*callee_span, args, &sig);
                 Completion::Value(sig.ret)
             }
 
@@ -6334,6 +6531,19 @@ impl Checker<'_> {
                 // base is "a record with this field", which is not a `Type` and so cannot
                 // be passed as one.
                 let base_ty = self.value_type(base, None);
+                if let Type::Record(id) = base_ty {
+                    if self
+                        .res
+                        .records()
+                        .get(id)
+                        .is_some_and(|d| d.repr == CRepr::Opaque)
+                    {
+                        let shown = self.show(base_ty);
+                        self.errors
+                            .push(opaque_refused(*name_span, &shown, "taken apart"));
+                        return Completion::Value(Type::Int);
+                    }
+                }
                 match self.check_projection(base_ty, name, *name_span) {
                     Some(t) => Completion::Value(t),
                     None => Completion::Value(Type::Int),
@@ -6427,6 +6637,48 @@ impl Checker<'_> {
 
     /// Record a call as it was checked (N20): its resolved callee, its arguments and the
     /// signature they were checked against, for a tool to read rather than work out.
+    /// A call of a foreign function passes each callback as an export's name (N85, §7.86):
+    /// only an export has a C entry that needs no environment and lives as long as the
+    /// process. A closure, a function value held in a binding, or a function that is not an
+    /// export is `N0612`.
+    fn check_callbacks(&mut self, at: Span, args: &[Expr], sig: &Signature) {
+        let Some(Callee::Function(callee)) = self.res.callee(at) else {
+            return;
+        };
+        if self
+            .res
+            .function(callee)
+            .is_none_or(|d| d.foreign.is_none())
+        {
+            return;
+        }
+        for (a, want) in args.iter().zip(&sig.params) {
+            if !matches!(want, Type::Fn(_)) {
+                continue;
+            }
+            let export = self
+                .res
+                .fn_value(a.span())
+                .and_then(|v| self.res.function(v.function))
+                .is_some_and(|d| d.export.is_some());
+            if !export {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::CALLBACK_NOT_EXPORT,
+                        a.span(),
+                        "a callback C calls is the name of an export",
+                    )
+                    .primary_label("not an export")
+                    .help(
+                        "write the name of a `pub extern \"C\" fn … ! {} = \"symbol\" { … }`: \
+                         its C entry needs no environment and lives as long as the process, \
+                         which a closure or another function value does not",
+                    ),
+                );
+            }
+        }
+    }
+
     fn record_checked_call(
         &mut self,
         at: Span,

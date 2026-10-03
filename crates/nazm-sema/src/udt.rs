@@ -301,6 +301,17 @@ impl UserTypes {
         false
     }
 
+    /// Whether this definition is an opaque C handle (N85).
+    fn opaque(&self, node: TypeNode) -> bool {
+        match node {
+            TypeNode::Record(id) => self
+                .records()
+                .get(id)
+                .is_some_and(|d| d.repr == crate::record::CRepr::Opaque),
+            TypeNode::Enum(_) => false,
+        }
+    }
+
     /// Whether a value of this type may be passed to a task, and if not, why.
     ///
     /// `Ok(())` or the **field path** that makes it illegal. A record inherits the answer
@@ -329,6 +340,13 @@ impl UserTypes {
                 })
             };
         };
+        // A C handle never crosses (N85): nothing says which C objects are thread-safe.
+        if self.opaque(root) {
+            return Err(TaskUnsafe {
+                path: Vec::new(),
+                ty: t,
+            });
+        }
         // An explicit stack of (node, next edge to look at), so the walk is bounded by the
         // heap rather than by the host's frame size. `path` mirrors it, and each frame
         // records how many components it pushed so unwinding is exact.
@@ -349,6 +367,9 @@ impl UserTypes {
                     let n = names.len();
                     path.extend(names);
                     if let Some(inner) = TypeNode::of(ty) {
+                        if self.opaque(inner) {
+                            return Err(TaskUnsafe { path, ty });
+                        }
                         stack.push((inner, 0, n));
                     }
                 }
@@ -406,6 +427,13 @@ impl UserTypes {
                 })
             };
         };
+        // A C handle has no equality (N85): a pointer's identity is C's to define.
+        if self.opaque(root) {
+            return Err(NoEquality {
+                path: Vec::new(),
+                ty: t,
+            });
+        }
         let mut seen = vec![false; self.nodes()];
         let mut stack: Vec<(TypeNode, usize, usize)> = vec![(root, 0, 0)];
         let mut path: Vec<String> = Vec::new();
@@ -422,6 +450,10 @@ impl UserTypes {
             };
             stack.push((node, at + 1, pushed));
             match TypeNode::of(ty) {
+                Some(inner) if self.opaque(inner) => {
+                    path.extend(self.names_of(node, variant, field));
+                    return Err(NoEquality { path, ty });
+                }
                 Some(inner) => {
                     let at = self.slot(inner);
                     if seen.get(at).copied().unwrap_or(true) {

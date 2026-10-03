@@ -190,6 +190,7 @@ impl Backend for Cranelift {
             shims: true,
             stack: true,
             closures: true,
+            foreign: true,
         }
     }
 }

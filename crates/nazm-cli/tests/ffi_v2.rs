@@ -179,9 +179,15 @@ fn a_str_holding_a_nul_is_refused_before_c_runs() {
 }
 
 #[test]
-fn a_str_result_from_c_is_still_refused() {
+fn a_str_result_from_c_is_a_copy_since_n85_and_a_sequence_result_is_still_refused() {
+    // N85 (§7.86): C keeps the string it returns and Nazm copies it, so who frees it is
+    // settled. A sequence is still nothing C can return.
+    assert!(
+        check_codes("extern \"C\" fn name() -> Str = \"c_name\";\nfn main() -> Int { 0 }\n")
+            .is_empty()
+    );
     assert_eq!(
-        check_codes("extern \"C\" fn name() -> Str = \"c_name\";\nfn main() -> Int { 0 }\n"),
+        check_codes("extern \"C\" fn name() -> Ints = \"c_name\";\nfn main() -> Int { 0 }\n"),
         ["N0381"]
     );
 }

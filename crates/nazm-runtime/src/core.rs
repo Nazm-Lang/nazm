@@ -203,6 +203,9 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.strings {
         out.push_str(FOREIGN_STRING_RUNTIME);
     }
+    if needs.foreign {
+        out.push_str(ERRNO_RUNTIME);
+    }
     if needs.closures {
         out.push_str(CLOSURE_RUNTIME);
     }
@@ -1499,6 +1502,22 @@ clean:
   ret i1 false
 }
 
+define hidden i64 @nz.cstr_len(ptr %p) {
+entry:
+  br label %scan
+scan:
+  %i = phi i64 [ 0, %entry ], [ %inext, %more ]
+  %at = getelementptr i8, ptr %p, i64 %i
+  %byte = load i8, ptr %at
+  %nul = icmp eq i8 %byte, 0
+  br i1 %nul, label %done, label %more
+more:
+  %inext = add i64 %i, 1
+  br label %scan
+done:
+  ret i64 %i
+}
+
 define hidden ptr @nz.cstr_borrow(ptr %p, i64 %n) {
 entry:
   %room = add i64 %n, 1
@@ -1512,6 +1531,32 @@ fill:
   %stop = getelementptr i8, ptr %buf, i64 %n
   store i8 0, ptr %stop
   ret ptr %buf
+}
+";
+
+/// `errno` across a foreign call (N85, §7.86): generated code calls `nz.errno_save` the moment a
+/// foreign call returns, and `c_errno()` reads what it saved. The location of `errno` is the
+/// target's (`__error` on macOS, `__errno_location` on Linux), so it is asked of
+/// `nz_errno_location`, which a per-target unit of its own defines (`crate::switch::emit_errno`)
+/// and this text stays the same on every target.
+const ERRNO_RUNTIME: &str = r"
+@nz.errno_saved = hidden thread_local global i64 0
+
+declare ptr @nz_errno_location()
+
+define hidden void @nz.errno_save() {
+entry:
+  %p = call ptr @nz_errno_location()
+  %e = load i32, ptr %p
+  %w = sext i32 %e to i64
+  store i64 %w, ptr @nz.errno_saved
+  ret void
+}
+
+define hidden i64 @nz.errno_last() {
+entry:
+  %v = load i64, ptr @nz.errno_saved
+  ret i64 %v
 }
 ";
 
