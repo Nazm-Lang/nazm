@@ -101,8 +101,9 @@ struct Layouts<'a> {
 /// A parameter's or result's LLVM type at a call or declaration: a foreign function's
 /// `Bool` is C's `bool`, which the C ABI zero-extends (N42); everything else as [`llvm_type`].
 fn c_type(layouts: Layouts<'_>, t: Ty, foreign: bool, result: bool) -> String {
-    // A `Str` argument is a `const char *` to a borrowed copy (N55).
-    if foreign && t == Ty::Str {
+    // A `Str` argument is a `const char *` to a borrowed copy (N55), and a C-layout record a
+    // `const struct *` to one (N85).
+    if foreign && matches!(t, Ty::Str | Ty::Record(_)) {
         return "ptr".to_owned();
     }
     match (foreign && t == Ty::Bool, result) {
@@ -254,6 +255,11 @@ struct Emitter<'a> {
     needs_sequences: bool,
     /// Whether a string backing is allocated, retained or released.
     needs_strings: bool,
+    /// Whether C is called or `c_errno()` read: the `errno` capture (N85).
+    needs_foreign: bool,
+    /// The exports this unit passes to C as callbacks (N85), each declared at the end unless
+    /// the unit defines it.
+    callbacks: std::collections::BTreeSet<String>,
 }
 
 /// What emitting one built-in produced.
@@ -1634,6 +1640,26 @@ impl Emitter<'_> {
                 let mut copies: Vec<u32> = Vec::new();
                 if foreign {
                     for (v, t) in &mut vals {
+                        // A C-layout record (N85): a copy of its bytes, which are already C's
+                        // layout, that C borrows for the call and the caller frees after it.
+                        if let Ty::Record(_) = *t {
+                            let text = llvm_type(self.types, *t);
+                            let (end, size) = (self.fresh(), self.fresh());
+                            let _ = writeln!(
+                                self.out,
+                                "  %{end} = getelementptr {text}, ptr null, i32 1"
+                            );
+                            let _ = writeln!(self.out, "  %{size} = ptrtoint ptr %{end} to i64");
+                            let m = self.fresh();
+                            let _ = writeln!(self.out, "  %{m} = call ptr @malloc(i64 %{size})");
+                            let oom = self.fresh();
+                            let _ = writeln!(self.out, "  %{oom} = icmp eq ptr %{m}, null");
+                            self.foreign_guard(oom, "N0406", "out of memory", &copies, at);
+                            let _ = writeln!(self.out, "  store {text} %{v}, ptr %{m}");
+                            copies.push(m);
+                            *v = m;
+                            continue;
+                        }
                         if *t != Ty::Str {
                             continue;
                         }
@@ -1687,6 +1713,11 @@ impl Emitter<'_> {
                     "  %{out} = call {} {symbol}({list})",
                     c_type(self.types, ret, foreign, true)
                 );
+                // What C left in `errno`, before anything else can change it (N85).
+                if foreign {
+                    self.needs_foreign = true;
+                    let _ = writeln!(self.out, "  call void @nz.errno_save()");
+                }
                 for c in &copies {
                     let _ = writeln!(self.out, "  call void @free(ptr %{c})");
                 }
@@ -1696,6 +1727,22 @@ impl Emitter<'_> {
                 if !foreign {
                     self.check_failed();
                 }
+                format!("%{out}")
+            }
+            // An export's C entry as a function pointer (N85): its symbol is the constant
+            // argument Core IR lowering wrote.
+            mir::Rvalue::Primitive {
+                op: Builtin::CallbackAddress,
+                args,
+                ..
+            } => {
+                let Some(mir::Operand::Const(mir::Const::Str(name))) = args.first() else {
+                    return "0".to_owned();
+                };
+                let symbol = String::from_utf8_lossy(name).into_owned();
+                let out = self.fresh();
+                let _ = writeln!(self.out, "  %{out} = ptrtoint ptr @{symbol} to i64");
+                self.callbacks.insert(symbol);
                 format!("%{out}")
             }
             mir::Rvalue::Primitive { op, elem, args } => {
@@ -1935,6 +1982,7 @@ impl Emitter<'_> {
             shims: false,
             stack: self.needs_stack,
             closures: self.needs_closures,
+            foreign: self.needs_foreign,
         }
     }
 
@@ -3455,6 +3503,22 @@ impl Emitter<'_> {
                     ty: Ty::Int,
                 };
             }
+            // A `const char *` C still owns, copied into a string Nazm owns (N85).
+            Builtin::CStrCopy => {
+                let p = self.fresh();
+                let _ = writeln!(self.out, "  %{p} = inttoptr i64 %{} to ptr", arg(0));
+                let n = self.fresh();
+                let _ = writeln!(self.out, "  %{n} = call i64 @nz.cstr_len(ptr %{p})");
+                let room = self.fresh();
+                let _ = writeln!(self.out, "  %{room} = add i64 %{n}, 1");
+                let (owner, buf) = self.string_backing(room, span);
+                let _ = writeln!(
+                    self.out,
+                    "  call void @llvm.memcpy.p0.p0.i64(ptr %{buf}, ptr %{p}, i64 %{n}, i1 false)"
+                );
+                let out = self.make_str(buf, n, &format!("%{owner}"));
+                out
+            }
             Builtin::StrFromByte => {
                 let b = arg(0);
                 let low = self.fresh();
@@ -3489,6 +3553,40 @@ impl Emitter<'_> {
             | Builtin::ChanCloseOf
             | Builtin::ChanSelectOf
             | Builtin::ChanSelectUntil => {
+                let _ = writeln!(self.out, "  unreachable");
+                return Val::Transferred;
+            }
+            // What the last foreign call on this thread left in `errno` (N85).
+            Builtin::CErrno => {
+                self.needs_foreign = true;
+                let t = self.fresh();
+                let _ = writeln!(self.out, "  %{t} = call i64 @nz.errno_last()");
+                return Val::Of {
+                    value: t,
+                    ty: Ty::Int,
+                };
+            }
+            // A pointer C promised was not null (N85): `N0409` before Nazm sees it.
+            Builtin::ForeignNonNull => {
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq i64 %{}, 0", arg(0));
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0409",
+                        message: "a foreign function returned null where its declaration \
+                                  promised a value"
+                            .to_owned(),
+                    },
+                    span,
+                );
+                return Val::Of {
+                    value: arg(0),
+                    ty: Ty::Int,
+                };
+            }
+            // Unreachable: the rvalue's own arm emits it, from its constant (N85).
+            Builtin::CallbackAddress => {
                 let _ = writeln!(self.out, "  unreachable");
                 return Val::Transferred;
             }
@@ -3797,6 +3895,8 @@ pub(crate) fn emit_unit_with(
         needs_io: false,
         needs_join: false,
         needs_strings: false,
+        needs_foreign: false,
+        callbacks: std::collections::BTreeSet::new(),
     };
 
     for id in &unit.functions {
@@ -3815,6 +3915,23 @@ pub(crate) fn emit_unit_with(
     preamble(&mut head, &unit.source);
     declarations(&mut head);
     runtime_declarations(&mut head);
+    // An export another unit defines, passed to C as a callback here (N85): only its address
+    // is taken, so its type is immaterial.
+    let defined: Vec<String> = unit
+        .functions
+        .iter()
+        .filter_map(|id| native.sigs.get(id.index()))
+        .filter_map(|s| {
+            s.export
+                .as_ref()
+                .map(|x| x.to_string().trim_start_matches('@').to_owned())
+        })
+        .collect();
+    for symbol in &e.callbacks {
+        if !defined.contains(symbol) {
+            let _ = writeln!(head, "declare void @{symbol}()");
+        }
+    }
     head.push('\n');
 
     let layouts = Layouts {

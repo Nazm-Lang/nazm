@@ -192,7 +192,12 @@ use crate::digest::{self, Framed};
 /// `24` — N80, 2026-10-03. Provenance v3: a path read out of a container, through a function
 /// value, a trait bound or a closure's parameter or capture, or out of a record's other field,
 /// moved from refused (`N0372`) to accepted where what reaches it is not restricted.
-pub const SEMANTIC_EPOCH: u32 = 24;
+/// `25` — N85, 2026-10-04. FFI v3: `extern "C" struct` declarations moved from refused (`N0100`)
+/// to accepted; a foreign parameter of a handle, a C struct or an export's function type, and a
+/// foreign result of a handle, a `Str` or an `Option` of either, moved from refused (`N0381`) to
+/// accepted; building or taking apart a handle is `N0611`, a callback that is not an export's
+/// name `N0612`, and `c_errno` is a name a program could not call before.
+pub const SEMANTIC_EPOCH: u32 = 25;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -209,6 +214,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "ASSIGN_TO_IMMUTABLE",
     "BRANCH_TYPES_DIFFER",
     "BUILTIN_TYPE_REDEFINED",
+    "CALLBACK_NOT_EXPORT",
     "CANNOT_INFER_TYPE_ARGUMENT",
     "CAPABILITY_CONSTRUCTED",
     "CAPTURE_REFUSED",
@@ -253,6 +259,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "NOT_A_TRAIT",
     "NOT_IN_A_LOOP",
     "NO_METHOD",
+    "OPAQUE_HANDLE",
     "OWNERSHIP_CYCLE",
     "PRELUDE_TYPE_REDECLARED",
     "PRIVATE_DEFINITION",

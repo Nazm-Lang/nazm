@@ -155,6 +155,12 @@ impl Origin {
             | Intrinsic::IntsSum => BuiltinFlow::Read,
             // A device register holds whatever the device put there (N62): not followed.
             Intrinsic::MmioRead32 => BuiltinFlow::Source(Self::Unknown),
+            // What C left in `errno` is C's (N85), as everything C returns is (N42).
+            Intrinsic::CErrno => BuiltinFlow::Source(Self::Unknown),
+            // A check and a copy of what C returned: the call's own origin, carried (N85).
+            Intrinsic::ForeignNonNull | Intrinsic::CStrCopy => BuiltinFlow::Derive,
+            // A code address: no data flows through it.
+            Intrinsic::CallbackAddress => BuiltinFlow::Fresh,
             // A new, empty handle, or a call that never returns.
             Intrinsic::IntsNew
             | Intrinsic::StrsNew
@@ -230,7 +236,11 @@ impl Origin {
             | Intrinsic::Arg
             | Intrinsic::ReadFile
             | Intrinsic::FileExists
-            | Intrinsic::WriteFile => ContainerUse::None,
+            | Intrinsic::WriteFile
+            | Intrinsic::CErrno
+            | Intrinsic::ForeignNonNull
+            | Intrinsic::CStrCopy
+            | Intrinsic::CallbackAddress => ContainerUse::None,
         }
     }
 
@@ -744,13 +754,15 @@ mod tests {
         assert_eq!(
             sources,
             [
-                // A device register is not followed (N62); since N80 it is the only built-in
-                // whose result is `unknown`.
+                // A device register is not followed (N62); with `c_errno` (N85), the only
+                // built-ins whose result is `unknown`.
                 ("mmio_read32", Origin::Unknown),
                 ("args_count", Origin::Argument),
                 ("arg", Origin::Argument),
                 ("read_file", Origin::File),
-                ("file_exists", Origin::File)
+                ("file_exists", Origin::File),
+                // What C left in `errno` is C's, as anything C returns is (N85).
+                ("c_errno", Origin::Unknown)
             ]
         );
         // Every container built-in names its handle, and no other built-in claims one (N80).

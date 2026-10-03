@@ -45,3 +45,6 @@ pub fn key() -> ModuleKey {
 
 /// The name of the definition `?` propagates through.
 pub const RESULT: &str = "Result";
+
+/// The name of the definition a nullable C result is (N85).
+pub const OPTION: &str = "Option";

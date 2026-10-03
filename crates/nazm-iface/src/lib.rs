@@ -37,5 +37,6 @@ pub use facts::PersistentFacts;
 pub use fingerprint::InterfaceHash;
 pub use resolved::ResolvedUnit;
 pub use wire::{
-    PersistentExport, PersistentType, PersistentUnitInterface, ReadError, Rehydrated, SCHEMA,
+    PersistentC, PersistentExport, PersistentType, PersistentUnitInterface, ReadError, Rehydrated,
+    SCHEMA,
 };

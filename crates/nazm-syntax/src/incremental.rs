@@ -791,12 +791,16 @@ impl Shift for Record {
             pub_span,
             type_params,
             fields,
+            foreign,
             span,
         } = self;
         name_span.shift(file, by);
         pub_span.shift(file, by);
         type_params.shift(file, by);
         fields.shift(file, by);
+        if let Some(f) = foreign {
+            f.abi_span.shift(file, by);
+        }
         span.shift(file, by);
     }
 }

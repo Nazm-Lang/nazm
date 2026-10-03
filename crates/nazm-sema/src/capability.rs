@@ -147,6 +147,8 @@ impl CapabilityKind {
             Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => CapabilitySet::of(Self::Time),
             // And a device register (N62).
             Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => CapabilitySet::of(Self::Mmio),
+            // Reading `errno` is part of calling C (N85).
+            Intrinsic::CErrno => CapabilitySet::of(Self::Foreign),
             Intrinsic::StrLen
             | Intrinsic::StrByte
             | Intrinsic::StrSlice
@@ -181,7 +183,10 @@ impl CapabilityKind {
             | Intrinsic::VecGet
             | Intrinsic::VecSet
             | Intrinsic::VecPush
-            | Intrinsic::VecPop => CapabilitySet::EMPTY,
+            | Intrinsic::VecPop
+            | Intrinsic::ForeignNonNull
+            | Intrinsic::CStrCopy
+            | Intrinsic::CallbackAddress => CapabilitySet::EMPTY,
         }
     }
 
