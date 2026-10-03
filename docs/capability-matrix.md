@@ -70,7 +70,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 4 | Memory model and reclamation | VERIFIED for the current type universe |
 | 5 | Effects | PARTIAL — effect subsumption for function values (N79); no handlers, user effects or divergence |
 | 6 | Capabilities (language) | PARTIAL — the bridge recorded as inherited authority and refusable by profile, `OutCap` attenuation (N79); the default still inherits |
-| 7 | Provenance and information flow (language) | PARTIAL |
+| 7 | Provenance and information flow (language) | PARTIAL — explicit flow by cell, target and field (N80); no implicit flow, no labels a program writes |
 | 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | VERIFIED (v1) |
 | 10 | LIR and the backend contract | PARTIAL |
@@ -980,6 +980,32 @@ a compile error with a span — met for every function that declares its effects
 ambient one, which is the bridge above.
 
 ### 7. Provenance and information flow, as a language feature — PARTIAL
+
+*N80, 2026-10-03: Container cells v1 — VERIFIED; Indirect targets v1 — VERIFIED; Local field and
+variant shapes v1 — VERIFIED; Flow policy engine v1 — VERIFIED; Origin-to-sink traces v1 —
+VERIFIED.* `architecture.md` §7.81 is the constitution, `spec.md` *Containers* and *Calls through
+values and bounds* the law. Every container is read and written through a **cell** named by its
+type, so a read carries what any container of that type was given — exhaustively, by the built-in's
+identity (`Origin::container`, `crates/nazm-sema/src/provenance.rs`) — and generic code is every
+cell; a receive and a select move a channel's cell, and a select's index carries nothing. A call
+through a function value reaches every function value of its type up to effects, a call through a
+bound every impl of its method; a closure's parameters and captures are received like any
+parameter. Within a body a record or variant keeps its fields apart. `N0372` and the profile flow
+rules are one engine (`FlowRule`), and `cyber` gains `checked-paths`, the language's rule in every
+function. Each sink carries one chain per origin, printed by `nazm explain-flow` as `nazm.flow/2`.
+Facts persist in `nazm.check/4`; epoch 24. Evidence: `crates/nazm-cli/tests/flow_v3.rs` — eleven
+end-to-end tests, each in both directions, covering every container form, receive and select,
+generic code, named values and closures and a pure value standing for an effectful one,
+parameters and captures, fields, variants, a field write and `?`, bounds, an export to C,
+`checked-paths`, the trace and its determinism, and an affected program run interpreted and natively;
+`crates/nazm-core/tests/provenance.rs` (containers by type, fields, the trace through a cell);
+`crates/nazm-cli/tests/incremental.rs` — a cell and a function value from a module the cache reused;
+`closures.rs`, `cost_and_flow.rs`, `profiles.rs`. **Falsifier, run:** `nazm check` of N79 and N80
+over all 237 `.nz` files in the repository gave identical codes on every one — no new refusal and no
+other change (`architecture.md` §7.81, as built). **Still PARTIAL**, for named reasons: implicit
+flow is not tracked, so this is not non-interference; precision is by type, not by handle, index
+or across a call; there are no labels a program writes. Cost: `nazm check` of `compiler/emit.nz`
+1.125× (`performance.md`).
 
 **N52 (2026-10-02)** · a sink registry (`SinkClass`: `path`, `output`, `file-data`, and `vouch`
 for the evidence of a declassification), each solved through helpers' parameters, closures and

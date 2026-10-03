@@ -7876,27 +7876,19 @@ killers = [{ package = "nazm-core", test = "provenance", name = "the_sources_are
 
 [[mutation]]
 name = "n38-shared-storage-is-followed"
-why = "a value read out of a sequence is taken to carry only what the read's arguments carry, as though no alias could have written it"
+why = """a value read out of a sequence is taken to carry only what the read's arguments carry, as though no alias could have written it Repointed by N80, which follows containers by cell: a read that names no cell falls back to `unknown`, over-refusing."""
 file = "crates/nazm-sema/src/provenance.rs"
-find = "            | Intrinsic::IntsSum => BuiltinFlow::Read,"
-replace = "            | Intrinsic::IntsSum => BuiltinFlow::Derive,"
-killers = [{ package = "nazm-core", test = "provenance", name = "shared_storage_is_not_followed_and_is_unknown" }]
+find = "            | Intrinsic::VecPop => ContainerUse::Read { handle: 0 },"
+replace = "            | Intrinsic::VecPop => ContainerUse::None,"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_container_carries_what_any_container_of_its_type_was_given" }]
 
 [[mutation]]
 name = "n38-a-channel-drops-provenance"
-why = "what a task receives from a channel carries nothing, so a value loses its origin crossing between tasks"
+why = """what a task receives from a channel carries nothing, so a value loses its origin crossing between tasks Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-sema/src/provenance.rs"
-find = '''
-            | Intrinsic::ChanRecv
-            // A device register holds whatever the device put there (N62).
-            | Intrinsic::MmioRead32
-            // Read out of a shared handle, as `ints_get` is (N66).
-            | Intrinsic::IntsSum => BuiltinFlow::Read,'''
-replace = '''
-            | Intrinsic::MmioRead32
-            | Intrinsic::IntsSum => BuiltinFlow::Read,
-            Intrinsic::ChanRecv => BuiltinFlow::Fresh,'''
-killers = [{ package = "nazm-core", test = "provenance", name = "shared_storage_is_not_followed_and_is_unknown" }]
+find = "                ContainerUse::Receive { from: 0, into: 1 }"
+replace = "                ContainerUse::None"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_receive_and_a_select_move_a_channels_cell_and_an_index_carries_nothing" }]
 
 [[mutation]]
 name = "n38-a-file-path-is-allowed"
@@ -7929,38 +7921,39 @@ killers = [{ package = "nazm-core", test = "provenance", name = "explicit_data_f
 
 [[mutation]]
 name = "n38-a-join-drops-a-side"
-why = "an operator's value carries only its left operand's provenance"
+why = """an operator's value carries only its left operand's provenance Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
 find = """                let r = self.expr(rhs);
-                l.joined(&r)"""
+                Shaped::whole(l.joined(&r))"""
 replace = """                let _r = self.expr(rhs);
-                l"""
+                Shaped::whole(l)"""
 killers = [{ package = "nazm-core", test = "provenance", name = "explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order" }]
 
 [[mutation]]
 name = "n38-a-binding-keeps-its-first-value"
-why = "a binding already carrying something ignores what is assigned to it later"
+why = """a binding already carrying something ignores what is assigned to it later Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
-find = "            if slot.join(v) && self.read.get(s) == Some(&true) {"
-replace = "            if slot.is_local() && slot.join(v) && self.read.get(s) == Some(&true) {"
+find = "            grew |= slot.join(&v.flow);"
+replace = "            grew |= slot.is_local() && slot.join(&v.flow);"
 killers = [{ package = "nazm-core", test = "provenance", name = "explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order" }]
 
 [[mutation]]
 name = "n38-a-condition-flows"
-why = "an `if`'s condition joins its value, so implicit flow is tracked where the law says it is not — and a local choice made on a file's existence is over-tainted"
+why = """an `if`'s condition joins its value, so implicit flow is tracked where the law says it is not — and a local choice made on a file's existence is over-tainted Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
 find = """                self.expr(cond);
-                let t = self.block(then_block);"""
+                let mut t = self.block(then_block);"""
 replace = """                let c = self.expr(cond);
-                let t = self.block(then_block).joined(&c);"""
+                let mut t = self.block(then_block);
+                t.flow = t.flow.joined(&c);"""
 killers = [{ package = "nazm-core", test = "provenance", name = "a_summary_passes_on_only_what_the_result_is_computed_from" }]
 
 [[mutation]]
 name = "n38-a-constant-inherits-its-input"
-why = "a callee passes on every argument it is given, so a function returning a constant is tainted by its parameters"
+why = """a callee passes on every argument it is given, so a function returning a constant is tainted by its parameters Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
-find = "                    for &p in &s.params {"
-replace = "                    for p in 0..u32::try_from(c.args.len()).unwrap_or(0) {"
+find = "        for &p in &s.params {"
+replace = "        for p in 0..u32::try_from(args.len()).unwrap_or(0) {"
 killers = [{ package = "nazm-core", test = "provenance", name = "a_summary_passes_on_only_what_the_result_is_computed_from" }]
 
 [[mutation]]
@@ -7996,30 +7989,28 @@ killers = [{ package = "nazm-core", test = "provenance", name = "authority_comes
 
 [[mutation]]
 name = "n38-a-helper-launders-a-path"
-why = "a sink does not make the parameter its path came from reach it, so a function that writes to a path it is given carries no rule to its callers"
+why = """a sink does not make the parameter its path came from reach it, so a function that writes to a path it is given carries no rule to its callers Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
-find = "        for s in f.sinks.iter().filter(|s| s.class == SinkClass::Path) {\n            reach.extend(Program::eval(&s.path, calls).params);\n        }"
-replace = "        for s in f.sinks.iter().filter(|s| s.class == SinkClass::Path) {\n            let _ = Program::eval(&s.path, calls);\n        }"
+find = "                .extend(program.eval(&s.path, vals).params);"
+replace = "                .extend(program.eval(&s.path, vals).params.into_iter().filter(|_| s.class != SinkClass::Path));"
 killers = [{ package = "nazm-core", test = "provenance", name = "a_function_that_writes_to_a_path_it_is_given_carries_the_rule_to_its_callers" }]
 
 [[mutation]]
 name = "n38-an-undeclared-helper-launders-a-path"
-why = "a callee with no declared effect set passes on no sink, so explicit code routes a file's contents to `write_file` through the bridge"
+why = """a callee with no declared effect set passes on no sink, so explicit code routes a file's contents to `write_file` through the bridge Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
-find = """            reach.extend(Program::eval(&s.path, calls).params);
-        }
-        for c in &f.calls {"""
-replace = """            reach.extend(Program::eval(&s.path, calls).params);
-        }
-        for c in f.calls.iter().filter(|c| res.function(c.callee).is_some_and(|d| d.declared_effects.is_some())) {"""
+find = """        for c in &f.calls {
+            for i in program.reach_of(c.callee, rule.class) {"""
+replace = """        for c in f.calls.iter().filter(|c| res.function(c.callee).is_some_and(|d| d.declared_effects.is_some())) {
+            for i in program.reach_of(c.callee, rule.class) {"""
 killers = [{ package = "nazm-core", test = "provenance", name = "ambient_code_is_the_bridge_and_is_not_checked_but_cannot_launder" }]
 
 [[mutation]]
 name = "n38-the-witness-stops-at-the-callee"
-why = "the witness for a restricted flow ends at the call whose result carries it, never showing where it was read"
+why = """the witness for a restricted flow ends at the call whose result carries it, never showing where it was read Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
-find = "                witness(p, res, g, &g.result, o, labels, depth + 1);"
-replace = "                let _ = g;"
+find = "                            self.flow(j, &g.result, o, steps, seen, depth + 1);"
+replace = "                            let _ = (j, g);"
 killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_a_files_contents_is_refused_with_its_witness" }]
 
 [[mutation]]
@@ -8044,10 +8035,10 @@ killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_keeps_
 
 [[mutation]]
 name = "n38-the-entry-schema-stays"
-why = "the check entry keeps the `/1` name for a shape that now carries facts, so an entry without them is read as one with none. Repointed by N77, which moved the entry to `/3` for its resolved unit: an entry without one must not be read under the new name."
+why = "the check entry keeps the `/1` name for a shape that now carries facts, so an entry without them is read as one with none. Repointed by N77, which moved the entry to `/3` for its resolved unit: an entry without one must not be read under the new name. Repointed by N80, which moved it to `/4` for cells and indirect calls."
 file = "crates/nazm-cache/src/artifact.rs"
-find = """pub const SCHEMA: &str = "nazm.check/3";"""
-replace = """pub const SCHEMA: &str = "nazm.check/2";"""
+find = """pub const SCHEMA: &str = "nazm.check/4";"""
+replace = """pub const SCHEMA: &str = "nazm.check/3";"""
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_keeps_the_modules_provenance_facts" }]
 
 [[mutation]]
@@ -8089,10 +8080,11 @@ Repointed by N62, which moved it to 19 for a freestanding target: an entry that 
 Repointed by N66, which moved it to 20 for `ints_sum_from`: an entry that accepted a function of that name must not be reused.
 Repointed by N76, which moved it to 21 for Unicode escapes: an entry that refused `\\u{e9}` must not be reused.
 Repointed by N78, which moved it to 22 for traits: an entry that refused a method call must not be reused.
-Repointed by N79, which moved it to 23 for attenuation: an entry that refused an IoCap given for an OutCap must not be reused."""
+Repointed by N79, which moved it to 23 for attenuation: an entry that refused an IoCap given for an OutCap must not be reused.
+Repointed by N80, which moved it to 24 for provenance v3: an entry that refused a path read out of a Strs must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 23;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 22;"
+find = "pub const SEMANTIC_EPOCH: u32 = 24;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 23;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -9795,23 +9787,19 @@ killers = [{ package = "nazm-iface", test = "persistence", name = "a_function_ty
 
 [[mutation]]
 name = "n50-an-indirect-result-has-a-known-origin"
-why = "the result of a call through a function value is taken to come only from its arguments"
+why = """the result of a call through a function value is taken to come only from its arguments Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
-find = """
-                        Flow::origin(Origin::Unknown, *callee_span)
-                            .joined(&callee)"""
-replace = """
-                        Flow::default()
-                            .joined(&callee)"""
-killers = [{ package = "nazm-cli", test = "closures", name = "a_path_through_a_function_value_is_of_unknown_origin" }]
+find = "                self.indirect(target, callee_span, flows).joined(&callee)"
+replace = "                { let _ = (target, flows); callee }"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_call_through_a_value_carries_what_its_candidates_return" }]
 
 [[mutation]]
 name = "n50-a-closure-parameter-has-a-known-origin"
-why = "a closure's parameter is taken to carry nothing, though any caller may hand it anything"
+why = """a closure's parameter is taken to carry nothing, though any caller may hand it anything Repointed by N80: a closure's parameters are what the calls through values hand it, and this drops that."""
 file = "crates/nazm-core/src/provenance.rs"
-find = "                    *slot = Flow::origin(Origin::Unknown, p.name_span);"
-replace = "                    *slot = Flow::default();"
-killers = [{ package = "nazm-cli", test = "closures", name = "a_path_through_a_function_value_is_of_unknown_origin" }]
+find = "                    edge(g, i, a);"
+replace = "                    let _ = (g, i, a);"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_closures_parameters_and_captures_are_what_it_is_handed" }]
 
 [[mutation]]
 name = "n50-a-function-value-may-cross-into-a-task"
@@ -10062,18 +10050,18 @@ killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs
 
 [[mutation]]
 name = "n52-a-sink-ignores-what-its-callers-hand-it"
-why = "a helper's sink sees only its own body's origins, not what its callers pass it"
+why = """a helper's sink sees only its own body's origins, not what its callers pass it Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
-find = "                    origins = origins.union(*r);"
-replace = "                    let _ = r;"
+find = "            .fold(v.origins, |o, p| o.union(self.received(f.function, *p)))"
+replace = "            .fold(v.origins, |o, _p| o)"
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "every_sink_class_is_solved_through_helpers_closures_and_containers" }]
 
 [[mutation]]
 name = "n52-a-vouch-clears-nothing"
-why = "str_vouch passes its argument's origins through, so declassification does nothing"
+why = """str_vouch passes its argument's origins through, so declassification does nothing Repointed by N80, which rewrote the provenance walk and solver."""
 file = "crates/nazm-core/src/provenance.rs"
-find = "                            BuiltinFlow::Vouch => Flow::default(),"
-replace = "                            BuiltinFlow::Vouch => all,"
+find = "                    BuiltinFlow::Vouch => Flow::default(),"
+replace = "                    BuiltinFlow::Vouch => all,"
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs_its_authority_everywhere_and_is_recorded" }]
 
 [[mutation]]
@@ -10095,10 +10083,10 @@ killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs
 
 [[mutation]]
 name = "n52-contents-may-be-shown"
-why = "cyber's rule watches the path sink instead of standard output"
+why = """cyber's rule watches the path sink instead of standard output Repointed by N80, which made the profile flow rules one engine."""
 file = "crates/nazm-service/src/profile.rs"
-find = "                    .filter(|s| s.class == SinkClass::Output)"
-replace = "                    .filter(|s| s.class == SinkClass::Path)"
+find = "            FlowRule::CONTENTS_STAY_IN_FILES,"
+replace = "            FlowRule::CHECKED_PATHS,"
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "profiles_read_resource_and_flow_facts" }]
 
 [[mutation]]
@@ -12534,3 +12522,139 @@ file = "crates/nazm-sema/src/generic.rs"
 find = "            (Type::Cap(_), Type::Cap(_)) => true,"
 replace = "            (Type::Cap(_), Type::Cap(_)) => false,"
 killers = [{ package = "nazm-cli", test = "authority", name = "an_out_cap_prints_and_authorises_nothing_else" }]
+
+
+# --- N80: provenance v3 --------------------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.81: a cell holds every write into a container of
+# its type, and generic code is every cell; a receive and a select move a channel's cell, and an index
+# carries nothing; an indirect call carries what its candidates return, and a closure's captures are
+# handed to whoever calls it; fields are apart within a body, and a field write makes the binding
+# whole; `?` reads the payload; an export is handed anything; the profile rules are one engine, with
+# `checked-paths` in `cyber`; and traces are printed.
+
+[[mutation]]
+name = "n80-a-cell-forgets-its-writes"
+why = "what is written into a container never reaches its cell, so a file's contents read back out of a `Strs` carry nothing and reach a path"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                let slot = cells.entry(s.cell.clone()).or_default();"
+replace = "                let slot = cells.entry(s.cell.clone()).or_default(); let o = { let _ = o; OriginSet::EMPTY };"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_container_carries_what_any_container_of_its_type_was_given" }]
+
+[[mutation]]
+name = "n80-generic-code-writes-nowhere"
+why = "a read of a concrete container ignores the wild cell, so what generic code wrote into a `Vec[T]` is missed"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                .union(self.cells.get(WILD_CELL).copied().unwrap_or_default())"
+replace = "                .union(OriginSet::EMPTY)"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_container_in_generic_code_is_every_container" }]
+
+[[mutation]]
+name = "n80-every-vec-is-one-cell"
+why = "a `Vec`'s cell forgets its element type, so a `Vec[Int]` written from a file taints every `Vec[Str]`"
+file = "crates/nazm-core/src/provenance.rs"
+find = '            Some(Shape::VecT) => elem().map(|t| format!("Vec[{t}]")),'
+replace = '            Some(Shape::VecT) => elem().map(|_t| "Vec".to_owned()),'
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_container_carries_what_any_container_of_its_type_was_given" }]
+
+[[mutation]]
+name = "n80-a-receive-moves-nothing"
+why = "a receive does not write the channel's cell into `out`, so a file's contents sent and received reach a path unseen"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                        self.store(target, callee_span, &moved);"
+replace = "                        let _ = (target, &moved);"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_receive_and_a_select_move_a_channels_cell_and_an_index_carries_nothing" }]
+
+[[mutation]]
+name = "n80-a-select-index-is-data"
+why = "a select's index carries its channels' cell, refusing a program that only branches on which channel was ready"
+file = "crates/nazm-core/src/provenance.rs"
+find = """
+                        // Which channel was ready: control, not data.
+                        Some(Flow::default())"""
+replace = """
+                        Some(Flow::cell(&source, callee_span))"""
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_receive_and_a_select_move_a_channels_cell_and_an_index_carries_nothing" }]
+
+[[mutation]]
+name = "n80-an-indirect-call-has-no-candidates"
+why = "a call through a function value returns nothing of its candidates', so a function value that reads a file hands a path its contents"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                    v.join(&self.applied(g, &c.args, &vals));"
+replace = "                    let _ = g;"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_call_through_a_value_carries_what_its_candidates_return" }]
+
+[[mutation]]
+name = "n80-a-bound-reaches-no-impl"
+why = "an impl's methods are filed under the trait alone, so a call through a bound finds no candidate and its result is local"
+file = "crates/nazm-core/src/provenance.rs"
+find = '                    .entry(format!("{METHOD_TARGET}{}.{}", t.name, m.name))'
+replace = '                    .entry(format!("{METHOD_TARGET}{}", t.name))'
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_call_through_a_bound_reaches_every_impl_of_its_method" }]
+
+[[mutation]]
+name = "n80-a-capture-is-not-handed"
+why = "a closure's captures receive nothing from its maker, so a closure returning a captured file's contents hands them out unseen"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                edge(m.function, base + j, a);"
+replace = "                let _ = (j, a, base);"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_closures_parameters_and_captures_are_what_it_is_handed" }]
+
+[[mutation]]
+name = "n80-a-field-read-is-the-whole"
+why = "a field read joins every field, so a record built with a path from the command line and a body from a file refuses its path"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                            if field == name {"
+replace = "                            if !field.is_empty() || field == name {"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "fields_and_variants_are_apart_within_a_body_and_whole_across_a_call" }]
+
+[[mutation]]
+name = "n80-a-field-write-is-lost"
+why = "`a.b = v` is ignored, so a file's contents written into one field are missed by a read of the binding's other field"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                    self.assign_field(a.place.name_span, &v.flow);"
+replace = "                    let _ = &v;"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "fields_and_variants_are_apart_within_a_body_and_whole_across_a_call" }]
+
+[[mutation]]
+name = "n80-question-reads-the-error"
+why = "`?` joins the error with the payload, refusing a path that only the `Ok` arm can carry"
+file = "crates/nazm-core/src/provenance.rs"
+find = '                            if variant != "Err" && variant != "None" {'
+replace = '                            if !variant.is_empty() {'
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "fields_and_variants_are_apart_within_a_body_and_whole_across_a_call" }]
+
+[[mutation]]
+name = "n80-an-export-is-handed-nothing"
+why = "what C hands an exported function is treated as local, so it reaches the program's containers unseen"
+file = "crates/nazm-core/src/provenance.rs"
+find = "        let open = def.export.is_some() || (program.incomplete && def.closure.is_some());"
+replace = "        let open = program.incomplete && def.closure.is_some();"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_function_exported_to_c_is_handed_anything" }]
+
+[[mutation]]
+name = "n80-cyber-has-no-checked-paths"
+why = "`cyber` loses `checked-paths`, so the bridge writes a path from a file's contents under the profile that promised otherwise"
+file = "crates/nazm-service/src/profile.rs"
+find = """
+                Rule::ContentsStayInFiles,
+                Rule::CheckedPaths,"""
+replace = """
+                Rule::ContentsStayInFiles,"""
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "checked_paths_is_the_languages_rule_in_every_function" }]
+
+[[mutation]]
+name = "n80-a-policy-refuses-nothing"
+why = "the engine never finds a forbidden origin at a sink, so every profile flow rule passes"
+file = "crates/nazm-service/src/profile.rs"
+find = "                        let o = policy.refuses(s)?;"
+replace = "                        let o = policy.refuses(s).filter(|_| false)?;"
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "checked_paths_is_the_languages_rule_in_every_function" }]
+
+[[mutation]]
+name = "n80-traces-are-not-printed"
+why = "`nazm.flow/2` names the origins at a sink but never how they got there"
+file = "crates/nazm-cli/src/explain.rs"
+find = '                    "traces": traces,'
+replace = '                    "traces": { let _ = traces; Vec::<Value>::new() },'
+killers = [{ package = "nazm-cli", test = "flow_v3", name = "explain_flow_prints_each_origins_chain_from_where_it_entered" }]

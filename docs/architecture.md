@@ -7237,6 +7237,26 @@ that runs a function value outside its candidate set. A field read whose flow om
 was written to that field. A policy verdict for `N0372` that differs from the language rule it
 replaced, on any program in the repository.
 
+**As built (N80, 2026-10-03).** The design held; five additions and one measurement:
+
+- **What C hands an export is `unknown`.** An exported function (N55) is called by C, so each of
+  its parameters receives `unknown`. It is pure and has no sink of its own, but it can write a
+  container, and through the cell that reaches the program. The constitution did not say so; the
+  model needed it to be sound.
+- **A device register is a source of `unknown`.** `mmio_read32` was a read of a shared handle; with
+  containers followed it is the one built-in whose result is `unknown`.
+- **A missing module's facts make everything indirect `unknown`.** When a reused module's facts do
+  not rehydrate, its writes, values and callers cannot be seen, so every cell, every indirect call's
+  result and every closure's parameters also carry `unknown`, and its functions reach every sink.
+- **`?` yields every part but `Err` and `None`.** That is the payload of the prelude's `Result`, the
+  only type `?` applies to.
+- **Reach is per sink class.** Which parameters reach a sink is solved for every class, so a rule
+  of the policy over any class and scope uses one solver. The published summary's `reaches` stays
+  the path's, as `nazm.context/3` documents it.
+- **The falsifier was run.** N79 (`38d8755`) and N80 checked all 237 `.nz` files in the repository
+  with identical codes on every one. A cold check of `compiler/emit.nz` costs 1.125×, measured in
+  `performance.md`; later rounds re-solve only the functions that read a grown cell.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
