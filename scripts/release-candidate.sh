@@ -131,7 +131,9 @@ cp examples/*.nz "$out/examples/"
 # The bootstrap's own inputs. A candidate that claims a byte-identical C2 and C3 and
 # does not carry the source they were built from is asking to be taken on trust.
 cp compiler/*.nz compiler/bootstrap.sh "$out/compiler/"
-cp compiler/conformance/* "$out/compiler/conformance/"
+# Recursively — the module and refusal corpora are directories (N14E), which a plain `cp` refuses —
+# and without the per-directory `.nazm` caches a checkout may hold.
+tar -C compiler/conformance --exclude=.nazm -cf - . | tar -C "$out/compiler/conformance" -xf -
 cp scripts/*.sh "$out/scripts/"
 cp bench/programs/* "$out/bench/programs/"
 # The external reference programs, so the one cross-language number in
