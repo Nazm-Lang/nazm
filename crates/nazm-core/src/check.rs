@@ -3898,7 +3898,7 @@ impl Checker<'_> {
             let want = params.get(i).copied();
             let got = self.value_type(a, want);
             if let Some(want) = want {
-                if got != want {
+                if !self.assignable(got, want) {
                     self.errors.push(Diagnostic::error(
                         codes::TYPE_MISMATCH,
                         a.span(),
@@ -4020,6 +4020,33 @@ impl Checker<'_> {
         }
     }
 
+    /// Whether a value of `got` may be passed or returned where `want` is expected (N79): the
+    /// same type; an `IoCap` where an `OutCap` is, which hands on less authority than it
+    /// holds; or a function type with the same parameters and result whose effects are within
+    /// the expected one's. An effect parameter is matched by binding, never by inclusion.
+    fn assignable(&self, got: Type, want: Type) -> bool {
+        if got == want {
+            return true;
+        }
+        match (got, want) {
+            (Type::Cap(g), Type::Cap(w)) => nazm_sema::CapabilitySet::of(g).implied().contains(w),
+            (Type::Fn(g), Type::Fn(w)) => {
+                let types = self.res.types();
+                let (Some(gs), Some(ws)) = (types.fn_signature(g), types.fn_signature(w)) else {
+                    return false;
+                };
+                gs.params == ws.params
+                    && gs.ret == ws.ret
+                    && gs.row.is_none()
+                    && ws.row.is_none()
+                    && !gs.effects.has_param()
+                    && !ws.effects.has_param()
+                    && gs.effects.without(ws.effects).is_empty()
+            }
+            _ => false,
+        }
+    }
+
     fn check_indirect_call(
         &mut self,
         name: &str,
@@ -4057,7 +4084,7 @@ impl Checker<'_> {
             let want = fsig.params.get(i).copied();
             let got = self.value_type(a, want);
             if let Some(want) = want {
-                if got != want {
+                if !self.assignable(got, want) {
                     self.errors.push(Diagnostic::error(
                         codes::TYPE_MISMATCH,
                         a.span(),
@@ -5443,7 +5470,7 @@ impl Checker<'_> {
             // Every path returned. No tail is needed, and demanding one would force a
             // dummy expression after code that cannot reach it.
             Completion::Diverges => {}
-            Completion::Value(actual) if actual == declared => {}
+            Completion::Value(actual) if self.assignable(actual, declared) => {}
             Completion::Value(actual) => {
                 let (actual, declared) = (self.show(actual), self.show(declared));
                 self.errors.push(
@@ -5690,7 +5717,7 @@ impl Checker<'_> {
             let want = sig.params.get(i).copied();
             let got = self.value_type(a, want);
             if let Some(want) = want {
-                if got != want {
+                if !self.assignable(got, want) {
                     self.errors.push(Diagnostic::error(
                         codes::TYPE_MISMATCH,
                         a.span(),
@@ -5745,7 +5772,7 @@ impl Checker<'_> {
             return;
         };
         let actual = self.value_type(&r.value, Some(declared));
-        if actual != declared {
+        if !self.assignable(actual, declared) {
             self.errors.push(
                 Diagnostic::error(
                     codes::TYPE_MISMATCH,
@@ -6155,7 +6182,7 @@ impl Checker<'_> {
                     let want = sig.params.get(i).copied();
                     let got = self.value_type(a, want);
                     if let Some(want) = want {
-                        if got != want {
+                        if !self.assignable(got, want) {
                             self.errors.push(Diagnostic::error(
                                 codes::TYPE_MISMATCH,
                                 a.span(),
