@@ -2625,6 +2625,29 @@ compiler holds the whole LLVM text it is building, the emitted IR now carries re
 release calls and the string runtime, and a bigger text is a bigger buffer. It is the price
 of the emitted program's 5× and it is recorded rather than left for a reader to find.
 
+### Incremental reparse — N76, measured 2026-10-03
+
+**Hypothesis:** an edit inside one item reparses that item, not the file. **Changed path:**
+`nazm_syntax::Revision::edit` against `Revision::new` and `parse_both` of the same text.
+**Workload:** the three largest compiler sources, one `x` inserted after the first `let ` past the
+middle of the file. **Method:** `cargo test --release -p nazm-syntax --test incremental -- --ignored
+--nocapture measure_full_parse_against_one_edit`, 5 warm-ups discarded, the median of 31; every
+result is checked for being a full or an incremental parse as labelled, and its correctness is
+the convergence suite's, not this run's. Apple M1 Pro, macOS 27.2, rustc 1.98.1, release profile,
+one thread, same host and process for all three columns.
+
+| File | Bytes | `parse_both` | `Revision::new` | One edit | Relexed | Reparsed tokens | Items kept |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `compiler/emit.nz` | 286,952 | 8.23 ms | 8.11 ms | 1.22 ms | 2 of 58,947 | 618 of 40,284 | 125 of 126 |
+| `compiler/analyse.nz` | 210,347 | 6.66 ms | 6.55 ms | 1.01 ms | 2 of 50,327 | 518 of 32,060 | 158 of 159 |
+| `compiler/parse.nz` | 77,480 | 2.50 ms | 2.45 ms | 0.38 ms | 2 of 19,030 | 290 of 12,152 | 92 of 93 |
+
+About 6.6–6.8× faster than a full parse. The rest is not parsing: 1.5% of the tokens are reparsed,
+and an edit still copies the scan and moves its suffix, which is linear in the file's lexemes. That
+copy is the next cost, and it is not attacked here. No variance beyond the median is recorded, and
+peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
+than a parse that drops its scan.
+
 ## Mutation harness v2 — what a mutant costs (N12.2, 2026-09-24/25)
 
 Tooling, not language performance, recorded here because this is where measured cost lives.
