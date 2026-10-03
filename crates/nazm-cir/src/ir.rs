@@ -5,6 +5,7 @@
 //! is an identity, every transfer of control names what it leaves, and nothing here says how
 //! the source was written or how a backend will lay it out.
 
+use nazm_sema::traits::TraitId;
 use nazm_sema::{EffectSet, EnumId, FnId, Intrinsic, ModuleId, RecordId, Type};
 use nazm_span::Span;
 
@@ -20,9 +21,31 @@ pub struct Program {
     /// The root module's `main`, where a program has one. A module checked as a library has
     /// none, and its Core IR is the same otherwise.
     pub entry: Option<FnId>,
+    /// The checker's impl table (N78): for each trait and type with an impl, the function
+    /// implementing each of the trait's methods. The one table a [`ExprKind::CallTrait`] is
+    /// resolved in — per instance by MIR, per frame by the interpreter.
+    pub impls: Vec<ImplRow>,
+}
+
+/// One impl, as Core IR resolves calls through a bound against it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImplRow {
+    pub trait_id: TraitId,
+    pub self_ty: Type,
+    /// By the trait's method order.
+    pub methods: Vec<FnId>,
 }
 
 impl Program {
+    /// The function implementing method `method` of `trait_id` for `ty`, from the impl table.
+    #[must_use]
+    pub fn method_fn(&self, trait_id: TraitId, ty: Type, method: u32) -> Option<FnId> {
+        self.impls
+            .iter()
+            .find(|r| r.trait_id == trait_id && r.self_ty == ty)
+            .and_then(|r| r.methods.get(method as usize).copied())
+    }
+
     /// The function `id` names.
     #[must_use]
     pub fn function(&self, id: FnId) -> Option<&Function> {
@@ -421,6 +444,18 @@ pub enum ExprKind {
     /// A call through a function value (N50): the callee is a value of function type.
     CallIndirect {
         callee: Box<Expr>,
+        args: Vec<Expr>,
+        callee_at: Span,
+    },
+    /// A method call through a type parameter's bound (N78): method `method` of `trait_id`
+    /// on a receiver of type `self_ty`, which mentions the calling function's own type
+    /// parameters. Which function runs is the impl table's answer for `self_ty` once those
+    /// are known — per instance in MIR, which never contains this, and per frame in the
+    /// interpreter. The receiver is `args[0]`. A call on a concrete type is a [`Self::Call`].
+    CallTrait {
+        trait_id: TraitId,
+        method: u32,
+        self_ty: Type,
         args: Vec<Expr>,
         callee_at: Span,
     },

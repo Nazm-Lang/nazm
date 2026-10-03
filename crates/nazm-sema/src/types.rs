@@ -105,6 +105,8 @@ pub enum ParamOwner {
     Enum(EnumId),
     /// A generic built-in's own parameter, such as `vec_push`'s `T`.
     Builtin(Intrinsic),
+    /// A trait's `Self`, position 0 (N78).
+    Trait(crate::traits::TraitId),
 }
 
 /// One type parameter: its owner, and its position in the owner's list.

@@ -89,6 +89,9 @@ impl<'a> Names<'a> {
                 ParamOwner::Record(_) | ParamOwner::Enum(_) | ParamOwner::Builtin(_) => {
                     format!("$?{}", p.index)
                 }
+                // A trait's `Self` reaches Core IR only inside a trait call's own record of
+                // what it was written against (N78).
+                ParamOwner::Trait(_) => "$Self".to_owned(),
             },
             other => other.builtin_name().unwrap_or("?").to_owned(),
         }
@@ -110,6 +113,20 @@ impl<'a> Names<'a> {
 
     /// A record's field, by name: declaration order is not part of what a record means.
     #[must_use]
+    /// A trait's method, durably: `module::trait Name.method` (N78).
+    pub fn trait_method(&self, id: nazm_sema::traits::TraitId, method: u32) -> String {
+        self.res.traits().get(id).map_or_else(
+            || "?".to_owned(),
+            |d| {
+                let m = d
+                    .methods
+                    .get(method as usize)
+                    .map_or("?", |m| m.name.as_str());
+                format!("{}.{m}", self.definition(d.module, DefKind::Trait, &d.name))
+            },
+        )
+    }
+
     pub fn field(&self, record: RecordId, field: u32) -> String {
         self.res
             .records()

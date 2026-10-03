@@ -161,6 +161,21 @@ pub struct Rec {
     fields: Vec<Value>,
 }
 
+impl Value {
+    /// The type a value of an implementable type has (N78): what a trait call dispatches on.
+    /// `None` for a value no impl can be for.
+    fn runtime_type(&self) -> Option<nazm_sema::Type> {
+        Some(match self {
+            Self::Int(_) => nazm_sema::Type::Int,
+            Self::Bool(_) => nazm_sema::Type::Bool,
+            Self::Str(_) => nazm_sema::Type::Str,
+            Self::Record(r) => nazm_sema::Type::Record(r.def),
+            Self::Enum(e) => nazm_sema::Type::Enum(e.def),
+            _ => return None,
+        })
+    }
+}
+
 impl Rec {
     #[must_use]
     pub fn new(def: RecordId, fields: Vec<Value>) -> Self {
@@ -2154,9 +2169,13 @@ impl Interpreter {
             }
             ExprKind::FnValue(func) => Value::Func(FuncVal::new(*func, Vec::new())),
 
-            ExprKind::Call { .. } | ExprKind::CallIndirect { .. } => {
-                let (target, args) = match &e.kind {
+            ExprKind::Call { .. } | ExprKind::CallIndirect { .. } | ExprKind::CallTrait { .. } => {
+                let (mut target, args) = match &e.kind {
                     ExprKind::Call { callee, args, .. } => (Ok(*callee), args),
+                    // Decided below, from the receiver's value (N78).
+                    ExprKind::CallTrait { args, .. } => {
+                        (Ok(nazm_sema::FnId::from_index(usize::MAX)), args)
+                    }
                     ExprKind::CallIndirect { callee, args, .. } => {
                         let v = take!(self, f, callee, env);
                         match v {
@@ -2175,6 +2194,28 @@ impl Interpreter {
                 let mut values = Vec::with_capacity(args.len() + 1);
                 for a in args {
                     values.push(take!(self, f, a, env));
+                }
+                // A call through a bound (N78): this frame's type arguments are not kept, but the
+                // receiver's value knows its type, and that is the type the bound was
+                // instantiated at. Resolved in the one impl table, Core IR's.
+                if let ExprKind::CallTrait {
+                    trait_id, method, ..
+                } = &e.kind
+                {
+                    let callee = values
+                        .first()
+                        .and_then(Value::runtime_type)
+                        .and_then(|t| self.core.method_fn(*trait_id, t, *method));
+                    match callee {
+                        Some(c) => target = Ok(c),
+                        None => {
+                            return Err(fail(
+                                codes::COMPILER_DEFECT,
+                                e.at,
+                                "a trait call whose receiver's type has no impl in the program",
+                            ))
+                        }
+                    }
                 }
                 let callee = match &target {
                     Ok(c) => *c,

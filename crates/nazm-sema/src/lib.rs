@@ -53,6 +53,7 @@ pub mod references;
 pub mod resolve;
 pub mod scope;
 pub mod stdlib;
+pub mod traits;
 pub mod types;
 pub mod udt;
 

@@ -134,7 +134,7 @@ pub(crate) fn analyse(
     // This module's functions, once each: a second definition of a name is not declared.
     let mut nodes: Vec<Node> = Vec::new();
     for (decl, f) in functions {
-        let Some(id) = res.definition(module, &f.name) else {
+        let Some(id) = crate::check::defined(res, module, f) else {
             continue;
         };
         let Some(def) = res.function(id) else {
