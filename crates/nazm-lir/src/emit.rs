@@ -150,26 +150,8 @@ fn vec_layout(vecs: &[VecLayout], id: VecTy) -> Option<&VecLayout> {
 /// refuses a cycle before lowering (`N0336`) — but its depth is a property of the program,
 /// and a recursive walk would put that depth on the compiler's stack.
 fn owns_anything(types: Layouts<'_>, t: Ty) -> bool {
-    let mut seen: Vec<Ty> = Vec::new();
-    let mut work = vec![t];
-    while let Some(next) = work.pop() {
-        if seen.contains(&next) {
-            continue;
-        }
-        seen.push(next);
-        let inner: Vec<Ty> = match next.owns() {
-            None => continue,
-            Some(Owns::Record(id)) => record_layout(types.records, id)
-                .map(|l| l.fields.clone())
-                .unwrap_or_default(),
-            Some(Owns::Enum(id)) => enum_layout(types.enums, id)
-                .map(|l| l.variants.iter().flat_map(|v| v.fields.clone()).collect())
-                .unwrap_or_default(),
-            Some(_) => return true,
-        };
-        work.extend(inner);
-    }
-    false
+    // The one answer, `nazm-lir`'s (N81): the Cranelift backend reads the same.
+    crate::abi::owns(types.records, types.enums, t)
 }
 
 /// How many fixed fields a task's argument block has before its arguments.
