@@ -7314,6 +7314,13 @@ eight; on every 64-bit target the same three words are 0, 8, 16 of 24.
 program in the repository; any program both backends compile correctly that the validator refuses;
 any layout whose printed offsets disagree with the bytes Cranelift writes.
 
+**As built (N81, 2026-10-03).** As constituted, with three notes. The printed form is `nazm.lir/1`,
+there having been no earlier one. The validator also checks ownership against containment, which
+the constitution listed and the code needed a table for: ownership is computed once by
+`abi::owns`, which the LLVM backend's helper now calls. And the falsifier ran: every `.nz` program in
+the repository built by N79 and N81 with each backend gave byte-identical objects, and the extended
+fuzzer agreed on every tier.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
