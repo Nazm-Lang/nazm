@@ -7038,6 +7038,18 @@ checker, the interpreter and a native build. A coherence violation accepted beca
 in different modules. A generic body that checks under its bound but cannot be instantiated for a
 type that satisfies it.
 
+**As built (amended after the code).** An impl is *usable* only from its own module and from modules
+that import it directly. The constitution's lookup said "an impl for `R`". That alone would have let a
+module's method resolution depend on an impl in a module outside its check key, so a cached check
+could silently go stale. Coherence is still checked over the whole compilation. A trait's method list
+does not recover member by member: a malformed method gives up the trait, as a record's field list
+did before N76. A persisted interface carries traits, impls and bounds for identity and invalidation,
+but `rehydrate` does not rebuild them, so a module checked against a persisted interface cannot use
+its traits. Each impl method is hidden-linked, not internal, because a generic instance in an object
+of its own may call it through a bound. The interpreter keeps no type arguments per frame, so it
+dispatches a `CallTrait` on the receiver value's runtime type. That type is the one the bound was
+instantiated at, because impls exist only for types whose values carry their type.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

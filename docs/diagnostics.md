@@ -299,6 +299,17 @@ imports, definitions and resolved occurrences by durable identity, and `nazm.ref
 entity's occurrences read from those units. The cache's own entry moved to `nazm.check/3`, and a
 `/2` entry is a miss. No code appeared, and the interface stays `nazm.interface/7`.
 
+**Applied to N78, traits and methods.** Eleven codes appeared, all compatible: `N0600` (two impls
+of one trait for one type), `N0601` (an impl in a module declaring neither), `N0602` (an impl
+missing a method), `N0603` (an impl method its trait does not declare, or with another signature
+or effects), `N0604` (an impl for a type that cannot have one), `N0605` (no trait in scope gives the
+receiver the method), `N0606` (more than one does), `N0607` (a trait where a type is expected),
+`N0608` (a method taken as a value), `N0609` (a trait method whose first parameter is not `self:
+Self`) and `N0610` (a bound or an impl naming a type that is not a trait). They are the checker's,
+in a new block because N03xx is full. The persisted interface moved to `nazm.interface/8`, and Core
+IR's printed form to `nazm.core-ir/2`. No other schema moved; `nazm.resolved/1` gained the target
+kinds `trait` and `trait method`.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

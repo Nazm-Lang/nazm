@@ -923,6 +923,9 @@ ordinary recursion through a generic function compiles (N49).
 
 #### What generics are not, in N11
 
+*Superseded in part by N78:* traits, `impl`, methods and trait bounds now exist (*Traits and
+methods*, below). The rest of this list stands.
+
 No traits, interfaces or protocols; no `impl` and no methods; no constraints or `where`; no
 associated types or constants; no higher-kinded parameters; no const generics; no defaults;
 no variance or subtyping; no specialisation or overloading; no reflection. No closures, no
@@ -1222,6 +1225,42 @@ says nothing about what `==` does there.
 
 ## Settled for v0.2 — mutation and iteration
 <!-- id: v0-2 -->
+
+### Traits and methods — N78
+<!-- id: traits -->
+
+A **trait** names a set of methods a type may implement. An **impl** says that one type implements
+one trait, and gives each method's body. A **method call** is resolved, by the checker, to exactly
+one function. `architecture.md` §7.79 is the design record.
+
+```nazm
+trait Show {
+    fn show(self: Self) -> Str;
+}
+
+struct Point { x: Int, y: Int, }
+
+impl Show for Point {
+    fn show(self: Point) -> Str { str_concat(int_to_str(self.x), int_to_str(self.y)) }
+}
+
+fn twice[T: Show](x: T) -> Str { str_concat(x.show(), Show.show(x)) }
+```
+
+| Rule | |
+| --- | --- |
+| **Declaring** | A trait is a list of signatures, each ended by `;`, whose first parameter is `self: Self` (`N0609`). There are no default bodies: a body in a trait is a syntax error. A trait shares the type namespace with records and enums, and `pub` exports it |
+| **Implementing** | `impl Trait for Type { fn … }` defines every method of the trait exactly once (`N0602`), each with the trait's signature with `Self` replaced by `Type`, effects included, and its first parameter named `self` (`N0603`). `Self` may be written for the type inside the impl. A method that writes no effect set has its trait's. `Type` is a non-generic record or enum, `Int`, `Bool` or `Str` (`N0604`) |
+| **Coherence** | A compilation has at most one impl of a trait for a type (`N0600`). An impl is in the module declaring the trait or the one declaring the type, and for `Int`, `Bool` and `Str` only the trait's (`N0601`) |
+| **Calling** | `recv.m(args)` finds the traits **in scope** — declared in this module, or exported by a module it imports — that declare `m`, keeps those with an impl for the receiver's type in this module or a module it imports directly, and needs exactly one (`N0605` for none, `N0606` for several). `Trait.m(recv, args)` names the trait (UFCS), and may be qualified, `alias::Trait.m(recv)`. An impl's methods are not in the function namespace: `show(p)` is not a call of one |
+| **Bounds** | `[T: Trait]` lets a generic body call the trait's methods on a `T`, and every call site's argument for `T` must have an impl, as for `Equality`. One requirement per parameter |
+| **What a call means** | The impl's function, called with the receiver first. Through a bound, the impl of the type the generic function was instantiated at |
+| **Not here** | A trait as a type (`N0607`): no trait objects, no dynamic dispatch. A method as a value, `x.show` (`N0608`). Generic traits and methods, associated types and constants, supertraits, impls with bounds or for generic types, and inherent impls are refused |
+| **Unchanged meanings** | `E.A()` is a variant wherever `E` is an enum. `Name.m(…)` with unlabelled arguments, or with `Name` a value, was refused before N78, so no program that checked changed meaning. `r.f(1)` with `f` a field of function type is still refused: bind it first |
+
+A trait method's effects are a promise: an impl's must equal them, so a call through a bound exercises
+no more than the trait declares. For provenance, a call through a bound is of unknown origin joined
+with its arguments, as a call through a function value is.
 
 ### Mutation is opt-in and visible at the binding
 <!-- id: mutation -->
