@@ -49,6 +49,9 @@ pub mod __syntax {
     /// The lossless tree (N15), for a tool that needs to know where a position is. What a
     /// position *means* is the resolution's, never the tree's.
     pub use nazm_syntax::{parse_cst, Cst, CstNode, Leaf, SyntaxKind};
+    /// An editor's revision of a file and the edits that move it (N76): the same parse,
+    /// maintained incrementally, never a second one.
+    pub use nazm_syntax::{EditError, ParseStats, Revision, TextEdit};
 }
 
 use nazm_diag::Diagnostic;
@@ -412,7 +415,20 @@ pub struct Analysis {
 /// stack arranged for it and uses [`on_checked_map`] or [`on_module_map`].
 #[must_use]
 pub fn analyse(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, entry: Entry) -> Analysis {
-    let (program, mut diagnostics) = nazm_syntax::parse_map(map);
+    analyse_parsed(map, graph, entry, None).0
+}
+
+/// As [`analyse`], with the root file's parse taken from an editor's revision of it when the
+/// revision is of the root's exact text (N76, [`nazm_syntax::parse_map_with_root`]); the
+/// `bool` says whether it was. Equal results either way, by the revision's contract.
+#[must_use]
+pub fn analyse_parsed(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+    entry: Entry,
+    root: Option<&__syntax::Revision>,
+) -> (Analysis, bool) {
+    let (program, mut diagnostics, reused) = nazm_syntax::parse_map_with_root(map, root);
     let parse_failed = !diagnostics.is_empty();
     let mut syntax_errors: Vec<nazm_span::FileId> =
         diagnostics.iter().map(|d| d.primary.span.file).collect();
@@ -430,12 +446,15 @@ pub fn analyse(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, entry: Ent
             .into_iter()
             .filter(|d| !(drop_missing_main && d.code == nazm_diag::codes::MISSING_MAIN)),
     );
-    Analysis {
-        program,
-        resolution,
-        diagnostics,
-        syntax_errors,
-    }
+    (
+        Analysis {
+            program,
+            resolution,
+            diagnostics,
+            syntax_errors,
+        },
+        reused,
+    )
 }
 
 /// A completion probe (N26): what the checker made of the current source with a hole at

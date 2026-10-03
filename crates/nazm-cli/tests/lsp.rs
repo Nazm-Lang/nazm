@@ -273,8 +273,8 @@ fn the_server_speaks_the_protocol_end_to_end() {
     );
     assert_eq!(caps["positionEncoding"], "utf-16");
     assert_eq!(
-        caps["textDocumentSync"]["change"], 1,
-        "full synchronisation"
+        caps["textDocumentSync"]["change"], 2,
+        "incremental synchronisation (N76)"
     );
     assert_eq!(caps["textDocumentSync"]["openClose"], true);
     assert_eq!(caps["referencesProvider"], true);
@@ -403,6 +403,54 @@ fn the_server_speaks_the_protocol_end_to_end() {
     assert_eq!(r["error"]["code"], -32602, "{r}");
 
     // 8. Shutdown and exit, cleanly, with nothing but protocol on stdout throughout.
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
+fn ranged_changes_in_utf16_move_the_buffer_as_whole_ones_would() {
+    // N76: each change a UTF-16 range of the text as the one before it left it. After
+    // non-ASCII text, so a byte offset taken for a column would land wrong.
+    let (_dir, root) = project(&[("lib.nz", LIB), ("main.nz", MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&main, 1, MAIN);
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["diagnostics"][0]["code"], "N0300", "{d}");
+    // `helper(s)` → `helper(1)`: one character, on line 1, after `é→😀`.
+    let line = MAIN.lines().nth(1).unwrap();
+    let s = utf16(line, line.rfind("(s)").unwrap() + 1);
+    let range = |a: u32, b: u32| json!({"start": {"line": 1, "character": a}, "end": {"line": 1, "character": b}});
+    c.notify(
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": uri(&main), "version": 2},
+               "contentChanges": [{"range": range(s, s + 1), "text": "1"}]}),
+    );
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(
+        (d["version"].clone(), d["diagnostics"].clone()),
+        (json!(2), json!([])),
+        "{d}"
+    );
+    // Two changes in one notification: a line inserted at the top, then — in the text that
+    // left — a syntax error on what is now line 2.
+    c.notify(
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": uri(&main), "version": 3},
+               "contentChanges": [
+                   {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "text": "// é\n"},
+                   {"range": {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 0}}, "text": "let "},
+               ]}),
+    );
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["version"], 3);
+    assert_eq!(d["diagnostics"][0]["range"]["start"]["line"], 2, "{d}");
+    // A whole-document change still replaces everything.
+    c.change(&main, 4, MAIN_OK);
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["diagnostics"], json!([]), "{d}");
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
