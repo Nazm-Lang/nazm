@@ -57,6 +57,11 @@ pub fn declarations(out: &mut String) {
         "declare i32 @pthread_attr_destroy(ptr)",
         "declare i32 @pthread_cond_timedwait(ptr, ptr, ptr)",
         "declare i32 @clock_gettime(i32, ptr)",
+        "declare i64 @atoll(ptr)",
+        "declare i32 @getpagesize()",
+        "declare i32 @posix_memalign(ptr, i64, i64)",
+        "declare i32 @mprotect(ptr, i64, i32)",
+        "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)",
     ] {
         let _ = writeln!(out, "{d}");
     }

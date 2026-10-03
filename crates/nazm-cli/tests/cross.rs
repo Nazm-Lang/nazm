@@ -108,8 +108,11 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
             assert!(o.status.success(), "{triple} {backend}: {}", err(&o));
             let listed = std::fs::read_to_string(d.path().join(&dir).join("link.txt")).unwrap();
             assert!(listed.contains(&format!("target {triple}\n")), "{listed}");
+            // The task pool's switch (N83) follows the runtime where the runtime has tasks or
+            // channels — always under Cranelift, whose runtime is its whole baseline.
             assert!(
-                listed.contains("objects 00-m0.o 01-runtime.o 02-entry.o\n"),
+                listed.contains("objects 00-m0.o 01-runtime.o 02-entry.o\n")
+                    || listed.contains("objects 00-m0.o 01-runtime.o 02-switch.o 03-entry.o\n"),
                 "{listed}"
             );
             let libs = if triple.contains("linux") {
@@ -118,7 +121,14 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
                 ""
             };
             assert!(listed.ends_with(&format!("libraries {libs}\n")), "{listed}");
-            for o in ["00-m0.o", "01-runtime.o", "02-entry.o"] {
+            // Every object listed, the switch's too, is for the target.
+            let objects: Vec<&str> = listed
+                .lines()
+                .find_map(|l| l.strip_prefix("objects "))
+                .unwrap()
+                .split(' ')
+                .collect();
+            for o in objects {
                 assert_eq!(
                     header(&d.path().join(&dir).join(o)),
                     expected(triple),
