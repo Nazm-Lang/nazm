@@ -1462,10 +1462,13 @@ name = "a-record-drop-does-not-recurse"
 why = """
 answers `does this record own anything` by looking at its immediate fields only, so a
 record whose only owning thing is two levels down is treated as owning nothing: no helper,
-no frame slot, and every string inside it leaked
+no frame slot, and every string inside it leaked. Repointed by N81, which made `nazm-lir`'s
+`abi::owns` the one answer both backends read.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """            Some(Owns::Record(id)) => record_layout(types.records, id)
+file = "crates/nazm-lir/src/abi.rs"
+find = """            Some(Owns::Record(id)) => records
+                .iter()
+                .find(|r| r.id == id)
                 .map(|l| l.fields.clone())
                 .unwrap_or_default(),"""
 replace = "            Some(Owns::Record(_)) => continue,"
@@ -12658,3 +12661,66 @@ file = "crates/nazm-cli/src/explain.rs"
 find = '                    "traces": traces,'
 replace = '                    "traces": { let _ = traces; Vec::<Value>::new() },'
 killers = [{ package = "nazm-cli", test = "flow_v3", name = "explain_flow_prints_each_origins_chain_from_where_it_entered" }]
+
+
+# --- N81: the backend contract v2, stage one ------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.82: the target's pointer width, a `Str`'s three
+# words, natural alignment, an enum's payload area, ownership closed under containment, the
+# validator, and Cranelift reading its layouts from `nazm-lir` for its own target.
+
+[[mutation]]
+name = "n81-wasm32-has-eight-byte-pointers"
+why = "every target is laid out as a 64-bit one, so what `nazm lir` prints for wasm32 is not what LLVM lays out there"
+file = "crates/nazm-lir/src/abi.rs"
+find = "            Arch::Wasm32 => Self::WASM32,"
+replace = "            Arch::Wasm32 => Self::LP64,"
+killers = [{ package = "nazm-cli", test = "lir", name = "a_pointer_is_four_bytes_on_wasm32_and_nothing_else_moves" }]
+
+[[mutation]]
+name = "n81-a-str-owner-overlaps-its-length"
+why = "a `Str`'s owner is placed four bytes after its length, inside it"
+file = "crates/nazm-lir/src/abi.rs"
+find = "        [0, len, len + 8]"
+replace = "        [0, len, len + 4]"
+killers = [{ package = "nazm-lir", lib = true, name = "abi::tests::a_str_is_three_words_with_an_eight_byte_length_on_every_target" }]
+
+[[mutation]]
+name = "n81-fields-are-packed"
+why = "fields are laid end to end without alignment, so an `Int` after a `Bool` sits at offset 1"
+file = "crates/nazm-lir/src/abi.rs"
+find = "            at = round(at, l.align);"
+replace = "            let _ = l.align;"
+killers = [{ package = "nazm-cli", test = "lir", name = "fields_follow_the_canonical_order_at_natural_alignment" }]
+
+[[mutation]]
+name = "n81-an-enum-forgets-its-tag"
+why = "an enum's size leaves out its tag word, so its largest variant runs past its end"
+file = "crates/nazm-lir/src/abi.rs"
+find = "                    let lay = Lay::new(round(PAYLOAD + area, align), align);"
+replace = "                    let lay = Lay::new(round(area, align), align);"
+killers = [{ package = "nazm-cli", test = "lir", name = "fields_follow_the_canonical_order_at_natural_alignment" }]
+
+[[mutation]]
+name = "n81-nothing-owns"
+why = "ownership stops at the first owning type instead of answering yes, so a drop gives nothing back"
+file = "crates/nazm-lir/src/abi.rs"
+find = "            Some(_) => return true,"
+replace = "            Some(_) => continue,"
+killers = [{ package = "nazm-cli", test = "lir", name = "ownership_is_closed_under_containment" }]
+
+[[mutation]]
+name = "n81-the-validator-allows-overlap"
+why = "two fields that overlap pass validation, so a broken table reaches code generation"
+file = "crates/nazm-lir/src/abi.rs"
+find = "                if *off < end {"
+replace = "                if false && *off < end {"
+killers = [{ package = "nazm-lir", lib = true, name = "abi::tests::the_validator_accepts_a_sound_table_and_names_every_broken_one" }]
+
+[[mutation]]
+name = "n81-cranelift-lays-out-for-another-target"
+why = "the Cranelift backend reads the tables for a 4-byte pointer on a 64-bit host, and its handles overlap"
+file = "crates/nazm-codegen-clif/src/unit.rs"
+find = "        let lay = Layouts::of(unit, DataLayout::with_pointer_bits(ptr.bits()));"
+replace = "        let lay = Layouts::of(unit, DataLayout::WASM32);"
+killers = [{ package = "nazm-cli", test = "lir", name = "every_shape_in_the_tables_runs_the_same_on_both_backends" }]

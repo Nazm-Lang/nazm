@@ -482,6 +482,14 @@ change. `--spans` names each statement's source position and `--json` gives one 
 promise as Core IR's: a debugging view, `nazm.mir/1`, internal and unstable
 (`docs/architecture.md` §7.42).
 
+```
+nazm lir --target wasm32-unknown-unknown prog.nz
+```
+
+goes one level further, to what both native backends read before they write any code: the
+target's data layout, every record's and enum's byte layout on that target, and which types own
+anything — `nazm.lir/1`, validated as every build validates it (`docs/architecture.md` §7.82).
+
 ## The syntax
 
 <!-- generated from docs/grammar.ebnf: begin -->

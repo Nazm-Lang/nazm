@@ -398,6 +398,15 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N81 — the backend contract v2, stage one — **not accepted, 2026-10-03; area 10 stays PARTIAL**
+
+`architecture.md` §7.82 first, and it says why: LIR now owns a target's data layout, every byte
+layout and the ownership table, both backends read them, every native build validates them, and
+`nazm lir` prints them as `nazm.lir/1`; the fuzzer exercises layouts on every tier. Objects are
+byte-identical on every program in the repository. Not done, by decision: one instruction-level LIR
+that both backends consume, with an oracle interpreter — a rewrite of both code generators that this
+programme does not risk the reference compiler for. Next: N82, runtime v2.
+
 ### N80 — provenance v3 — **complete as scoped, 2026-10-03; area 7 stays PARTIAL**
 
 `architecture.md` §7.81 first. Containers by type-keyed cell, calls through values and bounds by
