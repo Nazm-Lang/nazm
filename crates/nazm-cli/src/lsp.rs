@@ -119,7 +119,9 @@ fn capabilities() -> ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 open_close: Some(true),
-                change: Some(TextDocumentSyncKind::FULL),
+                // N76: each change is a range of the text, applied to the document's
+                // revision so only what it can have changed is parsed again.
+                change: Some(TextDocumentSyncKind::INCREMENTAL),
                 ..TextDocumentSyncOptions::default()
             },
         )),
@@ -392,12 +394,41 @@ impl Server {
                 let Some(path) = path_of(&p.text_document.uri) else {
                     return Vec::new();
                 };
-                // Full synchronisation: the last change is the whole document.
-                let Some(text) = p.content_changes.into_iter().last().map(|c| c.text) else {
+                // Incremental synchronisation (N76): each change is a UTF-16 range of the
+                // text as the changes before it left it, or — without a range — the whole
+                // document. Each becomes a byte range of that text.
+                let Some(mut text) = self.service.text(&path).map(|t| t.to_string()) else {
                     return Vec::new();
                 };
+                let mut edits = Vec::new();
+                for c in p.content_changes {
+                    let (start, end) = match c.range {
+                        Some(r) => {
+                            let index = LineIndex::new(&text);
+                            (index.offset(r.start), index.offset(r.end))
+                        }
+                        None => (0, u32::try_from(text.len()).unwrap_or(u32::MAX)),
+                    };
+                    let (a, b) = (start as usize, end as usize);
+                    if a > b || b > text.len() {
+                        eprintln!("nazm lsp: a change outside the document; send it whole");
+                        return Vec::new();
+                    }
+                    text.replace_range(a..b, &c.text);
+                    edits.push(nazm_core::__syntax::TextEdit {
+                        start,
+                        end,
+                        text: c.text,
+                    });
+                }
                 self.versions.insert(path.clone(), p.text_document.version);
-                self.service.change(&path, p.text_document.version, text)
+                match self.service.edit(&path, p.text_document.version, &edits) {
+                    Ok(published) => published,
+                    Err(e) => {
+                        eprintln!("nazm lsp: a change that does not apply ({e:?}); send it whole");
+                        Vec::new()
+                    }
+                }
             }
             DidCloseTextDocument::METHOD => {
                 let Ok(p) =

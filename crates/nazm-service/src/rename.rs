@@ -401,6 +401,8 @@ impl LanguageService {
                 root,
                 version,
                 self.generation,
+                // A rename's trial parses the edited text in full: no revision is of it.
+                None,
             );
             if !after.analysis.diagnostics.is_empty() {
                 return Err(Refusal::Rejected(after.analysis.diagnostics.clone()));

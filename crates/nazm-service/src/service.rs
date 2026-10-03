@@ -47,13 +47,17 @@
 //!
 //! # What is recomputed
 //!
-//! Everything, on every change, for every open document: each is loaded as the root of a
-//! compilation — exactly the compilation `nazm check <that file>` would load — lexed and
-//! parsed in full, and checked. That is the simplest strategy that is correct, and it is
-//! the one taken: no incremental reparse, no graph maintenance, no reuse of semantic work
-//! between versions, and no persistent cache read or written (an unsaved buffer is not
-//! state the cache may record). What *is* reused is the process, and the open buffers.
-//! `docs/performance.md` measures what that costs.
+//! Everything semantic, on every change, for every open document: each is loaded as the
+//! root of a compilation — exactly the compilation `nazm check <that file>` would load —
+//! and checked. **Its own text is not parsed again** (N76): each open document keeps the
+//! compiler's [`Revision`] of its text, moved by every ranged edit an editor sends
+//! ([`LanguageService::edit`]), and its compilation takes the root file's trees and syntax
+//! diagnostics from that revision. A revision equals a fresh parse of its text by contract
+//! (`architecture.md` §7.77), so this changes what is computed, not what is answered. Every
+//! other file of the compilation is parsed in full; there is no graph maintenance, no reuse
+//! of semantic work between versions, and no persistent cache read or written (an unsaved
+//! buffer is not state the cache may record). `docs/performance.md` measures what that
+//! costs.
 //!
 //! # Current means current
 //!
@@ -69,7 +73,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use nazm_core::__syntax::{Cst, SyntaxKind};
+use nazm_core::__syntax::{Cst, EditError, ParseStats, Revision, SyntaxKind, TextEdit};
 use nazm_core::sema::module::ModuleGraph;
 use nazm_core::sema::{Callee, ReferenceIndex};
 use nazm_core::{Analysis, Entry};
@@ -171,6 +175,9 @@ pub(crate) struct Document {
     pub(crate) path: PathBuf,
     pub(crate) version: i32,
     pub(crate) text: Arc<str>,
+    /// The compiler's parse of `text` as the root file of the document's compilation,
+    /// moved by [`LanguageService::edit`] (N76).
+    pub(crate) revision: Revision,
     pub(crate) analysis: Option<Snapshot>,
 }
 
@@ -192,6 +199,8 @@ pub(crate) struct Snapshot {
     /// Which file each of the compilation's files is, by [`FileId`] index, so that one file
     /// can be recognised in two compilations.
     pub(crate) files: Vec<FileKey>,
+    /// Whether the root file's parse was the document's revision rather than a new one.
+    pub(crate) reused_root: bool,
 }
 
 /// A file, as the same file in any compilation: its [`identity`] path, or the core
@@ -372,16 +381,68 @@ impl LanguageService {
     /// Open `path` at `version` with exactly `text`, which is from now on what every
     /// compilation reads for that file instead of the disk.
     pub fn open(&mut self, path: &Path, version: i32, text: String) -> Vec<Published> {
+        let revision = Revision::new(FileId::ROOT, text.clone());
         self.documents.insert(
             identity(path),
             Document {
                 path: path.to_path_buf(),
                 version,
                 text: text.into(),
+                revision,
                 analysis: None,
             },
         );
         self.refresh()
+    }
+
+    /// Apply `edits`, in order, to an open document's text, as `version`: each a byte range
+    /// of the text as the edits before it left it (N76). The document's revision moves with
+    /// each — reparsing only what an edit can have changed — and every open document is
+    /// analysed again, as for [`LanguageService::change`].
+    ///
+    /// # Errors
+    ///
+    /// `None` when the document is not open; the edit's error when one is not a range of
+    /// the text it applies to on character boundaries. Nothing changes then, not even for
+    /// the edits before it: the editor's text and this one's have diverged, and the editor
+    /// is expected to send the whole document.
+    pub fn edit(
+        &mut self,
+        path: &Path,
+        version: i32,
+        edits: &[TextEdit],
+    ) -> Result<Vec<Published>, Option<EditError>> {
+        let key = identity(path);
+        let doc = self.documents.get(&key).ok_or(None)?;
+        let mut revision = doc.revision.clone();
+        for e in edits {
+            revision = revision.edit(e).map_err(Some)?;
+        }
+        if let Some(doc) = self.documents.get_mut(&key) {
+            doc.text = Arc::from(revision.text());
+            doc.version = version;
+            doc.revision = revision;
+        }
+        Ok(self.refresh())
+    }
+
+    /// What the last parse of an open document's text did (N76): whether it was full, and
+    /// how much an edit reused.
+    #[must_use]
+    pub fn parse_stats(&self, path: &Path) -> Option<ParseStats> {
+        self.documents
+            .get(&identity(path))
+            .map(|d| d.revision.stats())
+    }
+
+    /// Whether the current analysis of an open document took its root file's parse from the
+    /// document's revision (N76).
+    #[must_use]
+    pub fn reused_root_parse(&self, path: &Path) -> Option<bool> {
+        self.documents
+            .get(&identity(path))
+            .and_then(|d| d.analysis.as_ref())
+            .map(|s| s.reused_root)
     }
 
     /// Open `path` at version 0 with its current contents on disk — for a one-shot client
@@ -440,6 +501,7 @@ impl LanguageService {
                 &path,
                 version,
                 generation,
+                Some(&doc.revision),
             );
             let published = Published {
                 path: path.clone(),
@@ -621,6 +683,7 @@ pub(crate) fn analyse(
     path: &Path,
     version: i32,
     generation: u64,
+    revision: Option<&Revision>,
 ) -> Snapshot {
     // The CLI's rule, unchanged: a declared root beats a marker beats the file's own
     // directory. A root that cannot be decided is reported the way `nazm check` reports it.
@@ -646,7 +709,8 @@ pub(crate) fn analyse(
     let load::Loaded { map, graph } = loaded;
     // A module, not a program: whether it has a `main` is `nazm check`'s and `nazm run`'s
     // question about a program, and an editor opening a library is not asking it.
-    let mut analysis = nazm_core::analyse(&map, &graph, Entry::Absent);
+    let (mut analysis, reused_root) =
+        nazm_core::analyse_parsed(&map, &graph, Entry::Absent, revision);
     early.append(&mut analysis.diagnostics);
     analysis.diagnostics = early;
     let index = ReferenceIndex::of(&analysis.resolution);
@@ -659,7 +723,12 @@ pub(crate) fn analyse(
         })
         .collect();
     let root_text = texts.first().map_or("", |t| &**t);
-    let cst = nazm_core::__syntax::parse_cst(FileId::ROOT, root_text).cst;
+    // The revision's tree when its parse was the one analysed; otherwise the root's text,
+    // parsed (N76).
+    let cst = match revision {
+        Some(r) if reused_root => r.cst().clone(),
+        _ => nazm_core::__syntax::parse_cst(FileId::ROOT, root_text).cst,
+    };
     Snapshot {
         generation,
         version,
@@ -670,6 +739,7 @@ pub(crate) fn analyse(
         cst,
         texts,
         files,
+        reused_root,
     }
 }
 

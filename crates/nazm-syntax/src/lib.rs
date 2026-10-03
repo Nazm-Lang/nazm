@@ -112,6 +112,42 @@ pub fn parse_map(map: &nazm_span::SourceMap) -> (Program, Vec<nazm_diag::Diagnos
     (program, errors)
 }
 
+/// As [`parse_map`], with the root file's parse taken from `root` — an editor's revision of
+/// it (N76) — when that revision is of exactly the root file's text. Returns whether it
+/// was. By [`Revision::edit`]'s contract the two parses are equal, so this changes what is
+/// computed, never what is answered; a revision of other text is not used, and the root is
+/// parsed as [`parse_map`] parses it.
+pub fn parse_map_with_root(
+    map: &nazm_span::SourceMap,
+    root: Option<&Revision>,
+) -> (Program, Vec<nazm_diag::Diagnostic>, bool) {
+    let reusable = root.filter(|r| {
+        r.file() == nazm_span::FileId::ROOT
+            && map.ids().any(|id| id == nazm_span::FileId::ROOT)
+            && map.text(nazm_span::FileId::ROOT) == r.text()
+    });
+    let mut program = Program {
+        functions: Vec::new(),
+        records: Vec::new(),
+        enums: Vec::new(),
+        imports: Vec::new(),
+        hole: None,
+    };
+    let mut errors = Vec::new();
+    for id in map.ids() {
+        let (p, file_errors) = match reusable {
+            Some(r) if id == nazm_span::FileId::ROOT => (r.program(), r.diagnostics()),
+            _ => parse_file(id, map.text(id)),
+        };
+        program.functions.extend(p.functions);
+        program.records.extend(p.records);
+        program.enums.extend(p.enums);
+        program.imports.extend(p.imports);
+        errors.extend(file_errors);
+    }
+    (program, errors, reusable.is_some())
+}
+
 /// As [`parse_map`], for a completion probe (N26): the root file parsed with a hole at byte
 /// `hole`, if the grammar has one there, and its concrete tree returned beside the rest.
 pub fn parse_map_at(
