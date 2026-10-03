@@ -7143,6 +7143,100 @@ subsumed value whose call performs an effect its expected type does not allow.
 
 The epoch is 23 for `OutCap` becoming a built-in type name and for the two new acceptances.
 
+## 7.81 Provenance v3: container cells, indirect targets, local shapes, one policy engine — N80, 2026-10-03
+
+Written before the code. Area 7 is PARTIAL for named reasons, and this section settles the ones
+that are precision rather than kind. **Containers**: every read of a sequence, `Vec` or channel is
+`unknown`, so a path built from a `Strs` the program filled with its own arguments is refused.
+**Indirect calls**: a call through a function value or a trait bound returns `unknown`, and a
+closure's parameters are `unknown`. **Records and variants** are tracked whole. **The one
+restriction** is code, not policy: `N0372`'s rule and `cyber`'s `contents-stay-in-files` are two
+implementations of one idea. **No traces**: `nazm explain-flow` names the origins at a sink, never
+how they got there. What stays out is stated at the end.
+
+**The domain.** Unchanged: four compiler-owned origins (`argument`, `file`, `authority`,
+`unknown`), explicit data flow only, conditions contributing nothing, joins as set unions, and
+summaries as the least fixed point over the whole program. No origin is added, so no label a
+program writes exists.
+
+**Container cells (type-keyed, alias-free).** Every container has a **cell**, named by its type:
+`Ints`, `Strs`, `Vec[T]`, `Chan` and `Chan[T]`, with `T` written as the checker shows it. A cell's
+origins are the join of every value written into **any** container of that type, anywhere in the
+program: `ints_push`, `ints_set`, `strs_push`, `strs_set`, `vec_push`, `vec_set`, `chan_send`,
+`chan_send_of`, and the value `chan_select_of` and `chan_select_until` move from `Chan[T]` onto
+`Vec[T]` (a write of the `Chan[T]` cell into the `Vec[T]` cell). Every read of one — `ints_get`,
+`ints_pop`, `ints_len`, `ints_sum`, the `strs_` and `vec_` reads, `str_join`, `chan_recv`,
+`chan_recv_of` — carries its cell's origins, and its other arguments'. This is sound without alias
+analysis, because a handle of type `T` can only ever hold what was written into some handle of
+type `T`, and every write is one of these built-ins: no foreign function takes a handle (§7.44), and
+the runtime fills none. It is imprecise exactly where two containers share a type, and that is
+stated, not hidden. A container whose type mentions a type parameter, in a generic body, is the
+**wild** cell: a write to it reaches every cell, and a read of it reads every cell. Same-named
+records from two modules share a cell: an over-approximation, never a miss. A select's index is
+control, not data, and carries nothing: implicit flow, outside the model as a condition is.
+
+**Indirect targets (type-based).** A call through a function value may reach any function value
+the program makes of a matching type: each named function written as a value, and each closure.
+Types match **up to effects** (N79's subsumption lets a pure value stand where an effectful one is
+expected) and exactly otherwise; a function type that mentions a type parameter matches every
+function value. The call's result is the join of every candidate's summary applied to its
+arguments; each candidate's parameters receive its arguments; a candidate whose parameter reaches
+a restricted sink carries the rule back to the argument. A call through a trait bound (N78) reaches
+every impl's method of that trait method. With no candidate, the call can never run and carries
+nothing. A **closure's parameters** are therefore ordinary parameters, received from the indirect
+calls that can reach it, and its **captures** are parameters received from its maker, at the point
+it is made — so a captured path that comes from the maker's file read is still refused, and one from
+its arguments is not.
+
+**Local shapes (field and variant sensitive within a body).** Inside a body, a binding assigned
+only constructions — a record, a variant, or another binding with a shape — keeps each field's
+flow apart, keyed by variant and field **name**. A field read, a pattern's binding and `?` on a
+`Result.Ok` read that field's flow; a variant never assigned to the binding contributes nothing. At
+a **call boundary** — an argument, a result, a store into a container — a value is whole again: the
+join of its fields. Flow-insensitive like everything else: a binding assigned anything without a
+shape is whole from then on.
+
+**One policy engine.** A **policy** is a list of rules `(sink class, forbidden origins, scope)`,
+where the scope is *declared functions* or *every function*. The language's policy is one rule,
+`(path, {file, unknown}, declared)`, and it is `N0372`, unchanged in meaning and message. A profile
+adds rules: `cyber`'s `contents-stay-in-files` is `(output, {file, unknown}, every)`, and a new
+rule, `checked-paths`, is the language's rule over every function — the provenance half of N37's
+bridge, closed by profile — added to `cyber`. One function decides a violation for both, and
+gives the same witness.
+
+**Traces.** Every sink, as solved, carries for each origin that reaches it one deterministic
+chain: where the origin entered, every call, return, container cell, capture and caller it
+crossed, in order. `nazm explain-flow --json` prints them as `nazm.flow/2`; `/1` had no `traces`.
+`N0372` and `N0510` show the same chain as secondary labels.
+
+**What tooling and the programmer observe.** A program accepted before stays accepted except where
+`cyber` gains `checked-paths`. A program refused before for a container read, an indirect call or a
+closure parameter that the cells and targets now prove carries no file contents is accepted. Nothing
+runs differently: provenance is erased before Core IR.
+
+**Versions.** Semantic epoch `23 → 24`: `N0372` moved from refused to accepted for such programs.
+Check entry `nazm.check/3 → /4`: a module's persisted facts gain cell writes and reads, indirect call
+sites and closure creations; a `/3` entry is a miss. Interface `/8` unchanged: no fact is in it.
+`nazm.flow/1 → /2` for traces. Core IR, MIR, LIR, runtime ABI and every object key unchanged:
+provenance is erased before Core IR. Profile ids gain `checked-paths`. `nazm.context`,
+`nazm.snapshot` and `nazm.delta` unchanged in shape: a summary's fields are the same three.
+
+**Negative example.** `let xs = strs_new(); strs_push(xs, read_file("cfg")); write_file(strs_get(xs,
+0), "x")` in a declared function is `N0372`, with a trace through the `Strs` cell to the
+`read_file`. **Boundary example.** The same with `strs_push(xs, arg(1))` is accepted — unless any
+other `strs_push` in the program writes a file's contents into any `Strs`, which the trace names.
+
+**Not solved, deliberately.** Implicit flow and non-interference; timing and side channels; per-handle
+or per-index precision (two containers of one type share a cell); shapes across calls; user labels,
+sanitisers and a policy language a program writes; runtime tracking; foreign code, whose results
+stay `unknown` and whose arguments are not sinks (the `ForeignCap` authorised them).
+
+**What would prove this unsuitable.** A program where a value written into a container reaches a
+read of another container of the same type with that origin missing from the read. An indirect call
+that runs a function value outside its candidate set. A field read whose flow omits an origin that
+was written to that field. A policy verdict for `N0372` that differs from the language rule it
+replaced, on any program in the repository.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
