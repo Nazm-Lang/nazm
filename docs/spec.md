@@ -3305,10 +3305,38 @@ pub extern "C" fn nazm_triple(x: Int) -> Int ! {} = "nazm_triple" { x * 3 }
 
 | | |
 | --- | --- |
-| **`Str` argument** | A NUL-terminated copy for the call's duration; C borrows it. A `Str` holding a NUL byte fails the call before C runs (`N0405`). A `Str` result is still refused (`N0381`) |
+| **`Str` argument** | A NUL-terminated copy for the call's duration; C borrows it. A `Str` holding a NUL byte fails the call before C runs (`N0405`). A `Str` result was refused (`N0381`) until N85, which copies it (*Foreign functions v3*) |
 | **Export** | `pub extern "C" fn … ! {} = "symbol" { … }`: a C-callable function of `Int`s and `Bool`s, public, effect-free and not generic (`N0391` otherwise) |
 | **Failure in an export** | Reported on standard error; the process exits with status 2. Nothing unwinds into C |
 | **Library** | `nazm build --lib FILE -o OUT.a` writes the static archive and `OUT.h`; no `main` needed |
+
+### Foreign functions v3: handles, C structs, strings back, `errno`, callbacks — N85
+<!-- id: ffi-v3 -->
+
+```nazm
+extern "C" struct Db;                                   // an opaque handle: a C pointer
+extern "C" struct Point { x: Int, flag: Bool, y: Int }  // laid out as C's struct, in this order
+
+extern "C" fn db_open(path: Str) -> Option[Db] = "db_open";   // null is `None`
+extern "C" fn db_errmsg(d: Db) -> Str = "db_errmsg";          // copied; null is `N0409`
+extern "C" fn plot(p: Point) -> Int = "plot";                 // `const struct Point *`, borrowed
+extern "C" fn each(f: fn(Int) -> Int, n: Int) -> Int = "each"; // a C function pointer
+
+pub extern "C" fn twice(x: Int) -> Int ! {} = "nz_twice" { x * 2 }
+
+fn go(f: ForeignCap) -> Int ! { foreign } { each(twice, 3) + c_errno() }
+```
+
+| | |
+| --- | --- |
+| **Opaque handle** | `extern "C" struct Name;` — a pointer Nazm never reads, frees or compares. Only a foreign result makes one; building one or reading a field is `N0611`, `==` is `N0304`, and it never crosses into a task, by capture (`N0321`) or channel (`N0390`). Otherwise an ordinary value: a local, a record field, a `Vec` element, a result |
+| **C-layout struct** | `extern "C" struct Name { … }` — fields `Int` (`int64_t`), `Bool` (`bool`), a handle (a pointer) or another C struct, **in declaration order** with C's alignment; any other field `N0381`, type parameters `N0384`, another ABI `N0380`. Passed to C as a `const struct Name *` to a copy made for the call and freed after it. A struct by value, a struct result, unions, arrays and bit-fields do not cross |
+| **Nullability** | A result `-> Db` or `-> Str` promises non-null: a null fails the call with `N0409`, checked before Nazm sees it. `-> Option[Db]` and `-> Option[Str]` make null `None`. An argument is never null; `Option[Db]` as an argument is `N0381` |
+| **`Str` result** | A `const char *` C still owns, copied to its NUL into a `Str` Nazm owns, the moment the call returns. A string the caller must free is bound as a handle and its free function |
+| **`errno`** | `c_errno() -> Int` is what the latest foreign call on this thread left, captured as it returned. It performs `foreign` (a `ForeignCap`); hosted targets only (`N0613` on a freestanding or WebAssembly build); `nazm run` refuses it as it refuses calling C (`N0385`) |
+| **Callback** | A foreign parameter of type `fn(…) -> …` over `Int` and `Bool` is a C function pointer. Its argument is an export's name — never a closure or another function (`N0612`); C may call it during the call, after it, and from any thread. A failure in it ends the process (status 2) |
+| **Shared library** | `nazm build --lib --shared FILE -o libNAME.dylib` (or `.so`): exports are its only visible symbols; it names itself `@rpath/NAME` (the soname `NAME` elsewhere); the same header as `--lib` |
+| **Not crossing** | Floating point, integers other than `int64_t`, variadics, by-value structs, closures as callbacks, `dlopen`, ABIs other than `"C"` — each refused by name |
 
 ### Packages v2: a registry and version requirements — N56
 <!-- id: registry -->
