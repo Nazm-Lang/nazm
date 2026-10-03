@@ -12314,7 +12314,7 @@ find = """
 replace = """
                 .is_some();
             if in_scope && usable {"""
-killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_in_a_module_not_imported_is_not_in_scope" }]
+killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_out_of_scope_is_not_a_candidate_even_when_another_trait_has_the_method" }]
 
 [[mutation]]
 name = "n78-mir-dispatches-on-int"
@@ -12400,7 +12400,7 @@ why = "`E.A()` is read as a method call when a trait in scope has a method `A`, 
 file = "crates/nazm-core/src/check.rs"
 find = '        let enum_visible = matches!(self.types.names.get(&key), Some(Type::Enum(_)));'
 replace = '        let enum_visible = { let _ = &key; false };'
-killers = [{ package = "nazm-cli", test = "traits", name = "trait_is_a_keyword_now_and_an_enum_keeps_its_variant_calls" }]
+killers = [{ package = "nazm-cli", test = "traits", name = "an_enum_keeps_its_variant_calls_beside_an_imported_trait_of_its_name" }]
 
 [[mutation]]
 name = "n78-a-trait-call-has-no-references"
