@@ -7534,6 +7534,122 @@ are each two functions. **`num_pow` returns `None` for `Int`'s minimum**: its ov
 magnitudes, and the documentation says so rather than the check growing a special case. A standard
 module may import another (`@std/fs` imports `@std/text`).
 
+## 7.86 FFI v3: handles, C-layout records, C-string results, errno, callbacks and shared libraries — N85, 2026-10-04
+
+Written before the code. Area 17 is PARTIAL: C is called with `Int`, `Bool` and borrowed `Str`
+arguments, Nazm is exported to C with scalars, and a static library is built. A real C API —
+`sqlite3 *`, a `struct timespec`, `strerror`, `qsort`'s comparator, `errno` — cannot be bound. §7.57
+designed four of the shapes; this milestone settles them, builds a practical subset of the C ABI,
+and names everything outside it as refused.
+
+**The sole owner.** The checker (`nazm-core/src/check.rs`) owns *which* types may cross and in which
+position, by one table: the FFI position rule. Core IR lowering (`nazm-core/src/lower.rs`) owns
+*how* a crossing value changes representation, and writes it as ordinary Core IR — a field read, a
+record or variant built, a test against zero — so MIR, LIR and both backends see a foreign function
+whose parameters and result are `Int`, `Bool`, `Str` (borrowed, as N55) or a C-layout record. The
+backends own only two things they always owned: the C calling convention, and the borrowed copy of an
+argument for the duration of the call (N55's C string, now also a C-layout record). Nothing else
+learns about C.
+
+**Opaque handles.** `extern "C" struct Db;` — C's own spelling of an incomplete struct — declares a nominal type whose values are C pointers Nazm
+never reads, writes, compares or frees. A handle comes into existence only as a foreign function's
+result; it is passed back to C as an argument, stored in a local, a record field or a `Vec`, and
+returned from Nazm functions — ordinary values otherwise. Refused at the operation:
+constructing one and reading a field of one (`N0611`: it has no fields to name); `==` or `!=` on one
+(`N0304`, as for any type without equality: a pointer's identity is C's to define); and a handle
+crossing into a task, by capture (`N0321`) or by channel (`N0390`), exactly as a sequence is refused —
+C objects are rarely thread-safe, and nothing in a declaration says which are. Each is the existing
+derived rule (§7.13, *Task safety is derived*) answering for a new type, not a new rule. Freeing is C's: the program calls the
+C function that frees it, and using a handle after that is C's undefined behaviour, outside every Nazm
+guarantee — the same trust boundary as everything else C does.
+
+**Nullability is in the type.** A result `-> Db` promises a non-null pointer: the call checks it, and
+a null result fails the call with `N0409` *after* C returns — never a handle that is null. A result
+`-> Option[Db]` maps null to `None` and anything else to `Some`. An argument is always a handle: no
+null pointer can be written in Nazm, and a C function that accepts null is called with a handle or
+not at all. `Option[Db]` as an argument is refused (`N0381`): it would be the one place a Nazm value
+means "no pointer", and nothing needs it yet.
+
+**C strings returned.** A result `-> Str` is a `const char *` that C still owns: Nazm copies its bytes
+up to the NUL into a Nazm string immediately after the call and never frees C's. A null result fails
+with `N0409`; `-> Option[Str]` makes it `None`. A C function returning a string the *caller* must free
+is bound as a handle and its free function — the ownership is then written in the program, not
+guessed. The copy is one allocation and one `strlen` per call, stated.
+
+**C-layout records.** `extern "C" struct Point { x: Int, y: Int }` declares a record whose fields are
+laid out **in declaration order** with C's alignment rules — `int64_t` for `Int`, `bool` for `Bool`, a
+pointer for a handle, the nested struct for a nested C-layout record — so declaration order *is*
+meaning for this record, unlike any other (§7.43). Its fields may be only those. A C-layout record
+crosses as an argument by **borrowed pointer**: C receives a `const struct Point *` to a copy the
+caller made for the call and frees after it, as a borrowed C string is. Passing a struct *by value*,
+a struct result, a union, a bit-field, an array field and a field of any other type are refused
+(`N0381`): each has per-target register rules the compiler does not implement. Otherwise a C-layout
+record is an ordinary record.
+
+**`errno`.** `c_errno()` returns the `errno` value the most recent foreign call on this thread left,
+captured by generated code immediately after the call returns and before anything else runs. It
+performs the effect `foreign`, as calling C does. It is defined on the hosted targets only (`__error`
+on macOS, `__errno_location` on Linux); a freestanding or WebAssembly build that calls it is refused
+(`N0613`). Under the task pool (§7.84) a task is pinned to its worker, so the value is the task's
+unless the task blocked between the call and the read — written down rather than prevented.
+
+**Callbacks.** A foreign parameter may have a function type whose parameters and result are `Int` and
+`Bool`: a C function pointer. Its argument must be the name of an **export** (`pub extern "C" fn`,
+§7.57) — never a closure or any other function value (`N0612`) — so the pointer C receives is the
+export's C entry, which needs no environment, cannot be freed, and is valid for the life of the
+process. Reentrancy is the export rules' consequence: an export performs no effect, holds no Nazm lock
+and takes no capability, so C may call it from inside the foreign call, again after it, and from any
+thread. **Thread attach**: an export uses no per-thread runtime state except its failure flag, which is
+per-thread; a C thread the runtime never started may call one. **Unwinding**: as N55, a Nazm failure in
+an export ends the process with status 2; it never unwinds through C frames, and a C `longjmp` across
+Nazm frames is outside every guarantee.
+
+**Shared libraries.** `nazm build --lib --shared -o libx.dylib` (or `.so`) links the library's objects
+and the runtime into one shared object whose only exported symbols are the program's exports, with the
+same header `--lib` writes. Two Nazm shared libraries in one process each carry a runtime; neither
+sees the other's state. Linking *against* a shared library is `--link libfoo.dylib`, as any link
+input. **Dynamic-library lifecycle**: Nazm never `dlopen`s or `dlclose`s — a library is mapped by
+the loader before `main` and unmapped at process exit, so no handle or callback outlives its code.
+Loading at run time is refused by absence: there is no construct for it.
+
+**Bindings.** `nazm bindgen` widens with the language: an incomplete `struct S *` becomes `extern "C"
+struct S;`, a complete struct of `int64_t`/`bool` fields passed as `const struct S *` becomes `extern
+"C" struct S { … }`, and a `const char *` result becomes `Option[Str]` (a header never says non-null).
+Everything else is a line naming its reason: by-value structs, unions, arrays, variadics, floating
+point, non-`int64_t` integers, function pointers whose argument a header cannot name an export for.
+
+**What the programmer observes, and when.** Compile time: every refusal above, by code and span. Run
+time: `N0409` after a call that broke its declaration's null promise; nothing else is checked after
+C returns. Target time: `N0613`. The interpreter refuses any program calling C or `c_errno` before
+running it (`N0385`, unchanged). **Deterministic**: every compile-time decision, every layout, the
+header. **Target-dependent**: `errno`'s location; a C-layout record's layout follows the target's C
+ABI, which on every target of the matrix is natural alignment for these field types.
+
+**Authority and provenance.** Unchanged in kind: every foreign call and `c_errno()` needs a
+`ForeignCap`; what C returns — a handle, a copied string, an `errno` — carries the `unknown` origin
+(N42), and a handle's origin flows through records and `Vec`s as any value's (N80).
+
+**Versions.** Semantic epoch `24 → 25` (new declarations, new accepted types). Interface schema
+`nazm.interface/8 → 9`: a record's C-layout and opaque flags are part of what an importer may do with
+it. Runtime ABI `11 → 12`: `nz.cstr_len`, `nz.errno_save`, `nz.errno_last`. Core IR, MIR and LIR
+schemas unchanged: the crossing is written in existing nodes, plus two internal built-ins
+(`foreign_nonnull`, `cstr_copy`) no program can name. The check cache follows the interface.
+
+**Negative example.** `extern "C" struct Db; fn same(a: Db, b: Db) -> Bool ! {} { a == b }` is `N0304`
+at the `==`, and `Db {}` anywhere is `N0611`. **Boundary example.** `extern "C" fn find(k: Int) -> Option[Db] = "find";` called when C
+returns null is `None`, and the same declaration written `-> Db` fails that call with `N0409` and
+status 2, not a crash in the caller's next use.
+
+**Not here.** By-value structs and struct results; unions, bit-fields, arrays; floating point;
+integer types other than `int64_t` and `bool`; variadic functions; closures as callbacks (a C
+`void *` environment rule); `dlopen`; ABIs other than C; exports taking `Str` or records; out-buffers
+C writes into. Each is a refusal with a code, not a silent fallback.
+
+**What would prove this unsuitable.** A C-layout record whose bytes as C reads them differ from its
+fields in declaration order on any target of the matrix; a null handle reaching Nazm code; an `errno`
+read that sees a value set by the runtime rather than by the foreign call; an export called from a C
+thread that crashes for want of runtime state.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
