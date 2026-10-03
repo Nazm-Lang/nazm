@@ -590,6 +590,13 @@ impl<'a> Gen<'a> {
             ExprKind::Closure { .. } | ExprKind::FnValue(_) | ExprKind::CallIndirect { .. } => {
                 return Err(refuse(f, e.at, "it uses a function value"))
             }
+            ExprKind::CallTrait { .. } => {
+                return Err(refuse(
+                    f,
+                    e.at,
+                    "it calls a method through a type parameter's bound",
+                ))
+            }
         }
         Ok(())
     }

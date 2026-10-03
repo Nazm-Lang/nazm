@@ -53,7 +53,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use nazm_core::sema::{DefKey, ModuleKey, ReferenceTarget};
+use nazm_core::sema::{DefKey, DefKind, ModuleKey, ReferenceTarget};
 use nazm_span::{FileId, Span};
 use serde::Serialize;
 
@@ -716,6 +716,7 @@ pub(crate) fn shape(
 
 /// The durable identity of an entity: its definition's key, and which member.
 pub(crate) fn identity_of(s: &Snapshot, t: ReferenceTarget) -> Identity {
+    let t_kind = t;
     let res = &s.analysis.resolution;
     let module_key = |m| s.graph.key(m).cloned();
     let key = |d: Option<DefKey>| d.map(|k| k.to_string());
@@ -782,6 +783,21 @@ pub(crate) fn identity_of(s: &Snapshot, t: ReferenceTarget) -> Identity {
             definition: None,
             member: None,
         },
+        // N78: a trait by its key; a trait method as its trait's key and its name.
+        ReferenceTarget::Trait(t) | ReferenceTarget::TraitMethod(t, _) => {
+            let d = res.traits().get(t);
+            let definition = d.and_then(|d| {
+                let module: ModuleKey = module_key(d.module)?;
+                Some(DefKey::new(module, DefKind::Trait, d.name.clone()).to_string())
+            });
+            let member = match t_kind {
+                ReferenceTarget::TraitMethod(_, m) => d
+                    .and_then(|d| d.methods.get(m as usize))
+                    .map(|m| m.name.clone()),
+                _ => None,
+            };
+            Identity { definition, member }
+        }
     }
 }
 
@@ -798,6 +814,8 @@ fn link_key(s: &Snapshot, paths: &Paths, t: ReferenceTarget) -> LinkKey {
         ReferenceTarget::Variant(_) => 4,
         ReferenceTarget::PayloadField(_) => 5,
         ReferenceTarget::Local(_) => 6,
+        ReferenceTarget::Trait(_) => 7,
+        ReferenceTarget::TraitMethod(..) => 8,
     };
     let declaration = s.index.declaration(t).and_then(|d| paths.span(d));
     (rank, declaration, identity_of(s, t))
@@ -824,6 +842,8 @@ fn link(
             ReferenceTarget::Variant(_) => "variant",
             ReferenceTarget::PayloadField(_) => "payload_field",
             ReferenceTarget::Local(_) => "local",
+            ReferenceTarget::Trait(_) => "trait",
+            ReferenceTarget::TraitMethod(..) => "trait_method",
         },
         name,
         declaration,

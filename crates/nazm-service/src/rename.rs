@@ -433,6 +433,9 @@ fn exported(res: &Resolution, entity: ReferenceTarget) -> bool {
         ReferenceTarget::Enum(id) => enumeration(id),
         ReferenceTarget::Variant(v) => enumeration(v.enumeration),
         ReferenceTarget::PayloadField(p) => enumeration(p.enumeration),
+        ReferenceTarget::Trait(t) | ReferenceTarget::TraitMethod(t, _) => {
+            res.traits().get(t).map(|d| d.visibility.is_exported())
+        }
     };
     // An entity the tables do not have is treated as exported: refused, not guessed.
     answer.unwrap_or(true)

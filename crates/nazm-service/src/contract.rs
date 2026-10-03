@@ -315,6 +315,13 @@ impl Sets<'_> {
                     self.expr(a, false);
                 }
             }
+            // A call through a bound (N78): which function runs is the instance's, as an
+            // indirect call's is the value's.
+            ExprKind::CallTrait { args, .. } => {
+                for a in args {
+                    self.expr(a, false);
+                }
+            }
             ExprKind::Record { fields, .. } => {
                 for init in fields {
                     self.expr(&init.value, false);

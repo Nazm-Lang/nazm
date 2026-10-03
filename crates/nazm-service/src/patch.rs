@@ -486,6 +486,8 @@ fn rename_target(
         ReferenceTarget::Variant(_) => "variant",
         ReferenceTarget::Field(_) => "field",
         ReferenceTarget::PayloadField(_) => "payload_field",
+        ReferenceTarget::Trait(_) => "trait",
+        ReferenceTarget::TraitMethod(..) => "trait_method",
     };
     Ok(match here {
         ReferenceTarget::Local(l) => RenameTarget {
