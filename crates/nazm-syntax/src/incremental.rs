@@ -442,6 +442,8 @@ impl Revision {
             records: Vec::new(),
             enums: Vec::new(),
             imports: Vec::new(),
+            traits: Vec::new(),
+            impls: Vec::new(),
             hole: None,
         };
         for c in &self.chunks {
@@ -689,7 +691,74 @@ impl Item {
             Self::Record(r) => r.shift(file, by),
             Self::Enum(e) => e.shift(file, by),
             Self::Import(i) => i.shift(file, by),
+            Self::Trait(t) => t.shift(file, by),
+            Self::Impl(decl, methods) => {
+                decl.shift(file, by);
+                methods.shift(file, by);
+            }
         }
+    }
+}
+
+impl Shift for crate::ast::Trait {
+    fn shift(&mut self, file: FileId, by: i64) {
+        let Self {
+            name: _,
+            name_span,
+            pub_span,
+            methods,
+            span,
+        } = self;
+        name_span.shift(file, by);
+        pub_span.shift(file, by);
+        methods.shift(file, by);
+        span.shift(file, by);
+    }
+}
+
+impl Shift for crate::ast::TraitMethod {
+    fn shift(&mut self, file: FileId, by: i64) {
+        let Self {
+            name: _,
+            name_span,
+            params,
+            return_type,
+            effects,
+            span,
+        } = self;
+        name_span.shift(file, by);
+        params.shift(file, by);
+        return_type.shift(file, by);
+        effects.shift(file, by);
+        span.shift(file, by);
+    }
+}
+
+impl Shift for crate::ast::ImplDecl {
+    fn shift(&mut self, file: FileId, by: i64) {
+        let Self {
+            trait_name,
+            self_ty,
+            impl_span,
+            span,
+        } = self;
+        trait_name.shift(file, by);
+        self_ty.shift(file, by);
+        impl_span.shift(file, by);
+        span.shift(file, by);
+    }
+}
+
+impl Shift for crate::ast::MethodOf {
+    fn shift(&mut self, file: FileId, by: i64) {
+        let Self {
+            trait_name,
+            self_ty,
+            impl_span,
+        } = self;
+        trait_name.shift(file, by);
+        self_ty.shift(file, by);
+        impl_span.shift(file, by);
     }
 }
 
@@ -792,6 +861,7 @@ impl Shift for Function {
             body,
             foreign,
             export,
+            method_of,
             span,
         } = self;
         name_span.shift(file, by);
@@ -804,6 +874,7 @@ impl Shift for Function {
         body.shift(file, by);
         foreign.shift(file, by);
         export.shift(file, by);
+        method_of.shift(file, by);
         span.shift(file, by);
     }
 }
@@ -1154,6 +1225,20 @@ impl Shift for Expr {
                 span.shift(file, by);
             }
             Self::Block(b) => b.shift(file, by),
+            Self::MethodCall {
+                qualifier,
+                receiver,
+                method: _,
+                method_span,
+                args,
+                span,
+            } => {
+                qualifier.shift(file, by);
+                receiver.shift(file, by);
+                method_span.shift(file, by);
+                args.shift(file, by);
+                span.shift(file, by);
+            }
         }
     }
 }

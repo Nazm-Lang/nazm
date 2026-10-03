@@ -534,6 +534,17 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
             }
         }
     }
+    // A trait's methods (N78): their parameters are constructs; the trait and its methods are
+    // items the checker reads, compared by their own kinds below.
+    for t in &program.traits {
+        spans.push((SyntaxKind::TraitItem, t.span));
+        for m in &t.methods {
+            spans.push((SyntaxKind::TraitMethod, m.span));
+            for p in &m.params {
+                spans.push((SyntaxKind::Param, p.span));
+            }
+        }
+    }
     for f in &program.functions {
         let Some(body) = &f.body else { continue };
         spans.push((SyntaxKind::FnItem, f.span));
@@ -662,6 +673,18 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                 Expr::Closure { body, span, .. } => {
                     spans.push((SyntaxKind::ClosureExpr, *span));
                     stack.push(Node::Block(body));
+                }
+                Expr::MethodCall {
+                    receiver,
+                    args,
+                    span,
+                    ..
+                } => {
+                    spans.push((SyntaxKind::MethodCallExpr, *span));
+                    stack.push(Node::Expr(receiver));
+                    for a in args {
+                        stack.push(Node::Expr(a));
+                    }
                 }
             },
         }

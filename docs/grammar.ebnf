@@ -25,7 +25,25 @@
 (* @example struct Point { x: Int, } fn main() -> Int { Point(x: 1).x } *)
 (* @example enum State { Ready, } fn main() -> Int { match State.Ready() { State.Ready() => 0, } } *)
 (* @example fn identity[T](value: T) -> T { value } fn main() -> Int { identity(7) } *)
-program = { use_item } , { function | foreign_function | record | enumeration } ;
+(* @example trait Show { fn show(self: Self) -> Str; } impl Show for Int { fn show(self: Int) -> Str { int_to_str(self) } } fn main() -> Int { str_len(7.show()) } *)
+program = { use_item } , { function | foreign_function | record | enumeration | trait_item | impl_item } ;
+
+(* A trait (N78): a named set of methods a type may implement. Each method is a signature
+ * ended by `;` — there are no default bodies — whose first parameter is `self: Self`. A trait
+ * is in the type namespace and is not a type: it is written as a type parameter's bound,
+ * `[T: Show]`, and never as the type of a value. See `docs/spec.md`, *Traits and methods*.
+ *)
+(* @example pub trait Show { fn show(self: Self) -> Str; fn shout(self: Self, n: Int) -> Str ! {}; } fn main() -> Int { 0 } *)
+trait_item = [ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}" ;
+
+(* @example trait Size { fn size(self: Self) -> Int; } fn main() -> Int { 0 } *)
+trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";" ;
+
+(* `impl Trait for Type`: every method of the trait, once, with `Self` written as the type.
+ * `for` is a word here and nowhere else. At most one impl of a trait for a type, in the
+ * trait's module or the type's. *)
+(* @example trait Size { fn size(self: Self) -> Int; } struct P { x: Int, } impl Size for P { fn size(self: P) -> Int { 1 } } fn main() -> Int { 0 } *)
+impl_item = "impl" , type , IDENT , type , "{" , { function } , "}" ;
 
 (* @example use "lib/helpers.nz"; fn main() -> Int { 0 } *)
 (* `as NAME` imports the module under a name (N49): its exports are written `NAME::item`
@@ -295,7 +313,11 @@ unary = [ "-" | "!" ] , primary ;
  *)
 (* @example fn f(r: Result[Int, Str]) -> Result[Int, Str] { Result[Int, Str].Ok(value: r? + 1) } fn main() -> Int { 0 } *)
 (* @example struct P { x: Int, } fn f(r: Result[P, Str]) -> Result[Int, Str] { Result[Int, Str].Ok(value: -r?.x) } fn main() -> Int { 0 } *)
-primary = atom , { "." , IDENT | "?" } ;
+(* `.name(…)` after an operand is a method call (N78): `p.show()`, `make().size()`. With a
+ * trait's name as the operand, `Show.show(p)`, the trait chooses the method and the first
+ * argument is the receiver. *)
+(* @example trait Size { fn size(self: Self) -> Int; } fn f[T: Size](x: T) -> Int { x.size() + Size.size(x) } fn main() -> Int { 0 } *)
+primary = atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] | "?" } ;
 
 (* @example fn main() -> Int { 1 } *)
 atom = INTEGER
