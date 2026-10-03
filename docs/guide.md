@@ -500,7 +500,7 @@ accepts.
 
 | Rule | Definition |
 | --- | --- |
-| `program` | `{ use_item } , { function \| foreign_function \| record \| enumeration \| trait_item \| impl_item }` |
+| `program` | `{ use_item } , { function \| foreign_function \| record \| foreign_struct \| enumeration \| trait_item \| impl_item }` |
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
 | `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";"` |
 | `impl_item` | `"impl" , type , IDENT , type , "{" , { function } , "}"` |
@@ -514,6 +514,7 @@ accepts.
 | `type_parameter` | `IDENT , [ ":" , IDENT ] \| "effects" , IDENT` |
 | `visibility` | `"pub"` |
 | `record` | `[ visibility ] , "struct" , IDENT , [ type_parameters ] , "{" , [ fields ] , "}"` |
+| `foreign_struct` | `[ visibility ] , IDENT , STRING , "struct" , IDENT , ( ";" \| "{" , [ fields ] , "}" )` |
 | `fields` | `field , { "," , field } , [ "," ]` |
 | `field` | `IDENT , ":" , type` |
 | `enumeration` | `[ visibility ] , "enum" , IDENT , [ type_parameters ] , "{" , [ variants ] , "}"` |
@@ -563,7 +564,7 @@ accepts.
 ### `program`
 
 ```ebnf
-program = { use_item } , { function | foreign_function | record | enumeration | trait_item | impl_item } ;
+program = { use_item } , { function | foreign_function | record | foreign_struct | enumeration | trait_item | impl_item } ;
 ```
 
 ```nazm
@@ -829,6 +830,26 @@ pub struct User { name: Str, } fn main() -> Int { str_len(User(name: "a").name) 
 
 ```nazm
 struct Box[T] { value: T, } fn main() -> Int { Box[Int](value: 1).value }
+```
+
+### `foreign_struct`
+
+```ebnf
+foreign_struct = [ visibility ] , IDENT , STRING , "struct" , IDENT , ( ";" | "{" , [ fields ] , "}" ) ;
+```
+
+A struct C sees (N85): `extern "C" struct Name;` is an opaque handle — a C pointer only a
+foreign function returns, never built, read or compared — and `extern "C" struct Name { … }`
+a record laid out as C's struct, its fields in the order written, which here is meaning.
+`extern` is an IDENT recognised before a string, as for a foreign function. See `docs/spec.md`,
+*Foreign functions v3*.
+
+```nazm
+extern "C" struct Db; fn main() -> Int { 0 }
+```
+
+```nazm
+extern "C" struct Point { x: Int, flag: Bool, y: Int } fn main() -> Int { Point(x: 1, flag: true, y: 2).y }
 ```
 
 ### `fields`

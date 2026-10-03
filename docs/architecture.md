@@ -7650,6 +7650,20 @@ fields in declaration order on any target of the matrix; a null handle reaching 
 read that sees a value set by the runtime rather than by the foreign call; an export called from a C
 thread that crashes for want of runtime state.
 
+**As built (N85, 2026-10-04).** Five amendments. **The syntax is `extern "C" struct`**, for a handle
+and a C struct alike — C's own spelling of an incomplete struct, and no new keyword: `extern` stays
+contextual, read before a string and `struct`. **A handle is a record of one hidden field**
+(`#pointer`, a name no program can write), so it is an ordinary value to every layer below the
+checker; `==` on one, and one reaching a task, are refused by the existing derived rules (`N0304`,
+`N0321`, `N0390`) answering for a new type rather than by a new code. **A callback's address is
+written by Core IR lowering** as an internal built-in on the export's symbol, because a named
+function value is a thunk by MIR, which no longer knows the export it wraps. **`errno`'s location is
+a per-target unit** (`nz_errno_location`, beside the task switch), so the runtime text stays the same
+on every target; the capture is the runtime's `foreign` part, and a freestanding runtime defines a
+capture that does nothing. **Cranelift links the `errno` unit always**, its runtime being its whole
+baseline. Versions as stated: epoch 25, `nazm.interface/9`, runtime ABI 12; Core IR, MIR and LIR
+print schemas unchanged — the crossing is existing nodes and three internal built-ins.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
