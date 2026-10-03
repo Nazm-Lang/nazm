@@ -388,6 +388,18 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N75 — production-readiness audit and release gate — **complete: candidate `cf664fd`, not released, 2026-10-03**
+
+An audit, not a feature: every matrix status against its evidence, `limitations.md` line by line, the
+security wording of every current document, the schemas against their documentation — four documentation
+defects fixed. The gate at one commit, contained: the workspace suite, lifecycle, selfhost, bootstrap,
+the benchmark and the **full mutation catalogue, 1,089 of 1,089 caught** (one timeout given a killer); nine
+platform runs and the fuzzers and formal core at release scale on the host. The release assembly found
+that its script could not copy the conformance corpus's directories, fixed in `cf664fd`, which it then
+assembled and verified; the artefact re-digested independently. `docs/releases/cf664fd.md` holds the
+identities, the target table, the accounting, the evidence index and the human release procedure.
+Nothing is tagged, pushed or published: that is a person's decision. N49–N75's programme ends here.
+
 ### N74 — ecosystem, IDE and migration tooling — **complete as scoped, 2026-10-02**
 
 `architecture.md` §7.76 first. `nazm init` and six templates, each held by its own commands; a library

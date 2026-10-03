@@ -1831,6 +1831,44 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### The post-v1 baseline — N75, frozen 2026-10-02
+
+The release gate's benchmark stage at the candidate `34e2380`: `cargo xtask contained bench`, one
+CPU, 4 GiB, offline, with the host otherwise idle. Milliseconds, minimum / median, five runs; the
+record is kept with the gate's evidence (`bench/record.json` of that run). It replaces N48's as the
+reference; no single score is derived from it.
+
+| program | check | build `-O0` | build `-O2` | interpret | native `-O2` |
+| --- | --- | --- | --- | --- | --- |
+| arith | 2.8 / 2.9 | 88.2 / 95.3 | 98.9 / 99.7 | 2,749.5 / 2,765.2 | 4.5 / 4.5 |
+| calls | 3.1 / 3.3 | 91.4 / 93.7 | 98.1 / 100.1 | 1,531.2 / 1,534.7 | 0.9 / 1.0 |
+| channels | 2.9 / 3.1 | 99.3 / 103.0 | 149.8 / 150.5 | 1,036.9 / 1,335.9 | 1,259.8 / 1,331.5 |
+| floor | 2.8 / 3.0 | 88.7 / 90.4 | 95.3 / 99.2 | 2.4 / 2.5 | 0.3 / 0.3 |
+| sequences | 3.0 / 3.1 | 91.8 / 93.5 | 112.7 / 115.6 | 764.5 / 771.1 | 2.3 / 2.7 |
+| sieve | 3.0 / 3.1 | 91.3 / 95.1 | 116.7 / 117.5 | 1,003.9 / 1,013.2 | 2.9 / 2.9 |
+| strings | 2.9 / 3.2 | 91.4 / 94.3 | 121.7 / 129.0 | 48.7 / 48.9 | 7.1 / 7.4 |
+| compiler | 107.2 / 107.4 | 1,924.7 / 1,939.6 | | | |
+
+`sieve/reference-c` 1.8 / 2.6; `reference-python` not measured (no Python in the image). Peak
+memory, bytes: interpreted 5.7 M (`arith`) to 13.0 M (`strings`); native 1.2 M to 5.8 M.
+
+**Against N48**, medians: the compiler's own `-O0` build is 9 % faster (2,131 → 1,940 ms), the
+direction N59's SSA temporaries predicted; checking is slower — `compiler/check` 97.1 → 107.4 ms
+(+11 %), the small programs 0.2–0.5 ms each — over the twenty-six milestones' checker work, not
+attributed to one; `-O2` builds of `channels`, `strings`, `sieve` and `sequences` are 11–15 % slower,
+and `channels` runs 9 % slower natively (1,225 → 1,332 ms) and interpreted, with a wide spread
+(1,037 / 1,336) that one run cannot settle. Nothing here is a claim against another language.
+
+**Beside it, on the host** (Apple M1 Pro, release builds, while the contained mutation campaign used
+four of ten cores — indicative, not a baseline): 10,000 tasks started and joined in scopes of 50 in
+143.5 ms (LLVM) / 159.6 ms (Cranelift); a channel round trip 4.66 / 4.82 µs; a streamed value 58 /
+60 ns; 400 M iterations over 1, 2 and 4 tasks 1,655, 828 and 417 ms (LLVM; Cranelift the same within
+1 ms). A three-package build: lock 4.4 ms, check 6.1 ms cold and 7.4 ms warm, build 211.6 ms with no
+cache and 82.0 ms warm. The figures of N62–N68 above — a board image's bytes and stack, a vectorised
+sum, a GPU map, field-by-field vectors — were measured at their milestones and not again here; their
+run-verified tests passed at the candidate. A contract's static gas bound for the `contract`
+template: `transfer` 59,420, `pause` 30,824, 831 bytes of runtime code; the EVM run stays inside it.
+
 ### The v1 baseline — N48, frozen 2026-10-01
 
 **The numbers a later milestone compares against**, in place of `bench/baseline-linux-aarch64.json`,
