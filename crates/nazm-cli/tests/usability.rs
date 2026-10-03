@@ -181,6 +181,47 @@ fn main() -> Int {
 }
 
 #[test]
+fn unicode_escapes_are_the_same_bytes_in_every_implementation() {
+    // N76: `\u{…}` is the UTF-8 encoding of a scalar value — the bytes the character
+    // written directly would be — in the interpreter and every native build alike.
+    let src = r#"
+fn bytes(s: Str) -> Int {
+    let mut i = 0;
+    while i < str_len(s) {
+        print(str_concat(int_to_str(str_byte(s, i)), " "));
+        i = i + 1;
+    }
+    print("\n");
+    str_len(s)
+}
+fn main() -> Int {
+    let a = bytes("\u{41}\u{e9}\u{20AC}\u{1F600}");
+    let same = "\u{e9}" == "é";
+    let b = bytes("\u{0}\u{7F}\u{80}");
+    if same { a * 10 + b } else { 0 - 1 }
+}
+"#;
+    agrees(
+        src,
+        "65 195 169 226 130 172 240 159 152 128 \n0 127 194 128 \n104",
+    );
+}
+
+#[test]
+fn a_refused_unicode_escape_names_its_bytes() {
+    for bad in ["\\u{D800}", "\\u{110000}", "\\u{}", "\\u{1234567}", "\\u41"] {
+        assert_eq!(
+            check_codes(&[(
+                "prog.nz",
+                &format!("fn main() -> Int {{ str_len(\"{bad}\") }}\n")
+            )]),
+            ["N0004"],
+            "{bad}"
+        );
+    }
+}
+
+#[test]
 fn a_refused_escape_stops_the_program_before_anything_runs() {
     assert_eq!(
         check_codes(&[("prog.nz", "fn main() -> Int { str_len(\"a\\qb\") }\n")]),

@@ -8061,10 +8061,11 @@ Repointed by N53, which moved it to 16 for generic channels: an entry that refus
 Repointed by N54, which moved it to 17 for select and the clock: an entry that accepted a function named time_now_ms must not be reused.
 Repointed by N55, which moved it to 18 for FFI v2: an entry that refused a Str argument to C must not be reused.
 Repointed by N62, which moved it to 19 for a freestanding target: an entry that accepted a function named mmio_read32 must not be reused.
-Repointed by N66, which moved it to 20 for `ints_sum_from`: an entry that accepted a function of that name must not be reused."""
+Repointed by N66, which moved it to 20 for `ints_sum_from`: an entry that accepted a function of that name must not be reused.
+Repointed by N76, which moved it to 21 for Unicode escapes: an entry that refused `\\u{e9}` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 20;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 19;"
+find = "pub const SEMANTIC_EPOCH: u32 = 21;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 20;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 

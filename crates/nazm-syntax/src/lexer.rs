@@ -309,6 +309,39 @@ pub struct Token {
 /// `span(a, b)` is the source span of `raw[a..b]`, so a refused escape is reported at the bytes
 /// written. A refused escape contributes nothing to the value and the rest of the literal is
 /// still decoded, so one bad escape is one diagnostic.
+/// `\u{H…}` starting at `bytes[k]` (the backslash): the scalar value and the escape's width,
+/// or the width of what is refused — through the `}` when there is one, else as far as the
+/// hexadecimal digits go.
+fn unicode_escape(bytes: &[u8], k: usize) -> Result<(char, usize), usize> {
+    if bytes.get(k + 2) != Some(&b'{') {
+        return Err(2);
+    }
+    let digits = bytes
+        .get(k + 3..)
+        .unwrap_or_default()
+        .iter()
+        .take_while(|b| b.is_ascii_hexdigit())
+        .count();
+    let close = k + 3 + digits;
+    if bytes.get(close) != Some(&b'}') {
+        return Err(3 + digits);
+    }
+    let width = 4 + digits;
+    if digits == 0 || digits > 6 {
+        return Err(width);
+    }
+    let value = bytes
+        .get(k + 3..close)
+        .unwrap_or_default()
+        .iter()
+        .try_fold(0u32, |v, b| char::from(*b).to_digit(16).map(|d| v * 16 + d));
+    // `char::from_u32` refuses exactly the surrogates and everything above `10FFFF`.
+    value
+        .and_then(char::from_u32)
+        .map(|c| (c, width))
+        .ok_or(width)
+}
+
 fn decode_escapes(
     raw: &str,
     span: impl Fn(usize, usize) -> Span,
@@ -350,6 +383,33 @@ fn decode_escapes(
             k += width;
             continue;
         }
+        // `\u{H…}` (N76): a Unicode scalar value, as the UTF-8 bytes the same character
+        // written directly in the source would be. Several bytes, so not in `decoded`.
+        if bytes.get(k + 1) == Some(&b'u') {
+            match unicode_escape(bytes, k) {
+                Ok((c, width)) => {
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    k += width;
+                }
+                Err(width) => {
+                    let written = raw.get(k..k + width).unwrap_or("\\u");
+                    errors.push(
+                        Diagnostic::error(
+                            codes::INVALID_ESCAPE,
+                            span(k, k + width),
+                            format!("`{written}` is not a Unicode escape this language has"),
+                        )
+                        .help(
+                            "a Unicode escape is `\\u{` and one to six hexadecimal digits \
+                             naming a scalar value — not a surrogate, at most 10FFFF — and `}`",
+                        ),
+                    );
+                    k += width;
+                }
+            }
+            continue;
+        }
         // The extent of what was refused: the backslash and the one character after it, or
         // the whole `\xHH` when there were two hex digits that named a byte above `7F`.
         let width = match bytes.get(k + 1) {
@@ -374,8 +434,8 @@ fn decode_escapes(
                 format!("`{written}` is not an escape this language has"),
             )
             .help(
-                "the escapes are \\n \\t \\r \\0 \\\\ \\\" and \\xHH up to \\x7F; write `\\\\` for a \
-                 backslash, and use `str_from_byte` for a byte above 127",
+                "the escapes are \\n \\t \\r \\0 \\\\ \\\" \\xHH up to \\x7F and \\u{H…}; write \
+                 `\\\\` for a backslash, and use `str_from_byte` for a byte above 127",
             ),
         );
         k += width;
@@ -470,228 +530,251 @@ impl Lexeme {
 /// [`TokenKind::Eof`] token. The spans cover `0..text.len()` exactly.
 #[must_use]
 pub fn lex_lossless_in(file: FileId, text: &str) -> (Vec<Lexeme>, Vec<Diagnostic>) {
+    let mut out: Vec<Lexeme> = Vec::new();
+    let mut errors = Vec::new();
+    let mut i = 0usize;
+    while i < text.len() {
+        let (lexeme, next) = scan_one(file, text, i, &mut errors);
+        out.push(lexeme);
+        i = next;
+    }
+    out.push(eof(file, text));
+    (out, errors)
+}
+
+/// The zero-width end of `text`.
+pub(crate) fn eof(file: FileId, text: &str) -> Lexeme {
+    let end = u32::try_from(text.len()).unwrap_or(u32::MAX);
+    Lexeme::Token(Token {
+        kind: TokenKind::Eof,
+        span: Span::new(file, end, end),
+    })
+}
+
+/// Scan the one lexeme that begins at byte `i` of `text`, which must be a lexeme boundary,
+/// and return it with the offset just past it.
+///
+/// **Context-free from a boundary, and one byte of lookahead** (N76): what this returns
+/// depends only on `text[i..]`, and of that only on the lexeme's own bytes and at most the
+/// one byte after it — the byte that ends a run, or the second byte of a two-character
+/// operator. Incremental relexing (`crate::incremental`) rests on exactly that, and its
+/// equality test against a full scan is what would notice if it stopped being true.
+pub(crate) fn scan_one(
+    file: FileId,
+    text: &str,
+    i: usize,
+    errors: &mut Vec<Diagnostic>,
+) -> (Lexeme, usize) {
     let bytes = text.as_bytes();
     // Checked access throughout. Every one of these reads is provably in bounds from the
     // surrounding loop condition, but "provably" is a property of today's code: the lint
     // is on for the whole workspace precisely so a later edit cannot quietly make one of
     // them a panic on malformed input.
     let byte = |i: usize| -> Option<u8> { bytes.get(i).copied() };
-    let mut i = 0usize;
-    let mut out: Vec<Lexeme> = Vec::new();
-    let mut errors = Vec::new();
-
     let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
-
-    while i < bytes.len() {
-        let start = i;
-        let Some(c) = byte(i) else { break };
-
-        // Whitespace, one lexeme per run: the tree keeps the bytes, and nothing needs to
-        // know where one space ends and the next begins.
-        if c.is_ascii_whitespace() {
-            while byte(i).is_some_and(|b| b.is_ascii_whitespace()) {
-                i += 1;
-            }
-            out.push(Lexeme::Whitespace(Span::new(file, at(start), at(i))));
-            continue;
-        }
-
-        // Line comments
-        if c == b'/' && byte(i + 1) == Some(b'/') {
-            while byte(i).is_some_and(|b| b != b'\n') {
-                i += 1;
-            }
-            // Not including the newline: the comment is the text, and where the line
-            // ends is the formatter's decision rather than the comment's.
-            out.push(Lexeme::Comment(Span::new(file, at(start), at(i))));
-            continue;
-        }
-
-        // Numbers
-        if c.is_ascii_digit() {
-            while byte(i).is_some_and(|b| b.is_ascii_digit() || b == b'_') {
-                i += 1;
-            }
-            let raw: String = text
-                .get(start..i)
-                .unwrap_or_default()
-                .chars()
-                .filter(|c| *c != '_')
-                .collect();
-            match raw.parse::<i64>() {
-                Ok(v) => out.push(Lexeme::Token(Token {
-                    kind: TokenKind::Int(v),
-                    span: Span::new(file, at(start), at(i)),
-                })),
-                // Refused at the boundary rather than silently wrapped. A literal that
-                // does not fit the type it is written as is a mistake, not a value.
-                // Not an error here: `-9223372036854775808` is a valid `Int` and its
-                // magnitude does not fit. The parser folds the sign and reports if it
-                // still does not.
-                Err(_) => out.push(Lexeme::Token(Token {
-                    kind: TokenKind::IntTooLarge(raw),
-                    span: Span::new(file, at(start), at(i)),
-                })),
-            }
-            continue;
-        }
-
-        // Identifiers and keywords
-        if c.is_ascii_alphabetic() || c == b'_' {
-            while byte(i).is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                i += 1;
-            }
-            let word = text.get(start..i).unwrap_or_default();
-            let kind = match word {
-                "fn" => TokenKind::Fn,
-                "let" => TokenKind::Let,
-                "if" => TokenKind::If,
-                "else" => TokenKind::Else,
-                "true" => TokenKind::True,
-                "false" => TokenKind::False,
-                "mut" => TokenKind::Mut,
-                "pub" => TokenKind::Pub,
-                "while" => TokenKind::While,
-                "break" => TokenKind::Break,
-                "continue" => TokenKind::Continue,
-                "return" => TokenKind::Return,
-                "use" => TokenKind::Use,
-                "struct" => TokenKind::Struct,
-                "enum" => TokenKind::Enum,
-                "match" => TokenKind::Match,
-                "scope" => TokenKind::Scope,
-                "spawn" => TokenKind::Spawn,
-                _ => TokenKind::Ident(word.to_owned()),
-            };
-            out.push(Lexeme::Token(Token {
-                kind,
-                span: Span::new(file, at(start), at(i)),
-            }));
-            continue;
-        }
-
-        // Strings, with the escapes `docs/spec.md` lists (N49). The scan skips the byte
-        // after a backslash, so `\"` does not end the literal; decoding is below, once the
-        // literal's extent is known.
-        if c == b'"' {
-            i += 1;
-            let content_start = i;
-            while byte(i).is_some_and(|b| b != b'"' && b != b'\n') {
-                if byte(i) == Some(b'\\') && byte(i + 1).is_some_and(|n| n != b'\n') {
-                    i += 1;
-                }
-                i += 1;
-            }
-            if byte(i).is_none_or(|b| b == b'\n') {
-                errors.push(
-                    Diagnostic::error(
-                        codes::UNTERMINATED_STRING,
-                        Span::new(file, at(start), at(i)),
-                        "this string has no closing quote",
-                    )
-                    .fix_with_review(
-                        Span::new(file, at(i), at(i)),
-                        "\"",
-                        "close the string",
-                        "the string was meant to end at the end of this line, rather \
-                         than a quote being missing from somewhere earlier",
-                    ),
-                );
-                // The quote and what followed it are still the author's bytes.
-                out.push(Lexeme::Invalid(Span::new(file, at(start), at(i))));
-                continue;
-            }
-            let raw = text.get(content_start..i).unwrap_or("");
-            let value = decode_escapes(
-                raw,
-                |a, b| Span::new(file, at(content_start + a), at(content_start + b)),
-                &mut errors,
-            );
-            i += 1;
-            out.push(Lexeme::Token(Token {
-                kind: TokenKind::Str(value),
-                span: Span::new(file, at(start), at(i)),
-            }));
-            continue;
-        }
-
-        // Two-character operators, checked before their one-character prefixes.
-        let two = byte(i + 1).map(|n| (c, n));
-        let (kind, width) = match two {
-            Some((b'-', b'>')) => (Some(TokenKind::Arrow), 2),
-            Some((b'=', b'=')) => (Some(TokenKind::EqEq), 2),
-            Some((b'=', b'>')) => (Some(TokenKind::FatArrow), 2),
-            Some((b'!', b'=')) => (Some(TokenKind::NotEq), 2),
-            Some((b'<', b'=')) => (Some(TokenKind::LtEq), 2),
-            Some((b'>', b'=')) => (Some(TokenKind::GtEq), 2),
-            Some((b'&', b'&')) => (Some(TokenKind::AmpAmp), 2),
-            Some((b':', b':')) => (Some(TokenKind::ColonColon), 2),
-            Some((b'|', b'|')) => (Some(TokenKind::PipePipe), 2),
-            _ => (None, 0),
+    let mut i = i;
+    let start = i;
+    let Some(c) = byte(i) else {
+        return (eof(file, text), text.len());
+    };
+    macro_rules! emit {
+        ($l:expr) => {
+            return ($l, i)
         };
-        if let Some(kind) = kind {
-            i += width;
-            out.push(Lexeme::Token(Token {
-                kind,
-                span: Span::new(file, at(start), at(i)),
-            }));
-            continue;
-        }
+    }
 
-        let single = match c {
-            b'(' => Some(TokenKind::LParen),
-            b')' => Some(TokenKind::RParen),
-            b'{' => Some(TokenKind::LBrace),
-            b'}' => Some(TokenKind::RBrace),
-            b'[' => Some(TokenKind::LBracket),
-            b']' => Some(TokenKind::RBracket),
-            b',' => Some(TokenKind::Comma),
-            b':' => Some(TokenKind::Colon),
-            b'.' => Some(TokenKind::Dot),
-            b';' => Some(TokenKind::Semi),
-            b'?' => Some(TokenKind::Question),
-            b'!' => Some(TokenKind::Bang),
-            b'=' => Some(TokenKind::Eq),
-            b'+' => Some(TokenKind::Plus),
-            b'-' => Some(TokenKind::Minus),
-            b'*' => Some(TokenKind::Star),
-            b'/' => Some(TokenKind::Slash),
-            b'%' => Some(TokenKind::Percent),
-            b'<' => Some(TokenKind::Lt),
-            b'>' => Some(TokenKind::Gt),
-            _ => None,
-        };
-        match single {
-            Some(kind) => {
-                i += 1;
-                out.push(Lexeme::Token(Token {
-                    kind,
-                    span: Span::new(file, at(start), at(i)),
-                }));
-            }
-            None => {
-                // Advance by a whole character, not a byte: stepping into the middle of a
-                // multi-byte sequence would produce one error per continuation byte.
-                let ch = text
-                    .get(start..)
-                    .and_then(|t| t.chars().next())
-                    .unwrap_or('\u{fffd}');
-                i += ch.len_utf8();
-                out.push(Lexeme::Invalid(Span::new(file, at(start), at(i))));
-                errors.push(Diagnostic::error(
-                    codes::UNKNOWN_CHARACTER,
-                    Span::new(file, at(start), at(i)),
-                    format!("`{ch}` is not valid here"),
-                ));
-            }
+    // Whitespace, one lexeme per run: the tree keeps the bytes, and nothing needs to
+    // know where one space ends and the next begins.
+    if c.is_ascii_whitespace() {
+        while byte(i).is_some_and(|b| b.is_ascii_whitespace()) {
+            i += 1;
+        }
+        emit!(Lexeme::Whitespace(Span::new(file, at(start), at(i))));
+    }
+
+    // Line comments
+    if c == b'/' && byte(i + 1) == Some(b'/') {
+        while byte(i).is_some_and(|b| b != b'\n') {
+            i += 1;
+        }
+        // Not including the newline: the comment is the text, and where the line
+        // ends is the formatter's decision rather than the comment's.
+        emit!(Lexeme::Comment(Span::new(file, at(start), at(i))));
+    }
+
+    // Numbers
+    if c.is_ascii_digit() {
+        while byte(i).is_some_and(|b| b.is_ascii_digit() || b == b'_') {
+            i += 1;
+        }
+        let raw: String = text
+            .get(start..i)
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| *c != '_')
+            .collect();
+        match raw.parse::<i64>() {
+            Ok(v) => emit!(Lexeme::Token(Token {
+                kind: TokenKind::Int(v),
+                span: Span::new(file, at(start), at(i)),
+            })),
+            // Refused at the boundary rather than silently wrapped. A literal that
+            // does not fit the type it is written as is a mistake, not a value.
+            // Not an error here: `-9223372036854775808` is a valid `Int` and its
+            // magnitude does not fit. The parser folds the sign and reports if it
+            // still does not.
+            Err(_) => emit!(Lexeme::Token(Token {
+                kind: TokenKind::IntTooLarge(raw),
+                span: Span::new(file, at(start), at(i)),
+            })),
         }
     }
 
-    out.push(Lexeme::Token(Token {
-        kind: TokenKind::Eof,
-        span: Span::new(file, at(bytes.len()), at(bytes.len())),
-    }));
-    (out, errors)
+    // Identifiers and keywords
+    if c.is_ascii_alphabetic() || c == b'_' {
+        while byte(i).is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            i += 1;
+        }
+        let word = text.get(start..i).unwrap_or_default();
+        let kind = match word {
+            "fn" => TokenKind::Fn,
+            "let" => TokenKind::Let,
+            "if" => TokenKind::If,
+            "else" => TokenKind::Else,
+            "true" => TokenKind::True,
+            "false" => TokenKind::False,
+            "mut" => TokenKind::Mut,
+            "pub" => TokenKind::Pub,
+            "while" => TokenKind::While,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
+            "return" => TokenKind::Return,
+            "use" => TokenKind::Use,
+            "struct" => TokenKind::Struct,
+            "enum" => TokenKind::Enum,
+            "match" => TokenKind::Match,
+            "scope" => TokenKind::Scope,
+            "spawn" => TokenKind::Spawn,
+            _ => TokenKind::Ident(word.to_owned()),
+        };
+        emit!(Lexeme::Token(Token {
+            kind,
+            span: Span::new(file, at(start), at(i)),
+        }));
+    }
+
+    // Strings, with the escapes `docs/spec.md` lists (N49). The scan skips the byte
+    // after a backslash, so `\"` does not end the literal; decoding is below, once the
+    // literal's extent is known.
+    if c == b'"' {
+        i += 1;
+        let content_start = i;
+        while byte(i).is_some_and(|b| b != b'"' && b != b'\n') {
+            if byte(i) == Some(b'\\') && byte(i + 1).is_some_and(|n| n != b'\n') {
+                i += 1;
+            }
+            i += 1;
+        }
+        if byte(i).is_none_or(|b| b == b'\n') {
+            errors.push(
+                Diagnostic::error(
+                    codes::UNTERMINATED_STRING,
+                    Span::new(file, at(start), at(i)),
+                    "this string has no closing quote",
+                )
+                .fix_with_review(
+                    Span::new(file, at(i), at(i)),
+                    "\"",
+                    "close the string",
+                    "the string was meant to end at the end of this line, rather \
+                         than a quote being missing from somewhere earlier",
+                ),
+            );
+            // The quote and what followed it are still the author's bytes.
+            emit!(Lexeme::Invalid(Span::new(file, at(start), at(i))));
+        }
+        let raw = text.get(content_start..i).unwrap_or("");
+        let value = decode_escapes(
+            raw,
+            |a, b| Span::new(file, at(content_start + a), at(content_start + b)),
+            errors,
+        );
+        i += 1;
+        emit!(Lexeme::Token(Token {
+            kind: TokenKind::Str(value),
+            span: Span::new(file, at(start), at(i)),
+        }));
+    }
+
+    // Two-character operators, checked before their one-character prefixes.
+    let two = byte(i + 1).map(|n| (c, n));
+    let (kind, width) = match two {
+        Some((b'-', b'>')) => (Some(TokenKind::Arrow), 2),
+        Some((b'=', b'=')) => (Some(TokenKind::EqEq), 2),
+        Some((b'=', b'>')) => (Some(TokenKind::FatArrow), 2),
+        Some((b'!', b'=')) => (Some(TokenKind::NotEq), 2),
+        Some((b'<', b'=')) => (Some(TokenKind::LtEq), 2),
+        Some((b'>', b'=')) => (Some(TokenKind::GtEq), 2),
+        Some((b'&', b'&')) => (Some(TokenKind::AmpAmp), 2),
+        Some((b':', b':')) => (Some(TokenKind::ColonColon), 2),
+        Some((b'|', b'|')) => (Some(TokenKind::PipePipe), 2),
+        _ => (None, 0),
+    };
+    if let Some(kind) = kind {
+        i += width;
+        emit!(Lexeme::Token(Token {
+            kind,
+            span: Span::new(file, at(start), at(i)),
+        }));
+    }
+
+    let single = match c {
+        b'(' => Some(TokenKind::LParen),
+        b')' => Some(TokenKind::RParen),
+        b'{' => Some(TokenKind::LBrace),
+        b'}' => Some(TokenKind::RBrace),
+        b'[' => Some(TokenKind::LBracket),
+        b']' => Some(TokenKind::RBracket),
+        b',' => Some(TokenKind::Comma),
+        b':' => Some(TokenKind::Colon),
+        b'.' => Some(TokenKind::Dot),
+        b';' => Some(TokenKind::Semi),
+        b'?' => Some(TokenKind::Question),
+        b'!' => Some(TokenKind::Bang),
+        b'=' => Some(TokenKind::Eq),
+        b'+' => Some(TokenKind::Plus),
+        b'-' => Some(TokenKind::Minus),
+        b'*' => Some(TokenKind::Star),
+        b'/' => Some(TokenKind::Slash),
+        b'%' => Some(TokenKind::Percent),
+        b'<' => Some(TokenKind::Lt),
+        b'>' => Some(TokenKind::Gt),
+        _ => None,
+    };
+    match single {
+        Some(kind) => {
+            i += 1;
+            emit!(Lexeme::Token(Token {
+                kind,
+                span: Span::new(file, at(start), at(i)),
+            }));
+        }
+        None => {
+            // Advance by a whole character, not a byte: stepping into the middle of a
+            // multi-byte sequence would produce one error per continuation byte.
+            let ch = text
+                .get(start..)
+                .and_then(|t| t.chars().next())
+                .unwrap_or('\u{fffd}');
+            i += ch.len_utf8();
+            errors.push(Diagnostic::error(
+                codes::UNKNOWN_CHARACTER,
+                Span::new(file, at(start), at(i)),
+                format!("`{ch}` is not valid here"),
+            ));
+            emit!(Lexeme::Invalid(Span::new(file, at(start), at(i))));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -831,7 +914,7 @@ mod tests {
             (r#""\x8""#, r"\x"),
             (r#""\x80""#, r"\x80"),
             (r#""\xFF""#, r"\xFF"),
-            (r#""\u{41}""#, r"\u"),
+            (r#""\u41""#, r"\u"),
             ("\"\\é\"", "\\é"),
         ] {
             let (t, e) = lex(src);
@@ -852,5 +935,47 @@ mod tests {
         let (t, e) = lex(r#""\q\n""#);
         assert_eq!(e.len(), 1);
         assert!(matches!(t.first().map(|t| &t.kind), Some(TokenKind::Str(v)) if v == "\n"));
+    }
+
+    #[test]
+    fn a_unicode_escape_is_the_utf8_bytes_of_its_scalar_value() {
+        // N76: the same bytes the character written directly would be.
+        assert_eq!(string(r#""\u{41}""#).as_bytes(), b"A");
+        assert_eq!(string(r#""\u{e9}""#), "é");
+        assert_eq!(string(r#""\u{E9}""#).as_bytes(), "é".as_bytes());
+        assert_eq!(string(r#""\u{80}""#).as_bytes(), [0xC2, 0x80]);
+        assert_eq!(string(r#""\u{200B}x""#).as_bytes(), "\u{200B}x".as_bytes());
+        assert_eq!(string(r#""\u{1F600}""#), "😀");
+        assert_eq!(string(r#""\u{10FFFF}""#).len(), 4);
+        assert_eq!(string(r#""\u{0}""#).as_bytes(), b"\0");
+        assert_eq!(string(r#""\u{00000A}""#).as_bytes(), b"\n");
+    }
+
+    #[test]
+    fn a_unicode_escape_outside_the_scalar_values_is_refused_at_its_bytes() {
+        for (src, written) in [
+            (r#""\u{}""#, r"\u{}"),
+            (r#""\u{D800}""#, r"\u{D800}"),
+            (r#""\u{dfff}""#, r"\u{dfff}"),
+            (r#""\u{110000}""#, r"\u{110000}"),
+            (r#""\u{0000041}""#, r"\u{0000041}"),
+            (r#""\u{12g}""#, r"\u{12"),
+            (r#""\u{41""#, r"\u{41"),
+            (r#""\u""#, r"\u"),
+        ] {
+            let (t, e) = lex(src);
+            assert_eq!(e.len(), 1, "{src}: {e:?}");
+            assert_eq!(e[0].code, codes::INVALID_ESCAPE, "{src}");
+            let at = &e[0].primary.span;
+            assert_eq!(
+                src.get(at.start as usize..at.end as usize),
+                Some(written),
+                "{src}"
+            );
+            assert!(
+                matches!(t.first().map(|t| &t.kind), Some(TokenKind::Str(_))),
+                "{src}"
+            );
+        }
     }
 }
