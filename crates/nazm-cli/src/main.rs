@@ -52,6 +52,7 @@ mod fmt;
 mod init;
 mod inspect;
 mod interface;
+mod lir;
 mod live;
 mod lsp;
 mod mir;
@@ -633,6 +634,19 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
+    /// Print what LIR decided for a checked program, `nazm.lir/1` (N81): the target's data
+    /// layout, every unit's symbols and linkage, every record's and enum's byte layout on that
+    /// target, and which types own anything — the tables both backends read, validated.
+    /// `docs/architecture.md` §7.82.
+    Lir {
+        file: PathBuf,
+        /// The target whose layout to print; the host's when absent.
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
+        /// Where this project begins. As `nazm check --source-root`.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
+    },
     /// Document a program's public API (N74), from its semantic definitions: every exported
     /// function, record and enum of its own modules, with effects, capabilities, foreign symbols and
     /// a link to the source. One `nazm.api-doc/1` line on stdout, or `api.json` and `api.md` in
@@ -1128,6 +1142,11 @@ fn main() -> ExitCode {
             spans,
             source_root,
         } => return mir::run(&file, json, spans, source_root.as_deref()),
+        Command::Lir {
+            file,
+            target,
+            source_root,
+        } => return lir::run(&file, target.as_deref(), source_root.as_deref()),
         Command::Lsp { source_root } => return lsp::run(source_root.as_deref()),
         Command::Context {
             root,
@@ -1297,6 +1316,7 @@ fn main() -> ExitCode {
         | Command::Lsp { .. }
         | Command::CoreIr { .. }
         | Command::Mir { .. }
+        | Command::Lir { .. }
         | Command::Capabilities { .. }
         | Command::Lock { .. }
         | Command::Publish { .. }

@@ -45,6 +45,16 @@ struct Gen {
     rng: Rng,
 }
 
+/// Every generated program's types (N81): an `Int` record, a record whose fields have three
+/// widths, and an enum with a payload that holds it — so byte layouts and ownership are exercised
+/// on every tier.
+const LAYOUTS: &str = "struct P { a: Int, b: Int }\n\
+struct Q { flag: Bool, name: Str, n: Int }\n\
+enum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\n\
+fn q_of(x: Int, y: Int) -> Q { Q(flag: x < y, name: int_to_str(x), n: y) }\n\
+fn s_of(x: Int, y: Int) -> S { if x < y { S.Pair(q: q_of(x, y), k: x) } else { if x == y { S.Empty() } else { S.Num(n: y) } } }\n\
+fn s_val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 - str_len(q.name) }) + k % 7, S.Empty() => 3, } }\n";
+
 impl Gen {
     fn literal(&mut self) -> String {
         match self.rng.below(10) {
@@ -65,7 +75,7 @@ impl Gen {
                 self.literal()
             };
         }
-        match self.rng.below(8) {
+        match self.rng.below(10) {
             0..=3 => {
                 let op = *self.rng.pick(&["+", "-", "*", "/", "%", "+", "-"]);
                 format!(
@@ -89,6 +99,18 @@ impl Gen {
                     self.int(vars, depth - 1, callable)
                 )
             }
+            // Layouts (N81): a record with a `Bool` and a `Str` beside an `Int`, inside an
+            // enum's payload, built and read back on every tier.
+            8 => format!(
+                "s_val(s_of({}, {}))",
+                self.int(vars, depth - 1, callable),
+                self.int(vars, depth - 1, callable)
+            ),
+            9 => format!(
+                "q_of({}, {}).n",
+                self.int(vars, depth - 1, callable),
+                self.int(vars, depth - 1, callable)
+            ),
             _ => format!(
                 "P(a: {}, b: {}).a",
                 self.int(vars, depth - 1, callable),
@@ -152,7 +174,7 @@ impl Gen {
     }
 
     fn program(&mut self) -> String {
-        let mut out = String::from("struct P { a: Int, b: Int }\n");
+        let mut out = String::from(LAYOUTS);
         let n = 1 + usize::try_from(self.rng.below(3)).unwrap();
         for f in 0..n {
             let _ = writeln!(out, "fn f{f}(x: Int, y: Int) -> Int {{");

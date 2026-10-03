@@ -14,6 +14,7 @@ use cranelift_frontend::FunctionBuilderContext;
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use nazm_diag::{codes, Diagnostic};
+use nazm_lir::abi::DataLayout;
 use nazm_lir::runtime::{self, Word};
 use nazm_lir::{EnumTy, Native, Needs, RecordTy, Ty, Unit};
 use nazm_mir as mir;
@@ -77,12 +78,16 @@ impl<'a> Gen<'a> {
             .map_err(|e| e.to_string())?;
         let module = ObjectModule::new(builder);
         let ptr = module.target_config().pointer_type();
+        // Every byte this unit lays out is `nazm-lir`'s, validated before any code (N81).
+        let lay = Layouts::of(unit, DataLayout::with_pointer_bits(ptr.bits()));
+        lay.verify()
+            .map_err(|e| format!("the layout tables do not hold: {e}"))?;
         Ok(Self {
             module,
             native,
             unit,
             names,
-            lay: Layouts::of(unit),
+            lay,
             ptr,
             funcs: BTreeMap::new(),
             imports: BTreeMap::new(),
