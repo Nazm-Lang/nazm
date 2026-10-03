@@ -7664,6 +7664,66 @@ capture that does nothing. **Cranelift links the `errno` unit always**, its runt
 baseline. Versions as stated: epoch 25, `nazm.interface/9`, runtime ABI 12; Core IR, MIR and LIR
 print schemas unchanged — the crossing is existing nodes and three internal built-ins.
 
+## 7.87 Embedded v2: boards as data, a second architecture, device registers by width — N86, 2026-10-04
+
+Written before the code. Area 18 is PARTIAL because everything it shows is one board: N62 built a
+freestanding image for QEMU's AArch64 `virt` machine, N63 bounded its stack, and the board's facts —
+where the image loads, where the UART is, how the machine stops — are constants in one runtime file.
+A second board would be a second copy of that file. This milestone makes a **board a description**
+and adds a second architecture family through it, so that what is specific to a board is data and
+what is the language's is not.
+
+**The sole owner.** `nazm_runtime::board` owns the board table: for each freestanding target, its
+architecture, load address, stack size, UART (address and access width), how the machine is stopped
+(ARM semihosting, or SiFive's test device), the startup's per-architecture instructions, and the
+emulator command a person runs it with. The linker script, the freestanding runtime and the entry are
+generated from a description and from nothing else; `nazm inspect` prints the table. The language
+gains no board knowledge: a program names device addresses as integers under an `MmioCap`, as in
+N62, and a board's description never changes what a program means.
+
+**The second architecture.** `riscv64gc-unknown-none-elf` on QEMU's RISC-V `virt` machine: RV64GC,
+machine mode, no firmware (`-bios none`), the image loaded at `0x8000_0000`, the NS16550A UART at
+`0x1000_0000`, the SiFive test device at `0x10_0000` stopping the machine with a status. Its startup
+sets the stack, enables the floating-point unit (code generation may use it) and calls `main` as
+AArch64's does; its stack check, stack painting and stack bound are N49's and N63's, unchanged. Only
+the LLVM backend builds it, as only it builds AArch64's board; Cranelift is refused by name.
+
+**Device registers by width.** `mmio_read8`, `mmio_write8`, `mmio_read16` and `mmio_write16` join the
+32-bit pair: one volatile access of exactly that width, zero-extended on read and truncated on write,
+under an `MmioCap`, freestanding only (`N0392` on a hosted build, unchanged). A 16550's registers are
+bytes; a 32-bit store to one writes its three neighbours, so a byte-wide device needs the byte access,
+and the width is the program's to state. No access is reordered against another (volatile), and none
+is merged or split.
+
+**Settled and not built.** *Atomics*: an ordering model needs a memory model the language has not
+written (N61's formal core has one thread), and a litmus test on one emulated core shows nothing about
+orderings; refused by absence — there is no atomic built-in — and recorded as DESIGNED. *Interrupts*:
+a handler is code the hardware calls between any two instructions; it needs the effect and capability
+story for preemption and a vector table per board; DESIGNED. *A heap*: the boards have none, and a
+program that allocates is refused as N62 refuses it (what only a hosted runtime has). *Static
+initialisation* is the linker's: `.data` is loaded with the image and `.bss` is zero in QEMU's loaded
+memory; on hardware a loader that does not zero `.bss` is outside this guarantee, written down.
+*Panic path*: unchanged — a failure is reported on the UART and the machine stopped with status 2.
+
+**Evidence, and what is claimed.** Emulator runs only: each board boots its image under QEMU, in a
+container, and a program's output, failures and measured stack are compared with independent expected
+values. No hardware is claimed; a board on the table is "emulated", and the published support matrix
+says which of build, link, boot and measured stack each target has.
+
+**Versions.** Semantic epoch `25 → 26` (four names a program could not call before). Runtime ABI
+`12 → 13` (four MMIO entries; the board table enters the runtime digest). Interface, Core IR, MIR and
+LIR schemas unchanged. A board image's objects are keyed by target as N57 keyed them, so a RISC-V
+object is never an AArch64 one.
+
+**Negative example.** `mmio_write8(268435456, 72)` in a program built for the host is `N0392`; a
+program allocating a `Vec` built for either board is refused before linking, naming the sequences
+runtime. **Boundary example.** On RISC-V, `mmio_write8` of `0x1_48` writes the byte `0x48` (`H`) and
+nothing else — the truncation is the width's.
+
+**What would prove this unsuitable.** A board fact needing a change outside its description; a
+program whose output differs between the two boards for anything but its device addresses; a stack
+measured above its stated bound on either.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
