@@ -6732,6 +6732,111 @@ is rewritten by `nazm lock`), translating C semantics or another language into N
 package boundary, and the agent benchmark: no claim of improved agent efficiency is made, so it is
 not re-run.
 
+## 7.77 Syntax completion: incremental reparse, finer recovery, `\u{…}` — N76, 2026-10-03
+
+Written before the code. Area 1 stayed PARTIAL for four named gaps: whole-file parsing only, recovery
+coarser than a statement outside blocks, no editor path that edits a parse, and an undecided Unicode
+escape. This section settles each one.
+
+**One owner.** `nazm-syntax` owns lexing and parsing, and stays the only place either happens.
+Incremental reparse is not a second parser. It is the same lexer and the same parser, restarted at a
+boundary where their state is provably the same as it was in the previous revision. Everything the
+reparse does not touch is copied from the previous revision and moved by the edit's length delta.
+
+**The revision model.** A `Revision` is the result of parsing one file's text. It holds the text,
+the lossless lexemes, the abstract items, the concrete tree, the diagnostics, and a *chunk table*:
+one row per top-level item, recording the bytes and tokens the item owns, how far its parse looked
+ahead, the parser's cascade state on entering it, and the diagnostics it raised. `Revision::edit`
+takes a `TextEdit` (a byte range of the old text and its replacement) and returns the next
+revision. The contract, which is the falsifier: **for every text and every edit, `edit` returns a
+revision equal to `Revision::new` of the edited text.** That means the same lexemes, the same
+concrete tree (kinds, bytes and spans of every node and leaf), the same abstract tree (spans
+included), and the same diagnostics in the same order. Nothing is "close enough". A sequence of
+edits converges because each step does.
+
+**Where the parse may restart.** The lexer is context-free from any lexeme boundary, and it reads at
+most one byte past a lexeme's end. So relexing begins at the first lexeme of the first affected
+chunk. It ends at the first boundary at or past the edit's end that is also a boundary of the old
+scan, shifted. From that point the old lexemes are exactly what a fresh scan would produce. The
+parser's only state across top-level items is the cascade mute (§7.17), and an item keyword resets
+it. Its only forward reach past an item is the delimiter-balance scan (§7.17), which is recorded per
+chunk as the furthest token the chunk examined. So a chunk is reused if and only if:
+
+- every token it examined lies wholly before the first changed token, or wholly after the relexed
+  region;
+- and it starts at the same token, shifted, with the same entry mute state.
+
+Every other chunk is reparsed. The reparse stops at the first old chunk boundary past the edit
+that it lands on exactly. If the edit unbalances a delimiter so that no later boundary matches, the
+reparse runs to the end of the file. That is correct, and only slower.
+
+**Green-node reuse.** A reused chunk's root-level green children are the previous tree's, by
+reference. The new root is assembled from them and from the reparsed region's children. The token
+text resolver becomes an append-only table that the next revision clones and extends, so an old
+leaf's key still resolves.
+
+**What a reuse may not do.** Reuse a chunk whose lookahead crossed the edit. Reuse after a lexing
+boundary mismatch. Carry a span unshifted. Reuse a completion-probe parse: a hole parse (§7.28) is
+always full. Fall back silently: every revision reports `ParseStats` (lexemes relexed, tokens
+reparsed, chunks reused and reparsed, and whether the revision was full), so a test can see which
+path ran.
+
+**Recovery, finer.** Inside a declaration, a malformed member no longer costs the item:
+
+- a record field or enum variant (or payload field) recovers at its `,` or at the list's closing
+  delimiter;
+- a parameter recovers at its `,` or at `)`;
+- a call's argument, a construction's field initialiser or a `match` arm recovers at its `,` or at
+  its closing delimiter.
+
+The malformed member is an `Error` node in the concrete tree. Its siblings stay typed nodes, and a
+later independent mistake in the same item is its own diagnostic. A broken `use` recovers at its
+`;`. Item recovery now also stops at `use`, so one bad import no longer swallows the next.
+
+**The abstract tree's contract is unchanged, deliberately.** An item whose header or member list
+needed recovery is absent from the abstract tree. A function whose body needed recovery keeps its
+signature and has no body. The checker never sees a declaration with a hole in it, so recovery adds
+syntax diagnostics and never semantic cascades. The usable abstract tree around a malformed region
+is every other item, and the signature of the item it is in. A hole-tolerant checker is not
+attempted here.
+
+**Unicode escapes, decided.** `Str` is bytes, and a literal's bytes are the UTF-8 encoding of its
+source text: that decision was made when `"é"` was specified as two bytes. `\u{H…}` (one to six
+hexadecimal digits, a Unicode scalar value) is therefore those same bytes, spelled in ASCII. It
+denotes nothing a literal could not already contain. It exists so that an invisible or
+bidirectional character can be written visibly. A surrogate (`D800`–`DFFF`), a value above
+`10FFFF`, no digits, more than six digits, a non-hex digit or a missing brace is refused (`N0004`)
+at the escape. `\xHH` still stops at `7F`. Above that, a lone byte is what `str_from_byte` makes,
+and a `\x80` meaning one byte would contradict `\u{80}` meaning two.
+
+**Unsaved buffers.** `nazm lsp` moves from full to incremental document sync. The service keeps one
+`Revision` per open document and applies each ranged change to it. Analysis takes the root file's
+parse from that revision instead of parsing the text again (`nazm_core::analyse_parsed`). Because
+of the contract above, the two are interchangeable, and a test holds them equal after every change.
+Imported files are still parsed in full on every analysis.
+
+**Versions.** Semantic epoch `20 → 21`: `\u{…}` moved from refused to accepted. Interface schema,
+runtime ABI, Core/MIR/LIR print schemas and package, lock and registry schemas: unchanged. No
+semantic fact, lowering or layout moves; only which source texts parse. Machine schemas: unchanged.
+The new diagnostics are existing codes at new positions. Check cache: an unparsable module is never
+written (§7.4), so recovery cannot reach a cache. The epoch bump invalidates every check cached under
+20. Selfhost: unchanged. The compiler written in Nazm still refuses every escape, still has no
+concrete tree, and still does not recover. Parity is N98's.
+
+**Negative example.** `fn f() -> Int { 1 }` + edit inserting `{` after the body opens a delimiter
+that no later boundary closes. The reparse runs to the end of the file, and the result equals a
+fresh parse. **Boundary example.** An edit at the exact first byte of an item touches the token
+that ends at that byte, so the previous chunk is reparsed too (`"ab"` + `"c"` at the boundary of an
+identifier makes one token, not two).
+
+**What would prove this unsuitable.** Any edit sequence over any text for which `edit` differs from
+`Revision::new`, checked over every `.nz` file in the repository with seeded random edit sequences.
+Also: a common one-item edit on the compiler's own sources that reparses most of the file.
+
+**Not here.** A hole-tolerant checker, incremental semantic analysis of an unsaved buffer (area 2a
+covers saved modules), incremental parsing of imported files, a concrete tree or recovery in the
+compiler written in Nazm, and `\x` above `7F`.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
