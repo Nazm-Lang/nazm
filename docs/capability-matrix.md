@@ -68,8 +68,8 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 2a | Incremental semantic checking | VERIFIED |
 | 3 | Type system | PARTIAL — traits, impls and methods (N78); no trait objects, generic traits or default methods |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe |
-| 5 | Effects | PARTIAL |
-| 6 | Capabilities (language) | PARTIAL |
+| 5 | Effects | PARTIAL — effect subsumption for function values (N79); no handlers, user effects or divergence |
+| 6 | Capabilities (language) | PARTIAL — the bridge recorded as inherited authority and refusable by profile, `OutCap` attenuation (N79); the default still inherits |
 | 7 | Provenance and information flow (language) | PARTIAL |
 | 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | VERIFIED (v1) |
@@ -852,6 +852,17 @@ callee's declared set performed with it replaced; through a wrapper (`@std/seq`)
 cached interface, and visible to profiles. `crates/nazm-cli/tests/effect_params.rs`, interpreter
 and both backends; `N0388`, `N0389`.
 
+*N79, 2026-10-03: Effect subsumption v1 — VERIFIED.* Where a function value is passed, spawned
+with or returned, one whose effects are a subset of the expected type's is accepted; parameters and
+results stay invariant, an effect parameter matches only by binding, and nothing converts inside
+another type (`architecture.md` §7.80, `spec.md` *Function values*). The checker's one relation is
+`assignable` (`crates/nazm-core/src/check.rs`); below it, Core IR's verifier compares results up to
+effects as it already compared arguments, so the interpreter and both native backends run a
+subsumed value unchanged. Evidence: `crates/nazm-cli/tests/authority.rs` —
+`a_function_value_with_fewer_effects_is_accepted_passed_or_returned` (interpreter and Cranelift),
+`a_function_value_with_more_effects_is_refused` (passed and returned, `N0300`). The row stays
+PARTIAL for handlers, user-defined effects and divergence.
+
 *N50, 2026-10-02.* A function type carries an effect set; a call through a function value performs
 it, a closure's body is checked against its own set (`! {}` unwritten), and an undeclared function
 used as a value is held to the none its value's type assumed (`N0366`). A closure's authority is
@@ -877,6 +888,26 @@ failure and panic are effects.
 effectful call refused where a pure one is accepted.
 
 ### 6. Capabilities, as a language feature — PARTIAL
+
+*N79, 2026-10-03: Inherited authority as a recorded contract v1 — VERIFIED; Strict authority by
+profile v1 — VERIFIED; Attenuation by a narrower kind v1 — VERIFIED; Revocation — declared outside
+the model.* The checker computes each function's **inherited authority** — the kinds its body
+exercises without holding them — by the rule that checks a declared function, and records it in
+the resolution (`Resolution::inherits`, `crates/nazm-core/src/effects.rs`); `nazm inspect` shows it
+as each definition's `inherits`. The `authority` profile's `explicit-authority` rule refuses every
+function of the program's own modules that inherits, by name and kind (`N0510`). `OutCap` (id 6)
+authorises `print` and `eprint` only; an `IoCap` implies it and is accepted where one is expected,
+never the reverse, and `main` may take one as a root (`crates/nazm-sema/src/capability.rs`,
+`CapabilitySet::implied`). Evidence: `crates/nazm-cli/tests/authority.rs` — an `OutCap` printing and
+refused a file read, a write and an existence check (`N0369`); `IoCap` for `OutCap` accepted and the
+reverse refused, as argument and result; `main(o: OutCap)` interpreted and native; `OutCap` not
+redefinable (`N0331`); the recorded `inherits` of undeclared, pure and declared functions; the
+profile refusing inheritance and accepting held authority and pure undeclared code; the profile
+report naming the rule. **Still PARTIAL**, for one reason: by default an undeclared function still
+inherits its caller's authority — the corpus and the compiler written in Nazm rely on it, and
+migrating both is named work. The interface stays `nazm.interface/8`: inherited authority depends
+on bodies, and an interface publishes declarations; a declared export inherits nothing, and an
+undeclared import is already every effect to its importer (§7.80, as built).
 
 **N51 (2026-10-02)** · a closure holds the capabilities visible where it is written, as captured,
 and its type states what it does with them (`a_closure_holds_the_capabilities_it_captures`);
@@ -920,18 +951,21 @@ identity. Twenty N37 mutations (area 30).
 enforces authority — there is no sandbox, broker or operating-system boundary, and a Nazm program can
 affect its machine as much as the process running it. **Coarse**: one `IoCap` authorises every file,
 both standard streams, the arguments and exit; nothing is least-privilege, and there is no
-attenuation because there is no narrower kind to derive. **Shareable**: capabilities copy freely,
+attenuation beyond `OutCap` (N79) because there is no other narrower kind to derive. **Shareable**: capabilities copy freely,
 with no linearity and no revocation. **The ambient bridge**: a function with no declared set — every
 function in the repository written before N37, 1,034 of the 1,054 function checks across the tree's
 roots — exercises its caller's authority, rooted at a `main` with no set; the bound is that code with a
-contract may call it only while holding what it needs. Possession is lexical, not use: the built-ins
+contract may call it only while holding what it needs. Since N79 that inheritance is recorded per
+function and refused under the `authority` profile, but not by default. Possession is lexical, not use: the built-ins
 do not take the capability as an argument. The Nazm-written compiler does not read capabilities.
 
 **Do not confuse this with `nazm capabilities`.** `schema/nazm.capabilities-1.json` is a
 *toolchain descriptor* — what one build of the compiler supports. It is unrelated to
 object capabilities or capability-safety, and it is VERIFIED under area 22.
 
-**Next dependency** · For attenuation, a resource-parametrised kind; for linearity, move semantics;
+**Next dependency** · For the default, migrating the corpus and the compiler written in Nazm to
+declared authority (then the bridge can be refused everywhere); for finer attenuation, a
+resource-parametrised kind; for linearity, move semantics;
 for enforcement beyond the checker, a runtime or operating-system boundary; for foreign code, FFI.
 
 *Before N37 this row was MISSING.* **Evidence of absence, then** · Authority was **ambient and

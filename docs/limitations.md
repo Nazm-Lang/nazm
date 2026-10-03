@@ -81,10 +81,15 @@ found only by reading all of it.
 
 ## Effects, authority and information flow
 
-- Capabilities are coarse: an `IoCap` authorises every file and stream alike; no attenuation or
-  revocation (area 6).
-- An undeclared function exercises its caller's authority (N37's bridge) unless a restriction
-  profile refuses it (areas 6, 19, 20).
+- Capabilities are coarse: an `IoCap` authorises every file alike, and the one narrower kind is
+  `OutCap`, the standard streams. No per-file or per-directory kind exists, and revocation is
+  outside the model by design (area 6). *Narrowed in N79.*
+- By default an undeclared function exercises its caller's authority (N37's bridge). Since N79 that
+  inheritance is recorded per function (`nazm inspect`'s `inherits`) and refused under the
+  `authority` profile, but the default is unchanged until the corpus and the compiler written in
+  Nazm declare their authority (areas 6, 19, 20).
+- Effect subsumption applies where a function value is passed or returned, not inside another
+  type: a `Vec[fn() -> Int]` is not a `Vec[fn() -> Int ! { io }]` (area 5).
 - Provenance has three sink classes (`path`, `output`, `file-data`) solved through helpers,
   closures and modules, and one language restriction (`N0372`, the path); the rest is profile
   policy. Declassification is `str_vouch` under a `VouchCap`, recorded. A container is still
@@ -163,7 +168,7 @@ found only by reading all of it.
   checker; no proof assistant, nothing beyond the bound, and nothing about functions, loops,
   strings, effects, tasks or the native backends' code (area 19).
 
-- Fourteen rules: N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
+- Fifteen rules: N79 added `explicit-authority` (the `authority` profile); N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
   `no-blocking` and `bounded-loops` (the `realtime` profile), N72 `signed-writes` (`accounts`); the
   stack rule bounds depth, not bytes, and is `unknown` through a function value; no constant-time
   rule, and a loop is bounded only in its counted form; `critical` stays a restriction set, not a
