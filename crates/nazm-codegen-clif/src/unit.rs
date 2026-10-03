@@ -240,6 +240,7 @@ impl<'a> Gen<'a> {
             runtime::Part::Tasks => self.needs.tasks = true,
             runtime::Part::Channels => self.needs.channels = true,
             runtime::Part::Closures => self.needs.closures = true,
+            runtime::Part::Foreign => self.needs.foreign = true,
             runtime::Part::Base | runtime::Part::Libc => {}
         }
         let word = |w: Word| match w {

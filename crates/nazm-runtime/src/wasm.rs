@@ -50,6 +50,13 @@ done:
   ret void
 }}
 
+; No C library keeps an `errno` here (N85): a foreign call's capture of it does nothing, and
+; `c_errno()`, which would read it, is refused (`N0613`).
+define hidden void @nz.errno_save() {{
+entry:
+  ret void
+}}
+
 define hidden i32 @nz.failed_now() {{
 entry:
   %f = load i1, ptr @nz.failed

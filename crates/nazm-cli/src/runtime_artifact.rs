@@ -146,20 +146,27 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
     let backend = Backend::discover(opt, &work, cross);
     // The hosted runtime has tasks, so it carries its target's task switch (N83) as a second
     // member of the archive.
-    let switch = (profile == Profile::Hosted)
+    // And it calls C, so it carries where its target keeps `errno` (N85) as a third.
+    let per_target = (profile == Profile::Hosted)
         .then(|| crate::build::switch_target(&target))
-        .flatten()
-        .map(nazm_lir::runtime::switch::emit_switch);
+        .flatten();
+    let switch = per_target.map(nazm_lir::runtime::switch::emit_switch);
+    let errno = per_target.map(nazm_lir::runtime::switch::emit_errno);
     let mut members = vec![obj.clone()];
-    if let Some(text) = &switch {
-        let sll = work.join("switch.ll");
-        let sobj = work.join("switch.o");
+    for (name, text) in [("switch", &switch), ("errno", &errno)] {
+        let Some(text) = text else { continue };
+        let sll = work.join(format!("{name}.ll"));
+        let sobj = work.join(format!("{name}.o"));
         if let Err(e) = std::fs::write(&sll, text) {
             return finish(refuse(format!("cannot write {}: {e}", sll.display())));
         }
         match backend.compile(&sll, &sobj) {
             Outcome::Ran(o) if o.status.success() => members.push(sobj),
-            _ => return finish(refuse("the toolchain refused the task switch".to_owned())),
+            _ => {
+                return finish(refuse(format!(
+                    "the toolchain refused the runtime's `{name}` unit"
+                )))
+            }
         }
     }
     match backend.compile(&ll, &obj) {
@@ -213,7 +220,14 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
         "services": if profile == Profile::Hosted { EVERYTHING.names() } else { vec!["stack"] },
         "opt_level": opt,
         "toolchain": toolchain(),
-        "text": digest(format!("{text}{}", switch.as_deref().unwrap_or("")).as_bytes()),
+        "text": digest(
+            format!(
+                "{text}{}{}",
+                switch.as_deref().unwrap_or(""),
+                errno.as_deref().unwrap_or("")
+            )
+            .as_bytes()
+        ),
         "archive": digest(&bytes),
     });
     if let Err(e) = std::fs::write(out.join(MANIFEST), format!("{manifest}\n")) {

@@ -36,9 +36,9 @@ use nazm_span::{FileId, Span};
 
 use crate::ast::{
     Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, FnTypeName, ForeignDecl,
-    Function, HoleSite, ImplDecl, Import, Let, MatchArm, MethodOf, Param, PatternField, Place,
-    PlaceField, Program, Qualifier, Record, Requirement, Return, Scope, Spawn, Stmt, Trait,
-    TraitMethod, TypeName, TypeParam, Variant, While,
+    ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm, MethodOf, Param,
+    PatternField, Place, PlaceField, Program, Qualifier, Record, Requirement, Return, Scope, Spawn,
+    Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -368,11 +368,21 @@ pub(crate) fn parse_region(
             // `struct`/`enum`, each optionally behind a `pub`. Looking one token past a
             // `pub` is what keeps the kinds of item apart without any grammar knowing
             // about another's.
-            let after_pub = if p.at(&TokenKind::Pub) {
-                p.tokens.get(p.pos + 1).map(|t| t.kind.clone())
-            } else {
-                Some(p.peek().clone())
-            };
+            let mut next = p.pos + usize::from(p.at(&TokenKind::Pub));
+            // `extern "C" struct` (N85) is a record; `extern "C" fn` stays a function.
+            if matches!(p.tokens.get(next).map(|t| &t.kind), Some(TokenKind::Ident(w)) if w == "extern")
+                && matches!(
+                    p.tokens.get(next + 1).map(|t| &t.kind),
+                    Some(TokenKind::Str(_))
+                )
+                && matches!(
+                    p.tokens.get(next + 2).map(|t| &t.kind),
+                    Some(TokenKind::Struct)
+                )
+            {
+                next += 2;
+            }
+            let after_pub = p.tokens.get(next).map(|t| t.kind.clone());
             match after_pub {
                 Some(TokenKind::Struct) => p.record().map(Item::Record),
                 Some(TokenKind::Enum) => p.enumeration().map(Item::Enum),
@@ -955,6 +965,20 @@ impl<'a> Parser<'a> {
             self.advance();
             s
         });
+        // `extern "C"` (N85): the dispatcher only sends a record here with it when a string and
+        // `struct` follow, so the two tokens are there.
+        let mut foreign: Option<ForeignStruct> = None;
+        if matches!(self.peek(), TokenKind::Ident(w) if w == "extern") {
+            self.advance();
+            let abi_span = self.peek_span();
+            if let TokenKind::Str(abi) = self.advance() {
+                foreign = Some(ForeignStruct {
+                    abi,
+                    abi_span,
+                    opaque: false,
+                });
+            }
+        }
         self.expect(&TokenKind::Struct, "to start a record")?;
 
         let name_span = self.peek_span();
@@ -978,6 +1002,26 @@ impl<'a> Parser<'a> {
             }
         };
         let type_params = self.only_type_params()?;
+
+        // `extern "C" struct Name;`: an opaque handle, with no field list at all (N85).
+        if let Some(f) = foreign.as_mut() {
+            if self.at(&TokenKind::Semi) {
+                let close = self.peek_span();
+                self.advance();
+                f.opaque = true;
+                self.wrap(at, SyntaxKind::RecordItem);
+                self.drop_item = self.poisoned;
+                return Some(Record {
+                    name,
+                    name_span,
+                    pub_span,
+                    type_params,
+                    fields: Vec::new(),
+                    foreign,
+                    span: start.join(close),
+                });
+            }
+        }
 
         let list = self.checkpoint();
         self.expect(&TokenKind::LBrace, "to start the fields")?;
@@ -1007,6 +1051,7 @@ impl<'a> Parser<'a> {
             pub_span,
             type_params,
             fields,
+            foreign,
             span: start.join(close),
         })
     }

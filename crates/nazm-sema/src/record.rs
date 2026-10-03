@@ -100,7 +100,27 @@ pub struct RecordDef {
     /// read an instance by the same code: the substitution happened once, here, and
     /// nothing downstream has to know it did. `None` for a definition as written.
     pub instance: Option<Instance<RecordId>>,
+    /// What C may see of this record (N85): nothing, its fields in declaration order, or
+    /// nothing but a pointer.
+    pub repr: CRepr,
 }
+
+/// How a record crosses the C boundary (N85, `docs/architecture.md` §7.86).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CRepr {
+    /// An ordinary record: never crosses, laid out in canonical order.
+    #[default]
+    Nazm,
+    /// `extern "C" struct S { … }`: laid out in **declaration order** by C's rules, and
+    /// passed to C by borrowed pointer.
+    Layout,
+    /// `extern "C" struct S;`: a C pointer Nazm never reads, written as one hidden `Int`
+    /// field ([`OPAQUE_FIELD`]) no program can name.
+    Opaque,
+}
+
+/// The name of an opaque handle's one field: not an identifier, so no program can write it.
+pub const OPAQUE_FIELD: &str = "#pointer";
 
 impl RecordDef {
     /// The field of this name, with its index in declaration order.
@@ -265,15 +285,22 @@ impl Records {
     /// that no consumer has to know the rule and none can disagree about it.
     pub fn complete(&mut self, id: RecordId, fields: Vec<FieldDef>) {
         let mut layout: Vec<u32> = (0..u32::try_from(fields.len()).unwrap_or(u32::MAX)).collect();
-        layout.sort_by(|a, b| {
-            let name = |i: &u32| {
-                fields
-                    .get(*i as usize)
-                    .map(|f| f.name.as_str())
-                    .unwrap_or("")
-            };
-            name(a).cmp(name(b))
-        });
+        // A record C sees keeps the order it was declared in: that order is C's layout (N85).
+        let declared = self
+            .defs
+            .get(id.index())
+            .is_some_and(|d| d.repr != CRepr::Nazm);
+        if !declared {
+            layout.sort_by(|a, b| {
+                let name = |i: &u32| {
+                    fields
+                        .get(*i as usize)
+                        .map(|f| f.name.as_str())
+                        .unwrap_or("")
+                };
+                name(a).cmp(name(b))
+            });
+        }
         if let Some(def) = self.defs.get_mut(id.index()) {
             def.fields = fields;
             def.layout = layout;

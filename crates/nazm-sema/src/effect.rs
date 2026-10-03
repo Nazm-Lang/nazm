@@ -103,6 +103,8 @@ impl Effect {
             | Intrinsic::Print
             | Intrinsic::EPrint
             | Intrinsic::ExitWith => Some(Self::Io),
+            // Reading what C left is part of calling C (N85).
+            Intrinsic::CErrno => Some(Self::Foreign),
             // Strings and sequences compute over values the caller holds; channels are
             // values too, and the power to run anything alongside is `spawn`'s.
             Intrinsic::StrLen
@@ -150,7 +152,11 @@ impl Effect {
             | Intrinsic::VecGet
             | Intrinsic::VecSet
             | Intrinsic::VecPush
-            | Intrinsic::VecPop => None,
+            | Intrinsic::VecPop
+            // The call these belong to performs `foreign` already (N85).
+            | Intrinsic::ForeignNonNull
+            | Intrinsic::CStrCopy
+            | Intrinsic::CallbackAddress => None,
         }
     }
 

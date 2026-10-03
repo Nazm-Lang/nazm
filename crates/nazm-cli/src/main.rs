@@ -779,6 +779,10 @@ enum Command {
         /// beside it with the extension `.h`.
         #[arg(long)]
         lib: bool,
+        /// With `--lib`, a shared library (`.dylib`, `.so`) instead of a static archive (N85):
+        /// its only visible symbols are the exports, and the header is the same.
+        #[arg(long, requires = "lib")]
+        shared: bool,
         /// Write every object and `DIR/link.txt` instead of linking (N57): for a `--target` this
         /// host has no linker for, linked by that target's own toolchain.
         #[arg(long, value_name = "DIR")]
@@ -1028,6 +1032,7 @@ fn main() -> ExitCode {
         target,
         link,
         lib,
+        shared,
         objects,
         stack_watermark,
         layout,
@@ -1055,6 +1060,7 @@ fn main() -> ExitCode {
                 target: target.as_deref(),
                 link: &link,
                 library: lib,
+                shared,
                 objects: objects.as_deref(),
                 stack_watermark,
                 layout: &layout,

@@ -121,7 +121,16 @@ use nazm_span::Span;
 /// and checking a call reads the third; a `/7` reader would take a module with impls for one
 /// without, and resolve a call differently. The fields are absent where empty, but the major
 /// moves.
-pub const SCHEMA: &str = "nazm.interface/8";
+///
+/// # `/9` (N85)
+///
+/// A record may carry `c`: `"struct"` for an `extern "C" struct` with fields, whose fields
+/// are then written **in declaration order**, which is its C layout; `"handle"` for an opaque
+/// handle, whose one field is the pointer no program can name. An importer builds, reads,
+/// compares and passes a record by these, so an `/8` reader — which would take a handle for
+/// an ordinary record any program may build, and a C struct's fields for an order it may
+/// sort — must refuse it, and the major moves.
+pub const SCHEMA: &str = "nazm.interface/9";
 
 /// A type as persisted.
 ///
@@ -244,8 +253,40 @@ pub struct PersistentRecord {
     ///
     /// Sorted rather than in declaration order, so that moving two field declarations
     /// produces identical bytes — which is what makes `docs/spec.md`'s claim that field
-    /// order is not semantic true of the fingerprint as well as of the language.
+    /// order is not semantic true of the fingerprint as well as of the language. A C struct's
+    /// are in declaration order instead (N85): for it, order *is* semantic.
     pub fields: Vec<PersistentField>,
+    /// What C sees of it (N85): absent for an ordinary record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c: Option<PersistentC>,
+}
+
+/// How a published record crosses the C boundary (N85).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PersistentC {
+    /// `extern "C" struct S { … }`.
+    Struct,
+    /// `extern "C" struct S;`.
+    Handle,
+}
+
+impl PersistentC {
+    fn of(repr: nazm_sema::CRepr) -> Option<Self> {
+        match repr {
+            nazm_sema::CRepr::Nazm => None,
+            nazm_sema::CRepr::Layout => Some(Self::Struct),
+            nazm_sema::CRepr::Opaque => Some(Self::Handle),
+        }
+    }
+
+    fn repr(c: Option<Self>) -> nazm_sema::CRepr {
+        match c {
+            None => nazm_sema::CRepr::Nazm,
+            Some(Self::Struct) => nazm_sema::CRepr::Layout,
+            Some(Self::Handle) => nazm_sema::CRepr::Opaque,
+        }
+    }
 }
 
 /// One exported definition, as published.
@@ -633,12 +674,18 @@ impl PersistentUnitInterface {
             let owner = graph
                 .key(def.module)
                 .ok_or(PublishError::RecordWithoutKey(def.module))?;
-            let fields = Self::published_fields(&def.fields, types, graph, def.module)?;
+            let mut fields = Self::published_fields(&def.fields, types, graph, def.module)?;
+            let c = PersistentC::of(def.repr);
+            if c.is_some() {
+                // A C struct's order is its layout (N85): declaration order, unsorted.
+                fields.sort_by_key(|f| def.field(&f.name).map_or(u32::MAX, |(i, _)| i));
+            }
             published_records.push(PersistentRecord {
                 def: DefKey::new(owner.clone(), DefKind::Record, def.name.clone()).to_string(),
                 name: def.name.clone(),
                 generics: u32::try_from(def.params.len()).unwrap_or(u32::MAX),
                 fields,
+                c,
             });
         }
         // By durable identity, and once each: two paths through the public surface that
@@ -1097,6 +1144,7 @@ impl PersistentUnitInterface {
                 decl: u32::MAX,
                 params: placeholder(r.generics),
                 instance: None,
+                repr: PersistentC::repr(r.c),
             };
             let id = if nameable {
                 types.records_mut().declare(def)

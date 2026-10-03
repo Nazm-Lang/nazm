@@ -270,7 +270,8 @@ fn every_declaration_outside_the_subset_is_refused_by_its_own_code() {
         ("extern \"Rust\" fn a(x: Int) -> Int = \"a\";", "N0380"),
         ("extern \"c\" fn a(x: Int) -> Int = \"a\";", "N0380"),
         ("extern \"C\" fn a(x: Ints) -> Int = \"a\";", "N0381"),
-        ("extern \"C\" fn a(x: Int) -> Str = \"a\";", "N0381"),
+        // A `Str` result crosses since N85, copied; a sequence result never does.
+        ("extern \"C\" fn a(x: Int) -> Strs = \"a\";", "N0381"),
         ("extern \"C\" fn a(x: Ints) -> Int = \"a\";", "N0381"),
         ("extern \"C\" fn a(x: ForeignCap) -> Int = \"a\";", "N0381"),
         (
@@ -542,6 +543,7 @@ fn a_reserved_c_symbol_is_every_one_the_runtime_calls() {
         shims: true,
         stack: true,
         closures: true,
+        foreign: true,
     };
     let text = nazm_lir::emit_runtime(all);
     let mut found = Vec::new();

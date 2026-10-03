@@ -526,6 +526,7 @@ fn wasm_build(
             target: Some("wasm32-unknown-unknown"),
             link: &[],
             library: false,
+            shared: false,
             objects: Some(dir),
             stack_watermark: false,
             layout: "aos",

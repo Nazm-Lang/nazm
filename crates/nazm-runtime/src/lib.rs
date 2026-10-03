@@ -57,6 +57,9 @@ pub struct Needs {
     pub stack: bool,
     /// The closure objects' allocation and count (N50).
     pub closures: bool,
+    /// `errno` captured after each foreign call and read by `c_errno()` (N85), with the
+    /// per-target `errno` unit beside the runtime.
+    pub foreign: bool,
 }
 
 impl Needs {
@@ -73,6 +76,7 @@ impl Needs {
             shims: self.shims || other.shims,
             stack: self.stack || other.stack,
             closures: self.closures || other.closures,
+            foreign: self.foreign || other.foreign,
         }
     }
 
@@ -90,6 +94,7 @@ impl Needs {
             (self.shims, "shims"),
             (self.stack, "stack"),
             (self.closures, "closures"),
+            (self.foreign, "foreign"),
         ]
         .into_iter()
         .filter_map(|(on, n)| on.then_some(n))
@@ -111,6 +116,7 @@ impl Needs {
                 "shims" => n.shims = true,
                 "stack" => n.stack = true,
                 "closures" => n.closures = true,
+                "foreign" => n.foreign = true,
                 _ => return None,
             }
         }
@@ -188,8 +194,11 @@ pub fn escape(s: &str) -> String {
 /// the freestanding one alike. 9 is N66's: `nz.ints_sum`, the ordered checked sum. 10 is N68's: `nz.soa_grow` and the
 /// field-by-field `Vec` layout it grows. 11 is N83's: the task pool — `nz.cwait`, `nz.ctimedwait`
 /// and `nz.cwake` around every wait, a task record in the argument block's head when the pool
-/// runs, and the per-target `switch` artefact every build reaching tasks or channels links.
-pub const RUNTIME_ABI_REVISION: u32 = 11;
+/// runs, and the per-target `switch` artefact every build reaching tasks or channels links. 12 is N85's:
+/// `nz.cstr_len` for a `Str` C returns, `nz.errno_save` after every foreign call and
+/// `nz.errno_last` for `c_errno()`, the thread-local `nz.errno_saved`, and the per-target `errno`
+/// unit defining `nz_errno_location` that a build reaching them links.
+pub const RUNTIME_ABI_REVISION: u32 = 12;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -204,6 +213,7 @@ pub const EVERYTHING: Needs = Needs {
     shims: true,
     stack: true,
     closures: true,
+    foreign: true,
 };
 
 /// The runtime's identity as text: blake3 over the whole runtime, the platform entry and the
@@ -220,6 +230,7 @@ pub fn digest() -> &'static str {
         h.update(emit_entry("@nz_main", 1, EVERYTHING).as_bytes());
         for t in switch::SwitchTarget::ALL {
             h.update(switch::emit_switch(t).as_bytes());
+            h.update(switch::emit_errno(t).as_bytes());
         }
         for i in INVENTORY {
             h.update(format!("{i:?}").as_bytes());
@@ -254,6 +265,8 @@ pub enum Part {
     Channels,
     /// Closure objects (N50).
     Closures,
+    /// `errno` across foreign calls (N85).
+    Foreign,
     /// The C library the runtime itself links against.
     Libc,
 }
@@ -325,6 +338,9 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.mmio_write32", [I64, I64], Some(Word::I64), Base, "writes a device register; takes nothing (N62)"),
     import!("nz.cstr_has_nul", [Ptr, I64], Some(Word::Bit), Strings, "borrows the bytes; whether they hold a NUL (N55)"),
     import!("nz.cstr_borrow", [Ptr, I64], Some(Word::Ptr), Strings, "borrows the bytes; a NUL-terminated copy the caller owns and frees, or null (N55)"),
+    import!("nz.cstr_len", [Ptr], Some(Word::I64), Strings, "borrows the C string; its length up to the NUL (N85)"),
+    import!("nz.errno_save", [], None, Foreign, "takes nothing; saves this thread's errno (N85)"),
+    import!("nz.errno_last", [], Some(Word::I64), Foreign, "takes nothing; the errno last saved on this thread (N85)"),
     import!("nz.chanv_close", [Ptr], None, Channels, "borrows the channel; closes it and wakes every select (N54)"),
     import!("nz.chanv_select", [Ptr, Ptr, I64, I64], Some(Word::I64), Channels, "borrows the channels; copies one slot out to the second pointer, handing over its reference, when it returns an index; -3 - i closed, -1 none, -2 timed out, i64::MIN out of memory"),
     import!("nz.time_now_ms", [], Some(Word::I64), Channels, "takes nothing"),
@@ -465,6 +481,9 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.mmio_write32", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 32-bit write of a device register (N62); reached only in a freestanding image", "none"),
     rt!("nz.cstr_has_nul", "i1" ("ptr", "i64") "", true, Strings, "", Status, Any, "whether a Str argument to C holds a NUL byte (N55)", "borrows the bytes"),
     rt!("nz.cstr_borrow", "ptr" ("ptr", "i64") "", true, Strings, "", Null, Any, "a Str argument as a C string, for one foreign call (N55)", "borrows the bytes; the copy is the caller's to free"),
+    rt!("nz.cstr_len", "i64" ("ptr") "", true, Strings, "", Never, Any, "the length of a C string a foreign function returned (N85)", "borrows the C string"),
+    rt!("nz.errno_save", "void" () "", true, Foreign, "", Never, Owner, "save this thread's errno as a foreign call returns (N85)", "none"),
+    rt!("nz.errno_last", "i64" () "", true, Foreign, "", Never, Owner, "the errno the last foreign call on this thread left (N85)", "none"),
     rt!("nz.chanv_close", "void" ("ptr") "", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
     rt!("nz.chanv_select", "i64" ("ptr", "ptr", "i64", "i64") "", true, Channels, "", Status, Locked, "wait for the lowest-indexed ready channel, or a deadline (N54)", "borrows the channels; hands one slot's reference to the caller when it returns an index"),
     rt!("nz.time_now_ms", "i64" () "", true, Channels, "", Never, Any, "a monotonic clock in milliseconds (N54)", "none"),
@@ -530,6 +549,7 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.pool_buckets", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_join", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.cur_task", ty: "ptr", thread_local: true, writers: "`nz.task_enter` and `nz.task_leave`, on its own worker only (N83)" },
+    RuntimeGlobal { symbol: "nz.errno_saved", ty: "i64", thread_local: true, writers: "`nz.errno_save`, on its own thread only (N85)" },
     RuntimeGlobal {
         symbol: "nz.failed",
         ty: "i1",
@@ -735,6 +755,7 @@ mod tests {
             shims: true,
             stack: true,
             closures: true,
+            foreign: true,
         }
     }
 
@@ -881,9 +902,22 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_eleven_and_its_digest_covers_the_pool() {
-        // N83's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 11);
+    fn the_runtime_is_revision_twelve_and_its_digest_covers_the_pool_and_errno() {
+        // N85's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 12);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.errno_save("));
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cstr_len("));
+        // Each target's `errno` is its own C library's.
+        assert!(
+            crate::switch::emit_errno(crate::switch::SwitchTarget::Aarch64Darwin)
+                .contains("@__error()")
+        );
+        assert!(
+            crate::switch::emit_errno(crate::switch::SwitchTarget::X86_64Linux)
+                .contains("@__errno_location()")
+        );
+        // Without C, no `errno` capture.
+        assert!(!crate::emit_runtime(crate::Needs::default()).contains("errno"));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cwait("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.task_start("));
         // Every task switch is in the digest: another switch is another runtime.

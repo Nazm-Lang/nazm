@@ -805,6 +805,18 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
                 let mut copies: Vec<Value> = Vec::new();
                 for a in args {
                     let v = self.argument(a);
+                    // A C-layout record (N85): a copy of its bytes — already C's layout, by
+                    // `nazm_lir::abi` — that C borrows for the call and the caller frees after.
+                    if let (true, t @ Ty::Record(_)) = (foreign, self.operand_ty(a)) {
+                        let size = self.iconst(i64::from(self.size(t)));
+                        let m = self.rt("malloc", &[size]).unwrap_or_else(|| self.iconst(0));
+                        let oom = self.b.ins().icmp_imm_s(IntCC::Equal, m, 0);
+                        self.foreign_guard(oom, "N0406", "out of memory", &copies);
+                        self.rt("memcpy", &[m, v, size]);
+                        copies.push(m);
+                        vals.push(m);
+                        continue;
+                    }
                     if foreign && self.operand_ty(a) == Ty::Str {
                         let p = self.b.ins().load(self.g.ptr, mem(), v, 0);
                         let n = self.b.ins().load(types::I64, mem(), v, 8);
@@ -831,6 +843,10 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
                 }
                 let r = self.func(fid);
                 let inst = self.b.ins().call(r, &vals);
+                // What C left in `errno`, before anything else can change it (N85).
+                if foreign {
+                    self.rt("nz.errno_save", &[]);
+                }
                 for c in &copies {
                     self.rt("free", &[*c]);
                 }

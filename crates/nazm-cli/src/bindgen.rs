@@ -2,9 +2,13 @@
 //! header as `extern "C"` declarations.
 //!
 //! Only what crosses the boundary by `docs/spec.md`'s rules is translated: a parameter of `int64_t`
-//! or `bool`, or `const char *` as N55's borrowed `Str`; a result of `int64_t` or `bool`. Every other
-//! prototype, type declaration and macro is refused with the reason — nothing is widened, narrowed or
-//! guessed, so no declaration lies about what C receives. The declarations are checked by the
+//! or `bool`, or `const char *` as N55's borrowed `Str`; a result of `int64_t` or `bool`. Since N85
+//! (§7.86): an incomplete `struct S;` is an opaque handle `extern "C" struct S;` — `typedef struct S
+//! S;` names it too — taken as `struct S *` and returned as `Option[S]`, since a header never says a
+//! pointer is not null; a complete struct of `int64_t`, `bool`, handles and such structs is an
+//! `extern "C" struct S { … }` taken as `const struct S *`; and a `const char *` result is an
+//! `Option[Str]`. Every other prototype, type declaration and macro is refused with the reason —
+//! nothing is widened, narrowed or guessed, so no declaration lies about what C receives. The declarations are checked by the
 //! checker before they are written; a declaration it refuses is a defect here, and nothing is written.
 //!
 //! This reads declarations, not C: a header that needs its preprocessor to be understood is outside
@@ -17,21 +21,72 @@ use serde_json::{json, Value};
 
 use crate::exit;
 
-/// What crosses, in each position, and as what.
-fn param(ty: &str) -> Result<&'static str, String> {
-    match ty {
-        "int64_t" => Ok("Int"),
-        "bool" | "_Bool" => Ok("Bool"),
-        "const char *" | "char const *" => Ok("Str"),
-        _ => Err(refusal(ty, false)),
+/// The C types a header has declared, so far, that cross (N85): opaque handles and C structs.
+#[derive(Default)]
+struct Known {
+    handles: Vec<String>,
+    structs: Vec<String>,
+}
+
+impl Known {
+    /// `struct S *` or `S *` naming a handle: its name.
+    fn handle(&self, ty: &str) -> Option<String> {
+        let t = ty.strip_suffix(" *")?;
+        let t = t.strip_prefix("struct ").unwrap_or(t);
+        self.handles.iter().find(|h| *h == t).cloned()
+    }
+
+    /// `const struct S *` or `const S *` naming a C struct: its name.
+    fn borrowed(&self, ty: &str) -> Option<String> {
+        let t = ty.strip_prefix("const ")?.strip_suffix(" *")?;
+        let t = t.strip_prefix("struct ").unwrap_or(t);
+        self.structs.iter().find(|h| *h == t).cloned()
+    }
+
+    /// A field of a C struct: `int64_t`, `bool`, a handle, or a struct by value.
+    fn field(&self, ty: &str) -> Result<String, String> {
+        match ty {
+            "int64_t" => return Ok("Int".to_owned()),
+            "bool" | "_Bool" => return Ok("Bool".to_owned()),
+            _ => {}
+        }
+        if let Some(h) = self.handle(ty) {
+            return Ok(h);
+        }
+        let t = ty.strip_prefix("struct ").unwrap_or(ty);
+        if self.structs.iter().any(|s| s == t) {
+            return Ok(t.to_owned());
+        }
+        Err(format!(
+            "a field of `{ty}`: a C struct's fields are `int64_t`, `bool`, a handle or another \
+             such struct"
+        ))
     }
 }
 
-fn result(ty: &str) -> Result<&'static str, String> {
+/// What crosses, in each position, and as what.
+fn param(ty: &str, known: &Known) -> Result<String, String> {
     match ty {
-        "int64_t" => Ok("Int"),
-        "bool" | "_Bool" => Ok("Bool"),
-        _ => Err(refusal(ty, true)),
+        "int64_t" => Ok("Int".to_owned()),
+        "bool" | "_Bool" => Ok("Bool".to_owned()),
+        "const char *" | "char const *" => Ok("Str".to_owned()),
+        _ => known
+            .handle(ty)
+            .or_else(|| known.borrowed(ty))
+            .ok_or_else(|| refusal(ty, false)),
+    }
+}
+
+fn result(ty: &str, known: &Known) -> Result<String, String> {
+    match ty {
+        "int64_t" => Ok("Int".to_owned()),
+        "bool" | "_Bool" => Ok("Bool".to_owned()),
+        // C still owns it; Nazm copies it, and a header never promises it is not null (N85).
+        "const char *" | "char const *" => Ok("Option[Str]".to_owned()),
+        _ => known
+            .handle(ty)
+            .map(|h| format!("Option[{h}]"))
+            .ok_or_else(|| refusal(ty, true)),
     }
 }
 
@@ -39,12 +94,14 @@ fn refusal(ty: &str, is_result: bool) -> String {
     if ty == "void" && is_result {
         return "it returns nothing; a foreign function returns `Int` or `Bool`".to_owned();
     }
-    if ty == "const char *" || ty == "char const *" {
-        return "a `const char *` result: a string crosses only as an argument, borrowed (N0381)"
-            .to_owned();
+    if ty.starts_with("struct ") && !ty.contains('*') {
+        return format!("`{ty}` by value: a struct crosses only by `const` pointer, borrowed");
     }
     if ty.contains('*') {
-        return format!("`{ty}` is a pointer; only `const char *` crosses, as a borrowed argument");
+        return format!(
+            "`{ty}` is a pointer to nothing this header declares as a handle or a C struct; a \
+             mutable buffer C writes into does not cross"
+        );
     }
     if ty.starts_with("struct ") || ty.starts_with("union ") || ty.starts_with("enum ") {
         return format!("`{ty}` has no C layout Nazm promises");
@@ -106,8 +163,95 @@ fn split_declarator(d: &str) -> (String, Option<String>) {
     (words.join(" ").replace("* *", "**"), name)
 }
 
+/// A type declaration (N85): `Ok(Some(decl))` for one that crosses, `Ok(None)` for one already
+/// known, `Err(why)` for one that does not, and `None` for a statement that is no type
+/// declaration at all.
+fn type_decl(stmt: &str, known: &mut Known) -> Option<Result<Option<String>, String>> {
+    let s = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if s.starts_with("union ") || s.starts_with("enum ") || s.starts_with("typedef union ") {
+        return (!s.contains('('))
+            .then(|| Err("a union or an enum: no C layout of one crosses".to_owned()));
+    }
+    // `typedef struct S S;`: the same handle or struct under its own name, nothing new.
+    if let Some(rest) = s.strip_prefix("typedef struct ") {
+        let words: Vec<&str> = rest.split(' ').collect();
+        return Some(match words.as_slice() {
+            [a, b] if a == b && identifier(a) => {
+                if !known.structs.iter().chain(&known.handles).any(|k| k == a) {
+                    known.handles.push((*a).to_owned());
+                    Ok(Some(format!("pub extern \"C\" struct {a};")))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Err(
+                "a typedef naming a struct by another name; write `typedef struct S S;`".to_owned(),
+            ),
+        });
+    }
+    if s.starts_with("typedef ") {
+        return Some(Err(
+            "a typedef: only `typedef struct S S;` is read".to_owned()
+        ));
+    }
+    let rest = s.strip_prefix("struct ")?;
+    if s.contains('(') && !s.contains('{') {
+        return None;
+    }
+    // `struct S;`: incomplete, so an opaque handle.
+    if identifier(rest) {
+        if known.handles.iter().any(|h| h == rest) {
+            return Some(Ok(None));
+        }
+        known.handles.push(rest.to_owned());
+        return Some(Ok(Some(format!("pub extern \"C\" struct {rest};"))));
+    }
+    let (Some(open), Some(close)) = (rest.find('{'), rest.rfind('}')) else {
+        return Some(Err(
+            "a struct declaration that is not `struct S;` or `struct S { … }`".to_owned(),
+        ));
+    };
+    let name = rest[..open].trim();
+    if !identifier(name) || !rest[close + 1..].trim().is_empty() {
+        return Some(Err(
+            "a struct with a declarator after it, or no name".to_owned()
+        ));
+    }
+    let mut fields = Vec::new();
+    for f in rest[open + 1..close]
+        .split(';')
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+    {
+        if f.contains('[') || f.contains(':') {
+            return Some(Err(format!(
+                "`{name}` has an array or a bit-field; neither crosses"
+            )));
+        }
+        let (ty, fname) = split_declarator(f);
+        let Some(fname) = fname.filter(|n| identifier(n)) else {
+            return Some(Err(format!(
+                "a field of `{name}` has no name that could be read"
+            )));
+        };
+        match known.field(&ty) {
+            Ok(nz) => fields.push(format!("{fname}: {nz}")),
+            Err(why) => return Some(Err(format!("`{name}`: {why}"))),
+        }
+    }
+    if fields.is_empty() {
+        return Some(Err(format!("`{name}` has no fields")));
+    }
+    known.handles.retain(|h| h != name);
+    known.structs.push(name.to_owned());
+    Some(Ok(Some(format!(
+        "pub extern \"C\" struct {name} {{ {} }}",
+        fields.join(", ")
+    ))))
+}
+
 /// One statement: a translated declaration, or why not.
-fn one(stmt: &str) -> Result<String, String> {
+fn one(stmt: &str, known: &Known) -> Result<String, String> {
     let s = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
     let s = s.strip_prefix("extern ").unwrap_or(&s).to_owned();
     if s.starts_with("typedef ")
@@ -125,13 +269,17 @@ fn one(stmt: &str) -> Result<String, String> {
     let head = s[..open].trim();
     let params = s[open + 1..close].trim();
     if params.contains('(') {
-        return Err("a function pointer: no callback crosses".to_owned());
+        return Err(
+            "a function pointer: a callback crosses only as an export's name, which a header \
+             cannot say; declare it by hand with a `fn(…) -> …` parameter"
+                .to_owned(),
+        );
     }
     let (ret, name) = split_declarator(head);
     let Some(name) = name.filter(|n| identifier(n)) else {
         return Err("no function name could be read".to_owned());
     };
-    let ret = result(&ret)?;
+    let ret = result(&ret, known)?;
     let mut out = Vec::new();
     if !(params.is_empty() || params == "void") {
         for (i, p) in params.split(',').enumerate() {
@@ -140,7 +288,7 @@ fn one(stmt: &str) -> Result<String, String> {
                 return Err("variadic: a variable argument list does not cross".to_owned());
             }
             let (ty, pname) = split_declarator(p);
-            let nz = param(&ty).map_err(|why| format!("parameter {}: {why}", i + 1))?;
+            let nz = param(&ty, known).map_err(|why| format!("parameter {}: {why}", i + 1))?;
             let pname = pname
                 .filter(|n| identifier(n) && !n.starts_with('_'))
                 .unwrap_or_else(|| format!("a{i}"));
@@ -208,16 +356,34 @@ pub(crate) fn run(header: &Path, out: Option<&Path>) -> ExitCode {
         }
         current.push(c);
     }
+    // The types first, in the header's order (N85): a prototype may name any of them.
+    let mut known = Known::default();
+    let mut types: Vec<String> = Vec::new();
+    let mut prototypes: Vec<&str> = Vec::new();
     for stmt in &statements {
         let s = stmt.trim().trim_start_matches('}').trim();
         if s.is_empty() {
             continue;
         }
         let c = s.split_whitespace().collect::<Vec<_>>().join(" ");
-        match one(s) {
+        match type_decl(s, &mut known) {
+            Some(Ok(Some(d))) => {
+                translated.push(json!({ "c": format!("{c};"), "nazm": d }));
+                types.push(d);
+            }
+            Some(Ok(None)) => {}
+            Some(Err(reason)) => refused.push(json!({ "c": format!("{c};"), "reason": reason })),
+            None => prototypes.push(s),
+        }
+    }
+    let declared: String = types.iter().map(|d| format!("{d}\n")).collect();
+    decls.extend(types.iter().cloned());
+    for s in prototypes {
+        let c = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        match one(s, &known) {
             // Each declaration is held by the checker on its own: a name the language keeps for
             // itself, or a symbol the native runtime declares, is refused with the checker's word.
-            Ok(d) => match nazm_core::check_source(&format!("{d}\nfn main() -> Int {{ 0 }}\n")).first() {
+            Ok(d) => match nazm_core::check_source(&format!("{declared}{d}\nfn main() -> Int {{ 0 }}\n")).first() {
                 None => {
                     translated.push(json!({ "c": format!("{c};"), "nazm": d }));
                     decls.push(d);

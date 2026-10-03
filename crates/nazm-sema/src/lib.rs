@@ -69,7 +69,7 @@ pub use provenance::{
     ModuleFacts, Origin, OriginSet, RuleScope, SinkClass, SinkFact, SinkReport, Step, StoreFact,
     Summary, METHOD_TARGET, VALUE_TARGET, WILD_CELL,
 };
-pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
+pub use record::{CRepr, FieldDef, RecordDef, RecordId, Records, TaskUnsafe, OPAQUE_FIELD};
 pub use references::{Coverage, ReferenceIndex, ReferenceTarget};
 pub use resolve::{
     CallSite, Callee, Capture, CheckedCall, ClosureInfo, FieldRef, FnDef, FnId, FnValueUse,

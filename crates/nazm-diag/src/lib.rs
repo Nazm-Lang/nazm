@@ -142,6 +142,11 @@ pub mod codes {
     /// stack check, made on entry to every function in a call cycle.
     pub const STACK_EXHAUSTED: Code = Code::new("N0408");
 
+    /// A foreign function returned null where its declaration promised a value (N85): a
+    /// handle result, or a `Str` result, not written as an `Option`. Checked after C returns
+    /// and before any Nazm code sees the pointer.
+    pub const NULL_FROM_C: Code = Code::new("N0409");
+
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");
     /// A value that may not cross into a task: an `Ints` or a `Strs`, which are handles
@@ -418,6 +423,16 @@ pub mod codes {
     pub const TRAIT_METHOD_SELF: Code = Code::new("N0609");
     /// A bound, an impl or a qualified call naming a type that is not a trait.
     pub const NOT_A_TRAIT: Code = Code::new("N0610");
+
+    // N85: FFI v3 (`architecture.md` §7.86).
+    /// An opaque handle (`extern "C" struct S;`) built or taken apart: it has no fields to
+    /// name, and only C makes one.
+    pub const OPAQUE_HANDLE: Code = Code::new("N0611");
+    /// A callback argument to C that is not an export's name: only an export has a C entry
+    /// that needs no environment and lives as long as the process.
+    pub const CALLBACK_NOT_EXPORT: Code = Code::new("N0612");
+    /// `c_errno()` in a build for a target with no `errno`: a freestanding or WebAssembly one.
+    pub const ERRNO_UNAVAILABLE: Code = Code::new("N0613");
 
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no

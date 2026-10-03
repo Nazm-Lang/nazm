@@ -313,13 +313,14 @@ fn all() -> nazm_lir::Needs {
         shims: true,
         stack: true,
         closures: true,
+        foreign: true,
     }
 }
 
 fn build(dir: &Path) -> std::path::PathBuf {
     std::fs::write(dir.join("runtime.ll"), nazm_lir::emit_runtime(all())).unwrap();
     // The task pool's switch for this host (N83), which the runtime's pool calls.
-    use nazm_lir::runtime::switch::{emit_switch, SwitchTarget};
+    use nazm_lir::runtime::switch::{emit_errno, emit_switch, SwitchTarget};
     let host = match (std::env::consts::ARCH, std::env::consts::OS) {
         ("aarch64", "macos") => SwitchTarget::Aarch64Darwin,
         ("aarch64", _) => SwitchTarget::Aarch64Linux,
@@ -327,12 +328,15 @@ fn build(dir: &Path) -> std::path::PathBuf {
         _ => SwitchTarget::X86_64Linux,
     };
     std::fs::write(dir.join("switch.ll"), emit_switch(host)).unwrap();
+    // And where it keeps `errno` (N85), which the runtime's capture asks.
+    std::fs::write(dir.join("errno.ll"), emit_errno(host)).unwrap();
     std::fs::write(dir.join("harness.c"), HARNESS).unwrap();
     let exe = dir.join("harness");
     let o = Command::new("clang")
         .args(["-O1", "-Wno-override-module", "-pthread"])
         .arg(dir.join("runtime.ll"))
         .arg(dir.join("switch.ll"))
+        .arg(dir.join("errno.ll"))
         .arg(dir.join("harness.c"))
         .arg("-o")
         .arg(&exe)

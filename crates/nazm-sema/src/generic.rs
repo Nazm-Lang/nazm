@@ -337,6 +337,7 @@ impl UserTypes {
                 decl: def.decl,
                 params: Vec::new(),
                 instance: Some(Instance { template, args }),
+                repr: def.repr,
             });
         self.enqueue(TypeNode::Record(id));
         Type::Record(id)

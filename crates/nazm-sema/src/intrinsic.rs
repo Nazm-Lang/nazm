@@ -197,6 +197,20 @@ pub enum Intrinsic {
     /// right, failing exactly where one of those running sums would overflow. Vectorised in
     /// native builds without changing that.
     IntsSum,
+    /// `c_errno() -> Int` (N85) — the `errno` the most recent foreign call on this thread
+    /// left, captured as it returned. Performs `foreign`, so it needs a `ForeignCap`; hosted
+    /// targets only.
+    CErrno,
+    /// Internal (N85): a pointer C returned where a handle or a `Str` was promised, failing
+    /// with `N0409` when it is null. Made by Core IR lowering; no program can name it.
+    ForeignNonNull,
+    /// Internal (N85): a copy of the NUL-terminated bytes a non-null `const char *` C returned
+    /// points to, as a `Str` Nazm owns. Made by Core IR lowering; no program can name it.
+    CStrCopy,
+    /// Internal (N85): the address of an export's C entry, named by its symbol — a constant
+    /// `Str` argument — passed to C as a function pointer. Made by Core IR lowering for a
+    /// callback argument; no program can name it.
+    CallbackAddress,
 
     // --- the outside world -------------------------------------------------------
     //
@@ -253,7 +267,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 49] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -302,6 +316,7 @@ impl Intrinsic {
         Self::VecSet,
         Self::VecPush,
         Self::VecPop,
+        Self::CErrno,
     ];
 
     #[must_use]
@@ -355,6 +370,10 @@ impl Intrinsic {
             Self::MmioRead32 => "mmio_read32",
             Self::MmioWrite32 => "mmio_write32",
             Self::IntsSum => "ints_sum_from",
+            Self::CErrno => "c_errno",
+            Self::ForeignNonNull => "foreign_nonnull",
+            Self::CStrCopy => "cstr_copy",
+            Self::CallbackAddress => "callback_address",
         }
     }
 
@@ -420,6 +439,9 @@ impl Intrinsic {
             Self::MmioRead32 => &[Shape::Int],
             Self::MmioWrite32 => &[Shape::Int, Shape::Int],
             Self::IntsSum => &[Shape::Int, Shape::Ints],
+            Self::CErrno => &[],
+            Self::ForeignNonNull | Self::CStrCopy => &[Shape::Int],
+            Self::CallbackAddress => &[Shape::Str],
         }
     }
 
@@ -462,7 +484,11 @@ impl Intrinsic {
             | Self::TimeNowMs
             | Self::MmioRead32
             | Self::MmioWrite32
-            | Self::IntsSum => Shape::Int,
+            | Self::IntsSum
+            | Self::CErrno
+            | Self::ForeignNonNull
+            | Self::CallbackAddress => Shape::Int,
+            Self::CStrCopy => Shape::Str,
         }
     }
 

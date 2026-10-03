@@ -247,6 +247,13 @@ impl<'a> Lower<'a> {
     fn function(mut self, f: &AstFn) -> Lowered<cir::Function> {
         if let Some(symbol) = &self.def.foreign {
             let def = self.def;
+            // The signature C has (N85): a handle, a callback, a returned string and a
+            // nullable result are each a pointer-sized `Int` here, and the call site makes
+            // them what the declaration says.
+            let (params, ret) = raw_foreign(self.res, def);
+            for (l, t) in self.locals.iter_mut().zip(params) {
+                l.ty = t;
+            }
             return Ok(cir::Function {
                 def: self.id,
                 module: def.module,
@@ -254,7 +261,7 @@ impl<'a> Lower<'a> {
                 type_params: 0,
                 params: u32::try_from(def.params.len()).unwrap_or(u32::MAX),
                 locals: self.locals,
-                ret: def.ret,
+                ret,
                 consts: Vec::new(),
                 loops: 0,
                 effects: cir::Effects {
@@ -951,6 +958,14 @@ impl<'a> Lower<'a> {
                 callee_at,
             },
             Callee::Function(callee) => {
+                // A foreign call's crossing, written as ordinary Core IR (N85, §7.86).
+                if self
+                    .res
+                    .function(callee)
+                    .is_some_and(|d| d.foreign.is_some())
+                {
+                    return self.foreign_call(callee, args, ty, callee_at, at);
+                }
                 let generic = self
                     .res
                     .function(callee)
@@ -981,6 +996,202 @@ impl<'a> Lower<'a> {
             ty: Some(ty),
             at,
         })
+    }
+
+    /// A call of a foreign function (N85, §7.86), as the C function sees it: each handle
+    /// argument its pointer, each callback the address of an export's C entry, and the result
+    /// — a pointer for a handle or a string — checked against null or tested for it, then
+    /// made a handle, a copied `Str` or an `Option` of either. The callee's own signature is
+    /// the raw one ([`raw_foreign`]), so MIR and both backends see only `Int`, `Bool`, a
+    /// borrowed `Str` and a C-layout record cross.
+    fn foreign_call(
+        &mut self,
+        callee: FnId,
+        args: Vec<Expr>,
+        ty: Type,
+        callee_at: Span,
+        at: Span,
+    ) -> Lowered<Expr> {
+        use crate::check::{foreign_param, foreign_result, CrossIn, CrossOut};
+        let Some(def) = self.res.function(callee) else {
+            return defect(callee_at, "a foreign call of no function");
+        };
+        let params = def.params.clone();
+        let mut raw = Vec::with_capacity(args.len());
+        for (a, t) in args.into_iter().zip(params) {
+            let a_at = a.at;
+            raw.push(match foreign_param(self.res, t) {
+                Some(CrossIn::Handle(record)) => Expr {
+                    kind: ExprKind::Field {
+                        base: Box::new(a),
+                        record,
+                        field: 0,
+                    },
+                    ty: Some(Type::Int),
+                    at: a_at,
+                },
+                Some(CrossIn::Callback) => {
+                    let ExprKind::FnValue(g) = a.kind else {
+                        return defect(a_at, "a callback that is not an export's name");
+                    };
+                    let Some(symbol) = self.res.function(g).and_then(|d| d.export.clone()) else {
+                        return defect(a_at, "a callback that is not an export");
+                    };
+                    let name = Expr {
+                        kind: ExprKind::Const(self.constant(Const::Str(symbol.into_bytes()))),
+                        ty: Some(Type::Str),
+                        at: a_at,
+                    };
+                    self.internal(nazm_sema::Intrinsic::CallbackAddress, name, Type::Int)
+                }
+                _ => a,
+            });
+        }
+        let out = foreign_result(self.res, checked_option(self.res, ty), ty);
+        let raw_ty = match out {
+            Some(CrossOut::Scalar) | None => ty,
+            Some(_) => Type::Int,
+        };
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee,
+                type_args: Vec::new(),
+                args: raw,
+                callee_at,
+            },
+            ty: Some(raw_ty),
+            at,
+        };
+        let handle = |record, value: Expr| Expr {
+            kind: ExprKind::Record {
+                record,
+                arity: 1,
+                fields: vec![Init {
+                    field: 0,
+                    value,
+                    at,
+                }],
+            },
+            ty: Some(Type::Record(record)),
+            at,
+        };
+        Ok(match out {
+            Some(CrossOut::Scalar) | None => call,
+            Some(CrossOut::Handle {
+                record,
+                nullable: false,
+            }) => handle(
+                record,
+                self.internal(nazm_sema::Intrinsic::ForeignNonNull, call, Type::Int),
+            ),
+            Some(CrossOut::CString { nullable: false }) => {
+                let checked = self.internal(nazm_sema::Intrinsic::ForeignNonNull, call, Type::Int);
+                self.internal(nazm_sema::Intrinsic::CStrCopy, checked, Type::Str)
+            }
+            Some(
+                CrossOut::Handle { nullable: true, .. } | CrossOut::CString { nullable: true },
+            ) => {
+                let Type::Enum(e) = ty else {
+                    return defect(at, "a nullable C result that is not an `Option`");
+                };
+                let variant = |name: &str| {
+                    self.res
+                        .enums()
+                        .get(e)
+                        .and_then(|d| d.variants.iter().position(|v| v.name == name))
+                        .and_then(|i| u32::try_from(i).ok())
+                };
+                let (Some(none), Some(some)) = (variant("None"), variant("Some")) else {
+                    return defect(at, "an `Option` without `None` and `Some`");
+                };
+                let local = self.temp(Temp::Foreign, Type::Int, at);
+                let read = Expr {
+                    kind: ExprKind::Local(local),
+                    ty: Some(Type::Int),
+                    at,
+                };
+                let zero = Expr {
+                    kind: ExprKind::Const(self.constant(Const::Int(0))),
+                    ty: Some(Type::Int),
+                    at,
+                };
+                let is_null = Expr {
+                    kind: ExprKind::Compare {
+                        op: cir::CmpOp::Eq,
+                        operand: Type::Int,
+                        law: Law::Int,
+                        lhs: Box::new(read.clone()),
+                        rhs: Box::new(zero),
+                    },
+                    ty: Some(Type::Bool),
+                    at,
+                };
+                let value = match out {
+                    Some(CrossOut::Handle { record, .. }) => handle(record, read),
+                    _ => self.internal(nazm_sema::Intrinsic::CStrCopy, read, Type::Str),
+                };
+                let variant_of = |variant: u32, fields: Vec<Init>| Expr {
+                    kind: ExprKind::Variant {
+                        enumeration: e,
+                        variant,
+                        arity: u32::try_from(fields.len()).unwrap_or(u32::MAX),
+                        fields,
+                    },
+                    ty: Some(ty),
+                    at,
+                };
+                let region = |tail: Expr| Block {
+                    stmts: Vec::new(),
+                    tail: Some(Box::new(tail)),
+                    ends: Ends::FallsThrough,
+                    owns: Vec::new(),
+                    at,
+                };
+                let some_value = variant_of(
+                    some,
+                    vec![Init {
+                        field: 0,
+                        value,
+                        at,
+                    }],
+                );
+                let none_value = variant_of(none, Vec::new());
+                Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts: vec![Stmt::Let { local, value: call }],
+                        tail: Some(Box::new(Expr {
+                            kind: ExprKind::If {
+                                cond: Box::new(is_null),
+                                then: region(none_value),
+                                otherwise: region(some_value),
+                            },
+                            ty: Some(ty),
+                            at,
+                        })),
+                        ends: Ends::FallsThrough,
+                        owns: vec![local],
+                        at,
+                    }),
+                    ty: Some(ty),
+                    at,
+                }
+            }
+        })
+    }
+
+    /// One of the built-ins only this lowering makes (N85), applied to one argument.
+    fn internal(&mut self, op: nazm_sema::Intrinsic, arg: Expr, ty: Type) -> Expr {
+        let at = arg.at;
+        Expr {
+            kind: ExprKind::Builtin {
+                op,
+                type_args: Vec::new(),
+                args: vec![arg],
+                callee_at: at,
+            },
+            ty: Some(ty),
+            at,
+        }
     }
 
     /// A method call (N78): the receiver — `None` when it is written as the first argument,
@@ -1189,6 +1400,34 @@ impl<'a> Lower<'a> {
             ty: Some(ok_ty),
             at,
         })
+    }
+}
+
+/// A foreign function's parameters and result as the C function has them (N85): what crosses
+/// as a pointer is an `Int`, everything else as declared.
+fn raw_foreign(res: &Resolution, def: &FnDef) -> (Vec<Type>, Type) {
+    use crate::check::{foreign_param, foreign_result, CrossIn, CrossOut};
+    let params = def
+        .params
+        .iter()
+        .map(|t| match foreign_param(res, *t) {
+            Some(CrossIn::Handle(_) | CrossIn::Callback) => Type::Int,
+            _ => *t,
+        })
+        .collect();
+    let ret = match foreign_result(res, checked_option(res, def.ret), def.ret) {
+        Some(CrossOut::Scalar) | None => def.ret,
+        Some(_) => Type::Int,
+    };
+    (params, ret)
+}
+
+/// The enum definition a foreign result's type applies, taken as the prelude's `Option`: the
+/// checker accepted the declaration only if it is (`check_foreign`), so lowering trusts it.
+fn checked_option(res: &Resolution, t: Type) -> Option<nazm_sema::EnumId> {
+    match res.types().definition_of(t) {
+        Some(nazm_sema::TypeNode::Enum(e)) => Some(e),
+        _ => None,
     }
 }
 

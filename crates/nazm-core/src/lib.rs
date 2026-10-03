@@ -192,6 +192,10 @@ fn pipeline(
                 .function(g)
                 .filter(|d| d.foreign.is_some())
                 .map(|d| (site.span, d.name.clone())),
+            // `c_errno()` reads what C left, and is C's as a call is (N85).
+            sema::resolve::Callee::Builtin(sema::Intrinsic::CErrno) => {
+                Some((site.span, "c_errno".to_owned()))
+            }
             // A foreign function cannot be a value (N50), so no indirect call reaches C.
             sema::resolve::Callee::Builtin(_) | sema::resolve::Callee::Indirect(_) => None,
         })

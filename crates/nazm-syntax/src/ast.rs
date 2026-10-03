@@ -153,7 +153,19 @@ pub struct Record {
     /// `docs/spec.md` makes reordering two fields a no-op for both the interface
     /// fingerprint and the native layout.
     pub fields: Vec<Field>,
+    /// `extern "C" struct …` (N85): a record C sees. `None` for every ordinary record.
+    pub foreign: Option<ForeignStruct>,
     pub span: Span,
+}
+
+/// The foreign half of an `extern "C" struct` declaration, as written (N85).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignStruct {
+    pub abi: String,
+    pub abi_span: Span,
+    /// `extern "C" struct Name;` — no field list: an opaque handle, a C pointer Nazm never
+    /// reads. With a field list it is a C-layout record.
+    pub opaque: bool,
 }
 
 /// One declared field: `name: Type`.

@@ -206,7 +206,8 @@ pub enum LocalOrigin {
     Binding {
         mutable: bool,
     },
-    /// Made by this IR, not written: a `?`'s success value or error value.
+    /// Made by this IR, not written: a `?`'s success value or error value, or what C
+    /// returned (N85).
     Temp(Temp),
 }
 
@@ -214,6 +215,8 @@ pub enum LocalOrigin {
 pub enum Temp {
     Ok,
     Err,
+    /// What a foreign function returned, before it is a handle, a string or `None` (N85).
+    Foreign,
 }
 
 impl Temp {
@@ -222,6 +225,7 @@ impl Temp {
         match self {
             Self::Ok => "ok",
             Self::Err => "err",
+            Self::Foreign => "c",
         }
     }
 }
