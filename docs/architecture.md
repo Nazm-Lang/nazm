@@ -7321,6 +7321,59 @@ the constitution listed and the code needed a table for: ownership is computed o
 the repository built by N79 and N81 with each backend gave byte-identical objects, and the extended
 fuzzer agreed on every tier.
 
+## 7.83 Runtime v2: the runtime as a built, versioned, verified artifact — N82, 2026-10-03
+
+Written before the code. Area 13 is PARTIAL for one named reason this milestone does not touch: one
+OS thread per task (N83's). What N82 settles is the runtime's **form**. Today it is LLVM text the
+compiler generates into every build, specialised to the services the program reaches, and compiled by
+clang on every build whose project store does not already hold that exact text. Nothing can build a
+runtime once, ship it, check that it is the one a compiler expects, and link it from another build.
+Both native backends already link the same runtime implementation — Cranelift's units call the same
+text, through the typed registry — so that half of the prompt's acceptance holds before the code, and
+this section keeps it.
+
+**What is settled.**
+
+- **A runtime artifact.** `nazm runtime build [--target T] [--profile hosted|board|wasm] [-O N] -o
+  DIR` compiles the whole runtime for one target and profile — every service — once, into
+  `DIR/libnazmrt.a`, beside a manifest `DIR/nazm-runtime.json`, `nazm.runtime/1`: the runtime ABI
+  revision, the runtime digest that already enters every object key, the target, the profile, the
+  services, the optimisation level, the toolchain that compiled it, and BLAKE3 digests of the text and
+  of the archive. The profile is the target's: `hosted` on the four operating-system targets, `board`
+  on `aarch64-unknown-none`, `wasm` on `wasm32-unknown-unknown`; another is refused.
+- **Linking it.** `nazm build --runtime DIR` links that archive and generates no runtime. The
+  platform entry is still the program's own. Before anything is linked, the build refuses — exit 4,
+  the reason named, nothing produced, never a silent fallback to generating the runtime — a missing or
+  unreadable manifest; another schema; another ABI revision or runtime digest (a compiler whose
+  runtime differs); another target or profile; a service the program reaches that the archive does
+  not provide; and an archive whose bytes are not the ones the manifest describes. Both backends take
+  `--runtime`, and link the same archive.
+- **Checking it.** `nazm runtime verify DIR` performs the same checks without a program, and says
+  whether the artifact fits this compiler.
+- **Nothing a program does changes.** The archive holds the same runtime text with every service, so a
+  program linked against it prints the same, ends the same, and reports the same memory counters as
+  one whose runtime was generated. Tested over programs reaching every service, on both backends.
+
+**What is not settled, stated before the code.** A runtime written in Rust: only the host's Rust
+target is installed and builds stay offline, so it could exist only for one target beside the text
+for every other — two implementations where there is one. An allocator of its own and a scheduler
+beyond one thread per task (N83). Every build without `--runtime` still generates its runtime, as
+before, and is what the tests and the default keep using; the artifact is the path for building a
+runtime once and checking what is linked, not yet the default.
+
+**Versions.** Runtime ABI revision unchanged: no runtime symbol, signature or global moved.
+`nazm.runtime/1` is new. `nazm.provenance/1` gains an optional `runtime_archive`, the archive's digest,
+present only when one was linked: additive, as its schema allows. Object keys unchanged: an archive
+is a link input, and nothing about linking is keyed (area 10b). Semantic epoch and interface
+unchanged.
+
+**Negative example.** An archive built by a compiler whose runtime digest differs is refused, naming
+both digests. **Boundary example.** An archive built with `--profile board` for `aarch64-unknown-none`
+links into a freestanding image, and a hosted build given it is refused for the profile.
+
+**What would prove this unsuitable.** A program whose output, ending or memory report differs between
+a generated runtime and the artifact; a mismatched or altered artifact that links.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
