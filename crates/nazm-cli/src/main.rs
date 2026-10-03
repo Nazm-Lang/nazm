@@ -63,6 +63,7 @@ mod provenance;
 mod repo;
 mod resolved;
 mod run_profile;
+mod runtime_artifact;
 mod snapshot;
 mod stack;
 mod summary;
@@ -84,6 +85,34 @@ mod exit {
     /// from `CHECK_FAILED` on purpose: one means the program is wrong, the other means
     /// the machine could not build a program that is fine.
     pub(crate) const TOOLCHAIN_FAILED: u8 = 4;
+}
+
+/// What `nazm runtime` does (N82).
+#[derive(clap::Subcommand, Debug)]
+enum RuntimeAction {
+    /// Compile the whole runtime for one target and profile into `OUT/libnazmrt.a`, with its
+    /// manifest `OUT/nazm-runtime.json`.
+    Build {
+        /// The target; the host's when absent.
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
+        /// `hosted`, `board` or `wasm`: the target's own, which is the default.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Optimisation level handed to `clang`.
+        #[arg(short = 'O', long = "opt-level", default_value_t = 2)]
+        opt_level: u8,
+        /// The directory to write the archive and manifest into.
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Check that the artifact in DIR is whole and fits this compiler and the target.
+    Verify {
+        dir: PathBuf,
+        /// The target; the host's when absent.
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -634,6 +663,13 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
+    /// Build or check a runtime artifact (N82, `docs/architecture.md` §7.83): the whole runtime
+    /// for one target and profile, compiled once into `libnazmrt.a` beside a `nazm.runtime/1`
+    /// manifest, which `nazm build --runtime DIR` links.
+    Runtime {
+        #[command(subcommand)]
+        action: RuntimeAction,
+    },
     /// Print what LIR decided for a checked program, `nazm.lir/1` (N81): the target's data
     /// layout, every unit's symbols and linkage, every record's and enum's byte layout on that
     /// target, and which types own anything — the tables both backends read, validated.
@@ -766,6 +802,11 @@ enum Command {
         /// lines. LLVM backend only; the same program, with more metadata.
         #[arg(long)]
         debug: bool,
+        /// Link the runtime artifact in DIR, built by `nazm runtime build`, instead of generating
+        /// the runtime (N82): refused, by name and before linking, when it does not fit this
+        /// compiler, the target or what the program reaches.
+        #[arg(long, value_name = "DIR")]
+        runtime: Option<PathBuf>,
         /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
         /// resolves to, with their bytes unchanged (N46).
         #[arg(long)]
@@ -992,6 +1033,7 @@ fn main() -> ExitCode {
         layout,
         timings,
         debug,
+        runtime,
         locked: _,
         profile,
         provenance,
@@ -1019,6 +1061,7 @@ fn main() -> ExitCode {
                 adapter: None,
                 timings,
                 debug,
+                runtime: runtime.as_deref(),
             },
         );
         let Some(record) = provenance else {
@@ -1041,6 +1084,7 @@ fn main() -> ExitCode {
                 stack_watermark,
                 link: &link,
                 profile: profile.as_deref(),
+                runtime: runtime.as_deref(),
             },
             &record,
             attest_with.as_deref(),
@@ -1147,6 +1191,21 @@ fn main() -> ExitCode {
             target,
             source_root,
         } => return lir::run(&file, target.as_deref(), source_root.as_deref()),
+        Command::Runtime { action } => {
+            return match action {
+                RuntimeAction::Build {
+                    target,
+                    profile,
+                    opt_level,
+                    out,
+                } => {
+                    runtime_artifact::build(target.as_deref(), profile.as_deref(), opt_level, &out)
+                }
+                RuntimeAction::Verify { dir, target } => {
+                    runtime_artifact::verify(&dir, target.as_deref())
+                }
+            }
+        }
         Command::Lsp { source_root } => return lsp::run(source_root.as_deref()),
         Command::Context {
             root,
@@ -1317,6 +1376,7 @@ fn main() -> ExitCode {
         | Command::CoreIr { .. }
         | Command::Mir { .. }
         | Command::Lir { .. }
+        | Command::Runtime { .. }
         | Command::Capabilities { .. }
         | Command::Lock { .. }
         | Command::Publish { .. }
