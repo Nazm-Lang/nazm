@@ -1366,6 +1366,9 @@ find = """  %old = atomicrmw sub ptr %rcp, i64 1 release
   %last = icmp eq i64 %old, 1"""
 replace = """  %old = atomicrmw sub ptr %rcp, i64 1 release
   %last = icmp sge i64 %old, 1"""
+# Declared at N75: in the workspace suite the torn-down channel leaves a task waiting for ever, a
+# 2,400 s timeout with no verdict; the runtime harness sees the early release under its own deadline.
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
 
 [[mutation]]
 name = "a-spawn-argument-is-not-held-for-its-task"
