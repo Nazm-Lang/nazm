@@ -129,19 +129,24 @@ fn authority_passed_from_main_through_helpers_recursion_and_storage_is_accepted(
 
 #[test]
 fn an_effect_declared_without_authority_is_an_authority_error_and_not_an_effect_one() {
-    for (call, needle) in [
-        ("print(\"x\")", "print"),
-        ("eprint(\"x\")", "eprint"),
-        ("args_count()", "args_count"),
-        ("str_len(arg(0))", "arg"),
-        ("str_len(read_file(\"f\"))", "read_file"),
-        ("write_file(\"f\", \"d\")", "write_file"),
-        ("if file_exists(\"f\") { 1 } else { 0 }", "file_exists"),
-        ("exit_with(0)", "exit_with"),
+    // The standard streams ask for the narrower `OutCap` (N79); an `IoCap` held gives it.
+    for (call, needle, kind) in [
+        ("print(\"x\")", "print", "`OutCap`"),
+        ("eprint(\"x\")", "eprint", "`OutCap`"),
+        ("args_count()", "args_count", "`IoCap`"),
+        ("str_len(arg(0))", "arg", "`IoCap`"),
+        ("str_len(read_file(\"f\"))", "read_file", "`IoCap`"),
+        ("write_file(\"f\", \"d\")", "write_file", "`IoCap`"),
+        (
+            "if file_exists(\"f\") { 1 } else { 0 }",
+            "file_exists",
+            "`IoCap`",
+        ),
+        ("exit_with(0)", "exit_with", "`IoCap`"),
     ] {
         let src = format!("fn f() -> Int ! {{ io }} {{ {call} }}\nfn main() -> Int {{ f() }}\n");
         let d = refused_at(&src, codes::MISSING_AUTHORITY, at(&src, needle));
-        assert!(d.message.contains("`IoCap`"), "{}", d.message);
+        assert!(d.message.contains(kind), "{}", d.message);
         // Threading authority changes every caller: never an automatic fix.
         assert!(d.fixes.is_empty(), "{:?}", d.fixes);
         // Holding one is the whole difference.
@@ -170,7 +175,7 @@ fn authority_without_the_effect_is_an_effect_error_and_both_missing_is_both_in_o
         check_source(src)
     );
     let d = check_source(src);
-    assert!(d[0].message.contains("`IoCap`") && d[1].message.contains("`SpawnCap`"));
+    assert!(d[0].message.contains("`OutCap`") && d[1].message.contains("`SpawnCap`"));
     assert_eq!(codes_of(src), codes_of(src));
 }
 

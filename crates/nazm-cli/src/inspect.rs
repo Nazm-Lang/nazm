@@ -109,6 +109,13 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
                 }),
             );
             o.insert("capabilities".into(), json!(capabilities));
+            // What the body exercises without holding it (N79): the bridge, as a contract.
+            let inherits: Vec<&str> = res
+                .inherits(f.def)
+                .iter()
+                .map(nazm_core::sema::CapabilityKind::type_name)
+                .collect();
+            o.insert("inherits".into(), json!(inherits));
             o.insert("provenance".into(), provenance);
             o.insert("foreign".into(), json!(def.foreign));
             o.insert(

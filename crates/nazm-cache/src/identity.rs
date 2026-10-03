@@ -185,7 +185,11 @@ use crate::digest::{self, Framed};
 /// `22` — N78, 2026-10-03. Traits and methods: `trait` and `impl` declarations, method calls and
 /// trait bounds moved from refused to accepted, and a program using `trait` as a name moved from
 /// accepted to refused. A cached check from epoch 21 is a check of a language without them.
-pub const SEMANTIC_EPOCH: u32 = 22;
+/// `23` — N79, 2026-10-03. Attenuation and subsumption: `OutCap` became a built-in type name, so
+/// a program defining it moved from accepted to refused; an `IoCap` where an `OutCap` is expected
+/// and a function value whose effects are a subset of the expected ones moved from refused
+/// (`N0300`) to accepted.
+pub const SEMANTIC_EPOCH: u32 = 23;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

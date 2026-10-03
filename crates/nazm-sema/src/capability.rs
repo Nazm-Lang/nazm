@@ -54,17 +54,22 @@ pub enum CapabilityKind {
     /// Authority to touch a device register (N62): what `mmio_read32` and `mmio_write32`
     /// need. No effect is authorised by it; only a freestanding build has registers at all.
     Mmio,
+    /// The standard streams and nothing else (N79): `print` and `eprint`. An attenuation of
+    /// `IoCap`, which implies it; nothing implies `IoCap`. Never constructed: an `IoCap` is
+    /// accepted where an `OutCap` is expected, and `main` may take one as a root.
+    Out,
 }
 
 impl CapabilityKind {
     /// Every kind, in id order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Io,
         Self::Spawn,
         Self::Foreign,
         Self::Vouch,
         Self::Time,
         Self::Mmio,
+        Self::Out,
     ];
 
     /// The kind's stable identity. Never reused and never reordered.
@@ -77,6 +82,7 @@ impl CapabilityKind {
             Self::Vouch => 3,
             Self::Time => 4,
             Self::Mmio => 5,
+            Self::Out => 6,
         }
     }
 
@@ -90,6 +96,7 @@ impl CapabilityKind {
             Self::Vouch => "VouchCap",
             Self::Time => "TimeCap",
             Self::Mmio => "MmioCap",
+            Self::Out => "OutCap",
         }
     }
 
@@ -131,9 +138,9 @@ impl CapabilityKind {
             | Intrinsic::ReadFile
             | Intrinsic::WriteFile
             | Intrinsic::FileExists
-            | Intrinsic::Print
-            | Intrinsic::EPrint
             | Intrinsic::ExitWith => CapabilitySet::of(Self::Io),
+            // The standard streams need only their attenuation (N79), which `IoCap` implies.
+            Intrinsic::Print | Intrinsic::EPrint => CapabilitySet::of(Self::Out),
             // Declassification is authority of its own (N52).
             Intrinsic::StrVouch => CapabilitySet::of(Self::Vouch),
             // A clock is authority of its own too (N54).
@@ -204,7 +211,7 @@ impl CapabilityKind {
         match self {
             Self::Io => "an",
             Self::Spawn | Self::Foreign | Self::Vouch | Self::Time => "a",
-            Self::Mmio => "an",
+            Self::Mmio | Self::Out => "an",
         }
     }
 
@@ -257,6 +264,17 @@ impl CapabilitySet {
         self.0 == 0
     }
 
+    /// The authority this set gives (N79): itself, and every kind a held kind implies —
+    /// `IoCap` implies `OutCap`. Monotone: a narrower kind implies nothing broader.
+    #[must_use]
+    pub const fn implied(self) -> Self {
+        if self.contains(CapabilityKind::Io) {
+            self.with(CapabilityKind::Out)
+        } else {
+            self
+        }
+    }
+
     /// The authority exercising every effect of `effects` requires.
     #[must_use]
     pub fn for_effects(effects: EffectSet) -> Self {
@@ -301,8 +319,9 @@ mod tests {
 
     #[test]
     fn every_built_in_needs_exactly_the_authority_for_its_effect() {
-        // Two tables, one question each; they agree built-in by built-in, with one stated
-        // exception: declassification needs authority and performs no effect (N52).
+        // Two tables, one question each; they agree built-in by built-in, with two stated
+        // exceptions: declassification needs authority and performs no effect (N52), and the
+        // standard streams need only an `OutCap`, which the effect's `IoCap` implies (N79).
         for i in Intrinsic::ALL {
             let from_effect =
                 Effect::of_intrinsic(i).map_or(CapabilitySet::EMPTY, CapabilityKind::for_effect);
@@ -311,11 +330,24 @@ mod tests {
                 assert_eq!(CapabilityKind::of_intrinsic(i), CapabilitySet::of(kind));
                 continue;
             }
+            if matches!(i, Intrinsic::Print | Intrinsic::EPrint) {
+                assert_eq!(
+                    CapabilityKind::of_intrinsic(i),
+                    CapabilitySet::of(CapabilityKind::Out)
+                );
+                assert!(from_effect.implied().contains(CapabilityKind::Out));
+                continue;
+            }
             assert_eq!(CapabilityKind::of_intrinsic(i), from_effect, "{}", i.name());
         }
         assert_eq!(
-            CapabilityKind::of_intrinsic(Intrinsic::Print),
+            CapabilityKind::of_intrinsic(Intrinsic::ReadFile),
             CapabilitySet::of(CapabilityKind::Io)
+        );
+        // Monotone: nothing narrower implies anything broader.
+        assert_eq!(
+            CapabilitySet::of(CapabilityKind::Out).implied(),
+            CapabilitySet::of(CapabilityKind::Out)
         );
         assert!(CapabilityKind::of_intrinsic(Intrinsic::ChanSend).is_empty());
     }
