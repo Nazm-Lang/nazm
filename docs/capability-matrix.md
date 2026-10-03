@@ -82,7 +82,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83): an opt-in M:N pool, `NAZM_SCHEDULER=pool`, macOS aarch64 and x86-64; Linux compile-only; no stealing or preemption |
 | 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; no networking, cryptography or floats |
-| 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`; header bindings for that subset, N74) |
+| 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | PARTIAL — one board, emulated, VERIFIED (N62); profile rules PARTIAL |
 | 19 | Critical profile | PARTIAL (rules v1) |
 | 20 | Cybersecurity profile | PARTIAL (rules v1) |
@@ -101,8 +101,11 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
-After N84, 2026-10-04: eighteen VERIFIED (area 16 moved, as scoped: the standard library 1.0),
-nineteen PARTIAL, none RESEARCH.
+After N85, 2026-10-04: nineteen VERIFIED (area 17 moved, as scoped: a practical C ABI subset),
+eighteen PARTIAL, none RESEARCH.
+
+*Historical.* After N84, 2026-10-04: eighteen VERIFIED (area 16 moved, as scoped: the standard
+library 1.0), nineteen PARTIAL, none RESEARCH.
 
 *Historical.* After N83, 2026-10-04: seventeen VERIFIED (area 15 moved, as scoped: an opt-in pool,
 macOS), twenty PARTIAL, none RESEARCH; nothing else moved between N77 and N82.
@@ -1592,7 +1595,7 @@ function; an ordering capability for sorting by key.
 **Accepted when** · For v1: met. For the area: a library a real program can be written against
 without reimplementing collections or text handling, with a stability policy past 1.0.
 
-### 17. FFI and ABI — PARTIAL (C, `Int` and `Bool`, `Str` arguments, exports and static libraries; native builds on the host)
+### 17. FFI and ABI — VERIFIED as scoped (a practical C ABI subset, N85; native builds on the host)
 
 **Evidence** · N42 (2026-10-01). `extern "C" fn name(p: T, …) -> R = "symbol";` declares a C
 function by its signature and its C symbol (`crates/nazm-syntax/src/parser.rs`; `extern` is
@@ -1612,22 +1615,36 @@ it with no failure check after it.
 | The interpreter | VERIFIED (refusal) | `nazm run` refuses a program calling C before running any of it, `N0385` (`nazm_run_refuses_a_foreign_call_before_running_anything`) |
 | Link inputs | VERIFIED | `--link` is passed in order; a missing file is refused before compiling; an unresolved symbol is reported as a missing `--link`, not a compiler bug (`the_linker_is_handed_exactly_what_link_names`) |
 | Interface and cache | VERIFIED | `nazm.interface/7` carries a foreign export's symbol; semantic epoch 11; the C symbol enters the object key (`the_c_symbol_enters_the_object_key`) |
-| `Str` arguments (N55) | VERIFIED | a borrowed NUL-terminated copy for the call, freed after it, under both backends with a balanced memory report; a NUL byte refused before C runs, `N0405`; a `Str` result still `N0381` (`a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends`, `a_str_holding_a_nul_is_refused_before_c_runs`, `a_str_result_from_c_is_still_refused`) |
+| `Str` arguments (N55) | VERIFIED | a borrowed NUL-terminated copy for the call, freed after it, under both backends with a balanced memory report; a NUL byte refused before C runs, `N0405`; a sequence result still `N0381` (`a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends`, `a_str_holding_a_nul_is_refused_before_c_runs`, `a_str_result_from_c_is_a_copy_since_n85_and_a_sequence_result_is_still_refused`) |
 | Exporting Nazm functions to C (N55) | VERIFIED | `pub extern "C" fn … ! {} = "sym" { … }`, `Int`/`Bool` only, `N0391` otherwise; one symbol per program (`N0383`); a failure ends the process with status 2 instead of unwinding into C (`an_export_is_public_effect_free_scalar_and_not_generic`, `an_export_symbol_is_defined_once_in_a_program`) |
 | Static libraries (N55) | VERIFIED | `nazm build --lib -o OUT.a` with no `main`, and `OUT.h` in a fixed order; a C program links and calls it under both backends; two builds are the same bytes (`a_library_and_its_header_link_into_a_c_program_under_both_backends`, `a_library_is_the_same_bytes_on_every_build_and_needs_no_main`) |
-| Opaque handles, structs, callbacks, variadics, `errno` | DESIGNED | §7.57: a nominal `extern "C" type`, a layout promise distinct from records, a trampoline with an environment rule, and a per-target `errno` location; none built |
-| Other ABIs and cross-target | MISSING | `"C"` only; the host only (area 33) |
+| Opaque handles (N85) | VERIFIED | `extern "C" struct Db;`: made only by a foreign result, held in a binding, a record field and a `Vec`, passed back to C, under both backends; built or taken apart `N0611`, `==` `N0304`, into a task `N0321`, through a channel `N0390` (`a_handle_a_c_struct_a_c_string_errno_and_a_callback_cross_under_both_backends`, `every_misuse_of_a_handle_a_c_struct_or_a_callback_is_refused_by_its_code`) |
+| Nullability (N85) | VERIFIED | `-> Db` and `-> Str` fail the call with `N0409` on null, before Nazm sees it, status 2 under both backends; `-> Option[…]` makes null `None`; `Option[Db]` as an argument `N0381` (`a_null_where_the_declaration_promised_a_value_fails_the_call_with_n0409`) |
+| C-layout structs (N85) | VERIFIED | `extern "C" struct P { … }` of `Int`, `Bool`, handles and nested C structs, laid out in declaration order — C reads `flag` at 8 and `y` at 16 whatever order a construction names them in — passed as a `const struct *` to a copy freed after the call (10 000 calls leave the allocator's block count where it was, macOS); any other field, a struct result, a by-value struct `N0381` (`a_struct_passed_to_c_is_a_copy_freed_after_every_call`) |
+| `Str` results (N85) | VERIFIED | a `const char *` C keeps, copied into an owned `Str` at the call; balanced memory report (`a_handle_a_c_struct_a_c_string_errno_and_a_callback_cross_under_both_backends`) |
+| `errno` (N85) | VERIFIED | `c_errno()` is what the latest foreign call on this thread left, captured as the call returns under both backends; needs a `ForeignCap`; refused by `nazm run` (`N0385`) and on freestanding and WebAssembly targets (`N0613`) (`a_program_reading_errno_runs_only_natively_and_only_where_there_is_one`) |
+| Callbacks (N85) | VERIFIED | an export's name passed for a `fn(Int) -> Int` parameter is its C entry: C calls it inside the call and from a thread C starts, under both backends; a closure or a non-export `N0612` |
+| Modules and cache (N85) | VERIFIED | a handle and a C struct imported from another module keep what they are through `nazm.interface/9` and the check cache; moving a C struct's fields changes its interface, an ordinary record's does not (`a_handle_and_a_c_struct_keep_what_they_are_across_a_module_boundary_and_in_the_cache`, `a_c_struct_s_field_order_is_its_interface_and_an_ordinary_record_s_is_not`) |
+| Shared libraries (N85) | VERIFIED (macOS) | `nazm build --lib --shared`: only the exports are visible (`nm`), named `@rpath/NAME`, linked and run by a C program under both backends; a failure in an export exits 2 (`a_shared_library_links_into_a_c_program_and_shows_only_its_exports`). Linux's `-shared` link is the same command, not run here |
+| Bindings (N85) | VERIFIED | `nazm bindgen` reads incomplete structs and `typedef struct S S;` as handles, complete structs of crossing fields as C structs, `const char *` results as `Option[Str]`; arrays, unions, by-value structs, function pointers and buffers refused by name (`bindgen_reads_handles_structs_and_returned_strings_and_names_what_it_refuses`) |
+| Outside the subset | Refused by name | floating point, integers other than `int64_t`, variadics, by-value structs and struct results, unions, arrays, bit-fields, closures as callbacks, out-buffers, `dlopen`, ABIs other than `"C"` |
+| Other ABIs and cross-target | MISSING | `"C"` only; a foreign call builds for every target of the matrix, and runs on the host only (area 33) |
 
-**Limitation** · Two scalar types, by value. C is trusted entirely once called: an abort, a loop or
-memory corruption inside it is outside every Nazm guarantee, and nothing is checked after the call.
-`nazm run` cannot call C at all, so a program that does has one implementation, not two.
+**Limitation** · The subset above, and only it. C is trusted entirely once called: an abort, a loop,
+a use of a freed handle or memory corruption inside it is outside every Nazm guarantee, and nothing
+but a promised non-null is checked after the call. `errno` is per thread: a pool task that blocks
+between a call and `c_errno()` may read another task's. `nazm run` cannot call C, so a program that
+does has one implementation, not two. Shared libraries are linked and run on macOS here; the
+self-hosted compiler reads none of N85's declarations (area 30).
 
-**Next dependency** · A layout story for records (a `repr(C)`-like promise) before a struct can
-cross; an opaque handle type before a C pointer can be held; function values exist since N50, so a
-callback needs only the environment rule §7.57 states; `errno` needs N57's target model.
+**Next dependency** · By-value structs and struct results need each target's register rules for
+aggregates; floating point needs the language to have it; closures as callbacks need a `void *`
+environment rule a C API states; `dlopen` would need a handle whose lifetime bounds every function
+taken from it.
 
-**Accepted when** · Met for the v1 set above. The whole area is accepted when a record and a string
-cross with their layout and ownership stated.
+**Accepted when** · Met, as scoped (N85): a record and a string cross with their layout and
+ownership stated, in both directions for strings, under both backends, with every shape outside the
+subset refused by name.
 
 ---
 

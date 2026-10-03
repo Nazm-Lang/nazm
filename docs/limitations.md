@@ -133,11 +133,17 @@ found only by reading all of it.
 
 ## FFI
 
-- `Int` and `Bool`, and a `Str` *argument* as a borrowed C string (N55); no pointers or opaque
-  handles, `Str` results, structs, callbacks, variadics or `errno`; C is trusted entirely once
-  called; `nazm run` cannot call C (area 17). *Narrowed in N55:* until then, import only and no
-  strings. Exports exist — public, `! {}`, `Int`/`Bool` only — and `nazm build --lib` writes a
-  static archive and its header; one Nazm library per C program, no dynamic library.
+- A practical C ABI subset (N85, area 17): `Int`, `Bool`, a `Str` argument borrowed and a `Str`
+  result copied, opaque handles, C-layout structs by borrowed `const` pointer, `Option` results for
+  null, `c_errno()`, exports as callbacks, static and shared libraries. Not crossing, each refused by
+  name: floating point, integers other than `int64_t`, variadics, by-value structs and struct
+  results, unions, arrays, bit-fields, closures as callbacks, out-buffers C writes into, `dlopen`,
+  ABIs other than `"C"`. C is trusted entirely once called — a handle used after C freed it is C's
+  undefined behaviour; `errno` is per thread, so a pool task that blocks between a call and
+  `c_errno()` may read another task's; `nazm run` cannot call C; one Nazm library per C program,
+  since each carries a runtime. Shared libraries are linked and run on macOS; Linux's link is the
+  same `-shared` command, not run here. *Narrowed in N85:* until then, no handles, structs, string
+  results, callbacks, `errno` or shared libraries; *in N55:* import only and no strings.
 
 ## Runtime and concurrency
 

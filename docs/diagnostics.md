@@ -340,6 +340,18 @@ be created does (`N0404`), and five C symbols the pool calls join the reserved l
 `NAZM_SCHED_REPORT` gains a second line, `nazm-pool: workers=… peak=… stack=…`, printed only where
 the pool ran; the first line is unchanged.
 
+**Applied to N85, FFI v3.** Four codes appeared, all compatible. `N0409` is a run-time failure: a
+foreign function returned null where its declaration promised a value — a handle or a `Str` not
+written as an `Option` — raised after C returns and before Nazm sees the pointer, status 2 as every
+failure. `N0611` (an opaque handle built or taken apart) and `N0612` (a callback that is not an
+export's name) are the checker's, continuing N78's block. `N0613` names `c_errno()` in a build for a
+freestanding or WebAssembly target, inside the existing refusal of what only a hosted runtime has.
+Existing codes answer for the new types without changing meaning: `N0381` for what may cross where
+(now: handles, C structs, export function types; and `Str` and handle results), `N0304` for `==` on a
+handle, `N0321` and `N0390` for a handle reaching a task, `N0380`/`N0384` for an `extern "C" struct`'s
+ABI and type parameters, `N0385` for `c_errno()` under `nazm run`. The persisted interface moved to
+`nazm.interface/9` (a record's `c`); `nazm.runtime/1` gains the service name `foreign`, additive.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

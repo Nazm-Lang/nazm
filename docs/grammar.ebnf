@@ -26,7 +26,7 @@
 (* @example enum State { Ready, } fn main() -> Int { match State.Ready() { State.Ready() => 0, } } *)
 (* @example fn identity[T](value: T) -> T { value } fn main() -> Int { identity(7) } *)
 (* @example trait Show { fn show(self: Self) -> Str; } impl Show for Int { fn show(self: Int) -> Str { int_to_str(self) } } fn main() -> Int { str_len(7.show()) } *)
-program = { use_item } , { function | foreign_function | record | enumeration | trait_item | impl_item } ;
+program = { use_item } , { function | foreign_function | record | foreign_struct | enumeration | trait_item | impl_item } ;
 
 (* A trait (N78): a named set of methods a type may implement. Each method is a signature
  * ended by `;` — there are no default bodies — whose first parameter is `self: Self`. A trait
@@ -143,6 +143,16 @@ visibility = "pub" ;
 (* @example pub struct User { name: Str, } fn main() -> Int { str_len(User(name: "a").name) } *)
 (* @example struct Box[T] { value: T, } fn main() -> Int { Box[Int](value: 1).value } *)
 record = [ visibility ] , "struct" , IDENT , [ type_parameters ] , "{" , [ fields ] , "}" ;
+
+(* A struct C sees (N85): `extern "C" struct Name;` is an opaque handle — a C pointer only a
+ * foreign function returns, never built, read or compared — and `extern "C" struct Name { … }`
+ * a record laid out as C's struct, its fields in the order written, which here is meaning.
+ * `extern` is an IDENT recognised before a string, as for a foreign function. See `docs/spec.md`,
+ * *Foreign functions v3*.
+ *)
+(* @example extern "C" struct Db; fn main() -> Int { 0 } *)
+(* @example extern "C" struct Point { x: Int, flag: Bool, y: Int } fn main() -> Int { Point(x: 1, flag: true, y: 2).y } *)
+foreign_struct = [ visibility ] , IDENT , STRING , "struct" , IDENT , ( ";" | "{" , [ fields ] , "}" ) ;
 
 (* @example struct P { x: Int, y: Int, } fn main() -> Int { P(x: 1, y: 2).y } *)
 fields = field , { "," , field } , [ "," ] ;

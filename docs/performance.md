@@ -2648,6 +2648,28 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### FFI v3 — N85, measured 2026-10-04
+
+**Hypothesis:** what crosses costs what §7.86 states, and nothing more. A foreign call now also
+captures `errno` (one runtime call and a thread-local store); a C struct crosses as a `malloc`'d copy
+freed after the call; a `Str` result is a `strlen` and a copy. **Workloads:** a loop of 10,000,000
+iterations whose body is one foreign call: `c_add(t, i)` (scalars), `c_psum(P(x: i, flag: true, y:
+1))` (a three-field C struct), `str_len(c_hi(i))` (a five-byte C string copied and dropped).
+**Method:** debug `nazm`, `--opt-level 2`, clang `-O2` C fixture, best of five wall-clock runs
+including process start; an empty program measures 32.3 ms the same way. Apple M1 Pro, macOS 27.2.
+
+| Loop of 10,000,000 | LLVM | Cranelift |
+| --- | ---: | ---: |
+| scalar call, `errno` captured | 73.0 ms | 77.7 ms |
+| C struct by borrowed copy | 198.7 ms | 250.2 ms |
+| `Str` result copied | 328.1 ms | 335.3 ms |
+
+Less the floor, a scalar call with its capture is about 4–5 ns an iteration; the struct copy adds
+about 13–17 ns (an allocation and a free), the string copy about 30 ns (an allocation, a `strlen`, a
+copy, a release). Not isolated: the capture's own cost against an N84 build of the same loop — N42's
+56.6 ms for the scalar loop was measured by another method and is not a comparator. A program that
+calls no C is unchanged: it reaches no `errno` part and links no `errno` unit under LLVM.
+
 ### The standard library 1.0 — N84, measured 2026-10-04
 
 **Workloads:** `ints_sort` of 100,000 pseudo-random integers; 10,000 `map_set`s of distinct keys in a

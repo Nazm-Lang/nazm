@@ -398,9 +398,20 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N85 — FFI and ABI v3 — **complete as scoped, 2026-10-04; area 17 VERIFIED as scoped**
+
+`architecture.md` §7.86 first. A practical C ABI subset: opaque handles (`extern "C" struct Db;`),
+C-layout structs by borrowed pointer, nullability in the result type (`N0409` or `None`), `Str`
+results copied, `c_errno()`, exports passed to C as callbacks, `nazm build --lib --shared`, and
+`bindgen` reading all of it. The crossing is written as ordinary Core IR, so MIR, LIR and both
+backends learned only the borrowed struct copy, the `errno` capture and an export's address. Semantic
+epoch 25, `nazm.interface/9`, runtime ABI 12. Not here: floats, by-value structs, variadics, closures
+as callbacks, `dlopen`, other ABIs, the compiler written in Nazm. Next: N86, embedded and bare metal
+v2.
+
 ### N84 — the standard library 1.0 — **complete as scoped, 2026-10-04; area 16 VERIFIED as scoped**
 
-`architecture.md` §7.85 first. Sixteen modules and 126 public items, frozen by `library/std/API-1.0`
+`architecture.md` §7.85 first. Seventeen modules and 126 public items, frozen by `library/std/API-1.0`
 and a semver policy in `spec.md`; four representative programs (a CLI tool, a data tool, a concurrent
 service, a package utility) written against it alone and run on every tier. Not here: networking,
 cryptography, floats, a faster map, `@std` in the compiler written in Nazm. Next: N85, FFI and ABI v3.
