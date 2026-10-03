@@ -59,6 +59,11 @@ pub enum TokenKind {
     /// `match` — the one elimination form for an enum. Reserved by name since v0.1 and
     /// refused with *"there is no pattern matching yet"* until N10.
     Match,
+    /// `trait` — a trait declaration, N78.
+    Trait,
+    /// `impl` — an implementation of a trait for a type, N78. Reserved by name since v0.1
+    /// and refused with *"there are no methods yet"* until then.
+    Impl,
 
     // Punctuation
     LParen,
@@ -142,6 +147,8 @@ impl TokenKind {
         Self::Use,
         Self::Scope,
         Self::Spawn,
+        Self::Trait,
+        Self::Impl,
         Self::Struct,
         Self::Enum,
         Self::Match,
@@ -203,6 +210,8 @@ impl TokenKind {
             Self::Use => Some("use"),
             Self::Scope => Some("scope"),
             Self::Spawn => Some("spawn"),
+            Self::Trait => Some("trait"),
+            Self::Impl => Some("impl"),
             Self::Struct => Some("struct"),
             Self::Enum => Some("enum"),
             Self::Match => Some("match"),
@@ -261,6 +270,8 @@ impl TokenKind {
             Self::Use => "`use`".to_owned(),
             Self::Scope => "`scope`".to_owned(),
             Self::Spawn => "`spawn`".to_owned(),
+            Self::Trait => "`trait`".to_owned(),
+            Self::Impl => "`impl`".to_owned(),
             Self::Struct => "`struct`".to_owned(),
             Self::Enum => "`enum`".to_owned(),
             Self::Match => "`match`".to_owned(),
@@ -655,6 +666,8 @@ pub(crate) fn scan_one(
             "match" => TokenKind::Match,
             "scope" => TokenKind::Scope,
             "spawn" => TokenKind::Spawn,
+            "trait" => TokenKind::Trait,
+            "impl" => TokenKind::Impl,
             _ => TokenKind::Ident(word.to_owned()),
         };
         emit!(Lexeme::Token(Token {

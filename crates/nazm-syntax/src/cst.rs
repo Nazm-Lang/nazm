@@ -84,6 +84,8 @@ pub enum SyntaxKind {
     StructKw,
     EnumKw,
     MatchKw,
+    TraitKw,
+    ImplKw,
     // --- tokens: punctuation and operators ---
     LParen,
     RParen,
@@ -174,6 +176,14 @@ pub enum SyntaxKind {
     Pattern,
     PatternFieldList,
     PatternField,
+    /// `trait Name { … }` (N78).
+    TraitItem,
+    /// One method of a trait: a signature ending in `;`.
+    TraitMethod,
+    /// `impl Trait for Type { … }` (N78).
+    ImplItem,
+    /// `receiver.method(args)` (N78).
+    MethodCallExpr,
     /// A region that did not parse: the partial construct and the tokens skipped to the
     /// next place the grammar can resume. Its bytes are the author's, unchanged.
     Error,
@@ -206,6 +216,8 @@ impl SyntaxKind {
         Self::StructKw,
         Self::EnumKw,
         Self::MatchKw,
+        Self::TraitKw,
+        Self::ImplKw,
         Self::LParen,
         Self::RParen,
         Self::LBrace,
@@ -289,6 +301,10 @@ impl SyntaxKind {
         Self::Pattern,
         Self::PatternFieldList,
         Self::PatternField,
+        Self::TraitItem,
+        Self::TraitMethod,
+        Self::ImplItem,
+        Self::MethodCallExpr,
         Self::Error,
     ];
 
@@ -322,6 +338,8 @@ impl SyntaxKind {
             TokenKind::Struct => Self::StructKw,
             TokenKind::Enum => Self::EnumKw,
             TokenKind::Match => Self::MatchKw,
+            TokenKind::Trait => Self::TraitKw,
+            TokenKind::Impl => Self::ImplKw,
             TokenKind::LParen => Self::LParen,
             TokenKind::RParen => Self::RParen,
             TokenKind::LBrace => Self::LBrace,

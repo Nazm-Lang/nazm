@@ -14,9 +14,9 @@ pub mod parser;
 
 pub use ast::{
     Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, FnTypeName, ForeignDecl,
-    Function, HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program,
-    Qualifier, Record, Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant,
-    While,
+    Function, HoleSite, ImplDecl, Import, Let, MatchArm, MethodOf, Param, PatternField, Place,
+    PlaceField, Program, Qualifier, Record, Requirement, Return, Scope, Spawn, Stmt, Trait,
+    TraitMethod, TypeName, TypeParam, Variant, While,
 };
 pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;
@@ -131,6 +131,8 @@ pub fn parse_map_with_root(
         records: Vec::new(),
         enums: Vec::new(),
         imports: Vec::new(),
+        traits: Vec::new(),
+        impls: Vec::new(),
         hole: None,
     };
     let mut errors = Vec::new();
@@ -143,6 +145,8 @@ pub fn parse_map_with_root(
         program.records.extend(p.records);
         program.enums.extend(p.enums);
         program.imports.extend(p.imports);
+        program.traits.extend(p.traits);
+        program.impls.extend(p.impls);
         errors.extend(file_errors);
     }
     (program, errors, reusable.is_some())
@@ -158,6 +162,8 @@ pub fn parse_map_at(
     let mut records = Vec::new();
     let mut enums = Vec::new();
     let mut imports = Vec::new();
+    let mut traits = Vec::new();
+    let mut impls = Vec::new();
     let mut errors = Vec::new();
     let mut found = None;
     let mut root = None;
@@ -176,6 +182,8 @@ pub fn parse_map_at(
         records.extend(program.records);
         enums.extend(program.enums);
         imports.extend(program.imports);
+        traits.extend(program.traits);
+        impls.extend(program.impls);
         errors.extend(file_errors);
     }
     (
@@ -184,6 +192,8 @@ pub fn parse_map_at(
             records,
             enums,
             imports,
+            traits,
+            impls,
             hole: found,
         },
         errors,

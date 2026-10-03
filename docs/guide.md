@@ -487,7 +487,10 @@ accepts.
 
 | Rule | Definition |
 | --- | --- |
-| `program` | `{ use_item } , { function \| foreign_function \| record \| enumeration }` |
+| `program` | `{ use_item } , { function \| foreign_function \| record \| enumeration \| trait_item \| impl_item }` |
+| `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
+| `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";"` |
+| `impl_item` | `"impl" , type , IDENT , type , "{" , { function } , "}"` |
 | `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";"` |
 | `qualifier` | `IDENT , "::"` |
 | `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
@@ -528,7 +531,7 @@ accepts.
 | `sum` | `product , { ( "+" \| "-" ) , product }` |
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" ] , primary` |
-| `primary` | `atom , { "." , IDENT \| "?" }` |
+| `primary` | `atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] \| "?" }` |
 | `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| closure \| "(" , expression , ")"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
@@ -547,7 +550,7 @@ accepts.
 ### `program`
 
 ```ebnf
-program = { use_item } , { function | foreign_function | record | enumeration } ;
+program = { use_item } , { function | foreign_function | record | enumeration | trait_item | impl_item } ;
 ```
 
 ```nazm
@@ -568,6 +571,49 @@ enum State { Ready, } fn main() -> Int { match State.Ready() { State.Ready() => 
 
 ```nazm
 fn identity[T](value: T) -> T { value } fn main() -> Int { identity(7) }
+```
+
+```nazm
+trait Show { fn show(self: Self) -> Str; } impl Show for Int { fn show(self: Int) -> Str { int_to_str(self) } } fn main() -> Int { str_len(7.show()) }
+```
+
+### `trait_item`
+
+```ebnf
+trait_item = [ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}" ;
+```
+
+A trait (N78): a named set of methods a type may implement. Each method is a signature
+ended by `;` — there are no default bodies — whose first parameter is `self: Self`. A trait
+is in the type namespace and is not a type: it is written as a type parameter's bound,
+`[T: Show]`, and never as the type of a value. See `docs/spec.md`, *Traits and methods*.
+
+```nazm
+pub trait Show { fn show(self: Self) -> Str; fn shout(self: Self, n: Int) -> Str ! {}; } fn main() -> Int { 0 }
+```
+
+### `trait_method`
+
+```ebnf
+trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";" ;
+```
+
+```nazm
+trait Size { fn size(self: Self) -> Int; } fn main() -> Int { 0 }
+```
+
+### `impl_item`
+
+```ebnf
+impl_item = "impl" , type , IDENT , type , "{" , { function } , "}" ;
+```
+
+`impl Trait for Type`: every method of the trait, once, with `Self` written as the type.
+`for` is a word here and nowhere else. At most one impl of a trait for a type, in the
+trait's module or the type's.
+
+```nazm
+trait Size { fn size(self: Self) -> Int; } struct P { x: Int, } impl Size for P { fn size(self: P) -> Int { 1 } } fn main() -> Int { 0 }
 ```
 
 ### `use_item`
@@ -1181,13 +1227,16 @@ fn main() -> Int { if !false { 1 } else { 0 } }
 ### `primary`
 
 ```ebnf
-primary = atom , { "." , IDENT | "?" } ;
+primary = atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] | "?" } ;
 ```
 
 `?` is a postfix beside projection, in any order and any number: `r?`, `make()?.x`,
 `r??`. It binds tighter than negation, so `-r?` is `-(r?)`. Whether the operand is a
 `Result` — and the core prelude's one — is the checker's question, not the grammar's.
 See `docs/spec.md`, *Propagation*.
+`.name(…)` after an operand is a method call (N78): `p.show()`, `make().size()`. With a
+trait's name as the operand, `Show.show(p)`, the trait chooses the method and the first
+argument is the receiver.
 
 ```nazm
 fn main() -> Int { (1 + 2) * 3 }
@@ -1215,6 +1264,10 @@ fn f(r: Result[Int, Str]) -> Result[Int, Str] { Result[Int, Str].Ok(value: r? + 
 
 ```nazm
 struct P { x: Int, } fn f(r: Result[P, Str]) -> Result[Int, Str] { Result[Int, Str].Ok(value: -r?.x) } fn main() -> Int { 0 }
+```
+
+```nazm
+trait Size { fn size(self: Self) -> Int; } fn f[T: Size](x: T) -> Int { x.size() + Size.size(x) } fn main() -> Int { 0 }
 ```
 
 ### `atom`

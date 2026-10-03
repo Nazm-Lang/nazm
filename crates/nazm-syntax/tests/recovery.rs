@@ -199,3 +199,24 @@ fn every_recovered_tree_is_still_lossless() {
         assert_eq!(cst.text(), text);
     }
 }
+
+#[test]
+fn a_list_given_up_inside_a_statement_still_resumes_inside_its_block() {
+    // The arms list meets a `let` it cannot hold and is given up, leaving the `match`'s `{`
+    // open; the statement skip must count that brace, or it takes the `match`'s `}` for the
+    // block's and every statement after it lands outside the function.
+    let text = "enum E { A, }\nfn main() -> Int {\n    let v = match e { E.A() => 1, let z = 2; };\n    let ok = 3;\n    ok\n}\nfn after() -> Int { 1 }\n";
+    let (program, cst, d) = parse(text);
+    assert_eq!(d.len(), 1, "{d:?}");
+    let lets = cst
+        .nodes()
+        .iter()
+        .filter(|n| n.kind() == SyntaxKind::LetStmt)
+        .count();
+    assert_eq!(
+        lets, 1,
+        "`let ok` is a statement of `main`, and the broken one is an error"
+    );
+    let names: Vec<&str> = program.functions.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["main", "after"]);
+}
