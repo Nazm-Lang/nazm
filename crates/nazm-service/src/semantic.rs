@@ -56,6 +56,10 @@ pub enum SemanticClass {
     TypeParameter,
     /// A built-in type: compiler-owned, with no declaration in any source.
     BuiltinType,
+    /// A trait (N78).
+    Trait,
+    /// A trait's method, at its declaration or a call through a bound (N78).
+    TraitMethod,
 }
 
 /// Whether an identifier declares what it names or refers to it.
@@ -153,6 +157,8 @@ fn classify(s: &Snapshot, at: Span) -> Option<SemanticIdentifier> {
             ReferenceTarget::Variant(_) => SemanticClass::Variant,
             ReferenceTarget::Field(_) => SemanticClass::Field,
             ReferenceTarget::PayloadField(_) => SemanticClass::PayloadField,
+            ReferenceTarget::Trait(_) => SemanticClass::Trait,
+            ReferenceTarget::TraitMethod(..) => SemanticClass::TraitMethod,
         };
         (class, role, SemanticTarget::Entity(entity))
     } else if let Some(Callee::Builtin(i)) = res.callee(at) {

@@ -113,7 +113,15 @@ use nazm_span::Span;
 /// a call to it needs a `ForeignCap` held — and which symbol it links against. The field is
 /// absent for every Nazm function, but a `/6` reader would silently take a foreign export for
 /// an ordinary function with no body, so the major moves.
-pub const SCHEMA: &str = "nazm.interface/7";
+///
+/// # `/8` (N78)
+///
+/// An interface carries the module's exported traits, every impl it declares, and each
+/// export's trait bounds. An importer's method lookup and coherence check read the first two,
+/// and checking a call reads the third; a `/7` reader would take a module with impls for one
+/// without, and resolve a call differently. The fields are absent where empty, but the major
+/// moves.
+pub const SCHEMA: &str = "nazm.interface/8";
 
 /// A type as persisted.
 ///
@@ -263,6 +271,9 @@ pub struct PersistentExport {
     /// parameter does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_equality: Vec<u32>,
+    /// Each type parameter that requires a trait, and the trait by durable key (N78).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_traits: Vec<(u32, String)>,
     /// The parameter types, in declaration order. A parameter in them is this function's.
     pub params: Vec<PersistentType>,
     /// The return type, in the same encoding.
@@ -373,6 +384,40 @@ pub struct PersistentUnitInterface {
     pub enums: Vec<PersistentEnum>,
     /// What it offers, sorted by name.
     pub exports: Vec<PersistentExport>,
+    /// Its exported traits, sorted by durable identity (N78).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub traits: Vec<PersistentTrait>,
+    /// Every impl it declares, sorted by trait and then type (N78).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub impls: Vec<PersistentImpl>,
+}
+
+/// An exported trait (N78). In each method's types, `{"param": 0}` is `Self`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentTrait {
+    pub def: String,
+    pub name: String,
+    pub methods: Vec<PersistentTraitMethod>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentTraitMethod {
+    pub name: String,
+    /// After `self`.
+    pub params: Vec<PersistentType>,
+    pub ret: PersistentType,
+    pub effects: Vec<String>,
+}
+
+/// An impl a module declares (N78): which trait, for which type, and the function each
+/// method is, by durable key, in the trait's order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentImpl {
+    #[serde(rename = "trait")]
+    pub trait_def: String,
+    #[serde(rename = "type")]
+    pub self_ty: PersistentType,
+    pub methods: Vec<String>,
 }
 
 /// Why a persisted interface could not be produced.
@@ -653,6 +698,17 @@ impl PersistentUnitInterface {
                         })
                     })
                     .collect(),
+                requires_traits: e
+                    .bounds
+                    .iter()
+                    .filter_map(|(i, name, m)| {
+                        let key = graph.key(*m)?;
+                        Some((
+                            *i,
+                            DefKey::new(key.clone(), DefKind::Trait, name.clone()).to_string(),
+                        ))
+                    })
+                    .collect(),
                 params,
                 ret: persist(e.ret, types, graph)
                     .ok_or_else(|| PublishError::NoModuleKey(interface.module()))?,
@@ -666,6 +722,64 @@ impl PersistentUnitInterface {
         // offers, so reordering two definitions must not change a single byte.
         exports.sort_by(|a, b| a.name.cmp(&b.name));
 
+        // Traits and impls (N78), each by durable identity.
+        let trait_key = |name: &str, m: nazm_sema::ModuleId| -> Result<String, PublishError> {
+            let key = graph.key(m).ok_or(PublishError::NoModuleKey(m))?;
+            Ok(DefKey::new(key.clone(), DefKind::Trait, name.to_owned()).to_string())
+        };
+        let ty =
+            |t: Type| persist(t, types, graph).ok_or(PublishError::NoModuleKey(interface.module()));
+        let mut traits = Vec::new();
+        for t in interface.traits() {
+            let mut methods = Vec::new();
+            for (name, params, ret, effects) in &t.methods {
+                methods.push(PersistentTraitMethod {
+                    name: name.clone(),
+                    params: params.iter().map(|p| ty(*p)).collect::<Result<_, _>>()?,
+                    ret: ty(*ret)?,
+                    effects: effects.names().into_iter().map(str::to_owned).collect(),
+                });
+            }
+            traits.push(PersistentTrait {
+                def: trait_key(&t.name, t.module)?,
+                name: t.name.clone(),
+                methods,
+            });
+        }
+        traits.sort_by(|a, b| a.def.cmp(&b.def));
+        let mut impls = Vec::new();
+        for i in interface.impls() {
+            let trait_def = trait_key(&i.trait_name, i.trait_module)?;
+            let self_ty = ty(i.self_ty)?;
+            let shown = types.show(i.self_ty);
+            impls.push(PersistentImpl {
+                methods: i
+                    .methods
+                    .iter()
+                    .map(|m| {
+                        DefKey::new(
+                            module.clone(),
+                            DefKind::Function,
+                            format!("{}/{shown}/{m}", i.trait_name),
+                        )
+                        .to_string()
+                    })
+                    .collect(),
+                trait_def,
+                self_ty,
+            });
+        }
+        impls.sort_by(|a, b| {
+            (
+                a.trait_def.as_str(),
+                serde_json::to_string(&a.self_ty).unwrap_or_default(),
+            )
+                .cmp(&(
+                    b.trait_def.as_str(),
+                    serde_json::to_string(&b.self_ty).unwrap_or_default(),
+                ))
+        });
+
         Ok(Self {
             schema: SCHEMA.to_owned(),
             module: module.as_str().to_owned(),
@@ -673,6 +787,8 @@ impl PersistentUnitInterface {
             records: published_records,
             enums: published_enums,
             exports,
+            traits,
+            impls,
         })
     }
 
@@ -1061,6 +1177,9 @@ impl PersistentUnitInterface {
             let def = FnId::from_index(first.index() + i);
             let owner = ParamOwner::Function(def);
             exports.push(Export {
+                // A persisted interface's traits are not rehydrated (N78): a dependent that
+                // needs one is checked against source, or refused, never misread.
+                bounds: Vec::new(),
                 name: e.name.clone(),
                 params: e
                     .params

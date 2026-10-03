@@ -68,6 +68,8 @@ impl Visibility {
 /// One definition a module offers by name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Export {
+    /// The trait each type parameter requires, by position (N78).
+    pub bounds: Vec<(u32, String, ModuleId)>,
     pub name: String,
     pub params: Vec<Type>,
     pub ret: Type,
@@ -136,6 +138,10 @@ pub struct EnumExport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitInterface {
     module: ModuleId,
+    /// Its exported traits and every impl it declares (N78): an importer's method lookup
+    /// and coherence check read both, so both are part of what the module offers.
+    traits: Vec<TraitExport>,
+    impls: Vec<ImplExport>,
     exports: Vec<Export>,
     /// Every record definition this interface's public surface mentions, closed over
     /// field types. See [`RecordExport`].
@@ -156,11 +162,31 @@ impl UnitInterface {
     ) -> Self {
         Self {
             module,
+            traits: Vec::new(),
+            impls: Vec::new(),
             exports,
             records,
             enums,
             imports,
         }
+    }
+
+    /// The same interface, offering these traits and impls (N78).
+    #[must_use]
+    pub fn with_traits(mut self, traits: Vec<TraitExport>, impls: Vec<ImplExport>) -> Self {
+        self.traits = traits;
+        self.impls = impls;
+        self
+    }
+
+    #[must_use]
+    pub fn traits(&self) -> &[TraitExport] {
+        &self.traits
+    }
+
+    #[must_use]
+    pub fn impls(&self) -> &[ImplExport] {
+        &self.impls
     }
 
     #[must_use]
@@ -285,4 +311,28 @@ pub fn reachable_types(types: &UserTypes, roots: impl IntoIterator<Item = Type>)
         }
     }
     out
+}
+
+/// An exported trait, as an interface offers it (N78): its name, and each method's
+/// signature after `self`, with `Self` the trait's parameter 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitExport {
+    pub name: String,
+    pub module: ModuleId,
+    pub methods: Vec<(
+        String,
+        Vec<crate::types::Type>,
+        crate::types::Type,
+        crate::EffectSet,
+    )>,
+}
+
+/// An impl a module declares (N78): which trait, for which type, and its methods' names in
+/// the trait's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImplExport {
+    pub trait_name: String,
+    pub trait_module: ModuleId,
+    pub self_ty: crate::types::Type,
+    pub methods: Vec<String>,
 }
