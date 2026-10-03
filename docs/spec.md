@@ -2524,8 +2524,12 @@ each other as well, at both optimisation levels.
 
 Every one of the following is *not* claimed, because none of it is implemented:
 
-- No M:N scheduling, no green threads, no work stealing, no task density. A program that
-  spawns ten thousand tasks will try to create ten thousand OS threads.
+- No M:N scheduling by default, and no work stealing. A program that spawns ten thousand tasks
+  will try to create ten thousand OS threads — unless it runs with `NAZM_SCHEDULER=pool` (N83,
+  `architecture.md` §7.84), which runs a native program's tasks on `NAZM_WORKERS` threads, parking a
+  task that waits instead of its worker. The pool changes how tasks are carried, never what a program
+  means: the same output, ending and memory report. A task's stack is then `NAZM_TASK_STACK` bytes
+  (256 KiB by default), and recursion past it is `N0408`.
 - **No deadlock freedom.** Two tasks that each wait for the other wait forever. Nothing in
   the capture rules prevents it, and no ownership discipline implies it. Neither does a
   scope: it waits for its tasks unconditionally, so a body that blocks on a task that

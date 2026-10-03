@@ -137,8 +137,12 @@ found only by reading all of it.
 
 ## Runtime and concurrency
 
-- One OS thread per task; no worker pool, no detached tasks; deadlock is possible and not
-  detected (areas 14, 15). *Narrowed in N54:* select over typed channels, a select deadline under
+- By default one OS thread per task; with `NAZM_SCHEDULER=pool` (N83) tasks run on a bounded pool
+  of workers, pinned, without work stealing or preemption — a task that computes without waiting
+  holds its worker, a blocking foreign call too, and a task's stack is fixed (`NAZM_TASK_STACK`).
+  The pool is verified on macOS only, and the interpreter and the compiler written in Nazm keep a
+  thread per task. No detached tasks; deadlock is possible and not detected, on either model
+  (areas 14, 15). *Narrowed in N54:* select over typed channels, a select deadline under
   a `TimeCap`, and cancellation by closing a channel a task selects on exist; nothing is cancelled
   on a sibling's failure, nothing selects over sends or over the `Int` channel, and the stackful
   pool §7.56 chose is not built. So the tasks alive at once are bounded by

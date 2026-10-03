@@ -10317,11 +10317,12 @@ Repointed by N54, which moved the revision to 6 for select: an object built agai
 Repointed by N55, which moved it to 7 for C-string arguments.
 Repointed by N62, which moved it to 8 for the device-register helpers.
 Repointed by N66, which moved it to 9 for the ordered sum.
-Repointed by N68, which moved it to 10 for the field-by-field layout."""
+Repointed by N68, which moved it to 10 for the field-by-field layout.
+Repointed by N83, which moved it to 11 for the task pool."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = "pub const RUNTIME_ABI_REVISION: u32 = 10;"
-replace = "pub const RUNTIME_ABI_REVISION: u32 = 9;"
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_ten_and_its_digest_covers_c_strings" }]
+find = "pub const RUNTIME_ABI_REVISION: u32 = 11;"
+replace = "pub const RUNTIME_ABI_REVISION: u32 = 10;"
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_eleven_and_its_digest_covers_the_pool" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -12816,3 +12817,84 @@ replace = """
         std::collections::BTreeMap::<String, Value>::new().insert(
             "archive".into(),"""
 killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "the_provenance_record_names_the_archive_linked" }]
+
+
+# --- N83: the task pool -------------------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.84: choosing the pool, its worker count, tasks on
+# the pool and not on threads, a wake that arrives while a task is parking, a select that does not
+# wait yielding, a deadline firing, the peak count, each task's own stack limit, and the switch
+# saving the registers its caller keeps. Every pool test runs its program under a deadline, so a
+# mutant that loses a wake-up fails the test rather than hanging it.
+
+[[mutation]]
+name = "n83-the-pool-is-never-chosen"
+why = "`NAZM_SCHEDULER=pool` is read as anything but the pool, so tasks stay one OS thread each"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %is = icmp eq i32 %c, 0"
+replace = "  %is = icmp ne i32 %c, 0"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "every_concurrency_shape_behaves_the_same_on_the_pool_on_both_backends" }]
+
+[[mutation]]
+name = "n83-the-worker-count-is-ignored"
+why = "`NAZM_WORKERS` is ignored and the pool always has four workers"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %count = select i1 %big, i64 64, i64 %wanted"
+replace = "  %count = select i1 %big, i64 64, i64 4"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "ten_thousand_tasks_all_alive_at_once_run_on_two_workers" }]
+
+[[mutation]]
+name = "n83-tasks-start-as-threads"
+why = "the pool is started but every spawn still creates a thread, so logical tasks never exceed threads"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %pooled = icmp eq i64 %mode, 2"
+replace = "  %pooled = icmp eq i64 %mode, 99"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "ten_thousand_tasks_all_alive_at_once_run_on_two_workers" }]
+
+[[mutation]]
+name = "n83-the-peak-is-not-counted"
+why = "the report's peak never moves, so how many tasks were alive at once is not evidence of anything"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %pk = atomicrmw max ptr @nz.pool_peak, i64 %now monotonic"
+replace = "  %pk = add i64 %now, 0"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "ten_thousand_tasks_all_alive_at_once_run_on_two_workers" }]
+
+[[mutation]]
+name = "n83-a-wake-while-parking-is-lost"
+why = "a wake that arrives while a task is still switching out is dropped, and the task parks for ever"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  br i1 %was, label %requeue, label %rest"
+replace = "  br i1 false, label %requeue, label %rest"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "ten_thousand_tasks_all_alive_at_once_run_on_two_workers" }]
+
+[[mutation]]
+name = "n83-a-polling-select-holds-its-worker"
+why = "a select that does not wait keeps its worker, so a task polling for a sibling on the same worker spins for ever"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  call void @nz.task_yield()"
+replace = "  ; no yield"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run" }]
+
+[[mutation]]
+name = "n83-a-deadline-never-fires"
+why = "a parked task's deadline is never seen to pass, so a select with a deadline on the pool waits for ever"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %passed = icmp sle i64 %d, %now"
+replace = "  %passed = icmp slt i64 %d, 0"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_parked_tasks_deadline_fires_on_the_pool" }]
+
+[[mutation]]
+name = "n83-a-task-has-no-stack-limit"
+why = "a task's stack limit is never set, so the check budgets from a thread's stack and recursion runs into the guard page"
+file = "crates/nazm-runtime/src/core.rs"
+find = '\n  store i64 %lim, ptr %limp",'
+replace = '",'
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker" }]
+
+[[mutation]]
+name = "n83-the-switch-loses-two-registers"
+why = "the AArch64 switch does not save x19 and x20, which the code it returns to keeps values in"
+file = "crates/nazm-runtime/src/switch.rs"
+find = "  stp x19, x20, [sp, #0]"
+replace = "  nop"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "every_concurrency_shape_behaves_the_same_on_the_pool_on_both_backends" }]
