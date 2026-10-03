@@ -414,3 +414,89 @@ fn an_edit_past_an_item_that_its_lookahead_read_reparses_that_item() {
         }
     });
 }
+
+/// The measurement `performance.md` reports (N76): a full parse of each compiler source
+/// against a one-word edit in the middle of it, median of 31 after 5 warm-ups. Ignored: it
+/// is a timing, run by hand in a release build —
+/// `cargo test --release -p nazm-syntax --test incremental -- --ignored --nocapture`.
+#[test]
+#[ignore = "a release-build timing, run by hand"]
+fn measure_full_parse_against_one_edit() {
+    fn median(mut v: Vec<u128>) -> u128 {
+        v.sort_unstable();
+        v[v.len().div_euclid(2)]
+    }
+    on_the_documented_stack(|| {
+        for name in [
+            "compiler/emit.nz",
+            "compiler/analyse.nz",
+            "compiler/parse.nz",
+        ] {
+            let text = std::fs::read_to_string(workspace().join(name)).unwrap();
+            let middle = text.len().div_euclid(2);
+            let at = u32::try_from(middle + text[middle..].find("let ").unwrap() + 4).unwrap();
+            let edit = TextEdit {
+                start: at,
+                end: at,
+                text: "x".to_owned(),
+            };
+            let base = Revision::new(FileId::ROOT, text.clone());
+            let mut full = Vec::new();
+            let mut inc = Vec::new();
+            let mut parse_both_times = Vec::new();
+            for i in 0..36 {
+                let t = std::time::Instant::now();
+                let r = Revision::new(FileId::ROOT, text.clone());
+                let f = t.elapsed().as_micros();
+                let t = std::time::Instant::now();
+                let e = base.edit(&edit).unwrap();
+                let n = t.elapsed().as_micros();
+                let t = std::time::Instant::now();
+                let p = parse_both(FileId::ROOT, &text);
+                let pb = t.elapsed().as_micros();
+                assert!(r.stats().full && !e.stats().full);
+                drop((r, e, p));
+                if i >= 5 {
+                    full.push(f);
+                    inc.push(n);
+                    parse_both_times.push(pb);
+                }
+            }
+            let e = base.edit(&edit).unwrap();
+            println!(
+                "{name}: {} bytes; parse_both {} us, Revision::new {} us, one edit {} us; \
+                 relexed {} of {} lexemes, reparsed {} of {} tokens, {} of {} chunks reused",
+                text.len(),
+                median(parse_both_times),
+                median(full),
+                median(inc),
+                e.stats().lexemes_relexed,
+                e.stats().lexemes_total,
+                e.stats().tokens_reparsed,
+                e.stats().tokens_total,
+                e.stats().chunks_reused,
+                e.stats().chunks_reused + e.stats().chunks_reparsed,
+            );
+        }
+    });
+}
+
+#[test]
+fn a_revision_is_the_roots_parse_only_when_it_is_of_the_roots_text() {
+    on_the_documented_stack(|| {
+        let text = "fn main() -> Int { 1 }\n";
+        let map = nazm_span::SourceMap::single("main.nz".to_owned(), text.to_owned());
+        let same = Revision::new(FileId::ROOT, text);
+        let (p, d, used) = nazm_syntax::parse_map_with_root(&map, Some(&same));
+        assert!(used);
+        assert_eq!((p, d), nazm_syntax::parse_map(&map));
+        // A revision of other text — an editor's copy that has moved on — is not used: the
+        // root is parsed from the map's text, and the answer is that text's.
+        let stale = Revision::new(FileId::ROOT, "fn main() -> Int { 2 }\n");
+        let (p, d, used) = nazm_syntax::parse_map_with_root(&map, Some(&stale));
+        assert!(!used);
+        assert_eq!((p, d), nazm_syntax::parse_map(&map));
+        let (_, _, used) = nazm_syntax::parse_map_with_root(&map, None);
+        assert!(!used);
+    });
+}
