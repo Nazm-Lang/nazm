@@ -58,6 +58,18 @@ struct Fixture {
 }
 
 /// A store holding one valid entry for `a.nz`, which depends on `b.nz`.
+/// A resolved unit of `module` over `source` (N77), with nothing in it.
+fn unit(module: &str, source: SourceFingerprint) -> nazm_iface::ResolvedUnit {
+    nazm_iface::ResolvedUnit {
+        schema: nazm_iface::resolved::SCHEMA.to_owned(),
+        module: module.to_owned(),
+        source: source.to_string(),
+        imports: Vec::new(),
+        definitions: Vec::new(),
+        occurrences: Vec::new(),
+    }
+}
+
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = Store::at(dir.path().join("check"));
@@ -72,7 +84,11 @@ fn fixture() -> Fixture {
         &deps,
         one_export("a.nz", "twice", "Int"),
     )
-    .expect("an artefact");
+    .expect("an artefact")
+    .with_resolved(unit(
+        "a.nz",
+        SourceFingerprint::of(b"fn main() -> Int { 1 }\n"),
+    ));
     let k = CheckKey::parse(&artifact.key).expect("its key");
     store.put(&artifact).expect("publish");
     Fixture {
@@ -153,11 +169,11 @@ fn a_schema_this_build_does_not_implement_is_refused_rather_than_reinterpreted()
         .artifact
         .to_json()
         .expect("json")
-        .replace("nazm.check/2", "nazm.check/3");
+        .replace("nazm.check/3", "nazm.check/4");
     tamper(&f.store, &f.key, &text);
     assert_eq!(
         rejected(&f.store, &f.key),
-        Invalid::UnknownSchema("nazm.check/3".to_owned())
+        Invalid::UnknownSchema("nazm.check/4".to_owned())
     );
 }
 
@@ -296,7 +312,11 @@ fn writing_the_same_entry_twice_is_the_same_entry() {
         }],
         one_export("a.nz", "twice", "Int"),
     )
-    .expect("an artefact");
+    .expect("an artefact")
+    .with_resolved(unit(
+        "a.nz",
+        SourceFingerprint::of(b"fn main() -> Int { 1 }\n"),
+    ));
     assert_eq!(again.to_json().unwrap(), f.artifact.to_json().unwrap());
     f.store.put(&again).expect("publish again");
     assert!(matches!(f.store.get(&f.key), Found::Hit(_)));
@@ -322,4 +342,38 @@ fn a_project_store_sits_under_its_source_root() {
         store.directory(),
         Path::new("/somewhere/project/.nazm/check")
     );
+}
+
+#[test]
+fn an_entry_without_its_resolved_unit_is_never_an_entry() {
+    // N77: a `/3` entry's unit is part of what it means; one without is a miss, never a
+    // module whose names resolved to nothing.
+    let f = fixture();
+    let mut v: serde_json::Value =
+        serde_json::from_str(&f.artifact.to_json().expect("json")).expect("parse");
+    v["resolved"] = serde_json::Value::Null;
+    tamper(&f.store, &f.key, &v.to_string());
+    assert_eq!(rejected(&f.store, &f.key), Invalid::ForeignResolution);
+}
+
+#[test]
+fn a_unit_of_another_module_or_other_text_is_never_read() {
+    for (field, value) in [("module", "b.nz"), ("source", "00")] {
+        let f = fixture();
+        let mut v: serde_json::Value =
+            serde_json::from_str(&f.artifact.to_json().expect("json")).expect("parse");
+        v["resolved"][field] = serde_json::Value::String(value.to_owned());
+        tamper(&f.store, &f.key, &v.to_string());
+        assert_eq!(
+            rejected(&f.store, &f.key),
+            Invalid::ForeignResolution,
+            "{field}"
+        );
+    }
+    let f = fixture();
+    let mut v: serde_json::Value =
+        serde_json::from_str(&f.artifact.to_json().expect("json")).expect("parse");
+    v["resolved"]["schema"] = serde_json::Value::String("nazm.resolved/2".to_owned());
+    tamper(&f.store, &f.key, &v.to_string());
+    assert_eq!(rejected(&f.store, &f.key), Invalid::ForeignResolution);
 }

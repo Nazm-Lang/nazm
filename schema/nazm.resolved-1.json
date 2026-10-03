@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.resolved-1.json",
+  "title": "nazm.resolved/1",
+  "description": "What checking one module decided about its names (N77, `docs/architecture.md` §7.78): its imports, its definitions and every resolved occurrence of a declared entity, each by durable identity. Written by `nazm resolve` one per line, and stored in the module's check entry (`nazm.check/3`) under the same key. No session id, absolute path, timestamp or load order; locals are absent. Ranges are byte offsets into the source `source` fingerprints.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "module", "source", "imports", "definitions", "occurrences"],
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item", "member", "kind"],
+      "properties": {
+        "item": { "type": "string", "description": "The defining item's durable key, `module::kind name`." },
+        "member": { "type": ["string", "null"], "description": "A variant's, field's or payload field's name (`Variant.field` for a payload field); null for the item itself." },
+        "kind": { "enum": ["function", "record", "enum", "variant", "field", "payload field"] }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "target"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "target": { "$ref": "#/$defs/target" }
+      }
+    }
+  },
+  "properties": {
+    "schema": { "const": "nazm.resolved/1" },
+    "module": { "type": "string", "description": "The module's durable key; a package's module carries its package." },
+    "source": { "type": "string", "description": "The BLAKE3 fingerprint of the exact source bytes the ranges are into." },
+    "imports": {
+      "type": "array",
+      "description": "Every `use`, in source order.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["written", "alias", "module", "interface"],
+        "properties": {
+          "written": { "type": "string", "description": "The import's literal as written, without quotes." },
+          "alias": { "type": ["string", "null"] },
+          "module": { "type": "string", "description": "The durable key of the module it names." },
+          "interface": { "type": ["string", "null"], "description": "That module's interface fingerprint when this one was checked against it." }
+        }
+      }
+    },
+    "definitions": { "type": "array", "items": { "$ref": "#/$defs/range" }, "description": "Each declared entity at its name, sorted by range then target." },
+    "occurrences": { "type": "array", "items": { "$ref": "#/$defs/range" }, "description": "Each use of a declared entity, sorted by range then target." }
+  }
+}

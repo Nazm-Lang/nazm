@@ -31,7 +31,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use nazm_iface::{InterfaceHash, PersistentFacts, PersistentUnitInterface};
+use nazm_iface::{InterfaceHash, PersistentFacts, PersistentUnitInterface, ResolvedUnit};
 use nazm_sema::key::ModuleKey;
 
 use crate::identity::CheckerIdentity;
@@ -49,7 +49,10 @@ use crate::source::SourceFingerprint;
 /// `/2` since N38: an entry also carries the module's provenance facts, which a run that
 /// reuses the module needs for the whole program's summaries. A `/1` entry has none, so it
 /// is refused and the module checked again — never read as a module with no flows.
-pub const SCHEMA: &str = "nazm.check/2";
+///
+/// `/3` since N77: an entry also carries the module's resolved unit (`nazm.resolved/1`),
+/// which a reader of a reused module's names needs. A `/2` entry has none and is a miss.
+pub const SCHEMA: &str = "nazm.check/3";
 
 /// One dependency, as the artefact records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +88,9 @@ pub struct CheckArtifact {
     pub interface_hash: String,
     /// Its bodies reduced to provenance flows (N38): a function of exactly the inputs above.
     pub provenance: PersistentFacts,
+    /// What checking the module decided about its names (N77): a function of exactly the
+    /// inputs the key covers, so it is filed under the same key.
+    pub resolved: Option<ResolvedUnit>,
 }
 
 /// Why a stored check result could not be used.
@@ -113,6 +119,8 @@ pub enum Invalid {
     KeyDisagrees,
     /// It is a valid entry, for something else.
     WrongKey,
+    /// The resolved unit is missing, unreadable, or of another module or source text.
+    ForeignResolution,
 }
 
 impl std::fmt::Display for Invalid {
@@ -131,6 +139,9 @@ impl std::fmt::Display for Invalid {
                 f.write_str("its recorded inputs do not produce the key it is filed under")
             }
             Self::WrongKey => f.write_str("it is an entry for something else"),
+            Self::ForeignResolution => {
+                f.write_str("its resolved unit is not this module's, of this source")
+            }
         }
     }
 }
@@ -144,6 +155,7 @@ pub struct Reusable {
     pub interface: PersistentUnitInterface,
     pub interface_hash: InterfaceHash,
     pub provenance: PersistentFacts,
+    pub resolved: ResolvedUnit,
 }
 
 impl CheckArtifact {
@@ -184,7 +196,15 @@ impl CheckArtifact {
             interface,
             interface_hash: interface_hash.to_string(),
             provenance: PersistentFacts::default(),
+            resolved: None,
         })
+    }
+
+    /// The same entry, carrying the module's resolved unit (N77).
+    #[must_use]
+    pub fn with_resolved(mut self, unit: ResolvedUnit) -> Self {
+        self.resolved = Some(unit);
+        self
     }
 
     /// The same entry, carrying `facts` as the module's provenance facts.
@@ -275,11 +295,25 @@ impl CheckArtifact {
             return Err(Invalid::WrongKey);
         }
 
+        // The unit through its own reader, and of this module's exact source: an entry is
+        // a file, and a unit of another module or another text names ranges that mean
+        // nothing here.
+        let unit = self
+            .resolved
+            .as_ref()
+            .and_then(|u| u.to_json().ok())
+            .and_then(|j| ResolvedUnit::from_json(&j).ok())
+            .ok_or(Invalid::ForeignResolution)?;
+        if unit.module != self.module || unit.source != self.source {
+            return Err(Invalid::ForeignResolution);
+        }
+
         Ok(Reusable {
             module,
             interface,
             interface_hash,
             provenance: self.provenance.clone(),
+            resolved: unit,
         })
     }
 }

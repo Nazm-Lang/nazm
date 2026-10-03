@@ -77,10 +77,13 @@ struct Entry {
     must_check: bool,
     /// A reused module's provenance facts (N38), as its entry kept them.
     provenance: Option<nazm_iface::PersistentFacts>,
+    /// The module's resolved unit (N77): read from its entry when it was reused, written
+    /// from the checker's resolution when it was checked cleanly.
+    resolved: Option<nazm_iface::ResolvedUnit>,
 }
 
 /// The cache, as the checker sees it.
-struct Cache<'a> {
+pub(crate) struct Cache<'a> {
     map: &'a SourceMap,
     store: Store,
     checker: CheckerIdentity,
@@ -91,7 +94,7 @@ struct Cache<'a> {
 }
 
 impl<'a> Cache<'a> {
-    fn new(map: &'a SourceMap, store: Store) -> Self {
+    pub(crate) fn new(map: &'a SourceMap, store: Store) -> Self {
         Self {
             map,
             store,
@@ -104,6 +107,16 @@ impl<'a> Cache<'a> {
 
     fn at(&self, module: ModuleId) -> Option<&Entry> {
         self.entries.get(module.index())
+    }
+
+    /// Every module's resolved unit after a clean check, by module, and how many modules
+    /// were checked and how many reused (N77). `None` for a module with no durable identity.
+    pub(crate) fn units(&self) -> (Vec<Option<nazm_iface::ResolvedUnit>>, usize, usize) {
+        (
+            self.entries.iter().map(|e| e.resolved.clone()).collect(),
+            self.tally.modules - self.tally.reused,
+            self.tally.reused,
+        )
     }
 }
 
@@ -167,6 +180,7 @@ impl nazm_core::Reuse for Cache<'_> {
             let check_key = CheckKey::of(self.checker, &key, source, &deps);
             let found = self.store.get(&check_key);
             let mut provenance = None;
+            let mut resolved = None;
             let reuse = match found {
                 Found::Hit(r) => {
                     // The entry says what this module offers, and stage 1 has just
@@ -176,6 +190,7 @@ impl nazm_core::Reuse for Cache<'_> {
                     if e.published.as_ref() == Some(&r.interface) {
                         self.tally.reused += 1;
                         provenance = Some(r.provenance);
+                        resolved = Some(r.resolved);
                         true
                     } else {
                         self.tally.rejected += 1;
@@ -196,6 +211,7 @@ impl nazm_core::Reuse for Cache<'_> {
                 e.dependencies = Some(deps);
                 e.must_check = !reuse;
                 e.provenance = provenance;
+                e.resolved = resolved;
             }
         }
     }
@@ -239,7 +255,42 @@ impl nazm_core::Reuse for Cache<'_> {
         else {
             return;
         };
-        let artifact = artifact.with_provenance(persisted);
+        // The module's names, from the checker's own answers (N77). A module that cannot
+        // name its targets durably keeps no unit and so no entry: an entry without one
+        // would be a miss on every read.
+        let index = nazm_core::sema::ReferenceIndex::of(res);
+        let map = self.map;
+        let entries = &self.entries;
+        let interface = |m: ModuleId| {
+            entries
+                .get(m.index())
+                .and_then(|e| e.interface)
+                .map(|h| h.to_string())
+        };
+        let written = |at: nazm_span::Span| {
+            map.text(at.file)
+                .get(at.start as usize..at.end as usize)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_owned()
+        };
+        let Ok(unit) = nazm_iface::ResolvedUnit::of(
+            res,
+            &index,
+            &self.graph,
+            module,
+            &source.to_string(),
+            &interface,
+            &written,
+        ) else {
+            return;
+        };
+        let artifact = artifact
+            .with_provenance(persisted)
+            .with_resolved(unit.clone());
+        if let Some(e) = self.entries.get_mut(module.index()) {
+            e.resolved = Some(unit);
+        }
         // A store that will not take an entry is not a reason to fail a compilation: the
         // disk is full, or the tree is read-only, and the program is fine either way.
         if self.store.put(&artifact).is_ok() {

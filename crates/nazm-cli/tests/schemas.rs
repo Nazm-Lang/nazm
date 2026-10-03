@@ -1101,3 +1101,46 @@ fn a_publish_plan_matches_the_published_schema() {
         &lines(&String::from_utf8_lossy(&o.stdout)),
     );
 }
+
+#[test]
+fn resolved_units_and_references_match_the_published_schemas() {
+    // N77: the units a check entry stores, and an entity's occurrences read from them.
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("nazm.root"), "").expect("write");
+    std::fs::write(
+        dir.path().join("lib.nz"),
+        "pub fn helper(x: Int) -> Int { x + 1 }\npub struct P { a: Int, }\npub enum E { A, B(v: Int), }\n",
+    )
+    .expect("write");
+    std::fs::write(
+        dir.path().join("main.nz"),
+        "use \"lib.nz\" as l;\nfn main() -> Int { let p = l::P(a: l::helper(1)); match l::E.B(v: p.a) { l::E.A() => 0, l::E.B(v: x) => x } }\n",
+    )
+    .expect("write");
+    let run = |args: &[&str]| {
+        let out = Command::new(NAZM)
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        lines(&String::from_utf8_lossy(&out.stdout))
+    };
+    let units = run(&["resolve", "main.nz"]);
+    assert!(units.len() >= 2);
+    check_against("nazm.resolved-1.json", &units);
+    let mut refs = Vec::new();
+    for def in [
+        "lib.nz::fn helper",
+        "lib.nz::enum E.B",
+        "lib.nz::enum E.B.v",
+        "lib.nz::record P.a",
+    ] {
+        refs.extend(run(&["references", def, "main.nz"]));
+    }
+    check_against("nazm.references-1.json", &refs);
+}
