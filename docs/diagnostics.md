@@ -319,6 +319,12 @@ and where it first exercises them. `nazm inspect` gains `inherits` per definitio
 compatible; `nazm.profile-report/1` gains a profile and a rule. The interface stays
 `nazm.interface/8`.
 
+**Applied to N80, provenance v3.** No code appeared. `N0372` keeps its meaning, and is now raised
+also at a call through a value whose candidate writes to a path from its parameter, and at a closure
+that captures what reaches a path, with a message saying which; its secondary labels follow cells,
+captures, callers and exports. `checked-paths` refuses with the existing `N0510`. `nazm.flow/1 →
+/2` adds `traces`; the check entry moved to `nazm.check/4`; `nazm.profile-report/1` gains a rule.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

@@ -19,8 +19,9 @@ found only by reading all of it.
   never a `let mut` binding (`N0386`); no attenuated capabilities and no revocation
   (`architecture.md` §7.53); a field of function type is called by
   binding it first; no function value crosses into a task (`N0321`); a path that went through a
-  function value is of unknown origin, conservatively, and so is a call through a trait bound. The
-  compiler written in Nazm has none of it (areas 3, 5, 7, 16). *Narrowed in N50.*
+  function value carries what every function value of its type may return, and a call through a
+  trait bound what every impl of that method may (N80). The compiler written in Nazm has none of it
+  (areas 3, 5, 7, 16). *Narrowed in N50 and N80.*
 - A module cannot re-export a name or export one under another name (area 2). A module's
   persisted resolution (N77, `nazm.resolved/1`) holds its names, not its types: `nazm build` and
   `nazm run` still check every module, and only `nazm check` and `nazm references` read it.
@@ -92,8 +93,11 @@ found only by reading all of it.
   type: a `Vec[fn() -> Int]` is not a `Vec[fn() -> Int ! { io }]` (area 5).
 - Provenance has three sink classes (`path`, `output`, `file-data`) solved through helpers,
   closures and modules, and one language restriction (`N0372`, the path); the rest is profile
-  policy. Declassification is `str_vouch` under a `VouchCap`, recorded. A container is still
-  coarse: whatever is read out of a sequence or channel is `unknown` (area 7). *Narrowed in N52.*
+  policy, checked by the same engine. Declassification is `str_vouch` under a `VouchCap`, recorded.
+  A container is precise by **type**, not by handle or index: one write of a file's contents into
+  any `Strs` reaches every `Strs` read, and a container in generic code reaches every cell. Records
+  and variants are precise by field only within a body. Implicit flow is not tracked (area 7).
+  *Narrowed in N52 and N80.*
 
 ## Native code
 
