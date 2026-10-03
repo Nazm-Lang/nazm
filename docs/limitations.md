@@ -105,6 +105,9 @@ found only by reading all of it.
   below; no Windows, 32-bit or CPU-feature selection; a target the host has no linker for is built to objects (`--objects`) for its own
   toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here
   (area 33). *Narrowed in N57:* until then, the host only.
+- A build generates its runtime unless given `--runtime DIR` (N82): the artifact is the way to build
+  a runtime once and check what is linked, not yet the default. The runtime is LLVM text, not Rust,
+  and has no allocator of its own (area 13).
 - The two native backends each translate MIR's operations themselves; their agreement rests on
   differential testing (N73, N81), not on one lowering. Byte layouts and ownership are `nazm-lir`'s
   and validated on every build (N81), but LLVM lays its own aggregates out, an enum as the product

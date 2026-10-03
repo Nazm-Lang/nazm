@@ -398,6 +398,15 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N82 — runtime v2: the runtime as an artifact — **complete as scoped, 2026-10-03; area 13 stays PARTIAL**
+
+`architecture.md` §7.83 first. `nazm runtime build` compiles the whole runtime for a target and
+profile into `libnazmrt.a` with a `nazm.runtime/1` manifest; `nazm build --runtime` links it on both
+backends after checking schema, ABI revision, runtime digest, target, profile, services and archive
+bytes, and refuses by name otherwise; `nazm runtime verify`; provenance names the archive. Behaviour is
+identical over the repository; a cold build is 34 ms faster with it. Not here: a runtime in Rust (one
+implementation kept), an allocator, a scheduler (N83). Next: N83, the advanced scheduler.
+
 ### N81 — the backend contract v2, stage one — **not accepted, 2026-10-03; area 10 stays PARTIAL**
 
 `architecture.md` §7.82 first, and it says why: LIR now owns a target's data layout, every byte

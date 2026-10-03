@@ -2648,6 +2648,24 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### The runtime artifact — N82, measured 2026-10-03
+
+**Hypothesis:** a prebuilt runtime saves the runtime's compile on every build that does not already
+hold that exact text. **Workload:** the program in `runtime_artifact.rs` that reaches every runtime
+service, built with `--no-cache` so every unit is compiled. **Method:** release build, the two
+configurations interleaved, 11 runs each, median (minimum–maximum). Apple M1 Pro, macOS 27.2,
+Apple clang 21.0.0.
+
+| Backend | Generated runtime | `--runtime` artifact |
+| --- | ---: | ---: |
+| LLVM | 146 ms (144–151) | 112 ms (111–116) |
+| Cranelift | 119 ms (117–122) | 85 ms (84–88) |
+
+About 34 ms a build, the runtime's clang compile at `-O2`; a build whose project store already held the
+runtime's object saw none of that cost before. The executable is the same program: its output,
+ending and memory report are identical (tested), though its bytes need not be, since the artifact is
+the runtime with every service.
+
 ### Provenance v3 — N80, measured 2026-10-03
 
 **Hypothesis:** container cells, indirect targets and local shapes cost the checker a bounded,
