@@ -17,6 +17,10 @@ found only by reading all of it.
   binding it first; no function value crosses into a task (`N0321`); a path that went through a
   function value is of unknown origin, conservatively. The compiler written in Nazm has none of
   it (areas 3, 5, 7, 16). *Narrowed in N50.*
+- A module cannot re-export a name or export one under another name (area 2). A module's
+  persisted resolution (N77, `nazm.resolved/1`) holds its names, not its types: `nazm build` and
+  `nazm run` still check every module, and only `nazm check` and `nazm references` read it.
+  *Narrowed in N77:* until then, nothing a check decided about a body outlived the process.
 - A standard module's functions keep their module's name (`text_split`), qualified or not:
   `use "@std/text" as t;` gives `t::text_split`, not `t::split` (areas 2, 16). *Narrowed in N49,
   which added qualified names.*
