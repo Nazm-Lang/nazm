@@ -130,6 +130,8 @@ fn explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order() {
          fn right() -> Int {{ 1 + str_len(arg(0)) }}\n\
          fn text() -> Str {{ int_to_str(args_count()) }}\n\
          fn field() -> Str {{ let p = Pair(a: \"x\", b: read_file(\"f\")); p.a }}\n\
+         fn other() -> Str {{ let p = Pair(a: \"x\", b: read_file(\"f\")); p.b }}\n\
+         fn handed(p: Pair) -> Str {{ p.a }}\n\
          fn payload() -> Str {{ match Got.Some(v: arg(1)) {{ Got.Some(v: s) => s, Got.None() => \"\", }} }}\n\
          fn mutated() -> Str {{ let mut x = \"local\"; x = read_file(\"f\"); x }}\n\
          fn twice() -> Str {{ let mut x = arg(0); x = read_file(\"f\"); x }}\n\
@@ -154,8 +156,11 @@ fn explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order() {
         "an operator joins both operands"
     );
     assert_eq!(origins(&src, "text"), ["argument"]);
-    // Records, variants and `Result` are values: provenance is the whole value's.
-    assert_eq!(origins(&src, "field"), ["file"]);
+    // Within a body, a record built there keeps each field apart (N80); one handed in is a
+    // whole value, whose fields are all of it.
+    assert!(origins(&src, "field").is_empty());
+    assert_eq!(origins(&src, "other"), ["file"]);
+    assert_eq!(summary(&src, "handed").params, [0]);
     assert_eq!(origins(&src, "payload"), ["argument"]);
     assert_eq!(origins(&src, "prop"), ["argument"]);
     // A binding carries everything assigned to it, loops included.
@@ -229,7 +234,9 @@ fn recursion_and_mutual_recursion_reach_the_least_fixed_point_in_any_order() {
 }
 
 #[test]
-fn shared_storage_is_not_followed_and_is_unknown() {
+fn a_container_carries_what_any_container_of_its_type_was_given() {
+    // Containers are followed by cell (N80): each read carries what was written into any
+    // container of its type, and nothing else.
     let src = format!(
         "fn from_seq() -> Str {{ let xs = strs_new(); strs_push(xs, \"lit\"); strs_get(xs, 0) }}\n\
          fn from_vec() -> Int {{ let v = vec_new[Int](); vec_push(v, 1); vec_len(v) }}\n\
@@ -237,8 +244,27 @@ fn shared_storage_is_not_followed_and_is_unknown() {
          fn received() -> Bool {{ let c = chan_new(1); chan_send(c, 1); let b = ints_new(); chan_recv(c, b) }}\n{MAIN}"
     );
     for f in ["from_seq", "from_vec", "from_chan", "received"] {
-        assert_eq!(origins(&src, f), ["unknown"], "{f}");
+        assert!(origins(&src, f).is_empty(), "{f}: {:?}", origins(&src, f));
     }
+    // One write of a file's contents anywhere reaches every read of that type — and only
+    // that type: a `Vec[Int]` filled from the command line stays the command line's.
+    let src = format!(
+        "fn fill() -> Int {{ let ys = strs_new(); strs_push(ys, read_file(\"f\")); 0 }}\n\
+         fn from_seq() -> Str {{ let xs = strs_new(); strs_push(xs, \"lit\"); strs_get(xs, 0) }}\n\
+         fn from_vec() -> Int {{ let v = vec_new[Int](); vec_push(v, str_len(arg(0))); vec_get(v, 0) }}\n\
+         fn through_chan() -> Int {{ let c = chan_new(1); chan_send(c, str_len(read_file(\"f\"))); let b = ints_new(); chan_recv(c, b); ints_pop(b) }}\n{MAIN}"
+    );
+    assert_eq!(origins(&src, "from_seq"), ["file"]);
+    assert_eq!(origins(&src, "from_vec"), ["argument"]);
+    // A receive moves the channel's cell into the `Ints`.
+    assert_eq!(origins(&src, "through_chan"), ["file"]);
+    // A container in generic code may be any container: a write there reaches every cell.
+    let src = format!(
+        "fn put[T](v: Vec[T], x: T) -> Int {{ vec_push(v, x); 0 }}\n\
+         fn fill() -> Int {{ let w = vec_new[Int](); put(w, str_len(read_file(\"f\"))) }}\n\
+         fn from_vec() -> Str {{ let v = vec_new[Str](); vec_push(v, \"lit\"); vec_get(v, 0) }}\n{MAIN}"
+    );
+    assert_eq!(origins(&src, "from_vec"), ["file"]);
 }
 
 #[test]
@@ -308,10 +334,23 @@ fn a_path_from_a_files_contents_is_refused_with_its_witness() {
     let call = at(src, "target(io), ").0;
     assert!(hops.contains(&(call, call + 6)), "{hops:?}");
     assert!(hops.contains(&at(src, "read_file")), "{hops:?}");
-    // And one read out of shared storage, which may be anything.
+    // A container is followed by its cell (N80): what was written into it is what a read
+    // carries, so the command line through a `Strs` is allowed…
     let src = "fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, arg(0)); write_file(strs_get(xs, 0), \"x\"); 0 }\n";
+    accepted(src);
+    // …and a file's contents through one are refused, with the read, the write into the cell
+    // and the file read on the chain.
+    let src = "fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"f\")); write_file(strs_get(xs, 0), \"x\"); 0 }\n";
     let d = restricted_at(src, at(src, "write_file"));
-    assert!(d.message.contains("does not follow"), "{}", d.message);
+    assert!(d.message.contains("contents of a file"), "{}", d.message);
+    let hops: Vec<(u32, u32)> = d
+        .secondary
+        .iter()
+        .map(|l| (l.span.start, l.span.end))
+        .collect();
+    assert!(hops.contains(&at(src, "strs_get")), "{hops:?}");
+    assert!(hops.contains(&at(src, "strs_push")), "{hops:?}");
+    assert!(hops.contains(&at(src, "read_file")), "{hops:?}");
 }
 
 #[test]

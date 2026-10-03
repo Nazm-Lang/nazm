@@ -16,7 +16,8 @@ use nazm_sema::key::ModuleKey;
 use nazm_sema::module::{ModuleGraph, ModuleId};
 use nazm_sema::resolve::{FnId, Resolution};
 use nazm_sema::{
-    CallFact, Flow, FunctionFacts, ModuleFacts, Origin, OriginSet, SinkClass, SinkFact,
+    CallFact, Flow, FunctionFacts, IndirectFact, MakeFact, ModuleFacts, Origin, OriginSet,
+    SinkClass, SinkFact, StoreFact,
 };
 use nazm_span::{FileId, Span};
 
@@ -33,6 +34,42 @@ pub struct PersistentFunction {
     pub calls: Vec<PersistentCall>,
     pub result: PersistentFlow,
     pub sinks: Vec<PersistentSink>,
+    /// What it writes into containers' cells (N80).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stores: Vec<PersistentStore>,
+    /// Its calls through values and bounds (N80).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub indirect: Vec<PersistentIndirect>,
+    /// The function values it makes (N80).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub makes: Vec<PersistentMake>,
+}
+
+/// A value written into a cell (N80). A cell is named by its container's type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentStore {
+    pub cell: String,
+    pub at: [u32; 2],
+    pub value: PersistentFlow,
+}
+
+/// A call through a value or a bound (N80), by the target it answers to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentIndirect {
+    pub target: String,
+    pub at: [u32; 2],
+    pub args: Vec<PersistentFlow>,
+}
+
+/// A function value made (N80): the function's module key and name — a closure's is the
+/// name its maker gave it — its target, and what it captures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentMake {
+    pub module: String,
+    pub function: String,
+    pub target: String,
+    pub at: [u32; 2],
+    pub captures: Vec<PersistentFlow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +99,12 @@ pub struct PersistentFlow {
     pub origins: Vec<(String, [u32; 2])>,
     pub params: Vec<u32>,
     pub calls: Vec<u32>,
+    /// The cells it was read out of, by name, sorted, with where each was first read (N80).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cells: Vec<(String, [u32; 2])>,
+    /// The indirect calls whose results it carries (N80).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via: Vec<u32>,
 }
 
 impl PersistentFlow {
@@ -74,10 +117,16 @@ impl PersistentFlow {
                 .collect(),
             params: f.params.clone(),
             calls: f.calls.clone(),
+            cells: f
+                .cells
+                .iter()
+                .map(|(c, at)| (c.clone(), [at.start, at.end]))
+                .collect(),
+            via: f.via.clone(),
         }
     }
 
-    fn back(&self, file: FileId, calls: usize) -> Option<Flow> {
+    fn back(&self, file: FileId, calls: usize, via: usize) -> Option<Flow> {
         let mut origins = OriginSet::EMPTY;
         let mut why = Vec::new();
         for (name, [s, e]) in &self.origins {
@@ -94,6 +143,13 @@ impl PersistentFlow {
             || self.params.windows(2).any(|w| w.first() >= w.get(1))
             || self.calls.windows(2).any(|w| w.first() >= w.get(1))
             || self.calls.iter().any(|c| *c as usize >= calls)
+            || self.via.windows(2).any(|w| w.first() >= w.get(1))
+            || self.via.iter().any(|c| *c as usize >= via)
+            || self
+                .cells
+                .windows(2)
+                .any(|w| w.first().map(|c| &c.0) >= w.get(1).map(|c| &c.0))
+            || self.cells.iter().any(|(_, [s, e])| s > e)
         {
             return None;
         }
@@ -102,6 +158,12 @@ impl PersistentFlow {
             why,
             params: self.params.clone(),
             calls: self.calls.clone(),
+            cells: self
+                .cells
+                .iter()
+                .map(|(c, [s, e])| (c.clone(), Span::new(file, *s, *e)))
+                .collect(),
+            via: self.via.clone(),
         })
     }
 }
@@ -110,6 +172,21 @@ fn module_of(graph: &ModuleGraph, key: &str) -> Option<ModuleId> {
     graph
         .ids()
         .find(|m| graph.key(*m).is_some_and(|k| k.to_string() == key))
+}
+
+/// A function of `module` by its durable name: a definition, or a closure (N50), which is in
+/// no namespace and is found by the name its maker gave it.
+fn function_named(res: &Resolution, module: ModuleId, name: &str) -> Option<FnId> {
+    res.definition(module, name).or_else(|| {
+        res.functions()
+            .iter()
+            .position(|d| d.module == module && d.closure.is_some() && d.name == name)
+            .map(FnId::from_index)
+    })
+}
+
+fn span_of(file: FileId, [s, e]: [u32; 2]) -> Option<Span> {
+    (s <= e).then(|| Span::new(file, s, e))
 }
 
 impl PersistentFacts {
@@ -141,9 +218,42 @@ impl PersistentFacts {
                         })
                     })
                     .collect::<Option<Vec<_>>>()?;
+                let makes = f
+                    .makes
+                    .iter()
+                    .map(|m| {
+                        let (module, function) = key_of(m.function)?;
+                        Some(PersistentMake {
+                            module,
+                            function,
+                            target: m.target.clone(),
+                            at: [m.at.start, m.at.end],
+                            captures: m.captures.iter().map(PersistentFlow::of).collect(),
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
                 Some(PersistentFunction {
                     name,
                     calls,
+                    stores: f
+                        .stores
+                        .iter()
+                        .map(|st| PersistentStore {
+                            cell: st.cell.clone(),
+                            at: [st.at.start, st.at.end],
+                            value: PersistentFlow::of(&st.value),
+                        })
+                        .collect(),
+                    indirect: f
+                        .indirect
+                        .iter()
+                        .map(|c| PersistentIndirect {
+                            target: c.target.clone(),
+                            at: [c.at.start, c.at.end],
+                            args: c.args.iter().map(PersistentFlow::of).collect(),
+                        })
+                        .collect(),
+                    makes,
                     result: PersistentFlow::of(&f.result),
                     sinks: f
                         .sinks
@@ -172,14 +282,9 @@ impl PersistentFacts {
         let file = graph.file(module)?;
         let mut functions = Vec::with_capacity(self.functions.len());
         for f in &self.functions {
-            // A closure (N50) is in no namespace: it is found by the name its maker gave it.
-            let function = res.definition(module, &f.name).or_else(|| {
-                res.functions()
-                    .iter()
-                    .position(|d| d.module == module && d.closure.is_some() && d.name == f.name)
-                    .map(FnId::from_index)
-            })?;
+            let function = function_named(res, module, &f.name)?;
             let n = f.calls.len();
+            let v = f.indirect.len();
             let calls = f
                 .calls
                 .iter()
@@ -196,7 +301,7 @@ impl PersistentFacts {
                         args: c
                             .args
                             .iter()
-                            .map(|a| a.back(file, n))
+                            .map(|a| a.back(file, n, v))
                             .collect::<Option<Vec<_>>>()?,
                         spawned: c.spawned,
                     })
@@ -212,7 +317,7 @@ impl PersistentFacts {
                     }
                     Some(SinkFact {
                         at: Span::new(file, a, b),
-                        path: s.path.back(file, n)?,
+                        path: s.path.back(file, n, v)?,
                         // An unknown class is no entry at all, never a path sink by default.
                         class: match &s.class {
                             None => SinkClass::Path,
@@ -221,11 +326,57 @@ impl PersistentFacts {
                     })
                 })
                 .collect::<Option<Vec<_>>>()?;
+            let stores = f
+                .stores
+                .iter()
+                .map(|st| {
+                    Some(StoreFact {
+                        cell: st.cell.clone(),
+                        at: span_of(file, st.at)?,
+                        value: st.value.back(file, n, v)?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let indirect = f
+                .indirect
+                .iter()
+                .map(|c| {
+                    Some(IndirectFact {
+                        target: c.target.clone(),
+                        at: span_of(file, c.at)?,
+                        args: c
+                            .args
+                            .iter()
+                            .map(|a| a.back(file, n, v))
+                            .collect::<Option<Vec<_>>>()?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let makes = f
+                .makes
+                .iter()
+                .map(|m| {
+                    let owner = module_of(graph, &m.module)?;
+                    Some(MakeFact {
+                        function: function_named(res, owner, &m.function)?,
+                        target: m.target.clone(),
+                        at: span_of(file, m.at)?,
+                        captures: m
+                            .captures
+                            .iter()
+                            .map(|a| a.back(file, n, v))
+                            .collect::<Option<Vec<_>>>()?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
             functions.push(FunctionFacts {
                 function,
                 calls,
-                result: f.result.back(file, n)?,
+                result: f.result.back(file, n, v)?,
                 sinks,
+                stores,
+                indirect,
+                makes,
             });
         }
         Some(ModuleFacts { functions })

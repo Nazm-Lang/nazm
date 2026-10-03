@@ -52,7 +52,11 @@ use crate::source::SourceFingerprint;
 ///
 /// `/3` since N77: an entry also carries the module's resolved unit (`nazm.resolved/1`),
 /// which a reader of a reused module's names needs. A `/2` entry has none and is a miss.
-pub const SCHEMA: &str = "nazm.check/3";
+///
+/// `/4` since N80: the provenance facts gain container cells, indirect calls and the
+/// function values a module makes. A `/3` entry has none, so it would read as a module that
+/// writes no container and makes no value — wrong, not merely incomplete — and is a miss.
+pub const SCHEMA: &str = "nazm.check/4";
 
 /// One dependency, as the artefact records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

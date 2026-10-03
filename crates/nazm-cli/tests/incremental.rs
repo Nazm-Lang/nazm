@@ -559,6 +559,69 @@ fn a_callees_provenance_reaches_a_caller_the_cache_did_not_check_again() {
 }
 
 #[test]
+fn a_container_written_in_a_module_the_cache_reused_still_reaches_its_reader() {
+    // N80: A reads a `Strs` into a path, and B is the only writer of any `Strs`. B's body
+    // decides what the cell holds; nothing B declares moves, so A is reused, and still told.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { let xs = names(io); write_file(strs_get(xs, 0), \"x\") }\n",
+    );
+    let from_args = "pub fn names(io: IoCap) -> Strs ! { io } { let xs = strs_new(); strs_push(xs, arg(1)); xs }\n";
+    write(dir.path(), "b.nz", from_args);
+    let first = check(dir.path(), "a.nz");
+    assert!(first.accepted, "{first:?}");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn names(io: IoCap) -> Strs ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"m\")); xs }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!((after.checked, after.reused), (1, 1 + PRELUDE), "{after:?}");
+    assert!(!after.accepted);
+    assert!(after.diagnostics[0].starts_with("N0372"), "{after:?}");
+    assert_eq!(meaning(&after), meaning(&cold(dir.path(), "a.nz")));
+    // Every module reused: the cells come from the entries' facts.
+    let again = check(dir.path(), "a.nz");
+    assert_eq!(again.reused, 2 + PRELUDE, "{again:?}");
+    assert_eq!(meaning(&again), meaning(&after));
+    write(dir.path(), "b.nz", from_args);
+    let back = check(dir.path(), "a.nz");
+    assert!(back.accepted, "{back:?}");
+}
+
+#[test]
+fn a_function_value_made_in_a_reused_module_is_still_a_candidate() {
+    // N80: B makes the only function value of its type; A calls through one. A changed body
+    // in B changes what A's indirect call returns, with A reused.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { let f = maker(); write_file(f(io), \"x\") }\n",
+    );
+    let local = "pub fn maker() -> fn(IoCap) -> Str ! { io } ! {} { fn(c: IoCap) -> Str ! { io } { \"out\" } }\n";
+    write(dir.path(), "b.nz", local);
+    let first = check(dir.path(), "a.nz");
+    assert!(first.accepted, "{first:?}");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn maker() -> fn(IoCap) -> Str ! { io } ! {} { fn(c: IoCap) -> Str ! { io } { read_file(\"m\") } }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!((after.checked, after.reused), (1, 1 + PRELUDE), "{after:?}");
+    assert!(!after.accepted, "{after:?}");
+    assert!(after.diagnostics[0].starts_with("N0372"), "{after:?}");
+    let again = check(dir.path(), "a.nz");
+    assert_eq!(again.reused, 2 + PRELUDE, "{again:?}");
+    assert_eq!(meaning(&again), meaning(&after));
+}
+
+#[test]
 fn a_helper_in_another_module_that_writes_to_its_parameter_carries_the_rule_across() {
     let dir = tempfile::tempdir().expect("tempdir");
     project(dir.path());
@@ -607,7 +670,7 @@ fn an_entry_keeps_the_modules_provenance_facts() {
         .map(|(_, a)| a)
         .find(|a| a.module == "b.nz")
         .expect("b's entry");
-    assert_eq!(b.schema, "nazm.check/3");
+    assert_eq!(b.schema, "nazm.check/4");
     let f = &b.provenance.functions[0];
     assert_eq!(f.name, "load");
     assert_eq!(f.result.origins.len(), 1);
@@ -877,7 +940,7 @@ fn a_damaged_entry_is_recomputed_rather_than_believed() {
         ("emptied", |_| String::new()),
         ("not json at all", |_| "nonsense".to_owned()),
         ("a schema from the future", |t| {
-            t.replace("nazm.check/3", "nazm.check/9")
+            t.replace("nazm.check/4", "nazm.check/9")
         }),
         ("an edited interface", |t| {
             t.replace(r#""ret":"Int""#, r#""ret":"Str""#)
@@ -1281,10 +1344,10 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        23,
+        24,
         "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42, N49, N50, N51, N52, N53, N54, N55, \
-         N62, N66, N76, N78 and N79 each changed what the checker accepts, so the epoch moved \
-         twenty-two times"
+         N62, N66, N76, N78, N79 and N80 each changed what the checker accepts, so the epoch \
+         moved twenty-three times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/8");
 }
@@ -1668,6 +1731,6 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     // and N37 for authority, and N38 for provenance, and N42 for foreign functions, and N49
     // for escapes and the syntax beside them, N50 for function values, N51 for effect
     // parameters, and N52 for declassification, N53–N55 for channels, the clock and FFI v2,
-    // N62 for device registers, N66 for `ints_sum`, N76 for Unicode escapes, N78 for traits and N79 for attenuation.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 23);
+    // N62 for device registers, N66 for `ints_sum`, N76 for Unicode escapes, N78 for traits, N79 for attenuation and N80 for provenance v3.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 24);
 }
