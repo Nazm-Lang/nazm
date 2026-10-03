@@ -81,6 +81,11 @@ pub enum ReferenceTarget {
     Variant(VariantRef),
     Field(FieldRef),
     PayloadField(PayloadRef),
+    /// A trait, by its declaration (N78).
+    Trait(crate::traits::TraitId),
+    /// A trait's method, by its trait and position: its declaration in the trait, and every
+    /// call through a bound. A call on a concrete type is a use of its impl's function.
+    TraitMethod(crate::traits::TraitId, u32),
 }
 
 impl ReferenceTarget {
@@ -95,6 +100,8 @@ impl ReferenceTarget {
             Self::Variant(_) => "variant",
             Self::Field(_) => "field",
             Self::PayloadField(_) => "payload field",
+            Self::Trait(_) => "trait",
+            Self::TraitMethod(..) => "trait method",
         }
     }
 }
@@ -138,6 +145,11 @@ impl ReferenceTarget {
             Self::Field(_) => Coverage::Complete,
             // Its declaration, and the label of every construction and pattern field.
             Self::PayloadField(_) => Coverage::Complete,
+            // Named in bounds, impl headers and qualified calls, all recorded — but each impl
+            // also writes the trait's methods by name, and rename does not edit those yet.
+            Self::Trait(_) | Self::TraitMethod(..) => {
+                Coverage::Incomplete("a trait's methods are written again in every impl of it")
+            }
         }
     }
 }
@@ -214,6 +226,21 @@ impl ReferenceIndex {
                     );
                 }
             }
+        }
+        // Traits (N78): each declaration and its methods'; every mention; every call
+        // through a bound.
+        for (t, def) in res.traits().iter() {
+            index.declare(ReferenceTarget::Trait(t), def.name_span);
+            for (m, method) in def.methods.iter().enumerate() {
+                let m = u32::try_from(m).unwrap_or(u32::MAX);
+                index.declare(ReferenceTarget::TraitMethod(t, m), method.name_span);
+            }
+        }
+        for (at, t) in res.traits().mentions() {
+            index.used(at, ReferenceTarget::Trait(t));
+        }
+        for (at, c) in res.traits().trait_calls() {
+            index.used(at, ReferenceTarget::TraitMethod(c.trait_id, c.method));
         }
         res.each_use(|span, target| index.used(span, definition_of(res, target)));
         for entry in index.entries.values_mut() {
@@ -338,7 +365,9 @@ fn definition_of(res: &Resolution, target: ReferenceTarget) -> ReferenceTarget {
         }),
         // A closure's copy of a captured binding is that binding (N50).
         ReferenceTarget::Local(l) => ReferenceTarget::Local(res.binding_of(l)),
-        other @ ReferenceTarget::Function(_) => other,
+        other @ (ReferenceTarget::Function(_)
+        | ReferenceTarget::Trait(_)
+        | ReferenceTarget::TraitMethod(..)) => other,
     }
 }
 

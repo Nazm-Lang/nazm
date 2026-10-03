@@ -22,7 +22,7 @@
     "schema": { "const": "nazm.references/1" },
     "item": { "type": "string", "description": "The entity's item, `module::kind name`." },
     "member": { "type": ["string", "null"] },
-    "kind": { "enum": ["function", "record", "enum", "variant", "field", "payload field"] },
+    "kind": { "enum": ["function", "record", "enum", "variant", "field", "payload field", "trait", "trait method"] },
     "declaration": { "oneOf": [{ "$ref": "#/$defs/at" }, { "type": "null" }], "description": "Where its name is declared, or null when no module of the compilation declares it in source." },
     "uses": { "type": "array", "items": { "$ref": "#/$defs/at" }, "description": "Every other occurrence, in module order then by range." },
     "checked": { "type": "integer", "minimum": 0, "description": "Modules whose bodies were checked this run." },

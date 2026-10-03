@@ -211,8 +211,37 @@ fn durable(
     let types = res.types();
     let key_of = |m: ModuleId| graph.key(m).ok_or(Unwritable::TargetWithoutKey);
     let item = |owner: Option<String>| owner.ok_or(Unwritable::TargetWithoutKey);
+    let trait_key = |t: nazm_sema::traits::TraitId| -> Result<(String, &nazm_sema::traits::TraitDef), Unwritable> {
+        let d = res.traits().get(t).ok_or(Unwritable::TargetWithoutKey)?;
+        let module = key_of(d.module)?;
+        Ok((
+            nazm_sema::DefKey::new(module.clone(), nazm_sema::DefKind::Trait, d.name.clone())
+                .to_string(),
+            d,
+        ))
+    };
     Ok(Some(match target {
         ReferenceTarget::Local(_) => return Ok(None),
+        // N78: a trait, and a trait's method as its trait's key and its name.
+        ReferenceTarget::Trait(t) => DurableTarget {
+            item: trait_key(t)?.0,
+            member: None,
+            kind: "trait".to_owned(),
+        },
+        ReferenceTarget::TraitMethod(t, m) => {
+            let (item, d) = trait_key(t)?;
+            DurableTarget {
+                item,
+                member: Some(
+                    d.methods
+                        .get(m as usize)
+                        .ok_or(Unwritable::TargetWithoutKey)?
+                        .name
+                        .clone(),
+                ),
+                kind: "trait method".to_owned(),
+            }
+        }
         ReferenceTarget::Function(id) => {
             let f = res.function(id).ok_or(Unwritable::TargetWithoutKey)?;
             let k = res.def_key(id, key_of(f.module)?).map(|k| k.to_string());

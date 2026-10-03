@@ -184,7 +184,7 @@ fn capabilities() -> ServerCapabilities {
 }
 
 /// The token types, in the legend's order: a token's type is its index here.
-const TOKEN_TYPES: [&str; 9] = [
+const TOKEN_TYPES: [&str; 11] = [
     "type",
     "struct",
     "enum",
@@ -194,6 +194,8 @@ const TOKEN_TYPES: [&str; 9] = [
     "property",
     "enumMember",
     "function",
+    "interface",
+    "method",
 ];
 
 /// The token modifiers, in the legend's order: modifier `i` is bit `1 << i`.
@@ -226,6 +228,8 @@ const fn token_type(class: SemanticClass) -> (u32, bool) {
         SemanticClass::Variant => (7, false),
         SemanticClass::Function => (8, false),
         SemanticClass::Intrinsic => (8, true),
+        SemanticClass::Trait => (9, false),
+        SemanticClass::TraitMethod => (10, false),
     }
 }
 
@@ -1531,7 +1535,8 @@ mod tests {
             l,
             serde_json::json!({
                 "tokenTypes": ["type", "struct", "enum", "typeParameter", "parameter",
-                               "variable", "property", "enumMember", "function"],
+                               "variable", "property", "enumMember", "function",
+                               "interface", "method"],
                 "tokenModifiers": ["declaration", "defaultLibrary"]
             })
         );
@@ -1551,6 +1556,8 @@ mod tests {
         assert_eq!(named(C::PayloadField), ("property", false));
         assert_eq!(named(C::TypeParameter), ("typeParameter", false));
         assert_eq!(named(C::BuiltinType), ("type", true));
+        assert_eq!(named(C::Trait), ("interface", false));
+        assert_eq!(named(C::TraitMethod), ("method", false));
         assert_eq!(
             TOKEN_MODIFIERS[DECLARATION.trailing_zeros() as usize],
             "declaration"

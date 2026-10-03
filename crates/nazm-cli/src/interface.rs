@@ -78,6 +78,8 @@ pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> Exit
             nazm_core::resolve_type_fields(u, &deps_of(u), &mut res, &mut errors);
         }
         nazm_core::validate_type_layouts(&mut res, &mut errors);
+        // Every trait's methods (N78), as a compilation declares them before its functions.
+        nazm_core::declare_trait_methods(&units, &types, &mut res, &mut errors);
         let root = units
             .iter()
             .find(|u| u.module() == ModuleId::ROOT)

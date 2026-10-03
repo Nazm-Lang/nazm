@@ -14,7 +14,7 @@
       "properties": {
         "item": { "type": "string", "description": "The defining item's durable key, `module::kind name`." },
         "member": { "type": ["string", "null"], "description": "A variant's, field's or payload field's name (`Variant.field` for a payload field); null for the item itself." },
-        "kind": { "enum": ["function", "record", "enum", "variant", "field", "payload field"] }
+        "kind": { "enum": ["function", "record", "enum", "variant", "field", "payload field", "trait", "trait method"] }
       }
     },
     "range": {

@@ -309,6 +309,11 @@ fn expr_blocks<'a>(e: &'a Expr, visit: &mut dyn FnMut(&'a Block)) {
                 expr_blocks(a, visit);
             }
         }
+        ExprKind::CallTrait { args, .. } => {
+            for a in args {
+                expr_blocks(a, visit);
+            }
+        }
         ExprKind::Record { fields, .. } | ExprKind::Variant { fields, .. } => {
             for i in fields {
                 expr_blocks(&i.value, visit);
