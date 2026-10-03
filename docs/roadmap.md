@@ -398,6 +398,15 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N80 — provenance v3 — **complete as scoped, 2026-10-03; area 7 stays PARTIAL**
+
+`architecture.md` §7.81 first. Containers by type-keyed cell, calls through values and bounds by
+type-based targets, closures' parameters and captures received, fields and variants within a body,
+one policy engine with `checked-paths` in `cyber`, and a chain per origin at every sink
+(`nazm.flow/2`). Epoch 24, `nazm.check/4`. No program in the repository changed verdict. Not here:
+implicit flow, per-handle precision, labels a program writes. Next: N81, LIR and the backend
+contract v2.
+
 ### N79 — effects and capabilities v3 — **complete as scoped, 2026-10-03; areas 5 and 6 stay PARTIAL**
 
 `architecture.md` §7.80 first, amended as built. The ambient bridge became a recorded contract: each

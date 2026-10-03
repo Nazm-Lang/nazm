@@ -317,6 +317,14 @@ library, count the generic standard functions that take a bound against those th
 function argument for the same job. If bounds are not the common shape, the trait system is
 ceremony and should not grow.
 
+**N80 (2026-10-03): is type-keyed precision enough?** Containers are followed by a cell per type,
+not per handle, which is sound without alias analysis and coarse where two containers share a type.
+*Measure:* across the corpus, count `N0372` and profile refusals whose trace crosses a cell written
+by a different function than the one read. *Falsifier for staying here:* if real programs are
+refused through a cell another part of the program polluted — a `Strs` of file lines making every
+`Strs` path suspect — the next step is allocation-site cells, which need MIR's places. None was
+found in the repository at N80.
+
 **N79 (2026-10-03): is the ambient bridge still load-bearing?** The bridge was kept as the default
 and made visible rather than deleted, because removing it would refuse most of the repository's
 undeclared functions, the compiler written in Nazm among them. The open question is whether that

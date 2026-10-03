@@ -2648,6 +2648,29 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### Provenance v3 — N80, measured 2026-10-03
+
+**Hypothesis:** container cells, indirect targets and local shapes cost the checker a bounded,
+measurable amount, and nothing at runtime. **Changed path:** `nazm check --no-cache`, whose
+provenance walk and solve changed; nothing below the checker did. **Workload:** the two largest
+compiler sources and one small example, checked cold. **Method:** release builds of N79's head
+(`38d8755`, in a worktree) and of N80, the two run interleaved in one Python loop, 21 to 31 runs
+each, the median with its minimum and maximum. Apple M1 Pro, macOS 27.2, rustc 1.98.1.
+
+| File | N79 | N80 | Ratio |
+| --- | ---: | ---: | ---: |
+| `compiler/emit.nz` | 71.1 ms (69.7–83.5) | 80.0 ms (78.3–83.1) | 1.125 |
+| `compiler/analyse.nz` | 41.6 ms (40.4–43.0) | 45.2 ms (43.9–46.9) | 1.085 |
+| `examples/pipeline.nz` | 5.5 ms (5.0–7.7) | 5.5 ms (5.1–7.0) | 0.99 |
+
+A regression of about 9 ms on the largest file, accepted and recorded. Instrumented, the solve on
+`emit.nz` takes four rounds as cells grow, about 7.7 ms in all. Three changes brought it down from a
+first build at 1.19×: an index of call sites per body (a container call's cell was a linear search),
+receive edges evaluated once per round, and later rounds starting from the previous one's summaries
+and re-solving only functions that read a grown cell. Further work would be incremental values and
+receives inside a round. Peak memory was not measured. The runtime is unchanged: provenance is
+erased before Core IR, and `flow_v3.rs` runs an affected program interpreted and natively.
+
 ## Mutation harness v2 — what a mutant costs (N12.2, 2026-09-24/25)
 
 Tooling, not language performance, recorded here because this is where measured cost lives.
