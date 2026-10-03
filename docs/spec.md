@@ -3524,6 +3524,9 @@ facts across modules, the separation from effects and authority, and one restric
 (*Provenance: where a value came from*). Still open:
 
 - Field-, element- and alias-precise tracking, instead of whole values and `unknown` shared storage.
+  *N80 (constitution, `architecture.md` §7.81)*: containers by type-keyed cells, indirect calls by
+  type-based targets, fields and variants within a body; per-handle and cross-call precision stay
+  open.
 
 - Implicit flows: is branching on a `Secret` a leak? Full non-interference is usually
   unusable in practice; what is the chosen approximation, and what does it miss?
