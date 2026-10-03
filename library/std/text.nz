@@ -140,3 +140,129 @@ pub fn text_parse_int(s: Str) -> Result[Int, Str] ! {} {
         }
     }
 }
+
+/// `s` without its leading ASCII whitespace.
+pub fn text_trim_start(s: Str) -> Str ! {} {
+    let m = str_len(s);
+    let mut a = 0;
+    let mut more = true;
+    while more {
+        if a == m { more = false; } else { if text_is_space(str_byte(s, a)) { a = a + 1; } else { more = false; } }
+    }
+    str_slice(s, a, m)
+}
+
+/// `s` without its trailing ASCII whitespace.
+pub fn text_trim_end(s: Str) -> Str ! {} {
+    let mut b = str_len(s);
+    let mut more = true;
+    while more {
+        if b == 0 { more = false; } else { if text_is_space(str_byte(s, b - 1)) { b = b - 1; } else { more = false; } }
+    }
+    str_slice(s, 0, b)
+}
+
+/// Whether the byte `b` is an ASCII digit, `0` to `9`.
+pub fn text_is_digit(b: Int) -> Bool ! {} {
+    if b < 48 { false } else { b <= 57 }
+}
+
+/// Whether the byte `b` is an ASCII letter.
+pub fn text_is_alpha(b: Int) -> Bool ! {} {
+    if b < 65 { false } else { if b <= 90 { true } else { if b < 97 { false } else { b <= 122 } } }
+}
+
+/// `s` with every ASCII lower-case letter made upper-case; every other byte unchanged.
+pub fn text_to_upper(s: Str) -> Str ! {} {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let up = if b < 97 { b } else { if b > 122 { b } else { b - 32 } };
+        strs_push(parts, str_from_byte(up));
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+/// `s` with every ASCII upper-case letter made lower-case; every other byte unchanged.
+pub fn text_to_lower(s: Str) -> Str ! {} {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let down = if b < 65 { b } else { if b > 90 { b } else { b + 32 } };
+        strs_push(parts, str_from_byte(down));
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+/// `s` with every occurrence of `from` replaced by `to`, left to right, without overlap. `from`
+/// must not be `""`; if it is, `s` is returned unchanged.
+pub fn text_replace(s: Str, from: Str, to: Str) -> Str ! {} {
+    if str_len(from) == 0 { s } else { str_join(text_split(s, from), to) }
+}
+
+/// How many times `needle` occurs in `s`, without overlap. `""` occurs no times.
+pub fn text_count(s: Str, needle: Str) -> Int ! {} {
+    if str_len(needle) == 0 { 0 } else { strs_len(text_split(s, needle)) - 1 }
+}
+
+/// `s` with `fill`'s first byte added in front until it is `width` bytes long; unchanged when it
+/// is already as long, or `fill` is `""`.
+pub fn text_pad_left(s: Str, width: Int, fill: Str) -> Str ! {} {
+    let short = width - str_len(s);
+    if short <= 0 { s } else { if str_len(fill) == 0 { s } else { str_concat(text_repeat(str_slice(fill, 0, 1), short), s) } }
+}
+
+/// `s` with `fill`'s first byte added after it until it is `width` bytes long; unchanged when it
+/// is already as long, or `fill` is `""`.
+pub fn text_pad_right(s: Str, width: Int, fill: Str) -> Str ! {} {
+    let short = width - str_len(s);
+    if short <= 0 { s } else { if str_len(fill) == 0 { s } else { str_concat(s, text_repeat(str_slice(fill, 0, 1), short)) } }
+}
+
+/// The lines of `s`: split at each `\n`, a `\r` before it removed, and no empty last line for a
+/// final newline. `""` has no lines.
+pub fn text_lines(s: Str) -> Strs ! {} {
+    let out = strs_new();
+    if str_len(s) > 0 {
+        let raw = text_split(s, str_from_byte(10));
+        let mut n = strs_len(raw);
+        if text_ends_with(s, str_from_byte(10)) { n = n - 1; }
+        let mut i = 0;
+        while i < n {
+            let line = strs_get(raw, i);
+            if text_ends_with(line, str_from_byte(13)) {
+                strs_push(out, str_slice(line, 0, str_len(line) - 1));
+            } else {
+                strs_push(out, line);
+            }
+            i = i + 1;
+        }
+    }
+    out
+}
+
+/// `-1`, `0` or `1` as `a` sorts before, with or after `b`, byte by byte; a prefix sorts first.
+pub fn text_compare(a: Str, b: Str) -> Int ! {} {
+    let n = str_len(a);
+    let m = str_len(b);
+    let mut i = 0;
+    let mut r = 0;
+    while r == 0 {
+        if i == n {
+            r = if i == m { 2 } else { 0 - 1 };
+        } else {
+            if i == m {
+                r = 1;
+            } else {
+                let x = str_byte(a, i);
+                let y = str_byte(b, i);
+                if x < y { r = 0 - 1; } else { if x > y { r = 1; } else { i = i + 1; } }
+            }
+        }
+    }
+    if r == 2 { 0 } else { r }
+}

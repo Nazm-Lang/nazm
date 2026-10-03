@@ -1,0 +1,448 @@
+// `@std/json`: JSON text, parsed into a document and encoded back.
+//
+// Imported with `use "@std/json";`. A value cannot own itself through a `Vec` (`N0359`), so a
+// document is an arena: every value is a node in one `Vec`, and an array's or an object's children
+// are a run of node indices in `kids`. A node is named by its index. Numbers are integers, as
+// Nazm's are: a fraction or an exponent is refused, by name. Parsing never traps: malformed text is
+// an `Err` naming the byte offset where it went wrong.
+
+/// One value: its kind, and what that kind holds. An array's elements, or an object's keys and
+/// values alternately, are `count` entries of `kids` from `first`.
+pub struct JsonNode {
+    kind: Int,
+    num: Int,
+    text: Str,
+    first: Int,
+    count: Int,
+}
+
+/// A document: its nodes, the runs of children they point into, and which node is the root.
+pub struct JsonDoc {
+    nodes: Vec[JsonNode],
+    kids: Ints,
+    root: Int,
+}
+
+// Kinds, by number.
+fn k_null() -> Int ! {} { 0 }
+fn k_false() -> Int ! {} { 1 }
+fn k_true() -> Int ! {} { 2 }
+fn k_num() -> Int ! {} { 3 }
+fn k_str() -> Int ! {} { 4 }
+fn k_arr() -> Int ! {} { 5 }
+fn k_obj() -> Int ! {} { 6 }
+
+/// An empty document whose root is a `null` node, for building one.
+pub fn json_new() -> JsonDoc ! {} {
+    let nodes = vec_new[JsonNode]();
+    vec_push(nodes, JsonNode(kind: k_null(), num: 0, text: "", first: 0, count: 0));
+    JsonDoc(nodes: nodes, kids: ints_new(), root: 0)
+}
+
+/// `doc`, with `node` as its root.
+pub fn json_with_root(doc: JsonDoc, node: Int) -> JsonDoc ! {} {
+    JsonDoc(nodes: doc.nodes, kids: doc.kids, root: node)
+}
+
+/// The root node of `doc`.
+pub fn json_root(doc: JsonDoc) -> Int ! {} {
+    doc.root
+}
+
+fn add(doc: JsonDoc, n: JsonNode) -> Int ! {} {
+    vec_push(doc.nodes, n);
+    vec_len(doc.nodes) - 1
+}
+
+/// A new `null` node in `doc`.
+pub fn json_add_null(doc: JsonDoc) -> Int ! {} {
+    add(doc, JsonNode(kind: k_null(), num: 0, text: "", first: 0, count: 0))
+}
+
+/// A new `true` or `false` node in `doc`.
+pub fn json_add_bool(doc: JsonDoc, b: Bool) -> Int ! {} {
+    add(doc, JsonNode(kind: if b { k_true() } else { k_false() }, num: 0, text: "", first: 0, count: 0))
+}
+
+/// A new number node in `doc`.
+pub fn json_add_int(doc: JsonDoc, n: Int) -> Int ! {} {
+    add(doc, JsonNode(kind: k_num(), num: n, text: "", first: 0, count: 0))
+}
+
+/// A new string node in `doc`.
+pub fn json_add_str(doc: JsonDoc, s: Str) -> Int ! {} {
+    add(doc, JsonNode(kind: k_str(), num: 0, text: s, first: 0, count: 0))
+}
+
+/// A new array node in `doc` whose elements are the nodes `items`, in order.
+pub fn json_add_array(doc: JsonDoc, items: Ints) -> Int ! {} {
+    let first = ints_len(doc.kids);
+    let mut i = 0;
+    while i < ints_len(items) { ints_push(doc.kids, ints_get(items, i)); i = i + 1; }
+    add(doc, JsonNode(kind: k_arr(), num: 0, text: "", first: first, count: ints_len(items)))
+}
+
+/// A new object node in `doc`: each of `keys` with the node at the same index of `values`. The
+/// shorter of the two decides how many members it has.
+pub fn json_add_object(doc: JsonDoc, keys: Strs, values: Ints) -> Int ! {} {
+    let n = if strs_len(keys) < ints_len(values) { strs_len(keys) } else { ints_len(values) };
+    let key_nodes = ints_new();
+    let mut i = 0;
+    while i < n { ints_push(key_nodes, json_add_str(doc, strs_get(keys, i))); i = i + 1; }
+    let first = ints_len(doc.kids);
+    i = 0;
+    while i < n { ints_push(doc.kids, ints_get(key_nodes, i)); ints_push(doc.kids, ints_get(values, i)); i = i + 1; }
+    add(doc, JsonNode(kind: k_obj(), num: 0, text: "", first: first, count: n))
+}
+
+/// What `node` is: `null`, `bool`, `number`, `string`, `array` or `object`; `""` for no node.
+pub fn json_kind(doc: JsonDoc, node: Int) -> Str ! {} {
+    if node < 0 || node >= vec_len(doc.nodes) { "" } else {
+        let k = vec_get(doc.nodes, node).kind;
+        if k == k_null() { "null" } else { if k == k_false() || k == k_true() { "bool" } else {
+            if k == k_num() { "number" } else { if k == k_str() { "string" } else {
+                if k == k_arr() { "array" } else { "object" } } } } }
+    }
+}
+
+/// How many elements an array has, or members an object has; `0` for anything else.
+pub fn json_len(doc: JsonDoc, node: Int) -> Int ! {} {
+    let kind = json_kind(doc, node);
+    if kind == "array" || kind == "object" { vec_get(doc.nodes, node).count } else { 0 }
+}
+
+/// The node of an array's element `i`, or `None`.
+pub fn json_at(doc: JsonDoc, node: Int, i: Int) -> Option[Int] ! {} {
+    if json_kind(doc, node) != "array" || i < 0 || i >= json_len(doc, node) { Option[Int].None() } else {
+        Option[Int].Some(value: ints_get(doc.kids, vec_get(doc.nodes, node).first + i))
+    }
+}
+
+/// The key of an object's member `i`, or `None`.
+pub fn json_key_at(doc: JsonDoc, node: Int, i: Int) -> Option[Str] ! {} {
+    if json_kind(doc, node) != "object" || i < 0 || i >= json_len(doc, node) { Option[Str].None() } else {
+        let k = ints_get(doc.kids, vec_get(doc.nodes, node).first + 2 * i);
+        Option[Str].Some(value: vec_get(doc.nodes, k).text)
+    }
+}
+
+/// The node of an object's member `i`'s value, or `None`.
+pub fn json_value_at(doc: JsonDoc, node: Int, i: Int) -> Option[Int] ! {} {
+    if json_kind(doc, node) != "object" || i < 0 || i >= json_len(doc, node) { Option[Int].None() } else {
+        Option[Int].Some(value: ints_get(doc.kids, vec_get(doc.nodes, node).first + 2 * i + 1))
+    }
+}
+
+/// The node of the value an object holds for `key` — the last, if it holds it more than once —
+/// or `None`.
+pub fn json_get(doc: JsonDoc, node: Int, key: Str) -> Option[Int] ! {} {
+    let mut found = 0 - 1;
+    let mut i = 0;
+    while i < json_len(doc, node) {
+        let hit = match json_key_at(doc, node, i) {
+            Option.Some(value: k) => k == key,
+            Option.None() => false,
+        };
+        if hit { found = i; }
+        i = i + 1;
+    }
+    if found < 0 { Option[Int].None() } else { json_value_at(doc, node, found) }
+}
+
+/// A number node's value, or `None`.
+pub fn json_int(doc: JsonDoc, node: Int) -> Option[Int] ! {} {
+    if json_kind(doc, node) == "number" { Option[Int].Some(value: vec_get(doc.nodes, node).num) } else { Option[Int].None() }
+}
+
+/// A string node's value, or `None`.
+pub fn json_str(doc: JsonDoc, node: Int) -> Option[Str] ! {} {
+    if json_kind(doc, node) == "string" { Option[Str].Some(value: vec_get(doc.nodes, node).text) } else { Option[Str].None() }
+}
+
+/// A boolean node's value, or `None`.
+pub fn json_bool(doc: JsonDoc, node: Int) -> Option[Bool] ! {} {
+    if json_kind(doc, node) == "bool" { Option[Bool].Some(value: vec_get(doc.nodes, node).kind == k_true()) } else { Option[Bool].None() }
+}
+
+// --- encoding ---------------------------------------------------------------------------------
+
+fn hex_digit(d: Int) -> Str ! {} {
+    str_slice("0123456789abcdef", d, d + 1)
+}
+
+/// `s` as a JSON string literal, quotes included: `"` and `\` escaped, and every control byte
+/// as `\n`, `\r`, `\t` or `\u00XX`.
+pub fn json_quote(s: Str) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, "\"");
+    let mut start = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let esc = if b == 34 { "\\\"" } else { if b == 92 { "\\\\" } else { if b == 10 { "\\n" } else {
+            if b == 13 { "\\r" } else { if b == 9 { "\\t" } else {
+                if b < 32 { str_concat(str_concat("\\u00", hex_digit(b / 16)), hex_digit(b % 16)) } else { "" } } } } } };
+        if str_len(esc) > 0 {
+            strs_push(parts, str_slice(s, start, i));
+            strs_push(parts, esc);
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(parts, str_slice(s, start, str_len(s)));
+    strs_push(parts, "\"");
+    str_join(parts, "")
+}
+
+/// The node `node` of `doc` as compact JSON text: no spaces, members in the order they were
+/// built or parsed.
+pub fn json_encode_node(doc: JsonDoc, node: Int) -> Str ! {} {
+    let kind = json_kind(doc, node);
+    if kind == "null" || kind == "" { "null" } else {
+        if kind == "bool" { if vec_get(doc.nodes, node).kind == k_true() { "true" } else { "false" } } else {
+            if kind == "number" { int_to_str(vec_get(doc.nodes, node).num) } else {
+                if kind == "string" { json_quote(vec_get(doc.nodes, node).text) } else {
+                    let parts = strs_new();
+                    let n = json_len(doc, node);
+                    let mut i = 0;
+                    while i < n {
+                        if kind == "array" {
+                            let e = match json_at(doc, node, i) { Option.Some(value: e) => e, Option.None() => 0 - 1 };
+                            strs_push(parts, json_encode_node(doc, e));
+                        } else {
+                            let k = match json_key_at(doc, node, i) { Option.Some(value: k) => k, Option.None() => "" };
+                            let v = match json_value_at(doc, node, i) { Option.Some(value: v) => v, Option.None() => 0 - 1 };
+                            strs_push(parts, str_concat(str_concat(json_quote(k), ":"), json_encode_node(doc, v)));
+                        }
+                        i = i + 1;
+                    }
+                    if kind == "array" { str_concat(str_concat("[", str_join(parts, ",")), "]") } else {
+                        str_concat(str_concat("{", str_join(parts, ",")), "}")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `doc`'s root as compact JSON text.
+pub fn json_encode(doc: JsonDoc) -> Str ! {} {
+    json_encode_node(doc, doc.root)
+}
+
+// --- parsing ----------------------------------------------------------------------------------
+
+// The parser's state: the text, where it is, and the first error, if any. Shared through the
+// handles, so every function sees one position.
+struct Parser {
+    text: Str,
+    pos: Ints,
+    error: Strs,
+}
+
+fn at(p: Parser) -> Int ! {} { ints_get(p.pos, 0) }
+fn advance(p: Parser, n: Int) -> Int ! {} { ints_set(p.pos, 0, at(p) + n) }
+fn failed(p: Parser) -> Bool ! {} { strs_len(p.error) > 0 }
+
+fn fail(p: Parser, what: Str) -> Int ! {} {
+    if !failed(p) {
+        strs_push(p.error, str_concat(str_concat(what, " at byte "), int_to_str(at(p))));
+    }
+    0 - 1
+}
+
+fn peek(p: Parser) -> Int ! {} {
+    if at(p) < str_len(p.text) { str_byte(p.text, at(p)) } else { 0 - 1 }
+}
+
+fn skip_space(p: Parser) -> Int ! {} {
+    let mut more = true;
+    while more {
+        let b = peek(p);
+        if b == 32 || b == 9 || b == 10 || b == 13 { let n = advance(p, 1); } else { more = false; }
+    }
+    0
+}
+
+fn expect_word(p: Parser, word: Str) -> Bool ! {} {
+    let n = str_len(word);
+    if at(p) + n <= str_len(p.text) && str_slice(p.text, at(p), at(p) + n) == word {
+        let moved = advance(p, n);
+        true
+    } else {
+        let f = fail(p, str_concat("expected ", word));
+        false
+    }
+}
+
+fn hex_value(b: Int) -> Int ! {} {
+    if b >= 48 && b <= 57 { b - 48 } else { if b >= 97 && b <= 102 { b - 87 } else { if b >= 65 && b <= 70 { b - 55 } else { 0 - 1 } } }
+}
+
+// The UTF-8 bytes of the code point `c`.
+fn utf8(c: Int) -> Str ! {} {
+    if c < 128 { str_from_byte(c) } else {
+        if c < 2048 { str_concat(str_from_byte(192 + c / 64), str_from_byte(128 + c % 64)) } else {
+            str_concat(str_concat(str_from_byte(224 + c / 4096), str_from_byte(128 + (c / 64) % 64)), str_from_byte(128 + c % 64))
+        }
+    }
+}
+
+fn parse_string(p: Parser) -> Str ! {} {
+    let open = advance(p, 1);
+    let parts = strs_new();
+    let mut start = at(p);
+    let mut done = false;
+    while !done {
+        let b = peek(p);
+        if b < 0 { let f = fail(p, "unterminated string"); done = true; } else {
+            if b == 34 {
+                strs_push(parts, str_slice(p.text, start, at(p)));
+                let close = advance(p, 1);
+                done = true;
+            } else {
+                if b == 92 {
+                    strs_push(parts, str_slice(p.text, start, at(p)));
+                    let e = if at(p) + 1 < str_len(p.text) { str_byte(p.text, at(p) + 1) } else { 0 - 1 };
+                    let simple = if e == 34 { "\"" } else { if e == 92 { "\\" } else { if e == 47 { "/" } else {
+                        if e == 98 { str_from_byte(8) } else { if e == 102 { str_from_byte(12) } else {
+                            if e == 110 { str_from_byte(10) } else { if e == 114 { str_from_byte(13) } else {
+                                if e == 116 { str_from_byte(9) } else { "" } } } } } } } };
+                    if str_len(simple) > 0 {
+                        strs_push(parts, simple);
+                        let moved = advance(p, 2);
+                    } else {
+                        if e == 117 && at(p) + 6 <= str_len(p.text) {
+                            let mut code = 0;
+                            let mut k = 0;
+                            while k < 4 {
+                                let h = hex_value(str_byte(p.text, at(p) + 2 + k));
+                                if h < 0 { code = 0 - 1; k = 4; } else { code = code * 16 + h; k = k + 1; }
+                            }
+                            if code < 0 { let f = fail(p, "bad \\u escape"); done = true; } else {
+                                strs_push(parts, utf8(code));
+                                let moved = advance(p, 6);
+                            }
+                        } else {
+                            let f = fail(p, "bad escape"); done = true;
+                        }
+                    }
+                    start = at(p);
+                } else {
+                    if b < 32 { let f = fail(p, "control byte in a string"); done = true; } else { let moved = advance(p, 1); }
+                }
+            }
+        }
+    }
+    str_join(parts, "")
+}
+
+fn parse_number(p: Parser) -> Int ! {} {
+    let start = at(p);
+    if peek(p) == 45 { let m = advance(p, 1); }
+    let digits = at(p);
+    while peek(p) >= 48 && peek(p) <= 57 { let m = advance(p, 1); }
+    if at(p) == digits { fail(p, "expected a digit") } else {
+        if peek(p) == 46 || peek(p) == 101 || peek(p) == 69 {
+            fail(p, "a number with a fraction or exponent is not supported")
+        } else {
+            let text = str_slice(p.text, start, at(p));
+            let body = if str_byte(text, 0) == 45 { str_slice(text, 1, str_len(text)) } else { text };
+            if str_len(body) > 1 && str_byte(body, 0) == 48 { fail(p, "a number with a leading zero") } else {
+                // Parsed as a negative accumulator, whose range is one larger, so `Int`'s minimum parses.
+                let mut acc = 0;
+                let mut i = 0;
+                let mut ok = true;
+                let limit = 0 - 922337203685477580;
+                while ok && i < str_len(body) {
+                    let d = str_byte(body, i) - 48;
+                    if acc < limit || (acc == limit && d > 8) { ok = false; } else { acc = acc * 10 - d; i = i + 1; }
+                }
+                if !ok { fail(p, "a number outside Int's range") } else {
+                    if str_byte(text, 0) == 45 { acc } else {
+                        if acc == limit * 10 - 8 { fail(p, "a number outside Int's range") } else { 0 - acc }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn parse_value(p: Parser, doc: JsonDoc, depth: Int) -> Int ! {} {
+    let s = skip_space(p);
+    if depth > 256 { fail(p, "nesting deeper than 256") } else {
+        let b = peek(p);
+        if b == 110 { if expect_word(p, "null") { json_add_null(doc) } else { 0 - 1 } } else {
+        if b == 116 { if expect_word(p, "true") { json_add_bool(doc, true) } else { 0 - 1 } } else {
+        if b == 102 { if expect_word(p, "false") { json_add_bool(doc, false) } else { 0 - 1 } } else {
+        if b == 34 { let s2 = parse_string(p); if failed(p) { 0 - 1 } else { json_add_str(doc, s2) } } else {
+        if b == 45 || (b >= 48 && b <= 57) { let n = parse_number(p); if failed(p) { 0 - 1 } else { json_add_int(doc, n) } } else {
+        if b == 91 { parse_array(p, doc, depth) } else {
+        if b == 123 { parse_object(p, doc, depth) } else {
+        if b < 0 { fail(p, "unexpected end") } else { fail(p, "unexpected byte") } } } } } } } }
+    }
+}
+
+fn parse_array(p: Parser, doc: JsonDoc, depth: Int) -> Int ! {} {
+    let open = advance(p, 1);
+    let items = ints_new();
+    let s = skip_space(p);
+    if peek(p) == 93 { let c = advance(p, 1); } else {
+        let mut more = true;
+        while more && !failed(p) {
+            let v = parse_value(p, doc, depth + 1);
+            if !failed(p) {
+                ints_push(items, v);
+                let s3 = skip_space(p);
+                let b = peek(p);
+                if b == 44 { let c = advance(p, 1); } else { if b == 93 { let c = advance(p, 1); more = false; } else { let f = fail(p, "expected , or ]"); } }
+            }
+        }
+    }
+    if failed(p) { 0 - 1 } else { json_add_array(doc, items) }
+}
+
+fn parse_object(p: Parser, doc: JsonDoc, depth: Int) -> Int ! {} {
+    let open = advance(p, 1);
+    let keys = strs_new();
+    let values = ints_new();
+    let s = skip_space(p);
+    if peek(p) == 125 { let c = advance(p, 1); } else {
+        let mut more = true;
+        while more && !failed(p) {
+            let s2 = skip_space(p);
+            if peek(p) != 34 { let f = fail(p, "expected a key"); } else {
+                let k = parse_string(p);
+                let s3 = skip_space(p);
+                if !failed(p) && peek(p) != 58 { let f = fail(p, "expected :"); }
+                if !failed(p) {
+                    let c = advance(p, 1);
+                    let v = parse_value(p, doc, depth + 1);
+                    if !failed(p) {
+                        strs_push(keys, k);
+                        ints_push(values, v);
+                        let s4 = skip_space(p);
+                        let b = peek(p);
+                        if b == 44 { let c2 = advance(p, 1); } else { if b == 125 { let c2 = advance(p, 1); more = false; } else { let f = fail(p, "expected , or }"); } }
+                    }
+                }
+            }
+        }
+    }
+    if failed(p) { 0 - 1 } else { json_add_object(doc, keys, values) }
+}
+
+/// The document `text` spells, or an `Err` naming what was wrong and the byte offset where.
+/// Whitespace is allowed around values; anything after the one top-level value is an error.
+pub fn json_parse(text: Str) -> Result[JsonDoc, Str] ! {} {
+    let pos = ints_new();
+    ints_push(pos, 0);
+    let p = Parser(text: text, pos: pos, error: strs_new());
+    let doc = json_new();
+    let root = parse_value(p, doc, 0);
+    let s = skip_space(p);
+    if !failed(p) && at(p) < str_len(text) { let f = fail(p, "text after the value"); }
+    if failed(p) { Result[JsonDoc, Str].Err(error: strs_get(p.error, 0)) } else {
+        Result[JsonDoc, Str].Ok(value: json_with_root(doc, root))
+    }
+}

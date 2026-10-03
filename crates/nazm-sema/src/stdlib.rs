@@ -22,13 +22,22 @@ pub const PREFIX: &str = "@std/";
 /// Every standard module, by name, with its source exactly as the repository holds it.
 pub const MODULES: &[(&str, &str)] = &[
     ("chan", include_str!("../../../library/std/chan.nz")),
+    ("fmt", include_str!("../../../library/std/fmt.nz")),
+    ("fs", include_str!("../../../library/std/fs.nz")),
     ("io", include_str!("../../../library/std/io.nz")),
+    ("json", include_str!("../../../library/std/json.nz")),
+    ("map", include_str!("../../../library/std/map.nz")),
+    ("num", include_str!("../../../library/std/num.nz")),
     ("option", include_str!("../../../library/std/option.nz")),
+    ("path", include_str!("../../../library/std/path.nz")),
     ("process", include_str!("../../../library/std/process.nz")),
     ("result", include_str!("../../../library/std/result.nz")),
     ("seq", include_str!("../../../library/std/seq.nz")),
     ("show", include_str!("../../../library/std/show.nz")),
+    ("sort", include_str!("../../../library/std/sort.nz")),
+    ("test", include_str!("../../../library/std/test.nz")),
     ("text", include_str!("../../../library/std/text.nz")),
+    ("time", include_str!("../../../library/std/time.nz")),
 ];
 
 /// The standard module an import path names, if it names one: its name and its source.

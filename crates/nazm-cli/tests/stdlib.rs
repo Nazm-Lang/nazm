@@ -130,7 +130,10 @@ fn codes(files: &[(&str, &str)]) -> Vec<String> {
         .collect()
 }
 
-const MODULES: &[&str] = &["chan", "io", "option", "process", "result", "seq", "text"];
+const MODULES: &[&str] = &[
+    "chan", "fmt", "fs", "io", "json", "map", "num", "option", "path", "process", "result", "seq",
+    "show", "sort", "test", "text", "time",
+];
 
 #[test]
 fn every_standard_module_is_found_by_name_and_checks_cleanly() {
