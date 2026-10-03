@@ -398,6 +398,16 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N77 — resolution, persisted — **complete as scoped, 2026-10-03; area 2 stays PARTIAL**
+
+`architecture.md` §7.78 first. A module that checks cleanly leaves `nazm.resolved/1`, its names by
+durable identity, stored with its check (`nazm.check/3`) so its invalidation is the check's; the
+same bytes from two processes and two checkouts. `nazm references` and `nazm resolve` read reused
+modules' units without checking their bodies, and agree with the language service. The compiler
+written in Nazm refuses `@std/` and package imports by name. Not here: re-export and export under
+another name (no design, so area 2 stays PARTIAL), a build that skips bodies, persisted locals. Next:
+N78, traits and methods.
+
 ### N76 — syntax completion: incremental reparse, finer recovery, `\u{…}` — **complete as scoped, 2026-10-03**
 
 `architecture.md` §7.77 first. `nazm_syntax::Revision` and `Revision::edit`: a file's next parse from
