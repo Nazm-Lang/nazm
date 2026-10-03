@@ -114,6 +114,16 @@ pub fn lower(
         }
     }
 
+    // Every impl's methods (N78): a call through a bound in any generic body may reach
+    // them, and that body's instances are artefacts of their own.
+    for (_, imp) in res.traits().impls() {
+        for g in imp.methods.iter().flatten() {
+            if let Some(slot) = from_generic.get_mut(g.index()) {
+                *slot = true;
+            }
+        }
+    }
+
     // Which definitions are in a call cycle, and so begin with a stack check (N49).
     let facts = Facts {
         from_generic,
@@ -1235,9 +1245,9 @@ impl Fx<'_> {
             cir::ExprKind::Arith { lhs, rhs, .. } | cir::ExprKind::Compare { lhs, rhs, .. } => {
                 Self::hazardous(lhs) || Self::hazardous(rhs)
             }
-            cir::ExprKind::Call { args, .. } | cir::ExprKind::Builtin { args, .. } => {
-                args.iter().any(Self::hazardous)
-            }
+            cir::ExprKind::Call { args, .. }
+            | cir::ExprKind::Builtin { args, .. }
+            | cir::ExprKind::CallTrait { args, .. } => args.iter().any(Self::hazardous),
             cir::ExprKind::Record { fields, .. } | cir::ExprKind::Variant { fields, .. } => {
                 fields.iter().any(|i| Self::hazardous(&i.value))
             }
@@ -1381,6 +1391,33 @@ impl Fx<'_> {
                     at,
                 );
                 self.release_all(held, at);
+            }
+            // A call through a bound (N78), resolved for this instance: `Self` substituted, the
+            // impl's function looked up in the checker's table, and an ordinary call lowered.
+            // MIR has no trait call.
+            cir::ExprKind::CallTrait {
+                trait_id,
+                method,
+                self_ty,
+                args,
+                callee_at,
+            } => {
+                let concrete = self.ty(*self_ty, at);
+                let Some(callee) = self.res.traits().method_fn(*trait_id, concrete, *method) else {
+                    self.fail(at, "a trait call with no impl for this instance's type");
+                    return;
+                };
+                let call = cir::Expr {
+                    kind: cir::ExprKind::Call {
+                        callee,
+                        type_args: Vec::new(),
+                        args: args.clone(),
+                        callee_at: *callee_at,
+                    },
+                    ty: e.ty,
+                    at: e.at,
+                };
+                self.expr_into(&call, dst);
             }
             cir::ExprKind::Call {
                 callee,

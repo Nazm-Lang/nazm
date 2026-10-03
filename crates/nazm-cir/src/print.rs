@@ -614,6 +614,21 @@ impl Printer<'_> {
                 o.push(("callee", self.expr(callee)));
                 o.push(("args", J::Arr(args.iter().map(|a| self.expr(a)).collect())));
             }
+            ExprKind::CallTrait {
+                trait_id,
+                method,
+                self_ty,
+                args,
+                ..
+            } => {
+                o.push(Self::op("call_trait"));
+                o.push((
+                    "method",
+                    J::Str(self.names.trait_method(*trait_id, *method)),
+                ));
+                o.push(("self", J::Str(self.names.ty(*self_ty))));
+                o.push(("args", J::Arr(args.iter().map(|a| self.expr(a)).collect())));
+            }
         }
         o.push(("type", self.ty(e.ty)));
         self.at(&mut o, e.at);

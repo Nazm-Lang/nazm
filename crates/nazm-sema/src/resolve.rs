@@ -401,6 +401,8 @@ pub struct Resolution {
     unresolved_members: HashMap<Span, Type>,
     /// Each closure expression's definition, by the expression's span (N50).
     closures: HashMap<Span, FnId>,
+    /// Traits, impls, bounds and calls through a bound (N78).
+    traits: crate::traits::Traits,
     /// Each named function written as a value, by the name's span (N50).
     fn_values: HashMap<Span, FnValueUse>,
     /// What each call to a function with an effect parameter bound it to, by the callee's
@@ -445,6 +447,17 @@ impl Resolution {
     #[must_use]
     pub fn types(&self) -> &UserTypes {
         &self.types
+    }
+
+    /// Every trait and impl of the compilation (N78).
+    #[must_use]
+    pub fn traits(&self) -> &crate::traits::Traits {
+        &self.traits
+    }
+
+    /// The trait tables, for the checker that is building them.
+    pub fn traits_mut(&mut self) -> &mut crate::traits::Traits {
+        &mut self.traits
     }
 
     /// The user-type tables, for the checker that is building them.

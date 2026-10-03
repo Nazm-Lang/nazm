@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 use nazm_syntax::{
-    Assign, BinOp, Block, Enum, Expr, FieldInit, Function, MatchArm, Program, Record, Return,
-    Spawn, Stmt, TypeName, TypeParam as WrittenParam, While,
+    Assign, BinOp, Block, Enum, Expr, FieldInit, Function, ImplDecl, MatchArm, Program, Record,
+    Return, Spawn, Stmt, Trait, TypeName, TypeParam as WrittenParam, While,
 };
 
 use nazm_sema::enums::{EnumDef, EnumId, VariantDef};
@@ -28,6 +28,7 @@ use nazm_sema::resolve::{
     CallSite, Callee, CheckedCall, FieldRef, FnDef, FnId, Instantiation, LocalDef, LocalRef,
     PayloadRef, Propagation, Resolution, VariantRef, WrittenType,
 };
+use nazm_sema::traits::{ImplDef, TraitCall, TraitDef, TraitId, TraitMethodDef};
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
 use nazm_sema::ModuleFacts;
@@ -282,6 +283,9 @@ pub struct Unit<'a> {
     records: Vec<(u32, &'a Record)>,
     /// Each enum of this module, with its index in `Program::enums`.
     enums: Vec<(u32, &'a Enum)>,
+    /// Its traits and impl headers (N78). An impl's methods are in `functions`.
+    traits: Vec<&'a Trait>,
+    impls: Vec<&'a ImplDecl>,
     imports: &'a [Dependency],
     /// The core prelude's module in this compilation, found by its durable key. `None`
     /// for a compilation assembled without one, which then has no `Result` for `?` to
@@ -314,11 +318,23 @@ impl<'a> Unit<'a> {
             .filter(|(_, e)| graph.module_of(e.name_span.file) == Some(module))
             .map(|(i, e)| (u32::try_from(i).unwrap_or(u32::MAX), e))
             .collect();
+        let traits = program
+            .traits
+            .iter()
+            .filter(|t| graph.module_of(t.name_span.file) == Some(module))
+            .collect();
+        let impls = program
+            .impls
+            .iter()
+            .filter(|i| graph.module_of(i.impl_span.file) == Some(module))
+            .collect();
         Self {
             module,
             functions,
             records,
             enums,
+            traits,
+            impls,
             imports: graph.imports(module),
             prelude: graph.prelude(),
         }
@@ -387,6 +403,9 @@ pub struct Checker<'a> {
     closure_count: u32,
     /// The effect parameter of the function being checked, by name, with its owner (N51).
     effect_param: Option<(String, ParamOwner)>,
+    /// The traits this module may name (N78), and the modules whose impls it may use.
+    trait_names: HashMap<String, Option<TraitId>>,
+    impl_modules: Vec<ModuleId>,
 }
 
 /// A closure whose body is being checked (N50).
@@ -573,6 +592,13 @@ pub fn check_reusing(
 
     // Stage 1, for the whole graph before any body is checked. A cycle needs this: A's
     // body may call B while B's calls A, and neither ordering of the two would work.
+    // Every trait's method signatures (N78), before any module declares an impl of one.
+    let before = errors.len();
+    declare_trait_methods(&units, &type_interfaces, &mut res, &mut errors);
+    if errors.len() != before {
+        declared_cleanly.iter_mut().for_each(|c| *c = false);
+    }
+
     let interfaces: Vec<UnitInterface> = units
         .iter()
         .enumerate()
@@ -749,7 +775,13 @@ pub fn declare_types(
                 instance: None,
             });
             res.types_mut().name_params(ParamOwner::Record(id), params);
-            declared_requirements(&r.type_params, ParamOwner::Record(id), res, errors);
+            declared_requirements(
+                &r.type_params,
+                ParamOwner::Record(id),
+                &HashMap::new(),
+                res,
+                errors,
+            );
             if visibility.is_exported() {
                 records.push(RecordExport {
                     def: id,
@@ -775,13 +807,33 @@ pub fn declare_types(
                 instance: None,
             });
             res.types_mut().name_params(ParamOwner::Enum(id), params);
-            declared_requirements(&e.type_params, ParamOwner::Enum(id), res, errors);
+            declared_requirements(
+                &e.type_params,
+                ParamOwner::Enum(id),
+                &HashMap::new(),
+                res,
+                errors,
+            );
             if visibility.is_exported() {
                 enums.push(EnumExport {
                     def: id,
                     nameable: true,
                 });
             }
+        }
+        // Traits share the type namespace (N78); their methods' signatures are resolved
+        // once every type is, by `declare_trait_methods`.
+        for t in &unit.traits {
+            if refuse_type_name(unit.module, &t.name, t.name_span, res, errors) {
+                continue;
+            }
+            res.traits_mut().declare(TraitDef {
+                name: t.name.clone(),
+                module: unit.module,
+                visibility: Visibility::from_keyword(t.pub_span),
+                name_span: t.name_span,
+                methods: Vec::new(),
+            });
         }
         interfaces.push(UnitInterface::new(
             unit.module,
@@ -792,6 +844,378 @@ pub fn declare_types(
         ));
     }
     interfaces
+}
+
+/// Every trait the module `unit` may name, by the name it writes (N78): its own, and the
+/// exported traits of every module it imports — unqualified under a plain `use`, as
+/// `alias::Name` under an alias. `None` for a name two imports give two traits, which a
+/// use must then qualify. The module's own trait wins over an import's, as a module's own
+/// record does.
+fn trait_scope(unit: &Unit<'_>, res: &Resolution) -> HashMap<String, Option<TraitId>> {
+    let mut own: HashMap<String, Option<TraitId>> = HashMap::new();
+    for (id, t) in res.traits().iter() {
+        if t.module == unit.module {
+            own.insert(t.name.clone(), Some(id));
+        }
+    }
+    let mut out: HashMap<String, Option<TraitId>> = HashMap::new();
+    for d in unit.imports {
+        for (id, t) in res.traits().iter() {
+            if t.module != d.on || !t.visibility.is_exported() {
+                continue;
+            }
+            if d.plain {
+                out.entry(t.name.clone())
+                    .and_modify(|e| {
+                        if *e != Some(id) {
+                            *e = None;
+                        }
+                    })
+                    .or_insert(Some(id));
+            }
+            for (alias, _) in &d.aliases {
+                out.insert(qualified_key(alias, &t.name), Some(id));
+            }
+        }
+    }
+    out.extend(own);
+    out
+}
+
+/// The modules whose impls `unit` may use (N78): itself and every module it imports
+/// directly. Coherence is over the whole compilation; *use* is limited to what the module's
+/// own check key covers, so a cached check never depends on an impl it did not see.
+fn impl_scope(unit: &Unit<'_>) -> Vec<ModuleId> {
+    let mut out = vec![unit.module];
+    out.extend(unit.imports.iter().map(|d| d.on));
+    out
+}
+
+/// Stage 0c (N78): every trait's method signatures, with `Self` the trait's own type
+/// parameter. After every type is declared and settled, before any module's functions:
+/// an impl may be in a module declared before its trait's.
+pub fn declare_trait_methods(
+    units: &[Unit<'_>],
+    type_interfaces: &[UnitInterface],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) {
+    for unit in units {
+        if unit.traits.is_empty() {
+            continue;
+        }
+        let deps: Vec<&UnitInterface> = unit
+            .imports
+            .iter()
+            .filter_map(|d| type_interfaces.get(d.on.index()))
+            .collect();
+        let types = type_environment(unit, &deps, res, errors, Collisions::Silent);
+        for t in &unit.traits {
+            let Some(id) = res
+                .traits()
+                .iter()
+                .find(|(_, d)| d.module == unit.module && d.name_span == t.name_span)
+                .map(|(id, _)| id)
+            else {
+                continue;
+            };
+            let me = Type::Param(id.self_param());
+            res.types_mut()
+                .name_params(ParamOwner::Trait(id), vec!["Self".to_owned()]);
+            let scope = vec![("Self".to_owned(), me)];
+            let mut methods: Vec<TraitMethodDef> = Vec::new();
+            for m in &t.methods {
+                if let Some(first) = methods.iter().find(|x| x.name == m.name) {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::DUPLICATE_FUNCTION,
+                            m.name_span,
+                            format!(
+                                "`{}` is declared more than once in trait `{}`",
+                                m.name, t.name
+                            ),
+                        )
+                        .secondary(first.name_span, "first declared here"),
+                    );
+                    continue;
+                }
+                let resolved: Vec<Type> = m
+                    .params
+                    .iter()
+                    .map(|p| resolve_written(&types, res, &p.ty, &scope, None, errors))
+                    .collect();
+                let self_ok = m.params.first().is_some_and(|p| p.name == "self")
+                    && resolved.first() == Some(&me);
+                if !self_ok {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::TRAIT_METHOD_SELF,
+                            m.params.first().map_or(m.name_span, |p| p.span),
+                            format!("`{}`'s first parameter must be `self: Self`", m.name),
+                        )
+                        .help(
+                            "a trait method is called on a value of the implementing type, \
+                             which it receives first: `fn show(self: Self) -> Str;`",
+                        ),
+                    );
+                    continue;
+                }
+                let ret = resolve_written(&types, res, &m.return_type, &scope, None, errors);
+                let effects = m
+                    .effects
+                    .as_ref()
+                    .and_then(|d| crate::effects::declared(d, None, errors))
+                    .unwrap_or_default();
+                methods.push(TraitMethodDef {
+                    name: m.name.clone(),
+                    name_span: m.name_span,
+                    params: resolved.into_iter().skip(1).collect(),
+                    ret,
+                    effects,
+                });
+            }
+            if let Some(def) = res.traits_mut().get_mut(id) {
+                def.methods = methods;
+            }
+        }
+    }
+}
+
+/// The trait a written name in `unit` refers to (N78), or the diagnostic saying why none.
+// One diagnostic, built only when the name does not resolve: not worth a box.
+#[allow(clippy::result_large_err)]
+fn named_trait(
+    written: &TypeName,
+    scope: &HashMap<String, Option<TraitId>>,
+    res: &Resolution,
+    unit: &Unit<'_>,
+) -> Result<TraitId, Diagnostic> {
+    let key = written_key(written.qualifier.as_ref(), &written.name);
+    match scope.get(&key) {
+        Some(Some(id)) => Ok(*id),
+        Some(None) => Err(Diagnostic::error(
+            codes::AMBIGUOUS_IMPORT,
+            written.name_span,
+            format!(
+                "`{}` is a trait in more than one imported module",
+                written.name
+            ),
+        )
+        .help("import one of them under a name and write `alias::Trait`")),
+        None => {
+            let is_type = res.records().declared(unit.module, &written.name).is_some()
+                || res.enums().declared(unit.module, &written.name).is_some()
+                || Type::from_name(&written.name).is_some();
+            Err(if is_type {
+                Diagnostic::error(
+                    codes::NOT_A_TRAIT,
+                    written.name_span,
+                    format!("`{}` is a type, not a trait", written.name),
+                )
+                .help("a bound or an impl names a trait: `impl Show for Point`")
+            } else {
+                Diagnostic::error(
+                    codes::UNKNOWN_TYPE,
+                    written.name_span,
+                    format!("no trait named `{}` is in scope", written.name),
+                )
+                .help("declare it, or import the module that exports it")
+            })
+        }
+    }
+}
+
+/// Whether `ty` may have an impl (N78, `architecture.md` §7.79), and the module that
+/// declares it — `None` for a built-in.
+fn implementable(res: &Resolution, ty: Type) -> Result<Option<ModuleId>, &'static str> {
+    match ty {
+        Type::Int | Type::Bool | Type::Str => Ok(None),
+        Type::Record(id) => {
+            let def = res.records().get(id).ok_or("an unknown record")?;
+            if !def.params.is_empty() || def.instance.is_some() {
+                return Err("a generic record");
+            }
+            Ok(Some(def.module))
+        }
+        Type::Enum(id) => {
+            let def = res.enums().get(id).ok_or("an unknown enum")?;
+            if !def.params.is_empty() || def.instance.is_some() {
+                return Err("a generic enum");
+            }
+            Ok(Some(def.module))
+        }
+        Type::Param(_) => Err("a type parameter"),
+        _ => Err("a built-in type other than `Int`, `Bool` or `Str`"),
+    }
+}
+
+/// The function name an impl method is declared under: `Trait/Type/m`, which no written
+/// name can be (N78).
+/// The definition a written function declared: by its name, or — for an impl's method,
+/// which is declared under `Trait/Type/m` — by where its name is (N78).
+pub(crate) fn defined(res: &Resolution, module: ModuleId, f: &Function) -> Option<FnId> {
+    if f.method_of.is_none() {
+        return res.definition(module, &f.name);
+    }
+    res.functions()
+        .iter()
+        .position(|d| d.module == module && d.name_span == f.name_span && d.closure.is_none())
+        .map(FnId::from_index)
+}
+
+fn impl_method_name(trait_name: &str, ty: &str, method: &str) -> String {
+    format!("{trait_name}/{ty}/{method}")
+}
+
+/// File one impl whose header resolved (N78): its methods against its trait's, the orphan
+/// rule, and the coherence table. Every rule is reported; the impl is filed only if its
+/// module may hold it, and it is the table's answer only if it is the first of its kind.
+fn register_impl(
+    unit: &Unit<'_>,
+    imp: &ImplDecl,
+    trait_id: TraitId,
+    ty: Type,
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Some(tr) = res.traits().get(trait_id).cloned() else {
+        return;
+    };
+    let ty_name = res.types().show(ty);
+    // The orphan rule: the trait's module, or the type's.
+    let home = implementable(res, ty).ok().flatten();
+    if tr.module != unit.module && home != Some(unit.module) {
+        errors.push(
+            Diagnostic::error(
+                codes::IMPL_ORPHAN,
+                imp.impl_span,
+                format!(
+                    "an impl of `{}` for `{ty_name}` must be in the module declaring `{}` or \
+                     the one declaring `{ty_name}`",
+                    tr.name, tr.name
+                ),
+            )
+            .secondary(tr.name_span, "the trait is declared here")
+            .help(
+                "one impl per trait and type, where everyone who can name both can find it: \
+                 move it to the trait's module or the type's",
+            ),
+        );
+        return;
+    }
+    let mut methods: Vec<Option<FnId>> = vec![None; tr.methods.len()];
+    for (_, f) in unit.functions.iter().filter(|(_, f)| {
+        f.method_of
+            .as_ref()
+            .is_some_and(|m| m.impl_span == imp.impl_span)
+    }) {
+        let Some(id) = res.definition(unit.module, &impl_method_name(&tr.name, &ty_name, &f.name))
+        else {
+            continue;
+        };
+        let Some(index) = tr.method(&f.name) else {
+            errors.push(
+                Diagnostic::error(
+                    codes::IMPL_METHOD_MISMATCH,
+                    f.name_span,
+                    format!("`{}` is not a method of `{}`", f.name, tr.name),
+                )
+                .secondary(tr.name_span, "the trait is declared here")
+                .help("an impl defines its trait's methods and nothing else"),
+            );
+            continue;
+        };
+        let Some(want) = tr.methods.get(index as usize) else {
+            continue;
+        };
+        let Some(def) = res.function(id).cloned() else {
+            continue;
+        };
+        let types = res.types_mut();
+        let owner = ParamOwner::Trait(trait_id);
+        let params: Vec<Type> = std::iter::once(ty)
+            .chain(
+                want.params
+                    .iter()
+                    .map(|t| types.substitute(*t, owner, &[ty])),
+            )
+            .collect();
+        let ret = types.substitute(want.ret, owner, &[ty]);
+        let self_named = f.params.first().is_some_and(|p| p.name == "self");
+        let effects_match = def.declared_effects.unwrap_or_default() == want.effects;
+        if def.params != params
+            || def.ret != ret
+            || !self_named
+            || !effects_match
+            || !def.type_params.is_empty()
+        {
+            let wanted: Vec<String> = params.iter().map(|t| types.show(*t)).collect();
+            errors.push(
+                Diagnostic::error(
+                    codes::IMPL_METHOD_MISMATCH,
+                    f.name_span,
+                    format!(
+                        "`{}` must be `fn {}(self: {}) -> {}` with the trait's effects, as `{}` \
+                         declares it with `Self` = `{ty_name}`",
+                        f.name,
+                        f.name,
+                        wanted.join(", "),
+                        types.show(ret),
+                        tr.name
+                    ),
+                )
+                .secondary(want.name_span, "the trait's method"),
+            );
+            continue;
+        }
+        if let Some(slot) = methods.get_mut(index as usize) {
+            *slot = Some(id);
+        }
+    }
+    let missing: Vec<&str> = tr
+        .methods
+        .iter()
+        .zip(&methods)
+        .filter(|(_, m)| m.is_none())
+        .map(|(m, _)| m.name.as_str())
+        .collect();
+    if !missing.is_empty() {
+        errors.push(
+            Diagnostic::error(
+                codes::IMPL_MISSING_METHOD,
+                imp.impl_span,
+                format!(
+                    "this impl of `{}` for `{ty_name}` does not define {}",
+                    tr.name,
+                    quoted(&missing.iter().map(|m| (*m).to_owned()).collect::<Vec<_>>())
+                ),
+            )
+            .secondary(tr.name_span, "the trait is declared here")
+            .help("an impl defines every method of its trait; there are no default methods"),
+        );
+    }
+    let filed = res.traits_mut().implement(ImplDef {
+        trait_id,
+        self_ty: ty,
+        module: unit.module,
+        impl_span: imp.impl_span,
+        methods,
+    });
+    if let Err(first) = filed {
+        let at = res
+            .traits()
+            .impl_def(first)
+            .map_or(imp.impl_span, |d| d.impl_span);
+        errors.push(
+            Diagnostic::error(
+                codes::IMPL_CONFLICT,
+                imp.impl_span,
+                format!("`{ty_name}` already implements `{}`", tr.name),
+            )
+            .secondary(at, "the first impl")
+            .help("a type implements a trait at most once in a program, so every call means one function"),
+        );
+    }
 }
 
 /// Whether this module may not declare a type of this name, having said why.
@@ -834,6 +1258,12 @@ fn refuse_type_name(
                 .declared(module, name)
                 .and_then(|id| res.enums().get(id))
                 .map(|d| d.name_span)
+        })
+        .or_else(|| {
+            res.traits()
+                .iter()
+                .find(|(_, t)| t.module == module && t.name == name)
+                .map(|(_, t)| t.name_span)
         });
     if let Some(first) = first {
         errors.push(
@@ -906,6 +1336,7 @@ pub const EQUALITY: &str = "Equality";
 fn declared_requirements(
     params: &[WrittenParam],
     owner: ParamOwner,
+    traits: &HashMap<String, Option<TraitId>>,
     res: &mut Resolution,
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -927,7 +1358,19 @@ fn declared_requirements(
             );
             continue;
         }
+        // A trait (N78): the parameter's methods are the trait's.
         if req.name != EQUALITY {
+            if let Some(Some(t)) = traits.get(&req.name) {
+                res.traits_mut().record_mention(req.span, *t);
+                res.traits_mut().bound(
+                    TypeParam {
+                        owner,
+                        index: u32::try_from(i).unwrap_or(u32::MAX),
+                    },
+                    *t,
+                );
+                continue;
+            }
             errors.push(
                 Diagnostic::error(
                     codes::UNKNOWN_REQUIREMENT,
@@ -938,7 +1381,8 @@ fn declared_requirements(
                     ),
                 )
                 .help(
-                    "the one capability is `Equality`: `fn same[T: Equality](a: T, b: T) -> Bool`",
+                    "a type parameter requires `Equality` or a trait in scope: \
+                     `fn same[T: Equality](a: T, b: T) -> Bool`, `fn f[T: Show](x: T) -> Str`",
                 ),
             );
             continue;
@@ -1596,6 +2040,23 @@ fn resolve_name(
         errors.push(unknown_qualified(name, &aliases, span, "type"));
         return Type::Int;
     }
+    // A trait where a type is expected (N78): there are no trait objects.
+    let bare = name.rsplit("::").next().unwrap_or(name);
+    if let Some((_, t)) = res.traits().iter().find(|(_, t)| t.name == bare) {
+        errors.push(
+            Diagnostic::error(
+                codes::TRAIT_NOT_A_TYPE,
+                span,
+                format!("`{name}` is a trait, not a type"),
+            )
+            .secondary(t.name_span, "the trait")
+            .help(format!(
+                "a value has one concrete type; to accept any type with `{bare}`, take a type \
+                 parameter that requires it: `fn f[T: {bare}](x: T)`"
+            )),
+        );
+        return Type::Int;
+    }
     let mut d = Diagnostic::error(codes::UNKNOWN_TYPE, span, format!("`{name}` is not a type"))
         .help(format!(
             "the built-in types are {}, and `struct` and `enum` declare others",
@@ -2131,16 +2592,75 @@ pub fn declare_unit(
     let types = type_environment(unit, deps, res, errors, Collisions::Silent);
     let mut exports = Vec::new();
 
+    // Each impl's header, resolved once (N78): its trait and its type, or `None` when either
+    // did not resolve — reported here, and its methods then declared as nothing at all.
+    let trait_names = trait_scope(unit, res);
+    let mut headers: Vec<(Span, Option<(TraitId, Type)>)> = Vec::new();
+    for imp in &unit.impls {
+        let trait_id = match named_trait(&imp.trait_name, &trait_names, res, unit) {
+            Ok(t) => {
+                res.traits_mut().record_mention(imp.trait_name.name_span, t);
+                Some(t)
+            }
+            Err(d) => {
+                errors.push(d);
+                None
+            }
+        };
+        let before = errors.len();
+        let ty = resolve_written(&types, res, &imp.self_ty, &[], None, errors);
+        let ty =
+            (errors.len() == before)
+                .then_some(ty)
+                .and_then(|ty| match implementable(res, ty) {
+                    Ok(_) => Some(ty),
+                    Err(why) => {
+                        errors.push(
+                            Diagnostic::error(
+                                codes::IMPL_TYPE_REFUSED,
+                                imp.self_ty.span,
+                                format!("`{}` cannot have an impl: it is {why}", imp.self_ty.name),
+                            )
+                            .help(
+                                "an impl is for a non-generic record or enum, or for `Int`, \
+                             `Bool` or `Str`",
+                            ),
+                        );
+                        None
+                    }
+                });
+        headers.push((imp.impl_span, trait_id.zip(ty)));
+    }
+
     // Each foreign symbol's first declaration in this module, for `N0383`.
     let mut foreign_seen: std::collections::HashMap<String, (Vec<Type>, Type, Span)> =
         std::collections::HashMap::new();
     for (decl, f) in &unit.functions {
+        // An impl's method (N78): declared under `Trait/Type/m`, with `Self` its impl's type.
+        let method = match &f.method_of {
+            Some(m) => match headers.iter().find(|(at, _)| *at == m.impl_span) {
+                Some((_, Some(h))) => Some(*h),
+                // Its impl's header did not resolve, which is reported: nothing to declare.
+                _ => continue,
+            },
+            None => None,
+        };
+        let name = method.map_or_else(
+            || f.name.clone(),
+            |(t, ty)| {
+                let trait_name = res.traits().get(t).map_or("?", |d| d.name.as_str());
+                impl_method_name(trait_name, &res.types().show(ty), &f.name)
+            },
+        );
         // A generic function's parameter types mention its own parameters, and a parameter
         // names its owner — so the id comes first. Nothing else declares a function between
         // here and the `declare` below, so the id this one would get is known now.
         let id = res.next_function();
         let generics = declared_type_params(&f.type_params, errors);
-        let scope = param_scope(&f.type_params, ParamOwner::Function(id));
+        let mut scope = param_scope(&f.type_params, ParamOwner::Function(id));
+        if let Some((_, ty)) = method {
+            scope.push(("Self".to_owned(), ty));
+        }
         let effect = declared_effect_param(f, errors).map(|n| (n, ParamOwner::Function(id)));
         let params: Vec<Type> = f
             .params
@@ -2148,10 +2668,19 @@ pub fn declare_unit(
             .map(|p| resolve_written(&types, res, &p.ty, &scope, effect, errors))
             .collect();
         let ret = resolve_written(&types, res, &f.return_type, &scope, effect, errors);
-        let declared_effects = f
+        let mut declared_effects = f
             .effects
             .as_ref()
             .and_then(|d| crate::effects::declared(d, effect.map(|e| e.0), errors));
+        // An impl method that writes no effect set has its trait method's (N78): a trait's
+        // signature is a promise, and its impls keep it.
+        if let (None, Some((t, _))) = (declared_effects, method) {
+            declared_effects = res
+                .traits()
+                .get(t)
+                .and_then(|d| d.method(&f.name).and_then(|i| d.methods.get(i as usize)))
+                .map(|m| m.effects);
+        }
         if let Some((name, owner)) = effect {
             res.types_mut().name_effect_param(owner, name.to_owned());
         }
@@ -2159,7 +2688,7 @@ pub fn declare_unit(
         // A built-in has no source span to point at, so "first defined here" would aim
         // at byte zero. Said plainly instead. Built-ins are not a module's definitions,
         // so no visibility rule makes this one legal.
-        if Intrinsic::by_name(&f.name).is_some() {
+        if method.is_none() && Intrinsic::by_name(&f.name).is_some() {
             errors.push(
                 Diagnostic::error(
                     codes::DUPLICATE_FUNCTION,
@@ -2180,14 +2709,18 @@ pub fn declare_unit(
         // Within this module. Another module defining the same name is another module's
         // definition, and since 2026-09-22 that is not a collision.
         if let Some(existing) = res
-            .definition(unit.module, &f.name)
+            .definition(unit.module, &name)
             .and_then(|id| res.function(id))
         {
             errors.push(
                 Diagnostic::error(
                     codes::DUPLICATE_FUNCTION,
                     f.name_span,
-                    format!("`{}` is defined more than once in this module", f.name),
+                    if method.is_some() {
+                        format!("`{}` is defined more than once in this impl", f.name)
+                    } else {
+                        format!("`{}` is defined more than once in this module", f.name)
+                    },
                 )
                 .secondary(existing.name_span, "first defined here"),
             );
@@ -2234,9 +2767,14 @@ pub fn declare_unit(
             declared_effects
         };
 
-        let visibility = Visibility::from_keyword(f.pub_span);
+        // A method is never in the function namespace: it is reached through its trait.
+        let visibility = if method.is_some() {
+            Visibility::Private
+        } else {
+            Visibility::from_keyword(f.pub_span)
+        };
         let declared = res.declare(FnDef {
-            name: f.name.clone(),
+            name: name.clone(),
             module: unit.module,
             visibility,
             params: params.clone(),
@@ -2259,7 +2797,13 @@ pub fn declare_unit(
         declare_type_params(res, &f.type_params, ParamOwner::Function(id));
         res.types_mut()
             .name_params(ParamOwner::Function(id), generics.clone());
-        declared_requirements(&f.type_params, ParamOwner::Function(id), res, errors);
+        declared_requirements(
+            &f.type_params,
+            ParamOwner::Function(id),
+            &trait_names,
+            res,
+            errors,
+        );
 
         if visibility.is_exported() {
             // A public signature naming a private record would publish a type the
@@ -2275,7 +2819,18 @@ pub fn declare_unit(
             {
                 report_private_type(*t, at, f.name_span, "function", &f.name, res, errors);
             }
+            let bounds = (0..u32::try_from(generics.len()).unwrap_or(u32::MAX))
+                .filter_map(|index| {
+                    let t = res.traits().bound_of(TypeParam {
+                        owner: ParamOwner::Function(id),
+                        index,
+                    })?;
+                    let d = res.traits().get(t)?;
+                    Some((index, d.name.clone(), d.module))
+                })
+                .collect();
             exports.push(Export {
+                bounds,
                 name: f.name.clone(),
                 params,
                 ret,
@@ -2289,6 +2844,13 @@ pub fn declare_unit(
     }
 
     // The same check for an exported type's own fields, and the interface's type set.
+    for (imp, (_, header)) in unit.impls.iter().zip(&headers) {
+        let Some((trait_id, ty)) = *header else {
+            continue;
+        };
+        register_impl(unit, imp, trait_id, ty, res, errors);
+    }
+
     let mut records: Vec<RecordExport> = Vec::new();
     let mut enums: Vec<EnumExport> = Vec::new();
     let mut roots: Vec<Type> = Vec::new();
@@ -2375,7 +2937,38 @@ pub fn declare_unit(
         }
     }
 
+    // What the module offers of traits (N78): its exported traits, and every impl it declares
+    // — impls are global to a compilation, so all of them are part of what it offers.
+    let traits = res
+        .traits()
+        .iter()
+        .filter(|(_, t)| t.module == unit.module && t.visibility.is_exported())
+        .map(|(_, t)| nazm_sema::interface::TraitExport {
+            name: t.name.clone(),
+            module: t.module,
+            methods: t
+                .methods
+                .iter()
+                .map(|m| (m.name.clone(), m.params.clone(), m.ret, m.effects))
+                .collect(),
+        })
+        .collect();
+    let impls = res
+        .traits()
+        .impls()
+        .filter(|(_, d)| d.module == unit.module)
+        .filter_map(|(_, d)| {
+            let t = res.traits().get(d.trait_id)?;
+            Some(nazm_sema::interface::ImplExport {
+                trait_name: t.name.clone(),
+                trait_module: t.module,
+                self_ty: d.self_ty,
+                methods: t.methods.iter().map(|m| m.name.clone()).collect(),
+            })
+        })
+        .collect();
     UnitInterface::new(unit.module, exports, records, enums, unit.imports.to_vec())
+        .with_traits(traits, impls)
 }
 
 /// Report a public item that names a private user-defined type.
@@ -2476,7 +3069,10 @@ pub fn check_unit(
         closures: Vec::new(),
         closure_count: 0,
         effect_param: None,
+        trait_names: HashMap::new(),
+        impl_modules: impl_scope(unit),
     };
+    c.trait_names = trait_scope(unit, c.res);
     for (_, f) in &unit.functions {
         c.check_function(f);
     }
@@ -2577,8 +3173,12 @@ fn environment(
         );
     }
 
-    // This module's own definitions, exported or not. A module sees all of its own.
+    // This module's own definitions, exported or not. A module sees all of its own. An
+    // impl's methods are not among them: a method is reached through its trait (N78).
     for (_, f) in &unit.functions {
+        if f.method_of.is_some() {
+            continue;
+        }
         let Some(id) = res.definition(unit.module, &f.name) else {
             continue;
         };
@@ -3100,6 +3700,326 @@ impl Checker<'_> {
     }
 
     /// A call through a binding of function type (N50).
+    /// Whether `name.m()` names a receiver rather than an enum (N78): a value in scope, or —
+    /// when no enum of that name is visible — a trait. An enum keeps every meaning it had.
+    fn names_a_receiver(&self, qualifier: Option<&nazm_syntax::Qualifier>, name: &str) -> bool {
+        let key = written_key(qualifier, name);
+        if qualifier.is_none() && self.scopes.lookup(name).is_some() {
+            return true;
+        }
+        let enum_visible = matches!(self.types.names.get(&key), Some(Type::Enum(_)));
+        !enum_visible && matches!(self.trait_names.get(&key), Some(Some(_)))
+    }
+
+    /// A method call (N78, `architecture.md` §7.79): `recv.m(args)`, or `Trait.m(recv, args)`
+    /// when the receiver as written is a trait's name. Resolved here, completely: on a
+    /// concrete type to the impl's function, recorded as an ordinary call; on a type
+    /// parameter to its bound's method, recorded as a trait call and — for effects, authority
+    /// and provenance — as an indirect call of the method's signature.
+    #[allow(clippy::too_many_arguments)]
+    fn check_method_call(
+        &mut self,
+        qualifier: Option<&nazm_syntax::Qualifier>,
+        receiver: &Expr,
+        method: &str,
+        at: Span,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Type {
+        // What an unresolved call continues as: what was wanted, so one mistake is one
+        // diagnostic.
+        let fallback = expected.unwrap_or(Type::Int);
+        // `Show.show(x)`: the trait is written, and the receiver is the first argument.
+        let ufcs = match receiver {
+            Expr::Var {
+                name,
+                span: name_at,
+            } if qualifier.is_some() || self.scopes.lookup(name).is_none() => {
+                let key = written_key(qualifier, name);
+                match self.trait_names.get(&key) {
+                    Some(Some(t)) => Some((*t, *name_at)),
+                    _ if qualifier.is_some() => {
+                        self.errors.push(Diagnostic::error(
+                            codes::NOT_A_TRAIT,
+                            *name_at,
+                            format!("`{key}` is not a trait in scope"),
+                        ));
+                        for a in args {
+                            self.check_expr(a, None);
+                        }
+                        return fallback;
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some((t, name_at)) = ufcs {
+            self.res.traits_mut().record_mention(name_at, t);
+        }
+        let (recv, rest): (&Expr, &[Expr]) = match ufcs {
+            Some((t, name_at)) => {
+                let Some((first, rest)) = args.split_first() else {
+                    let tname = self.res.traits().get(t).map_or("?", |d| d.name.as_str());
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::WRONG_ARGUMENT_COUNT,
+                            span,
+                            format!("`{tname}.{method}` needs its receiver as its first argument"),
+                        )
+                        .secondary(name_at, "the trait"),
+                    );
+                    return fallback;
+                };
+                (first, rest)
+            }
+            None => (receiver, args),
+        };
+        let recv_ty = self.value_type(recv, None);
+
+        // Which trait's method this is.
+        let chosen: Result<(TraitId, u32), Diagnostic> = if let Some((t, _)) = ufcs {
+            let def = self.res.traits().get(t);
+            match def.and_then(|d| d.method(method)) {
+                Some(i) => Ok((t, i)),
+                None => Err(Diagnostic::error(
+                    codes::NO_METHOD,
+                    at,
+                    format!(
+                        "`{}` has no method `{method}`",
+                        def.map_or("?", |d| d.name.as_str())
+                    ),
+                )),
+            }
+        } else {
+            self.lookup_method(recv_ty, method, at)
+        };
+        let (trait_id, index) = match chosen {
+            Ok(c) => c,
+            Err(d) => {
+                self.errors.push(d);
+                for a in rest {
+                    self.check_expr(a, None);
+                }
+                return fallback;
+            }
+        };
+        let Some(want) = self
+            .res
+            .traits()
+            .get(trait_id)
+            .and_then(|d| d.methods.get(index as usize))
+            .cloned()
+        else {
+            return fallback;
+        };
+        let tname = self
+            .res
+            .traits()
+            .get(trait_id)
+            .map_or_else(|| "?".to_owned(), |d| d.name.clone());
+        let owner = ParamOwner::Trait(trait_id);
+        let params: Vec<Type> = want
+            .params
+            .iter()
+            .map(|t| self.res.types_mut().substitute(*t, owner, &[recv_ty]))
+            .collect();
+        let ret = self.res.types_mut().substitute(want.ret, owner, &[recv_ty]);
+
+        let through_bound = matches!(recv_ty, Type::Param(_));
+        if through_bound {
+            let fty = self.res.types_mut().fn_of(nazm_sema::FnSignature {
+                params: std::iter::once(recv_ty)
+                    .chain(params.iter().copied())
+                    .collect(),
+                ret,
+                effects: want.effects,
+                row: None,
+            });
+            self.res.traits_mut().record_call(
+                at,
+                TraitCall {
+                    trait_id,
+                    method: index,
+                    self_ty: recv_ty,
+                },
+            );
+            self.res.record_call(at, Callee::Indirect(fty));
+        } else {
+            let imp = self
+                .res
+                .traits()
+                .method_fn(trait_id, recv_ty, index)
+                .filter(|_| {
+                    self.res
+                        .traits()
+                        .find(trait_id, recv_ty)
+                        .and_then(|i| self.res.traits().impl_def(i))
+                        .is_some_and(|d| self.impl_modules.contains(&d.module))
+                });
+            let Some(f) = imp else {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::NO_METHOD,
+                        at,
+                        format!(
+                            "`{}` does not implement `{tname}` in this module's scope",
+                            self.show(recv_ty)
+                        ),
+                    )
+                    .help(
+                        "an impl is used where its module is this one or one this module imports",
+                    ),
+                );
+                for a in rest {
+                    self.check_expr(a, None);
+                }
+                return ret;
+            };
+            self.res.record_call(at, Callee::Function(f));
+        }
+        self.record_site(at, Vec::new(), false);
+
+        if rest.len() != params.len() {
+            self.errors.push(Diagnostic::error(
+                codes::WRONG_ARGUMENT_COUNT,
+                span,
+                format!(
+                    "`{tname}.{method}` takes {} argument{} after its receiver, but {} {} given",
+                    params.len(),
+                    if params.len() == 1 { "" } else { "s" },
+                    rest.len(),
+                    if rest.len() == 1 { "was" } else { "were" }
+                ),
+            ));
+        }
+        for (i, a) in rest.iter().enumerate() {
+            let want = params.get(i).copied();
+            let got = self.value_type(a, want);
+            if let Some(want) = want {
+                if got != want {
+                    self.errors.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        a.span(),
+                        format!(
+                            "argument {} of `{tname}.{method}` is `{}`, but this is `{}`",
+                            i + 1,
+                            self.show(want),
+                            self.show(got)
+                        ),
+                    ));
+                }
+            }
+        }
+        if let Some(callee) = self.res.callee(at) {
+            self.res.record_checked_call(
+                at,
+                CheckedCall {
+                    callee,
+                    span,
+                    args: std::iter::once(recv.span())
+                        .chain(rest.iter().map(Expr::span))
+                        .collect(),
+                    params: std::iter::once(recv_ty).chain(params).collect(),
+                    ret,
+                    instance: None,
+                    spawned: false,
+                },
+            );
+        }
+        ret
+    }
+
+    /// The one trait method `method` on a value of `ty` (N78): through a type parameter's
+    /// bound, or among the traits in scope with an impl for `ty` this module may use.
+    // One diagnostic, built only when the lookup fails: not worth a box.
+    #[allow(clippy::result_large_err)]
+    fn lookup_method(
+        &self,
+        ty: Type,
+        method: &str,
+        at: Span,
+    ) -> Result<(TraitId, u32), Diagnostic> {
+        let shown = self.show(ty);
+        if let Type::Param(p) = ty {
+            let bound = self.res.traits().bound_of(p);
+            return bound
+                .and_then(|t| {
+                    self.res
+                        .traits()
+                        .get(t)
+                        .and_then(|d| d.method(method))
+                        .map(|i| (t, i))
+                })
+                .ok_or_else(|| {
+                    Diagnostic::error(
+                        codes::NO_METHOD,
+                        at,
+                        format!("`{shown}` has no method `{method}`"),
+                    )
+                    .help(
+                        "a type parameter has the methods of the trait it requires: \
+                         `fn f[T: Show](x: T) -> Str { x.show() }`",
+                    )
+                });
+        }
+        let mut found: Vec<(TraitId, u32)> = Vec::new();
+        let mut elsewhere: Vec<String> = Vec::new();
+        for (t, def) in self.res.traits().iter() {
+            let Some(i) = def.method(method) else {
+                continue;
+            };
+            let Some(imp) = self.res.traits().find(t, ty) else {
+                continue;
+            };
+            let in_scope = self.trait_names.values().any(|v| *v == Some(t));
+            let usable = self
+                .res
+                .traits()
+                .impl_def(imp)
+                .is_some_and(|d| self.impl_modules.contains(&d.module));
+            if in_scope && usable {
+                found.push((t, i));
+            } else {
+                elsewhere.push(format!("`{}`", def.name));
+            }
+        }
+        match found.as_slice() {
+            [one] => Ok(*one),
+            [] => {
+                let d = Diagnostic::error(
+                    codes::NO_METHOD,
+                    at,
+                    format!("no trait in scope gives `{shown}` a method `{method}`"),
+                );
+                Err(if elsewhere.is_empty() {
+                    d
+                } else {
+                    d.help(format!(
+                        "{} would: import the module that declares it",
+                        elsewhere.join(", ")
+                    ))
+                })
+            }
+            many => {
+                let names: Vec<String> = many
+                    .iter()
+                    .filter_map(|(t, _)| self.res.traits().get(*t).map(|d| format!("`{}`", d.name)))
+                    .collect();
+                Err(Diagnostic::error(
+                    codes::AMBIGUOUS_METHOD,
+                    at,
+                    format!(
+                        "`{method}` on `{shown}` is a method of {}",
+                        names.join(" and ")
+                    ),
+                )
+                .help("name the trait: `Show.show(x)`"))
+            }
+        }
+    }
+
     fn check_indirect_call(
         &mut self,
         name: &str,
@@ -4371,6 +5291,30 @@ impl Checker<'_> {
     /// no global field namespace, so a name that is a field of some other record is not a
     /// field of this one. `docs/spec.md`, *Field resolution starts from the type*.
     fn check_projection(&mut self, base_ty: Type, name: &str, name_span: Span) -> Option<Type> {
+        // `x.show` with no call and no field of that name, where a trait in scope has the
+        // method (N78): methods are not values.
+        let is_field = matches!(base_ty, Type::Record(id)
+            if self.res.records().get(id).is_some_and(|d| d.field(name).is_some()));
+        let a_method = self.trait_names.values().flatten().any(|t| {
+            self.res
+                .traits()
+                .get(*t)
+                .is_some_and(|d| d.method(name).is_some())
+        });
+        if !is_field && a_method {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::METHOD_NOT_A_VALUE,
+                    name_span,
+                    format!("`.{name}` is a method, and a method is called, not taken as a value"),
+                )
+                .help(format!(
+                    "call it, `x.{name}()`, or make a value of the call with a closure: \
+                     `fn() -> … {{ x.{name}() }}`"
+                )),
+            );
+            return None;
+        }
         let Type::Record(id) = base_ty else {
             let shown = self.show(base_ty);
             let help = if base_ty.is_enum() {
@@ -4432,7 +5376,7 @@ impl Checker<'_> {
         //
         // Looked up in **this module's** table. Before N2 the name alone was enough,
         // which is the same thing as saying a name meant one function in the program.
-        self.current = self.res.definition(self.module, &f.name);
+        self.current = defined(self.res, self.module, f);
         self.closure_count = 0;
         self.effect_param = self.current.and_then(|id| {
             f.effect_params
@@ -4445,6 +5389,16 @@ impl Checker<'_> {
             .current
             .map(|id| param_scope(&f.type_params, ParamOwner::Function(id)))
             .unwrap_or_default();
+        // An impl's method may write its impl's type as `Self` (N78): its first parameter's.
+        if f.method_of.is_some() {
+            if let Some(ty) = self
+                .current
+                .and_then(|id| self.res.function(id))
+                .and_then(|d| d.params.first().copied())
+            {
+                self.type_scope.push(("Self".to_owned(), ty));
+            }
+        }
         record_type_scope(self.res, f.span, &self.type_scope, &self.types);
         self.open_scope(f.span);
         for p in &f.params {
@@ -5239,6 +6193,50 @@ impl Checker<'_> {
                 None => Completion::Value(Type::Int),
             },
 
+            // `x.m()` and `Show.m()` with nothing to tell them from a variant by (N78): a
+            // call when the name before the `.` is a value or a trait rather than an enum.
+            Expr::Variant {
+                qualifier,
+                ty,
+                ty_span,
+                type_args: None,
+                variant,
+                variant_span,
+                fields,
+                span,
+            } if fields.is_empty() && self.names_a_receiver(qualifier.as_ref(), ty) => {
+                let receiver = Expr::Var {
+                    name: ty.clone(),
+                    span: *ty_span,
+                };
+                Completion::Value(self.check_method_call(
+                    qualifier.as_ref(),
+                    &receiver,
+                    variant,
+                    *variant_span,
+                    &[],
+                    *span,
+                    expected,
+                ))
+            }
+
+            Expr::MethodCall {
+                qualifier,
+                receiver,
+                method,
+                method_span,
+                args,
+                span,
+            } => Completion::Value(self.check_method_call(
+                qualifier.as_ref(),
+                receiver,
+                method,
+                *method_span,
+                args,
+                *span,
+                expected,
+            )),
+
             Expr::Variant {
                 qualifier,
                 ty,
@@ -5659,6 +6657,53 @@ impl Checker<'_> {
                 owner,
                 index: u32::try_from(i).unwrap_or(u32::MAX),
             };
+            // A trait bound (N78): the argument has a usable impl, or is a caller's own
+            // parameter bound by the same trait.
+            if let Some(tr) = self.res.traits().bound_of(param) {
+                let satisfied = match t {
+                    Type::Param(q) => self.res.traits().bound_of(q) == Some(tr),
+                    _ => self
+                        .res
+                        .traits()
+                        .find(tr, t)
+                        .and_then(|imp| self.res.traits().impl_def(imp))
+                        .is_some_and(|d| self.impl_modules.contains(&d.module)),
+                };
+                if !satisfied {
+                    let p = self.res.types().param_name(param);
+                    let shown = self.show(t);
+                    let tname = self
+                        .res
+                        .traits()
+                        .get(tr)
+                        .map_or_else(|| "?".to_owned(), |d| d.name.clone());
+                    let place = if from == WRITTEN {
+                        at
+                    } else {
+                        args.get(from).map_or(at, Expr::span)
+                    };
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNSATISFIED_REQUIREMENT,
+                            place,
+                            format!(
+                                "`{name}` requires `{p}: {tname}`, and `{p}` is `{shown}` here, \
+                                 which has no impl of `{tname}` in this module's scope"
+                            ),
+                        )
+                        .secondary(sig.name_span, "declared here")
+                        .help(if let Type::Param(_) = t {
+                            format!("declare `{shown}: {tname}` on this definition")
+                        } else {
+                            format!(
+                                "implement it, `impl {tname} for {shown}`, in the module of \
+                                 `{tname}` or of `{shown}`, and import that module here"
+                            )
+                        }),
+                    );
+                }
+                continue;
+            }
             if !self.res.types().requires_equality(param) {
                 continue;
             }

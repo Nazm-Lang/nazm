@@ -466,6 +466,19 @@ impl<'a> Canon<'a> {
                 self.expr(callee);
                 self.exprs(args);
             }
+            ExprKind::CallTrait {
+                trait_id,
+                method,
+                self_ty,
+                args,
+                ..
+            } => {
+                self.tag("call-trait");
+                let name = self.names.trait_method(*trait_id, *method);
+                self.bytes(name.as_bytes());
+                self.ty(*self_ty);
+                self.exprs(args);
+            }
         }
     }
 }

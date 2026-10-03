@@ -209,6 +209,8 @@ pub enum DefKind {
     /// refuses the collision; this field is what makes the two identities distinguishable
     /// when they are in different modules.
     Enum,
+    /// A trait (N78). In the type namespace with records and enums, and not a type.
+    Trait,
 }
 
 impl DefKind {
@@ -221,6 +223,7 @@ impl DefKind {
             // and *record* for the category, and there is no such pair for an enum — the
             // keyword and the category are one word, so the identity uses it.
             Self::Enum => "enum",
+            Self::Trait => "trait",
         }
     }
 
@@ -230,6 +233,7 @@ impl DefKind {
             "fn" => Some(Self::Function),
             "record" => Some(Self::Record),
             "enum" => Some(Self::Enum),
+            "trait" => Some(Self::Trait),
             _ => None,
         }
     }

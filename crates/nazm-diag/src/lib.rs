@@ -390,6 +390,35 @@ pub mod codes {
     /// A registry package holding a symbolic link or anything but files and directories.
     pub const PACKAGE_UNSAFE: Code = Code::new("N0514");
 
+    // N78: traits and methods (`architecture.md` §7.79). The checker's N03xx block is full;
+    // these are its continuation. A trait method's malformed syntax is `N0101`, an unknown
+    // name in a bound or an impl is `N0305` when it names no type and `N0610` when it names
+    // a type that is not a trait, a duplicate method in a trait or an impl is `N0203`.
+    /// Two impls of one trait for one type in one compilation.
+    pub const IMPL_CONFLICT: Code = Code::new("N0600");
+    /// An impl in a module that declares neither the trait nor the type.
+    pub const IMPL_ORPHAN: Code = Code::new("N0601");
+    /// An impl that does not define every method of its trait.
+    pub const IMPL_MISSING_METHOD: Code = Code::new("N0602");
+    /// An impl method its trait does not declare, or one whose signature is not the
+    /// trait's with `Self` replaced by the impl's type, effects included.
+    pub const IMPL_METHOD_MISMATCH: Code = Code::new("N0603");
+    /// An impl for a type that cannot have one: a generic type, a `Vec`, a channel, a
+    /// function type, a capability or a type parameter.
+    pub const IMPL_TYPE_REFUSED: Code = Code::new("N0604");
+    /// A method call no trait in scope provides for the receiver's type.
+    pub const NO_METHOD: Code = Code::new("N0605");
+    /// A method call more than one trait in scope provides: the trait must be named.
+    pub const AMBIGUOUS_METHOD: Code = Code::new("N0606");
+    /// A trait written where a type is expected. There are no trait objects.
+    pub const TRAIT_NOT_A_TYPE: Code = Code::new("N0607");
+    /// A method named without being called: methods are not values.
+    pub const METHOD_NOT_A_VALUE: Code = Code::new("N0608");
+    /// A trait method whose first parameter is not `self: Self`.
+    pub const TRAIT_METHOD_SELF: Code = Code::new("N0609");
+    /// A bound, an impl or a qualified call naming a type that is not a trait.
+    pub const NOT_A_TRAIT: Code = Code::new("N0610");
+
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no
     /// diagnostic could not be lowered to Core IR, or its Core IR broke an invariant every

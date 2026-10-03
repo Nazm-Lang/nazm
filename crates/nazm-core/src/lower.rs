@@ -100,9 +100,25 @@ pub(crate) fn lower(program: &Program, res: &Resolution) -> Result<cir::Program,
     if !errors.is_empty() {
         return Err(errors);
     }
+    // The impl table (N78): each impl that is the coherence table's answer, with every
+    // method defined. One the checker refused is not here, and nothing calls through it.
+    let impls = res
+        .traits()
+        .impls()
+        .filter(|(id, d)| res.traits().find(d.trait_id, d.self_ty) == Some(*id))
+        .filter_map(|(_, d)| {
+            let methods: Option<Vec<FnId>> = d.methods.iter().copied().collect();
+            methods.map(|methods| cir::ImplRow {
+                trait_id: d.trait_id,
+                self_ty: d.self_ty,
+                methods,
+            })
+        })
+        .collect();
     let core = cir::Program {
         functions,
         entry: res.entry(),
+        impls,
     };
     let problems = cir::verify(&core, res);
     if problems.is_empty() {
@@ -691,6 +707,32 @@ impl<'a> Lower<'a> {
                 span,
                 ..
             } => self.call(*callee_span, args, *span)?,
+            // A method call (N78), and `x.m()` the checker read as one.
+            AstExpr::MethodCall {
+                receiver,
+                method_span,
+                args,
+                span,
+                ..
+            } => {
+                let ufcs = matches!(&**receiver, AstExpr::Var { span, .. } if self.res.var(*span).is_none());
+                self.method_call((!ufcs).then_some(&**receiver), *method_span, args, *span)?
+            }
+            AstExpr::Variant {
+                ty,
+                ty_span,
+                variant_span,
+                fields,
+                span,
+                ..
+            } if fields.is_empty() && self.res.callee(*variant_span).is_some() => {
+                let receiver = AstExpr::Var {
+                    name: ty.clone(),
+                    span: *ty_span,
+                };
+                let ufcs = self.res.var(*ty_span).is_none();
+                self.method_call((!ufcs).then_some(&receiver), *variant_span, &[], *span)?
+            }
             AstExpr::Construct {
                 ty_span, fields, ..
             } => {
@@ -938,6 +980,53 @@ impl<'a> Lower<'a> {
             kind,
             ty: Some(ty),
             at,
+        })
+    }
+
+    /// A method call (N78): the receiver — `None` when it is written as the first argument,
+    /// `Trait.m(recv, …)` — then the arguments, as the checker resolved them. A call on a
+    /// concrete type is a call of the impl's function; one through a bound is a trait call.
+    fn method_call(
+        &mut self,
+        receiver: Option<&AstExpr>,
+        at: Span,
+        args: &[AstExpr],
+        span: Span,
+    ) -> Lowered<Expr> {
+        let mut lowered = Vec::with_capacity(args.len() + 1);
+        if let Some(r) = receiver {
+            lowered.push(self.expr(r)?);
+        }
+        lowered.extend(self.exprs(args)?);
+        let Some(checked) = self.res.checked_call(at) else {
+            return defect(at, "a method call the checker did not record");
+        };
+        let ty = checked.ret;
+        let kind = if let Some(tc) = self.res.traits().call(at) {
+            ExprKind::CallTrait {
+                trait_id: tc.trait_id,
+                method: tc.method,
+                self_ty: tc.self_ty,
+                args: lowered,
+                callee_at: at,
+            }
+        } else if let Callee::Function(callee) = checked.callee {
+            ExprKind::Call {
+                callee,
+                type_args: Vec::new(),
+                args: lowered,
+                callee_at: at,
+            }
+        } else {
+            return defect(
+                at,
+                "a method call that is neither a function's nor a trait's",
+            );
+        };
+        Ok(Expr {
+            kind,
+            ty: Some(ty),
+            at: span,
         })
     }
 
