@@ -197,7 +197,13 @@ found only by reading all of it.
   checker; no proof assistant, nothing beyond the bound, and nothing about functions, loops,
   strings, effects, tasks or the native backends' code (area 19).
 
-- Fifteen rules: N79 added `explicit-authority` (the `authority` profile); N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
+- Contracts (N87) are `requires` and `ensures` and nothing else: no loop invariants, ranges or
+  ghost state; the only proof is evaluating a call whose arguments are all literals, of a function of
+  the same module; a clause is checked every time, never assumed, and costs its evaluation; the
+  obligation census's `proved` entries are the whole of what is proved — every other overflow, index
+  and division is checked as the program runs, which is the language's guarantee, not a proof of
+  absence; the compiler written in Nazm parses no contract (area 30). Not certification (area 19).
+- Seventeen rules: N87 added `no-unknown-calls` (to `critical` and `cyber`), N80 `checked-paths`, N79 `explicit-authority` (the `authority` profile); N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
   `no-blocking` and `bounded-loops` (the `realtime` profile), N72 `signed-writes` (`accounts`); the
   stack rule bounds depth, not bytes, and is `unknown` through a function value; no constant-time
   rule, and a loop is bounded only in its counted form; `critical` stays a restriction set, not a

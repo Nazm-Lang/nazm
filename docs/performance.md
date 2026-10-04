@@ -2648,6 +2648,24 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### Contracts — N87, measured 2026-10-04
+
+**Hypothesis:** a contract costs its clauses' evaluation and nothing more. **Workload:** 20,000,000
+calls of a two-line function `step(n, k)` with `requires n >= 0 && k > 0` and `ensures result >= n`,
+against the same program with the two clauses removed; the result printed and equal. **Method:**
+debug `nazm`, `--opt-level 2`, best of five wall-clock runs including process start. Apple M1 Pro,
+macOS 27.2.
+
+| 20,000,000 calls | LLVM | Cranelift |
+| --- | ---: | ---: |
+| with the contract | 116.3 ms | 114.6 ms |
+| without | 117.1 ms | 108.0 ms |
+
+Under LLVM the difference is inside the run-to-run noise: the checks are compares and a branch to
+the failure path, which `-O2` schedules among the call's own work. Under Cranelift about 6 %, the
+compares and branches as written. Not measured: checking time (the clauses are typed with the body),
+and a clause that calls a function, which costs that call.
+
 ### Two boards under QEMU — N86, measured 2026-10-04
 
 **Hypothesis:** a program means the same on both boards, and each board's measured stack stays within

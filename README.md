@@ -299,6 +299,7 @@ business raising the floor for the crates that ship.
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
 | `nazm capabilities` | What this build supports, read from the compiler's own tables |
+| `nazm obligations FILE` | Every obligation of a checked program, `nazm.obligations/1` (N87): each contract clause, call of a function with a precondition, overflow, division, index, allocation, call through a function value and call into C — proved (with its witness), checked as the program runs, or unknown. Compiler evidence, not certification; `--json` |
 | `nazm core-ir FILE` | What a checked program became — its Core IR, `nazm.core-ir/1`: typed, every name an identity, every transfer explicit. A debugging view of what `nazm run` and `nazm build` both start from; `--no-spans`, `--json` |
 | `nazm explain-cost FILE` | Each function's allocation, retain, block, channel, foreign and task sites, read off MIR, with a count per call — `at-most-once` or `unknown` (N52); `--json` for `nazm.cost/1` |
 | `nazm explain-flow FILE` | Every sink — a path written to, standard output, a file's data — and every declassification, with the origins that reach it (N52); `--json` for `nazm.flow/1` |
