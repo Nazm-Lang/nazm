@@ -2648,6 +2648,30 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### Two boards under QEMU — N86, measured 2026-10-04
+
+**Hypothesis:** a program means the same on both boards, and each board's measured stack stays within
+its stated bound. **Method:** `nazm-qemu:n86` (Debian, clang 19 with RISC-V, `ld.lld`, QEMU 10.0),
+no network, 8 GiB memory and swap, 4 CPUs; `nazm` built from the tree inside it; each program built
+at `-O0` and `-O2`, linked with `ld.lld -T link.ld`, booted with the board's `emulator` line and a
+20 s deadline; the stack painted with `--stack-watermark`. Host: Apple M1 Pro, macOS 27.2.
+
+| Program | AArch64 `virt` | RISC-V `virt` |
+| --- | --- | --- |
+| byte writes to the UART, result `100` | `HI` / `100`, status 0 | `HI` / `100`, status 0 |
+| `Int` overflow in a loop | `N0400`, status 2 | `N0400`, status 2 |
+| recursion past the stack | `N0408`, status 2 | `N0408`, status 2 |
+| stack used ≤ bound, `-O0` | 176 ≤ 176 bytes | 152 ≤ 160 bytes |
+| stack used ≤ bound, `-O2` | 32 ≤ 48 bytes | 32 ≤ 48 bytes |
+| `fib(20)`, recursive (no bound stated), used `-O0` / `-O2` | 1,696 / 688 bytes | 1,344 / 688 bytes |
+
+Found on the way, and fixed before these numbers: at `-O2` the RISC-V unit carries an `.eh_frame`
+section the linker script did not name, which `ld.lld` placed at the load address ahead of `_start`,
+so the machine started in data; the script now discards unwind tables and names RISC-V's small-data
+sections. The AArch64 bound at `-O0` is met exactly: the bound is clang's frames along the deepest
+path, and the run took that path. No timing is claimed: an emulator's speed says nothing about a
+board's.
+
 ### FFI v3 — N85, measured 2026-10-04
 
 **Hypothesis:** what crosses costs what §7.86 states, and nothing more. A foreign call now also

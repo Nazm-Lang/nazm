@@ -3381,8 +3381,11 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **`mmio_read32(addr: Int) -> Int`** | One volatile 32-bit load from a device register, zero-extended. No effect; needs an `MmioCap` held where it is written, in every function (`N0369` otherwise) |
 | **`mmio_write32(addr: Int, value: Int) -> Int`** | One volatile 32-bit store of `value`'s low 32 bits; `0`. As `mmio_read32` |
 | **`MmioCap`** | A built-in capability type, like `TimeCap`; handed to `main` |
-| **Where there is no device** | `nazm run` and every hosted build refuse a program that calls either (`N0392`) |
-| **The board's contract** | `_start` sets the stack and enables floating point, calls `main`, writes its result in decimal and a newline to the PL011 UART at `0x09000000`, and stops the machine with status 0 by ARM semihosting; a failure writes its diagnostic there and stops with status 2 |
+| **`mmio_read8`, `mmio_write8`, `mmio_read16`, `mmio_write16`** (N86) | The same at 8 and 16 bits: one volatile access of exactly that width, zero-extended on read, `value`'s low byte or half written; never merged, split or reordered against another. A byte-wide device (a 16550 UART) needs the byte access: a 32-bit store writes its neighbours too |
+| **Where there is no device** | `nazm run` and every hosted build refuse a program that calls any of them (`N0392`) |
+| **The board's contract** | `_start` sets the stack and enables floating point, calls `main`, writes its result in decimal and a newline to the board's UART, and stops the machine with status 0; a failure writes its diagnostic there and stops with status 2 |
+| **`riscv64gc-unknown-none-elf`** (N86) | RV64GC in machine mode on QEMU's RISC-V `virt` board, no firmware: the image at `0x80000000`, the NS16550A UART at `0x10000000`, stopped by SiFive's test device at `0x100000`. What builds, and the contract, are the AArch64 board's; LLVM backend only, and only where `clang` has a RISC-V code generator (refused by name otherwise) |
+| **Boards** | A board is a description outside the language — load address, UART, how the machine stops, startup — printed by `nazm inspect` (`toolchain.boards`); a program names device addresses as integers, and no board changes what a program means. Every board is emulated: none is claimed on hardware |
 
 ### WebAssembly: a module whose outside is its imports — N64
 <!-- id: webassembly -->
