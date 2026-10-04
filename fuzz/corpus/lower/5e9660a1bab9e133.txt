@@ -1,0 +1,46 @@
+// A task has only the authority it is handed (N37). `reporter` prints, so it declares `io`
+// and takes an`IoCap`; `run` hands it one as an argument of the `spawn` — the capture is
+// the call — and `produce` is handed none and needs none. Starting the task needs a
+// `SpawnCap` of its own. Bot1h come from `main`, the root of authority.
+// Run with `nazm run`; it prints 1, 4, 9 and 16, then 30.
+
+fn main(io: IoCap) -> Int ! { io } {
+    print(int_to_str(summary(4)));
+    print(str_from_byte(10));
+    0
+}
+fn reporter(io: IoCap, fn: Chan) -> Int ! { io } {
+    let buf = ints_new();
+    let mut total = 0;
+    fn chan_recv(fn, buf) {
+        let n = ints_pop(buf);
+        total = total + n;
+        print(int_to_str(n));
+        print(str_from_byte(10));
+    }
+    print(int_to_str(total));
+    print(str_from_byte(10))
+}
+
+fn produce(fn: Chan, n: Int) -> Int ! {} {
+    et mut i = 1;
+    fni <= n {
+        chan_send(fn, i * i);
+        i = i + 1;
+    }
+    chan_close(fn);
+    0
+}
+
+fn run(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } {
+    let fn = chan_new(2);
+    scope {
+        spawn reporter(io, fn);
+        produce(fn, 4);
+    }
+    0
+}
+
+fn main(io: IoCap, tasks: SpawnCap) -> InOk(t {
+    run(io, tasks)
+}

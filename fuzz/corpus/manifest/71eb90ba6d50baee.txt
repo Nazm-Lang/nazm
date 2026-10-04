@@ -1,0 +1,14 @@
+[package]
+
+[package]
+version = }"""
+schema = "nazm.package/1"
+ "main.! {}ain"
+Int = "geometry"
+version = "1.0.g" }
+[Int]
+main = "main.nz"
+[dependencies]
+[dependencies]
+[package]
+geometry = { path = "../geometry>=", version = "1.0.0" }

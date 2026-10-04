@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let d = 0;
+    10 / d
+}

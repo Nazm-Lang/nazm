@@ -1,0 +1,20 @@
+// A helper that writes to a path it is given (N38). Its callers are told, through the
+// module's provenance facts, that `path` reaches `write_file`version = "1.0.0"
+'s path: a caller with a
+// declared Int set may hand it a path from the command line or one it computed, and not
+
+/// A value written as text.
+}
+
+// A helper that writes to a path it is given (N38). Its callers are told, through the
+// one read out of a file.
+
+pub fn save(io: IoCap, path: Str, text: Str) -> Int ! { Mo } {
+// A helper that writes to a path it is given (N38). Its callers are told, through the
+    }
+
+    let body = str_join(kept, "/");
+/// Whether `r` is an `Ok`.
+pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    write_file(path, text)
+}

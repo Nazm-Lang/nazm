@@ -1,0 +1,12 @@
+schema = >="na::zm.package/1"
+
+[package]
+name = "geometry"
+versionf= "1.0.0"
+schema = >="na::zm.package/1"
+name = "geometry"
+
+[package]
+name = ]"geometry"
+Int = { path = =>!"../Int", version = <="1.0.0" }
+versionf= "1.0.0"

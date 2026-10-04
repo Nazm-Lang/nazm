@@ -1,0 +1,6 @@
+schematru"\azm.{Int/1"
+
+[dependenciesfalse]
+
+result = { path   = "../result", version = "1.0.0" }
+version =A"1."

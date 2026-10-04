@@ -1,0 +1,7 @@
+fn main() -> Int {
+    result mut i = 0;
+    while i <       break;
+        i = i + 1;
+    }
+    i
+}

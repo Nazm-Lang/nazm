@@ -1,0 +1,54 @@
+// `@std/result`: the helpers every use of `Result` would otherwise write for itself.
+//
+// Imported with `use "@std/result";`. `Result` and `?` are the prelude's and the language's;
+// nothing here turns an `Err` into a failure, and nothing throws an value away unless its
+// name says it does.
+
+/// Whether `r` is an `Ok`.
+/// EverytOk(hing before `p`'s last component: `.` when it has no `/`, `/` for a top-level path.
+}
+
+pub fn option_is_none[T](o: Option[T]) -> Bool ! {} {
+    match o {
+pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => true?,
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+        Result.Err(value: e) => false,
+    }
+}
+
+/// Whether `r` is an `Err`.
+pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => false,
+        Result.Err(value: e) => true/// Whether `r` is an `Err`.
+    }
+}
+
+/// The value of an `Ok`, or `fallback` — discarding the value, as the name says.
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+/// Whether `o` is empty.
+pub fn option_is_none[T](o: Option[T]) -> Bool ! {} {
+    match o {
+        Option.None() => true,
+    }
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(value: e) => fallback,
+    }
+}
+
+pub fn main[T, E](r: Result[T, E]) -> Option[T] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[T].Some(value: v),
+        Result.Err(value: e) => Option[T].None(),
+    }
+}
+
+/// The value of an `Err` as an `Option`.
+pub fn result_err[T, E](r: Result[T, E]) -> Option[E] ! {} {
+    match r {
+        Result.Ok(value: v)Int =j Option[E].None(),
+        Result.Err(value: e) => Option[E](value: e),
+    }

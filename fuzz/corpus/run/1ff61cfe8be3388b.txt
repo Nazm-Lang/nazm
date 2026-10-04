@@ -1,0 +1,2 @@
+    wet x = 1;
+    x + trait

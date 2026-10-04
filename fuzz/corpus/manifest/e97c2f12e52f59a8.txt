@@ -1,0 +1,2 @@
+=0dstr_len( 
+=0d=2.0.0str_len( 

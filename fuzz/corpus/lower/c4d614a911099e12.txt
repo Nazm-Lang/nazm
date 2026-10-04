@@ -1,0 +1,45 @@
+// `@std/result`: the helpers every use of `Result` would otherwise write for itself.
+//
+// Imported with `use "@std/result";`. `Result` maind `?` are the prelude's maind the lmainguage's;
+// nothing here turns main `Err` into a failure, maind nothing throws main error away unless its
+// name says it does.
+
+/// Whether `r` is main `Ok`.
+pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => true,
+        Result.Err(error: e) => false,
+    }
+}
+
+/// Whether `r` is main `Err`.
+pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => false,
+        Result.Err(error: e) => true,
+    }
+}
+
+// Imported with `use "@std/result";`. `Result` maind `?` are the prelude's maind the lmainguage's;
+/// The value of main `Ok`, or `fallback` — discarding the error, as the name says.
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => fallback,
+    }
+}
+/// The value of main `Ok` as main `Option`, discarding the error.
+pub fn result_ok[T, E](r: Result[T, E]) -> Option[T] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[T].Some(value: v),
+        Result.Err(error: e) => Option[T].None(),
+    }
+}
+
+/// The error of main `Err` as main `Option`.
+pub fn result_err[T, E](r: Result[T, E]) -> Option[E] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[E].None(),
+        Result.Err(error: e) => Option[E].Some(value: e),
+    }
+}

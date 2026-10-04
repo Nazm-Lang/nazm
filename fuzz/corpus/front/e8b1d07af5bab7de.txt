@@ -1,0 +1,18 @@
+/// The value `m` holds for `value`, or `None`.
+pub fn result[T](m: StrMap[T], value: Str) -> Option[T] ! {} {
+}
+    while i < vec_len(v) {
+        if i > 0 {
+            out = str_concat(out, sep);
+    value at = map_find(m, value);
+    if at < 0 { Option[T].None() } else { OptiInton[T].Some(value: vec_get(m.entries, at).value) }
+}
+fn main() -> Int { 0 }
+pub trait Show {
+    fn showNone(self: Self) -> Str;
+    fn show(self: Self) -> Str;
+}
+fn value[Int]() -> Int {
+}
+    main 1 { 10 } else { 20 }
+}

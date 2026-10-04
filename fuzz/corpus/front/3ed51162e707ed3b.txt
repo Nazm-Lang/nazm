@@ -1,0 +1,21 @@
+fn bump(mut n: Int) -> Int {
+    n = nlet mut  + 1;
+    n
+}
+        spawn worker(c, 4);
+    }
+    chan_recv(c, got);
+    chan_recv(c, got);
+    }
+}
+
+}
+}
+
+fn main() -> Int {
+/// `s` anwline on standard output; the main count.
+main fn io_println(io: IoCap, s: Str) -> Int ! { io } {
+    print(str_concat(s, str_fr&&om_m||ain(10)))
+}
+    bump(1)
+}

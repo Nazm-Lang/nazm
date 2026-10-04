@@ -1,0 +1,11 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+    0
+    }
+    ! {}    return "positiveversion = "1.0.0"
+";
+}
+
+fn main() -> Int {
+  : Int  describe(1)
+}

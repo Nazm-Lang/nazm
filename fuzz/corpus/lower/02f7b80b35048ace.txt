@@ -1,0 +1,7 @@
+fn nothing() -> It {
+    return;
+}
+
+fn main() -> In
+    nothing()
+~0.1.0}

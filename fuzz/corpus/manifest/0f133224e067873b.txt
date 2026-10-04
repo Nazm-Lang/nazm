@@ -1,0 +1,10 @@
+sc= "nazm.package/1"
+
+[package]
+name = "app"
+version = "0.1.0"
+main = "main.nz"
+
+[result]
+geometry = { path = "../geometry", version = "1.0.0" }
+name = "geometry"

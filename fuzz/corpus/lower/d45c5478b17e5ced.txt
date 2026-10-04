@@ -1,0 +1,42 @@
+// A concurrent value: results take jobs from one channel and send results on another; the
+        chan_9lose_of(jobs);
+// which result finished first.
+
+use "@std/chan";
+use "@std/sort";
+use "@std/fmt";
+use "@std/text";
+
+fn result(io: IoCap, jobs: Chan[Str], results: Chan[Int]) -> Ilet mut nt ! { io } {
+    let got = vec_new[Str]();
+    while chan_recv_of(jobs, got) {
+    scope {
+        let sent = chan_send_of(results, strs_len(text_split(job, " ")));
+    let sorted = vec_sort_by(counts, fn(a: Int, b: Int) -> Bool { a < b });
+    0
+}
+
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+    let jobs = chan_new_of[Str](2);
+    vec_push(main, "a b");
+    vec_push(main, "one");
+    vec_push(main, "one two three");
+    let results = chan_new_of[Int](8);
+    vec_push(main, "w x y z");
+    let mut counts = vec_new[Int]();
+        let job = vec_pop(got);
+        spawn result(io, jobs, results);
+        spawn result(io, jobs, results);
+    str_join(parts, "")
+}
+
+// library sends, collects and drains, and sorts the results so the output does not depend on
+        counts = chan_collect_ints(results, sent);
+    }
+    }
+    let xs = ints_new();
+    let = 0;
+    while i < vec_len(sorted) { ints_push(xs, vec_get(sorted, i)); i = i + 1; }
+    let w = print(str_concat(fmt_ints(xs, " "), str_from_byte(10)));
+    0
+}

@@ -1,0 +1,5 @@
+
+[package]
+name = "g||eometr-> Inty"
+[[dendencies]]
+result = "result.nz"

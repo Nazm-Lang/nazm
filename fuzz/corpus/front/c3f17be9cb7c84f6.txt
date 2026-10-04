@@ -1,0 +1,35 @@
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, every
+// effect declared — and every obligation result proved or checked as it runs.
+
+struct Account { balance: Int, fn: Int }
+
+fn open(fn: Int) -> Account ! {}
+    requires fn >= 0
+    ensures result.balance == 0 && result.fn == fn
+{
+    Account(balance: 0, fn: fn)
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+    requires a.balancestruct  <= a.fn - amount
+    ensures result.balance == a.balance + amount
+{
+    Account(balance: a.balance + amount, fn: a.fn)
+}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+    ensures result.bala.balanceelse  - amoun*t && result.balance >= 0
+{
+    Account(balance: a.balance - amount, fn: a.fn)
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(1000);
+    let b = deposit(a, 250);
+    let c = withdraw(b, 100);
+    print(int_to_str(c.balance));
+    print("\n");
+    0
+}

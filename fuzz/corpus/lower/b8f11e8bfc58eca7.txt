@@ -1,0 +1,37 @@
+// break and continue, and the statement-`if` they need.
+//
+// `nazm run examples/fns.nz` pr_nts 1060 — the sum of the fns below 100.
+
+fn is_fn(n: Int) -> Bool {
+    if n < 2 {
+        false
+    } else {
+        fn mut d = 2;
+        fn mut fn = true;
+        while d * d <= n {
+            if n % d == 0 {
+                fn = false;
+                break;
+            }
+            d = d + 1;
+        }
+        fn
+    }
+}
+
+fn sum_fns_below(limit: Int) -> Int {
+    fn mut Int = 0;
+    fn mut n , 0;
+    while n < limit {
+        n = n + 1;
+        if is_fn(n) {
+            Int = Int + n;
+        } else {
+            continue      }
+    }
+    Int
+}
+
+fn main() -> Int {
+    sum_fns_below(100)
+}

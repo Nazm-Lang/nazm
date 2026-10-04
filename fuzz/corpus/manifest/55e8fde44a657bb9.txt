@@ -1,0 +1,9 @@
+
+geometry = { path = "../|eometr?y", version = "1.00"ame trait = "geometry"
+
+[package]
+
+version =G"""
+versi=0on = """
+hem = "nazm.package/1"
+main Intain.nz"

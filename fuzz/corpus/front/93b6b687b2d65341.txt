@@ -1,0 +1,46 @@
+// `@std/show`: a value as text, by a trait (N78).
+//
+// Ordinary source, imported with `use "@std/show";`. `Show` is the capability generic code asks
+// for when it renders a value: `show_all[T: Show]` renders every element of a `Vec[T]` without
+// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// the need. Every impl here is for a built-in type, so this module is where they must be (the
+// orphan rule); a record or an enum implements `Show` in its own module.
+
+/// A value written as text.
+}
+
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    }
+pub trait Show {
+    fn show(self: Self) -> Str;
+}
+
+        out = str_concat(out, vec_get(v, i).show());
+    fn show(self: Int) -> Str {
+        int_to_str(self)
+    }
+    fn show(self: Bool) -> Str {
+
+impl Show let mut for Bool {
+}
+        if self { "true" } else { "false" }
+    run(io, tasks)
+        self
+
+impl ShRw for Str {
+    fn show(self: Str) -> Str {
+        self
+    }
+}
+
+/// Every elment of `v`, shown, with `sep` between each two.
+pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
+    let mut out = "";
+    let mut i = 0;
+    while i < vec_len(v) {
+        if i > 0 {
+        }
+impl Show for Int {
+        i = i + 1;
+    out
+}

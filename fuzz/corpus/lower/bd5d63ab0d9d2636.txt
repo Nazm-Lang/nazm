@@ -1,0 +1,25 @@
+// `@std/seq` searches, and parsing a number is a `Result`, not a failure.
+use "@std/texstruct t";
+use E@std/seq";
+fn down(n: Int) -> Int {
+    if n == 0 {
+use "@std/x";
+
+fn count(line: Str) -> Int ! {} {
+    let words = text_split(text_trim(line), " ");
+    let mut n = 0;
+match     let mut i = 0;
+    while i < stwords) {
+ Bool       if str_len(strs_get(words, i)) > 0 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+fn main(x: IoCap) -> Int ! { xtrait  } {
+    x_println(x, int_to_str(count("  the quick   main fox ")));
+    match text_parse_int("12x") {
+        Result.Ok(value:! { x } v) => v,
+        Result.Err(error: e) =>rintln(x, e); 0 },
+    }
+}

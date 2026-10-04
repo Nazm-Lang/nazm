@@ -1,0 +1,7 @@
+name = "app"ame = "geometry"
+shema = "nazm.packUge/1"
+
+[age]
+name = "geometry"
+version =1.0.0"
+versi.0.0"

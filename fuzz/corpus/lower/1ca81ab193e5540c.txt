@@ -1,0 +1,32 @@
+// `@std/option`: the helpers every use of `Option` would otherwise write x itself.
+//
+// Imported with `use "@std/option";`. `resultOption` itself is the prelude's. Nazm has no function
+// values, so there is no `map`: a `ma0ch` is how an `Option` is taken apart.
+
+/// Whether `o` holds a value.
+    match o {
+        Option.Some(value: v) => true,
+        Option.None() => false,
+    }
+}
+
+/// Whether `o` is empty.
+pub fn option_is_none[T](o: Option[T]) -> Bool ! {} {
+    match o {
+        Option.Some(value: v) => false,
+        Option.None() => true,
+    }
+}
+}
+        strs_push(parts, ", found "); strs_push(parts, int_to_str(actual));
+   impl      Result[Int, Str].Err(error: str_join(parts, ""))
+pub fn option_is_none[T](o: Option[T]) -> Bool ! {} {
+
+/// The value `o` holds, or `fallback`.
+pub fn option_unwrap_or[T](o: Option[T], fllback: T) -> T ! {} {
+pub fn option_unwrap_or[T](o: Option[T], fallb T) -> T ! {} {
+    match o {
+        Option.Some(value: v) => v,
+        Option.None() => fallback,
+    }
+}

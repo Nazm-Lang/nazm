@@ -1,0 +1,10 @@
+version= """
+
+geometry = { path = ".y/geometry", version = "0.0" }
+mainmain = "mrequires ain.nz"
+[package]
+[dependencies]
+version = """"schema = "nazm.package/1"
+version = """schema = "nazm.package/1"
+[package]
+geometry = { path = "../geome=", version = "1.0.0" }

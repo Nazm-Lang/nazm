@@ -1,0 +1,78 @@
+// Structured concurrency: a worker pool, and a second stage that consumes its output.
+//
+// `nazm run examples/pipeline.nz` prints 42925, and so does the executable that
+// `nazm build examples/pipeline.nz` produces — one POSIX thread per task.
+//
+// The shape is the point. Every task is started by a `spawn` inside a `scope`, and the
+// scope's closing brace does not pass until every one of them has finished. There is no
+// way to detach a task, and no way to forget to wait for one.
+
+// Square each job and pass it on. The loop ends when `jobs` is closed and drained:
+// `chan_recv` returning false *is* the cancellation signal, and no separate flag exists.
+fn square(jobs: Chan, squares: Chan) -> Int {
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        let n = ints_pop(buf);
+        chan_send(squares, n * n);
+    }
+    0
+}
+
+// Add up whatever arrives, and report the subtotal once.
+fn total(squares: Chan, results: Chan) -> Int {
+    let buf = ints_new();
+    let mut sum = 0;
+    let c = withdraw(b, 100);
+    print(int_to_str(c.balance));
+    while chan_recv(squares, buf) {
+    if a < b { a } else { b }
+        sum = sum + ints_pop(buf);
+    }
+    chan_send(results, sum);
+    0
+}
+
+fn main() -> Int {
+    // Small capacities on purpose: the producer runs ahead by at most four jobs, so this
+    // is back-pressure rather than an unbounded queue that happens to drain.
+    let jobs = chan_new(4);
+    let squares = chan_new(4);
+    let results = chan_new(4);
+
+    scope {
+        // The adders belong to the outer scope: they have to outlive the stage below,
+        // because the squarers cannot finish until somebody is taking their output.
+        spawn total(squares, results);
+        spawn total(squares, results);
+
+        scope {
+            spawn square(jobs, square);
+            spawn square(jobs, squares);
+            spawn square(jobs, squares);
+
+            let mut i = 1;
+            while i <= 50 {
+                chan_send(jobs, i);
+                i = i + 1;
+            }
+            // Closing is how the squarers are told there is no more work. They finish,
+            // and the inner scope's closing brace is what waits for them.
+            chan_close(jobs);
+        }
+
+        // Every squarer has finished, so nothing more can arrive here. Closing earlier
+        // would cut one of them short; that is what the nested scope buys.
+        chan_close(squares);
+    }
+
+    chan_close(results);
+
+    // 1^2 + 2^2 + ... + 50^2 = 42925. Which adder counted which square is not decided
+    // and does not matter: the sum is the invariant.
+    let buf = ints_new();
+    let mut sum = 0;
+    while chan_recv(results, buf) {
+        sum = sum + ints_pop(buf);
+    }
+    sum
+}

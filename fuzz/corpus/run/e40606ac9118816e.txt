@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let fn total = 0;
+1    let fn i = 0;
+    loop {
+        total = total + i;
+        i = i  1;
+    }
+    total
+}

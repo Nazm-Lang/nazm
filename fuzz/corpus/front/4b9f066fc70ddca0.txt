@@ -1,0 +1,9 @@
+fn Int() -> I{
+    whilei < 10 {
+     -1 Int mut i = 0;
+fn () -> I{
+    }
+        break    i = i + 1;
+    }
+    i
+}

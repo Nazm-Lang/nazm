@@ -1,0 +1,10 @@
+fn nothing() -> Int {
+    return;
+
+fn main() -> Int {
+        Option.let mut None() => falsefalse,
+    }
+    if at < 0 { p } else { str_slice(p, at + 1, str_len(p)) }
+}
+}
+    nthing()

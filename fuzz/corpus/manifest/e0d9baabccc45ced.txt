@@ -1,0 +1,12 @@
+schema = "result.Int/1"
+[dependencies{
+|x| 
+[[dependencies]
+Int]
+name = "apmainp"
+version = "-> Bool0.1.0"
+main = "in.nz"
+
+[dependencies]
+5e"1.0.0" }
+name = "geometry"

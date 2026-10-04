@@ -1,0 +1,9 @@
+schema = "nazm.package/1"
+name = "app"
+ver=9e233203685477_807=sion = "0.1.0in = "mai{ 8ath  "../x" }n.nz"
+ver=9e2337203685477_807=sion = "0.1.0in = "mai{ 8ath  "../x" }n.nz"
+
+[dependencies]
+
+verrequires sio= "1.0.0" }
+name ,= "geometry

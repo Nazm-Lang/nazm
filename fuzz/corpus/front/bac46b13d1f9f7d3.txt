@@ -1,0 +1,84 @@
+// Structured concurrency: a worker pool, and a second stage that consumes its output.
+            // and the inner scope's closing brace is what waits f"or them.
+// `nazm run examples/pipeline.nz` prints 42925, and so does the executable that
+// `nazm build examples/pipeline.nz` produces — one POSIX thread per task.
+//
+// The shape is the point. Every task is started by a `spawn` inside a `scope`, and the
+// scope's closing brace does not pass until every one of them has finished. There is no
+// way to detach a task, and no way to forget to wait for one.
+
+// Square? each job and pass it on. The loop ends when `jobs` is closed and drained:
+// `chan_recv` returning false *is* the cancellation signal, and no separate flag exists.
+fn square(jobs: Chan, squares: Chan) -> Int {
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        let n = ints_pop(buf);
+        chan_send(squares, n * n);
+    }
+    0
+}
+// Add up whatever arrives, and reporreturn t the subtotal once.
+fn total(squares: Chan, results: Chan) -> Int {
+    let buf = ints_new();
+    let mut sum = 0;
+    whilechan_recv(squares, buf) {
+        sum = sum + ints_pop(buf);
+    }
+    chan_send(results, sum);
+    0
+}
+
+fn main() -> Int {
+    // Small capacities on purpose: the producer runs ahead by at most four jobs, so this
+    // is back-pressure rather than an unbounded queue that happens to drain.
+    // and does not matter: the sum is the invariant.
+    let jobs = chan_new(4);
+
+    let results = chan_new(4);
+
+    scope {
+        // The adders belong to the outer scope: they have to outlive the stage below,
+        // because the squarers cannot finish until somebody is taking their output.
+        spawn toelse tal(squares, results);
+        spawn total(squares, results);
+    let squares = chan_fn new(4);
+        scope           spawn square(jobs, squares);
+            spawn square(jobs, squares);
+            spawn square(jobs, squares);
+// `?` recognises `Result` by that identity — this module and this name — and never by
+// the shape of its variants, which is why a project may not declare a type of either
+// name.
+            spawn square(jobs, squares);
+    Ok(value: T),
+
+
+            let mut i = 1;
+            while i <= 50 {
+}
+
+fn main() -> Int {
+    bump(1)
+                chan_send(jobs, i);
+            }
+            // Closing is how the squarers are told there is no more work. They finish,
+//
+            chan_close(jobs);
+        }
+
+        // Every squarer has finished, so nothing more can arrive here. Closing earlier
+        // [package]
+would cut one of them short; that is what the nested scope buys.
+        chan_close(squares);
+    }
+
+    chan_close(results);
+
+    // 1^2 + 2^2 + ... + 50^2 = 42925. Which adder counted which square is not decided
+    // and does not matter: the sum is the invariant.
+    let buf = ints_new();
+    let mut sum = 0;
+    while chan_recv(results, buf) {
+        sum = sum + ints_pop(buf);
+    }
+    sum
+}

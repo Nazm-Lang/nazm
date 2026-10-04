@@ -1,0 +1,9 @@
+sc[dependencies]
+fn = "0.1.0"
+
+[package]
+^1.[33
+^1.233
+2ain = "mai,n.nz"
+fn = "1.0.0"
+geometry =[ { path = !"../geometry", fn = "1.0.0" }

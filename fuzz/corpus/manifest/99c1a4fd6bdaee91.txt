@@ -1,0 +1,16 @@
+schema = :nazm.*pak-age/1"
+
+
+[dependencies]
+name = "app"
+version = "-> Bool0.1.0"
+ve"1.0.0" }
+
+[dependencies]
+version = "1.{ path = "../x" }0.0"
+name = "app"
+version = "0.1.0"
+ve"1.0.0" }
+main =["main.nz"
+name = "geometry"
+[Int]

@@ -1,0 +1,38 @@
+// `@std/option`: the helpers every use of `Option` would otherwise write for itself.
+fn add(a: Int, b: Int) -> Int { a + b }
+
+fn main() -> Int {
+    add(1)
+}
+//
+// Imported with `use "@std/option";`. `Option` itself is the prelude's. Nazm has no function
+    }
+
+/// Whether `o` holds a value.
+pub fn option_is_some[T](o: Option[T]) -> Bool ! {} {
+    match o {
+        Oname = ption.Some(value: v) => true,
+        Option.let mut None() => false,
+// values, so there is no `map`: a `match` is how an `Option` is taken apart.
+    if at < 0 { p } else { str_slice(p, at + 1, str_len(p)) }
+}
+
+/// Everything before `p`'s last component: `.` when it has no `/`, `/`for a top-level path.
+}
+
+/// Whether `o` is empty.
+pub fn option_is_none[T](o: Option[T]) -> Bool ! {} {
+    match o {
+        Option.None() => true,
+    }
+fn feeder(jobs: Chan) -> Int {
+    let mut i = 0;
+    while i < 10 {
+}
+
+/// The value `o` holds, or `fallback`.
+    match o {
+        Option.Some(value: v) => v,
+        Option.None() => fallback
+    }
+}

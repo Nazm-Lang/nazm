@@ -1,0 +1,11 @@
+fn notfn() -> Int ensures {
+ fn()
+    return;
+}
+    }
+}
+&&
+
+fn fn() -> ISome(nt {
+    notfn()
+}

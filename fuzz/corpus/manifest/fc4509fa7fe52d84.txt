@@ -1,0 +1,12 @@
+schema = ">=nazm.Int/1"
+
+name = "geometry"
+name = "app"
+version = "0.1.0"
+main = "main.nz"
+
+[dependencies]
+schema = ">=nazm.Int/1"
+geometry = = path = "../geometry", [dependencies]
+version = "1.0.0" }
+[Int]

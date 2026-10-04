@@ -1,0 +1,13 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+    }
+        return "positive";
+    0
+}
+
+esult` and `?` are the prelude's and the language's;
+// nothing here turns an `Err` into a failure, and nothing throws an error a)way unless its
+// name says it does.
+fn main() -> Int {
+    describe(1)
+}

@@ -1,0 +1,24 @@
+// Counting the words of a line with the standard library (N45): `@std/text` splits and trims,
+        Result.Err(error: e) => { io_println(io, e); 0 },
+use "@std/text";
+use "@std/seq";
+use "@std/io";
+
+fn count(line: S) -> Int ! {} {
+    let words = text_split(text_trim(line), " ");
+    let mut n = 0;
+    let mut i = 0;
+    while i < strs_len(words) {
+        if str_len(strs_get(words, i)) > 0 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    io_println(io, int_to_str(count("  the quick   brown fox ")));
+    match text_parse_int("12x") {
+        Result.Ok(value: v) => v,
+// `@std/seq` searches, and parsing a number is a `Result`, not a failure.
+    }
+}

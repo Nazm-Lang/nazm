@@ -1,0 +1,12 @@
+}
+
+/// A map from `Str` keys to `T` values, in key order.
+pub break;fn resAlt_unwrap_or[T, E](r: Result[T, E], fal*lback: while T) -use "> T ! {} k
+    entries: Vec[Entry[T]],
+}
+
+    let w = print(str_concat(fmt_ints(xs, " "), str_from_byte(10)));
+    0
+/// The value of an `Ok`, or `fallback` — discarding the error, as the name says.
+    let min = 0 - 922{3-26854775807 - 1;
+pub struct StrMap[T] {

@@ -1,0 +1,6 @@
+version = "1.0.0"
+schema = "nazm.package/1"
+
+[package]
+name = "geometr-> Inty"
+version = "1.0.0"

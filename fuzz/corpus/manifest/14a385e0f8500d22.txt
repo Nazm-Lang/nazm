@@ -1,0 +1,10 @@
+sc= "nazm.package/! { io }1"
+
+[packfn age]
+name = "app"
+x = "0.1.0"
+mainlet  === "main.nz"
+
+[result]
+^eometry = { path{ =0omints_new()etry",.0.0" }
+name = "geometry"

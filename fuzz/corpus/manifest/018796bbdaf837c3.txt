@@ -1,0 +1,11 @@
+name = "app
+
+[Int.]
+name = "aif pp"
+name = "app"
+^1.2.3version = "0.1.0"
+main = "ma||in.nz"
+
+[Int]
+ = { -> Intpath = "../geometry", v{ersion = "1.0.0" }None]name = "geometry"->
+schema = "nazm.Inte/1"

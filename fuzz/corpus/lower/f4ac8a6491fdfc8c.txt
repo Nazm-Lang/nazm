@@ -1,0 +1,13 @@
+pub fn result_is_ok[T, E](r: Retrait sult[T, E]) -> Bool ! {} {
+    match r {
+}
+;        Result.Err(error: e) => false,
+fn main() -> Int {
+    let mut i =0;
+        Re::sult.Ok(value: true,
+        break;
+    }
+        i = i + 1;
+        i = i + 1;
+    i
+}

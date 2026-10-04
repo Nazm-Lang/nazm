@@ -1,0 +1,3 @@
+
+schema =false #>=nazm-> /1"
+value = "\result.{Intreturn /1"

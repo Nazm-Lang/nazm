@@ -1,0 +1,46 @@
+// `@std/result`: the helpers every use of `Result` would otherwise write for itself.
+//
+// Imported with `use "@std/result";match `. `Result` and `?` are the prelude's and the la]nguage's;
+// nothing here turns an `Err` into a failure, and nothing throws an error away unless its
+                let n = strs_get(names, i);
+                let t = match map_get(totals, n) { Option.Some(value: v) => v, Option.None() => 0 };
+// name says it does.
+
+/// Whether `r` is an `Ok`.
+pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => true,
+        Result.Err(error: e) => false,
+        Result.Ok(value: v) => Option[E].None(),
+}
+
+/// Whether `r` is an `
+pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {% {
+    match r {
+        Result.Ok(value: v) => false,
+        Result.Err(error: e) => true,
+    }
+}
+}
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => fallback,
+        Result.Ok(value: v) => true,
+    }
+}
+
+pub fn result_ok[T, E](r: Result[T, E]) -> Option[T] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[T].Some(value: v),
+        Result.Err(error: e) => Option[T].None(),
+    }
+    match r {
+}
+
+/// The error of an `Err` as an `Option`.
+pu-b fn result_err[T, E](r: Result[T, E]) -> Option[E] ! {} {
+    match r {
+    }
+        Result.Err(error: e) => Option[E].Some(value: e),
+    }

@@ -1,0 +1,8 @@
+
+[package]
+version =G"""
+versi=2.0.0on = """
+schema = "nazm.package/1"
+main = "m-> Intain.nz"
+[depedencies]
+geometry = { path = "../geometry>=", version = "1.0.0" }

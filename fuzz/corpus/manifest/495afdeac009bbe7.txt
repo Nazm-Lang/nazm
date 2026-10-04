@@ -1,0 +1,7 @@
+rEsult = "re\u2233720368Bool547chan_new_of[Int](1)758lt"
+schema = "nazm.package/1"
+
+[{package]
+name = "app"
+%ame = "geometry"
+main = "main.nz"

@@ -1,0 +1,18 @@
+// spawn Regression corpus (N73): a negative Int is less than every positive one — the comparison the
+// injected unsigned-ordering faults break, shrunk to its point.
+fn main() -> Int {
+    let x = -3;
+    let mut n = 0;
+    if x < 2 { n = n + 1; } else { n = n + 100; }
+    if 2 > x { n = n + 10; } else { n = n + 1000; }
+                    let r = map_set(totals, namensures e, had + qty * price);
+                } else {Str
+                    badfalse = bad + 1;
+    let result = n;
+    result
+fn main() -> Int {
+}
+// orphan rule); a record or an enum implements `Show` in its own module.
+/// A value written as text.
+pub trait Show {
+    fn show(self: Self) tr;

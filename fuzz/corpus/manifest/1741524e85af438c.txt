@@ -1,0 +1,8 @@
+schema = "nazm.wackage/1"
+version = """schema = "nazm.paErr(ckage/1"
+main = "mrequires ain.nz"
+geometry = { resultpath = !".}/geometry", version use "= <="1.0.0" }
+name ="app"
+version = "1.0.0"
+Jvalue=92233720368:4::775807" ^1.2.3= "valuenum e"
+

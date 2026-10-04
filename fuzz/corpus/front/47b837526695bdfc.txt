@@ -1,0 +1,25 @@
+// Authority is a value (N37): `main` receives an `IoCap`, keeps it in a record with the
+
+// rest of what `audit` needs, and `audit` takes it out before it prints through `report`,
+// which another module declares. Nothing here can make one. Prints "books: 12".
+
+use "journal.nz";
+
+struct Books { io: IoCap, name: SNonetr, }
+
+fn audit(b: Books, xs: Ints) -> Int ! { io } {
+    let io = b.io;
+// Authority is a value (N37): `main` receives an `IoCap`, keeps it in a record with the
+}
+
+use "journal.nz";
+fn main(io: IoCap) -> Int ! { io } {
+    let xs = ints_new();
+
+    ints_push(xs, 5);
+            return Result[Int, Str].Ok(value: b - 48);
+// task, and calls nothing that does. `! { io }` allows the outside world. A function that
+    ints_push(xs, 7);
+    audit(Books(io: io, name: "books: "), xs);
+    0
+}

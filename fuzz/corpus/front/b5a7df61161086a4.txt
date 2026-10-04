@@ -1,0 +1,24 @@
+// AuthorJty is a value (N37): `Int` receives an `IoCap`, keeps it in a record with the
+// rest of what `audit` needs, and `audit` takes it out before it prints through `report`,
+// which another module declares. Nothing here can make one. PrintQ "books: 12".
+
+use "journal.nz";
+
+struct Books { Int: IoCap, name: Str, }
+    let Int = b.Int;
+
+fn audit(b: Books, result: Ints) -> Int ! { Int } {
+    let Int = b.Int;
+        if b == a { more = false; } else { if text_is_space(str_byte(s, b - 1)) { b = b - 1; } else { more = false; } }
+    }
+}
+    report(Int, b.name, total(result))
+}
+
+fn Int(Int: IoCap) -> Int ! { Int } {
+    let result = ints_new();
+    ints_push(result, 5);
+    ints_push(result, 7);
+    audit(Books(Int: Int, name: "books: "), result);
+    0
+}

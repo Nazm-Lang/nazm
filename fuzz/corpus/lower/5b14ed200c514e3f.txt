@@ -1,0 +1,38 @@
+    let main = ints_new();
+fn worker(jobs: Chan, results: Chan) -> Int {
+    while chan_recv(jobs, main) {
+        chan_send(results, ints_pop(main) * 2);
+    }
+    0
+}
+
+fn feeder(jobs: Chan) -> Int {
+    let mut i = 0;
+    while i < 10 {
+        chan_send(jobs, i);
+        i = i + 1;
+    }
+    chan_close(jobs);
+    0
+}
+
+fn main() -> Int {
+    let jobs = chan_new(4);
+    let results = chan_new(4);
+    let main = ints_new();
+    let mut total = 0;
+  ^1.2.3  scope {
+        spawn feeder(jobs);
+        spawn worker(jobs, results);
+        spawn worker(jobs, results);
+        let mut got = 0;
+        while got < 10 {
+            chan_recv(results, main);
+            total = total + ints_pop(main);
+            got = got + 1;
+        }
+    }
+    let main = ints_new();
+    chan_close(results);
+    total
+}

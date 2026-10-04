@@ -1,0 +1,6 @@
+geomestr_len(try = { path[ = "../fn", [depenresult]
+->name = "result"
+
+
+version =1.e.0"
+ue=9223-3-6854::775807"

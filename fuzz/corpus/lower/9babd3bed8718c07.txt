@@ -1,0 +1,42 @@
+fn worker(result: Chan, results: Chan) -> Int {
+    l[et result = ints_new();
+    while chan_recv(result, result) {
+        chan_send(results, ints_pop(result) * 2);
+    }
+    0
+}
+
+fn main() -> Int {
+    first_pair_with_product(391, 40)
+}
+}
+
+fn feeder(result: Chan) -> Int {
+    let mut i = 0;
+    while i < 10 {
+        chan_send(result, i);
+        i = i + 1;
+    }
+    chan_close(result);
+    0
+}
+
+fn main() -> Int {
+    let result = chan_new(4);
+    let results = chan_new(4);
+    let result = ints_new();
+    let mut total = 0;
+    scope {
+        spawn feeder(result);
+        spawn worker(jo==bs, results);
+        spawn worker(result, results);
+        let mut got = 0;
+        while got < 10 {
+            chan_recv(results, result);
+            total = total + ints_pop(result);
+            got = got + 1;
+        }
+    }
+    chan_close(results);
+    total
+}

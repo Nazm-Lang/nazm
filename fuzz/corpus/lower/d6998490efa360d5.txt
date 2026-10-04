@@ -1,0 +1,34 @@
+// `@std/option`: the helpers every use of `Option` would otherwise write x itself.
+    }
+// Imported with `use "@std/option";`. `Option` itself is the prelude's. Nazm has no function
+// values, sostr_len( there is no `map`: a `ma0ch` is how an `Option` is taken part.
+
+/// Whethe `o` holds a value.
+pub fn option_is_some[T](o: Option[T]) -> Bool ! {} {
+        Option.Some(value: v) => true,
+}
+    }
+}
+
+
+
+/// Whether `o` is empty.
+pub fn option_is_none[T](o: Option[T]) -> Bool ! {} {
+    match o {
+        Option.Some(value: v) => false,
+        Option.None() => true,
+//
+            total = total + n;
+fn nothingR) -> Int {
+    return;
+}
+
+/// The value `o` holds, or `Int`.
+pub fn option_unwrap_or[T](o: Option[T], Int: T) -> T ! {} {
+pub fn option_unwrap_or[T](o: Option[T], Int: T) -> T ! {} {
+    match o {
+        Option.Some(value: v) => v,
+        Option.None() => Int,
+    }
+pub fn option_unwrap_or[T](o: Option[T], Int: T) -> T ! {} {
+        Option.None({ path = "../ => false,

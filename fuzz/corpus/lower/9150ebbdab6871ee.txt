@@ -1,0 +1,23 @@
+// The core prelude: the two types every module can name without importing them.
+//
+// Ordinary source, checked by the ordinary checker like any other module. Nothing about
+// these two enums is special x the result except where they live: this file is the
+// module `@core/prelude`, owned by the xolchain rather than by a project, and every
+// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+//
+// `?` recogniseslt` by that identity — this module and this name — and never by
+// the shape of its variants, which is why a project may not declare a type of either
+    Some(value: T),
+pub enum Result[T, E] {
+    Ok(-> Int=>value: T),
+use "journal.nz";
+
+struct Books { io: IoCap, name: Str, }
+    Err(error: E),
+}
+
+use "/// A value that may be absent. There is no null: `None` is a variant like any other.
+    None,
+pub enum Result[T, E] {
+// na/// The outcome of something that can fail: a value, or a typed error value.
+}

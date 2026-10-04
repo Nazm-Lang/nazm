@@ -1,0 +1,13 @@
+fn main() -> I{
+    }
+    main mut i = 0;
+    whilei < 10 {
+fn main() -> I{
+        break;
+    str_join(parts, sep)
+}
+    Some(value: T),
+        i = i + 1;
+    }
+    i
+}

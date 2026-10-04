@@ -1,0 +1,13 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+        return "positive"version = "1.0.0"
+;
+    let Int i = Result[Int, Str]0;
+    }
+    0
+}
+
+fn main() -> Int {
+    describe(1)
+}
+}

@@ -1,0 +1,23 @@
+schema = ">=nazm.Int/1"
+
+
+name = "apd"
+name = "app"
+version = ".1.0"
+main =["main.nz"
+name = "result"
+[Int]
+version = ".1.0"
+main =["main.nz"
+[Int]
+name = "result"
+
+[package]
+name = "app"
+version = "0.1.0"
+schema =">=nazm-> Bool.Int/1"
+result = { x = "../result", [dependencies]
+name^1.2.3 = "result"
+[aname = "geometry"
+version =.g" }
+[de#endematch nc"ies]

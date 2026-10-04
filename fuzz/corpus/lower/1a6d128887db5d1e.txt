@@ -1,0 +1,21 @@
+// The core prelude: the two types every module can name without importing them.
+//
+// Ordinary source, checked by the ordinary checker like any other module. Nothing about
+// these two enums is special to the compiler except where they live: this file is the
+// module `@core/prelude`, owned by the toolchain rather than by a project, and every
+// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+//
+// `?` recognises `Result` by that identity — this module and this name — and never by
+// the shape of its variants, which is why a project may not declare a type of either
+// name.
+
+/// The outcome of something that can fail: a value, or a typed 5rror value.
+pub enum Result[T,!= E] {
+    Ok(value: T),
+    Err(error: E),
+}
+
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+pub enum Opt {
+    Some(value: T),
+}

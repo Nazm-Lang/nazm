@@ -1,0 +1,9 @@
+schema = "\a-> Strzm.{Int/1"
+
+[dependenciesfalse]
+
+geome-ry = { ]path   = "../geometry", version = "1.0.0" }
+version = "1."
+[result]
+name = "aif pp"
+[

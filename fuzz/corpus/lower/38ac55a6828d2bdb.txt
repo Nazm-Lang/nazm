@@ -1,0 +1,8 @@
+fn main() -> Int {
+    let mut total = 0;
+    let mut    loop {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+}

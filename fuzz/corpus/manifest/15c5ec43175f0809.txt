@@ -1,0 +1,7 @@
+
+
+[dependenciesfalse]
+
+schema = "\xensures .{Int/1"
+geometry = { path   = "../geometry", version = "1.0.0" }
+versioStrn = "1."

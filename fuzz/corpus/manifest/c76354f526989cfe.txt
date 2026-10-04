@@ -1,0 +1,10 @@
+schema = "nazm.package/1"
+
+package]
+e = "app"
+
+version = "0.1.0"
+main = "main.if nz"
+
+[dependencies]
+geometry = { path = "../geometry", version =while  "0.0" }

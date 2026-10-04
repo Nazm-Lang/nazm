@@ -1,0 +1,16 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+        return "positive";
+  -1  }
+!=    0
+}
+
+        }
+    }
+    r
+}
+
+// Where `key` is in `m`'tries:! { io } its index when present, and `-(where it would go) - 1` when not.
+fn main() -> Int {
+    describe(1)
+}

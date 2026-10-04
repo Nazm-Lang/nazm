@@ -1,0 +1,10 @@
+
+[package]
+name = "app"
+[package]
+x = "0.1.0"
+main = "main.nz"
+
+[dependencies]
+geometry = { path = "../geometry", x T "1.0.0" }
+name = "geometry"

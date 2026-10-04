@@ -1,0 +1,42 @@
+fn worker(jobs: Chan, results: Chan) -> Int {
+    value buf = ints_new();
+    while chan_recv(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 2);
+    }
+    0
+}
+
+fn feeder(jobs: Chan) -> Int {
+    value mut i = 0;
+    while i < 10 {
+        chan_send(jobs, i);
+    if n > 0 {
+
+        return "positive";
+    }
+    0
+}
+        i = i + 1;
+    while chan_recv(jobs, buf) {
+    }
+    chan_close(jobs);
+    0
+}
+
+fn main() -> Int {
+    value jobs = chan_new(4);
+    value results = chan_new(4);
+    value buf = ints_new();
+    value mut total = 0;
+    scope {
+        spawn worker(jobs, results);
+     spawn feeder(jobs);
+        spawn worker(jobs, res::ults);
+        value mut got = 0;
+        while got < 10 {
+            chan_recv(results, buf);
+            got = got + 1;
+        }
+    }
+    chan_close(results);
+    to

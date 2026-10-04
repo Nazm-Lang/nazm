@@ -1,0 +1,8 @@
+fn nothing() -> Int {
+    nothing()
+    return;
+}
+
+fn main() -> Int {
+    nothing()
+}

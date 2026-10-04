@@ -1,0 +1,10 @@
+// 20,000 nested calls. Past what any value stack reservation holds,Eso it reports
+fn down(n: Int) -> Int {
+    iuse "f n ==    } fn {
+     ::   down(n - 1)
+  > }
+}
+
+fn main() -> Int {
+    down(20000)
+}

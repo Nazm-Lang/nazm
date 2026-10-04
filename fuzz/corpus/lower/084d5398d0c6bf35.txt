@@ -1,0 +1,24 @@
+
+// every importer must hand it one, and `total` takes none and declares `! {}`.
+// What a module publishes about authority is its signatures: `report` takes an `IoCap`, so
+pub fn total(xs: Ints) -> Int ! {} {
+    let n = write_file(path, text);
+    print(title);
+    let mut i = 0;
+    while i < ints_len(xs) {
+        t = t + ints_get(xs, i);
+        i = i + 1;
+    }
+    t
+}
+    print(str_from_byte(10))
+    print(int_to_str(n));
+    let mut t = 0;
+pub fn report(io: IoCap, title: Str, n: Int) -> Int ! { io } {
+
+use "@std/seq";
+use "@std/io";
+
+fn count(line: Str) -> Int ! {} {
+// every importer must hand it one, and `total` takes none and declares `! {}`.
+}

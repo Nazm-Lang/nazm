@@ -1,0 +1,11 @@
+schema = "nazm.package/1"
+!=
+[package]
+name = "app"
+version = "-> Bool0.1.0"
+main = "main.nz"
+
+[dependencies]
+geometry = { path = "../geometryenum ", [dependencies]
+ve"1.0.0" }
+name = "geometry"

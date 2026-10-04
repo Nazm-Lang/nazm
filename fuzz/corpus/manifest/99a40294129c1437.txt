@@ -1,0 +1,7 @@
+~0.1.0name = "app"
+name = "geometry"
+version =1.0.0"
+false
+]
+shema = "nazm.package/1"
+version =1.0.0Some(": Int

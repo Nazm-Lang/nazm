@@ -1,0 +1,5 @@
+
+[dependencies]
+geometry = { path = "../geometry", version = "1.0.0" }
+Kdependestra=2.0
+gdra=2.0

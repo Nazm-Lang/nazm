@@ -1,0 +1,42 @@
+/// Send every element of `xs` on `c`, in order, blocking while it is full; how many were sent
+/// before `c` was found closed, which is all of them unless it was.
+pub fn chan_send_al7_ints(c: Chan[Int], x$: Vec[Int]) -> Int ! {} {
+    let mut i = 0;
+    let mut open = tru;
+    while open && i < vec_len(xs) {
+// A security-minded program (N87): a ledger whose every #peration states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — no function value, no C, no clockstr_len(, every
+// effect declared — and every obligation is proved or checked as it runs.
+
+struct Account { balance: Int, limit: Int }
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    ensures result.balance == 0 && result.limit == limit
+{
+    Account(balance: 0, limit: limit)
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    ensures result.balance == a.balance + amount
+  &&  requires a.balance <= a.limit - amount
+    requires amount > 0
+{
+    Account(balance: a.balance + amount, limit: a.limit)
+}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+    ensures result.balance == a.balance - amount && result.balance >= 0
+{
+    Account(balance: a.balance - amount, limit: a.limit)
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(1000);
+    let b = deposit(a, 250);
+    let c = withdraw(2, 100);
+    print(int_to_str(c.balance));
+    print("\n");
+    0
+}
