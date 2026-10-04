@@ -23,7 +23,7 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
 /// The version every `bench/*.json` carries. See `docs/performance.md`.
-const SCHEMA: &str = "nazm.bench/1";
+const SCHEMA: &str = "nazm.bench/2";
 
 /// How far a median may move before `--check` calls it a change.
 ///
@@ -214,6 +214,33 @@ impl Measurement {
 
     fn key(&self) -> String {
         format!("{}/{}", self.program, self.stage)
+    }
+
+    /// Every run, in milliseconds, sorted (N92).
+    fn sorted(&self) -> Vec<f64> {
+        let mut ms: Vec<f64> = self.runs.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
+        ms.sort_by(f64::total_cmp);
+        ms
+    }
+
+    /// The nearest-rank 90th percentile: a run that was observed, never an interpolation.
+    fn p90(&self) -> f64 {
+        let ms = self.sorted();
+        let rank = (ms.len() * 9).div_ceil(10).max(1);
+        ms.get(rank - 1).copied().unwrap_or(0.0)
+    }
+
+    fn max(&self) -> f64 {
+        self.sorted().last().copied().unwrap_or(0.0)
+    }
+
+    /// The median absolute deviation from the median: a spread one slow run cannot inflate.
+    fn mad(&self) -> f64 {
+        let median = self.median();
+        let mut d: Vec<f64> = self.sorted().iter().map(|x| (x - median).abs()).collect();
+        d.sort_by(f64::total_cmp);
+        let middle = d.len().saturating_sub(1).wrapping_div(2);
+        d.get(middle).copied().unwrap_or(0.0)
     }
 }
 
@@ -412,7 +439,23 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
     // statement for statement, not the way a C or Python programmer would write it,
     // because a different algorithm would measure the algorithm. Absent toolchains are
     // recorded as absent rather than skipped silently.
-    measurements.extend(references(&root, &nazm, &scratch, runs));
+    let mut absent = vec![Absent {
+        stage: "reference-zig",
+        why: "no Zig reference is written: no Zig toolchain is installed here to check one"
+            .to_owned(),
+    }];
+    measurements.extend(references(&root, &nazm, &scratch, runs, &mut absent));
+    // Each native executable's size (N92).
+    let sizes: Vec<(String, Option<u64>)> = programs
+        .iter()
+        .map(|p| {
+            let name = p
+                .file_stem()
+                .map_or_else(|| "?".to_owned(), |s| s.to_string_lossy().into_owned());
+            let bytes = std::fs::metadata(scratch.join(&name)).ok().map(|m| m.len());
+            (name, bytes)
+        })
+        .collect();
 
     // Peak memory, once per command rather than repeatedly: it varies far less than
     // time does, and `docs/performance.md` rule 2 asks for it separately from
@@ -438,7 +481,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         });
     }
 
-    let json = render_json(&root, runs, &measurements, &memory);
+    let json = render_json(&root, runs, &measurements, &memory, &sizes, &absent);
     print!("{}", render_table(&measurements));
     print!("{}", render_memory(&memory));
 
@@ -472,7 +515,39 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
 ///
 /// Each must produce the same answer as the Nazm program it mirrors, checked against the
 /// same `.expected` file — a reference that computes something else is not a reference.
-fn references(root: &Path, nazm: &Path, scratch: &Path, runs: usize) -> Vec<Measurement> {
+/// The references, and whether each one's arithmetic is checked as Nazm's is (N92).
+const REFERENCES: &[(&str, &str, &str)] = &[
+    (
+        "reference-c",
+        "clang -O2",
+        "unchecked: C's signed overflow is undefined, not failed",
+    ),
+    (
+        "reference-python",
+        "python3",
+        "unbounded integers: nothing overflows",
+    ),
+    (
+        "reference-rust",
+        "rustc -O -C overflow-checks=on",
+        "checked, and bounds-checked: the closest to Nazm's meaning",
+    ),
+    ("reference-go", "go build", "wrapping, bounds-checked"),
+];
+
+/// A reference that was not measured, and why.
+struct Absent {
+    stage: &'static str,
+    why: String,
+}
+
+fn references(
+    root: &Path,
+    nazm: &Path,
+    scratch: &Path,
+    runs: usize,
+    absent: &mut Vec<Absent>,
+) -> Vec<Measurement> {
     let mut out = Vec::new();
     let dir = root.join("bench/reference");
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -511,6 +586,59 @@ fn references(root: &Path, nazm: &Path, scratch: &Path, runs: usize) -> Vec<Meas
                     }
                     _ => {
                         println!("bench: clang is unavailable; the C reference was not measured");
+                        absent.push(Absent {
+                            stage: "reference-c",
+                            why: "clang is not installed".to_owned(),
+                        });
+                        continue;
+                    }
+                }
+            }
+            Some("rs") => {
+                let exe = scratch.join(format!("{name}.rs.out"));
+                let built = Command::new("rustc")
+                    .args(["-O", "-C", "overflow-checks=on", "-o"])
+                    .arg(&exe)
+                    .arg(&source)
+                    .output();
+                match built {
+                    Ok(o) if o.status.success() => {
+                        ("reference-rust", Box::new(move || Command::new(&exe)))
+                    }
+                    _ => {
+                        println!(
+                            "bench: rustc is unavailable; the Rust reference was not measured"
+                        );
+                        absent.push(Absent {
+                            stage: "reference-rust",
+                            why: "rustc could not build it".to_owned(),
+                        });
+                        continue;
+                    }
+                }
+            }
+            Some("go") => {
+                let exe = scratch.join(format!("{name}.go.out"));
+                // Go's caches in the scratch directory: nothing written outside it.
+                let built = Command::new("go")
+                    .env("GOCACHE", scratch.join("gocache"))
+                    .env("GOPATH", scratch.join("gopath"))
+                    .env("GOFLAGS", "-mod=mod")
+                    .env("GOTOOLCHAIN", "local")
+                    .args(["build", "-o"])
+                    .arg(&exe)
+                    .arg(&source)
+                    .output();
+                match built {
+                    Ok(o) if o.status.success() => {
+                        ("reference-go", Box::new(move || Command::new(&exe)))
+                    }
+                    _ => {
+                        println!("bench: go is unavailable; the Go reference was not measured");
+                        absent.push(Absent {
+                            stage: "reference-go",
+                            why: "go is not installed".to_owned(),
+                        });
                         continue;
                     }
                 }
@@ -518,6 +646,10 @@ fn references(root: &Path, nazm: &Path, scratch: &Path, runs: usize) -> Vec<Meas
             Some("py") => {
                 if Command::new("python3").arg("--version").output().is_err() {
                     println!("bench: python3 is unavailable; that reference was not measured");
+                    absent.push(Absent {
+                        stage: "reference-python",
+                        why: "python3 is not installed".to_owned(),
+                    });
                     continue;
                 }
                 let s = source.clone();
@@ -539,6 +671,10 @@ fn references(root: &Path, nazm: &Path, scratch: &Path, runs: usize) -> Vec<Meas
                 "bench: the {stage} for {name} produced {got:?}, expected {expected:?} — \
                  it is not computing the same thing and was not measured"
             );
+            absent.push(Absent {
+                stage,
+                why: format!("it printed {got:?}, not {expected:?}"),
+            });
             continue;
         }
         match measure(&name, stage, runs, &mut *command) {
@@ -681,11 +817,48 @@ fn render_memory(memory: &[Memory]) -> String {
     out
 }
 
+/// The machine, as far as it can be read without privileges (N92): CPU model, logical CPUs,
+/// memory in bytes, kernel release.
+fn fingerprint() -> (String, usize, Option<u64>, String) {
+    let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+    let line = |key: &str| {
+        cpuinfo
+            .lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split_once(':'))
+            .map(|(_, v)| v.trim().to_owned())
+    };
+    let model = if cpuinfo.is_empty() {
+        shell("sysctl", &["-n", "machdep.cpu.brand_string"])
+    } else {
+        line("model name").unwrap_or_else(|| {
+            format!(
+                "implementer {} part {}",
+                line("CPU implementer").unwrap_or_default(),
+                line("CPU part").unwrap_or_default()
+            )
+        })
+    };
+    let cpus = std::thread::available_parallelism().map_or(0, std::num::NonZero::get);
+    let memory = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| {
+            m.lines()
+                .find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+                .map(|kb| kb * 1024)
+        })
+        .or_else(|| shell("sysctl", &["-n", "hw.memsize"]).parse().ok());
+    (model, cpus, memory, shell("uname", &["-r"]))
+}
+
 fn render_json(
     root: &Path,
     runs: usize,
     measurements: &[Measurement],
     memory: &[Memory],
+    sizes: &[(String, Option<u64>)],
+    absent: &[Absent],
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{{");
@@ -693,11 +866,15 @@ fn render_json(
     let _ = writeln!(out, "  \"runs\": {runs},");
     let _ = writeln!(out, "  \"warmups_discarded\": 1,");
     let _ = writeln!(out, "  \"host\": {},", quote(&shell("uname", &["-sm"])));
+    let (model, cpus, memory_bytes, kernel) = fingerprint();
+    let _ = writeln!(out, "  \"cpus\": \"{cpus}\",");
+    let _ = writeln!(out, "  \"cpu_model\": {},", quote(&model));
     let _ = writeln!(
         out,
-        "  \"cpus\": {},",
-        quote(&shell("sysctl", &["-n", "hw.ncpu"]))
+        "  \"memory_bytes\": {},",
+        memory_bytes.map_or_else(|| "null".to_owned(), |b| b.to_string())
     );
+    let _ = writeln!(out, "  \"kernel\": {},", quote(&kernel));
     let _ = writeln!(
         out,
         "  \"rustc\": {},",
@@ -730,13 +907,59 @@ fn render_json(
     let _ = writeln!(out, "  \"measurements\": [");
     for (i, m) in measurements.iter().enumerate() {
         let comma = if i + 1 == measurements.len() { "" } else { "," };
+        let all: Vec<String> = m.sorted().iter().map(|x| format!("{x:.3}")).collect();
         let _ = writeln!(
             out,
-            "    {{\"program\": {}, \"stage\": {}, \"min_ms\": {:.3}, \"median_ms\": {:.3}}}{comma}",
+            "    {{\"program\": {}, \"stage\": {}, \"min_ms\": {:.3}, \"median_ms\": {:.3}, \"p90_ms\": {:.3}, \"max_ms\": {:.3}, \"mad_ms\": {:.3}, \"runs_ms\": [{}]}}{comma}",
             quote(&m.program),
             quote(m.stage),
             m.min(),
-            m.median()
+            m.median(),
+            m.p90(),
+            m.max(),
+            m.mad(),
+            all.join(", ")
+        );
+    }
+    let _ = writeln!(out, "  ],");
+    // The floor (N92): the median of a program that does nothing, natively — process start-up
+    // and exit. No difference smaller than it is claimed.
+    let floor = measurements
+        .iter()
+        .find(|m| m.program == "floor" && m.stage == "native-O2")
+        .map_or_else(|| "null".to_owned(), |m| format!("{:.3}", m.median()));
+    let _ = writeln!(out, "  \"noise_floor_ms\": {floor},");
+    let _ = writeln!(out, "  \"binary_bytes\": [");
+    for (i, (program, bytes)) in sizes.iter().enumerate() {
+        let comma = if i + 1 == sizes.len() { "" } else { "," };
+        let b = bytes.map_or_else(|| "null".to_owned(), |b| b.to_string());
+        let _ = writeln!(
+            out,
+            "    {{\"program\": {}, \"stage\": \"native-O2\", \"bytes\": {b}}}{comma}",
+            quote(program)
+        );
+    }
+    let _ = writeln!(out, "  ],");
+    let _ = writeln!(out, "  \"references\": [");
+    for (i, (stage, how, arithmetic)) in REFERENCES.iter().enumerate() {
+        let comma = if i + 1 == REFERENCES.len() { "" } else { "," };
+        let _ = writeln!(
+            out,
+            "    {{\"stage\": {}, \"built_with\": {}, \"arithmetic\": {}}}{comma}",
+            quote(stage),
+            quote(how),
+            quote(arithmetic)
+        );
+    }
+    let _ = writeln!(out, "  ],");
+    let _ = writeln!(out, "  \"not_measured\": [");
+    for (i, a) in absent.iter().enumerate() {
+        let comma = if i + 1 == absent.len() { "" } else { "," };
+        let _ = writeln!(
+            out,
+            "    {{\"stage\": {}, \"why\": {}}}{comma}",
+            quote(a.stage),
+            quote(&a.why)
         );
     }
     let _ = writeln!(out, "  ],");
@@ -915,12 +1138,50 @@ fn field(text: &str, name: &str) -> String {
 
 fn baseline_median(text: &str, program: &str, stage: &str) -> Option<f64> {
     let needle = format!("\"program\": \"{program}\", \"stage\": \"{stage}\"");
+    // The value runs to the next field or the end of the object: `/1` ended there, `/2`
+    // continues with `p90_ms`.
     text.lines()
         .find(|l| l.contains(&needle))?
         .split("\"median_ms\": ")
         .nth(1)?
-        .trim_end_matches(['}', ','])
+        .split([',', '}'])
+        .next()?
         .trim()
         .parse()
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runs(ms: &[u64]) -> Measurement {
+        Measurement {
+            program: "p".to_owned(),
+            stage: "s",
+            runs: ms.iter().map(|m| Duration::from_millis(*m)).collect(),
+        }
+    }
+
+    #[test]
+    fn the_spread_is_of_runs_that_were_observed() {
+        let m = runs(&[12, 10, 11, 50, 10, 13, 11]);
+        assert!((m.min() - 10.0).abs() < 1e-9);
+        assert!((m.median() - 11.0).abs() < 1e-9);
+        // Nearest rank: the 7th of 7 sorted runs is the 90th percentile.
+        assert!((m.p90() - 50.0).abs() < 1e-9);
+        assert!((m.max() - 50.0).abs() < 1e-9);
+        // One slow run moves the maximum, not the median absolute deviation.
+        assert!((m.mad() - 1.0).abs() < 1e-9);
+        assert!((runs(&[5]).p90() - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_baseline_of_either_version_is_read() {
+        let v1 = "{\"program\": \"sieve\", \"stage\": \"native-O2\", \"min_ms\": 1.000, \"median_ms\": 2.500},";
+        let v2 = "{\"program\": \"sieve\", \"stage\": \"native-O2\", \"min_ms\": 1.000, \"median_ms\": 2.500, \"p90_ms\": 3.000, \"max_ms\": 4.000, \"mad_ms\": 0.100, \"runs_ms\": [1.000, 2.500]}";
+        for text in [v1, v2] {
+            assert_eq!(baseline_median(text, "sieve", "native-O2"), Some(2.5));
+        }
+    }
 }
