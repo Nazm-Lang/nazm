@@ -160,7 +160,8 @@ impl Effect {
             // The call these belong to performs `foreign` already (N85).
             | Intrinsic::ForeignNonNull
             | Intrinsic::CStrCopy
-            | Intrinsic::CallbackAddress => None,
+            | Intrinsic::CallbackAddress
+            | Intrinsic::ContractCheck => None,
         }
     }
 

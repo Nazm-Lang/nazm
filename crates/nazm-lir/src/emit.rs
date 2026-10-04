@@ -113,6 +113,15 @@ fn c_type(layouts: Layouts<'_>, t: Ty, foreign: bool, result: bool) -> String {
     }
 }
 
+/// A contract clause's failure (N87): `N0410` for a precondition, `N0411` for a postcondition.
+fn contract_failure(which: i64) -> (&'static str, &'static str) {
+    if which == 0 {
+        ("N0410", "this precondition does not hold")
+    } else {
+        ("N0411", "this postcondition does not hold")
+    }
+}
+
 /// How a type is written in LLVM text.
 fn llvm_type(types: Layouts<'_>, t: Ty) -> String {
     match t {
@@ -1744,6 +1753,32 @@ impl Emitter<'_> {
                 let _ = writeln!(self.out, "  %{out} = ptrtoint ptr @{symbol} to i64");
                 self.callbacks.insert(symbol);
                 format!("%{out}")
+            }
+            // A contract clause (N87): its kind is the constant second argument Core IR
+            // lowering wrote, so the failure's code is known here.
+            mir::Rvalue::Primitive {
+                op: Builtin::ContractCheck,
+                args,
+                ..
+            } => {
+                let (Some(cond), Some(mir::Operand::Const(mir::Const::Int(which)))) =
+                    (args.first(), args.get(1))
+                else {
+                    return "0".to_owned();
+                };
+                let (c, _) = self.operand(cond);
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = xor i1 %{c}, true");
+                let (code, message) = contract_failure(*which);
+                self.guard(
+                    bad,
+                    &Failure {
+                        code,
+                        message: message.to_owned(),
+                    },
+                    at,
+                );
+                "0".to_owned()
             }
             mir::Rvalue::Primitive { op, elem, args } => {
                 let vals: Vec<u32> = args.iter().map(|a| self.operand(a).0).collect();
@@ -3585,8 +3620,8 @@ impl Emitter<'_> {
                     ty: Ty::Int,
                 };
             }
-            // Unreachable: the rvalue's own arm emits it, from its constant (N85).
-            Builtin::CallbackAddress => {
+            // Unreachable: the rvalue's own arm emits these, from their constants (N85, N87).
+            Builtin::CallbackAddress | Builtin::ContractCheck => {
                 let _ = writeln!(self.out, "  unreachable");
                 return Val::Transferred;
             }

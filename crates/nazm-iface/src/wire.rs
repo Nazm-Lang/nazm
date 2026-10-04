@@ -130,7 +130,13 @@ use nazm_span::Span;
 /// compares and passes a record by these, so an `/8` reader — which would take a handle for
 /// an ordinary record any program may build, and a C struct's fields for an order it may
 /// sort — must refuse it, and the major moves.
-pub const SCHEMA: &str = "nazm.interface/9";
+///
+/// # `/10` (N87)
+///
+/// An export may carry `requires`: how many preconditions it states. An importer's obligation
+/// report counts each of its calls as one, and a `/9` reader would count none; absent where it
+/// states none, but the major moves.
+pub const SCHEMA: &str = "nazm.interface/10";
 
 /// A type as persisted.
 ///
@@ -329,6 +335,14 @@ pub struct PersistentExport {
     /// module with no foreign declaration is written exactly as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreign: Option<String>,
+    /// How many `requires` clauses it states (N87). **Absent** where it states none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub requires: u32,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// How a type is written in a persisted interface.
@@ -763,6 +777,7 @@ impl PersistentUnitInterface {
                     .effects
                     .map(|s| s.names().into_iter().map(str::to_owned).collect()),
                 foreign: e.foreign.clone(),
+                requires: e.preconditions,
             });
         }
         // By name: the order a module declares its functions in is not part of what it
@@ -1244,6 +1259,7 @@ impl PersistentUnitInterface {
                     .as_ref()
                     .map(|names| names.iter().filter_map(|n| effect_named(n)).collect()),
                 foreign: e.foreign.clone(),
+                preconditions: e.requires,
             });
             for &index in &e.requires_equality {
                 types.require_equality(TypeParam { owner, index });

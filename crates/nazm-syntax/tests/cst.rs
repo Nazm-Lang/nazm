@@ -551,6 +551,11 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
         for p in &f.params {
             spans.push((SyntaxKind::Param, p.span));
         }
+        // A contract clause and its expression are constructs (N87).
+        for c in &f.contracts {
+            spans.push((SyntaxKind::Contract, c.span));
+            stack.push(Node::Expr(&c.expr));
+        }
         stack.push(Node::Block(body));
     }
     while let Some(node) = stack.pop() {

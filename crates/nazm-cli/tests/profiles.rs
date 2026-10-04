@@ -111,7 +111,8 @@ fn every_profile_s_rules_and_verdicts() {
                 ("locked-build", "fail"),
                 ("no-declassification", "pass"),
                 ("no-ambient-time", "pass"),
-                ("no-select", "pass")
+                ("no-select", "pass"),
+                ("no-unknown-calls", "pass")
             ])
         )
     );
@@ -124,7 +125,8 @@ fn every_profile_s_rules_and_verdicts() {
                 ("no-foreign", "pass"),
                 ("locked-build", "fail"),
                 ("contents-stay-in-files", "pass"),
-                ("checked-paths", "pass")
+                ("checked-paths", "pass"),
+                ("no-unknown-calls", "pass")
             ])
         )
     );

@@ -57,11 +57,15 @@ pub enum Rule {
     /// No path `write_file` writes to, in any function, comes from a file's contents or what
     /// the checker does not follow (N80, §7.81): the language's rule over every function.
     CheckedPaths,
+    /// No obligation whose status is unknown (N87, §7.88): no call through a function value,
+    /// whose callee and so whose contract the compiler does not know — and, with `no-foreign`,
+    /// no call into C. Every obligation is then proved or checked as the program runs.
+    NoUnknownCalls,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -78,6 +82,7 @@ impl Rule {
         Self::SignedWrites,
         Self::ExplicitAuthority,
         Self::CheckedPaths,
+        Self::NoUnknownCalls,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -100,6 +105,7 @@ impl Rule {
             Self::SignedWrites => "signed-writes",
             Self::ExplicitAuthority => "explicit-authority",
             Self::CheckedPaths => "checked-paths",
+            Self::NoUnknownCalls => "no-unknown-calls",
         }
     }
 
@@ -121,7 +127,8 @@ impl Rule {
             | Self::BoundedLoops
             | Self::SignedWrites
             | Self::ExplicitAuthority
-            | Self::CheckedPaths => None,
+            | Self::CheckedPaths
+            | Self::NoUnknownCalls => None,
         }
     }
 }
@@ -196,6 +203,7 @@ impl Profile {
                 Rule::NoDeclassification,
                 Rule::NoAmbientTime,
                 Rule::NoSelect,
+                Rule::NoUnknownCalls,
             ],
             Self::Cyber => &[
                 Rule::DeclaredEffects,
@@ -203,6 +211,7 @@ impl Profile {
                 Rule::LockedBuild,
                 Rule::ContentsStayInFiles,
                 Rule::CheckedPaths,
+                Rule::NoUnknownCalls,
             ],
             Self::Realtime => &[
                 Rule::NoIo,
@@ -442,6 +451,17 @@ pub fn evaluate(
                         span: at_main(),
                         note: "the program's resource facts were not computed".to_owned(),
                     }]
+                }
+            } else if rule == Rule::NoUnknownCalls {
+                match facts {
+                    None => {
+                        unknown = true;
+                        vec![Witness {
+                            span: at_main(),
+                            note: "the program's calls were not computed".to_owned(),
+                        }]
+                    }
+                    Some(f) => f.indirect.clone(),
                 }
             } else if rule == Rule::NoRecursion {
                 match facts {
@@ -726,6 +746,7 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::NoBlocking => "this profile admits nothing whose latency is another task's or the scheduler's: no channel send, receive or select".to_owned(),
                 Rule::ExplicitAuthority => "take the capability as a parameter and pass it from `main`: under this profile a function holds only what its scope holds (`nazm inspect` shows each function's `inherits`)".to_owned(),
                 Rule::SignedWrites => "compare `caller` with the state's owner, or another signer it names, before writing; an unguarded write lets anyone change the state".to_owned(),
+                Rule::NoUnknownCalls => "call the function by its name: a call through a function value has a callee, and so a contract, the compiler does not know, and this profile admits no obligation of unknown status (`nazm obligations` lists them)".to_owned(),
                 Rule::BoundedLoops => "write the loop as a counter from a literal, compared with a literal and stepped towards it once per turn by a positive literal (§7.65); `nazm check --profile-report` lists every loop's bound".to_owned(),
             })
         })

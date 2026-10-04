@@ -269,6 +269,10 @@ struct Printer<'a> {
     /// level with the block's body, so a wrapped signature would look exactly like the
     /// first line of the function it introduces.
     continuing: bool,
+    /// Whether a function's contract clauses are being printed (N87): each on its own line one
+    /// level in, and the body's `{` back at the function's own level, so a reader sees the
+    /// clauses as the header's and the body as the function's.
+    contract: bool,
 }
 
 fn print<'a>(text: &'a str, pieces: &'a [Piece<'a>], layout: &'a Layout) -> String {
@@ -284,6 +288,7 @@ fn print<'a>(text: &'a str, pieces: &'a [Piece<'a>], layout: &'a Layout) -> Stri
         previous_end: 0,
         fresh_line: true,
         continuing: false,
+        contract: false,
     };
     for (i, piece) in pieces.iter().enumerate() {
         let next = pieces.get(i + 1).and_then(|n| n.kind);
@@ -312,7 +317,12 @@ impl<'a> Printer<'a> {
         } else {
             self.break_line();
             self.blank_if_there_was_one(piece.start);
-            self.pad();
+            // Among a function's contract clauses, a comment is one of them (N87).
+            if self.contract {
+                self.out.push_str(INDENT);
+            } else {
+                self.pad();
+            }
         }
         self.out.push_str(piece.text);
         self.out.push('\n');
@@ -358,7 +368,21 @@ impl<'a> Printer<'a> {
             if *kind != TokenKind::RBrace && !self.continuing {
                 self.blank_if_there_was_one(piece.start);
             }
-            self.pad();
+            // A contract clause starts its line at the top level of a declaration (N87).
+            if self.indent == 0
+                && self.continuing
+                && matches!(kind, TokenKind::Ident(w) if w == "requires" || w == "ensures")
+            {
+                self.contract = true;
+            }
+            if self.contract && *kind == TokenKind::LBrace {
+                self.continuing = false;
+            }
+            if self.contract && *kind != TokenKind::LBrace {
+                self.out.push_str(INDENT);
+            } else {
+                self.pad();
+            }
         } else if self.space_before(kind)
             // The empty effect set is `{}`: nothing to pad.
             && !(*kind == TokenKind::RBrace
@@ -371,6 +395,9 @@ impl<'a> Printer<'a> {
         self.out.push_str(piece.text);
         self.fresh_line = false;
 
+        if *kind == TokenKind::LBrace {
+            self.contract = false;
+        }
         match kind {
             TokenKind::LBrace => {
                 let inline = self.layout.inline.get(at).copied().unwrap_or(false);
