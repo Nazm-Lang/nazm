@@ -86,6 +86,11 @@ fixes of `c38da8b`:
 | **survived** | 1 | `n79-a-held-io-cap-is-read-alone`: no program found that reaches an ambient call needing `out` alone; possibly equivalent |
 | no verdict: suite tier, no declared killer | 4 | every-definition-is-exported, a-record-drop-does-not-recurse, task-safety-stops-at-the-first-level, lowered-propagation-falls-through-on-error |
 
+**Resolved by N101 (2026-10-05).** The survivor is reachable — the probe above ran in a directory
+holding a warm check cache — and is caught by `authority::a_held_io_cap_authorises_its_own_print`
+in a fresh directory. The four without a verdict are caught by focused killers (`architecture.md`
+§7.102). The table stands as what N100 observed.
+
 Five mutants were caught only after the tests or the mutant changed — each is a finding, recorded in
 `c38da8b`. Zero survivors is not claimed: one survives and four were not run to a verdict.
 
