@@ -86,7 +86,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
 | 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
 | 20 | Cybersecurity profile | VERIFIED as scoped — profile enforcement (N87): declared authority, no C, a locked build, contents kept in files, checked paths, no unknown calls; constant time RESEARCH; not certification |
-| 21 | AI/HPC | PARTIAL — one GPU map kernel, OpenCL on Apple M1 Pro (N67); vectorised sums (N66) |
+| 21 | AI/HPC | PARTIAL — maps, zips and reductions of `Int` kernels on one GPU, OpenCL on Apple M1 Pro (N67, N88); vectorised sums (N66); a second provider BLOCKED here; vector operations in LIR DESIGNED |
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | VERIFIED |
@@ -101,7 +101,9 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
-After N87, 2026-10-04: twenty-two VERIFIED (areas 19 and 20 moved, as scoped: profile enforcement
+After N88, 2026-10-04: unchanged — area 21 widened and still PARTIAL.
+
+*Historical.* After N87, 2026-10-04: twenty-two VERIFIED (areas 19 and 20 moved, as scoped: profile enforcement
 and obligation evidence, not certification), fifteen PARTIAL, none RESEARCH.
 
 *Historical.* After N86, 2026-10-04: twenty VERIFIED (area 18 moved, as scoped: two emulated
@@ -1885,6 +1887,22 @@ declassification and no constant-time rule.
 and audited, with the approximation's blind spots stated.
 
 ### 21. AI/HPC — PARTIAL
+
+*N88, 2026-10-04: maps of one or two sequences, reductions, a numeric oracle — VERIFIED on one GPU;
+the area stays PARTIAL.* `architecture.md` §7.89 first. A kernel is `(Int) -> Int` (a map) or
+`(Int, Int) -> Int` (a zip over two inputs of one length); `--reduce add|min|max` folds the results
+in index order on the host, `add` checked as `ints_sum` is. Every run held to the interpreter —
+results and fold. Evidence, `crates/nazm-cli/tests/accel.rs`: on any host, the zip's two-buffer
+kernel and its refusals before a device (arity, unequal lengths); on the M1 Pro (ignored, run by
+hand), a zip and each reduction agreeing with the interpreter and with an independent computation,
+`add` failing at the running sum's overflow, and **40 generated kernels** over `+ - * / %`, `if`
+and literals at `Int`'s edges, 200 elements each, agreeing with the interpreter and with the spec's
+arithmetic in 128 bits — values, or the lowest failing index and its code. **Why still PARTIAL**: one
+provider, OpenCL on macOS, deprecated by its vendor — a second (Metal, SPIR-V) is BLOCKED here for
+want of a toolchain (no Metal compiler, no Vulkan loader), not of a design; vector operations in LIR
+are DESIGNED, the one vectorised loop (N66) still a pattern; and the measured workload (N88,
+`performance.md`) is one a native CPU loop serves faster than the device and its transfers, so the
+row's acceptance — a workload a CPU cannot serve — is unmet.
 
 *N67, 2026-10-02: accelerator kernels — VERIFIED on one GPU, OpenCL on an Apple M1 Pro.*
 `architecture.md` §7.69 first. `nazm accel FILE KERNEL --input FILE` runs a pure `(Int) -> Int`

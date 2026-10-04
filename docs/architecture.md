@@ -7871,6 +7871,13 @@ element, as `ints_sum` does, though the total fits.
 **What would prove this unsuitable.** A generated kernel whose device result or failure differs from
 the interpreter's; a reduction whose value differs from the interpreter's fold.
 
+**As built (N88, 2026-10-04).** As stated, with two notes. The host program now takes `kernel.cl
+output.bin input.bin [input2.bin]`, one buffer per input, and its JSON's `to_device_bytes` counts
+both. The numeric oracle is an ignored test of 40 generated kernels of 200 elements each, seeded and
+deterministic, run on the M1 Pro: every one agreed with the interpreter and with 128-bit arithmetic,
+values and failures alike. No schema file existed for `nazm.accel/1`; `/2` is documented in
+`spec.md` and the matrix, not given one.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

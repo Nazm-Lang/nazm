@@ -3437,7 +3437,9 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | --- | --- |
 | **A kernel** | A function of the file's module that is pure and maps one `Int` to an `Int`, reaching only functions that are pure functions of `Int`s and `Bool`s — no recursion, built-ins, records, enums, closures, tasks or C. Anything else is `N0394`, naming why and where |
 | **The map** | `nazm accel FILE KERNEL --input FILE` applies it to each whitespace-separated `Int` of the input (at most 8,000,000) on the GPU: the results in order, or the failure of the lowest failing element — `N0400`/`N0401` at the operation's span, "at element *i*" — as the interpreter mapping in order would give |
-| **The report** | One `nazm.accel/1` line: device, each transfer (direction, bytes, ms), the synchronisation, build and run times, the kernel's identity, and `reference` — the interpreter's agreement, checked unless `--no-check` |
+| **A zip** (N88) | A kernel of two `Int`s, `(Int, Int) -> Int`, over two inputs: `--input A --input B`, of one length (`N0394` otherwise, before any device); element *i* of each its arguments. A kernel of three or more is `N0394` |
+| **A reduction** (N88) | `--reduce add\|min\|max` folds the results into one `Int` in index order on the host after the transfer: `add` checked as `ints_sum` is — `N0400` where the running sum overflows, though the total fit — `min` and `max` never failing, `null` for no elements |
+| **The report** | One `nazm.accel/2` line: the kernel's `shape` (`map` or `zip`), device, `inputs` (each one's elements and bytes), each transfer (direction, bytes, ms), the synchronisation, build and run times, `reduce` (op, where, ms, value or failure), the kernel's identity, and `reference` — the interpreter's agreement, results and fold, checked unless `--no-check` |
 | **Where it runs** | macOS's OpenCL; elsewhere it is refused, never run on the CPU instead. `--print-kernel` shows the OpenCL C on any host |
 
 ### Contracts: the `web3` profile and `nazm contract` — N69
