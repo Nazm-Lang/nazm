@@ -7825,6 +7825,52 @@ formatter prints the clauses as the header's**, one level in, the body's `{` bac
 level. The census's kinds and statuses are as stated; a `proved` overflow or division is one on
 literals the census computed, the only proof it makes beyond the checker's.
 
+## 7.89 Accelerators v2: maps of one or two sequences, reductions, and a numeric oracle — N88, 2026-10-04
+
+Written before the code. Area 21 is PARTIAL: N67's `nazm accel` runs one idiom — a pure
+`(Int) -> Int` map over one sequence — on one GPU through one deprecated API. A user who needs two
+sequences combined, or a total of what was mapped, cannot say it. This milestone widens what a user
+can express to a small compute subset with one meaning everywhere, and holds the device to an
+oracle on generated inputs rather than on chosen ones.
+
+**What a kernel is.** As N67, plus one shape: a kernel is a pure function of **one or two** `Int`s
+returning an `Int` — `(Int) -> Int`, a *map*, or `(Int, Int) -> Int`, a *zip* — reaching only
+functions of the same kind. A zip takes two input sequences of the same length (`--input A --input
+B`); different lengths are refused before any device (`N0394`). Eligibility, the checked arithmetic,
+the lowest-failing-index rule, the 8,000,000-element cap and the explicit transfers are N67's,
+unchanged; a zip's report names both inputs' transfers.
+
+**Reductions.** `--reduce add|min|max` folds the kernel's results, in index order, into one `Int`:
+`add` is `ints_sum`'s fold — checked, failing with `N0400` where a running sum would overflow, even
+if the total would fit — and `min` and `max` cannot fail (an empty sequence reduces to `None`,
+printed as `null`). The fold runs on the host, after the one device-to-host transfer, and the report
+says so and times it: its meaning is a sequential fold's, which a device's tree of partial sums would
+change for `add`; for `min` and `max` it is a choice of where, stated.
+
+**One meaning, three ways.** Every run is held, unless `--no-check`, to the interpreter applying the
+same function to the same elements and folding the same way; a disagreement is a failure of the run,
+never a result. **The oracle on generated inputs:** a fuzzer generates pure kernels over `+ - * / %`,
+comparisons, `if` and literals at the edges of `Int`, and elements across the range, and compares
+the device's results and failure (index and code) with the interpreter's and with an independent
+computation in Rust's 128-bit arithmetic.
+
+**Providers.** OpenCL on the Apple M1 Pro's GPU, as N67. A second provider was sought and is not
+available on this host — no Metal compiler (`xcrun metal` absent without Xcode), no Vulkan loader —
+so Metal and SPIR-V stay designed, and the row says BLOCKED for want of the toolchain, not of a
+design. **Vector operations in LIR** — a vector type and operations the backends lower — stay
+DESIGNED: the one vectorised loop (N66) is a pattern, and is reported as one.
+
+**Versions.** No language change: semantic epoch, interface, runtime ABI and IR schemas unchanged.
+`nazm.accel/1 → /2`: `inputs` (one or two, each with its bytes and time), `reduce` (the operation,
+where and how long, its value). `nazm.kernel/1` keeps its form; a zip's kernel has two parameters.
+
+**Negative example.** A zip over inputs of 3 and 4 elements is refused before a device is touched.
+**Boundary example.** `--reduce add` over `[i64::MAX, 1, -1]` fails with `N0400` at the second
+element, as `ints_sum` does, though the total fits.
+
+**What would prove this unsuitable.** A generated kernel whose device result or failure differs from
+the interpreter's; a reduction whose value differs from the interpreter's fold.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
