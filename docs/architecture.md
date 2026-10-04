@@ -8371,6 +8371,48 @@ pushed or published.
 **What would prove the audit wrong.** A row whose stated evidence a reader cannot find or rerun; a
 gate step reported passed that did not run.
 
+## 7.102 Evidence closure: the N100 survivor, the four without a verdict, and a catalogue with no silent tier — N101, 2026-10-04
+
+Written before the code. N100 ended with one mutant SURVIVED (`n79-a-held-io-cap-is-read-alone`,
+called "possibly equivalent") and four with no verdict (`every-definition-is-exported`,
+`a-record-drop-does-not-recurse`, `task-safety-stops-at-the-first-level`,
+`lowered-propagation-falls-through-on-error`): suite-tier entries, no declared killer, each needing a
+whole workspace suite per run. Owner: the mutation catalogue (`xtask/mutations/mutations.toml`) and
+its validation (`xtask/src/plan.rs`).
+
+**The survivor is reachable.** The mutant reads a held `IoCap` without what it implies, so a
+declared function holding only an `IoCap` that calls `print` is refused (`N0369`, no `OutCap`). N100's
+probe of exactly that program reported success because it ran in a directory holding a warm check
+cache: the cache's key is the checker identity — semantic epoch, package version, schemas, the
+built-in table — and a mutant changes the checker without changing any of these, so a warm entry
+answered for the unmutated checker. That key is right for a released build, whose rules change only
+with the epoch, a counter bumped by hand (§7.4); it is not evidence about a mutated build. Mutation probes and killers run in
+fresh directories. The focused killer is `authority::a_held_io_cap_authorises_its_own_print`.
+
+**The four get focused killers**, each a test whose failure under the mutant was observed:
+`build::the_same_name_defined_privately_in_two_files_is_not_a_conflict`,
+`memory::a_nested_record_releases_through_both_levels`,
+`scheduler::nothing_mutable_crosses_into_a_task`,
+`propagation::locals_are_released_once_when_an_error_propagates`.
+
+**No silent tier.** The other 175 catalogue entries without a declared killer are the same problem
+waiting for N108, whose full-catalogue campaign would spend a whole suite on each (about 50 hours).
+Each gets a killer found by applying it and running its crate's tests, then `nazm-cli`'s, in a
+dedicated worktree, and a declared killer is verified by the contained runner. An entry no test
+catches is recorded with a `no_killer` reason and its classification — a known survivor, or not
+injectable — never left unclassified. The catalogue's validation then refuses an entry with neither
+killers nor a `no_killer` reason.
+
+**Versions.** None: no semantic epoch, schema, ABI or cache key changes; the catalogue gains killer
+metadata only.
+
+**Negative example.** An entry with no `killers` and no `no_killer` fails `cargo xtask check`.
+**Boundary example.** An entry whose `find` text no longer occurs is NOT INJECTED: its definition is
+repaired to the code that now owns the rule, never dropped.
+
+**What would prove this wrong.** A declared killer that passes with its mutant applied, in a fresh
+directory, under the contained runner.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
