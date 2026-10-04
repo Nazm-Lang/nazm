@@ -398,6 +398,14 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N100 — the grand audit — **complete; the zero-partial objective NOT MET**
+
+`architecture.md` §7.101 and `docs/audit-n100.md`. Every row audited against executed evidence;
+twenty-two VERIFIED, fifteen PARTIAL. The combined gate: workspace, selfhost and bootstrap passed
+contained; of 215 mutants, 210 caught (five after a finding was fixed), one survives, four without a
+verdict; every container-backed run passed. A release candidate and a human procedure — nothing
+tagged, pushed or published.
+
 ### N99 — JIT and REPL v2 — **complete as scoped, 2026-10-04; the JIT stays BLOCKED**
 
 `architecture.md` §7.100 first. The REPL, the interpreter and both native backends held to one
