@@ -55,6 +55,9 @@ pub fn k_struct() -> Int { 25 }
 // `enum` and `match`, added by N10. Reserved by name from v0.1 and refused until then.
 pub fn k_enum() -> Int { 26 }
 pub fn k_match() -> Int { 27 }
+// `trait` and `impl` (N78; this lexer's since N102).
+pub fn k_trait() -> Int { 28 }
+pub fn k_impl() -> Int { 29 }
 pub fn k_lparen() -> Int { 30 }
 pub fn k_rparen() -> Int { 31 }
 pub fn k_lbrace() -> Int { 32 }
@@ -88,6 +91,11 @@ pub fn k_rbracket() -> Int { 53 }
 // `?`, added by N12: propagation, a postfix after an operand whose type is the core
 // prelude's `Result`. `??` is two of them.
 pub fn k_question() -> Int { 54 }
+// `!`, added by N102: the effect set's opening (`! { io }`). Alone; `!=` is its own token.
+pub fn k_bang() -> Int { 55 }
+// `&&` and `||` (N49; this lexer's since N102).
+pub fn k_ampamp() -> Int { 56 }
+pub fn k_pipepipe() -> Int { 57 }
 
 // --- byte classification -----------------------------------------------------------
 
@@ -139,6 +147,8 @@ fn keyword_kind(word: Str) -> Int {
     if word == "struct" { return k_struct(); }
     if word == "enum" { return k_enum(); }
     if word == "match" { return k_match(); }
+    if word == "trait" { return k_trait(); }
+    if word == "impl" { return k_impl(); }
     k_ident()
 }
 
@@ -255,18 +265,28 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
                 i = i + 2;
                 continue;
             }
-            fail("N0001", i, "`!` is not in the bootstrap subset");
+            push_token(kinds, starts, ends, texts, k_bang(), i, i + 1, "");
+            i = i + 1;
+            continue;
         }
         // `::` (N49), a qualified name, is not in the bootstrap subset.
         if b == 58 {
             if next == 58 { fail("N0001", i, "`::` is not in the bootstrap subset"); }
         }
-        // `&&` and `||` (N49) are not in the bootstrap subset either, and say so by name.
+        // `&&` and `||` (N49).
         if b == 38 {
-            if next == 38 { fail("N0001", i, "`&&` is not in the bootstrap subset"); }
+            if next == 38 {
+                push_token(kinds, starts, ends, texts, k_ampamp(), i, i + 2, "");
+                i = i + 2;
+                continue;
+            }
         }
         if b == 124 {
-            if next == 124 { fail("N0001", i, "`||` is not in the bootstrap subset"); }
+            if next == 124 {
+                push_token(kinds, starts, ends, texts, k_pipepipe(), i, i + 2, "");
+                i = i + 2;
+                continue;
+            }
         }
         if b == 60 {
             if next == 61 {

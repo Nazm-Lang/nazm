@@ -1,33 +1,33 @@
 {
   "differs": 0,
-  "equal": 13,
+  "equal": 21,
   "probes": 21,
   "reference": "nazm build, run natively",
-  "refused": 8,
+  "refused": 0,
   "results": [
     {
       "dimension": "closures",
       "probe": "closures",
-      "refusal": "unnamed",
-      "selfhost": "refused"
+      "refusal": null,
+      "selfhost": "equal"
     },
     {
       "dimension": "concurrency",
       "probe": "concurrency-tasks",
-      "refusal": "unnamed",
-      "selfhost": "refused"
+      "refusal": null,
+      "selfhost": "equal"
     },
     {
       "dimension": "contracts",
       "probe": "contracts",
-      "refusal": "unnamed",
-      "selfhost": "refused"
+      "refusal": null,
+      "selfhost": "equal"
     },
     {
       "dimension": "effects",
       "probe": "effects-io",
-      "refusal": "unnamed",
-      "selfhost": "refused"
+      "refusal": null,
+      "selfhost": "equal"
     },
     {
       "dimension": "failure",
@@ -44,8 +44,8 @@
     {
       "dimension": "ffi",
       "probe": "ffi-extern",
-      "refusal": "unnamed",
-      "selfhost": "refused"
+      "refusal": null,
+      "selfhost": "equal"
     },
     {
       "dimension": "modules",
@@ -56,8 +56,8 @@
     {
       "dimension": "modules",
       "probe": "modules-std",
-      "refusal": "unnamed",
-      "selfhost": "refused"
+      "refusal": null,
+      "selfhost": "equal"
     },
     {
       "dimension": "syntax",
@@ -68,8 +68,8 @@
     {
       "dimension": "syntax",
       "probe": "syntax-functions",
-      "refusal": "N0101",
-      "selfhost": "refused"
+      "refusal": null,
+      "selfhost": "equal"
     },
     {
       "dimension": "syntax",
@@ -80,8 +80,8 @@
     {
       "dimension": "traits",
       "probe": "traits-methods",
-      "refusal": "unnamed",
-      "selfhost": "refused"
+      "refusal": null,
+      "selfhost": "equal"
     },
     {
       "dimension": "types",

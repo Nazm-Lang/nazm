@@ -1,0 +1,5 @@
+// N102: a trait, its impl and a function taking a function value from another module, and a
+// standard module, through every compiler.
+use "shapes.nz";
+use "@std/num";
+fn main() -> Int { Sq(s: 3).area() + apply(fn(x: Int) -> Int { num_max(x, 10) }, 4) }

@@ -1,0 +1,6 @@
+// expect: N0614
+fn g() -> Int { 1 }
+fn f(n: Int) -> Int ! {}
+    requires g() > 0
+{ n }
+fn main() -> Int { f(1) }

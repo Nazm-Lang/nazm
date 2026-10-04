@@ -2435,8 +2435,14 @@ a function whose tail has the wrong type is accepted: `fn g() -> Int { "text" }`
 Nazm checker never compared the two before N10.2, and the reference always has
 """
 file = "compiler/analyse.nz"
-find = """if bc == Completion.Value() {"""
-replace = """if bc != bc {"""
+find = """
+                let bc = vec_get(ncomp, body);
+                if bc == Completion.Value() {
+                    // The body's entry on the type stack"""
+replace = """
+                let bc = vec_get(ncomp, body);
+                if bc != bc {
+                    // The body's entry on the type stack"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
@@ -2446,8 +2452,16 @@ a function whose body produces nothing is accepted, and returns whatever the emi
 leaves on its stack
 """
 file = "compiler/analyse.nz"
-find = """if bc == Completion.Unit() {"""
-replace = """if bc != bc {"""
+find = """
+                if bc == Completion.Unit() {
+                    report(diags, "N0300",
+                            ints_get(nst, body), ints_get(nen, body),
+                            str_concat(str_concat(str_concat("`", before_colon(text)),"""
+replace = """
+                if bc != bc {
+                    report(diags, "N0300",
+                            ints_get(nst, body), ints_get(nen, body),
+                            str_concat(str_concat(str_concat("`", before_colon(text)),"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
@@ -3079,13 +3093,13 @@ why = """
 the **Nazm-written** emitter's error path leaves without joining the scopes it is inside, so a running task outlives the frame it borrows from — the N10.1 defect, through `?`
 """
 file = "compiler/emit.nz"
-find = """    join_from(out, next, current, live, 2);
+find = """
+    join_from(out, next, current, live, 2);
     release_temporaries(out, next, owned, otype, rowns);
-    release_frame(out, next, frame, rowns);
-    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
-replace = """    release_temporaries(out, next, owned, otype, rowns);
-    release_frame(out, next, frame, rowns);
-    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+    leave_with(out, next, frame, rowns, ens, ret_t, returned);"""
+replace = """
+    release_temporaries(out, next, owned, otype, rowns);
+    leave_with(out, next, frame, rowns, ens, ret_t, returned);"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_propagates_with_the_same_memory_semantics" }]
 
 [[mutation]]
@@ -3094,13 +3108,13 @@ why = """
 the **Nazm-written** emitter's error path releases the frame but not the temporaries the enclosing expression holds — `consume(int_to_str(i), may_fail()?, …)` leaks the first argument
 """
 file = "compiler/emit.nz"
-find = """    join_from(out, next, current, live, 2);
+find = """
+    join_from(out, next, current, live, 2);
     release_temporaries(out, next, owned, otype, rowns);
-    release_frame(out, next, frame, rowns);
-    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
-replace = """    join_from(out, next, current, live, 2);
-    release_frame(out, next, frame, rowns);
-    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+    leave_with(out, next, frame, rowns, ens, ret_t, returned);"""
+replace = """
+    join_from(out, next, current, live, 2);
+    leave_with(out, next, frame, rowns, ens, ret_t, returned);"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_propagates_with_the_same_memory_semantics" }]
 
 [[mutation]]
@@ -3109,11 +3123,14 @@ why = """
 the **Nazm-written** emitter's error path returns without releasing the function's locals
 """
 file = "compiler/emit.nz"
-find = """    release_temporaries(out, next, owned, otype, rowns);
-    release_frame(out, next, frame, rowns);
-    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
-replace = """    release_temporaries(out, next, owned, otype, rowns);
-    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+find = """
+    join_from(out, next, current, live, 2);
+    release_temporaries(out, next, owned, otype, rowns);
+    leave_with(out, next, frame, rowns, ens, ret_t, returned);"""
+replace = """
+    join_from(out, next, current, live, 2);
+    release_temporaries(out, next, owned, otype, rowns);
+    add_line(out, str_concat(str_concat("  ret ", llvm_type(ret_t)), str_concat(" ", v(returned))));"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_value_blocks_with_the_same_memory_semantics" }]
 
 [[mutation]]
@@ -3122,8 +3139,9 @@ why = """
 the **Nazm-written** emitter's error path branches to the success block instead of returning, so an `Err`'s payload is read as the success value and the rest of the expression runs
 """
 file = "compiler/emit.nz"
-find = """    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
-replace = """    add_line(out, str_concat("  br label %", blk("q", k)));"""
+find = "    leave_with(out, next, frame, rowns, ens, ret_t, returned);"
+replace = """
+    add_line(out, str_concat("  br label %", blk("q", k)));"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
 
 # --- N12.1: the core prelude's identity in the compiler written in Nazm -------------------
@@ -12427,7 +12445,7 @@ why = "the compiler written in Nazm looks for `@std/text` as a file again and re
 file = "compiler/module.nz"
 find = '                    if str_len(why) > 0 {'
 replace = '                    if str_len(why) > 1000 {'
-killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_refuses_std_and_package_imports_by_name" }]
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_resolves_std_and_refuses_package_imports_by_name" }]
 
 # --- N78: traits and methods --------------------------------------------------------------
 #
@@ -13705,3 +13723,94 @@ file = "compiler/emit.nz"
 find = "            str_concat(v(a), str_concat(\", i64 \", str_concat(v(b), \")\")))))));"
 replace = "            str_concat(v(b), str_concat(\", i64 \", str_concat(v(a), \")\")))))));"
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_parity_record_is_what_both_compilers_do_with_each_feature" }]
+
+[[mutation]]
+name = "n102-selfhost-main-takes-any-parameter"
+why = "the **Nazm-written** checker accepts a parameter of `main` that is not a capability, which the reference refuses with `N0371`"
+file = "compiler/analyse.nz"
+find = "        if is_cap(ints_get(fparams, ints_get(ffirst, at) + p)) == false {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_the_n102_features" }]
+
+[[mutation]]
+name = "n102-selfhost-an-undeclared-effect-is-accepted"
+why = "the **Nazm-written** checker never reports a body that needs an effect its function does not declare (`N0366`)"
+file = "compiler/analyse.nz"
+find = """            if missing != 0 {
+                let mut listed = "";
+                bit = 1;"""
+replace = """            if missing < 0 {
+                let mut listed = "";
+                bit = 1;"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_the_n102_features" }]
+
+[[mutation]]
+name = "n102-selfhost-a-contract-may-contain-anything"
+why = "the **Nazm-written** checker lets a contract clause branch, block, propagate or call what is not pure (`N0614`)"
+file = "compiler/analyse.nz"
+find = """                if what != "" {
+                    if found == false {
+                        report(diags, "N0614", at, to,"""
+replace = """                if what == "?" {
+                    if found == false {
+                        report(diags, "N0614", at, to,"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_the_n102_features" }]
+
+[[mutation]]
+name = "n102-selfhost-an-impl-may-omit-a-method"
+why = "the **Nazm-written** checker accepts an impl that does not define a method its trait declares (`N0602`)"
+file = "compiler/analyse.nz"
+find = """                        if ints_get(tb.imeth, first + pos) < 0 {
+                            report(diags, "N0602", start, start + 4,"""
+replace = """                        if ints_get(tb.imeth, first + pos) < 0 - 1 {
+                            report(diags, "N0602", start, start + 4,"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_the_n102_features" }]
+
+[[mutation]]
+name = "n102-selfhost-a-closure-captures-a-mutable-binding"
+why = "the **Nazm-written** checker lets a closure capture a `let mut` binding (`N0386`), so the closure and its frame disagree about the value"
+file = "compiler/analyse.nz"
+find = """    if ints_get(nmut, i) == 1 {
+        report(diags, "N0386", at, to,"""
+replace = """    if ints_get(nmut, i) == 2 {
+        report(diags, "N0386", at, to,"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_the_n102_features" }]
+
+[[mutation]]
+name = "n102-selfhost-recursion-runs-unchecked"
+why = "the **Nazm-written** emitter calls a function in a cycle without `nz.stack_check`, so unbounded recursion overflows the native stack instead of failing `N0408`"
+file = "compiler/emit.nz"
+find = """                if ints_get(cyc, cme) == 1 {
+                    let sr = take_number(next);
+                    add_line(out, str_concat(str_concat("  ", v(sr)), " = call i32 @nz.stack_check()"));"""
+replace = """                if ints_get(cyc, cme) == 2 {
+                    let sr = take_number(next);
+                    add_line(out, str_concat(str_concat("  ", v(sr)), " = call i32 @nz.stack_check()"));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_recursion_as_the_reference_does" }]
+
+[[mutation]]
+name = "n102-selfhost-a-contract-never-fails"
+why = "the **Nazm-written** emitter computes a clause's failure as false, so a precondition or postcondition that does not hold goes unreported (`N0410`, `N0411`)"
+file = "compiler/emit.nz"
+find = """                                str_concat(" = icmp eq i1 ", str_concat(v(c), ", false"))));
+                        let mut code = "N0410";"""
+replace = """                                str_concat(" = and i1 false, ", v(c))));
+                        let mut code = "N0410";"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_the_n102_features_with_the_same_memory_semantics" }]
+
+[[mutation]]
+name = "n102-selfhost-a-capture-is-not-retained"
+why = "the **Nazm-written** emitter stores a capture into a closure object without the object's own reference, so the value is released twice"
+file = "compiler/emit.nz"
+find = """        emit_retain(out, next, val, t, rowns);
+        let p = take_number(next);"""
+replace = """        let p = take_number(next);"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_the_n102_features_with_the_same_memory_semantics" }]
+
+[[mutation]]
+name = "n102-selfhost-short-circuit-decides-the-wrong-way"
+why = "the **Nazm-written** emitter's join of `&&` and `||` takes the other operator's answer where the left operand decided"
+file = "compiler/emit.nz"
+find = """                    let decided = if text == "&&" { "false" } else { "true" };"""
+replace = """                    let decided = if text == "&&" { "true" } else { "false" };"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_the_n102_features_with_the_same_memory_semantics" }]
