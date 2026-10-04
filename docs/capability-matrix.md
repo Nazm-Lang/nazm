@@ -1363,6 +1363,14 @@ without `-g`, so a compiled program cannot be debugged symbolically.
 
 ### 12. Cranelift backend — VERIFIED (v1, for the native subset, on the host)
 
+*N99, 2026-10-04: the interactive tier v2 — the tiers VERIFIED to agree; the JIT still BLOCKED.*
+`architecture.md` §7.100 first. `crates/nazm-cli/tests/tiers.rs`: one REPL session's thirteen answers,
+four of them failures (`N0400` twice, `N0401`, and `i64::MIN / -1`), equal to `nazm run`'s and to the
+native builds' of the same definitions by LLVM and by Cranelift. The JIT stays BLOCKED by two causes,
+stated: the workspace forbids `unsafe`, which executable memory needs, and no crate that provides it
+(`cranelift-jit`, `region`, `memmap2`) is in the offline cache; the isolated crate that would lift it,
+with its W^X and stale-code acceptance tests, is designed in §7.100 and not built.
+
 *N65, 2026-10-02: the interactive tier — VERIFIED for the REPL, comptime and reload checks; the JIT
 BLOCKED.* `architecture.md` §7.67 first. `nazm repl` checks the session as one program on every
 edit and refuses a redefinition that breaks a caller by the caller's name; `nazm comptime`

@@ -398,6 +398,12 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N99 — JIT and REPL v2 — **complete as scoped, 2026-10-04; the JIT stays BLOCKED**
+
+`architecture.md` §7.100 first. The REPL, the interpreter and both native backends held to one
+answer; the JIT's blocker shown to need `unsafe` and an absent crate, and its isolated design written.
+Next: N100, the grand audit.
+
 ### N98 — the compiler written in Nazm at parity — **not accepted: parity measured, 13 of 21 probes**
 
 `architecture.md` §7.99 first. A per-feature parity record, measured contained and gated:
