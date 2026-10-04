@@ -8317,6 +8317,38 @@ and name the same code.
 **What would prove this unsuitable.** A probe recorded equal whose two executables behave differently
 on another input: probes are single programs, and equality is of those programs only.
 
+## 7.100 The interactive tier v2: the JIT question answered, and the tiers held to one answer — N99, 2026-10-04
+
+Written before the code. N65 verified the REPL, `nazm comptime` (sandboxed: no ambient files,
+network or clock, explicit budgets) and the reload rule, and left the JIT BLOCKED on the workspace's
+`unsafe_code = "forbid"`.
+
+**Whether safe abstractions suffice: they do not.** Running generated machine code in process needs
+memory that is writable, then executable (`mmap`/`mprotect`, or `MAP_JIT` with
+`pthread_jit_write_protect_np` on this host), and a jump to an address as a function — a raw-pointer
+cast to a function pointer. The standard library offers none of this safely, and no crate that wraps
+it is in this machine's offline cache (`cranelift-jit`, `region`, `memmap2`: absent). A subprocess is
+not a JIT. So the JIT stays **BLOCKED**, by two causes: the forbid lint, and the absent crate.
+
+**What would lift it, designed and not built.** One crate, `nazm-jit-mem`, the only member allowed
+`unsafe` (`xtask/src/rules.rs`'s allowlist, the workspace lint relaxed to `deny` in the same change,
+§2's rule): it maps a buffer read-write, copies relocated code in, flips it to read-execute (W^X —
+never both), and returns a handle whose call goes through one audited `unsafe` cast. Threat model:
+the code is the compiler's own output from validated LIR, never input bytes; the handle owns the
+mapping and unmaps on drop, so no call outlives its code; a stale-code test after recompilation and
+a W^X test are its acceptance. Lifting the lint is the project's decision, not a milestone's.
+
+**What this milestone adds.** The tiers that exist held to one answer: a REPL session's every value
+and failure code equal to `nazm run`'s and to native builds' by LLVM and by Cranelift, on the same
+definitions — recursion, loops, both trap codes, `i64::MIN / -1` and `% -1`.
+
+**Versions.** None.
+
+**Negative example.** An overflow inside a function the REPL defined fails with `N0400` in all four
+tiers. **Boundary example.** `i64::MIN % -1` is 0 in all four.
+
+**What would prove this unsuitable.** A REPL answer no other tier gives.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
