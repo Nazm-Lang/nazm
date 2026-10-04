@@ -8187,6 +8187,41 @@ verification beyond N56's registry digests.
 **What would prove this unsuitable.** An artefact that verifies after a byte of it changed; two
 builds of identical input with different bytes; an SBOM that omits a package the build linked.
 
+## 7.96 The platform matrix v2: every cell one of three answers — N95, 2026-10-04
+
+Written before the code. Area 33 is PARTIAL: seven targets are accepted, their evidence spread over
+N57, N62, N64 and N86 in prose, and nothing holds the documented matrix to the compiler or says what
+CPU an object is for.
+
+**The matrix.** One table in `nazm-lir` (`backend::SUPPORT`) gives, for every accepted triple and
+each backend, exactly one of **run-verified** (programs built for it ran here — host, Rosetta, the
+Linux image, QEMU, Node — and agreed with the interpreter; the evidence named: a test, or a contained
+command), **compile-only** (objects built and read from their headers; nothing ran) or
+**unsupported** (refused by name, with why). It records each target's CPU identity — the C compiler
+driver's default CPU for the triple under LLVM, the baseline ISA under Cranelift, which detects
+nothing of the building host — and what a debugger has been shown to do. `nazm inspect` prints it;
+the capability matrix's table is held to it cell for cell by a test, which also requires every
+accepted target to have a row, every non-refusal to name evidence the tree holds, and each LLVM CPU
+to be what the driver resolves. No cell may say "supported".
+
+**Non-goals, decided.** Windows (no linker, SDK or machine here; no runtime port), 32-bit hosted
+targets (`Int` is 64-bit; hosted layouts assume 64-bit pointers — wasm32 is the one 32-bit target,
+freestanding) and big-endian targets (nothing here runs one; layouts and the DWARF writer assume
+little-endian), each with its reason in the same table.
+
+**Versions.** None: no language, IR, ABI or object change; the CPU is recorded and checked, not pinned
+by a new flag, so no object's bytes move. `nazm.inspect/1` gains `toolchain.support` and
+`toolchain.non_goals`, additive.
+
+**Negative example.** A row claiming x86_64 Linux run-verified fails the test — no x86_64 Linux
+machine has run anything. **Boundary example.** A clang whose default CPU for a triple changes fails
+the CPU test: the identity is then stale, and the table must change with it.
+
+**Not here.** An x86_64 Linux runner, Windows, CPU-feature selection, sysroots, a bundled linker.
+
+**What would prove this unsuitable.** A run-verified cell whose named test does not run a program for
+that target; a target the compiler accepts with no row.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
