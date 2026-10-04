@@ -8089,10 +8089,11 @@ Repointed by N76, which moved it to 21 for Unicode escapes: an entry that refuse
 Repointed by N78, which moved it to 22 for traits: an entry that refused a method call must not be reused.
 Repointed by N79, which moved it to 23 for attenuation: an entry that refused an IoCap given for an OutCap must not be reused.
 Repointed by N80, which moved it to 24 for provenance v3: an entry that refused a path read out of a Strs must not be reused.
-Repointed by N85, which moved it to 25 for FFI v3: an entry that refused an `extern "C" struct` must not be reused."""
+Repointed by N85, which moved it to 25 for FFI v3: an entry that refused an `extern "C" struct` must not be reused.
+Repointed by N86, which moved it to 26 for device registers by width: an entry that refused `mmio_write8` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 25;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 24;"
+find = "pub const SEMANTIC_EPOCH: u32 = 26;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 25;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10328,11 +10329,12 @@ Repointed by N62, which moved it to 8 for the device-register helpers.
 Repointed by N66, which moved it to 9 for the ordered sum.
 Repointed by N68, which moved it to 10 for the field-by-field layout.
 Repointed by N83, which moved it to 11 for the task pool.
-Repointed by N85, which moved it to 12 for the errno capture and C strings returned."""
+Repointed by N85, which moved it to 12 for the errno capture and C strings returned.
+Repointed by N86, which moved it to 13 for device registers by width."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = "pub const RUNTIME_ABI_REVISION: u32 = 12;"
-replace = "pub const RUNTIME_ABI_REVISION: u32 = 11;"
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twelve_and_its_digest_covers_the_pool_and_errno" }]
+find = "pub const RUNTIME_ABI_REVISION: u32 = 13;"
+replace = "pub const RUNTIME_ABI_REVISION: u32 = 12;"
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirteen_and_its_digest_covers_the_pool_and_errno" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -10729,8 +10731,9 @@ name = "n57-clang-is-not-told-the-target"
 why = "a cross build's LLVM units are compiled for the host"
 file = "crates/nazm-cli/src/backend.rs"
 find = """
-    cross.map_or_else(Vec::new, |t| vec!["-target".to_owned(), t.to_owned()])"""
-replace = "    cross.map_or_else(Vec::new, |_t| Vec::new())"
+        Some(t) => vec!["-target".to_owned(), t.to_owned()],"""
+replace = """
+        Some(_) => Vec::new(),"""
 killers = [{ package = "nazm-cli", test = "cross", name = "every_target_is_built_by_both_backends_in_its_own_format" }]
 
 [[mutation]]
@@ -11029,8 +11032,8 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_regis
 name = "n62-a-register-needs-no-authority"
 why = "a function holding no `MmioCap` may write a device register"
 file = "crates/nazm-sema/src/capability.rs"
-find = '            Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => Some(Self::Mmio),'
-replace = '            Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => None,'
+find = '            | Intrinsic::MmioWrite16 => Some(Self::Mmio),'
+replace = '            | Intrinsic::MmioWrite16 => None,'
 killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_register_needs_an_mmio_cap_held" }]
 
 [[mutation]]
@@ -11085,7 +11088,7 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runt
 name = "n62-floating-point-stays-trapped"
 why = "`_start` leaves CPACR_EL1 at its reset value, so the first SIMD instruction code generation emits traps"
 file = "crates/nazm-runtime/src/board.rs"
-find = '        "module asm \"  msr cpacr_el1, x1\"",'
+find = '                "  msr cpacr_el1, x1",'
 replace = ''
 killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runtime_has_no_thread_local_storage_and_no_c_library" }]
 
@@ -11227,8 +11230,8 @@ killers = [{ package = "nazm-cli", test = "realtime", name = "a_board_build_stat
 name = "n63-the-watermark-paints-nothing"
 why = "`_start` does not paint the stack, so the watermark reads every word as touched"
 file = "crates/nazm-runtime/src/board.rs"
-find = '            "module asm \"  ldr x2, =0x5a5a5a5a5a5a5a5a\"",'
-replace = '            "module asm \"  ldr x2, =0\"",'
+find = '                "  ldr x2, =0x5a5a5a5a5a5a5a5a",'
+replace = '                "  ldr x2, =0",'
 killers = [{ package = "nazm-cli", test = "realtime", name = "the_watermark_is_the_board_s" }]
 
 
@@ -11238,7 +11241,7 @@ killers = [{ package = "nazm-cli", test = "realtime", name = "the_watermark_is_t
 name = "n64-a-module-is-a-board"
 why = "WebAssembly is taken for the board, so a module may touch device registers it does not have"
 file = "crates/nazm-lir/src/backend.rs"
-find = '        self.os == Os::None && self.arch == Arch::Aarch64'
+find = '        self.os == Os::None && self.arch != Arch::Wasm32'
 replace = '        self.os == Os::None'
 killers = [{ package = "nazm-cli", test = "wasm", name = "what_a_module_cannot_have_is_refused_by_name" }]
 
@@ -13084,3 +13087,64 @@ file = "crates/nazm-cli/src/build.rs"
 find = "    let linked = if choice.library && choice.shared {"
 replace = "    let linked = if choice.library && choice.shared && false {"
 killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_shared_library_links_into_a_c_program_and_shows_only_its_exports" }]
+
+
+# --- N86: boards as data, a second architecture, device registers by width ----------------------
+
+[[mutation]]
+name = "n86-the-riscv-uart-is-the-aarch64-one"
+why = "the RISC-V board's description names AArch64's UART, so its output goes to an address nothing decodes"
+file = "crates/nazm-runtime/src/board.rs"
+find = "        uart: 0x1000_0000,"
+replace = "        uart: 0x0900_0000,"
+killers = [{ package = "nazm-cli", test = "boards", name = "inspect_lists_the_riscv_board_and_every_board_s_description" }]
+
+[[mutation]]
+name = "n86-a-byte-write-is-a-word"
+why = "`mmio_write8` stores 32 bits, so a byte-wide device's three neighbouring registers are written too"
+file = "crates/nazm-runtime/src/board.rs"
+find = """  %t = trunc i64 %value to i8
+  store volatile i8 %t, ptr %p"""
+replace = """  %t = trunc i64 %value to i32
+  store volatile i32 %t, ptr %p"""
+killers = [{ package = "nazm-cli", test = "boards", name = "every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does" }]
+
+[[mutation]]
+name = "n86-small-data-is-an-orphan"
+why = "RISC-V's small-data sections are left to the linker, which may place them at the load address ahead of `_start`"
+file = "crates/nazm-runtime/src/board.rs"
+find = "*(.data*) *(.sdata*)"
+replace = "*(.data*)"
+killers = [{ package = "nazm-cli", test = "boards", name = "every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does" }]
+
+[[mutation]]
+name = "n86-unwind-tables-lead-the-image"
+why = "unwind tables are not discarded, and an orphaned `.eh_frame` at the load address is where the machine starts"
+file = "crates/nazm-runtime/src/board.rs"
+find = "  /DISCARD/ : {{ *(.eh_frame*) }}\\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "boards", name = "every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does" }]
+
+[[mutation]]
+name = "n86-the-riscv-fpu-stays-off"
+why = "RISC-V's startup leaves `mstatus.FS` off, so the first floating-point instruction code generation emits traps"
+file = "crates/nazm-runtime/src/board.rs"
+find = '                "  csrs mstatus, t0",'
+replace = ''
+killers = [{ package = "nazm-cli", test = "boards", name = "every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does" }]
+
+[[mutation]]
+name = "n86-a-byte-register-runs-hosted"
+why = "`mmio_read8` is not a board's, so `nazm run` reads a device register that is not there"
+file = "crates/nazm-core/src/lib.rs"
+find = "                | sema::Intrinsic::MmioRead8"
+replace = ""
+killers = [{ package = "nazm-cli", test = "boards", name = "a_device_register_of_any_width_is_a_board_s_and_needs_an_mmio_cap" }]
+
+[[mutation]]
+name = "n86-clang-is-not-asked"
+why = "a host without a RISC-V code generator compiles anyway, and its failure is reported as the compiler's bug"
+file = "crates/nazm-cli/src/build.rs"
+find = '    if target.arch == nazm_lir::backend::Arch::Riscv64 && !crate::backend::generates("riscv64") {'
+replace = '    if target.arch == nazm_lir::backend::Arch::Riscv64 && false {'
+killers = [{ package = "nazm-cli", test = "boards", name = "a_riscv_board_is_built_where_clang_can_and_refused_by_name_where_it_cannot" }]

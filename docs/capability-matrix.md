@@ -83,7 +83,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 15 | Advanced scheduler | VERIFIED as scoped (N83): an opt-in M:N pool, `NAZM_SCHEDULER=pool`, macOS aarch64 and x86-64; Linux compile-only; no stealing or preemption |
 | 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; no networking, cryptography or floats |
 | 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
-| 18 | Embedded support | PARTIAL — one board, emulated, VERIFIED (N62); profile rules PARTIAL |
+| 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
 | 19 | Critical profile | PARTIAL (rules v1) |
 | 20 | Cybersecurity profile | PARTIAL (rules v1) |
 | 21 | AI/HPC | PARTIAL — one GPU map kernel, OpenCL on Apple M1 Pro (N67); vectorised sums (N66) |
@@ -101,8 +101,11 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
-After N85, 2026-10-04: nineteen VERIFIED (area 17 moved, as scoped: a practical C ABI subset),
-eighteen PARTIAL, none RESEARCH.
+After N86, 2026-10-04: twenty VERIFIED (area 18 moved, as scoped: two emulated boards), seventeen
+PARTIAL, none RESEARCH.
+
+*Historical.* After N85, 2026-10-04: nineteen VERIFIED (area 17 moved, as scoped: a practical C ABI
+subset), eighteen PARTIAL, none RESEARCH.
 
 *Historical.* After N84, 2026-10-04: eighteen VERIFIED (area 16 moved, as scoped: the standard
 library 1.0), nineteen PARTIAL, none RESEARCH.
@@ -1678,7 +1681,29 @@ commitment that keeps it reachable — field access stays symbolic until the low
 layout selection remains possible — is already honoured and must be preserved rather than
 undone when this profile arrives.
 
-### 18. Embedded support — PARTIAL
+### 18. Embedded support — VERIFIED as scoped (two emulated boards, N86)
+
+**N86: boards as data, a second architecture — VERIFIED, emulated.** `architecture.md` §7.87 first.
+A board is a description (`nazm_runtime::board::BOARDS`, printed by `nazm inspect` as
+`toolchain.boards`), and its linker script, runtime and entry are generated from it alone
+(`every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does`). The second
+architecture family, `riscv64gc-unknown-none-elf`, boots on QEMU's RISC-V `virt` machine; device
+registers have 8-, 16- and 32-bit accesses. The published support matrix:
+
+| Board | Build | Link | Boot (QEMU) | Failure path | Stack: measured ≤ bound | Hardware |
+| --- | --- | --- | --- | --- | --- | --- |
+| `aarch64-unknown-none`, QEMU `virt` Cortex-A53 | host or container | `ld.lld` | `-O0`, `-O2` | `N0400`, `N0408`, status 2 | 176 ≤ 176, 32 ≤ 48 bytes | no |
+| `riscv64gc-unknown-none-elf`, QEMU `virt` RV64GC, M-mode | container only (needs a RISC-V `clang`; refused by name elsewhere) | `ld.lld` | `-O0`, `-O2` | `N0400`, `N0408`, status 2 | 152 ≤ 160, 32 ≤ 48 bytes | no |
+
+Evidence: the four tests of `crates/nazm-cli/tests/boards.rs` on the host, and its ignored
+`both_boards_boot_and_agree_under_qemu`, run in `nazm-qemu:n86` — `nazm` built from the tree in the
+container, then each board's programs at `-O0` and `-O2`: identical UART output (`HI` and `100`, the
+byte write truncating `0x149` to `I`), the overflow and the exhausted stack each reported with
+status 2; with the stack painted, every measured use within the stated bound
+(`docs/performance.md`, N86). **Not claimed**: hardware; atomics and memory orderings, interrupts
+and vectors, a heap or arena (each DESIGNED in §7.87, with the reason it is not built); `.bss`
+zeroing by a loader other than QEMU's; RISC-V on a macOS host's Apple `clang`, which has no RISC-V
+code generator.
 
 **N62: a freestanding target — VERIFIED on QEMU's `virt` board, one board.** `aarch64-unknown-none`
 builds to objects and `link.ld`, links with `ld.lld` and boots under `qemu-system-aarch64`: no OS, no

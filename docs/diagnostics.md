@@ -352,6 +352,11 @@ handle, `N0321` and `N0390` for a handle reaching a task, `N0380`/`N0384` for an
 ABI and type parameters, `N0385` for `c_errno()` under `nazm run`. The persisted interface moved to
 `nazm.interface/9` (a record's `c`); `nazm.runtime/1` gains the service name `foreign`, additive.
 
+**Applied to N86, embedded v2.** No code appeared. The four device-register widths are refused
+where there is no device exactly as the 32-bit pair is (`N0392`), whose help now names both boards;
+a RISC-V build on a host whose `clang` has no RISC-V code generator is an environment refusal, exit
+4 and one sentence, as a missing toolchain is.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

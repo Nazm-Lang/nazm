@@ -105,7 +105,7 @@ found only by reading all of it.
 
 ## Native code
 
-- Six targets, no others: four hosted — `aarch64`/`x86_64` × macOS/Linux — and two freestanding,
+- Seven targets, no others: four hosted — `aarch64`/`x86_64` × macOS/Linux — and three freestanding,
   below; no Windows, 32-bit or CPU-feature selection; a target the host has no linker for is built to objects (`--objects`) for its own
   toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here
   (area 33). *Narrowed in N57:* until then, the host only.
@@ -116,10 +116,14 @@ found only by reading all of it.
   differential testing (N73, N81), not on one lowering. Byte layouts and ownership are `nazm-lir`'s
   and validated on every build (N81), but LLVM lays its own aggregates out, an enum as the product
   of its variants (area 10).
-- One freestanding target, `aarch64-unknown-none`, verified only on QEMU's `virt` board: objects and
-  `link.ld`, linked by `ld.lld` outside this host; no atomics, interrupts, heap or `@std`; a board
-  program that reaches allocation, input and output, tasks, channels, closures or the C library is
-  refused; Cranelift builds no board (areas 18, 33). *Narrowed in N62:* until then, no target
+- Two boards, both emulated and neither run on hardware: `aarch64-unknown-none` and (N86)
+  `riscv64gc-unknown-none-elf`, each on its QEMU `virt` machine: objects and `link.ld`, linked by
+  `ld.lld` outside this host; RISC-V is built only where `clang` has a RISC-V code generator (not
+  Apple's — the `nazm-qemu:n86` image's), refused by name elsewhere. No atomics or memory orderings,
+  interrupts, heap or arena, or `@std`; `.bss` is zero because QEMU's loaded memory is, which a
+  hardware loader need not do; a board program that reaches allocation, input and output, tasks,
+  channels, closures or the C library is refused; Cranelift builds no board (areas 18, 33).
+  *Narrowed in N86:* until then, one board and 32-bit device registers only; *in N62:* no target
   without an operating system.
 - Cranelift keeps every non-scalar local in a stack slot; its loops are slower than LLVM's
   (area 12, `performance.md`).

@@ -7724,6 +7724,15 @@ nothing else — the truncation is the width's.
 program whose output differs between the two boards for anything but its device addresses; a stack
 measured above its stated bound on either.
 
+**As built (N86, 2026-10-04).** Three amendments. **RISC-V is built where `clang` can build it**:
+Apple's `clang` has no RISC-V code generator, so the host refuses the target by name before
+compiling (`-print-targets` asked), and the evidence is built and run in `nazm-qemu:n86`, whose
+Debian `clang` has one. **The linker script names more than it did**: RISC-V's small-data sections,
+and `/DISCARD/` for unwind tables — at `-O2` an orphaned `.eh_frame` was placed at the load address
+ahead of `_start`; AArch64's images were unaffected and its script gains the same lines. **The
+hosted refusal (`N0392`) names both boards** in its help. Epoch 26 and runtime ABI 13 as stated;
+`nazm inspect` gains `toolchain.boards`, additive.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
