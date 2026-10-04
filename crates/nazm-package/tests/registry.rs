@@ -165,7 +165,9 @@ fn a_transitive_requirement_narrows_the_choice_and_a_conflict_is_refused_naming_
     let d = e.first().unwrap();
     assert_eq!(d.code, codes::VERSION_UNSATISFIABLE);
     assert!(
-        d.message.contains("`app` requires ~1.2.0") && d.message.contains("`geo` requires ~1.1.0"),
+        d.message.contains("`core`")
+            && d.message.contains("`app` requires ~1.2.0")
+            && d.message.contains("`geo` 2.0.0 requires ~1.1.0"),
         "{}",
         d.message
     );
@@ -460,4 +462,130 @@ fn a_path_package_and_a_registry_dependency_of_one_name_conflict() {
         "reg",
     );
     assert_eq!(refused(&app), codes::PACKAGE_CONFLICT);
+}
+
+// --- backtracking (N90, §7.91) ---------------------------------------------------------------
+
+#[test]
+fn an_older_version_is_chosen_when_the_newest_leaves_another_package_no_version() {
+    // Every `b 1.x` but 1.0.0 requires `c ^2`; the application requires `c ^1`.
+    let w = World::new();
+    w.publish("reg", "b", "1.0.0", &["c = { version = \"^1.0.0\" }"]);
+    for v in ["1.1.0", "1.2.0"] {
+        w.publish("reg", "b", v, &["c = { version = \"^2.0.0\" }"]);
+    }
+    for v in ["1.0.0", "1.5.0", "2.0.0"] {
+        w.publish("reg", "c", v, &[]);
+    }
+    let app = w.app(
+        &[
+            "b = { version = \"^1.0.0\" }",
+            "c = { version = \"^1.0.0\" }",
+        ],
+        "reg",
+    );
+    let g = resolve(&app).unwrap();
+    assert_eq!(
+        chosen(&g),
+        [
+            "app 1.0.0 path+.",
+            "b 1.0.0 registry+b@1.0.0",
+            "c 1.5.0 registry+c@1.5.0"
+        ]
+    );
+    // The same answer however often it is asked.
+    assert_eq!(resolve(&app).unwrap().lock_text(), g.lock_text());
+}
+
+#[test]
+fn an_unsatisfiable_set_is_explained_with_every_requirement_and_who_placed_it() {
+    let w = World::new();
+    for v in ["1.0.0", "2.0.0"] {
+        w.publish("reg", "b", v, &[]);
+    }
+    w.publish("reg", "c", "1.0.0", &["b = { version = \"^1.0.0\" }"]);
+    let app = w.app(
+        &[
+            "b = { version = \"=2.0.0\" }",
+            "c = { version = \"^1.0.0\" }",
+        ],
+        "reg",
+    );
+    let e = resolve(&app).unwrap_err();
+    let d = e.first().unwrap();
+    assert_eq!(d.code, codes::VERSION_UNSATISFIABLE);
+    assert!(
+        d.message.contains("`b`")
+            && d.message.contains("`app` requires =2.0.0")
+            && d.message.contains("`c` 1.0.0 requires ^1.0.0"),
+        "{}",
+        d.message
+    );
+}
+
+#[test]
+fn a_search_past_its_bound_says_so_rather_than_claiming_no_answer() {
+    // Five packages of ten versions each, and a sixth no version of which exists: every one of
+    // the 100,000 assignments of the first five dead-ends at the sixth.
+    let w = World::new();
+    let mut deps = Vec::new();
+    for p in ["a", "b", "c", "d", "e"] {
+        for minor in 0..10 {
+            w.publish("reg", p, &format!("1.{minor}.0"), &[]);
+        }
+        deps.push(format!("{p} = {{ version = \"^1.0.0\" }}"));
+    }
+    w.publish("reg", "f", "1.0.0", &[]);
+    deps.push("f = { version = \"^2.0.0\" }".to_owned());
+    let deps: Vec<&str> = deps.iter().map(String::as_str).collect();
+    let app = w.app(&deps, "reg");
+    let e = resolve(&app).unwrap_err();
+    let d = e.first().unwrap();
+    assert_eq!(d.code, codes::VERSION_UNSATISFIABLE);
+    assert!(
+        d.message.contains("stopped after 10000 candidate versions"),
+        "{}",
+        d.message
+    );
+}
+
+#[test]
+fn update_drops_the_lockfiles_preference_only_for_the_packages_named() {
+    let w = World::new();
+    for p in ["b", "c"] {
+        w.publish("reg", p, "1.0.0", &[]);
+    }
+    let app = w.app(
+        &[
+            "b = { version = \"^1.0.0\" }",
+            "c = { version = \"^1.0.0\" }",
+        ],
+        "reg",
+    );
+    nazm_package::write_lock(&resolve(&app).unwrap()).unwrap();
+    for p in ["b", "c"] {
+        w.publish("reg", p, "1.1.0", &[]);
+    }
+    // The lockfile holds both while they satisfy.
+    let held = chosen(&resolve(&app).unwrap());
+    assert!(
+        held.contains(&"b 1.0.0 registry+b@1.0.0".to_owned()),
+        "{held:?}"
+    );
+    let one = chosen(&nazm_package::resolve_updating(&app, &["b".to_owned()]).unwrap());
+    assert!(
+        one.contains(&"b 1.1.0 registry+b@1.1.0".to_owned()),
+        "{one:?}"
+    );
+    assert!(
+        one.contains(&"c 1.0.0 registry+c@1.0.0".to_owned()),
+        "{one:?}"
+    );
+    let all = chosen(&nazm_package::resolve_updating(&app, &[]).unwrap());
+    assert!(
+        all.contains(&"c 1.1.0 registry+c@1.1.0".to_owned()),
+        "{all:?}"
+    );
+    let e = nazm_package::resolve_updating(&app, &["nope".to_owned()]).unwrap_err();
+    assert_eq!(e.first().unwrap().code, codes::PACKAGE_NOT_FOUND);
 }
