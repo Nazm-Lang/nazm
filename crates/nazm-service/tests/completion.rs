@@ -758,11 +758,22 @@ fn every_resolved_name_is_among_what_its_scope_offers() {
             for f in loaded.map.ids() {
                 let module = loaded.graph.module_of(f).unwrap();
                 let cst = nazm_core::__syntax::parse_cst(f, loaded.map.text(f)).cst;
+                // The last significant leaf before this one: a method's name follows a `.`,
+                // and is found through its receiver's type, not the scope (N78, N102).
+                let mut after_dot = false;
                 for leaf in cst.leaves() {
                     if leaf.kind != nazm_core::__syntax::SyntaxKind::Ident {
+                        if !leaf.text.trim().is_empty() && !leaf.text.starts_with("//") {
+                            after_dot = leaf.text == ".";
+                        }
                         continue;
                     }
+                    let method = after_dot;
+                    after_dot = false;
                     let span = leaf.span;
+                    if method {
+                        continue;
+                    }
                     let expected = if let Some(l) = res.local(span) {
                         let declared =
                             res.function(l.function).unwrap().locals[l.slot as usize].span;

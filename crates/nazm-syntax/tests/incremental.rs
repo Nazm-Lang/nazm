@@ -294,9 +294,11 @@ fn an_edit_inside_one_function_of_a_large_file_reparses_that_function_alone() {
         let r = Revision::new(FileId::ROOT, text.clone());
         let full: ParseStats = r.stats();
         assert!(full.full && full.chunks_reparsed > 50, "{full:?}");
-        // Inside the body of some function in the middle of the file: rename a local.
-        let middle = text.len().div_euclid(2);
-        let at = middle + text[middle..].find("let ").unwrap() + 4;
+        // Inside the body of one ordinary function: rename a local. Named rather than found
+        // at the midpoint, since N102 put one of the largest functions there, and the bound
+        // below is about a function, not the largest one.
+        let function = text.find("\nfn closure_object(").unwrap();
+        let at = function + text[function..].find("let ").unwrap() + 4;
         let next = r
             .edit(&TextEdit {
                 start: u32::try_from(at).unwrap(),
