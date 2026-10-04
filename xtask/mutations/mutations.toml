@@ -1495,9 +1495,9 @@ Only a differential test that compares what the two compilers' programs *reclaim
 it, which is what `the_nazm_written_compiler_emits_the_same_memory_semantics` is for
 """
 file = "compiler/emit.nz"
-find = """                                                                                                        own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
-                                                                                                        release_frame(out, next, frame, rowns);"""
-replace = """                                                                                                        own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);"""
+find = """                                                                                                                    own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
+                                                                                                                    release_frame(out, next, frame, rowns);"""
+replace = "                                                                                                                    own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);"
 killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 
@@ -2123,14 +2123,14 @@ reclamation while agreeing about every value, which is the divergence a differen
 test exists to catch
 """
 file = "compiler/emit.nz"
-find = """                                                            leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
-                                                                    loop_own, loop_m);
-                                                            join_from(out, next, current, live,
-                                                                    ints_get(loop_scope, ints_len(loop_scope) - 1));
-                                                            // The header, never the body: `continue` re-evaluates the condition."""
-replace = """                                                            join_from(out, next, current, live,
-                                                                    ints_get(loop_scope, ints_len(loop_scope) - 1));
-                                                            // The header, never the body: `continue` re-evaluates the condition."""
+find = """                                                                    leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
+                                                                            loop_own, loop_m);
+                                                                    join_from(out, next, current, live,
+                                                                            ints_get(loop_scope, ints_len(loop_scope) - 1));
+                                                                    // The header, never the body: `continue` re-evaluates the condition."""
+replace = """                                                                    join_from(out, next, current, live,
+                                                                            ints_get(loop_scope, ints_len(loop_scope) - 1));
+                                                                    // The header, never the body: `continue` re-evaluates the condition."""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 
@@ -2242,10 +2242,10 @@ its failure is never taken on, and the program prints a value where the referenc
 with the task's diagnostic
 """
 file = "compiler/emit.nz"
-find = """                                                        join_from(out, next, current, live,
-                                                                ints_get(loop_scope, ints_len(loop_scope) - 1));
-                                                        branch(out, live, blk("x", w));"""
-replace = """                                                        branch(out, live, blk("x", w));"""
+find = """                                                                join_from(out, next, current, live,
+                                                                        ints_get(loop_scope, ints_len(loop_scope) - 1));
+                                                                branch(out, live, blk("x", w));"""
+replace = """                                                                branch(out, live, blk("x", w));"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
@@ -2255,9 +2255,9 @@ the same for `return`: the frame is left with the scope's tasks still running an
 failure unseen
 """
 file = "compiler/emit.nz"
-find = """                                                                join_from(out, next, current, live, 2);
-                                                                // Rule 3."""
-replace = """                                                                // Rule 3."""
+find = """                                                                        join_from(out, next, current, live, 2);
+                                                                        // Rule 3."""
+replace = "                                                                        // Rule 3."
 killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
@@ -2298,11 +2298,11 @@ the same leak in the Nazm-written emitter, which the selfhost suite's reclamatio
 comparison is what catches
 """
 file = "compiler/emit.nz"
-find = """                                                                                        if ot == t_str() {
-                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
-                                                                                            own_drop(out, next, owned, b, ot, rowns, otype);
-"""
-replace = """                                                                                        if ot == t_str() {
+find = """                                                                                                if ot == t_str() {
+                                                                                                    own_drop(out, next, owned, a, ot, rowns, otype);
+                                                                                                    own_drop(out, next, owned, b, ot, rowns, otype);
+                                                                                                """
+replace = """                                                                                                if ot == t_str() {
 """
 killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
@@ -4028,10 +4028,10 @@ killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_c
 name = "n13-selfhost-compared-temporaries-leak"
 why = "the **Nazm-written** emitter releases neither operand of a record or enum comparison"
 file = "compiler/emit.nz"
-find = """                                                                                        if is_record(ot) {
-                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
-                                                                                            own_drop(out, next, owned, b, ot, rowns, otype);
-                                                                                        }"""
+find = """                                                                                                if is_record(ot) {
+                                                                                                    own_drop(out, next, owned, a, ot, rowns, otype);
+                                                                                                    own_drop(out, next, owned, b, ot, rowns, otype);
+                                                                                                }"""
 replace = ""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
 
@@ -7903,32 +7903,11 @@ replace = """        if false && site.spawned {
             needs.push((CapabilityKind::to_start_a_task(), Needs::Spawn));"""
 killers = [{ package = "nazm-core", test = "capabilities", name = "starting_a_task_needs_spawn_authority_and_the_task_brings_none_of_its_own" }]
 
-[[mutation]]
-name = "n37-an-undeclared-callee-brings-its-own-authority"
-why = "a call to a function with no declared set needs nothing of its caller, so code with a contract reaches ambient authority through code without one"
-file = "crates/nazm-core/src/effects.rs"
-find = "                if let Some(effects) = effects {"
-replace = "                if let Some(effects) = effects.filter(|_| false) {"
-killers = [{ package = "nazm-core", test = "capabilities", name = "an_undeclared_callee_exercises_its_callers_authority_with_a_witness" }]
+# `n37-an-undeclared-callee-brings-its-own-authority` is retired by N104: no call to a function needs authority of its caller any more: every body holds what it exercises, which `n104-an-undeclared-body-inherits-again` attacks.
 
-[[mutation]]
-name = "n37-an-undeclared-import-brings-its-own-authority"
-why = """an import with no declared set needs nothing of its caller, so the compatibility bridge is a backdoor across a module boundary
-Repointed by N42: the authority an undeclared callee needs is `assumed()`'s set."""
-file = "crates/nazm-core/src/effects.rs"
-find = """                        Some(Some(_)) => None,
-                        _ => Some(assumed(g, res)),"""
-replace = """                        Some(Some(_)) => None,
-                        _ => None,"""
-killers = [{ package = "nazm-cli", test = "incremental", name = "an_undeclared_import_needs_every_authority_from_a_caller_with_a_contract" }]
+# `n37-an-undeclared-import-brings-its-own-authority` is retired by N104: an import needs nothing of its caller: its authority is its parameters (`n104-an-undeclared-body-inherits-again`).
 
-[[mutation]]
-name = "n37-a-task-inherits-its-spawners-authority"
-why = "a task whose function declares nothing needs nothing of its spawner, so a `SpawnCap` alone lets a task exercise any authority"
-file = "crates/nazm-core/src/effects.rs"
-find = "                if let Some(effects) = effects {"
-replace = "                if let Some(effects) = effects.filter(|_| !site.spawned) {"
-killers = [{ package = "nazm-core", test = "capabilities", name = "starting_a_task_needs_spawn_authority_and_the_task_brings_none_of_its_own" }]
+# `n37-a-task-inherits-its-spawners-authority` is retired by N104: a task's function holds what it exercises, as every function does; nothing is inherited from a spawner.
 
 [[mutation]]
 name = "n37-an-effect-set-grants-authority"
@@ -7942,10 +7921,11 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "an_effect_dec
 [[mutation]]
 name = "n37-a-pure-contract-needs-no-authority"
 why = """authority is checked only for a function declaring some effect, so one declaring `! {}` that exercises authority is reported only for its effect.
-Repointed by N79, which made the check return what is missing rather than push it."""
+Repointed by N79, which made the check return what is missing rather than push it.
+Repointed by N104, which checks every body for authority from one loop."""
 file = "crates/nazm-core/src/effects.rs"
-find = "        for (kind, at, why) in authority(node, &nodes, &sets, module, &contract, res) {"
-replace = "        for (kind, at, why) in authority(node, &nodes, &sets, module, &contract, res).into_iter().filter(|_| !declared.is_empty()) {"
+find = "        for (kind, at, why) in authority(node, res) {"
+replace = "        for (kind, at, why) in authority(node, res).into_iter().filter(|_| node.declared.is_some_and(|d| !d.is_empty())) {"
 killers = [{ package = "nazm-core", test = "capabilities", name = "authority_without_the_effect_is_an_effect_error_and_both_missing_is_both_in_order" }]
 
 [[mutation]]
@@ -7961,13 +7941,7 @@ replace = """            let at = site.span;
             if site.spawned {"""
 killers = [{ package = "nazm-core", test = "capabilities", name = "authority_passed_from_main_through_helpers_recursion_and_storage_is_accepted" }]
 
-[[mutation]]
-name = "n37-the-authority-witness-stops-at-the-callee"
-why = "the witness for missing authority ends at the first undeclared callee, so it never shows what needs the authority"
-file = "crates/nazm-core/src/effects.rs"
-find = "                EffectSource::Inferred(h) => g = h,"
-replace = "                EffectSource::Inferred(_) => break,"
-killers = [{ package = "nazm-core", test = "capabilities", name = "an_undeclared_callee_exercises_its_callers_authority_with_a_witness" }]
+# `n37-the-authority-witness-stops-at-the-callee` is retired by N104: the witness through undeclared callees is gone with the bridge: missing authority is reported at the site that needs it.
 
 [[mutation]]
 name = "n37-authority-is-a-spelling"
@@ -8291,10 +8265,11 @@ Repointed by N80, which moved it to 24 for provenance v3: an entry that refused 
 Repointed by N85, which moved it to 25 for FFI v3: an entry that refused an `extern "C" struct` must not be reused.
 Repointed by N86, which moved it to 26 for device registers by width: an entry that refused `mmio_write8` must not be reused.
 Repointed by N87, which moved it to 27 for contracts: an entry that refused a `requires` must not be reused.
-Repointed by N103, which moved it to 28 for re-exports: an entry that refused `pub use` must not be reused."""
+Repointed by N103, which moved it to 28 for re-exports: an entry that refused `pub use` must not be reused.
+Repointed by N104, which moved it to 29 for authority without inheritance: an entry that accepted a printing `fn main()` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 28;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 27;"
+find = "pub const SEMANTIC_EPOCH: u32 = 29;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 28;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10145,13 +10120,7 @@ find = "                            Some(set) => {\n                            
 replace = "                            Some(set) => {\n                                direct.extend(set.named().iter().map(|effect| {"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "a_caller_is_held_to_what_the_function_it_passes_does" }]
 
-[[mutation]]
-name = "n51-a-value-of-an-undeclared-import-needs-no-authority"
-why = "declared code makes a value of an undeclared import without the authority its effects need, and reaches the bridge through it"
-file = "crates/nazm-core/src/effects.rs"
-find = "        let required = CapabilitySet::for_effects(value.assumed);"
-replace = "        let required = CapabilitySet::EMPTY;"
-killers = [{ package = "nazm-cli", test = "effect_params", name = "a_value_of_an_undeclared_import_needs_the_authority_a_call_would" }]
+# `n51-a-value-of-an-undeclared-import-needs-no-authority` is retired by N104: a function value needs no authority of its maker: the function holds what it needs.
 
 [[mutation]]
 name = "n51-the-interface-cannot-read-the-parameter"
@@ -10281,10 +10250,11 @@ killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs
 [[mutation]]
 name = "n52-an-undeclared-function-vouches-without-authority"
 why = """code that declares no effects vouches with no VouchCap, so declassification is ambient
-Repointed by N54, which made the check one for every authority held apart from an effect (a vouch's and a clock's)."""
+Repointed by N54, which made the check one for every authority held apart from an effect (a vouch's and a clock's).
+Repointed by N104, whose one authority check covers a vouch in every function."""
 file = "crates/nazm-core/src/effects.rs"
-find = "            if !site.held.contains(kind) {"
-replace = "            if false && !site.held.contains(kind) {"
+find = "            needs.push((CapabilityKind::of_intrinsic(b), Needs::Builtin(b)));"
+replace = "            needs.push((CapabilityKind::of_intrinsic(b).without(CapabilitySet::of(CapabilityKind::Vouch)), Needs::Builtin(b)));"
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_needs_its_authority_everywhere_and_is_recorded" }]
 
 [[mutation]]
@@ -12690,37 +12660,13 @@ find = "                .without(site.held.implied())"
 replace = "                .without(site.held)"
 killers = [{ package = "nazm-cli", test = "authority", name = "a_held_io_cap_authorises_its_own_print" }]
 
-[[mutation]]
-name = "n79-inheritance-is-not-recorded"
-why = "inherited authority is computed and dropped, so the bridge is ambient again and every function reports `inherits: []`"
-file = "crates/nazm-core/src/effects.rs"
-find = "        res.record_inherits(id, set, at);"
-replace = "        let _ = (id, set, at);"
-killers = [{ package = "nazm-cli", test = "authority", name = "inherited_authority_is_recorded_and_inspect_shows_it" }]
+# `n79-inheritance-is-not-recorded` is retired by N104: nothing is inherited, so nothing is recorded.
 
-[[mutation]]
-name = "n79-inspect-hides-inherits"
-why = "`nazm inspect` no longer reports inherited authority, so a reviewer cannot see which functions use the bridge"
-file = "crates/nazm-cli/src/inspect.rs"
-find = '            o.insert("inherits".into(), json!(inherits));'
-replace = '            let _ = inherits;'
-killers = [{ package = "nazm-cli", test = "authority", name = "inherited_authority_is_recorded_and_inspect_shows_it" }]
+# `n79-inspect-hides-inherits` is retired by N104: `nazm inspect` (`/2`) no longer has an `inherits` field.
 
-[[mutation]]
-name = "n79-the-rule-passes-inheritance"
-why = "`explicit-authority` passes a function that inherits, so the strict profile enforces nothing"
-file = "crates/nazm-service/src/profile.rs"
-find = "                        if held.is_empty() {"
-replace = "                        if true {"
-killers = [{ package = "nazm-cli", test = "authority", name = "the_authority_profile_refuses_inheritance_by_name_and_general_does_not" }]
+# `n79-the-rule-passes-inheritance` is retired by N104: `explicit-authority` is the language's rule: it has nothing left to refuse.
 
-[[mutation]]
-name = "n79-the-profile-has-no-rule"
-why = "the `authority` profile holds no rule, so naming it refuses nothing"
-file = "crates/nazm-service/src/profile.rs"
-find = "            Self::Authority => &[Rule::ExplicitAuthority],"
-replace = "            Self::Authority => &[],"
-killers = [{ package = "nazm-cli", test = "authority", name = "the_authority_profile_refuses_inheritance_by_name_and_general_does_not" }]
+# `n79-the-profile-has-no-rule` is retired by N104 as equivalent: `explicit-authority` is the language's rule and can no longer fire, so a profile without it refuses exactly what one with it does.
 
 [[mutation]]
 name = "n79-core-ir-results-are-exact"
@@ -13905,3 +13851,65 @@ replace = """                    if found == false { found = true; }
                     if found == false {
                         report(diags, "N0211", nat, nat + str_len(name),"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_agrees_with_the_reference_on_reexports" }]
+
+# --- N104: authority is a parameter -------------------------------------------------------------
+
+[[mutation]]
+name = "n104-an-undeclared-body-inherits-again"
+why = "a function with no declared effect set is not checked for authority, so it exercises whatever it calls with authority it never holds — the bridge, back"
+file = "crates/nazm-core/src/effects.rs"
+find = "        for (kind, at, why) in authority(node, res) {"
+replace = "        for (kind, at, why) in authority(node, res).into_iter().filter(|_| node.declared.is_some()) {"
+killers = [{ package = "nazm-core", test = "capabilities", name = "an_undeclared_function_holds_what_it_exercises" }]
+
+[[mutation]]
+name = "n104-a-spawn-needs-no-authority"
+why = "starting a task needs no `SpawnCap`, so any function can start one"
+file = "crates/nazm-core/src/effects.rs"
+find = """        if site.spawned {
+            needs.push((CapabilityKind::to_start_a_task(), Needs::Spawn));"""
+replace = """        if false {
+            needs.push((CapabilityKind::to_start_a_task(), Needs::Spawn));"""
+killers = [{ package = "nazm-core", test = "capabilities", name = "starting_a_task_needs_spawn_authority_and_the_task_brings_none_of_its_own" }]
+
+[[mutation]]
+name = "n104-selfhost-authority-is-not-checked"
+why = "the **Nazm-written** checker never reports missing authority (`N0369`), so it accepts a program that prints from a function holding nothing"
+file = "compiler/analyse.nz"
+find = "    if kind == 0 { return 0; }\n    let bit = auth_bit(kind);"
+replace = "    if kind >= 0 { return 0; }\n    let bit = auth_bit(kind);"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_the_n102_features" }]
+
+[[mutation]]
+name = "n104-selfhost-an-io-cap-is-not-an-out-cap"
+why = "the **Nazm-written** checker does not count a held `IoCap` as the `OutCap` it implies, so a function given an `IoCap` may not print"
+file = "compiler/analyse.nz"
+find = """        if kind == t_outcap() {
+            if t == t_iocap() { return true; }
+        }"""
+replace = """        if kind == t_outcap() {
+            if t == t_iocap() { return false; }
+        }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_the_n102_features" }]
+
+[[mutation]]
+name = "n104-mir-capabilities-of-two-kinds-differ"
+why = "MIR's shape relation has no rule for capabilities, so an `IoCap` passed for an `OutCap` fails MIR validation (`N0900`) after the checker accepted it"
+file = "crates/nazm-mir/src/ir.rs"
+find = """        if let (Type::Cap(_), Type::Cap(_)) = (a, b) {
+            return true;
+        }"""
+replace = """        if let (Type::Cap(_), Type::Cap(_)) = (a, b) {
+            return a == b;
+        }"""
+killers = [{ package = "nazm-cli", test = "authority", name = "an_io_cap_given_for_an_out_cap_compiles_on_both_backends" }]
+
+[[mutation]]
+name = "n104-a-generic-call-takes-no-attenuation"
+why = "a generic call compares a concrete parameter exactly, so a generic function cannot be handed an `IoCap` for its `OutCap`"
+file = "crates/nazm-core/src/check.rs"
+find = """                // As a monomorphic call's argument is (N79, N104): an attenuation is accepted.
+                if !self.assignable(got, want) {"""
+replace = """                // As a monomorphic call's argument is (N79, N104): an attenuation is accepted.
+                if got != want {"""
+killers = [{ package = "nazm-cli", test = "authority", name = "an_io_cap_given_for_an_out_cap_compiles_on_both_backends" }]

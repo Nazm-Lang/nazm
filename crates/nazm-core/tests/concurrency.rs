@@ -89,7 +89,7 @@ fn a_worker_pool_finishes_work_the_body_is_still_producing() {
             while chan_recv(jobs, buf) { chan_send(results, ints_pop(buf) * 2); }
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(4);
             let results = chan_new(64);
             scope {
@@ -125,7 +125,7 @@ fn a_channel_of_capacity_one_still_delivers_everything() {
             chan_send(results, sum);
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(1);
             let results = chan_new(1);
             scope {
@@ -159,7 +159,7 @@ fn a_scope_does_not_finish_until_every_task_has() {
             chan_send(out, acc);
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let out = chan_new(8);
             scope {
                 spawn contribute(out, 1);
@@ -196,7 +196,7 @@ fn scopes_nest_and_the_inner_one_joins_first() {
     // runs, so `stage` is complete before the outer task is even started with it.
     let src = r"
         fn add(out: Chan, n: Int) -> Int { chan_send(out, n); 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let inner = chan_new(4);
             let outer = chan_new(4);
             scope {
@@ -234,7 +234,7 @@ fn closing_a_channel_wakes_every_blocked_receiver() {
             while chan_recv(jobs, buf) { ints_pop(buf); }
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(4);
             scope {
                 spawn waiter(jobs);
@@ -265,7 +265,7 @@ fn closing_a_full_channel_wakes_a_blocked_sender_and_reports_the_send_failed() {
             chan_send(results, refused);
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(2);
             let results = chan_new(1);
             scope {
@@ -306,7 +306,7 @@ fn closing_twice_is_allowed() {
     // second time would make the race a program error.
     let src = r"
         fn stop(c: Chan) -> Int { chan_close(c); 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let c = chan_new(1);
             scope {
                 spawn stop(c);
@@ -335,7 +335,7 @@ fn a_task_that_fails_fails_the_whole_program() {
             let zero = ints_pop(buf);
             1 / zero
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let c = chan_new(1);
             scope {
                 spawn bad(c);
@@ -363,7 +363,7 @@ fn a_failing_task_does_not_stop_the_others_being_joined() {
             while chan_recv(c, buf) { ints_pop(buf); }
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let dead = chan_new(1);
             let work = chan_new(1);
             scope {
@@ -397,7 +397,7 @@ fn a_scope_whose_body_fails_reports_the_bodys_own_failure() {
             while chan_recv(c, buf) { ints_pop(buf); }
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let work = chan_new(1);
             let mut top = 1;
             scope {
@@ -427,7 +427,7 @@ fn when_both_the_body_and_a_task_fail_the_bodys_failure_is_the_one_reported() {
             chan_recv(c, buf);
             1 / ints_pop(buf)
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let c = chan_new(1);
             let mut top = 1;
             scope {
@@ -450,7 +450,7 @@ fn when_both_the_body_and_a_task_fail_the_bodys_failure_is_the_one_reported() {
 fn spawn_outside_a_scope_is_refused() {
     let src = r"
         fn t() -> Int { 0 }
-        fn main() -> Int { spawn t(); 0 }
+        fn main(tasks: SpawnCap) -> Int { spawn t(); 0 }
     ";
     assert_eq!(
         sole_error("spawn outside scope", src),
@@ -464,7 +464,7 @@ fn a_sequence_may_not_cross_into_a_task() {
     // one through would be a data race the language had invited.
     let src = r"
         fn t(xs: Ints) -> Int { ints_push(xs, 1); 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let xs = ints_new();
             scope { spawn t(xs); }
             ints_len(xs)
@@ -499,7 +499,7 @@ fn every_message_is_delivered_exactly_once_under_contention() {
             chan_send(results, sum);
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(1);
             let results = chan_new(8);
             scope {
@@ -534,7 +534,7 @@ fn many_scopes_in_sequence_leave_nothing_running() {
     // the threads would pile up and the total would be short.
     let src = r"
         fn one(out: Chan) -> Int { chan_send(out, 1); 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let out = chan_new(2048);
             let mut round = 0;
             while round < 200 {

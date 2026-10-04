@@ -140,7 +140,7 @@ fn the_promises_hold_for_deliberately_ugly_input() {
         ),
         (
             "concurrency",
-            "fn w(c: Chan) -> Int { 0 }\nfn main() -> Int { let c = chan_new(1); scope { spawn w(c); chan_close(c); } 0 }",
+            "fn w(c: Chan) -> Int { 0 }\nfn main(tasks: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c); chan_close(c); } 0 }",
         ),
         ("a use item", "use \"other.nz\";\nfn main() -> Int { 0 }"),
         (

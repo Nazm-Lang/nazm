@@ -527,7 +527,7 @@ fn every_kind_of_semantic_diagnostic_is_indexed_with_its_owner_and_detail() {
         ),
         (
             "task capture",
-            "fn use_seq(xs: Ints) -> Int { ints_push(xs, 1) }\nfn main() -> Int {\n    let xs = ints_new();\n    scope { spawn use_seq(xs); }\n    ints_len(xs)\n}\n",
+            "fn use_seq(xs: Ints) -> Int { ints_push(xs, 1) }\nfn main(tasks: SpawnCap) -> Int {\n    let xs = ints_new();\n    scope { spawn use_seq(xs); }\n    ints_len(xs)\n}\n",
             "N0321",
             Some("main.nz::fn main"),
         ),

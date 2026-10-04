@@ -1,7 +1,7 @@
 fn send(out: Chan, n: Int) -> Int {
     if chan_send(out, n) { 1 } else { 0 }
 }
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let out = chan_new(8);
     let got = ints_new();
     let mut i = 0;

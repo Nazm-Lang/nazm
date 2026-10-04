@@ -155,11 +155,11 @@ fn every_outside_world_built_in_requires_io_and_a_pure_function_may_call_none_of
 #[test]
 fn a_spawn_requires_spawn_and_every_effect_of_the_task_it_starts() {
     let src = "fn quiet(c: Chan) -> Int { 0 }\n\
-        fn loud(c: Chan) -> Int { print(\"t\") }\n\
+        fn loud(c: Chan, out: OutCap) -> Int { print(\"t\") }\n\
         fn a(s: SpawnCap) -> Int { let c = chan_new(1); scope { spawn quiet(c); } 0 }\n\
-        fn b() -> Int { let c = chan_new(1); scope { spawn loud(c); } 0 }\n\
-        fn through() -> Int { b() }\n\
-        fn main(s: SpawnCap) -> Int { a(s) + through() }\n";
+        fn b(io: IoCap, tasks: SpawnCap) -> Int { let c = chan_new(1); scope { spawn loud(c, io); } 0 }\n\
+        fn through(io: IoCap, tasks: SpawnCap) -> Int { b(io, tasks) }\n\
+        fn main(s: SpawnCap, io: IoCap) -> Int { a(s) + through(io, s) }\n";
     accepted(src);
     assert_eq!(inferred(src, "quiet"), EffectSet::EMPTY);
     assert_eq!(inferred(src, "a"), SPAWN);
@@ -197,11 +197,11 @@ fn a_set_is_the_same_in_any_order_and_a_wider_contract_is_allowed() {
 
 #[test]
 fn a_purity_assertion_fails_through_every_level_and_names_a_shortest_witness() {
-    let src = "fn leaf() -> Int { print(\"x\") }\n\
-        fn mid() -> Int { leaf() }\n\
-        fn top() -> Int { mid() }\n\
-        fn detour() -> Int { top() }\n\
-        fn pure(io: IoCap) -> Int ! {} { if true { detour() } else { mid() } }\n\
+    let src = "fn leaf(out: OutCap) -> Int { print(\"x\") }\n\
+        fn mid(out: OutCap) -> Int { leaf(out) }\n\
+        fn top(out: OutCap) -> Int { mid(out) }\n\
+        fn detour(out: OutCap) -> Int { top(out) }\n\
+        fn pure(io: IoCap) -> Int ! {} { if true { detour(io) } else { mid(io) } }\n\
         fn main(io: IoCap) -> Int { pure(io) }\n";
     let d = check_source(src);
     assert_eq!(d.len(), 1, "{d:#?}");
@@ -209,14 +209,14 @@ fn a_purity_assertion_fails_through_every_level_and_names_a_shortest_witness() {
     assert_eq!(d.code, codes::UNDECLARED_EFFECT);
     // `mid` is two calls from `print`, `detour` four: the shorter chain is the witness,
     // though `detour` is called first.
-    let (s, _) = at(src, "mid() } }");
+    let (s, _) = at(src, "mid(io) } }");
     assert_eq!((d.primary.span.start, d.primary.span.end), (s, s + 3));
     let hops: Vec<(u32, u32)> = d
         .secondary
         .iter()
         .map(|l| (l.span.start, l.span.end))
         .collect();
-    let leaf_call = at(src, "leaf() }");
+    let leaf_call = at(src, "leaf(out) }");
     let print_call = at(src, "print");
     assert!(hops.contains(&(leaf_call.0, leaf_call.0 + 4)), "{hops:?}");
     assert!(hops.contains(&print_call), "{hops:?}");
@@ -244,17 +244,17 @@ fn recursion_reaches_the_least_fixed_point_and_injects_nothing() {
         fn main() -> Int { if even(4) { count(3) + depth(1, 2) } else { 0 } }\n";
     accepted(pure);
     // One `print` anywhere on a cycle reaches all of it, and a pure caller of the cycle.
-    let src = "fn a(n: Int) -> Int { if n == 0 { 0 } else { b(n - 1) } }\n\
-        fn b(n: Int) -> Int { if n == 0 { 0 } else { c(n - 1) } }\n\
-        fn c(n: Int) -> Int { if n == 7 { print(\"x\") } else { a(n - 1) } }\n\
-        fn self_(n: Int) -> Int { if n == 0 { eprint(\"x\") } else { self_(n - 1) } }\n\
-        fn gen[T](x: T, n: Int) -> Int { if n == 0 { print(\"g\") } else { gen(x, n - 1) } }\n\
-        fn pure(io: IoCap, n: Int) -> Int ! {} { a(n) }\n\
-        fn main(io: IoCap) -> Int { pure(io, 3) + self_(2) + gen(1, 2) }\n";
+    let src = "fn a(n: Int, out: OutCap) -> Int { if n == 0 { 0 } else { b(n - 1, out) } }\n\
+        fn b(n: Int, out: OutCap) -> Int { if n == 0 { 0 } else { c(n - 1, out) } }\n\
+        fn c(n: Int, out: OutCap) -> Int { if n == 7 { print(\"x\") } else { a(n - 1, out) } }\n\
+        fn self_(n: Int, out: OutCap) -> Int { if n == 0 { eprint(\"x\") } else { self_(n - 1, out) } }\n\
+        fn gen[T](x: T, n: Int, out: OutCap) -> Int { if n == 0 { print(\"g\") } else { gen(x, n - 1, out) } }\n\
+        fn pure(io: IoCap, n: Int) -> Int ! {} { a(n, io) }\n\
+        fn main(io: IoCap) -> Int { pure(io, 3) + self_(2, io) + gen(1, 2, io) }\n";
     for f in ["a", "b", "c", "self_", "gen"] {
         assert_eq!(inferred(src, f), IO, "{f}");
     }
-    refused_at(src, codes::UNDECLARED_EFFECT, name(src, "a(n) }", "a"));
+    refused_at(src, codes::UNDECLARED_EFFECT, name(src, "a(n, io) }", "a"));
     // The same, written in any order.
     let mut lines: Vec<&str> = src.lines().collect();
     lines.reverse();
@@ -264,7 +264,7 @@ fn recursion_reaches_the_least_fixed_point_and_injects_nothing() {
 
 #[test]
 fn an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade() {
-    let src = "fn f() -> Int ! { io, network } { print(\"x\") }\nfn g(io: IoCap) -> Int ! {} { f() }\nfn main(io: IoCap) -> Int { g(io) }\n";
+    let src = "fn f(io: IoCap) -> Int ! { io, network } { print(\"x\") }\nfn g(io: IoCap) -> Int ! {} { f(io) }\nfn main(io: IoCap) -> Int { g(io) }\n";
     // `network` is refused, and `f`'s set is then unwritten: its body is not checked
     // against a contract nobody can read, and `g` sees what `f` actually needs.
     let d = diagnostics(src);
@@ -278,8 +278,8 @@ fn an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade() {
             ),
             (
                 "N0366".to_owned(),
-                at(src, "f() }").0,
-                at(src, "f() }").0 + 1
+                at(src, "f(io) }").0,
+                at(src, "f(io) }").0 + 1
             ),
         ]
     );
@@ -332,7 +332,7 @@ fn a_body_that_did_not_parse_adds_nothing_to_the_error_it_is() {
 
 #[test]
 fn the_analysis_is_the_same_twice_and_its_witness_is_recorded() {
-    let src = "fn leaf() -> Int { print(\"x\") }\nfn mid() -> Int { leaf() }\nfn main() -> Int { mid() }\n";
+    let src = "fn leaf(out: OutCap) -> Int { print(\"x\") }\nfn mid(io: IoCap) -> Int { leaf(io, io) }\nfn main(io: IoCap) -> Int { mid(io, io) }\n";
     assert_eq!(effects(src), effects(src));
     assert_eq!(check_source(src), check_source(src));
     let src2 = src.to_owned();
@@ -371,14 +371,14 @@ fn a_large_call_graph_settles_without_recursion_or_explosion() {
     let mut src = String::new();
     let n = 2000;
     for i in 0..n {
-        src.push_str(&format!("fn c{i}() -> Int {{ c{}() }}\n", i + 1));
+        src.push_str(&format!("fn c{i}(out: OutCap) -> Int {{ c{}(out) }}\n", i + 1));
     }
-    src.push_str(&format!("fn c{n}() -> Int {{ print(\"end\") }}\n"));
+    src.push_str(&format!("fn c{n}(out: OutCap) -> Int {{ print(\"end\") }}\n"));
     let fan = 300;
     // Flat statements, not a 300-deep `+` chain: the fan-out is wide, not nested.
-    src.push_str("fn wide() -> Int { let mut t = 0;");
+    src.push_str("fn wide(out: OutCap) -> Int { let mut t = 0;");
     for i in 0..fan {
-        src.push_str(&format!(" t = t + w{i}();"));
+        src.push_str(&format!(" t = t + w{i}(out);"));
     }
     src.push_str(" t }\n");
     for i in 0..fan {
@@ -387,19 +387,19 @@ fn a_large_call_graph_settles_without_recursion_or_explosion() {
         } else {
             "1".to_owned()
         };
-        src.push_str(&format!("fn w{i}() -> Int {{ {body} }}\n"));
+        src.push_str(&format!("fn w{i}(out: OutCap) -> Int {{ {body} }}\n"));
     }
     let ring = 500;
     for i in 0..ring {
         let next = (i + 1) % ring;
         let body = if i == 250 {
-            format!("if true {{ print(\"r\") }} else {{ r{next}() }}")
+            format!("if true {{ print(\"r\") }} else {{ r{next}(out) }}")
         } else {
-            format!("r{next}()")
+            format!("r{next}(out)")
         };
-        src.push_str(&format!("fn r{i}() -> Int {{ {body} }}\n"));
+        src.push_str(&format!("fn r{i}(out: OutCap) -> Int {{ {body} }}\n"));
     }
-    src.push_str("fn main(io: IoCap) -> Int ! { io } { c0() + wide() + r0() }\n");
+    src.push_str("fn main(io: IoCap) -> Int ! { io } { c0(io) + wide(io) + r0(io) }\n");
     let start = std::time::Instant::now();
     let all = effects(&src);
     assert!(start.elapsed().as_secs() < 60, "{:?}", start.elapsed());

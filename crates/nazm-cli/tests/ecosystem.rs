@@ -71,7 +71,7 @@ fn every_template_is_a_project_its_own_commands_hold() {
         String::from_utf8_lossy(&Command::new(at("cli").join("app")).output().unwrap().stdout),
         "hello, world\n0\n"
     );
-    assert!(ok(&at("cli"), &["inspect", "."]).contains("\"nazm.inspect/1\""));
+    assert!(ok(&at("cli"), &["inspect", "."]).contains("\"nazm.inspect/2\""));
     assert_eq!(
         ok(&at("server"), &["run", ".", "--", "requests.txt"]),
         "4 requests served\n30\n"

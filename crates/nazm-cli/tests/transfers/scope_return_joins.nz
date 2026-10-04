@@ -1,9 +1,9 @@
 fn boom(n: Int) -> Int { 10 / n }
-fn go() -> Int {
+fn go(tasks: SpawnCap) -> Int {
     scope {
         spawn boom(0);
         return 5;
     }
     0
 }
-fn main() -> Int { go() }
+fn main(tasks: SpawnCap) -> Int { go(tasks) }

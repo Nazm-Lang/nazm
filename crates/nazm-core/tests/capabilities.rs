@@ -192,14 +192,13 @@ fn starting_a_task_needs_spawn_authority_and_the_task_brings_none_of_its_own() {
     let w = at(&src, "w(io, c)").0;
     let d = refused_at(&src, codes::MISSING_AUTHORITY, (w, w + 1));
     assert!(d.message.contains("`SpawnCap`"), "{}", d.message);
-    // A task whose function declares nothing exercises its spawner's authority, so the
-    // spawner must hold what the task does: the `SpawnCap` to start it is not enough.
+    // A task whose function declares nothing has only what it is handed, as any function
+    // (N104): its own body is refused, not the spawner's.
     let src = "fn w(c: Chan) -> Int { print(\"t\"); 0 }\n\
         fn run(s: SpawnCap) -> Int ! { io, spawn } { let c = chan_new(1); scope { spawn w(c); } 0 }\n\
         fn main(s: SpawnCap) -> Int { run(s) }\n";
-    let w = at(src, "w(c); }").0;
-    let d = refused_at(src, codes::MISSING_AUTHORITY, (w, w + 1));
-    assert!(d.message.contains("`IoCap`"), "{}", d.message);
+    let d = refused_at(src, codes::MISSING_AUTHORITY, at(src, "print"));
+    assert!(d.message.contains("`OutCap`"), "{}", d.message);
     // A task with a contract has only the authority it is handed: its own body is checked.
     let src = "fn w(c: Chan) -> Int ! { io } { print(\"t\"); 0 }\n\
         fn run(s: SpawnCap, io: IoCap) -> Int ! { io, spawn } { let c = chan_new(1); scope { spawn w(c); } 0 }\n\
@@ -208,31 +207,26 @@ fn starting_a_task_needs_spawn_authority_and_the_task_brings_none_of_its_own() {
 }
 
 #[test]
-fn an_undeclared_callee_exercises_its_callers_authority_with_a_witness() {
+fn an_undeclared_function_holds_what_it_exercises() {
+    // N104: no function exercises its caller's authority. `inner` prints and holds nothing,
+    // so it alone is refused, at the `print`; `helper` and `f` call it and need nothing at
+    // the call, because a function's authority is its parameters.
     let src = "fn inner() -> Int { print(\"deep\") }\n\
         fn helper() -> Int { inner() }\n\
-        fn f() -> Int ! { io } { helper() }\n\
-        fn main() -> Int { f() }\n";
-    let h = at(src, "helper() }").0;
-    let d = refused_at(src, codes::MISSING_AUTHORITY, (h, h + 6));
-    let hops: Vec<(u32, u32)> = d
-        .secondary
-        .iter()
-        .map(|l| (l.span.start, l.span.end))
-        .collect();
-    let inner_call = at(src, "inner() }");
-    assert!(hops.contains(&(inner_call.0, inner_call.0 + 5)), "{hops:?}");
-    assert!(hops.contains(&at(src, "print")), "{hops:?}");
-    // Holding the authority is enough, and the legacy functions still need no change.
+        fn f(io: IoCap) -> Int ! { io } { helper() }\n\
+        fn main(io: IoCap) -> Int { f(io) }\n";
+    let d = refused_at(src, codes::MISSING_AUTHORITY, at(src, "print"));
+    assert!(d.message.contains("`inner` holds no `OutCap`"), "{}", d.message);
+    // Threaded from `main`, as a parameter at every level, it is accepted.
     accepted(
-        &src.replace("fn f() -> Int", "fn f(io: IoCap) -> Int")
-            .replace(
-                "fn main() -> Int { f() }",
-                "fn main(io: IoCap) -> Int { f(io) }",
-            ),
+        "fn inner(out: OutCap) -> Int { print(\"deep\") }\n\
+         fn helper(out: OutCap) -> Int { inner(out) }\n\
+         fn f(io: IoCap) -> Int ! { io } { helper(io) }\n\
+         fn main(io: IoCap) -> Int { f(io) }\n",
     );
-    // A program that declares nothing anywhere is the bridge, whole: `main` is its root.
-    accepted("fn inner() -> Int { print(\"x\") }\nfn main() -> Int { inner() }\n");
+    // `main` holds nothing it is not given.
+    let src = "fn main() -> Int { print(\"x\") }\n";
+    refused_at(src, codes::MISSING_AUTHORITY, at(src, "print"));
 }
 
 #[test]

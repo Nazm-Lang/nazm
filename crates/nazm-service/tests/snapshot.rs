@@ -703,17 +703,17 @@ fn a_snapshot_is_the_same_at_any_generation_of_the_service() {
 
 #[test]
 fn a_provenance_change_is_its_own_section_even_where_no_byte_of_the_function_moved() {
-    let caller = "fn main() -> Int { str_len(load()) }\n";
+    let caller = "fn main(io: IoCap) -> Int { str_len(load(io)) }\n";
     let p = Project::new(&[(
         "main.nz",
-        &format!("fn load() -> Str {{ \"x\" }}\n{caller}"),
+        &format!("fn load(io: IoCap) -> Str {{ \"x\" }}\n{caller}"),
     )]);
     let before = snapshot(&p.root());
     // `load` starts to read a file. `main`'s own text is the same bytes; what its result
     // carries is not, and the delta says so rather than calling `main` unchanged.
     p.write(
         "main.nz",
-        &format!("fn load() -> Str {{ read_file(\"f\") }}\n{caller}"),
+        &format!("fn load(io: IoCap) -> Str {{ read_file(\"f\") }}\n{caller}"),
     );
     let d = delta(&p.root(), &before);
     assert_eq!(
@@ -775,20 +775,26 @@ fn a_capability_only_change_is_a_change_of_shape_under_the_same_identity() {
 
 #[test]
 fn an_effect_change_is_its_own_section_whether_declared_or_required() {
-    let text = "fn f() -> Int { 1 }\nfn main() -> Int { f() }\n";
-    let p = Project::new(&[("main.nz", text)]);
+    // `f` holds an `OutCap` from the start (N104: a body that prints holds one).
+    let p = Project::new(&[(
+        "main.nz",
+        "fn f(out: OutCap) -> Int { 1 }\nfn main(io: IoCap) -> Int { f(io) }\n",
+    )]);
     let before = snapshot(&p.root());
     // The body starts to print: nothing declared moved, but what `f` requires did, and so
     // did what its caller requires. Neither's shape changed.
     p.write(
         "main.nz",
-        "fn f() -> Int { print(\"x\") }\nfn main() -> Int { f() }\n",
+        "fn f(out: OutCap) -> Int { print(\"x\") }\nfn main(io: IoCap) -> Int { f(io) }\n",
     );
     let d = delta(&p.root(), &before);
     // A built-in is not a dependency or a callee entity: only `effects` says it is new.
     assert_eq!(changed(&d, "main.nz::fn f"), ["source", "effects"]);
     assert_eq!(changed(&d, "main.nz::fn main"), ["effects"]);
     // Declared pure, same body: the contract is the signature, and it is an effect change.
+    let text = "fn f() -> Int { 1 }\nfn main() -> Int { f() }\n";
+    p.write("main.nz", text);
+    let before = snapshot(&p.root());
     p.write(
         "main.nz",
         "fn f() -> Int ! {} { 1 }\nfn main() -> Int { f() }\n",

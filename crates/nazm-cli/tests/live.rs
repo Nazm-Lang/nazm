@@ -91,7 +91,7 @@ fn a_failure_in_the_repl_is_the_language_s_failure() {
 const CONSTANTS: &str = "fn table() -> Int ! {} { let mut i = 0; let mut s = 0; while i < 10 { s = s + i * i; i = i + 1; } s }\n\
                          fn reads(io: IoCap) -> Int ! { io } { print(\"x\"); 0 }\n\
                          fn loud() -> Int ! { io } { 0 }\n\
-                         fn ambient() -> Int { print(\"hi\"); 0 }\n\
+                         fn ambient(out: OutCap) -> Int { print(\"hi\"); 0 }\n\
                          fn forever() -> Int ! {} { let mut i = 0; while i >= 0 { i = i + 0; } i }\n\
                          fn main() -> Int { table() }\n";
 
@@ -105,8 +105,9 @@ fn comptime_evaluates_a_pure_constant_and_refuses_anything_that_could_reach_the_
     for (f, why) in [
         ("reads", "it has parameters, so it is not a constant"),
         ("loud", "it is not pure"),
-        // Undeclared, it would exercise its caller's authority — and comptime has none to lend.
-        ("ambient", "it is not pure"),
+        // It exercises authority, so it takes it as a parameter (N104): comptime has none to
+        // hand it, and a function with parameters is no constant.
+        ("ambient", "it has parameters, so it is not a constant"),
         ("nothere", "there is no function `nothere`"),
     ] {
         let o = nazm(d.path(), &["comptime", "c.nz", f]);

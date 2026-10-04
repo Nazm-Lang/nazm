@@ -471,11 +471,11 @@ fn the_runtime_is_defined_exactly_once() {
     let files = &[
         (
             "a.nz",
-            "use \"b.nz\";\nfn main() -> Int { work() + str_len(int_to_str(7)) }\n",
+            "use \"b.nz\";\nfn main(tasks: SpawnCap) -> Int { work(tasks) + str_len(int_to_str(7)) }\n",
         ),
         (
             "b.nz",
-            "pub fn work() -> Int {\n    let got = ints_new();\n    \
+            "pub fn work(tasks: SpawnCap) -> Int {\n    let got = ints_new();\n    \
              let c = chan_new(1);\n    scope { spawn feed(c); }\n    \
              let more = chan_recv(c, got);\n    ints_get(got, 0) + 4\n}\n\
              pub fn feed(c: Chan) -> Int { chan_send(c, 30); chan_close(c); 0 }\n",

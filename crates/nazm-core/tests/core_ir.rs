@@ -371,7 +371,7 @@ fn effects_and_authority_survive_as_function_metadata() {
 fn provenance_is_not_carried_into_core_ir() {
     // The checker's summary says `r` returns a file's contents; Core IR says nothing about
     // it — no section, no per-node origin set — because nothing below Core IR reads one.
-    let src = "fn r() -> Str { read_file(\"f\") }\nfn main() -> Int { str_len(r()) }";
+    let src = "fn r(io: IoCap) -> Str { read_file(\"f\") }\nfn main(io: IoCap) -> Int { str_len(r(io)) }";
     let text = printed(src, true);
     for key in ["provenance", "origin\":\"file", "origins", "\"file\""] {
         assert!(!text.contains(key), "{key} in {text}");
@@ -657,9 +657,9 @@ fn a_provenance_only_change_moves_no_core_ir_digest() {
     // `main` — or nothing at all, and so `f`'s provenance; it changes no effect and nothing of
     // `f`'s own Core IR, and so none of `f`'s digests.
     let a = "fn g(s: Str) -> Str { s }\nfn f(s: Str) -> Str { g(s) }\n\
-             fn main() -> Int { str_len(f(arg(0))) }";
+             fn main(io: IoCap) -> Int { str_len(f(arg(0))) }";
     let b = "fn g(s: Str) -> Str { \"x\" }\nfn f(s: Str) -> Str { g(s) }\n\
-             fn main() -> Int { str_len(f(arg(0))) }";
+             fn main(io: IoCap) -> Int { str_len(f(arg(0))) }";
     let provenance = |src: &str| {
         let (map, graph) = nazm_core::one_file(src);
         nazm_core::on_lowered(&map, &graph, Entry::Required, |_, res| {

@@ -115,7 +115,7 @@ fn get(o: Option[Str]) -> Int {
     }
 }
 
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let log = ints_new();
     let a = match named(false) {
         Result.Ok(value: s) => str_len(s),

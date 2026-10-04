@@ -6,7 +6,7 @@
 
 use "lex.nz";
 
-fn main() -> Int {
+fn main(io: IoCap) -> Int {
     if args_count() < 1 {
         eprint("usage: lexer FILE");
         eprint(str_from_byte(10));
@@ -24,7 +24,7 @@ fn main() -> Int {
     let starts = ints_new();
     let ends = ints_new();
     let texts = strs_new();
-    lex(src, kinds, starts, ends, texts);
+    lex(src, kinds, starts, ends, texts, io);
 
     // One allocation for the whole output. `str_concat` in a loop is quadratic in time
     // *and* memory, and with nothing ever freed that is what exhausted memory on large

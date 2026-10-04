@@ -2401,7 +2401,7 @@ fn feeder(jobs: Chan) -> Int {
     0
 }
 
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let jobs = chan_new(4);
     let results = chan_new(4);
     let buf = ints_new();

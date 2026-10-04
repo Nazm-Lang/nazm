@@ -159,7 +159,7 @@ fn escapes_are_the_same_bytes_in_every_implementation() {
     // Each byte is printed as a number, so the comparison is of bytes, not of a terminal's
     // rendering of them.
     let src = r#"
-fn bytes(s: Str) -> Int {
+fn bytes(s: Str, out: OutCap) -> Int {
     let mut i = 0;
     while i < str_len(s) {
         print(str_concat(int_to_str(str_byte(s, i)), "\n"));
@@ -167,8 +167,8 @@ fn bytes(s: Str) -> Int {
     }
     str_len(s)
 }
-fn main() -> Int {
-    let n = bytes("a\nb\t\r\0\\\"\x41\x7f");
+fn main(io: IoCap) -> Int {
+    let n = bytes("a\nb\t\r\0\\\"\x41\x7f", io);
     print("line one\nline two\n");
     print("é\x21\n");
     if "\x41" == "A" { n } else { 0 - 1 }
@@ -185,7 +185,7 @@ fn unicode_escapes_are_the_same_bytes_in_every_implementation() {
     // N76: `\u{…}` is the UTF-8 encoding of a scalar value — the bytes the character
     // written directly would be — in the interpreter and every native build alike.
     let src = r#"
-fn bytes(s: Str) -> Int {
+fn bytes(s: Str, out: OutCap) -> Int {
     let mut i = 0;
     while i < str_len(s) {
         print(str_concat(int_to_str(str_byte(s, i)), " "));
@@ -194,10 +194,10 @@ fn bytes(s: Str) -> Int {
     print("\n");
     str_len(s)
 }
-fn main() -> Int {
-    let a = bytes("\u{41}\u{e9}\u{20AC}\u{1F600}");
+fn main(io: IoCap) -> Int {
+    let a = bytes("\u{41}\u{e9}\u{20AC}\u{1F600}", io);
     let same = "\u{e9}" == "é";
-    let b = bytes("\u{0}\u{7F}\u{80}");
+    let b = bytes("\u{0}\u{7F}\u{80}", io);
     if same { a * 10 + b } else { 0 - 1 }
 }
 "#;
@@ -230,7 +230,7 @@ fn a_refused_escape_stops_the_program_before_anything_runs() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(
         d.path().join("prog.nz"),
-        "fn main() -> Int { print(\"ran\"); str_len(\"\\x80\") }\n",
+        "fn main(out: OutCap) -> Int { print(\"ran\"); str_len(\"\\x80\") }\n",
     )
     .unwrap();
     let r = nazm(d.path(), &["run", "prog.nz"]);
@@ -260,15 +260,15 @@ fn logical_operators_short_circuit_and_bind_as_specified_everywhere() {
     // `boom` divides by zero: reached, it would fail the program, so its absence from the
     // trace and the program's success are two observations of the same skipped operand.
     let src = r#"
-fn seen(tag: Str, v: Bool) -> Bool { print(str_concat(tag, "\n")); v }
+fn seen(tag: Str, v: Bool, out: OutCap) -> Bool { print(str_concat(tag, "\n")); v }
 fn boom() -> Bool { 1 / (1 - 1) == 0 }
 fn b(v: Bool) -> Int { if v { 1 } else { 0 } }
-fn main() -> Int {
+fn main(io: IoCap) -> Int {
     let mut n = 0;
-    n = n * 2 + b(seen("a", false) && seen("never-1", true));
-    n = n * 2 + b(seen("b", true) || seen("never-2", true));
-    n = n * 2 + b(seen("c", true) && seen("d", true));
-    n = n * 2 + b(seen("e", false) || seen("f", false));
+    n = n * 2 + b(seen("a", false, io) && seen("never-1", true, io));
+    n = n * 2 + b(seen("b", true, io) || seen("never-2", true, io));
+    n = n * 2 + b(seen("c", true, io) && seen("d", true, io));
+    n = n * 2 + b(seen("e", false, io) || seen("f", false, io));
     n = n * 2 + b(false && boom());
     n = n * 2 + b(true || boom());
     // `||` loosest, then `&&`, then comparison; `!` as tight as `-`.
@@ -318,7 +318,7 @@ fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
 fn count[T](items: Vec[T], i: Int) -> Int { if i >= vec_len(items) { 0 } else { 1 + count(items, i + 1) } }
 fn depth(n: Int) -> Int { if n == 0 { 0 } else { 1 + depth(n - 1) } }
 fn labels(n: Int) -> Str { if n == 0 { "" } else { str_concat(Node(value: n, label: int_to_str(n)).label, labels(n - 1)) } }
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let v = vec_new[Str]();
     vec_push(v, "a");
     vec_push(v, "b");
@@ -479,7 +479,7 @@ fn corner(p: g::Point) -> Int { p.x + p.y }
 fn measure(s: g::Shape) -> Int {
     match s { g::Shape.Dot(at: p) => corner(p), g::Shape.Square(side: n) => n, }
 }
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let p = g::Point(x: 2, y: 3);
     let sq = g::Shape.Square(side: 4);
     print(str_concat(t::text_trim("  hi  "), "\n"));

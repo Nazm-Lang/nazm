@@ -112,8 +112,10 @@ fn definition(units: &[(String, String)], name: &str) -> String {
 #[test]
 fn a_capability_parameter_lowers_exactly_as_an_int_one_and_main_is_handed_its_roots() {
     // Signatures on lines of their own, so each body is at the same position in both.
-    let cap = "fn say(io: IoCap, n: Int) -> Int ! { io }\n{ print(int_to_str(n)) }\nfn main(io: IoCap, tasks: SpawnCap) -> Int\n{ say(io, 4); 0 }\n";
-    let int = "fn say(io: Int, n: Int) -> Int\n{ print(int_to_str(n)) }\nfn main(io: IoCap, tasks: SpawnCap) -> Int\n{ say(0, 4); 0 }\n";
+    // Since N104 an `Int` cannot authorise `print`, so both bodies exercise nothing: what is
+    // compared is how the parameter itself lowers.
+    let cap = "fn say(io: IoCap, n: Int) -> Int\n{ n * 3 + 1 }\nfn main(io: IoCap, tasks: SpawnCap) -> Int\n{ say(io, 4); 0 }\n";
+    let int = "fn say(io: Int, n: Int) -> Int\n{ n * 3 + 1 }\nfn main(io: IoCap, tasks: SpawnCap) -> Int\n{ say(0, 4); 0 }\n";
     let with_cap = ir_units(cap);
     let with_int = ir_units(int);
     assert_eq!(definition(&with_cap, "say"), definition(&with_int, "say"));

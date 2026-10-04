@@ -211,7 +211,7 @@ fn an_enum_with_a_payload_and_plain_values_cross_a_channel() {
         r#"
 enum Msg { Word(text: Str), Stop, }
 
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let c = chan_new_of[Msg](3);
     chan_send_of(c, Msg.Word(text: str_concat("he", "y")));
     chan_send_of(c, Msg.Stop());
@@ -266,7 +266,7 @@ fn put(c: Chan[Str]) -> Bool {
     chan_send_of(c, s)
 }
 
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let c = chan_new_of[Str](1);
     put(c);
     let junk = vec_new[Str]();
@@ -288,7 +288,7 @@ fn main() -> Int {
 fn a_send_after_close_is_refused_and_its_value_released() {
     agrees(
         r#"
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let c = chan_new_of[Str](2);
     chan_close_of(c);
     let sent = chan_send_of(c, str_concat("never", "queued"));
@@ -310,7 +310,7 @@ fn a_channel_type_crosses_a_module_boundary_and_its_interface() {
     let lib = "pub struct Item { tag: Str, }\n\
                pub fn put(c: Chan[Item], s: Str) -> Bool ! {} { chan_send_of(c, Item(tag: s)) }\n";
     let main = "use \"lib.nz\";\n\
-                fn main() -> Int {\n    let c = chan_new_of[Item](1);\n    \
+                fn main(out: OutCap) -> Int {\n    let c = chan_new_of[Item](1);\n    \
                 put(c, str_concat(\"x\", \"y\"));\n    let v = vec_new[Item]();\n    \
                 if chan_recv_of(c, v) { print(vec_pop(v).tag); }\n    0\n}\n";
     agrees_on(&[("main.nz", main), ("lib.nz", lib)], "xy0", 0);

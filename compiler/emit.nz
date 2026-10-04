@@ -2602,7 +2602,7 @@ fn runtime() -> Str {
     str_concat(str_join(r, nl()), nl())
 }
 
-fn refuse(message: Str, at: Str) -> Int {
+fn refuse(message: Str, at: Str, io: IoCap) -> Int {
     eprint(str_concat(str_concat("nazm: error[N0101]: ", message),
             str_concat(str_concat(" at ", at), nl())));
     eprint(str_concat("nazm: this backend compiles the bootstrap subset; what it refuses still runs under `nazm run`", nl()));
@@ -2997,7 +2997,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
 
 // A refusal with its own code: the same shape `refuse` writes, for the two limits on
 // instantiation that are not "outside this backend's subset" but facts about the program.
-fn refuse_as(code: Str, message: Str, at: Str) -> Int {
+fn refuse_as(code: Str, message: Str, at: Str, io: IoCap) -> Int {
     eprint(str_concat(str_concat(str_concat(str_concat("nazm: error[", code), "]: "), message),
             str_concat(str_concat(" at ", at), nl())));
     exit_with(1);
@@ -3028,7 +3028,7 @@ fn max_instance_nesting() -> Int { 64 }
 // the one already planned, or a new one at the end of the worklist. Numbered in the order
 // the worklist finds them, which is a function of the program alone.
 fn request_instance(fnn: Int, args: Ints, inst_fn: Ints, inst_first: Ints, inst_args: Ints,
-        tb: Table, src: Str, path: Str, at: Int) -> Int {
+        tb: Table, src: Str, path: Str, at: Int, io: IoCap) -> Int {
     let mut i = 0;
     while i < ints_len(inst_fn) {
         if ints_get(inst_fn, i) == fnn {
@@ -3048,13 +3048,13 @@ fn request_instance(fnn: Int, args: Ints, inst_fn: Ints, inst_first: Ints, inst_
     while a < ints_len(args) {
         if depth_of(tb, ints_get(args, a)) > max_instance_nesting() {
             refuse_as("N0358", "this call needs a generic instance whose type argument nests more than 64 deep",
-                    position(src, path, at));
+                    position(src, path, at), io);
         }
         a = a + 1;
     }
     if ints_len(inst_fn) >= max_instances() {
         refuse_as("N0358", "this program needs more than 10000 generic instances",
-                position(src, path, at));
+                position(src, path, at), io);
     }
     ints_push(inst_fn, fnn);
     ints_push(inst_first, ints_len(inst_args));
@@ -3082,7 +3082,7 @@ fn emittable(tb: Table, r0: Int) -> Bool {
 // call that expands, before any instance is planned; the reference finds the same edge.
 fn refuse_expansion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent: Ints,
         ncallee: Ints, fnames: Strs, fowner: Ints, fgc: Ints, mstart: Ints,
-        tb: Table, ntfirst: Ints, ntargs: Ints) -> Int {
+        tb: Table, ntfirst: Ints, ntargs: Ints, io: IoCap) -> Int {
     // The function each call sits in, found by walking parents, and its node.
     let efrom = ints_new();
     let eto = ints_new();
@@ -3160,7 +3160,7 @@ fn refuse_expansion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent:
             if back {
                 refuse_as("N0357", str_concat(str_concat("`", strs_get(fnames, to)),
                         "` is called with a type argument built from its caller's own, so every instance of it needs a larger one"),
-                        position(src, path, ints_get(nst, ints_get(enode, e))));
+                        position(src, path, ints_get(nst, ints_get(enode, e))), io);
             }
         }
         e = e + 1;
@@ -3418,7 +3418,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, blocks: Strs, nrec: Ints, rowns: Ints,
         rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
         lo: Int, hi: Int, me_sym: Str, ninst: Ints, generic_fn: Ints, tb: Table,
-        eqs: Ints, cyc: Ints, ntfirst: Ints, ntargs: Ints) -> Int {
+        eqs: Ints, cyc: Ints, ntfirst: Ints, ntargs: Ints, io: IoCap) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     // Slot 1 is the block-label counter, separate from slot 0 because the labels are
@@ -3607,7 +3607,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     let pnode = ints_get(kids, ints_get(kid_first, fnode) + fp);
                     if ints_get(nrec, pnode) != t_int() {
                         refuse("a foreign function taking anything but `Int`",
-                                position(src, path, ints_get(nst, pnode)));
+                                position(src, path, ints_get(nst, pnode)), io);
                     }
                     if fp > 0 {
                         types = str_concat(types, ", ");
@@ -3621,7 +3621,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                 }
                 if ints_get(nrec, fnode) != t_int() {
                     refuse("a foreign function returning anything but `Int`",
-                            position(src, path, ints_get(nst, fnode)));
+                            position(src, path, ints_get(nst, fnode)), io);
                 }
                 let csym = str_concat("@", strs_get(ntx, fbody));
                 add_line(out, str_concat(str_concat(str_concat("declare i64 ", csym), "("),
@@ -3650,7 +3650,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             if ints_get(nar, k) > 0 { recv_t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k))); }
             let g = method_for(tb, 0 - 10 - bound_code, recv_t);
             if g < 0 {
-                refuse("a method call no impl answers", position(src, path, from));
+                refuse("a method call no impl answers", position(src, path, from), io);
             }
             ints_set(ncallee, k, g);
             kind = n_call();
@@ -3831,368 +3831,370 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     make_closure(out, msgs, next, current, live, vals, owned, otype, rowns, ntype,
                             nslot, ntfirst, ntargs, k, position(src, path, from));
                 } else {
-                if kind == n_fnvalue() {
-                    make_fn_value(out, msgs, next, current, live, vals, owned, otype, rowns, ntype,
-                            ncallee, k, position(src, path, from));
-                } else {
-                if kind == n_spawn() {
-                    emit_spawn(out, msgs, next, current, live, tasks, blocks, owned, vals, nar, ntype,
-                            kids, kid_first, fnames, fret, k, ints_get(ncallee, k),
-                            position(src, path, from), rowns, otype);
-                } else {
-                    if emit_record_node(out, next, vals, owned, nk, nar, ntx, ntype, nrec,
-                            nslot, kids, kid_first, k, rowns, rfirst, rcount, rfname,
-                            rftype, otype, phi_val, phi_blk, nin,
-                            current, live, frame, current_return(nrec, cur_fn), ens) == 1 {
-                        // A declaration, a construction, a projection, or a `match`.
+                    if kind == n_fnvalue() {
+                        make_fn_value(out, msgs, next, current, live, vals, owned, otype, rowns, ntype,
+                                ncallee, k, position(src, path, from));
                     } else {
-                        if kind == n_param() {
-                            // Handled by `open_function`, which stored it before the body began.
+                        if kind == n_spawn() {
+                            emit_spawn(out, msgs, next, current, live, tasks, blocks, owned, vals, nar, ntype,
+                                    kids, kid_first, fnames, fret, k, ints_get(ncallee, k),
+                                    position(src, path, from), rowns, otype);
                         } else {
-                            if kind == n_call() {
-                                let argc = ints_get(nar, k);
-                                let args = ints_new();
-                                let mut a = 0;
-                                while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
-                                // A built-in is instructions, not a call: `emit_builtin` returns -1 when
-                                // the name is not one, which is how a built-in is told from a user function
-                                // without a second name table.
-                                let ordered = ints_new();
-                                let mut o = argc - 1;
-                                while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
-                                let callee = before_bracket(text);
-                                let indirect = ints_get(ncallee, k) == 0 - 3;
-                                let mut built = 0 - 1;
-                                if indirect {
-                                    // A call through a function value (N102): the binding's closure object, its code
-                                    // at offset 8, called with the object first.
-                                } else {
-                                if is_vec_op(callee) {
-                                    // A `Vec` operation is instructions over its element's layout,
-                                    // which is the call's own type — or its first argument's.
-                                    let mut vt = ints_get(ntype, k);
-                                    if callee != "vec_new" {
-                                        vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                    }
-                                    built = emit_vec_op(callee, ordered, vt, tb, owned, out, msgs,
-                                            next, current, live, position(src, path, from), rowns, otype);
-                                } else {
-                                    built = emit_builtin(callee, ordered, owned, out, msgs, next, current,
-                                            live, position(src, path, from), rowns, otype);
-                                }
-                                }
-                                if built >= 0 {
-                                    // A built-in borrows its arguments, exactly as a function does,
-                                    // so a temporary handed to one is nobody's after it returns.
-                                    drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns, otype);
-                                    ints_push(vals, built);
-                                } else {
-                                    let mut list = "";
-                                    // `x.m()` (N102): the receiver is the binding's, read from its slot.
-                                    if argc == 0 {
-                                        // The slot is the receiver's, unless the call is through a value, whose slot is the callee's.
-                                        let mut receiver = ints_get(nslot, k) >= 0;
-                                        if indirect { receiver = false; }
-                                        if receiver {
-                                            let rt = ints_get(nrec, k);
-                                            let rv = take_number(next);
-                                            add_line(out, str_concat(str_concat(str_concat("  ", v(rv)),
-                                                    str_concat(" = load ", llvm_type(rt))),
-                                                    str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
-                                            list = str_concat(str_concat(llvm_type(rt), " "), v(rv));
-                                        }
-                                    }
-                                    a = argc - 1;
-                                    while a >= 0 {
-                                        if a < argc - 1 { list = str_concat(list, ", "); }
-                                        let at = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + (argc - 1 - a)));
-                                        list = str_concat(list, str_concat(str_concat(llvm_type(at), " "),
-                                                v(ints_get(args, a))));
-                                        a = a - 1;
-                                    }
-                                    let mut target = callee_symbol(ncallee, ninst, k);
-                                    if indirect {
-                                        let cv = take_number(next);
-                                        add_line(out, str_concat(str_concat(str_concat("  ", v(cv)), " = load ptr, ptr %slot"),
-                                                int_to_str(ints_get(nslot, k))));
-                                        let cp = take_number(next);
-                                        add_line(out, str_concat(str_concat(str_concat("  ", v(cp)), " = getelementptr i8, ptr "),
-                                                str_concat(v(cv), ", i64 8")));
-                                        let code = take_number(next);
-                                        add_line(out, str_concat(str_concat(str_concat("  ", v(code)), " = load ptr, ptr "), v(cp)));
-                                        target = v(code);
-                                        if argc > 0 { list = str_concat(", ", list); }
-                                        list = str_concat(str_concat("ptr ", v(cv)), list);
-                                    }
-                                    let n = take_number(next);
-                                    add_line(out, str_concat(str_concat("  ", v(n)),
-                                            str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
-                                            str_concat(" ", target)),
-                                            str_concat(str_concat("(", list), ")"))));
-                                    // A callee that failed has already left by its own exit and handed
-                                    // back a stand-in. Noticed here, so the failure keeps travelling
-                                    // outward instead of this function carrying on with a value that was
-                                    // never produced — which would run statements, print, and could loop
-                                    // forever on it.
-                                    check_failed(out, next, current, live, owned, otype, rowns);
-                                    // Rule 3: returning transfers, so what came back is a reference
-                                    // this expression now holds. Rule 2: the arguments were only
-                                    // borrowed, so a temporary passed in is still nobody's and is
-                                    // dropped here.
-                                    if owns_anything(ints_get(ntype, k), rowns) { own_add(owned, otype, n, ints_get(ntype, k)); }
-                                    drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns, otype);
-                                    ints_push(vals, n);
-                                }
+                            if emit_record_node(out, next, vals, owned, nk, nar, ntx, ntype, nrec,
+                                    nslot, kids, kid_first, k, rowns, rfirst, rcount, rfname,
+                                    rftype, otype, phi_val, phi_blk, nin,
+                                    current, live, frame, current_return(nrec, cur_fn), ens) == 1 {
+                                // A declaration, a construction, a projection, or a `match`.
                             } else {
-                                if kind == n_str() {
-                                    // A literal is known entirely at compile time, so it is a constant pair
-                                    // loaded in one instruction rather than assembled from `undef`.
-                                    let idx = message_index(blobs, text);
-                                    let n = take_number(next);
-                                    add_line(out, str_concat(str_concat("  ", v(n)),
-                                            str_concat(" = load { ptr, i64, ptr }, ptr @.sv",
-                                            int_to_str(idx))));
-                                    ints_push(vals, n);
+                                if kind == n_param() {
+                                    // Handled by `open_function`, which stored it before the body began.
                                 } else {
-                                    if kind == n_bool() {
-                                        let n = take_number(next);
-                                        add_line(out, str_concat(str_concat("  ", v(n)),
-                                                str_concat(" = or i1 ", str_concat(text, ", false"))));
-                                        ints_push(vals, n);
-                                    } else {
-                                        if block_like(kind) {
-                                            // Structure only: a block's value, if it has one, is its tail's and is
-                                            // already on the stack — whether the block is a body, a branch, or an
-                                            // operand written as a block.
+                                    if kind == n_call() {
+                                        let argc = ints_get(nar, k);
+                                        let args = ints_new();
+                                        let mut a = 0;
+                                        while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
+                                        // A built-in is instructions, not a call: `emit_builtin` returns -1 when
+                                        // the name is not one, which is how a built-in is told from a user function
+                                        // without a second name table.
+                                        let ordered = ints_new();
+                                        let mut o = argc - 1;
+                                        while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
+                                        let callee = before_bracket(text);
+                                        let indirect = ints_get(ncallee, k) == 0 - 3;
+                                        let mut built = 0 - 1;
+                                        if indirect {
+                                            // A call through a function value (N102): the binding's closure object, its code
+                                            // at offset 8, called with the object first.
                                         } else {
-                                            if kind == n_while() {
-                                                // Structure only: the header, the body and the exit are opened at the
-                                                // boundaries between its children.
+                                            if is_vec_op(callee) {
+                                                // A `Vec` operation is instructions over its element's layout,
+                                                // which is the call's own type — or its first argument's.
+                                                let mut vt = ints_get(ntype, k);
+                                                if callee != "vec_new" {
+                                                    vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                                }
+                                                built = emit_vec_op(callee, ordered, vt, tb, owned, out, msgs,
+                                                        next, current, live, position(src, path, from), rowns, otype);
                                             } else {
-                                                if kind == n_if() {
-                                                    if ints_get(ntype, k) != 0 {
-                                                        // Only the branches that reached the join contribute, and each
-                                                        // names the block emission *ended* in rather than the label the
-                                                        // branch was opened with. The join is open, so at least one did.
-                                                        ints_push(vals, emit_phi(out, next, owned, otype, rowns,
-                                                                phi_val, phi_blk, ints_get(nin, k), ints_get(ntype, k)));
-                                                    }
+                                                built = emit_builtin(callee, ordered, owned, out, msgs, next, current,
+                                                        live, position(src, path, from), rowns, otype);
+                                            }
+                                        }
+                                        if built >= 0 {
+                                            // A built-in borrows its arguments, exactly as a function does,
+                                            // so a temporary handed to one is nobody's after it returns.
+                                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns, otype);
+                                            ints_push(vals, built);
+                                        } else {
+                                            let mut list = "";
+                                            // `x.m()` (N102): the receiver is the binding's, read from its slot.
+                                            if argc == 0 {
+                                                // The slot is the receiver's, unless the call is through a value, whose slot is the callee's.
+                                                let mut receiver = ints_get(nslot, k) >= 0;
+                                                if indirect { receiver = false; }
+                                                if receiver {
+                                                    let rt = ints_get(nrec, k);
+                                                    let rv = take_number(next);
+                                                    add_line(out, str_concat(str_concat(str_concat("  ", v(rv)),
+                                                            str_concat(" = load ", llvm_type(rt))),
+                                                            str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
+                                                    list = str_concat(str_concat(llvm_type(rt), " "), v(rv));
+                                                }
+                                            }
+                                            a = argc - 1;
+                                            while a >= 0 {
+                                                if a < argc - 1 { list = str_concat(list, ", "); }
+                                                let at = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + (argc - 1 - a)));
+                                                list = str_concat(list, str_concat(str_concat(llvm_type(at), " "),
+                                                        v(ints_get(args, a))));
+                                                a = a - 1;
+                                            }
+                                            let mut target = callee_symbol(ncallee, ninst, k);
+                                            if indirect {
+                                                let cv = take_number(next);
+                                                add_line(out, str_concat(str_concat(str_concat("  ", v(cv)), " = load ptr, ptr %slot"),
+                                                        int_to_str(ints_get(nslot, k))));
+                                                let cp = take_number(next);
+                                                add_line(out, str_concat(str_concat(str_concat("  ", v(cp)), " = getelementptr i8, ptr "),
+                                                        str_concat(v(cv), ", i64 8")));
+                                                let code = take_number(next);
+                                                add_line(out, str_concat(str_concat(str_concat("  ", v(code)), " = load ptr, ptr "), v(cp)));
+                                                target = v(code);
+                                                if argc > 0 { list = str_concat(", ", list); }
+                                                list = str_concat(str_concat("ptr ", v(cv)), list);
+                                            }
+                                            let n = take_number(next);
+                                            add_line(out, str_concat(str_concat("  ", v(n)),
+                                                    str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
+                                                    str_concat(" ", target)),
+                                                    str_concat(str_concat("(", list), ")"))));
+                                            // A callee that failed has already left by its own exit and handed
+                                            // back a stand-in. Noticed here, so the failure keeps travelling
+                                            // outward instead of this function carrying on with a value that was
+                                            // never produced — which would run statements, print, and could loop
+                                            // forever on it.
+                                            check_failed(out, next, current, live, owned, otype, rowns);
+                                            // Rule 3: returning transfers, so what came back is a reference
+                                            // this expression now holds. Rule 2: the arguments were only
+                                            // borrowed, so a temporary passed in is still nobody's and is
+                                            // dropped here.
+                                            if owns_anything(ints_get(ntype, k), rowns) { own_add(owned, otype, n, ints_get(ntype, k)); }
+                                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns, otype);
+                                            ints_push(vals, n);
+                                        }
+                                    } else {
+                                        if kind == n_str() {
+                                            // A literal is known entirely at compile time, so it is a constant pair
+                                            // loaded in one instruction rather than assembled from `undef`.
+                                            let idx = message_index(blobs, text);
+                                            let n = take_number(next);
+                                            add_line(out, str_concat(str_concat("  ", v(n)),
+                                                    str_concat(" = load { ptr, i64, ptr }, ptr @.sv",
+                                                    int_to_str(idx))));
+                                            ints_push(vals, n);
+                                        } else {
+                                            if kind == n_bool() {
+                                                let n = take_number(next);
+                                                add_line(out, str_concat(str_concat("  ", v(n)),
+                                                        str_concat(" = or i1 ", str_concat(text, ", false"))));
+                                                ints_push(vals, n);
+                                            } else {
+                                                if block_like(kind) {
+                                                    // Structure only: a block's value, if it has one, is its tail's and is
+                                                    // already on the stack — whether the block is a body, a branch, or an
+                                                    // operand written as a block.
                                                 } else {
-                                                    if kind == n_break() {
-                                                        let w = enclosing_loop(nk, parent, childno, k);
-                                                        if w < 0 { refuse("a `break` with no loop to leave", position(src, path, from)); }
-                                                        // The expression this is leaving never finishes, so what it
-                                                        // was holding is nobody's: the temporaries this loop produced
-                                                        // and the values the `match`es inside it hold.
-                                                        leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
-                                                                loop_own, loop_m);
-                                                        // And the scopes opened inside the loop are joined, innermost
-                                                        // first: leaving one is one of the ways out of it.
-                                                        join_from(out, next, current, live,
-                                                                ints_get(loop_scope, ints_len(loop_scope) - 1));
-                                                        branch(out, live, blk("x", w));
+                                                    if kind == n_while() {
+                                                        // Structure only: the header, the body and the exit are opened at the
+                                                        // boundaries between its children.
                                                     } else {
-                                                        if kind == n_continue() {
-                                                            let w = enclosing_loop(nk, parent, childno, k);
-                                                            if w < 0 { refuse("a `continue` with no loop to repeat", position(src, path, from)); }
-                                                            leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
-                                                                    loop_own, loop_m);
-                                                            join_from(out, next, current, live,
-                                                                    ints_get(loop_scope, ints_len(loop_scope) - 1));
-                                                            // The header, never the body: `continue` re-evaluates the condition.
-                                                            branch(out, live, blk("h", w));
+                                                        if kind == n_if() {
+                                                            if ints_get(ntype, k) != 0 {
+                                                                // Only the branches that reached the join contribute, and each
+                                                                // names the block emission *ended* in rather than the label the
+                                                                // branch was opened with. The join is open, so at least one did.
+                                                                ints_push(vals, emit_phi(out, next, owned, otype, rowns,
+                                                                        phi_val, phi_blk, ints_get(nin, k), ints_get(ntype, k)));
+                                                            }
                                                         } else {
-                                                            if kind == n_return() {
-                                                                let value = ints_pop(vals);
-                                                                let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                // Every scope still open is left, so every one is
-                                                                // joined first — the reference's `join_through(0)`.
-                                                                // A task's failure is taken on here and reported by
-                                                                // the caller's check after the call returns.
-                                                                join_from(out, next, current, live, 2);
-                                                                // Rule 3. The caller receives a reference that
-                                                                // outlives this frame, so it is taken over
-                                                                // **before** the frame lets go of everything else
-                                                                // — otherwise returning a local would release the
-                                                                // storage it is returning.
-                                                                own_keep(out, next, owned, value, vt, rowns, otype);
-                                                                // Taken over first, so releasing what this
-                                                                // statement still holds cannot reach the value
-                                                                // being returned. The slots are the frame's and
-                                                                // go just below.
-                                                                release_temporaries(out, next, owned, otype, rowns);
-                                                                leave_with(out, next, frame, rowns, ens, vt, value);
-                                                                ints_set(live, 0, 0);
+                                                            if kind == n_break() {
+                                                                let w = enclosing_loop(nk, parent, childno, k);
+                                                                if w < 0 { refuse("a `break` with no loop to leave", position(src, path, from), io); }
+                                                                // The expression this is leaving never finishes, so what it
+                                                                // was holding is nobody's: the temporaries this loop produced
+                                                                // and the values the `match`es inside it hold.
+                                                                leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
+                                                                        loop_own, loop_m);
+                                                                // And the scopes opened inside the loop are joined, innermost
+                                                                // first: leaving one is one of the ways out of it.
+                                                                join_from(out, next, current, live,
+                                                                        ints_get(loop_scope, ints_len(loop_scope) - 1));
+                                                                branch(out, live, blk("x", w));
                                                             } else {
-                                                                if kind == n_var() {
-                                                                    let n = take_number(next);
-                                                                    add_line(out, str_concat(str_concat("  ", v(n)),
-                                                                            str_concat(str_concat(" = load ", llvm_type(ints_get(ntype, k))),
-                                                                            str_concat(", ptr %slot", int_to_str(ints_get(nslot, k))))));
-                                                                    ints_push(vals, n);
+                                                                if kind == n_continue() {
+                                                                    let w = enclosing_loop(nk, parent, childno, k);
+                                                                    if w < 0 { refuse("a `continue` with no loop to repeat", position(src, path, from), io); }
+                                                                    leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
+                                                                            loop_own, loop_m);
+                                                                    join_from(out, next, current, live,
+                                                                            ints_get(loop_scope, ints_len(loop_scope) - 1));
+                                                                    // The header, never the body: `continue` re-evaluates the condition.
+                                                                    branch(out, live, blk("h", w));
                                                                 } else {
-                                                                    if kind == n_let() {
-                                                                        // The value is already on the stack: its subtree came first.
+                                                                    if kind == n_return() {
                                                                         let value = ints_pop(vals);
                                                                         let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                        store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns, otype);
+                                                                        // Every scope still open is left, so every one is
+                                                                        // joined first — the reference's `join_through(0)`.
+                                                                        // A task's failure is taken on here and reported by
+                                                                        // the caller's check after the call returns.
+                                                                        join_from(out, next, current, live, 2);
+                                                                        // Rule 3. The caller receives a reference that
+                                                                        // outlives this frame, so it is taken over
+                                                                        // **before** the frame lets go of everything else
+                                                                        // — otherwise returning a local would release the
+                                                                        // storage it is returning.
+                                                                        own_keep(out, next, owned, value, vt, rowns, otype);
+                                                                        // Taken over first, so releasing what this
+                                                                        // statement still holds cannot reach the value
+                                                                        // being returned. The slots are the frame's and
+                                                                        // go just below.
+                                                                        release_temporaries(out, next, owned, otype, rowns);
+                                                                        leave_with(out, next, frame, rowns, ens, vt, value);
+                                                                        ints_set(live, 0, 0);
                                                                     } else {
-                                                                        if kind == n_assign() {
-                                                                            // The same store as a `let`, when the place is a plain binding: a
-                                                                            // declaration and a reassignment differ in the source and not once the
-                                                                            // slot is known, so there is one code path rather than two.
-                                                                            let value = ints_pop(vals);
-                                                                            let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                            if path_length(text) == 0 {
+                                                                        if kind == n_var() {
+                                                                            let n = take_number(next);
+                                                                            add_line(out, str_concat(str_concat("  ", v(n)),
+                                                                                    str_concat(str_concat(" = load ", llvm_type(ints_get(ntype, k))),
+                                                                                    str_concat(", ptr %slot", int_to_str(ints_get(nslot, k))))));
+                                                                            ints_push(vals, n);
+                                                                        } else {
+                                                                            if kind == n_let() {
+                                                                                // The value is already on the stack: its subtree came first.
+                                                                                let value = ints_pop(vals);
+                                                                                let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
                                                                                 store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns, otype);
                                                                             } else {
-                                                                                set_field(out, next, owned, value, vt, ints_get(nslot, k),
-                                                                                        ints_get(nrec, k), text, rowns,
-                                                                                        rfirst, rcount, rfname, rftype, otype);
-                                                                            }
-                                                                        } else {
-                                                                            if kind == n_exprstmt() {
-                                                                                // Evaluated for its effects; the value is dropped, exactly as `nazm run`
-                                                                                // drops it. **Only if there was one**: a statement-position `if` produces
-                                                                                // nothing, and popping for it would take someone else's value.
-                                                                                if ints_get(ntype, ints_get(kids, ints_get(kid_first, k))) != 0 {
-                                                                                    let dropped = ints_pop(vals);
-                                                                                    own_drop(out, next, owned, dropped,
-                                                                                            ints_get(ntype, ints_get(kids, ints_get(kid_first, k))), rowns, otype);
-                                                                                }
-                                                                            } else {
-                                                                                if kind == n_int() {
-                                                                                    let n = take_number(next);
-                                                                                    // Through an `add` rather than inline, so every expression has a value
-                                                                                    // number and there is one shape to reason about. `-O2` folds it.
-                                                                                    add_line(out, str_concat(str_concat("  ", v(n)),
-                                                                                            str_concat(" = add i64 ", str_concat(text, ", 0"))));
-                                                                                    ints_push(vals, n);
-                                                                                } else {
-                                                                                    if kind == n_bin() {
-                                                                                        let b = ints_pop(vals);
-                                                                                        let a = ints_pop(vals);
-                                                                                        let at = position(src, path, ints_get(naux, k));
-                                                                                        // The operand type, not the result's: `==` always produces `Bool`, and
-                                                                                        // what it compares decides how.
-                                                                                        let ot = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                                        // A record or an enum compares through its equality
-                                                                                        // helper (N13), and `!=` negates that one answer.
-                                                                                        let r = if ot == t_str() {
-                                                                                            string_equality(out, current, live, next, a, b, text == "!=")
-                                                                                        } else {
-                                                                                            if is_record(ot) {
-                                                                                                composite_equality(out, next, a, b, ot, text == "!=", eqs)
-                                                                                            } else {
-                                                                                                emit_binary(out, msgs, next, current, live, text, a, b, at, ot, owned, otype, rowns)
-                                                                                            }
-                                                                                        };
-                                                                                        if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at); }
-                                                                                        // Rule 2: a comparison borrows its operands, as a call
-                                                                                        // does, so a string compared is nobody's once the
-                                                                                        // answer exists. Leaked on every evaluation until N10.1.
-                                                                                        // A record or an enum compared is released the same
-                                                                                        // way, once, after the answer.
-                                                                                        if ot == t_str() {
-                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
-                                                                                            own_drop(out, next, owned, b, ot, rowns, otype);
-                                                                                        }
-                                                                                        if is_record(ot) {
-                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
-                                                                                            own_drop(out, next, owned, b, ot, rowns, otype);
-                                                                                        }
-                                                                                        ints_push(vals, r);
+                                                                                if kind == n_assign() {
+                                                                                    // The same store as a `let`, when the place is a plain binding: a
+                                                                                    // declaration and a reassignment differ in the source and not once the
+                                                                                    // slot is known, so there is one code path rather than two.
+                                                                                    let value = ints_pop(vals);
+                                                                                    let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                                                                    if path_length(text) == 0 {
+                                                                                        store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns, otype);
                                                                                     } else {
-                                                                                        if kind == n_neg() {
-                                                                                            let a = ints_pop(vals);
-                                                                                            let zero = take_number(next);
-                                                                                            add_line(out, str_concat(str_concat("  ", v(zero)), " = add i64 0, 0"));
-                                                                                            let at = position(src, path, from);
-                                                                                            // The only negation without a representable result is `-Int::MIN`.
-                                                                                            let r = checked(out, msgs, next, current, live, "ssub", "negation", zero, a, at, owned, otype, rowns);
-                                                                                            ints_push(vals, r);
+                                                                                        set_field(out, next, owned, value, vt, ints_get(nslot, k),
+                                                                                                ints_get(nrec, k), text, rowns,
+                                                                                                rfirst, rcount, rfname, rftype, otype);
+                                                                                    }
+                                                                                } else {
+                                                                                    if kind == n_exprstmt() {
+                                                                                        // Evaluated for its effects; the value is dropped, exactly as `nazm run`
+                                                                                        // drops it. **Only if there was one**: a statement-position `if` produces
+                                                                                        // nothing, and popping for it would take someone else's value.
+                                                                                        if ints_get(ntype, ints_get(kids, ints_get(kid_first, k))) != 0 {
+                                                                                            let dropped = ints_pop(vals);
+                                                                                            own_drop(out, next, owned, dropped,
+                                                                                                    ints_get(ntype, ints_get(kids, ints_get(kid_first, k))), rowns, otype);
+                                                                                        }
+                                                                                    } else {
+                                                                                        if kind == n_int() {
+                                                                                            let n = take_number(next);
+                                                                                            // Through an `add` rather than inline, so every expression has a value
+                                                                                            // number and there is one shape to reason about. `-O2` folds it.
+                                                                                            add_line(out, str_concat(str_concat("  ", v(n)),
+                                                                                                    str_concat(" = add i64 ", str_concat(text, ", 0"))));
+                                                                                            ints_push(vals, n);
                                                                                         } else {
-                                                                                            if kind == n_block() {
-                                                                                                if text != "tail" {
-                                                                                                    refuse("a body with no result expression",
-                                                                                                            position(src, path, from));
-                                                                                                }
-                                                                                            } else {
-                                                                                                if kind == n_fn() {
-                                                                                                    if llvm_type(ints_get(nrec, k)) == "void" {
-                                                                                                        refuse(str_concat(str_concat("a function returning `",
-                                                                                                                before_at(fn_ret(text))), "`"),
-                                                                                                                position(src, path, from));
-                                                                                                    }
-                                                                                                    // The platform wrapper prints an `Int`, so `main` must
-                                                                                                    // produce one. What a `Str` result would mean for a process
-                                                                                                    // is a decision nobody has made.
-                                                                                                    if fn_name(text) == "main" {
-                                                                                                        if before_at(fn_ret(text)) != "Int" {
-                                                                                                            refuse("a `main` that does not return `Int`",
-                                                                                                                    position(src, path, from));
-                                                                                                        }
-                                                                                                    }
-                                                                                                    // A body whose every path returned has nothing to fall off
-                                                                                                    // the end with and needs no terminator of its own — the
-                                                                                                    // `ret` is already there.
-                                                                                                    if ints_get(live, 0) == 1 {
-                                                                                                    if ints_get(ens, 0) >= 0 {
-                                                                                                    // `nz.ens`, every `ensures` checked: the value leaves `result`'s slot, which is
-                                                                                                    // zeroed so the frame does not release what the caller receives, and the frame goes.
-                                                                                                    let rt = ints_get(nrec, k);
-                                                                                                    let rs = ints_get(ens, 0);
-                                                                                                    let rv = take_number(next);
-                                                                                                    add_line(out, str_concat(str_concat(str_concat("  ", v(rv)), str_concat(" = load ", llvm_type(rt))),
-                                                                                                            str_concat(", ptr %slot", int_to_str(rs))));
-                                                                                                    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(rt)), str_concat(" ", unwind_value(rt))),
-                                                                                                            str_concat(", ptr %slot", int_to_str(rs))));
-                                                                                                    release_frame(out, next, frame, rowns);
-                                                                                                    add_line(out, str_concat(str_concat("  ret ", llvm_type(rt)), str_concat(" ", v(rv))));
-                                                                                                    } else {
-                                                                                                        if ints_len(vals) != 1 {
-                                                                                                            refuse("a body that produces no value",
-                                                                                                                    position(src, path, from));
-                                                                                                        }
-                                                                                                        // The tail is a `return` without the keyword, and it obeys the same two
-                                                                                                        // rules: take the reference the caller is about to receive, then let the
-                                                                                                        // frame go.
-                                                                                                        let tv = ints_pop(vals);
-                                                                                                        own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
-                                                                                                        release_frame(out, next, frame, rowns);
-                                                                                                        add_line(out, str_concat(str_concat("  ret ",
-                                                                                                                llvm_type(ints_get(nrec, k))),
-                                                                                                                str_concat(" ", v(tv))));
-                                                                                                    }
-                                                                                                    }
-                                                                                                    // The one exit every failure in this function leaves by,
-                                                                                                    // written only if something branched to it.
-                                                                                                    if ints_get(live, 1) == 1 {
-                                                                                                        let rt = ints_get(nrec, k);
-                                                                                                        add_line(out, "nz.unwind:");
-                                                                                                        // A failure leaves through here from anywhere in the function, so this is
-                                                                                                        // the one exit source indentation would never have found. A program that
-                                                                                                        // failed still reclaims what it was holding.
-                                                                                                        release_frame(out, next, frame, rowns);
-                                                                                                        add_line(out, str_concat(str_concat("  ret ",
-                                                                                                                llvm_type(rt)),
-                                                                                                                str_concat(" ", unwind_value(rt))));
-                                                                                                        ints_set(live, 1, 0);
-                                                                                                    }
-                                                                                                    add_line(out, "}");
-                                                                                                    ints_set(live, 0, 0);
-                                                                                                    // Values never cross a function boundary. A body that
-                                                                                                    // returned on every path can leave some behind, and the
-                                                                                                    // next function would inherit them.
-                                                                                                    while ints_len(vals) > 0 { ints_pop(vals); }
+                                                                                            if kind == n_bin() {
+                                                                                                let b = ints_pop(vals);
+                                                                                                let a = ints_pop(vals);
+                                                                                                let at = position(src, path, ints_get(naux, k));
+                                                                                                // The operand type, not the result's: `==` always produces `Bool`, and
+                                                                                                // what it compares decides how.
+                                                                                                let ot = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                                                                                // A record or an enum compares through its equality
+                                                                                                // helper (N13), and `!=` negates that one answer.
+                                                                                                let r = if ot == t_str() {
+                                                                                                    string_equality(out, current, live, next, a, b, text == "!=")
                                                                                                 } else {
-                                                                                                    // A contract clause leaves its condition on the stack, for the check at the boundary
-                                                                                                    // after it (N102).
-                                                                                                    let mut known = kind == n_program();
-                                                                                                    if kind == n_contract() { known = true; }
-                                                                                                    if known == false {
-                                                                                                        refuse(str_concat(str_concat("`", node_name(kind)), "`"),
-                                                                                                                position(src, path, from));
+                                                                                                    if is_record(ot) {
+                                                                                                        composite_equality(out, next, a, b, ot, text == "!=", eqs)
+                                                                                                    } else {
+                                                                                                        emit_binary(out, msgs, next, current, live, text, a, b, at, ot, owned, otype, rowns)
+                                                                                                    }
+                                                                                                };
+                                                                                                if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at, io); }
+                                                                                                // Rule 2: a comparison borrows its operands, as a call
+                                                                                                // does, so a string compared is nobody's once the
+                                                                                                // answer exists. Leaked on every evaluation until N10.1.
+                                                                                                // A record or an enum compared is released the same
+                                                                                                // way, once, after the answer.
+                                                                                                if ot == t_str() {
+                                                                                                    own_drop(out, next, owned, a, ot, rowns, otype);
+                                                                                                    own_drop(out, next, owned, b, ot, rowns, otype);
+                                                                                                }
+                                                                                                if is_record(ot) {
+                                                                                                    own_drop(out, next, owned, a, ot, rowns, otype);
+                                                                                                    own_drop(out, next, owned, b, ot, rowns, otype);
+                                                                                                }
+                                                                                                ints_push(vals, r);
+                                                                                            } else {
+                                                                                                if kind == n_neg() {
+                                                                                                    let a = ints_pop(vals);
+                                                                                                    let zero = take_number(next);
+                                                                                                    add_line(out, str_concat(str_concat("  ", v(zero)), " = add i64 0, 0"));
+                                                                                                    let at = position(src, path, from);
+                                                                                                    // The only negation without a representable result is `-Int::MIN`.
+                                                                                                    let r = checked(out, msgs, next, current, live, "ssub", "negation", zero, a, at, owned, otype, rowns);
+                                                                                                    ints_push(vals, r);
+                                                                                                } else {
+                                                                                                    if kind == n_block() {
+                                                                                                        if text != "tail" {
+                                                                                                            refuse("a body with no result expression",
+                                                                                                                    position(src, path, from), io);
+                                                                                                        }
+                                                                                                    } else {
+                                                                                                        if kind == n_fn() {
+                                                                                                            if llvm_type(ints_get(nrec, k)) == "void" {
+                                                                                                                refuse(str_concat(str_concat("a function returning `",
+                                                                                                                        before_at(fn_ret(text))), "`"),
+                                                                                                                        position(src, path, from), io);
+                                                                                                            }
+                                                                                                            // The platform wrapper prints an `Int`, so `main` must
+                                                                                                            // produce one. What a `Str` result would mean for a process
+                                                                                                            // is a decision nobody has made.
+                                                                                                            if fn_name(text) == "main" {
+                                                                                                                if before_at(fn_ret(text)) != "Int" {
+                                                                                                                    refuse("a `main` that does not return `Int`",
+                                                                                                                            position(src, path, from), io);
+                                                                                                                }
+                                                                                                            }
+                                                                                                            // A body whose every path returned has nothing to fall off
+                                                                                                            // the end with and needs no terminator of its own — the
+                                                                                                            // `ret` is already there.
+                                                                                                            if ints_get(live, 0) == 1 {
+                                                                                                                if ints_get(ens, 0) >= 0 {
+                                                                                                                    // `nz.ens`, every `ensures` checked: the value leaves `result`'s slot, which is
+                                                                                                                    // zeroed so the frame does not release what the caller receives, and the frame goes.
+                                                                                                                    let rt = ints_get(nrec, k);
+                                                                                                                    let rs = ints_get(ens, 0);
+                                                                                                                    let rv = take_number(next);
+                                                                                                                    add_line(out, str_concat(str_concat(str_concat("  ", v(rv)), str_concat(" = load ", llvm_type(rt))),
+                                                                                                                            str_concat(", ptr %slot", int_to_str(rs))));
+                                                                                                                    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(rt)), str_concat(" ", unwind_value(rt))),
+                                                                                                                            str_concat(", ptr %slot", int_to_str(rs))));
+                                                                                                                    release_frame(out, next, frame, rowns);
+                                                                                                                    add_line(out, str_concat(str_concat("  ret ", llvm_type(rt)), str_concat(" ", v(rv))));
+                                                                                                                } else {
+                                                                                                                    if ints_len(vals) != 1 {
+                                                                                                                        refuse("a body that produces no value",
+                                                                                                                                position(src, path, from), io);
+                                                                                                                    }
+                                                                                                                    // The tail is a `return` without the keyword, and it obeys the same two
+                                                                                                                    // rules: take the reference the caller is about to receive, then let the
+                                                                                                                    // frame go.
+                                                                                                                    let tv = ints_pop(vals);
+                                                                                                                    own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
+                                                                                                                    release_frame(out, next, frame, rowns);
+                                                                                                                    add_line(out, str_concat(str_concat("  ret ",
+                                                                                                                            llvm_type(ints_get(nrec, k))),
+                                                                                                                            str_concat(" ", v(tv))));
+                                                                                                                }
+                                                                                                            }
+                                                                                                            // The one exit every failure in this function leaves by,
+                                                                                                            // written only if something branched to it.
+                                                                                                            if ints_get(live, 1) == 1 {
+                                                                                                                let rt = ints_get(nrec, k);
+                                                                                                                add_line(out, "nz.unwind:");
+                                                                                                                // A failure leaves through here from anywhere in the function, so this is
+                                                                                                                // the one exit source indentation would never have found. A program that
+                                                                                                                // failed still reclaims what it was holding.
+                                                                                                                release_frame(out, next, frame, rowns);
+                                                                                                                add_line(out, str_concat(str_concat("  ret ",
+                                                                                                                        llvm_type(rt)),
+                                                                                                                        str_concat(" ", unwind_value(rt))));
+                                                                                                                ints_set(live, 1, 0);
+                                                                                                            }
+                                                                                                            add_line(out, "}");
+                                                                                                            ints_set(live, 0, 0);
+                                                                                                            // Values never cross a function boundary. A body that
+                                                                                                            // returned on every path can leave some behind, and the
+                                                                                                            // next function would inherit them.
+                                                                                                            while ints_len(vals) > 0 { ints_pop(vals); }
+                                                                                                        } else {
+                                                                                                            // A contract clause leaves its condition on the stack, for the check at the boundary
+                                                                                                            // after it (N102).
+                                                                                                            let mut known = kind == n_program();
+                                                                                                            if kind == n_contract() { known = true; }
+                                                                                                            if known == false {
+                                                                                                                refuse(str_concat(str_concat("`", node_name(kind)), "`"),
+                                                                                                                        position(src, path, from), io);
+                                                                                                            }
+                                                                                                        }
                                                                                                     }
                                                                                                 }
                                                                                             }
@@ -4214,8 +4216,6 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             }
                         }
                     }
-                }
-                }
                 }
             }
         }
@@ -4513,7 +4513,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
     ints_get(next, 0)
 }
 
-fn main() -> Int {
+fn main(io: IoCap) -> Int {
     // The core prelude is the toolchain's, not the project's, so it is named on the
     // command line rather than found beside the program: `library/core/prelude.nz` in this
     // repository, and whatever path a toolchain installs it at. It is read like any source
@@ -4538,13 +4538,13 @@ fn main() -> Int {
     let mto = ints_new();
     let mat = ints_new();
     let src = attach_core(arg(1), load_modules(path, std_dir_of(arg(1)), mpath, mstart, mfirst,
-            mcount, mto, mat),
-            mpath, mstart, mfirst, mcount, mto, mat);
+            mcount, mto, mat, io),
+            mpath, mstart, mfirst, mcount, mto, mat, io);
 
     // The program's IR, or the diagnostics that stopped it before any was written.
-    match emit_program(src, path, mpath, mstart, mfirst, mcount, mto, mat) {
+    match emit_program(src, path, mpath, mstart, mfirst, mcount, mto, mat, io) {
         Result.Ok(value: ir) => print(ir),
-        Result.Err(error: found) => refused(src, path, found),
+        Result.Err(error: found) => refused(src, path, found, io),
     };
     // `exit_with`, not a return: the platform wrapper prints `main`'s value, and this
     // program's standard output *is* the LLVM module. A stray integer at the end of it
@@ -4556,7 +4556,7 @@ fn main() -> Int {
 /// Every diagnostic that stopped a compilation, to standard error, and the exit that
 /// says so. The IR was never written: a refusal after it was on standard output would be
 /// one nobody could act on.
-fn refused(src: Str, path: Str, diags: Vec[Diag]) -> Int {
+fn refused(src: Str, path: Str, diags: Vec[Diag], io: IoCap) -> Int {
     let mut d = 0;
     while d < vec_len(diags) {
         let one = vec_get(diags, d);
@@ -4579,8 +4579,8 @@ fn refused(src: Str, path: Str, diags: Vec[Diag]) -> Int {
 /// subset, an instance limit — still stops the process where it is found, by the failure
 /// protocol that has always owned it.
 fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: Ints,
-        mto: Ints, mat: Ints) -> Result[Str, Vec[Diag]] {
-    let checked = check_program(src, mpath, mstart, mfirst, mcount, mto, mat)?;
+        mto: Ints, mat: Ints, io: IoCap) -> Result[Str, Vec[Diag]] {
+    let checked = check_program(src, mpath, mstart, mfirst, mcount, mto, mat, io)?;
     let nk = checked.nk;
     let nar = checked.nar;
     let nst = checked.nst;
@@ -4623,7 +4623,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     // Before a single instruction is written: a refusal that arrived after the IR was on
     // stdout would be a refusal nobody could act on.
     refuse_expansion(src, path, nk, nst, ntx, parent, ncallee, fnames, fowner, fgc, mstart,
-            tb, ntfirst, ntargs);
+            tb, ntfirst, ntargs, io);
     let cyc = find_cycles(nk, nst, ntx, parent, ncallee, fnames, fowner, mstart, tb);
     let mut recursive = false;
     let mut cy = 0;
@@ -4696,7 +4696,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
                         let args = node_types(ntfirst, ntargs, gi);
                         ints_set(ninst, gi, request_instance(ints_get(fnode_of, f), args,
                                 inst_fn, inst_first, inst_args, tb, src, path,
-                                ints_get(nst, gi)));
+                                ints_get(nst, gi), io));
                     }
                 }
             }
@@ -4759,7 +4759,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
                             w = w + 1;
                         }
                         callee_inst = request_instance(ints_get(fnode_of, f), cargs, inst_fn,
-                                inst_first, inst_args, tb, src, path, ints_get(nst, j));
+                                inst_first, inst_args, tb, src, path, ints_get(nst, j), io);
                     }
                 }
             }
@@ -4811,7 +4811,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
             parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
             body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
-            0, ints_len(nk) - 1, "", ninst, generic_fn, tb, eqs, cyc, ntfirst, ntargs);
+            0, ints_len(nk) - 1, "", ninst, generic_fn, tb, eqs, cyc, ntfirst, ntargs, io);
     // Each instance, from its definition's own nodes — spans and all, so a failure inside
     // one is reported at the generic definition's line — with the node types substituted.
     ii = 0;
@@ -4830,7 +4830,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
                 parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
                 body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
                 lo, fnn, str_concat("@nz.g", int_to_str(ii)), ninst, generic_fn, tb, eqs, cyc,
-                ntfirst, ntargs);
+                ntfirst, ntargs, io);
         ii = ii + 1;
     }
 
@@ -4847,7 +4847,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
                     parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
                     body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
                     ints_get(substart, cn), cn, str_concat("@nz.c", int_to_str(cn)), ninst,
-                    generic_fn, tb, eqs, cyc, ntfirst, ntargs);
+                    generic_fn, tb, eqs, cyc, ntfirst, ntargs, io);
             // What the object carries, released when the last reference to it goes.
             let cbase = ints_get(ntfirst, cn);
             if closure_owns(ntargs, cbase, rowns) {

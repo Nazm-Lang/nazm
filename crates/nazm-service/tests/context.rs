@@ -844,10 +844,10 @@ fn two_dependencies_of_one_spelling_are_two_dependencies() {
 #[test]
 fn a_functions_packet_carries_its_provenance_summary() {
     const SRC: &str = "fn save(io: IoCap, path: Str, data: Str) -> Int ! { io } { write_file(path, data) }\n\
-        fn load(name: Str) -> Str { read_file(name) }\n\
+        fn load(name: Str, io: IoCap) -> Str { read_file(name) }\n\
         fn one(x: Str) -> Int ! {} { 1 }\n\
         struct P { x: Int, }\n\
-        fn main(io: IoCap) -> Int ! { io } { save(io, arg(0), load(\"in\")) + one(\"x\") + P(x: 1).x }\n";
+        fn main(io: IoCap) -> Int ! { io } { save(io, arg(0), load(\"in\", io)) + one(\"x\") + P(x: 1).x }\n";
     let p = Project::new(&[("main.nz", SRC)]);
     let main = p.path("main.nz");
     let of = |name: &str| {
@@ -863,7 +863,7 @@ fn a_functions_packet_carries_its_provenance_summary() {
     assert_eq!(
         of("load"),
         json!({"origins": ["file"], "passes_on": ["name"], "reaches_write_path": [],
-               "receives": [{"param": "name", "origins": []}]})
+               "receives": [{"param": "name", "origins": []}, {"param": "io", "origins": ["authority"]}]})
     );
     assert_eq!(
         of("one"),
@@ -887,10 +887,10 @@ fn a_functions_packet_carries_its_provenance_summary() {
 #[test]
 fn a_functions_packet_carries_its_effects_and_why_from_the_checker() {
     const FX: &str = "use \"lib.nz\";\n\
-        fn leaf() -> Int { print(\"x\") }\n\
-        fn mid() -> Int { leaf() }\n\
+        fn leaf(out: OutCap) -> Int { print(\"x\") }\n\
+        fn mid(out: OutCap) -> Int { leaf(out) }\n\
         fn pure() -> Int ! {} { 1 }\n\
-        fn both(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { mid() }\n\
+        fn both(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { mid(io) }\n\
         fn far() -> Int { helper() }\n\
         struct P { x: Int, }\n\
         fn main(io: IoCap, t: SpawnCap) -> Int { both(io, t) + pure() + far() + P(x: 1).x }\n";
@@ -918,7 +918,7 @@ fn a_functions_packet_carries_its_effects_and_why_from_the_checker() {
         mid["reasons"][0]["callee"]["definition"],
         "main.nz::fn leaf"
     );
-    assert_eq!(mid["reasons"][0]["at"]["start"], at(FX, "leaf() }", 0));
+    assert_eq!(mid["reasons"][0]["at"]["start"], at(FX, "leaf(out) }", 0));
     let pure = of("pure");
     assert_eq!(
         pure,

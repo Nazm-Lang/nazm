@@ -7433,7 +7433,8 @@ impl Checker<'_> {
                 let now = settled_args(&solved, owner);
                 let want = self.res.types_mut().substitute(formal, owner, &now);
                 let got = self.value_type(a, Some(want));
-                if got != want {
+                // As a monomorphic call's argument is (N79, N104): an attenuation is accepted.
+                if !self.assignable(got, want) {
                     self.errors.push(Diagnostic::error(
                         codes::TYPE_MISMATCH,
                         a.span(),

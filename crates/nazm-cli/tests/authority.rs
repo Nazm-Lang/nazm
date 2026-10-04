@@ -41,27 +41,6 @@ fn text(o: &Output) -> String {
     )
 }
 
-/// `(name, inherits)` for every definition `nazm inspect` reports.
-fn inherits(dir: &Path) -> Vec<(String, Vec<String>)> {
-    let o = nazm(dir, &["inspect", "p.nz"]);
-    assert!(o.status.success(), "{}", text(&o));
-    let doc: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
-    doc["definitions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|d| {
-            let held = d.get("inherits")?.as_array()?;
-            Some((
-                d["identity"].as_str().unwrap().to_owned(),
-                held.iter()
-                    .map(|k| k.as_str().unwrap().to_owned())
-                    .collect(),
-            ))
-        })
-        .collect()
-}
-
 #[test]
 fn an_out_cap_prints_and_authorises_nothing_else() {
     let d = program(
@@ -132,6 +111,31 @@ fn main_may_hold_only_an_out_cap_on_every_engine() {
     assert_eq!(String::from_utf8_lossy(&o.stdout), "hi\n42\n");
 }
 
+/// An `IoCap` handed where an `OutCap` is expected compiles natively, on both backends, and
+/// runs as the interpreter does — to a generic function too. Until N104 the first
+/// type-checked and then failed MIR validation (`N0900`: MIR's copy of the shape relation had
+/// no rule for capabilities), and the second was refused (`N0300`: a generic call compared
+/// its concrete parameters exactly).
+#[test]
+fn an_io_cap_given_for_an_out_cap_compiles_on_both_backends() {
+    let d = program(
+        "fn say(out: OutCap, n: Int) -> Int { print(int_to_str(n)); n }\n\
+         fn twice[T](x: T, out: OutCap) -> Int { print(\"!\"); 0 }\n\
+         fn main(io: IoCap) -> Int { say(io, 7) - 7 + twice(true, io) }\n",
+    );
+    let o = nazm(d.path(), &["run", "p.nz"]);
+    assert!(o.status.success(), "{}", text(&o));
+    // `print` adds no newline; `nazm run` then prints `main`'s result.
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "7!0\n");
+    for backend in ["llvm", "cranelift"] {
+        let o = nazm(d.path(), &["build", "--backend", backend, "p.nz", "-o", "p"]);
+        assert!(o.status.success(), "{backend}: {}", text(&o));
+        let o = Command::new(d.path().join("p")).output().unwrap();
+        assert!(o.status.success(), "{backend}");
+        assert_eq!(String::from_utf8_lossy(&o.stdout), "7!0\n", "{backend}");
+    }
+}
+
 #[test]
 fn an_out_cap_cannot_be_defined_by_a_program() {
     let d = program("struct OutCap { x: Int }\nfn main() -> Int { 0 }\n");
@@ -187,67 +191,68 @@ fn a_function_value_with_more_effects_is_refused() {
 }
 
 #[test]
-fn inherited_authority_is_recorded_and_inspect_shows_it() {
+fn nothing_inherits_authority_and_inspect_reports_no_inheritance() {
+    // N104: a function that declares no effect set no longer exercises its caller's authority.
+    // It holds what it exercises, or it is refused at the first site that needs it.
     let d = program(
         "fn helper() -> Int { print(\"x\\n\"); 0 }\n\
-         fn pure(n: Int) -> Int { n + 1 }\n\
-         fn reader() -> Int { let s = read_file(\"x\"); 0 }\n\
-         fn shout(o: OutCap) -> Int ! {io} { print(\"loud\\n\"); 1 }\n\
-         fn main(io: IoCap) -> Int ! {io} { shout(io) + helper() + pure(0) + reader() }\n",
+         fn main(io: IoCap) -> Int ! {io} { helper() }\n",
     );
-    let got = inherits(d.path());
-    let of = |name: &str| {
-        got.iter()
-            .find(|(n, _)| n.ends_with(&format!("fn {name}")))
-            .map(|(_, k)| k.clone())
-            .unwrap_or_else(|| panic!("no `{name}` in {got:?}"))
-    };
-    assert_eq!(of("helper"), ["OutCap"]);
-    assert_eq!(of("reader"), ["IoCap"]);
-    assert!(of("pure").is_empty());
-    // A declared function's inherited authority is always empty: missing authority is N0369.
-    assert!(of("shout").is_empty());
-    assert!(of("main").is_empty());
-}
-
-#[test]
-fn the_authority_profile_refuses_inheritance_by_name_and_general_does_not() {
-    let inheriting = "fn helper() -> Int { print(\"x\\n\"); 0 }\n\
-                      fn main(io: IoCap) -> Int ! {io} { helper() }\n";
-    let d = program(inheriting);
     let o = nazm(d.path(), &["check", "p.nz"]);
-    assert!(
-        o.status.success(),
-        "the default still inherits: {}",
-        text(&o)
-    );
-    let o = nazm(d.path(), &["check", "--profile", "authority", "p.nz"]);
     let t = text(&o);
     assert!(!o.status.success(), "{t}");
     assert!(
-        t.contains("N0510") && t.contains("explicit-authority"),
+        t.contains("N0369") && t.contains("`helper` holds no `OutCap`"),
         "{t}"
     );
-    assert!(
-        t.contains("`helper` exercises `OutCap` it does not hold"),
-        "{t}"
-    );
-
-    // Held authority, and an undeclared function that exercises none, are accepted.
+    // Given one, it is accepted; and `nazm inspect`, now `/2`, reports no inheritance at all.
     let d = program(
-        "fn helper(o: OutCap) -> Int ! {io} { print(\"x\\n\"); 0 }\n\
+        "fn helper(out: OutCap) -> Int { print(\"x\\n\"); 0 }\n\
+         fn pure(n: Int) -> Int { n + 1 }\n\
+         fn main(io: IoCap) -> Int ! {io} { helper(io) + pure(0) }\n",
+    );
+    let o = nazm(d.path(), &["inspect", "p.nz"]);
+    assert!(o.status.success(), "{}", text(&o));
+    let doc: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(doc["schema"], "nazm.inspect/2");
+    for def in doc["definitions"].as_array().unwrap() {
+        assert!(def.get("inherits").is_none(), "{def}");
+    }
+}
+
+#[test]
+fn the_authority_profile_and_the_default_refuse_the_same_programs() {
+    // N104: `explicit-authority` is the language's rule now. A function exercising what it
+    // does not hold is refused by the default (`N0369`) and the profile alike; the profile's
+    // own rule has nothing left to refuse.
+    let d = program(
+        "fn helper() -> Int { print(\"x\\n\"); 0 }\n\
+         fn main(io: IoCap) -> Int ! {io} { helper() }\n",
+    );
+    for args in [&["check", "p.nz"][..], &["check", "--profile", "authority", "p.nz"]] {
+        let o = nazm(d.path(), args);
+        let t = text(&o);
+        assert!(!o.status.success(), "{args:?}: {t}");
+        assert!(t.contains("N0369"), "{args:?}: {t}");
+        assert!(!t.contains("explicit-authority"), "{args:?}: {t}");
+    }
+    // Held authority, and a function that exercises none, are accepted by both.
+    let d = program(
+        "fn helper(o: OutCap) -> Int { print(\"x\\n\"); 0 }\n\
          fn pure(n: Int) -> Int { n + 1 }\n\
          fn main(io: IoCap) -> Int ! {io} { helper(io) + pure(1) }\n",
     );
-    let o = nazm(d.path(), &["check", "--profile", "authority", "p.nz"]);
-    assert!(o.status.success(), "{}", text(&o));
+    for args in [&["check", "p.nz"][..], &["check", "--profile", "authority", "p.nz"]] {
+        let o = nazm(d.path(), args);
+        assert!(o.status.success(), "{args:?}: {}", text(&o));
+    }
 }
 
 #[test]
 fn the_profile_report_names_the_rule() {
     let d = program(
-        "fn helper() -> Int { print(\"x\\n\"); 0 }\n\
-         fn main(io: IoCap) -> Int ! {io} { helper() }\n",
+        "fn helper(out: OutCap) -> Int { print(\"x\\n\"); 0 }\n\
+         fn main(io: IoCap) -> Int ! {io} { helper(io) }\n",
     );
     let o = nazm(
         d.path(),
@@ -270,7 +275,7 @@ fn a_held_io_cap_covers_what_an_undeclared_helper_prints() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(
         d.path().join("a.nz"),
-        "fn say() -> Int { print(\"hi\"); 0 }\nfn main(io: IoCap) -> Int ! { io } { say() }\n",
+        "fn say(out: OutCap) -> Int { print(\"hi\"); 0 }\nfn main(io: IoCap) -> Int ! { io } { say(io) }\n",
     )
     .unwrap();
     let o = nazm(d.path(), &["check", "a.nz"]);

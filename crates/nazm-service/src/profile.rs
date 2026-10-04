@@ -599,31 +599,10 @@ pub fn evaluate(
                     })
                     .collect()
             } else if rule == Rule::ExplicitAuthority {
-                // The recorded contract (§7.80), never a re-derivation: what `nazm inspect`
-                // shows is what this refuses.
-                (0..res.functions().len())
-                    .map(FnId::from_index)
-                    .filter(|&g| !toolchain(graph, res, g))
-                    .filter_map(|g| {
-                        let f = res.function(g)?;
-                        let held = res.inherits(g);
-                        if held.is_empty() {
-                            return None;
-                        }
-                        let kinds: Vec<String> = held
-                            .iter()
-                            .map(|k| format!("`{}`", k.type_name()))
-                            .collect();
-                        Some(Witness {
-                            span: res.inherited_at(g).first().copied().unwrap_or(f.name_span),
-                            note: format!(
-                                "`{}` exercises {} it does not hold: its caller's, inherited",
-                                f.name,
-                                kinds.join(", ")
-                            ),
-                        })
-                    })
-                    .collect()
+                // The language's own rule since N104 (§7.105): no function inherits authority,
+                // so nothing is left for the profile to refuse. Kept by name, so a manifest
+                // that lists it still means what it meant.
+                Vec::new()
             } else if rule == Rule::DeclaredEffects {
                 res.functions()
                     .iter()

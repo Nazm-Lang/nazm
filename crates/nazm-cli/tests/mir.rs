@@ -502,7 +502,7 @@ fn main() -> Int {
 fn concurrency_lowers_to_scope_primitives_and_every_exit_joins() {
     let src = r#"
 fn worker(c: Chan, n: Int) -> Int { chan_send(c, n * 2); 0 }
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let c = chan_new(8);
     let mut total = 0;
     scope {
@@ -547,8 +547,8 @@ fn a_function_in_a_call_cycle_checks_its_stack_first_and_no_other_does() {
                fn leaf(n: Int) -> Int { n + 1 }\n\
                fn job(c: Chan) -> Int { chan_send(c, 1); 0 }\n\
                fn again(c: Chan, t: SpawnCap) -> Int { scope { spawn job(c); } 0 }\n\
-               fn w(n: Int) -> Int { if n <= 0 { 0 } else { scope { spawn w(n - 1); } 0 } }\n\
-               fn main(t: SpawnCap) -> Int { let c = chan_new(2); again(c, t); f(3) + a(2) + leaf(1) + w(2) }\n";
+               fn w(n: Int, tasks: SpawnCap) -> Int { if n <= 0 { 0 } else { scope { spawn w(n - 1, tasks); } 0 } }\n\
+               fn main(t: SpawnCap) -> Int { let c = chan_new(2); again(c, t); f(3) + a(2) + leaf(1) + w(2, t) }\n";
     let p = valid(src);
     let first_is_check = |name: &str| {
         let f = function(&p, name);

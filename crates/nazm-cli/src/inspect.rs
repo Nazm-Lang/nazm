@@ -1,4 +1,4 @@
-//! `nazm inspect` — one program's facts in one deterministic document, `nazm.inspect/1` (N48).
+//! `nazm inspect` — one program's facts in one deterministic document, `nazm.inspect/2` (N48; `/2` since N104, which dropped `inherits`).
 //!
 //! `docs/architecture.md` §7.50. For every definition of a checked program: its durable identity,
 //! signature, declared and required effects, the capabilities it takes, its provenance summary,
@@ -137,13 +137,6 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
                 }),
             );
             o.insert("capabilities".into(), json!(capabilities));
-            // What the body exercises without holding it (N79): the bridge, as a contract.
-            let inherits: Vec<&str> = res
-                .inherits(f.def)
-                .iter()
-                .map(nazm_core::sema::CapabilityKind::type_name)
-                .collect();
-            o.insert("inherits".into(), json!(inherits));
             o.insert("provenance".into(), provenance);
             o.insert("foreign".into(), json!(def.foreign));
             o.insert(
@@ -204,7 +197,7 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
         })
         .collect();
     let doc = json!({
-        "schema": "nazm.inspect/1",
+        "schema": "nazm.inspect/2",
         "root": root_key,
         "toolchain": {
             "compiler": env!("CARGO_PKG_VERSION"),

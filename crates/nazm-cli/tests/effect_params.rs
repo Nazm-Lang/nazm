@@ -362,18 +362,22 @@ fn main(io: IoCap) -> Int ! { io } {
 // --- the bridge -------------------------------------------------------------------------
 
 #[test]
-fn a_value_of_an_undeclared_import_needs_the_authority_a_call_would() {
-    let lib = "pub fn loud(x: Int) -> Int { print(\"x\"); x }\n";
-    let without = "use \"lib.nz\";\n\
-        fn main(io: IoCap) -> Int ! { io, spawn } { let f = loud; f(1) }\n";
-    let codes = check_codes(&[("main.nz", without), ("lib.nz", lib)]);
-    assert!(codes.contains(&"N0369".to_owned()), "{codes:?}");
-    let with = "use \"lib.nz\";\n\
-        fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } { let f = loud; f(1) }\n";
+fn a_value_of_an_undeclared_import_needs_no_authority_of_its_maker() {
+    // N104: the function holds what it exercises, as a parameter, so making a value of it
+    // needs nothing; calling the value passes the authority like any argument. The value's
+    // type still carries every effect, since the import declares none.
+    let lib = "pub fn loud(x: Int, out: OutCap) -> Int { print(\"x\"); x }\n";
+    let ok = "use \"lib.nz\";\n\
+        fn main(io: IoCap) -> Int ! { io, spawn } { let f = loud; f(1, io) }\n";
     assert_eq!(
-        check_codes(&[("main.nz", with), ("lib.nz", lib)]),
+        check_codes(&[("main.nz", ok), ("lib.nz", lib)]),
         Vec::<String>::new()
     );
+    let narrow = "use \"lib.nz\";\n\
+        fn main(io: IoCap) -> Int ! { io } { let f = loud; f(1, io) }\n";
+    let codes = check_codes(&[("main.nz", narrow), ("lib.nz", lib)]);
+    assert!(codes.contains(&"N0366".to_owned()), "{codes:?}");
+    assert!(!codes.contains(&"N0369".to_owned()), "{codes:?}");
 }
 
 // --- across a module, and its interface --------------------------------------------------

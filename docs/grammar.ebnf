@@ -273,13 +273,13 @@ break_statement = "break" , ";" ;
 (* @example fn main() -> Int { let mut i = 0; while i < 3 { i = i + 1; continue; } i } *)
 continue_statement = "continue" , ";" ;
 
-(* @example fn w(c: Chan) -> Int { 0 } fn main() -> Int { let c = chan_new(1); scope { spawn w(c); } 0 } *)
+(* @example fn w(c: Chan) -> Int { 0 } fn main(t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c); } 0 } *)
 scope_statement = "scope" , block ;
 
-(* @example fn w(c: Chan, n: Int) -> Int { 0 } fn main() -> Int { let c = chan_new(1); scope { spawn w(c, 1); } 0 } *)
+(* @example fn w(c: Chan, n: Int) -> Int { 0 } fn main(t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c, 1); } 0 } *)
 spawn_statement = "spawn" , IDENT , "(" , [ arguments ] , ")" , ";" ;
 
-(* @example fn main() -> Int { print("hi"); 0 } *)
+(* @example fn main(out: OutCap) -> Int { print("hi"); 0 } *)
 expression_statement = expression , ";" ;
 
 (* @example fn main() -> Int { 1 + 2 * 3 } *)

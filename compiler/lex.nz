@@ -166,7 +166,7 @@ fn push_token(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, kind: Int, fro
 }
 
 // Report and stop. Errors are located, which is the whole point of carrying byte offsets.
-pub fn fail(code: Str, at_offset: Int, detail: Str) -> Int {
+pub fn fail(code: Str, at_offset: Int, detail: Str, io: IoCap) -> Int {
     eprint(str_concat("error ", code));
     eprint(str_concat(" at ", int_to_str(at_offset)));
     eprint(str_concat(": ", detail));
@@ -175,7 +175,7 @@ pub fn fail(code: Str, at_offset: Int, detail: Str) -> Int {
     0
 }
 
-pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int {
+pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs, io: IoCap) -> Int {
     let n = str_len(src);
     let mut i = 0;
     while i < n {
@@ -227,9 +227,9 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
             while true {
                 let c = at(src, i);
                 if c == 34 { break; }
-                if c == 10 { fail("N0002", from, "this string has no closing quote"); }
-                if c < 0 { fail("N0002", from, "this string has no closing quote"); }
-                if c == 92 { fail("N0004", i, "string escapes are not in the bootstrap subset"); }
+                if c == 10 { fail("N0002", from, "this string has no closing quote", io); }
+                if c < 0 { fail("N0002", from, "this string has no closing quote", io); }
+                if c == 92 { fail("N0004", i, "string escapes are not in the bootstrap subset", io); }
                 i = i + 1;
             }
             let text = str_slice(src, from + 1, i);
@@ -271,7 +271,7 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
         }
         // `::` (N49), a qualified name, is not in the bootstrap subset.
         if b == 58 {
-            if next == 58 { fail("N0001", i, "`::` is not in the bootstrap subset"); }
+            if next == 58 { fail("N0001", i, "`::` is not in the bootstrap subset", io); }
         }
         // `&&` and `||` (N49).
         if b == 38 {
@@ -325,7 +325,7 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
         if b == 93 { kind = k_rbracket(); }
         if b == 63 { kind = k_question(); }
 
-        if kind == 0 { fail("N0001", i, "this character is not part of the language"); }
+        if kind == 0 { fail("N0001", i, "this character is not part of the language", io); }
         push_token(kinds, starts, ends, texts, kind, i, i + 1, "");
         i = i + 1;
     }

@@ -1056,7 +1056,7 @@ fn recovery_always_makes_progress() {
         "fn main() -> Int { match { } }",
         "fn main() -> Int { if { } else }",
         "fn main() -> Int { scope scope }",
-        "fn main() -> Int { spawn spawn }",
+        "fn main(tasks: SpawnCap) -> Int { spawn spawn }",
         "; ; ;",
         "fn f[ -> Int { 1 }",
         "fn f( -> Int { 1 }",

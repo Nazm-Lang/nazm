@@ -101,11 +101,11 @@ const MAIN: &str = "fn main() -> Int { 0 }\n";
 #[test]
 fn the_sources_are_the_built_ins_that_bring_data_in_and_nothing_else() {
     let src = format!(
-        "fn a() -> Str {{ arg(0) }}\n\
-         fn n() -> Int {{ args_count() }}\n\
-         fn r() -> Str {{ read_file(\"f\") }}\n\
-         fn e() -> Bool {{ file_exists(\"f\") }}\n\
-         fn p() -> Int {{ print(\"x\") }}\n\
+        "fn a(io: IoCap) -> Str {{ arg(0) }}\n\
+         fn n(io: IoCap) -> Int {{ args_count() }}\n\
+         fn r(io: IoCap) -> Str {{ read_file(\"f\") }}\n\
+         fn e(io: IoCap) -> Bool {{ file_exists(\"f\") }}\n\
+         fn p(out: OutCap) -> Int {{ print(\"x\") }}\n\
          fn lit() -> Str {{ \"x\" }}\n\
          fn num() -> Int {{ 1 + 2 * 3 }}\n{MAIN}"
     );
@@ -124,20 +124,20 @@ fn explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order() {
     let src = format!(
         "struct Pair {{ a: Str, b: Str, }}\n\
          enum Got {{ Some(v: Str), None, }}\n\
-         fn both() -> Str {{ str_concat(arg(0), read_file(\"f\")) }}\n\
-         fn back() -> Str {{ str_concat(read_file(\"f\"), arg(0)) }}\n\
-         fn len() -> Int {{ str_len(read_file(\"f\")) + 1 }}\n\
-         fn right() -> Int {{ 1 + str_len(arg(0)) }}\n\
-         fn text() -> Str {{ int_to_str(args_count()) }}\n\
-         fn field() -> Str {{ let p = Pair(a: \"x\", b: read_file(\"f\")); p.a }}\n\
-         fn other() -> Str {{ let p = Pair(a: \"x\", b: read_file(\"f\")); p.b }}\n\
+         fn both(io: IoCap) -> Str {{ str_concat(arg(0), read_file(\"f\")) }}\n\
+         fn back(io: IoCap) -> Str {{ str_concat(read_file(\"f\"), arg(0)) }}\n\
+         fn len(io: IoCap) -> Int {{ str_len(read_file(\"f\")) + 1 }}\n\
+         fn right(io: IoCap) -> Int {{ 1 + str_len(arg(0)) }}\n\
+         fn text(io: IoCap) -> Str {{ int_to_str(args_count()) }}\n\
+         fn field(io: IoCap) -> Str {{ let p = Pair(a: \"x\", b: read_file(\"f\")); p.a }}\n\
+         fn other(io: IoCap) -> Str {{ let p = Pair(a: \"x\", b: read_file(\"f\")); p.b }}\n\
          fn handed(p: Pair) -> Str {{ p.a }}\n\
-         fn payload() -> Str {{ match Got.Some(v: arg(1)) {{ Got.Some(v: s) => s, Got.None() => \"\", }} }}\n\
-         fn mutated() -> Str {{ let mut x = \"local\"; x = read_file(\"f\"); x }}\n\
-         fn twice() -> Str {{ let mut x = arg(0); x = read_file(\"f\"); x }}\n\
-         fn looped() -> Str {{ let mut x = \"\"; let mut y = \"\"; let mut i = 0; while i < 3 {{ x = y; y = arg(0); i = i + 1; }} x }}\n\
+         fn payload(io: IoCap) -> Str {{ match Got.Some(v: arg(1)) {{ Got.Some(v: s) => s, Got.None() => \"\", }} }}\n\
+         fn mutated(io: IoCap) -> Str {{ let mut x = \"local\"; x = read_file(\"f\"); x }}\n\
+         fn twice(io: IoCap) -> Str {{ let mut x = arg(0); x = read_file(\"f\"); x }}\n\
+         fn looped(io: IoCap) -> Str {{ let mut x = \"\"; let mut y = \"\"; let mut i = 0; while i < 3 {{ x = y; y = arg(0); i = i + 1; }} x }}\n\
          fn half(n: Int) -> Result[Int, Str] {{ Result[Int, Str].Ok(value: n / 2) }}\n\
-         fn prop() -> Result[Int, Str] {{ let h = half(str_len(arg(0)))?; Result[Int, Str].Ok(value: h) }}\n{MAIN}"
+         fn prop(io: IoCap) -> Result[Int, Str] {{ let h = half(str_len(arg(0)))?; Result[Int, Str].Ok(value: h) }}\n{MAIN}"
     );
     assert_eq!(origins(&src, "both"), ["argument", "file"]);
     assert_eq!(
@@ -177,14 +177,14 @@ fn explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order() {
 fn a_summary_passes_on_only_what_the_result_is_computed_from() {
     let src = format!(
         "fn id(x: Str) -> Str {{ x }}\n\
-         fn len(x: Str) -> Int {{ str_len(x) }}\n\
+         fn len(x: Str, io: IoCap) -> Int {{ str_len(x) }}\n\
          fn one(x: Str) -> Int {{ 1 }}\n\
          fn second(a: Str, b: Str) -> Str {{ b }}\n\
          fn pick(c: Bool, a: Str, b: Str) -> Str {{ if c {{ a }} else {{ b }} }}\n\
-         fn use_id() -> Str {{ id(read_file(\"f\")) }}\n\
-         fn use_one() -> Int {{ one(read_file(\"f\")) }}\n\
-         fn use_second() -> Str {{ second(read_file(\"f\"), arg(0)) }}\n\
-         fn guarded() -> Str {{ if file_exists(\"f\") {{ \"yes\" }} else {{ \"no\" }} }}\n{MAIN}"
+         fn use_id(io: IoCap) -> Str {{ id(read_file(\"f\")) }}\n\
+         fn use_one(io: IoCap) -> Int {{ one(read_file(\"f\")) }}\n\
+         fn use_second(io: IoCap) -> Str {{ second(read_file(\"f\"), arg(0)) }}\n\
+         fn guarded(io: IoCap) -> Str {{ if file_exists(\"f\") {{ \"yes\" }} else {{ \"no\" }} }}\n{MAIN}"
     );
     assert_eq!(summary(&src, "id").params, [0]);
     assert_eq!(summary(&src, "len").params, [0]);
@@ -206,10 +206,10 @@ fn a_summary_passes_on_only_what_the_result_is_computed_from() {
 fn recursion_and_mutual_recursion_reach_the_least_fixed_point_in_any_order() {
     let src = format!(
         "fn count(x: Str, n: Int) -> Str {{ if n == 0 {{ x }} else {{ count(x, n - 1) }} }}\n\
-         fn ping(x: Str, n: Int) -> Str {{ if n == 0 {{ \"done\" }} else {{ pong(x, n - 1) }} }}\n\
-         fn pong(x: Str, n: Int) -> Str {{ if n == 7 {{ read_file(x) }} else {{ ping(x, n - 1) }} }}\n\
+         fn ping(x: Str, n: Int, io: IoCap) -> Str {{ if n == 0 {{ \"done\" }} else {{ pong(x, n - 1, io) }} }}\n\
+         fn pong(x: Str, n: Int, io: IoCap) -> Str {{ if n == 7 {{ read_file(x) }} else {{ ping(x, n - 1, io) }} }}\n\
          fn spin(n: Int) -> Int {{ if n == 0 {{ 0 }} else {{ spin(n - 1) }} }}\n\
-         fn top() -> Str {{ count(arg(0), 3) }}\n{MAIN}"
+         fn top(io: IoCap) -> Str {{ count(arg(0), 3) }}\n{MAIN}"
     );
     assert_eq!(summary(&src, "count").params, [0]);
     assert_eq!(origins(&src, "ping"), ["file"]);
@@ -239,7 +239,7 @@ fn a_container_carries_what_any_container_of_its_type_was_given() {
     // container of its type, and nothing else.
     let src = format!(
         "fn from_seq() -> Str {{ let xs = strs_new(); strs_push(xs, \"lit\"); strs_get(xs, 0) }}\n\
-         fn from_vec() -> Int {{ let v = vec_new[Int](); vec_push(v, 1); vec_len(v) }}\n\
+         fn from_vec(io: IoCap) -> Int {{ let v = vec_new[Int](); vec_push(v, 1); vec_len(v) }}\n\
          fn from_chan() -> Int {{ let c = chan_new(1); chan_send(c, 1); let b = ints_new(); chan_recv(c, b); ints_pop(b) }}\n\
          fn received() -> Bool {{ let c = chan_new(1); chan_send(c, 1); let b = ints_new(); chan_recv(c, b) }}\n{MAIN}"
     );
@@ -249,10 +249,10 @@ fn a_container_carries_what_any_container_of_its_type_was_given() {
     // One write of a file's contents anywhere reaches every read of that type — and only
     // that type: a `Vec[Int]` filled from the command line stays the command line's.
     let src = format!(
-        "fn fill() -> Int {{ let ys = strs_new(); strs_push(ys, read_file(\"f\")); 0 }}\n\
+        "fn fill(io: IoCap) -> Int {{ let ys = strs_new(); strs_push(ys, read_file(\"f\")); 0 }}\n\
          fn from_seq() -> Str {{ let xs = strs_new(); strs_push(xs, \"lit\"); strs_get(xs, 0) }}\n\
-         fn from_vec() -> Int {{ let v = vec_new[Int](); vec_push(v, str_len(arg(0))); vec_get(v, 0) }}\n\
-         fn through_chan() -> Int {{ let c = chan_new(1); chan_send(c, str_len(read_file(\"f\"))); let b = ints_new(); chan_recv(c, b); ints_pop(b) }}\n{MAIN}"
+         fn from_vec(io: IoCap) -> Int {{ let v = vec_new[Int](); vec_push(v, str_len(arg(0))); vec_get(v, 0) }}\n\
+         fn through_chan(io: IoCap) -> Int {{ let c = chan_new(1); chan_send(c, str_len(read_file(\"f\"))); let b = ints_new(); chan_recv(c, b); ints_pop(b) }}\n{MAIN}"
     );
     assert_eq!(origins(&src, "from_seq"), ["file"]);
     assert_eq!(origins(&src, "from_vec"), ["argument"]);
@@ -261,8 +261,8 @@ fn a_container_carries_what_any_container_of_its_type_was_given() {
     // A container in generic code may be any container: a write there reaches every cell.
     let src = format!(
         "fn put[T](v: Vec[T], x: T) -> Int {{ vec_push(v, x); 0 }}\n\
-         fn fill() -> Int {{ let w = vec_new[Int](); put(w, str_len(read_file(\"f\"))) }}\n\
-         fn from_vec() -> Str {{ let v = vec_new[Str](); vec_push(v, \"lit\"); vec_get(v, 0) }}\n{MAIN}"
+         fn fill(io: IoCap) -> Int {{ let w = vec_new[Int](); put(w, str_len(read_file(\"f\"))) }}\n\
+         fn from_vec(io: IoCap) -> Str {{ let v = vec_new[Str](); vec_push(v, \"lit\"); vec_get(v, 0) }}\n{MAIN}"
     );
     assert_eq!(origins(&src, "from_vec"), ["file"]);
 }
@@ -375,7 +375,7 @@ fn a_function_that_writes_to_a_path_it_is_given_carries_the_rule_to_its_callers(
         ("fn save(io: IoCap, p: Str) -> Int ! { io } { write_file(p, \"x\") }", "save(io, read_file(\"cfg\"))"),
         ("fn save(io: IoCap, p: Str) -> Int { write_file(p, \"x\") }", "save(io, read_file(\"cfg\"))"),
         (
-            "fn inner(p: Str) -> Int { write_file(str_concat(p, \"/x\"), \"x\") }\nfn save(io: IoCap, p: Str) -> Int ! { io } { inner(p) }",
+            "fn inner(p: Str, io: IoCap) -> Int { write_file(str_concat(p, \"/x\"), \"x\") }\nfn save(io: IoCap, p: Str) -> Int ! { io } { inner(p, io) }",
             "save(io, read_file(\"cfg\"))",
         ),
     ] {
@@ -397,16 +397,16 @@ fn a_function_that_writes_to_a_path_it_is_given_carries_the_rule_to_its_callers(
 #[test]
 fn ambient_code_is_the_bridge_and_is_not_checked_but_cannot_launder() {
     // A program that declares nothing is accepted as before.
-    accepted("fn main() -> Int { write_file(read_file(\"cfg\"), \"x\"); 0 }\n");
+    accepted("fn main(io: IoCap) -> Int { write_file(read_file(\"cfg\"), \"x\"); 0 }\n");
     // A declared function that lets an undeclared one choose from a file is refused where
     // it hands the file's contents over, not excused because the helper declares nothing.
-    let src = "fn helper(p: Str) -> Int { write_file(p, \"x\") }\n\
-        fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { helper(read_file(\"cfg\")); 0 }\n";
+    let src = "fn helper(p: Str, io: IoCap) -> Int { write_file(p, \"x\") }\n\
+        fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { helper(read_file(\"cfg\"), io); 0 }\n";
     let s = at(src, "helper(read").0;
     restricted_at(src, (s, s + 6));
     // And through a declared function in between, which hands its own parameter on to it.
-    let src = "fn helper(p: Str) -> Int { write_file(p, \"x\") }\n\
-        fn mid(io: IoCap, t: SpawnCap, p: Str) -> Int ! { io, spawn } { helper(p) }\n\
+    let src = "fn helper(p: Str, io: IoCap) -> Int { write_file(p, \"x\") }\n\
+        fn mid(io: IoCap, t: SpawnCap, p: Str) -> Int ! { io, spawn } { helper(p, io) }\n\
         fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { mid(io, t, read_file(\"cfg\")) }\n";
     let s = at(src, "mid(io, t, read").0;
     restricted_at(src, (s, s + 3));
@@ -441,13 +441,14 @@ fn a_large_program_settles_quickly_and_the_same_every_time() {
     for i in 0..ring {
         let next = (i + 1) % ring;
         let body = if i == 250 {
-            format!("if true {{ read_file(\"r\") }} else {{ r{next}(p) }}")
+            format!("if true {{ read_file(\"r\") }} else {{ r{next}(p, io) }}")
         } else {
-            format!("r{next}(p)")
+            format!("r{next}(p, io)")
         };
-        src.push_str(&format!("fn r{i}(p: Str) -> Str {{ {body} }}\n"));
+        // Each holds the authority the ring's one read needs (N104).
+        src.push_str(&format!("fn r{i}(p: Str, io: IoCap) -> Str {{ {body} }}\n"));
     }
-    src.push_str("fn main(io: IoCap) -> Int ! { io } { write_file(c0(arg(0)), \"a\"); write_file(r0(\"x\"), \"b\"); 0 }\n");
+    src.push_str("fn main(io: IoCap) -> Int ! { io } { write_file(c0(arg(0)), \"a\"); write_file(r0(\"x\", io), \"b\"); 0 }\n");
     let start = std::time::Instant::now();
     let d = check_source(&src);
     assert!(start.elapsed().as_secs() < 60, "{:?}", start.elapsed());

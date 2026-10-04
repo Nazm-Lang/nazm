@@ -1142,7 +1142,7 @@ fn sorted_diagnostics(lines: &str) -> Vec<(String, u32, u32)> {
 /// against its signature.
 const COMPARABLE: &[&str] = &[
     "N0200", "N0201", "N0203", "N0204", "N0206", "N0207", "N0208", "N0300", "N0301", "N0303",
-    "N0302", "N0304", "N0310", "N0313", "N0320", "N0321",
+    "N0302", "N0304", "N0310", "N0313", "N0320", "N0321", "N0369",
 ];
 
 #[test]
@@ -1802,8 +1802,8 @@ fn the_nazm_written_compiler_propagates_with_the_same_memory_semantics() {
         // A scope whose task is still running when `?` leaves it.
         ("fn worker(out: Chan, tag: Str) -> Int { let mut i = 0; let mut s = 0; while i < 200000 { s = s + i % 3; i = i + 1; } chan_send(out, str_len(tag)); s }\n\
           fn fails() -> Result[Int, Str] { Result[Int, Str].Err(error: int_to_str(9)) }\n\
-          fn run(out: Chan) -> Result[Int, Str] { let tag = str_concat(\"task-\", int_to_str(1)); scope { spawn worker(out, tag); let held = int_to_str(555); let x = fails()?; chan_send(out, x + str_len(held)); } Result[Int, Str].Ok(value: 0) }\n\
-          fn main() -> Int { let out = chan_new(4); let r = run(out); chan_close(out); let buf = ints_new(); let got = chan_recv(out, buf); \
+          fn run(out: Chan, tasks: SpawnCap) -> Result[Int, Str] { let tag = str_concat(\"task-\", int_to_str(1)); scope { spawn worker(out, tag); let held = int_to_str(555); let x = fails()?; chan_send(out, x + str_len(held)); } Result[Int, Str].Ok(value: 0) }\n\
+          fn main(tasks: SpawnCap) -> Int { let out = chan_new(4); let r = run(out, tasks); chan_close(out); let buf = ints_new(); let got = chan_recv(out, buf); \
           match r { Result.Ok(value: n) => 0, Result.Err(error: e) => str_len(e) * 1000, } + ints_len(buf) * 100 + ints_get(buf, 0) }\n".to_owned(),
          "1106"),
         // A generic function's instances, and one `match` on a propagated value.
@@ -1939,9 +1939,9 @@ fn the_nazm_written_compiler_compiles_value_blocks_with_the_same_memory_semantic
         ("fn worker(out: Chan, tag: Str) -> Int { let mut i = 0; let mut s = 0; while i < 200000 { s = s + i % 3; i = i + 1; } chan_send(out, str_len(tag)); s }\n\
           fn g(ok: Bool) -> Result[Int, Str] { if ok { return Result[Int, Str].Ok(value: 41); } Result[Int, Str].Err(error: int_to_str(404)) }\n\
           enum State { A, B, }\n\
-          fn f(s: State, ok: Bool, out: Chan) -> Result[Int, Str] { let x = match s { State.A() => { let held = str_concat(\"held-\", int_to_str(1)); let mut n = 0; \
+          fn f(s: State, ok: Bool, out: Chan, tasks: SpawnCap) -> Result[Int, Str] { let x = match s { State.A() => { let held = str_concat(\"held-\", int_to_str(1)); let mut n = 0; \
           scope { spawn worker(out, held); let inner = int_to_str(99); n = g(ok)? + str_len(inner); } n + str_len(held) }, State.B() => { 0 }, }; Result[Int, Str].Ok(value: x) }\n\
-          fn main() -> Int { let out = chan_new(8); let a = f(State.A(), true, out); let b = f(State.A(), false, out); let c = f(State.B(), false, out); chan_close(out); \
+          fn main(tasks: SpawnCap) -> Int { let out = chan_new(8); let a = f(State.A(), true, out, tasks); let b = f(State.A(), false, out, tasks); let c = f(State.B(), false, out, tasks); chan_close(out); \
           let buf = ints_new(); let got = chan_recv(out, buf); let more = chan_recv(out, buf); let rest = chan_recv(out, buf); \
           let va = match a { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, }; let vb = match b { Result.Ok(value: v) => v, Result.Err(error: e) => str_len(e), }; \
           let vc = match c { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, }; va * 10000 + vb * 1000 + vc * 100 + ints_len(buf) * 10 + ints_get(buf, 0) }\n".to_owned(),
@@ -2245,6 +2245,14 @@ fn the_nazm_checker_agrees_with_the_reference_on_the_n102_features() {
         "fn main() -> Int { let f = fn(x: Int) -> Int { x }; f(1, 2) }",
         "fn main(io: IoCap) -> Int ! { io } { let f = fn(x: Int) -> Int { print(\"a\"); x }; f(1) }",
         "fn main() -> Int { let f = fn(x: Int) -> Int { true }; f(1) }",
+        // Authority is held, never inherited (N104): a built-in or a `spawn` with no capability
+        // of its kind in scope, in a declared or an undeclared function, and what holds it.
+        "fn main() -> Int { print(\"x\"); 0 }",
+        "fn shout() -> Int { print(\"!\"); 0 }\nfn main(io: IoCap) -> Int { shout() }",
+        "fn shout(o: OutCap) -> Int { print(\"!\"); write_file(\"f\", \"x\"); print(\"?\"); 0 }\nfn main(io: IoCap) -> Int { shout(io) }",
+        "fn shout(o: OutCap) -> Int { print(\"!\"); 0 }\nfn main(io: IoCap) -> Int { shout(io) }",
+        "fn w(n: Int) -> Int { n }\nfn main() -> Int { scope { spawn w(1); } 0 }",
+        "fn main(io: IoCap) -> Int { let f = fn(x: Int) -> Int ! { io } { print(\"a\"); x }; f(1) }",
         // `&&`, `||` and `!`.
         "fn main() -> Int { if 1 < 2 && 2 < 3 || false && !true { 7 } else { 8 } }",
         "fn main() -> Int { if 1 && true { 1 } else { 0 } }",
@@ -2490,7 +2498,7 @@ fn build_layout_harness(dir: &Path) -> PathBuf {
         dir.join("layout.nz"),
         "use \"analyse.nz\";\nuse \"module.nz\";\n\
          // arg(0) the prelude, arg(1) the root, arg(2) its dependency, arg(3) `last`, `between` or `none`.\n\
-         fn main() -> Int {\n    let core = arg(0);\n    let root = read_file(arg(1));\n    let dep = read_file(arg(2));\n    \
+         fn main(io: IoCap) -> Int {\n    let core = arg(0);\n    let root = read_file(arg(1));\n    let dep = read_file(arg(2));\n    \
          let nl = str_from_byte(10);\n    let mpath = strs_new();\n    let mstart = ints_new();\n    let mfirst = ints_new();\n    \
          let mcount = ints_new();\n    let mto = ints_new();\n    let mat = ints_new();\n    let mut src = \"\";\n    \
          if arg(3) != \"between\" {\n        \
@@ -2500,7 +2508,7 @@ fn build_layout_harness(dir: &Path) -> PathBuf {
          ints_push(mfirst, 0);\n        ints_push(mcount, 1);\n        ints_push(mto, 1);\n        ints_push(mat, 0);\n        \
          ints_push(mfirst, 1);\n        ints_push(mcount, 0);\n        \
          src = str_concat(str_concat(root, nl), dep);\n        \
-         if arg(3) == \"last\" {\n            src = attach_core(core, src, mpath, mstart, mfirst, mcount, mto, mat);\n        }\n    \
+         if arg(3) == \"last\" {\n            src = attach_core(core, src, mpath, mstart, mfirst, mcount, mto, mat, io);\n        }\n    \
          } else {\n        \
          // The prelude between the two, keyed as the prelude, so it is neither last nor\n        \
          // any particular index the checker could assume.\n        \
@@ -2514,7 +2522,7 @@ fn build_layout_harness(dir: &Path) -> PathBuf {
          ints_push(mfirst, 2);\n        ints_push(mcount, 1);\n        ints_push(mto, 1);\n        ints_push(mat, 0 - 1);\n        \
          src = str_concat(str_concat(str_concat(str_concat(root, nl), text), nl), dep);\n    }\n    \
          let out = strs_new();\n    \
-         match check_program(src, mpath, mstart, mfirst, mcount, mto, mat) {\n        \
+         match check_program(src, mpath, mstart, mfirst, mcount, mto, mat, io) {\n        \
          Result.Ok(value: checked) => {\n            strs_push(out, \"ok\");\n        },\n        \
          Result.Err(error: found) => {\n            let mut d = 0;\n            while d < vec_len(found) {\n                \
          strs_push(out, vec_get(found, d).code);\n                d = d + 1;\n            }\n        },\n    };\n    \
@@ -3207,7 +3215,7 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
         // A channel shared with tasks, reclaimed after the scope has joined.
         (
             "fn feed(c: Chan, n: Int) -> Int { chan_send(c, n); 0 }\n\
-             fn main() -> Int {\n    let c = chan_new(4);\n    \
+             fn main(tasks: SpawnCap) -> Int {\n    let c = chan_new(4);\n    \
              scope {\n        spawn feed(c, 1);\n        spawn feed(c, 2);\n    }\n    \
              chan_close(c);\n    let buf = ints_new();\n    \
              while chan_recv(c, buf) {\n    }\n    ints_len(buf)\n}\n",
@@ -3293,7 +3301,7 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
              let n = str_len(m.text) + match e { E.Empty() => 0, \
              E.Text(value: s) => str_len(s), };\n    \
              if chan_send(out, n) { 1 } else { 0 }\n}\n\
-             fn main() -> Int {\n    let s = str_concat(\"he\", \"llo\");\n    \
+             fn main(tasks: SpawnCap) -> Int {\n    let s = str_concat(\"he\", \"llo\");\n    \
              let out = chan_new(4);\n    let got = ints_new();\n    \
              scope {\n        spawn worker(M(text: s), E.Text(value: s), out);\n        \
              spawn worker(M(text: s), E.Text(value: s), out);\n    }\n    \
@@ -4102,7 +4110,7 @@ fn the_nazm_written_compiler_compiles_concurrency() {
         (
             "two tasks and a channel",
             "fn w(c: Chan) -> Int { chan_send(c, 5); 0 }\n\
-             fn main() -> Int {\n\
+             fn main(tasks: SpawnCap) -> Int {\n\
              let c = chan_new(2);\n\
              let buf = ints_new();\n\
              let mut t = 0;\n\
@@ -4171,7 +4179,7 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
     let dir = tempfile::tempdir().expect("tempdir");
     let emitter = build_emitter(dir.path());
 
-    const WORKER: &str = "fn worker(started: Chan, go: Chan) -> Int {\n\
+    const WORKER: &str = "fn worker(started: Chan, go: Chan, out: OutCap) -> Int {\n\
          let buf = ints_new();\n\
          chan_send(started, 1);\n\
          chan_recv(go, buf);\n\
@@ -4184,13 +4192,13 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
         (
             "the body fails",
             format!(
-                "{WORKER}fn main() -> Int {{\n\
+                "{WORKER}fn main(io: IoCap, tasks: SpawnCap) -> Int {{\n\
                  let started = chan_new(1);\n\
                  let go = chan_new(1);\n\
                  let buf = ints_new();\n\
                  let mut top = 1;\n\
                  scope {{\n\
-                 spawn worker(started, go);\n\
+                 spawn worker(started, go, io);\n\
                  chan_recv(started, buf);\n\
                  ints_pop(buf);\n\
                  chan_send(go, 1);\n\
@@ -4210,13 +4218,13 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
                  chan_recv(dead, buf);\n\
                  1 / ints_pop(buf)\n\
                  }}\n\
-                 fn main() -> Int {{\n\
+                 fn main(io: IoCap, tasks: SpawnCap) -> Int {{\n\
                  let started = chan_new(1);\n\
                  let go = chan_new(1);\n\
                  let dead = chan_new(1);\n\
                  let buf = ints_new();\n\
                  scope {{\n\
-                 spawn worker(started, go);\n\
+                 spawn worker(started, go, io);\n\
                  spawn bad(dead);\n\
                  chan_recv(started, buf);\n\
                  ints_pop(buf);\n\

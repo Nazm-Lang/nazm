@@ -377,15 +377,15 @@ fn a_body_change_within_its_declared_contract_leaves_the_importer_alone() {
 #[test]
 fn an_import_that_declares_nothing_is_every_effect_to_a_pure_caller() {
     // A caller may not read another module's body, so an undeclared export promises
-    // nothing — however pure its body is. Declaring it is the migration. Since N37 it is
-    // also every **authority** to a caller with a contract, which holds none: the two
-    // `N0369`s first, then the effect.
+    // nothing — however pure its body is. Declaring it is the migration. From N37 to N104 it
+    // was also every **authority** to a caller with a contract; since N104 a call needs no
+    // authority of its caller, so only the effect is refused.
     let dir = tempfile::tempdir().expect("tempdir");
     pure_importer(dir.path(), "pub fn twice(n: Int) -> Int { n * 2 }\n");
     let refused = cold(dir.path(), "a.nz");
     assert!(!refused.accepted);
     let codes: Vec<&str> = refused.diagnostics.iter().map(|d| &d[..5]).collect();
-    assert_eq!(codes, ["N0369", "N0369", "N0366"], "{refused:?}");
+    assert_eq!(codes, ["N0366"], "{refused:?}");
     write(
         dir.path(),
         "b.nz",
@@ -401,12 +401,12 @@ fn the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\nfn main(io: IoCap) -> Int { loud(io) + quiet() + plain() }\n",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int { loud(io) + quiet() + plain(io) }\n",
     );
     write(
         dir.path(),
         "b.nz",
-        "pub fn loud(io: IoCap) -> Int ! { io } { print(\"x\") }\npub fn quiet() -> Int ! {} { 1 }\npub fn plain() -> Int { print(\"y\") }\n",
+        "pub fn loud(io: IoCap) -> Int ! { io } { print(\"x\") }\npub fn quiet() -> Int ! {} { 1 }\npub fn plain(out: OutCap) -> Int { print(\"y\") }\n",
     );
     assert!(check(dir.path(), "a.nz").accepted);
     let b = check_entries(dir.path())
@@ -428,7 +428,7 @@ fn the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one
         "{text}"
     );
     assert!(
-        text.contains(r#""name":"plain","kind":"fn","generics":0,"params":[],"ret":"Int"}"#),
+        text.contains(r#""name":"plain","kind":"fn","generics":0,"params":["OutCap"],"ret":"Int"}"#),
         "{text}"
     );
 }
@@ -485,12 +485,33 @@ fn a_capability_only_change_rechecks_the_importer_and_finds_what_it_breaks() {
 }
 
 #[test]
-fn an_undeclared_import_needs_every_authority_from_a_caller_with_a_contract() {
-    // The compatibility bridge is not a backdoor: an export that declares nothing may
-    // exercise any effect with its caller's authority, so a caller that states a contract
-    // must hold all of it — whatever the import's body does.
+fn an_undeclared_import_needs_no_authority_of_its_caller() {
+    // N104: an export that declares nothing holds what it exercises, as every function does,
+    // so its caller needs nothing at the call. What remains of N37's bridge is the effect a
+    // caller with a contract must allow: every effect, since the import publishes none.
     let dir = tempfile::tempdir().expect("tempdir");
     project(dir.path());
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn old(n: Int, out: OutCap) -> Int { print(int_to_str(n)) }\n",
+    );
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io, spawn } { old(1, io) }\n",
+    );
+    assert!(cold(dir.path(), "a.nz").accepted);
+    // A contract narrower than every effect is refused for the effect, not for authority.
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { old(1, io) }\n",
+    );
+    let refused = cold(dir.path(), "a.nz");
+    assert_eq!(refused.diagnostics.len(), 1, "{refused:?}");
+    assert!(refused.diagnostics[0].starts_with("N0366"), "{refused:?}");
+    // And the import itself, given nothing, is refused where it prints.
     write(
         dir.path(),
         "b.nz",
@@ -499,24 +520,13 @@ fn an_undeclared_import_needs_every_authority_from_a_caller_with_a_contract() {
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io, spawn } { old(1) }\n",
-    );
-    let refused = cold(dir.path(), "a.nz");
-    assert_eq!(refused.diagnostics.len(), 1, "{refused:?}");
-    assert!(refused.diagnostics[0].starts_with("N0369"), "{refused:?}");
-    write(
-        dir.path(),
-        "a.nz",
-        "use \"b.nz\";\nfn main(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } { old(1) }\n",
-    );
-    assert!(cold(dir.path(), "a.nz").accepted);
-    // And a caller that states no contract is the bridge: `main` is the root.
-    write(
-        dir.path(),
-        "a.nz",
         "use \"b.nz\";\nfn main() -> Int { old(1) }\n",
     );
-    assert!(cold(dir.path(), "a.nz").accepted);
+    let refused = cold(dir.path(), "a.nz");
+    assert!(
+        refused.diagnostics.iter().any(|d| d.starts_with("N0369")),
+        "{refused:?}"
+    );
 }
 
 // --- N38: provenance crosses as facts, and is solved every run ------------------------------
@@ -657,12 +667,12 @@ fn an_entry_keeps_the_modules_provenance_facts() {
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\nfn main() -> Int { str_len(load()) }\n",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int { str_len(load(io)) }\n",
     );
     write(
         dir.path(),
         "b.nz",
-        "pub fn load() -> Str { read_file(\"f\") }\n",
+        "pub fn load(io: IoCap) -> Str { read_file(\"f\") }\n",
     );
     assert!(check(dir.path(), "a.nz").accepted);
     let b = check_entries(dir.path())
@@ -1344,10 +1354,10 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        28,
+        29,
         "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42, N49, N50, N51, N52, N53, N54, N55, \
-         N62, N66, N76, N78, N79, N80, N85, N86, N87 and N103 each changed what the checker \
-         accepts, so the epoch moved twenty-seven times"
+         N62, N66, N76, N78, N79, N80, N85, N86, N87, N103 and N104 each changed what the \
+         checker accepts, so the epoch moved twenty-eight times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/11");
 }
@@ -1732,6 +1742,7 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     // for escapes and the syntax beside them, N50 for function values, N51 for effect
     // parameters, and N52 for declassification, N53–N55 for channels, the clock and FFI v2,
     // N62 for device registers, N66 for `ints_sum`, N76 for Unicode escapes, N78 for traits, N79 for attenuation, N80 for provenance v3, N85 for FFI v3, N86 for the
-    // device registers by width, N87 for contracts and N103 for re-exports.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 28);
+    // device registers by width, N87 for contracts, N103 for re-exports and N104 for authority
+    // without inheritance.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 29);
 }

@@ -22,7 +22,7 @@ fn consume(jobs: Chan, out: Chan) -> Int {
     0
 }
 
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let jobs = chan_new(1);
     let out = chan_new(1);
     scope {

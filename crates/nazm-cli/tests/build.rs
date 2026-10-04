@@ -3668,7 +3668,7 @@ fn arguments_exclude_the_program_name_in_both_implementations() {
     // The reason they are excluded: a compiled `argv[0]` is a path and an interpreted
     // program has no equivalent, so including it would make one program mean two
     // things. Excluded, the two agree exactly — which is what this asserts.
-    let src = "fn main() -> Int {\n\
+    let src = "fn main(io: IoCap) -> Int {\n\
                \x20   let mut i = 0;\n\
                \x20   let mut total = 0;\n\
                \x20   while i < args_count() {\n\
@@ -3687,7 +3687,7 @@ fn arguments_exclude_the_program_name_in_both_implementations() {
 
 #[test]
 fn an_argument_past_the_end_fails_at_its_own_position() {
-    let src = "fn main() -> Int { str_len(arg(0)) }\n";
+    let src = "fn main(io: IoCap) -> Int { str_len(arg(0)) }\n";
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).expect("write");
@@ -3729,7 +3729,7 @@ fn an_argument_past_the_end_fails_at_its_own_position() {
 fn a_file_round_trips_through_both_implementations() {
     // Written by one run and read back by the same run, with the path supplied as an
     // argument so the program has no compiled-in knowledge of where it is.
-    let src = "fn main() -> Int {\n\
+    let src = "fn main(io: IoCap) -> Int {\n\
                \x20   let path = arg(0);\n\
                \x20   let payload = str_concat(\"bytes: \", int_to_str(1234));\n\
                \x20   write_file(path, payload);\n\
@@ -3760,7 +3760,7 @@ fn a_missing_file_is_reported_and_a_present_one_is_found() {
     let dir = tempfile::tempdir().expect("tempdir");
     let there = dir.path().join("present.txt");
     std::fs::write(&there, "x").expect("write");
-    let src = "fn main() -> Int {\n\
+    let src = "fn main(io: IoCap) -> Int {\n\
                \x20   if file_exists(arg(0)) { 1 } else { 0 }\n\
                }\n";
     expect_same_run(src, &[there.to_str().unwrap()], "1\n", "", 0);
@@ -3773,7 +3773,7 @@ fn a_missing_file_is_reported_and_a_present_one_is_found() {
     );
 
     // Reading one that is not there stops the program, in both.
-    let failing = "fn main() -> Int { str_len(read_file(arg(0))) }\n";
+    let failing = "fn main(io: IoCap) -> Int { str_len(read_file(arg(0))) }\n";
     expect_same_run(
         failing,
         &[dir.path().join("absent.txt").to_str().unwrap()],
@@ -3787,7 +3787,7 @@ fn a_missing_file_is_reported_and_a_present_one_is_found() {
 fn exit_with_ends_the_program_and_nothing_after_it_runs() {
     // Also the only built-in that transfers control: everything after it is unreachable,
     // and `main`'s value is never printed because `main` never returns.
-    let src = "fn main() -> Int {\n\
+    let src = "fn main(io: IoCap) -> Int {\n\
                \x20   eprint(\"before\");\n\
                \x20   exit_with(7);\n\
                \x20   print(\"after\");\n\
@@ -3802,7 +3802,7 @@ fn exit_with_ends_the_program_and_nothing_after_it_runs() {
 fn print_and_eprint_go_to_different_descriptors_and_add_nothing() {
     // No trailing newline is added by either — `str_from_byte(10)` is how a program
     // asks for one, and a compiler emitting IR depends on that being exact.
-    let src = "fn main() -> Int {\n\
+    let src = "fn main(out_cap: OutCap) -> Int {\n\
                \x20   print(\"out\");\n\
                \x20   eprint(\"err\");\n\
                \x20   print(str_from_byte(10));\n\

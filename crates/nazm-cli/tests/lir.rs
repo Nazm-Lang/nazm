@@ -29,7 +29,7 @@ enum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\n\
 enum T { One(x: Int), Two }\n\
 fn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 }) + q.n + k, S.Empty() => 0, } }\n\
 fn tee(t: T) -> Int { match t { T.One(x: x) => x, T.Two() => 7, } }\n\
-fn main() -> Int {\n\
+fn main(out: OutCap) -> Int {\n\
     let h = H(a: ints_new(), b: strs_new());\n\
     ints_push(h.a, 5);\n\
     strs_push(h.b, \"hello\");\n\

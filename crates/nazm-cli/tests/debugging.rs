@@ -211,7 +211,7 @@ fn inspect_is_one_deterministic_document_of_the_program_s_facts() {
     let b = nazm(d.path(), &["inspect", "prog.nz"]);
     assert_eq!(out(&a), out(&b), "the same bytes every time");
     let v: serde_json::Value = serde_json::from_str(out(&a).trim()).unwrap();
-    assert_eq!(v["schema"], "nazm.inspect/1");
+    assert_eq!(v["schema"], "nazm.inspect/2");
     assert_eq!(v["mir"]["validated"], true);
     for key in [
         "compiler",

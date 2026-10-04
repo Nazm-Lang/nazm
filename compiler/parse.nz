@@ -21,13 +21,13 @@
 //
 // A construct this increment does not parse is named, at its own position, rather than
 // left to fail as "expected an expression" — which would be true but useless.
-fn refuse_unimplemented(kinds: Ints, starts: Ints, i: Int) -> Int {
+fn refuse_unimplemented(kinds: Ints, starts: Ints, i: Int, io: IoCap) -> Int {
     let t = kind_at(kinds, i);
     let mut what = "";
     if t == k_enum() { what = "an enum declared inside a function"; }
     if t == k_struct() { what = "a record declared inside a function"; }
     if what == "" { return 0; }
-    die(str_concat(what, ": not implemented yet in this parser"), start_at(starts, i));
+    die(str_concat(what, ": not implemented yet in this parser"), start_at(starts, i), io);
     0
 }
 
@@ -280,7 +280,7 @@ fn text_at(texts: Strs, i: Int) -> Str {
     strs_get(texts, i)
 }
 
-fn die(message: Str, offset: Int) -> Int {
+fn die(message: Str, offset: Int, io: IoCap) -> Int {
     eprint("parse error at ");
     eprint(int_to_str(offset));
     eprint(": ");
@@ -300,7 +300,7 @@ fn die(message: Str, offset: Int) -> Int {
 fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
         nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
         ops: Ints, opat: Ints, cname: Strs, cargs: Ints, cfields: Strs, vs: Ints, ve: Ints,
-        status: Ints, resuming: Bool, base: Int, naux: Ints) -> Int {
+        status: Ints, resuming: Bool, base: Int, naux: Ints, io: IoCap) -> Int {
     // `base` is how deep the operator stack was when *this* expression started. The
     // stacks are shared — an `if` suspends one expression while the expressions inside
     // its blocks are parsed — so every reduction stops here rather than at the bottom.
@@ -342,7 +342,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 // one node, spanning both.
                 let text = text_at(texts, i + 1);
                 if text != "9223372036854775808" {
-                    die("this integer does not fit in `Int`", start_at(starts, i));
+                    die("this integer does not fit in `Int`", start_at(starts, i), io);
                 }
                 emit(nk, nar, nst, nen, ntx, n_int(), 0, start_at(starts, i),
                         end_at(ends, i + 1), str_concat("-", text));
@@ -353,7 +353,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             }
             if t == k_int() {
                 if int_too_large(text_at(texts, i)) {
-                    die("this integer does not fit in `Int`", start_at(starts, i));
+                    die("this integer does not fit in `Int`", start_at(starts, i), io);
                 }
                 emit(nk, nar, nst, nen, ntx, n_int(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
                 ints_push(vs, start_at(starts, i));
@@ -412,23 +412,23 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 let cat = start_at(starts, i);
                 i = i + 1;
                 if kind_at(kinds, i) != k_lparen() {
-                    die("expected `(` after `fn` in a closure", start_at(starts, i));
+                    die("expected `(` after `fn` in a closure", start_at(starts, i), io);
                 }
                 i = i + 1;
                 let mut params = 0;
                 while kind_at(kinds, i) != k_rparen() {
                     if kind_at(kinds, i) != k_ident() {
-                        die("expected a parameter name", start_at(starts, i));
+                        die("expected a parameter name", start_at(starts, i), io);
                     }
                     let pname = text_at(texts, i);
                     let pstart = start_at(starts, i);
                     i = i + 1;
                     if kind_at(kinds, i) != k_colon() {
-                        die("expected `:` after a parameter name", start_at(starts, i));
+                        die("expected `:` after a parameter name", start_at(starts, i), io);
                     }
                     i = i + 1;
                     let pty = strs_new();
-                    i = read_type(kinds, starts, ends, texts, i, "expected a type", pty);
+                    i = read_type(kinds, starts, ends, texts, i, "expected a type", pty, io);
                     emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, end_at(ends, i - 1),
                             str_concat(str_concat(pname, ":"), strs_get(pty, 0)));
                     params = params + 1;
@@ -436,12 +436,12 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 }
                 i = i + 1;
                 if kind_at(kinds, i) != k_arrow() {
-                    die("expected `->` and a result type", start_at(starts, i));
+                    die("expected `->` and a result type", start_at(starts, i), io);
                 }
                 i = i + 1;
                 let rty = strs_new();
                 let ret_at = start_at(starts, i);
-                i = read_type(kinds, starts, ends, texts, i, "expected a result type", rty);
+                i = read_type(kinds, starts, ends, texts, i, "expected a result type", rty, io);
                 let mut ret = strs_get(rty, 0);
                 if kind_at(kinds, i - 1) == k_ident() {
                     ret = str_concat(str_concat(ret, "@"), int_to_str(ret_at));
@@ -449,7 +449,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 if kind_at(kinds, i) == k_bang() {
                     i = i + 1;
                     if kind_at(kinds, i) != k_lbrace() {
-                        die("expected `{` after `!`, to open the effect set", start_at(starts, i));
+                        die("expected `{` after `!`, to open the effect set", start_at(starts, i), io);
                     }
                     i = i + 1;
                     let mut effects = "!";
@@ -458,7 +458,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                         let mut word = "";
                         if kind_at(kinds, i) == k_ident() { word = text_at(texts, i); }
                         if kind_at(kinds, i) == k_spawn() { word = "spawn"; }
-                        if word == "" { die("expected an effect name", start_at(starts, i)); }
+                        if word == "" { die("expected an effect name", start_at(starts, i), io); }
                         if efirst == false { effects = str_concat(effects, ","); }
                         effects = str_concat(str_concat(str_concat(effects, word), "@"),
                                 int_to_str(start_at(starts, i)));
@@ -473,7 +473,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     ret = str_concat(ret, "!");
                 }
                 if kind_at(kinds, i) != k_lbrace() {
-                    die("expected `{` to start the closure's body", start_at(starts, i));
+                    die("expected `{` to start the closure's body", start_at(starts, i), io);
                 }
                 strs_push(cname, str_concat("closure:", ret));
                 ints_push(cargs, params);
@@ -499,7 +499,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 let mut targs = "";
                 if kind_at(kinds, i + 1) == k_lbracket() {
                     let got = strs_new();
-                    let past = type_tail(kinds, starts, ends, texts, i + 2, "[", 1, got);
+                    let past = type_tail(kinds, starts, ends, texts, i + 2, "[", 1, got, io);
                     // The list's own closing offset is dropped: a diagnostic about these
                     // arguments points at the name they follow, as the reference's does.
                     targs = before_last_at(strs_get(got, 0));
@@ -511,7 +511,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                         }
                     }
                     if applies == false {
-                        die("expected `(` after the type arguments", start_at(starts, past));
+                        die("expected `(` after the type arguments", start_at(starts, past), io);
                     }
                     i = past - 1;
                 }
@@ -531,7 +531,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 }
                 if unlabelled {
                     if targs != "" {
-                        die("type arguments cannot be written before a method call", head_at);
+                        die("type arguments cannot be written before a method call", head_at, io);
                     }
                     emit(nk, nar, nst, nen, ntx, n_var(), 0, head_at, end_at(ends, i), head);
                     ints_push(vs, head_at);
@@ -562,10 +562,10 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                         done_primary = true;
                     } else {
                         if kind_at(kinds, i) != k_ident() {
-                            die("expected a payload field name", start_at(starts, i));
+                            die("expected a payload field name", start_at(starts, i), io);
                         }
                         if kind_at(kinds, i + 1) != k_colon() {
-                            die("expected `:` after a payload field name", start_at(starts, i + 1));
+                            die("expected `:` after a payload field name", start_at(starts, i + 1), io);
                         }
                         ints_push(ops, sent_variant());
                         ints_push(opat, at);
@@ -621,7 +621,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             }
 
             if done_primary == false {
-                die("expected an expression", start_at(starts, i));
+                die("expected an expression", start_at(starts, i), io);
             }
         }
 
@@ -646,7 +646,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 }
                 if kind_at(kinds, i) != k_dot() { break; }
                 if kind_at(kinds, i + 1) != k_ident() {
-                    die("expected a field name after `.`", start_at(starts, i + 1));
+                    die("expected a field name after `.`", start_at(starts, i + 1), io);
                 }
                 // `receiver.m(…)` (N102): a method call on any receiver.
                 if kind_at(kinds, i + 2) == k_lparen() {
@@ -751,7 +751,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     if innermost_is_call(ops, base) == false {
                         while ints_len(ops) > base {
                             if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 {
-                                die("this bracket is never closed", ints_get(opat, ints_len(opat) - 1));
+                                die("this bracket is never closed", ints_get(opat, ints_len(opat) - 1), io);
                             }
                             reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
                         }
@@ -773,10 +773,10 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                         continue;
                     }
                     if kind_at(kinds, i + 1) != k_ident() {
-                        die("expected a payload field name", start_at(starts, i + 1));
+                        die("expected a payload field name", start_at(starts, i + 1), io);
                     }
                     if kind_at(kinds, i + 2) != k_colon() {
-                        die("expected `:` after a payload field name", start_at(starts, i + 2));
+                        die("expected `:` after a payload field name", start_at(starts, i + 2), io);
                     }
                     strs_set(cfields, strs_len(cfields) - 1,
                             str_concat(str_concat(strs_get(cfields, strs_len(cfields) - 1), ","),
@@ -793,10 +793,10 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                         continue;
                     }
                     if kind_at(kinds, i + 1) != k_ident() {
-                        die("expected a field name", start_at(starts, i + 1));
+                        die("expected a field name", start_at(starts, i + 1), io);
                     }
                     if kind_at(kinds, i + 2) != k_colon() {
-                        die("expected `:` after a field name", start_at(starts, i + 2));
+                        die("expected `:` after a field name", start_at(starts, i + 2), io);
                     }
                     strs_set(cfields, strs_len(cfields) - 1,
                             str_concat(str_concat(strs_get(cfields, strs_len(cfields) - 1), ","),
@@ -907,7 +907,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             // stack is a real operator awaiting its reduction.
             while ints_len(ops) > base {
                 if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 {
-                    die("this bracket is never closed", ints_get(opat, ints_len(opat) - 1));
+                    die("this bracket is never closed", ints_get(opat, ints_len(opat) - 1), io);
                 }
                 reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
             }
@@ -1010,7 +1010,7 @@ fn making_variant(kinds: Ints, i: Int) -> Bool {
 // else. `from` is where a type is expected, or — straight after a `[` — where a `]` may
 // close an empty list; `open` is how many brackets are already open.
 fn type_tail(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int, head: Str,
-        open: Int, out: Strs) -> Int {
+        open: Int, out: Strs, io: IoCap) -> Int {
     let mut at = from;
     let mut text = head;
     let mut depth = open;
@@ -1023,7 +1023,7 @@ fn type_tail(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int, head
     while true {
         if want_type {
             if kind_at(kinds, at) != k_ident() {
-                die("expected a type", start_at(starts, at));
+                die("expected a type", start_at(starts, at), io);
             }
             text = str_concat(str_concat(str_concat(text, text_at(texts, at)), "@"),
                     int_to_str(start_at(starts, at)));
@@ -1050,7 +1050,7 @@ fn type_tail(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int, head
             at = at + 1;
             continue;
         }
-        die("expected `,` or `]` in the type arguments", start_at(starts, at));
+        die("expected `,` or `]` in the type arguments", start_at(starts, at), io);
     }
     strs_push(out, text);
     at
@@ -1069,59 +1069,59 @@ fn before_last_at(s: Str) -> Str {
 // A written type — a field's, a parameter's, a return's. Its text is pushed onto `out`;
 // the index just past it is returned.
 fn read_type(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, i: Int, what: Str,
-        out: Strs) -> Int {
+        out: Strs, io_cap: IoCap) -> Int {
     // `fn(T, …) -> R ! { e }` (N102): a function type, written as `fn%BITS@at[T,…,R]@end`, its
     // effects as bits in a name no program can write — `io` 1, `spawn` 2, `foreign` 4.
     if kind_at(kinds, i) == k_fn() {
-        return read_fn_type(kinds, starts, ends, texts, i, out);
+        return read_fn_type(kinds, starts, ends, texts, i, out, io_cap);
     }
     if kind_at(kinds, i) != k_ident() {
-        die(what, start_at(starts, i));
+        die(what, start_at(starts, i), io_cap);
     }
     if kind_at(kinds, i + 1) != k_lbracket() {
         strs_push(out, text_at(texts, i));
         return i + 1;
     }
-    type_tail(kinds, starts, ends, texts, i, "", 0, out)
+    type_tail(kinds, starts, ends, texts, i, "", 0, out, io_cap)
 }
 
-fn read_fn_type(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, i0: Int, out: Strs) -> Int {
+fn read_fn_type(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, i0: Int, out: Strs, io_cap: IoCap) -> Int {
     let at = start_at(starts, i0);
     let mut i = i0 + 1;
     if kind_at(kinds, i) != k_lparen() {
-        die("expected `(` after `fn` in a function type", start_at(starts, i));
+        die("expected `(` after `fn` in a function type", start_at(starts, i), io_cap);
     }
     i = i + 1;
     let mut items = "";
     while kind_at(kinds, i) != k_rparen() {
         if kind_at(kinds, i) == k_fn() {
             die("a function type inside a function type is not in this compiler's subset",
-                    start_at(starts, i));
+                    start_at(starts, i), io_cap);
         }
         let one = strs_new();
         let pat = start_at(starts, i);
-        i = read_type(kinds, starts, ends, texts, i, "expected a parameter type", one);
+        i = read_type(kinds, starts, ends, texts, i, "expected a parameter type", one, io_cap);
         items = str_concat(str_concat(items, located(strs_get(one, 0), pat)), ",");
         if kind_at(kinds, i) == k_comma() { i = i + 1; }
     }
     i = i + 1;
     if kind_at(kinds, i) != k_arrow() {
-        die("expected `->` and a result type", start_at(starts, i));
+        die("expected `->` and a result type", start_at(starts, i), io_cap);
     }
     i = i + 1;
     if kind_at(kinds, i) == k_fn() {
         die("a function type inside a function type is not in this compiler's subset",
-                start_at(starts, i));
+                start_at(starts, i), io_cap);
     }
     let one = strs_new();
     let rat = start_at(starts, i);
-    i = read_type(kinds, starts, ends, texts, i, "expected a result type", one);
+    i = read_type(kinds, starts, ends, texts, i, "expected a result type", one, io_cap);
     items = str_concat(items, located(strs_get(one, 0), rat));
     let mut bits = 0;
     if kind_at(kinds, i) == k_bang() {
         i = i + 1;
         if kind_at(kinds, i) != k_lbrace() {
-            die("expected `{` after `!`, to open the effect set", start_at(starts, i));
+            die("expected `{` after `!`, to open the effect set", start_at(starts, i), io_cap);
         }
         i = i + 1;
         while kind_at(kinds, i) != k_rbrace() {
@@ -1134,7 +1134,7 @@ fn read_fn_type(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, i0: Int, out
             if word == "foreign" { bit = 4; }
             if bit == 0 {
                 die("expected `io`, `spawn` or `foreign`: an effect parameter in a function type is not in this compiler's subset",
-                        start_at(starts, i));
+                        start_at(starts, i), io_cap);
             }
             if (bits / bit) % 2 == 0 { bits = bits + bit; }
             i = i + 1;
@@ -1161,7 +1161,7 @@ fn located(t: Str, at: Int) -> Str {
 // `[A, B]` after a declared name, or nothing: `[A@7,B@10]`, pushed onto `out`. At least
 // one name and no trailing comma, as the reference parser has it; whether the names are
 // distinct is the checker's question.
-fn read_type_params(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -> Int {
+fn read_type_params(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs, io: IoCap) -> Int {
     if kind_at(kinds, i) != k_lbracket() {
         strs_push(out, "");
         return i;
@@ -1170,7 +1170,7 @@ fn read_type_params(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -
     let mut text = "[";
     while true {
         if kind_at(kinds, at) != k_ident() {
-            die("expected a type parameter", start_at(starts, at));
+            die("expected a type parameter", start_at(starts, at), io);
         }
         text = str_concat(str_concat(str_concat(text, text_at(texts, at)), "@"),
                 int_to_str(start_at(starts, at)));
@@ -1180,7 +1180,7 @@ fn read_type_params(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -
         // only the checker's requirement reader sees it.
         if kind_at(kinds, at) == k_colon() {
             if kind_at(kinds, at + 1) != k_ident() {
-                die("expected a capability after `:`", start_at(starts, at + 1));
+                die("expected a capability after `:`", start_at(starts, at + 1), io);
             }
             text = str_concat(str_concat(str_concat(text, "="), text_at(texts, at + 1)),
                     str_concat("@", int_to_str(start_at(starts, at + 1))));
@@ -1191,7 +1191,7 @@ fn read_type_params(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -
         at = at + 1;
     }
     if kind_at(kinds, at) != k_rbracket() {
-        die("expected `]` to close the type parameters", start_at(starts, at));
+        die("expected `]` to close the type parameters", start_at(starts, at), io);
     }
     strs_push(out, str_concat(text, "]"));
     at + 1
@@ -1251,9 +1251,9 @@ fn reduce(ops: Ints, opat: Ints, vs: Ints, ve: Ints, nk: Ints, nar: Ints, nst: I
 // `ftext`/`fparams`, innermost last — walked by a single loop. No recursion, which is
 // the same reason the expression parser uses sentinels rather than frames.
 
-fn expect(kinds: Ints, starts: Ints, i: Int, want: Int, what: Str) -> Int {
+fn expect(kinds: Ints, starts: Ints, i: Int, want: Int, what: Str, io: IoCap) -> Int {
     if kind_at(kinds, i) != want {
-        die(what, start_at(starts, i));
+        die(what, start_at(starts, i), io);
     }
     i + 1
 }
@@ -1289,32 +1289,32 @@ fn pend_contract() -> Int { 8 }
 // A field binds a name or is discarded with `_`, which is an ordinary identifier to the
 // lexer and a discard only here. `docs/spec.md` gives `_` its meaning inside a pattern
 // and nowhere else, so nothing before this point has to know about it.
-fn read_pattern(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -> Int {
+fn read_pattern(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs, io: IoCap) -> Int {
     if kind_at(kinds, i) != k_ident() {
-        die("expected an enum name", start_at(starts, i));
+        die("expected an enum name", start_at(starts, i), io);
     }
     let ename = text_at(texts, i);
     let mut at = i + 1;
-    at = expect(kinds, starts, at, k_dot(), "expected `.` between an enum and its variant");
+    at = expect(kinds, starts, at, k_dot(), "expected `.` between an enum and its variant", io);
     if kind_at(kinds, at) != k_ident() {
-        die("expected a variant name", start_at(starts, at));
+        die("expected a variant name", start_at(starts, at), io);
     }
     let vname = text_at(texts, at);
     at = at + 1;
-    at = expect(kinds, starts, at, k_lparen(), "expected `(` to start the payload");
+    at = expect(kinds, starts, at, k_lparen(), "expected `(` to start the payload", io);
     let mut text = str_concat(str_concat(str_concat(ename, "."), vname), "(");
     let mut first = true;
     while kind_at(kinds, at) != k_rparen() {
         if first == false { text = str_concat(text, ","); }
         first = false;
         if kind_at(kinds, at) != k_ident() {
-            die("expected a payload field name", start_at(starts, at));
+            die("expected a payload field name", start_at(starts, at), io);
         }
         let fname = text_at(texts, at);
         at = at + 1;
-        at = expect(kinds, starts, at, k_colon(), "expected `:` after a payload field name");
+        at = expect(kinds, starts, at, k_colon(), "expected `:` after a payload field name", io);
         if kind_at(kinds, at) != k_ident() {
-            die("expected a binding or `_`", start_at(starts, at));
+            die("expected a binding or `_`", start_at(starts, at), io);
         }
         let bname = text_at(texts, at);
         at = at + 1;
@@ -1330,16 +1330,16 @@ fn read_pattern(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -> In
 // of the body's first token.
 fn begin_arm(kinds: Ints, starts: Ints, texts: Strs, i: Int,
         pk: Ints, pstart: Ints, ptext: Strs, pdepth: Ints, pbase: Ints,
-        fk: Ints, ops: Ints, status: Ints) -> Int {
+        fk: Ints, ops: Ints, status: Ints, io: IoCap) -> Int {
     let at = start_at(starts, i);
-    let next = read_pattern(kinds, starts, texts, i, ptext);
+    let next = read_pattern(kinds, starts, texts, i, ptext, io);
     ints_push(pk, pend_arm());
     ints_push(pstart, at);
     ints_push(pdepth, ints_len(fk));
     ints_push(pbase, ints_len(ops));
     // One more arm body open, which is what lets a `,` at the top of one end it.
     ints_set(status, 1, ints_get(status, 1) + 1);
-    expect(kinds, starts, next, k_fatarrow(), "expected `=>` after a pattern")
+    expect(kinds, starts, next, k_fatarrow(), "expected `=>` after a pattern", io)
 }
 
 fn push_frame(fk: Ints, fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints,
@@ -1397,51 +1397,51 @@ fn finish_if(ops: Ints, opat: Ints, vs: Ints, ve: Ints,
 // One trait method's signature, `fn m(p: T, …) -> R ! { … };` (N102): its parameters as
 // `param` nodes and the signature as a `sig` node over them, text as a function's.
 fn read_sig(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, at0: Int,
-        nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
+        nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, io: IoCap) -> Int {
     let mut i = at0;
     let sig_start = start_at(starts, i);
-    i = expect(kinds, starts, i, k_fn(), "expected `fn` in a trait");
-    if kind_at(kinds, i) != k_ident() { die("expected a method name", start_at(starts, i)); }
+    i = expect(kinds, starts, i, k_fn(), "expected `fn` in a trait", io);
+    if kind_at(kinds, i) != k_ident() { die("expected a method name", start_at(starts, i), io); }
     let name = text_at(texts, i);
     let name_at = start_at(starts, i);
     i = i + 1;
     if kind_at(kinds, i) == k_lbracket() {
-        die("a generic method is not supported", start_at(starts, i));
+        die("a generic method is not supported", start_at(starts, i), io);
     }
-    i = expect(kinds, starts, i, k_lparen(), "expected `(` after the method name");
+    i = expect(kinds, starts, i, k_lparen(), "expected `(` after the method name", io);
     let mut params = 0;
     while kind_at(kinds, i) != k_rparen() {
-        if kind_at(kinds, i) != k_ident() { die("expected a parameter name", start_at(starts, i)); }
+        if kind_at(kinds, i) != k_ident() { die("expected a parameter name", start_at(starts, i), io); }
         let pname = text_at(texts, i);
         let pstart = start_at(starts, i);
         i = i + 1;
-        i = expect(kinds, starts, i, k_colon(), "expected `:` after a parameter name");
+        i = expect(kinds, starts, i, k_colon(), "expected `:` after a parameter name", io);
         let pty = strs_new();
-        i = read_type(kinds, starts, ends, texts, i, "expected a type", pty);
+        i = read_type(kinds, starts, ends, texts, i, "expected a type", pty, io);
         emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, end_at(ends, i - 1),
                 str_concat(str_concat(pname, ":"), strs_get(pty, 0)));
         params = params + 1;
         if kind_at(kinds, i) == k_comma() { i = i + 1; }
     }
     i = i + 1;
-    i = expect(kinds, starts, i, k_arrow(), "expected `->` and a return type");
+    i = expect(kinds, starts, i, k_arrow(), "expected `->` and a return type", io);
     let rty = strs_new();
     let ret_at = start_at(starts, i);
-    i = read_type(kinds, starts, ends, texts, i, "expected a return type", rty);
+    i = read_type(kinds, starts, ends, texts, i, "expected a return type", rty, io);
     let mut ret = strs_get(rty, 0);
     if kind_at(kinds, i - 1) == k_ident() {
         ret = str_concat(str_concat(ret, "@"), int_to_str(ret_at));
     }
     if kind_at(kinds, i) == k_bang() {
         i = i + 1;
-        i = expect(kinds, starts, i, k_lbrace(), "expected `{` after `!`, to open the effect set");
+        i = expect(kinds, starts, i, k_lbrace(), "expected `{` after `!`, to open the effect set", io);
         let mut effects = "!";
         let mut first = true;
         while kind_at(kinds, i) != k_rbrace() {
             let mut word = "";
             if kind_at(kinds, i) == k_ident() { word = text_at(texts, i); }
             if kind_at(kinds, i) == k_spawn() { word = "spawn"; }
-            if word == "" { die("expected an effect name", start_at(starts, i)); }
+            if word == "" { die("expected an effect name", start_at(starts, i), io); }
             if first == false { effects = str_concat(effects, ","); }
             effects = str_concat(str_concat(str_concat(effects, word), "@"), int_to_str(start_at(starts, i)));
             first = false;
@@ -1452,10 +1452,10 @@ fn read_sig(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, at0: Int,
         ret = str_concat(ret, effects);
     }
     if kind_at(kinds, i) == k_lbrace() {
-        die("a trait method has no body: end its signature with `;`", start_at(starts, i));
+        die("a trait method has no body: end its signature with `;`", start_at(starts, i), io);
     }
     let semi = end_at(ends, i);
-    i = expect(kinds, starts, i, k_semi(), "expected `;` after a method's signature");
+    i = expect(kinds, starts, i, k_semi(), "expected `;` after a method's signature", io);
     emit(nk, nar, nst, nen, ntx, n_sig(), params, sig_start, semi,
             str_concat(str_concat(name, ":"), ret));
     set_aux(naux, nk, item_aux(0, name_at));
@@ -1479,12 +1479,12 @@ fn clause_or_body(kinds: Ints, starts: Ints, texts: Strs, i: Int, nk: Ints,
         hdr: Ints, hdrtext: Strs,
         pk: Ints, pstart: Ints, ptext: Strs, pdepth: Ints, pbase: Ints, fk: Ints, ops: Ints,
         fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints, fvis: Ints,
-        ftext: Strs) -> Int {
+        ftext: Strs, io: IoCap) -> Int {
     let word = contract_word(kinds, texts, i);
     if word != "" {
         if word == "requires" {
             if ints_get(hdr, 4) > 0 {
-                die("a `requires` after an `ensures`", start_at(starts, i));
+                die("a `requires` after an `ensures`", start_at(starts, i), io);
             }
         }
         if word == "ensures" {
@@ -1498,7 +1498,7 @@ fn clause_or_body(kinds: Ints, starts: Ints, texts: Strs, i: Int, nk: Ints,
         return i + 1;
     }
     let brace = start_at(starts, i);
-    let at = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body");
+    let at = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body", io);
     ints_set(hdr, 6, ints_len(nk));
     push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
             frame_body(), brace, ints_get(hdr, 0),
@@ -1522,30 +1522,39 @@ fn rotate_arena(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints
     let tx = ints_new();
     let mut j = mid;
     while j < n {
-        ints_push(tk, ints_get(nk, j)); ints_push(ta, ints_get(nar, j));
-        ints_push(ts, ints_get(nst, j)); ints_push(te, ints_get(nen, j));
-        strs_push(tt, strs_get(ntx, j)); ints_push(tx, ints_get(naux, j));
+        ints_push(tk, ints_get(nk, j));
+        ints_push(ta, ints_get(nar, j));
+        ints_push(ts, ints_get(nst, j));
+        ints_push(te, ints_get(nen, j));
+        strs_push(tt, strs_get(ntx, j));
+        ints_push(tx, ints_get(naux, j));
         j = j + 1;
     }
     j = from;
     while j < mid {
-        ints_push(tk, ints_get(nk, j)); ints_push(ta, ints_get(nar, j));
-        ints_push(ts, ints_get(nst, j)); ints_push(te, ints_get(nen, j));
-        strs_push(tt, strs_get(ntx, j)); ints_push(tx, ints_get(naux, j));
+        ints_push(tk, ints_get(nk, j));
+        ints_push(ta, ints_get(nar, j));
+        ints_push(ts, ints_get(nst, j));
+        ints_push(te, ints_get(nen, j));
+        strs_push(tt, strs_get(ntx, j));
+        ints_push(tx, ints_get(naux, j));
         j = j + 1;
     }
     j = 0;
     while j < ints_len(tk) {
-        ints_set(nk, from + j, ints_get(tk, j)); ints_set(nar, from + j, ints_get(ta, j));
-        ints_set(nst, from + j, ints_get(ts, j)); ints_set(nen, from + j, ints_get(te, j));
-        strs_set(ntx, from + j, strs_get(tt, j)); ints_set(naux, from + j, ints_get(tx, j));
+        ints_set(nk, from + j, ints_get(tk, j));
+        ints_set(nar, from + j, ints_get(ta, j));
+        ints_set(nst, from + j, ints_get(ts, j));
+        ints_set(nen, from + j, ints_get(te, j));
+        strs_set(ntx, from + j, strs_get(tt, j));
+        ints_set(naux, from + j, ints_get(tx, j));
         j = j + 1;
     }
     n
 }
 
 pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-        nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
+        nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, io_cap: IoCap) -> Int {
     let fk = ints_new();
     let fstart = ints_new();
     let fcount = ints_new();
@@ -1594,7 +1603,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     strs_push(hdrtext, "");
     // The impl being read (N102): `[open, methods, start, aux]` and its text.
     let istate = ints_new();
-    ints_push(istate, 0); ints_push(istate, 0); ints_push(istate, 0); ints_push(istate, 0);
+    ints_push(istate, 0);
+    ints_push(istate, 0);
+    ints_push(istate, 0);
+    ints_push(istate, 0);
     let itext = strs_new();
     strs_push(itext, "");
     strs_push(itext, "");
@@ -1611,7 +1623,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         if resumable(pk, pdepth, fk) {
             i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx,
                     ops, opat, cname, cargs, cfields, vs, ve, status, resuming,
-                    ints_get(pbase, ints_len(pbase) - 1), naux);
+                    ints_get(pbase, ints_len(pbase) - 1), naux, io_cap);
             resuming = false;
             if ints_get(status, 0) == 1 {
                 // Suspended at an `if`'s `{`: the condition is done and the block is
@@ -1669,7 +1681,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     continue;
                 }
                 i = begin_arm(kinds, starts, texts, i, pk, pstart, ptext, pdepth, pbase,
-                        fk, ops, status);
+                        fk, ops, status, io_cap);
                 continue;
             }
             // The expression finished. Complete whatever it was for.
@@ -1684,7 +1696,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
 
             if what == pend_while() {
                 let brace = start_at(starts, i);
-                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body");
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body", io_cap);
                 push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
                         frame_while(), brace, at, 0, 0, "");
                 continue;
@@ -1698,7 +1710,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 }
                 i = clause_or_body(kinds, starts, texts, i, nk, hdr, hdrtext,
                         pk, pstart, ptext, pdepth, pbase, fk, ops,
-                        fstart, fcount, ftail, faux, fparams, fvis, ftext);
+                        fstart, fcount, ftail, faux, fparams, fvis, ftext, io_cap);
                 continue;
             }
             if what == pend_arm() {
@@ -1709,12 +1721,12 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     i = i + 1;
                     if kind_at(kinds, i) != k_rbrace() {
                         i = begin_arm(kinds, starts, texts, i, pk, pstart, ptext, pdepth,
-                                pbase, fk, ops, status);
+                                pbase, fk, ops, status, io_cap);
                         continue;
                     }
                 }
                 if kind_at(kinds, i) != k_rbrace() {
-                    die("expected `,` or `}` after an arm", start_at(starts, i));
+                    die("expected `,` or `}` after an arm", start_at(starts, i), io_cap);
                 }
                 let close = end_at(ends, i);
                 i = i + 1;
@@ -1751,11 +1763,11 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     bump(fcount);
                     continue;
                 }
-                die("expected `;` or `}` after this expression", start_at(starts, i));
+                die("expected `;` or `}` after this expression", start_at(starts, i), io_cap);
                 continue;
             }
             let semi = end_at(ends, i);
-            i = expect(kinds, starts, i, k_semi(), "expected `;` to end this statement");
+            i = expect(kinds, starts, i, k_semi(), "expected `;` to end this statement", io_cap);
             if what == pend_let() {
                 emit(nk, nar, nst, nen, ntx, n_let(), 1, at, semi, text);
             }
@@ -1772,7 +1784,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 // definition of how a call's arguments are parsed.
                 let last = ints_len(nk) - 1;
                 if ints_get(nk, last) != n_call() {
-                    die("`spawn` needs a call to a named function", at);
+                    die("`spawn` needs a call to a named function", at, io_cap);
                 }
                 ints_set(nk, last, n_spawn());
                 // Where the callee is written, which the node's span no longer says once
@@ -1798,7 +1810,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     continue;
                 }
                 if kind_at(kinds, i) != k_fn() {
-                    die("an impl holds methods, each `fn …`", start_at(starts, i));
+                    die("an impl holds methods, each `fn …`", start_at(starts, i), io_cap);
                 }
             }
             // --- top level: an import, or a function header ------------------------
@@ -1815,13 +1827,13 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 // Imports are the driver's business, not the grammar's, and contribute
                 // no node — exactly as the reference parser treats them.
                 i = i + 1;
-                i = expect(kinds, starts, i, k_str(), "expected a quoted path");
+                i = expect(kinds, starts, i, k_str(), "expected a quoted path", io_cap);
                 if reexporting {
                     if kind_at(kinds, i) == k_lbrace() {
                         i = i + 1;
                         while kind_at(kinds, i) != k_rbrace() {
                             if kind_at(kinds, i) != k_ident() {
-                                die("expected a name to re-export", start_at(starts, i));
+                                die("expected a name to re-export", start_at(starts, i), io_cap);
                             }
                             i = i + 1;
                             if kind_at(kinds, i) == k_ident() {
@@ -1829,7 +1841,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                                     i = i + 1;
                                     if kind_at(kinds, i) != k_ident() {
                                         die("expected the name to re-export it under, after `as`",
-                                                start_at(starts, i));
+                                                start_at(starts, i), io_cap);
                                     }
                                     i = i + 1;
                                 }
@@ -1838,7 +1850,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                                 i = i + 1;
                             } else {
                                 if kind_at(kinds, i) != k_rbrace() {
-                                    die("expected `,` or `}` in the names re-exported", start_at(starts, i));
+                                    die("expected `,` or `}` in the names re-exported", start_at(starts, i), io_cap);
                                 }
                             }
                         }
@@ -1848,10 +1860,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 // `use "path" as name;` (N49) is not in the bootstrap subset, and says so.
                 if kind_at(kinds, i) == k_ident() {
                     if text_at(texts, i) == "as" {
-                        die("an import under a name, `as`, is not in the bootstrap subset", start_at(starts, i));
+                        die("an import under a name, `as`, is not in the bootstrap subset", start_at(starts, i), io_cap);
                     }
                 }
-                i = expect(kinds, starts, i, k_semi(), "expected `;` after an import");
+                i = expect(kinds, starts, i, k_semi(), "expected `;` after an import", io_cap);
                 continue;
             }
             let fn_start = start_at(starts, i);
@@ -1866,17 +1878,17 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             // `trait Name { fn m(self: Self, …) -> R; … }` (N102).
             if kind_at(kinds, i) == k_trait() {
                 i = i + 1;
-                if kind_at(kinds, i) != k_ident() { die("expected a trait name", start_at(starts, i)); }
+                if kind_at(kinds, i) != k_ident() { die("expected a trait name", start_at(starts, i), io_cap); }
                 let tname = text_at(texts, i);
                 let tname_at = start_at(starts, i);
                 i = i + 1;
                 if kind_at(kinds, i) == k_lbracket() {
-                    die("a generic trait is not supported", start_at(starts, i));
+                    die("a generic trait is not supported", start_at(starts, i), io_cap);
                 }
-                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the trait");
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the trait", io_cap);
                 let mut nsigs = 0;
                 while kind_at(kinds, i) != k_rbrace() {
-                    i = read_sig(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx, naux);
+                    i = read_sig(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx, naux, io_cap);
                     nsigs = nsigs + 1;
                 }
                 let tclose = end_at(ends, i);
@@ -1889,24 +1901,24 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             // `impl Trait for Type { fn … }` (N102): its methods are read as functions, and
             // belong to the impl rather than to the module's namespace.
             if kind_at(kinds, i) == k_impl() {
-                if vis == 1 { die("an impl is not `pub`: it is as visible as its trait and type", fn_start); }
-                if ints_get(istate, 0) == 1 { die("an impl inside an impl", fn_start); }
+                if vis == 1 { die("an impl is not `pub`: it is as visible as its trait and type", fn_start, io_cap); }
+                if ints_get(istate, 0) == 1 { die("an impl inside an impl", fn_start, io_cap); }
                 i = i + 1;
-                if kind_at(kinds, i) != k_ident() { die("expected a trait name", start_at(starts, i)); }
+                if kind_at(kinds, i) != k_ident() { die("expected a trait name", start_at(starts, i), io_cap); }
                 let trait_word = text_at(texts, i);
                 let trait_text = str_concat(str_concat(trait_word, "@"), int_to_str(start_at(starts, i)));
                 i = i + 1;
-                if kind_at(kinds, i) != k_ident() { die("expected `for`", start_at(starts, i)); }
-                if text_at(texts, i) != "for" { die("expected `for`", start_at(starts, i)); }
+                if kind_at(kinds, i) != k_ident() { die("expected `for`", start_at(starts, i), io_cap); }
+                if text_at(texts, i) != "for" { die("expected `for`", start_at(starts, i), io_cap); }
                 i = i + 1;
-                if kind_at(kinds, i) != k_ident() { die("expected a type", start_at(starts, i)); }
+                if kind_at(kinds, i) != k_ident() { die("expected a type", start_at(starts, i), io_cap); }
                 let type_word = text_at(texts, i);
                 let type_text = str_concat(str_concat(type_word, "@"), int_to_str(start_at(starts, i)));
                 i = i + 1;
                 if kind_at(kinds, i) == k_lbracket() {
-                    die("an impl for a generic type is not supported", start_at(starts, i));
+                    die("an impl for a generic type is not supported", start_at(starts, i), io_cap);
                 }
-                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the impl");
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the impl", io_cap);
                 ints_set(istate, 0, 1);
                 ints_set(istate, 1, 0);
                 ints_set(istate, 2, fn_start);
@@ -1922,24 +1934,24 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if kind_at(kinds, i) == k_struct() {
                 i = i + 1;
                 if kind_at(kinds, i) != k_ident() {
-                    die("expected a record name", start_at(starts, i));
+                    die("expected a record name", start_at(starts, i), io_cap);
                 }
                 let tp = strs_new();
                 let rname = text_at(texts, i);
                 let name_at = start_at(starts, i);
-                i = read_type_params(kinds, starts, texts, i + 1, tp);
-                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the fields");
+                i = read_type_params(kinds, starts, texts, i + 1, tp, io_cap);
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the fields", io_cap);
                 let mut nfields = 0;
                 while kind_at(kinds, i) != k_rbrace() {
                     if kind_at(kinds, i) != k_ident() {
-                        die("expected a field name", start_at(starts, i));
+                        die("expected a field name", start_at(starts, i), io_cap);
                     }
                     let fname = text_at(texts, i);
                     let fat = start_at(starts, i);
                     i = i + 1;
-                    i = expect(kinds, starts, i, k_colon(), "expected `:` after a field name");
+                    i = expect(kinds, starts, i, k_colon(), "expected `:` after a field name", io_cap);
                     let ft = strs_new();
-                    i = read_type(kinds, starts, ends, texts, i, "expected a field type", ft);
+                    i = read_type(kinds, starts, ends, texts, i, "expected a field type", ft, io_cap);
                     let ftype = strs_get(ft, 0);
                     let fto = end_at(ends, i - 1);
                     emit(nk, nar, nst, nen, ntx, n_structfield(), 0, fat, fto,
@@ -1962,17 +1974,17 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if kind_at(kinds, i) == k_enum() {
                 i = i + 1;
                 if kind_at(kinds, i) != k_ident() {
-                    die("expected an enum name", start_at(starts, i));
+                    die("expected an enum name", start_at(starts, i), io_cap);
                 }
                 let etp = strs_new();
                 let ename = text_at(texts, i);
                 let ename_at = start_at(starts, i);
-                i = read_type_params(kinds, starts, texts, i + 1, etp);
-                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the variants");
+                i = read_type_params(kinds, starts, texts, i + 1, etp, io_cap);
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the variants", io_cap);
                 let mut nvariants = 0;
                 while kind_at(kinds, i) != k_rbrace() {
                     if kind_at(kinds, i) != k_ident() {
-                        die("expected a variant name", start_at(starts, i));
+                        die("expected a variant name", start_at(starts, i), io_cap);
                     }
                     let vname = text_at(texts, i);
                     let vat = start_at(starts, i);
@@ -1986,20 +1998,20 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                         // payload is no brackets.
                         if kind_at(kinds, i) == k_rparen() {
                             die("this variant has an empty payload, which is written by writing nothing",
-                                    vat);
+                                    vat, io_cap);
                         }
                         while kind_at(kinds, i) != k_rparen() {
                             if kind_at(kinds, i) != k_ident() {
-                                die("expected a payload field name", start_at(starts, i));
+                                die("expected a payload field name", start_at(starts, i), io_cap);
                             }
                             let pname = text_at(texts, i);
                             let pat = start_at(starts, i);
                             i = i + 1;
                             i = expect(kinds, starts, i, k_colon(),
-                                    "expected `:` after a payload field name");
+                                    "expected `:` after a payload field name", io_cap);
                             let pt = strs_new();
                             i = read_type(kinds, starts, ends, texts, i,
-                                    "expected a payload field type", pt);
+                                    "expected a payload field type", pt, io_cap);
                             let ptype = strs_get(pt, 0);
                             let pto = end_at(ends, i - 1);
                             emit(nk, nar, nst, nen, ntx, n_payload(), 0, pat, pto,
@@ -2031,16 +2043,16 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 if text_at(texts, i) == "extern" {
                     if kind_at(kinds, i + 1) == k_str() {
                         if text_at(texts, i + 1) != "C" {
-                            die("the only foreign ABI is `C`", start_at(starts, i + 1));
+                            die("the only foreign ABI is `C`", start_at(starts, i + 1), io_cap);
                         }
                         foreign = true;
                         i = i + 2;
                     }
                 }
             }
-            i = expect(kinds, starts, i, k_fn(), "expected `fn`");
+            i = expect(kinds, starts, i, k_fn(), "expected `fn`", io_cap);
             if kind_at(kinds, i) != k_ident() {
-                die("expected a function name", start_at(starts, i));
+                die("expected a function name", start_at(starts, i), io_cap);
             }
             let ftp = strs_new();
             let mut name = text_at(texts, i);
@@ -2051,19 +2063,19 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if ints_get(istate, 0) == 1 {
                 name = str_concat(strs_get(itext, 1), name);
             }
-            i = read_type_params(kinds, starts, texts, i + 1, ftp);
-            i = expect(kinds, starts, i, k_lparen(), "expected `(` after the function name");
+            i = read_type_params(kinds, starts, texts, i + 1, ftp, io_cap);
+            i = expect(kinds, starts, i, k_lparen(), "expected `(` after the function name", io_cap);
             let mut params = 0;
             while kind_at(kinds, i) != k_rparen() {
                 if kind_at(kinds, i) != k_ident() {
-                    die("expected a parameter name", start_at(starts, i));
+                    die("expected a parameter name", start_at(starts, i), io_cap);
                 }
                 let pname = text_at(texts, i);
                 let pstart = start_at(starts, i);
                 i = i + 1;
-                i = expect(kinds, starts, i, k_colon(), "expected `:` after a parameter name");
+                i = expect(kinds, starts, i, k_colon(), "expected `:` after a parameter name", io_cap);
                 let pty = strs_new();
-                i = read_type(kinds, starts, ends, texts, i, "expected a type", pty);
+                i = read_type(kinds, starts, ends, texts, i, "expected a type", pty, io_cap);
                 let ptype = strs_get(pty, 0);
                 let pend = end_at(ends, i - 1);
                 emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, pend,
@@ -2072,10 +2084,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 if kind_at(kinds, i) == k_comma() { i = i + 1; }
             }
             i = i + 1;
-            i = expect(kinds, starts, i, k_arrow(), "expected `->` and a return type");
+            i = expect(kinds, starts, i, k_arrow(), "expected `->` and a return type", io_cap);
             let rty = strs_new();
             let ret_at = start_at(starts, i);
-            i = read_type(kinds, starts, ends, texts, i, "expected a return type", rty);
+            i = read_type(kinds, starts, ends, texts, i, "expected a return type", rty, io_cap);
             // A return type always carries where it is written: the `fn` node's span is the
             // whole function, so nothing else could say.
             let mut ret = strs_get(rty, 0);
@@ -2088,7 +2100,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             // alone, is a declaration too. `spawn` is a keyword and names its own effect.
             if kind_at(kinds, i) == k_bang() {
                 i = i + 1;
-                i = expect(kinds, starts, i, k_lbrace(), "expected `{` after `!`, to open the effect set");
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` after `!`, to open the effect set", io_cap);
                 let mut effects = "!";
                 let mut first = true;
                 while kind_at(kinds, i) != k_rbrace() {
@@ -2096,7 +2108,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     let mut word = "";
                     if ek == k_ident() { word = text_at(texts, i); }
                     if ek == k_spawn() { word = "spawn"; }
-                    if word == "" { die("expected an effect name", start_at(starts, i)); }
+                    if word == "" { die("expected an effect name", start_at(starts, i), io_cap); }
                     if first == false { effects = str_concat(effects, ","); }
                     effects = str_concat(str_concat(str_concat(effects, word), "@"),
                             int_to_str(start_at(starts, i)));
@@ -2106,7 +2118,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                         i = i + 1;
                     } else {
                         if kind_at(kinds, i) != k_rbrace() {
-                            die("expected `,` or `}` in the effect set", start_at(starts, i));
+                            die("expected `,` or `}` in the effect set", start_at(starts, i), io_cap);
                         }
                     }
                 }
@@ -2116,9 +2128,9 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if foreign {
                 // `= "symbol";`: the symbol is written, never derived from the name. A body
                 // after it would make the function an export, which this parser does not read.
-                i = expect(kinds, starts, i, k_eq(), "expected `=` before a foreign function's symbol");
+                i = expect(kinds, starts, i, k_eq(), "expected `=` before a foreign function's symbol", io_cap);
                 if kind_at(kinds, i) != k_str() {
-                    die("expected the foreign function's symbol as a string", start_at(starts, i));
+                    die("expected the foreign function's symbol as a string", start_at(starts, i), io_cap);
                 }
                 let sym = text_at(texts, i);
                 let sym_at = start_at(starts, i);
@@ -2126,10 +2138,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 i = i + 1;
                 if kind_at(kinds, i) == k_lbrace() {
                     die("a foreign export, a body after the symbol, is not in this parser's subset",
-                            start_at(starts, i));
+                            start_at(starts, i), io_cap);
                 }
                 let semi = end_at(ends, i);
-                i = expect(kinds, starts, i, k_semi(), "expected `;` after a foreign function's symbol");
+                i = expect(kinds, starts, i, k_semi(), "expected `;` after a foreign function's symbol", io_cap);
                 emit(nk, nar, nst, nen, ntx, n_foreign(), 0, sym_at, sym_end, sym);
                 emit(nk, nar, nst, nen, ntx, n_fn(), params + 1, fn_start, semi,
                         str_concat(str_concat(str_concat(name, strs_get(ftp, 0)), ":"), ret));
@@ -2147,7 +2159,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             strs_set(hdrtext, 0, str_concat(str_concat(str_concat(name, strs_get(ftp, 0)), ":"), ret));
             i = clause_or_body(kinds, starts, texts, i, nk, hdr, hdrtext,
                     pk, pstart, ptext, pdepth, pbase, fk, ops,
-                    fstart, fcount, ftail, faux, fparams, fvis, ftext);
+                    fstart, fcount, ftail, faux, fparams, fvis, ftext, io_cap);
             continue;
         }
 
@@ -2183,7 +2195,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     i = i + 1;
                     let brace2 = start_at(starts, i);
                     i = expect(kinds, starts, i, k_lbrace(),
-                            "expected `{` after `else`");
+                            "expected `{` after `else`", io_cap);
                     push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
                             frame_if_else(), brace2, 0, 0, 0, "");
                     continue;
@@ -2248,7 +2260,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
 
         if top(ftail) == 1 {
             die("this block already produced its value; nothing can follow it",
-                    start_at(starts, i));
+                    start_at(starts, i), io_cap);
         }
 
         if t == k_let() {
@@ -2257,11 +2269,11 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             let mut mutable = 0;
             if kind_at(kinds, i) == k_mut() { mutable = 1; i = i + 1; }
             if kind_at(kinds, i) != k_ident() {
-                die("expected a name after `let`", start_at(starts, i));
+                die("expected a name after `let`", start_at(starts, i), io_cap);
             }
             let name = text_at(texts, i);
             i = i + 1;
-            i = expect(kinds, starts, i, k_eq(), "expected `=` in a `let`");
+            i = expect(kinds, starts, i, k_eq(), "expected `=` in a `let`", io_cap);
             ints_push(pk, pend_let());
             ints_push(pdepth, ints_len(fk));
             ints_push(pbase, ints_len(ops));
@@ -2302,7 +2314,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             let stmt_start = start_at(starts, i);
             i = i + 1;
             let brace = start_at(starts, i);
-            i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a scope");
+            i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a scope", io_cap);
             push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
                     frame_scope(), brace, stmt_start, 0, 0, "");
             continue;
@@ -2315,11 +2327,11 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             // callee is an identifier and nothing else. Checked here rather than left to
             // the expression parser, which would report whatever it happened to find.
             if kind_at(kinds, i) != k_ident() {
-                die("expected a function name after `spawn`", start_at(starts, i));
+                die("expected a function name after `spawn`", start_at(starts, i), io_cap);
             }
             if kind_at(kinds, i + 1) != k_lparen() {
                 die("expected `(` after the function name in a `spawn`",
-                        start_at(starts, i + 1));
+                        start_at(starts, i + 1), io_cap);
             }
             ints_push(pk, pend_spawn());
             ints_push(pdepth, ints_len(fk));
@@ -2358,7 +2370,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             let stmt_start = start_at(starts, i);
             i = i + 1;
             let semi = end_at(ends, i);
-            i = expect(kinds, starts, i, k_semi(), "expected `;` after `break`");
+            i = expect(kinds, starts, i, k_semi(), "expected `;` after `break`", io_cap);
             emit(nk, nar, nst, nen, ntx, n_break(), 0, stmt_start, semi, "");
             bump(fcount);
             continue;
@@ -2368,14 +2380,14 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             let stmt_start = start_at(starts, i);
             i = i + 1;
             let semi = end_at(ends, i);
-            i = expect(kinds, starts, i, k_semi(), "expected `;` after `continue`");
+            i = expect(kinds, starts, i, k_semi(), "expected `;` after `continue`", io_cap);
             emit(nk, nar, nst, nen, ntx, n_continue(), 0, stmt_start, semi, "");
             bump(fcount);
             continue;
         }
 
         // An expression: a statement if a `;` follows, the block's value if not.
-        refuse_unimplemented(kinds, starts, i);
+        refuse_unimplemented(kinds, starts, i, io_cap);
         ints_push(pk, pend_stmt());
         ints_push(pdepth, ints_len(fk));
         ints_push(pbase, ints_len(ops));
@@ -2391,7 +2403,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     }
 
     if ints_len(fk) > 0 {
-        die("this block is never closed", top(fstart));
+        die("this block is never closed", top(fstart), io_cap);
     }
     emit(nk, nar, nst, nen, ntx, n_program(), items, 0, 0, "");
     pad_aux(naux, nk);

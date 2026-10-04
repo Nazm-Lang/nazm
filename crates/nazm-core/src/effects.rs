@@ -401,63 +401,22 @@ pub(crate) fn analyse(
         let (Some(set), Some(why)) = (sets.get(n).copied(), reasons.get(n)) else {
             continue;
         };
-        let Some(declared) = node.declared else {
-            continue;
-        };
         if !node.has_body {
             continue;
         }
         // Authority first, then effects: one deterministic order for a body wrong in both.
-        for (kind, at, why) in authority(node, &nodes, &sets, module, &contract, res) {
+        // Every body holds what it exercises, declared or not (N104): nothing is inherited.
+        for (kind, at, why) in authority(node, res) {
             errors.push(missing_authority(node, kind, at, why, res));
         }
+        let Some(declared) = node.declared else {
+            continue;
+        };
         let missing = set.without(declared);
         if missing.is_empty() {
             continue;
         }
         errors.push(undeclared(node, declared, missing, why, res));
-    }
-    // Inherited authority (N79): what each undeclared body exercises without holding it —
-    // the bridge, recorded as part of the function's contract rather than left ambient.
-    let inherited: Vec<(FnId, CapabilitySet, Vec<Span>)> = nodes
-        .iter()
-        .filter(|n| n.has_body && n.declared.is_none())
-        .map(|node| {
-            let found = authority(node, &nodes, &sets, module, &contract, res);
-            let set = found
-                .iter()
-                .fold(CapabilitySet::EMPTY, |s, (k, _, _)| s.with(*k));
-            (node.id, set, found.iter().map(|(_, at, _)| *at).collect())
-        })
-        .collect();
-    for (id, set, at) in inherited {
-        res.record_inherits(id, set, at);
-    }
-    // A vouch needs a `VouchCap` held, in every function (N52), and a clock a `TimeCap` (N54):
-    // neither is ever ambient. A declared function's is already its authority check's.
-    for node in nodes.iter().filter(|n| n.has_body && n.declared.is_none()) {
-        let sites = res
-            .function(node.id)
-            .map(|d| d.call_sites.clone())
-            .unwrap_or_default();
-        for site in sites {
-            let Callee::Builtin(i) = site.callee else {
-                continue;
-            };
-            let Some(kind) = CapabilityKind::held_for(i) else {
-                continue;
-            };
-            if !site.held.contains(kind) {
-                errors.push(missing_authority(
-                    node,
-                    kind,
-                    site.span,
-                    Needs::Builtin(i),
-                    res,
-                ));
-                break;
-            }
-        }
     }
     // A foreign call needs a `ForeignCap` held, in every function (N42): N37's bridge does not
     // reach it.
@@ -670,38 +629,25 @@ enum Needs {
     Builtin(nazm_sema::Intrinsic),
     /// A `spawn`, which needs the authority to start a task.
     Spawn,
-    /// A function with no declared effect set, which exercises its **caller's** authority —
-    /// N37's compatibility bridge. The caller must hold what the callee's effects need.
-    Ambient { callee: FnId, local: bool },
     /// A foreign function (N42), which needs a `ForeignCap` wherever it is called.
     Foreign { callee: FnId },
 }
 
-/// Check that a function with a declared effect set holds, at every call, the authority
-/// what it calls requires (N37).
+/// Check that a function holds, at every call, the authority what it calls requires (N37,
+/// N104).
 ///
 /// Authority is lexical: the capability-typed bindings a name reaches at the call, which
 /// the checker recorded on the call site ([`nazm_sema::CallSite::held`]). A built-in needs
-/// its identity's authority and a `spawn` the authority to start a task. A callee with a
-/// declared set needs nothing here — its contract takes its authority as parameters, which
-/// ordinary type checking has already made the caller supply. A callee with **no** declared
-/// set exercises its caller's authority, so the caller must hold what its effects need: its
-/// inferred set in this module, and every effect across one. That is what keeps the bridge
-/// from being a backdoor — code that states its contract cannot reach ambient authority
-/// through code that does not.
+/// its identity's authority and a `spawn` the authority to start a task. A call to a function
+/// needs nothing here — whatever its body exercises it holds itself, so its authority is in its
+/// parameters, which ordinary type checking has already made the caller supply. Until N104 a
+/// function with no declared effect set exercised its caller's authority instead (N37's bridge,
+/// recorded as inherited authority by N79); nothing does now, in any function.
 ///
 /// Returns every kind `node`'s body exercises without holding it, once each, with the first
-/// site that needs it and why. Held kinds count with what they imply: an `IoCap` gives an
-/// `OutCap`. For a declared function each is an `N0369`; for an undeclared one, the kinds are
-/// its **inherited authority** (N79, `architecture.md` §7.80).
-fn authority(
-    node: &Node,
-    nodes: &[Node],
-    sets: &[EffectSet],
-    module: nazm_sema::module::ModuleId,
-    contract: &dyn Fn(FnId) -> Option<Option<EffectSet>>,
-    res: &Resolution,
-) -> Vec<(CapabilityKind, Span, Needs)> {
+/// site that needs it and why: each an `N0369`. Held kinds count with what they imply: an
+/// `IoCap` gives an `OutCap`.
+fn authority(node: &Node, res: &Resolution) -> Vec<(CapabilityKind, Span, Needs)> {
     let mut out = Vec::new();
     let sites = res
         .function(node.id)
@@ -713,36 +659,8 @@ fn authority(
         if site.spawned {
             needs.push((CapabilityKind::to_start_a_task(), Needs::Spawn));
         }
-        match site.callee {
-            Callee::Builtin(b) => needs.push((CapabilityKind::of_intrinsic(b), Needs::Builtin(b))),
-            // A function value's type is a contract (N50): what it may do, it takes the
-            // authority for as parameters, which type checking has made the caller supply.
-            Callee::Indirect(_) => {}
-            Callee::Function(g) => {
-                let local = res.function(g).is_some_and(|d| d.module == module);
-                let effects = if local {
-                    nodes.iter().position(|m| m.id == g).and_then(|j| {
-                        let m = nodes.get(j)?;
-                        // Declared: the contract carries its own authority. Unparsed: already
-                        // an error, and requiring nothing adds no second one.
-                        if m.declared.is_some() || !m.has_body {
-                            return None;
-                        }
-                        sets.get(j).copied()
-                    })
-                } else {
-                    match contract(g) {
-                        Some(Some(_)) => None,
-                        _ => Some(assumed(g, res)),
-                    }
-                };
-                if let Some(effects) = effects {
-                    needs.push((
-                        CapabilitySet::for_effects(effects),
-                        Needs::Ambient { callee: g, local },
-                    ));
-                }
-            }
+        if let Callee::Builtin(b) = site.callee {
+            needs.push((CapabilityKind::of_intrinsic(b), Needs::Builtin(b)));
         }
         for (required, why) in needs {
             for kind in required
@@ -755,47 +673,7 @@ fn authority(
             }
         }
     }
-    // A value of an undeclared function is made with the authority its type's effects need,
-    // as a call to it would be (N51): calling a value needs none, so this is the one place
-    // declared code could otherwise reach the bridge.
-    for value in res.fn_values() {
-        if value.within != Some(node.id) {
-            continue;
-        }
-        let undeclared = res
-            .function(value.function)
-            .is_some_and(|d| d.declared_effects.is_none() && d.foreign.is_none());
-        if !undeclared {
-            continue;
-        }
-        let local = res
-            .function(value.function)
-            .is_some_and(|d| d.module == module);
-        let required = CapabilitySet::for_effects(value.assumed);
-        for kind in required
-            .without(value.held.implied())
-            .without(reported)
-            .iter()
-        {
-            reported = reported.with(kind);
-            out.push((
-                kind,
-                value.at,
-                Needs::Ambient {
-                    callee: value.function,
-                    local,
-                },
-            ));
-        }
-    }
     out
-}
-
-/// The effect a capability kind authorises, for a witness to follow.
-fn authorised(kind: CapabilityKind) -> Option<Effect> {
-    Effect::ALL
-        .into_iter()
-        .find(|e| CapabilityKind::for_effect(*e).contains(kind))
 }
 
 fn missing_authority(
@@ -813,7 +691,7 @@ fn missing_authority(
     let what = match why {
         Needs::Builtin(b) => format!("the built-in `{}`", b.name()),
         Needs::Spawn => "starting a task".to_owned(),
-        Needs::Ambient { callee, .. } | Needs::Foreign { callee } => {
+        Needs::Foreign { callee } => {
             format!("calling {}", name_of(callee))
         }
     };
@@ -835,49 +713,7 @@ fn missing_authority(
             name_of(callee),
             kind.article()
         ),
-        Needs::Ambient {
-            callee,
-            local: true,
-        } => format!(
-            "{} declares no effect set, so it exercises its caller's authority, and it \
-             requires `{}`",
-            name_of(callee),
-            authorised(kind).map_or("an effect", Effect::name)
-        ),
-        Needs::Ambient {
-            callee,
-            local: false,
-        } => format!(
-            "{} is in another module and declares no effect set, so it may exercise every \
-             effect with its caller's authority",
-            name_of(callee)
-        ),
     };
-    // Through this module's undeclared functions to what needs the authority.
-    if let (
-        Needs::Ambient {
-            callee,
-            local: true,
-        },
-        Some(effect),
-    ) = (why, authorised(kind))
-    {
-        let mut g = callee;
-        for _ in 0..64 {
-            let Some(def) = res.function(g) else { break };
-            let Some(next) = def.effect_reasons.iter().find(|r| r.effect == effect) else {
-                break;
-            };
-            d = d.secondary(
-                next.at,
-                format!("in `{}`: {}", def.name, describe(*next, res)),
-            );
-            match next.source {
-                EffectSource::Inferred(h) => g = h,
-                _ => break,
-            }
-        }
-    }
     if let Some(written) = node.written {
         d = d.secondary(
             written,
