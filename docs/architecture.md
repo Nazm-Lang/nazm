@@ -8473,6 +8473,62 @@ compiler's program.
 **What would prove this wrong.** A program both compilers accept whose two executables differ in
 status, output, failure code or memory report.
 
+
+## 7.104 Re-exports: one definition under another module's names — N103, 2026-10-04
+
+Written with the code. Area 2's standing limitation was that a module could neither re-export
+a name nor export one under another name. Owner: `nazm-syntax` (the grammar), `nazm-sema` (the
+graph's edge and the interface), `nazm-core` (applying re-exports), `nazm-iface` (persisting
+them), `nazm-service` (rename) and the compiler written in Nazm.
+
+**The syntax.** `pub use "PATH";` re-exports every name the module at `PATH` offers;
+`pub use "PATH" { a, b as c };` the names chosen, `c` the name `b` is offered under. A
+`pub use` is also an ordinary `use`: the module sees what it re-exports. `pub use "PATH" as m;`
+is refused — a re-export is not imported under a name.
+
+**The semantics: one definition, several names.** A re-export adds no definition. The export it
+adds carries the defining module's id, so a call, a type, a trait bound, a reference, a rename and
+a persisted interface all answer with the definition — `shapes.nz::fn double`, whichever module's
+name was written. What a module offers is its own `pub` definitions and what it re-exports;
+what an import brings is what its module offers, unchanged in every other respect: not
+transitive beyond what is re-exported, collisions refused as before (`N0207`, `N0208`). A trait
+is re-exported under its own name only; its name is how bounds and calls find it. An impl in a
+module re-exported from is usable wherever the re-exporting module is imported, and is carried in
+its interface.
+
+**Refusals.** A chosen name the module does not offer: `N0211`, at the name. A name the module
+already offers — its own, or another re-export's: `N0212`. Modules re-exporting from each other
+in a cycle: `N0213`, at each `pub` — a cycle of re-exports offers nothing in particular, and
+applying re-exports in dependency order is what keeps the answer deterministic.
+
+**Durability.** `nazm.interface/11`: a re-export's export carries `reexport` and the defining
+module's `DefKey`; a type offered under another name, or by another module, is listed in
+`reexported_types`. An importer's check key covers the re-exporting module's interface, and so
+every signature it re-exports: a re-exported signature's change re-checks the importer; a
+private body's change does not. Resolved units name the definition. `nazm.api-doc/2` documents
+each re-export with the identity it offers.
+
+**One resolution model.** `nazm_core::declared_interfaces` is the stages a compilation runs before
+any body, re-exports included; `nazm interface` publishes from it rather than from a shorter
+second path, which until N103 it did.
+
+**The compiler written in Nazm.** Its parser accepts `pub use`; its checker reads the re-exports
+from the tokens and the module graph, computes what each module offers — functions, types,
+traits — in the same order, and reports `N0211`–`N0213` at the reference's positions; impls
+follow re-exports as the reference's do.
+
+**Versions.** Semantic epoch 27 → 28 (programs that did not parse are accepted).
+`nazm.interface/10` → `/11`; `nazm.api-doc/1` → `/2`. Runtime ABI, Core/MIR/LIR: unchanged — a
+re-export is resolved before any of them exists. Check and object keys: through the interface
+schema and the epoch, both moved; no other key input.
+
+**Negative example.** `pub use "shapes.nz" { hidden };` where `hidden` is private: `N0211`.
+**Boundary example.** A rename of `double` re-exported as `twice`: the list's `double` and
+every use written `double` are renamed; every use written `twice` is not, and still means it.
+
+**What would prove this wrong.** Two identities for one definition in any output: a reference,
+a resolved unit, a persisted interface or a symbol.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
