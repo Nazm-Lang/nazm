@@ -195,7 +195,7 @@ fn once(log: Ints, ok: Bool) -> Result[Int, Str] {
     Result[Int, Str].Ok(value: a * 2)
 }
 
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let a = str_len(text(Option[Str].Some(value: str_concat("some-", int_to_str(42))))) * 10 + str_len(text(Option[Str].None()));
     let b = str_len(choose(Option[Str].None(), int_to_str(1234))) * 10 + ints_get(choose(Option[Item].Some(value: item(6)), item(9)).tags, 0);
     let c = show(step(Step.Leave(), true)) + show(step(Step.Keep(), true)) + show(step(Step.Try(), true)) + show(step(Step.Try(), false));

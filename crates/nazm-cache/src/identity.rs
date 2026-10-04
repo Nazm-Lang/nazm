@@ -206,7 +206,10 @@ use crate::digest::{self, Framed};
 /// moved from refused (`N0100`) to accepted, offering another module's definitions under this
 /// module's names; a name the module does not export is `N0211`, one offered twice `N0212`,
 /// and a cycle of re-exports `N0213`.
-pub const SEMANTIC_EPOCH: u32 = 28;
+/// `29` — N104, 2026-10-05. No inherited authority: a function with no declared effect set
+/// exercised its caller's capabilities (N37's bridge); now every body must hold what it
+/// exercises, so programs accepted under 28 are refused (`N0369`).
+pub const SEMANTIC_EPOCH: u32 = 29;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

@@ -387,10 +387,10 @@ fn propagation_out_of_a_scope_joins_the_task_and_cleans_up() {
         "fn worker(out: Chan, tag: Str) -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    \
          while i < 200000 { s = s + i % 3; i = i + 1; }\n    chan_send(out, str_len(tag));\n    s\n}\n\
          fn fails() -> Result[Int, Str] { Result[Int, Str].Err(error: int_to_str(9)) }\n\
-         fn run(out: Chan) -> Result[Int, Str] {\n    let tag = str_concat(\"task-\", int_to_str(1));\n    \
+         fn run(out: Chan, tasks: SpawnCap) -> Result[Int, Str] {\n    let tag = str_concat(\"task-\", int_to_str(1));\n    \
          scope {\n        spawn worker(out, tag);\n        let held = int_to_str(555);\n        let x = fails()?;\n        \
          chan_send(out, x + str_len(held));\n    }\n    Result[Int, Str].Ok(value: 0)\n}\n\
-         fn main() -> Int {\n    let out = chan_new(4);\n    let r = run(out);\n    chan_close(out);\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let out = chan_new(4);\n    let r = run(out, tasks);\n    chan_close(out);\n    \
          let buf = ints_new();\n    let got = chan_recv(out, buf);\n    let more = chan_recv(out, buf);\n    \
          match r { Result.Ok(value: n) => 0, Result.Err(error: e) => str_len(e) * 1000, } + ints_len(buf) * 100 + ints_get(buf, 0)\n}\n",
     ));

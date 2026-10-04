@@ -1147,7 +1147,7 @@ scope_statement = "scope" , block ;
 ```
 
 ```nazm
-fn w(c: Chan) -> Int { 0 } fn main() -> Int { let c = chan_new(1); scope { spawn w(c); } 0 }
+fn w(c: Chan) -> Int { 0 } fn main(t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c); } 0 }
 ```
 
 ### `spawn_statement`
@@ -1157,7 +1157,7 @@ spawn_statement = "spawn" , IDENT , "(" , [ arguments ] , ")" , ";" ;
 ```
 
 ```nazm
-fn w(c: Chan, n: Int) -> Int { 0 } fn main() -> Int { let c = chan_new(1); scope { spawn w(c, 1); } 0 }
+fn w(c: Chan, n: Int) -> Int { 0 } fn main(t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c, 1); } 0 }
 ```
 
 ### `expression_statement`
@@ -1167,7 +1167,7 @@ expression_statement = expression , ";" ;
 ```
 
 ```nazm
-fn main() -> Int { print("hi"); 0 }
+fn main(out: OutCap) -> Int { print("hi"); 0 }
 ```
 
 ### `expression`

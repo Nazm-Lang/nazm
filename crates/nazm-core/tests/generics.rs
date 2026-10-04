@@ -201,13 +201,13 @@ fn a_type_parameter_can_reach_a_task_only_as_a_mismatch() {
     // so a `T` can never be given to one. The rule that a parameter is not task-safe is
     // held by construction here, and a generic body may still spawn ordinary work.
     let src = "fn w2(n: Int) -> Int { 0 }\n\
-               fn g[T](held: T) -> Int { scope { spawn w2(0); } 0 }\n\
-               fn main() -> Int { g(\"s\") }\n";
+               fn g[T](held: T, tasks: SpawnCap) -> Int { scope { spawn w2(0); } 0 }\n\
+               fn main(tasks: SpawnCap) -> Int { g(\"s\", tasks) }\n";
     assert!(diagnostics(src).is_empty(), "{:?}", diagnostics(src));
     // The argument is the wrong type for `take`, and it is also a value no task may be
     // given: both rules apply to it, exactly as they do to an `Ints` handed to an `Int`
     // parameter — the capture rule reads the argument's type, not the parameter's.
-    let spawn_t = "fn run[T](held: T) -> Int { scope { spawn take(held); } 0 }\n\
+    let spawn_t = "fn run[T](held: T, tasks: SpawnCap) -> Int { scope { spawn take(held); } 0 }\n\
                    fn take(n: Int) -> Int { 0 }\n\
                    fn main() -> Int { 0 }\n";
     let (start, end) = at(spawn_t, "held", 1);
@@ -223,25 +223,25 @@ fn a_type_parameter_can_reach_a_task_only_as_a_mismatch() {
 #[test]
 fn a_task_runs_a_non_generic_function() {
     let src = "fn work[T](x: T) -> Int { 0 }\n\
-               fn main() -> Int { scope { spawn work(1); } 0 }\n";
+               fn main(tasks: SpawnCap) -> Int { scope { spawn work(1); } 0 }\n";
     refused(src, codes::UNSUPPORTED_CONSTRUCT, "work", 1);
 }
 
 #[test]
 fn a_vec_never_crosses_into_a_task_whatever_it_holds() {
     let src = "fn w(x: Vec[Str]) -> Int { 0 }\n\
-               fn main() -> Int { let held = vec_new[Str](); scope { spawn w(held); } 0 }\n";
+               fn main(tasks: SpawnCap) -> Int { let held = vec_new[Str](); scope { spawn w(held); } 0 }\n";
     refused(src, codes::ILLEGAL_TASK_CAPTURE, "held", 1);
     // And a record holding one inherits that, through an application.
     let wrapped = "struct Env[T] { value: T, }\n\
                    fn w(x: Env[Vec[Int]]) -> Int { 0 }\n\
-                   fn main() -> Int { let held = Env[Vec[Int]](value: vec_new[Int]()); \
+                   fn main(tasks: SpawnCap) -> Int { let held = Env[Vec[Int]](value: vec_new[Int]()); \
                    scope { spawn w(held); } 0 }\n";
     refused(wrapped, codes::ILLEGAL_TASK_CAPTURE, "held", 1);
     // A generic record of task-safe fields is task-safe.
     let fine = "struct Env[T] { value: T, }\n\
                 fn w(x: Env[Str]) -> Int { 0 }\n\
-                fn main() -> Int { scope { spawn w(Env[Str](value: \"s\")); } 0 }\n";
+                fn main(tasks: SpawnCap) -> Int { scope { spawn w(Env[Str](value: \"s\")); } 0 }\n";
     assert!(diagnostics(fine).is_empty(), "{:?}", diagnostics(fine));
 }
 

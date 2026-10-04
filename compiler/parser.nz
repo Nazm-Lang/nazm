@@ -6,7 +6,7 @@
 use "parse.nz";
 use "lex.nz";
 
-fn main() -> Int {
+fn main(io: IoCap) -> Int {
     if args_count() < 1 {
         eprint("usage: parser FILE");
         eprint(str_from_byte(10));
@@ -24,7 +24,7 @@ fn main() -> Int {
     let starts = ints_new();
     let ends = ints_new();
     let texts = strs_new();
-    lex(src, kinds, starts, ends, texts);
+    lex(src, kinds, starts, ends, texts, io);
 
     let nk = ints_new();
     let nar = ints_new();
@@ -32,7 +32,7 @@ fn main() -> Int {
     let nen = ints_new();
     let ntx = strs_new();
     let naux = ints_new();
-    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx, naux);
+    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx, naux, io);
 
     // `kind|arity|start|end|text`, one node per line, in the order they were appended —
     // which is post-order, which is the whole encoding.

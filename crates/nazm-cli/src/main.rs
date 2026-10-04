@@ -896,7 +896,7 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         sbom: Option<PathBuf>,
     },
-    /// Print one program's facts as `nazm.inspect/1` (N48): every definition's identity,
+    /// Print one program's facts as `nazm.inspect/2` (N48; `/2` since N104): every definition's identity,
     /// signature, effects, capabilities, provenance, Core IR and MIR digests, and the toolchain,
     /// package and lock identities — one deterministic line of JSON.
     Inspect {

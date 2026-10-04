@@ -624,6 +624,13 @@ impl Types {
         if a == b {
             return true;
         }
+        // A capability of any kind is one word below the checker (N79), as in
+        // `nazm_sema`'s `same_shape`: an `IoCap` passed where an `OutCap` is expected is the
+        // checker's attenuation, settled before Core IR. Until N104 this table lacked the rule,
+        // and an attenuating call failed MIR validation.
+        if let (Type::Cap(_), Type::Cap(_)) = (a, b) {
+            return true;
+        }
         let (Type::Fn(x), Type::Fn(y)) = (a, b) else {
             return false;
         };

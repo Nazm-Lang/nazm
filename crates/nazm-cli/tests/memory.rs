@@ -463,7 +463,7 @@ fn a_sequence_still_may_not_cross_into_a_task() {
     std::fs::write(
         dir.path().join("m.nz"),
         "fn use_seq(xs: Ints) -> Int { ints_push(xs, 1) }\n\
-         fn main() -> Int {\n    let xs = ints_new();\n    scope { spawn use_seq(xs); }\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let xs = ints_new();\n    scope { spawn use_seq(xs); }\n    \
          ints_len(xs)\n}\n",
     )
     .expect("write");
@@ -515,7 +515,7 @@ fn a_process_argument_is_external_storage_in_both_implementations() {
     // free them — so a program that reads an argument and slices it allocates **nothing**,
     // and both agree about that rather than one of them quietly copying.
     let r = both_with_args(
-        "fn main() -> Int {\n    let a = arg(0);\n    let b = str_slice(a, 0, 1);\n    \
+        "fn main(io: IoCap) -> Int {\n    let a = arg(0);\n    let b = str_slice(a, 0, 1);\n    \
          str_len(a) * 1000 + str_byte(b, 0)\n}\n",
         &["hello"],
     );
@@ -794,7 +794,7 @@ fn a_channel_shared_with_tasks_outlives_every_one_of_them() {
     let r = channels(
         1,
         "fn feed(c: Chan, n: Int) -> Int { chan_send(c, n); 0 }\n\
-         fn main() -> Int {\n    let c = chan_new(4);\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let c = chan_new(4);\n    \
          scope {\n        spawn feed(c, 1);\n        spawn feed(c, 2);\n    }\n    \
          chan_close(c);\n    let buf = ints_new();\n    \
          while chan_recv(c, buf) {\n    }\n    \
@@ -813,7 +813,7 @@ fn a_blocked_receiver_woken_by_a_close_leaves_nothing_behind() {
         1,
         "fn drain(c: Chan) -> Int {\n    let buf = ints_new();\n    \
          while chan_recv(c, buf) {\n    }\n    ints_len(buf)\n}\n\
-         fn main() -> Int {\n    let c = chan_new(2);\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let c = chan_new(2);\n    \
          scope {\n        spawn drain(c);\n        chan_send(c, 1);\n        \
          chan_send(c, 2);\n        chan_close(c);\n    }\n    0\n}\n",
     );
@@ -830,7 +830,7 @@ fn a_blocked_sender_woken_by_a_close_leaves_nothing_behind() {
         "fn feed(c: Chan) -> Int {\n    let mut i = 0;\n    \
          while i < 50 {\n        if chan_send(c, i) == false { return i; }\n        \
          i = i + 1;\n    }\n    i\n}\n\
-         fn main() -> Int {\n    let c = chan_new(1);\n    let buf = ints_new();\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let c = chan_new(1);\n    let buf = ints_new();\n    \
          scope {\n        spawn feed(c);\n        chan_recv(c, buf);\n        \
          chan_close(c);\n    }\n    ints_len(buf)\n}\n",
     );
@@ -846,7 +846,7 @@ fn a_task_that_fails_while_holding_a_channel_still_gives_it_back() {
     let (r, text) = both_failing(
         "fn bad(c: Chan) -> Int {\n    let xs = ints_new();\n    \
          chan_send(c, 1);\n    ints_get(xs, 0)\n}\n\
-         fn main() -> Int {\n    let c = chan_new(2);\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let c = chan_new(2);\n    \
          scope {\n        spawn bad(c);\n    }\n    0\n}\n",
     );
     assert!(text.contains("N0405"), "{text}");
@@ -861,7 +861,7 @@ fn a_string_crossing_into_a_task_keeps_its_backing() {
     // them valid.
     let r = both(
         "fn use_it(c: Chan, s: Str) -> Int { chan_send(c, str_byte(s, 0)); 0 }\n\
-         fn main() -> Int {\n    let c = chan_new(4);\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let c = chan_new(4);\n    \
          let mut s = str_concat(\"ab\", \"cd\");\n    \
          scope {\n        spawn use_it(c, s);\n        spawn use_it(c, str_slice(s, 1, 3));\n        \
          s = \"\";\n    }\n    chan_close(c);\n    let buf = ints_new();\n    \
@@ -914,7 +914,7 @@ fn a_program_that_calls_exit_with_reclaims_nothing_and_says_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("m.nz"),
-        "fn main() -> Int {\n    let xs = ints_new();\n    ints_push(xs, 1);\n    \
+        "fn main(io: IoCap) -> Int {\n    let xs = ints_new();\n    ints_push(xs, 1);\n    \
          exit_with(0)\n}\n",
     )
     .expect("write");
@@ -1217,7 +1217,7 @@ fn a_task_safe_record_crosses_into_siblings_and_comes_back() {
         "struct Message {\n    id: Int,\n    text: Str,\n    reply: Chan,\n}\n\
          fn worker(m: Message) -> Int {\n    let t = str_slice(m.text, 0, 2);\n    \
          chan_send(m.reply, m.id + str_len(t));\n    0\n}\n\
-         fn main() -> Int {\n    let c = chan_new(4);\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let c = chan_new(4);\n    \
          let m = Message(id: 1, text: str_concat(\"ab\", \"cd\"), reply: c);\n    \
          scope {\n        spawn worker(m);\n        spawn worker(m);\n    }\n    \
          chan_close(c);\n    let got = ints_new();\n    \
@@ -1552,7 +1552,7 @@ fn an_enum_crossing_into_a_task_carries_its_active_payload_and_no_other() {
          let n = match m { Message.Reply(chan: c) => 0, \
          Message.Text(value: s) => str_len(s), };\n    \
          if chan_send(out, n) { 1 } else { 0 }\n}\n\
-         fn main() -> Int {\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    \
          let shared = str_concat(\"he\", \"llo\");\n    \
          let out = chan_new(4);\n    let got = ints_new();\n    \
          scope {\n        spawn worker(Message.Text(value: shared), out);\n        \

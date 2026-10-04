@@ -283,10 +283,10 @@ fn a_foreign_call_is_a_resource_site() {
 #[test]
 fn every_sink_class_is_solved_through_helpers_closures_and_containers() {
     let src = r#"
-fn show(s: Str) -> Int { print(s) }
+fn show(s: Str, out: OutCap) -> Int { print(s) }
 fn main(io: IoCap) -> Int ! { io } {
     let secret = read_file("prog.nz");
-    show(str_slice(secret, 0, 2));
+    show(str_slice(secret, 0, 2), io);
     let names = strs_new();
     strs_push(names, "x");
     print(strs_get(names, 0));
@@ -481,12 +481,12 @@ fn a_long_call_chain_is_solved_deterministically_and_in_bounded_time() {
     let mut src = String::new();
     for i in 0..n {
         src.push_str(&format!(
-            "fn f{i}(s: Str) -> Int {{ f{}(str_concat(s, \"x\")) }}\n",
+            "fn f{i}(s: Str, out: OutCap) -> Int {{ f{}(str_concat(s, \"x\"), out) }}\n",
             i + 1
         ));
     }
-    src.push_str(&format!("fn f{n}(s: Str) -> Int {{ print(s) }}\n"));
-    src.push_str("fn main(io: IoCap) -> Int ! { io } { f0(read_file(\"prog.nz\")) }\n");
+    src.push_str(&format!("fn f{n}(s: Str, out: OutCap) -> Int {{ print(s) }}\n"));
+    src.push_str("fn main(io: IoCap) -> Int ! { io } { f0(read_file(\"prog.nz\"), io) }\n");
     let start = Instant::now();
     let a = json_of(&[("prog.nz", &src)], &["explain-flow"]);
     let b = json_of(&[("prog.nz", &src)], &["explain-flow"]);

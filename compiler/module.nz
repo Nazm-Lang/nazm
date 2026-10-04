@@ -141,12 +141,12 @@ fn strs_has(xs: Strs, want: Str) -> Bool {
 /// The real lexer does the reading. A second, ad-hoc scanner for `use` lines would be a
 /// second definition of what an import is, and the two would drift — a `use` inside a
 /// comment or a string is exactly the case a `grep` gets wrong and a lexer does not.
-fn imports_of(src: Str, dir: Str, at: Ints) -> Strs {
+fn imports_of(src: Str, dir: Str, at: Ints, io: IoCap) -> Strs {
     let kinds = ints_new();
     let starts = ints_new();
     let ends = ints_new();
     let texts = strs_new();
-    lex(src, kinds, starts, ends, texts);
+    lex(src, kinds, starts, ends, texts, io);
 
     let out = strs_new();
     let mut i = 0;
@@ -236,7 +236,7 @@ pub fn imports_directly(mfirst: Ints, mcount: Ints, mto: Ints, from: Int, to: In
 /// importing itself contributes no edge: it already sees all of its own definitions, so
 /// the edge could only make it collide with itself.
 pub fn load_modules(root: Str, std_dir: Str, mpath: Strs, mstart: Ints, mfirst: Ints,
-        mcount: Ints, mto: Ints, mat: Ints) -> Str {
+        mcount: Ints, mto: Ints, mat: Ints, io: IoCap) -> Str {
     let parts = strs_new();
     let stack = strs_new();
     strs_push(stack, normalise(root));
@@ -266,7 +266,7 @@ pub fn load_modules(root: Str, std_dir: Str, mpath: Strs, mstart: Ints, mfirst: 
             strs_push(parts, text);
 
             let at = ints_new();
-            let kids = imports_of(strs_get(parts, me), dir_of(path), at);
+            let kids = imports_of(strs_get(parts, me), dir_of(path), at, io);
             let mut i = 0;
             while i < strs_len(kids) {
                 ints_push(raw_owner, me);
@@ -374,7 +374,7 @@ fn reserved_key(key: Str) -> Bool {
 /// nothing downstream reads. A project module can never hold the key: one whose path is in the
 /// `@core` namespace is re-keyed out of it before the prelude is added.
 pub fn attach_core(core: Str, src: Str, mpath: Strs, mstart: Ints, mfirst: Ints,
-        mcount: Ints, mto: Ints, mat: Ints) -> Str {
+        mcount: Ints, mto: Ints, mat: Ints, io: IoCap) -> Str {
     if file_exists(core) == false {
         eprint(str_concat(str_concat("cannot find the core prelude ", core),
                 str_from_byte(10)));
