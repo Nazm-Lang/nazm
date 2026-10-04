@@ -398,6 +398,13 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N89 — LSP and MCP workspace editing — **complete as scoped, 2026-10-04; area 25 stays PARTIAL**
+
+`architecture.md` §7.90 first. A declared source root is a workspace: an exported entity is renamed
+in every module under it, validated whole, and a library package's API is refused; `nazm patch
+apply` writes a plan only to the exact bytes it was made from, all or nothing. Not here: an MCP
+apply, DAP, editor automation. Next: N90, packages v3.
+
 ### N88 — AI/HPC v2 — **complete as scoped, 2026-10-04; area 21 stays PARTIAL**
 
 `architecture.md` §7.89 first. `nazm accel` runs maps and zips of `Int` kernels and folds them

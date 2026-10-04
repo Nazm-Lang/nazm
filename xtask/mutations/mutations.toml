@@ -13267,3 +13267,38 @@ killers = [{ package = "nazm-cli", test = "accel", name = "a_zip_needs_two_input
 # `n88-the-fold-is-not-held-to-the-interpreter` is not a catalogue entry: only a device run can kill it,
 # and the campaign's container has no GPU. The ignored `a_zip_and_a_reduction_run_on_the_gpu_and_agree`
 # exercises it by hand.
+
+
+# --- N89: workspace editing ---------------------------------------------------------------------
+
+[[mutation]]
+name = "n89-a-workspace-is-any-directory"
+why = "a root nobody declared is taken for a workspace, so an exported rename edits one directory and misses importers elsewhere"
+file = "crates/nazm-service/src/rename.rs"
+find = "            _ => Ok(None),"
+replace = "            _ => Ok(Some(root.path().to_path_buf())),"
+killers = [{ package = "nazm-cli", test = "workspace_edit", name = "without_a_declared_workspace_or_in_a_library_package_an_export_is_not_renamed" }]
+
+[[mutation]]
+name = "n89-a-library-api-is-renamed"
+why = "a library package's exported API is renamed, breaking every package that imports it"
+file = "crates/nazm-service/src/rename.rs"
+find = "                if library_package(root.path()) {"
+replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "workspace_edit", name = "without_a_declared_workspace_or_in_a_library_package_an_export_is_not_renamed" }]
+
+[[mutation]]
+name = "n89-the-walk-stays-at-the-top"
+why = "the workspace walk does not descend into directories, so modules under them are never searched"
+file = "crates/nazm-service/src/rename.rs"
+find = "                walk(&p, out);"
+replace = ""
+killers = [{ package = "nazm-cli", test = "workspace_edit", name = "an_exported_function_is_renamed_in_every_module_of_the_workspace" }]
+
+[[mutation]]
+name = "n89-apply-ignores-the-digest"
+why = "`nazm patch apply` writes to a file edited since planning, as long as each edit's bytes still match"
+file = "crates/nazm-cli/src/patch.rs"
+find = "        if nazm_service::digest(&bytes) != want {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "workspace_edit", name = "a_plan_is_applied_only_to_the_bytes_it_was_made_from" }]

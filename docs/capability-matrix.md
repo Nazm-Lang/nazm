@@ -2496,6 +2496,23 @@ and a missing state refused; a disk edit stale by state and read at the next cal
 unavailable; and 1,001 calls through edits and repairs with flat resident memory. Seventeen N32
 mutations (area 30).
 
+*N89, 2026-10-04: workspace editing — VERIFIED for exported renames within a declared workspace and
+stale-safe application; the area stays PARTIAL.* `architecture.md` §7.90 first. A **workspace** is a
+declared source root — a `nazm.root` marker, `--source-root`, or an application package — and every
+`.nz` under it, each analysed as a root over the editor's buffers. An exported function, record,
+enum, field, variant or payload field is renamed in every module of it that uses it — those the
+requesting root's compilation does not load included — the entity found in each compilation by its
+declaration's place, every compilation that contains an edited file re-analysed whole, clean and
+partitioned as before; a library package's API (`package_api`) and a root nobody declared
+(`exported`) are refused. `nazm patch apply PLAN` writes a `nazm.patch/1` plan all or nothing, only
+to files whose bytes hash to the plan's digests. Evidence: `crates/nazm-cli/tests/workspace_edit.rs`
+(5) — a function renamed in three modules and nowhere else, applied and run; an edit after planning
+refused with nothing written, and a path leaving the base refused; no declared root, a library
+package, an application package; a capture in an importer refused; an exported record field renamed
+through construction labels and projections. **Why still PARTIAL**: MCP has no planning tool for
+the workspace rename and no apply; there is no DAP integration in the language server; and no
+editor was driven — protocol tests do not show an editor's behaviour.
+
 *N33, 2026-09-29: Repository Context Map v1, `nazm.repository-map/1` — VERIFIED; Minimum Task
 Context Planner v1, `nazm.task-context/1` — VERIFIED; G80 — PARTIAL; G69 — PARTIAL; G68 — PARTIAL,
 strengthened; G70 — PARTIAL, unchanged; G83, G84, G85 — RESEARCH, with a byte-level foundation
@@ -2552,9 +2569,12 @@ type parameter and anything in a body that did not parse have no definition and 
 the core prelude has no file, so a definition in it has
 no location and a references answer for one of its entities has no declaration. References
 cover the programs being analysed — each open document's compilation — and not files on disk
-that no open document loads. Rename covers locals and private definitions only: an exported
-entity is refused, because a module no open program loads may use it, and a closed file is
-never edited, because the protocol cannot make its content a precondition. Completion is of an
+that no open document loads. Rename covers locals and private definitions, and — within a declared workspace, since N89 — exported
+ones across every module under the root; without a declared root, and for a library package's API,
+an exported entity is refused, because a module no walk finds may use it. The editor protocol's
+edit is offered only when every file it touches is open, because the protocol cannot make a closed
+file's content a precondition; such a plan goes through `nazm patch`, whose `apply` binds every
+file's bytes. Completion is of an
 identifier in a value, call-head or type position only — no field, variant, label, pattern or
 import-path completion, no auto-import, no ranking — and there is none where the source needed
 syntax recovery. Signature help is for calls and `spawn`s whose callee
