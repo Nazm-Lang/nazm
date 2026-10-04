@@ -405,6 +405,12 @@ the compiler written in Nazm at parity (N102), re-exports (N103), authority (N10
 (N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
 catalogue (N108).
 
+### N103 — re-exports — **complete, 2026-10-05; area 2 stays PARTIAL**
+
+`architecture.md` §7.104 first. `pub use`, with chosen names and `as`; one identity per definition
+in every output; `N0211`–`N0213`; `nazm.interface/11`, `nazm.api-doc/2`, epoch 28; both compilers.
+Not done: check reuse for `nazm build` and `nazm run`. Next: N104.
+
 ### N102 — the compiler written in Nazm at parity — **complete, 2026-10-05: 21 of 21 probes**
 
 `architecture.md` §7.103 first. Effects, capabilities, recursion with the stack check, contracts,
