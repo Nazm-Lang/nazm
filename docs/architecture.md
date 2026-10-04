@@ -7977,6 +7977,14 @@ refused; N90 chooses `b 1.0.0`. **Boundary example.** `a` requires `b =2.0.0` an
 **What would prove this unsuitable.** Two runs over the same inputs choosing differently; a refusal
 where an assignment exists within the bound; an `update` that changes a package not named.
 
+**As built (N90, 2026-10-04).** Three precisions. **A requirement placed on a package already chosen
+is checked again** at every step, since a later choice can constrain an earlier one; such a dead
+end, like a package with no fitting version, is a candidate for the explanation. **`update NAME`
+keeps every other package's lockfile preference**: another package changes only when the named one's
+new version requires it — the exception the last paragraph's "not named" admits. **An unknown name
+is `N0501`**, the code for a package that is not there. A path package's requirements are placed
+by `` `name` ``, a registry package's by `` `name` version ``.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

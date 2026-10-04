@@ -365,6 +365,12 @@ that is not a `Bool` is the existing `N0300`. `nazm.obligations/1` is new, with
 `schema/nazm.obligations-1.json` checked against real output; the persisted interface moved to
 `nazm.interface/10` (an export's `requires`).
 
+**Applied to N90, packages v3.** No code appeared. `N0513`'s meaning is unchanged — no choice of
+versions satisfies every requirement — and it is now said after a backtracking search, naming the
+package no version fitted where the search got deepest and every requirement on it with who placed
+it; a search that reaches its 10,000-candidate bound is `N0513` saying it stopped. `nazm update`
+naming no registry package is the existing `N0501`.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of
