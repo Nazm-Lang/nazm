@@ -657,8 +657,9 @@ fn partition_shifted(
         let edits = match &key {
             FileKey::Path(p) => shifts
                 .iter()
-                .find(|(q, _)| q == p)
-                .map(|(_, e)| e.as_slice()),
+                .filter(|(q, _)| q == p)
+                .map(|(_, e)| e.as_slice())
+                .next(),
             FileKey::Prelude => None,
         };
         let (start, end) = edits.map_or((span.start, span.end), |e| moved(span, e));
