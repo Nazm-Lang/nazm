@@ -5,6 +5,8 @@
 //! by its rule. It depends on nothing of the compiler, so the compiler cannot be its own oracle:
 //! `tests/exhaustive.rs` holds the compiler to it over every program up to a bound.
 
+pub mod statements;
+
 use std::fmt::Write as _;
 
 /// An expression of the core.
