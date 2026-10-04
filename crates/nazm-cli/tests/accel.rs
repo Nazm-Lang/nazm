@@ -10,7 +10,11 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    // The numeric oracle (N88) computes the spec's division and draws generated values.
+    clippy::integer_division,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
 )]
 
 use std::path::Path;
@@ -36,6 +40,7 @@ fn rec(x: Int) -> Int ! {} { if x == 0 { 0 } else { rec(x - 1) } }\n\
 fn loud(x: Int) -> Int ! { io } { 0 }\n\
 fn strs(x: Int) -> Int ! {} { str_len(\"ab\") + x }\n\
 fn two(x: Int, y: Int) -> Int ! {} { x + y }\n\
+fn three(x: Int, y: Int, z: Int) -> Int ! {} { x + y + z }\n\
 fn main() -> Int { 0 }\n";
 
 fn setup(input: &str) -> tempfile::TempDir {
@@ -102,7 +107,15 @@ fn an_ineligible_function_is_refused_by_name_before_any_device() {
             "strs",
             "it calls the built-in `str_len`, which has no device form",
         ),
-        ("two", "its signature must be `(Int) -> Int`"),
+        // A zip of two is a kernel since N88; three are not.
+        (
+            "three",
+            "its signature must be `(Int) -> Int` or `(Int, Int) -> Int`",
+        ),
+        (
+            "two",
+            "`two` takes 2 `Int`s, so it runs over 2 inputs, and 1 was given",
+        ),
         ("nothere", "there is no function `nothere`"),
     ] {
         let d = setup("1\n");
@@ -142,7 +155,8 @@ fn a_kernel_runs_on_the_gpu_and_agrees_with_the_interpreter() {
     let o = accel(d.path(), &["k.nz", "collatz", "--input", "in.txt"]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let v = report(&o);
-    assert_eq!(v["schema"], "nazm.accel/1");
+    assert_eq!(v["schema"], "nazm.accel/2");
+    assert_eq!(v["kernel"]["shape"], "map");
     assert_eq!(v["reference"], "agrees with the interpreter");
     assert_eq!(v["device"]["api"], "OpenCL");
     assert_eq!(v["elements"], 20_000);
@@ -212,4 +226,241 @@ fn a_failure_on_the_gpu_is_the_lowest_failing_index_at_its_site() {
     let d = setup("0 1 5 -9223372036854775807\n");
     let v = report(&accel(d.path(), &["k.nz", "edges", "--input", "in.txt"]));
     assert_eq!(v["reference"], "agrees with the interpreter");
+}
+
+#[test]
+fn a_zip_needs_two_inputs_of_one_length_before_any_device() {
+    let d = setup("1 2 3\n");
+    std::fs::write(d.path().join("four.txt"), "1 2 3 4\n").unwrap();
+    let o = accel(
+        d.path(),
+        &["k.nz", "two", "--input", "in.txt", "--input", "four.txt"],
+    );
+    assert_eq!(o.status.code(), Some(1));
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        e.contains("error[N0394]") && e.contains("these have 3 and 4"),
+        "{e}"
+    );
+    assert!(o.stdout.is_empty());
+    // A zip's kernel reads two buffers, element by element.
+    let source = kernel_source("two");
+    assert!(source.contains("__global const long *nz_in2"), "{source}");
+    assert!(
+        source.contains("nz_in[nz_index], nz_in2[nz_index]"),
+        "{source}"
+    );
+}
+
+/// Needs macOS's OpenCL and a GPU (N88): a zip and the three reductions, each held to the
+/// interpreter and to an independent computation; `add` fails where the running sum overflows.
+#[test]
+#[ignore = "runs on the GPU"]
+fn a_zip_and_a_reduction_run_on_the_gpu_and_agree() {
+    let n: i64 = 50_000;
+    let a: String = (1..=n).map(|i| format!("{i} ")).collect();
+    let b: String = (1..=n).map(|i| format!("{} ", i % 7)).collect();
+    let d = setup(&a);
+    std::fs::write(d.path().join("b.txt"), &b).unwrap();
+    let want_sum: i64 = (1..=n).map(|i| i * (i % 7) + i).sum();
+    let want_max: i64 = (1..=n).map(|i| i + i % 7).max().unwrap();
+    let want_min: i64 = (1..=n).map(|i| i + i % 7).min().unwrap();
+    for (op, want) in [("add", want_sum), ("max", want_max), ("min", want_min)] {
+        let kernel = if op == "add" { "zipped" } else { "two" };
+        let src = format!("{KERNELS}fn zipped(x: Int, y: Int) -> Int ! {{}} {{ x * y + x }}\n");
+        std::fs::write(d.path().join("k.nz"), src).unwrap();
+        let v = report(&accel(
+            d.path(),
+            &[
+                "k.nz", kernel, "--input", "in.txt", "--input", "b.txt", "--reduce", op,
+            ],
+        ));
+        assert_eq!(v["kernel"]["shape"], "zip");
+        assert_eq!(v["reference"], "agrees with the interpreter", "{v}");
+        assert_eq!(v["reduce"]["value"].as_i64(), Some(want), "{op}: {v}");
+        assert_eq!(v["inputs"].as_array().unwrap().len(), 2);
+    }
+    // `add` checks the running sum, as `ints_sum` does, though the total fits.
+    std::fs::write(d.path().join("ov.txt"), "9223372036854775807 1 -1\n").unwrap();
+    let o = accel(
+        d.path(),
+        &["k.nz", "square", "--input", "ov.txt", "--reduce", "add"],
+    );
+    assert_eq!(o.status.code(), Some(2));
+}
+
+/// One generated kernel's body over `x` and `y`, and its meaning in 128-bit arithmetic: the
+/// value, or the code of the first failure in evaluation order.
+#[derive(Clone, Debug)]
+enum Gen {
+    X,
+    Y,
+    Lit(i64),
+    Neg(Box<Gen>),
+    Bin(char, Box<Gen>, Box<Gen>),
+    If(Box<Gen>, Box<Gen>, Box<Gen>, Box<Gen>),
+}
+
+const EDGES: [i64; 9] = [0, 1, -1, 2, 7, -3, i64::MAX, i64::MIN + 1, 3037000500];
+
+fn next(seed: &mut u64) -> u64 {
+    *seed ^= *seed << 13;
+    *seed ^= *seed >> 7;
+    *seed ^= *seed << 17;
+    *seed
+}
+
+fn generate(seed: &mut u64, depth: u32) -> Gen {
+    let pick = next(seed) % if depth == 0 { 3 } else { 7 };
+    match pick {
+        0 => Gen::X,
+        1 => Gen::Y,
+        2 => Gen::Lit(EDGES[(next(seed) % EDGES.len() as u64) as usize]),
+        3 => Gen::Neg(Box::new(generate(seed, depth - 1))),
+        4 | 5 => {
+            let op = ['+', '-', '*', '/', '%'][(next(seed) % 5) as usize];
+            Gen::Bin(
+                op,
+                Box::new(generate(seed, depth - 1)),
+                Box::new(generate(seed, depth - 1)),
+            )
+        }
+        _ => Gen::If(
+            Box::new(generate(seed, depth - 1)),
+            Box::new(generate(seed, depth - 1)),
+            Box::new(generate(seed, depth - 1)),
+            Box::new(generate(seed, depth - 1)),
+        ),
+    }
+}
+
+fn source(g: &Gen) -> String {
+    match g {
+        Gen::X => "x".to_owned(),
+        Gen::Y => "y".to_owned(),
+        Gen::Lit(v) if *v < 0 => format!("(0 - {})", -(i128::from(*v))),
+        Gen::Lit(v) => v.to_string(),
+        Gen::Neg(a) => format!("(0 - {})", source(a)),
+        Gen::Bin(op, a, b) => format!("({} {op} {})", source(a), source(b)),
+        Gen::If(a, b, t, e) => format!(
+            "(if {} < {} {{ {} }} else {{ {} }})",
+            source(a),
+            source(b),
+            source(t),
+            source(e)
+        ),
+    }
+}
+
+/// `Ok(value)` or `Err(code)`, by the spec's checked arithmetic.
+fn meaning(g: &Gen, x: i64, y: i64) -> Result<i64, &'static str> {
+    let fit = |v: i128| i64::try_from(v).map_err(|_| "N0400");
+    match g {
+        Gen::X => Ok(x),
+        Gen::Y => Ok(y),
+        Gen::Lit(v) if *v < 0 => fit(0 - (-i128::from(*v))),
+        Gen::Lit(v) => Ok(*v),
+        Gen::Neg(a) => fit(0 - i128::from(meaning(a, x, y)?)),
+        Gen::Bin(op, a, b) => {
+            let l = i128::from(meaning(a, x, y)?);
+            let r = i128::from(meaning(b, x, y)?);
+            match op {
+                '+' => fit(l + r),
+                '-' => fit(l - r),
+                '*' => fit(l * r),
+                '/' if r == 0 => Err("N0401"),
+                '/' => fit(l / r),
+                '%' if r == 0 => Err("N0401"),
+                _ => fit(l % r),
+            }
+        }
+        Gen::If(a, b, t, e) => {
+            if meaning(a, x, y)? < meaning(b, x, y)? {
+                meaning(t, x, y)
+            } else {
+                meaning(e, x, y)
+            }
+        }
+    }
+}
+
+/// The numeric oracle on generated inputs (N88, §7.89): kernels generated over `+ - * / %`,
+/// comparisons, `if` and literals at `Int`'s edges, over elements across its range, each run on
+/// the GPU and held to the interpreter (inside `nazm accel`) and to the spec's arithmetic in 128
+/// bits (here): the results, or the lowest failing index and its code. Needs macOS's OpenCL.
+#[test]
+#[ignore = "runs on the GPU"]
+fn generated_kernels_agree_with_the_interpreter_and_with_128_bit_arithmetic() {
+    let mut seed: u64 = 0x88;
+    let d = setup("0\n");
+    let mut compared = 0;
+    for k in 0..40 {
+        let g = generate(&mut seed, 4);
+        let src = format!(
+            "fn gen(x: Int, y: Int) -> Int ! {{}} {{ {} }}\nfn main() -> Int {{ 0 }}\n",
+            source(&g)
+        );
+        std::fs::write(d.path().join("g.nz"), &src).unwrap();
+        let xs: Vec<i64> = (0..200)
+            .map(|i| {
+                if i % 9 == 0 {
+                    EDGES[(i / 9) % EDGES.len()]
+                } else {
+                    (next(&mut seed) as i64) >> (next(&mut seed) % 63)
+                }
+            })
+            .collect();
+        let ys: Vec<i64> = (0..200)
+            .map(|i| {
+                if i % 11 == 0 {
+                    EDGES[(i / 11) % EDGES.len()]
+                } else {
+                    (next(&mut seed) as i64) >> (next(&mut seed) % 63)
+                }
+            })
+            .collect();
+        let line = |v: &[i64]| v.iter().map(i64::to_string).collect::<Vec<_>>().join(" ");
+        std::fs::write(d.path().join("x.txt"), line(&xs)).unwrap();
+        std::fs::write(d.path().join("y.txt"), line(&ys)).unwrap();
+        let o = accel(
+            d.path(),
+            &["g.nz", "gen", "--input", "x.txt", "--input", "y.txt"],
+        );
+        let v = report(&o);
+        assert_eq!(
+            v["reference"], "agrees with the interpreter",
+            "kernel {k}: {src} {v}"
+        );
+        let first = xs
+            .iter()
+            .zip(&ys)
+            .enumerate()
+            .find_map(|(i, (x, y))| meaning(&g, *x, *y).err().map(|c| (i, c)));
+        match first {
+            Some((i, code)) => {
+                assert_eq!(
+                    v["result"]["index"].as_u64(),
+                    Some(i as u64),
+                    "kernel {k}: {src}"
+                );
+                assert_eq!(
+                    v["result"]["failure"].as_str(),
+                    Some(code),
+                    "kernel {k}: {src}"
+                );
+            }
+            None => {
+                let sum = xs.iter().zip(&ys).fold(0i64, |a, (x, y)| {
+                    a.wrapping_add(meaning(&g, *x, *y).unwrap())
+                });
+                assert_eq!(
+                    v["result"]["checksum"].as_i64(),
+                    Some(sum),
+                    "kernel {k}: {src}"
+                );
+            }
+        }
+        compared += 1;
+    }
+    assert_eq!(compared, 40);
 }

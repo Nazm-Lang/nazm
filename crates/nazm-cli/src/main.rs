@@ -580,9 +580,14 @@ enum Command {
         file: PathBuf,
         /// The function to run as a kernel, in the file's own module.
         kernel: String,
-        /// The input: whitespace-separated `Int`s, at most 8,000,000.
-        #[arg(long, value_name = "FILE")]
-        input: PathBuf,
+        /// The input: whitespace-separated `Int`s, at most 8,000,000. Twice for a kernel of two
+        /// `Int`s, a zip (N88): the two inputs are of one length, element `i` of each its arguments.
+        #[arg(long, value_name = "FILE", required = true)]
+        input: Vec<PathBuf>,
+        /// Fold the kernel's results into one `Int`, in index order (N88): `add`, checked as
+        /// `ints_sum` is; `min`; `max`. On the host, after the transfer, timed in the report.
+        #[arg(long, value_name = "OP", value_parser = ["add", "min", "max"])]
+        reduce: Option<String>,
         /// Do not hold the results to the interpreter's.
         #[arg(long)]
         no_check: bool,
@@ -1174,9 +1179,19 @@ fn main() -> ExitCode {
             file,
             kernel,
             input,
+            reduce,
             no_check,
             print_kernel,
-        } => return accel::run(&file, &kernel, &input, !no_check, print_kernel),
+        } => {
+            return accel::run(
+                &file,
+                &kernel,
+                &input,
+                reduce.as_deref().and_then(accel::Reduce::by_name),
+                !no_check,
+                print_kernel,
+            )
+        }
         Command::Comptime {
             file,
             function,

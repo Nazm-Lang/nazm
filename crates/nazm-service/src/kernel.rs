@@ -39,6 +39,8 @@ pub struct Kernel {
     pub sites: Vec<Site>,
     /// The functions it includes, the kernel's own first.
     pub functions: Vec<String>,
+    /// How many input sequences it reads (N88): 1 for a map, 2 for a zip.
+    pub arity: u32,
 }
 
 /// The kernel for `name`, or why not.
@@ -65,14 +67,14 @@ pub fn kernel(
         at,
         why: why.to_owned(),
     };
-    if entry.params != 1
-        || entry.local(LocalId(0)).map(|l| l.ty) != Some(Type::Int)
-        || entry.ret != Type::Int
-    {
+    // A map of one sequence or a zip of two (N88, §7.89).
+    let ints = (0..entry.params).all(|i| entry.local(LocalId(i)).map(|l| l.ty) == Some(Type::Int));
+    if !(1..=2).contains(&entry.params) || !ints || entry.ret != Type::Int {
         return Err(refuse(
             entry,
             entry.name_span,
-            "a kernel maps one `Int` to an `Int`: its signature must be `(Int) -> Int`",
+            "a kernel maps one or two `Int`s to an `Int`: its signature must be `(Int) -> Int` or \
+             `(Int, Int) -> Int`",
         ));
     }
     // Every function the kernel reaches, in an order where each comes after what it calls.
@@ -98,12 +100,21 @@ pub fn kernel(
         };
         g.function(f)?;
     }
+    // One input buffer per parameter; element `i` of each is the work item's argument.
+    let (inputs, args) = if entry.params == 2 {
+        (
+            "__global const long *nz_in, __global const long *nz_in2",
+            "nz_in[nz_index], nz_in2[nz_index]",
+        )
+    } else {
+        ("__global const long *nz_in", "nz_in[nz_index]")
+    };
     let _ = writeln!(
         g.out,
-        "__kernel void nz_kernel(__global const long *nz_in, __global long *nz_out, __global int *nz_fail) {{\n\
+        "__kernel void nz_kernel({inputs}, __global long *nz_out, __global int *nz_fail) {{\n\
          \x20 size_t nz_index = get_global_id(0);\n\
          \x20 int nz_flag = 0;\n\
-         \x20 long r = {}(nz_in[nz_index], nz_fail, nz_index, &nz_flag);\n\
+         \x20 long r = {}({args}, nz_fail, nz_index, &nz_flag);\n\
          \x20 nz_out[nz_index] = r;\n\
          }}",
         cname(entry)
@@ -116,6 +127,7 @@ pub fn kernel(
             .rev()
             .filter_map(|i| program.function(*i).map(|f| f.name.clone()))
             .collect(),
+        arity: entry.params,
     })
 }
 
