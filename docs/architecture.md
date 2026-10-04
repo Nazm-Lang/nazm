@@ -8252,6 +8252,40 @@ with `N0400` in all three.
 **What would prove this unsuitable.** A generated sequence on which a VM and the simulator disagree
 while the written sequences agree — which is the point of generating them.
 
+## 7.98 Formal semantics v2: statements, loops and recursion, bounded and machine-checked — N97, 2026-10-04
+
+Written before the code. N61's formal core is expressions over `Int` and `Bool`; functions, loops and
+mutation are "not in the core", and nothing is proved.
+
+**The proof assistant, chosen deliberately: none.** None is installed here — no Coq, Lean, Agda,
+Isabelle, Dafny or SMT solver — and nothing can be installed offline. Proofs of progress and
+preservation, effect soundness and explicit-flow properties are therefore **BLOCKED**, and nothing
+here is called a proof. What extends is the executable model and its bounded, machine-checked
+properties.
+
+**Phase A, as a model.** `nazm.formal-core/2` (`docs/formal-core.md` §2, `nazm_formal::statements`):
+`let mut`, assignment, `while`, `if` as a statement, `return`, and one recursive function `f(n: Int)`,
+over the core's arithmetic and traps. Big-step with **fuel** — each loop turn and call spends one, 400
+in all — and running out is no outcome: the semantics declines, since Nazm bounds neither iteration
+nor recursion. Properties over **every** program of a stated bound of three families (loops of two
+mutable bindings, branches with an early return, recursion built on `f(n − 1)`): S1 soundness —
+never stuck; S2 determinism; S3 correspondence — Nazm's interpreter gives the same value or trap for
+every program the semantics finishes; S4 the checker accepts every program of the bound.
+
+**Not here.** Records, enums, strings and sequences in the model; Phase B (ownership and
+reclamation, effects and capabilities, explicit flows) and Phase C (structured concurrency, Core/MIR
+refinement); any property beyond the bound. The whole language is not formally verified, and nothing
+says so.
+
+**Versions.** `nazm.formal-core/2` is new and contains `/1`, unchanged. Nothing in the compiler changes.
+
+**Negative example.** A loop that never ends within the fuel — `while 0 < x { x = x + 1; }` from 1 —
+is out of fuel, and the interpreter is not asked. **Boundary example.** The same loop from `i64::MAX`
+traps `N0400` on its first turn, in the model and the interpreter alike.
+
+**What would prove this unsuitable.** A program of the bound the model and the interpreter answer
+differently — which, as N61's first run did, may be an error in either.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
