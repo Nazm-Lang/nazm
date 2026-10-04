@@ -1344,12 +1344,12 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        27,
+        28,
         "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42, N49, N50, N51, N52, N53, N54, N55, \
-         N62, N66, N76, N78, N79, N80, N85, N86 and N87 each changed what the checker accepts, \
-         so the epoch moved twenty-six times"
+         N62, N66, N76, N78, N79, N80, N85, N86, N87 and N103 each changed what the checker \
+         accepts, so the epoch moved twenty-seven times"
     );
-    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/10");
+    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/11");
 }
 
 /// Every check entry under `dir`'s derived store, with the directory its store is at.
@@ -1732,6 +1732,6 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     // for escapes and the syntax beside them, N50 for function values, N51 for effect
     // parameters, and N52 for declassification, N53–N55 for channels, the clock and FFI v2,
     // N62 for device registers, N66 for `ints_sum`, N76 for Unicode escapes, N78 for traits, N79 for attenuation, N80 for provenance v3, N85 for FFI v3, N86 for the
-    // device registers by width and N87 for contracts.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 27);
+    // device registers by width, N87 for contracts and N103 for re-exports.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 28);
 }

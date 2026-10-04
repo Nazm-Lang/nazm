@@ -1067,7 +1067,7 @@ fn an_api_document_matches_the_published_schema() {
     .unwrap();
     let o = nazm_in(d.path(), &["doc", "m.nz"]);
     check_against(
-        "nazm.api-doc-1.json",
+        "nazm.api-doc-2.json",
         &lines(&String::from_utf8_lossy(&o.stdout)),
     );
 }

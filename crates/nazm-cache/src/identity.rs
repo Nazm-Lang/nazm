@@ -202,7 +202,11 @@ use crate::digest::{self, Framed};
 /// `27` — N87, 2026-10-04. Contracts: `requires` and `ensures` moved from refused (`N0100`) to
 /// accepted, a clause that is not pure is `N0614`, and a literal call breaking a precondition
 /// `N0615`.
-pub const SEMANTIC_EPOCH: u32 = 27;
+/// `28` — N103, 2026-10-04. Re-exports: `pub use "PATH";` and `pub use "PATH" { a, b as c };`
+/// moved from refused (`N0100`) to accepted, offering another module's definitions under this
+/// module's names; a name the module does not export is `N0211`, one offered twice `N0212`,
+/// and a cycle of re-exports `N0213`.
+pub const SEMANTIC_EPOCH: u32 = 28;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -275,6 +279,9 @@ pub const CHECKER_CODES: &[&str] = &[
     "PROPAGATE_NON_RESULT",
     "PROPAGATE_OUTSIDE_RESULT",
     "RECURSIVE_RECORD",
+    "REEXPORT_COLLIDES",
+    "REEXPORT_CYCLE",
+    "REEXPORT_UNKNOWN",
     "RESTRICTED_FLOW",
     "SPAWN_OUTSIDE_SCOPE",
     "TRAIT_METHOD_SELF",

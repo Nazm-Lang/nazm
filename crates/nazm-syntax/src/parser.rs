@@ -37,8 +37,8 @@ use nazm_span::{FileId, Span};
 use crate::ast::{
     Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm,
-    MethodOf, Param, PatternField, Place, PlaceField, Program, Qualifier, Record, Requirement,
-    Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, While,
+    MethodOf, Param, PatternField, Place, PlaceField, Program, Qualifier, Record, Reexport,
+    ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -360,7 +360,10 @@ pub(crate) fn parse_region(
         ) {
             p.muted = false;
         }
-        let item = if p.at(&TokenKind::Use) {
+        // `pub use` (N103) is an import that re-exports.
+        let pub_use = p.at(&TokenKind::Pub)
+            && matches!(p.tokens.get(p.pos + 1).map(|t| &t.kind), Some(TokenKind::Use));
+        let item = if p.at(&TokenKind::Use) || pub_use {
             p.import().map(Item::Import)
         } else if p.at(&TokenKind::Impl) {
             p.impl_decl().map(|(d, m)| Item::Impl(d, m))
@@ -851,7 +854,12 @@ impl<'a> Parser<'a> {
 
     fn import_inner(&mut self) -> Option<Import> {
         let at = self.checkpoint();
+        let pub_span = self.at(&TokenKind::Pub).then(|| self.peek_span());
+        if pub_span.is_some() {
+            self.bump();
+        }
         let start = self.expect(&TokenKind::Use, "to start an import")?;
+        let start = pub_span.map_or(start, |p| p.join(start));
         let path_span = self.peek_span();
         let path = match self.advance() {
             TokenKind::Str(p) => p,
@@ -891,12 +899,71 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // What a `pub use` re-exports (N103): everything, or the names in braces, each
+        // optionally under another name.
+        let mut reexport = None;
+        if let Some(pub_span) = pub_span {
+            if let Some(a) = &alias {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        a.span,
+                        "a re-export is not imported under a name",
+                    )
+                    .help(
+                        "`pub use \"other.nz\";` re-exports every name it exports;                          `pub use \"other.nz\" { name, other as alias };` chooses",
+                    ),
+                );
+                return None;
+            }
+            let mut names = None;
+            if self.eat(&TokenKind::LBrace) {
+                let mut list = Vec::new();
+                while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+                    let span = self.peek_span();
+                    let TokenKind::Ident(name) = self.advance() else {
+                        self.report(Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            span,
+                            "expected a name to re-export",
+                        ));
+                        return None;
+                    };
+                    let mut renamed = None;
+                    if matches!(self.peek(), TokenKind::Ident(w) if w == "as") {
+                        self.advance();
+                        let alias_span = self.peek_span();
+                        let TokenKind::Ident(new) = self.advance() else {
+                            self.report(Diagnostic::error(
+                                codes::UNEXPECTED_TOKEN,
+                                alias_span,
+                                "expected the name to re-export it under, after `as`",
+                            ));
+                            return None;
+                        };
+                        renamed = Some((new, alias_span));
+                    }
+                    list.push(ReexportName {
+                        name,
+                        span,
+                        alias: renamed,
+                    });
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&TokenKind::RBrace, "to close the names re-exported")?;
+                names = Some(list);
+            }
+            reexport = Some(Reexport { pub_span, names });
+        }
         let end = self.expect(&TokenKind::Semi, "to end an import")?;
         self.wrap(at, SyntaxKind::UseItem);
         Some(Import {
             path,
             path_span,
             alias,
+            reexport,
             span: start.join(end),
         })
     }

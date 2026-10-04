@@ -89,6 +89,12 @@ pub mod codes {
     pub const ALIAS_COLLIDES: Code = Code::new("N0209");
     /// `NAME::item` where `NAME` is no alias, or the aliased module exports no `item` (N49).
     pub const UNKNOWN_QUALIFIED_NAME: Code = Code::new("N0210");
+    /// A `pub use` names something the module it re-exports from does not export (N103).
+    pub const REEXPORT_UNKNOWN: Code = Code::new("N0211");
+    /// A module offers one name twice, its own or a re-export's (N103).
+    pub const REEXPORT_COLLIDES: Code = Code::new("N0212");
+    /// Modules re-export from each other in a cycle (N103).
+    pub const REEXPORT_CYCLE: Code = Code::new("N0213");
 
     // Types
     pub const TYPE_MISMATCH: Code = Code::new("N0300");

@@ -571,10 +571,13 @@ pub fn check_reusing(
     // completed once every definition has its fields. `nazm_sema::generic` says why.
     res.types_mut().defer();
     let before = errors.len();
-    let type_interfaces = declare_types(&units, &mut res, &mut errors);
+    let mut type_interfaces = declare_types(&units, &mut res, &mut errors);
     if errors.len() != before {
         declared_cleanly.iter_mut().for_each(|c| *c = false);
     }
+    // What `pub use` re-exports of types and traits (N103), before anything resolves a type
+    // name an importer writes. Refusals wait for the full interfaces below.
+    apply_reexports(&units, &mut type_interfaces, &mut res, &mut Vec::new(), false);
 
     // Stage 0b: each module's field types, against the type half of its imports'
     // interfaces. Stage 0c: the layouts those fields describe.
@@ -607,7 +610,7 @@ pub fn check_reusing(
         declared_cleanly.iter_mut().for_each(|c| *c = false);
     }
 
-    let interfaces: Vec<UnitInterface> = units
+    let mut interfaces: Vec<UnitInterface> = units
         .iter()
         .enumerate()
         .map(|(n, u)| {
@@ -622,6 +625,17 @@ pub fn check_reusing(
             interface
         })
         .collect();
+    // And everything `pub use` re-exports (N103), now that every module offers its own.
+    let mut refused = Vec::new();
+    let unclean = apply_reexports(&units, &mut interfaces, &mut res, &mut refused, true);
+    for m in unclean {
+        if let Some(n) = units.iter().position(|u| u.module == m) {
+            if let Some(c) = declared_cleanly.get_mut(n) {
+                *c = false;
+            }
+        }
+    }
+    errors.extend(refused);
 
     reuse.plan(graph, &interfaces, res.types());
 
@@ -873,8 +887,12 @@ fn trait_scope(unit: &Unit<'_>, res: &Resolution) -> HashMap<String, Option<Trai
     }
     let mut out: HashMap<String, Option<TraitId>> = HashMap::new();
     for d in unit.imports {
+        let reexported: Vec<TraitId> = res.traits().reexported_by(d.on).collect();
         for (id, t) in res.traits().iter() {
-            if t.module != d.on || !t.visibility.is_exported() {
+            // Its own exported traits, and those it re-exports (N103).
+            let offered =
+                (t.module == d.on && t.visibility.is_exported()) || reexported.contains(&id);
+            if !offered {
                 continue;
             }
             if d.plain {
@@ -895,13 +913,314 @@ fn trait_scope(unit: &Unit<'_>, res: &Resolution) -> HashMap<String, Option<Trai
     out
 }
 
-/// The modules whose impls `unit` may use (N78): itself and every module it imports
-/// directly. Coherence is over the whole compilation; *use* is limited to what the module's
-/// own check key covers, so a cached check never depends on an impl it did not see.
-fn impl_scope(unit: &Unit<'_>) -> Vec<ModuleId> {
-    let mut out = vec![unit.module];
-    out.extend(unit.imports.iter().map(|d| d.on));
+/// Every type an interface lets an importer name, by the name it writes: each nameable record
+/// and enum by its own, and each type re-exported under another (N103).
+fn offered_types(iface: &UnitInterface, res: &Resolution) -> Vec<(String, Type)> {
+    let mut out: Vec<(String, Type)> = iface
+        .records()
+        .iter()
+        .filter(|e| e.nameable)
+        .map(|e| Type::Record(e.def))
+        .chain(
+            iface
+                .enums()
+                .iter()
+                .filter(|e| e.nameable)
+                .map(|e| Type::Enum(e.def)),
+        )
+        .filter_map(|t| type_name_of(res, t).map(|n| (n, t)))
+        .collect();
+    out.extend(iface.renamed().iter().cloned());
     out
+}
+
+/// The modules whose impls `unit` may use (N78): itself and every module it imports
+/// directly — and every module those re-export from (N103), whose impls their interfaces
+/// carry. Coherence is over the whole compilation; *use* is limited to what the module's own
+/// check key covers, so a cached check never depends on an impl it did not see.
+fn impl_scope(unit: &Unit<'_>, res: &Resolution) -> Vec<ModuleId> {
+    let mut out = vec![unit.module];
+    let mut work: Vec<ModuleId> = unit.imports.iter().map(|d| d.on).collect();
+    while let Some(m) = work.pop() {
+        if out.contains(&m) {
+            continue;
+        }
+        out.push(m);
+        work.extend(res.traits().reexport_sources(m));
+    }
+    out
+}
+
+/// Apply every `pub use` (N103): each module's interface gains the definitions it
+/// re-exports, under their own names or the names it gives them, each the **same**
+/// definition — its id, and so its identity, is the defining module's. With `full`, the
+/// functions and impls too, and every refusal reported; without, types and traits only,
+/// silently, for the type interfaces the importers' types resolve against.
+///
+/// A module re-exporting from one that re-exports is applied after it; a cycle of re-exports
+/// has no order and is refused (`N0213`). Returns the modules a refusal was reported for.
+fn apply_reexports(
+    units: &[Unit<'_>],
+    ifaces: &mut [UnitInterface],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+    full: bool,
+) -> Vec<ModuleId> {
+    let mut unclean = Vec::new();
+    let mut done: Vec<bool> = units
+        .iter()
+        .map(|u| u.imports.iter().all(|d| d.reexport.is_none()))
+        .collect();
+    let finished = |done: &[bool], m: ModuleId| {
+        units
+            .iter()
+            .position(|u| u.module == m)
+            .is_none_or(|i| done.get(i).copied().unwrap_or(true))
+    };
+    let mut progressed = true;
+    while progressed {
+        progressed = false;
+        for (n, u) in units.iter().enumerate() {
+            if done.get(n).copied().unwrap_or(true) {
+                continue;
+            }
+            if !u
+                .imports
+                .iter()
+                .filter(|d| d.reexport.is_some())
+                .all(|d| finished(&done, d.on))
+            {
+                continue;
+            }
+            for d in u.imports.iter() {
+                let Some(spec) = &d.reexport else { continue };
+                let before = errors.len();
+                reexport_one(u.module, d.on, spec, ifaces, res, errors, full);
+                if errors.len() != before {
+                    unclean.push(u.module);
+                }
+            }
+            if let Some(slot) = done.get_mut(n) {
+                *slot = true;
+            }
+            progressed = true;
+        }
+    }
+    if full {
+        for (n, u) in units.iter().enumerate() {
+            if done.get(n).copied().unwrap_or(true) {
+                continue;
+            }
+            for d in u.imports.iter() {
+                if let Some(spec) = &d.reexport {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::REEXPORT_CYCLE,
+                            spec.at,
+                            "this re-export is part of a cycle of re-exports",
+                        )
+                        .help(
+                            "a re-export offers what another module offers, so a cycle of \
+                             them offers nothing in particular: re-export from the module \
+                             that defines the name",
+                        ),
+                    );
+                    unclean.push(u.module);
+                }
+            }
+        }
+    }
+    unclean
+}
+
+/// One `pub use`: what module `from` offers, added to `module`'s interface.
+fn reexport_one(
+    module: ModuleId,
+    from: ModuleId,
+    spec: &nazm_sema::ReexportSpec,
+    ifaces: &mut [UnitInterface],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+    full: bool,
+) {
+    let Some(src) = ifaces.get(from.index()).cloned() else {
+        return;
+    };
+    res.traits_mut().record_reexport_source(module, from);
+    // What `from` offers, by the name an importer writes.
+    let mut types: Vec<(String, Type)> = Vec::new();
+    for r in src.records().iter().filter(|r| r.nameable) {
+        if let Some(d) = res.records().get(r.def) {
+            types.push((d.name.clone(), Type::Record(r.def)));
+        }
+    }
+    for e in src.enums().iter().filter(|e| e.nameable) {
+        if let Some(d) = res.enums().get(e.def) {
+            types.push((d.name.clone(), Type::Enum(e.def)));
+        }
+    }
+    types.extend(src.renamed().iter().cloned());
+    let traits: Vec<(String, TraitId)> = res
+        .traits()
+        .iter()
+        .filter(|(_, t)| t.module == from && t.visibility.is_exported())
+        .map(|(id, t)| (t.name.clone(), id))
+        .chain(
+            res.traits()
+                .reexported_by(from)
+                .filter_map(|id| res.traits().get(id).map(|t| (t.name.clone(), id)))
+                .collect::<Vec<_>>(),
+        )
+        .collect();
+    let functions: Vec<Export> = src.exports().to_vec();
+
+    // The chosen names, or every one, with the name each is offered under.
+    struct Chosen {
+        name: String,
+        offered: String,
+        at: Span,
+        renamed: bool,
+    }
+    let chosen: Vec<Chosen> = match &spec.names {
+        Some(list) => list
+            .iter()
+            .map(|i| Chosen {
+                name: i.name.clone(),
+                offered: i.offered().to_owned(),
+                at: i.span,
+                renamed: i.alias.is_some(),
+            })
+            .collect(),
+        None => functions
+            .iter()
+            .map(|e| e.name.clone())
+            .chain(types.iter().map(|(n, _)| n.clone()))
+            .chain(traits.iter().map(|(n, _)| n.clone()))
+            .map(|name| Chosen {
+                offered: name.clone(),
+                name,
+                at: spec.at,
+                renamed: false,
+            })
+            .collect(),
+    };
+
+    for c in chosen {
+        let function = functions.iter().find(|e| e.name == c.name);
+        let ty = types.iter().find(|(n, _)| *n == c.name).map(|(_, t)| *t);
+        let tr = traits.iter().find(|(n, _)| *n == c.name).map(|(_, t)| *t);
+        let Some(here) = ifaces.get(module.index()) else {
+            return;
+        };
+        // A name this module already offers, its own or another re-export's.
+        let taken_fn = here.exports().iter().any(|e| e.name == c.offered);
+        let taken_ty = here.user_type(res.types(), &c.offered).is_some()
+            || res
+                .traits()
+                .iter()
+                .any(|(_, t)| t.module == module && t.name == c.offered)
+            || res
+                .traits()
+                .reexported_by(module)
+                .any(|id| res.traits().get(id).is_some_and(|t| t.name == c.offered));
+        if function.is_none() && ty.is_none() && tr.is_none() {
+            if full {
+                errors.push(
+                    Diagnostic::error(
+                        codes::REEXPORT_UNKNOWN,
+                        c.at,
+                        format!(
+                            "`{}` is not exported by the module this re-exports from",
+                            c.name
+                        ),
+                    )
+                    .help("a module re-exports only what the module it names exports"),
+                );
+            }
+            continue;
+        }
+        if let Some(e) = function {
+            if full {
+                if taken_fn {
+                    errors.push(taken(&c.offered, c.at));
+                    continue;
+                }
+                let mut offered = e.clone();
+                offered.name.clone_from(&c.offered);
+                // Its identity is where it is defined, however many modules pass it on.
+                if offered.origin.is_none() {
+                    offered.origin = Some((from, e.name.clone()));
+                }
+                if let Some(i) = ifaces.get_mut(module.index()) {
+                    i.add_reexport(offered);
+                }
+                if c.at != spec.at {
+                    res.record_call(c.at, Callee::Function(e.def));
+                }
+            }
+        }
+        if let Some(t) = ty {
+            if taken_ty && full && function.is_none() {
+                errors.push(taken(&c.offered, c.at));
+                continue;
+            }
+            if !taken_ty {
+                if let Some(i) = ifaces.get_mut(module.index()) {
+                    i.add_reexported_type(t, c.renamed.then(|| c.offered.clone()));
+                }
+                if c.at != spec.at {
+                    match t {
+                        Type::Record(id) => res.record_type_name(c.at, TypeNode::Record(id)),
+                        Type::Enum(id) => res.record_type_name(c.at, TypeNode::Enum(id)),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if let Some(t) = tr {
+            if c.renamed {
+                if full {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::REEXPORT_UNKNOWN,
+                            c.at,
+                            format!("`{}` is a trait, which is re-exported under its own name", c.name),
+                        )
+                        .help("a trait's name is how an importer's bounds and calls find it: drop `as`"),
+                    );
+                }
+                continue;
+            }
+            // Recorded at the type stage already: the full stage only reports.
+            let again = res.traits().reexported_by(module).any(|x| x == t);
+            if taken_ty && !again && full && function.is_none() && ty.is_none() {
+                errors.push(taken(&c.offered, c.at));
+                continue;
+            }
+            res.traits_mut().record_reexport(module, t);
+            if c.at != spec.at {
+                res.traits_mut().record_mention(c.at, t);
+            }
+        }
+    }
+    if full {
+        if let Some(i) = ifaces.get_mut(module.index()) {
+            i.add_reexported_traits(src.traits(), src.impls());
+        }
+    }
+}
+
+/// `N0212`: a name this module offers twice.
+fn taken(name: &str, at: Span) -> Diagnostic {
+    Diagnostic::error(
+        codes::REEXPORT_COLLIDES,
+        at,
+        format!("`{name}` is already offered by this module"),
+    )
+    .help(
+        "a module offers each name once: re-export it under another name with `as`, or \
+         rename the definition",
+    )
 }
 
 /// Stage 0c (N78): every trait's method signatures, with `Self` the trait's own type
@@ -2018,22 +2337,8 @@ fn type_environment(
         // Under a name (N49): every nameable type as `alias::Name`, colliding with nothing.
         for (alias, _) in &d.aliases {
             aliases.push(alias.clone());
-            let offered = iface
-                .records()
-                .iter()
-                .filter(|e| e.nameable)
-                .map(|e| Type::Record(e.def))
-                .chain(
-                    iface
-                        .enums()
-                        .iter()
-                        .filter(|e| e.nameable)
-                        .map(|e| Type::Enum(e.def)),
-                );
-            for offer in offered {
-                if let Some(name) = type_name_of(res, offer) {
-                    names.insert(qualified_key(alias, &name), offer);
-                }
+            for (name, offer) in offered_types(iface, res) {
+                names.insert(qualified_key(alias, &name), offer);
             }
         }
         if !d.plain {
@@ -2042,23 +2347,7 @@ fn type_environment(
         // Records then enums, each the ones this interface makes nameable. One loop body
         // for both: which kind a name refers to changes the `Type` that goes in the map
         // and nothing else about the rule.
-        let offered: Vec<Type> = iface
-            .records()
-            .iter()
-            .filter(|e| e.nameable)
-            .map(|e| Type::Record(e.def))
-            .chain(
-                iface
-                    .enums()
-                    .iter()
-                    .filter(|e| e.nameable)
-                    .map(|e| Type::Enum(e.def)),
-            )
-            .collect();
-        for offer in offered {
-            let Some(name) = type_name_of(res, offer) else {
-                continue;
-            };
+        for (name, offer) in offered_types(iface, res) {
             let Some(declared_at) = user_type_span(res, offer) else {
                 continue;
             };
@@ -2893,6 +3182,44 @@ fn foreign_type(at: Span, what: &str) -> Diagnostic {
     )
 }
 
+/// Every module's interface, as a compilation declares them: types, their fields and layouts,
+/// traits' methods, each module's definitions, then what `pub use` re-exports (N103). For a
+/// tool that publishes an interface without checking bodies — the same stages, in the same
+/// order, as [`check`] runs before any body.
+pub fn declared_interfaces(
+    units: &[Unit<'_>],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<UnitInterface> {
+    res.types_mut().defer();
+    let mut types = declare_types(units, res, errors);
+    apply_reexports(units, &mut types, res, &mut Vec::new(), false);
+    for u in units {
+        let deps: Vec<&UnitInterface> = u
+            .imports
+            .iter()
+            .filter_map(|d| types.get(d.on.index()))
+            .collect();
+        resolve_type_fields(u, &deps, res, errors);
+    }
+    res.types_mut().settle();
+    validate_type_layouts(res, errors);
+    declare_trait_methods(units, &types, res, errors);
+    let mut interfaces: Vec<UnitInterface> = units
+        .iter()
+        .map(|u| {
+            let deps: Vec<&UnitInterface> = u
+                .imports
+                .iter()
+                .filter_map(|d| types.get(d.on.index()))
+                .collect();
+            declare_unit(u, &deps, res, errors)
+        })
+        .collect();
+    apply_reexports(units, &mut interfaces, res, errors, true);
+    interfaces
+}
+
 /// Stage 1 for one module: declare what it defines, and say what it offers.
 ///
 /// Reads this module's declarations and nothing else — no other module's source, no other
@@ -3159,6 +3486,7 @@ pub fn declare_unit(
                 effects: declared_effects,
                 foreign: foreign.clone(),
                 preconditions: preconditions_of(f),
+                origin: None,
             });
         }
     }
@@ -3280,6 +3608,7 @@ pub fn declare_unit(
         .filter_map(|(_, d)| {
             let t = res.traits().get(d.trait_id)?;
             Some(nazm_sema::interface::ImplExport {
+                module: d.module,
                 trait_name: t.name.clone(),
                 trait_module: t.module,
                 self_ty: d.self_ty,
@@ -3371,6 +3700,7 @@ pub fn check_unit(
     let result = unit
         .prelude
         .and_then(|m| res.enums().declared(m, nazm_sema::prelude::RESULT));
+    let impl_modules = impl_scope(unit, res);
     let mut c = Checker {
         res,
         module: unit.module,
@@ -3390,7 +3720,7 @@ pub fn check_unit(
         closure_count: 0,
         effect_param: None,
         trait_names: HashMap::new(),
-        impl_modules: impl_scope(unit),
+        impl_modules,
         preconditions: HashMap::new(),
     };
     for (_, f) in &unit.functions {

@@ -65,26 +65,13 @@ pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> Exit
             .collect();
         let mut res = nazm_core::Resolution::default();
         let mut errors = Vec::new();
-        let types = nazm_core::declare_types(&units, &mut res, &mut errors);
-        let deps_of = |u: &nazm_core::Unit<'_>| -> Vec<&nazm_core::UnitInterface> {
-            loaded
-                .graph
-                .imports(u.module())
-                .iter()
-                .filter_map(|d| types.get(d.on.index()))
-                .collect()
-        };
-        for u in &units {
-            nazm_core::resolve_type_fields(u, &deps_of(u), &mut res, &mut errors);
-        }
-        nazm_core::validate_type_layouts(&mut res, &mut errors);
-        // Every trait's methods (N78), as a compilation declares them before its functions.
-        nazm_core::declare_trait_methods(&units, &types, &mut res, &mut errors);
-        let root = units
-            .iter()
-            .find(|u| u.module() == ModuleId::ROOT)
+        // The same stages a compilation runs before any body, re-exports included (N103):
+        // one path to an interface, not a shorter second one.
+        let interfaces = nazm_core::declared_interfaces(&units, &mut res, &mut errors);
+        let interface = interfaces
+            .get(ModuleId::ROOT.index())
+            .cloned()
             .ok_or_else(Vec::new)?;
-        let interface = nazm_core::declare_unit(root, &deps_of(root), &mut res, &mut errors);
         Ok::<_, Vec<nazm_diag::Diagnostic>>(PersistentUnitInterface::published(
             &interface,
             &loaded.graph,

@@ -768,10 +768,20 @@ impl Shift for Import {
             path: _,
             path_span,
             alias,
+            reexport,
             span,
         } = self;
         path_span.shift(file, by);
         alias.shift(file, by);
+        if let Some(r) = reexport {
+            r.pub_span.shift(file, by);
+            for n in r.names.iter_mut().flatten() {
+                n.span.shift(file, by);
+                if let Some((_, at)) = &mut n.alias {
+                    at.shift(file, by);
+                }
+            }
+        }
         span.shift(file, by);
     }
 }

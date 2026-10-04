@@ -746,7 +746,7 @@ enum Command {
     },
     /// Document a program's public API (N74), from its semantic definitions: every exported
     /// function, record and enum of its own modules, with effects, capabilities, foreign symbols and
-    /// a link to the source. One `nazm.api-doc/1` line on stdout, or `api.json` and `api.md` in
+    /// a link to the source. One `nazm.api-doc/2` line on stdout, or `api.json` and `api.md` in
     /// `-o DIR`. Not `nazm docs`, which reads Nazm's own documentation.
     Doc {
         /// A source file, or a package's directory.

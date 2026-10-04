@@ -383,6 +383,14 @@ removed refusal of `--debug` with Cranelift was a toolchain message, not a code.
 and whether its arithmetic is checked) and `not_measured` (each absent reference, with why). A `/1`
 baseline is still read by `--check`. `bench/claims.toml` is new and is a register, not a schema.
 
+**Applied to N103, re-exports.** Three codes: `N0211`, a `pub use` names something the module it
+re-exports from does not offer (or renames a trait, which is offered under its own name only);
+`N0212`, a module offers one name twice; `N0213`, a cycle of re-exports, at each `pub`. Each at the
+name or keyword it is about. Two schemas moved: `nazm.interface/10` → `nazm.interface/11` (a re-export's export
+carries `reexport` and the defining module's identity; `reexported_types`), and
+`nazm.api-doc/1` → `nazm.api-doc/2` (a re-export is an item of kind `reexport` with `of`, the identity it
+offers).
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

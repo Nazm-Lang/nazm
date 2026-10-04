@@ -248,10 +248,10 @@ impl LanguageService {
             let expected = text
                 .get(span.start as usize..span.end as usize)
                 .ok_or(Refusal::Internal("an occurrence outside its file"))?;
+            // Written under a name a re-export gave it (N103): the alias still names the
+            // renamed definition, so that occurrence keeps its spelling.
             if expected != found.name {
-                return Err(Refusal::Internal(
-                    "an occurrence is not spelled as its entity",
-                ));
+                continue;
             }
             if edits.last().is_some_and(|e| e.end > span.start) {
                 return Err(Refusal::Internal("two occurrences overlap"));
@@ -564,10 +564,9 @@ impl LanguageService {
                 let expected = text
                     .get(*start as usize..*end as usize)
                     .ok_or(Refusal::Internal("an occurrence outside its file"))?;
+                // Written under a re-export's alias (N103): left as it is.
                 if expected != found.name {
-                    return Err(Refusal::Internal(
-                        "an occurrence is not spelled as its entity",
-                    ));
+                    continue;
                 }
                 if edits.last().is_some_and(|e| e.end > *start) {
                     return Err(Refusal::Internal("two occurrences overlap"));
@@ -578,6 +577,11 @@ impl LanguageService {
                     expected: expected.to_owned(),
                     replacement: new_name.to_owned(),
                 });
+            }
+            // A file whose every occurrence is written under a re-export's alias (N103) has
+            // nothing to change, and is no part of the plan.
+            if edits.is_empty() {
+                continue;
             }
             many.push((path.clone(), apply(text, &edits)));
             shifts.push((path.clone(), edits.clone()));
