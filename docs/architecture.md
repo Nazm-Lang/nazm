@@ -8349,6 +8349,28 @@ tiers. **Boundary example.** `i64::MIN % -1` is 0 in all four.
 
 **What would prove this unsuitable.** A REPL answer no other tier gives.
 
+## 7.101 The grand audit: every area against its evidence, and one candidate through every gate — N100, 2026-10-04
+
+Written before the gate runs. N76–N99 each moved or narrowed one area. This milestone adds no
+feature. It audits every row of the capability matrix — `area | status | remaining limitation |
+owner milestone | executed evidence | proposed final status` (`docs/audit-n100.md`) — and runs one
+candidate, the head of N99's records, through the gate the programme deferred to its end: the full
+workspace suite, the selfhost suite and the bootstrap, contained; the mutation campaign over every
+mutant N76–N99 added or repointed (215, every verdict class reported); and the container-backed runs
+— the live debugger sessions, both boards under QEMU, WebAssembly, the EVM and the contract
+properties.
+
+**The objective, and its answer stated in advance.** The ideal is no row PARTIAL, RESEARCH, BLOCKED
+or MISSING. It is not met, and the audit will not force it: fifteen rows are PARTIAL with named,
+executed limits — among them sBPF and the JIT BLOCKED by what this machine lacks, proofs BLOCKED by
+the absence of a proof assistant, the selfhost compiler at 13 of 21 parity probes, eight performance
+claims unreproduced. N100 therefore **fails the zero-partial objective** and says so; the candidate is
+a release candidate for what the matrix states, with a human procedure, and nothing is tagged,
+pushed or published.
+
+**What would prove the audit wrong.** A row whose stated evidence a reader cannot find or rerun; a
+gate step reported passed that did not run.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
