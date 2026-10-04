@@ -111,8 +111,11 @@ found only by reading all of it.
 
 - Seven targets, no others: four hosted — `aarch64`/`x86_64` × macOS/Linux — and three freestanding,
   below; no Windows, 32-bit or CPU-feature selection; a target the host has no linker for is built to objects (`--objects`) for its own
-  toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here
-  (area 33). *Narrowed in N57:* until then, the host only.
+  toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here,
+  and Cranelift builds no freestanding or WebAssembly target (area 33). Windows, 32-bit hosted and
+  big-endian targets are non-goals, each with its reason in `nazm inspect`'s support matrix (N95). An
+  LLVM object's CPU is the C compiler driver's default for its triple, recorded, not selectable.
+  *Narrowed in N57 and N95:* until N57, the host only.
 - A build generates its runtime unless given `--runtime DIR` (N82): the artifact is the way to build
   a runtime once and check what is linked, not yet the default. The runtime is LLVM text, not Rust,
   and has no allocator of its own (area 13).

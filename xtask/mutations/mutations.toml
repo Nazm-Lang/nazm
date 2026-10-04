@@ -13478,3 +13478,27 @@ file = "crates/nazm-cli/src/provenance.rs"
 find = "    for p in record[\"packages\"].as_array().into_iter().flatten() {"
 replace = "    for p in record[\"packages\"].as_array().into_iter().flatten().skip(1) {"
 killers = [{ package = "nazm-cli", test = "attestation", name = "the_sbom_lists_every_package_source_and_the_runtime_with_their_digests" }]
+
+[[mutation]]
+name = "n95-a-compiled-target-is-claimed-run"
+why = "x86_64 Linux, which nothing here has run, is reported run-verified"
+file = "crates/nazm-lir/src/backend.rs"
+find = "        llvm: Support::Compile(\"every_target_is_built_by_both_backends_in_its_own_format\"),"
+replace = "        llvm: Support::Run(\"every_target_is_built_by_both_backends_in_its_own_format\"),"
+killers = [{ package = "nazm-cli", test = "platform_matrix", name = "the_capability_matrix_states_exactly_what_the_compiler_does" }]
+
+[[mutation]]
+name = "n95-a-cpu-is-misrecorded"
+why = "the CPU an x86_64 macOS object is compiled for is recorded as another"
+file = "crates/nazm-lir/src/backend.rs"
+find = "        llvm_cpu: \"penryn\","
+replace = "        llvm_cpu: \"x86-64\","
+killers = [{ package = "nazm-cli", test = "platform_matrix", name = "each_llvm_cpu_is_the_one_the_driver_resolves" }]
+
+[[mutation]]
+name = "n95-the-matrix-is-not-printed"
+why = "nazm inspect prints no support matrix, so the documented one is held to nothing"
+file = "crates/nazm-cli/src/inspect.rs"
+find = "            \"support\": nazm_lir::backend::SUPPORT.iter().map(|c| serde_json::json!({"
+replace = "            \"support\": nazm_lir::backend::SUPPORT.iter().take(0).map(|c| serde_json::json!({"
+killers = [{ package = "nazm-cli", test = "platform_matrix", name = "every_accepted_target_has_a_row_and_every_cell_one_of_three_answers" }]
