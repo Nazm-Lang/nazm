@@ -8137,6 +8137,56 @@ VERIFIED for the four targets at the stated budget, not for those.
 **What would prove this unsuitable.** A corpus input the replay passes and the campaign's target
 panics on; a "minimised" corpus that reaches fewer edges than the kept set.
 
+## 7.95 Reproducibility and provenance v2: a stated model, signed in-toto statements, and an SBOM — N94, 2026-10-04
+
+Written before the code. Area 32 is PARTIAL: N73 writes `nazm.provenance/1` and runs a local command
+as an "attestation" whose output Nazm neither signs nor checks; reproducibility was measured, not
+stated as a model; there is no SBOM.
+
+**The reproducibility model.** Five claims, each with its own evidence, none implied by another:
+1. *Identical input* — the same source, toolchain, target, options and environment give the same
+   executable, object, provenance and SBOM bytes, under either backend.
+2. *Across directories* — the same, built from two checkouts in different places: no absolute path,
+   time or host name enters an artefact Nazm writes.
+3. *Archive* — a release archive (N75) is the same bytes for the same revision.
+4. *Offline* — a locked package build needs nothing but the local registry and the toolchain.
+5. *Across toolchains* — **not** byte identity. Two C compilers are compared and every difference
+   classified (N73's measurement: the program's objects equal, the runtime's differing by a symbol
+   type at `-O0` and by layout at `-O2`).
+
+**Signed statements.** `nazm attest sign --key KEY PROVENANCE ARTIFACT…` wraps a provenance record in
+an **in-toto Statement v1** — `_type` `https://in-toto.io/Statement/v1`, one `subject` per artefact
+with its `blake3` digest, `predicateType` `urn:nazm:provenance:1`, the record as `predicate` — after
+checking every artefact's digest is one the record names; then signs it with OpenSSH's `ssh-keygen -Y
+sign` (the SSHSIG format git signs commits with), namespace `nazm-attestation`. `nazm attest verify
+--allowed-signers FILE --identity ID STATEMENT ARTIFACT…` succeeds only when the signature verifies
+for that identity, the statement is well formed, and every artefact's digest is a subject's. Keys
+and trust are the user's: Nazm holds none, publishes nothing, and logs nothing to a transparency log —
+this is Sigstore's statement shape signed offline, not Sigstore.
+
+**SBOM.** `nazm build --sbom FILE` writes a **CycloneDX 1.5** JSON document, deterministic: the
+output as the metadata component with its BLAKE3 hash; one component per package (with its version,
+`pkg:generic/NAME@VERSION` and BLAKE3 digest), per source module (a `file` component with its hash),
+and for the runtime and its ABI revision; the tools — `nazm`, its Cranelift, the C compiler as it
+reports itself. Every package of the build is in it, and nothing else.
+
+**Owners.** `nazm-cli`'s `provenance` owns the record and the SBOM; a new `attest` module owns
+statements and their verification, through `ssh-keygen`. No compiler semantics change.
+
+**Versions.** No language, IR, runtime or interface change. New output formats: in-toto Statement v1
+with predicate `urn:nazm:provenance:1`; CycloneDX 1.5. `nazm.provenance/1` unchanged.
+
+**Negative example.** Verifying with the artefact edited after signing fails, naming the digest; a
+statement signed by a key the allowed-signers file does not list for the identity fails.
+**Boundary example.** Signing refuses an artefact the provenance does not name, before any key is used.
+
+**Not here.** A transparency log, keyless signing, SLSA levels claimed, rebuilds on several
+independent machines (one host and one Linux image are what exist here), and dependency-origin
+verification beyond N56's registry digests.
+
+**What would prove this unsuitable.** An artefact that verifies after a byte of it changed; two
+builds of identical input with different bytes; an SBOM that omits a package the build linked.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
