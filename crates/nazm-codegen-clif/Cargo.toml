@@ -27,6 +27,10 @@ cranelift-frontend = { version = "=0.136.1" }
 cranelift-module = { version = "=0.136.1" }
 cranelift-object = { version = "=0.136.1" }
 target-lexicon = { version = "=0.13.5" }
+# Debug information (N91): DWARF written with the `gimli` Cranelift itself depends on, into the
+# object `cranelift-object` writes with `object` — the same versions, so nothing new is built.
+gimli = { version = "=0.33.0", default-features = false, features = ["write", "std"] }
+object = { version = "=0.40.0", default-features = false, features = ["read_core", "macho", "write", "std"] }
 # Each object's cache key.
 blake3 = { workspace = true }
 

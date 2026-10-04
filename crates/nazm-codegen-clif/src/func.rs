@@ -151,6 +151,7 @@ pub(crate) fn translate(
         fx.b.switch_to_block(cb);
         for s in &blk.stmts {
             fx.at = s.at;
+            fx.locate(s.at);
             fx.unwind = s
                 .kind
                 .unwind()
@@ -158,6 +159,7 @@ pub(crate) fn translate(
             fx.statement(&s.kind);
         }
         fx.at = blk.term_at;
+        fx.locate(blk.term_at);
         fx.terminator(&blk.term, sig.ret);
     }
     fx.b.seal_all_blocks();
@@ -166,6 +168,18 @@ pub(crate) fn translate(
 }
 
 impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
+    /// In a `--debug` build, the instructions that follow come from `at` (N91). A synthetic
+    /// span has no place, and the location stays the last statement's.
+    fn locate(&mut self, at: Span) {
+        let Some(pos) = self.g.names.position(at) else {
+            return;
+        };
+        if let Some(debug) = self.g.debug.as_mut() {
+            let i = debug.location(pos);
+            self.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(i));
+        }
+    }
+
     /// A context for a generated helper: no MIR locals, blocks or failure edge.
     pub(crate) fn helper(g: &'g mut Gen<'a>, b: FunctionBuilder<'b>) -> Self {
         Self {
