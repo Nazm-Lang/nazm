@@ -7,7 +7,7 @@
 //! as written and the comment lines directly above a definition, shown as its description: the
 //! language has no doc comments, and this is the tool's convention, not a rule of the language.
 //!
-//! One `nazm.api-doc/1` document. Each definition's anchor is its identity, so a link into
+//! One `nazm.api-doc/2` document (N103: re-exports are items too). Each definition's anchor is its identity, so a link into
 //! `api.md` holds across rebuilds and moves only when the definition does. Nothing depends on the
 //! time or on an absolute path: a source is named relative to the package, or to the root file's
 //! directory.
@@ -232,6 +232,86 @@ fn document(
                 json!(variants),
             );
         }
+        // What each module re-exports (N103): part of its surface, documented as the name it
+        // offers and the definition it is — the defining module's identity, never a copy.
+        for import in &program.imports {
+            let Some(re) = &import.reexport else { continue };
+            let file = import.span.file;
+            if !own(file) {
+                continue;
+            }
+            let Some(module) = module_key(file) else {
+                continue;
+            };
+            let text = map.text(file);
+            let signature = text
+                .get(import.span.start as usize..import.span.end as usize)
+                .unwrap_or("")
+                .trim_end_matches(';')
+                .to_owned();
+            let line = line_of(text, import.span.start as usize);
+            match &re.names {
+                None => {
+                    let id = format!("{module}::reexport {}", import.path);
+                    out.push((
+                        module.clone(),
+                        id.clone(),
+                        json!({
+                            "id": id,
+                            "anchor": slug(&id),
+                            "kind": "reexport",
+                            "name": import.path,
+                            "signature": signature,
+                            "description": "",
+                            "of": "every export",
+                            "source": { "path": relative(map.name(file), base), "line": line },
+                        }),
+                    ));
+                }
+                Some(list) => {
+                    for item in list {
+                        let offered = item.alias.as_ref().map_or(&item.name, |(a, _)| a);
+                        let of = match res.callee(item.span) {
+                            Some(nazm_core::sema::Callee::Function(id)) => Some(names.function(id)),
+                            _ => res
+                                .type_name(item.span)
+                                .map(|n| match n {
+                                    nazm_core::sema::TypeNode::Record(r) => {
+                                        names.ty(nazm_core::sema::Type::Record(r))
+                                    }
+                                    nazm_core::sema::TypeNode::Enum(e) => {
+                                        names.ty(nazm_core::sema::Type::Enum(e))
+                                    }
+                                })
+                                .or_else(|| {
+                                    res.traits()
+                                        .mentions()
+                                        .find(|(at, _)| *at == item.span)
+                                        .and_then(|(_, t)| res.traits().get(t))
+                                        .map(|t| {
+                                            format!("{}::trait {}", names.module(t.module), t.name)
+                                        })
+                                }),
+                        };
+                        let id = format!("{module}::reexport {offered}");
+                        out.push((
+                            module.clone(),
+                            id.clone(),
+                            json!({
+                                "id": id,
+                                "anchor": slug(&id),
+                                "kind": "reexport",
+                                "name": offered,
+                                "signature": signature,
+                                "description": "",
+                                "of": of,
+                                "source": { "path": relative(map.name(file), base), "line": line },
+                            }),
+                        ));
+                    }
+                }
+            }
+        }
         Ok(out)
     });
     let items = found.map_err(|d| {
@@ -316,6 +396,10 @@ fn markdown(doc: &Value) -> String {
                     let _ = writeln!(md, "- export: C calls it as `{s}`");
                 }
             }
+            if it["kind"] == "reexport" {
+                let of = it["of"].as_str().unwrap_or("nothing resolved");
+                let _ = writeln!(md, "- re-exports: `{of}`");
+            }
             let path = at(it, "/source/path").as_str().unwrap_or("");
             let line = at(it, "/source/line").as_u64().unwrap_or(1);
             let _ = writeln!(md, "- source: [{path}:{line}]({path}#L{line})\n");
@@ -353,7 +437,7 @@ pub(crate) fn run(path: &Path, out: Option<&Path>) -> ExitCode {
         .into_iter()
         .map(|(module, items)| json!({ "module": module, "items": items.into_values().collect::<Vec<_>>() }))
         .collect();
-    let doc = json!({ "schema": "nazm.api-doc/1", "package": package, "modules": modules });
+    let doc = json!({ "schema": "nazm.api-doc/2", "package": package, "modules": modules });
     let Some(dir) = out else {
         println!("{doc}");
         return ExitCode::from(exit::OK);

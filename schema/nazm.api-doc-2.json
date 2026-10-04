@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nazm.api-doc-1.json",
-  "title": "nazm.api-doc/1",
-  "description": "A program's public API from its semantic definitions, from `nazm doc` (N74).",
+  "$id": "nazm.api-doc-2.json",
+  "title": "nazm.api-doc/2",
+  "description": "A program's public API from its semantic definitions, from `nazm doc` (N74). `/2` (N103): a module's re-exports are items of kind `reexport`, each with `of`, the identity of the definition it offers (or `every export`).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "nazm.api-doc/1"
+      "const": "nazm.api-doc/2"
     },
     "package": {
       "oneOf": [
@@ -88,7 +88,8 @@
                   "enum": [
                     "fn",
                     "struct",
-                    "enum"
+                    "enum",
+                    "reexport"
                   ]
                 },
                 "name": {
@@ -188,6 +189,13 @@
                       "minimum": 1
                     }
                   }
+                },
+                "of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "For a re-export (N103): the durable identity of the definition it offers, `every export`, or null when it names nothing resolved."
                 }
               }
             }

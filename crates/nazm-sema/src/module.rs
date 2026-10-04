@@ -67,6 +67,33 @@ pub struct Dependency {
     pub plain: bool,
     /// Each `as NAME` it was imported under, with where the name is written (N49).
     pub aliases: Vec<(String, Span)>,
+    /// What a `pub use` of it re-exports (N103), or `None` where no `use` of it is `pub`.
+    pub reexport: Option<ReexportSpec>,
+}
+
+/// What a module re-exports of one it imports (N103): every export, or the names chosen, each
+/// with where it is written and the name it is offered under when `as` gives one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReexportSpec {
+    /// The `pub` of the `pub use`, where a refusal about the whole re-export points.
+    pub at: Span,
+    pub names: Option<Vec<ReexportItem>>,
+}
+
+/// One chosen name of a re-export (N103).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReexportItem {
+    pub name: String,
+    pub span: Span,
+    pub alias: Option<(String, Span)>,
+}
+
+impl ReexportItem {
+    /// The name it is offered under: its alias, or its own.
+    #[must_use]
+    pub fn offered(&self) -> &str {
+        self.alias.as_ref().map_or(self.name.as_str(), |(a, _)| a.as_str())
+    }
 }
 
 /// One module: where its source came from, and what it directly imports.
@@ -178,8 +205,32 @@ impl ModuleGraph {
                     at,
                     plain,
                     aliases: alias.into_iter().collect(),
+                    reexport: None,
                 }),
             }
+        }
+    }
+
+    /// Record that `from` re-exports from `to` (N103), after the `use` that made the edge. A
+    /// second `pub use` of one module adds its names to the first's; one that re-exports
+    /// everything makes the whole re-export everything.
+    pub fn reexport(&mut self, from: ModuleId, to: ModuleId, spec: ReexportSpec) {
+        let Some(m) = self.modules.get_mut(from.index()) else {
+            return;
+        };
+        let Some(d) = m.imports.iter_mut().find(|d| d.on == to) else {
+            return;
+        };
+        match (&mut d.reexport, spec.names) {
+            (None, names) => {
+                d.reexport = Some(ReexportSpec { at: spec.at, names });
+            }
+            (Some(existing), Some(more)) => {
+                if let Some(list) = &mut existing.names {
+                    list.extend(more);
+                }
+            }
+            (Some(existing), None) => existing.names = None,
         }
     }
 

@@ -122,6 +122,11 @@ pub struct Traits {
     calls: HashMap<Span, TraitCall>,
     /// Every place a trait is named: a bound, an impl's header, a call that names it.
     mentions: HashMap<Span, TraitId>,
+    /// Traits a module offers that another module declared (N103): `pub use` re-exports.
+    reexported: Vec<(crate::module::ModuleId, TraitId)>,
+    /// Which modules each module re-exports from (N103): their impls are usable wherever the
+    /// re-exporting module is imported, as the module's own are.
+    sources: Vec<(crate::module::ModuleId, crate::module::ModuleId)>,
 }
 
 impl Traits {
@@ -220,5 +225,42 @@ impl Traits {
 
     pub fn mentions(&self) -> impl Iterator<Item = (Span, TraitId)> + '_ {
         self.mentions.iter().map(|(s, t)| (*s, *t))
+    }
+
+    /// Record that `module` re-exports `trait_id` (N103), once.
+    pub fn record_reexport(&mut self, module: crate::module::ModuleId, trait_id: TraitId) {
+        if !self.reexported.contains(&(module, trait_id)) {
+            self.reexported.push((module, trait_id));
+        }
+    }
+
+    /// Record that `module` re-exports from `from` (N103), once.
+    pub fn record_reexport_source(
+        &mut self,
+        module: crate::module::ModuleId,
+        from: crate::module::ModuleId,
+    ) {
+        if !self.sources.contains(&(module, from)) {
+            self.sources.push((module, from));
+        }
+    }
+
+    /// The modules `module` re-exports from (N103).
+    pub fn reexport_sources(
+        &self,
+        module: crate::module::ModuleId,
+    ) -> impl Iterator<Item = crate::module::ModuleId> + '_ {
+        self.sources
+            .iter()
+            .filter(move |(m, _)| *m == module)
+            .map(|(_, f)| *f)
+    }
+
+    /// The traits `module` re-exports (N103), under their own names.
+    pub fn reexported_by(&self, module: crate::module::ModuleId) -> impl Iterator<Item = TraitId> + '_ {
+        self.reexported
+            .iter()
+            .filter(move |(m, _)| *m == module)
+            .map(|(_, t)| *t)
     }
 }

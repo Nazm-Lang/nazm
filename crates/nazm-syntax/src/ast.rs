@@ -110,7 +110,30 @@ pub struct Import {
     /// `as name` (N49): the module is imported under this name, and its exports are written
     /// `name::item` rather than brought into scope.
     pub alias: Option<Qualifier>,
+    /// `pub use "path";` or `pub use "path" { a, b as c };` (N103): what this module offers
+    /// of the imported module's exports as its own. `None` for an ordinary import.
+    pub reexport: Option<Reexport>,
     pub span: Span,
+}
+
+/// What a `pub use` re-exports (N103). A re-export offers the **same definition** under this
+/// module's name: no second definition is made, and every identity — durable or session —
+/// is the one the defining module gave it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reexport {
+    /// The `pub` keyword's span.
+    pub pub_span: Span,
+    /// The names chosen, or `None` for every export of the module.
+    pub names: Option<Vec<ReexportName>>,
+}
+
+/// One name a `pub use` re-exports: as it is exported there, and — with `as` — the name this
+/// module offers it under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReexportName {
+    pub name: String,
+    pub span: Span,
+    pub alias: Option<(String, Span)>,
 }
 
 /// A function type as written (N50): `fn(Int, Str) -> Bool ! {io}`.

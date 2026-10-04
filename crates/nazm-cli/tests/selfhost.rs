@@ -2379,6 +2379,71 @@ fn the_nazm_written_compiler_compiles_the_n102_features_with_the_same_memory_sem
     }
 }
 
+/// N103: re-exports through the compiler written in Nazm — the same programs, the same answers
+/// and memory reports as the reference, and the same refusals at the same positions.
+#[test]
+fn the_nazm_written_compiler_agrees_with_the_reference_on_reexports() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    for (name, text) in [
+        (
+            "shapes.nz",
+            "pub trait Area { fn area(self: Self) -> Int; }\npub struct Sq { s: Int }\n\
+             impl Area for Sq { fn area(self: Sq) -> Int { self.s * self.s } }\n\
+             pub fn double(n: Int) -> Int { n * 2 }\nfn hidden() -> Int { 9 }\n",
+        ),
+        (
+            "facade.nz",
+            "pub use \"shapes.nz\" { Sq as Square, double as twice, Area };\n",
+        ),
+        ("all.nz", "pub use \"shapes.nz\";\n"),
+        ("cycb.nz", "pub use \"mem.nz\";\npub fn b() -> Int { 2 }\n"),
+    ] {
+        std::fs::write(dir.path().join(name), text).expect("write");
+    }
+    same_memory_semantics(
+        dir.path(),
+        &emitter,
+        &[
+            ("use \"facade.nz\";\nfn main() -> Int { Square(s: 3).area() + twice(4) }", "17"),
+            ("use \"all.nz\";\nfn tw[T: Area](x: T) -> Int { x.area() }\nfn main() -> Int { Sq(s: 2).area() + double(1) + tw(Sq(s: 1)) }", "7"),
+        ],
+    );
+    // The refusals, from both front ends, by code and position.
+    for (source, expected) in [
+        (
+            "pub use \"shapes.nz\" { hidden, nope, double };\npub fn double(n: Int) -> Int { n }\nfn main() -> Int { 0 }\n",
+            &["N0211", "N0211", "N0212", "N0208"][..],
+        ),
+        ("pub use \"shapes.nz\" { Area as Shape };\nfn main() -> Int { 0 }\n", &["N0211"][..]),
+        ("pub use \"cycb.nz\";\nfn main() -> Int { 0 }\n", &["N0213"][..]),
+    ] {
+        let file = dir.path().join("mem.nz");
+        std::fs::write(&file, source).expect("write");
+        let (rc, _, err) = run_stage(&emitter, &file);
+        assert_eq!(rc, Some(1), "{source}: {err}");
+        let ours: Vec<&str> = err
+            .lines()
+            .filter_map(|l| l.split("error[").nth(1).and_then(|r| r.split(']').next()))
+            .collect();
+        let out = Command::new(NAZM)
+            .args(["check", file.to_str().unwrap()])
+            .output()
+            .expect("run nazm check");
+        let reference = String::from_utf8_lossy(&out.stderr);
+        let theirs: Vec<&str> = reference
+            .lines()
+            .filter_map(|l| l.strip_prefix("error[").and_then(|r| r.split(']').next()))
+            .collect();
+        assert!(ours.starts_with(expected) || ours == expected, "{source}: {ours:?}");
+        // The root's own diagnostics agree; the reference also reports the other module's
+        // half of a cycle, which the Nazm-written compiler reports only for the root.
+        for code in expected {
+            assert!(theirs.contains(code), "{source}: the reference said {theirs:?}");
+        }
+    }
+}
+
 #[test]
 fn the_nazm_written_compiler_compiles_requirements_with_the_same_memory_semantics() {
     // N14: bounded generic bodies instantiated at owning types, compiled by the

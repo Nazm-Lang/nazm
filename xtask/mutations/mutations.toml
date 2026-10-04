@@ -7845,10 +7845,11 @@ why = """the interface keeps the `/5` name for a shape whose absent `effects` no
 Repointed by N42, whose `/7` adds foreign exports: the rule is the same, one version on — a `/6` file must not be read as a `/7` one.
 Repointed by N78, whose `/8` adds traits and impls: a `/7` file must not be read as an `/8` one.
 Repointed by N85, whose `/9` adds C structs and handles: an `/8` file must not be read as a `/9` one.
-Repointed by N87, whose `/10` adds preconditions: a `/9` file must not be read as a `/10` one."""
+Repointed by N87, whose `/10` adds preconditions: a `/9` file must not be read as a `/10` one.
+Repointed by N103, whose `/11` adds re-exports: a `/10` file must not be read as an `/11` one."""
 file = "crates/nazm-iface/src/wire.rs"
-find = """pub const SCHEMA: &str = "nazm.interface/10";"""
-replace = """pub const SCHEMA: &str = "nazm.interface/9";"""
+find = """pub const SCHEMA: &str = "nazm.interface/11";"""
+replace = """pub const SCHEMA: &str = "nazm.interface/10";"""
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
 
 # `n36-the-epoch-stays` is retired: N37 moved the epoch to 9, and the rule it pinned — the epoch
@@ -8289,10 +8290,11 @@ Repointed by N79, which moved it to 23 for attenuation: an entry that refused an
 Repointed by N80, which moved it to 24 for provenance v3: an entry that refused a path read out of a Strs must not be reused.
 Repointed by N85, which moved it to 25 for FFI v3: an entry that refused an `extern "C" struct` must not be reused.
 Repointed by N86, which moved it to 26 for device registers by width: an entry that refused `mmio_write8` must not be reused.
-Repointed by N87, which moved it to 27 for contracts: an entry that refused a `requires` must not be reused."""
+Repointed by N87, which moved it to 27 for contracts: an entry that refused a `requires` must not be reused.
+Repointed by N103, which moved it to 28 for re-exports: an entry that refused `pub use` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 27;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 26;"
+find = "pub const SEMANTIC_EPOCH: u32 = 28;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 27;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -9774,8 +9776,8 @@ killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_r
 name = "n49-an-aliased-type-is-unreachable"
 why = "an aliased module's records and enums are never held under `alias::Name`, so `g::Point` is no type"
 file = "crates/nazm-core/src/check.rs"
-find = "                    names.insert(qualified_key(alias, &name), offer);"
-replace = "                    let _ = (alias, &name, offer);"
+find = "                names.insert(qualified_key(alias, &name), offer);"
+replace = "                let _ = (alias, &name, offer);"
 killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_resolve_to_the_definitions_an_import_would_and_agree_everywhere" }]
 
 [[mutation]]
@@ -12574,10 +12576,12 @@ file = "crates/nazm-iface/src/wire.rs"
 find = """
             traits,
             impls,
+            reexported_types,
         })"""
 replace = """
             traits,
             impls: { let _ = impls; Vec::new() },
+            reexported_types,
         })"""
 killers = [{ package = "nazm-cli", test = "traits", name = "the_interface_carries_exported_traits_impls_and_bounds" }]
 
@@ -13814,3 +13818,90 @@ file = "compiler/emit.nz"
 find = """                    let decided = if text == "&&" { "false" } else { "true" };"""
 replace = """                    let decided = if text == "&&" { "true" } else { "false" };"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_the_n102_features_with_the_same_memory_semantics" }]
+
+# --- N103: re-exports ---------------------------------------------------------------------------
+
+[[mutation]]
+name = "n103-a-reexport-is-a-second-identity"
+why = "a re-exported function's identity is the re-exporting module's, so one definition answers under two identities — in a reference, a rename, a persisted interface"
+file = "crates/nazm-core/src/check.rs"
+find = "                    offered.origin = Some((from, e.name.clone()));"
+replace = "                    offered.origin = Some((module, c.offered.clone()));"
+killers = [{ package = "nazm-cli", test = "reexports", name = "the_persisted_interface_names_the_defining_identity_and_suffices_alone" }]
+
+[[mutation]]
+name = "n103-an-unknown-reexport-is-accepted"
+why = "a re-export of a name the module does not offer is silently dropped instead of refused (`N0211`)"
+file = "crates/nazm-core/src/check.rs"
+find = """        if function.is_none() && ty.is_none() && tr.is_none() {
+            if full {"""
+replace = """        if function.is_none() && ty.is_none() && tr.is_none() {
+            if false {"""
+killers = [{ package = "nazm-cli", test = "reexports", name = "what_a_reexport_may_not_do_is_refused_by_name" }]
+
+[[mutation]]
+name = "n103-a-reexported-name-may-collide"
+why = "a re-exported function whose name the module already offers is not refused (`N0212`), so which definition the name means depends on order"
+file = "crates/nazm-core/src/check.rs"
+find = """                if taken_fn {
+                    errors.push(taken(&c.offered, c.at));"""
+replace = """                if false {
+                    errors.push(taken(&c.offered, c.at));"""
+killers = [{ package = "nazm-cli", test = "reexports", name = "what_a_reexport_may_not_do_is_refused_by_name" }]
+
+[[mutation]]
+name = "n103-a-reexport-cycle-is-silent"
+why = "modules re-exporting from each other in a cycle are not refused (`N0213`): what they offer is simply missing"
+file = "crates/nazm-core/src/check.rs"
+find = """    if full {
+        for (n, u) in units.iter().enumerate() {
+            if done.get(n).copied().unwrap_or(true) {"""
+replace = """    if false {
+        for (n, u) in units.iter().enumerate() {
+            if done.get(n).copied().unwrap_or(true) {"""
+killers = [{ package = "nazm-cli", test = "reexports", name = "what_a_reexport_may_not_do_is_refused_by_name" }]
+
+[[mutation]]
+name = "n103-impls-do-not-follow-reexports"
+why = "an impl in a module re-exported from is not in scope where the re-exporting module is imported, so a method call through the facade fails"
+file = "crates/nazm-core/src/check.rs"
+find = "        work.extend(res.traits().reexport_sources(m));"
+replace = "        let _ = res.traits().reexport_sources(m);"
+killers = [{ package = "nazm-cli", test = "reexports", name = "a_reexport_offers_the_same_definition_under_its_names" }]
+
+[[mutation]]
+name = "n103-rename-rewrites-an-alias"
+why = "a workspace rename rewrites a use written under a re-export's alias, which names the definition by another spelling and must keep it"
+file = "crates/nazm-service/src/rename.rs"
+find = """                if expected != found.name {
+                    continue;"""
+replace = """                if false {
+                    continue;"""
+killers = [{ package = "nazm-cli", test = "reexports", name = "a_rename_follows_the_definition_and_keeps_every_alias" }]
+
+[[mutation]]
+name = "n103-the-interface-forgets-a-reexport"
+why = "a persisted export no longer says it is a re-export, so a definition of another module is read back as this one's own"
+file = "crates/nazm-iface/src/wire.rs"
+find = "                reexport: e.origin.is_some(),"
+replace = "                reexport: false,"
+killers = [{ package = "nazm-cli", test = "reexports", name = "the_persisted_interface_names_the_defining_identity_and_suffices_alone" }]
+
+[[mutation]]
+name = "n103-the-api-doc-omits-reexports"
+why = "the API document leaves out what a module re-exports, so part of its surface is undocumented"
+file = "crates/nazm-cli/src/apidoc.rs"
+find = "            let Some(re) = &import.reexport else { continue };"
+replace = "            let Some(re) = import.reexport.as_ref().filter(|_| false) else { continue };"
+killers = [{ package = "nazm-cli", test = "reexports", name = "the_api_document_lists_each_reexport_by_its_definition" }]
+
+[[mutation]]
+name = "n103-selfhost-an-unknown-reexport-is-accepted"
+why = "the **Nazm-written** checker does not refuse a re-export of a name the module does not offer (`N0211`)"
+file = "compiler/analyse.nz"
+find = """                    if found == false {
+                        report(diags, "N0211", nat, nat + str_len(name),"""
+replace = """                    if found == false { found = true; }
+                    if found == false {
+                        report(diags, "N0211", nat, nat + str_len(name),"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_agrees_with_the_reference_on_reexports" }]

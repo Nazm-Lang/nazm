@@ -15,8 +15,8 @@ pub mod parser;
 pub use ast::{
     Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm,
-    MethodOf, Param, PatternField, Place, PlaceField, Program, Qualifier, Record, Requirement,
-    Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, While,
+    MethodOf, Param, PatternField, Place, PlaceField, Program, Qualifier, Record, Reexport,
+    ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, While,
 };
 pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;

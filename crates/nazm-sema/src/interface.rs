@@ -96,6 +96,9 @@ pub struct Export {
     pub foreign: Option<String>,
     /// How many `requires` clauses it states (N87): each call of it is an obligation.
     pub preconditions: u32,
+    /// For a re-export (N103), the module that defines it and the name it has there — the
+    /// identity a persisted interface writes. `None` for this module's own definition.
+    pub origin: Option<(ModuleId, String)>,
 }
 
 /// One record definition an importer needs to see.
@@ -150,6 +153,9 @@ pub struct UnitInterface {
     records: Vec<RecordExport>,
     /// Every enum definition its public surface mentions, closed the same way.
     enums: Vec<EnumExport>,
+    /// A type re-exported under another name (N103): the name an importer writes, and the type
+    /// it means — the defining module's, never a copy.
+    renamed: Vec<(String, Type)>,
     imports: Vec<Dependency>,
 }
 
@@ -169,8 +175,56 @@ impl UnitInterface {
             exports,
             records,
             enums,
+            renamed: Vec::new(),
             imports,
         }
+    }
+
+    /// Offer a definition another module made, under `export.name` (N103). The entry keeps
+    /// the definition's own id: a re-export is a second name, not a second definition.
+    pub fn add_reexport(&mut self, export: Export) {
+        self.exports.push(export);
+    }
+
+    /// Offer a type another module declared (N103), under its own name or — with `alias` —
+    /// another. Its shape is carried as any mentioned type's is.
+    pub fn add_reexported_type(&mut self, t: Type, alias: Option<String>) {
+        let nameable = alias.is_none();
+        match t {
+            Type::Record(def) => match self.records.iter_mut().find(|r| r.def == def) {
+                Some(r) => r.nameable |= nameable,
+                None => self.records.push(RecordExport { def, nameable }),
+            },
+            Type::Enum(def) => match self.enums.iter_mut().find(|e| e.def == def) {
+                Some(e) => e.nameable |= nameable,
+                None => self.enums.push(EnumExport { def, nameable }),
+            },
+            _ => return,
+        }
+        if let Some(name) = alias {
+            self.renamed.push((name, t));
+        }
+    }
+
+    /// Carry another module's impls and traits (N103): what a re-export offers depends on
+    /// them, so they are part of this interface — and of what its hash covers.
+    pub fn add_reexported_traits(&mut self, traits: &[TraitExport], impls: &[ImplExport]) {
+        for t in traits {
+            if !self.traits.contains(t) {
+                self.traits.push(t.clone());
+            }
+        }
+        for i in impls {
+            if !self.impls.contains(i) {
+                self.impls.push(i.clone());
+            }
+        }
+    }
+
+    /// The types this interface offers under a name other than their own (N103).
+    #[must_use]
+    pub fn renamed(&self) -> &[(String, Type)] {
+        &self.renamed
     }
 
     /// The same interface, offering these traits and impls (N78).
@@ -231,6 +285,12 @@ impl UnitInterface {
             .filter(|r| r.nameable)
             .find(|r| types.records().get(r.def).is_some_and(|d| d.name == name))
             .map(|r| r.def)
+            .or_else(|| {
+                self.renamed.iter().find_map(|(n, t)| match t {
+                    Type::Record(def) if n == name => Some(*def),
+                    _ => None,
+                })
+            })
     }
 
     /// The enum an importer names with this spelling, if this module offers one.
@@ -241,6 +301,12 @@ impl UnitInterface {
             .filter(|e| e.nameable)
             .find(|e| types.enums().get(e.def).is_some_and(|d| d.name == name))
             .map(|e| e.def)
+            .or_else(|| {
+                self.renamed.iter().find_map(|(n, t)| match t {
+                    Type::Enum(def) if n == name => Some(*def),
+                    _ => None,
+                })
+            })
     }
 
     /// The user-defined type an importer names with this spelling.
@@ -333,6 +399,9 @@ pub struct TraitExport {
 /// the trait's order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImplExport {
+    /// The module that declares the impl, whose identities its methods are — another module's
+    /// when a re-export carries it (N103).
+    pub module: ModuleId,
     pub trait_name: String,
     pub trait_module: ModuleId,
     pub self_ty: crate::types::Type,
