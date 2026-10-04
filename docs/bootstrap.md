@@ -257,8 +257,9 @@ declared root to change.
   `./x.nz`, `x.nz` and `a/../x.nz` are one file; two names reaching one file through a
   symbolic link are two, and it would be read twice. The Rust driver keys by the canonical
   path instead, because it can — the emitted runtime has no `realpath`.
-- **Only relative imports.** The reference resolves `@std/NAME` and a package's `NAME:path`
-  (`load.rs`); this loader refuses both **by name** since N77 ("the compiler written in Nazm does not
+- **No package imports.** The reference resolves `@std/NAME` and a package's `NAME:path`
+  (`load.rs`); this loader resolves `@std/NAME` since N102, from the library beside the core prelude,
+  and refuses a package import **by name**. Until N102 it refused both, since N77 ("the compiler written in Nazm does not
   resolve `@std/text`: it names a standard library module", exit 2), where until then it looked for
   a file of that name and reported it missing. Aliases (`as`) and qualified names (`::`) are refused
   by its parser.
@@ -628,6 +629,25 @@ parameter, an unconstrained wrapper forwarding (`N0364`), and two bounded parame
 executables byte-identical once the linker UUID is removed and the runnable forms too, 32
 conformance cases (13 of them multi-module) and 25 refusals agreeing across C2, C3 and the
 reference, at 12,543 source lines.
+
+### Parity on every probe — N102, 2026-10-05
+
+`architecture.md` §7.103. The compiler gained what N98's eight refused probes needed — effects and
+capabilities, recursion with the reference's stack check, contracts, foreign declarations, `@std`,
+traits, closures and function values — and `&&`, `||` and `!`, without using any of them in its own
+source: it still has no recursion and no `&&` of its own, and lexes, parses and compiles itself as
+before.
+
+**What the chain now carries.** `compiler/conformance/features.nz` (every N102 feature in one
+program, expected 243) and `modules/features/` (a trait and its impl in another module, a closure
+passed to a function of that module, and a standard module, expected 19), and four refusals: an impl missing a method (`N0602`), a closure
+capturing a `let mut` binding (`N0386`), an undeclared effect (`N0366`) and an impure contract
+clause (`N0614`).
+
+**The digest moved**: since N14's `0e1a40e6…`, by each milestone that changed the compiler, to
+`8cc750c6…`. `ir: identical`, executables byte-identical once the linker UUID is removed, 34
+conformance cases (14 of them multi-module) and 29 refusals agreeing across C2, C3 and the
+reference, at 16,030 source lines.
 
 ## 6. Reproducing it
 

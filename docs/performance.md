@@ -2653,6 +2653,26 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### The compiler written in Nazm at parity — N102, measured 2026-10-05
+
+**What changed:** `compiler/*.nz` grew from 12,767 to 16,200 lines (`cat compiler/*.nz | wc -l`).
+**Method:** the debug `nazm` binary on the host (Apple M1 Pro, macOS 27.2), the tree before N102 (a
+pristine export of `d7c7754`) against the tree after, `nazm check compiler/emit.nz` with every
+`.nazm` cache removed before each of three runs, and `nazm build --no-cache compiler/emit.nz`;
+`/usr/bin/time -l`, wall time and maximum resident set.
+
+| | Before | After |
+| --- | ---: | ---: |
+| cold check, wall | 1.05 s | 1.36 s |
+| cold check, peak resident | 50 MB | 75 MB |
+| build, wall | 2.39 s | 2.66 s |
+| build, peak resident | 82 MB | 106 MB |
+
+About a quarter more source, about 30 % more check time and half again the check's memory: the
+checker's work is the compiler's size, and the new trait and effect tables. A debug binary
+measures the compiler's own cost on a large input, not a release user's; no release or contained
+run was made for this row.
+
 ### Performance evidence v2 — N92, measured 2026-10-04
 
 **Method:** `cargo xtask contained bench --save` at N92's tree: one CPU, 4 GiB, offline, the host
