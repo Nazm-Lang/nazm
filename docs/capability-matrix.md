@@ -1797,6 +1797,17 @@ anticipating a Critical profile is not evidence for one.**
 established bound, total functions, and every failure mode enumerated rather than trapped;
 contracts and invariants checked rather than asserted.
 
+*N97, 2026-10-04: formal semantics v2 — PARTIAL (bounded, machine-checked; proofs BLOCKED).*
+`architecture.md` §7.98 first. `nazm.formal-core/2` (`docs/formal-core.md` §2,
+`crates/nazm-formal/src/statements.rs`): `let mut`, assignment, `while`, `if` statements, `return` and
+one recursive function over `Int`, big-step with fuel. Over all 12,900 programs of a stated bound
+(`crates/nazm-formal/tests/statements.rs`): never stuck, deterministic, accepted by the checker, and
+for the 11,137 the model finishes — 3,194 of them traps — the interpreter's value or trap is the
+model's; 1,763 run out of fuel and are not compared. **Proofs BLOCKED**: no proof assistant or solver
+is installed and none can be installed offline, so progress, preservation, effect soundness and flow
+properties are not proved. Phase B (ownership, effects, flows) and Phase C (concurrency, refinement)
+are not modelled. Two mutants of the model's own rules, each caught by the correspondence.
+
 *N61, 2026-10-02: a formal core — PARTIAL (bounded, machine-checked; no proof).* `docs/formal-core.md`
 states integers and booleans with traps, comparison, short-circuit `&&`, `if` and `let` by typing and
 big-step rules; `crates/nazm-formal` transcribes them with no dependency on the compiler, and

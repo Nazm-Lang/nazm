@@ -398,6 +398,13 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N97 — formal semantics v2 — **complete as scoped, 2026-10-04; proofs BLOCKED (no proof assistant)**
+
+`architecture.md` §7.98 first. The formal model extended to loops, mutation, early return and
+recursion with fuel, and held to the interpreter and the checker over 12,900 programs. No proof:
+none can be made without a proof assistant, and none is installed. Next: N98, the compiler written
+in Nazm at full parity.
+
 ### N96 — smart contracts v2 — **complete as scoped, 2026-10-04; area 34 stays PARTIAL, sBPF BLOCKED**
 
 `architecture.md` §7.97 first. The EVM and WebAssembly backends held to the simulator on generated

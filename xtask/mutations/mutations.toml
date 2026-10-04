@@ -13502,3 +13502,19 @@ file = "crates/nazm-cli/src/inspect.rs"
 find = "            \"support\": nazm_lir::backend::SUPPORT.iter().map(|c| serde_json::json!({"
 replace = "            \"support\": nazm_lir::backend::SUPPORT.iter().take(0).map(|c| serde_json::json!({"
 killers = [{ package = "nazm-cli", test = "platform_matrix", name = "every_accepted_target_has_a_row_and_every_cell_one_of_three_answers" }]
+
+[[mutation]]
+name = "n97-the-model-ignores-return"
+why = "the formal model runs on past a return, so it and the interpreter disagree on every early return — the correspondence must notice"
+file = "crates/nazm-formal/src/statements.rs"
+find = "                    Ok(v) => Flow::Return(v),"
+replace = "                    Ok(_) => Flow::Next,"
+killers = [{ package = "nazm-formal", test = "statements", name = "s3_the_interpreter_means_what_the_statement_semantics_says" }]
+
+[[mutation]]
+name = "n97-the-model-takes-the-wrong-branch"
+why = "the formal model's false branch runs the true one"
+file = "crates/nazm-formal/src/statements.rs"
+find = "                    Ok(false) => self.stmts(b, rho)?,"
+replace = "                    Ok(false) => self.stmts(a, rho)?,"
+killers = [{ package = "nazm-formal", test = "statements", name = "s3_the_interpreter_means_what_the_statement_semantics_says" }]
