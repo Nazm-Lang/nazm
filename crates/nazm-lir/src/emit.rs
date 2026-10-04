@@ -4251,7 +4251,25 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 {
-                    let _ = writeln!(e.out, "  ; nz.var {i} {arg} {line} {kind} {}", local.name);
+                    // Its scope (N91): the block's first and last positions, or zeros for
+                    // the whole function.
+                    let range = local
+                        .scope
+                        .and_then(|b| {
+                            let first = e.names.position(b)?;
+                            let last = e.names.position(nazm_span::Span::new(
+                                b.file,
+                                b.end.saturating_sub(1),
+                                b.end,
+                            ))?;
+                            Some((first.1, first.2, last.1, last.2))
+                        })
+                        .unwrap_or((0, 0, 0, 0));
+                    let _ = writeln!(
+                        e.out,
+                        "  ; nz.var {i} {arg} {line} {kind} {} {} {} {} {}",
+                        range.0, range.1, range.2, range.3, local.name
+                    );
                 }
             }
         }

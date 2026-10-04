@@ -111,7 +111,9 @@ fn a_profile_reports_what_one_run_did_under_both_backends() {
         let o = nazm(d.path(), &["profile", "--backend", backend, "prog.nz"]);
         assert!(o.status.success(), "{}", err(&o));
         let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
-        assert_eq!(v["schema"], "nazm.profile/1");
+        assert_eq!(v["schema"], "nazm.profile/2");
+        // Not sampled unless asked (N91).
+        assert!(v["samples"].is_null(), "{v}");
         assert_eq!(v["backend"], backend);
         assert_eq!(v["exit"], 0);
         // `ok`, and main's result line.
@@ -150,7 +152,7 @@ fn a_live_session_shows_nazm_frames_lines_and_variables() {
         ],
     );
     assert!(b.status.success(), "{}", err(&b));
-    let script = "cd /src && cc /src/o/00-m0.o /src/o/01-runtime.o /src/o/02-entry.o -lpthread -o /tmp/v && \
+    let script = "cd /src && cc /src/o/*.o -lpthread -o /tmp/v && \
                   gdb -q -batch -ex 'break greet' -ex run -ex bt -ex 'info args' -ex 'info locals' \
                   -ex next -ex next -ex 'info locals' /tmp/v";
     let o = Command::new("docker")

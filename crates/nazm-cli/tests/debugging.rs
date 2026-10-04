@@ -133,11 +133,13 @@ fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_in
             "no .dSYM beside the executable"
         );
     }
-    // Cranelift has no debug information and says so rather than building without it.
+    // Cranelift writes debug information too since N91, and its debug build behaves as an
+    // ordinary one.
     let c = nazm(
         d.path(),
         &[
             "build",
+            "--no-cache",
             "--debug",
             "--backend",
             "cranelift",
@@ -146,11 +148,15 @@ fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_in
             "c",
         ],
     );
-    assert!(
-        !c.status.success() && err(&c).contains("--debug"),
-        "{}",
-        err(&c)
-    );
+    assert!(c.status.success(), "{}", err(&c));
+    let r = common::bounded_exe(&d.path().join("c")).output().unwrap();
+    assert_eq!((r.status.code(), out(&r)), (a.status.code(), out(&a)));
+    if cfg!(target_os = "macos") {
+        assert!(
+            d.path().join("c.dSYM").is_dir(),
+            "no .dSYM beside the executable"
+        );
+    }
 }
 
 #[test]

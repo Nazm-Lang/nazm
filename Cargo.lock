@@ -1224,11 +1224,13 @@ dependencies = [
  "cranelift-frontend",
  "cranelift-module",
  "cranelift-object",
+ "gimli",
  "nazm-diag",
  "nazm-lir",
  "nazm-mir",
  "nazm-sema",
  "nazm-span",
+ "object",
  "target-lexicon",
 ]
 

@@ -9,6 +9,7 @@
 //! Nothing of Cranelift's appears in this crate's public interface: a caller names a target and
 //! an optimisation level and gets a [`Backend`].
 
+mod dwarf;
 mod func;
 mod helpers;
 mod layout;
@@ -32,6 +33,8 @@ pub struct Cranelift {
     opt_level: u8,
     /// Whether Cranelift's IR verifier runs on every function before code generation.
     verify: bool,
+    /// Whether each object carries DWARF (N91).
+    debug: bool,
 }
 
 impl Cranelift {
@@ -42,7 +45,15 @@ impl Cranelift {
             target,
             opt_level,
             verify: true,
+            debug: false,
         }
+    }
+
+    /// The same backend, writing debug information into every object (N91).
+    #[must_use]
+    pub const fn with_debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
     }
 
     fn settings(&self) -> Result<settings::Flags, String> {
@@ -79,7 +90,8 @@ impl Cranelift {
         name: &str,
     ) -> Result<(Vec<u8>, Needs), Vec<Diagnostic>> {
         let isa = self.isa().map_err(|e| vec![refusal(e)])?;
-        let g = unit::Gen::new(isa, native, unit, names, name).map_err(|e| vec![refusal(e)])?;
+        let g = unit::Gen::new(isa, native, unit, names, name, self.debug)
+            .map_err(|e| vec![refusal(e)])?;
         g.run(self.verify)
     }
 
@@ -140,9 +152,10 @@ impl Backend for Cranelift {
 
     fn version(&self) -> String {
         format!(
-            "cranelift-{CRANELIFT_VERSION} opt={} pic verify={} runtime-abi={RUNTIME_ABI_REVISION}",
+            "cranelift-{CRANELIFT_VERSION} opt={} pic verify={} runtime-abi={RUNTIME_ABI_REVISION}{}",
             if self.opt_level == 0 { "none" } else { "speed" },
-            self.verify
+            self.verify,
+            if self.debug { " debug" } else { "" }
         )
     }
 
@@ -154,7 +167,9 @@ impl Backend for Cranelift {
         units(native)
             .into_iter()
             .map(|(name, unit, instance)| Planned {
-                key: Some(self.key(native, unit)),
+                // A debug object's lines are a function of the source's text, which no MIR
+                // digest is: it is generated every time, never reused (N91).
+                key: (!self.debug).then(|| self.key(native, unit)),
                 name,
                 instance,
             })

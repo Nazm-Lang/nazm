@@ -875,12 +875,20 @@ enum Command {
     /// starts a task (N52), read off MIR, each with its count per call — `at-most-once` or
     /// `unknown`, never a guess. `--json` prints `nazm.cost/1`.
     /// Build the program and run it once with its memory and scheduler counters on (N58), and
-    /// print `nazm.profile/1`: its exit status, wall time and the counts — events, not samples.
+    /// print `nazm.profile/2`: its exit status, wall time and the counts; with `--sample`, also
+    /// where its samples fell (N91).
     Profile {
         file: PathBuf,
         /// The code generator, as `nazm build --backend`.
         #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
         backend: String,
+        /// Sample the run with the host's sampler, attributing each sample to a Nazm function
+        /// and line, the runtime, foreign code or the system (N91).
+        #[arg(long)]
+        sample: bool,
+        /// With `--sample`, the time between samples.
+        #[arg(long, value_name = "MS", default_value_t = 1, requires = "sample")]
+        interval_ms: u64,
     },
     ExplainCost {
         file: PathBuf,
@@ -1014,8 +1022,14 @@ fn main() -> ExitCode {
     if let Command::Inspect { file, def } = &cli.command {
         return inspect::run(file, def.as_deref());
     }
-    if let Command::Profile { file, backend } = &cli.command {
-        return run_profile::run(file, backend);
+    if let Command::Profile {
+        file,
+        backend,
+        sample,
+        interval_ms,
+    } = &cli.command
+    {
+        return run_profile::run(file, backend, sample.then_some(*interval_ms));
     }
     if let Command::ExplainCost { file, json } = &cli.command {
         return explain::cost(file, *json);

@@ -357,6 +357,8 @@ struct Fx<'a> {
     /// entries of [`Self::stack`], kept apart so that a failure edge — every fallible
     /// operation has one — finds them without walking every binding in the function.
     scopes: Vec<LocalId>,
+    /// The source blocks being lowered, innermost last: where a `let` is visible (N91).
+    open_blocks: Vec<Span>,
     loops: Vec<LoopFrame>,
     /// The failure-cleanup block for each set of open scopes, innermost last.
     cleanups: BTreeMap<Vec<LocalId>, BlockId>,
@@ -501,6 +503,7 @@ fn lower_function(
                 name: l.name.clone(),
                 origin: LocalOrigin::Param,
                 at: l.at,
+                scope: None,
             })
             .collect();
         return Ok(Function {
@@ -536,6 +539,7 @@ fn lower_function(
         cur: None,
         stack: Vec::new(),
         scopes: Vec::new(),
+        open_blocks: Vec::new(),
         loops: Vec::new(),
         cleanups: BTreeMap::new(),
         shared_unwind: None,
@@ -555,6 +559,7 @@ fn lower_function(
             name: l.name.clone(),
             origin,
             at: l.at,
+            scope: None,
         });
     }
     fx.ret = fx.ty(f.ret, f.ret_span);
@@ -681,6 +686,7 @@ impl Fx<'_> {
             name: format!("{what}#{}", id.0),
             origin: LocalOrigin::Temp,
             at,
+            scope: None,
         });
         id
     }
@@ -692,6 +698,7 @@ impl Fx<'_> {
             name: format!("tasks#{}", id.0),
             origin: LocalOrigin::Temp,
             at,
+            scope: None,
         });
         id
     }
@@ -916,6 +923,7 @@ impl Fx<'_> {
     /// A region: its statements, then its tail into `dst` if it has one, then the drop of what
     /// it bound.
     fn block_into(&mut self, b: &cir::Block, dst: Option<LocalId>) {
+        self.open_blocks.push(b.at);
         let depth = self.stack.len();
         for s in &b.stmts {
             if self.cur.is_none() {
@@ -929,12 +937,20 @@ impl Fx<'_> {
             }
         }
         self.pop_to(depth, b.at);
+        self.open_blocks.pop();
     }
 
     fn stmt(&mut self, s: &cir::Stmt) {
         match s {
             cir::Stmt::Let { local, value } => {
                 let l = LocalId(local.0);
+                // The function's own body is the subprogram's scope: no block of its own.
+                let scope = (self.open_blocks.len() > 1)
+                    .then(|| self.open_blocks.last().copied())
+                    .flatten();
+                if let Some(d) = self.locals.get_mut(l.index()) {
+                    d.scope = scope;
+                }
                 self.expr_into(value, Some(l));
                 self.own(l);
             }
