@@ -13518,3 +13518,11 @@ file = "crates/nazm-formal/src/statements.rs"
 find = "                    Ok(false) => self.stmts(b, rho)?,"
 replace = "                    Ok(false) => self.stmts(a, rho)?,"
 killers = [{ package = "nazm-formal", test = "statements", name = "s3_the_interpreter_means_what_the_statement_semantics_says" }]
+
+[[mutation]]
+name = "n98-the-selfhost-compiler-swaps-operands"
+why = "the compiler written in Nazm emits checked arithmetic with its operands swapped, so subtraction and division mean other things"
+file = "compiler/emit.nz"
+find = "            str_concat(v(a), str_concat(\", i64 \", str_concat(v(b), \")\")))))));"
+replace = "            str_concat(v(b), str_concat(\", i64 \", str_concat(v(a), \")\")))))));"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_parity_record_is_what_both_compilers_do_with_each_feature" }]

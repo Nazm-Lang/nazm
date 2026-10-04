@@ -3745,6 +3745,17 @@ remaining crashing case moved out of process. For fuzzing, a decision to start.
 
 ### 31. Bootstrap — VERIFIED
 
+*N98, 2026-10-04: parity of the compiler written in Nazm — measured and gated; not reached.*
+`architecture.md` §7.99 first. `compiler/parity/` holds 21 probes, one per feature; the contained
+test `the_parity_record_is_what_both_compilers_do_with_each_feature` (`crates/nazm-cli/tests/selfhost.rs`)
+builds each with the reference and with `compiler/emit.nz`, runs both natively, and holds
+`compiler/parity.json` to the verdicts: **13 equal** — arithmetic, loops, both failure traps, modules
+of files, records, enums, generics, `Result` with `?`, sequences, `Vec`, strings, equality — **8
+refused** — closures, traits, effects with `IoCap`, tasks and channels, contracts, `@std`, foreign
+declarations, and a recursive function with `if` as its value (`N0101`) — and **none differs**. The
+bootstrap stays VERIFIED; parity with the reference's native subset is not.
+
+
 **Evidence** · `compiler/bootstrap.sh` runs C1 → C2 → C3 from one source and compares two
 things: the emitted IR byte for byte, and the linker-normalised executables byte for byte.
 Five conformance cases under `compiler/conformance/` must agree across C2, C3 and the
