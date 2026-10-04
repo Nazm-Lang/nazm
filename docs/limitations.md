@@ -206,11 +206,10 @@ found only by reading all of it.
   no backend, FFI or registry-archive fuzzing, and the differential generator writes `Int` and
   `Bool` programs only (area 30). A minimised corpus reaches 99.3 % or more of its campaign's edges.
   *Narrowed in N73 and N93.*
-- The compiler written in Nazm understands neither packages nor `@std` imports nor foreign
-  declarations (areas 16, 17, 26).
-
-## Performance evidence
-
+- The compiler written in Nazm builds 13 of the 21 parity probes as the reference does and refuses
+  8 — closures, traits, effects, tasks and channels, contracts, `@std`, foreign declarations, and a
+  recursive function whose result is an `if` (`compiler/parity.json`, N98); it reads no package
+  manifest (areas 16, 17, 26, 31).
 - Checking is slower than at N75: `nazm check compiler/emit.nz` 107 → 166 ms in the contained
   benchmark, the steps at N76 and N80; `channels` builds 13–31 % slower (area 28, `performance.md`).
 - Of the 71 measured sections of `performance.md`, 8 current claims (N80, N82–N88) have no command
