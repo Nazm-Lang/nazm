@@ -196,8 +196,11 @@ found only by reading all of it.
   A provenance record is evidence of what a build read and wrote, not a proof; Nazm neither signs nor
   verifies an attestation. The compiler's bill of materials is what `Cargo.lock` claims; nothing
   checks a crate against its upstream.
-- Fuzzing is seeded generation, not coverage-guided; the differential generator writes `Int` and
-  `Bool` programs only (N73, area 30). *Narrowed in N73:* until then, no fuzzing.
+- Coverage-guided fuzzing covers four targets — the front end, lowering with MIR's validator, the
+  interpreter and package manifests — at 300 s each per campaign; no sanitizer, Miri or Loom run,
+  no backend, FFI or registry-archive fuzzing, and the differential generator writes `Int` and
+  `Bool` programs only (area 30). A minimised corpus reaches 99.3 % or more of its campaign's edges.
+  *Narrowed in N73 and N93.*
 - The compiler written in Nazm understands neither packages nor `@std` imports nor foreign
   declarations (areas 16, 17, 26).
 

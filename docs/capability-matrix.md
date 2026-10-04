@@ -95,7 +95,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 27 | Debugger and profiler | PARTIAL — lexical scopes, Cranelift line tables and a sampling profiler on macOS (N91); no Cranelift variables, no DAP |
 | 28 | Performance measurement | PARTIAL — every measured claim filed in a gated register (N92): 10 reproducible, 53 dated, 8 current claims unreproduced |
 | 29 | Differential testing | VERIFIED |
-| 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — seeded front-end and differential fuzzers (N73); not coverage-guided |
+| 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of four targets with a replayed corpus (N93); no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL — build provenance records and attestation hook (N73); across toolchains measured, not equal |
 | 33 | Platform and target matrix | PARTIAL |
@@ -2925,6 +2925,24 @@ invisible to all five. `docs/spec.md` names what must be settled before
 **Accepted when** · Met.
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — PARTIAL (N73; MISSING until then)
+
+*N93, 2026-10-04: coverage-guided fuzzing — VERIFIED for four targets at the stated budget; fuzzing
+stays PARTIAL.* `architecture.md` §7.94 first. `fuzz/` (its own workspace): the compiler's crates
+built with SanitizerCoverage (`trace-pc-guard`, a stable `rustc` option), the edge callbacks in
+uninstrumented C (`fuzz/cov.c`), and an engine that keeps an input when it reaches a new edge and
+mutates kept inputs by bytes, whole tokens of the language, whole lines and spliced lines, and names
+renamed. Targets: `front` (parse and check), `lower` (Core IR, MIR, and MIR's validator over every
+checked program), `run` (the interpreter, each execution bounded to 2 s — a program may block
+forever, which the language allows), `manifest`. `cargo xtask contained fuzz [SECONDS] [TARGET…]`;
+the minimised corpora are committed as `fuzz/corpus/TARGET/` and replayed by the ordinary suite
+(`crates/nazm-cli/tests/fuzz_replay.rs`, 1,826 inputs, about 2 s). **Campaign** (contained, four
+CPUs, 300 s per target): `front` 318,377 executions, 13,293 of 109,890 edges, 487 minimised inputs;
+`lower` 338,902, 17,467 edges, 531; `run` 221,834, 14,522 edges, 503, 35 inputs that block; `manifest`
+2,995,846, 2,347 edges, 298 — **no crash**. A minimised set reaches 99.3 % or more of the edges its
+campaign reached, not always all: the remainder are edges whose reaching varies between runs (threads, hash order).
+No defect was found, so none gained a regression or a mutant; the engine is outside the workspace the
+mutation catalogue covers. Not here: sanitizers (no `unsafe` in the compiler), Miri, Loom, backend and
+FFI differential fuzzing beyond N73's generator, registry archives, a contract VM.
 
 **Evidence** · `xtask/mutations/mutations.toml` holds **686** catalogued defects (158 when
 this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33, 612 at N34, 628 at N35, 643 at N36, 662 at N37), **498** of them with a verified killer and all

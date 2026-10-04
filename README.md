@@ -279,6 +279,10 @@ cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
 # Each catalogued defect is injected and must be caught. One full build and test run
 # per entry, so `--only NAME` selects a subset by substring.
 cargo xtask contained mutate
+
+# The coverage-guided fuzzer (N93): each target for SECONDS (300 by default); the minimised
+# corpora land in target/fuzz/ to commit under fuzz/corpus/, which the suite replays.
+cargo xtask contained fuzz 300 front lower run manifest
 ```
 
 The toolchain is pinned to 1.98.1 in `rust-toolchain.toml`. That pin is load-bearing:
