@@ -12670,7 +12670,7 @@ name = "n80-traces-are-not-printed"
 why = "`nazm.flow/2` names the origins at a sink but never how they got there"
 file = "crates/nazm-cli/src/explain.rs"
 find = '                    "traces": traces,'
-replace = '                    "traces": { let _ = traces; Vec::<Value>::new() },'
+replace = '                    "traces": traces.into_iter().take(0).collect::<Vec<Value>>(),'
 killers = [{ package = "nazm-cli", test = "flow_v3", name = "explain_flow_prints_each_origins_chain_from_where_it_entered" }]
 
 

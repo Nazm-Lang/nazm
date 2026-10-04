@@ -176,6 +176,38 @@ fn a_debugger_finds_a_cranelift_build_s_functions_and_lines() {
         ],
     );
     assert!(b.status.success(), "{}", err(&b));
+    // Each subprogram's address in the gathered DWARF is its symbol's in the executable: an
+    // address left as an offset into its section would still let a breakpoint by name resolve
+    // through the symbol table, and say nothing true about lines.
+    if cfg!(target_os = "macos") {
+        let dwarf = Command::new("dwarfdump")
+            .args(["--debug-info", "s.dSYM"])
+            .current_dir(d.path())
+            .output()
+            .unwrap();
+        let dwarf = out(&dwarf);
+        let symbols = Command::new("nm")
+            .arg("s")
+            .current_dir(d.path())
+            .output()
+            .unwrap();
+        let symbols = out(&symbols);
+        for f in ["f", "main"] {
+            let at = dwarf
+                .split("DW_TAG_subprogram")
+                .find(|die| die.contains(&format!("DW_AT_name\t(\"{f}\")")))
+                .and_then(|die| die.split("DW_AT_low_pc\t(0x").nth(1))
+                .and_then(|r| r.split(')').next())
+                .map(|h| u64::from_str_radix(h, 16).unwrap())
+                .unwrap_or_else(|| panic!("no subprogram {f}: {dwarf}"));
+            let symbol = symbols
+                .lines()
+                .find(|l| l.ends_with(&format!(".{f}")) && l.contains("nz.m."))
+                .and_then(|l| u64::from_str_radix(l.split_whitespace().next()?, 16).ok())
+                .unwrap_or_else(|| panic!("no symbol for {f}: {symbols}"));
+            assert_eq!(at, symbol, "{f}: DWARF {at:#x}, symbol {symbol:#x}");
+        }
+    }
     let text = query(
         d.path(),
         "./s",

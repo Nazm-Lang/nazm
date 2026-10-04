@@ -143,6 +143,33 @@ fn a_program_reaching_every_service_behaves_the_same_with_the_artifact_on_both_b
             "{backend}: the report is printed"
         );
         assert_eq!(linked.1, Some(0));
+        // The artifact is what was linked: no runtime is generated beside it, which on a linker
+        // that pulls archive members only when needed would leave the artifact silently unused.
+        let objects = format!("objects-{backend}");
+        let o = nazm(
+            d.path(),
+            &[
+                "build",
+                "p.nz",
+                "--backend",
+                backend,
+                "--runtime",
+                "rt",
+                "--objects",
+                &objects,
+            ],
+        );
+        assert!(o.status.success(), "{}", text(&o));
+        let names: Vec<String> = std::fs::read_dir(d.path().join(&objects))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with("libnazmrt.a"))
+                && !names.iter().any(|n| n.ends_with("-runtime.o")),
+            "{backend}: {names:?}"
+        );
     }
 }
 
