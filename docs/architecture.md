@@ -7878,6 +7878,58 @@ deterministic, run on the M1 Pro: every one agreed with the interpreter and with
 values and failures alike. No schema file existed for `nazm.accel/1`; `/2` is documented in
 `spec.md` and the matrix, not given one.
 
+## 7.90 Workspace editing: renaming what a project exports, and applying a plan stale-safely — N89, 2026-10-04
+
+Written before the code. Area 25 is PARTIAL: rename covers locals and private definitions, and an
+exported entity is refused because "a module no open program loads may use it" (§7.20) — so the
+one rename a maintainer most needs, of a function a project's other modules call, is the one the
+tools cannot do. And a `nazm.patch/1` plan is a proposal nothing applies. This milestone makes a
+**workspace** the unit of completeness, renames exported entities within one, and applies a plan
+only to the exact bytes it was computed from.
+
+**What a workspace is.** A source root that is *declared* — a `nazm.root` marker, or `--source-root`
+— and every `.nz` file under it, found by walking the directory (hidden directories and `target/`
+excepted, as the CLI's other walks except them). Every one of those files is analysed as a root, as
+`nazm check` would analyse it, over the editor's unsaved buffers where it has them. A file outside
+the root, and a package's dependency, are not in it. Without a declared root there is no workspace,
+and an exported rename is refused as before.
+
+**Which exported renames are complete.** Within a workspace, every module that can name an exported
+entity is a file under the root that imports its module — and every such file is analysed. So an
+exported function, record, enum, field, variant or payload field may be renamed when: its declaring
+file is under the root; every compilation of the workspace that contains it is clean; and the root is
+not a **library package** — a `nazm.toml` with no `main` — whose exported API is what *other*
+packages import, which no walk of this root finds. That last case is refused by name
+(`Refusal::PackageApi`): a library's API changes by its author's decision, never by a rename.
+
+**The plan.** The entity is found in each compilation by its declaration's place (file and bytes) —
+its session-local id means nothing outside one compilation — and its occurrences, across every file
+of every compilation that contains it, are the edits: the declaration and every use, each spelled as
+the old name, merged across compilations, one `FileEdit` per file, each bound to that file's exact
+text and its editor version (or, for a file not open, its disk bytes). The candidate workspace —
+every edited file replaced in memory, nothing written — is re-analysed in full: every compilation
+that contains an edited file must be clean and partition its occurrences into entities exactly as
+before, the edits accounted for. Any difference refuses the whole plan.
+
+**Applying.** `nazm patch apply PLAN.json` applies a `nazm.patch/1` plan to disk, all or nothing: every
+file's bytes must hash to the plan's `digest` and hold each edit's `expected` bytes at its place; if
+any file differs the command refuses, naming it, and writes nothing. The edits are written through a
+temporary file and a rename per file. The language server applies nothing: an editor applies a
+rename's edits, and the protocol's edit is offered only when every file it touches is open at the
+version the plan was computed from — a closed file's edit goes through `nazm patch`, whose plan binds
+its bytes.
+
+**What does not change.** The language, the compiler, every schema but one addition: `nazm.patch/1`
+already carries several files; `apply` reads it. No semantic epoch, interface, runtime or IR change.
+
+**Negative example.** In a library package, renaming its `pub fn parse` is refused — other packages'
+uses cannot be found. **Boundary example.** Renaming a `pub fn` used by three modules of a workspace
+edits all four files; a fifth file edited after planning makes `apply` refuse and write nothing.
+
+**What would prove this unsuitable.** A workspace file that uses the entity and is not edited; a plan
+`apply` writes to a file whose bytes differ from the plan's; a rename that changes what any
+compilation of the workspace means.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
