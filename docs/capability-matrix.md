@@ -99,7 +99,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL — a stated five-part model, signed in-toto statements and a CycloneDX SBOM (N94); one host and one image, no transparency log |
 | 33 | Platform and target matrix | PARTIAL — every cell run-verified, compile-only or unsupported (N95): 9 run, 2 compile-only, 3 unsupported; x86_64 Linux not run |
-| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
+| 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72); both VMs held to the simulator on generated sequences (N96) |
 
 After N88, 2026-10-04: unchanged — area 21 widened and still PARTIAL.
 
@@ -3948,6 +3948,18 @@ test on a third.
 project verifies.
 
 ### 34. Smart contracts — PARTIAL
+
+*N96, 2026-10-04: generated sequences on the reference VMs — VERIFIED; the area stays PARTIAL, sBPF
+BLOCKED.* `architecture.md` §7.97 first. `crates/nazm-cli/tests/contract_property.rs`: three seeded
+sequences of 250 transactions, generated from `nazm.contract/1`'s entrypoints with callers among the
+owner and two others and arguments at `Int`'s edges, over a contract with transfers, an owner's
+switch, a conservation breach, a loop, overflow and division. On any host the simulator is
+deterministic and every committed state keeps the conserved quantity; with `--ignored`, py-evm
+(`nazm-evm:n70`) and the WebAssembly reference host (`nazm-wasm:n64`) agree with it on all 750
+outcomes, codes and final states, and every EVM transaction stays inside its stated gas bound. sBPF
+remains BLOCKED: this machine has no BPF target in its C compiler and no Solana toolchain, validator or
+emulator. Not in the model, and not added: events, external calls and reentrancy, assets as types,
+metering beyond the bound, a chain's own WebAssembly host, migrations beyond `--upgrade-check`.
 
 *N69, 2026-10-02: the chain-neutral model — VERIFIED for the model and its simulator.*
 `architecture.md` §7.71 first. A contract is an ordinary module — a `State` record of `Int`s and

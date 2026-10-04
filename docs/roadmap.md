@@ -398,6 +398,13 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N96 — smart contracts v2 — **complete as scoped, 2026-10-04; area 34 stays PARTIAL, sBPF BLOCKED**
+
+`architecture.md` §7.97 first. The EVM and WebAssembly backends held to the simulator on generated
+transaction sequences under their reference VMs: 750 transactions, every outcome, code and final state
+equal, every gas bound held. No language change; events, external calls and sBPF remain out. Next:
+N97, formal semantics v2.
+
 ### N95 — the platform matrix v2 — **complete as scoped, 2026-10-04; area 33 stays PARTIAL**
 
 `architecture.md` §7.96 first. Every target × backend cell is run-verified, compile-only or
