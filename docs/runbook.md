@@ -407,6 +407,24 @@ total-memory gate (`performance.md`), so the default did not move. `--profile` s
 each step if given, and the profile is part of the campaign identity: a journal recorded
 under one profile is never read by a resume under another.
 
+### A probe runs in a fresh directory, and every entry names its killer
+
+**A warm check cache answers for the unmutated checker.** The cache is keyed by the checker's
+identity — semantic epoch, package version, schemas, the built-in table — and a mutant changes the
+checker without changing any of these. A probe of a mutant in a directory that already holds a
+`.nazm` cache reads the unmutated answer from it. N100 called `n79-a-held-io-cap-is-read-alone`
+"possibly equivalent" for that reason; N101 found the program it had probed is refused under the
+mutant in a fresh directory. Probes by hand and killers both run in fresh directories.
+
+**No silent tier (N101).** Every catalogue entry declares `killers`, or says why it has none in
+`no_killer`: a known survivor, an equivalent mutant, or one that cannot be injected, with the
+evidence. `cargo xtask check` refuses an entry with neither. A new entry's killer is the test whose
+failure under the mutant was observed; for a historical entry without one, N101's method was to
+apply the mutant in a dedicated worktree with its own target directory, run the owning crate's
+tests and then `nazm-cli`'s, and take the first failing test that is not a whole-chain test (the
+bootstrap fixpoint, the parity record). Selfhost and bootstrap mutants refuse to run uncontained,
+so theirs were found under the contained runner against a pristine export.
+
 ### Deadlines and process trees
 
 Every build and test the campaign starts runs through one subprocess runner
