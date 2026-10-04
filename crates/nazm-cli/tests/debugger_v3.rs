@@ -344,3 +344,85 @@ fn a_live_session_on_either_backend_shows_nazm_frames_and_lines() {
     // Cranelift: lines and frames; its variables are not described.
     assert!(clif.contains("No locals."), "{clif}");
 }
+
+/// For `docs/performance.md` (N91): a sampled run's wall time against the same executable alone,
+/// at two intervals, and a Cranelift build with and without `--debug`. Medians of seven and five.
+#[test]
+#[ignore = "a measurement, for docs/performance.md; run with --ignored --nocapture"]
+fn what_debugging_and_sampling_cost() {
+    if !Path::new("/usr/bin/sample").is_file() {
+        eprintln!("SKIP: no sampler on this machine");
+        return;
+    }
+    let median = |mut xs: Vec<f64>| {
+        xs.sort_by(f64::total_cmp);
+        xs[(xs.len() - 1) / 2]
+    };
+    let d = with("spin.nz", SPIN);
+    let b = nazm(
+        d.path(),
+        &["build", "--debug", "--no-cache", "spin.nz", "-o", "spin"],
+    );
+    assert!(b.status.success(), "{}", err(&b));
+    let exe = d.path().join("spin");
+    // The first launch of a fresh executable is not the program's time.
+    Command::new(&exe).output().unwrap();
+    let run = |interval: Option<&str>| {
+        let start = std::time::Instant::now();
+        let mut child = Command::new(&exe)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let sampler = interval.map(|i| {
+            Command::new("/usr/bin/sample")
+                .args([&child.id().to_string(), "3600", i, "-file", "/dev/null"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        });
+        child.wait().unwrap();
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        if let Some(mut s) = sampler {
+            s.wait().unwrap();
+        }
+        ms
+    };
+    for (label, interval) in [
+        ("alone", None),
+        ("every 1 ms", Some("1")),
+        ("every 10 ms", Some("10")),
+    ] {
+        let ms = median((0..7).map(|_| run(interval)).collect());
+        println!("sampling {label}: {ms:.0} ms");
+    }
+    let program = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/programs/strings.nz"),
+    )
+    .unwrap();
+    std::fs::write(d.path().join("strings.nz"), program).unwrap();
+    for (label, debug) in [("ordinary", false), ("--debug", true)] {
+        let mut args = vec![
+            "build",
+            "--no-cache",
+            "--backend",
+            "cranelift",
+            "strings.nz",
+            "-o",
+            "s",
+        ];
+        if debug {
+            args.insert(1, "--debug");
+        }
+        let ms = median(
+            (0..5)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    assert!(nazm(d.path(), &args).status.success());
+                    start.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect(),
+        );
+        println!("cranelift build, {label}: {ms:.0} ms");
+    }
+}
