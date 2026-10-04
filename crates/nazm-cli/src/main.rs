@@ -34,6 +34,7 @@ use std::process::ExitCode;
 
 mod accel;
 mod apidoc;
+mod attest;
 mod backend;
 mod bindgen;
 mod build;
@@ -136,6 +137,35 @@ enum RuntimeAction {
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+/// The operations of `nazm attest` (N94).
+#[derive(Subcommand, Debug)]
+enum AttestOperation {
+    /// Wrap a provenance record in an in-toto Statement v1 over the ARTEFACTs — each checked to
+    /// be an output the record names — and sign it with `ssh-keygen -Y sign`, writing `FILE.sig`.
+    Sign {
+        /// The private key, as `ssh-keygen -f` takes it.
+        #[arg(long)]
+        key: PathBuf,
+        /// Where the statement goes: `PROVENANCE.intoto.json` by default.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        provenance: PathBuf,
+        #[arg(required = true)]
+        artefacts: Vec<PathBuf>,
+    },
+    /// Verify a signed statement for IDENTITY against an allowed-signers file, and that every
+    /// ARTEFACT's digest is one of its subjects.
+    Verify {
+        #[arg(long)]
+        allowed_signers: PathBuf,
+        #[arg(long)]
+        identity: String,
+        statement: PathBuf,
+        #[arg(required = true)]
+        artefacts: Vec<PathBuf>,
+    },
 }
 
 /// The operations `nazm patch` plans.
@@ -861,6 +891,10 @@ enum Command {
         /// standard output as `FILE.sig` — a hook for any local signer. Needs `--provenance`.
         #[arg(long, value_name = "CMD", requires = "provenance")]
         attest_with: Option<String>,
+        /// After a successful build, write a CycloneDX 1.5 SBOM to FILE (N94): the output, every
+        /// package, source module and the runtime with their BLAKE3 hashes, and the tools.
+        #[arg(long, value_name = "FILE")]
+        sbom: Option<PathBuf>,
     },
     /// Print one program's facts as `nazm.inspect/1` (N48): every definition's identity,
     /// signature, effects, capabilities, provenance, Core IR and MIR digests, and the toolchain,
@@ -901,6 +935,11 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         json: bool,
+    },
+    /// Sign and verify in-toto statements of a build's provenance (N94).
+    Attest {
+        #[command(subcommand)]
+        operation: AttestOperation,
     },
     /// Resolve a package and write its `nazm.lock` (N46): the exact package versions, sources
     /// and digests a `--locked` build is held to. Written only when its bytes would change.
@@ -972,6 +1011,22 @@ fn main() -> ExitCode {
     // its lockfile — both settled before any command sees the file.
     if let Command::Lock { dir } = &cli.command {
         return package::lock(dir);
+    }
+    if let Command::Attest { operation } = &cli.command {
+        return match operation {
+            AttestOperation::Sign {
+                key,
+                out,
+                provenance,
+                artefacts,
+            } => attest::sign(key, out.as_deref(), provenance, artefacts),
+            AttestOperation::Verify {
+                allowed_signers,
+                identity,
+                statement,
+                artefacts,
+            } => attest::verify(allowed_signers, identity, statement, artefacts),
+        };
     }
     if let Command::Update { dir, names } = &cli.command {
         return package::update(dir, names);
@@ -1099,6 +1154,7 @@ fn main() -> ExitCode {
         profile,
         provenance,
         attest_with,
+        sbom,
     } = cli.command
     {
         let built = build::run(
@@ -1126,10 +1182,7 @@ fn main() -> ExitCode {
                 runtime: runtime.as_deref(),
             },
         );
-        let Some(record) = provenance else {
-            return built;
-        };
-        if built != ExitCode::from(exit::OK) {
+        if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {
             return built;
         }
         return provenance::write(
@@ -1148,7 +1201,8 @@ fn main() -> ExitCode {
                 profile: profile.as_deref(),
                 runtime: runtime.as_deref(),
             },
-            &record,
+            provenance.as_deref(),
+            sbom.as_deref(),
             attest_with.as_deref(),
         );
     }
@@ -1461,6 +1515,7 @@ fn main() -> ExitCode {
         | Command::Capabilities { .. }
         | Command::Lock { .. }
         | Command::Update { .. }
+        | Command::Attest { .. }
         | Command::Publish { .. }
         | Command::Yank { .. }
         | Command::ExplainCost { .. }

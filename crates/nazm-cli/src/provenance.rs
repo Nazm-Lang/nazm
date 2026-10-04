@@ -203,15 +203,126 @@ fn record(r: &Request<'_>) -> Result<Value, String> {
     }))
 }
 
-/// Write the record, and the attestation if one was asked for. Runs only after the build has
+/// A `blake3:HEX` digest's hex, for a format that names the algorithm apart.
+fn hex(digest: &Value) -> Option<&str> {
+    digest.as_str()?.strip_prefix("blake3:")
+}
+
+/// The build as a CycloneDX 1.5 SBOM (N94, §7.95), read off the provenance record so the two cannot
+/// describe different builds: the output as the metadata component, every package, every source
+/// module as a file, the runtime, and the tools. Deterministic — no serial number or timestamp,
+/// both of which CycloneDX makes optional.
+// serde_json's `Index` on a `Value` never panics: a missing key or a non-object reads as `Null`.
+#[allow(clippy::indexing_slicing)]
+pub(crate) fn sbom(record: &Value) -> Value {
+    let hashes = |d: &Value| -> Value {
+        hex(d).map_or_else(|| json!([]), |h| json!([{ "alg": "BLAKE3", "content": h }]))
+    };
+    let files = record["output"]["files"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let main = files.first().cloned().unwrap_or(Value::Null);
+    let mut components: Vec<Value> = Vec::new();
+    for p in record["packages"].as_array().into_iter().flatten() {
+        let (name, version) = (
+            p["name"].as_str().unwrap_or(""),
+            p["version"].as_str().unwrap_or(""),
+        );
+        components.push(json!({
+            "type": "library",
+            "bom-ref": format!("package:{name}@{version}"),
+            "name": name,
+            "version": version,
+            "purl": format!("pkg:generic/{name}@{version}"),
+            "hashes": hashes(&p["digest"]),
+        }));
+    }
+    for m in record["sources"].as_array().into_iter().flatten() {
+        let name = m["module"].as_str().unwrap_or("");
+        components.push(json!({
+            "type": "file",
+            "bom-ref": format!("source:{name}"),
+            "name": name,
+            "hashes": hashes(&m["digest"]),
+        }));
+    }
+    components.push(json!({
+        "type": "library",
+        "bom-ref": "runtime",
+        "name": "nazm-runtime",
+        "version": format!("abi-{}", record["runtime"]["abi_revision"]),
+        "hashes": hashes(&record["runtime"]["digest"]),
+    }));
+    for f in files.iter().skip(1) {
+        components.push(json!({
+            "type": "file",
+            "bom-ref": format!("output:{}", f["name"].as_str().unwrap_or("")),
+            "name": f["name"],
+            "hashes": hashes(&f["digest"]),
+        }));
+    }
+    let mut tools = vec![
+        json!({ "type": "application", "name": "nazm", "version": record["compiler"]["version"] }),
+        json!({ "type": "library", "name": "cranelift", "version": record["backend"]["cranelift"] }),
+    ];
+    if let Some(v) = record["c_compiler"]["version"].as_str() {
+        tools.push(
+            json!({ "type": "application", "name": record["c_compiler"]["driver"], "version": v }),
+        );
+    }
+    json!({
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "version": 1,
+        "metadata": {
+            "tools": { "components": tools },
+            "component": {
+                "type": if record["output"]["kind"] == "executable" { "application" } else { "library" },
+                "bom-ref": "output",
+                "name": main["name"],
+                "hashes": hashes(&main["digest"]),
+                "properties": [
+                    { "name": "nazm:target", "value": record["target"] },
+                    { "name": "nazm:backend", "value": record["backend"]["name"] },
+                    { "name": "nazm:semantic_epoch", "value": record["semantic_epoch"].to_string() },
+                ],
+            },
+        },
+        "components": components,
+        "dependencies": [{
+            "ref": "output",
+            "dependsOn": record["packages"].as_array().into_iter().flatten()
+                .map(|p| format!("package:{}@{}", p["name"].as_str().unwrap_or(""), p["version"].as_str().unwrap_or("")))
+                .chain(std::iter::once("runtime".to_owned()))
+                .collect::<Vec<_>>(),
+        }],
+    })
+}
+
+/// Write the record, the SBOM and the attestation, as asked. Runs only after the build has
 /// succeeded; a failure here fails the command, and the output stays where the build put it.
-pub(crate) fn write(r: &Request<'_>, file: &Path, attest_with: Option<&str>) -> ExitCode {
+pub(crate) fn write(
+    r: &Request<'_>,
+    file: Option<&Path>,
+    sbom_file: Option<&Path>,
+    attest_with: Option<&str>,
+) -> ExitCode {
     let doc = match record(r) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("nazm: no provenance: {e}");
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
+    };
+    if let Some(path) = sbom_file {
+        if let Err(e) = std::fs::write(path, format!("{:#}\n", sbom(&doc))) {
+            eprintln!("nazm: cannot write {}: {e}", path.display());
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
+    }
+    let Some(file) = file else {
+        return ExitCode::from(exit::OK);
     };
     if let Err(e) = std::fs::write(file, format!("{doc:#}\n")) {
         eprintln!("nazm: cannot write {}: {e}", file.display());
