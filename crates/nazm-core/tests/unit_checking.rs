@@ -62,6 +62,7 @@ fn interface_of_b(module: nazm_core::sema::ModuleId) -> UnitInterface {
             effects: None,
             foreign: None,
             preconditions: 0,
+            origin: None,
         }],
         Vec::new(),
         Vec::new(),

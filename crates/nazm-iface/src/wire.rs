@@ -136,7 +136,15 @@ use nazm_span::Span;
 /// An export may carry `requires`: how many preconditions it states. An importer's obligation
 /// report counts each of its calls as one, and a `/9` reader would count none; absent where it
 /// states none, but the major moves.
-pub const SCHEMA: &str = "nazm.interface/10";
+///
+/// # `/11` (N103)
+///
+/// A module may offer what another defines (`pub use`). Such an export carries `reexport`
+/// and the **defining** module's identity in `def`, where every other export's is this
+/// module's; a type offered by another module is listed in `reexported_types` under the name
+/// an importer writes. A `/10` reader would refuse the identity as foreign or miss the type,
+/// so the major moves.
+pub const SCHEMA: &str = "nazm.interface/11";
 
 /// A type as persisted.
 ///
@@ -298,8 +306,12 @@ impl PersistentC {
 /// One exported definition, as published.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistentExport {
-    /// Which logical definition this is: `module::kind name`.
+    /// Which logical definition this is: `module::kind name` — another module's for a
+    /// re-export (N103), which is the one identity the definition has.
     pub def: String,
+    /// Offered by this module and defined by another (N103). Absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reexport: bool,
     /// What a dependent writes to name it.
     ///
     /// Redundant with the tail of `def`, and kept because a reader should not have to
@@ -445,6 +457,10 @@ pub struct PersistentUnitInterface {
     /// Every impl it declares, sorted by trait and then type (N78).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub impls: Vec<PersistentImpl>,
+    /// Types another module declares that this one offers (N103): the name an importer
+    /// writes, and the type's durable identity. Sorted by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reexported_types: Vec<(String, String)>,
 }
 
 /// An exported trait (N78). In each method's types, `{"param": 0}` is `Self`.
@@ -746,8 +762,17 @@ impl PersistentUnitInterface {
                         .ok_or_else(|| PublishError::NoModuleKey(interface.module()))?,
                 );
             }
+            // A re-export's identity is its definition's (N103).
+            let def = match &e.origin {
+                Some((m, name)) => {
+                    let key = graph.key(*m).ok_or(PublishError::NoModuleKey(*m))?;
+                    DefKey::new(key.clone(), DefKind::Function, name.clone()).to_string()
+                }
+                None => DefKey::new(module.clone(), DefKind::Function, e.name.clone()).to_string(),
+            };
             exports.push(PersistentExport {
-                def: DefKey::new(module.clone(), DefKind::Function, e.name.clone()).to_string(),
+                def,
+                reexport: e.origin.is_some(),
                 name: e.name.clone(),
                 kind: DefKind::Function.as_str().to_owned(),
                 generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
@@ -814,13 +839,15 @@ impl PersistentUnitInterface {
             let trait_def = trait_key(&i.trait_name, i.trait_module)?;
             let self_ty = ty(i.self_ty)?;
             let shown = types.show(i.self_ty);
+            // Its methods are the declaring module's, however it reached this interface.
+            let owner = graph.key(i.module).ok_or(PublishError::NoModuleKey(i.module))?;
             impls.push(PersistentImpl {
                 methods: i
                     .methods
                     .iter()
                     .map(|m| {
                         DefKey::new(
-                            module.clone(),
+                            owner.clone(),
                             DefKind::Function,
                             format!("{}/{shown}/{m}", i.trait_name),
                         )
@@ -842,6 +869,51 @@ impl PersistentUnitInterface {
                 ))
         });
 
+        // Types another module declares that this one offers, under the name an importer
+        // writes (N103): a nameable one of another module by its own, a renamed one by its
+        // new one.
+        let mut reexported_types: Vec<(String, String)> = Vec::new();
+        let type_key = |t: Type| -> Option<String> {
+            match t {
+                Type::Record(id) => types.records().get(id).and_then(|d| {
+                    graph
+                        .key(d.module)
+                        .map(|k| DefKey::new(k.clone(), DefKind::Record, d.name.clone()).to_string())
+                }),
+                Type::Enum(id) => types.enums().get(id).and_then(|d| {
+                    graph
+                        .key(d.module)
+                        .map(|k| DefKey::new(k.clone(), DefKind::Enum, d.name.clone()).to_string())
+                }),
+                _ => None,
+            }
+        };
+        for r in interface.records().iter().filter(|r| r.nameable) {
+            if let Some(d) = types.records().get(r.def) {
+                if d.module != interface.module() {
+                    if let Some(k) = type_key(Type::Record(r.def)) {
+                        reexported_types.push((d.name.clone(), k));
+                    }
+                }
+            }
+        }
+        for e in interface.enums().iter().filter(|e| e.nameable) {
+            if let Some(d) = types.enums().get(e.def) {
+                if d.module != interface.module() {
+                    if let Some(k) = type_key(Type::Enum(e.def)) {
+                        reexported_types.push((d.name.clone(), k));
+                    }
+                }
+            }
+        }
+        for (name, t) in interface.renamed() {
+            if let Some(k) = type_key(*t) {
+                reexported_types.push((name.clone(), k));
+            }
+        }
+        reexported_types.sort();
+        reexported_types.dedup();
+
         Ok(Self {
             schema: SCHEMA.to_owned(),
             module: module.as_str().to_owned(),
@@ -851,6 +923,7 @@ impl PersistentUnitInterface {
             exports,
             traits,
             impls,
+            reexported_types,
         })
     }
 
@@ -1038,9 +1111,16 @@ impl PersistentUnitInterface {
                 }
             }
             // The identity must be this module's, and must be the one the name and kind
-            // beside it describe. Either mismatch means the file disagrees with itself.
+            // beside it describe. Either mismatch means the file disagrees with itself. A
+            // re-export's is another module's function (N103), and only a re-export's is.
             let expected = DefKey::new(module.clone(), kind, e.name.clone()).to_string();
-            if e.def != expected {
+            if e.reexport {
+                let foreign_fn = parse_type_key(&e.def, DefKind::Function)
+                    .is_some_and(|k| k.module() != &module);
+                if !foreign_fn {
+                    return Err(ReadError::NameMismatch(e.def.clone()));
+                }
+            } else if e.def != expected {
                 if e.def.starts_with(&format!("{module}::")) {
                     return Err(ReadError::NameMismatch(e.def.clone()));
                 }
@@ -1260,6 +1340,8 @@ impl PersistentUnitInterface {
                     .map(|names| names.iter().filter_map(|n| effect_named(n)).collect()),
                 foreign: e.foreign.clone(),
                 preconditions: e.requires,
+                // Session ids are this reader's; the durable identity stays in `def`.
+                origin: None,
             });
             for &index in &e.requires_equality {
                 types.require_equality(TypeParam { owner, index });
@@ -1288,7 +1370,27 @@ impl PersistentUnitInterface {
                 _ => None,
             })
             .collect();
-        UnitInterface::new(module, exports, record_exports, enum_exports, Vec::new())
+        let mut iface =
+            UnitInterface::new(module, exports, record_exports, enum_exports, Vec::new());
+        // Types offered by name from another module (N103): their shapes are in the lists
+        // above, as every mentioned type's is.
+        for (name, key) in &self.reexported_types {
+            if let Some(node) = ids.get(key.as_str()).copied() {
+                let (t, own) = match node {
+                    TypeNode::Record(def) => (
+                        Type::Record(def),
+                        types.records().get(def).map(|d| d.name.clone()),
+                    ),
+                    TypeNode::Enum(def) => (
+                        Type::Enum(def),
+                        types.enums().get(def).map(|d| d.name.clone()),
+                    ),
+                };
+                let alias = (own.as_deref() != Some(name.as_str())).then(|| name.clone());
+                iface.add_reexported_type(t, alias);
+            }
+        }
+        iface
     }
 
     /// This module's durable identity. Validated on read, so this cannot fail afterwards.
