@@ -255,6 +255,22 @@ and the parser produces a usable tree for a file with an error in the middle of 
 
 ### 2. Name resolution and modules — PARTIAL
 
+*N103, 2026-10-05: re-exports, one identity.* `architecture.md` §7.104 first. `pub use "PATH";`
+offers everything the module at `PATH` offers; `pub use "PATH" { a, b as c };` the names chosen,
+`c` the name `b` is offered under. A re-export adds no definition: its export carries the
+defining module's identity, so a call, a type, a trait bound, a reference, a rename, a persisted
+interface (`nazm.interface/11`) and the API document (`nazm.api-doc/2`) all answer with the
+definition. Refused: a name not offered `N0211`, a name offered twice `N0212`, a cycle of
+re-exports `N0213`; `pub use … as m`. An impl in a module re-exported from is usable where the
+re-exporting module is imported. Across a package boundary too. `nazm interface` publishes from
+the stages a compilation runs (`declared_interfaces`), no longer a shorter path of its own. The
+compiler written in Nazm reads re-exports and reports `N0211`–`N0213` at the reference's positions.
+Held by `crates/nazm-cli/tests/reexports.rs` (nine tests: both backends, refusals, references, the
+persisted interface alone, check reuse — a re-exported signature's change re-checks the importer, a
+private body's does not — a workspace rename that keeps an alias, the API document, a warm build,
+a package) and the selfhost suite. Nine new mutants, all caught. **Stays PARTIAL:** `nazm build`
+and `nazm run` still check every module; a warm build reuses objects, not checks.
+
 **N77 (2026-10-03)** · *Resolution, persisted* (`architecture.md` §7.78). A module that checks
 cleanly leaves a **resolved unit**, `nazm.resolved/1`: its imports (as written, alias, target
 key, target interface hash), its definitions and every resolved occurrence of a declared entity,
@@ -350,16 +366,14 @@ marker, or `--source-root DIR`, fixes the root a module's key is relative to, so
 neither, the root is derived from the named file exactly as before. The marker must be
 empty and is refused otherwise: it says where a project begins and owns nothing else.
 
-**Limitation** · A module still cannot export a name under another one or re-export one: both
-are language decisions with no settled design, and they are why this area stays PARTIAL. A module
-is named by a relative path, `@std/NAME` or a package's `NAME:path`; the compiler written in Nazm
-resolves only the first (N98). A resolved unit carries no types and no slots, so `nazm build` and
+**Limitation** · A module is named by a relative path, `@std/NAME` or a package's `NAME:path`; the
+compiler written in Nazm resolves the first two (N102) and refuses the third by name. A resolved unit carries no types and no slots, so `nazm build` and
 `nazm run` still check every module (area 2a); locals have no persisted resolution; the language
 service never reads or writes a unit (an unsaved buffer is not cache state). *The sentence that
 stood here — that nothing is separately compiled — was true until N5 and is now area 10a.*
 
-**Next dependency** · Aliasing and re-export are language decisions; separate code
-generation needs a linking model (area 10).
+**Next dependency** · Check reuse for `nazm build` and `nazm run`: a persisted unit that carries
+types and slots, so a warm build lowers a module it did not re-check.
 
 **Accepted when** · Met for identity, interfaces and a declared root.
 

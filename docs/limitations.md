@@ -23,10 +23,12 @@ found only by reading all of it.
   trait bound what every impl of that method may (N80). The compiler written in Nazm has closures,
   function values and traits since N102, and not provenance (areas 3, 5, 7, 16). *Narrowed in N50, N80
   and N102.*
-- A module cannot re-export a name or export one under another name (area 2). A module's
-  persisted resolution (N77, `nazm.resolved/1`) holds its names, not its types: `nazm build` and
-  `nazm run` still check every module, and only `nazm check` and `nazm references` read it.
-  *Narrowed in N77:* until then, nothing a check decided about a body outlived the process.
+- A module's persisted resolution (N77, `nazm.resolved/1`) holds its names, not its types:
+  `nazm build` and `nazm run` still check every module — a warm build reuses objects, not checks —
+  and only `nazm check` and `nazm references` read it (area 2). A trait is re-exported under its own
+  name only, and `pub use "PATH" as m;` is refused. *Narrowed in N77:* until then, nothing a check
+  decided about a body outlived the process. *Narrowed in N103:* a module may re-export a name, and
+  under another name.
 - The standard library is 1.0 (N84) and stable within 1.x, but has no networking, no
   cryptography and no floating point; `@std/map` inserts in linear time (a sorted array), and
   channel helpers exist for `Int` and `Str` only, since a channel cannot carry a type parameter
