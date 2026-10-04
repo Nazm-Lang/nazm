@@ -398,6 +398,13 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N95 — the platform matrix v2 — **complete as scoped, 2026-10-04; area 33 stays PARTIAL**
+
+`architecture.md` §7.96 first. Every target × backend cell is run-verified, compile-only or
+unsupported, with its evidence and CPU identity, in one table `nazm inspect` prints and a test holds
+the capability matrix to; Windows, 32-bit hosted and big-endian targets are decided non-goals. Not
+here: an x86_64 Linux runner. Next: N96, smart contracts v2.
+
 ### N94 — reproducibility and provenance v2 — **complete as scoped, 2026-10-04; area 32 stays PARTIAL**
 
 `architecture.md` §7.95 first. A five-part reproducibility model, each part with its own evidence;
