@@ -299,7 +299,194 @@ struct Resolver {
 }
 
 /// How many rounds the registry solve may take before it is refused as not settling.
-const MAX_ROUNDS: usize = 64;
+/// How many candidate versions the resolver tries before it stops and says so (N90).
+const MAX_CANDIDATES: usize = 10_000;
+
+/// Requirements on one package: each with who placed it.
+type Placed = Vec<(VersionReq, String)>;
+
+/// The backtracking search over the registry's packages (N90, `docs/architecture.md` §7.91).
+struct Search<'a> {
+    registry: &'a Path,
+    /// What the path packages require: `(package, requirement, who)`.
+    base: Vec<(String, VersionReq, String)>,
+    /// The path packages' names: one build has one package of each name.
+    path_names: Vec<String>,
+    preferred: &'a BTreeMap<String, Version>,
+    indexes: BTreeMap<String, Index>,
+    manifests: BTreeMap<(String, Version), (Manifest, PathBuf)>,
+    tried: usize,
+    /// The package no candidate fitted at the deepest point reached, with every requirement on
+    /// it there: the explanation of a failure.
+    deepest: Option<(usize, String, Placed)>,
+}
+
+impl Search<'_> {
+    fn index(&mut self, name: &str) -> Result<&Index, Box<Diagnostic>> {
+        if !self.indexes.contains_key(name) {
+            let i = Index::read(self.registry, name)?;
+            self.indexes.insert(name.to_owned(), i);
+        }
+        self.indexes.get(name).ok_or_else(|| {
+            Box::new(error(
+                codes::PACKAGE_NOT_FOUND,
+                format!("no index for `{name}`"),
+            ))
+        })
+    }
+
+    /// A registry version's manifest, read once and checked: it depends only on the registry.
+    fn manifest(&mut self, name: &str, v: Version) -> Result<Manifest, Box<Diagnostic>> {
+        if let Some((m, _)) = self.manifests.get(&(name.to_owned(), v)) {
+            return Ok(m.clone());
+        }
+        let (m, dir) = self.index(name)?.fetch(v)?;
+        if let Some((dep, _)) = m
+            .dependencies
+            .iter()
+            .find(|(_, d)| matches!(d, Dependency::Path { .. }))
+        {
+            return Err(Box::new(error(
+                codes::MANIFEST_INVALID,
+                format!(
+                    "the registry's `{name}` {v} depends on `{dep}` by path; a registry package \
+                     depends only on the registry"
+                ),
+            )));
+        }
+        self.manifests
+            .insert((name.to_owned(), v), (m.clone(), dir));
+        Ok(m)
+    }
+
+    /// Every requirement under `chosen`: the path packages', and each chosen version's.
+    fn requirements(
+        &mut self,
+        chosen: &BTreeMap<String, Version>,
+    ) -> Result<BTreeMap<String, Placed>, Box<Diagnostic>> {
+        let mut reqs: BTreeMap<String, Placed> = BTreeMap::new();
+        for (name, r, by) in &self.base {
+            reqs.entry(name.clone()).or_default().push((*r, by.clone()));
+        }
+        for (name, v) in chosen {
+            let m = self.manifest(name, *v)?;
+            for (dep, d) in &m.dependencies {
+                if let Dependency::Registry(r) = d {
+                    reqs.entry(dep.clone())
+                        .or_default()
+                        .push((*r, format!("`{name}` {v}")));
+                }
+            }
+        }
+        Ok(reqs)
+    }
+
+    /// The first complete assignment in name order, each package's candidates newest first —
+    /// the lockfile's choice before the rest — or `None`.
+    fn solve(
+        &mut self,
+        chosen: &BTreeMap<String, Version>,
+    ) -> Result<Option<BTreeMap<String, Version>>, Box<Diagnostic>> {
+        let reqs = self.requirements(chosen)?;
+        // A requirement a choice placed on a package already chosen must hold of it.
+        for (name, v) in chosen {
+            if let Some(rs) = reqs.get(name) {
+                if rs.iter().any(|(r, _)| !r.matches(*v)) {
+                    self.dead_end(chosen.len(), name, rs);
+                    return Ok(None);
+                }
+            }
+        }
+        let Some((name, on)) = reqs
+            .iter()
+            .find(|(n, _)| !chosen.contains_key(*n))
+            .map(|(n, rs)| (n.clone(), rs.clone()))
+        else {
+            return Ok(Some(chosen.clone()));
+        };
+        if self.path_names.contains(&name) {
+            return Err(Box::new(error(
+                codes::PACKAGE_CONFLICT,
+                format!(
+                    "`{name}` is a path package and also a registry dependency of `{}`; one build \
+                     has one package of each name",
+                    on.first().map(|r| r.1.as_str()).unwrap_or("")
+                ),
+            )));
+        }
+        let only: Vec<VersionReq> = on.iter().map(|r| r.0).collect();
+        let preferred = self.preferred.get(&name).copied();
+        let index = self.index(&name)?;
+        let ok = |v: Version| only.iter().all(|r| r.matches(v));
+        let mut candidates: Vec<Version> = Vec::new();
+        if let Some(p) = preferred {
+            if ok(p) && index.entries.iter().any(|e| e.version == p) {
+                candidates.push(p);
+            }
+        }
+        for e in index.entries.iter().rev() {
+            if !e.yanked && ok(e.version) && Some(e.version) != preferred {
+                candidates.push(e.version);
+            }
+        }
+        if candidates.is_empty() {
+            self.dead_end(chosen.len(), &name, &on);
+            return Ok(None);
+        }
+        for v in candidates {
+            self.tried += 1;
+            if self.tried > MAX_CANDIDATES {
+                return Err(Box::new(error(
+                    codes::VERSION_UNSATISFIABLE,
+                    format!(
+                        "the resolver stopped after {MAX_CANDIDATES} candidate versions without an \
+                         answer; this does not show that none exists"
+                    ),
+                )));
+            }
+            let mut next = chosen.clone();
+            next.insert(name.clone(), v);
+            if let Some(done) = self.solve(&next)? {
+                return Ok(Some(done));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A dead end at `depth`: the explanation keeps the deepest, the last of equals.
+    fn dead_end(&mut self, depth: usize, name: &str, on: &Placed) {
+        if self.deepest.as_ref().is_none_or(|d| depth >= d.0) {
+            self.deepest = Some((depth, name.to_owned(), on.clone()));
+        }
+    }
+
+    /// `N0513`, naming the package no version of which fitted where the search got furthest, and
+    /// every requirement on it there with who placed it.
+    fn explain(&self) -> Diagnostic {
+        let (name, said) = self.deepest.as_ref().map_or_else(
+            || (String::new(), String::new()),
+            |(_, n, on)| {
+                (
+                    n.clone(),
+                    on.iter()
+                        .map(|(r, by)| format!("{by} requires {r}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+            },
+        );
+        error(
+            codes::VERSION_UNSATISFIABLE,
+            format!(
+                "no choice of versions satisfies every requirement: no published version of \
+                 `{name}` satisfies {said} (after trying {} candidate version{})",
+                self.tried,
+                if self.tried == 1 { "" } else { "s" }
+            ),
+        )
+        .help("one build has one version of each package; the requirements must overlap for some choice of the others")
+    }
+}
 
 impl Resolver {
     /// Solve every registry dependency (N56, §7.58), once every path package is known: in rounds,
@@ -317,116 +504,60 @@ impl Resolver {
             .first()
             .and_then(|f| f.0.registry.clone())
             .map(|r| root_dir.join(r));
+        // The requirements the path packages place on the registry: fixed for the search.
+        let mut base: Vec<(String, VersionReq, String)> = Vec::new();
+        for (m, _) in self.found.iter().take(path_count) {
+            for (name, d) in &m.dependencies {
+                if let Dependency::Registry(r) = d {
+                    base.push((name.clone(), *r, format!("`{}`", m.name)));
+                }
+            }
+        }
+        if base.is_empty() {
+            return Ok(());
+        }
+        let Some(registry) = registry.as_deref() else {
+            let name = base.first().map(|b| b.0.clone()).unwrap_or_default();
+            return Err(Box::new(error(
+                codes::PACKAGE_NOT_FOUND,
+                format!(
+                    "`{name}` is a registry dependency, and the root manifest names no \
+                     `[registry]`"
+                ),
+            )));
+        };
+        let mut search = Search {
+            registry,
+            base,
+            path_names: self
+                .found
+                .iter()
+                .take(path_count)
+                .map(|f| f.0.name.clone())
+                .collect(),
+            preferred,
+            indexes: BTreeMap::new(),
+            manifests: BTreeMap::new(),
+            tried: 0,
+            deepest: None,
+        };
+        let solved = search.solve(&BTreeMap::new())?;
+        let Some(assignment) = solved else {
+            return Err(Box::new(search.explain()));
+        };
         let mut chosen: BTreeMap<String, (Version, Manifest, PathBuf)> = BTreeMap::new();
-        let mut indexes: BTreeMap<String, Index> = BTreeMap::new();
-        for round in 0..=MAX_ROUNDS {
-            // Every requirement on a registry package, from the path packages and from the
-            // registry packages they reach.
-            let mut reqs: BTreeMap<String, Vec<(VersionReq, String)>> = BTreeMap::new();
-            let mut frontier: Vec<&Manifest> =
-                self.found.iter().take(path_count).map(|f| &f.0).collect();
-            let mut reached: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-            while let Some(m) = frontier.pop() {
-                for (name, d) in &m.dependencies {
-                    let Dependency::Registry(r) = d else {
-                        continue;
-                    };
-                    reqs.entry(name.clone())
-                        .or_default()
-                        .push((*r, m.name.clone()));
-                    if reached.insert(name.clone()) {
-                        if let Some((_, cm, _)) = chosen.get(name) {
-                            frontier.push(cm);
-                        }
-                    }
-                }
-            }
-            if reqs.is_empty() {
-                break;
-            }
-            let Some(registry) = registry.as_deref() else {
-                let name = reqs.keys().next().cloned().unwrap_or_default();
-                return Err(Box::new(error(
-                    codes::PACKAGE_NOT_FOUND,
-                    format!(
-                        "`{name}` is a registry dependency, and the root manifest names no \
-                         `[registry]`"
-                    ),
-                )));
-            };
-            let before: BTreeMap<String, Version> =
-                chosen.iter().map(|(n, c)| (n.clone(), c.0)).collect();
-            let mut next: BTreeMap<String, (Version, Manifest, PathBuf)> = BTreeMap::new();
-            for (name, rs) in &reqs {
-                if let Some(&i) = self.by_name.get(name) {
-                    if i < path_count {
-                        return Err(Box::new(error(
-                            codes::PACKAGE_CONFLICT,
-                            format!(
-                                "`{name}` is a path package and also a registry dependency of `{}`; \
-                                 one build has one package of each name",
-                                rs.first().map(|r| r.1.as_str()).unwrap_or("")
-                            ),
-                        )));
-                    }
-                }
-                if !indexes.contains_key(name) {
-                    indexes.insert(name.clone(), Index::read(registry, name)?);
-                }
-                let Some(index) = indexes.get(name) else {
-                    continue;
-                };
-                let only: Vec<VersionReq> = rs.iter().map(|r| r.0).collect();
-                let Some(v) = index.choose(&only, preferred.get(name).copied()) else {
-                    let said: Vec<String> = rs
-                        .iter()
-                        .map(|(r, by)| format!("`{by}` requires {r}"))
-                        .collect();
-                    return Err(Box::new(
-                        error(
-                            codes::VERSION_UNSATISFIABLE,
-                            format!(
-                                "no published version of `{name}` satisfies every requirement: {}",
-                                said.join(", ")
-                            ),
-                        )
-                        .help("one build has one version of each package; the requirements must overlap"),
-                    ));
-                };
-                let entry = match chosen.remove(name) {
-                    Some(c) if c.0 == v => c,
-                    _ => {
-                        let (m, dir) = index.fetch(v)?;
-                        if let Some((dep, _)) = m
-                            .dependencies
-                            .iter()
-                            .find(|(_, d)| matches!(d, Dependency::Path { .. }))
-                        {
-                            return Err(Box::new(error(
-                                codes::MANIFEST_INVALID,
-                                format!(
-                                    "the registry's `{name}` {v} depends on `{dep}` by path; a \
-                                     registry package depends only on the registry"
-                                ),
-                            )));
-                        }
-                        (v, m, dir)
-                    }
-                };
-                next.insert(name.clone(), entry);
-            }
-            let same =
-                next.len() == before.len() && next.iter().all(|(n, c)| before.get(n) == Some(&c.0));
-            chosen = next;
-            if same && round > 0 {
-                break;
-            }
-            if round == MAX_ROUNDS {
-                return Err(Box::new(error(
-                    codes::VERSION_UNSATISFIABLE,
-                    format!("the registry dependencies did not settle in {MAX_ROUNDS} rounds"),
-                )));
-            }
+        for (name, v) in assignment {
+            let (m, dir) = search
+                .manifests
+                .get(&(name.clone(), v))
+                .cloned()
+                .ok_or_else(|| {
+                    Box::new(error(
+                        codes::PACKAGE_NOT_FOUND,
+                        format!("`{name}` {v} was never read"),
+                    ))
+                })?;
+            chosen.insert(name, (v, m, dir));
         }
         for (name, (_, m, dir)) in chosen {
             let index = self.found.len();
@@ -710,6 +841,44 @@ pub fn digest(manifest: &[u8], source_root: &Path) -> String {
 /// dependency (`N0501`), a version mismatch (`N0502`), two packages of one name or a declared
 /// name its manifest does not have (`N0503`), a cycle (`N0504`).
 pub fn resolve(dir: &Path) -> Result<Graph, Vec<Diagnostic>> {
+    resolve_preferring(dir, None)
+}
+
+/// Resolve as [`resolve`] does, with the lockfile's preference dropped for the registry
+/// packages named — for every one when `names` is empty (`nazm update`, N90).
+///
+/// # Errors
+///
+/// [`resolve`]'s, and `N0501` for a name that is no registry package of the graph or the lockfile.
+pub fn resolve_updating(dir: &Path, names: &[String]) -> Result<Graph, Vec<Diagnostic>> {
+    let graph = resolve_preferring(dir, Some(names))?;
+    let locked = locked_versions(dir);
+    for name in names {
+        let known = locked.contains_key(name)
+            || graph
+                .packages
+                .iter()
+                .any(|p| &p.name == name && p.source.starts_with("registry+"));
+        if !known {
+            return Err(vec![error(
+                codes::PACKAGE_NOT_FOUND,
+                format!("`{name}` is not a registry package of this build"),
+            )
+            .help(
+                "`nazm update` changes registry packages; a path package is its directory",
+            )]);
+        }
+    }
+    Ok(graph)
+}
+
+/// The registry versions `dir`'s lockfile records, by name: empty without one.
+#[must_use]
+pub fn locked_versions(dir: &Path) -> BTreeMap<String, Version> {
+    locked_registry_versions(&dir.join(LOCKFILE))
+}
+
+fn resolve_preferring(dir: &Path, dropping: Option<&[String]>) -> Result<Graph, Vec<Diagnostic>> {
     let mut r = Resolver {
         found: Vec::new(),
         by_dir: BTreeMap::new(),
@@ -722,7 +891,12 @@ pub fn resolve(dir: &Path) -> Result<Graph, Vec<Diagnostic>> {
     let root_dir = r.found.get(root).map(|f| f.1.clone()).unwrap_or_default();
     // A lockfile's registry versions are preferred while they still satisfy the manifests, so
     // locking and building again chooses nothing new (N56).
-    let preferred = locked_registry_versions(&root_dir.join(LOCKFILE));
+    let mut preferred = locked_registry_versions(&root_dir.join(LOCKFILE));
+    match dropping {
+        Some([]) => preferred.clear(),
+        Some(names) => preferred.retain(|n, _| !names.contains(n)),
+        None => {}
+    }
     r.solve_registry(&root_dir, &preferred)
         .map_err(|d| vec![*d])?;
     // Sorted by name: the order a lockfile lists them in, and the only order anything sees.

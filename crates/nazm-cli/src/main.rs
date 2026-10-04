@@ -900,6 +900,14 @@ enum Command {
         /// The package's directory, holding `nazm.toml`.
         dir: PathBuf,
     },
+    /// Re-resolve a package with its lockfile's registry versions no longer preferred — every
+    /// one's, or only the named packages' — write `nazm.lock`, and print each change (N90).
+    Update {
+        /// The package's directory, holding `nazm.toml`.
+        dir: PathBuf,
+        /// The registry packages to update; none means all.
+        names: Vec<String>,
+    },
     /// Publish a package into a local registry (N56): copy its manifest and sources and record
     /// the version and its digest. A published version never changes.
     Publish {
@@ -956,6 +964,9 @@ fn main() -> ExitCode {
     // its lockfile — both settled before any command sees the file.
     if let Command::Lock { dir } = &cli.command {
         return package::lock(dir);
+    }
+    if let Command::Update { dir, names } = &cli.command {
+        return package::update(dir, names);
     }
     if let Command::Publish {
         dir,
@@ -1435,6 +1446,7 @@ fn main() -> ExitCode {
         | Command::Runtime { .. }
         | Command::Capabilities { .. }
         | Command::Lock { .. }
+        | Command::Update { .. }
         | Command::Publish { .. }
         | Command::Yank { .. }
         | Command::ExplainCost { .. }
