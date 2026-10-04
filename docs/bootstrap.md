@@ -649,6 +649,16 @@ clause (`N0614`).
 conformance cases (14 of them multi-module) and 29 refusals agreeing across C2, C3 and the
 reference, at 16,030 source lines.
 
+### Authority as a parameter — N104, 2026-10-05
+
+The compiler's own source no longer relies on inherited authority: 30 of its functions take an
+`IoCap` (those that read, print or stop with a diagnostic), threaded from each stage's `main`;
+none takes a `SpawnCap`. Its checker reports `N0369` — a built-in or a `spawn` with no capability
+of its kind in scope — at the reference's spans. **The digest moved**: `8cc750c6…` → `18481f2a…`.
+`ir: identical`, executables byte-identical once the linker UUID is removed, 34 conformance cases
+(14 of them multi-module) and 29 refusals agreeing across C2, C3 and the reference, at 16,573
+source lines.
+
 ## 6. Reproducing it
 
 ```sh
