@@ -20,6 +20,7 @@
         "incomplete_coverage",
         "toolchain_owned",
         "exported",
+        "package_api",
         "not_clean",
         "invalid_name",
         "unchanged",
@@ -31,7 +32,7 @@
         "overlapping_edits",
         "internal"
       ],
-      "description": "Why there is no patch. `exported`: one root compilation is not every module that may import it. `incomplete_compilation`: syntax recovery or a missing module left no snapshot to bind to — which includes every fix of a syntax diagnostic. `no_such_fix`: no current diagnostic at the position carries a fix with that index. Present only when `status` is `unavailable`."
+      "description": "Why there is no patch. `exported`: no declared workspace, so one root compilation is not every module that may import it. `package_api`: part of a library package's API, which other packages import (N89). `incomplete_compilation`: syntax recovery or a missing module left no snapshot to bind to — which includes every fix of a syntax diagnostic. `no_such_fix`: no current diagnostic at the position carries a fix with that index. Present only when `status` is `unavailable`."
     },
     "operation": {
       "oneOf": [{ "$ref": "#/$defs/rename" }, { "$ref": "#/$defs/diagnostic_fix" }]

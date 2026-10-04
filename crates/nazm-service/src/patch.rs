@@ -191,6 +191,8 @@ pub enum NoPatch {
     ToolchainOwned,
     /// Exported: one root compilation is not every module that may import it.
     Exported,
+    /// Part of a library package's API (N89): other packages import it.
+    PackageApi,
     /// A compilation containing the entity has diagnostics.
     NotClean,
     /// The new name is not one identifier the language allows there.
@@ -245,6 +247,7 @@ impl From<Refusal> for NoPatch {
             Refusal::Incomplete(_) => Self::IncompleteCoverage,
             Refusal::ToolchainOwned => Self::ToolchainOwned,
             Refusal::Exported => Self::Exported,
+            Refusal::PackageApi => Self::PackageApi,
             Refusal::NotClean => Self::NotClean,
             Refusal::InvalidName(_) => Self::InvalidName,
             Refusal::Unchanged => Self::Unchanged,
@@ -325,7 +328,10 @@ impl LanguageService {
             .ok_or(NoPatch::NotCurrent)?;
         let paths = Paths::of(s, root, self.source_root.as_deref());
         let target = rename_target(s, doc, &paths, entity, declared)?;
-        let files = patch_files(s, &paths, &plan.files)?;
+        let workspace = crate::root::decide(root, self.source_root.as_deref())
+            .ok()
+            .map(|r| identity(r.path()));
+        let files = patch_files(s, &paths, workspace.as_deref(), &plan.files)?;
         Ok(SemanticPatch {
             schema: SCHEMA,
             status: "available",
@@ -362,7 +368,7 @@ impl LanguageService {
         }
         let s = self.current(root, version).ok_or(NoPatch::NotCurrent)?;
         let paths = Paths::of(s, root, self.source_root.as_deref());
-        let files = patch_files(s, &paths, std::slice::from_ref(&plan.file))?;
+        let files = patch_files(s, &paths, None, std::slice::from_ref(&plan.file))?;
         let primary = plan.diagnostic.primary.span;
         let diagnostic = FixedDiagnostic {
             code: plan.diagnostic.code.to_string(),
@@ -516,22 +522,35 @@ fn rename_target(
 fn patch_files(
     s: &Snapshot,
     paths: &Paths,
+    workspace: Option<&Path>,
     planned: &[FileEdit],
 ) -> Result<Vec<PatchFile>, NoPatch> {
     let mut files = Vec::with_capacity(planned.len());
     for fe in planned {
         let key = FileKey::Path(identity(&fe.path));
-        let f = s
-            .files
-            .iter()
-            .position(|k| *k == key)
-            .ok_or(NoPatch::NotInCompilation)?;
-        if s.texts.get(f).map(|t| &**t) != Some(&*fe.text) {
-            return Err(NoPatch::NotCurrent);
-        }
-        let path = paths
-            .file(FileId::from_index(f))
-            .ok_or(NoPatch::NotInCompilation)?;
+        let path = match s.files.iter().position(|k| *k == key) {
+            Some(f) => {
+                if s.texts.get(f).map(|t| &**t) != Some(&*fe.text) {
+                    return Err(NoPatch::NotCurrent);
+                }
+                paths
+                    .file(FileId::from_index(f))
+                    .ok_or(NoPatch::NotInCompilation)?
+            }
+            // A workspace rename (N89) edits files the root's compilation does not load: each
+            // is named relative to the workspace root, which every one of them is under.
+            None => {
+                let rel = workspace
+                    .and_then(|w| {
+                        identity(&fe.path)
+                            .strip_prefix(w)
+                            .ok()
+                            .map(Path::to_path_buf)
+                    })
+                    .ok_or(NoPatch::NotInCompilation)?;
+                rel.to_string_lossy().replace('\\', "/")
+            }
+        };
         for e in &fe.edits {
             if fe.text.get(e.start as usize..e.end as usize) != Some(e.expected.as_str()) {
                 return Err(NoPatch::Internal);

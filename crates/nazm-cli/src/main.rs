@@ -142,7 +142,8 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum PatchOperation {
     /// Rename the entity declared or used at `--byte` of `--file`, by the language
-    /// service's validated rename: locals and private definitions only.
+    /// service's validated rename: locals and private definitions, and — within a declared
+    /// workspace (N89) — exported ones, across every module under the source root.
     Rename {
         /// The compilation's root module.
         #[arg(long)]
@@ -186,6 +187,17 @@ enum PatchOperation {
         /// `nazm check --source-root` does.
         #[arg(long)]
         source_root: Option<PathBuf>,
+    },
+    /// Apply a `nazm.patch/1` plan to disk, all or nothing (N89): every file must hash to the
+    /// plan's digest and hold each edit's expected bytes, or nothing is written and the
+    /// differing file is named. Each file is written through a temporary file and a rename.
+    Apply {
+        /// The plan, as `nazm patch rename|fix --json` printed it.
+        plan: PathBuf,
+        /// The directory the plan's paths are relative to: the source root it was planned
+        /// in. The current directory by default.
+        #[arg(long)]
+        base: Option<PathBuf>,
     },
 }
 
@@ -1311,6 +1323,9 @@ fn main() -> ExitCode {
                     json,
                     source_root.as_deref(),
                 ),
+                PatchOperation::Apply { plan, base } => {
+                    patch::apply(&plan, base.as_deref().unwrap_or(std::path::Path::new(".")))
+                }
             }
         }
         Command::Fmt { files, check } => return fmt::run(&files, check),
