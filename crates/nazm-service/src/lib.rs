@@ -78,7 +78,7 @@ pub use diagnostics::{
 pub use durable::{DurableDefinition, DurableDefinitions};
 pub use fixes::{FixPlan, NoFixes};
 pub use hierarchy::{HierarchyFunction, IncomingCall, Locator, NoHierarchy, OutgoingCall};
-pub use patch::{NoPatch, PatchResult, SemanticPatch};
+pub use patch::{digest, NoPatch, PatchResult, SemanticPatch};
 pub use rename::{Edit, FileEdit, Refusal, RenamePlan, Renameable};
 pub use semantic::{
     NoIdentifiers, Role, SemanticClass, SemanticIdentifier, SemanticIdentifiers, SemanticTarget,

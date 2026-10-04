@@ -249,6 +249,8 @@ pub(crate) struct Overlaid<'a> {
     /// `(identity path, text)`: a file as a rename would leave it, read in place of its
     /// buffer or its disk contents. Never written anywhere.
     pub(crate) replaced: Option<(&'a Path, &'a str)>,
+    /// Several files as a workspace rename would leave them (N89), by identity path.
+    pub(crate) many: &'a [(PathBuf, String)],
 }
 
 impl Sources for Overlaid<'_> {
@@ -259,6 +261,9 @@ impl Sources for Overlaid<'_> {
                 return Ok(text.to_owned());
             }
         }
+        if let Some((_, text)) = self.many.iter().find(|(at, _)| *at == key) {
+            return Ok(text.clone());
+        }
         match self.documents.get(&key) {
             Some(d) => Ok(d.text.to_string()),
             None => Disk.read(path),
@@ -268,6 +273,7 @@ impl Sources for Overlaid<'_> {
     fn exists(&self, path: &Path) -> bool {
         let key = identity(path);
         self.replaced.is_some_and(|(at, _)| at == key)
+            || self.many.iter().any(|(at, _)| *at == key)
             || self.documents.contains_key(&key)
             || Disk.exists(path)
     }
@@ -494,6 +500,7 @@ impl LanguageService {
             let sources = Overlaid {
                 documents: &self.documents,
                 replaced: None,
+                many: &[],
             };
             let snapshot = analyse(
                 &sources,
