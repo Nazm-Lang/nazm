@@ -398,6 +398,15 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N86 — embedded v2 — **complete as scoped, 2026-10-04; area 18 VERIFIED as scoped**
+
+`architecture.md` §7.87 first. Boards are descriptions (`nazm_runtime::board::BOARDS`), from which
+each linker script, runtime and entry is generated; a second architecture family,
+`riscv64gc-unknown-none-elf` on QEMU's RISC-V `virt`, boots beside AArch64's with identical output,
+failures and in-bound stacks at `-O0` and `-O2`, built and run in `nazm-qemu:n86`; device registers
+at 8, 16 and 32 bits. Semantic epoch 26, runtime ABI 13. Not here, each DESIGNED with its reason:
+atomics, interrupts, a heap; and no hardware. Next: N87, the critical and cyber profiles v3.
+
 ### N85 — FFI and ABI v3 — **complete as scoped, 2026-10-04; area 17 VERIFIED as scoped**
 
 `architecture.md` §7.86 first. A practical C ABI subset: opaque handles (`extern "C" struct Db;`),
