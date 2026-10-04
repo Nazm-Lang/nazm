@@ -262,3 +262,17 @@ fn the_profile_report_names_the_rule() {
     let t = String::from_utf8_lossy(&o.stdout);
     assert!(t.contains("\"explicit-authority\""), "{t}");
 }
+
+#[test]
+fn a_held_io_cap_covers_what_an_undeclared_helper_prints() {
+    // `IoCap` implies `OutCap` (N79): a helper with no declared effects that prints is called
+    // under the caller's `IoCap` without a separate `OutCap`.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("a.nz"),
+        "fn say() -> Int { print(\"hi\"); 0 }\nfn main(io: IoCap) -> Int ! { io } { say() }\n",
+    )
+    .unwrap();
+    let o = nazm(d.path(), &["check", "a.nz"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}

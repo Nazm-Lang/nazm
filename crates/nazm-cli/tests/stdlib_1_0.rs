@@ -113,12 +113,12 @@ fn text_1_0_behaves_as_documented_at_its_edges() {
              print(text_replace(\"a,b,,c\", \",\", \";\")); print(\"|\"); print(text_replace(\"abc\", \"\", \"x\")); print(\"|\");\n\
              print(int_to_str(text_count(\"aaaa\", \"aa\"))); print(int_to_str(text_count(\"a\", \"\"))); print(\"|\");\n\
              print(text_pad_left(\"7\", 3, \"0\")); print(text_pad_left(\"1234\", 3, \"0\")); print(text_pad_right(\"ab\", 4, \".\")); print(text_pad_right(\"ab\", 4, \"\")); print(\"|\");\n\
-             let ls = text_lines(\"x\\r\\ny\\n\\nz\\n\"); print(int_to_str(strs_len(ls))); print(strs_get(ls, 1)); print(int_to_str(strs_len(text_lines(\"\")))); print(\"|\");\n\
+             let ls = text_lines(\"x\\r\\ny\\n\\nz\\n\"); print(int_to_str(strs_len(ls))); print(int_to_str(str_len(strs_get(ls, 0)))); print(strs_get(ls, 1)); print(int_to_str(strs_len(text_lines(\"\")))); print(\"|\");\n\
              print(int_to_str(text_compare(\"ab\", \"abc\") + 10 * text_compare(\"b\", \"a\") + 100 * text_compare(\"q\", \"q\"))); print(\"|\");\n\
              print(text_trim_start(\" \\t a \")); print(\"|\"); print(text_trim_end(\" a \\n\")); print(\"|\");\n\
              print(if text_is_digit(48) && !text_is_digit(58) && text_is_alpha(90) && !text_is_alpha(91) { \"T\" } else { \"F\" });\n\
              0 }\n",
-        "AB-CZ|ab-cz|a;b;;c|abc|20|0071234ab..ab|4y0|9|a | a|T0\n",
+        "AB-CZ|ab-cz|a;b;;c|abc|20|0071234ab..ab|41y0|9|a | a|T0\n",
     );
 }
 
