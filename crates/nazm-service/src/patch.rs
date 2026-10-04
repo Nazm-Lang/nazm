@@ -548,7 +548,11 @@ fn patch_files(
                             .map(Path::to_path_buf)
                     })
                     .ok_or(NoPatch::NotInCompilation)?;
-                rel.to_string_lossy().replace('\\', "/")
+                // `/`-separated, as every plan path is, whatever the host's separator.
+                rel.components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/")
             }
         };
         for e in &fe.edits {
