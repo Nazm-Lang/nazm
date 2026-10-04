@@ -1,0 +1,4 @@
+// expect: N0366
+fn say(o: OutCap) -> Int { print("x"); 0 }
+fn f(io: IoCap) -> Int ! {} { say(io) }
+fn main(io: IoCap) -> Int ! { io } { f(io) }
