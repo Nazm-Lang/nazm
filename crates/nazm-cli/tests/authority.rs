@@ -276,3 +276,26 @@ fn a_held_io_cap_covers_what_an_undeclared_helper_prints() {
     let o = nazm(d.path(), &["check", "a.nz"]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
 }
+
+#[test]
+fn a_held_io_cap_authorises_its_own_print() {
+    // N101: the case N100 missed. A declared function holding only an `IoCap` prints itself —
+    // `print` requires an `OutCap`, which the held `IoCap` implies. Run, not only checked, and
+    // in a fresh directory: a check cache keyed by the semantic epoch alone would answer for an
+    // earlier build of the checker.
+    let d = program(
+        "fn say(io: IoCap) -> Int ! {io} { print(\"hi\\n\"); eprint(\"e\\n\"); 2 }\n\
+         fn main(io: IoCap) -> Int ! {io} { say(io) }\n",
+    );
+    let o = nazm(d.path(), &["run", "p.nz"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "hi\n2\n");
+    // The implication is one way: an `OutCap` gives no `IoCap`.
+    let d = program(
+        "fn say(o: OutCap) -> Int ! {io} { exit_with(1); 0 }\n\
+         fn main(io: IoCap) -> Int ! {io} { say(io) }\n",
+    );
+    let o = nazm(d.path(), &["check", "p.nz"]);
+    let t = text(&o);
+    assert!(!o.status.success() && t.contains("N0369"), "{t}");
+}

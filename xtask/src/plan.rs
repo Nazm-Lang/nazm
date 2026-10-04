@@ -728,12 +728,15 @@ pub(crate) fn validate(root: &Path, catalogue: &Catalogue) -> Vec<String> {
             if !profile_names.contains(p.as_str()) {
                 bad.push(format!("{}: profile `{p}` is not declared", m.name));
             }
-            if m.killers.is_empty() && m.no_killer.as_deref().is_none_or(|w| w.trim().is_empty()) {
-                bad.push(format!(
-                    "{}: names a profile but no killer, and does not say why in `no_killer`",
-                    m.name
-                ));
-            }
+        }
+        // No silent tier (N101): an entry with no killer would cost a whole suite in every
+        // campaign, and its verdict would wait on that. It names its killers, or says why it has
+        // none — a known survivor, or a rule no single test observes.
+        if m.killers.is_empty() && m.no_killer.as_deref().is_none_or(|w| w.trim().is_empty()) {
+            bad.push(format!(
+                "{}: has no killer, and does not say why in `no_killer`",
+                m.name
+            ));
         }
         if !m.killers.is_empty() && m.no_killer.is_some() {
             bad.push(format!("{}: has killers and also says it has none", m.name));
@@ -1036,6 +1039,20 @@ replace = "r"
             "{:?}",
             validate(w.path(), &cat(&fixed))
         );
+    }
+
+    #[test]
+    fn an_entry_without_a_killer_must_say_why() {
+        let w = workspace();
+        let bad = validate(w.path(), &cat(ONE));
+        assert!(
+            bad.iter().any(|b| b.contains("has no killer")),
+            "{bad:?}"
+        );
+        let said = cat(&format!("{ONE}no_killer = \"a known survivor\"\n"));
+        assert!(validate(w.path(), &said).is_empty());
+        let blank = cat(&format!("{ONE}no_killer = \"  \"\n"));
+        assert!(!validate(w.path(), &blank).is_empty());
     }
 
     #[test]

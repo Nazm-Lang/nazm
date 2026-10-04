@@ -31,6 +31,7 @@ why = "divides acceptances by acceptances, pinning every arm's rate at 1.0"
 file = "crates/nazm-bench/src/report.rs"
 find = "accepted as f64 / counted.len() as f64"
 replace = "accepted as f64 / counted.iter().filter(|a| a.is_accepted()).count() as f64"
+killers = [{ package = "nazm-bench", lib = true, name = "selftest::tests::every_selftest_case_passes" }]
 
 [[mutation]]
 name = "cost-numerator-drops-failures"
@@ -38,6 +39,7 @@ why = "sums only successful attempts, so an arm that fails cheaply looks cheap"
 file = "crates/nazm-bench/src/report.rs"
 find = "let costs: Vec<&crate::cost::Cost> = counted.iter().map(|a| &a.cost).collect();"
 replace = "let costs: Vec<&crate::cost::Cost> = counted.iter().filter(|a| a.is_accepted()).map(|a| &a.cost).collect();"
+killers = [{ package = "nazm-bench", lib = true, name = "selftest::tests::every_selftest_case_passes" }]
 
 [[mutation]]
 name = "missing-cost-becomes-zero"
@@ -47,6 +49,7 @@ find = """                CostComponent::Missing { reason } => {
                     gaps.push((line.to_owned(), reason.clone()));
                 }"""
 replace = "                CostComponent::Missing { reason: _ } => {}"
+killers = [{ package = "nazm-bench", lib = true, name = "cost::tests::the_gap_reason_survives_aggregation" }]
 
 [[mutation]]
 name = "candidate-fault-becomes-void"
@@ -54,6 +57,7 @@ why = "a crashing candidate leaves the denominator, so an unreliable arm looks b
 file = "crates/nazm-bench/src/acceptance.rs"
 find = "            Self::CandidateFault { .. } => Outcome::Crash { signal: None },"
 replace = "            Self::CandidateFault { reason } => Outcome::HarnessError { reason },"
+killers = [{ package = "nazm-bench", test = "execution_boundary", name = "evaluator_failure_is_void_but_candidate_failure_is_counted" }]
 
 [[mutation]]
 name = "skip-submission-drift-check"
@@ -61,6 +65,7 @@ why = "grades a snapshot that changed after it was recorded"
 file = "crates/nazm-bench/src/acceptance.rs"
 find = "        if let Err(drift) = submission.verify_unchanged() {"
 replace = "        if let Err(drift) = Ok::<(), SubmissionDrift>(()) {"
+killers = [{ package = "nazm-bench", test = "execution_boundary", name = "a_submission_modified_after_freezing_is_void_not_rescored" }]
 
 [[mutation]]
 name = "compare-against-the-baseline"
@@ -68,6 +73,7 @@ why = "credits the language with the entire tooling contribution"
 file = "crates/nazm-bench/src/task.rs"
 find = "            Self::Nazm => Some(Self::TypescriptTooled),"
 replace = "            Self::Nazm => Some(Self::TypescriptBaseline),"
+killers = [{ package = "nazm-bench", lib = true, name = "task::tests::the_gate_compares_nazm_against_the_tooled_arm_not_the_baseline" }]
 
 [[mutation]]
 name = "void-spend-discarded"
@@ -75,6 +81,7 @@ why = "hides money really spent on voided attempts"
 file = "crates/nazm-bench/src/report.rs"
 find = "    let void_costs: Vec<&crate::cost::Cost> = void.iter().map(|a| &a.cost).collect();"
 replace = "    let void_costs: Vec<&crate::cost::Cost> = Vec::new();"
+killers = [{ package = "nazm-bench", lib = true, name = "selftest::tests::every_selftest_case_passes" }]
 
 [[mutation]]
 name = "primary-metric-drops-void-spend"
@@ -86,6 +93,7 @@ $1.00 and pass the gate on what is really a 2x cost regression
 file = "crates/nazm-bench/src/report.rs"
 find = "        total_cost_per_accepted: all_total.per_accepted(accepted),"
 replace = "        total_cost_per_accepted: total.per_accepted(accepted),"
+killers = [{ package = "nazm-bench", lib = true, name = "selftest::tests::every_selftest_case_passes" }]
 
 [[mutation]]
 name = "teardown-order-reversed"
@@ -97,6 +105,7 @@ removed -- the ordering bug that leaks an attempt's resources
 file = "crates/nazm-bench/src/sandbox/attempt.rs"
 find = "            .partition(|r| r.kind == ResourceKind::Container);"
 replace = "            .partition(|r| r.kind != ResourceKind::Container);"
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "ownership_is_recorded_before_creation_is_attempted" }]
 
 [[mutation]]
 name = "cleanup-verification-skipped"
@@ -104,6 +113,7 @@ why = "reports Clean without checking whether anything survived teardown"
 file = "crates/nazm-bench/src/sandbox/attempt.rs"
 find = "        if surviving.is_empty() && problems.is_empty() {"
 replace = "        if true {"
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "teardown_refuses_a_resource_that_changed_hands" }]
 
 [[mutation]]
 name = "unverifiable-cleanup-passes"
@@ -130,6 +140,7 @@ find = """        self.ledger.intend(&self.cfg.attempt, &id)?;
         let created = create(self.engine);"""
 replace = """        let created = create(self.engine);
         self.ledger.intend(&self.cfg.attempt, &id)?;"""
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "ownership_is_recorded_before_creation_is_attempted" }]
 
 [[mutation]]
 name = "allocator-ignores-occupied-subnets"
@@ -137,6 +148,7 @@ why = "hands out a subnet already in use, including by networks the harness does
 file = "crates/nazm-bench/src/sandbox/network.rs"
 find = "        if !in_use.iter().any(|s| overlaps(s, &candidate.cidr())) {"
 replace = "        if true {"
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "allocation_skips_an_occupied_slot_rather_than_failing" }]
 
 [[mutation]]
 name = "removal-skips-the-ownership-check"
@@ -147,6 +159,7 @@ a stranger's container whenever a create failed because the name was already tak
 file = "crates/nazm-bench/src/sandbox/attempt.rs"
 find = "            Ownership::Absent => Ok(true),"
 replace = "            Ownership::Absent | Ownership::Foreign { .. } => Ok(true),"
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "teardown_refuses_a_resource_that_changed_hands" }]
 
 [[mutation]]
 name = "recovery-ignores-ownership"
@@ -156,6 +169,7 @@ find = """                let _ = ledger.disowned(&entry.attempt, id);
                 out.foreign.push((id.clone(), found));"""
 replace = """                let _ = found;
                 let _ = engine.remove(id, true);"""
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "recovery_refuses_a_claimed_name_now_held_by_a_stranger" }]
 
 [[mutation]]
 name = "recovery-ignores-dependency-order"
@@ -166,6 +180,7 @@ attached -- the engine refuses and the leftovers stay
 file = "crates/nazm-bench/src/sandbox/recovery.rs"
 find = "        .filter(|e| e.resource.kind == ResourceKind::Container)\n        .chain("
 replace = "        .filter(|e| e.resource.kind != ResourceKind::Container)\n        .chain("
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "a_transient_unknown_resolves_on_retry" }]
 
 [[mutation]]
 name = "unknown-ownership-resolves-the-claim"
@@ -176,6 +191,7 @@ resource may exist even though the client never learned its id
 file = "crates/nazm-bench/src/sandbox/recovery.rs"
 find = "                if !resolved {"
 replace = "                if false {"
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "unknown_ownership_blocks_the_next_attempt_but_foreign_does_not" }]
 
 [[mutation]]
 name = "ledger-keys-claims-by-engine-id"
@@ -186,6 +202,7 @@ entry become different rows and every completed attempt looks like it leaked eve
 file = "crates/nazm-bench/src/sandbox/ledger.rs"
 find = "                    && a.resource.name == b.resource.name"
 replace = "                    && a.resource.name == b.resource.name\n                    && a.resource.engine_id == b.resource.engine_id"
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "normal_execution_removes_every_attempt_resource" }]
 
 [[mutation]]
 name = "ledger-claims-not-scoped-to-attempt"
@@ -198,6 +215,7 @@ find = """                a.run == b.run
                     && a.attempt == b.attempt
                     && a.resource.kind == b.resource.kind"""
 replace = """                a.resource.kind == b.resource.kind"""
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "a_reused_name_in_a_later_attempt_is_a_separate_claim" }]
 
 
 [[mutation]]
@@ -212,6 +230,7 @@ replace = """            env: vec![
                     self.credentials.superuser_password.clone(),
                 ),
             ],"""
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "the_candidate_never_receives_admin_credentials_or_the_init_script" }]
 
 # --- the language itself ------------------------------------------------------------
 #
@@ -227,6 +246,7 @@ process with no diagnostic — the one failure a tool cannot explain to anyone
 file = "crates/nazm-core/src/eval.rs"
 find = "                if self.depth > self.max_depth {"
 replace = "                if false {"
+killers = [{ package = "nazm-core", test = "language", name = "a_smaller_depth_budget_is_honoured" }]
 
 [[mutation]]
 name = "call-depth-never-released"
@@ -241,6 +261,7 @@ file = "crates/nazm-core/src/eval.rs"
 find = """                let out = self.call_body(g, fr);
                 self.depth -= 1;"""
 replace = "                let out = self.call_body(g, fr);"
+killers = [{ package = "nazm-core", test = "language", name = "depth_is_released_when_a_call_returns" }]
 
 [[mutation]]
 name = "a-returned-value-is-discarded"
@@ -257,6 +278,7 @@ replace = """            Flow::Fell(Some(v)) => Ok(v),
                 f.body.at,
                 format!("`{}` finished without producing a value", f.name),
             )),"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
 
 [[mutation]]
 name = "return-does-not-leave-its-block"
@@ -270,6 +292,7 @@ find = """            let flow = self.stmt(f, stmt, env)?;
             if !flow.is_fall_through() {"""
 replace = """            let flow = self.stmt(f, stmt, env)?;
             if matches!(flow, Flow::Break(_) | Flow::Continue(_)) {"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
 
 [[mutation]]
 name = "a-diverging-branch-forgets-the-other"
@@ -280,6 +303,7 @@ drops the rule that a branch which returns takes the other branch's type, so
 file = "crates/nazm-core/src/check.rs"
 find = "                    (Completion::Diverges, other) | (other, Completion::Diverges) => other,"
 replace = """                    (Completion::Diverges, _) | (_, Completion::Diverges) => Completion::Unit,"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "every_break_and_continue_names_the_loop_it_leaves" }]
 
 [[mutation]]
 name = "remainder-inherits-the-hardware-fault"
@@ -294,6 +318,7 @@ replace = """        (Rem, Int(a), Int(b)) => a
             .checked_rem(*b)
             .map(Int)
             .ok_or_else(|| overflow("remainder")),"""
+killers = [{ package = "nazm-core", test = "language", name = "the_remainder_of_the_smallest_int_by_minus_one_is_zero" }]
 
 [[mutation]]
 name = "negative-literals-not-range-checked"
@@ -304,6 +329,7 @@ a different number instead of being refused
 file = "crates/nazm-syntax/src/parser.rs"
 find = "                    Ok(v) if v == 1u64 << 63 => {"
 replace = "                    Ok(_) => {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_program_from_the_nazm_compiler_joins_its_scope_before_reporting" }]
 
 [[mutation]]
 name = "a-failed-body-drops-the-function"
@@ -371,6 +397,7 @@ the defect the tree bound was added to close
 file = "crates/nazm-syntax/src/parser.rs"
 find = "            lhs_depth = lhs_depth.max(rhs_depth) + 1;"
 replace = "            lhs_depth = rhs_depth + 1;"
+killers = [{ package = "nazm-syntax", lib = true, name = "parser::ast_depth_tests::a_deep_condition_counts_toward_the_tree" }]
 
 [[mutation]]
 name = "a-chain-starts-from-nothing"
@@ -381,6 +408,7 @@ below the first operator is uncounted
 file = "crates/nazm-syntax/src/parser.rs"
 find = "        let mut lhs_depth = self.child();"
 replace = "        let mut lhs_depth = 0;"
+killers = [{ package = "nazm-syntax", lib = true, name = "parser::ast_depth_tests::a_deep_condition_counts_toward_the_tree" }]
 
 [[mutation]]
 name = "a-block-does-not-count-its-contents"
@@ -391,6 +419,7 @@ tree bound entirely
 file = "crates/nazm-syntax/src/parser.rs"
 find = "        self.built(deepest + 1)?;\n        self.wrap(at, SyntaxKind::Block);"
 replace = "        self.built(1)?;\n        self.wrap(at, SyntaxKind::Block);"
+killers = [{ package = "nazm-syntax", lib = true, name = "parser::ast_depth_tests::a_composition_at_its_own_edge_is_still_within_the_limit" }]
 
 [[mutation]]
 name = "an-if-ignores-its-condition-depth"
@@ -402,6 +431,7 @@ find = """                let cond = self.expr()?;
                 let mut deepest = self.child();"""
 replace = """                let cond = self.expr()?;
                 let mut deepest = 0;"""
+killers = [{ package = "nazm-syntax", lib = true, name = "parser::ast_depth_tests::a_deep_condition_counts_toward_the_tree" }]
 
 [[mutation]]
 name = "parentheses-count-as-a-node"
@@ -415,6 +445,7 @@ find = """                self.wrap(at, SyntaxKind::ParenExpr);
 replace = """                self.wrap(at, SyntaxKind::ParenExpr);
                 self.built(self.child() + 1)?;
                 Some(inner)"""
+killers = [{ package = "nazm-syntax", lib = true, name = "parser::ast_depth_tests::a_chain_does_not_spend_the_recursion_budget" }]
 
 # `chain-depth-never-unwound` and `chain-depth-not-counted` were removed with the code they
 # targeted: a per-operator parser-recursion count in the Pratt loop, which was the first and
@@ -447,6 +478,7 @@ Repointed by N39: `take!` evaluates a Core IR expression, and `no_value` is a fr
 file = "crates/nazm-core/src/eval.rs"
 find = "            left => return Ok(left),"
 replace = "            left => return Err(no_value($e)),"
+killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
 
 [[mutation]]
 name = "stack-not-sized-from-the-budget"
@@ -457,6 +489,7 @@ default promises a bound the stack cannot back and the program aborts instead of
 file = "crates/nazm-core/src/eval.rs"
 find = "    STACK_BASE_BYTES.saturating_add(max_depth.saturating_mul(STACK_BYTES_PER_CALL))"
 replace = "    STACK_BASE_BYTES"
+killers = [{ package = "nazm-cli", test = "cli", name = "deep_trees_and_deep_recursion_report_rather_than_abort" }]
 
 
 # --- submission identity -------------------------------------------------------------
@@ -475,6 +508,7 @@ find = "    relative.to_str().map(str::to_owned).ok_or_else(|| {"
 replace = """    return Ok(relative.to_string_lossy().into_owned());
     #[allow(unreachable_code)]
     relative.to_str().map(str::to_owned).ok_or_else(|| {"""
+killers = [{ package = "nazm-bench", lib = true, name = "workspace::tests::a_non_utf8_name_is_refused_with_its_path" }]
 
 [[mutation]]
 name = "snapshot-accepts-symlinks"
@@ -486,6 +520,7 @@ live workspace the freeze exists to escape
 file = "crates/nazm-bench/src/workspace.rs"
 find = "        if meta.file_type().is_symlink() {"
 replace = "        if false {"
+killers = [{ package = "nazm-bench", test = "execution_boundary", name = "every_symlink_is_refused_including_the_ones_that_look_contained" }]
 
 [[mutation]]
 name = "snapshot-records-content-without-mode"
@@ -500,6 +535,7 @@ find = """    format!(
         fnv1a(bytes)
     )"""
 replace = """    format!("file:{:016x}", fnv1a(bytes))"""
+killers = [{ package = "nazm-bench", test = "execution_boundary", name = "a_mode_change_alone_is_drift" }]
 
 [[mutation]]
 name = "snapshot-copies-with-the-umask"
@@ -510,6 +546,7 @@ candidate did not produce and the snapshot no longer matches its own manifest
 file = "crates/nazm-bench/src/workspace.rs"
 find = "                fs::set_permissions(&dest, fs::Permissions::from_mode(wanted))?;"
 replace = ""
+killers = [{ package = "nazm-bench", test = "execution_boundary", name = "the_executable_bit_is_part_of_the_submission" }]
 
 [[mutation]]
 name = "snapshot-skips-the-mode-readback"
@@ -525,6 +562,7 @@ find = """    if got == wanted {
 replace = """    if true {
         return Ok(());
     }"""
+killers = [{ package = "nazm-bench", lib = true, name = "workspace::tests::the_mask_covers_setuid_and_sticky_not_just_permissions" }]
 
 [[mutation]]
 name = "freeze-accepts-evidence-about-another-attempt"
@@ -535,6 +573,7 @@ stopped authorises freezing attempt B's workspace — whose candidate may still 
 file = "crates/nazm-bench/src/workspace.rs"
 find = "            if vouched != self.attempt_id {"
 replace = "            if false {"
+killers = [{ package = "nazm-bench", test = "execution_boundary", name = "evidence_about_one_attempt_cannot_freeze_another" }]
 
 [[mutation]]
 name = "a-confirmed-stop-forgets-its-attempt"
@@ -545,6 +584,7 @@ workspace equally and the check above can never fire
 file = "crates/nazm-bench/src/sandbox/execution.rs"
 find = "            &self.attempt,"
 replace = "            String::new(),"
+killers = [{ package = "nazm-bench", test = "execution_boundary", name = "evidence_about_one_attempt_cannot_freeze_another" }]
 
 # `snapshot-skips-the-production-mode-readback` is deliberately absent, and this is the
 # reason rather than an oversight.
@@ -588,6 +628,7 @@ also be non-zero.
 file = "crates/nazm-lir/src/emit.rs"
 find = 'ArithOp::Add => "sadd",'
 replace = 'ArithOp::Add => "uadd",'
+killers = [{ package = "nazm-cli", test = "build", name = "a_failing_argument_stops_the_callee_body" }]
 
 [[mutation]]
 name = "the-statement-conditional-selects-the-wrong-branch"
@@ -620,6 +661,7 @@ replace = """                cond: c,
             at,
         );
         let mut arrives = otherwise.is_none();"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_callee_returning_early_does_not_disturb_its_caller" }]
 
 [[mutation]]
 name = "the-value-conditional-selects-the-wrong-branch"
@@ -645,6 +687,7 @@ replace = """                cond: c,
             at,
         );
         let mut arrives = false;"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_failure_in_the_branch_taken_reports_correctly" }]
 
 [[mutation]]
 name = "two-same-typed-arguments-are-transposed"
@@ -674,6 +717,7 @@ replace = """                let mut vals: Vec<(u32, Ty)> = args.iter().map(|a| 
                     vals.swap(0, 1);
                 }
                 let foreign = self.sigs.get(callee.index()).is_some_and(|s| s.foreign);"""
+killers = [{ package = "nazm-cli", test = "build", name = "arguments_are_not_swapped" }]
 
 [[mutation]]
 name = "the-loop-reuses-its-first-condition"
@@ -738,6 +782,7 @@ Repointed by N40: a `continue` is a MIR `goto` to its loop's condition block; th
 file = "crates/nazm-mir/src/lower.rs"
 find = "        let (depth, to) = (frame.depth, if leave { frame.exit } else { frame.head });"
 replace = "        let (depth, to) = (frame.depth, if leave { frame.exit } else { BlockId(frame.head.0 + 1) });"
+killers = [{ package = "nazm-cli", test = "build", name = "break_and_continue_may_be_conditional" }]
 
 [[mutation]]
 name = "return-does-not-end-the-block-it-is-in"
@@ -768,6 +813,7 @@ replace = """                if self.cur.is_some() {
                     self.seal(Terminator::Return(tmp), *at);
                     self.cur = open;
                 }"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_body_where_every_path_returns_needs_no_tail" }]
 
 [[mutation]]
 name = "every-definition-is-exported"
@@ -788,6 +834,7 @@ replace = """
         } else {
             Visibility::Exported
         };"""
+killers = [{ package = "nazm-cli", test = "build", name = "the_same_name_defined_privately_in_two_files_is_not_a_conflict" }]
 
 [[mutation]]
 name = "imports-become-transitive"
@@ -820,6 +867,7 @@ replace = """    let mut brought_in: HashMap<&str, Span> = HashMap::new();
         )
         .collect();
     for d in &reachable {"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_program_can_span_several_files_and_a_diamond_loads_once" }]
 
 [[mutation]]
 name = "selfhost-ignores-the-pub-bit"
@@ -831,6 +879,7 @@ accepting the same programs while both still bootstrap
 file = "compiler/analyse.nz"
 find = "                ints_push(fpub, is_public(naux, k));"
 replace = "                ints_push(fpub, 1);"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_two_compilers_agree_on_every_module_and_visibility_rule" }]
 
 [[mutation]]
 name = "selfhost-resolves-across-every-module"
@@ -848,6 +897,7 @@ replace = """    let own = owned_index(fnames, fowner, here, name);
     let seen = visible_import(vmod, vname, vfn, here, name);
     if seen >= 0 { return seen; }
     builtin_index(fnames, name)"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_two_compilers_agree_on_every_module_and_visibility_rule" }]
 
 [[mutation]]
 name = "selfhost-lets-the-first-import-win"
@@ -868,6 +918,7 @@ find = """                    if taken == 1 {
 replace = """                    if taken == 1 {
                         if visible_import(vmod, vname, vfn, m, name) >= 0 { taken = 0; }
                     }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_two_compilers_agree_on_every_module_and_visibility_rule" }]
 
 [[mutation]]
 name = "selfhost-accepts-any-main-as-the-entry-point"
@@ -878,6 +929,7 @@ the command line stops deciding what runs
 file = "compiler/analyse.nz"
 find = '    let at = owned_index(fnames, fowner, 0, "main");'
 replace = "    let at = builtin_index(fnames, \"main\");"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_two_compilers_agree_on_every_module_and_visibility_rule" }]
 
 [[mutation]]
 name = "an-absolute-path-reaches-the-module-key"
@@ -889,6 +941,7 @@ what their modules are, and every persisted interface carries a host directory
 file = "crates/nazm-service/src/load.rs"
 find = "    let relative = absolute.strip_prefix(root).unwrap_or(&absolute);"
 replace = "    let relative = absolute.as_path();"
+killers = [{ package = "nazm-service", lib = true, name = "diagnostics::tests::two_diagnostics_structure_cannot_tell_apart_are_told_apart_by_an_ordinal" }]
 
 [[mutation]]
 name = "a-private-definition-reaches-the-interface"
@@ -903,6 +956,7 @@ find = """        if visibility.is_exported() {
             // A public signature naming a private record would publish a type the"""
 replace = """        if true {
             // A public signature naming a private record would publish a type the"""
+killers = [{ package = "nazm-core", test = "capabilities", name = "authority_is_the_bindings_a_name_reaches_and_nothing_else" }]
 
 [[mutation]]
 name = "the-signature-leaves-the-interface"
@@ -919,6 +973,7 @@ find = """                    .collect(),
 replace = """                    .collect(),
                 params: Vec::new(),
                 ret: persist(e.ret, types, graph)"""
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_channel_type_is_published_and_read_back_as_the_same_type" }]
 
 [[mutation]]
 name = "an-unknown-interface-version-is-read-as-this-one"
@@ -930,6 +985,7 @@ the bytes parse, so the compiler acts on a meaning nobody wrote
 file = "crates/nazm-iface/src/wire.rs"
 find = "        if envelope.schema != SCHEMA {"
 replace = "        if false {"
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
 
 [[mutation]]
 name = "the-interface-keeps-declaration-order"
@@ -941,6 +997,7 @@ comparison built on the fingerprint then reports a change that did not happen
 file = "crates/nazm-iface/src/wire.rs"
 find = "        exports.sort_by(|a, b| a.name.cmp(&b.name));"
 replace = "        let _ = &mut exports;"
+killers = [{ package = "nazm-iface", test = "persistence", name = "serialising_the_same_interface_twice_gives_the_same_bytes" }]
 
 [[mutation]]
 name = "the-check-key-forgets-the-source"
@@ -953,6 +1010,7 @@ happened, which is a wrong program accepted rather than a slow build
 file = "crates/nazm-cache/src/key.rs"
 find = "            .field(&source.to_string())"
 replace = "            .field(\"\")"
+killers = [{ package = "nazm-cache", lib = true, name = "key::tests::the_order_the_imports_were_written_in_does" }]
 
 [[mutation]]
 name = "the-check-key-forgets-its-dependencies"
@@ -965,6 +1023,7 @@ to prevent
 file = "crates/nazm-cache/src/key.rs"
 find = "            f.field(d.module.as_str()).field(&d.interface.to_string());"
 replace = "            let _ = d;"
+killers = [{ package = "nazm-cache", lib = true, name = "key::tests::every_input_moves_it" }]
 
 [[mutation]]
 name = "the-check-key-forgets-which-compiler-it-was"
@@ -988,6 +1047,7 @@ exactly the identity confusion `ModuleKey` was built to prevent
 file = "crates/nazm-cache/src/key.rs"
 find = "            .field(module.as_str())"
 replace = "            .field(\"\")"
+killers = [{ package = "nazm-cache", lib = true, name = "key::tests::every_input_moves_it" }]
 
 [[mutation]]
 name = "a-cache-entry-is-trusted-because-it-parsed"
@@ -999,6 +1059,7 @@ match is evidence, not proof; this is the check that turns it into proof
 file = "crates/nazm-cache/src/artifact.rs"
 find = "        if CheckKey::of(checker, &module, source, &deps) != filed {"
 replace = "        if false {"
+killers = [{ package = "nazm-cache", test = "store", name = "an_entry_from_another_checker_is_unreachable" }]
 
 [[mutation]]
 name = "a-module-that-did-not-check-is-cached-anyway"
@@ -1010,6 +1071,7 @@ accepts a program it has already refused
 file = "crates/nazm-core/src/check.rs"
 find = "        if !unparsed && errors.len() == before && declared_cleanly.get(n) == Some(&true) {"
 replace = "        if true {"
+killers = [{ package = "nazm-cli", test = "ffi", name = "an_imported_foreign_function_needs_a_foreign_cap_too" }]
 
 [[mutation]]
 name = "the-native-symbol-forgets-its-module"
@@ -1023,6 +1085,7 @@ find = """            "nz.m.{}.{}",
             encode(def.module().as_str()),"""
 replace = """            "nz.m.{}.{}",
             "","""
+killers = [{ package = "nazm-lir", lib = true, name = "symbol::tests::a_symbol_is_the_module_and_the_name_and_nothing_else" }]
 
 [[mutation]]
 name = "the-native-symbol-follows-load-order"
@@ -1037,6 +1100,7 @@ Repointed by N42: a foreign function's symbol is its declared C name; every othe
 file = "crates/nazm-lir/src/lower.rs"
 find = "                    .map_or_else(|| of_identity(&f.identity), NativeSymbol::foreign),"
 replace = "                    .map_or_else(|| NativeSymbol::of_unkeyed(f.module, &f.name), NativeSymbol::foreign),"
+killers = [{ package = "nazm-cli", test = "attestation", name = "a_signed_statement_verifies_for_its_signer_and_its_artefacts_only" }]
 
 [[mutation]]
 name = "the-runtime-is-emitted-into-every-unit"
@@ -1050,6 +1114,7 @@ Repointed by N48: the unit's text is now bound before debug information may be a
 file = "crates/nazm-lir/src/emit.rs"
 find = "    let text = head + &e.out + &e.helpers + &e.tasks;"
 replace = "    let text = head + &e.out + &e.helpers + &e.tasks + &crate::runtime::emit_runtime(e.needs());"
+killers = [{ package = "nazm-cli", test = "attestation", name = "identical_input_gives_identical_artefacts_here_and_in_another_directory" }]
 
 [[mutation]]
 name = "native-linkage-ignores-visibility"
@@ -1062,6 +1127,7 @@ Repointed by N40: linkage is decided from MIR's `exported`, `reached_from_generi
 file = "crates/nazm-lir/src/lower.rs"
 find = "                if f.exported || f.reached_from_generic || instance || Some(f.id) == entry_id {"
 replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "attestation", name = "a_signed_statement_verifies_for_its_signer_and_its_artefacts_only" }]
 
 [[mutation]]
 name = "the-object-key-forgets-its-input"
@@ -1073,6 +1139,7 @@ was already compiled*, and an input-free key says nothing at all
 file = "crates/nazm-cache/src/object.rs"
 find = "                .field(&input.to_string())"
 replace = "                .field(\"\")"
+killers = [{ package = "nazm-cache", lib = true, name = "object::tests::every_input_moves_it" }]
 
 [[mutation]]
 name = "the-object-key-forgets-the-backend"
@@ -1085,6 +1152,7 @@ whose toolchain was replaced
 file = "crates/nazm-cache/src/object.rs"
 find = "                .field(&tool.to_string())"
 replace = "                .field(\"\")"
+killers = [{ package = "nazm-cache", lib = true, name = "object::tests::every_input_moves_it" }]
 
 [[mutation]]
 name = "the-object-key-forgets-the-configuration"
@@ -1096,6 +1164,7 @@ of it is visible in the IR, so leaving it out is the widest wrong hit available 
 file = "crates/nazm-cache/src/object.rs"
 find = "                .field(&config.to_string())"
 replace = "                .field(\"\")"
+killers = [{ package = "nazm-cache", lib = true, name = "object::tests::an_optimisation_level_and_a_target_cannot_collide" }]
 
 [[mutation]]
 name = "a-cached-object-is-trusted-because-its-name-matches"
@@ -1107,6 +1176,7 @@ data: an edited, mis-filed or half-written entry then becomes a linked object
 file = "crates/nazm-cache/src/objects.rs"
 find = "        if ObjectKey::of(input, tool, config) != filed {"
 replace = "        if false {"
+killers = [{ package = "nazm-cache", test = "objects", name = "a_header_claiming_other_inputs_is_a_miss" }]
 
 [[mutation]]
 name = "a-cached-object-s-bytes-are-not-checked"
@@ -1118,6 +1188,7 @@ the digest of the bytes is stored beside them rather than left to the linker to 
 file = "crates/nazm-cache/src/objects.rs"
 find = "        if ObjectFingerprint::of(bytes) != object {"
 replace = "        if false {"
+killers = [{ package = "nazm-cache", test = "objects", name = "a_header_claiming_another_object_is_a_miss" }]
 
 [[mutation]]
 name = "the-object-key-approximates-the-whole-program"
@@ -1140,6 +1211,7 @@ replace = """            .map(|s| {
                     .collect();
                 ObjectKey::of(LlvmInput::of(whole.as_bytes()), s.identity, s.config)
             });"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated" }]
 
 [[mutation]]
 name = "a-binding-does-not-take-the-reference-it-stores"
@@ -1159,6 +1231,7 @@ replace = """            mir::Rvalue::Copy(l) => {
                 let ty = self.slot_ty(*l);
                 let x = self.load(*l);
                 let _ = ty;"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_native_sequence_is_shared_storage" }]
 
 [[mutation]]
 name = "the-frame-is-not-released-on-a-normal-exit"
@@ -1172,6 +1245,7 @@ Repointed by N40: a region's normal end drops what it bound: MIR lowering's `pop
 file = "crates/nazm-mir/src/lower.rs"
 find = "                Some(Entry::Owned(l)) => self.push(StatementKind::Drop(l), at),"
 replace = "                Some(Entry::Owned(_)) => {}"
+killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_with_fewer_effects_is_accepted_passed_or_returned" }]
 
 [[mutation]]
 name = "the-frame-is-not-released-when-a-failure-unwinds"
@@ -1187,6 +1261,7 @@ find = """        if let Some(block) = self.blocks.get_mut(b.index()) {
             block.stmts = drops;"""
 replace = """        if let Some(block) = self.blocks.get_mut(b.index()) {
             let _ = drops;"""
+killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_with_fewer_effects_is_accepted_passed_or_returned" }]
 
 [[mutation]]
 name = "a-returned-sequence-is-released-on-the-way-out"
@@ -1203,6 +1278,7 @@ replace = """            mir::Terminator::Return(l) => {
                 let v = self.load(*l);
                 let dying = self.slot_ty(*l);
                 self.release(v, dying);"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_payload_returned_from_an_arm_is_valid_at_both_levels" }]
 
 [[mutation]]
 name = "a-borrowed-parameter-is-released-by-the-callee"
@@ -1218,6 +1294,7 @@ find = """            .skip(self.f.params as usize)
             .filter(|(_, l)| l.ty.value().is_some_and(|t| self.managed(t)))"""
 replace = """            .skip(0)
             .filter(|(_, l)| l.ty.value().is_some_and(|t| self.managed(t)))"""
+killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_with_fewer_effects_is_accepted_passed_or_returned" }]
 
 [[mutation]]
 name = "storage-goes-while-another-reference-remains"
@@ -1233,6 +1310,7 @@ find = """  %last = icmp sle i64 %rc2, 0
   br i1 %last, label %free, label %kept"""
 replace = """  %last = icmp sle i64 %rc2, 9223372036854775807
   br i1 %last, label %free, label %kept"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_native_sequence_is_shared_storage" }]
 
 # --- N8: strings and channels ---------------------------------------------------------
 #
@@ -1255,6 +1333,7 @@ find = """                let _ = writeln!(self.out, "  call void @nz.str_retain
                 let out = self.make_str(start, n, &format!("%{owner}"));"""
 replace = """                self.needs_strings = true;
                 let out = self.make_str(start, n, &format!("%{owner}"));"""
+killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_changes_nothing_at_run_time_everywhere" }]
 
 [[mutation]]
 name = "a-sequence-does-not-retain-the-string-it-stores"
@@ -1277,6 +1356,7 @@ replace = """                let _ = writeln!(
                     llvm_type(self.types, elem),
                     arg(1)
                 );"""
+killers = [{ package = "nazm-cli", test = "build", name = "strs_sequences_carry_strings_by_value" }]
 
 [[mutation]]
 name = "a-string-read-out-of-a-sequence-is-only-borrowed"
@@ -1293,6 +1373,7 @@ find = """                if elem.owns().is_some() {
                 }
                 return Val::Of { value: v, ty: elem };"""
 replace = "                return Val::Of { value: v, ty: elem };"
+killers = [{ package = "nazm-cli", test = "build", name = "strs_sequences_carry_strings_by_value" }]
 
 [[mutation]]
 name = "an-overwritten-element-is-never-released"
@@ -1307,6 +1388,7 @@ find = """                    arg(2)
                 self.release(old, elem);"""
 replace = """                    arg(2)
                 );"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
 
 [[mutation]]
 name = "a-sequence-of-strings-does-not-release-its-contents"
@@ -1344,6 +1426,7 @@ test:
   br i1 %more, label %body, label %storage
 body:
   %e = getelementptr { ptr, i64, ptr }, ptr %data, i64 %i"""
+killers = [{ package = "nazm-cli", test = "attestation", name = "identical_input_gives_identical_artefacts_here_and_in_another_directory" }]
 
 [[mutation]]
 name = "string-storage-goes-while-another-view-remains"
@@ -1359,6 +1442,7 @@ find = """  %old = atomicrmw sub ptr %b, i64 1 release
   %last = icmp eq i64 %old, 1"""
 replace = """  %old = atomicrmw sub ptr %b, i64 1 release
   %last = icmp sge i64 %old, 1"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_payload_returned_from_an_arm_is_valid_at_both_levels" }]
 
 [[mutation]]
 name = "a-channel-goes-while-another-reference-remains"
@@ -1399,6 +1483,7 @@ replace = """            let _ = writeln!(
                 "  store {} %{value}, ptr %{slot}",
                 llvm_type(self.types, *ty)
             );"""
+killers = [{ package = "nazm-cli", test = "build", name = "the_spec_worker_pool_example_terminates_and_answers_ninety" }]
 
 [[mutation]]
 name = "the-self-hosted-emitter-skips-one-release-path"
@@ -1413,6 +1498,7 @@ file = "compiler/emit.nz"
 find = """                                                                                                        own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
                                                                                                         release_frame(out, next, frame, rowns);"""
 replace = """                                                                                                        own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 
 # --- N9: records -----------------------------------------------------------------------
@@ -1439,6 +1525,7 @@ replace = """            if retain {
             } else {
                 self.release(v, ty);
             }"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_record_survives_construction_copy_replacement_and_return_at_both_levels" }]
 
 [[mutation]]
 name = "a-record-drop-omits-its-fields"
@@ -1456,6 +1543,7 @@ replace = """            if retain {
                 self.retain(v, ty);
             } else {
             }"""
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_with_managed_results_and_arguments_agrees" }]
 
 [[mutation]]
 name = "a-record-drop-does-not-recurse"
@@ -1472,6 +1560,7 @@ find = """            Some(Owns::Record(id)) => records
                 .map(|l| l.fields.clone())
                 .unwrap_or_default(),"""
 replace = "            Some(Owns::Record(_)) => continue,"
+killers = [{ package = "nazm-cli", test = "memory", name = "a_nested_record_releases_through_both_levels" }]
 
 
 # `a-field-replacement-releases-before-it-takes` is retired by N40: MIR moves the new value into the field from a temporary that already owns it, so there is no take left to reorder: releasing the old field first is then harmless, and the defect is not expressible. The take itself — the retain that makes a projected or copied value owned — is `a-projection-out-of-a-temporary-is-only-borrowed` and `a-binding-does-not-take-the-reference-it-stores`.
@@ -1489,6 +1578,7 @@ find = """                // Its own reference, by MIR's law: a projection is ow
                 self.retain(out, fty);"""
 replace = """                // Its own reference, by MIR's law: a projection is owned by its destination.
                 let _ = fty;"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_record_survives_construction_copy_replacement_and_return_at_both_levels" }]
 
 [[mutation]]
 name = "a-partly-built-record-is-not-cleaned"
@@ -1518,6 +1608,7 @@ replace = """                    let fty = self.record_field_ty(rid, init.field,
                         }
                         return;
                     }"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "cleanup_on_every_exit_and_on_failure_agrees" }]
 
 [[mutation]]
 name = "task-safety-stops-at-the-first-level"
@@ -1538,6 +1629,7 @@ find = """                Type::Record(_) | Type::Enum(_) => {
                     }
                 }"""
 replace = """                Type::Record(_) | Type::Enum(_) => {}"""
+killers = [{ package = "nazm-cli", test = "scheduler", name = "nothing_mutable_crosses_into_a_task" }]
 
 [[mutation]]
 name = "an-exported-record-is-left-out-of-the-interface"
@@ -1553,6 +1645,7 @@ find = """    pub fn records(&self) -> &[RecordExport] {
 replace = """    pub fn records(&self) -> &[RecordExport] {
         &self.records[..0]
     }"""
+killers = [{ package = "nazm-cli", test = "core_ir", name = "the_printed_core_ir_is_the_same_bytes_in_every_process" }]
 
 [[mutation]]
 name = "a-published-field-loses-its-type"
@@ -1571,6 +1664,7 @@ replace = """            let _ = ty;
                 name: f.name.clone(),
                 ty: PersistentType::Builtin("Int".to_owned()),
             });"""
+killers = [{ package = "nazm-iface", test = "persistence", name = "an_enum_round_trips_with_its_variants_and_payload_types" }]
 
 [[mutation]]
 name = "a-published-record-is-named-by-its-spelling"
@@ -1583,6 +1677,7 @@ file = "crates/nazm-iface/src/wire.rs"
 find = """            let key = graph.key(def.module)?;
             Some(DefKey::new(key.clone(), DefKind::Record, def.name.clone()).to_string())"""
 replace = "            Some(def.name.clone())"
+killers = [{ package = "nazm-cli", test = "durable_identity", name = "a_dependent_checks_records_against_a_deserialised_interface_with_the_dependency_deleted" }]
 
 [[mutation]]
 name = "the-native-layout-follows-the-declaration"
@@ -1600,6 +1695,7 @@ find = """            fields: r
                 .map(|f| Ty::of(f.ty))
                 .collect(),"""
 replace = "            fields: r.fields.iter().map(|f| Ty::of(f.ty)).collect(),"
+killers = [{ package = "nazm-cli", test = "build", name = "a_nested_match_and_a_record_payload_agree_at_both_levels" }]
 
 [[mutation]]
 name = "a-field-is-read-from-the-wrong-position"
@@ -1617,6 +1713,7 @@ replace = """        if let Some(slot) = out.get_mut(*declared as usize) {
             let _ = position;
             *slot = 0;
         }"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_nested_match_and_a_record_payload_agree_at_both_levels" }]
 
 # `a-record-that-contains-itself-is-accepted` (N9) is retired as **equivalent**, found by the
 # first whole-catalogue run (N12.2, 2026-09-24): it SURVIVED the workspace suite because it
@@ -1639,6 +1736,7 @@ replace = """    let cycles: Vec<_> = res
         .into_iter()
         .filter(|c| !matches!(c.reach, nazm_sema::Reach::Inline))
         .collect();"""
+killers = [{ package = "nazm-core", test = "enums", name = "a_cycle_through_a_record_and_an_enum_is_refused_too" }]
 [[mutation]]
 name = "a-private-type-leaks-through-a-public-signature"
 why = """
@@ -1653,6 +1751,7 @@ find = """    let Some((private_name, declared_at)) = found else {
 replace = """    let Some((private_name, declared_at)) = found.filter(|_| false) else {
         return;
     };"""
+killers = [{ package = "nazm-core", test = "generics", name = "a_public_generic_signature_may_not_expose_a_private_type_in_an_argument" }]
 
 [[mutation]]
 name = "the-self-hosted-emitter-forgets-a-record-field"
@@ -1672,6 +1771,7 @@ replace = """            if retain {
             } else {
                 emit_release(out, next, n, ft, rowns);
             }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 # --- N10: enums and pattern matching ----------------------------------------------------
 #
@@ -1690,6 +1790,7 @@ language's meaning precisely so that this cannot be deferred to the backend
 file = "crates/nazm-core/src/check.rs"
 find = "        if !missing.is_empty() && !unresolved {"
 replace = "        if false {"
+killers = [{ package = "nazm-core", test = "enums", name = "a_match_that_misses_a_variant_is_refused_and_names_it" }]
 
 [[mutation]]
 name = "a-variant-may-have-two-arms"
@@ -1704,6 +1805,7 @@ replace = """            if let Some(None) = covered.get(at as usize).copied() {
                 let _ = arm.variant_span;
             }
             if let Some(Some(first)) = None::<Option<Span>> {"""
+killers = [{ package = "nazm-core", test = "enums", name = "a_match_that_names_one_variant_twice_is_refused" }]
 
 [[mutation]]
 name = "a-pattern-may-name-another-enums-variant"
@@ -1716,6 +1818,7 @@ arm would bind payload fields of a variant the value does not have
 file = "crates/nazm-core/src/check.rs"
 find = "            if self.res.types().definition_of(sty) != Some(TypeNode::Enum(named)) {"
 replace = "            if false {"
+killers = [{ package = "nazm-core", test = "enums", name = "a_pattern_naming_another_enums_variant_is_refused" }]
 
 [[mutation]]
 name = "a-pattern-need-not-name-every-payload-field"
@@ -1729,6 +1832,7 @@ find = """        let missing = self.missing_payload_fields(id, at, &named);
         if !missing.is_empty() {"""
 replace = """        let missing = self.missing_payload_fields(id, at, &named);
         if false {"""
+killers = [{ package = "nazm-core", test = "enums", name = "a_pattern_must_name_every_payload_field" }]
 
 [[mutation]]
 name = "a-public-enum-may-leak-a-private-payload-type"
@@ -1745,6 +1849,7 @@ find = """        let payloads: Vec<(Type, Span)> = def
             .flat_map(|v| v.fields.iter().map(|f| (f.ty, f.ty_span)))
             .collect();"""
 replace = "        let payloads: Vec<(Type, Span)> = Vec::new();"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_interpreter" }]
 
 [[mutation]]
 name = "an-enums-properties-come-from-its-first-variant"
@@ -1757,6 +1862,7 @@ only owning payload is in a later variant would get no cleanup at all
 file = "crates/nazm-sema/src/udt.rs"
 find = "                    for (vi, v) in def.variants.iter().enumerate() {"
 replace = "                    for (vi, v) in def.variants.iter().enumerate().take(1) {"
+killers = [{ package = "nazm-cli", test = "durable_identity", name = "a_dependent_derives_equality_from_a_deserialised_interface_with_the_dependency_deleted" }]
 
 [[mutation]]
 name = "a-discriminant-follows-the-parser"
@@ -1772,6 +1878,7 @@ find = """        order.sort_by(|a, b| {
             name(a).cmp(name(b))
         });"""
 replace = "        let _ = &order;"
+killers = [{ package = "nazm-cli", test = "equality", name = "an_enum_helper_reads_only_the_active_variant_s_slot" }]
 
 [[mutation]]
 name = "a-payload-is-laid-out-in-the-order-it-was-written"
@@ -1787,6 +1894,7 @@ find = """            layout.sort_by(|a, b| {
                 name(a).cmp(name(b))
             });"""
 replace = "            let _ = &layout;"
+killers = [{ package = "nazm-cli", test = "equality", name = "declaration_order_changes_no_byte_of_the_program" }]
 
 [[mutation]]
 name = "a-published-enum-keeps-its-source-order"
@@ -1798,6 +1906,7 @@ The interface is where a claim about order stops being a claim and becomes bytes
 file = "crates/nazm-iface/src/wire.rs"
 find = "            variants.sort_by(|a, b| a.name.cmp(&b.name));"
 replace = "            let _ = &variants;"
+killers = [{ package = "nazm-iface", test = "persistence", name = "an_enum_round_trips_with_its_variants_and_payload_types" }]
 
 [[mutation]]
 name = "an-exported-enum-is-left-out-of-the-interface"
@@ -1814,6 +1923,7 @@ find = """    pub fn enums(&self) -> &[EnumExport] {
 replace = """    pub fn enums(&self) -> &[EnumExport] {
         &self.enums[..0]
     }"""
+killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_function_is_refused_by_name_before_any_device" }]
 
 [[mutation]]
 name = "an-enum-helper-branches-on-the-wrong-tag"
@@ -1826,6 +1936,7 @@ program computes are unaffected
 file = "crates/nazm-lir/src/emit.rs"
 find = """            .map(|(a, label)| format!("i64 {}, label %{label}", a.tag))"""
 replace = """            .map(|(a, label)| format!("i64 {}, label %{label}", a.tag + 1))"""
+killers = [{ package = "nazm-cli", test = "constraints", name = "a_bounded_comparison_observes_owning_arguments_and_releases_its_temporaries_once" }]
 
 [[mutation]]
 name = "an-enum-copy-takes-no-reference"
@@ -1845,6 +1956,7 @@ replace = """                if retain {
                 } else {
                     self.release(v, *ty);
                 }"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_payload_returned_from_an_arm_is_valid_at_both_levels" }]
 
 [[mutation]]
 name = "a-match-does-not-take-over-the-value-it-matches"
@@ -1865,6 +1977,7 @@ replace = """        let s = self.temp(st, m.scrutinee.at, name);
             }
             _ => self.expr_into(&m.scrutinee, Some(s)),
         }"""
+killers = [{ package = "nazm-cli", test = "build", name = "a_nested_match_and_a_record_payload_agree_at_both_levels" }]
 
 [[mutation]]
 name = "a-match-never-lets-go-of-what-it-matched"
@@ -1878,6 +1991,7 @@ file = "crates/nazm-mir/src/lower.rs"
 find = """                self.stack.truncate(pos);
                 self.push(StatementKind::Drop(s), m.at);"""
 replace = "                self.stack.truncate(pos);"
+killers = [{ package = "nazm-cli", test = "build", name = "a_nested_match_and_a_record_payload_agree_at_both_levels" }]
 
 [[mutation]]
 name = "a-partly-built-variant-is-not-cleaned"
@@ -1907,6 +2021,7 @@ replace = """                    let fty = self.payload_ty(eid, *variant, init.f
                         }
                         return;
                     }"""
+killers = [{ package = "nazm-cli", test = "memory", name = "a_continue_out_of_a_half_built_variant_gives_back_its_payload" }]
 
 [[mutation]]
 name = "a-task-does-not-give-back-the-enum-it-borrowed"
@@ -1923,6 +2038,7 @@ find = """                Some(Owns::Enum(id)) => {
                     }
                 }"""
 replace = """                Some(Owns::Enum(_)) => {}"""
+killers = [{ package = "nazm-cli", test = "memory", name = "an_enum_crossing_into_a_task_carries_its_active_payload_and_no_other" }]
 
 [[mutation]]
 name = "the-self-hosted-checker-skips-exhaustiveness"
@@ -1941,6 +2057,7 @@ replace = """                        if missing == "!" {
                             report(diags, "N0343", from, to,
                                     str_concat("this `match` does not cover ", missing));
                         }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_enums_and_matching" }]
 
 [[mutation]]
 name = "the-self-hosted-emitter-does-not-take-over-a-payload"
@@ -1962,6 +2079,7 @@ replace = """            let held = take_number(next);
                     str_concat(str_concat(" = load ", ty),
                     str_concat(", ptr %slot", int_to_str(slot)))));
             let payload = take_number(next);"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "a-break-keeps-what-the-expression-was-holding"
@@ -1977,6 +2095,7 @@ find = """        self.cleanup_to(depth, at);
         self.goto(to, at);"""
 replace = """        self.cleanup_to(self.stack.len().max(depth), at);
         self.goto(to, at);"""
+killers = [{ package = "nazm-cli", test = "concurrent", name = "a_break_out_of_a_scope_still_waits_for_its_tasks" }]
 
 
 # `a-continue-keeps-the-value-it-was-building` is retired by N40: MIR has one cleanup stack: a value being built is a temporary on it like any other, so the `building` half this injected no longer exists apart from `a-break-keeps-what-the-expression-was-holding`.
@@ -1993,6 +2112,7 @@ find = """        self.cleanup_to(depth, at);
         self.goto(to, at);"""
 replace = """        self.cleanup_to(0, at);
         self.goto(to, at);"""
+killers = [{ package = "nazm-cli", test = "concurrent", name = "a_break_out_of_a_scope_still_waits_for_its_tasks" }]
 
 [[mutation]]
 name = "the-self-hosted-compiler-keeps-what-a-continue-abandons"
@@ -2011,6 +2131,7 @@ find = """                                                            leave_loop
 replace = """                                                            join_from(out, next, current, live,
                                                                     ints_get(loop_scope, ints_len(loop_scope) - 1));
                                                             // The header, never the body: `continue` re-evaluates the condition."""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 
 # --- N10.1: a transfer in a value position -------------------------------------------
@@ -2039,6 +2160,7 @@ find = """                            // Only if a branch reached it. Both leavi
                                 open_block(out, current, live, blk("j", p));
                             }"""
 replace = """                            open_block(out, current, live, blk("j", p));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "a-match-join-no-arm-reached-is-opened-anyway"
@@ -2053,6 +2175,7 @@ find = """                            // Opened only if some arm reached it. Oth
                                 open_block(out, current, live, blk("j", p));
                             }"""
 replace = """                            open_block(out, current, live, blk("j", p));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "an-unreachable-node-is-emitted-anyway"
@@ -2067,6 +2190,7 @@ find = """fn unreachable_here(live: Ints, kind: Int) -> Bool {
     if ints_get(live, 0) == 1 { return false; }"""
 replace = """fn unreachable_here(live: Ints, kind: Int) -> Bool {
     if kind > 0 { return false; }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "an-unreachable-assignment-is-emitted-anyway"
@@ -2083,6 +2207,7 @@ replace = """    if kind == n_payload() { return false; }
     if kind == n_assign() { return false; }
     true
 }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "an-if-with-one-incoming-reads-two"
@@ -2094,6 +2219,7 @@ with a block that is not a predecessor
 file = "compiler/emit.nz"
 find = """                                                                phi_val, phi_blk, ints_get(nin, k), ints_get(ntype, k)));"""
 replace = """                                                                phi_val, phi_blk, 2, ints_get(ntype, k)));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "an-unreachable-nodes-operands-stay-on-the-stack"
@@ -2105,6 +2231,7 @@ that belongs to a path that no longer exists
 file = "compiler/emit.nz"
 find = """                while ints_len(vals) > floor { ints_pop(vals); }"""
 replace = """                let _kept = floor;"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "a-break-out-of-a-scope-does-not-join-it"
@@ -2119,6 +2246,7 @@ find = """                                                        join_from(out,
                                                                 ints_get(loop_scope, ints_len(loop_scope) - 1));
                                                         branch(out, live, blk("x", w));"""
 replace = """                                                        branch(out, live, blk("x", w));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "a-return-out-of-a-scope-does-not-join-it"
@@ -2130,6 +2258,7 @@ file = "compiler/emit.nz"
 find = """                                                                join_from(out, next, current, live, 2);
                                                                 // Rule 3."""
 replace = """                                                                // Rule 3."""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "the-self-hosted-checker-says-nothing-after-a-transfer"
@@ -2158,6 +2287,7 @@ replace = """        if t == t_unknown() { return t; }
     }
     t
 }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_enums_and_matching" }]
 
 
 # `a-string-comparison-keeps-its-operands` is retired by N40: equivalent under MIR: a temporary the comparison does not give back stays on the cleanup stack and is dropped at its region's end, so the leak it injected cannot happen; the counters balance either way. The read-after-release ordering is `n13-native-operands-are-released-before-they-are-compared`.
@@ -2174,6 +2304,7 @@ find = """                                                                      
 """
 replace = """                                                                                        if ot == t_str() {
 """
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 
 # --- N10.2: a value, no value, and never finishing ---------------------------------------
@@ -2245,6 +2376,7 @@ find = """                        c = ec;
                         t = else_t;"""
 replace = """                        c = ec;
                         t = then_t;"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "an-else-branch-that-leaves-takes-the-type"
@@ -2257,6 +2389,7 @@ find = """                            c = tc;
                             t = then_t;"""
 replace = """                            c = tc;
                             t = else_t;"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "branches-of-two-types-are-accepted"
@@ -2268,6 +2401,7 @@ string, which clang refuses — the checker's job, found by the assembler
 file = "compiler/analyse.nz"
 find = """if agrees(then_t, else_t) == false {"""
 replace = """if false {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-value-and-nothing-are-accepted"
@@ -2280,6 +2414,7 @@ find = """                                } else {
                                     report(diags, "N0302", from, to,"""
 replace = """                                } else {
                                     report(diags, "N9999", from, to,"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_value_blocks" }]
 
 [[mutation]]
 name = "a-unit-arm-leaves-the-match-a-value"
@@ -2291,6 +2426,7 @@ statement leaves the value arms' values on the emitter's stack
 file = "compiler/analyse.nz"
 find = """                                if arm_c == Completion.Unit() {"""
 replace = """                                if arm_c != arm_c {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-body-is-not-held-to-its-signature"
@@ -2322,6 +2458,7 @@ why = """
 file = "compiler/analyse.nz"
 find = """if agrees(got, ints_get(cur_ret, 0)) == false {"""
 replace = """if false {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "the-arms-of-a-refused-match-are-still-checked"
@@ -2333,6 +2470,7 @@ arm of such a `match`
 file = "compiler/analyse.nz"
 find = """if silenced >= 0 {"""
 replace = """if silenced >= 99999999 {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-discarded-arm-value-stays-on-the-stack"
@@ -2347,6 +2485,7 @@ find = """    if t == 0 { return 0; }
     own_drop(out, next, owned, dropped, t, rowns, otype)"""
 replace = """    if t == 0 { return 0; }
     0"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-discarded-arm-value-is-not-given-back"
@@ -2359,6 +2498,7 @@ find = """    let dropped = ints_pop(vals);
     own_drop(out, next, owned, dropped, t, rowns, otype)"""
 replace = """    let dropped = ints_pop(vals);
     dropped"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 # --- N11: generics and `Vec[T]` -------------------------------------------------------
 #
@@ -2378,6 +2518,7 @@ substitution ignores which parameter a use names and gives every one the first a
 file = "crates/nazm-sema/src/generic.rs"
 find = "                args.get(p.index as usize).copied().unwrap_or(Type::Int)"
 replace = "                args.first().copied().unwrap_or(Type::Int)"
+killers = [{ package = "nazm-cli", test = "accounts", name = "the_account_metadata_states_every_instructions_constraints" }]
 
 [[mutation]]
 name = "the-wrong-number-of-type-arguments-is-accepted"
@@ -2391,6 +2532,7 @@ find = """        (Some(mut args), n) => {
 replace = """        (Some(mut args), n) => {
             if args.len() != n && false {
                 errors.push(wrong_arity("""
+killers = [{ package = "nazm-core", test = "generics", name = "the_wrong_number_of_type_arguments_is_one_error_wherever_it_is_written" }]
 
 [[mutation]]
 name = "inference-keeps-the-first-conflicting-type"
@@ -2404,6 +2546,7 @@ find = """                    Some((t, from)) => Err(Unify::Conflict {
                         from,
                     }),"""
 replace = "                    Some((_, _)) => Ok(()),"
+killers = [{ package = "nazm-core", test = "generics", name = "two_arguments_that_disagree_about_a_parameter_are_a_conflict_not_a_choice" }]
 
 [[mutation]]
 name = "a-type-parameter-may-be-compared"
@@ -2424,6 +2567,7 @@ file = "crates/nazm-core/src/check.rs"
 find = """                if types.definition_of(formal) != types.definition_of(actual)
                     || std::mem::discriminant(&formal) != std::mem::discriminant(&actual)"""
 replace = "                if std::mem::discriminant(&formal) != std::mem::discriminant(&actual)"
+killers = [{ package = "nazm-core", test = "generics", name = "inference_does_not_unify_two_generic_definitions_of_one_shape" }]
 
 [[mutation]]
 name = "the-interface-persists-parameter-names"
@@ -2433,6 +2577,7 @@ a persisted generic definition carries its parameters' spelling as well as their
 file = "crates/nazm-iface/src/wire.rs"
 find = "                generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),"
 replace = "                generics: u32::try_from(e.type_params.len() + e.type_params.iter().map(String::len).sum::<usize>()).unwrap_or(u32::MAX),"
+killers = [{ package = "nazm-cli", test = "durable_identity", name = "a_generic_interface_carries_positions_and_no_parameter_names" }]
 
 [[mutation]]
 name = "an-instance-symbol-keeps-only-its-first-argument"
@@ -2467,6 +2612,7 @@ find = """                    if !seen.contains_key(&key) {
 replace = """                    seen.insert(key.clone(), order.len());
                     order.push((key.clone(), site.span));
                     work.push_back((key, site.span));"""
+killers = [{ package = "nazm-cli", test = "constraints", name = "a_bounded_comparison_observes_owning_arguments_and_releases_its_temporaries_once" }]
 
 [[mutation]]
 name = "the-planner-skips-calls-made-by-an-instance"
@@ -2479,6 +2625,7 @@ find = """                let next = InstanceKey { def: g, args };
                 if !seen.contains_key(&next) {"""
 replace = """                let next = InstanceKey { def: g, args };
                 if false && !seen.contains_key(&next) {"""
+killers = [{ package = "nazm-cli", test = "constraints", name = "a_bounded_comparison_observes_owning_arguments_and_releases_its_temporaries_once" }]
 
 [[mutation]]
 name = "polymorphic-recursion-is-not-an-expanding-cycle"
@@ -2489,6 +2636,7 @@ Repointed by N40: the planner moved to `nazm-mir` unchanged.
 file = "crates/nazm-mir/src/instance.rs"
 find = "                    let expanding = *t != Type::Param(param);"
 replace = "                    let expanding = false && *t != Type::Param(param);"
+killers = [{ package = "nazm-cli", test = "generics", name = "polymorphic_recursion_runs_interpreted_and_is_refused_natively_by_name" }]
 
 [[mutation]]
 name = "vec-push-does-not-take-its-own-reference"
@@ -2501,6 +2649,7 @@ find = """                // The vector keeps what it is given, so it takes a co
                 self.retain(arg(1), elem);"""
 replace = """                // The vector keeps what it is given, so it takes a copy of its own; the
                 // caller's value is untouched, which is rule 2."""
+killers = [{ package = "nazm-cli", test = "closures", name = "function_values_live_in_records_and_vecs_and_compose" }]
 
 [[mutation]]
 name = "vec-get-returns-a-borrowed-element"
@@ -2514,6 +2663,7 @@ find = """                if elem.owns().is_some() {
                 }
                 Val::Of { value: v, ty: elem }"""
 replace = "                Val::Of { value: v, ty: elem }"
+killers = [{ package = "nazm-cli", test = "memory", name = "a_nested_vec_releases_each_inner_vector_and_what_it_holds" }]
 
 [[mutation]]
 name = "vec-pop-copies-instead-of-transferring"
@@ -2529,6 +2679,7 @@ find = """                let _ = writeln!(self.out, "  store i64 %{last}, ptr %
 replace = """                let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
                 self.retain(v, elem);
                 Val::Of { value: v, ty: elem }"""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "an_enum_with_a_payload_and_plain_values_cross_a_channel" }]
 
 [[mutation]]
 name = "a-vec-is-freed-without-its-elements"
@@ -2538,6 +2689,7 @@ the last release of a `Vec` of owning elements frees its storage and never relea
 file = "crates/nazm-lir/src/emit.rs"
 find = "        self.release(v, layout.elem);"
 replace = ""
+killers = [{ package = "nazm-cli", test = "closures", name = "function_values_live_in_records_and_vecs_and_compose" }]
 
 [[mutation]]
 name = "a-vec-hides-what-it-owns"
@@ -2551,6 +2703,7 @@ find = """
                     self.owned_by(e, COUNTED, via, uses, out);"""
 replace = """
                 if let Some(e) = self.vec_element(v) {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "a-parameter-no-field-uses-counts-as-used"
@@ -2560,6 +2713,7 @@ every parameter of a generic definition is taken to be stored, inline and counte
 file = "crates/nazm-sema/src/udt.rs"
 find = "                        used |= self.reaches_param(ty, p, &uses);"
 replace = "                        used |= self.reaches_param(ty, p, &uses) | INLINE | COUNTED;"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
 
 [[mutation]]
 name = "selfhost-accepts-the-wrong-number-of-type-arguments"
@@ -2571,6 +2725,7 @@ find = """                        if written != arity {
                             report(diags, "N0353", at, end,"""
 replace = """                        if written == 0 - 7 {
                             report(diags, "N0353", at, end,"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_generics" }]
 
 [[mutation]]
 name = "selfhost-inference-keeps-the-first-type"
@@ -2582,6 +2737,7 @@ find = """                if ints_get(sval, p) != x {
                     if ints_get(sval, p) != t_unknown() {"""
 replace = """                if ints_get(sval, p) == 0 - 7 {
                     if ints_get(sval, p) != t_unknown() {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_generics" }]
 
 [[mutation]]
 name = "selfhost-lets-a-parameter-be-compared"
@@ -2605,6 +2761,7 @@ the **Nazm-written** compiler's substitution gives every parameter the first arg
 file = "compiler/analyse.nz"
 find = "                if at < ints_len(args) { ints_push(to, ints_get(args, at)); } else { ints_push(to, x); }"
 replace = "                if at < ints_len(args) { ints_push(to, ints_get(args, 0)); } else { ints_push(to, x); }"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_equality" }]
 
 [[mutation]]
 name = "selfhost-a-vec-hides-what-it-owns"
@@ -2619,6 +2776,7 @@ find = """                    if is_vec(t) {
 replace = """                    if is_vec(t) {
                         ints_len(work);
                     }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_generics" }]
 
 [[mutation]]
 name = "selfhost-vec-get-returns-a-borrowed-element"
@@ -2632,6 +2790,7 @@ find = """        if owns_anything(elem, rowns) {
         }
         return got;"""
 replace = "        return got;"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_emits_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-a-vec-is-freed-without-its-elements"
@@ -2642,6 +2801,7 @@ file = "compiler/emit.nz"
 find = """            str_concat(str_concat(" = load ", et), ", ptr %e")));
     emit_release(out, next, n, elem, rowns);"""
 replace = """            str_concat(str_concat(" = load ", et), ", ptr %e")));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-the-planner-skips-calls-made-by-an-instance"
@@ -2651,6 +2811,7 @@ the **Nazm-written** emitter never plans an instance's own calls to generic func
 file = "compiler/emit.nz"
 find = "                        callee_inst = request_instance(ints_get(fnode_of, f), cargs, inst_fn,"
 replace = "                        callee_inst = 0 - 1 + 0 * request_instance(ints_get(fnode_of, f), cargs, inst_fn,"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_requirements_with_the_same_memory_semantics" }]
 
 # --- N12: `Result`, `Option` and `?` --------------------------------------------------
 #
@@ -2686,6 +2847,7 @@ replace = """        let _ = def;
         if self.res.enums().get(id).is_none_or(|d| d.variant("Ok").is_none() || d.variant("Err").is_none()) {
             return None;
         }"""
+killers = [{ package = "nazm-core", test = "results", name = "a_project_result_is_refused_and_is_not_what_question_mark_propagates" }]
 
 [[mutation]]
 name = "the-canonical-result-is-the-first-one-named-result"
@@ -2695,6 +2857,7 @@ the `Result` `?` propagates is the first definition of that name anywhere in the
 file = "crates/nazm-core/src/check.rs"
 find = """        .and_then(|m| res.enums().declared(m, nazm_sema::prelude::RESULT));"""
 replace = """        .and(res.enums().declared_anywhere(nazm_sema::prelude::RESULT).next());"""
+killers = [{ package = "nazm-core", test = "results", name = "a_project_result_is_refused_and_is_not_what_question_mark_propagates" }]
 
 [[mutation]]
 name = "checker-question-mark-is-allowed-outside-a-result-function"
@@ -2712,6 +2875,7 @@ replace = """            if let Some(span) = self.return_span {
             }
             let _ = d;
             return Completion::Value(ok);"""
+killers = [{ package = "nazm-core", test = "results", name = "propagation_needs_a_function_that_returns_result" }]
 
 [[mutation]]
 name = "checker-question-mark-ignores-the-error-type"
@@ -2721,6 +2885,7 @@ the operand's error type is never compared with the function's, so a `Result[Int
 file = "crates/nazm-core/src/check.rs"
 find = "        if err != into_err {"
 replace = "        if err != into_err && false {"
+killers = [{ package = "nazm-core", test = "results", name = "propagation_needs_exactly_the_same_error_type" }]
 
 [[mutation]]
 name = "question-mark-requires-the-same-success-type"
@@ -2730,6 +2895,7 @@ why = """
 file = "crates/nazm-core/src/check.rs"
 find = "        if err != into_err {"
 replace = "        if err != into_err || Some(ok) != declared.and_then(|t| self.result_parts(t)).map(|p| p.1) {"
+killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
 
 [[mutation]]
 name = "checker-a-project-type-may-take-a-prelude-name"
@@ -2741,6 +2907,7 @@ find = """                if Some(d.on) == unit.prelude {
                     if collisions == Collisions::Report {"""
 replace = """                if Some(d.on) == unit.prelude && false {
                     if collisions == Collisions::Report {"""
+killers = [{ package = "nazm-core", test = "results", name = "a_project_result_is_refused_and_is_not_what_question_mark_propagates" }]
 
 [[mutation]]
 name = "a-project-path-can-take-the-core-key"
@@ -2765,6 +2932,7 @@ replace = """                .imports(m)
                 .iter()
                 .filter(|d| graph.key(d.on).is_none_or(|k| !k.is_prelude()))
                 .map(|d| {"""
+killers = [{ package = "nazm-cli", test = "prelude", name = "every_module_s_check_entry_depends_on_the_prelude_s_interface" }]
 
 [[mutation]]
 name = "rehydration-gives-every-interface-its-own-types"
@@ -2787,6 +2955,7 @@ find = """        let ok_arm = arm(p.ok, ok, Vec::new(), Some(Box::new(local(ok,
         let err_arm = arm(p.err, err, vec![leave], None);"""
 replace = """        let ok_arm = arm(p.err, ok, Vec::new(), Some(Box::new(local(ok, ok_ty))));
         let err_arm = arm(p.ok, err, vec![leave], None);"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
 
 [[mutation]]
 name = "lowered-propagation-returns-the-operand-s-result"
@@ -2799,6 +2968,7 @@ find = """            kind: ExprKind::Variant {
                 enumeration: p.into,"""
 replace = """            kind: ExprKind::Variant {
                 enumeration: p.operand,"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
 
 [[mutation]]
 name = "lowered-propagation-falls-through-on-error"
@@ -2809,6 +2979,7 @@ Repointed by N39: the error arm's `return` is Core IR's, for both backends.
 file = "crates/nazm-core/src/lower.rs"
 find = "        let leave = self.leave(rebuilt, at)?;"
 replace = "        let leave = Stmt::Eval(rebuilt);"
+killers = [{ package = "nazm-cli", test = "propagation", name = "locals_are_released_once_when_an_error_propagates" }]
 
 # `interpreted-propagation-carries-on-with-the-error` is retired by N39: the interpreter has no `?`
 # of its own any more. `?` is lowered once, to a `match` whose error arm returns, and both backends
@@ -2833,6 +3004,7 @@ the **Nazm-written** checker never compares the two error types
 file = "compiler/analyse.nz"
 find = "                if ints_get(parts, 1) != into_err {"
 replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_propagation" }]
 
 [[mutation]]
 name = "selfhost-question-mark-is-allowed-outside-a-result-function"
@@ -2842,6 +3014,7 @@ the **Nazm-written** checker accepts `?` in a function that does not return `Res
 file = "compiler/analyse.nz"
 find = "                if returns_result == false {"
 replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_propagation" }]
 
 [[mutation]]
 name = "selfhost-a-project-type-may-take-a-prelude-name"
@@ -2865,6 +3038,7 @@ find = """        ints_push(to, me);
         ints_push(at, 0 - 1);
         ints_set(mcount, m, n + 1);"""
 replace = """        ints_set(mcount, m, n);"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_project_file_cannot_take_the_prelude_s_key" }]
 
 [[mutation]]
 name = "selfhost-an-error-is-not-retained-before-it-leaves"
@@ -2874,6 +3048,7 @@ the **Nazm-written** emitter builds the returned `Err` from the operand's own re
 file = "compiler/emit.nz"
 find = "    emit_retain(out, next, error, err_t, rowns);"
 replace = "    ints_len(vals);"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_value_blocks_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-a-success-value-is-not-retained"
@@ -2896,6 +3071,7 @@ find = """    emit_release(out, next, dying, et, rowns);
     1"""
 replace = """    ints_push(vals, value);
     1"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-propagation-skips-the-scope-join"
@@ -2925,6 +3101,7 @@ find = """    join_from(out, next, current, live, 2);
 replace = """    join_from(out, next, current, live, 2);
     release_frame(out, next, frame, rowns);
     add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_propagates_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-propagation-leaves-the-frame-unreleased"
@@ -2937,6 +3114,7 @@ find = """    release_temporaries(out, next, owned, otype, rowns);
     add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
 replace = """    release_temporaries(out, next, owned, otype, rowns);
     add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_value_blocks_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-the-error-path-falls-into-the-success-path"
@@ -2946,6 +3124,7 @@ the **Nazm-written** emitter's error path branches to the success block instead 
 file = "compiler/emit.nz"
 find = """    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
 replace = """    add_line(out, str_concat("  br label %", blk("q", k)));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
 
 # --- N12.1: the core prelude's identity in the compiler written in Nazm -------------------
 
@@ -12487,7 +12666,7 @@ why = "the authority check reads held kinds without what they imply, so a functi
 file = "crates/nazm-core/src/effects.rs"
 find = "                .without(site.held.implied())"
 replace = "                .without(site.held)"
-killers = [{ package = "nazm-cli", test = "authority", name = "an_out_cap_prints_and_authorises_nothing_else" }]
+killers = [{ package = "nazm-cli", test = "authority", name = "a_held_io_cap_authorises_its_own_print" }]
 
 [[mutation]]
 name = "n79-inheritance-is-not-recorded"
