@@ -8222,6 +8222,36 @@ the CPU test: the identity is then stale, and the table must change with it.
 **What would prove this unsuitable.** A run-verified cell whose named test does not run a program for
 that target; a target the compiler accepts with no row.
 
+## 7.97 Smart contracts v2: generated sequences on the reference VMs, and what stays blocked — N96, 2026-10-04
+
+Written before the code. Area 34 is PARTIAL: the EVM (N70) and WebAssembly (N71) backends were each held
+to the simulator on one written sequence; sBPF execution is BLOCKED (N72); the model has no events,
+external calls, assets as types, or gas beyond a bound.
+
+**What this adds.** Generated evidence, not new semantics. Transaction sequences are generated from
+the contract's own facts (`nazm.contract/1`: each entrypoint and its arguments) — seeded, the same on
+every host — with callers among the owner and two others and arguments from the edges of `Int`. Each
+sequence is run by the simulator and by both reference VMs: py-evm (Shanghai, `nazm-evm:n70`) and the
+reference WebAssembly host under Node (`nazm-wasm:n64`). Every transaction's outcome and revert code
+and the final state must agree; every committed state must keep the conserved quantity; every EVM
+transaction must use no more gas than its entrypoint's stated bound.
+
+**What stays as it is, and why.** sBPF: no sBPF toolchain, validator or emulator exists on this
+machine — this clang has no BPF target at all, and no Solana tool or crate is installed — so no object
+or run is claimed, and the blocker is external and named. Events, external calls, reentrancy, assets
+as linear types, metering beyond N70's bound, a chain's own WebAssembly host and storage migrations
+beyond `--upgrade-check` are not in the model: adding them is a language change this milestone does
+not make. Area 34 stays PARTIAL, and N100 says so.
+
+**Versions.** None change.
+
+**Negative example.** A backend whose division truncated differently from the simulator's would
+disagree on a generated `arith` with negative operands. **Boundary example.** `i64::MIN / -1` fails
+with `N0400` in all three.
+
+**What would prove this unsuitable.** A generated sequence on which a VM and the simulator disagree
+while the written sequences agree — which is the point of generating them.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
