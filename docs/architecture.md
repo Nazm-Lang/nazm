@@ -7936,6 +7936,47 @@ root-relative, and a workspace rename's other files are under the same root. **`
 `--base`**, the directory the plan's paths are relative to, the current directory by default, and
 refuses any path that leaves it. `nazm.patch/1` gains the reason `package_api`.
 
+## 7.91 Packages v3: a backtracking resolver that explains itself, and `nazm update` — N90, 2026-10-04
+
+Written before the code. Area 26 is PARTIAL. N56's registry chooses each package's highest version
+satisfying the requirements it has seen, round by round, and refuses (`N0513`) the first time a
+choice leaves some package with no version — even when an older version of the package that made the
+demand would have satisfied everyone. "No backtracking" was its stated limit. And a lockfile can only
+be written afresh (`nazm lock`); nothing updates one deliberately.
+
+**Resolution, settled.** The registry's packages are chosen by a **backtracking search**: packages in
+name order; for each, its published, non-yanked versions highest first — a version the lockfile
+records first, while it satisfies — and each candidate kept only if it satisfies every requirement
+the current choice places on it; a candidate's own requirements then join the set, and the search
+goes on. A dead end undoes the last choice and tries the next candidate. The answer is the first
+complete assignment in that order: deterministic, the same for the same registry and manifests, and
+the newest a lockfile allows. One version per package name, as before: the language has one module
+per path, and two versions of one package would be two modules a program cannot tell apart.
+
+**When there is none.** The search is bounded — at most 10,000 candidates tried — and a failure is
+`N0513` with an **explanation**: the package that could not be chosen, every requirement on it at the
+deepest point the search reached, and which package (at which version) placed each. A search that
+runs out of its bound says so, rather than claiming the registry unsatisfiable.
+
+**`nazm update [NAME…]`.** Re-resolves with the lockfile's preferences dropped — for every registry
+package, or only for those named — writes the lockfile, and prints each change, `name old → new`.
+Without names it is `nazm lock` with no preference; `nazm build --locked` is unchanged.
+
+**Not here.** Signatures and trust roots (no signing implementation is available offline here, and a
+digest is not a signature), a remote registry, pre-release versions and features, multi-root
+workspaces, build scripts (prohibited by absence: there is no construct for one). Each is a named
+limit, not a silent gap.
+
+**Versions.** No language change. `nazm.lock/1` unchanged: what it records is the same, only how its
+versions were found changes. The registry layout is unchanged.
+
+**Negative example.** `a` requires `b ^1` and `c ^1`; every `b 1.x` but `1.0.0` requires `c ^2`: N56
+refused; N90 chooses `b 1.0.0`. **Boundary example.** `a` requires `b =2.0.0` and `c` requires
+`b ^1`: refused, the explanation naming both requirements and who placed them.
+
+**What would prove this unsuitable.** Two runs over the same inputs choosing differently; a refusal
+where an assignment exists within the bound; an `update` that changes a package not named.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
