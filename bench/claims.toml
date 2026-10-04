@@ -1,0 +1,374 @@
+# The performance claims register (N92, docs/architecture.md §7.93).
+#
+# One entry per measured section of docs/performance.md, by its exact heading. `cargo xtask check`
+# (performance claims) refuses a measured heading with no entry, an entry for no heading, and a
+# reproducible entry whose command is not in the tree. It does not run the commands.
+#
+#   reproducible  `how` regenerates the numbers; `metric` is what it prints
+#   dated         a record of the tree on its date; `why` says so
+#   unreproduced  a current claim no command regenerates; `why` says what is missing
+
+[[claim]]
+heading = "Incremental semantic checking — measured 2026-09-22, and smaller than it sounds"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Separate code generation — measured 2026-09-22, and it costs"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Native object reuse — measured 2026-09-22, and it pays for the section above"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Reclamation — measured 2026-09-22, and the instrument matters"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Strings and channels — measured 2026-09-22, and the incident's shape is gone"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Records — measured 2026-09-23, and the cost is the fields'"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Enums — measured 2026-09-23, and the cost is a branch and some space"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Generics and `Vec[T]` — measured 2026-09-23, and the cost is the instances"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Typed errors — measured 2026-09-24, and `?` costs what the `match` it means costs"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Value blocks and the first `Option` in the compiler — measured 2026-09-24"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Derived equality — measured 2026-09-25, and at `-O2` it is the fields' comparisons"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Equality requirements — measured 2026-09-25, and the requirement itself costs nothing"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "The lossless syntax tree — measured 2026-09-25, and it doubles the parse"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "The language service — measured 2026-09-25, and it is fast enough without incremental reparse"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "The reference index — measured 2026-09-25, and it does not change the incremental-reparse answer"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Rename — measured 2026-09-25"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Scope at a position and completion — measured 2026-09-25"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "The call at a position and signature help — measured 2026-09-26"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Structure at a position — measured 2026-09-26"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Document and workspace symbols — measured 2026-09-26"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Semantic identifiers and semantic tokens — measured 2026-09-26"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Quick fixes — measured 2026-09-26"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Call hierarchy — measured 2026-09-26"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Completion at a hole — measured 2026-09-27"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Semantic context packets and `nazm-mcp` — measured 2026-09-27"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Semantic snapshots, deltas and their MCP tools — measured 2026-09-27"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Semantic patch plans and `nazm.semantic_patch` — measured 2026-09-28"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Compact diagnostics and diagnostic detail — measured 2026-09-28"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Command and test summaries — measured 2026-09-28"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Documentation index and sections — measured 2026-09-29"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Repository map and task contexts — measured 2026-09-29"
+status = "reproducible"
+how = "cargo test --release -p nazm-repo --test benchmark -- --ignored --nocapture what_a_map_and_a_task_cost"
+metric = "a repository map's and a task context's time and size"
+
+[[claim]]
+heading = "The post-v1 baseline — N75, frozen 2026-10-02"
+status = "reproducible"
+how = "cargo xtask contained bench"
+metric = "each benchmark program's median per stage, its peak memory, and since N92 its spread and size"
+
+[[claim]]
+heading = "The v1 baseline — N48, frozen 2026-10-01"
+status = "dated"
+why = "the v1 baseline, superseded by the post-v1 baseline (N75), which the benchmark reproduces"
+
+[[claim]]
+heading = "Restriction profiles — N47, measured 2026-10-01"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Packages — N46, measured 2026-10-01"
+status = "reproducible"
+how = "cargo test --release -p nazm-cli --test packages -- --ignored --nocapture what_packages_cost"
+metric = "resolution, a clean build and an incremental one of the diamond"
+
+[[claim]]
+heading = "The standard library — N45, measured 2026-10-01"
+status = "reproducible"
+how = "cargo test --release -p nazm-cli --test stdlib -- --ignored --nocapture what_the_standard_library_costs"
+metric = "the standard library's check and run costs"
+
+[[claim]]
+heading = "The formal core's check — N61, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Scalar temporaries — N59, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Targets — N57, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Field-by-field vectors — N68, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "A GPU map — N67, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Vectorised sums — N66, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Stack: the stated bound and a painted run — N63, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "A freestanding image — N62, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Select and the event count — N54, measured 2026-10-02"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Tasks and channels — N44, measured 2026-10-01"
+status = "reproducible"
+how = "cargo test --release -p nazm-cli --test scheduler -- --ignored --nocapture what_tasks_and_channels_cost"
+metric = "spawn, join and channel costs"
+
+[[claim]]
+heading = "The runtime contract — N43, measured 2026-10-01"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Foreign calls — N42, measured 2026-10-01"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "The Cranelift backend — N41, measured 2026-10-01"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "MIR — N40, measured 2026-10-01"
+status = "reproducible"
+how = "cargo test --release -p nazm-cli --test core_ir -- --ignored --nocapture what_each_phase_costs_on_the_compiler"
+metric = "each phase's time on the compiler written in Nazm"
+
+[[claim]]
+heading = "Core IR — N39, measured 2026-09-30"
+status = "reproducible"
+how = "cargo test --release -p nazm-cli --test core_ir -- --ignored --nocapture what_each_phase_costs_on_the_compiler"
+metric = "each phase's time on the compiler written in Nazm"
+
+[[claim]]
+heading = "Provenance — N38, measured 2026-09-30"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Capabilities — N37, measured 2026-09-30"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Typed effects — N36, measured 2026-09-30"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Agent task tokens, cost and correctness — N35, measured 2026-09-29"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Context under four tokenizers — N34, measured 2026-09-29"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Incremental reparse — N76, measured 2026-10-03"
+status = "reproducible"
+how = "cargo test --release -p nazm-syntax --test incremental -- --ignored --nocapture measure_full_parse_against_one_edit"
+metric = "a full parse against one incremental edit, three compiler files"
+
+[[claim]]
+heading = "Performance evidence v2 — N92, measured 2026-10-04"
+status = "reproducible"
+how = "cargo xtask contained bench --save"
+metric = "nazm.bench/2: every program's runs per stage, their spread, sizes, the references and the noise floor; the per-milestone check times are a one-off on the host, stated as such"
+
+[[claim]]
+heading = "Debugging and sampling — N91, measured 2026-10-04"
+status = "reproducible"
+how = "cargo test -p nazm-cli --test debugger_v3 -- --ignored --nocapture what_debugging_and_sampling_cost"
+metric = "a sampled run's wall time at two intervals against the run alone; a Cranelift build with and without --debug"
+
+[[claim]]
+heading = "Accelerators v2 — N88, measured 2026-10-04"
+status = "unreproduced"
+why = "measured once by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "Contracts — N87, measured 2026-10-04"
+status = "unreproduced"
+why = "measured once by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "Two boards under QEMU — N86, measured 2026-10-04"
+status = "unreproduced"
+why = "measured once by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "FFI v3 — N85, measured 2026-10-04"
+status = "unreproduced"
+why = "measured once by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "The standard library 1.0 — N84, measured 2026-10-04"
+status = "unreproduced"
+why = "measured once by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "The task pool — N83, measured 2026-10-04"
+status = "unreproduced"
+why = "measured once by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "The runtime artifact — N82, measured 2026-10-03"
+status = "unreproduced"
+why = "measured once by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "Provenance v3 — N80, measured 2026-10-03"
+status = "unreproduced"
+why = "measured once by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "The warm mutation session — N32-H, measured 2026-09-28/29"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Verification harness V3 — N32-H3, measured 2026-09-29"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "The mutation baseline and the persistent cache — N32-H2, measured 2026-09-29"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "Development and evidence pipeline parallelism — N14.1, measured 2026-09-25"
+status = "dated"
+why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
