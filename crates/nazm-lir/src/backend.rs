@@ -48,6 +48,8 @@ pub enum Arch {
     X86_64,
     /// WebAssembly, 32-bit linear memory (N64, §7.66).
     Wasm32,
+    /// RISC-V, RV64GC (N86, §7.87): a board only.
+    Riscv64,
 }
 
 /// An operating system this compiler links for.
@@ -82,12 +84,14 @@ impl Target {
             "x86_64-unknown-linux-gnu" => (Arch::X86_64, Os::Linux),
             "aarch64-unknown-none" => (Arch::Aarch64, Os::None),
             "wasm32-unknown-unknown" => (Arch::Wasm32, Os::None),
+            "riscv64gc-unknown-none-elf" => (Arch::Riscv64, Os::None),
             other => {
                 return Err(format!(
                     "`{other}` is not a target this compiler generates code for; the \
                      targets are aarch64-apple-darwin, aarch64-unknown-linux-gnu, \
                      x86_64-apple-darwin, x86_64-unknown-linux-gnu and, freestanding, \
-                     aarch64-unknown-none and wasm32-unknown-unknown"
+                     aarch64-unknown-none, riscv64gc-unknown-none-elf and \
+                     wasm32-unknown-unknown"
                 ))
             }
         };
@@ -98,11 +102,11 @@ impl Target {
         })
     }
 
-    /// Whether this is the board (N62): the one target with device registers, a linker script
-    /// and a UART.
+    /// Whether this is a board (N62, N86): a target with device registers, a linker script and a
+    /// UART — every freestanding target that is not WebAssembly.
     #[must_use]
     pub fn is_board(&self) -> bool {
-        self.os == Os::None && self.arch == Arch::Aarch64
+        self.os == Os::None && self.arch != Arch::Wasm32
     }
 
     /// Whether this is WebAssembly (N64): freestanding, its outside reached only by imports.

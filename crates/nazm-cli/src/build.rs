@@ -159,6 +159,21 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
+    // RISC-V (N86) is code generation the host's `clang` may not have — Apple's has none. Asked
+    // before anything is compiled, so a missing code generator is named rather than reported as
+    // the compiler's own fault.
+    if target.arch == nazm_lir::backend::Arch::Riscv64 && !crate::backend::generates("riscv64") {
+        if summary {
+            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+        }
+        eprintln!(
+            "nazm: this host's `{}` has no RISC-V code generator, so it cannot build `{}`; build \
+             where one does — the `nazm-qemu:n86` image's",
+            crate::backend::DRIVER,
+            target.triple
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
     // The field-by-field layout (N68, §7.70) is the LLVM emitter's, and asked for by name.
     let soa = match choice.layout {
         "aos" => false,
@@ -184,8 +199,8 @@ pub(crate) fn run(
             return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
         }
         eprintln!(
-            "nazm: `--stack-watermark` measures the board's stack; it needs \
-             `--target aarch64-unknown-none`"
+            "nazm: `--stack-watermark` measures a board's stack; it needs \
+             `--target aarch64-unknown-none` or `--target riscv64gc-unknown-none-elf`"
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
@@ -1025,7 +1040,7 @@ fn emit_artefacts(
         let runtime = if wasm {
             nazm_lir::runtime::wasm::emit_runtime(needs.stack)
         } else {
-            nazm_lir::runtime::board::emit_runtime(needs.stack)
+            nazm_lir::runtime::board::emit_runtime(board_of(backend.target()), needs.stack)
         };
         let foreign: Vec<&str> = native
             .sigs
@@ -1058,6 +1073,7 @@ fn emit_artefacts(
                     )
                 } else {
                     nazm_lir::runtime::board::emit_entry(
+                        board_of(backend.target()),
                         &native.entry.to_string(),
                         native.entry_roots,
                         watermark,
@@ -1129,6 +1145,12 @@ fn emit_artefacts(
 
 /// The task pool's switch for a hosted target (N83); `None` for a freestanding one, which has no
 /// tasks.
+/// The board a freestanding target names (N86): every target that is not WebAssembly and has no
+/// operating system is one of the table's, and the first is N62's.
+pub(crate) fn board_of(t: &nazm_lir::backend::Target) -> &'static nazm_lir::runtime::board::Board {
+    nazm_lir::runtime::board::board(&t.triple).unwrap_or(nazm_lir::runtime::board::AARCH64)
+}
+
 pub(crate) fn switch_target(
     t: &nazm_lir::backend::Target,
 ) -> Option<nazm_lir::runtime::switch::SwitchTarget> {
@@ -1336,7 +1358,7 @@ fn write_objects(
     if target.is_board() {
         std::fs::write(
             dir.join("link.ld"),
-            nazm_lir::runtime::board::linker_script(),
+            nazm_lir::runtime::board::linker_script(board_of(target)),
         )?;
     }
     Ok(())

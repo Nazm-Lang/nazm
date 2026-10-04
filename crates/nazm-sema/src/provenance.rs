@@ -134,7 +134,9 @@ impl Origin {
             | Intrinsic::ChanSendOf
             | Intrinsic::ChanCloseOf
             // A store's result is a constant; what reaches the device is the caller's (N62).
-            | Intrinsic::MmioWrite32 => BuiltinFlow::Derive,
+            | Intrinsic::MmioWrite32
+            | Intrinsic::MmioWrite8
+            | Intrinsic::MmioWrite16 => BuiltinFlow::Derive,
             // Read out of a handle: what is there is whatever was written into any container
             // of its type — its cell (N80, §7.81). Which cell is [`Origin::container`]'s.
             Intrinsic::IntsLen
@@ -154,7 +156,9 @@ impl Origin {
             // Read out of a handle, as `ints_get` is (N66).
             | Intrinsic::IntsSum => BuiltinFlow::Read,
             // A device register holds whatever the device put there (N62): not followed.
-            Intrinsic::MmioRead32 => BuiltinFlow::Source(Self::Unknown),
+            Intrinsic::MmioRead32 | Intrinsic::MmioRead8 | Intrinsic::MmioRead16 => {
+                BuiltinFlow::Source(Self::Unknown)
+            }
             // What C left in `errno` is C's (N85), as everything C returns is (N42).
             Intrinsic::CErrno => BuiltinFlow::Source(Self::Unknown),
             // A check and a copy of what C returned: the call's own origin, carried (N85).
@@ -224,6 +228,10 @@ impl Origin {
             | Intrinsic::ChanCloseOf
             | Intrinsic::MmioWrite32
             | Intrinsic::MmioRead32
+            | Intrinsic::MmioWrite8
+            | Intrinsic::MmioRead8
+            | Intrinsic::MmioWrite16
+            | Intrinsic::MmioRead16
             | Intrinsic::IntsNew
             | Intrinsic::StrsNew
             | Intrinsic::VecNew
@@ -762,7 +770,10 @@ mod tests {
                 ("read_file", Origin::File),
                 ("file_exists", Origin::File),
                 // What C left in `errno` is C's, as anything C returns is (N85).
-                ("c_errno", Origin::Unknown)
+                ("c_errno", Origin::Unknown),
+                // And a device register of another width (N86), as the 32-bit one.
+                ("mmio_read8", Origin::Unknown),
+                ("mmio_read16", Origin::Unknown)
             ]
         );
         // Every container built-in names its handle, and no other built-in claims one (N80).

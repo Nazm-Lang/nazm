@@ -1,36 +1,106 @@
-//! The freestanding runtime and entry (N62, `docs/architecture.md` §7.64): `aarch64-unknown-none`
-//! on QEMU's `virt` board — no OS, no C library, no heap, one thread.
+//! The freestanding runtime and entry (N62, `docs/architecture.md` §7.64), for each board of the
+//! table (N86, §7.87): no OS, no C library, no heap, one thread.
 //!
-//! A failure is recorded in plain globals and reported on the board's PL011 UART; the machine is
-//! stopped by ARM semihosting's `SYS_EXIT_EXTENDED`. `_start` sets the stack the linker script
-//! reserves, calls `main` and prints its result. Nothing runs before `main` but that.
+//! A board is a description — where its image loads, its UART, how its machine is stopped, its
+//! architecture's startup — and the linker script, the runtime and the entry are generated from one
+//! and from nothing else. A failure is recorded in plain globals and reported on the board's UART,
+//! and the machine stopped with a status. `_start` sets the stack the linker script reserves,
+//! calls `main` and prints its result. Nothing runs before `main` but that.
 
 use std::fmt::Write as _;
 
 use crate::preamble;
 
-/// The PL011 UART's data register on QEMU's `virt` machine.
-pub const UART: u64 = 0x0900_0000;
+/// A board's instruction set, which decides its startup and how its machine is stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Isa {
+    Aarch64,
+    Riscv64,
+}
 
-/// The board's one stack, in bytes: 64 KiB.
+/// How a board's machine is stopped with a status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// ARM semihosting's `SYS_EXIT_EXTENDED`, which QEMU honours with `-semihosting`.
+    Semihosting,
+    /// SiFive's test device: `0x5555` for success, `code << 16 | 0x3333` for a failure.
+    SifiveTest { address: u64 },
+}
+
+/// One board: everything about it that is not the language's (N86).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Board {
+    /// The target triple a build names it by.
+    pub triple: &'static str,
+    /// What it is, for a person.
+    pub name: &'static str,
+    pub isa: Isa,
+    /// Where the emulator loads the image, and so where `link.ld` places `_start`.
+    pub load_address: u64,
+    /// The UART's data register, written a byte at a time.
+    pub uart: u64,
+    pub stop: Stop,
+    /// How it is booted: the emulator command line, the image last.
+    pub emulator: &'static str,
+    /// Whether it has been run on hardware. No board has.
+    pub hardware: bool,
+}
+
+/// Every board, in a fixed order.
+pub const BOARDS: [Board; 2] = [
+    Board {
+        triple: "aarch64-unknown-none",
+        name: "QEMU virt, AArch64 (Cortex-A53)",
+        isa: Isa::Aarch64,
+        load_address: 0x4008_0000,
+        uart: 0x0900_0000,
+        stop: Stop::Semihosting,
+        emulator:
+            "qemu-system-aarch64 -M virt -cpu cortex-a53 -nographic -nic none -semihosting -kernel",
+        hardware: false,
+    },
+    Board {
+        triple: "riscv64gc-unknown-none-elf",
+        name: "QEMU virt, RISC-V RV64GC, machine mode",
+        isa: Isa::Riscv64,
+        load_address: 0x8000_0000,
+        uart: 0x1000_0000,
+        stop: Stop::SifiveTest { address: 0x10_0000 },
+        emulator: "qemu-system-riscv64 -M virt -bios none -nographic -nic none -kernel",
+        hardware: false,
+    },
+];
+
+/// The board a triple names, if it names one.
+#[must_use]
+pub fn board(triple: &str) -> Option<&'static Board> {
+    BOARDS.iter().find(|b| b.triple == triple)
+}
+
+/// The first board, N62's: what a caller that names no board means.
+pub const AARCH64: &Board = &BOARDS[0];
+
+/// Every board's one stack, in bytes: 64 KiB.
 pub const STACK: u64 = 0x1_0000;
 
 /// What `nz.stack_check` keeps in reserve below a recursive call (N49's quarter): 16 KiB.
 pub const STACK_HEADROOM: u64 = STACK >> 2;
 
-/// Where QEMU's `virt` machine loads a kernel image, and so where `link.ld` places it.
-pub const LOAD_ADDRESS: u64 = 0x4008_0000;
-
 /// The linker script a freestanding image is linked with (`ld.lld -T link.ld`): `_start` first at
-/// the load address, then text, read-only data, data and zeroed data, then a 64 KiB stack whose
-/// bounds are `__stack_bottom` and `__stack_top`.
+/// the board's load address, then text, read-only data, data and zeroed data — each with RISC-V's
+/// small-data sections beside it (N86), which the linker would otherwise place as orphans ahead of
+/// `_start` — then a 64 KiB stack whose bounds are `__stack_bottom` and `__stack_top`. Unwind
+/// tables are discarded: a board has no unwinder, and an orphaned `.eh_frame` was placed at the
+/// load address ahead of `_start` (N86).
 #[must_use]
-pub fn linker_script() -> String {
+pub fn linker_script(board: &Board) -> String {
+    let triple = board.triple;
+    let load = board.load_address;
     format!(
-        "/* Written by nazm build for aarch64-unknown-none (N62). */\nENTRY(_start)\nSECTIONS\n{{\n  \
-         . = {LOAD_ADDRESS:#x};\n  .text : {{ *(.text.start) *(.text*) }}\n  .rodata : {{ *(.rodata*) }}\n  \
-         .data : {{ *(.data*) }}\n  .bss : {{ *(.bss*) *(COMMON) }}\n  . = ALIGN(16);\n  __stack_bottom = .;\n  . = . + {STACK:#x};\n  \
-         __stack_top = .;\n}}\n"
+        "/* Written by nazm build for {triple} (N62, N86). */\nENTRY(_start)\nSECTIONS\n{{\n  \
+         . = {load:#x};\n  .text : {{ *(.text.start) *(.text*) }}\n  .rodata : {{ *(.rodata*) *(.srodata*) }}\n  \
+         .data : {{ *(.data*) *(.sdata*) }}\n  .bss : {{ *(.bss*) *(.sbss*) *(COMMON) }}\n  . = ALIGN(16);\n  __stack_bottom = .;\n  . = . + {STACK:#x};\n  \
+         __stack_top = .;\n  /DISCARD/ : {{ *(.eh_frame*) }}\n}}\n"
     )
 }
 
@@ -38,7 +108,9 @@ pub fn linker_script() -> String {
 /// the MMIO helpers and — where a function in a call cycle checks it — the stack check, against
 /// the linker script's `__stack_bottom` rather than an operating system's limit.
 #[must_use]
-pub fn emit_runtime(stack: bool) -> String {
+pub fn emit_runtime(board: &Board, stack: bool) -> String {
+    let uart = board.uart;
+    let exit = board_exit(board);
     let mut out = String::new();
     preamble(&mut out, "<nazm freestanding runtime>");
     out.push_str(&format!(
@@ -77,7 +149,7 @@ entry:
 
 define hidden void @nz.uart_byte(i8 %c) {{
 entry:
-  store volatile i8 %c, ptr inttoptr (i64 {UART} to ptr)
+  store volatile i8 %c, ptr inttoptr (i64 {uart} to ptr)
   ret void
 }}
 
@@ -130,19 +202,7 @@ emit:
   ret void
 }}
 
-; ARM semihosting SYS_EXIT_EXTENDED (0x20): {{ ADP_Stopped_ApplicationExit, code }}.
-define hidden void @nz.board_exit(i64 %code) noreturn {{
-entry:
-  %blk = alloca [2 x i64], align 8
-  store i64 131110, ptr %blk
-  %c = getelementptr i64, ptr %blk, i64 1
-  store i64 %code, ptr %c
-  call void asm sideeffect "mov x0, #0x20\0Amov x1, $0\0Ahlt #0xf000", "r,~{{x0}},~{{x1}},~{{memory}}"(ptr %blk)
-  br label %hang
-hang:
-  br label %hang
-}}
-
+{exit}
 define hidden void @nz.report() noreturn {{
 entry:
   %m = load ptr, ptr @nz.errmsg
@@ -177,10 +237,80 @@ entry:
     out
 }
 
-/// The two device-register built-ins (N62): a volatile 32-bit load and store at an address. The
+/// How the machine is stopped with `%code` (N62, N86): ARM semihosting's `SYS_EXIT_EXTENDED`
+/// (0x20, `{ ADP_Stopped_ApplicationExit, code }`), or SiFive's test device.
+fn board_exit(board: &Board) -> String {
+    match board.stop {
+        Stop::Semihosting => "; ARM semihosting SYS_EXIT_EXTENDED (0x20): { ADP_Stopped_ApplicationExit, code }.
+define hidden void @nz.board_exit(i64 %code) noreturn {
+entry:
+  %blk = alloca [2 x i64], align 8
+  store i64 131110, ptr %blk
+  %c = getelementptr i64, ptr %blk, i64 1
+  store i64 %code, ptr %c
+  call void asm sideeffect \"mov x0, #0x20\\0Amov x1, $0\\0Ahlt #0xf000\", \"r,~{x0},~{x1},~{memory}\"(ptr %blk)
+  br label %hang
+hang:
+  br label %hang
+}
+"
+        .to_owned(),
+        Stop::SifiveTest { address } => format!(
+            "; SiFive's test device: 0x5555 stops the machine with success, `code << 16 | 0x3333` with
+; `code` (N86).
+define hidden void @nz.board_exit(i64 %code) noreturn {{
+entry:
+  %ok = icmp eq i64 %code, 0
+  %c32 = trunc i64 %code to i32
+  %shifted = shl i32 %c32, 16
+  %fail = or i32 %shifted, 13107
+  %word = select i1 %ok, i32 21845, i32 %fail
+  store volatile i32 %word, ptr inttoptr (i64 {address} to ptr)
+  br label %hang
+hang:
+  br label %hang
+}}
+"
+        ),
+    }
+}
+
+/// The device-register built-ins (N62, N86): a volatile 32-bit load and store at an address. The
 /// hosted runtime defines them too, unreachable there — a hosted build refuses a program using
 /// them (`N0392`) — so one inventory describes both.
 pub const MMIO_RUNTIME: &str = r"
+define hidden i64 @nz.mmio_read8(i64 %addr) {
+entry:
+  %p = inttoptr i64 %addr to ptr
+  %v = load volatile i8, ptr %p
+  %r = zext i8 %v to i64
+  ret i64 %r
+}
+
+define hidden i64 @nz.mmio_write8(i64 %addr, i64 %value) {
+entry:
+  %p = inttoptr i64 %addr to ptr
+  %t = trunc i64 %value to i8
+  store volatile i8 %t, ptr %p
+  ret i64 0
+}
+
+define hidden i64 @nz.mmio_read16(i64 %addr) {
+entry:
+  %p = inttoptr i64 %addr to ptr
+  %v = load volatile i16, ptr %p
+  %r = zext i16 %v to i64
+  ret i64 %r
+}
+
+define hidden i64 @nz.mmio_write16(i64 %addr, i64 %value) {
+entry:
+  %p = inttoptr i64 %addr to ptr
+  %t = trunc i64 %value to i16
+  store volatile i16 %t, ptr %p
+  ret i64 0
+}
+
 define hidden i64 @nz.mmio_read32(i64 %addr) {
 entry:
   %p = inttoptr i64 %addr to ptr
@@ -208,41 +338,63 @@ pub const STACK_PAINT: u64 = 0x5a5a_5a5a_5a5a_5a5a;
 /// `main`'s result the entry writes `nazm-stack: used=N`: the bytes between the stack's top and
 /// the lowest word no longer painted — a measurement of that run, not a bound.
 #[must_use]
-pub fn emit_entry(entry: &str, roots: usize, watermark: bool) -> String {
+pub fn emit_entry(board: &Board, entry: &str, roots: usize, watermark: bool) -> String {
     let mut out = String::new();
     preamble(&mut out, "<nazm freestanding entry>");
+    let (start, paint, call): (&[&str], &[&str], &[&str]) = match board.isa {
+        Isa::Aarch64 => (
+            &[
+                "  ldr x0, =__stack_top",
+                // Floating point and SIMD are trapped at reset; code generation may use them.
+                "  mov x1, #(3 << 20)",
+                "  msr cpacr_el1, x1",
+                "  isb",
+                "  mov sp, x0",
+            ],
+            &[
+                "  ldr x0, =__stack_bottom",
+                "  ldr x1, =__stack_top",
+                "  ldr x2, =0x5a5a5a5a5a5a5a5a",
+                "2: cmp x0, x1",
+                "  b.hs 3f",
+                "  str x2, [x0], #8",
+                "  b 2b",
+                "3:",
+            ],
+            &["  bl nz_board_main", "1: b 1b"],
+        ),
+        // Machine mode with no firmware (N86): the floating-point unit is off at reset
+        // (`mstatus.FS`), and code generation may use it.
+        Isa::Riscv64 => (
+            &[
+                "  la sp, __stack_top",
+                "  li t0, 0x6000",
+                "  csrs mstatus, t0",
+            ],
+            &[
+                "  la t0, __stack_bottom",
+                "  la t1, __stack_top",
+                "  li t2, 0x5a5a5a5a5a5a5a5a",
+                "2: bgeu t0, t1, 3f",
+                "  sd t2, 0(t0)",
+                "  addi t0, t0, 8",
+                "  j 2b",
+                "3:",
+            ],
+            &["  call nz_board_main", "1: j 1b"],
+        ),
+    };
     for line in [
-        "module asm \".section .text.start, \\22ax\\22\"",
-        "module asm \".global _start\"",
-        "module asm \"_start:\"",
-        "module asm \"  ldr x0, =__stack_top\"",
-        // Floating point and SIMD are trapped at reset; code generation may use them.
-        "module asm \"  mov x1, #(3 << 20)\"",
-        "module asm \"  msr cpacr_el1, x1\"",
-        "module asm \"  isb\"",
-        "module asm \"  mov sp, x0\"",
-    ] {
-        let _ = writeln!(out, "{line}");
-    }
-    if watermark {
-        for line in [
-            "module asm \"  ldr x0, =__stack_bottom\"",
-            "module asm \"  ldr x1, =__stack_top\"",
-            "module asm \"  ldr x2, =0x5a5a5a5a5a5a5a5a\"",
-            "module asm \"2: cmp x0, x1\"",
-            "module asm \"  b.hs 3f\"",
-            "module asm \"  str x2, [x0], #8\"",
-            "module asm \"  b 2b\"",
-            "module asm \"3:\"",
-        ] {
-            let _ = writeln!(out, "{line}");
-        }
-    }
-    for line in [
-        "module asm \"  bl nz_board_main\"",
-        "module asm \"1: b 1b\"",
-    ] {
-        let _ = writeln!(out, "{line}");
+        ".section .text.start, \\22ax\\22",
+        ".global _start",
+        "_start:",
+    ]
+    .iter()
+    .chain(start)
+    .chain(if watermark { paint } else { &[] })
+    .chain(call)
+    {
+        let _ = writeln!(out, "module asm \"{line}\"");
     }
     let root_types = vec!["i64"; roots].join(", ");
     let root_args = vec!["i64 0"; roots].join(", ");

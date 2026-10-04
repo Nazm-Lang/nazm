@@ -2516,6 +2516,11 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         // N85: `c_errno` reads what a foreign call left, and the compiler written in Nazm
         // declares and calls no foreign function (area 30); a call is an unknown function there.
         ("c_errno", "ForeignCap"),
+        // N86: the device registers by width, as their 32-bit pair (N62).
+        ("mmio_read8", "MmioCap"),
+        ("mmio_write8", "MmioCap"),
+        ("mmio_read16", "MmioCap"),
+        ("mmio_write16", "MmioCap"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {

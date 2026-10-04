@@ -245,7 +245,7 @@ fn what_a_module_cannot_have_is_refused_by_name() {
     let o = objects(d.path(), &["--stack-watermark"]);
     assert_eq!(o.status.code(), Some(4));
     assert!(
-        err(&o).contains("`--stack-watermark` measures the board's stack"),
+        err(&o).contains("`--stack-watermark` measures a board's stack"),
         "{}",
         err(&o)
     );

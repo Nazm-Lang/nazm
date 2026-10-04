@@ -59,11 +59,14 @@ impl Profile {
         }
     }
 
-    /// The runtime's text for this profile, with every service.
-    fn text(self) -> String {
+    /// The runtime's text for this profile, with every service; a board's is its own board's
+    /// (N86).
+    fn text(self, target: &Target) -> String {
         match self {
             Self::Hosted => nazm_lir::emit_runtime(EVERYTHING),
-            Self::Board => nazm_lir::runtime::board::emit_runtime(true),
+            Self::Board => {
+                nazm_lir::runtime::board::emit_runtime(crate::build::board_of(target), true)
+            }
             Self::Wasm => nazm_lir::runtime::wasm::emit_runtime(true),
         }
     }
@@ -134,7 +137,7 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
         let _ = std::fs::remove_dir_all(&work);
         code
     };
-    let text = profile.text();
+    let text = profile.text(&target);
     let ll = work.join("runtime.ll");
     let obj = work.join("runtime.o");
     if let Err(e) = std::fs::write(&ll, &text) {

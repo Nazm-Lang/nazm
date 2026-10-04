@@ -789,7 +789,7 @@ enum Command {
         objects: Option<PathBuf>,
         /// Paint the board's stack in `_start` and write `nazm-stack: used=N` to its UART after
         /// `main` (N63): the deepest byte the run touched, beside `bounds.json`'s static bound.
-        /// `aarch64-unknown-none` only.
+        /// A board's target only: `aarch64-unknown-none` or `riscv64gc-unknown-none-elf`.
         #[arg(long)]
         stack_watermark: bool,
         /// How a `Vec` of records is laid out (N68): `aos`, each element whole, or `soa`, one

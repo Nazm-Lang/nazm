@@ -146,7 +146,12 @@ impl CapabilityKind {
             // A clock is authority of its own too (N54).
             Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => CapabilitySet::of(Self::Time),
             // And a device register (N62).
-            Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => CapabilitySet::of(Self::Mmio),
+            Intrinsic::MmioRead32
+            | Intrinsic::MmioWrite32
+            | Intrinsic::MmioRead8
+            | Intrinsic::MmioWrite8
+            | Intrinsic::MmioRead16
+            | Intrinsic::MmioWrite16 => CapabilitySet::of(Self::Mmio),
             // Reading `errno` is part of calling C (N85).
             Intrinsic::CErrno => CapabilitySet::of(Self::Foreign),
             Intrinsic::StrLen
@@ -198,7 +203,12 @@ impl CapabilityKind {
         match i {
             Intrinsic::StrVouch => Some(Self::Vouch),
             Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => Some(Self::Time),
-            Intrinsic::MmioRead32 | Intrinsic::MmioWrite32 => Some(Self::Mmio),
+            Intrinsic::MmioRead32
+            | Intrinsic::MmioWrite32
+            | Intrinsic::MmioRead8
+            | Intrinsic::MmioWrite8
+            | Intrinsic::MmioRead16
+            | Intrinsic::MmioWrite16 => Some(Self::Mmio),
             _ => None,
         }
     }

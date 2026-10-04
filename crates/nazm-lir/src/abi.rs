@@ -44,7 +44,7 @@ impl DataLayout {
     pub const fn of(target: &Target) -> Self {
         match target.arch {
             Arch::Wasm32 => Self::WASM32,
-            Arch::Aarch64 | Arch::X86_64 => Self::LP64,
+            Arch::Aarch64 | Arch::X86_64 | Arch::Riscv64 => Self::LP64,
         }
     }
 

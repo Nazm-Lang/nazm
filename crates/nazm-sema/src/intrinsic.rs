@@ -193,6 +193,17 @@ pub enum Intrinsic {
     /// `mmio_write32(addr: Int, value: Int) -> Int` (N62) — one volatile 32-bit store of
     /// `value`'s low half to a device register; `0`. Needs an `MmioCap`; freestanding only.
     MmioWrite32,
+    /// `mmio_read8(addr: Int) -> Int` (N86) — one volatile 8-bit load, zero-extended. As
+    /// `mmio_read32`: an `MmioCap`, freestanding only.
+    MmioRead8,
+    /// `mmio_write8(addr: Int, value: Int) -> Int` (N86) — one volatile 8-bit store of
+    /// `value`'s low byte; `0`.
+    MmioWrite8,
+    /// `mmio_read16(addr: Int) -> Int` (N86) — one volatile 16-bit load, zero-extended.
+    MmioRead16,
+    /// `mmio_write16(addr: Int, value: Int) -> Int` (N86) — one volatile 16-bit store of
+    /// `value`'s low half; `0`.
+    MmioWrite16,
     /// `ints_sum_from(start: Int, v: Ints) -> Int` (N66) — `start` plus every element of `v`, left to
     /// right, failing exactly where one of those running sums would overflow. Vectorised in
     /// native builds without changing that.
@@ -267,7 +278,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 53] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -317,6 +328,10 @@ impl Intrinsic {
         Self::VecPush,
         Self::VecPop,
         Self::CErrno,
+        Self::MmioRead8,
+        Self::MmioWrite8,
+        Self::MmioRead16,
+        Self::MmioWrite16,
     ];
 
     #[must_use]
@@ -369,6 +384,10 @@ impl Intrinsic {
             Self::TimeNowMs => "time_now_ms",
             Self::MmioRead32 => "mmio_read32",
             Self::MmioWrite32 => "mmio_write32",
+            Self::MmioRead8 => "mmio_read8",
+            Self::MmioWrite8 => "mmio_write8",
+            Self::MmioRead16 => "mmio_read16",
+            Self::MmioWrite16 => "mmio_write16",
             Self::IntsSum => "ints_sum_from",
             Self::CErrno => "c_errno",
             Self::ForeignNonNull => "foreign_nonnull",
@@ -436,8 +455,8 @@ impl Intrinsic {
             Self::ChanSelectOf => &[Shape::ChansT, Shape::VecT],
             Self::ChanSelectUntil => &[Shape::ChansT, Shape::VecT, Shape::Int],
             Self::TimeNowMs => &[],
-            Self::MmioRead32 => &[Shape::Int],
-            Self::MmioWrite32 => &[Shape::Int, Shape::Int],
+            Self::MmioRead32 | Self::MmioRead8 | Self::MmioRead16 => &[Shape::Int],
+            Self::MmioWrite32 | Self::MmioWrite8 | Self::MmioWrite16 => &[Shape::Int, Shape::Int],
             Self::IntsSum => &[Shape::Int, Shape::Ints],
             Self::CErrno => &[],
             Self::ForeignNonNull | Self::CStrCopy => &[Shape::Int],
@@ -484,6 +503,10 @@ impl Intrinsic {
             | Self::TimeNowMs
             | Self::MmioRead32
             | Self::MmioWrite32
+            | Self::MmioRead8
+            | Self::MmioWrite8
+            | Self::MmioRead16
+            | Self::MmioWrite16
             | Self::IntsSum
             | Self::CErrno
             | Self::ForeignNonNull

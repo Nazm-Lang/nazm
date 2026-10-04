@@ -529,19 +529,25 @@ impl Fx<'_, '_, '_> {
             // A device register (N62), volatile in the runtime. Cranelift builds only
             // hosted targets, which refuse these before lowering; the arms exist so the
             // table is whole.
-            Intrinsic::MmioRead32 => {
+            Intrinsic::MmioRead32 | Intrinsic::MmioRead8 | Intrinsic::MmioRead16 => {
                 let a = arg(self, 0);
-                let t = self
-                    .rt("nz.mmio_read32", &[a])
-                    .unwrap_or_else(|| self.iconst(0));
+                let symbol = match op {
+                    Intrinsic::MmioRead8 => "nz.mmio_read8",
+                    Intrinsic::MmioRead16 => "nz.mmio_read16",
+                    _ => "nz.mmio_read32",
+                };
+                let t = self.rt(symbol, &[a]).unwrap_or_else(|| self.iconst(0));
                 self.set(dst, t);
             }
-            Intrinsic::MmioWrite32 => {
+            Intrinsic::MmioWrite32 | Intrinsic::MmioWrite8 | Intrinsic::MmioWrite16 => {
                 let a = arg(self, 0);
                 let v = arg(self, 1);
-                let t = self
-                    .rt("nz.mmio_write32", &[a, v])
-                    .unwrap_or_else(|| self.iconst(0));
+                let symbol = match op {
+                    Intrinsic::MmioWrite8 => "nz.mmio_write8",
+                    Intrinsic::MmioWrite16 => "nz.mmio_write16",
+                    _ => "nz.mmio_write32",
+                };
+                let t = self.rt(symbol, &[a, v]).unwrap_or_else(|| self.iconst(0));
                 self.set(dst, t);
             }
             Intrinsic::ChanCloseOf => {
