@@ -2045,7 +2045,7 @@ fn digits(s: Str) -> Int { str_len(s) }     // private to lib.nz
 | --- | --- |
 | **Default** | A top-level definition is **private to its module**. Nothing outside the module may name it |
 | **`pub`** | Written before `fn`, it exports that definition: modules that directly import this one may name it. That is all it does — it does not change the definition's meaning, its type, or how its own module sees it |
-| **Granularity** | One bit. There is no `private`, no package visibility, no friend module, no export list, and no re-export |
+| **Granularity** | One bit. There is no `private`, no package visibility, no friend module and no export list. A module may re-export (`pub use`, below) |
 | **Within a module** | Private and public definitions are alike: a module sees everything it defines, in any order |
 | **Built-ins** | Unaffected. They are not a module's definitions and `pub` has nothing to say about them |
 
@@ -2061,6 +2061,20 @@ what happened: the multi-file programs in this repository, including the self-ho
 compiler, were migrated by marking their genuine cross-module APIs `pub`. A program written
 against the old rule does not silently change meaning; it stops compiling, naming the
 definition and the module that cannot see it.
+
+#### `pub use` offers another module's definitions — N103
+
+`pub use "shapes.nz";` offers every name `shapes.nz` offers; `pub use "shapes.nz" { double, Sq as
+Square };` offers the names chosen, `Square` the name `Sq` is offered under. A `pub use` is also an
+ordinary `use`.
+
+| | |
+| --- | --- |
+| **Identity** | A re-export adds no definition. `twice`, offered for `shapes.nz`'s `double`, *is* `double`: a reference, a rename, a persisted interface and a symbol all name `shapes.nz::fn double` |
+| **What a module offers** | Its own `pub` definitions and what it re-exports. An importer receives exactly that, not transitively beyond it |
+| **Traits and impls** | A trait is re-exported under its own name only. An impl in a module re-exported from is usable wherever the re-exporting module is imported |
+| **Refused** | A chosen name the module does not offer, `N0211`; a name the module already offers, `N0212`; modules re-exporting from each other in a cycle, `N0213`, at each `pub`; `pub use "PATH" as m;` |
+| **Rename** | Renaming a definition renames every use written with its own name, and the name in a re-export's list; a use written under an alias still names it and is kept |
 
 #### `use` makes an interface visible, not a body
 
