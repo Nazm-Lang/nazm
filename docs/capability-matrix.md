@@ -101,7 +101,12 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL — every cell run-verified, compile-only or unsupported (N95): 9 run, 2 compile-only, 3 unsupported; x86_64 Linux not run |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72); both VMs held to the simulator on generated sequences (N96) |
 
-After N88, 2026-10-04: unchanged — area 21 widened and still PARTIAL.
+After N100, 2026-10-04 (`docs/audit-n100.md`): twenty-two VERIFIED (several as scoped, area 30 for
+mutation testing), fifteen PARTIAL, none RESEARCH or MISSING; BLOCKED parts named inside areas 12
+(JIT), 34 (sBPF) and the formal evidence (proofs). Nothing moved between N88 and N100: N89–N99
+widened PARTIAL rows and measured them. The zero-partial objective is not met.
+
+*Historical.* After N88, 2026-10-04: unchanged — area 21 widened and still PARTIAL.
 
 *Historical.* After N87, 2026-10-04: twenty-two VERIFIED (areas 19 and 20 moved, as scoped: profile enforcement
 and obligation evidence, not certification), fifteen PARTIAL, none RESEARCH.
