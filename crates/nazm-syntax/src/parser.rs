@@ -35,10 +35,10 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 
 use crate::ast::{
-    Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, FnTypeName, ForeignDecl,
-    ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm, MethodOf, Param,
-    PatternField, Place, PlaceField, Program, Qualifier, Record, Requirement, Return, Scope, Spawn,
-    Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, While,
+    Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
+    FnTypeName, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm,
+    MethodOf, Param, PatternField, Place, PlaceField, Program, Qualifier, Record, Requirement,
+    Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -670,6 +670,14 @@ impl<'a> Parser<'a> {
         matches!(
             self.tokens.get(index).map(|t| &t.kind),
             Some(TokenKind::Ident(_))
+        )
+    }
+
+    /// Whether `requires` or `ensures` is at `index` (N87).
+    fn contract_word_at(&self, index: usize) -> bool {
+        matches!(
+            self.tokens.get(index).map(|t| &t.kind),
+            Some(TokenKind::Ident(w)) if w == "requires" || w == "ensures"
         )
     }
 
@@ -1583,6 +1591,7 @@ impl<'a> Parser<'a> {
                     params,
                     return_type,
                     effects,
+                    contracts: Vec::new(),
                     body: None,
                     foreign: Some(decl),
                     export: None,
@@ -1591,6 +1600,10 @@ impl<'a> Parser<'a> {
                 });
             }
         }
+
+        // `requires E` and `ensures E` (N87): contextual words, recognised only here, between the
+        // signature and the body, where no other word can stand.
+        let contracts = self.contracts()?;
 
         // A header that needed recovery (a parameter, N76) leaves the function out of the
         // abstract tree; its body is still parsed, for its own mistakes and its tree.
@@ -1628,12 +1641,51 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             effects,
+            contracts,
             body,
             foreign: None,
             export,
             method_of: None,
             span: start.join(span),
         })
+    }
+
+    /// The contract clauses before a body (N87): every `requires`, then every `ensures`. A
+    /// `requires` after an `ensures` is refused, so the order written is the order checked.
+    fn contracts(&mut self) -> Option<Vec<Contract>> {
+        let mut out: Vec<Contract> = Vec::new();
+        loop {
+            let kind = match self.peek() {
+                TokenKind::Ident(w) if w == "requires" => ContractKind::Requires,
+                TokenKind::Ident(w) if w == "ensures" => ContractKind::Ensures,
+                _ => return Some(out),
+            };
+            let at = self.checkpoint();
+            let keyword_span = self.peek_span();
+            if kind == ContractKind::Requires && out.iter().any(|c| c.kind == ContractKind::Ensures)
+            {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        keyword_span,
+                        "a `requires` after an `ensures`",
+                    )
+                    .help(
+                        "write every `requires` first: preconditions are checked before the body",
+                    ),
+                );
+            }
+            self.advance();
+            let expr = self.expr()?;
+            let span = keyword_span.join(expr.span());
+            self.wrap(at, SyntaxKind::Contract);
+            out.push(Contract {
+                kind,
+                keyword_span,
+                expr,
+                span,
+            });
+        }
     }
 
     /// `( name: Type, … )` — a declaration's or a closure's parameters (N50: one parser).
@@ -2909,7 +2961,11 @@ impl<'a> Parser<'a> {
             }
             // `receiver.` with the cursor right after the `.` and no name: a probe's hole,
             // an empty member name the checker looks for on the receiver's type (N26).
-            if self.hole.is_some() && self.ends_at_hole(self.pos) && !self.ident_at(self.pos + 1) {
+            // A contract word after it begins the next clause (N87), not a member's name.
+            if self.hole.is_some()
+                && self.ends_at_hole(self.pos)
+                && (!self.ident_at(self.pos + 1) || self.contract_word_at(self.pos + 1))
+            {
                 depth += 1;
                 out = self.member_hole(at, out, depth)?;
                 continue;

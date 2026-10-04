@@ -238,6 +238,9 @@ pub struct Function {
     /// checker infers an undeclared function's effects from its body. What the names
     /// mean, and whether they exist, is `nazm_sema`'s to decide; here they are words.
     pub effects: Option<EffectDecl>,
+    /// `requires E` and `ensures E` clauses (N87, `docs/architecture.md` §7.88), in the order
+    /// written, every `requires` before every `ensures`. Empty for most functions.
+    pub contracts: Vec<Contract>,
     /// `None` when the body failed to parse.
     ///
     /// The signature survives anyway, so calls to this function still check against real
@@ -254,6 +257,25 @@ pub struct Function {
     /// The impl this function is a method of, for one declared inside `impl … { }` (N78).
     pub method_of: Option<Box<MethodOf>>,
     pub span: Span,
+}
+
+/// One contract clause (N87): what a function promises its callers, or asks of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contract {
+    pub kind: ContractKind,
+    /// The `requires` or `ensures` keyword.
+    pub keyword_span: Span,
+    pub expr: Expr,
+    pub span: Span,
+}
+
+/// Which side of a call a contract clause is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContractKind {
+    /// Checked when the function is entered.
+    Requires,
+    /// Checked when it returns, with `result` the value returned.
+    Ensures,
 }
 
 /// The foreign half of an `extern "C" fn … = "symbol";` declaration, as written (N42).

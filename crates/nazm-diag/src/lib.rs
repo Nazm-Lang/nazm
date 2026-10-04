@@ -147,6 +147,14 @@ pub mod codes {
     /// and before any Nazm code sees the pointer.
     pub const NULL_FROM_C: Code = Code::new("N0409");
 
+    /// A precondition that did not hold as the function was entered (N87): a `requires`
+    /// clause evaluated `false`.
+    pub const PRECONDITION_FAILED: Code = Code::new("N0410");
+
+    /// A postcondition that did not hold as the function returned (N87): an `ensures` clause
+    /// evaluated `false` with `result` the value being returned.
+    pub const POSTCONDITION_FAILED: Code = Code::new("N0411");
+
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");
     /// A value that may not cross into a task: an `Ints` or a `Strs`, which are handles
@@ -433,6 +441,14 @@ pub mod codes {
     pub const CALLBACK_NOT_EXPORT: Code = Code::new("N0612");
     /// `c_errno()` in a build for a target with no `errno`: a freestanding or WebAssembly one.
     pub const ERRNO_UNAVAILABLE: Code = Code::new("N0613");
+
+    // N87: contracts (`architecture.md` §7.88).
+    /// A contract clause that is not made only of literals, names, operators, field reads and
+    /// calls of pure functions.
+    pub const CONTRACT_SHAPE: Code = Code::new("N0614");
+    /// A call whose arguments are all literals and that breaks its callee's precondition: it
+    /// would fail every time it ran.
+    pub const PRECONDITION_REFUTED: Code = Code::new("N0615");
 
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no

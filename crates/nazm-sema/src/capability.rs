@@ -191,7 +191,8 @@ impl CapabilityKind {
             | Intrinsic::VecPop
             | Intrinsic::ForeignNonNull
             | Intrinsic::CStrCopy
-            | Intrinsic::CallbackAddress => CapabilitySet::EMPTY,
+            | Intrinsic::CallbackAddress
+            | Intrinsic::ContractCheck => CapabilitySet::EMPTY,
         }
     }
 

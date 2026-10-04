@@ -56,6 +56,7 @@ mod lir;
 mod live;
 mod lsp;
 mod mir;
+mod obligations;
 mod package;
 mod patch;
 mod profile;
@@ -648,6 +649,19 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
+    /// Print every obligation of a checked program, `nazm.obligations/1` (N87): each contract
+    /// clause, call of a function with a precondition, operation that can overflow or divide
+    /// by zero, index, allocation, call through a function value and call into C, each proved,
+    /// checked as the program runs, or unknown. Compiler evidence, not certification.
+    Obligations {
+        file: PathBuf,
+        /// `nazm.obligations/1` on one line, rather than a line per obligation.
+        #[arg(long)]
+        json: bool,
+        /// Where this project begins. As `nazm check --source-root`.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
+    },
     /// Print each concrete function of the native program as MIR, `nazm.mir/1` (N40): basic
     /// blocks with every copy, move, drop, scope join and failure edge written out, after the
     /// validator accepted it. Debug output, internal and unstable; `docs/architecture.md` §7.42.
@@ -1192,6 +1206,11 @@ fn main() -> ExitCode {
             spans,
             source_root,
         } => return mir::run(&file, json, spans, source_root.as_deref()),
+        Command::Obligations {
+            file,
+            json,
+            source_root,
+        } => return obligations::run(&file, json, source_root.as_deref()),
         Command::Lir {
             file,
             target,
@@ -1380,6 +1399,7 @@ fn main() -> ExitCode {
         | Command::ReloadCheck { .. }
         | Command::Lsp { .. }
         | Command::CoreIr { .. }
+        | Command::Obligations { .. }
         | Command::Mir { .. }
         | Command::Lir { .. }
         | Command::Runtime { .. }

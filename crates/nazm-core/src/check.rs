@@ -45,6 +45,11 @@ pub struct Signature {
     pub owner: Option<ParamOwner>,
     /// Whether the callee declares an effect parameter (N51), which each call binds.
     pub effect_param: bool,
+    /// How many `requires` clauses the callee states (N87).
+    pub preconditions: u32,
+    /// Whether a contract clause may call it (N87): a function declaring `! {}` that is not
+    /// foreign, or a built-in that reads and neither allocates nor performs an effect.
+    pub pure: bool,
 }
 
 /// What is known about a binding.
@@ -406,6 +411,9 @@ pub struct Checker<'a> {
     /// The traits this module may name (N78), and the modules whose impls it may use.
     trait_names: HashMap<String, Option<TraitId>>,
     impl_modules: Vec<ModuleId>,
+    /// This module's functions' preconditions (N87): each one's parameter names and its
+    /// `requires` clauses, for proving a call of it whose arguments are all literals.
+    preconditions: HashMap<FnId, (Vec<String>, Vec<Expr>)>,
 }
 
 /// A closure whose body is being checked (N50).
@@ -1552,6 +1560,124 @@ pub fn resolve_type_fields(
             });
         }
         res.enums_mut().complete(id, variants);
+    }
+}
+
+/// A literal value, as the checker's precondition proof evaluates one (N87).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lit {
+    Int(i64),
+    Bool(bool),
+}
+
+impl Lit {
+    fn show(&self) -> String {
+        match self {
+            Self::Int(i) => i.to_string(),
+            Self::Bool(b) => b.to_string(),
+        }
+    }
+}
+
+/// `e`'s value from literals and the names in `env`, or `None` for anything else — including
+/// an operation that would fail, which is then not proved. `&&` and `||` short-circuit, as at
+/// run time, so a clause guarded by one is evaluated as the program would evaluate it.
+fn literal(e: &Expr, env: &HashMap<&str, Lit>) -> Option<Lit> {
+    match e {
+        Expr::Int { value, .. } => Some(Lit::Int(*value)),
+        Expr::Bool { value, .. } => Some(Lit::Bool(*value)),
+        Expr::Var { name, .. } => env.get(name.as_str()).copied(),
+        Expr::Neg { operand, .. } => match literal(operand, env)? {
+            Lit::Int(i) => i.checked_neg().map(Lit::Int),
+            Lit::Bool(_) => None,
+        },
+        Expr::Not { operand, .. } => match literal(operand, env)? {
+            Lit::Bool(b) => Some(Lit::Bool(!b)),
+            Lit::Int(_) => None,
+        },
+        Expr::Binary { op, lhs, rhs, .. } => {
+            let l = literal(lhs, env)?;
+            match (op, l) {
+                (BinOp::And, Lit::Bool(false)) => return Some(Lit::Bool(false)),
+                (BinOp::Or, Lit::Bool(true)) => return Some(Lit::Bool(true)),
+                _ => {}
+            }
+            let r = literal(rhs, env)?;
+            match (l, r) {
+                (Lit::Int(a), Lit::Int(b)) => match op {
+                    BinOp::Add => a.checked_add(b).map(Lit::Int),
+                    BinOp::Sub => a.checked_sub(b).map(Lit::Int),
+                    BinOp::Mul => a.checked_mul(b).map(Lit::Int),
+                    BinOp::Div => a.checked_div(b).map(Lit::Int),
+                    BinOp::Rem => a.checked_rem(b).map(Lit::Int),
+                    BinOp::Eq => Some(Lit::Bool(a == b)),
+                    BinOp::NotEq => Some(Lit::Bool(a != b)),
+                    BinOp::Lt => Some(Lit::Bool(a < b)),
+                    BinOp::LtEq => Some(Lit::Bool(a <= b)),
+                    BinOp::Gt => Some(Lit::Bool(a > b)),
+                    BinOp::GtEq => Some(Lit::Bool(a >= b)),
+                    BinOp::And | BinOp::Or => None,
+                },
+                (Lit::Bool(a), Lit::Bool(b)) => match op {
+                    BinOp::And => Some(Lit::Bool(a && b)),
+                    BinOp::Or => Some(Lit::Bool(a || b)),
+                    BinOp::Eq => Some(Lit::Bool(a == b)),
+                    BinOp::NotEq => Some(Lit::Bool(a != b)),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A clause, for a witness: its shape, not its source text, which the checker does not hold.
+fn describe_clause(e: &Expr) -> String {
+    match e {
+        Expr::Int { value, .. } => value.to_string(),
+        Expr::Bool { value, .. } => value.to_string(),
+        Expr::Var { name, .. } => name.clone(),
+        Expr::Neg { operand, .. } => format!("-{}", describe_clause(operand)),
+        Expr::Not { operand, .. } => format!("!{}", describe_clause(operand)),
+        Expr::Binary { op, lhs, rhs, .. } => {
+            let o = match op {
+                BinOp::Add => "+",
+                BinOp::Sub => "-",
+                BinOp::Mul => "*",
+                BinOp::Div => "/",
+                BinOp::Rem => "%",
+                BinOp::Eq => "==",
+                BinOp::NotEq => "!=",
+                BinOp::Lt => "<",
+                BinOp::LtEq => "<=",
+                BinOp::Gt => ">",
+                BinOp::GtEq => ">=",
+                BinOp::And => "&&",
+                BinOp::Or => "||",
+            };
+            format!("{} {o} {}", describe_clause(lhs), describe_clause(rhs))
+        }
+        _ => "…".to_owned(),
+    }
+}
+
+/// How many `requires` clauses a function states (N87).
+fn preconditions_of(f: &Function) -> u32 {
+    u32::try_from(
+        f.contracts
+            .iter()
+            .filter(|c| c.kind == nazm_syntax::ContractKind::Requires)
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+/// The function a callee is, or a definition no function has.
+fn callee_fn(c: Callee) -> FnId {
+    match c {
+        Callee::Function(f) => f,
+        Callee::Builtin(_) | Callee::Indirect(_) => FnId::from_index(usize::MAX),
     }
 }
 
@@ -2983,6 +3109,7 @@ pub fn declare_unit(
             mentions: Vec::new(),
             foreign: foreign.clone(),
             export,
+            preconditions: preconditions_of(f),
             closure: None,
         });
         debug_assert_eq!(declared, id);
@@ -3031,6 +3158,7 @@ pub fn declare_unit(
                 type_params: generics,
                 effects: declared_effects,
                 foreign: foreign.clone(),
+                preconditions: preconditions_of(f),
             });
         }
     }
@@ -3263,7 +3391,20 @@ pub fn check_unit(
         effect_param: None,
         trait_names: HashMap::new(),
         impl_modules: impl_scope(unit),
+        preconditions: HashMap::new(),
     };
+    for (_, f) in &unit.functions {
+        let requires: Vec<Expr> = f
+            .contracts
+            .iter()
+            .filter(|k| k.kind == nazm_syntax::ContractKind::Requires)
+            .map(|k| k.expr.clone())
+            .collect();
+        if let (false, Some(id)) = (requires.is_empty(), defined(c.res, unit.module, f)) {
+            let names = f.params.iter().map(|p| p.name.clone()).collect();
+            c.preconditions.insert(id, (names, requires));
+        }
+    }
     c.trait_names = trait_scope(unit, c.res);
     for (_, f) in &unit.functions {
         c.check_function(f);
@@ -3359,6 +3500,17 @@ fn environment(
                     generics: i.generics(),
                     owner: (i.generics() > 0).then_some(owner),
                     effect_param: false,
+                    preconditions: 0,
+                    pure: matches!(
+                        i,
+                        Intrinsic::StrLen
+                            | Intrinsic::StrByte
+                            | Intrinsic::IntsLen
+                            | Intrinsic::IntsGet
+                            | Intrinsic::StrsLen
+                            | Intrinsic::VecLen
+                            | Intrinsic::VecGet
+                    ),
                 },
                 callee: Callee::Builtin(i),
             },
@@ -3388,6 +3540,9 @@ fn environment(
                     owner: (!def.type_params.is_empty() || polymorphic(def.declared_effects))
                         .then_some(ParamOwner::Function(id)),
                     effect_param: polymorphic(def.declared_effects),
+                    preconditions: def.preconditions,
+                    pure: def.foreign.is_none()
+                        && def.declared_effects == Some(nazm_sema::EffectSet::EMPTY),
                 },
                 callee: Callee::Function(id),
             },
@@ -3453,6 +3608,9 @@ fn environment(
                             owner: (!e.type_params.is_empty() || polymorphic(e.effects))
                                 .then_some(ParamOwner::Function(e.def)),
                             effect_param: polymorphic(e.effects),
+                            preconditions: e.preconditions,
+                            pure: e.foreign.is_none()
+                                && e.effects == Some(nazm_sema::EffectSet::EMPTY),
                         },
                         callee: Callee::Function(e.def),
                     },
@@ -3515,6 +3673,8 @@ fn environment(
                         owner: (!e.type_params.is_empty() || polymorphic(e.effects))
                             .then_some(ParamOwner::Function(e.def)),
                         effect_param: polymorphic(e.effects),
+                        preconditions: e.preconditions,
+                        pure: e.foreign.is_none() && e.effects == Some(nazm_sema::EffectSet::EMPTY),
                     },
                     callee: Callee::Function(e.def),
                 },
@@ -4117,6 +4277,10 @@ impl Checker<'_> {
                     ret,
                     instance: None,
                     spawned: false,
+                    preconditions: self
+                        .res
+                        .function(callee_fn(callee))
+                        .map_or(0, |d| d.preconditions),
                 },
             );
         }
@@ -4297,6 +4461,8 @@ impl Checker<'_> {
             generics: 0,
             owner: None,
             effect_param: false,
+            preconditions: 0,
+            pure: false,
         };
         self.record_checked_call(at, span, args, &sig, None, false);
         fsig.ret
@@ -4377,6 +4543,7 @@ impl Checker<'_> {
             mentions: Vec::new(),
             foreign: None,
             export: None,
+            preconditions: 0,
             closure: Some(nazm_sema::ClosureInfo {
                 enclosing,
                 at: span,
@@ -5652,6 +5819,8 @@ impl Checker<'_> {
         }
 
         let declared = self.signature_type(&f.return_type);
+        // Contracts (N87, §7.88): `Bool`, over the parameters and, after `ensures`, `result`.
+        self.check_contracts(f, declared);
         if f.foreign.is_some() {
             // A foreign declaration has no body, and that is not a parse failure (N42).
             self.close_scope();
@@ -5710,6 +5879,99 @@ impl Checker<'_> {
             }
         }
         self.close_scope();
+    }
+
+    /// A function's contract clauses (N87, §7.88): each a `Bool`; a `requires` over the
+    /// parameters, an `ensures` over them and `result`, the value being returned, in a slot of
+    /// the function's own; and each made only of what cannot fail for want of authority or
+    /// memory — literals, names, operators, projections and calls of pure functions (`N0614`).
+    fn check_contracts(&mut self, f: &Function, declared: Type) {
+        for c in &f.contracts {
+            let ensures = c.kind == nazm_syntax::ContractKind::Ensures;
+            if ensures {
+                self.open_scope(c.span);
+                let slot = match self.current.and_then(|id| self.res.contract_result(id)) {
+                    Some(slot) => slot,
+                    None => {
+                        let slot = self.allocate("result", c.keyword_span, declared, false);
+                        if let Some(id) = self.current {
+                            self.res.record_contract_result(id, slot);
+                        }
+                        slot
+                    }
+                };
+                self.define("result", declared, false, None, slot, c.keyword_span.end);
+            }
+            let got = self.value_type(&c.expr, Some(Type::Bool));
+            if got != Type::Bool {
+                let shown = self.show(got);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        c.expr.span(),
+                        format!("a contract clause is a `Bool`, but this is `{shown}`"),
+                    )
+                    .help("a clause states a condition: compare, or combine with `&&`, `||`, `!`"),
+                );
+            }
+            if let Some((at, what)) = self.impure_clause(&c.expr) {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::CONTRACT_SHAPE,
+                        at,
+                        format!("a contract clause cannot {what}"),
+                    )
+                    .primary_label("not a contract's")
+                    .help(
+                        "a clause is evaluated every time the function is entered or returns, \
+                             and must not fail for want of authority or memory: it is literals, \
+                             names, operators, field reads and calls of functions declaring `! {}`",
+                    ),
+                );
+            }
+            if ensures {
+                self.close_scope();
+            }
+        }
+    }
+
+    /// The first part of a clause a contract may not contain (N87), with what it is.
+    fn impure_clause(&self, e: &Expr) -> Option<(Span, &'static str)> {
+        match e {
+            Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } | Expr::Var { .. } => None,
+            Expr::Neg { operand, .. } | Expr::Not { operand, .. } => self.impure_clause(operand),
+            Expr::Binary { lhs, rhs, .. } => {
+                self.impure_clause(lhs).or_else(|| self.impure_clause(rhs))
+            }
+            Expr::Field { base, .. } => self.impure_clause(base),
+            Expr::Call {
+                qualifier,
+                callee,
+                callee_span,
+                args,
+                ..
+            } => {
+                let pure = self
+                    .env
+                    .get(&written_key(qualifier.as_ref(), callee))
+                    .is_some_and(|v| v.sig.pure);
+                if pure {
+                    args.iter().find_map(|a| self.impure_clause(a))
+                } else {
+                    Some((*callee_span, "call a function that is not pure"))
+                }
+            }
+            Expr::Closure { span, .. } => Some((*span, "make a closure")),
+            Expr::Construct { span, .. } | Expr::Variant { span, .. } => {
+                Some((*span, "build a value"))
+            }
+            Expr::Match { span, .. } | Expr::If { span, .. } => {
+                Some((*span, "branch; write the condition with `&&` and `||`"))
+            }
+            Expr::Block(b) => Some((b.span, "contain a block")),
+            Expr::Propagate { op_span, .. } => Some((*op_span, "propagate a failure")),
+            Expr::MethodCall { span, .. } => Some((*span, "call a method")),
+        }
     }
 
     fn check_block(&mut self, b: &Block, expected: Option<Type>) -> Completion {
@@ -6403,6 +6665,7 @@ impl Checker<'_> {
                 }
                 self.record_checked_call(*callee_span, *span, args, &sig, None, false);
                 self.check_callbacks(*callee_span, args, &sig);
+                self.prove_preconditions(*callee_span, args);
                 Completion::Value(sig.ret)
             }
 
@@ -6637,6 +6900,59 @@ impl Checker<'_> {
 
     /// Record a call as it was checked (N20): its resolved callee, its arguments and the
     /// signature they were checked against, for a tool to read rather than work out.
+    /// A call whose arguments are all literals, of a function of this module stating a
+    /// precondition (N87, §7.88): each clause evaluated with them. False is `N0615` — the call
+    /// would fail every time — and every clause true makes the call's obligation proved, with
+    /// the evaluated clauses as its witness. Any other call is not reasoned about.
+    fn prove_preconditions(&mut self, at: Span, args: &[Expr]) {
+        let Some(Callee::Function(callee)) = self.res.callee(at) else {
+            return;
+        };
+        let Some((names, clauses)) = self.preconditions.get(&callee) else {
+            return;
+        };
+        let values: Option<Vec<Lit>> = args.iter().map(|a| literal(a, &HashMap::new())).collect();
+        let Some(values) = values else {
+            return;
+        };
+        if values.len() != names.len() {
+            return;
+        }
+        let env: HashMap<&str, Lit> = names.iter().map(String::as_str).zip(values).collect();
+        let mut witness: Vec<String> = Vec::new();
+        for clause in clauses {
+            match literal(clause, &env) {
+                Some(Lit::Bool(true)) => witness.push(format!("{} holds", describe_clause(clause))),
+                Some(Lit::Bool(false)) => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::PRECONDITION_REFUTED,
+                            at,
+                            "this call breaks its callee's precondition",
+                        )
+                        .secondary(clause.span(), "false for these arguments")
+                        .help("with these literal arguments the call fails every time it runs (`N0410`)"),
+                    );
+                    return;
+                }
+                _ => return,
+            }
+        }
+        let shown: Vec<String> = names
+            .iter()
+            .map(|n| {
+                format!(
+                    "{n} = {}",
+                    env.get(n.as_str()).map_or_else(String::new, Lit::show)
+                )
+            })
+            .collect();
+        self.res.record_proved_call(
+            at,
+            format!("{} with {}", witness.join(", "), shown.join(", ")),
+        );
+    }
+
     /// A call of a foreign function passes each callback as an export's name (N85, §7.86):
     /// only an export has a C entry that needs no environment and lives as long as the
     /// process. A closure, a function value held in a binding, or a function that is not an
@@ -6701,6 +7017,7 @@ impl Checker<'_> {
                 ret: sig.ret,
                 instance,
                 spawned,
+                preconditions: sig.preconditions,
             },
         );
     }

@@ -94,6 +94,8 @@ pub struct Export {
     /// The C symbol, for a foreign declaration (N42): an importer calls it without the
     /// declaration's source, and must know a call to it needs a `ForeignCap`.
     pub foreign: Option<String>,
+    /// How many `requires` clauses it states (N87): each call of it is an obligation.
+    pub preconditions: u32,
 }
 
 /// One record definition an importer needs to see.

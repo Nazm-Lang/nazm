@@ -222,6 +222,10 @@ pub enum Intrinsic {
     /// `Str` argument — passed to C as a function pointer. Made by Core IR lowering for a
     /// callback argument; no program can name it.
     CallbackAddress,
+    /// Internal (N87): `contract_check(cond: Bool, which: Int) -> Int` — `0` when `cond` holds;
+    /// otherwise the call fails, `N0410` for a precondition (`which` 0) and `N0411` for a
+    /// postcondition. Made by Core IR lowering for each contract clause; no program can name it.
+    ContractCheck,
 
     // --- the outside world -------------------------------------------------------
     //
@@ -393,6 +397,7 @@ impl Intrinsic {
             Self::ForeignNonNull => "foreign_nonnull",
             Self::CStrCopy => "cstr_copy",
             Self::CallbackAddress => "callback_address",
+            Self::ContractCheck => "contract_check",
         }
     }
 
@@ -461,6 +466,7 @@ impl Intrinsic {
             Self::CErrno => &[],
             Self::ForeignNonNull | Self::CStrCopy => &[Shape::Int],
             Self::CallbackAddress => &[Shape::Str],
+            Self::ContractCheck => &[Shape::Bool, Shape::Int],
         }
     }
 
@@ -510,7 +516,8 @@ impl Intrinsic {
             | Self::IntsSum
             | Self::CErrno
             | Self::ForeignNonNull
-            | Self::CallbackAddress => Shape::Int,
+            | Self::CallbackAddress
+            | Self::ContractCheck => Shape::Int,
             Self::CStrCopy => Shape::Str,
         }
     }

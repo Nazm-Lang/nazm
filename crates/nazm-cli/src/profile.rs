@@ -209,6 +209,7 @@ pub(crate) fn enforce(
     let needs_cost = profiles.iter().any(|p| {
         p.rules().contains(&profile::Rule::BoundedAllocation)
             || p.rules().contains(&profile::Rule::NoRecursion)
+            || p.rules().contains(&profile::Rule::NoUnknownCalls)
             || p.rules().contains(&profile::Rule::BoundedLoops)
             || p.rules().contains(&profile::Rule::SignedWrites)
     });

@@ -464,7 +464,7 @@ fn the_interface_carries_exported_traits_impls_and_bounds() {
     let r = nazm(d.path(), &["interface", "lib.nz"]);
     assert_eq!(r.code, Some(0), "{}", r.stderr);
     let v: serde_json::Value = serde_json::from_str(r.stdout.trim()).unwrap();
-    assert_eq!(v["schema"], "nazm.interface/9");
+    assert_eq!(v["schema"], "nazm.interface/10");
     assert_eq!(v["traits"][0]["def"], "lib.nz::trait Show");
     assert_eq!(v["impls"][0]["trait"], "lib.nz::trait Show");
     assert_eq!(v["impls"][0]["methods"][0], "lib.nz::fn Show/P/show");

@@ -155,6 +155,11 @@ struct Lower<'a> {
     /// How far the resolution's slots are from Core IR's locals: 1 in a closure, whose
     /// local 0 is the closure itself (N50), and 0 everywhere else.
     shift: u32,
+    /// The function's `ensures` clauses (N87), checked wherever it returns.
+    ensures: Vec<(AstExpr, Span)>,
+    /// The slot its clauses read as `result`, and the local a return site holds it in.
+    result_slot: Option<u32>,
+    result_here: Option<LocalId>,
 }
 
 impl<'a> Lower<'a> {
@@ -192,6 +197,9 @@ impl<'a> Lower<'a> {
             targets: Vec::new(),
             owned: Vec::new(),
             shift,
+            ensures: Vec::new(),
+            result_slot: None,
+            result_here: None,
         }
     }
 
@@ -290,7 +298,33 @@ impl<'a> Lower<'a> {
         let Some(required) = self.def.inferred_effects else {
             return defect(f.name_span, format!("`{}` has no inferred effects", f.name));
         };
-        let body = self.value_block(body, Vec::new())?;
+        // Contracts (N87, §7.88): every `requires` first, then the body; every `ensures` where
+        // it returns — its tail, here, and each `return` and `?`, by `leave`.
+        self.ensures = f
+            .contracts
+            .iter()
+            .filter(|c| c.kind == nazm_syntax::ContractKind::Ensures)
+            .map(|c| (c.expr.clone(), c.span))
+            .collect();
+        self.result_slot = self.res.contract_result(self.id);
+        let mut checks = Vec::new();
+        for c in f
+            .contracts
+            .iter()
+            .filter(|c| c.kind == nazm_syntax::ContractKind::Requires)
+        {
+            let cond = self.expr(&c.expr)?;
+            let check = self.contract_check(cond, 0, c.span);
+            checks.push(Stmt::Eval(check));
+        }
+        let mut body = self.value_block(body, Vec::new())?;
+        if !checks.is_empty() {
+            checks.append(&mut body.stmts);
+            body.stmts = checks;
+        }
+        if let Some(tail) = body.tail.take() {
+            body.tail = Some(Box::new(self.ensured(*tail)?));
+        }
         let def = self.def;
         Ok(cir::Function {
             def: self.id,
@@ -320,6 +354,12 @@ impl<'a> Lower<'a> {
     // --- identities --------------------------------------------------------------------
 
     fn local_at(&self, span: Span) -> Lowered<LocalId> {
+        // `result` in an `ensures` clause is the value this return site holds (N87).
+        if let (Some(slot), Some(here)) = (self.result_slot, self.result_here) {
+            if self.res.var(span) == Some(slot) {
+                return Ok(here);
+            }
+        }
         match self.res.var(span) {
             Some(slot) if ((slot + self.shift) as usize) < self.locals.len() => {
                 Ok(LocalId(slot + self.shift))
@@ -534,10 +574,10 @@ impl<'a> Lower<'a> {
                     callee_at: sp.callee_span,
                 }
             }
-            AstStmt::Return(r) => Stmt::Return {
-                value: self.expr(&r.value)?,
-                at: r.span,
-            },
+            AstStmt::Return(r) => {
+                let value = self.expr(&r.value)?;
+                self.leave(value, r.span)?
+            }
             AstStmt::Break { span } => Stmt::Break {
                 target: self.target("break", *span)?,
                 at: *span,
@@ -1179,6 +1219,106 @@ impl<'a> Lower<'a> {
         })
     }
 
+    /// Leave the function with `value` (N87): a `return`, after every `ensures` clause holds of
+    /// it. With none, a `return` as it always was.
+    fn leave(&mut self, value: Expr, at: Span) -> Lowered<Stmt> {
+        if self.ensures.is_empty() {
+            return Ok(Stmt::Return { value, at });
+        }
+        let ty = self.def.ret;
+        let held = self.temp(Temp::Result, ty, at);
+        let mut stmts = vec![Stmt::Let { local: held, value }];
+        stmts.extend(self.postconditions(held)?);
+        stmts.push(Stmt::Return {
+            value: Expr {
+                kind: ExprKind::Local(held),
+                ty: Some(ty),
+                at,
+            },
+            at,
+        });
+        Ok(Stmt::Block(Block {
+            stmts,
+            tail: None,
+            ends: Ends::Transfers,
+            owns: vec![held],
+            at,
+        }))
+    }
+
+    /// A body's tail, once every `ensures` clause holds of it (N87).
+    fn ensured(&mut self, tail: Expr) -> Lowered<Expr> {
+        if self.ensures.is_empty() {
+            return Ok(tail);
+        }
+        let ty = self.def.ret;
+        let at = tail.at;
+        let held = self.temp(Temp::Result, ty, at);
+        let mut stmts = vec![Stmt::Let {
+            local: held,
+            value: tail,
+        }];
+        stmts.extend(self.postconditions(held)?);
+        Ok(Expr {
+            kind: ExprKind::Block(Block {
+                stmts,
+                tail: Some(Box::new(Expr {
+                    kind: ExprKind::Local(held),
+                    ty: Some(ty),
+                    at,
+                })),
+                ends: Ends::FallsThrough,
+                owns: vec![held],
+                at,
+            }),
+            ty: Some(ty),
+            at,
+        })
+    }
+
+    /// Each `ensures` clause, checked with `result` the value `held` holds.
+    fn postconditions(&mut self, held: LocalId) -> Lowered<Vec<Stmt>> {
+        let clauses = self.ensures.clone();
+        let saved = self.result_here.replace(held);
+        let mut out = Vec::with_capacity(clauses.len());
+        for (e, span) in &clauses {
+            let cond = self.expr(e);
+            match cond {
+                Ok(cond) => {
+                    let check = self.contract_check(cond, 1, *span);
+                    out.push(Stmt::Eval(check));
+                }
+                Err(d) => {
+                    self.result_here = saved;
+                    return Err(d);
+                }
+            }
+        }
+        self.result_here = saved;
+        Ok(out)
+    }
+
+    /// A contract clause's check (N87): `contract_check(cond, which)`, failing with `N0410` for
+    /// a precondition (`which` 0) or `N0411` for a postcondition (1) when `cond` is false, at
+    /// the clause. Its result is `0` and is discarded.
+    fn contract_check(&mut self, cond: Expr, which: i64, at: Span) -> Expr {
+        let which = Expr {
+            kind: ExprKind::Const(self.constant(Const::Int(which))),
+            ty: Some(Type::Int),
+            at,
+        };
+        Expr {
+            kind: ExprKind::Builtin {
+                op: nazm_sema::Intrinsic::ContractCheck,
+                type_args: Vec::new(),
+                args: vec![cond, which],
+                callee_at: at,
+            },
+            ty: Some(Type::Int),
+            at,
+        }
+    }
+
     /// One of the built-ins only this lowering makes (N85), applied to one argument.
     fn internal(&mut self, op: nazm_sema::Intrinsic, arg: Expr, ty: Type) -> Expr {
         let at = arg.at;
@@ -1363,7 +1503,7 @@ impl<'a> Lower<'a> {
             ty: Some(Type::Enum(p.into)),
             at,
         };
-        let leave = Stmt::Return { value: rebuilt, at };
+        let leave = self.leave(rebuilt, at)?;
         let arm = |variant: u32, local: LocalId, stmts: Vec<Stmt>, tail: Option<Box<Expr>>| {
             let ends = if stmts.iter().any(|s| s.ends() == Ends::Transfers) {
                 Ends::Transfers

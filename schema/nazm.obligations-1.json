@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.obligations-1.json",
+  "title": "nazm.obligations/1",
+  "description": "Every obligation of a checked program (N87, `docs/architecture.md` §7.88): each contract clause, each call of a function stating a precondition, each operation that can overflow or divide by zero, each index and allocation, each call through a function value and each call into C, with whether it is proved at compile time (and why), checked as the program runs, or unknown. Written by `nazm obligations --json` as one line; deterministic. Compiler evidence for a reviewer, not certification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "evidence", "proved", "checked", "unknown", "obligations"],
+  "properties": {
+    "schema": { "const": "nazm.obligations/1" },
+    "evidence": { "const": "compiler evidence, not certification" },
+    "proved": { "type": "integer", "minimum": 0 },
+    "checked": { "type": "integer", "minimum": 0 },
+    "unknown": { "type": "integer", "minimum": 0 },
+    "obligations": {
+      "type": "array",
+      "description": "Function by function in Core IR's order, each by position.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["function", "kind", "status", "file", "line", "column"],
+        "properties": {
+          "function": { "type": "string" },
+          "kind": {
+            "enum": ["precondition", "postcondition", "call-precondition", "overflow", "division", "index", "allocation", "indirect-call", "foreign-call"]
+          },
+          "status": { "enum": ["proved", "checked", "unknown"] },
+          "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 },
+          "column": { "type": "integer", "minimum": 1 },
+          "witness": { "type": "string", "description": "Why a proved obligation is proved; absent otherwise." }
+        }
+      }
+    }
+  }
+}

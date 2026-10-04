@@ -1049,6 +1049,9 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                                     || leaf.text == "Vec"
                                     || a_type_parameter(span, leaf.text)))
                             || (node.kind() == K::PatternField && leaf.text == "_")
+                            // A contract's `requires` and `ensures` are its syntax (N87).
+                            || (node.kind() == K::Contract
+                                && (leaf.text == "requires" || leaf.text == "ensures"))
                             // An effect name is the compiler's, never a program's entity (N36);
                             // an effect parameter is its function's, as a type parameter is (N51).
                             || (node.kind() == K::EffectSet
