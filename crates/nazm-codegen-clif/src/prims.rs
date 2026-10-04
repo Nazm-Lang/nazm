@@ -440,6 +440,22 @@ impl Fx<'_, '_, '_> {
                 let result = self.b.ins().select(shut, index, r);
                 self.set(dst, result);
             }
+            // A contract clause (N87): its kind is the constant second argument.
+            Intrinsic::ContractCheck => {
+                let cond = arg(self, 0);
+                let which = match args.get(1) {
+                    Some(mir::Operand::Const(mir::Const::Int(k))) => *k,
+                    _ => 0,
+                };
+                let bad = self.b.ins().icmp_imm_s(IntCC::Equal, cond, 0);
+                if which == 0 {
+                    self.guard(bad, "N0410", "this precondition does not hold");
+                } else {
+                    self.guard(bad, "N0411", "this postcondition does not hold");
+                }
+                let z = self.iconst(0);
+                self.set(dst, z);
+            }
             // What the last foreign call on this thread left in `errno` (N85).
             Intrinsic::CErrno => {
                 let t = self

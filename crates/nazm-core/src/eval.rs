@@ -1769,6 +1769,26 @@ impl Interpreter {
             }
             // Declassification changes provenance and nothing at run time (N52).
             (Intrinsic::StrVouch, [v @ Value::Str(_)]) => Ok(v.clone()),
+            // A contract clause (N87): the sentence the compiled program writes, at the clause.
+            (Intrinsic::ContractCheck, [Value::Bool(holds), Value::Int(which)]) => {
+                if *holds {
+                    return Ok(Value::Int(0));
+                }
+                let (code, message) = if *which == 0 {
+                    (
+                        codes::PRECONDITION_FAILED,
+                        "this precondition does not hold",
+                    )
+                } else {
+                    (
+                        codes::POSTCONDITION_FAILED,
+                        "this postcondition does not hold",
+                    )
+                };
+                Err(RuntimeError {
+                    diagnostic: Box::new(Diagnostic::error(code, span, message)),
+                })
+            }
             (Intrinsic::StrFromByte, [Value::Int(b)]) => {
                 let Ok(byte) = u8::try_from(*b) else {
                     return Err(out_of_bounds(

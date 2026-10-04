@@ -217,6 +217,8 @@ pub enum Temp {
     Err,
     /// What a foreign function returned, before it is a handle, a string or `None` (N85).
     Foreign,
+    /// The value a function returns, held while its `ensures` clauses are checked (N87).
+    Result,
 }
 
 impl Temp {
@@ -226,6 +228,7 @@ impl Temp {
             Self::Ok => "ok",
             Self::Err => "err",
             Self::Foreign => "c",
+            Self::Result => "result",
         }
     }
 }

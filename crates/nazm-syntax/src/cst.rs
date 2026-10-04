@@ -134,6 +134,8 @@ pub enum SyntaxKind {
     RetType,
     /// `! { io, spawn }` after a return type (N36).
     EffectSet,
+    /// `requires E` or `ensures E` (N87).
+    Contract,
     Type,
     TypeArgList,
     /// `{ name: Type, … }` of a record, or `( name: Type, … )` of a variant's payload.
@@ -261,6 +263,7 @@ impl SyntaxKind {
         Self::Param,
         Self::RetType,
         Self::EffectSet,
+        Self::Contract,
         Self::Type,
         Self::TypeArgList,
         Self::FieldList,

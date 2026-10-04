@@ -1175,6 +1175,30 @@ fn the_lir_tables_match_the_published_schema_on_every_target_class() {
 }
 
 #[test]
+fn an_obligation_census_matches_the_published_schema() {
+    // N87: contracts, a proved and a checked call, arithmetic, an index and a function value.
+    let (dir, src) = write_program(
+        "fn half(n: Int) -> Int ! {} requires n >= 0 ensures result * 2 <= n { n / 2 }\n\
+         fn ap(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(x) }\n\
+         fn main() -> Int { half(8) + half(str_len(\"ab\")) + str_byte(\"a\", 0) + ap(half, 4) }\n",
+    );
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_nazm"))
+        .args(["obligations", "--json"])
+        .arg(&src)
+        .current_dir(dir.path())
+        .output()
+        .expect("run nazm obligations");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let objects = lines(&String::from_utf8_lossy(&out.stdout));
+    assert_eq!(objects.len(), 1);
+    check_against("nazm.obligations-1.json", &objects);
+}
+
+#[test]
 fn a_runtime_manifest_matches_the_published_schema_for_every_profile() {
     // N82: a hosted, a board and a WebAssembly artifact.
     let dir = tempfile::tempdir().expect("tempdir");

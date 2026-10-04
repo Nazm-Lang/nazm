@@ -161,6 +161,8 @@ pub struct FnDef {
     /// The C symbol an exported function is also callable as (N55), or `None`. An export has a
     /// Nazm body and is called by Nazm as any function is.
     pub export: Option<String>,
+    /// How many `requires` clauses it states (N87).
+    pub preconditions: u32,
     /// For a closure (N50): the function whose body wrote it, where, and what it captured.
     /// A closure has no declaration of its own — `decl` is its enclosing function's — and
     /// no name a program can write.
@@ -255,6 +257,9 @@ pub struct CheckedCall {
     pub instance: Option<Instantiation>,
     /// Whether this is a `spawn` rather than a call.
     pub spawned: bool,
+    /// How many `requires` clauses the callee states (N87): each call of one with any is an
+    /// obligation, whether the callee is this module's or another's.
+    pub preconditions: u32,
 }
 
 /// What one call of a generic callee settled its type parameters to.
@@ -412,6 +417,11 @@ pub struct Resolution {
     effect_bindings: HashMap<Span, crate::EffectSet>,
     /// Every sink as provenance solved it, in module and body order (N52).
     sinks: Vec<crate::SinkReport>,
+    /// Each function's `result`, the slot its `ensures` clauses read (N87).
+    contract_results: HashMap<FnId, u32>,
+    /// Each call whose callee's preconditions the checker proved, by the callee name's span,
+    /// with the witness: each clause as evaluated (N87).
+    proved_calls: HashMap<Span, String>,
     /// What each written type name the checker resolved to something **no program
     /// declared** is (N23), by the span of that name: a built-in type (`Int`, `Str`, the
     /// `Vec` of `Vec[Int]`) or a type parameter — and, for a type parameter, the span its
@@ -875,6 +885,28 @@ impl Resolution {
     #[must_use]
     pub fn closure_at(&self, span: Span) -> Option<FnId> {
         self.closures.get(&span).copied()
+    }
+
+    /// Record the slot a function's `ensures` clauses read as `result` (N87).
+    pub fn record_contract_result(&mut self, function: FnId, slot: u32) {
+        self.contract_results.insert(function, slot);
+    }
+
+    /// The slot a function's `ensures` clauses read as `result`, if it has any (N87).
+    #[must_use]
+    pub fn contract_result(&self, function: FnId) -> Option<u32> {
+        self.contract_results.get(&function).copied()
+    }
+
+    /// Record a call whose callee's preconditions were proved, with the witness (N87).
+    pub fn record_proved_call(&mut self, at: Span, witness: String) {
+        self.proved_calls.insert(at, witness);
+    }
+
+    /// The witness for a proved call, by its callee name's span (N87).
+    #[must_use]
+    pub fn proved_call(&self, at: Span) -> Option<&str> {
+        self.proved_calls.get(&at).map(String::as_str)
     }
 
     /// Record a named function written as a value (N50).

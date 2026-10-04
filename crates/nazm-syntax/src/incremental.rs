@@ -862,6 +862,7 @@ impl Shift for Function {
             params,
             return_type,
             effects,
+            contracts,
             body,
             foreign,
             export,
@@ -875,6 +876,11 @@ impl Shift for Function {
         params.shift(file, by);
         return_type.shift(file, by);
         effects.shift(file, by);
+        for c in contracts.iter_mut() {
+            c.keyword_span.shift(file, by);
+            c.expr.shift(file, by);
+            c.span.shift(file, by);
+        }
         body.shift(file, by);
         foreign.shift(file, by);
         export.shift(file, by);

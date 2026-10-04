@@ -11,6 +11,7 @@ mod effects;
 pub use effects::assumed as assumed_effects;
 pub mod eval;
 mod lower;
+pub mod obligations;
 mod provenance;
 
 /// Core IR (N39): what a checked program lowers to, and what every backend starts from.

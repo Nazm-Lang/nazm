@@ -199,7 +199,10 @@ use crate::digest::{self, Framed};
 /// name `N0612`, and `c_errno` is a name a program could not call before.
 /// `26` — N86, 2026-10-04. `mmio_read8`, `mmio_write8`, `mmio_read16` and `mmio_write16` are names
 /// a program could not call before, and `riscv64gc-unknown-none-elf` a board.
-pub const SEMANTIC_EPOCH: u32 = 26;
+/// `27` — N87, 2026-10-04. Contracts: `requires` and `ensures` moved from refused (`N0100`) to
+/// accepted, a clause that is not pure is `N0614`, and a literal call breaking a precondition
+/// `N0615`.
+pub const SEMANTIC_EPOCH: u32 = 27;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -224,6 +227,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CONDITION_NOT_BOOL",
     "CONFLICTING_EFFECT_ARGUMENT",
     "CONFLICTING_TYPE_ARGUMENTS",
+    "CONTRACT_SHAPE",
     "DUPLICATE_EFFECT",
     "DUPLICATE_FIELD",
     "DUPLICATE_FUNCTION",
@@ -263,6 +267,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "NO_METHOD",
     "OPAQUE_HANDLE",
     "OWNERSHIP_CYCLE",
+    "PRECONDITION_REFUTED",
     "PRELUDE_TYPE_REDECLARED",
     "PRIVATE_DEFINITION",
     "PRIVATE_TYPE_EXPOSED",
