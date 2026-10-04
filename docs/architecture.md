@@ -8529,6 +8529,62 @@ every use written `double` are renamed; every use written `twice` is not, and st
 **What would prove this wrong.** Two identities for one definition in any output: a reference,
 a resolved unit, a persisted interface or a symbol.
 
+
+## 7.105 Authority is a parameter: no inheritance — N104, 2026-10-05
+
+Written before the code. N37's compatibility bridge let a function with no declared effect set
+exercise its **caller's** authority; N79 recorded what each such function inherits (its
+`inherits`), published it, and offered a profile rule, `explicit-authority`, that refused it — but
+the default stayed: `fn main() -> Int { print("x"); 0 }` was accepted, and so was a helper that
+prints without holding anything. Area 6 is PARTIAL for that reason. Owner: the authority check
+(`crates/nazm-core/src/effects.rs`), with every program in the repository and the compiler
+written in Nazm as its migration.
+
+**The rule.** A capability is a value, and authority is what a function's scope holds lexically:
+its capability parameters, a binding of capability type, a capture of one. Every call that needs
+authority — a built-in whose identity needs a kind, a `spawn`, a foreign call — needs it held
+**there**, in every function, declared or not. A call to a function needs nothing at the call:
+whatever its body exercises it holds itself, so its authority is in its parameter list and type
+checking has already made the caller supply it. Missing authority is `N0369`, as it was for a
+declared function, with the function and the kind named. `main`'s parameters are the root: the
+runtime hands `main` one capability per parameter, and nothing else is a source.
+
+**What goes.** The bridge's authority half, entirely: `Needs::Ambient`, the inherited-authority
+record in the resolution, and its report in `nazm inspect`. A
+function value of an undeclared function no longer needs its maker to hold anything: the
+function holds what it needs. The profile rule `explicit-authority` is now the language's rule;
+it stays named, so a manifest that lists it still parses, and can no longer fire.
+
+**What stays.** The bridge's **effect** half: a function in another module that declares no
+effect set is assumed to have the bridged effects (`io`, `spawn`), because its interface publishes
+no set. That is an effect contract, conservative and representable, and it grants nothing:
+authority is now always a parameter. Attenuation (`OutCap`), subsumption and the capability kinds
+are unchanged; no kind is added.
+
+**Migration.** Every program in the repository — examples, the standard library, the corpora,
+every program inside a test, the compiler written in Nazm — gains the capability parameters its
+functions exercise, threaded from `main`, by a migrator that reads the pre-N104 checker's
+`inherits` (the exact set each function exercised without holding) and adds `io: IoCap`,
+`out: OutCap` or `tasks: SpawnCap` where needed, and the caller's own at each call. The
+compiler written in Nazm also gains the check itself: `N0369` at the reference's spans, for a
+built-in or a `spawn` with no capability of the kind in scope.
+
+**Versions.** Semantic epoch 28 → 29: programs accepted before are refused. `nazm.interface/11`:
+unchanged — an interface never carried inherited authority (an importer assumed the bridged
+effects of an undeclared export, and still does), and a function's authority is its parameters'
+types, which it already publishes. `nazm.inspect/1 → /2`: a definition no longer reports
+`inherits`. Runtime ABI,
+Core/MIR/LIR: unchanged — authority is a check, and a capability's representation is untouched.
+Check and object keys: through the epoch and the interface schema.
+
+**Negative example.** `fn shout() -> Int { print("!"); 0 } fn main(io: IoCap) -> Int { shout() }`:
+`N0369` in `shout`, which holds no `OutCap`; `main`'s `io` is not reachable from it.
+**Boundary example.** `fn shout(out: OutCap) -> Int { print("!"); 0 } fn main(io: IoCap) -> Int
+{ shout(io) }` is accepted: an `IoCap` is given where an `OutCap` is expected.
+
+**What would prove this wrong.** A program in which a function exercises a capability kind that
+no binding in its scope holds, accepted by either compiler.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
