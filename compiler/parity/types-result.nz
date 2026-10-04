@@ -1,0 +1,3 @@
+fn half(n: Int) -> Result[Int, Int] { if n % 2 == 0 { Result[Int, Int].Ok(value: n / 2) } else { Result[Int, Int].Err(error: n) } }
+fn twice(n: Int) -> Result[Int, Int] { let h = half(n)?; Result[Int, Int].Ok(value: h + 1) }
+fn main() -> Int { match twice(10) { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - e } }
