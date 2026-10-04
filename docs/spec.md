@@ -3338,6 +3338,28 @@ fn go(f: ForeignCap) -> Int ! { foreign } { each(twice, 3) + c_errno() }
 | **Shared library** | `nazm build --lib --shared FILE -o libNAME.dylib` (or `.so`): exports are its only visible symbols; it names itself `@rpath/NAME` (the soname `NAME` elsewhere); the same header as `--lib` |
 | **Not crossing** | Floating point, integers other than `int64_t`, variadics, by-value structs, closures as callbacks, `dlopen`, ABIs other than `"C"` — each refused by name |
 
+### Function contracts — N87
+<!-- id: function-contracts -->
+
+```nazm
+fn isqrt(n: Int) -> Int ! {}
+    requires n >= 0
+    ensures result >= 0
+    ensures result * result <= n && n - result * result <= 2 * result
+{ … }
+```
+
+| | |
+| --- | --- |
+| **Clauses** | After the effect set and before the body: any number of `requires E`, then any number of `ensures E`. `requires` and `ensures` are words with that meaning only there |
+| **What a clause is** | A `Bool` (`N0300` otherwise) of literals, the parameters, `result` (in `ensures`: the value being returned), operators, field reads and calls of pure functions — ones declaring `! {}` that are not foreign, and the built-ins that only read (`str_len`, `str_byte`, `ints_len`, `ints_get`, `strs_len`, `vec_len`, `vec_get`). Anything else — an effect, an allocation, a closure, a construction, a branch, a method call — is `N0614` |
+| **When** | Every `requires`, in order, as the function is entered, after its arguments; every `ensures`, in order, as it returns — from its final expression, a `return` or a `?` — with `result` the returned value. Never compiled out: the same under `nazm run`, both backends, every optimisation level and every profile |
+| **Failure** | A false `requires` fails the call with `N0410`, a false `ensures` with `N0411`, at the clause, as every failure fails (status 2 natively). A clause that itself fails — an overflow in it — fails the call with that failure: write clauses in `Int` as code is written |
+| **Proved at compile time** | A call whose arguments are all literals, of a function of the same module, is checked against its `requires` by evaluating them: false is `N0615` at the call, true makes the call's obligation proved. Nothing else is reasoned about |
+| **Across modules** | An export's precondition count is in its interface (`nazm.interface/10`): an importer's calls of it are obligations, checked as they run |
+| **`nazm obligations FILE`** | `nazm.obligations/1`: every precondition, postcondition, call of a function with a precondition, overflow, division, index, allocation, call through a function value and call into C, each `proved` (with its witness), `checked` or `unknown`. Compiler evidence, not certification |
+| **Profiles** | `critical` and `cyber` add `no-unknown-calls`: no call through a function value, so with `no-foreign` every obligation is proved or checked |
+
 ### Packages v2: a registry and version requirements — N56
 <!-- id: registry -->
 

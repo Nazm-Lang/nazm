@@ -398,6 +398,14 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N87 — assurance profiles v3 — **complete as scoped, 2026-10-04; areas 19 and 20 VERIFIED as scoped, as enforcement**
+
+`architecture.md` §7.88 first. Contracts — `requires` and `ensures`, checked on entry and on every
+return path, identical on every tier, never compiled out — with calls of literals proved or refused
+at compile time; `nazm obligations` and `nazm.obligations/1`, every obligation proved, checked or
+unknown; `no-unknown-calls` in `critical` and `cyber`. Semantic epoch 27, `nazm.interface/10`. Not
+here: loop invariants, a solver, constant time (RESEARCH), certification. Next: N88, AI/HPC v2.
+
 ### N86 — embedded v2 — **complete as scoped, 2026-10-04; area 18 VERIFIED as scoped**
 
 `architecture.md` §7.87 first. Boards are descriptions (`nazm_runtime::board::BOARDS`), from which

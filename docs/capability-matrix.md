@@ -84,8 +84,8 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; no networking, cryptography or floats |
 | 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
-| 19 | Critical profile | PARTIAL (rules v1) |
-| 20 | Cybersecurity profile | PARTIAL (rules v1) |
+| 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
+| 20 | Cybersecurity profile | VERIFIED as scoped — profile enforcement (N87): declared authority, no C, a locked build, contents kept in files, checked paths, no unknown calls; constant time RESEARCH; not certification |
 | 21 | AI/HPC | PARTIAL — one GPU map kernel, OpenCL on Apple M1 Pro (N67); vectorised sums (N66) |
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
@@ -101,8 +101,11 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
-After N86, 2026-10-04: twenty VERIFIED (area 18 moved, as scoped: two emulated boards), seventeen
-PARTIAL, none RESEARCH.
+After N87, 2026-10-04: twenty-two VERIFIED (areas 19 and 20 moved, as scoped: profile enforcement
+and obligation evidence, not certification), fifteen PARTIAL, none RESEARCH.
+
+*Historical.* After N86, 2026-10-04: twenty VERIFIED (area 18 moved, as scoped: two emulated
+boards), seventeen PARTIAL, none RESEARCH.
 
 *Historical.* After N85, 2026-10-04: nineteen VERIFIED (area 17 moved, as scoped: a practical C ABI
 subset), eighteen PARTIAL, none RESEARCH.
@@ -1763,7 +1766,24 @@ allocating.*
 computed rather than hoped for. Native frame counts do not bound stack bytes, and that
 obligation is inherited here.
 
-### 19. Critical profile — PARTIAL (restriction rules v1)
+### 19. Critical profile — VERIFIED as scoped (enforcement and evidence, N87; not certification)
+
+**N87: contracts and the obligation census — VERIFIED, as enforcement and evidence.**
+`architecture.md` §7.88 first. `requires` and `ensures` clauses, checked as a function is entered and
+on every return path (its tail, `return`, `?`) identically by `nazm run` and both backends (`N0410`,
+`N0411`), never compiled out; a call of literals proved or refused at compile time (`N0615`); a clause
+only of what cannot fail for want of authority or memory (`N0614`). `nazm obligations` prints
+`nazm.obligations/1`: every contract clause, call of a function with a precondition, overflow,
+division, index, allocation, call through a function value and call into C, each `proved` (with its
+witness), `checked` as the program runs, or `unknown`. `critical` adds `no-unknown-calls`, so with
+`no-foreign` every obligation of an accepted program is proved or checked. Evidence:
+`crates/nazm-cli/tests/contracts.rs` (11) — the three tiers agreeing on holds and failures, a `?`
+leaving through a postcondition, a `Str` result reclaimed, a failing clause failing the call, the
+literal proof and refusal, the clause shape, the census's exact rows and bytes, the profile rule, a
+callee's preconditions reaching an importer through `nazm.interface/10` and the cache, the formatter;
+`examples/contracts/` (an integer square root and a ledger). **Not claimed**: loop invariants or
+ranges as declarations, any proof beyond evaluating a literal call, absence of runtime error beyond
+the census's own `proved` entries, and certification against any standard — the next paragraph stands.
 
 **Read this before the rest.** This profile is an architectural intention. It is **not** a
 claim that Nazm is suitable for any safety-related, airborne, medical, automotive or
@@ -1824,7 +1844,15 @@ a qualified toolchain, which the bootstrap explicitly does **not** provide — `
 **Accepted when** · A proof obligation is discharged on a real Nazm program and assessed
 against a named standard by someone qualified to make that assessment. Not a test count.
 
-### 20. Cybersecurity profile — PARTIAL (restriction rules v1)
+### 20. Cybersecurity profile — VERIFIED as scoped (enforcement, N87; not certification)
+
+**N87: `cyber` v3.** `cyber` adds `no-unknown-calls` to declared effects, no C, a locked build,
+contents kept in files (N52) and checked paths (N80): no call reaches a callee, or a contract, the
+compiler does not know. Every obligation of an accepted program is proved or checked
+(`critical_and_cyber_refuse_an_obligation_of_unknown_status`). **Constant time stays RESEARCH**: the
+one subset precise enough to state needs secrets in the type system, which provenance tracks only to
+its sinks (§7.88). Dynamic loading has no construct to refuse (§7.86). Not a sandbox, and not
+certification.
 
 **What it would restrict** · Untrusted input tracked to its uses; declassification
 explicit and audited; no ambient authority; constant-time obligations honoured where they

@@ -2807,7 +2807,7 @@ the error path builds the function's `Result` and discards it instead of returni
 Repointed by N39: the error arm's `return` is Core IR's, for both backends.
 """
 file = "crates/nazm-core/src/lower.rs"
-find = "        let leave = Stmt::Return { value: rebuilt, at };"
+find = "        let leave = self.leave(rebuilt, at)?;"
 replace = "        let leave = Stmt::Eval(rebuilt);"
 
 # `interpreted-propagation-carries-on-with-the-error` is retired by N39: the interpreter has no `?`
@@ -7647,10 +7647,11 @@ name = "n36-the-interface-schema-stays"
 why = """the interface keeps the `/5` name for a shape whose absent `effects` now means undeclared, so a `/5` file is read as a `/6` one
 Repointed by N42, whose `/7` adds foreign exports: the rule is the same, one version on — a `/6` file must not be read as a `/7` one.
 Repointed by N78, whose `/8` adds traits and impls: a `/7` file must not be read as an `/8` one.
-Repointed by N85, whose `/9` adds C structs and handles: an `/8` file must not be read as a `/9` one."""
+Repointed by N85, whose `/9` adds C structs and handles: an `/8` file must not be read as a `/9` one.
+Repointed by N87, whose `/10` adds preconditions: a `/9` file must not be read as a `/10` one."""
 file = "crates/nazm-iface/src/wire.rs"
-find = """pub const SCHEMA: &str = "nazm.interface/9";"""
-replace = """pub const SCHEMA: &str = "nazm.interface/8";"""
+find = """pub const SCHEMA: &str = "nazm.interface/10";"""
+replace = """pub const SCHEMA: &str = "nazm.interface/9";"""
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
 
 # `n36-the-epoch-stays` is retired: N37 moved the epoch to 9, and the rule it pinned — the epoch
@@ -8090,10 +8091,11 @@ Repointed by N78, which moved it to 22 for traits: an entry that refused a metho
 Repointed by N79, which moved it to 23 for attenuation: an entry that refused an IoCap given for an OutCap must not be reused.
 Repointed by N80, which moved it to 24 for provenance v3: an entry that refused a path read out of a Strs must not be reused.
 Repointed by N85, which moved it to 25 for FFI v3: an entry that refused an `extern "C" struct` must not be reused.
-Repointed by N86, which moved it to 26 for device registers by width: an entry that refused `mmio_write8` must not be reused."""
+Repointed by N86, which moved it to 26 for device registers by width: an entry that refused `mmio_write8` must not be reused.
+Repointed by N87, which moved it to 27 for contracts: an entry that refused a `requires` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 26;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 25;"
+find = "pub const SEMANTIC_EPOCH: u32 = 27;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 26;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -8160,10 +8162,10 @@ killers = [{ package = "nazm-core", test = "language", name = "a_while_loop_accu
 name = "n39-return-falls-through"
 why = "a `return` is lowered as its operand evaluated and discarded, so the function carries on past it"
 file = "crates/nazm-core/src/lower.rs"
-find = """            AstStmt::Return(r) => Stmt::Return {
-                value: self.expr(&r.value)?,
-                at: r.span,
-            },"""
+find = """            AstStmt::Return(r) => {
+                let value = self.expr(&r.value)?;
+                self.leave(value, r.span)?
+            }"""
 replace = """            AstStmt::Return(r) => Stmt::Eval(self.expr(&r.value)?),"""
 killers = [{ package = "nazm-core", test = "core_ir", name = "value_if_return_and_completion_are_explicit" }]
 
@@ -10960,9 +10962,11 @@ file = "crates/nazm-service/src/profile.rs"
 find = '''
                 Rule::NoAmbientTime,
                 Rule::NoSelect,
+                Rule::NoUnknownCalls,
             ],'''
 replace = '''
                 Rule::NoAmbientTime,
+                Rule::NoUnknownCalls,
             ],'''
 killers = [{ package = "nazm-cli", test = "profiles_v2", name = "critical_refuses_a_select_by_its_call_site" }]
 
@@ -13148,3 +13152,86 @@ file = "crates/nazm-cli/src/build.rs"
 find = '    if target.arch == nazm_lir::backend::Arch::Riscv64 && !crate::backend::generates("riscv64") {'
 replace = '    if target.arch == nazm_lir::backend::Arch::Riscv64 && false {'
 killers = [{ package = "nazm-cli", test = "boards", name = "a_riscv_board_is_built_where_clang_can_and_refused_by_name_where_it_cannot" }]
+
+
+# --- N87: contracts and the obligation census ---------------------------------------------------
+
+[[mutation]]
+name = "n87-a-precondition-is-not-checked"
+why = "a `requires` is checked by nothing, so a call that breaks it runs the body"
+file = "crates/nazm-core/src/lower.rs"
+find = "            checks.push(Stmt::Eval(check));"
+replace = "            let _ = check;"
+killers = [{ package = "nazm-cli", test = "contracts", name = "a_contract_holds_or_fails_alike_on_every_tier" }]
+
+[[mutation]]
+name = "n87-a-return-skips-the-postcondition"
+why = "an early `return` and a `?` leave without their `ensures` being checked"
+file = "crates/nazm-core/src/lower.rs"
+find = """        if self.ensures.is_empty() {
+            return Ok(Stmt::Return { value, at });"""
+replace = """        if true {
+            return Ok(Stmt::Return { value, at });"""
+killers = [{ package = "nazm-cli", test = "contracts", name = "a_postcondition_is_checked_on_every_return_a_question_mark_included" }]
+
+[[mutation]]
+name = "n87-the-tail-skips-the-postcondition"
+why = "a body's final value is returned without its `ensures` being checked"
+file = "crates/nazm-core/src/lower.rs"
+find = """        if self.ensures.is_empty() {
+            return Ok(tail);"""
+replace = """        if true {
+            return Ok(tail);"""
+killers = [{ package = "nazm-cli", test = "contracts", name = "a_clause_that_itself_fails_fails_the_call_with_its_own_failure" }]
+
+[[mutation]]
+name = "n87-a-refuted-call-is-accepted"
+why = "a call of literals that breaks its callee's precondition compiles, and fails every time it runs"
+file = "crates/nazm-core/src/check.rs"
+find = "                Some(Lit::Bool(false)) => {"
+replace = "                Some(Lit::Bool(false)) if false => {"
+killers = [{ package = "nazm-cli", test = "contracts", name = "a_call_of_literals_is_proved_or_refused_at_compile_time" }]
+
+[[mutation]]
+name = "n87-every-call-is-proved"
+why = "the census calls a call's precondition proved when nothing proved it"
+file = "crates/nazm-core/src/obligations.rs"
+find = "                        None => self.push(Kind::CallPrecondition, Status::Checked, e.at, None),"
+replace = "                        None => self.push(Kind::CallPrecondition, Status::Proved, e.at, None),"
+killers = [{ package = "nazm-cli", test = "contracts", name = "a_call_of_literals_is_proved_or_refused_at_compile_time" }]
+
+[[mutation]]
+name = "n87-any-call-is-pure"
+why = "a contract clause may call any function, so evaluating it may perform an effect or allocate"
+file = "crates/nazm-core/src/check.rs"
+find = "                    .is_some_and(|v| v.sig.pure);"
+replace = "                    .is_some();"
+killers = [{ package = "nazm-cli", test = "contracts", name = "a_clause_is_only_what_cannot_fail_for_want_of_authority_or_memory" }]
+
+[[mutation]]
+name = "n87-the-interface-forgets-preconditions"
+why = "an export's preconditions are not published, so an importer's census counts none of its calls"
+file = "crates/nazm-iface/src/wire.rs"
+find = "                requires: e.preconditions,"
+replace = "                requires: 0,"
+killers = [{ package = "nazm-cli", test = "contracts", name = "an_imported_function_s_preconditions_reach_its_callers_through_the_interface" }]
+
+[[mutation]]
+name = "n87-critical-admits-a-function-value"
+why = "`no-unknown-calls` passes a call through a function value, an obligation of unknown status"
+file = "crates/nazm-service/src/profile.rs"
+find = """                    Some(f) => f.indirect.clone(),
+                }
+            } else if rule == Rule::NoRecursion {"""
+replace = """                    Some(_) => Vec::new(),
+                }
+            } else if rule == Rule::NoRecursion {"""
+killers = [{ package = "nazm-cli", test = "contracts", name = "critical_and_cyber_refuse_an_obligation_of_unknown_status" }]
+
+[[mutation]]
+name = "n87-llvm-names-the-wrong-clause"
+why = "the LLVM backend reports a broken precondition as a postcondition, disagreeing with the interpreter and Cranelift"
+file = "crates/nazm-lir/src/emit.rs"
+find = "    if which == 0 {"
+replace = "    if which != 1 && which != 0 {"
+killers = [{ package = "nazm-cli", test = "contracts", name = "a_contract_holds_or_fails_alike_on_every_tier" }]

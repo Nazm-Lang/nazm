@@ -506,7 +506,8 @@ accepts.
 | `impl_item` | `"impl" , type , IDENT , type , "{" , { function } , "}"` |
 | `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";"` |
 | `qualifier` | `IDENT , "::"` |
-| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
+| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , { contract } , block` |
+| `contract` | `( "requires" \| "ensures" ) , expression` |
 | `foreign_function` | `[ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , "=" , STRING , ";"` |
 | `effect_set` | `"!" , "{" , [ effect_name , { "," , effect_name } ] , "}"` |
 | `effect_name` | `IDENT \| "spawn"` |
@@ -668,7 +669,7 @@ use "shapes.nz" as s; fn f(x: s::Shape) -> Int { match x { s::Shape.Dot() => 0, 
 ### `function`
 
 ```ebnf
-function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block ;
+function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , { contract } , block ;
 ```
 
 ```nazm
@@ -685,6 +686,22 @@ pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
 
 ```nazm
 fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") }
+```
+
+### `contract`
+
+```ebnf
+contract = ( "requires" | "ensures" ) , expression ;
+```
+
+A contract clause (N87): `requires` is checked as the function is entered, `ensures` as it
+returns, on every path, with `result` the value returned. Both are IDENTs recognised only
+here, between the signature and the body; every `requires` comes before every `ensures`. A
+clause is a `Bool` of literals, names, operators, field reads and calls of pure functions.
+See `docs/spec.md`, *Contracts*.
+
+```nazm
+fn half(n: Int) -> Int ! {} requires n >= 0 ensures result * 2 <= n { n / 2 } fn main() -> Int { half(8) }
 ```
 
 ### `foreign_function`
