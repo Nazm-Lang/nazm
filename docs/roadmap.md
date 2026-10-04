@@ -398,6 +398,13 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N93 — coverage-guided fuzzing — **complete as scoped, 2026-10-04; area 30's fuzzing stays PARTIAL**
+
+`architecture.md` §7.94 first. A coverage-guided fuzzer of the compiler's own entry points, built
+with SanitizerCoverage and run contained by `cargo xtask contained fuzz`; four targets, 3.9 million
+executions, no crash; the minimised corpora replayed by the ordinary suite. Not here: sanitizers,
+Miri, Loom, backend/FFI/registry fuzzing. Next: N94, reproducibility and provenance v2.
+
 ### N92 — performance evidence v2 — **complete as scoped, 2026-10-04; area 28 stays PARTIAL**
 
 `architecture.md` §7.93 first. Every measured section of `performance.md` is filed in
