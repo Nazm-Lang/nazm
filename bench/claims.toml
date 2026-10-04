@@ -372,3 +372,8 @@ why = "measured on the tree of its date by the method its prose describes, befor
 heading = "Development and evidence pipeline parallelism — N14.1, measured 2026-09-25"
 status = "dated"
 why = "measured on the tree of its date by the method its prose describes, before the post-v1 baseline (N75); a record of that date, not a claim about the current tree"
+
+[[claim]]
+heading = "The compiler written in Nazm at parity — N102, measured 2026-10-05"
+status = "unreproduced"
+why = "measured once on the host with the debug binary by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"

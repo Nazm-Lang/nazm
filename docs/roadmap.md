@@ -23,8 +23,8 @@ The invariants that constrain any ordering are [`master-architecture.md`](master
 | | |
 | --- | --- |
 | `nazm run` | The interpreter. The widest subset |
-| `nazm build` | Native, for the bootstrap subset. **Narrower than `nazm run`** — notably it refuses recursion |
-| `compiler/*.nz` | A compiler for Nazm written in Nazm, reaching a C2 ≡ C3 fixpoint |
+| `nazm build` | Native, through Core IR, MIR and LIR, by LLVM or Cranelift |
+| `compiler/*.nz` | A compiler for Nazm written in Nazm, reaching a C2 ≡ C3 fixpoint; all 21 parity probes as the reference builds them (N102), and narrower than the language — `limitations.md` |
 
 Ask `nazm capabilities --json` for construct-level truth; it is read from the compiler's own
 tables. Ask `capability-matrix.md` for architectural truth, area by area.
@@ -404,6 +404,15 @@ honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidenc
 the compiler written in Nazm at parity (N102), re-exports (N103), authority (N104), one LIR contract
 (N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
 catalogue (N108).
+
+### N102 — the compiler written in Nazm at parity — **complete, 2026-10-05: 21 of 21 probes**
+
+`architecture.md` §7.103 first. Effects, capabilities, recursion with the stack check, contracts,
+foreign declarations, `@std`, traits, closures and function values, `&&`, `||` and `!` ported into
+`compiler/*.nz`, each as the reference has it; the parity record 21 equal, 0 refused, none differs.
+Selfhost and bootstrap passed contained (C2 = C3, `8cc750c6…`, 34 conformance cases, 29 refusals).
+The cost: 3,400 more lines and about 30 % more check time for the compiler itself
+(`performance.md`). Next: N103.
 
 ### N101 — evidence closure — **complete, 2026-10-05**
 

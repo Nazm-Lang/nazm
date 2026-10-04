@@ -3769,6 +3769,23 @@ remaining crashing case moved out of process. For fuzzing, a decision to start.
 
 ### 31. Bootstrap — VERIFIED
 
+*N102, 2026-10-05: parity on every probe — 21 of 21.* `architecture.md` §7.103 first. The eight
+refusals N98 measured are gone: effects and capabilities, recursion (the reference's stack check,
+derived and gated by `check-runtime`), contracts, foreign declarations (`Int` only), `@std`, traits,
+closures and function values, and with them tasks and channels; `&&`, `||` and `!` too.
+`compiler/parity.json`: **21 equal, 0 refused, none differs**. The checker's answers are compared
+with the reference's — codes and spans — on 39 sources of the N102 features and four new refusals
+(`N0602`, `N0386`, `N0366`, `N0614`); `compiler/conformance/features.nz` and a two-module case run
+through C2, C3 and the reference with the same memory counters, closures included. Contained:
+selfhost 43 of 43, bootstrap C2 = C3 (`8cc750c6…`, 16,030 lines, 34 cases of which 14
+multi-module, 29 refusals). **Mutation**, contained: all 100 catalogue entries on `compiler/`,
+nine of them new, applied one at a time — 100 caught; one only after the memory test gained a case
+(a capture not retained into a closure, invisible until a later string reuses the freed storage),
+and one, `selfhost-a-success-value-is-not-retained`, crashing the whole suite and caught cleanly by
+its declared killer. Parity on the probes is not parity on the language: what remains is in
+`limitations.md` (packages, generic channels, `select`, the clock, devices, `c_errno`, provenance,
+profiles, escapes, `::`, `as`). A fixpoint is self-reproduction, not correctness.
+
 *N98, 2026-10-04: parity of the compiler written in Nazm — measured and gated; not reached.*
 `architecture.md` §7.99 first. `compiler/parity/` holds 21 probes, one per feature; the contained
 test `the_parity_record_is_what_both_compilers_do_with_each_feature` (`crates/nazm-cli/tests/selfhost.rs`)

@@ -20,8 +20,9 @@ found only by reading all of it.
   (`architecture.md` §7.53); a field of function type is called by
   binding it first; no function value crosses into a task (`N0321`); a path that went through a
   function value carries what every function value of its type may return, and a call through a
-  trait bound what every impl of that method may (N80). The compiler written in Nazm has none of it
-  (areas 3, 5, 7, 16). *Narrowed in N50 and N80.*
+  trait bound what every impl of that method may (N80). The compiler written in Nazm has closures,
+  function values and traits since N102, and not provenance (areas 3, 5, 7, 16). *Narrowed in N50, N80
+  and N102.*
 - A module cannot re-export a name or export one under another name (area 2). A module's
   persisted resolution (N77, `nazm.resolved/1`) holds its names, not its types: `nazm build` and
   `nazm run` still check every module, and only `nazm check` and `nazm references` read it.
@@ -46,8 +47,8 @@ found only by reading all of it.
   the stack is exhausted only while the non-recursive calls between two checks fit the quarter
   kept as headroom; no tail-call optimisation; the depth at which it arrives depends on the
   backend and the optimisation level (areas 11, 12). *Narrowed in N49, which compiles recursion.*
-- The compiler written in Nazm refuses string escapes, `&&`, `||`, `!`, `::`, `as` and recursion
-  by name: its bootstrap subset is narrower than the language (area 31).
+- The compiler written in Nazm refuses string escapes, `::` and `as` by name: its bootstrap subset
+  is narrower than the language (area 31). *Narrowed in N102: `&&`, `||`, `!` and recursion.*
 - Allocation is tracked per site, not per byte: `nazm explain-cost` reports each allocation,
   retain, block, channel, foreign and task site with a count per call that is `at-most-once` or
   `unknown` (a loop), and `embedded` refuses an `unknown` allocation; there is no byte bound, no
@@ -206,10 +207,12 @@ found only by reading all of it.
   no backend, FFI or registry-archive fuzzing, and the differential generator writes `Int` and
   `Bool` programs only (area 30). A minimised corpus reaches 99.3 % or more of its campaign's edges.
   *Narrowed in N73 and N93.*
-- The compiler written in Nazm builds 13 of the 21 parity probes as the reference does and refuses
-  8 — closures, traits, effects, tasks and channels, contracts, `@std`, foreign declarations, and a
-  recursive function whose result is an `if` (`compiler/parity.json`, N98); it reads no package
-  manifest (areas 16, 17, 26, 31).
+- The compiler written in Nazm builds all 21 parity probes as the reference does (N102,
+  `compiler/parity.json`), which is parity on those probes and not on the language: it reads no
+  package manifest and refuses a package import by name; it has no `Chan[T]` of any element type, no
+  `select`, clock, device registers or `c_errno`; a foreign declaration takes and returns `Int` only;
+  it checks no provenance, no profile and no information flow; it has no string escapes, `::` or
+  `as`. It emits one LLVM module for a whole program (areas 16, 17, 26, 31). *Narrowed in N102.*
 - Checking is slower than at N75: `nazm check compiler/emit.nz` 107 → 166 ms in the contained
   benchmark, the steps at N76 and N80; `channels` builds 13–31 % slower (area 28, `performance.md`).
 - Of the 71 measured sections of `performance.md`, 8 current claims (N80, N82–N88) have no command
@@ -233,7 +236,8 @@ found only by reading all of it.
   the same module; a clause is checked every time, never assumed, and costs its evaluation; the
   obligation census's `proved` entries are the whole of what is proved — every other overflow, index
   and division is checked as the program runs, which is the language's guarantee, not a proof of
-  absence; the compiler written in Nazm parses no contract (area 30). Not certification (area 19).
+  absence; the compiler written in Nazm checks a contract's shape and the clauses at run time, as the
+  reference does, and proves nothing (area 30). Not certification (area 19).
 - Seventeen rules: N87 added `no-unknown-calls` (to `critical` and `cyber`), N80 `checked-paths`, N79 `explicit-authority` (the `authority` profile); N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
   `no-blocking` and `bounded-loops` (the `realtime` profile), N72 `signed-writes` (`accounts`); the
   stack rule bounds depth, not bytes, and is `unknown` through a function value; no constant-time

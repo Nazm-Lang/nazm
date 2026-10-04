@@ -1552,7 +1552,7 @@ both native backends.
 | **What is guaranteed** | Unbounded recursion meets a check. A chain of non-recursive calls between two checks is bounded by the program's call graph but its stack is not measured: the guarantee holds while such a chain fits in the quarter kept as headroom (2 MiB at 8 MiB), and a program whose non-recursive frames are larger can still be killed by the operating system |
 | **What is not** | Tail calls are ordinary calls: no tail-call optimisation is performed or promised. Recursion depth is not bounded by the language, and the depth at which `N0408` arrives depends on frame sizes, the backend and the optimisation level |
 | **The interpreter** | Unchanged: its limit is its call-depth budget, `N0403`. The two implementations agree on what a terminating program produces; each reports its own limit, and neither limit is a language rule |
-| **The compiler written in Nazm** | Still refuses recursion by name: its emitter has no stack check, so the reason this section gave for refusing is still its reason |
+| **The compiler written in Nazm** | Compiles recursion since N102 with the same check: `nz.stack_check`, derived from the reference runtime and gated by `cargo xtask check-runtime`, on entry to every function in a call cycle or calling through a value, failing `N0408` at the function's name |
 
 **The general rule, of which these are instances: a runtime resource limit is an
 implementation contract, never a silently invented language rule.** Where an
@@ -1565,8 +1565,8 @@ never becomes false runs until something kills it, with no `N0402`. This is stat
 that the difference is part of the record rather than a discovery. The two implementations
 agree on what a *terminating* program produces; they do not agree on what a runaway one
 does, and no test claims otherwise. Recursion was refused outright by both compilers until N49;
-`nazm build` now compiles it with a measured stack guard, and the compiler written in Nazm still
-refuses it — see *Native recursion, and the stack it runs on*, below.
+`nazm build` now compiles it with a measured stack guard, and since N102 so does the compiler
+written in Nazm — see *Native recursion, and the stack it runs on*, below.
 
 ### Strings are bytes, and what that commits to
 <!-- id: strings -->
