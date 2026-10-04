@@ -16,6 +16,11 @@ second half of this file remain targets.
 This file exists so that claims are written down *before* benchmarks are chosen, which
 is the only order in which a benchmark can falsify anything.
 
+**Every measured section is filed (N92).** `bench/claims.toml` names each section below whose heading
+says *measured* or *frozen* as **reproducible** — and the command that regenerates it — **dated**, a
+record of the tree on its date and not a claim about this one, or **unreproduced**, a current claim
+no command regenerates yet. `cargo xtask check` refuses a section the register does not file.
+
 ---
 
 ## The measurements
@@ -2647,6 +2652,39 @@ and an edit still copies the scan and moves its suffix, which is linear in the f
 copy is the next cost, and it is not attacked here. No variance beyond the median is recorded, and
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
+
+### Performance evidence v2 — N92, measured 2026-10-04
+
+**Method:** `cargo xtask contained bench --save` at N92's tree: one CPU, 4 GiB, offline, the host
+otherwise idle, five runs after a discarded warm-up; `nazm.bench/2` in `bench/record.json` and
+`bench/baseline-linux-aarch64.json`, which it replaces — the file held a baseline older than N75's,
+from another configuration, and `--check` against it reported twenty-one "regressions" that were the
+configuration's. Medians in ms, with N75's from the section below.
+
+| program | check | build `-O0` | build `-O2` | interpret | native `-O2` | executable |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| arith | 2.8 | 90.5 (95.3) | 98.9 (99.7) | 2,718.7 (2,765.2) | 4.6 (4.5) | 71,984 B |
+| calls | 3.0 | 91.3 (93.7) | 99.1 (100.1) | 1,492.2 (1,534.7) | 1.0 (1.0) | 71,984 B |
+| channels | 3.1 | 116.3 (103.0) | 197.8 (150.5) | 1,270.2 (1,335.9) | 1,239.4 (1,331.5) | 77,040 B |
+| floor | 2.9 | 89.3 (90.4) | 94.3 (99.2) | 2.3 (2.5) | 0.3 (0.3) | 71,936 B |
+| sequences | 3.0 | 91.2 (93.5) | 115.2 (115.6) | 765.0 (771.1) | 2.3 (2.7) | 72,896 B |
+| sieve | 3.1 | 90.8 (95.1) | 119.0 (117.5) | 1,009.9 (1,013.2) | 3.4 (2.9) | 72,888 B |
+| strings | 3.1 | 93.3 (94.3) | 124.6 (129.0) | 49.5 (48.9) | 7.1 (7.4) | 73,376 B |
+| compiler | **165.6 (107.4)** | 2,030.2 (1,939.6) | | | | |
+
+The noise floor (the empty program, natively) is 0.3 ms; the median absolute deviation is under 1.5
+ms everywhere but the two `channels` runs (51 and 32 ms), whose spread N75 also recorded. The sieve's
+references: C (`-O2`, unchecked) 2.5 ms, **Rust (`-O`, overflow- and bounds-checked) 2.6 ms**, Nazm
+3.4 ms; Python and Go are not in the image, and the record says so.
+
+**Two regressions since N75, stated and not hidden.** `nazm check compiler/emit.nz` is 54 % slower
+(107.4 → 165.6 ms), and `channels` builds 13 % (`-O0`) and 31 % (`-O2`) slower. Located for the
+first by release builds of each milestone's records commit on the host (Apple M1 Pro, eleven runs,
+median, the same `compiler/` for all): N75 54.0 ms, N76 63.9, N77 67.3, N78 68.8, N79 67.5, N80
+75.2, N92 76.0 — the steps are N76 (the lossless tree beneath every parse) and N80 (provenance v3),
+each of which `performance.md` measured on its own files at the time; nothing since moved it. Which
+work inside those milestones costs it is not measured. The `channels` build regression is not
+located. Interpretation and native code are unchanged within noise.
 
 ### Debugging and sampling — N91, measured 2026-10-04
 

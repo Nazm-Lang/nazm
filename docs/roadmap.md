@@ -398,6 +398,13 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N92 — performance evidence v2 — **complete as scoped, 2026-10-04; area 28 stays PARTIAL**
+
+`architecture.md` §7.93 first. Every measured section of `performance.md` is filed in
+`bench/claims.toml` as reproducible, dated or unreproduced, held by a gate; `nazm.bench/2` records the
+machine, the spread, sizes, the noise floor and why a reference was not measured; Rust and Go sieve
+references. Eight current claims stay unreproduced. Next: N93, coverage-guided fuzzing.
+
 ### N91 — debugger and profiler v3 — **complete as scoped, 2026-10-04; area 27 stays PARTIAL**
 
 `architecture.md` §7.92 first. Bindings have lexical scopes under LLVM; Cranelift writes DWARF line

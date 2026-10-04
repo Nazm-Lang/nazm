@@ -377,6 +377,12 @@ sampler, the interval, the total, the samples by Nazm function and line, by runt
 system symbol (each system frame with `blocked`), the blocked count and the unattributed count. The
 removed refusal of `--debug` with Cranelift was a toolchain message, not a code.
 
+**Applied to N92, performance evidence v2.** No code appeared. `nazm.bench/1 → /2`, additive:
+`cpu_model`, `memory_bytes`, `kernel`, and `cpus` read on Linux too; per measurement `p90_ms`,
+`max_ms`, `mad_ms` and `runs_ms`; `noise_floor_ms`, `binary_bytes`, `references` (how each is built
+and whether its arithmetic is checked) and `not_measured` (each absent reference, with why). A `/1`
+baseline is still read by `--check`. `bench/claims.toml` is new and is a register, not a schema.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of
