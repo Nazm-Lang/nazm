@@ -8089,6 +8089,54 @@ current claim — every entry not dated — is reproducible.
 **What would prove this unsuitable.** A reproducible entry whose command no longer prints its metric;
 a current claim filed as dated to escape the gate.
 
+## 7.94 Coverage-guided fuzzing: a fuzzer that keeps what reaches new code, contained, replayed by the suite — N93, 2026-10-04
+
+Written before the code. Area 30's fuzzing half is PARTIAL: N73's two fuzzers are seeded and blind —
+a mutated input is run and thrown away whether or not it reached anything new — and "not
+coverage-guided" is the named limit, `cargo fuzz` needing `libfuzzer-sys`, which is not in this
+machine's offline crate cache.
+
+**The fuzzer.** `fuzz/` is a crate of its own workspace, as cargo-fuzz's are. Its code under test —
+the compiler's crates — is built with LLVM's SanitizerCoverage in `trace-pc-guard` mode, a stable
+`rustc` option (`-C passes=sancov-module` with its `llvm-args`); the callbacks that count edges are
+C (`fuzz/cov.c`), compiled without instrumentation. An input is **kept** when it reaches an edge no
+earlier input reached, and inputs are mutated from what is kept: byte edits, tokens of the language
+inserted whole, lines duplicated, deleted, swapped or spliced in from another kept input, and names
+renamed everywhere — structure a byte flip rarely makes. Its one `unsafe` is reading the C counters,
+outside the workspace whose lint forbids it.
+
+**Targets.** The compiler's entry points, in process: `front` (parse and check: a diagnostic is the
+answer to any input, a panic a defect); `lower` (Core IR and MIR for every program the checker
+accepts, and **MIR's validator must accept what lowering produced** — validator fuzzing); `run` (the
+interpreter under its step and depth budgets); `manifest` (a package manifest and every version
+requirement in it). A panic is shrunk by lines and recorded; the campaign fails.
+
+**Budgets and replay.** `cargo xtask contained fuzz [SECONDS] [TARGET…]` runs each target for
+SECONDS (300 by default) in the contained runner, seeded from its persistent corpus and the
+repository's programs, and exports each target's **minimised** corpus — the smallest set of kept
+inputs, chosen greedily, that reaches every edge reached — and a report, one `nazm.fuzz/1` line per
+target. The minimised inputs are committed to `fuzz/corpus/TARGET/`, and the ordinary suite replays
+every one through the same entry point (`crates/nazm-cli/tests/fuzz_replay.rs`): the evidence a
+release carries is that replay, and the campaign that grew it is rerun by one command.
+
+**Who owns what.** `fuzz/` owns the engine and the coverage; `xtask` owns the contained campaign;
+the suite owns the replay. The compiler is unchanged; a defect found is fixed where it lives, with
+a regression input in the corpus and a mutant.
+
+**Versions.** None change: no language, IR, runtime or schema. `nazm.fuzz/1` is a report line.
+
+**Negative example.** An input that panics the checker fails the campaign and is written, shrunk, to
+the report. **Boundary example.** An input the checker refuses is a kept input when its diagnostic
+path is new — refusals are coverage too.
+
+**Not here.** Sanitizers (no `unsafe` in the compiler to run them on; ASan on a nightly is not this
+toolchain), Miri over the whole suite, Loom (not in the offline cache), backend and FFI differential
+fuzzing beyond N73's generator, registry archives, and a contract VM. Area 30's fuzzing half is
+VERIFIED for the four targets at the stated budget, not for those.
+
+**What would prove this unsuitable.** A corpus input the replay passes and the campaign's target
+panics on; a "minimised" corpus that reaches fewer edges than the kept set.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
