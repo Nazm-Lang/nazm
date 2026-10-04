@@ -398,6 +398,12 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N98 — the compiler written in Nazm at parity — **not accepted: parity measured, 13 of 21 probes**
+
+`architecture.md` §7.99 first. A per-feature parity record, measured contained and gated:
+13 equal, 8 refused, none differs. Porting the refused features is the remaining work, and the
+acceptance criterion is not met. Next: N99, JIT and REPL.
+
 ### N97 — formal semantics v2 — **complete as scoped, 2026-10-04; proofs BLOCKED (no proof assistant)**
 
 `architecture.md` §7.98 first. The formal model extended to loops, mutation, early return and
