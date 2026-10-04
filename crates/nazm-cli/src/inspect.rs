@@ -214,6 +214,17 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
             "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
             "target": target,
             "targets": targets,
+            // The support matrix (N95, §7.96): every target, run-verified, compile-only or
+            // unsupported under each backend, with its evidence and CPU identity.
+            "support": nazm_lir::backend::SUPPORT.iter().map(|c| serde_json::json!({
+                "triple": c.triple,
+                "llvm": { "status": c.llvm.name(), "evidence": c.llvm.evidence(), "cpu": c.llvm_cpu },
+                "cranelift": { "status": c.cranelift.name(), "evidence": c.cranelift.evidence(), "cpu": c.cranelift_cpu },
+                "debugger": c.debugger,
+            })).collect::<Vec<_>>(),
+            "non_goals": nazm_lir::backend::NON_GOALS.iter()
+                .map(|(what, why)| serde_json::json!({ "what": what, "why": why }))
+                .collect::<Vec<_>>(),
             // Each board's description (N86, §7.87): what is the board's and not the language's.
             "boards": boards(),
             // What a native build still runs besides this compiler (N59, §7.61): the C
