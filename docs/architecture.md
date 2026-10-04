@@ -8413,6 +8413,66 @@ repaired to the code that now owns the rule, never dropped.
 **What would prove this wrong.** A declared killer that passes with its mutant applied, in a fresh
 directory, under the contained runner.
 
+## 7.103 The compiler written in Nazm at parity: 21 of 21, and what each dimension means — N102, 2026-10-04
+
+Written with the port rather than before it: the constitution below states what the work
+established, and it was settled probe by probe as each refusal was replaced. N98 measured the
+compiler written in Nazm (`compiler/*.nz`) against the reference on 21 probes: 13 equal, 8 refused.
+Owner: the compiler written in Nazm, held by `crates/nazm-cli/tests/selfhost.rs` and
+`compiler/parity.json`.
+
+**What was ported, each as the reference has it and none for a probe.**
+
+| Feature | Lexer / parser | Checker | Emitter |
+| --- | --- | --- | --- |
+| Effect sets `! { … }` | `!`, the set on the function's text | `N0366`–`N0368`, inferred in rounds as `effects.rs` does; the bridge's assumption for another module's undeclared function | nothing |
+| Capabilities | the seven type names | types; `IoCap` accepted where `OutCap` is expected; `N0371` for a parameter of `main` that is none; no equality | an `i64` nothing reads; `main` given one per parameter |
+| Recursion | — | — | `nz.stack_check` on entry to every function in a call cycle or calling through a value, failing `N0408` at the function's name — the reference runtime's, derived and gated (`check-runtime`) |
+| Contracts | `requires`/`ensures` as children of the function: parameters, `requires`, body, `ensures` | a `Bool` (`N0300`); `N0614` for what a clause may not contain; `result` in a slot of the function's own | `N0410` on entry; every exit stores into `result`'s slot and leaves through one block, `nz.ens`, where `N0411` is checked before the frame goes |
+| Foreign declarations | `extern "C" fn … = "symbol";` | no body; contract `foreign` | the C symbol declared, and a function under the definition's own symbol calling it; `Int` only |
+| Standard modules | `@std/NAME` keyed as itself, read from the library beside the core prelude | — | — |
+| Traits | `trait`, `impl`, `recv.m(…)`, `Trait.m(x)`; a method named `#Trait.Type.m`, in no namespace a call by name searches | `N0600`–`N0607`, `N0609`, `N0364` for a bound; a concrete call resolved to the impl's definition | a call through a bound resolved per instance |
+| Closures and function values | `fn(T) -> R ! {…}` types; closure literals | captures through every enclosing closure; `N0386`, `N0387`; effects checked per closure; effect subsumption where a value is passed | the reference's objects (`nz.closure_new`, counted), captures retained into them, code taking the object first, thunks for named functions, the closure runtime derived and gated |
+| `&&`, `\|\|`, `!` | the reference's binding powers | `N0304` | short-circuit branches and a `phi` |
+
+**Parity, dimension by dimension.** Parse: the selfhost parser's tree is compared with the reference's on
+every source in the tree, as before. Resolution: unchanged rules, plus trait and method resolution
+compared in `the_nazm_checker_agrees_with_the_reference_on_the_n102_features` (39 sources, every code
+and span). Checking: the same test, plus every earlier one; **authority is not checked** by the
+compiler written in Nazm — no `N0369` — so it accepts a program whose function exercises authority
+it does not hold, which the reference refuses (N104 removes the bridge that makes that rule
+complicated; the port is its natural successor). Effects: as the reference, including the bridge's
+assumption. Code generation and runtime ABI: the same failure codes, the same memory report, closure
+counters included, on every probe and on
+`the_nazm_written_compiler_compiles_the_n102_features_with_the_same_memory_semantics` (16 programs and
+4 failures, on stated answers). Packages: refused by name (`NAME:path`). Profiles: none, as before.
+Diagnostics: codes and primary spans compared; message text is not.
+
+**What still differs, outside the parity record's subset, each refused by name or recorded:**
+string escapes, `::`, `as`, effect parameters, a function type inside another type, foreign types
+other than `Int` and foreign exports, `Chan[T]`, `select`, the clock, device registers, `N0615`
+(a literal call proved against a precondition at compile time — checked at run time instead),
+reserved words, and authority. The release-native subset the parity record defines is its 21 probes'
+features.
+
+**Bootstrap.** C2 = C3 (`8cc750c6…`) at 16,030 source lines, 34 conformance cases (14 multi-module)
+and 29 refusals agreeing across C2, C3 and the reference — the new features among them. Self-reproduction,
+not correctness.
+
+**Cost.** The source grew 27% (12,767 → 16,200 lines across `compiler/*.nz`); `nazm check` of it cold
+1.05 → 1.36 s and 50 → 75 MB; `nazm build` 2.39 → 2.66 s and 82 → 106 MB.
+
+**Versions.** Semantic epoch, interface schema, runtime ABI, Core/MIR/LIR and machine schemas:
+unchanged — no rule of the language changed; the compiler written in Nazm caught up with it. `nazm.parity/1`
+unchanged; its record moved to 21 equal.
+
+**Negative example.** A trait method whose impl declares `! { io }` where the trait declares `! {}` is
+`N0603` in both checkers. **Boundary example.** `false && boom()` never calls `boom` in either
+compiler's program.
+
+**What would prove this wrong.** A program both compilers accept whose two executables differ in
+status, output, failure code or memory report.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
