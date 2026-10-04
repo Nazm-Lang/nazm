@@ -584,7 +584,12 @@ pub fn machine_only_call(
     resolution.functions().iter().find_map(|f| {
         f.call_sites.iter().find_map(|site| match site.callee {
             sema::resolve::Callee::Builtin(
-                b @ (sema::Intrinsic::MmioRead32 | sema::Intrinsic::MmioWrite32),
+                b @ (sema::Intrinsic::MmioRead32
+                | sema::Intrinsic::MmioWrite32
+                | sema::Intrinsic::MmioRead8
+                | sema::Intrinsic::MmioWrite8
+                | sema::Intrinsic::MmioRead16
+                | sema::Intrinsic::MmioWrite16),
             ) => Some((site.span, b.name().to_owned())),
             _ => None,
         })
@@ -600,5 +605,8 @@ pub fn machine_only(at: nazm_span::Span, name: &str, what: &str) -> nazm_diag::D
         format!("{what} cannot perform the built-in `{name}`: it has no device registers"),
     )
     .primary_label("a device register")
-    .help("device registers exist only in a freestanding build: `nazm build --target aarch64-unknown-none`")
+    .help(
+        "device registers exist only in a board's build: `nazm build --target aarch64-unknown-none` \
+         or `--target riscv64gc-unknown-none-elf`",
+    )
 }

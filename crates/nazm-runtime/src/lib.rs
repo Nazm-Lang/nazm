@@ -197,8 +197,10 @@ pub fn escape(s: &str) -> String {
 /// runs, and the per-target `switch` artefact every build reaching tasks or channels links. 12 is N85's:
 /// `nz.cstr_len` for a `Str` C returns, `nz.errno_save` after every foreign call and
 /// `nz.errno_last` for `c_errno()`, the thread-local `nz.errno_saved`, and the per-target `errno`
-/// unit defining `nz_errno_location` that a build reaching them links.
-pub const RUNTIME_ABI_REVISION: u32 = 12;
+/// unit defining `nz_errno_location` that a build reaching them links. 13 is N86's: the device
+/// registers by width (`nz.mmio_read8`, `nz.mmio_write8`, `nz.mmio_read16`, `nz.mmio_write16`),
+/// and a board's runtime generated from its description.
+pub const RUNTIME_ABI_REVISION: u32 = 13;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -336,6 +338,10 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.chanv_release", [Ptr], None, Channels, "one reference fewer; the last releases each queued slot and frees the channel"),
     import!("nz.mmio_read32", [I64], Some(Word::I64), Base, "reads a device register; takes nothing (N62)"),
     import!("nz.mmio_write32", [I64, I64], Some(Word::I64), Base, "writes a device register; takes nothing (N62)"),
+    import!("nz.mmio_read8", [I64], Some(Word::I64), Base, "reads a byte-wide device register; takes nothing (N86)"),
+    import!("nz.mmio_write8", [I64, I64], Some(Word::I64), Base, "writes a byte-wide device register; takes nothing (N86)"),
+    import!("nz.mmio_read16", [I64], Some(Word::I64), Base, "reads a 16-bit device register; takes nothing (N86)"),
+    import!("nz.mmio_write16", [I64, I64], Some(Word::I64), Base, "writes a 16-bit device register; takes nothing (N86)"),
     import!("nz.cstr_has_nul", [Ptr, I64], Some(Word::Bit), Strings, "borrows the bytes; whether they hold a NUL (N55)"),
     import!("nz.cstr_borrow", [Ptr, I64], Some(Word::Ptr), Strings, "borrows the bytes; a NUL-terminated copy the caller owns and frees, or null (N55)"),
     import!("nz.cstr_len", [Ptr], Some(Word::I64), Strings, "borrows the C string; its length up to the NUL (N85)"),
@@ -479,6 +485,10 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chanv_release", "void" ("ptr") "", true, Channels, "", Never, Any, "one reference fewer; the last releases the queued slots and frees the channel", "takes a reference, atomically"),
     rt!("nz.mmio_read32", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 32-bit read of a device register (N62); reached only in a freestanding image", "none"),
     rt!("nz.mmio_write32", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 32-bit write of a device register (N62); reached only in a freestanding image", "none"),
+    rt!("nz.mmio_read8", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 8-bit read of a device register (N86); reached only in a freestanding image", "none"),
+    rt!("nz.mmio_write8", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 8-bit write of a device register (N86); reached only in a freestanding image", "none"),
+    rt!("nz.mmio_read16", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 16-bit read of a device register (N86); reached only in a freestanding image", "none"),
+    rt!("nz.mmio_write16", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 16-bit write of a device register (N86); reached only in a freestanding image", "none"),
     rt!("nz.cstr_has_nul", "i1" ("ptr", "i64") "", true, Strings, "", Status, Any, "whether a Str argument to C holds a NUL byte (N55)", "borrows the bytes"),
     rt!("nz.cstr_borrow", "ptr" ("ptr", "i64") "", true, Strings, "", Null, Any, "a Str argument as a C string, for one foreign call (N55)", "borrows the bytes; the copy is the caller's to free"),
     rt!("nz.cstr_len", "i64" ("ptr") "", true, Strings, "", Never, Any, "the length of a C string a foreign function returned (N85)", "borrows the C string"),
@@ -902,9 +912,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twelve_and_its_digest_covers_the_pool_and_errno() {
-        // N85's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 12);
+    fn the_runtime_is_revision_thirteen_and_its_digest_covers_the_pool_and_errno() {
+        // N86's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 13);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.mmio_write8("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.errno_save("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cstr_len("));
         // Each target's `errno` is its own C library's.

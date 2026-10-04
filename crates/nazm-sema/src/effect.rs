@@ -122,6 +122,10 @@ impl Effect {
             // (N62). Its authority is an `MmioCap`, held, as a clock's is a `TimeCap`.
             | Intrinsic::MmioRead32
             | Intrinsic::MmioWrite32
+            | Intrinsic::MmioRead8
+            | Intrinsic::MmioWrite8
+            | Intrinsic::MmioRead16
+            | Intrinsic::MmioWrite16
             // A sum of what the caller holds (N66).
             | Intrinsic::IntsSum
             | Intrinsic::ChanSelectOf

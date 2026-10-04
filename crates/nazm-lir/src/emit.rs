@@ -3632,11 +3632,13 @@ impl Emitter<'_> {
             // A device register (N62): one volatile access, in the runtime so that no
             // optimisation of this module can merge, move or drop it. Only a freestanding
             // build reaches here; a hosted one was refused before it was lowered.
-            Builtin::MmioRead32 => {
+            // A device register by its width (N62, N86): the runtime's volatile access.
+            Builtin::MmioRead32 | Builtin::MmioRead8 | Builtin::MmioRead16 => {
                 let t = self.fresh();
                 let _ = writeln!(
                     self.out,
-                    "  %{t} = call i64 @nz.mmio_read32(i64 %{})",
+                    "  %{t} = call i64 @nz.{}(i64 %{})",
+                    op.name(),
                     arg(0)
                 );
                 return Val::Of {
@@ -3644,11 +3646,12 @@ impl Emitter<'_> {
                     ty: Ty::Int,
                 };
             }
-            Builtin::MmioWrite32 => {
+            Builtin::MmioWrite32 | Builtin::MmioWrite8 | Builtin::MmioWrite16 => {
                 let t = self.fresh();
                 let _ = writeln!(
                     self.out,
-                    "  %{t} = call i64 @nz.mmio_write32(i64 %{}, i64 %{})",
+                    "  %{t} = call i64 @nz.{}(i64 %{}, i64 %{})",
+                    op.name(),
                     arg(0),
                     arg(1)
                 );
