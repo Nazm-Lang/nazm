@@ -64,6 +64,8 @@ pub(crate) struct Gen<'a> {
     pub needs: Needs,
     pub errors: Vec<Diagnostic>,
     anonymous: u32,
+    /// The unit's debug information, in a `--debug` build (N91).
+    pub debug: Option<crate::dwarf::Debug>,
 }
 
 impl<'a> Gen<'a> {
@@ -73,6 +75,7 @@ impl<'a> Gen<'a> {
         unit: &'a Unit,
         names: &'a nazm_lir::SourceNames<'a>,
         name: &str,
+        debug: bool,
     ) -> Result<Self, String> {
         let builder = ObjectBuilder::new(isa, name, cranelift_module::default_libcall_names())
             .map_err(|e| e.to_string())?;
@@ -104,6 +107,7 @@ impl<'a> Gen<'a> {
             },
             errors: Vec::new(),
             anonymous: 0,
+            debug: debug.then(crate::dwarf::Debug::default),
         })
     }
 
@@ -446,6 +450,7 @@ impl<'a> Gen<'a> {
             let mut ctx = self.module.make_context();
             crate::func::translate(&mut self, &mut ctx, &mut fctx, f, sig);
             self.define(fid, &mut ctx, verify, &f.name);
+            self.describe(fid, &ctx, f);
             // An export's C entry, beside the function it calls (N55).
             if let Some(symbol) = &sig.export {
                 let c = self.c_signature(&sig.params, sig.ret);
@@ -507,7 +512,25 @@ impl<'a> Gen<'a> {
             return Err(self.errors);
         }
         let needs = self.needs;
-        match self.module.finish().emit() {
+        let mut product = self.module.finish();
+        if let Some(debug) = &self.debug {
+            let names = self.names;
+            if let Err(e) = crate::dwarf::write(&mut product, debug, &|i| names.debug_file(i)) {
+                return Err(vec![Diagnostic::error(
+                    codes::COMPILER_DEFECT,
+                    Span::synthetic(),
+                    format!("the Cranelift backend could not write debug information: {e}"),
+                )]);
+            }
+        }
+        let debug = self.debug.is_some();
+        match product.emit().map_err(|e| e.to_string()).and_then(|b| {
+            if debug {
+                crate::dwarf::settle_macho(b)
+            } else {
+                Ok(b)
+            }
+        }) {
             Ok(bytes) => Ok((bytes, needs)),
             Err(e) => Err(vec![Diagnostic::error(
                 codes::COMPILER_DEFECT,
@@ -515,6 +538,31 @@ impl<'a> Gen<'a> {
                 format!("the Cranelift backend could not write an object: {e}"),
             )]),
         }
+    }
+
+    /// A compiled MIR function's debug facts, in a `--debug` build: its declaration, its code's
+    /// length, and the code range each statement's location covers (N91).
+    fn describe(&mut self, id: FuncId, ctx: &Context, f: &mir::Function) {
+        let names = self.names;
+        let (Some(debug), Some(code)) = (self.debug.as_mut(), ctx.compiled_code()) else {
+            return;
+        };
+        let (file, line) = names.position(f.span).map_or((0, 0), |p| (p.0, p.1));
+        let ranges = code
+            .buffer
+            .get_srclocs_sorted()
+            .iter()
+            .filter(|r| !r.loc.is_default())
+            .map(|r| (r.start, r.end, r.loc.bits()))
+            .collect();
+        debug.functions.push(crate::dwarf::Function {
+            func: id,
+            name: f.name.clone(),
+            file,
+            line,
+            size: code.code_info().total_size,
+            ranges,
+        });
     }
 
     fn define(&mut self, id: FuncId, ctx: &mut Context, verify: bool, what: &str) {

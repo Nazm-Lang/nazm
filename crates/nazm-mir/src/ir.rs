@@ -184,6 +184,10 @@ pub struct LocalDecl {
     pub name: String,
     pub origin: LocalOrigin,
     pub at: Span,
+    /// The source block a binding is visible in — the innermost `{…}` its `let` is in — for a
+    /// debugger's lexical scopes (N91). `None` for a parameter or a binding in the function's
+    /// own body, visible in the whole function, and for a temporary. Display only: no digest and no printed form includes it.
+    pub scope: Option<Span>,
 }
 
 /// Why a block exists. Compiler-made blocks say so, which is what keeps a debugger or a reader

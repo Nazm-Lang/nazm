@@ -134,15 +134,6 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
-    // Debug information is the LLVM backend's (N48): refused, rather than silently dropped,
-    // for Cranelift.
-    if choice.debug && choice.backend == nazm_lir::backend::BackendId::Cranelift {
-        eprintln!(
-            "nazm: `--debug` carries debug information through the LLVM backend only; \
-             `--backend cranelift` writes none"
-        );
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
-    }
     // A freestanding image is the LLVM backend's (N62): Cranelift's object writer knows no
     // binary format for a target without an operating system, so it is refused by name here
     // rather than by Cranelift after the program is lowered.
@@ -223,7 +214,9 @@ pub(crate) fn run(
     let llvm = nazm_lir::backend::LlvmText::new(target.clone())
         .with_debug(choice.debug)
         .with_soa(soa);
-    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level);
+    // Both backends write debug information (N48; Cranelift's since N91).
+    let cranelift =
+        nazm_codegen_clif::Cranelift::new(target.clone(), opt_level).with_debug(choice.debug);
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
         nazm_lir::backend::BackendId::Llvm => &llvm,
         nazm_lir::backend::BackendId::Cranelift => &cranelift,

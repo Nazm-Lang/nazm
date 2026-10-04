@@ -140,6 +140,23 @@ impl Meta<'_> {
     }
 }
 
+/// A source block's lexical scope (N91): its first and last positions, and its node.
+struct Lexical {
+    from: (u32, u32),
+    to: (u32, u32),
+    node: usize,
+}
+
+/// The innermost lexical block holding `at`, or the subprogram. Blocks nest — a source block is
+/// inside another or apart from it — so the innermost is the containing one that starts last.
+fn scope_of(blocks: &[Lexical], sp: usize, at: (u32, u32)) -> usize {
+    blocks
+        .iter()
+        .filter(|b| b.from <= at && at <= b.to)
+        .max_by_key(|b| b.from)
+        .map_or(sp, |b| b.node)
+}
+
 fn numbers(rest: &str) -> Vec<u32> {
     rest.split(' ')
         .filter_map(|x| x.parse::<u32>().ok())
@@ -206,6 +223,39 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
             escape(&name)
         ));
         any = true;
+        // The function's lexical blocks (N91): one per distinct scope its variables name,
+        // outermost first so each finds its parent among those already made.
+        let mut ranges: Vec<((u32, u32), (u32, u32))> = lines
+            .get(i + 1..end)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|l| l.trim().strip_prefix("; nz.var "))
+            .filter_map(|rest| {
+                let parts: Vec<&str> = rest.split(' ').collect();
+                match parts[..] {
+                    [_, _, _, _, a, b, c, d, _] => {
+                        let n: Vec<u32> =
+                            [a, b, c, d].iter().filter_map(|x| x.parse().ok()).collect();
+                        match n[..] {
+                            [a, b, c, d] if a > 0 => Some(((a, b), (c, d))),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        ranges.sort_by(|x, y| x.0.cmp(&y.0).then(y.1.cmp(&x.1)));
+        ranges.dedup();
+        let mut blocks: Vec<Lexical> = Vec::new();
+        for (from, to) in ranges {
+            let parent = scope_of(&blocks, sp, from);
+            let node = meta.node(format!(
+                "distinct !DILexicalBlock(scope: !{parent}, file: !{fnode}, line: {}, column: {})",
+                from.0, from.1
+            ));
+            blocks.push(Lexical { from, to, node });
+        }
         let (head, tail) = line.split_at(open);
         let _ = writeln!(out, "{head} !dbg !{sp}{tail}");
         let mut here = (fline, 0u32);
@@ -236,7 +286,7 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
                 continue;
             }
             if prologue && l.trim_start().starts_with("br ") {
-                let loc = meta.location(sp, first.0, first.1);
+                let loc = meta.location(scope_of(&blocks, sp, first), first.0, first.1);
                 out.push_str(&with_location(l, loc));
                 out.push('\n');
                 continue;
@@ -257,20 +307,29 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
             // the slot, positioned at the binding's line.
             if let Some(rest) = l.trim().strip_prefix("; nz.var ") {
                 let parts: Vec<&str> = rest.split(' ').collect();
-                if let [slot, arg, line, kind, name] = parts[..] {
+                if let [slot, arg, line, kind, from_line, from_column, .., name] = parts[..] {
                     if let (Some(t), Ok(arg), Ok(line)) =
                         (meta.ty(kind), arg.parse::<u32>(), line.parse::<u32>())
                     {
+                        let from = (
+                            from_line.parse::<u32>().unwrap_or(0),
+                            from_column.parse::<u32>().unwrap_or(0),
+                        );
+                        // Its own block's node, found by where the block starts.
+                        let scope = blocks
+                            .iter()
+                            .find(|b| from.0 > 0 && b.from == from)
+                            .map_or(sp, |b| b.node);
                         let argument = if arg > 0 {
                             format!("arg: {arg}, ")
                         } else {
                             String::new()
                         };
                         let var = meta.node(format!(
-                            "!DILocalVariable(name: \"{}\", {argument}scope: !{sp}, file: !{fnode}, line: {line}, type: !{t})",
+                            "!DILocalVariable(name: \"{}\", {argument}scope: !{scope}, file: !{fnode}, line: {line}, type: !{t})",
                             escape(name)
                         ));
-                        let loc = meta.location(sp, line, 0);
+                        let loc = meta.location(scope, line, 0);
                         meta.vars = true;
                         let _ = writeln!(
                             out,
@@ -281,7 +340,7 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
                 continue;
             }
             if instruction(l) {
-                let loc = meta.location(sp, here.0, here.1);
+                let loc = meta.location(scope_of(&blocks, sp, here), here.0, here.1);
                 out.push_str(&with_location(l, loc));
             } else {
                 out.push_str(l);
