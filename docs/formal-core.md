@@ -1,4 +1,4 @@
-# The formal core, v1
+# The formal core, v1 and v2
 
 `nazm.formal-core/1` — N61, 2026-10-02. This document is the semantics; `crates/nazm-formal` is it
 transcribed rule by rule (each rule's name is a comment on its arm), and
@@ -67,8 +67,40 @@ values. Evaluation is left to right; a trap propagates.
 | P4 | **Correspondence**: the Nazm interpreter, run on `to_source(e)`, prints the same value or fails with the same code | the same, and a sample through the native backend |
 | P5 | **Typing agrees**: Nazm's checker accepts `to_source(e)` exactly when the formal rules type `e` | every program up to the bound, typed or not |
 
+## 2. Statements, loops and recursion — `nazm.formal-core/2` (N97)
+
+```text
+E ::= n | x | E ⊕ E | f(E)                       Int expressions, ⊕ as in §1
+C ::= E < E | E == E | !C
+S ::= x = E; | while C { S* } | if C { S* } else { S* } | return E;
+B ::= (let mut x = E;)* S* E                      a body: bindings, statements, its result
+P ::= [fn f(n: Int) -> Int { B }] fn main() -> Int { B }
+```
+
+**W-Prog** (well formed — every value is `Int`, so well formed is well typed): every name is bound;
+every assigned name is a `let mut` in scope; `f` is called only when it exists.
+
+**Evaluation**, big step, with fuel φ (400 at the start), outcomes `v | trap(c) | out-of-fuel`:
+
+| rule | |
+| --- | --- |
+| S-Expr | as §1, left to right, the first trap wins |
+| S-Call | the argument, then one fuel (none left: out-of-fuel), then `f`'s body with `n` bound to it |
+| S-Assign | evaluate, then update the innermost binding of `x` |
+| S-While | the condition; false: next; true: one fuel (none left: out-of-fuel), the body, again |
+| S-If | the condition, then exactly one branch |
+| S-Return | evaluate, and leave the body with that value |
+| S-Body | the bindings in order, the statements, then the result — unless a statement returned, trapped or ran out of fuel |
+
+**Properties** over every program of the bound — loops `let mut x = a; let mut y = b; while C { x =
+E1; y = E2; } R` (5 × 3 × 6 × 8 × 5 × 3), branches `let mut x = a; if C { x = E1; } else { return
+E2; } x` (5 × 6 × 8 × 8), recursion `fn f(n) { if n < 1 { return B; } A }` on 9 arguments (4 × 5 ×
+9): 12,900 programs. **S1** never stuck; **S2** deterministic; **S3** the interpreter's value or trap
+equals the model's for every program the model finishes — 11,137, 3,194 of them traps; 1,763 run out
+of fuel and are not compared; **S4** the checker accepts each. `crates/nazm-formal/tests/statements.rs`.
+
 ## Not in the core
 
-Functions, recursion, loops, mutation, strings, sequences, records, enums, effects, tasks,
+Records, enums, strings, sequences, effects and capabilities, provenance, tasks,
 channels, closures, the memory model and the backends' code generation. Each is outside the
 properties above, and no claim is made about it.

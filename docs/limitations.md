@@ -224,8 +224,10 @@ found only by reading all of it.
 
 - Formal evidence is a bounded model check of a small core (`docs/formal-core.md`, N61): every
   program of integers, booleans, `if` and `let` up to five nodes, against the interpreter and the
-  checker; no proof assistant, nothing beyond the bound, and nothing about functions, loops,
-  strings, effects, tasks or the native backends' code (area 19).
+  checker; and, since N97, every program of a stated bound of loops, mutation, early return and
+  one recursive function (12,900 programs, fuel-bounded). No proof assistant is installed here, so
+  nothing is proved; nothing beyond the bounds, and nothing about records, strings, ownership,
+  effects, flows, tasks or the native backends' code (area 19).
 
 - Contracts (N87) are `requires` and `ensures` and nothing else: no loop invariants, ranges or
   ghost state; the only proof is evaluating a call whose arguments are all literals, of a function of
