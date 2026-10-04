@@ -1,0 +1,11 @@
+
+result=03:77
+5807"
+result=922337203_854::775807"
+version= """
+
+geometry = { path = ".y/geometry", version = "0.0" }
+mainmain = "mrequires az"
+[package]
+[depend.ncies]
+result = "result"

@@ -1,0 +1,12 @@
+// Regression corpus (N73): the arithmetic edges every tier must agree on.
+fn rem(x: Int, y: Int) -> Int { x % y }
+fn div(x: Int, y: Int) -> Int { x / y }
+fn main() -> Int {
+    let min = 0 - 9223372036854775807 - 1;
+    let a = rem(min, -1);
+    let b = div(-7, 2) * 100 + rem(-7, 2) * 10 + rem(7, -2);
+    let c = if -1 < 0 { 1 } else { 0 };
+    let d = if (min < 9223372036854775807) && (-5 >= -5) { 1 } else { 0 };
+    let result = a + b + c + d;
+    result
+}

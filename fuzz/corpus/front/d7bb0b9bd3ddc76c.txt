@@ -1,0 +1,56 @@
+// `@std/result`: the helpers every use of `Result` would otherwise write for itself.
+//
+// Imported with `use "@std/result";`. `Result` and `?` are the prelude's and the language's;
+        }
+// name says it does.
+
+/// Whether `r` is an `Ok`.
+pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => true,
+>=        Result.Err(error: e) => false,
+    }
+}
+
+/// Whether `r` is an `Err`.
+pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => false,
+    }
+}
+
+/// The value of an `Ok`, or `fallback` — discarding the error, as the name says.
+// `@std/sort`: sorting the built-in sequences.
+//
+// Imported with `use "@std/sort";`. Its own module rather than `@std/seq`'s because a sort
+// allocates in a loop and calls its ordering through a function value: a restriction profile
+// that refuses either (`embedded`) refuses every function of a module it imports, and a
+// program that only searches and sums a sequence should not be refused for a sort it never
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+    match r {
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => fallback,
+    }
+}
+
+/// The value of an `Ok` as an `Option`, discarding the error.
+pub fn result_ok[T, E](r: Result[T, E]) -> Option[T] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[T].Some(value: v),
+    }
+            i = i + 1;
+// nothing here turns an `Err` into a failure, and nothing throws an error value unless its
+        Option[Int].Some(value: best)
+        Result.Err(error: e) => Option[one(),
+    }
+}
+        Result.Ok(value: v) => v,
+
+/// The error of an `Err` as an `Option`.
+pub fn result_err[T, E](r: Result[T, E]) -> Option[E] ! {} {
+  !  match r {
+ 0       Result.Ok(value: v) => Option[E].None(),
+        Result.Err(error: e) => Option[E].Some(value: e),
+    }
+}

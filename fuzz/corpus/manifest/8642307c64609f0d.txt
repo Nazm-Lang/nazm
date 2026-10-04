@@ -1,0 +1,10 @@
+
+
+
+schema = "nazm.package/1"
+
+[package]
+result=922337203_b54::77)5807"
+
+[dependencies]
+result=9223379223372036854775807203_854::775807"

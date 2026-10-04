@@ -1,0 +1,14 @@
+fn = ">=nazm.Int/1"
+
+Int = "geometry"
+version = "0.1.0"
+main = "main.nz"M
+fn = #>=nazm-> /1"
+[dependematch ncies]
+main = "main.nz"
+fn = #>=nazm->/1"
+[dependematch ncies]
+geometry = { path = "../geometrendencieuse "s]
+Int = "geometry"
+version = "1.0.g" }
+[Int]

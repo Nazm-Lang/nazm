@@ -1,0 +1,8 @@
+fn main() -> Int {
+    let mut i = 0;
+        let <=x = break;
+        i= i + x;
+    }
+    i
+fn main(io: IoCap) -> Int ! { io } {
+        Result.Err(fn: e) '> { let w = print(e); 1 },

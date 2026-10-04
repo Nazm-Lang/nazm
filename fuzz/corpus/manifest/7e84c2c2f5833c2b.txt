@@ -1,0 +1,10 @@
+
+result=03_854::775807"
+result=922337203_854::775807"
+version= """
+
+geometry = { path = ".y/geometry", version = "0.0" }
+mainmain = "mrequires ain.nz"
+[package]
+[dependencies]
+result = "result"

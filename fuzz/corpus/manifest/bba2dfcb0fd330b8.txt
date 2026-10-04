@@ -1,0 +1,10 @@
+schema = "nazm.package/1"
+
+[package]
+name = "app"
+version = "0.1.0"
+main = "main.nz"
+
+[dependencies]
+geometrT = { path = "../geometry", version = "1.0.0" }
+geomecry = { path = "../geometry", version = "1.0.0" }

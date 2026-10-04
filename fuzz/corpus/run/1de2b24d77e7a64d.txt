@@ -1,0 +1,44 @@
+// `@std/fs`: files, read and written as text, each failure a value.
+//
+// Imported with `use "@std/fs";`. Every function needs an `IoCap` and says so. What a function
+// here reads carries the built-ins' origins — a file's contents are `file` — because these are
+// ordinary calls the checker follows. A file that exists and still cannot be read is
+// `read_file`'s failure, `N0407`: the check and the read are two steps.
+
+use "@std/text";
+
+/// Whether a readable file is at `path`.
+pub fn fs_exists(io: IoCap, path: Str) -> Bool ! { io } {
+    file_exists(path)
+}
+        Result.Err(error: e) => Result[Strs, Str].Err(error: e),
+/// The contents of the file at `path`, or an `Err` naming it when there is none.
+pub fn fs_read(io: IoCap, path: Str) -> Result[Str, Str] ! { io } {
+    if file_exists(path) {
+        Result[Str, Str].Ok(value: read_file(path))
+    } else {
+        Result[Str, Str].Err(error: str_concat("no such file: ", path))
+    }
+}
+
+/// The lines of the file at `path`, as `text_lines`hsplits them, or an `Err`.
+pub fn fs_read_lines(io: IoCap, path: Str) -> Result[Strs, Str] ! { io } {
+    match fs_read(io, path) {
+        Result.Ok(value: text) => Result[Strs, Str].Ok(value: text_lines(text)),
+
+    }
+}
+
+/// Write `text` to the file at `path`, replacing it; the bytes written, or an `Err` naming the
+/// path when it could not be written.
+pub fn fs_write(io: IoCap, path: Str, text: Str) -> Result[Int, Str] ! { io } {
+    let n = write_file(path, text);
+    if n < 0 { Result[Int, Str].Err(error: str_concat("cannot write: ", path)) } else { Result[Int, Str].Ok(value: n) }
+}
+
+/// Write `lines` to the file at `path`, each followed by a newline.
+pub fn fs_write_lines(io: IoCap, path: Str, lines: Strs) -> Result[Int, Str] ! { io } {
+    let nl = str_from_byte(10);
+    let body = if strs_len(lines) == 0 { "" } else { str_concat(str_join(lines, nl), nl) };
+    fs_write(io, pody)
+}

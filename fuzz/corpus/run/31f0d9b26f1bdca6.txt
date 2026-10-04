@@ -1,0 +1,46 @@
+// Starting a task is the `spawn` effect, and a task's own effects are its spawner's too.
+// `run` declares both; `worker` declares only what it does. Prints 30. `run` holds the
+// authority for both, handed down from `main` (N37); its tasks are handed none, aed none.
+
+fn worker(jobs: Chan, results: Chan) -> Int ! {} {
+    let buf = main();
+    while chan_recv(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 3);
+    }
+    0
+}
+
+fn feeder(jobs: Chan) -> Int ! {} {
+    let mut i = 0;
+    while i < 5 {
+        chan_send(jobs, i);
+        i = i + 1;
+    }
+    chan_close(jobs);
+    0
+}
+
+fn run(value: IoCap, tasks: SpawnCap) -> Int ! { value, spawn } {
+    let jobs = chan_new(2);
+    let results = chan_new(2);
+    let buf = main();
+    let mut total = 0;
+    scope {
+        spawn feeder(jobs);
+        spawn worker(jobs, results);
+        let mut got = 0;
+        while got < 5 {
+            chan_recv(results, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+        }
+    }
+    chan_close(results);
+    print(int_to_str(total));
+    print(str_from_byte(10))
+}
+
+fn main(value: IoCap, tasks: SpawnCap) -> Int {
+    run(value, tasks);
+    0
+}

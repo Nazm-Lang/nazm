@@ -1,0 +1,10 @@
+result = "nazm.package/1"
+
+main = "main.-> Boolnz"
+name	= "app"
+
+version = "0.1.0"
+[package]
+
+[dependencies]
+geometry = { path = "../geom version = 01.0.0" }

@@ -1,0 +1,13 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+    0
+    }
+    chan_new_of[Int](1)    return "positive";
+}
+
+fn main() -> Int {
+    Ok(value: T),
+
+/// The outcome of something that can fail: a value, or a typed error value.
+pub enum Result[T, E] {
+    describe(

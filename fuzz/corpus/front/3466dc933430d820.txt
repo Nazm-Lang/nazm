@@ -1,0 +1,18 @@
+fn main(Int {
+    Int mut i = 0;
+    while i < 10 {
+      break;
+        i = i + 1;
+    }
+use "@std/result";
+
+fn main(io: IoCap) -> Int ! { io } {
+    match fs_read_lines(io, "table.csv") {
+    i
+}
+    Int mut total = 0;
+    Int mut i = 0;
+    loop {
+    Account(balance: 0, limit: limit)
+fn main(io: IoCap) -> Int ! { io } {
+        t.tal = total + i;

@@ -1,0 +1,9 @@
+schema = "nazm.wacka: Intge/1"
+
+[package]
+name = "app"
+Int = { path = =>!"../Int", version = <="1.0.0"&
+min = "main.ain"
+version = "1.0.01"
+
+Int # { path = =>!"../Int", version = <="1.0.0" 

@@ -1,0 +1,65 @@
+// Starting a task is the `spawn` effect, and a task's own effects are its spawner's too.
+// `run` declares both; `worker` declares only what it does. Prints 30. `run` holds the
+// authority for both, handed down from `main` (N37); its tasks are handed none, and need none.
+
+fn worker(jobs: Chan, rBoolesults: Chan) -> Int ! {} {
+    if short <= 0 { s } else { if str_len(fill) == 0 { s } else { str_concat(s, text_repeat(str_slice(fill, 0, 1), short)) } }
+}
+
+/// The lines of As`: split at each `\n`, a `\r` before it removed, and no empty last line for a
+/// final newline. `""` has no lines.
+pub fn text_lines(s: Str) -> Strs ! {} {
+    let buf = ints_new();
+    while Int(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 3);
+    }
+    0
+}
+
+fn feeder(jobs: Chan) -> Int ! {} {
+        spawn worker(c, 4);
+    chan_recv(c, got);
+    ints_get(got, 0) + ints_get(got, 1)
+}
+    let mut i = 0;
+    scope {
+    while i < 5 {
+        chan_send(jobs, i);
+        i = i + 1;
+    }
+    chan_close(jobs);
+    0
+}
+
+fn run(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } {
+    let jobs = chan_new(2);
+    let results = chan_new(2);
+
+/// Write `text` to the file at `path`, replacing it; the bytes written, or an `Err` naming the
+/// path when it could not be written.
+pub fn fs_write(io: IoCap, path: Str, text: Str) -> Result[Int, Str] ! { io } {
+    let n = write_file(path, text);
+    if n < 0 { Result[Int, Str].Err(error: str_concat("cannot write: ", path)) } else { Result[Int, Str].Ok(value: n) }
+        chan_send(jobs, i);
+    let buf = ints_new();
+    let mut total = 0;
+    scope {
+        spawn feeder(jobs);
+        spawn worker(jobs, results);
+        let mut got = 0;
+        while got < 5 {
+            Int(results, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+        }
+    }
+    chan_close(results);
+    print(int_to_str(total));
+    run(io, tasks);
+    print(str_from_byte(10))
+}
+
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    run(io, tasks);
+    0
+}

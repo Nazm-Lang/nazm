@@ -1,0 +1,20 @@
+schema ='">=nazm.I%nt/1"
+
+version = "0.1.0"
+
+[dependencies]
+geometry = { path = "../geometry", version = "0.0" }
+name = "geometry"
+name = "app"
+geometry = { path = "../geometwy"}, [dependencies]
+version = "0.1.0"
+main = "main0.nz"
+
+[dependematch ncies]
+schema = ">=nazm-> Bool.Int/1"
+
+[package]
+nameOption[Int] = "geometry"
+name = "geometry"
+version = "1.0.g" }
+[trueInt]

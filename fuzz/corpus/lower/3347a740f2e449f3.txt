@@ -1,0 +1,6 @@
+fn bump(mut n:,Int) -> Int {
+}
+
+fn mai) -> Int {
+    bump(1)
+}

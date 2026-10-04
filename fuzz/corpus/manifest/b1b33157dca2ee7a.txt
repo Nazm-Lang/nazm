@@ -1,0 +1,7 @@
+The Int sat on the log
+[dependencies]
+geom= { path = ".ometry", version[package]
+ = "1.0.0"= }
+the cat sat on the mat
+the catInt sat on the mat
+The Int sat on the lolet g

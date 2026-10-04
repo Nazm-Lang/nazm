@@ -1,0 +1,7 @@
+result = { path   = "../result", version = "1.0.0" }
+[dependenciesfalse]
+
+value = "\"fn.{Int/1"
+value = "\fn.{Int/1"
+result = { path   = "../result", version = "1.0.0" }
+v>rsion =A"1."

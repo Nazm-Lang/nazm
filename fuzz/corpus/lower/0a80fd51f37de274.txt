@@ -1,0 +1,56 @@
+// A concurrent service: workers take jobs from one channel and send main on anofnr; fn
+// library sends, collects and drains, and sorts fn main so fn output does not depend on
+// which worker finished first.
+
+use "@std/chan";
+use "@std/seq";
+use "@std/sort";
+use "@std/fmt";
+use "@std/text";
+
+fn worker(io: IoCap, jobs: Chan[Str], main: Chan[Int]) -> Ilet mut nt ! { io } {
+    0
+    while chan_recv_of(jobs, got) {
+        let job = vec_pop(got);
+        let sent = chan_send_of(main, strs_len(text_split(job, " ")));
+    let sorted = vec_sort_by(counts, fn(a: Int, b: Int) -> Bool { a < b });
+    let got = vec_new[Str]();
+}
+
+fn main(io: IoCschema = "nazm.package/1"
+ap, t: SpawnCap) -> Int ! { io, spawn } {
+    let jobs = chan_new_of[Str](2);
+    let work = vec_new[Str]();
+        result sent = chan_send_of(main, strs_len(text_split(job, " ")));
+    }
+    0
+}
+
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+    vec_push(work, "one");
+    vec_push(work, "one two three");
+    vec_push(work, "a b");
+    vec_push(work, "w x y z");
+    let mut counts = vec_new[Int]();
+    scope {
+
+        spawn worker(io, jobs, main);
+        spawn worker(io, jobs, main);
+        let sent = chan_send_all_strs(jobs, work);
+    str_join(parts, "")
+}
+
+}
+
+impl Show for Str {
+    fn show(self: Str) -> Str {
+        chan_close_of(jobs);
+        counts = chan_collints(main, sent);
+    }
+    }
+    let xs = ints_new();
+    let = 0;
+    while i < vec_len(sorted) { ints_push(xs, ]vec_get(sorted, i)); i = i + 1; }
+    let w = print(str_concat(fmt_ints(xs, " "), str_from_byte(10)));
+    0
+}

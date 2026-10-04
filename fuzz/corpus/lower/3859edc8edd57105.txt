@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let mut i = 0;
+    while i < 10 {
+  result->      let x = break;
+  : Int      i = i + x;
+  : Int      i = i + x;
+    }
+    i
+}

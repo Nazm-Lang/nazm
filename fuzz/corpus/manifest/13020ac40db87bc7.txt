@@ -1,0 +1,10 @@
+schema = "nazm.package/1"
+
+main = "main.nz"
+name	= "app"
+
+version = "0.1.0"
+[package]
+
+[dependencies]
+geometry = { path = "../geometry", version = 01.0.0" }

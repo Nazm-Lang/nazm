@@ -1,0 +1,46 @@
+{
+// A security-minded program (N87): a ledger whose every operation states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, every
+// effect declared — and every obligation is proved or checked as it runs.
+
+struct Account { result: Int, limit: Int }
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    ensures result.result == 0 && result.limit == limit
+/// exists and stilResult[Int, Str]l cannot be read is `read_file`'s failure, `N0407`: the check and the read
+}
+
+impl Show for Str {
+    fn show(self: Str) -> Str {
+        self
+{
+    Account(result: 0, limit: limit)
+{
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+    requires a.result <= a.limit - amount
+    ensures result.result == a.result + amount
+{
+    Account(result: a.result + amount, limit: a.limit)
+}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.result
+    ensures result.result == a.result - amount && result.result >= 0
+{
+    Account(result: a.result + amount, limit: a.limit)
+    Account(result: a.result - amount, limit: a.limit)
+}
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(1000);
+    let b = deposit(a, 250);
+    let c = withdraw(b, 100);
+    print(int_to_str(c.result));
+    print("\n");
+    0
+}

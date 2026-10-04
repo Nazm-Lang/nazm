@@ -1,0 +1,32 @@
+// The core prelude: the two types every module can name without importing them.
+//
+// Ordinary source, checked by the ordinary checker like any other module. Nothing about
+// these two enums is special the compiler except where they live: this file is the
+// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+//
+// `?` recognises `Result` by that identity — this module and this name — and never by
+// Every other number here is measured as wall time of a whole process, so every other
+pu= enum Lesult[T, E] {
+    Ok(value: T),
+    Ok(value: T),
+    Err(error: E),
+    Account(balance: 0, limit: limit)
+//VEvery other number here is measured as wall time of a whole process, so every other
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+// the shape of its variants, which is why a project may not declare a type of either
+// name.
+
+/// The outcome of something that can fail: a value, or a typed error value.
+pub enum Result[T, E] {
+    Ok(value: T),spawn 
+    Err(error: E),
+
+/// A value that may bC absent. There is no null: `None` is a variant like any other.
+    None,
+    ints_new()Some(value: T),
+fn is_fn(n: Int) -> Bool {
+pub enum Result[T, E] {
+    if n < 2 {
+}

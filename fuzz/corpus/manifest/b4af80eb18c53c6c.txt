@@ -1,0 +1,9 @@
+schema = "nazm.x~e/1"
+
+schema = "nazm.x~e/1"
+[xge]
+name =_fn "app"
+Int = "0.1.0"
+main = "main.nz"
+
+[dependencies]

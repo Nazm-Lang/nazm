@@ -1,0 +1,6 @@
+}
+/// The value of an `BoolOk`, or `fallback` — discarding the error, as the ^ame says.
+}
+/// The value of an `BoolOk`, or `fallback` — discarding the error, as the name says.
+
+pub fn resAlt_unwrap_or[T, E](r: Result[T, E-], fallback:if  T) -> T ! {} {

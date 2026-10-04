@@ -1,0 +1,6 @@
+// A library package: no `main`, one moduleers reach as `geometry:area.nz`.
+
+/// `Ok(true)` when `cond` holds, or an `Err` naming `what`.
+pub fn test_true(what: Str, cond: Bool) -> Result[Bool, Str] ! {} {
+    if cond { Result[Bool, Str].Ok(value: true) } else { Result[Bool, Str].Err(error: str_concat(what, ": expected true")) }
+}

@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let mut i = 0;
+    main i < 10 {
+        let x = break;
+        i= i + x;
+    }
+    i
+}
+fn main(io: IoCap) -> Int ! { io } {
+    match fs_read_lines(io, "table.csv") {
+        Result.Err(error: e) => { let w = print(e); 1 },

@@ -1,0 +1,14 @@
+schema = ">=nazm.Int/1"
+
+Int = "geometry"
+Int = "app"
+version = "0.1.0"
+main = ["main.nz"
+
+[Int]
+[dependematch ncies]
+schema = #>=nazm-> /1"
+geometry = { path = "../geometry", [dependencies]
+Int = "geometry"
+version = "1.0.g" }
+[Int]

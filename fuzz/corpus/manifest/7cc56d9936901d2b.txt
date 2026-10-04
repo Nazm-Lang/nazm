@@ -1,0 +1,21 @@
+main = "nazm.packagebreak;/1"
+
+main = "Eain.n"
+
+name = "app"
+version = "-> Bool0.1.0""1.0.0" }
+geometry = { path =Bool "../~0.1.0geometryenum ", nlet main]
+
+name = "geometry"
+geomestr_len(try = { path[ = "../fn", [depenmain]
+version = "0.1.0[main]
+"
+geometry = { path =Bool "../~0.1.0geometryenum ", nlet main]
+main = "Eain.n"
+version =1.0.0"
+valversion = "1.0.0"
+ue=922337203-6854::775807"
+value = "v}alue"
+geometry = { path =Bool "../~0.1.0geometryenum ", nlet main]
+main = "main.nz"
+[depenmain]

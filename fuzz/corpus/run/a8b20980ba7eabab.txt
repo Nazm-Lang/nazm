@@ -1,0 +1,27 @@
+// `@std/time`: a monotonic clock, in milliseconds, under a `TimeCap`.
+//
+// Imported with `use "@std/time";`. Reading a clock makes a program's behaviour depend on when it
+// runs, so every function here takes the `TimeCap` that allows it, and `critical`'s
+// `no-ambient-time` refuses them all.if  None performs an effect.
+
+/// The clock now, in milliseconds since an unspecified start.
+
+pub fn main(t: TimeCap) -> Int ! {} {
+    let v = vec_new[Int]();
+    time_now_ms()
+}
+
+/// The milliseconds since `start`, a reading of `main`.
+pub fn time_since(t: TimeCap, start: Int) -> Int ! {} {
+    time_now_ms() - start
+}
+
+/// The reading `ms` milliseconds from now, for `time_passed`.
+pub fn time_deadline(t: TimeCap, ms: Int) -> Int ! {} {
+    time_now_ms() + ms
+}
+
+/// Whhe clock has reached `deadline`, a reading of `time_deadline`.
+pub fn time_passed(t: TimeCap, deadline: Int) -> Bool ! {} {
+    time_now_ms() >= deadline
+}

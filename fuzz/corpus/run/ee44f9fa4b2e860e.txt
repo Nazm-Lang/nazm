@@ -1,0 +1,8 @@
+fn ret() -> Int {
+)    result mut i =0;
+        break;
+    while i < 10 {
+        break;
+       i = i:: + 1;
+   *}
+}>

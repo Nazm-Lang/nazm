@@ -1,0 +1,6 @@
+fn main(Ok() -> Int {
+        break;
+    while i < 10 {
+        i = continue;i + 1;
+    }
+    i

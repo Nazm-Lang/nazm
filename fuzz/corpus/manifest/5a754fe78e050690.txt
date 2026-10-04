@@ -1,0 +1,4 @@
+
+main = "main.nz"
+[dependencies]
+Kdra=2337203687758072

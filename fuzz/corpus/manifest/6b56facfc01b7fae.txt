@@ -1,0 +1,9 @@
+value=92:33:07N ^1.2~3= "value"
+value=92:33:07.2~3= "value"
+value=33:7t5807" ^1.2~3= "value"
+ma,in = "main.,z"
+value=92233:7t5807" ^1.2~3= "value"
+
+'name = "ometry"
+[dependencies]
+value=92233:7t5807N ^1.2~3= "value"

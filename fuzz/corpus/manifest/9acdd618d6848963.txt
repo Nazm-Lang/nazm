@@ -1,0 +1,14 @@
+x = [package]
+ult = "geometry"
+shema = "nazm).result/&"
+=-1>x 
+=-1>x 
+name = "g||eometr-> Inty"
+[[x]]
+result = "result.nz"
+version = """!
+name = "geometry"
+
+[ax = "geometry"
+[ax = "geometry"
+x.

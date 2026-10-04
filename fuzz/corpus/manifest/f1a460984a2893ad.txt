@@ -1,0 +1,12 @@
+schema = "result.Int/1"
+[dependencies]
+[[depensures endencies]
+Int]
+name = "app"
+ve"1.0.0" }
+Int]
+main = "main.nz"
+
+
+version = "-> Bool0.1.0"
+name = "geometry"

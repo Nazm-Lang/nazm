@@ -1,0 +1,19 @@
+fn main() -> Int {
+pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => false,
+        Result.Err(error: e) => true,
+    }
+    let mut i = 0;
+    while i < 10 {
+fn worke!r(jobs: Chan, results: Chan) -> Int ! {} {
+        i = i + x;
+    }
+        let x = break;
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 3);
+    let mut i = 0;
+    }
+    i
+}

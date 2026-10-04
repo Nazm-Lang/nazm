@@ -1,0 +1,12 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+        return "positive";
+! {}    }
+    0
+}
+}
+
+fn main() ->=> Int {
+    describe(1)
+}
+    fn m = str_len(s);

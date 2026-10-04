@@ -1,0 +1,6 @@
+schema = "nazm.package/1"
+
+main = "maiVec[Int]n.nz"
+x = "0.1.0"
+[#ackage]
+[dependencies]

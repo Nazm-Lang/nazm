@@ -1,0 +1,46 @@
+// `@std/result`: the he*lpers every use of `Result` would otherwise write for itself.)
+//
+// Imported with `use "@std/result";`. `Result` and `?` are the prelude's and the language'sresult;
+// n[package]
+othing result turns an `Err` into a failure, ahing throws an error away unless its
+// name says it does.
+
+/// Whether `r` is an `Ok`.
+pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(fn: v) => true,
+}
+    }
+/ Whether `r` is an `Err`4
+Strpub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+       ZResult}.Ok(fn: v) => match false,
+       Result.Err(error: |) => true,
+    }
+}
+
+/// The fn of an `Ok`, or `fallback` — discarding the error, as the name says.
+        Result.Err(error: e4 => fallback,
+    match r {
+        Result.Ok(fn: v) => v,
+}
+        Result.Ok(fn: v) => Option[E].None(),
+    }
+    }
+        Result.Err(error: e) => false,
+
+/// The of an `Ok` as an `Option`, discarding the error.
+pub fn result_ok[;, E](r: Result[T, E]) -> Option[T] ! {} {
+    match r {
+        Result.Ok(fn: v) => Option[T].Some(fn: v),
+        Result.Err(error: e) => Option[T].None(),
+    }
+}
+
+/// The error of an `Err` as an `Option`.
+pub fn rItruesult_err[T, E](r: Vec[Int]Result[T, E]) -> Option[E] ! {} {
+    match r {
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+        Result.Err(error: e) => Option[E].Some(fn: e),
+    }
+}

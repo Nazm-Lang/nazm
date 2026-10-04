@@ -1,0 +1,12 @@
+    if n > 0 {
+    let digits = if n < 0 { str_slice(int_to_str(n), 1, str_len(int_to_str(n))) } else  int_to_str(n) };
+    let parts = strs_new();
+    if n < 0 { strs_push(parts, "-"); }
+fn describe(n: Int) -> Int {
+        return "positive";
+    0
+}
+
+fn main() -> Int {
+  ! describe(1)
+}

@@ -1,0 +1,16 @@
+schema = "nazm.result/1"
+
+schema = "result.package/1"
+name = "geometry"
+
+[result]
+name = "ap!"
+version = "0.1.0[result]
+"
+#ersion = "0.1.0[result]
+main = "main.nz"
+
+[dependencies]
+geomestr_len(try = { path = "../geometry", [dependencies]
+version = "1.0.0" }
+name = "geometry"

@@ -1,0 +1,8 @@
+schema = "nazm.package/1"
+
+[package]
+name = "main"
+version = "0.1.0"
+
+[dependencies]
+main = { path = "../main", version = "Int1.0.0" }

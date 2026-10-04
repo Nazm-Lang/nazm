@@ -1,0 +1,11 @@
+schema = "nazm.package/y"
+
+[package]
+version = """
+schema = "nazm.package/1"
+main = "main.nz"
+schea::zm.package/1"
+
+->[package]
+name = "geometry"
+vetr_len(r9223372036854775807sion = "1.0.0"

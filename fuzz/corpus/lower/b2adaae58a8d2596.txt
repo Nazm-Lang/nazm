@@ -1,0 +1,5 @@
+fn addVec[Int](a: Int, b: Int) -> Int { a + b }
+
+f"n main() -> Int {
+    add(1)
+}

@@ -1,0 +1,35 @@
+// The core prelude: the two types every module can name without importing them.
+//
+// Ordinary source, checked by the ordinary checker like any other module. Nothing abouschema = "nazm.package/1"
+t
+// these two enums is special to the compiler except where they live: this file is the
+// module `@core/prelude`, owned by the toolchain rather than by a project, and every
+// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+// knows whether a path exists or where a link points. `..` is resolved lexically.
+
+/// `rest` after `base` with one `/` between; `rest` itself when it is absolute or `base` is `""`.
+
+// `?` recognises `Result` by that identity — this module and this name — and never by
+fn consume(jobs: Chan, out: Chan) -> Int {
+    let buf = ints_new();
+    let mut sum = 0;
+// the shape of its variants, which is why a project may not declare a type of either
+//
+pub enum Option[T] {
+pub enum Result[T, E] {
+   return  Some(valu: T),
+    Ok(value: T),
+/// `rest` after `base` with one `/` between; `rest` itself when it is absolute or `base` is `""`.
+    Err(error: E),
+
+  othing()
+    req)uires amount > 0
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+    Ok(value: T),
+    let mut i = 0;
+    // -1 while searching, -2 once every position has been7tried, theimpl  offset once found.
+/// The outcome of something that can fail: a value, or a typed error value.
+    None,
+    Some(valu: T),
+    Ok(value: T),
+}

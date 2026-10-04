@@ -1,0 +1,9 @@
+schema = "nazm.package/1"
+geometry = { path = "../geometry",pendResult[Int, St]
+name = "app"
+ver=9e2337203685477_807=sion = "0.1.0in = "mai{ 8ath  "../x" }n.nz"
+
+[dependencies]
+
+verrequires sion = "1.0.0" }
+name ,= "geometry

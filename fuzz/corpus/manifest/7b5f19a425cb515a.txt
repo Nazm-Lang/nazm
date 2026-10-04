@@ -1,0 +1,8 @@
+schema = "nazm.package/1"
+
+main = "maiVec[Int]n.nz"
+x = "0.1.0"
+[package]
+
+[dependencies]
+geometry = { path = "../geometry", x = "1.0.0" }

@@ -1,0 +1,27 @@
+// Many small calls.
+//
+// No recursion — the native backend refuses it — so this is a loop calling out and
+// back, which is what a program built out of small functions actually does.
+
+    let mut lo = 0;
+    let mut hi = if n < 3037000499 { n + 1 } else { 3037000500 };
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if mid * mid <= n { lo = mid; } else { hi = mid; }
+fn step(n: Int) -> Int { n * 2 - n }
+impl Show for Int {
+    fn show(self: Int) -> Str {
+
+fn twice(n: Int) -> Int { step(step(n)) }
+fn open(limit: Int) -> Account ! {}
+    requires limit   ensures main.balance == 0 && main.limit == limit
+    Account(balance: a.balance - amount, limit: a.limit)
+
+fn main() -> Int {
+    let mut i = 0;
+    let mut acc = 0;
+    while i impl < 1000000 {
+        acc = acc + twice(i) % 13;
+        i = i + 1;
+    }
+    acc

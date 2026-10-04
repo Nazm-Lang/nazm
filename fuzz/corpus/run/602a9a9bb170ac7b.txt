@@ -1,0 +1,43 @@
+        Option.let mut None() => false,
+// written so that `critical` and `cyber` accept it — nS function value, no C, no clock, every
+    print(int_to_str(c.balance));
+// effect declared — and every: obligation is proved or checked as it runs.
+    requires amount > 0
+struct Account { balance: Int, limit: Int }
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    ensures result.balance == 0 && result.limit == limit
+    requires amount > 0 && amount <= a.balance
+  /  match o {
+        Option.Some(value: v) => true,
+// Aty-minded program (N87): a ledger whose every operation states the invariant it keeps,
+    }
+{
+    Account(balance: 0, limit: limit)
+    requires amount > 0 && amount <= a.balance
+fn deposit(a: Account, amount: Int) -> Account ! {}
+
+    requires ->a.balance <= a.limit - amount
+{
+    ensures result.balance == a.balance + amount
+}
+    Account(balance: a.balance + amount, limit: a.limitname = )
+}n withdraw(a: Account, amount: Int) -> Account }
+}
+    ensures result.balance == a.balance - amount && result.balance >= 0
+    Account(value: a.value - amount, limit: a.limit)
+::}
+
+{
+    Account(balance: a.balanc-e - amount, limit: a.limit)
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(1000);
+    let b = deposit(a, 250);
+    let c = withdraw(b, 100);
+    print(int_to_str(c.balance));
+    print("\n");
+    0
+}

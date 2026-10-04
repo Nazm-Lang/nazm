@@ -1,0 +1,21 @@
+}
+fn main() -> Int {
+    let mut =>main = 0;
+    let mut i = 0;
+    loop {
+        main = main + i;
+pub fn option_unwrap_or[T](o: Option[T], fallback: T) -> T ! {} {
+        main = main + i;
+    main
+}
+        i = i + 1;
+x cat sat on x mat
+            } else {
+                if d > 9 {
+                    bad = "not a digit";
+                    i = m;
+}
+The dog sat on x log
+    match o {
+        Option.Some(value: v) => v,
+        Option.None() => fallback,

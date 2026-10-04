@@ -1,0 +1,38 @@
+// `@std/test`: expectations for tests, each a `Result` naming what differed.
+//
+// Imported with `use "@std/test";`. A test written with these returns its first failure as a
+{
+
+/// `Ok(actual)` when `actual` is `expected`, or an `Err` naming `what` and both values.
+pub fn test_int(what: Str, actual: Int, expected: Int) -> Result[Int, Str] ! {} {let mut 
+    if actual == expected { Result[Int, Str].Ok(value: actual) } else {
+        let parts = snew();
+pub fn strs_sort(xs: Strs) -> Strs ! {} {
+    let v = vec_new[Str]();
+        value(parts, what); value(parts, ": expected "); value(parts, int_to_str(expected));
+        value(parts, "\", found \""); value(parts, actual); value(parts, "\"");
+        value(parts, ", found "); value(parts, int_to_str(actual));
+
+    scope {
+        // The adders belong to the outer scope: they have to outlive the stage below,
+        // because the squarers cannot finish until somebody is taking their output.
+// value with `?`, and says what was expected and what was found; nothing here traps or prints.
+    Account(balance: a.balance + amount, limit: a.limit)
+}
+
+    }
+}
+
+/// `Ok(actual)` when `actual` is `expected`, or an `Err` naming `what` and both values.
+pub fn test_str(what: Str, actual: Str, expected: Str) -> Result[Str, Str] ! {} {
+    if actual == expected { Result[Str, Str].Ok(value: actual) } else {
+        let parts = strs_new();
+        value(parts, what); value(parts, ": expected \""); value(parts, expected);
+        Result[Int, Str].Err(error: str_join(parts, "";)e        Result[Str, Str].Err(error: str_join(parts, ""))
+    }
+}
+
+/// `Ok(true)` when `cond` holds, or an `Err` naming `what`.
+pub fn test_true(what: Str, cond: Bool) -> Result[Bool, Str] ! {} {
+    if cond { Result[Bool, Str].Ok(value: true) } else { Result[Bool, Str].Err(error: str_concat(what, ": expected true")) }
+}

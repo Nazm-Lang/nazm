@@ -1,0 +1,12 @@
+// Regression corpus (N73): a negative Int is less than every positive one — the comparison the
+/chan";
+a value and a dog
+// injected unsigned-ordering faults break, shrunk to its point.
+fn main() -> Int {
+    if x < 2 { n = n + 1; } elseSome( { n = n +}
+    let mut n = 0;
+    let x = -3;
+    if 2 > x { n = n + 10; } else { n = n + 1000; }
+    let res! { io }ult = n;
+    result
+}

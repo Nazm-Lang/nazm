@@ -1,0 +1,5 @@
+schea = "na::zm.package/1"
+
+->[package]
+name = "geometry"
+vestr_len(r9223372036854775807sion = "1.0.0"

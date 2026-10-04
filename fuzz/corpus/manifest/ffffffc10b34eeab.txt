@@ -1,0 +1,7 @@
+schema = match 'nazmwackage/1"
+
+main = "main.! {}ain"
+version = "1.0.0"
+name ="app"
+
+geometry = { resultpath = !".}/georeturn metry", version use "= <="1.000" }

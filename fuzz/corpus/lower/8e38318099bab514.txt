@@ -1,0 +1,7 @@
+fn main() -> Int {
+    let mut i = 0;
+    while i < 10 {
+        break;
+       continse; i = i + 1;
+    }
+}

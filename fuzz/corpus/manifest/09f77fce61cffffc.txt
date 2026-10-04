@@ -1,0 +1,8 @@
+schema = "nazm.package/1"
+
+[package]
+value = _apsion = "0.1.0"
+main = "main.x"
+
+[dependencies]
+Intimpl  = { path = "../Int", version = "1.0.0" }

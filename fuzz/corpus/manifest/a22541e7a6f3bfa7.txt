@@ -1,0 +1,11 @@
+schema = "\a-> Strzm.{Int/1"
+
+[dependenciesfalse]
+=2.0.0
+schema = "nazm.package/1"
+
+[package]
+ver^>1.2.3sion = "1.0.0"
+geome-ry = { ]path   = "../geometry", version = "1.0.0" }
+[result]
+name = "aif pp"

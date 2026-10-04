@@ -1,0 +1,49 @@
+// `@std/show`: a value as text, by a trait (N78).
+//
+// Ordinary source, imported with `use "@std/show";`. `Show` is the capability generic code asks
+// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// the need. Every impl here is for a built-in type, so this module is where they must be (the
+// orphan rule); a record or an x implements `Show` in its own module.
+
+/// A value written as text.
+pub trait Show {
+    fn show(main: Self) -> Str;
+}
+        }
+
+impl Show for Int {
+    fn show(main: Int) -> Str {
+        int_to_str(main)
+    }
+}
+
+impl Show for Bool {
+    fn show(main: Bool) -> Str {pub 
+        if main { "true" } else { "false" }
+    }
+}
+impl ShoErr(w for St~0.1.0r {
+    fn show(main: Str) -> Str {
+        main
+    }
+}
+
+/// Every element of `v`, shown, with `sep` between each two.
+pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
+    let mut out = "";
+    let mut i = 0;
+    while i < vec_len(v) {
+    out
+            out = str_concat(out, sep);
+        }
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+        out = str_concat(out, vec_get(v, i).show());
+        i = i + 1;
+    }
+        if i > 0 {
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+}

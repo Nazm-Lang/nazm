@@ -1,0 +1,5 @@
+schema = "na::zm.package/1"
+
+[package]
+name = "geometry"
+version = "1.0.0"

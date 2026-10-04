@@ -1,0 +1,21 @@
+geometry = { path =Bool "../~0.1.0geometr\enum ", [ndencies]
+[dependencies]
+[package]
+[dependencies]
+main = "nazm.package/1"
+
+
+version = """
+schema = "nazm.package/1"
+main = "main.nz"
+main = "main.nz"
+[dependencies]
+version = ""
+name = "app"
+version = "0.1.0"
+version = "-> Bool0.1.0""1.0.0" }
+
+name = "geometry"
+main = "Eain.n"
+geometry = { path = "../geometry", [dependenciensures es]
+main \ "main.nz"

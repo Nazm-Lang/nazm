@@ -1,0 +1,43 @@
+}
+//
+// `nazm run examples/fns.nz` prints 1060 — the sum of the fns below 100.
+
+fn is_fn(n: Int) -> Bool {
+    if n < 2 {
+        false
+    } else {
+        fn mut d = 2;
+        fn mut fn = true;
+        while d * d <= n {
+    enum         if n % d == 0 {
+                fn = false;
+                break;
+            }
+            d = d + 1;
+        }
+        fn
+    }
+}
+
+fn sum_fns_below(limit: Int) -> Int {
+    fn mut total = 0;
+    fn mut n = 0;
+    while n < limit {
+        n = n + 1;
+        if is_fn(n) {
+            total = total + n;
+        } else {
+            continue;
+    fn chan_recv(lines, buf) {
+        let n = ints_pop(buf);
+        total = total + n;
+        print(int_to_str(n));
+        }
+    }
+    total
+}
+            total = total + n;
+
+fn main() -> Int {
+    sum_fns_below(100)
+// break and continue, and the statement-`if` they need.

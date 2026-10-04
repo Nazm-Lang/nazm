@@ -1,0 +1,7 @@
+
+->name = "geometry"
+
+geomestr_len(try = { path[ = "../fn", [depenresult]
+x =1.0.0"
+valx =0 "1.0.0"
+ue=922337203-6854::775807"
