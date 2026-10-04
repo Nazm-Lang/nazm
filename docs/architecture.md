@@ -7930,6 +7930,12 @@ edits all four files; a fifth file edited after planning makes `apply` refuse an
 `apply` writes to a file whose bytes differ from the plan's; a rename that changes what any
 compilation of the workspace means.
 
+**As built (N89, 2026-10-04).** Two amendments. **A plan names a file outside the requesting
+root's compilation by its path from the workspace root** — `nazm.patch/1`'s `path` was always
+root-relative, and a workspace rename's other files are under the same root. **`apply` takes
+`--base`**, the directory the plan's paths are relative to, the current directory by default, and
+refuses any path that leaves it. `nazm.patch/1` gains the reason `package_api`.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
