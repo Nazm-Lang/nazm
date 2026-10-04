@@ -398,6 +398,13 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N94 — reproducibility and provenance v2 — **complete as scoped, 2026-10-04; area 32 stays PARTIAL**
+
+`architecture.md` §7.95 first. A five-part reproducibility model, each part with its own evidence;
+`nazm build --sbom` (CycloneDX 1.5); `nazm attest sign`/`verify` — in-toto statements signed and
+verified with OpenSSH. Not here: a transparency log, keyless signing, independent rebuilders. Next:
+N95, the platform and target matrix v2.
+
 ### N93 — coverage-guided fuzzing — **complete as scoped, 2026-10-04; area 30's fuzzing stays PARTIAL**
 
 `architecture.md` §7.94 first. A coverage-guided fuzzer of the compiler's own entry points, built

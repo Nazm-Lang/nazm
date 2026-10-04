@@ -97,7 +97,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 29 | Differential testing | VERIFIED |
 | 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of four targets with a replayed corpus (N93); no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
 | 31 | Bootstrap | VERIFIED |
-| 32 | Reproducibility and provenance | PARTIAL — build provenance records and attestation hook (N73); across toolchains measured, not equal |
+| 32 | Reproducibility and provenance | PARTIAL — a stated five-part model, signed in-toto statements and a CycloneDX SBOM (N94); one host and one image, no transparency log |
 | 33 | Platform and target matrix | PARTIAL |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
@@ -3807,6 +3807,23 @@ source lines, runnable executables byte-identical too.
 **Accepted when** · Met.
 
 ### 32. Reproducibility and provenance — PARTIAL
+
+*N94, 2026-10-04: reproducibility and provenance v2 — VERIFIED under the model of §7.95, on one host;
+the area stays PARTIAL.* `architecture.md` §7.95 first. The model's claims, apart: identical input
+and another directory give the same executable, provenance and SBOM bytes under either backend
+(`identical_input_gives_identical_artefacts_here_and_in_another_directory`); the release archive (N75)
+and offline locked builds (N56) as before; across toolchains, differences classified, never equal
+(N73). `nazm build --sbom FILE` writes CycloneDX 1.5 read off the provenance record — the output,
+every package with `pkg:generic/NAME@VERSION`, every source module, the runtime, BLAKE3 hashes, the
+tools (`the_sbom_lists_every_package_source_and_the_runtime_with_their_digests`). `nazm attest sign`
+wraps the record in an in-toto Statement v1 (`urn:nazm:provenance:1`) over artefacts it names, and
+signs it with `ssh-keygen -Y sign` in the namespace `nazm-attestation`; `nazm attest verify` checks the
+signature for an identity in an allowed-signers file and every artefact's digest among the subjects
+(`crates/nazm-cli/src/attest.rs`; `a_signed_statement_verifies_for_its_signer_and_its_artefacts_only`:
+a stray artefact refused before a key is used, another identity, an edited artefact, an edited
+statement and an unlisted key each refused). Four mutants, one repointed. Not here: a transparency
+log, keyless signing, SLSA levels, rebuilds on independent machines, dependency origins beyond N56's
+digests.
 
 **Evidence** · `scripts/release-candidate.sh` runs every gate, writes `PROVENANCE.txt` and
 `MANIFEST.txt`, and validates the package against its own manifest with counts compared

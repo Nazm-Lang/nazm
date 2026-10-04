@@ -11885,8 +11885,8 @@ killers = [{ package = "nazm-cli", test = "build_provenance", name = "an_attesta
 name = "n73-a-failed-build-has-a-record"
 why = "a record is written for a build that produced nothing"
 file = "crates/nazm-cli/src/main.rs"
-find = "        if built != ExitCode::from(exit::OK) {\n            return built;\n        }"
-replace = "        if false {\n            return built;\n        }"
+find = "        if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {"
+replace = "        if provenance.is_none() && sbom.is_none() {"
 killers = [{ package = "nazm-cli", test = "build_provenance", name = "a_failed_build_writes_no_record" }]
 
 # --- N73: the evidence bundle and the compiler's bill of materials ---------------------------------
@@ -13446,3 +13446,35 @@ file = "xtask/src/bench.rs"
 find = "        .split([',', '}'])"
 replace = "        .split(['}'])"
 killers = [{ package = "xtask", bin = "xtask", name = "bench::tests::a_baseline_of_either_version_is_read" }]
+
+[[mutation]]
+name = "n94-a-stray-artefact-is-attested"
+why = "a statement is signed over a file the provenance record does not name, so a signature vouches for an artefact no build produced"
+file = "crates/nazm-cli/src/attest.rs"
+find = "        if !named.contains(&d.as_str()) {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "attestation", name = "a_signed_statement_verifies_for_its_signer_and_its_artefacts_only" }]
+
+[[mutation]]
+name = "n94-the-signature-is-not-checked"
+why = "verification accepts a statement whatever ssh-keygen says of its signature: an edited statement, or one for another identity, verifies"
+file = "crates/nazm-cli/src/attest.rs"
+find = "        Ok(o) if o.status.success() => {}"
+replace = "        Ok(_) => {}"
+killers = [{ package = "nazm-cli", test = "attestation", name = "a_signed_statement_verifies_for_its_signer_and_its_artefacts_only" }]
+
+[[mutation]]
+name = "n94-an-artefact-is-not-checked"
+why = "verification does not compare the artefact with the statement's subjects, so a file changed after signing verifies"
+file = "crates/nazm-cli/src/attest.rs"
+find = "            Ok(d) if subjects.contains(&d.as_str()) => {}"
+replace = "            Ok(_) => {}"
+killers = [{ package = "nazm-cli", test = "attestation", name = "a_signed_statement_verifies_for_its_signer_and_its_artefacts_only" }]
+
+[[mutation]]
+name = "n94-the-sbom-drops-a-package"
+why = "the SBOM omits a package the build linked"
+file = "crates/nazm-cli/src/provenance.rs"
+find = "    for p in record[\"packages\"].as_array().into_iter().flatten() {"
+replace = "    for p in record[\"packages\"].as_array().into_iter().flatten().skip(1) {"
+killers = [{ package = "nazm-cli", test = "attestation", name = "the_sbom_lists_every_package_source_and_the_runtime_with_their_digests" }]
