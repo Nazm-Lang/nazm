@@ -1952,8 +1952,9 @@ is how every program written before N37 is accepted unchanged.
 *Corrected 2026-09-30, N37.* This section was titled *Authority is ambient, and that is a
 limitation*, and said any function could call `read_file` and there was no capability
 parameter. That is no longer true for a function with a declared set, and it is still true
-for one without — which is now a **compatibility bridge**, bounded so that code with a
-contract never reaches authority it does not hold by calling code without one. The
+for one without — which was then a **compatibility bridge**, bounded so that code with a
+contract never reaches authority it does not hold by calling code without one. *N104 retired
+the bridge*: no function exercises its caller's authority (*No inherited authority*). The
 limitation that remains is stated there, not hidden here: the checking is static, v1
 capabilities are coarse, and nothing at runtime sandboxes a Nazm program.
 
@@ -2220,8 +2221,9 @@ with `--profile NAME` on `check`, `build` and `run`, or required by a package's 
 `no-io`, `no-spawn` and `no-foreign` refuse a program whose `main` requires that effect, through
 any call, standard functions included. `declared-effects` refuses any function of the program that
 writes no `! { … }`, so no function exercises its caller's authority. `explicit-authority` (N79)
-is narrower: it refuses only a function whose recorded inherited authority is not empty, so an
-undeclared function that exercises no authority is accepted (*The bridge is a recorded contract*). `locked-build` refuses a
+refused a function whose recorded inherited authority was not empty; since N104 no function
+inherits authority, so it is the language's rule and refuses nothing more (*No inherited
+authority*). `locked-build` refuses a
 build that is not a package build whose lockfile verifies. `no-recursion` refuses a cycle of direct
 calls or spawns, and is `unknown` where a call goes through a function value; `no-select` refuses
 any select (N60). Each rule's verdict is `pass`, `fail` or `unknown`, and `unknown` is refused: a
@@ -2659,7 +2661,7 @@ declarations, and only the second promises anything:
 
 | Written | Contract | Its own module's callers see | Another module's callers see | Authority (N37) |
 | --- | --- | --- | --- | --- |
-| `fn f() -> Int` | none | what its body requires, inferred | every effect, `{ io, spawn }` | its caller's: the compatibility bridge |
+| `fn f() -> Int` | none | what its body requires, inferred | every effect, `{ io, spawn }` | only the capabilities its scope holds (N104; its caller's until then) |
 | `fn f() -> Int ! {}` | pure | `{}` | `{}` | only the capabilities its scope holds |
 | `fn f(io: IoCap) -> Int ! { io }` | may reach the outside world | `{ io }` | `{ io }` | the `IoCap` it is handed |
 
@@ -2830,32 +2832,27 @@ need a cell per grant and a check at every authorised call — runtime state the
 not have. A program that needs a revocable grant passes ordinary data it can invalidate, such as a
 channel it closes; that is data, not authority.
 
-#### The compatibility bridge: a function with no declared set
+#### No inherited authority (N104)
 
-A function that declares no effect set is **ambient**: it has no authority of its own and
-exercises its **caller's**. That is how every program written before N37 is accepted unchanged
-— a `main` with no set is the bridge's root and is handed all of it, and every undeclared
-function it calls exercises it in turn.
+**Every function holds what it exercises.** A built-in that needs a capability, a `spawn`, a
+foreign call — each needs one of its kind held at the site, in every function, whether it
+declares an effect set or not. Missing authority is `N0369`, at the site, naming the function and
+the kind. A call to a function needs nothing at the call: whatever that function exercises it
+holds itself, so its authority is in its parameters, and type checking has already made the
+caller supply them. `main`'s parameters are the root: the runtime hands `main` one capability per
+parameter, and nothing else is a source.
 
-The bridge is bounded, and the bound is the point: a function that declares a set may call or
-spawn an ambient one **only while holding what that callee's effects need** — every effect, for
-an import it cannot read. So code that states its contract never reaches authority it does not
-hold by calling code that states none, in its own module or another. Declaring a set is how a
-function leaves the bridge; nothing makes a function leave it silently, and nothing lets one
-re-enter it.
+*Until N104* a function with no declared set exercised its **caller's** authority — N37's
+compatibility bridge, bounded so that code with a contract could not reach authority through code
+without one, and recorded since N79 as each function's *inherited authority*. N104 migrated every
+program in the repository, the compiler written in Nazm among them, to take its authority as
+parameters, and removed the bridge: `fn main() -> Int { print("x"); 0 }` is now refused, and
+`fn main(out: OutCap) -> Int { print("x"); 0 }` is how it is written. The `authority` profile's
+`explicit-authority` rule is the language's rule; it keeps its name and can no longer fire.
 
-**The bridge is a recorded contract (N79).** Each function's **inherited authority** is the set
-of capability kinds its body exercises without holding them lexically, computed by the same rule
-that checks a declared function's authority. It is part of the function's contract, recorded in
-the resolution and reported by `nazm inspect` as each definition's `inherits`. A function that
-declares an effect set always inherits nothing, since missing authority is `N0369` for it. So
-which functions use the bridge, and for which kinds, is stated rather than ambient.
-
-**Strict authority is a profile.** Under `--profile authority`, the rule `explicit-authority`
-refuses (`N0510`) every function of the program's own modules whose inherited authority is not
-empty, naming the function, the kinds and where it first exercises them. Under it, a function
-holds only what its scope holds, and `main`'s parameters are the only root. Outside the profile
-the bridge behaves exactly as before.
+What remains of the bridge is its **effect** half, which grants nothing: a function in another
+module that declares no effect set is assumed to have every effect, `{ io, spawn }`, because its
+interface publishes no set.
 
 #### Across modules
 
@@ -2877,7 +2874,8 @@ There is **no sandbox**. A Nazm program can affect its machine exactly as much a
 running it can; an operating-system boundary, a broker or a resource quota is not part of the
 language. What N37 establishes is narrower and exact: **Nazm v1 statically represents and
 checks explicit compiler-owned authority** — for every function that declares its effects —
-and labels everywhere else as the ambient bridge it is.
+and labels everywhere else as the ambient bridge it is. *Since N104* there is no bridge: every
+function's authority is checked.
 
 Not in v1, and not implied by anything above: attenuation (there is no narrower capability to
 derive one into), resource-specific authority, revocation, linear or affine capabilities,
@@ -2925,8 +2923,8 @@ interface carries its symbol.
 **Calling one is an effect and needs authority.** A foreign function's effect is `foreign`: a
 function whose declared set leaves it out cannot call one (`N0366`). And **every** call to one
 needs a `ForeignCap` in scope, whether or not the calling function declares an effect set
-(`N0369`): C can do anything, so the compatibility bridge that lets an undeclared function
-exercise its caller's `io` does not reach it. A function in another module that declares no
+(`N0369`): C can do anything, and authority is never inherited — which N104 made true of every
+kind, as it was of this one from the start. A function in another module that declares no
 effects is assumed to call C only if one of its parameters can carry a `ForeignCap`.
 
 **Failure and ownership.** C cannot fail the Nazm way: after a foreign call nothing is checked,
@@ -3103,8 +3101,8 @@ a file's contents either). Each refusal shows the same chain.
 **Traces (N80).** `nazm explain-flow` prints every sink with the origins that reach it and, for
 each, one chain from where it entered to the sink; `--json` prints `nazm.flow/2`.
 
-A function that declares no effect set is the bridge N37 describes, and its own writes are not
-checked; but explicit code cannot launder a file's contents through it.
+A function that declares no effect set has its own writes left unchecked for restricted flows
+(N38); explicit code still cannot launder a file's contents through it.
 
 Authority needs no restriction of its own here: no built-in accepts a capability and none
 converts one to data, so authority reaching output, a file or a channel is already impossible by
@@ -3651,8 +3649,8 @@ static erasure (*Capabilities: what allows a function to act*). Still open:
   copyable — needs move semantics the language does not have.
 - **Revocation and lifetime.** A copied capability lives as long as any copy; a scoped grant
   needs a lifetime analysis.
-- **Retiring the bridge.** When a function with no declared set stops being ambient, and what
-  a program declaring nothing is migrated to.
+- **Retiring the bridge.** *Settled by N104*: no function is ambient; a program declaring
+  nothing takes its authority as parameters from `main`.
 - **Runtime enforcement.** Whether a later milestone backs the static check with an
   operating-system boundary for a program that crosses into foreign code.
 - **Foreign and unsafe authority.** A foreign-function call or unsafe code would need

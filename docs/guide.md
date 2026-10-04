@@ -379,10 +379,9 @@ fn main(io: IoCap) -> Int ! { io } {
 ```
 
 Declaring `! { io }` without holding an `IoCap` is refused, and so is holding one while
-declaring `! {}` — two different mistakes, two different errors. A function that declares
-nothing uses its caller's authority, which is how programs written without any of this keep
-working; one that declares a set may call it only while holding what it needs. `nazm inspect`
-shows what each function inherits that way, and `--profile authority` refuses it.
+declaring `! {}` — two different mistakes, two different errors. A function holds what
+it uses, whether it declares a set or not: one that prints and is given nothing is refused, so
+authority is threaded from `main`'s parameters to every function that needs it.
 
 Hand a function less than everything: an `OutCap` authorises `print` and `eprint` and nothing
 else, and an `IoCap` is accepted wherever one is expected —

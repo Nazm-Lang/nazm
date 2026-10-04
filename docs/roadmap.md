@@ -405,6 +405,12 @@ the compiler written in Nazm at parity (N102), re-exports (N103), authority (N10
 (N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
 catalogue (N108).
 
+### N104 — authority is a parameter — **complete, 2026-10-05; area 6 stays PARTIAL**
+
+`architecture.md` §7.105 first. The authority bridge removed: no function exercises its caller's
+capabilities; every program in the repository, and the compiler written in Nazm, migrated to take
+them as parameters; `N0369` in both compilers; epoch 29, `nazm.inspect/2`. Next: N105.
+
 ### N103 — re-exports — **complete, 2026-10-05; area 2 stays PARTIAL**
 
 `architecture.md` §7.104 first. `pub use`, with chosen names and `as`; one identity per definition

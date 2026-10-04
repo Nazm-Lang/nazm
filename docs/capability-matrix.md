@@ -69,7 +69,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 3 | Type system | PARTIAL — traits, impls and methods (N78); no trait objects, generic traits or default methods |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe |
 | 5 | Effects | PARTIAL — effect subsumption for function values (N79); no handlers, user effects or divergence |
-| 6 | Capabilities (language) | PARTIAL — the bridge recorded as inherited authority and refusable by profile, `OutCap` attenuation (N79); the default still inherits |
+| 6 | Capabilities (language) | PARTIAL — no inherited authority: every function holds what it exercises (N104); `OutCap` attenuation (N79); static only, coarse, shareable |
 | 7 | Provenance and information flow (language) | PARTIAL — explicit flow by cell, target and field (N80); no implicit flow, no labels a program writes |
 | 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | VERIFIED (v1) |
@@ -925,6 +925,22 @@ effectful call refused where a pure one is accepted.
 
 ### 6. Capabilities, as a language feature — PARTIAL
 
+*N104, 2026-10-05: no inherited authority — VERIFIED.* `architecture.md` §7.105 first. The
+bridge's authority half is removed: every body, declared or not, holds what it exercises
+(`N0369` otherwise), a call needs nothing of its caller, and `main`'s parameters are the only
+root. `Resolution::inherits` and `nazm inspect`'s `inherits` are gone (`nazm.inspect/2`); the
+`explicit-authority` rule can no longer fire. Every program in the repository was migrated — eleven
+`.nz` programs and examples, the compiler written in Nazm (30 of its functions take an `IoCap`,
+none a `SpawnCap`), and the programs inside the tests — by threading from `main` the capabilities
+each function's own body uses. The migration found two N79 defects in attenuation, both fixed and
+held by `authority::an_io_cap_given_for_an_out_cap_compiles_on_both_backends`: an `IoCap` handed
+for an `OutCap` failed MIR validation (`N0900`), because MIR's copy of the shape relation had no
+capability rule; and a generic function could not be handed one (`N0300`), because a generic
+call compared its concrete parameters exactly. The compiler written in Nazm also checks it: `N0369` at the
+reference's spans (six new agreement cases). Semantic epoch 29. Nine catalogue entries that
+attacked the bridge are retired, three repointed, six added. **Stays PARTIAL** for the reasons
+below: static only, coarse, shareable.
+
 *N79, 2026-10-03: Inherited authority as a recorded contract v1 — VERIFIED; Strict authority by
 profile v1 — VERIFIED; Attenuation by a narrower kind v1 — VERIFIED; Revocation — declared outside
 the model.* The checker computes each function's **inherited authority** — the kinds its body
@@ -988,19 +1004,14 @@ enforces authority — there is no sandbox, broker or operating-system boundary,
 affect its machine as much as the process running it. **Coarse**: one `IoCap` authorises every file,
 both standard streams, the arguments and exit; nothing is least-privilege, and there is no
 attenuation beyond `OutCap` (N79) because there is no other narrower kind to derive. **Shareable**: capabilities copy freely,
-with no linearity and no revocation. **The ambient bridge**: a function with no declared set — every
-function in the repository written before N37, 1,034 of the 1,054 function checks across the tree's
-roots — exercises its caller's authority, rooted at a `main` with no set; the bound is that code with a
-contract may call it only while holding what it needs. Since N79 that inheritance is recorded per
-function and refused under the `authority` profile, but not by default. Possession is lexical, not use: the built-ins
-do not take the capability as an argument. The Nazm-written compiler does not read capabilities.
+with no linearity and no revocation. **No bridge since N104.** Possession is lexical, not use: the built-ins
+do not take the capability as an argument.
 
 **Do not confuse this with `nazm capabilities`.** `schema/nazm.capabilities-1.json` is a
 *toolchain descriptor* — what one build of the compiler supports. It is unrelated to
 object capabilities or capability-safety, and it is VERIFIED under area 22.
 
-**Next dependency** · For the default, migrating the corpus and the compiler written in Nazm to
-declared authority (then the bridge can be refused everywhere); for finer attenuation, a
+**Next dependency** · For finer attenuation, a
 resource-parametrised kind; for linearity, move semantics;
 for enforcement beyond the checker, a runtime or operating-system boundary; for foreign code, FFI.
 
