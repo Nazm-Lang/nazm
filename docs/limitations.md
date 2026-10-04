@@ -134,10 +134,12 @@ found only by reading all of it.
 - Both backends still need clang for the runtime's LLVM text and the C compiler driver for the
   link; `nazm inspect` names both (areas 11, 12). The LLVM emitter promotes only scalar temporaries
   within one block; other locals keep a slot at `-O0` (N59).
-- Debug information through the LLVM backend only (Cranelift refuses `--debug`): functions, lines,
-  and `Int`, `Bool` and `Str` variables, with no lexical scopes; a live session verified with gdb in
-  the Linux container, not under lldb on macOS, whose developer mode a non-interactive run cannot
-  enable; profiling is counts of one run, not sampling (area 27). *Narrowed in N58.*
+- Debug information: functions, lines, lexical scopes and `Int`, `Bool` and `Str` variables under
+  LLVM; functions and lines under Cranelift, which describes no variables; a live session verified
+  with gdb in the Linux container, not under lldb on macOS, whose developer mode a non-interactive
+  run cannot enable; no debug adapter (DAP). Sampling (`nazm profile --sample`) uses macOS's
+  `sample` and is refused on a host without it; no Linux sampler, timeline or event trace (area 27).
+  *Narrowed in N58 and N91.*
 
 ## FFI
 

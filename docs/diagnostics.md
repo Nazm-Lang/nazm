@@ -371,6 +371,12 @@ package no version fitted where the search got deepest and every requirement on 
 it; a search that reaches its 10,000-candidate bound is `N0513` saying it stopped. `nazm update`
 naming no registry package is the existing `N0501`.
 
+**Applied to N91, debugger and profiler v3.** No code appeared. One schema moved, compatibly in
+every field it had: `nazm.profile/1 → /2` adds `samples` — `null` unless `--sample`, else the
+sampler, the interval, the total, the samples by Nazm function and line, by runtime, foreign and
+system symbol (each system frame with `blocked`), the blocked count and the unattributed count. The
+removed refusal of `--debug` with Cranelift was a toolchain message, not a code.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

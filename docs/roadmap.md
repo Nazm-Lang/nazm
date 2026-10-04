@@ -398,6 +398,14 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N91 — debugger and profiler v3 — **complete as scoped, 2026-10-04; area 27 stays PARTIAL**
+
+`architecture.md` §7.92 first. Bindings have lexical scopes under LLVM; Cranelift writes DWARF line
+tables and subprograms, checked by lldb and a live gdb session; `nazm profile --sample` attributes a
+run's samples to Nazm functions and lines, the runtime, foreign code and the system, with waits
+counted as blocked (`nazm.profile/2`). Not here: Cranelift variables, the remaining types, DAP, a
+Linux sampler. Next: N92, performance evidence v2.
+
 ### N90 — packages v3 — **complete as scoped, 2026-10-04; area 26 stays PARTIAL**
 
 `architecture.md` §7.91 first. The registry resolver backtracks: name order, newest first, the

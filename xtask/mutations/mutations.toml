@@ -9377,11 +9377,11 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "build::tests::only_a_de
 
 [[mutation]]
 name = "n48-cranelift-debug-is-silently-plain"
-why = "`--debug` with Cranelift builds without debug information instead of refusing"
+why = "`--debug` with Cranelift builds without debug information (repointed in N91: Cranelift writes DWARF since, and the rule is that it is not dropped)"
 file = "crates/nazm-cli/src/build.rs"
-find = "    if choice.debug && choice.backend == nazm_lir::backend::BackendId::Cranelift {"
-replace = "    if choice.debug && choice.backend == nazm_lir::backend::BackendId::Cranelift && false {"
-killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+find = "        nazm_codegen_clif::Cranelift::new(target.clone(), opt_level).with_debug(choice.debug);"
+replace = "        nazm_codegen_clif::Cranelift::new(target.clone(), opt_level).with_debug(false);"
+killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }, { package = "nazm-cli", test = "debugger_v3", name = "a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
 
 [[mutation]]
 name = "n48-a-phase-is-not-timed"
@@ -13342,3 +13342,67 @@ file = "crates/nazm-package/src/lib.rs"
 find = "        Some(names) => preferred.retain(|n, _| !names.contains(n)),"
 replace = "        Some(_) => preferred.clear(),"
 killers = [{ package = "nazm-package", test = "registry", name = "update_drops_the_lockfiles_preference_only_for_the_packages_named" }]
+
+[[mutation]]
+name = "n91-a-binding-has-no-block"
+why = "every binding is visible for its whole function, as before N91: a debugger shows a branch's binding outside its branch"
+file = "crates/nazm-mir/src/lower.rs"
+find = "                    d.scope = scope;"
+replace = "                    d.scope = None;"
+killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_binding_is_scoped_to_its_own_block" }]
+
+[[mutation]]
+name = "n91-locations-ignore-their-blocks"
+why = "an instruction's location names the subprogram, not its block, so a debugger stopped in a branch does not see the branch's bindings"
+file = "crates/nazm-lir/src/debug.rs"
+find = "                let loc = meta.location(scope_of(&blocks, sp, here), here.0, here.1);"
+replace = "                let loc = meta.location(sp, here.0, here.1);"
+killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_binding_is_scoped_to_its_own_block" }]
+
+[[mutation]]
+name = "n91-cranelift-writes-no-dwarf"
+why = "a Cranelift debug build gathers its debug facts and writes none of them"
+file = "crates/nazm-codegen-clif/src/unit.rs"
+find = "        if let Some(debug) = &self.debug {"
+replace = "        if let Some(debug) = None::<&crate::dwarf::Debug> {"
+killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_cranelift_build_carries_debug_information_only_when_asked" }]
+
+[[mutation]]
+name = "n91-macho-addresses-are-not-settled"
+why = "a Mach-O object's DWARF addresses are offsets into the code section, not object addresses, so dsymutil places every function at the wrong address"
+file = "crates/nazm-codegen-clif/src/unit.rs"
+find = "                crate::dwarf::settle_macho(b)"
+replace = "                Ok(b)"
+killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
+
+[[mutation]]
+name = "n91-a-debug-object-is-reused"
+why = "a Cranelift debug object is taken from the cache by its MIR, which does not change when a line is added above the code, so the debugger's lines are stale"
+file = "crates/nazm-codegen-clif/src/lib.rs"
+find = "                key: (!self.debug).then(|| self.key(native, unit)),"
+replace = "                key: Some(self.key(native, unit)),"
+killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
+
+[[mutation]]
+name = "n91-a-frame-owns-its-callees-samples"
+why = "a sample is counted at every frame on the stack, not once at its innermost, so callers are charged their callees' time"
+file = "crates/nazm-cli/src/run_profile.rs"
+find = "        let own = f.count.saturating_sub(children);"
+replace = "        let own = f.count;"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "run_profile::tests::each_sample_is_attributed_once_by_its_innermost_frame" }]
+
+[[mutation]]
+name = "n91-a-wait-is-running"
+why = "a thread blocked in the kernel is reported as running time"
+file = "crates/nazm-cli/src/run_profile.rs"
+find = "            if WAITS.contains(&f.symbol.as_str()) {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "run_profile::tests::each_sample_is_attributed_once_by_its_innermost_frame" }]
+
+[[mutation]]
+name = "n91-sampling-without-lines"
+why = "a sampled program is built without debug information, so no sample is attributed to a Nazm line"
+file = "crates/nazm-cli/src/run_profile.rs"
+find = "        build.args([\"--debug\", \"--no-cache\"]);"
+replace = "        build.args([\"--no-cache\"]);"
+killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_sampled_run_is_attributed_to_nazm_functions_and_lines" }]

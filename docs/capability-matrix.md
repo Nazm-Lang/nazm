@@ -92,7 +92,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 24 | Machine-applicable fixes | VERIFIED |
 | 25 | LSP and MCP | PARTIAL / PARTIAL — across package boundaries tested; an editor client (N74) |
 | 26 | Package and build tooling | PARTIAL — templates, a library check, API docs and a publish dry run (N74); a backtracking resolver that explains a refusal, and `nazm update` (N90) |
-| 27 | Debugger and profiler | PARTIAL |
+| 27 | Debugger and profiler | PARTIAL — lexical scopes, Cranelift line tables and a sampling profiler on macOS (N91); no Cranelift variables, no DAP |
 | 28 | Performance measurement | PARTIAL |
 | 29 | Differential testing | VERIFIED |
 | 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — seeded front-end and differential fuzzers (N73); not coverage-guided |
@@ -2732,22 +2732,44 @@ position on every instruction from MIR's spans, gathered into `OUTPUT.dSYM` on m
 inspect` prints `nazm.inspect/1` (`crates/nazm-cli/src/inspect.rs`); `nazm build --timings` prints
 `nazm.timings/1`.
 
+*N91, 2026-10-04: debugger and profiler v3 — VERIFIED for the host matrix below; the area stays
+PARTIAL.* `architecture.md` §7.92 first. MIR records each binding's block (`LocalDecl.scope`) and an
+LLVM debug build nests a `DILexicalBlock` per block. Cranelift writes DWARF 4 through `gimli`
+(`crates/nazm-codegen-clif/src/dwarf.rs`): a compile unit, a subprogram per function and a line table
+from the source location set on every statement, relocated per object format; a debug object is never
+reused from the cache. `nazm profile --sample` runs the debug build under macOS's `sample` and
+attributes each sample's innermost frame to a Nazm function and line, the runtime, foreign code or
+the system, counting the system's waits as blocked; `nazm.profile/2`. Evidence:
+`crates/nazm-cli/tests/debugger_v3.rs` (5, and 1 run with `--ignored` in the `nazm-debug` image) and
+the sampler's attribution unit test; eight mutants, one repointed.
+
+| Feature | LLVM, aarch64-apple-darwin | LLVM, aarch64-linux (gdb, container) | Cranelift, aarch64-apple-darwin | Cranelift, aarch64-linux (gdb, container) |
+| --- | --- | --- | --- | --- |
+| Breakpoint by function and by `.nz` line | lldb, static | live | lldb, static | live |
+| Backtrace naming `.nz` lines; step by statement | — (developer mode) | live | — (developer mode) | live |
+| Parameters and bindings (`Int`, `Bool`, `Str`) | described | live | not described | `No locals.` |
+| A binding visible only in its block | described (IR) | live | — | — |
+| Sampled run attributed to `.nz` lines | `sample` | no sampler in the image | `sample` | no sampler in the image |
+
 | Claim | Status | Evidence |
 | --- | --- | --- |
 | Line tables: a breakpoint by Nazm function or by `.nz` file and line resolves to that line | VERIFIED (static, lldb on aarch64-apple-darwin) | `a_debugger_finds_nazm_functions_and_lines` |
 | A debug build behaves as an ordinary one; an ordinary build carries no debug metadata | VERIFIED | `a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information` |
 | A live session — run to a breakpoint, backtrace, step (N58) | VERIFIED (gdb, aarch64-unknown-linux-gnu, in the `nazm-debug` image) | a breakpoint by Nazm function name stops on its first statement with the parameters stored; the backtrace names Nazm functions with files and lines through two calls; `next` and `step` by statement (`a_live_session_shows_nazm_frames_lines_and_variables`, run with `--ignored` where Docker is). On macOS, launching under lldb still waits on developer-mode authorisation and is not exercised |
 | Local variables, types (N58) | VERIFIED for `Int`, `Bool`, `Str` | parameters (with their positions) and source bindings, never temporaries; `Str` as `{data, len, owner}`; a dropped or not-yet-bound slot reads as its zeroed contents, never freed storage (`parameters_and_bindings_are_described_and_temporaries_are_not`, and the live test). Records, enums, sequences, channels and closures not described; no lexical scopes, so a variable is visible for its whole function |
-| Cranelift debug information | BLOCKED | `--debug` with Cranelift is refused by name: Cranelift 0.136's object module exposes no DWARF emission through the API this backend uses |
+| Cranelift debug information (N91) | VERIFIED for functions and lines; variables not described | DWARF written with `gimli` from Cranelift's per-instruction source locations: breakpoints by function and line resolved by lldb (`a_debugger_finds_a_cranelift_build_s_functions_and_lines`) and a live gdb session (`a_live_session_on_either_backend_shows_nazm_frames_and_lines`); a line added above the code moves the next build's lines (no debug object is reused). Variables: Cranelift reports where a value lives only through value labels, not tracked — `No locals.` |
+| Lexical scopes (N91) | VERIFIED (LLVM) | a branch's binding in a `DILexicalBlock` of its own (`a_binding_is_scoped_to_its_own_block`); live, a binding of a later branch not in scope at the function's first statement and in scope, with its value, in its branch |
 | Deterministic inspection of a program's facts | VERIFIED | `inspect_is_one_deterministic_document_of_the_program_s_facts` |
 | Compiler phase timings | VERIFIED | `timings_account_for_every_phase` |
-| Runtime profiling (N58) | PARTIAL | `nazm profile FILE` prints `nazm.profile/1`: one run's exit, wall time, output size, memory counts and scheduler counts (tasks spawned and joined, selects, timeouts), under either backend (`a_profile_reports_what_one_run_did_under_both_backends`); counts of events, never samples; no sampling profiler, timeline or event trace |
+| Runtime profiling (N58) | VERIFIED as counts | `nazm profile FILE` prints one run's exit, wall time, output size, memory counts and scheduler counts (tasks spawned and joined, selects, timeouts), under either backend (`a_profile_reports_what_one_run_did_under_both_backends`); `nazm.profile/2` since N91 |
+| Sampling profiler (N91) | VERIFIED on aarch64-apple-darwin; BLOCKED on Linux here | `nazm profile --sample [--interval-ms N]`: every sample attributed once, by its innermost frame, to a Nazm function and `.nz` line, the runtime, foreign code or the system, a system wait counted as blocked (`a_sampled_run_is_attributed_to_nazm_functions_and_lines`, both backends; `each_sample_is_attributed_once_by_its_innermost_frame`). macOS's `sample` only: no `perf` in the images, and a host without a sampler is refused. No timeline or event trace |
 
-**Limitation** · Function and statement positions only. The runtime and entry objects carry no
-debug information.
+**Limitation** · The runtime and entry objects carry no debug information. Records, enums,
+sequences, channels and closures are not described; Cranelift describes no variables. No DAP: a
+debugger is driven by its own commands. Sampling is macOS's `sample`; no Linux sampler here.
 
-**Next dependency** · Lexical scopes and the remaining types; Cranelift's DWARF; a sampling
-profiler with a stated overhead.
+**Next dependency** · Cranelift value labels; the remaining types; a debug adapter; a Linux
+sampler.
 
 **Accepted when** · A native backtrace taken in a live session names a `.nz` line — the static half
 is met.
