@@ -1,0 +1,2 @@
+struct P { x: Int, y: Int }
+fn main() -> Int { if P(x: 1, y: 2) == P(x: 1, y: 2) { 1 } else { 0 } }

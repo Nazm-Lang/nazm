@@ -1,0 +1,1 @@
+fn main() -> Int { let s = str_concat("ab", "cde"); str_len(s) }

@@ -1,0 +1,2 @@
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn main() -> Int { let k = 3; apply(fn(y: Int) -> Int { y * k }, 7) }
