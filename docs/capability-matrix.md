@@ -98,7 +98,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of four targets with a replayed corpus (N93); no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL — a stated five-part model, signed in-toto statements and a CycloneDX SBOM (N94); one host and one image, no transparency log |
-| 33 | Platform and target matrix | PARTIAL |
+| 33 | Platform and target matrix | PARTIAL — every cell run-verified, compile-only or unsupported (N95): 9 run, 2 compile-only, 3 unsupported; x86_64 Linux not run |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72) |
 
 After N88, 2026-10-04: unchanged — area 21 widened and still PARTIAL.
@@ -3900,6 +3900,33 @@ alone without an `IoCap`; 64 corpus programs (`transfers`, `compiler/conformance
 50 refused by part, none disagree. **Limitation**: no heap, so most programs are refused; no WASI;
 exports beyond `nazm_main`; no other engine run; a debugger's source mapping not exercised, only
 the sections' presence.
+
+*N95, 2026-10-04: the support matrix — VERIFIED as stated; the area stays PARTIAL.*
+`architecture.md` §7.96 first. One table, `nazm_lir::backend::SUPPORT`, printed by `nazm inspect`
+(`toolchain.support`, `toolchain.non_goals`), and this one held to it cell for cell by
+`crates/nazm-cli/tests/platform_matrix.rs`, which also requires every target the compiler accepts to
+have a row, every run-verified or compile-only cell to name evidence the tree holds, and each LLVM CPU
+to be the one the C compiler driver resolves for the triple.
+
+| Target | LLVM | Cranelift | CPU (LLVM / Cranelift) | Debugger |
+| --- | --- | --- | --- | --- |
+| `aarch64-apple-darwin` | run-verified | run-verified | apple-m1 / aarch64 baseline | lldb, breakpoints resolved statically, both backends |
+| `x86_64-apple-darwin` | run-verified | run-verified | penryn / x86-64 baseline (SSE2) | not exercised |
+| `aarch64-unknown-linux-gnu` | run-verified | run-verified | generic / aarch64 baseline | gdb, live, both backends |
+| `x86_64-unknown-linux-gnu` | compile-only | compile-only | x86-64 / x86-64 baseline (SSE2) | not exercised |
+| `aarch64-unknown-none` | run-verified | unsupported | generic / none | not exercised |
+| `riscv64gc-unknown-none-elf` | run-verified | unsupported | generic-rv64 / none | not exercised |
+| `wasm32-unknown-unknown` | run-verified | unsupported | generic / none | DWARF present, not exercised |
+
+Run-verified means programs built for the target ran and agreed with the interpreter: on the host,
+under Rosetta, in the Linux image, under QEMU, under Node — each cell's test is named in the table in
+code. `x86_64-unknown-linux-gnu` is compile-only: no x86_64 Linux machine or image is here. A
+freestanding target is unsupported by Cranelift, whose object writer has no format for it, and
+WebAssembly by this Cranelift build. **Non-goals, by decision**: Windows (no linker, SDK or machine
+here; no runtime port), 32-bit hosted targets (`Int` is 64-bit and hosted layouts assume 64-bit
+pointers), big-endian targets (nothing here runs one; layouts and the DWARF writer assume
+little-endian). The CPU of an LLVM object is the driver's default for its triple, recorded and
+checked, not pinned by a flag; Cranelift detects nothing of the building host.
 
 **Limitation** · No Windows, 32-bit, big-endian or CPU-feature targets; no bundled linker or
 sysroot, so a Linux target from macOS is objects only; cross-host byte reproducibility not
