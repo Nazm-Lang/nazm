@@ -7815,6 +7815,16 @@ constant time, and any claim of absence of runtime error beyond the census's own
 **What would prove this unsuitable.** A contract a backend or the interpreter does not run; a
 `proved` obligation that fails at run time; an obligation the census omits — a trap site not in it.
 
+**As built (N87, 2026-10-04).** Four amendments. **The census is its own command**, `nazm
+obligations FILE [--json]`, beside `nazm core-ir`, rather than a flag of `nazm check`: it reads Core
+IR, which only a program that checks has. **The interface carries a count**, `requires`, not the
+clauses: the literal proof stays within a module, and an importer needs only to know a call is an
+obligation. **A contract call is `pure` by its signature** — a declared `! {}`, not foreign — so a
+callee whose interface came from the cache answers as the same callee checked from source. **The
+formatter prints the clauses as the header's**, one level in, the body's `{` back at the function's
+level. The census's kinds and statuses are as stated; a `proved` overflow or division is one on
+literals the census computed, the only proof it makes beyond the checker's.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

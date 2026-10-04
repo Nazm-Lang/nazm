@@ -357,6 +357,14 @@ where there is no device exactly as the 32-bit pair is (`N0392`), whose help now
 a RISC-V build on a host whose `clang` has no RISC-V code generator is an environment refusal, exit
 4 and one sentence, as a missing toolchain is.
 
+**Applied to N87, contracts.** Four codes appeared, all compatible. `N0410` and `N0411` are run-time
+failures — a precondition or a postcondition that evaluated `false`, at the clause, the same sentence
+from the interpreter and both backends. `N0614` (a clause that is not pure) and `N0615` (a call of
+literals that breaks its callee's precondition) are the checker's, continuing N78's block. A clause
+that is not a `Bool` is the existing `N0300`. `nazm.obligations/1` is new, with
+`schema/nazm.obligations-1.json` checked against real output; the persisted interface moved to
+`nazm.interface/10` (an export's `requires`).
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of
