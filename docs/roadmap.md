@@ -398,6 +398,21 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### After N100: N101–N108, closing the core
+
+`docs/nazm_N101_N108_core_closure_prompts/MASTER_EXECUTION_ORDER.md`'s order: evidence closure (N101),
+the compiler written in Nazm at parity (N102), re-exports (N103), authority (N104), one LIR contract
+(N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
+catalogue (N108).
+
+### N101 — evidence closure — **complete, 2026-10-05**
+
+`architecture.md` §7.102 first. N100's survivor, `n79-a-held-io-cap-is-read-alone`, is reachable —
+N100's probe read a warm check cache — and has a focused killer. The four without a verdict have
+focused killers. Every other catalogue entry without one got a killer found by applying it: 175, all
+caught. 1,254 of 1,255 entries declare a killer; the one that does not is a known survivor with its
+reason. `cargo xtask check` refuses an entry with neither. Next: N102.
+
 ### N100 — the grand audit — **complete; the zero-partial objective NOT MET**
 
 `architecture.md` §7.101 and `docs/audit-n100.md`. Every row audited against executed evidence;

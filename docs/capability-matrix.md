@@ -2950,6 +2950,17 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — PARTIAL (N73; MISSING until then)
 
+*N101, 2026-10-05: no silent tier.* `architecture.md` §7.102. N100's one survivor,
+`n79-a-held-io-cap-is-read-alone`, is reachable and caught by
+`authority::a_held_io_cap_authorises_its_own_print`; N100 had probed it in a directory with a warm
+check cache, whose key does not change under a mutant (runbook: a probe runs in a fresh directory).
+N100's four without a verdict have focused killers. The 175 other entries without a declared killer
+were applied one at a time and each was caught: 132 in a dedicated host worktree, 43 selfhost and
+bootstrap entries under the contained runner. Of **1,255** entries, **1,254** declare a killer;
+`n13-native-operands-are-released-before-they-are-compared` is a known survivor, its reason in
+`no_killer`. `xtask/src/plan.rs` refuses an entry with neither (`an_entry_without_a_killer_must_say_why`).
+Not claimed: that a declared killer is a minimal one, or that zero survivors would mean no defect.
+
 *N93, 2026-10-04: coverage-guided fuzzing — VERIFIED for four targets at the stated budget; fuzzing
 stays PARTIAL.* `architecture.md` §7.94 first. `fuzz/` (its own workspace): the compiler's crates
 built with SanitizerCoverage (`trace-pc-guard`, a stable `rustc` option), the edge callbacks in
