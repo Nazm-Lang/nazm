@@ -811,6 +811,10 @@ fn resolved_declaration(
         let v = e.variants.get(p.variant as usize)?;
         return Some(("payload field", v.fields.get(p.field as usize)?.name_span));
     }
+    // N78: a trait named in a bound, an impl or a call, by the trait it names.
+    if let Some((_, t)) = res.traits().mentions().find(|(s, _)| *s == span) {
+        return Some(("trait", res.traits().get(t)?.name_span));
+    }
     // N18: a written type name, by the definition the checker resolved it to.
     match res.type_name(span)? {
         nazm_core::sema::TypeNode::Record(id) => Some(("record", res.records().get(id)?.name_span)),
@@ -1028,6 +1032,18 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                         params.push((item.span(), names));
                     }
                 }
+                // Each trait's span (N78): its methods are signatures with no body, so their
+                // parameters name nothing a program can use, and `Self` is the trait's own type
+                // parameter.
+                let traits: Vec<nazm_span::Span> = cst
+                    .nodes()
+                    .into_iter()
+                    .filter(|n| n.kind() == K::TraitItem)
+                    .map(|n| n.span())
+                    .collect();
+                let in_a_trait = |span: nazm_span::Span| {
+                    traits.iter().any(|s| s.start <= span.start && span.end <= s.end)
+                };
                 let a_type_parameter = |span: nazm_span::Span, text: &str| {
                     params.iter().any(|(s, names)| {
                         s.start <= span.start
@@ -1057,7 +1073,12 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                             || (node.kind() == K::EffectSet
                                 && (nazm_core::sema::Effect::by_name(leaf.text).is_some()
                                     || a_type_parameter(span, leaf.text)))
-                            || matches!(a.resolution.callee(span), Some(Callee::Builtin(_)));
+                            || matches!(a.resolution.callee(span), Some(Callee::Builtin(_)))
+                            // `impl Trait for Type`: `for` is its syntax (N78).
+                            || (node.kind() == K::ImplItem && leaf.text == "for")
+                            // A trait method's parameter, and `Self`, inside a trait (N78).
+                            || (node.kind() == K::Param && in_a_trait(span))
+                            || (node.kind() == K::Type && leaf.text == "Self" && in_a_trait(span));
                         if !explained {
                             unexplained.push(format!(
                                 "{}:{} {:?} `{}`",
