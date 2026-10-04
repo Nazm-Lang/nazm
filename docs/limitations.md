@@ -181,9 +181,12 @@ found only by reading all of it.
   multi-root workspaces (area 26). *Narrowed in N56:* until then, path dependencies only.
 - Project tooling (N74): six templates, a library check, `nazm doc` from semantic definitions, a
   publish dry run; no `nazm update`, no hosted documentation, no template beyond the six (area 26).
-  `nazm bindgen` translates only the `int64_t`/`bool`/`const char *` subset and reads declarations,
-  not the C preprocessor (area 17). The editor client (`editors/vscode`) is not exercised inside an
-  editor here or published; rename across a package boundary is refused (area 25).
+  `nazm bindgen` translates the subset §7.86 lists and reads declarations, not the C preprocessor
+  (area 17). The editor client (`editors/vscode`) is not exercised inside an editor here or
+  published. An exported rename (N89) needs a declared workspace and is never of a library package's
+  API, whose importers are other packages; the language server offers its edit only when every file
+  it touches is open, and MCP neither plans it nor applies a plan (area 25). *Narrowed in N89:* until
+  then, every exported rename was refused.
 - Reproducibility is verified on one host. Across toolchains it is measured, not claimed: Apple
   clang 21 and clang 19 give the same program objects and a different runtime object (N73, area 32).
   A provenance record is evidence of what a build read and wrote, not a proof; Nazm neither signs nor
