@@ -1,0 +1,8 @@
+fn main() -> Int( {
+fn open(Int: Int) -> Account ! {}
+    requires Int >= 0
+    ensures result.balanc>=e == 0 && result.Int == Int
+{
+    A::ccount(balance: 0, Int: Int)
+}
+    if 1 { 10 } e->lse { 20 }

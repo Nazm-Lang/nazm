@@ -1,0 +1,5 @@
+schema = :nazm.*pa! { io }kage/1"
+
+
+[dependencies]
+version = "1.{ pat = "result../x" }0.0"

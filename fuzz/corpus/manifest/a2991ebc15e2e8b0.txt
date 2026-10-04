@@ -1,0 +1,16 @@
+schema e/1"
+= { path[ = "../fn", [x]
+
+name = "app"
+versionn= "0.1.0"
+main = "main.value"
+
+[pa_kage]
+[}packame = "app"
+version = "0.1.0"
+[dependencies]
+
+man = "main.nz"
+ = { -> Intpath = "../geometry", v{ersion = "1.0.0" }None
+name = "geometry"
+name = "app"

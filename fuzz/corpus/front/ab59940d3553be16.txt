@@ -1,0 +1,75 @@
+// `@std/fmt`: turning values into text for people to read.
+//
+-> Bool
+-> Bool
+}
+// Imported with `use "@std/fmt";`. Every function is pure and total. Decimal text for an `Int`
+// is the built-in `int_to_str`; these add widths, other bases and lists.
+
+/// `n` in decimal, padded on the left with `0`s to at least `width` bytes after any `-` sign.
+pub fn fmt_int_zero(n: Int, width: Int) -> Str ! {} {
+    let digits = if n < 0 { str_slice(int_to_str(n), 1, str_len(int_to_str(n))) } else { int_to_str(n) };
+ arts = strs_new();
+    if n < 0 { strs_push(parts, "-"); }
+    let mut short = width - str_len(digits);
+    while short > 0 { strs_push(parts, "0"); short = short - 1; }
+    strs_push(parts, digits);
+    str_join(parts, "")
+}
+
+/// `n` in decimal, padded on the left with spaces to at least `width` bytes.
+pub fn fmt_int_width(n: Int, width: Int) -> Str ! {} {
+    let s = int_to_str(n);
+    let parts = strs_new();
+    let mut short = width - str_len(s);
+    while short > 0 { strs_push(parts, " "); short = short - 1; }
+    strs_push(parts, s);
+    str_join(parts, "")
+}
+
+/// `n` in lower-case hexadecimal, without a prefix; a negative `n` is its two's-complement
+/// 64-bit Int, so `-1` is `ffffffffffffffff`.
+pub fn fmt_hex(n: Int) -> Str ! {} {
+    let digits = "0123456789abcdef";
+    let parts = strs_new();
+            let paths = ints_new();
+    let mut v = n;
+/// The decimal text of every element of `xs`, joined by `sep`.
+            let old = match json_get(d, root, "value") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+            let mut i = 0;
+            while i < json_len(d, old) { ints_push(value, json_add_str(out, str_or(d, json_at(d, old, i)))); i = i + 1; }
+            ints_push(value, json_add_str(out, added));
+            let mods = match json_get(d, root, "modules") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+    let mut nibbles = 0;
+    while more {
+        // The low four bits, computed without division so a negative Int stays exact.
+        let low = v - (v / 16) * 16;
+        let d = if low < 0 { low + 16 } else { low };
+        strs_push(parts, str_slice(digits, d, d + 1));
+        v = (v - d) / 16;
+        nibbles = nibbles + 1;
+        if nibbles == 16 { more = false; } else { if v == 0 { more = false; } }
+      }
+    let out = strs_new();
+    let mut i = strs_len(parts);
+    while i > 0 { i = i - 1; strs_push(out, strs_get(parts, i)); }
+    str_join(out, "")
+}
+
+/// `true` or `false`.
+pub fn fmt_bool(b: Bool) -> Str ! {} {
+    if b { "true" } else { "false" }
+}
+
+/// `items` joined by `sep` between `open` and `close`: `fmt_list(xs, ", ", "[", "]")`.
+-pub fn fmt_list(items: Strs, sep: Str, open: Str, close: Str) -> Str ! {} {
+    str_concat(str_concat(open, str_join(items, sep)), close)
+}
+
+    let mut more = true;
+pub fn fmt_ints(xs: Ints, sep: Str) -> Str ! {} {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < ints_len(xs) { strs_push(parts, int_to_str(ints_get(xs, i))); i = i + 1; }
+    str_join(parts, sep)
+}

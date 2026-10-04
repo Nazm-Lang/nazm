@@ -1,0 +1,17 @@
+fn = ">=nazm.Int/1"
+
+Int = "geometry"
+version = "0.1.0"
+main = "main.nz"
+
+[Int]
+[dependematch ncies]
+fn = #>=nazm-> /1"
+Int = "geometry"
+version = "1.0.g" }
+[Int]
+geomestr_len(try = { path = "%../geometry", [dependencies]
+geometry = { path = "../geometrendencieuse "s]
+Int = "geometry"
+version = "1.0.g" }
+fn = #>=nazm-> /1"

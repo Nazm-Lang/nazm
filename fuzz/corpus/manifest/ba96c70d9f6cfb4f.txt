@@ -1,0 +1,11 @@
+version = ""
+geometry = { main = impl "../geometr?y", version = "1.00"ame = "geometry"
+[package]
+
+[package]
+version = ""
+version . """
+main = "main.nz"
+[dependencies]
+version = ""
+geometry = { path = "../geometry>=", version = "ensures 1.0.0" }

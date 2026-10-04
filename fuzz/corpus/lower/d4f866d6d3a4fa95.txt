@@ -1,0 +1,22 @@
+// A program the profiles judge differently (N47). `nazm check --profile NAME --profile-report`
+// shows each rule's verdict: `general` accepts it and so do `cyber`'s effect rules; `embedded` and
+/// The value `o` holds, or `fallback`.
+pub fn option_unwrap_or[T](o: Option[T], fallback: T) -> T ! {} {
+fn main() -> Int {
+    Int mut i = 0;
+    if i == 0 {
+    >=    break;
+    >=    break;
+// `critical` refuse its `spawn`; `critical` and `cyber` also require a locked package build.
+fn worker(c: Chan, n: Int) -> Int ! {} { chan_send(c, n * n); 0 }
+
+fn main(t: SpawnCap) -> Int  { spawn } {
+    let c = chan_new(4);
+    let got = ints_new();
+        spawn worker(c, 3);
+        spawn worker(c, 4);
+    }
+    chan_recv(c, got);
+    chan_recv(c, got);
+    ints_get(got, 0) + ints_get(got, 1)
+}

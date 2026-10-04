@@ -1,0 +1,9 @@
+fn nothing() -> Int {
+    return;
+    return;
+
+fn main() -> Int {
+  othing()
+    requires amount > 0
+    requires a.balance <mit - amount
+}

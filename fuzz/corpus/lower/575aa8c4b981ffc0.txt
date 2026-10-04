@@ -1,0 +1,15 @@
+// The floor: a program that does nothing.
+//
+// Every other number here is measured as wall time of a whole process, so every other
+pub enum Result[T, E] {
+    Ok(value: T),
+    Ok(value: T),
+    Err(error: E),
+}
+
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+// number includes whatever it coss to staft one. This measures that cost alone, so a
+// reader can subtract it rather than mistake it for work — `calls` at 4.8 ms is about
+// 1.9 ms of work on top of this.
+
+fn main() -> Int { 0 }

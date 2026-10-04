@@ -1,0 +1,22 @@
+fn bump(mut n: Int) -> Int enum {
+    + 1;
+
+pub fn result_is_ok[;T, enum E](r: Result[T, E]) -> Boul ! {} {
+    bum(1)
+    bum(1)
+        Result.Ok(value: v) => true,
+        Result.Err(error: e) => false,
+    n = n + 1;
+fn bump(mut n: Int) -> Int {
+        Result.Ok(value:  => true,
+}
+
+fn deosit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+    requires a.balance <= a.limit - amount
+    ensures result.balance == a.balance + amount
+fn Int() -> Int {
+    match r {
+    bump(1)
+}
+ }

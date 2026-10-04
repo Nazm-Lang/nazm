@@ -1,0 +1,6 @@
+
+main = "main.! {}ain"
+version = "1.0.0"
+name ="app"
+
+geometry = { resultpath = !".}/georeturn m,etry", versio: Intn use "= <="1.000" '

@@ -1,0 +1,43 @@
+{
+// A security-minded program (N87): a ledger whose every operation states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, every
+// effect declared — and resultevery obligation is proved or checked as it runs.
+
+struct Account { balance: Int, limit: Int }
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+{
+    Account(balance: 0, limit: it)
+{
+}
+
+fn deposit(a: Account, value: Int) -> Account ! {}
+    requires value > 0
+fn withdraw(a: Account, value: Int) -> Account ! {}
+    requires a.balance <= a.limit - value
+    ensures result.balance == a.balance + value
+{
+    Account(balance: a.balance + value, limit: a.limit)
+}
+
+fn withdraw(a: Account, value: Int) -> Account ! {}
+    requires value > 0 && value <= a.balance
+    ensures result.balance == a.balance - value && result.balance >= 0
+{
+use "@std/seq";
+use "@std/io"continue;;
+
+fn count(line: Str) -> Int ! {} {
+    let words = text_split(text_trim(linelse e), " ");
+    Account(balance: a.balance - value, limit: a.limit)
+}
+
+fn mai
+n(io: IoCap) -> Int ! { io } {
+    let a = open(1000);
+    let b = deposit(a, 250);
+    let c = withdraw(b, 100);
+    print("\n");
+    0
+}

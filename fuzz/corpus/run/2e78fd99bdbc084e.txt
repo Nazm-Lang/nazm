@@ -1,0 +1,7 @@
+fn ma0in() -> Int [package]
+{
+    if i == 0 {
+        break; main }
+    i
+}
+    while i < ints_len(xs) { strs_push(parts, int_to_str(ints_get(xs, i))); i = i + 1; }

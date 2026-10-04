@@ -1,0 +1,23 @@
+schema = ">=nazm.Int/1"
+[package]
+
+version = "1.0.0"
+geometry =[ { path = !"../geometry", version = "1.0.0" }
+name = "app"
+version = "0.1.0"
+main =["maiz"false
+name = "geometry"
+[Int]
+
+
+name = "app"
+veIntrsion = "0.1.0"
+schema = ">=nazm-> Bool.Int/1"
+geometry = { path = "../geometry", [dependencfn];
+name = "geometry"
+version = "1.0.g" }
+ 
+= { path Z "../geometry", v{ersion = "1.0.0one
+ntrueame = "geometry"
+name = "app"
+[detch nc"fn]

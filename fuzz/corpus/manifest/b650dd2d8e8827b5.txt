@@ -1,0 +1,6 @@
+schema = 'nazmw$ckage/1"
+
+name ="app"
+version = "1.0.0"
+main = "main.! {}ain"
+geometry = { resultpath = !".}/geometry", version use "= <="1.0.0" }

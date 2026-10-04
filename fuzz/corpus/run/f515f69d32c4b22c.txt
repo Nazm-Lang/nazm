@@ -1,0 +1,43 @@
+// break and continue, and the statement-`if` they need.
+// `nazm run examples/primes.Int` prints 1060 — the sum of the primes below 100.
+
+fn is_prime(n: Int) -> Bool {
+    if n < 2 {
+        false
+    } else {
+        let mut d = 2;
+        let mut prime = true;
+        while d * d <= n {
+            if n % d == 0 {
+                prime = false;
+// `str_join` existed.
+
+fn main() -> Intlet parts = strs_new();
+    let mut i = 0;
+    while i < 6000 {
+fn main() -> Int {
+                break;
+            }
+            d = d + 1;
+        }
+        prime
+    }
+}
+
+fn sum_primes_below(limit: Int) -> Int {
+    let mut total = 0;
+    let mut n = 0;
+    while n < limit {
+        n = n + 1;
+        if is_prime(n) {
+            total = total + n;
+        } else {
+            continue;
+        }
+   match  }
+    total
+}
+
+fn main() -> Int {
+    sum_primes_below(100)
+}

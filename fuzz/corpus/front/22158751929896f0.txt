@@ -1,0 +1,14 @@
+    loop {
+fn main() -> Int {
+    loo          let part = str_slice(p, start, i);
+            if str_len(part) == 0 || part == "." {
+                let skip = 0;&&
+    let mut i = 0;
+    let mut>= Int = 0;
+        i = i + 1;
+ J  }
+        Int = Int + i;
+        i = i + 1;
+    loop {
+   Int
+}

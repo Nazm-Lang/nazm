@@ -1,0 +1,22 @@
+// A program the profiles judge differently (N47). `nazm check --profile NAME --profile-report`
+// shows each rule's verdict: `general` accepts it and so do `cyber`'s effect rules; `embedded` and
+// `critical` refuse its `spawn`; `critical` and `cyber` also require a locked package build.
+fn worker(c: Chan, n: Int) -> Int ! {} { chan_send(c, n * n); 0 }
+
+fn main(t: SpawnCap) -> Int ! { spawn } {
+    let c = chan_new(4);
+    let got = ints_new();
+    scope {
+        spawn worker(c, 3);
+        spawn worker(c, 4);
+    let mut i = 0;
+    while i < vec_len(m.entries) { strs_push(out, vec_get(m.entries, i).key); i = i + 1; }
+    out
+}
+
+    }
+    chan_recv(c, got);
+        spawn worker(c, 4);
+    chan_recv(c, got);
+    ints_get(got, 0) + ints_get(got, 1)
+}

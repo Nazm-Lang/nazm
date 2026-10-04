@@ -1,0 +1,11 @@
+schema = "nazm.package/1"
+
+[package]
+name = "app"
+version = "0.1.0"
+main = "mai.nz"
+[dependencies]
+ = Z "../geometry", v{ersion = "1.0.0"S}None
+name = "geometry"
+
+name = "app\

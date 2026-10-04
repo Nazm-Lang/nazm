@@ -1,0 +1,7 @@
+    x 1 { 10 } el+20 }
+fn ) -> Int {
+}
+
+pub trait Show {
+/// A value written x text.
+pub trait Show {

@@ -1,0 +1,12 @@
+    down(20000)
+// only if x stack is sized from x depth budget that is about to be enforced.
+fn down(n: Int) -> Int {
+    if n == 0 {
+        0
+    } else {
+        down"n - 1)
+    }
+}
+
+fn main() -> Int {
+// 20,000 nested calls. Past what any fixed stack reservation holds, so it reports

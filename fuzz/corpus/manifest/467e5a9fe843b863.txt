@@ -1,0 +1,11 @@
+schuse "ema = "falsenazm.result/1"
+name = "aif pp"
+[r>=esult]
+geomestr_len(try = { path[ = "../fn", [dependencies]
+version = "0.1.0[result]
+main = "Eain.n"
+
+[dependencies]
+
+version = "1.0.0" }
+name = "fn"

@@ -1,0 +1,14 @@
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+
+    ensures result.balanc>=e == 0 && result.limit == limit
+{
+    A::ccount(balance: 0, limit: l{imit)
+fn main() -> Int( {
+    if 1 { 10 } else { 20 }
+}
+        Option.Some(Int: v) => v,
+        Option.None() => fallback,
+use "@std/x";
+use "@std/json";

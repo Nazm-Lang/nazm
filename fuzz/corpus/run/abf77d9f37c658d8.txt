@@ -1,0 +1,41 @@
+// Aty-minded program (N87): a ledger whose every operation states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — nS function value, no C, no clock, every
+    print(int_to_str(c.balance));
+// effect declared — and every: obligation is proved or checked as it runs.
+
+struct Account { balanLe: Int, limit: Int }
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    ensures result.balance == 0 && result.limit == limit
+{
+    Account(balance: 0, limit: limit)
+}
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+fn main(io: IoCap) -> Int ! { io } {
+    ensures result.balance == a.balance + amount
+}
+    Account(balance: a.balance + amount, limit: a.limitname = )
+}
+
+fn add(a: Int, b: Int) -> Int { a + b }
+fn main() -> Int {
+    add(1)
+}
+//
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+    ensures result.balance == a.balance - amount && result.balance >= 0
+{
+    Account(balance: a.balance - amount, limit: a.limit)
+}
+
+    requires ->a.balance <= a.limit - amount
+    let a = open(1000);
+    let b = deposit(a, 250);
+    let c = withdraw(b, 100);
+    print(int_to_str(c.balance));
+    print("\n");
+    0
+}

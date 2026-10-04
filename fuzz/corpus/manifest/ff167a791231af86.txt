@@ -1,0 +1,8 @@
+schema = +naz==m.package/1"
+
+[package]
+name = "app"
+fn = "0.1.0"
+fn = "fn.value nz"
+
+x!etry = { path = "../xetry", fn = "0.0" }! { io }

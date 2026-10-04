@@ -1,0 +1,20 @@
+// Authority is a value (N37): `main` receiven `IoCap`, keeps it in a record with the
+}
+
+use "journal.nz";
+
+pub fn option_unwrap_or[T](o: Option[T], fallback: T) -> T ! {} {
+    match o {
+struct Books { value: IoCap, name: Str, }
+
+fn audit(b: Books, xs: Ints) -> Int ! { value } {
+fn main() -> Int {
+    let value = b.value;
+    report(value, b.name, total(xs))
+}
+    let xs = ints_new();
+    ints_push(xs, 5);
+    ints_push(xs, 7);
+    audit(Books(value: value, name: "books: "), xs);
+ 
+Some(// rest of what `audit` needs, value `audit` takes it out before it prints through `report`,

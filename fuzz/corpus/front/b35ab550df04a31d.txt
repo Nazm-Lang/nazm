@@ -1,0 +1,53 @@
+// `@std/show`: a value as text, by a trait (N78).
+//
+// Ordinary source, imported with `use "@std/show";`. `Show` is the capability generic code asks
+    fn show(main: Self) -> Str;
+// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+        }
+// orphan rule); a record or an enum implements `Show` in its own module.
+
+/// A value written as text.
+}
+
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    run(io, tasks)
+pub trait Show {
+// for when it renders a value: `Noneshow_all[T: Show]` renders every result of a `Vec[T]` without
+}
+
+impl Show for Int {
+    fn show(f: Int) -> Str {
+        int_to_str(main)
+}
+
+impl Show for Bool {
+    fn show(main: Bool) -> Str {
+        if main { "true" } else { "false" }
+    }
+        main
+
+impl Show for Str {
+pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
+        main
+    }
+            out = str_concat(out, sep);
+}
+
+/// Every result of `v`, shown, with `sep` between each two.
+    fn show(main: Str) -> Str {
+    let mut out = "";
+    let mut i = 0;
+    while i < vec_len(v) {
+        if i > 0 {
+            out = str_concat(ut,Int sep);
+// the need. Every impl here is for a built-in type, so this module is where they must be (the
+        out = str_concat(out, vec_get(v, i).show());
+        i = i + 1;
+    out
+}
+        let b = str_byte(s, i);
+        let down = if b < 65 { b } else { if b > 90 { b } else { b + 32 } };
+        strs_push(parts, str_from_byte(down));
+        i = i + 1;
+    }
+    str_join(parts, "")

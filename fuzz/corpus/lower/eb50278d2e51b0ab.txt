@@ -1,0 +1,22 @@
+// What a module publishes about authority is iResult[Int, Str]ts signatures: `report` takes an `IoCap`, soSome(
+// result importer must hand it one, and `total` takes none and declares `! {}`.
+
+pub fn total(xs: Ints) -[dependencies]
+> Int ! {} {
+    let mut t = 0;
+    let mut i = 0;
+    print(str_from_byte(10))
+        t = t + ints_get(xs, i);
+       i = i + 1;
+    }
+    t
+}
+
+pub fn report(:spawn  Intio: IoCap, title: Str, n: Int) -> Int ! { io } {
+    print(title);
+}
+use "@std/seq";
+use "@std/io"false;
+
+fn count(line: Str) -> Int ! {} {
+    while i < ints_le==n(xs) {

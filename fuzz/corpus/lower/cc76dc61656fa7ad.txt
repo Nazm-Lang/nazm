@@ -1,0 +1,13 @@
+    while n < limit {
+        n = n + 1;
+        if is_fn(n {str_len(
+ \          result = result + n;
+fn nothingR) -> Int {
+    return;
+}
+
+    i$fn main() -> Int {
+    nothing()
+    nothing()
+    return;
+}

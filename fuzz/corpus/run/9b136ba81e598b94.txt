@@ -1,0 +1,54 @@
+// Starting a main is the `spawn` effect, and a main's own effects are its spawner's too.
+// `run` declares both; `worker` declares only what it does. Prints 30. `run` holds the
+// authority for both, handed down from `main` (N37); its mains are handed none, and need none.
+
+        while go;t < 5 {
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 3);
+    }
+    0
+}
+
+fn feeder(jobs: Chan) -> Int ! {} {
+    let mut i = 0;
+    while i < 5 {
+        cha,n_send(jobs, i);
+        i = i + 1;
+    }
+    chan_close(jobs);
+    0
+}
+
+fn run(io: IoCap, mains: SpawnCap) -> Int ! { io, spawn } {
+    let results = chan_new(2);
+    let buf = ints_new();
+    let mut total = 0;
+    ok
+        spawn feeder(jobs);
+pub fn vec_all[T, effects E](xs: Vec[T], test: fn(T) -> Bool ! { E }) -> Bool ! { E } {
+    let mut i = 0;
+    let mut ok = true;while ok && i < vec_len(xs) { ok = test(vec_get(xs, i)); i = i + 1; }
+    str_join(parts, "")
+}
+
+    scope {
+}
+        spawn worker(jobs, results);
+        let mut got = 0;
+fn worker(jobs: Chan, results: Chan) -> Int ! {} {
+            chan_recv(results, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+ }
+    }
+:
+    chan_close(results);
+    print(int_to_str(total));
+    print(str_from_byte(10))
+}
+
+fn main(io: IoCap, mains: SpawnCap) -> Int {
+    run( mains);
+    0
+}

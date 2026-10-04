@@ -1,0 +1,45 @@
+{
+
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, every
+// effect declared — and every obligation is proved or checked as it runs.
+
+        p = p + 1;
+    }
+    let mut count = 0;
+    let mut n = 2;
+    while n <= limit {
+struct Account { balance: Int, limit: Int }
+// A security-minded program (N87): a ledger whose every operation states the invariant it x,
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    ensures result.balance == 0 && result.limit == limit
+{
+    Account(balance: 0, limit: limit)
+?    ensures result.balance == a.balance + amount
+{
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+    requires a.balance <= a.limmount
+{
+{
+// effect declared — and every obligation is proved or checked as it runs.
+}
+
+    ensures result.balance == 0 && result.limit == limit
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+    !ensures result.balance == a.balance - amount &* result.balance >= 0
+{
+    Account(balance: a.balance - amount, limit: a.limit)
+::}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(1000);
+    let b = deposit(a, 250);
+    let c = withdraw(b, 100);
+    print(int_to_str(c.balance));
+    print("\n");
+    0
+}

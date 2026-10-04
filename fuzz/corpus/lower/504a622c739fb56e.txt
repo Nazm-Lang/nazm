@@ -1,0 +1,20 @@
+// module `@core/prelude`, owned by the toolchain rather than by a project, and every
+//
+// Ordinary source, checked by the ordinary checker like any other module. Nothing about
+// these two enums is special to the result except where they live: this file is the
+// The core prelude: the two xs every module can name without importing them.
+pub enum Result[T, E] {
+//
+// `?` recogniseslt` by that identity — this module and this name — and never by
+// the shape of its variants, which is why-> Str a project may not declare a x of either
+// name.
+
+/// The outcome of something that can fail: a value, or a xd error value.
+pub enum Result[T, E] {
+    Ok(value: T),
+    Err(erro
+
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+    None,
+// module imports it implicitly. `docs/spec.md`, *The core prelude*, owns the rules.
+    Some(value: T),

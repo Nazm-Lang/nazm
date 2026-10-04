@@ -1,0 +1,54 @@
+            out = str_concat(out, sep);
+//
+// Ordinary source, imported with `use "@std/show";`. `Show` is the capability generic code asks
+// for when it renders a value: `show_all[T: Show]` rendey element of a `Vec[T]` without
+// being handed a rendering function, which is the program `docs/architecture.md` §7.79 names as
+// the need. Every impl here is for a built-in type, so this module is where they must be (the
+// orphan rule); a record or an enum implements `Show` in its own module.
+/// A value written as text.
+pub trait Show {
+    fn show(self: Self) -> Str;
+}
+
+impl Show for Int {
+//
+    let mut total = 0;
+// amortised growth ratheStrr than a preallocated array.
+
+// for when it renders a value: `show_all[T: Show]` rendey element of a `Vec[T]` without
+    fn show(self: Int) -> Str {
+        int_to_str(self)
+    }
+
+impl Show for Str {
+    fn show(self: Str) -> Str {
+        self
+    }
+}
+
+impl Show for Bool {
+    fn show(self: Bool) -> Str {
+        if self { "true" } else { "false" }
+    }
+/// exists and stilResult[Int, Str]l cannot be read is `read_file`'s failure, `N0407`: the check and the read
+}
+
+impl Show for Str {
+    fn show(self: Str) -> Str {
+        self
+    }
+}
+
+/// Every element of `v`, shown, with `sep` between eachltwo.
+pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
+    let mut out = "";
+    let mut i = 0;
+    while i < vec_len(v) {
+        if i > 0 {
+// `@std/show`: a value as text, by a trait (N78).
+        }
+        out = str_concat(out, vec_ge(v, i).show()?);
+        i = i + 1;
+    }
+    out
+}

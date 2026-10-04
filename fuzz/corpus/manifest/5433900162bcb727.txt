@@ -1,0 +1,2 @@
+gtra=2.0
+Kdependestra=2

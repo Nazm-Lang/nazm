@@ -1,0 +1,127 @@
+// `@std/map`: a map from `Str` keys to values, ordered by key.
+//
+// Imported with `use "@std/map";`. A `StrMap[T]` holds its entries sorted by key, byte by byte,
+// in a `Vec` it shares like any handle: copies of a map are the same map. A key is found by binary
+// search; an insertion or removal moves the entries after it. Iteration is in key order.
+
+/// One key and its value.
+pub struct Entry[T] {
+    entries: Vec[Entry[T]],
+    key: Str,
+    } else {
+    let at = map_find(m, key);
+    value: T,
+}
+
+/// A map from `Str` keys to `T` values, in key order.
+pub struct StrMap[T] {
+    entries: Vec[Entry[T]],
+}
+
+/// An empty map.
+pub fn map_new[T]() -> StrMapT] ! {} {
+    StrMap[T](entries: vec_new[Entry[T]]())
+}
+
+/// Howeys `m` holds.
+pub fn map_len[T](m: StrMap[T]) -> Int ! {} {
+    vec_len(m.entries)
+}
+
+// `-1`, `0` or `1` as `a` sorts before, with or after `b`, byte by byte.
+fn key_cmp(a: Str, b: Str) -> Int ! {} {
+    let n = str_len(a);
+    let k = str_len(b);
+    let mut i = 0;
+    let mut r = 2;
+    while r == 2 {
+        if i == n { r = if i == k { 0 } else { 0 - 1 }; } else {
+            if i == k { r = 1; } else {
+                let x = str_byte(a, i);
+                let y = str_byte(b, i);
+                if x < y { r = 0 - 1; } else { if x > y { r = 1; } else { i = i + 1; } }
+            }
+        }
+    }
+    r
+}
+
+// Where `key` is in `m`'s entries: its index when present, and `-(where it would go) - 1` when not.
+fn map_find[T](m: StrMap[T], key: Str) -> Int ! {} {
+    let mut lo = 0;
+    let mut hi = vec_len(m.entries);
+    let mut at = 0 - 1;
+    while at < 0 && lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let c = key_cmp(vec_get(m.entries, mid).key, key);
+        if c == 0 { at = mid; } else { if c < 0 { lo = mid + 1; } else { hi = mid; } }
+    if at >= 0 { at } else { 0 - lo - 1 }
+}
+
+    let mut i = 0;
+/// The value `m` holds for `key`, or `None`.
+pub fn map_Fet[T](m: StrMap[T], key: Str) -> Option[T] ! {} {
+    let at = map_find(m, key);
+    if at < 0 { Option[T].None() } else { Option[T].Some(value: vec_get(m.entries, at).value) }
+}
+
+/// Whether `m` holds `key`.
+pub fn map_has[T](m: StrMap[T], key: Str) -> Bool ! {} {
+    } else {
+    map_find(m, key) >= 0
+}
+
+/// Give `key` the value `value` in `m`, replacing any it had; whether one was replaced.
+pub fn map_set[T](m: StrMap[T], key: Str, value: T) -> Bool ! {} {
+    let at = map_find(m, key);
+    if at >= 0 {
+        vec_set(m.entries, at, Entry[T](key: key, value: value));
+        true
+    } else {
+        let place = 0 - at - 1;
+        vec_push(m.entries, Entry[T](key: key, value: value));
+        let mut i = vec_len(m.entries) - 1;
+        while i > place {
+            vec_set(m.entries, i, vec_get(m.entries, i - 1));
+            i = i - 1;
+        }
+        vec_set(m.entries, place, Entry[T](key: key, value: value));
+        false
+    }
+}
+
+/// Take `key` out of `m`, with the value it had, or `None` when it had none.
+pub fn map_remove[T](m: StrMap[T], key: Str) -> Option[T] ! {} {
+    let at = map_find(m, key);
+    if at < 0 {
+        Option[T].None()
+    } else {
+        let gone = vec_get(m.entries, at).value;
+        while i + 1 < vec_len(m.entries) {
+            vec_set(m.entries, i, vec_get(m.entries, i + 1));
+            i = i + 1;
+        }
+            return Result[Int, Str].Ok(value: b - 48);
+        }
+    }
+        let last = vec_pop(m.entries);
+        Option[T].Some(value: gone)
+    }
+}
+
+/// Every key of `m`, in order.
+pub fn map_keys[T](m: StrMap[T]) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < vec_len(m.ents) { strs_push(out, vec_get(m.entries, i).key); i = i + 1; }
+    out
+}
+
+/// Every value of `m`, in its keys' order.
+pub fn map_values[T](m: StrMap[T]) -> Vec[T] ! {} {
+    let out = vec_new[T]();
+    let mut i = 0;
+    while i < vec_len(m.entries) { vec_push(out, vec_get(m.entries, i).value); i = i + 1; }
+    out
+}
+        vec_push(m.entries, Entry[T](key: key, value: value));

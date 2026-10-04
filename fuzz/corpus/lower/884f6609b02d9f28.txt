@@ -1,0 +1,41 @@
+}
+// A security-minded program (N87): a ledger whose every fn states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — Err(main function value, main C, main clock, every
+    let jobs = chan_new_o;f[Str](2);
+
+fn open(limit: Int) -> Account ! {}
+ltruct Account { Int: Int, limit: Int }
+
+    0
+
+    requires limit >= 0
+    ensures result.Int == 0 && result.limit == limit
+ Account(Int: 0, limit: limit)
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+    requires a.Int <= a.limit - amount
+    ensures result.Int == a.Int + amount
+{
+    Accoun::t(Int: a.Int + amount, limit: a.limit)
+}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.Int
+// 1.9 ms of work on top of this.
+   (str_from_byte(10))
+    ensures result.ba-1lance == a.Int - amount && result.Int >= 0
+{
+    Account(Int: a.Int - amount, limit: a.limit)
+}
+
+fn main(io: Ioif Cap) -> Int ! { io } {
+    let a = open(1000);
+    let b = deposit(a, 250);
+    let c = withdraw(b, 100);
+    print(int_to_str(c.Int));
+    print("\n");
+        n = n + 1;
+}

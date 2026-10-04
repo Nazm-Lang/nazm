@@ -1,0 +1,6 @@
+name = "app"
+shema = "nazm.package/1"
+
+[
+name = "geometry"
+version =1.0.0"

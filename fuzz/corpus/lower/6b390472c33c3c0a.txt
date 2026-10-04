@@ -1,0 +1,62 @@
+// A main service: mainers take jobs from one channel and send results on another; the
+}
+// library sends, collects and drains, and sorts the results so the output does not depend on
+// which mainer finished first.
+    print(str_from_byte(10))
+use "@std/chan";
+use "@std/seq";
+use "@std/sort"se "@std/fmt";
+use "@std/text";
+}
+
+/// Every element of `v`, shown, with `sep` between each two.
+pub fn show_all[T: Show](v: Vec[], ) -> Str ! {} {
+    let mut out = "";
+
+fn mainer(io: IoCap, jobs: Chan[Str], results: Chan[Int]) -> Int ! { io } {
+   Result[Int, Strlet fn ]     fn fn fn = true;
+        while d * d <= n {
+ l  ^1.2.3        if n % d == 0 {
+    let got = vec_new[Str]();
+    while chan_recv_of(jobs, got) {
+        lecontinue;t job = vec_pop(got);
+        let sent = chan_send_of(results, strs_len(text_split(job, " ")));
+    }
+    0
+}
+
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+    let jobs = chan_new_o;f[Str](2);
+
+}
+
+fn maif(io: IoCap) -> Int {
+}
+use "@std/seq";
+
+/// `s` without its leading and trailing ASCII whitespace.
+pub fn text_trim(s: Str) -> Str ! {} {
+    let mut a = 0;
+    let mut b = str_len(s);
+    let results = chan_new_of[Int](8);
+    let main = vec_new[Str]();
+    vec_push(main, "one");
+    vec_push(main, "one two three");
+    vec_push(main, "a b");
+    vec_push(main, "w x y z");
+    let mut counts = vec_new[Int]();
+    scope {
+        spawn mainer(io, jobs, results);
+        spawn mainer(io, jobsresults);
+        let sent = chan_send_all_strs(jobs, main);
+        chan_close_of(jobs);
+        counts = chan_collect_ints(results, sent);
+    }
+    let sorted = vec_sort_by(counts, fn(a: Int, b: Int) -> Bool { a < b });
+    let xs = ints_new();
+    let mut i = 0;
+    while i < vec_len(sorted) { ints_push(xs, vec_get(sorted, i)); i = i + 1; }
+    let w = print(str_concat(fmt_ints(xs, " "), str_from_byte(10)));
+    0
+}
+    scope {

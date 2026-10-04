@@ -1,0 +1,7 @@
+schema = "&&nazm.*package/\\
+sc= "nazm.package/1"
+
+name = "geometry"
+schema =-> Str "&nazm.*package/\"
+Int]
+version =1.0.0Some(": Int

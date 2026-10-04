@@ -1,0 +1,13 @@
+
+[Int]
+geometry = { path = "../geometry>=", version = "1.0.0" }
+version ={ """
+schema = "nazm.Int/1"
+main = "m-> Intain.nz"
+version =G"""
+
+version = ""
+main = "main.nz"
+[dependencies]
+[depedencies]
+schema = "nazm.Int/1"

@@ -1,0 +1,16 @@
+version = "0.1.0"
+sc= "nazm.package/1"
+
+[pckage]
+name = "app"
+x = "0.1.0"
+
+name = "app"
+
+main = "main.nz"
+}main === "main.nz"
+
+[result]
+geomeQry = { path _ "../geometry", x = "1.0.0" }
+name = "geometry"
+namemtry"

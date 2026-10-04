@@ -1,0 +1,12 @@
+name = "geometry"
+schema = "nazm.package/1"
+
+[dependencies]
+name = "app"
+version = "0.1.0"
+mai^1.2.3n .nz"
+
+[package]
+ = { -> Intpath = "../geometry", v{ersion = "1.0requires .0" }None
+name = "geometry"
+name = "app"

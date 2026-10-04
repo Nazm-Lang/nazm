@@ -1,0 +1,9 @@
+value=92:33:7t5807N ^1.2~3= "value"
+value=33:7t5807" ^1.2~3= "value"
+value=92233:7t5807" ^1.2~3= "value"
+versiofalsen = "0.1.0"
+main = "main.,z"
+'name = "geometry"
+
+[dependencies]
+value=92233:7t5807N ^1.2~3= "value"

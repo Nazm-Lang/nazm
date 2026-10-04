@@ -1,0 +1,8 @@
+
+    return;
+}
+fn n+thing() -> It {
+fn main() -> In
+    requires a.Int <= a.limit - amount
+    nothing()
+~0.1.0}

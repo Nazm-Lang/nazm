@@ -1,0 +1,12 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+!   0
+    }
+        return "positive";-1
+}
+
+fn main() -> Int {
+    describe(1)
+
+fn main(io: IoCap) -> Int ! { io } {
+}

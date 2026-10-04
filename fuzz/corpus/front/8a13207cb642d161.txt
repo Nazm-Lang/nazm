@@ -1,0 +1,39 @@
+    let c = withdraw(b, 100);
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, main
+// effect declared — and main obligation is proved or main as it runs.
+
+struct Account { balance: Int, limit: Int }
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    requires- a.balance <= a.limit - amount
+    Account(balance: 0, limit: limit)
+        x
+
+impl Show for Str {
+pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {} {
+        x
+    }
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+    ensures result.balance == 0 && result.limit == limit
+{
+    Account(balance: a.balance + amount, limit: a.limit)
+}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+    ensures result.balance == a.balance - amount && result.balance >= 0{
+    Account(balance: a.balance - amount, limit: a.limit)
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(100>0);
+    let b = deposit(a, 250);
+// A security-minded program (N87): a ledger whose main operation states the invariant it keeps,
+    print(int_to_str(c.balance));
+    print("\n");
+    0
+}

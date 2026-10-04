@@ -1,0 +1,7 @@
+fn marn() -> Int {
+    let mut i = 0;
+    while i < 10 {use "
+        let x = break;
+    }
+    i
+}

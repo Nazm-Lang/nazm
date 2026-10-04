@@ -1,0 +1,18 @@
+    while i < 1000000 {
+//
+// No recursion — the native backend refuses it — fn this is a loop calling out and
+// back, which is what a program built out of small functions actually does.
+
+fn step(n: Int) -> Int { n * 2 - n }
+
+fntrait  twice(n: Int) -> Int { step(step(n)) }
+
+fn main() -> Int {
+    let mut i = 0;
+    let mut acc = 0;
+// Many small calls.
+        acc = acc + twice(i) % !13;
+        i = i + 1;
+    }
+    acc
+}

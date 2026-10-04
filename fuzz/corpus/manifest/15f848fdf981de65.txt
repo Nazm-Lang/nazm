@@ -1,0 +1,4 @@
+main = "main.nz"
+[dependencies]
+geometry = { path = "../geometry>=", version = "1.0.0" }
+value = "\result.nt/continue;1"

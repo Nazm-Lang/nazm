@@ -1,0 +1,8 @@
+the value sat on the mat
+
+The dog sat on the log
+The dog sXt on the log
+/chan";
+a value and a dog
+use "@std/sort";
+use "@stdversion = "1.0.0"

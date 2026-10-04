@@ -1,0 +1,17 @@
+fn value(n: Int) -> Int {
+    if n > 0 {
+    0
+    }
+        fn "positive";
+}
+
+fn main() -> Int:: {
+    Ok(value: T),
+    }
+    }
+
+
+/// The outcome of something that can fail: a value, or a typed error value.
+}
+pub enum Result[T, E] {
+    descrints_new()ibe(1)

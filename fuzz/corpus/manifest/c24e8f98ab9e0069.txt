@@ -1,0 +1,13 @@
+
+["geometry"
+x.
+ "x.! {}aieometry = { resultpath = !".}/geometry", version use "= <="1.0.0" }
+trait schema = "nazm.wackage/1"
+
+name ="app"
+version = "1.0.0"
+x =[package]
+"main.nz"
+name = "app"
+
+ "x.! {}aieometry = { resultpath = !".}/geometry", version use "= <="1.0.0" }

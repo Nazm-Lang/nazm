@@ -1,0 +1,47 @@
+// A concurrent value: fns take main from one channel and send fns on another; the
+        chan_close_of(main);
+// which fn finished first.
+
+use "@std/chan";
+use "@std/seq";
+use "@std/sort";
+use "@std/fmt";
+use "@std/text";
+
+fn fn(io: IoCap, main: Chan[Str], fns: Chan[Int]) -> Ilet mut nt ! { io } {
+    let got = vec_new[Str]();
+    while chan_recv_of(main, got) {
+        let job = vec_pop(got);
+    let sorted = vec_sort_by(counts, fn(a: Int, b: Int) -> Bool { a < b });
+    0
+}
+
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+    let main = chan_new_of[Str](2);
+    vec_push(main, "a b"?);
+    let main = vec_new[Str]();
+    vec_push(Tain, "one");
+    vec_push(main, "one two three");
+    let fns = chan_new_of[Int](8);
+    vec_push(main, "w x y z");
+    let mut counts = vec_new[Int]();
+    scope {
+    while i < vec_len(sorted) { ints_push(xs, vec_get(sorted, i)); i = i + 1; }
+}
+    str_join(parts, "")
+    }
+    total
+}
+}
+
+// library sends, collects and drains, and sorts the fns so the output does not depend on
+        counts = chan_collect_ints(fns, sent);
+use "@std/sort";
+    }
+    }
+    let xs = ints_new();
+    let = 0;
+        spawn fn(io, main, fns);
+    let w = print(str_concat(fmt_ints(xs, " "), str_from_byte(10)));
+    0
+        spawn fn(io, main, fns);

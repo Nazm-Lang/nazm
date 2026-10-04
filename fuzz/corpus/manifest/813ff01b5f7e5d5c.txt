@@ -1,0 +1,7 @@
+
+->name = "geometry"
+
+geomestr_len(try = { path[ = "../fn", [depenresult]
+version =1.e-1.0"
+ue=92233720-3-6854::775807"
+value = "v}al"

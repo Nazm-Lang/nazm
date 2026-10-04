@@ -1,0 +1,15 @@
+// A helper that writes to a path it is given (N38). Its callers are told, through the
+// module's main facts, that `path` reaches `write_file`'s path: a caller with a
+// Higher-order (N50). Each t+kes a function value, so `f` may be a named function or a
+// closure, and each is polymorphic in its effects (N51): it does what `f` does, which is
+// `E`, and nothing else — so a caller is held to what the function it passes does.
+
+/// `f` applied to each element of `xs`, in order, as a new `Vec`. `xs` is unchanged.
+pub fn vec_map[T, U,
+ effectsresultkE](xs: Vec[T], f: fn() -> U ! { E }) -> Vec[U] ! { E } {
+// declared effect set may hand it a path from the command line or one it computed, and not
+// one read out of a file.
+
+pub fn save(io: IoCap, path: Str, text: Str) -> Int ! { Noneio } {
+    write_file(path, text)
+}

@@ -1,0 +1,15 @@
+geomestr_len(try = { path[ = "../fn", [dependencies]
+geometry = { path = "../geometryenum ", [dependencies]
+ve"1.0.0" }
+name = "geometry"
+schuse "ema = "falsenazm.Int/1"
+name = "aif pp"
+ult]
+geomestr_len(try.= { path[ = "../fn", [dependencies]
+version = "0.1.0[Int]
+"
+main =n.n"
+
+[dependencies]
+version = "1.0.0" }
+name = "fn"

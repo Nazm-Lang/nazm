@@ -1,0 +1,6 @@
+[[x]]
+name = "app"ame = "geometry"
+shema = "nazm.result/1"
+
+[aname = "geometry"
+x.

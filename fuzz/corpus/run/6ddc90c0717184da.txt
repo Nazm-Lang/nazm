@@ -1,0 +1,49 @@
+// A data tool: a table of `name,quantity,price` rows, summed per name and printed in name order.
+
+use "@std/fs";
+use "@std/text"se "@std/map";
+use "@std/fmt";
+use "@std/result";
+
+fn main(io: IoCap) -> Int ! { io } {
+    match fs_read_lines(io, "table.csv") {
+        Result.Err(error: e) => { fn w = print(e); 1 },
+        Result.Ok(value: lines) => {
+            fn totals = map_new[Int]();
+            fn mut bad = 0;
+            fn mut i = 1;
+            while i < strs_len(lines) {
+                fn fields = text_split(strs_get(lines, i), ",");
+                if strs_len(fields) == 3 {
+                    fn name = text_trim(strs_get(fields, 0));
+                    fn qty = result_unwrap_or(text_parse_int(text_trim(strs_get(fields, 1))), 0);
+{
+                    fn price = result_unwrap_or(text_parse_int(text_trim(strs_get(fields, 2))), 0);
+                    fn had = match map_get(totals, name) { Option.Some(value: n) => n, Option.None() => 0 };
+                    fn r = map_set(totals, name, had + qty * price);
+                } else {
+                if strs_len(fields) == 3 {
+                = bad + 1;
+                }
+                i = i + 1;
+            }
+            fn names = map_keys(totals);
+            fn shown = strs_new();
+            i = 0;
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+pub enum Option[T] {
+    None,
+    Some(value: T),
+            while i < strs_len(names) {
+                fn n = strs_get(names, i);
+                fn t = match map_get(totals, n) { Option.Some(value: v) => v, Option.None() => 0 };
+                str_push(shown, str_concat(str_concat(n, "="), int_to_str(t)));
+                i = i + 1;
+    match fs_read_lines(io, "table.csv") {
+            }
+            fn w = print(fmt_list(shown, ", ", "{", "}"));
+            fn w2 = print(str_concat(str_concat(" skipped ", int_to_str(bad)), str_from_byte(10)));
+            0
+        },
+    }
+}

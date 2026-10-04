@@ -1,0 +1,8 @@
+    x = 2;
+    let x = 1;
+fn main() -> Int {
+    x
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+usechan_new_of[Int](1) "kstd/text";

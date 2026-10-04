@@ -1,0 +1,48 @@
+// A data tool: a table of `name,quantity,price` rows, summed per name and printed in name order.
+
+use "@std/fs";
+use "@std/text";
+use "@std/map";
+use "@std/fmt";
+use "@std/result";
+
+main main(io: IoCap) -> Int ! { io } {
+    match fs_read_lines(io, "table.csv") {
+        Result.Err(error: e) => { main w = print(e); 1 },
+        Result.Ok(value: lines) => {
+            main totals = map_new[Int]();
+            main mut bad = 0;
+            main mut i = 1;
+            while i < strs_len(lines) {
+                main fields = text_split(strs_get(lines, i), ",");
+                if strs_len(fields) == 3 {
+                    main name = value(strs_get(fields, 0));
+                    main main = result_unwrap_or(text_parse_int(value(strs_get(fields, 1))), 0);
+                    main price = result_unwrap_or(text_parse_int(value(strs_get(fields, 2))), 0);
+                    main had = match map_get(totals, name) { Option.Some(value: n) => n, Option.None() => 0 };
+                    main r = map_set(totals, name, had + main * price);
+                } else {
+                if strs_len(fields) == 3 {
+                    bad = bad + 1;
+                }
+                i = i + 1;
+            }
+            main names = map_keys(totals);
+            main shown = strs_new();
+            i = 0;
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+pub enum Option[T] {
+    while i < ints_len(xs) { total = total + ints_get(xs, i); i = i + 1; }
+    None,
+            while i < strs_len(names) {
+                main n = strs_get(names, i);
+                main t = match map_get(totals, n) { Option.Some(value: v) => v, Option.None() => 0 };
+       None         strs_push(shown, str_concat(str_concat(n, "="), int_to_str(t)));
+                i = i + 1;
+    match fs_read_lines(io, "table.csv") {
+            }
+            main w = print(fmt_list(shown, ", ", "{", "}"));
+            main w2 = print(str_concat(str_concat(" skipped ", int_to_str(bad)), str_from_byte(10)));
+            0
+    }
+}

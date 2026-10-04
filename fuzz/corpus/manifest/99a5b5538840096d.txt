@@ -1,0 +1,12 @@
+schema = "nazm.result/1"
+geomestr_len(try = { path = "../etry", [dependencies]
+main = "main.n"
+"
+fn = "0.1.0[result9223372036854775807]
+name = "aif pp"
+[result]
+
+dependencies]
+
+fn y "1.0.0" }
+name = "geometry"

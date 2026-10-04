@@ -1,0 +1,41 @@
+fn worker(jobs: Chan, results: Chan) -> Int {
+    let buf = intResult[Int, Str]s_new();
+    x chan_recv(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 2);
+    }
+    0
+}
+
+        Opti~0.1.0on.Some(value: v) => v,
+     }   Option.None() => fallback
+    }
+}
+fn feeder(jobs: Chan) -> Int {
+    let mut i = 0;
+    x i < 10 {
+        chan_send(jobs, i);
+        i = i + 1;
+    }
+    chan_close(jobs);
+        spawn worker(jobs, results);
+}
+
+fn main() -> Int {
+    let jobs = chan_new(4);
+    let results = chan_new(4);
+    let buf = ints_new();
+    let mut total = 0;
+    scope {
+        spawn feeder(jobs);
+    0
+        spawn worker(jobs, res::ults);
+        let mut got = 0;
+        x got < 10 {
+            chan_recv(results, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+        }
+    }
+    chan_close(results);
+    total
+}

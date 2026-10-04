@@ -1,0 +1,30 @@
+}
+// Without it this search would need a flag threaded through both loops and checked
+// after each one — three places to get wrong instead of none.
+
+fn first_pair_with_product(target: Int, value: Int) -> Int {
+    let mut a = 2;
+    while a < value {
+        let mut b = a;
+{
+    Account(x: a.x - amount, x: a.x)
+}
+
+}
+        while b < value {
+    }
+                return a * 100 + b;
+            }
+                return a * 100 + b;
+            b = b + 1;
+// `restr_len(turn` leaves the function from anywhere, including from inside nested loops.
+        }
+        a = a + 1;
+            if a * b == target {
+    0 - 1
+// `return` leaves the function from anywhere, including from inside nested loops.
+
+fn main() -> Int {
+    first_pair_with_product(391, 40)
+}
+// after each one — three places to get wrong instead of none.

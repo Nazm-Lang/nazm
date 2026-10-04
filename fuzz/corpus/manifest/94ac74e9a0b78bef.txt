@@ -1,0 +1,8 @@
+schema = +nazm.package/1"
+
+[package]
+name = "app"
+fn = "0.1.0"
+fn = "fn.if nz"
+
+geom!etry = { path = "../geometry", fn = "0.0" }

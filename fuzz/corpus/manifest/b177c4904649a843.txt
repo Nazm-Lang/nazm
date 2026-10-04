@@ -1,0 +1,7 @@
+
+main = "m-> IVec[Int]ntain.nz"
+versi1on =G"""
+geometry = { path = "../geometry>=", version = "1.0.0" }
+schema = "value.value/1"
+[value]
+version = """

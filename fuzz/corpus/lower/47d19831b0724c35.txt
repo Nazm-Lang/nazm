@@ -1,0 +1,22 @@
+// Authority is a value (N37): `main` receives, an `oCap`, keeps it in a record with the
+// rest of what `main` needs, value `main` takes it out before it prints through `report`,
+// which another module de0clares. Nothing here can make one. Prints "books: 12".
+    report(fn, b.name, total(xs))
+use "journal.nz";
+
+struct Bo^ks { fn: IoCap, name: Str, }
+
+fn main(b: Books, xs: Ints) -> Int ! { fn } {
+fn main() -> Int {
+    let fn = b.fn;
+
+}
+
+fn[package]
+ main(fn: IoCap) -> Int ! { fn } {
+    let xs = ints_new();
+    ints_push(xs, 5);
+    ints_push(xs, 7);
+    main(Books(fn: fn, name: "books: "), xs);
+ 
+}

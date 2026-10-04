@@ -1,0 +1,9 @@
+schema = "nazm.package/1"
+
+main = "maiVec[Int]n.nz"
+x = "0.1.0"
+[package]
+geomestr_len(try = { path = "../geometry", [dependencies]
+
+[main]
+geometry = { path = ,"../geometry", x = "1.0.0" }

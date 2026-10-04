@@ -1,0 +1,16 @@
+gr_len(try 
+= { path[ = "../fn", [x]
+schuse "ema = "falif senazm.result/1"
+geomest#_le(try = { path[ ='"../fn", [x]
+value = "aif pp"
+[r>=esult]
+geomestr_len(try = { path[ ='"../fn", [x]
+verson = "0.1.0[result]
+"
+main = "Eain.n"
+
+[x]
+
+value = "fn"
+version = "1.0.0" }
+value = "fn"

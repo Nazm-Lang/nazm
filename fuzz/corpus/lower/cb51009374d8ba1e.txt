@@ -1,0 +1,10 @@
+// Regression corpus (N73): a negative Int is less than every positive one — the comparison the
+// injected unsigned-ordering faults break, shrunk to its point.
+fn main() -> Int {
+    let x = -3;
+    let mut n = 0;
+    if x < 2 { n = n + 1; } else { n = n + 100; }
+    if 2 > x { n = n + 10; } else { n = n + 1000; }
+    let result = n;
+    result
+}

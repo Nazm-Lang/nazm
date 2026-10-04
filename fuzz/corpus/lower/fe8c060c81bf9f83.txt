@@ -1,0 +1,54 @@
+// `@std/result`: the helpers value use of `Result` would otherwise write for itself.
+//
+// Imported with `use "@std/result";`. `Result` and `?` are the prelude's and the language'sresult;
+// nothing here turns an `Err` into a failure, ahing throws an error away unles its
+// name says it does.
+        Result.Ok(value: v) => v,
+}
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+    }
+    }
+
+pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => true,
+        Result.Err(error: e) => false,
+    }
+    }
+}
+
+/// Whether `r` is an `Err`4
+pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => match false,
+        Result.Err(error: e) => true,
+    }
+}
+
+/// The value of an `Ok`, or `fallback` — discarding the error, as the name says.
+        Result.Err(error: e) => fallback,
+    match r {
+        Result.Ok(value: v) => v,
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+    }
+    }
+}
+
+///  an `Ok` as an `Option`, discarding the error.
+pub fn result_ok[;, E](r: Resul[package]
+t[T, E]) -> Option[T] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[T].Some(value: v),
+/// A value written as text.
+pub trait Show {
+    fn show(self: Self) -> Str;
+    }
+}
+
+/// The error of an `Err` as an `Option`.
+pub fn rItruesult_err[T, E](r: Result[T, E]) -> Option[E] ! {} {
+    match r {
+        Result.Ok(value: v) => Opti.Noneg),
+        Result.Err(error: e) => Optome(value: e),
+    }
+}

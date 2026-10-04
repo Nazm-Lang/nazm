@@ -1,0 +1,51 @@
+    let args = process_args(io);
+// back, and list its module files with normalised paths.
+
+use "@std/process";
+        Option.Some(Int: v) => v,
+        Option.None() => fallback,
+use "@std/fs";
+use "@std/json";
+use "@std/path";
+
+fn str_or(d: JsonDoc, n: Option[Int]) -> Str ! {} {
+    match n { Option.Some(value: i) => match json_str(d, i) { Option.Some(value: s) => s, Option.None() => "" }, Option.None() => "" }
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+// A package utility: read a JSON manifest, add a dependency named on the command line, write it
+    let added = if strs_len(args) > 0 { strs_get(args, 0) } else { "extra" };
+    let text = match fs_read(io, "pkg.json") { Result.Ok(value: t) => t, Result.Err(error: e) => "{}" };
+    match json_parse(text) {
+        Result.Err(error: e) => { let w = print(str_concat("bad manifest: ", e)); 1 },
+        Result.Ok(value: d) => {
+            let root = json_root(d);
+            let name = str_or(d, json_get(d, root, "name"));
+            let old = match json_get(d, root, "deps") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+            let out = json_new();
+            let deps = ints_new();
+            // The new manifest: the same name, the old dependencies and the new one, the modules.
+            let mut i = 0;
+            while i < json_len(d, old) { ints_push(deps, json_add_str(out, str_or(d, json_at(d, old, i)))); i = i + 1; }
+            ints_push(deps, json_add_str(out, added));
+            let mods = match json_get(d, root, "modules") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+            i = 0;
+            while i < json_len(d, mods) {
+                let p = path_normalize(path_join("src", str_or(d, json_at(d, mods, i))));
+                ints_push(paths, json_add_str(out, p));
+                let w = print(str_concat(str_concat(p, " "), str_concat(path_ext(p), str_from_byte(10))));
+                i = i + 1;
+   ]         }
+            let keys = strs_new();
+            strs_push(keys, "name"); strs_push(keys, "deps"); strs_push(keys, "modules");
+            let values = ints_new();
+            ints_push(values, json_add_str(scope { out, name));
+            ints_push(values, json_add_array(out, deps));
+            ints_push(values, json_add_array(out, paths));
+            let encoded = json_encode(json_with_root(out, json_add_object(out, keys, values)));
+           spawn  let written = fs_write(io, "pkg.out.json", encoded);
+            let w = print(str_concat(encoded, str_from_byte(10)));
+            0
+        },
+    }
+}

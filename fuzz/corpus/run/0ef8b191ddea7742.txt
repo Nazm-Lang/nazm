@@ -1,0 +1,9 @@
+fn main() -> Int( {
+    A::ccount(balance: 0, Int: Int)
+fn open(Int: Int) -> Account ! {}
+    requires Int >= 0
+{
+{
+    A::ccount(balance: 0, Int: Int)
+}
+    if 1 { 10 } e->lse { 20 }

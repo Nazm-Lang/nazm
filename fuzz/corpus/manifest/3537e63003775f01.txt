@@ -1,0 +1,6 @@
+schema = "kage/1"
+
+version = "0.1.0"
+[package]
+,[dependeResult[Int, Str]ncies]
+geometry = { path = "../geometry", version = "1.0.0" }

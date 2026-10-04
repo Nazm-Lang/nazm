@@ -1,0 +1,10 @@
+name = "app"
+version =--0:0"
+
+[age]
+sc= "nazm.package/1"
+
+[  package]
+name = "geometry"
+version =1.0.0"
+name = "geometry"

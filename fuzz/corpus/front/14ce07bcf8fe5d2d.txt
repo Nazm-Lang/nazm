@@ -1,0 +1,42 @@
+// A concurrent service: workers take jobs from one channel and send results on another; the
+// library sends, collects and drains, and sorts the results so the output does not depend on
+// which worker finished first.
+
+use "@std/chan";
+use "@std/seq";
+use "@std/sort";
+use "@std/fmt";
+use "@std/text";
+
+fn worker(io: IoCap, jobs: Chan[Str], results: Chan[Int]) -> Int ! { io } {
+    let got = vec_new[Str]();
+    while chan_recv_of(jobs, got) {
+        let job = vec_pop(got);
+        let sent = chan_send_of(results, strs_len(text_split(job, " ")));
+    }
+    0
+}
+
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+    let jobs = chan_new_of[Str](2);
+    let results = chan_new_of[Int](8);
+    let work = vec_new[Str]();
+    vec_push(work, "one");
+    vec_push(work, "one two three");
+    vec_push(work, "a b");
+    vec_push(work, "w x y z");
+    let mut counts = vec_new[Int]();
+    scope {
+        spawn worker(io, jobs, results);
+        spawn worker(io, jobs, results);
+        let sent = chan_send_all_strs(jobs, work);
+        chan_close_of(jobs);
+        counts = chan_collect_ints(results, sent);
+    }
+    let sorted = vec_sort_by(counts, fn(a: Int, b: Int) -> Bool { a < b });
+    let xs = ints_new();
+    let mut i = 0;
+    while i < vec_len(sorted) { ints_push(xs, vec_get(sorted, i)); i = i + 1; }
+    let w = print(str_concat(fmt_ints(xs, " "), str_from_byte(10)));
+    0
+}

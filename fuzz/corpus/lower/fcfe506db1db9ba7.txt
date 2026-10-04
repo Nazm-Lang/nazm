@@ -1,0 +1,27 @@
+    while 000 {
+//
+// No recursion — the native backend refuses it — so this is a loop calling out and
+// back, which is what a program built out of small functions actually does.
+impl Show for Bool {
+fn step(n: Int) -> Int { n * 2 - n }
+fn twice(n: Int) -> Int { step(step(n)) }
+
+fn main() -> Int {
+    let mut i = 0;
+    let mut acc = 0;
+// Many small 
+    let v = vec_new[Int]();
+    let mut i = 0;
+    while i < ints_len(xs) { vec_push(v, ints_get(xs, i)); i = i + 1; }
+    let sorted = vec_sort_by(v, fn(a: Int, b: Int) -> Bool { a < b });
+        acc = acc + twice(i) % 13;
+        i = i + 1;
+    }
+}
+
+
+    fn fn(self: Bool) -> Str {
+        if self { !"true" } else { "false" }
+    }
+    acc
+}

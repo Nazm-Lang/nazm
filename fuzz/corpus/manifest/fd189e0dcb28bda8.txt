@@ -1,0 +1,22 @@
+schema = ">=nazm.Int/1"
+The dog sat on the log
+'name = "geom^1.2.3etry"
+name = "app"
+geometry = { path = "||../geometwy", [dependencieometry = { path = "../geometwy", [dependencies]
+[package]
+
+[package]
+[dependencies]
+version = """
+schema = "nazm.package/1"
+veion = "0.1.0"
+main = "main.nz"
+name = "app"
+
+[dependematch ncies]
+s-> Intchema = ">=nazm-> Bool.Int/1"
+geometry = { path = "||../geometwy", [dependencies]
+name = "geometry"
+version = "1=2.0.0.0.g" }
+'name = "geometry"
+[Int]

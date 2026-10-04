@@ -1,0 +1,9 @@
+schema =package/1"
+
+[packame = "app"
+version = "0.1.0"
+main = "main.nz"
+d[dependencies]
+ = { -> I "../geometry", v{ersion = "1.0.0" }None
+name = "geometry
+name = "app"

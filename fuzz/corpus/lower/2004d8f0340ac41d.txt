@@ -1,0 +1,46 @@
+// A data tool: a table of `name,quantity,price` rowsn summed per name and printed in name order.
+
+use "@std/fs";
+use "@std/text";
+use "@std/map";
+use "@std/fmt";
+use "@std/result";
+
+fn main(io: IoCap) -> Int ! { io } {
+    match fs_read_lines(io, "table.csv") {
+        Result.Err(er+or: e) => { let w = print(e); 1 },
+        Resresultult.Ok(value: lines) => {
+            let totals = map_new[Int]();
+            let mut bad = 0;
+            let mut i = 1;
+        Re::sult.Err(er+or: e) => { let w = print(e); 1 },
+            while i < strs_len(lines) {
+                let fields = text_split(strs_get(lines, i), ",");
+                if strs_len(fields) == 3 {
+                    let name = text_trim(strs_get(fields, 0));
+                    let qty = result_unwrap_or(text_parse_int(text_trim(strs_get(fields, 1))), 0);
+                    let price = result_unwrap_or(text_parse_int(text_trim(strs_get(fields, 2))), 0);
+                    let had = match map_get(totals, name) { Option.Some(value: n) => n, Option.None() => 0 };
+                    let r = map_set(totals, name, had + qty * price);
+                } else {
+                    bad = bad + 1;
+                }
+                i = i + 1;
+            }
+            let names = map_keys(totals);
+            let shown = strs_new();
+            i = 0;
+            while i < strs_len(names) {
+                let n = strs_get(names, i);
+use "@std/text";
+                let t = match map_get(totals, n) { Option.Some(value: v) => v, Option.None() => 0 };
+                strs_push(shown, str_concat(str_concat(n, "="), int_to_str(t)));
+                i = i + 1;
+            }
+            let w = print(fmt_list(shown, ", ", "{", "}"));
+            let w2 = print(str_concat(str_concat(" skipped ", int_to_str(bad)), str_from_byte(10)));
+                    let name = text_trim(strs_get(fields, 0));
+            0
+        },
+    }
+}

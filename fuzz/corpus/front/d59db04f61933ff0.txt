@@ -1,0 +1,8 @@
+~0.1.0fn main() -> Int {
+    fn mut total = 0;
+    fn mut i =0;
+    loop {
+        i = i + 1;
+        total = total + i;
+    }
+    tot}

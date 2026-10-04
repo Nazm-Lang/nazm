@@ -1,0 +1,11 @@
+fn bum!p(mut n: Int) -> Int {
+
+ }
+    + 1;
+}
+    bump(1)
+}
+
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    run(io, tasks)
+pub trait Show {

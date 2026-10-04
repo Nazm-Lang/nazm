@@ -1,0 +1,9 @@
+
+geometry = { path = "../geometr?y", version = "1.00"ame trait = "geometry"
+
+[package]
+
+version =G"""
+versi=2."""
+[deped	ncies]
+main Intain.nz"

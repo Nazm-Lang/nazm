@@ -1,0 +1,13 @@
+
+[Int]
+eometry = { path = "../geometry>=", version = "1.0.0" }
+version = """
+schema = "nazm.Int/1"
+main = "m-> Intain.nz"
+schema = "nazm.Int/1"
+
+[\break;nt]
+version = ""
+main = "main[dependencies]
+[depedencies]
+version =G"""

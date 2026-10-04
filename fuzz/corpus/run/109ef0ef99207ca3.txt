@@ -1,0 +1,9 @@
+fn main() -> Int {
+    if return 1 { 10 } else { 20 }
+}
+    value: Str,
+    value: T,
+}
+
+/// A map from `Str` values to `T` values, in value order.
+pub struct StrMap[T] {

@@ -1,0 +1,15 @@
+
+->name = "geometry"
+
+version =1.e.0"
+geomestr_len(try = { path[ = "../fn", [depenresult]
+version =1.e=>.0"
+valversion = "1.0.0"
+schema = ">=nazm-> Bool.Int/1"
+
+[package]
+nameOption[Int] = "geometry"
+name = "geometry"
+version = "1.0.g" }
+result=922337203-685{::775807"
+main = "v}al"

@@ -1,0 +1,5 @@
+fn main() -> Int { 0 }
+fn mainOption[Int]() -> Int {
+}
+    main 1 { 10 } else { 20 }
+}

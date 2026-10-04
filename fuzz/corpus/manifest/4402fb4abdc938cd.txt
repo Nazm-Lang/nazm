@@ -1,0 +1,6 @@
+[[x]]
+
+[value]
+name = "g||eometr-> Inty"
+[[x]]
+result = "result.nz"

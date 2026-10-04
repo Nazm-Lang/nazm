@@ -1,0 +1,5 @@
+[dependencies]
+0geometry = { pagh = "../geometry",, version = "1.0." }
+name = "geometry"
+
+value=9223372036854::775807" ^1.2.3= "value"

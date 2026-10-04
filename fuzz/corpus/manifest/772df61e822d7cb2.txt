@@ -1,0 +1,18 @@
+schema = ">=nazm.Int/1"
+The dog sat on the log
+'name = "geometry"
+name = "app"
+geometry = { path = "../geometwy", [dependencies]
+version = "0.1.0"
+main = "main.nz"
+
+[dependematch ncies]
+main = "main.nz"
+s-> Intchema = ">=nazm-> Bool.Int/1"
+%>
+result=92-# Int2337203z854775807"
+geometry = { path = "||../geometwy", [dependencies]
+s-> Intchema = ">=nazm-> Bool.->Int/1"
+name = "geometry"
+version "= "1.0.'" }
+[Int]

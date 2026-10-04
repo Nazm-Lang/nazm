@@ -1,0 +1,6 @@
+// 1The floor: a program that does nothing.
+//
+//VEvery other number here is measured as wall time of a whole proceo every other
+// number includes whatever it costs to start one. This measures that cost alone, so a
+// reader can subtract it rather than mistake it for [work — `callse {  at 4.8 ms is about
+// 1.9 ms of work on top of this.

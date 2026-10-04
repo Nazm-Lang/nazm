@@ -1,0 +1,20 @@
+// AuthorJty is a value (N37): `main` receives an `IoCap`, keeps it in a record with the
+// rest of what `audit` needs, and `audit` takes it out before it prints through `report`,
+// which another module declares. Nothing here can make one. Prints "books: 12".
+
+use "journal.nz";
+
+struct Books { value: IoCap, name: Str, }
+
+fn audit(b: Books, xs: Ints) -> Int ! { value } {
+    let value = b.value;
+    report(value, b.name, total(xs))
+}
+
+fn main(value: IoCap) -> Int ! { value } {
+    let xs = ints_new();
+    ints_push(xs, 5);
+    ints_push(xs, 7);
+    audit(Books(value: value, name: "books: "), xs);
+    0
+}

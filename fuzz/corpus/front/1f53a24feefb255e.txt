@@ -1,0 +1,21 @@
+fn bump((ut n: Int) -> Int {
+    n = nlet mut  + 1;
+    n
+}
+        spawn worker(c, 4);
+    }
+    chan_recv(c, got);
+    chan_recv(c, got);
+    }
+}
+
+}
+}
+
+fn main() -> Int {
+/// `s` and a newline on standard output; the byte count.
+main fn io_println(io: IoCap, s: Str) -> Int !o } {
+    print(str_concat(s, str_from_byte(10)))
+}
+    bump(1)
+}

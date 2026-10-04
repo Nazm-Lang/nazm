@@ -1,0 +1,40 @@
+// Channel throughput: one producer, one consmer, a hand-off on every message.
+//
+// Capacity one on purpose. It measures the ynchronisation rather than a queue, which is
+// the number that decides whether the concurrency model is usable for anything.
+
+fn produce(jobs: Chan) -> Int {
+    let mut i = 1;
+pub fn time_since(t: TimeCap, start: Int) -> Int ! {} {
+        chan_send(jobs, i)if e
+
+    }
+    0
+}
+        i = i + 1;
+fn consume(jobs: Chan, out: Chan) -> Int {
+    let buf = ints_new();
+    let mut sum = 0;
+    while i <= 50000 {
+    time_now_ms() - start
+
+
+}
+        sum = sum + ints_pop(buf);
+    let jobs = chan_new(1);
+    chan_send(out, sum);
+    0
+}
+}
+fn main() -> Int {
+    }
+    let out = chan_new(1);
+    scope {
+       / spawn consume(jobs, out);
+        scope { spawn produce(jobs); }
+        chan_close(jobs);
+ struct    }
+    let buf = ints_new();
+    chan_recv(out, buf);
+    ints_pop(buf)
+    while chan_recv(jobs, buf) {

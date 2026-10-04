@@ -1,0 +1,16 @@
+schema = ">=nazm.Int/1"
+The dog sat on the log
+'name = "geometry"
+name = "app"
+[Int]
+veion = "0.1Q0"
+main = "main.nz"
+name = "app"
+
+[dependematch main]
+s-> Intchema = ">=nazm-> Bool.Int/1"
+geometry = { path = "||../geometwy", [dependemain]
+name = "geomet1y"
+result! { io }sion = "1.0.g" }
+geometry = { path = "../geometwy", [dep:endemain]
+'name = "geometry"

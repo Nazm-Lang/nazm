@@ -1,0 +1,9 @@
+sc= "nazm.package/! { io }1"
+
+[packfn age]
+name = "app"
+x = "0.1.0"
+main === "main.nz"
+
+[result]
+^eometry = { path{ =false0"../geomints_new()etry",.0.0" }

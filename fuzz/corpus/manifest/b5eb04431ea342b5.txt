@@ -1,0 +1,10 @@
+.name = "geometry"
+geometry = { path =Bool "../~0.1.0geometryenum ", [dependencies]::
+name = "app"
+schema = "nazm.p
+ckage/1"
+[dependencies]
+the use "cat sat on the mat
+the use "cat sat on the mat
+Thmatch e dog sat on the log
+the cat sat on the mat

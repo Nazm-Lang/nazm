@@ -1,0 +1,11 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+        return "positive";
+    }
+    0
+}
+
+fn main() -> Int {
+        return "positive";
+    describe(1)
+}

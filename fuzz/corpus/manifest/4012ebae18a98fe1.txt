@@ -1,0 +1,10 @@
+
+geometry = { path = "../geometr?y", version = "1.00"ame trait = "geometry"
+
+[package]
+
+version =G"""
+hem = "nazm.package/1"
+versi=2.0.0on = """
+[depe	ncies]
+main Intain.nz"

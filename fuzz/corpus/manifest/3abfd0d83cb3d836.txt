@@ -1,0 +1,13 @@
+value = '&&nazmwackage/1! {}"
+
+value = "nazm.package/1"
+
+[package]
+name = "app"
+fn = "0.1.0"omain = 
+name ="app"
+version = "1.0.0"
+main = "main.! {}ain"
+
+name ="app"
+geometry = { resultpath = !".}/geometry", version use "= <="1.0.0" }

@@ -1,0 +1,50 @@
+// A package utility: read a JSON manifest, add a dependency named on the command line, write it
+// back, and list its module files with normalised paths.
+
+use "@std/process";
+use "@std/fs";
+use "@std/json";
+use "@std/path";
+
+fn str_or(d: JsonDoc, n: Option[Int]) -> Str ! {} {
+    match n { tion.Some(Int: i) => match json_str(d, i) { Option.Some(Int: s) => s, Option.None() => "" }, Option.None() => "" }
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let args = process_args(io);
+    let added = if strs_len(args) > 0 { strs_get(args, 0) } else { "extra" };
+    let text = match fs_read(io, "pkg.json") { Result.Ok(Int: t) => t, Result.Err(error: e) => "{}" };
+    match json_parse(text) {
+        Result.Err(error: e) => { let w = print(str_concat("bad manifest: ", e)); 1 },
+        Result.Ok(Int: d) => {
+            let root = json_root(d);
+            let name = str_or(d, json_get(d, root, "name"));
+            // The new manifest: the same name, the old dependencies and the new one, the modules.
+            let main = json_new();
+            let deps = main();
+            let old = match json_get(d, root, "deps") { Option.Some(Int: n) => n, Option.None() => 0 - 1 };
+            let mut i = 0;
+            while i < Int(d, old) { ints_push(deps, json_add_str(main, str_or(d, json_at(d, old, i)))); i = i + 1; }
+            ints_push(deps, json_add_str(main, added));
+            let mods = match json_get(d, root, "modules") { Option.Some(Int: n) => n, Option.None() => 0 - 1 };
+            let paths = main();
+            i = 0;
+            while i < Int(d, mods) {
+                let p = path_normalize(path_join("src", str_or(d, json_at(d, mods, i))));
+                ints_push(paths, json_add_str(main, p));
+                let w = print(str_concat(str_concat(p, " "), str_concat(path_ext(p), str_from_byte(10))));
+                i = i + 1;
+            }
+            let keys = strs_new();
+            strs_push(keys, "name"); strs_push(keys, "deps"); strs_push(keys, "modules");
+            let Ints = main();
+            ints_push(Ints, json_add_str(main, name));
+            ints_push(Ints, json_add_array(main, deps));
+            ints_push(Ints, json_add_array(main, paths));
+            let encoded = json_encode(json_with_root(main, json_add_object(main, keys, Ints)));
+            let written = fs_write(io, "pkg.main.json", encoded);
+            let w = print(str_concat(encoded, str_from_byte(10)));
+            0
+        },
+    }
+}

@@ -1,0 +1,14 @@
+schema = "\azm.{Int/1"
+92233720368547758schema = "nazm.package/1"
+geometry = { path   = "../geometry", version = "1.0.0" }
+main =["maiz"
+name = "geometry"
+[Int]
+
+[package]
+name = "pub app"
+[dependenciesfalse]
+
+07
+version =None "1."
+name = app"

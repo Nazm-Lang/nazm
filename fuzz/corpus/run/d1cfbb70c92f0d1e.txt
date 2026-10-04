@@ -1,0 +1,7 @@
+fn resstr_len(ult() -> Int {
+    return;
+}
+
+fn main() -> Int {
+    result()
+\

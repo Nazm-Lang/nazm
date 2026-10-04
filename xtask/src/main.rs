@@ -2722,6 +2722,43 @@ fn run_contained(args: &[String]) -> ExitCode {
                 )),
             )
         }
+        // The coverage-guided fuzz campaign (N93): `fuzz [SECONDS] [TARGET…]`, each target for
+        // SECONDS (300 by default). Its minimised corpora and its report are exported by name
+        // into `target/fuzz/`; nothing else leaves the container.
+        Some("fuzz") => {
+            let seconds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(300);
+            let targets: Vec<&str> = args
+                .iter()
+                .skip(2)
+                .map(String::as_str)
+                .filter(|t| ["front", "lower", "run", "manifest"].contains(t))
+                .collect();
+            let count = if targets.is_empty() { 4 } else { targets.len() } as u64;
+            // The cold instrumented build, then each target twice its budget (the run and the
+            // minimisation).
+            bounds.deadline = Duration::from_secs(1800 + seconds * 2 * count);
+            let dest = repo.join("target/fuzz");
+            if let Err(e) = std::fs::create_dir_all(&dest) {
+                eprintln!("contained: cannot make {}: {e}", dest.display());
+                return ExitCode::FAILURE;
+            }
+            bounds.export = Some(contained::ExportPolicy {
+                manifest: "/work/fuzzout/EXPORTS".to_owned(),
+                dest,
+                allowed: vec!["fuzz-min.tar".to_owned(), "report.txt".to_owned()],
+                max_bytes: 8 * 1024 * 1024,
+            });
+            (
+                "fuzz",
+                shell(&format!(
+                    "CARGO_BUILD_JOBS={j} sh /src/fuzz/run.sh {seconds} {}; s=$?; : > /work/fuzzout/EXPORTS; \
+                     for f in fuzz-min.tar report.txt; do \
+                       [ -f /work/fuzzout/$f ] && echo \"$f $(wc -c < /work/fuzzout/$f)\" >> /work/fuzzout/EXPORTS; \
+                     done; exit $s",
+                    targets.join(" ")
+                )),
+            )
+        }
         Some("run") => {
             let cmd = args.get(1..).unwrap_or_default().join(" ");
             if cmd.trim().is_empty() {
@@ -2732,7 +2769,7 @@ fn run_contained(args: &[String]) -> ExitCode {
         }
         other => {
             eprintln!(
-                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | bench | mutate | run <command>",
+                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | bench | mutate | fuzz [SECONDS] [TARGET...] | run <command>",
                 other.unwrap_or("<none>")
             );
             return ExitCode::FAILURE;
@@ -2816,7 +2853,8 @@ fn run_contained(args: &[String]) -> ExitCode {
 /// result.
 fn default_profile(workload: &str) -> contained::ExecutionProfile {
     match workload {
-        "tests" | "selfhost" => contained::ExecutionProfile::P4T4,
+        // The fuzz campaign builds the whole compiler instrumented, cold (N93): four jobs.
+        "tests" | "selfhost" | "fuzz" => contained::ExecutionProfile::P4T4,
         _ => contained::ExecutionProfile::P1,
     }
 }

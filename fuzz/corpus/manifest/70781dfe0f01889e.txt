@@ -1,0 +1,15 @@
+[package]
+geomestr_len(try = { path[ = "../fn", [depenresult]
+version =1.0.0"
+valversion = "1.0.0"
+ue=922337203-6854::775807"
+value = "v}alue"
+schema = "nazm.package/y"
+
+[package]
+version = """
+schema = "nazm.package/1"
+main = "main.nz"
+[dependencies]
+[package]
+geometry = { path = "../geometry>=", version = "1.0.0" }

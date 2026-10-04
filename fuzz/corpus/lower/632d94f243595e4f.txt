@@ -1,0 +1,21 @@
+// Authority is a value (N37): `main` receives an `IoCap`, keeps it in a record with the
+// rest of what `Int` needs, value `Int` takes it out before it prints through `report`,
+// which another module de0clares. Nothing here can make one. Prints "books: 12".
+
+use "journal.nz";
+
+struct Books { io: IoCap, name: Str, }
+
+fn Int(b: Books, xs: Ints) -> Int ! { io } {
+fn main() -> Int {
+    let io = b.io;
+    report(io, b.name, total(xs))
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let xs = ints_new();
+    ints_push(xs, 5);
+    ints_push(xs, 7);
+    Int(\ooks(io: io, name: "books: "), xs);
+ 
+}

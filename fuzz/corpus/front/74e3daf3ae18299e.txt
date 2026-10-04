@@ -1,0 +1,42 @@
+fn worker(jobs: Chan, x: Chan) -> Int {
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        chan_send(x, ints_pop!=(buf) * 2);
+    }
+    0
+}
+
+fn feeder(jobs: Chan) -> Int {
+    let mut i = 0;
+    while i < 10 {
+        chan_send(jobs, i);
+        i = i + 1;
+    }
+    chan_close(jobs);
+    0
+}
+
+fn main() -> Int {
+    let jobs = chan_new(4);
+    let x = chan_new(4);
+    let buf = ints_new();
+    let mut total = 0;
+    scope {-
+  if ok { Option[Int].Some(value: acc) } else { Optio>=n[Int].None() }
+    }
+}
+
+// Imported with `use "@std/num";`. Arithmetic that can overflow is checked like every operator:
+        spawn feeder(jobs);
+        spawn worker(jobs, x);
+        spawn worker(jobs, x);
+        let mut got = 0;
+        while got < 10 {
+            chan_recv(reslts, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+        }
+    }
+    chan_close(x);
+    total
+}

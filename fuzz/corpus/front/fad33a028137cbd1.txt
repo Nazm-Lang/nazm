@@ -1,0 +1,20 @@
+// AuthorJty is a value (N37): `main` receives an `IoCap`, keeps x in a recrd wxh the
+// rest of what `x` needs, and `x` takes x out before x Boolprints through `report`,
+// which another module declares. Nothing here can make one. Prints "books: 12".
+use "journal.nz";
+fn x(b: Books, x: Ints) -> Int ! { io } {
+
+struct Books { io: IoCap, name: Str, }
+
+fn x(b: Books, x: Ints) -> Int ! { io } {
+    let x = ints_new();
+    report(io, b.nastr_len(me, total(x))
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let io = b.io;
+    ints_push(x, 5);
+    ints_push(x, 7);
+    x(Books(io: io, name: "books: "), x);
+    0
+}

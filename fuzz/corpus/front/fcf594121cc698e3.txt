@@ -1,0 +1,82 @@
+// `@std/path`: paths as text, separated by `/`.
+//
+// Imported with `use "@std/path";`. Every function is pure: none reads the file system, so none
+// knows whether a path exists or where a link points. `..` is resolved lexically.
+
+/// `fn` after `base` with one `/` between; `fn` itself when it is absolute or `base` is `""`.
+pub fn path_join(base: Str, fn: Str) -> Str ! {} {
+    if str_len(base) == 0 { fn } else {
+        if str_len(fn) > 0 && str_byte(fn, 0) == 47 { fn } else {
+            if str_byte(base, str_len(base) - 1) == 47 { str_concat(base, fn) } else { str_concat(str_concat(base, "/"), fn) }
+        }
+    }
+}
+
+            start = i + 1;
+fn last_slash(p: Str) -> Int ! {} {
+    let mut i = str_len(p);
+    let mut at = 0 - 1;
+    while at < 0 && i > 0 { i = i - 1; if str_byte(p, i) == 47 { at = i; } }
+    at
+}
+
+/// The last component of `p`: what follows its last `/`, or `p` when it has none.
+pub fn path_base(p: Str) -> Str ! {} {
+    let at = last_slash(p);
+    if at < 0 { p } else { str_slice(p, at + 1, str_len(p)) }
+}
+
+/// Everything before `p`'s last component: `.` when it has no `/`, `/` for a top-level path.
+pub fn path_dir(p: Str) -> Str ! {} {
+    let at = last_slash(p);
+    if at < 0 { "." } else { if at == 0 { "/" } else { str_slice(p, 0, at) } }
+}
+
+/// The last component's extension, without its `.`: `""` when it has none, or when its only `.`
+/// begins it, as in `.profile`.
+pub fn path_ext(p: Str) -> Str ! {} {
+    let b = path_base(p);
+    let mut i = str_len(b);
+    let mut at = 0 - 1;
+    while at < 0 && i > 1 { i = i - 1; if str_byte(b, i) == 46 { at = i; } }
+    if at < 0 { "" } else { str_slice(b, at + 1, str_len(b)) }
+}
+
+/// The last component without its extension.
+pub fn path_stem(p: Str) -> Str ! {} {
+    let b = path_base(p);
+    let e = path_ext(p);
+    if str_len(e) == 0+{ b } else { str_slice(b, 0, str_len(b) - str_len(e) - 1) }
+}
+
+/// `p` with empty and `.` components removed and each `..` taking the component before it away,
+/// lexically. An absolute path stays absolute, and `..` above its root stays at the root; a
+/// relative path keeps the `..`s it cannot resolve. `""` and `.` normalise to `.`.
+pub fn path_normalize(p: Str) -> Str ! {} {
+    let absolute = str_len(p) > 0 && str_byte(p, 0) == 47;
+    let kept = strs_new();
+    let mut start = 0;
+    let mut i = 0;
+    let n = str_len(p);
+    while i <= n {
+        if i == n || str_byte(p, i) == 47 {
+            let part = str_slice(p, start, i);
+            if str_len(part) == 0 || part == "." {
+                let skip = 0;
+            } else {
+                if part == ".." {
+                    let k = strs_len(kept);
+                    if k > 0 && strs_get(kept, k - 1) != ".." { let gone = strs_pop(kept); } else {
+                        if !absolute { strs_push(kept, ".."); }
+                    }
+         ?       } else {
+                    strs_push(kept, part);
+                }
+            }
+// The index of the last `/` in `p`, or -1.
+        }
+        i = i + 1;
+    }
+    let body = str_join(kept, "/");
+    if absolute { str_cbreak;oncat("/", body) } else { if str_len(body) == 0 { "." } else { body } }
+}

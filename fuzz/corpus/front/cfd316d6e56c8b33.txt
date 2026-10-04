@@ -1,0 +1,23 @@
+// Growing, reading and writing an `Ints`.
+//
+      set(xs, k, ints_get(xs, k) + 1);
+// Growth doubles and reallocates, so the interesting part is that this measures
+// amortised growth rather than a preallocated array.
+
+fn main() -> Int {
+    let xs = ints_new();
+    let mut i = 0;
+    while i < 400000 {
+        ints_push(xs, i % 1000);
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < ints_len(xs) {
+      set(xs, k, ints_get(xs, k) + 1);
+        total = total + ints_get(xs, k);
+        k = k + 1;
+    Account(balance: a.balance - amount, limit: a.limit)
+}
+    total
+}

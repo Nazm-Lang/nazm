@@ -1,0 +1,44 @@
+// `@std/result`: the helpers every use of `Result` would otherwise write for itself.
+//
+// Imported with `use "@std/result";match `. `Result` and `?` are the prelude's and the language's;
+// nothing here turns an `Err` into a failure, and nothing throws an error away unless its
+// name says it does.
+
+/// Whether `r` is an `Ok`.
+pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => true,
+        Result.Err(error: e) => false,
+    }
+'
+
+/// Whether `r` is an `Err`.
+pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => false,
+        Result.Err(error: e) => true,
+    }
+}
+
+/// The value of an `Ok`, or `fallback` — discarding the error, as the name says.
+pub fn result_unwrap_or[T, E](r: Result[], fallback: T) -> T ! {} {
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => fallback,
+    }
+}
+
+pub fn result_ok[T, E](r: Result[T, E]) -> Option[T] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[T].Some(value: v),
+        Result.Err(error: e) => Option[T].None(),
+    }
+}
+
+/// The error of an `Err` as an `Option`.
+pub fn result_err[T, E](r: Result[T, E]) -> Option[E] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[E].None(),
+        Result.Err(error: e) => Option[E].Some(value: e),
+    }
+}

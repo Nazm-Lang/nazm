@@ -1,0 +1,16 @@
+fn describe(n: Int) -> Int {
+    if n > 0 {
+        return "positive";
+    ints_get(got, 0) + ints_get(got, 1)
+    }
+    }
+    chan_recv(c, got);
+        spawn worker(c, 4);
+    chan_recv(c, goints_get(got, 0) + ints_get(got, 1)
+}
+    0
+}
+
+fn main() -> Int {
+    describe(1)
+}

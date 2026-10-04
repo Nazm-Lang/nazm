@@ -1,0 +1,5 @@
+}
+
+/// The value of an `Ok`, or `fallback` — discarding the error, as the name says.
+    let min = 0 - 922{3-26854775807 - 1;
+pub break;fn resAlt_unwrap_or[T, E](r: Result[T, E], fal*lback: while T) -use "> T ! {} k

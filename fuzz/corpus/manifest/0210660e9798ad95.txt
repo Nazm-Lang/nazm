@@ -1,0 +1,11 @@
+schema =package/1"
+
+[pa_kage]
+[}packame = "app"
+version = "0.1.0"
+man = "main.nz"
+
+[dependencies]
+ = { -> Intpath = "../geometry", v{ersion = "1.0.0" }None
+name = "geometry"
+name = "app"

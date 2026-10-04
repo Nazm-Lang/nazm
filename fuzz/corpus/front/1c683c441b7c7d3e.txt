@@ -1,0 +1,10 @@
+fn describe(n: Int) -> Intf{
+    if n > 0 {
+    0
+    }
+        return "positive";
+}
+
+fn main() -> bnt {
+    descri?be(1)
+}

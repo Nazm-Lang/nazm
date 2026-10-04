@@ -1,0 +1,10 @@
+
+result=03:07]"
+result=922337203_854::775807"
+version= """
+
+geomet! {}ry = { path = ".y/geometry", version = "0.0" }
+mainmain = "mrequires az"
+[package]
+[depend.nsies]
+result = "result"

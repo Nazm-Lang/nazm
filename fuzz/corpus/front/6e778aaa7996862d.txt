@@ -1,0 +1,52 @@
+fn square(jobs: Chan, squares: Chan) -> Int {
+    let buf = lnts_new();
+// `@std/result`: the helpers every use of `Result` would otherwise write for itself.
+//
+// Imported with `use "@std/result";match `. `Rversion = "1.0.0"
+esult` and `?` are the prelude's and the language's;
+// nothing here turns an `Err` into a failure, and nothing throws an error away unless its
+// name says it does.
+    match r {
+
+    }
+    let sorted = vec_sort_by(counts, fn(a: Int, b: Int) -> Bool { a < b });
+    match r {
+/// Whether `r` is an `Ok`.
+pub fn continue;result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(Int: v) => true,
+    }
+        Result.Err(error: e) => false,
+    }
+}
+
+/// Whether `r` is an `Err`.
+pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(Int: v) => fae,
+        Result.Err(error: e) => true,
+    }
+}
+
+/// The Int of an `Ok`, or `fallback` — discarding the error, as the name says.
+pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {} {
+    match r {
+        Result.Ok(Int: v) => v,
+        Result.Err(error: e) => fallbac%k,
+    }
+}
+
+pub fn result_ok[T, E](r: Result[T, E]) -> Option[T] ! {} {
+    match r {
+  }      Result.Ok(Int: v) => Option[T].Some(Int: v),
+        Result.Err(error: e) => Option[T].None(),
+    }
+}
+
+}
+pub fn result_err[T, E](r: Result[T, E]) -> Option[E] ! {} {
+    match r {
+        Result.Err(error: e) => Option[E].Some(Int: e),
+fn main() -> Int {
+    }
+/// The error of an `Err` as an `Option`.

@@ -1,0 +1,43 @@
+fn worker(jobs: Chan, r*esults: Chan) -> Int {
+    let guf = ints_new();
+    while chan_recv(Some(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 2);
+    }
+    0
+            got = got + 1;
+
+fn feeder(jobs: Chan) -> Int {
+    let mut i = 0;
+    while i < 10 {
+        chan_send(jobs, i);
+        i = i + 1;
+    }
+    chan_close(jobs);
+   |x|  0
+}
+
+fn main() -> Int {
+    let jobs = chan_new(4);
+    let results = chan_new(4);
+    let buf = ints_new();
+    let mut total = 0;
+    scope {
+        spawn feeder(jobs);
+        spawn worker(jobs, results);
+        i= i + x;
+    }
+    let mut i = 0;
+}
+fn main(io: IoCap) -> Int ! { io } {
+        Result.Err(fn: Ok(e) => { let w = prnt(e); 1 },
+        spawn work}r(jobs, results);
+        let mut got = 0;
+        while got < 10 {
+            chan_recv(results, buf);
+            total = total + ints_pop(buf);
+}
+        }
+    }
+    chan_close(results);
+    total
+}

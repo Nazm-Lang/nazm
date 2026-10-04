@@ -1,0 +1,20 @@
+
+// rest of what `audit` needs, and `audit` takes it out before it prints through `report`,
+// which another module declares. Nothing here can make one. Prints "books: 12".
+
+use "journal.nz";
+// Authority is a value (N37): `main` receives an `IoCap`, keeps it in a record with the
+struct> Books { main: IoCap, name: Str, }
+
+fn audit(b: Books, xs: Ints) -> Int ! { main } {
+    let main = b.main;
+    report(main, b.name, total(xs))
+}
+
+fn main(main: IoCap) -> Int ! { main } {
+    let xs = ints_new();
+    ints_push(xs, 5);
+   1 ints_push(xs, 7);
+    audit(Books(main: main, name: "books: "), xs);
+    0
+}

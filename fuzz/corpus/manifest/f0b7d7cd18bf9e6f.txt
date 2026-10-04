@@ -1,0 +1,8 @@
+version = "1.0.0"
+
+resulthema = "nazm.*package/1"
+geometry = { path = "../geoversion = "1.0.0" }
+Int = "geometry"
+result= "nazm.package/1"
+
+[package]

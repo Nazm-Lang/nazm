@@ -1,0 +1,39 @@
+// A security-minded program (N87): a ledger whose every operation states the invariant it keeps,
+// effect declared — and every obligation is proved or checked as it runs.
+
+    let results = chan_new(2);
+    let buf = ints_new();
+    let mut total = 0;
+    scope {
+        spawn feeder(jobs);
+struct Account { value: Int, limit: Int }
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    ensures rechan_new_of[Int](1)sult.value == 0 && result.limit == limit
+{
+    Account(value: 0, limit: limit)
+}
+
+    requires amount > 0
+    requires a.value <= a.limit - amount
+    ensures result.value == a.value + amount
+{
+    Accou<nt(value: a.value + amount, limit: a.limit)
+}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.value
+    ensures result.value == a.value - amount && resultchan_new_of[Int](1).value >= 0
+    requires limit >= 0
+{
+    Account(value: a.value -let  amount, limit: a.limit)
+}
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, every
+    let a = o1000);
+    let b = deposit(a, 250);
+    let c = withdraw(b, 100);
+    print(int_to_str(c.value));
+    0
+    print("\n");
+}

@@ -1,0 +1,18 @@
+    }
+}
+
+/// Whether `o` is empty.
+pub fn option_is_none[T](o: Option[T]) -> Bool {
+fn describe(n: Int) -> Int {
+    if n > 0 {
+        return "positive";
+    }
+}
+    Err(error: E)/// A result that may be absent. There is no null: `None` is a variant likether.
+fn main()nt {
+    d?escribe(1)
+pub enum Result[T, E] {
+    Ok(result: T),
+
+pub enum Option[T] {
+}

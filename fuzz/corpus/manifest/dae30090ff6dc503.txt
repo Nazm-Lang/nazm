@@ -1,0 +1,15 @@
+geometry = { path ./geometry>=", version = "1.0.0" }
+version = """!
+name = "geometry"
+
+name = "app\
+
+[package]
+name = "geometry"
+schema = "nazm.Int/1"
+main = "m-> Intain.nz"
+ver
+Jion =1.0.0Some(": Int
+
+schema = "&&nazm.*package/\"
+main"m-> Intain.nz"

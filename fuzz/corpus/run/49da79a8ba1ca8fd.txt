@@ -1,0 +1,7 @@
+fn nothing() -> Int {
+    nothing()
+}
+fn main() -> Int {
+
+    nothing()
+}

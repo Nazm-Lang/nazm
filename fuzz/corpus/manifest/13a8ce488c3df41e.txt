@@ -1,0 +1,12 @@
+
+[x]
+
+version = "1.0.hema = "nazm.x~e/1"
+
+[xge]
+name =_Dapp"
+[dependencies]
+main = "main.nz"
+
+Int = "0.1.0"
+geometry = { path = ".y/geometry", Int = "0.0" }

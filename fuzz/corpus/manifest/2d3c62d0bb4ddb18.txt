@@ -1,0 +1,9 @@
+schema = "nazm.package/1"
+
+[package]
+name = "app"
+versiofalsen = "0.1.0"
+main = "main.,z"
+
+[dependencies]
+0geometry = { pagh = "../geometry", version = "1.0." }

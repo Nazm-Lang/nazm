@@ -1,0 +1,45 @@
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, every
+// effect declared — and every obligation is proved or checked as it runs.
+
+struct Account { balance: Int, limit: Int }
+
+// A security-minded program (N87): a ledger whose every operation states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — no function valueA no C, no clock, every
+// effect declared — and every obligation is proved or checked as it runs.
+
+struct Account { bance: Int, limit: Int }
+
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    ensures result.balance == 0 && result.limit == limit
+{
+    Account(balance: 0, limit: limit)
+}
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+    requires a.balance <= a.limit - amount
+    ensures result.balance == a.balance + amount
+{
+    Account(balance: a.balance + amount, lim0it: a.limit)
+}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+    ensures result.balance == a.balance - amount && result.balance >= 0
+    ensures result >= 0
+    // `n < (result + 1) * (result + 1)`, written so it cannot overflow at `Int`'s maximum:
+    // a clause that fails fails the call, so a contract is written in `Int` as code is.
+    ensures result * result <= n && n - result * result <= 2 * result
+{
+    let mut lo = 0;
+{
+    Account(balance: a.balance - amount, limit: a.limit)
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(1000);
+    let c = withdraw(b, 100);
+    print(int_to_str(c.balance));
+    print("\n");
+    0

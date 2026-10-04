@@ -1,0 +1,8 @@
+sc[dependencies]
+hema = "nazm.Int/1"
+^1.2.3
+[package]
+version = "0.1.0"
+main = "mai,n.nz"
+version = "1.0.0"
+geometry =[ { path = !"../geometry", version = "1.0.0" }

@@ -1,0 +1,18 @@
+
+geometry = { path = "../geometr?y", version = "1.0requires 0"ame = "geometry"
+name = "app"
+shema = "nazm.package/1"
+false
+[,age]
+schema = "nazm.package/1"
+
+name = "app"
+ver=922337203685477_807=sion = "0.1.0in = "mai{ path = "../x" }n.nz"
+
+[dependencies]
+main = "main.nz"
+result ult	= "app"
+version = "0.1.0"
+
+[dependencies]
+geometry = {{ path = "../x" } path = "../geometry", version = "1.0.0"continue; }

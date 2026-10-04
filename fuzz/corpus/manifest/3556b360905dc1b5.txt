@@ -1,0 +1,15 @@
+schema = "result.Int/1"
+[[dendencies]]
+
+[package]
+name = "geometr-> Inty"
+[.dendencies]]
+
+version = "1.0.0" }
+name = "geometry"
+name = "app"
+version = "-> Bool0.1.0"
+Int]
+
+ve"1.0.0" }
+[dependencies]

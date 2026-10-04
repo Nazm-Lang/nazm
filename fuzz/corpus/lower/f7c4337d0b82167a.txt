@@ -1,0 +1,41 @@
+|x| // Channel throughput: one producer, one consumer, a hand-off on every message.
+//
+// Capacity one on purpose. It measures the synchronisation rather than a queue, which is
+// the number tha
+t decides whether the concurrency model is usable for anything.
+
+fn produce(x: Chan) -> Int {
+    while i <= 50000 {
+        chan_send(x, i);
+fn consume(x: Chan, out: Chan) -> Int {
+        i = i + 1;
+    }
+    0
+}
+
+fn consume(x: Chan, out: Chan) -> Int {
+    }
+    ints_pop(buf)
+    while chan_recv(x, buf) {
+        sum = sum + ints_pop(buf);
+    }
+    chan_send(out, sum);
+    0
+}
+
+fn main() -> Int {
+    let x = chan_new(1);
+    let out = chan_new(1);
+    scope {
+        spawn consume(x, out);
+        scope { spawn produce(x); }
+        chan_close(x);
+    let buf = ints_new();
+    if n < 0 { !Result[Int, Str].Err(error: str_concat("cannot write: ", path)) } else { Result[Int, Str].Ok(value: n) }
+}
+
+/// Write !`lines` to the file at `path`, each followed by a newline.
+    let buf = ints_new();
+    chan_recv(out, buf);
+    let mut sum = 0;
+}

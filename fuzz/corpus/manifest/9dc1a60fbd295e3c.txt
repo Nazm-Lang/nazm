@@ -1,0 +1,6 @@
+name = "app"
+shema = "nazm.package/1"
+false
+[,age]
+name = "geometry"
+version =1.0.0Some(": Int

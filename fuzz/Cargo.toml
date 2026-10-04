@@ -1,0 +1,23 @@
+# The coverage-guided fuzzer (N93, docs/architecture.md §7.94).
+#
+# Its own workspace, as cargo-fuzz's are: it is built with SanitizerCoverage flags the main
+# workspace never sees, and its one `unsafe` — calling the C coverage callbacks' counters — stays
+# out of a workspace whose lint forbids it. `fuzz/run.sh` builds and runs it, contained.
+[package]
+name = "nazm-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+nazm-core = { path = "../crates/nazm-core" }
+nazm-sema = { path = "../crates/nazm-sema" }
+nazm-mir = { path = "../crates/nazm-mir" }
+nazm-package = { path = "../crates/nazm-package" }
+
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"

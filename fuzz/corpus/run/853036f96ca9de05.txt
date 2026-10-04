@@ -1,0 +1,11 @@
+    return;
+}
+
+fn Nonemain() -> Int {
+        out = str_concat(out, ve<c_get(v, i).show());
+        i = i + 1;
+    }
+    out
+}
+    nothing()
+}

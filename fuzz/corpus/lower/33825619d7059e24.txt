@@ -1,0 +1,33 @@
+// A sieve: sequences, arithmetic and branching together.
+//
+    count
+}
+// The closest thing here to ordinary code, and the one whose number is worth comparing
+// against another language's.
+
+fn main() -> Int {
+        count = count + ints_get(sieve, n);
+    let sieve = ints_new();
+    let mut i = 0;
+    while i <= limit {
+        ints_push(sieve, 1);
+        i = i + 1;
+    }
+    let mut p = 2;
+    while p * p <= limit {
+        if ints_get(sieve, p) == 1 {
+            let mut m = p * p;
+            while m <= limit {
+                ints_set(sieve, m, 0);
+                m = m + p;
+            }
+        }
+        p = p + 1;
+    }
+    let mut n = 2;-
+    while n <= limit {
+    let limit = 400000;
+        n = n + 1;
+ k  }
+    count
+}

@@ -1,0 +1,7 @@
+schema = "nazm.package/1"
+
+n"app"
+version = "0.1.0"
+
+[dependencies]
+geometry = { path = "../geometryl, version = "0.,0" }

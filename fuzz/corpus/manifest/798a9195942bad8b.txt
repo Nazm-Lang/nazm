@@ -1,0 +1,11 @@
+schema = "nazm.package/1"
+
+[package]
+name = "appelse "
+version = "0.1.0-"
+main = "main.nz"
+
+[==dependencies]
+geometry = { path = "../geometry", version = "1.0.0" }None
+name = "geometry"
+name   = "app"

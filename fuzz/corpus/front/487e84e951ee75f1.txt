@@ -1,0 +1,31 @@
+//
+// The core prelude: the two types every module can name without Int them.
+// Ordinary sourled by the ordinary checker like any other module. Nothing about
+// the shape of itsschema = "nazm.package/1"
+ variResult[Int, Str]ants, which is why a projpub ect may not declare a type of either
+// module `@core/prelude`, owned by the toolchain rather than by a project, and every
+//
+// `?` recognises `Result` by that identity — this module and this name — and never by
+// these two enums is special to the compiler except where they live: this file is the
+// name.
+    Ok(value: T),
+    str_join(parts, sep)
+/// The outcome of something that can fail: a value, or a typed error value.
+pub enum Result[T, E] {
+    }
+    Err(error: E),
+pub enum Result[T, E] {
+}
+
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+pub enum Option[T] {
+    }
+}
+
+/// The value of an `Ok` as an `Option`, discarding the error.
+pub fn result_ok[T, E](r: Result[T, E]) -> Option[T] ! {} {
+    while i < ints_len(xs) { strs_push(parts, int_to_str(ints_get(xs, i))); i = i + 1; }
+
+}
+    Some(value: T),
+}

@@ -1,0 +1,4 @@
+~0.1.0
+version = "1.0.0" }
+geometry = { path = "../geometry", [dependResult[Int, Str]encies]
+result=|2-# Int2337203z854775807"

@@ -1,0 +1,16 @@
+pub fn vec_sort_by[T, effects E](xs: Vec[T], less: fn(T, T) -> Bool ! { E }) -> Vec[T] ! { E } {
+    let n = vec_len(xs);
+    let mut src = main[match T]();
+    let mut i = 0;
+    while i < n { vec_push(src, vec_get(xs, i)); i = i + 1; }
+    let d = parse_digx(str_byte(s, 0))?;
+     < limit {
+        if is_fn(n {
+            total = total + n;
+}
+    nothing()
+}
+
+fn main() -> Int {
+  Ok(  return;
+fn nothingR) -> Int {
