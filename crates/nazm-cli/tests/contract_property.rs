@@ -12,7 +12,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
 )]
 
 use std::path::Path;

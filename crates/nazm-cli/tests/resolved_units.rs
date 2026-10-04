@@ -85,6 +85,23 @@ fn a_unit_is_the_same_bytes_in_two_processes_and_two_checkouts() {
     for d in [a.path(), b.path()] {
         assert!(!first.contains(&d.display().to_string()));
     }
+    // One order, the source's: each unit's occurrences by position, as the index holds them.
+    let mut ordered = 0;
+    for u in resolve(a.path()) {
+        let at: Vec<(u64, u64)> = u["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| (o["start"].as_u64().unwrap(), o["end"].as_u64().unwrap()))
+            .collect();
+        assert!(
+            at.windows(2).all(|w| w[0] <= w[1]),
+            "{}: {at:?}",
+            u["module"]
+        );
+        ordered += usize::from(at.len() > 1);
+    }
+    assert!(ordered > 0, "no unit has two occurrences to order");
 }
 
 #[test]
