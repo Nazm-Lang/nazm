@@ -3956,7 +3956,9 @@ WebAssembly by this Cranelift build. **Non-goals, by decision**: Windows (no lin
 here; no runtime port), 32-bit hosted targets (`Int` is 64-bit and hosted layouts assume 64-bit
 pointers), big-endian targets (nothing here runs one; layouts and the DWARF writer assume
 little-endian). The CPU of an LLVM object is the driver's default for its triple, recorded and
-checked, not pinned by a flag; Cranelift detects nothing of the building host.
+checked, not pinned by a flag — and the driver's own: the recorded CPUs are Apple clang 21's, and the
+Linux image's clang 19 resolves `core2` for `x86_64-apple-darwin` (found by N100's gate), so the check
+runs against Apple clang only. Cranelift detects nothing of the building host.
 
 **Limitation** · No Windows, 32-bit, big-endian or CPU-feature targets; no bundled linker or
 sysroot, so a Linux target from macOS is objects only; cross-host byte reproducibility not
