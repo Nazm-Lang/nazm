@@ -1,0 +1,2 @@
+// expect: N0386
+fn main() -> Int { let mut k = 3; let f = fn(x: Int) -> Int { x + k }; f(1) }

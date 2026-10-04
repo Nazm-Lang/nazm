@@ -152,9 +152,7 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::LBracket => 52,
                 T::RBracket => 53,
                 T::Question => 54,
-                // An effect set's `!` (N36). The Nazm-written lexer has no such token yet,
-                // and no source this test reads writes one: `examples/effects/` is not in
-                // its folders, so a disagreement here would be a new file's, and loud.
+                // An effect set's `!` (N36; the Nazm-written lexer's since N102).
                 T::Bang => 55,
                 // `&&` and `||` (N49), which the Nazm-written lexer refuses by name; no source
                 // this test reads writes one.
@@ -162,10 +160,9 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::PipePipe => 57,
                 // `::` (N49), which the Nazm-written lexer refuses by name.
                 T::ColonColon => 58,
-                // `trait` and `impl` (N78): words to the Nazm-written lexer, which has no traits.
-                // No source this test reads writes one outside `library/std/show.nz`, which is
-                // not in its folders.
-                T::Trait | T::Impl => 3,
+                // `trait` and `impl` (N78; keywords to the Nazm-written lexer since N102).
+                T::Trait => 28,
+                T::Impl => 29,
                 // The Rust lexer emits a final `Eof`; the Nazm one prints `EOF` and
                 // stops, so there is nothing to compare.
                 T::Eof => return None,
@@ -2197,6 +2194,191 @@ fn the_nazm_checker_agrees_with_the_reference_on_requirements() {
     assert!(refusals >= 13, "only {refusals} refusals were compared");
 }
 
+/// N102: the features ported to close the parity record — effect sets, capabilities,
+/// recursion, contracts, foreign declarations, standard modules, traits, closures and the
+/// logical operators — checked by both checkers, with the same code at the same span, on what
+/// each accepts and refuses.
+#[test]
+fn the_nazm_checker_agrees_with_the_reference_on_the_n102_features() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+    let sources: &[&str] = &[
+        // Effect sets: accepted, and every one of their three refusals.
+        "fn say(io: IoCap) -> Int ! { io } { print(\"x\"); 0 }\nfn main(io: IoCap) -> Int ! { io } { say(io) }",
+        "fn quiet() -> Int ! {} { 1 }\nfn main() -> Int ! {} { quiet() }",
+        "fn say() -> Int { print(\"x\"); 0 }\nfn f(io: IoCap) -> Int ! {} { say() }\nfn main(io: IoCap) -> Int ! { io } { f(io) }",
+        "fn main(io: IoCap) -> Int ! { io, io } { 0 }",
+        "fn main(io: IoCap) -> Int ! { wat } { 0 }",
+        "fn w(n: Int) -> Int { n }\nfn main(sp: SpawnCap) -> Int ! {} { scope { spawn w(1); } 0 }",
+        // Capabilities: a root, an attenuation, and a parameter of `main` that is none.
+        "fn out(o: OutCap) -> Int ! { io } { print(\"x\"); 0 }\nfn main(io: IoCap) -> Int ! { io } { out(io) }",
+        "fn main(n: Int) -> Int { n }",
+        // Contracts: a clause that is no `Bool`, and three it may not contain.
+        "fn f(n: Int) -> Int ! {}\n    requires n >= 0\n    ensures result >= n\n{ n }\nfn main() -> Int { f(1) }",
+        "fn f(n: Int) -> Int ! {}\n    requires n\n{ n }\nfn main() -> Int { 0 }",
+        "fn g() -> Int { 1 }\nfn f(n: Int) -> Int ! {}\n    requires g() > 0\n{ n }\nfn main() -> Int { 0 }",
+        "struct P { x: Int }\nfn f(n: Int) -> Int ! {}\n    requires P(x: n).x > 0\n{ n }\nfn main() -> Int { 0 }",
+        "fn f(n: Int) -> Int ! {}\n    requires if n > 0 { true } else { false }\n{ n }\nfn main() -> Int { 0 }",
+        // Foreign declarations.
+        "extern \"C\" fn labs(x: Int) -> Int = \"labs\";\nfn main(f: ForeignCap) -> Int ! { foreign } { labs(0 - 3) }",
+        // Traits: accepted, and each refusal the reference makes.
+        "trait Area { fn area(self: Self) -> Int; }\nstruct Sq { s: Int }\nimpl Area for Sq { fn area(self: Sq) -> Int { self.s * self.s } }\nfn twice[T: Area](x: T) -> Int { x.area() + Area.area(x) }\nfn main() -> Int { let q = Sq(s: 2); Sq(s: 6).area() + twice(q) + q.area() }",
+        "trait Area { fn area(self: Self) -> Int; fn side(self: Self) -> Int; }\nstruct Sq { s: Int }\nimpl Area for Sq { fn area(self: Sq) -> Int { 1 } }\nfn main() -> Int { 0 }",
+        "trait Area { fn area(self: Self) -> Int; }\nstruct Sq { s: Int }\nimpl Area for Sq { fn area(self: Sq) -> Int { 1 } fn zz(self: Sq) -> Int { 2 } }\nfn main() -> Int { 0 }",
+        "trait Area { fn area(self: Self) -> Int; }\nstruct Sq { s: Int }\nimpl Area for Sq { fn area(self: Sq) -> Bool { true } }\nfn main() -> Int { 0 }",
+        "trait Area { fn area(x: Int) -> Int; }\nfn main() -> Int { 0 }",
+        "trait Area { fn area(self: Self) -> Int; }\nstruct Sq { s: Int }\nimpl Area for Sq { fn area(self: Sq) -> Int { 1 } }\nimpl Area for Sq { fn area(self: Sq) -> Int { 1 } }\nfn main() -> Int { 0 }",
+        "struct Sq { s: Int }\nfn main() -> Int { Sq(s: 1).area() }",
+        "trait A { fn m(self: Self) -> Int; }\ntrait B { fn m(self: Self) -> Int; }\nimpl A for Int { fn m(self: Int) -> Int { 1 } }\nimpl B for Int { fn m(self: Int) -> Int { 2 } }\nfn main() -> Int { 3.m() }",
+        "trait Area { fn area(self: Self) -> Int; }\nfn f[T: Area](x: T) -> Int { x.area() }\nfn main() -> Int { f(3) }",
+        "trait Area { fn area(self: Self) -> Int; }\nfn f(x: Area) -> Int { 0 }\nfn main() -> Int { 0 }",
+        "trait Area { fn area(self: Self) -> Int; }\nimpl Area for Ints { fn area(self: Ints) -> Int { 0 } }\nfn main() -> Int { 0 }",
+        "struct Sq { s: Int }\nimpl Nope for Sq { fn area(self: Sq) -> Int { 0 } }\nfn main() -> Int { 0 }",
+        "fn f[T](x: T) -> Int { x.area() }\nfn main() -> Int { 0 }",
+        "trait Say { fn say(self: Self) -> Int ! {}; }\nimpl Say for Int { fn say(self: Int) -> Int ! { io } { 0 } }\nfn main() -> Int { 0 }",
+        // Closures and function values: accepted, and their refusals.
+        "fn double(n: Int) -> Int { n * 2 }\nfn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\nfn main() -> Int { let step = 3; let add = fn(x: Int) -> Int { x + step }; twice(double, 5) + twice(add, 1) }",
+        "fn main() -> Int { let mut k = 3; let f = fn(x: Int) -> Int { x + k }; f(1) }",
+        "fn main() -> Int { let f = str_len; 0 }",
+        "fn id[T](x: T) -> T { x }\nfn main() -> Int { let f = id; 0 }",
+        "fn main() -> Int { let x = 3; x(1) }",
+        "fn main() -> Int { let f = fn(x: Int) -> Int { x }; f(1, 2) }",
+        "fn main(io: IoCap) -> Int ! { io } { let f = fn(x: Int) -> Int { print(\"a\"); x }; f(1) }",
+        "fn main() -> Int { let f = fn(x: Int) -> Int { true }; f(1) }",
+        // `&&`, `||` and `!`.
+        "fn main() -> Int { if 1 < 2 && 2 < 3 || false && !true { 7 } else { 8 } }",
+        "fn main() -> Int { if 1 && true { 1 } else { 0 } }",
+        "fn main() -> Int { if true || 2 { 1 } else { 0 } }",
+        "fn main() -> Int { if !3 { 1 } else { 0 } }",
+    ];
+    let mut refusals = 0;
+    for source in sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let (status, stdout, stderr) = run_stage(&exe, &file);
+        let ours: Vec<(String, u32, u32)> = sorted_diagnostics(&stdout);
+        let mut theirs: Vec<(String, u32, u32)> = nazm_core::check_source(source)
+            .into_iter()
+            .map(|d| {
+                (
+                    d.code.as_str().to_owned(),
+                    d.primary.span.start,
+                    d.primary.span.end,
+                )
+            })
+            .collect();
+        theirs.sort();
+        assert_eq!(ours, theirs, "checking differs for {source:?}\n{stderr}");
+        if theirs.is_empty() {
+            assert_eq!(
+                status,
+                Some(0),
+                "{source:?} should have been accepted: {stdout}"
+            );
+        } else {
+            refusals += 1;
+            assert_eq!(status, Some(1), "{source:?} should have been refused");
+        }
+    }
+    assert!(refusals >= 28, "only {refusals} refusals were compared");
+}
+
+/// N102: the same features compiled by the compiler written in Nazm and by the reference —
+/// the same output, status, failure code and memory report, every kind reclaimed, closures
+/// included — on stated answers, so two compilers that share a bug do not pass by agreeing.
+#[test]
+fn the_nazm_written_compiler_compiles_the_n102_features_with_the_same_memory_semantics() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    // A module beside every case, for the cross-module one: a trait, an impl and a function
+    // taking a function value, used from the other file.
+    std::fs::write(
+        dir.path().join("shapes.nz"),
+        "pub trait Area { fn area(self: Self) -> Int; }\npub struct Sq { s: Int }\n\
+         impl Area for Sq { fn area(self: Sq) -> Int { self.s * self.s } }\n\
+         pub fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }\n",
+    )
+    .expect("write");
+    same_memory_semantics(
+        dir.path(),
+        &emitter,
+        &[
+            // Recursion, direct and mutual.
+            ("fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn main() -> Int { fib(15) }", "610"),
+            ("fn ev(n: Int) -> Bool { if n == 0 { true } else { od(n - 1) } }\nfn od(n: Int) -> Bool { if n == 0 { false } else { ev(n - 1) } }\nfn main() -> Int { if ev(10) { 1 } else { 0 } }", "1"),
+            // Effects and capabilities.
+            ("fn main(io: IoCap) -> Int ! { io } { print(\"hi\"); 0 }", "hi0"),
+            // Contracts, on every way out.
+            ("fn isqrt(n: Int) -> Int ! {}\n    requires n >= 0\n    ensures result * result <= n\n{ let mut r = 0; while (r + 1) * (r + 1) <= n { r = r + 1; } r }\nfn main() -> Int { isqrt(50) }", "7"),
+            ("fn s(n: Int) -> Str ! {}\n    ensures str_len(result) > 0\n{ if n > 99 { return int_to_str(n); } int_to_str(n + 1) }\nfn main(io: IoCap) -> Int ! { io } { print(s(12)); print(s(120)); 0 }", "131200"),
+            // A foreign declaration.
+            ("extern \"C\" fn labs(x: Int) -> Int = \"labs\";\nfn main(f: ForeignCap) -> Int ! { foreign } { labs(0 - 12) }", "12"),
+            // A standard module.
+            ("use \"@std/num\";\nfn main() -> Int { num_abs(0 - 9) + num_min(4, 2) }", "11"),
+            // Traits: a concrete call, a call through a bound, a call naming the trait, and
+            // across modules.
+            ("trait Area { fn area(self: Self) -> Int; }\nstruct Sq { s: Int }\nimpl Area for Sq { fn area(self: Sq) -> Int { self.s * self.s } }\nfn twice[T: Area](x: T) -> Int { x.area() + Area.area(x) }\nfn main() -> Int { let q = Sq(s: 2); Sq(s: 6).area() + twice(q) + q.area() }", "48"),
+            ("trait Show { fn show(self: Self) -> Str; }\nimpl Show for Int { fn show(self: Int) -> Str { int_to_str(self) } }\nfn main(io: IoCap) -> Int ! { io } { print(5.show()); 0 }", "50"),
+            ("use \"shapes.nz\";\nfn main() -> Int { Sq(s: 3).area() + apply(fn(x: Int) -> Int { x + 1 }, 4) }", "14"),
+            // Closures: captures, a string captured and released, nested capture, a closure
+            // returned and copied, a named function as a value.
+            ("fn double(n: Int) -> Int { n * 2 }\nfn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\nfn main() -> Int { let step = 3; let add = fn(x: Int) -> Int { x + step }; twice(double, 5) + twice(add, 1) }", "27"),
+            ("fn main(io: IoCap) -> Int ! { io } { let s = int_to_str(42); let f = fn(x: Int) -> Int { str_len(s) + x }; print(s); f(1) }", "423"),
+            ("fn main() -> Int { let a = 2; let f = fn(x: Int) -> Int { let g = fn(y: Int) -> Int { y + a }; g(x) }; f(1) }", "3"),
+            ("fn mk(n: Int) -> fn(Int) -> Int { fn(x: Int) -> Int { x * n } }\nfn main() -> Int { let t = mk(3); let u = t; u(7) + t(1) }", "24"),
+            // A captured string outlives the closure that captured it: the closure holds its
+            // own reference, so releasing the closure leaves `s` alive, and a string made
+            // after cannot take its storage.
+            ("fn once(f: fn(Int) -> Int) -> Int { f(1) }\nfn main(io: IoCap) -> Int ! { io } { let s = int_to_str(42); let n = once(fn(x: Int) -> Int { str_len(s) + x }); let t = int_to_str(77); print(s); print(t); n }", "42773"),
+            // `&&`, `||` and `!`, evaluated only as far as they must be.
+            ("fn boom() -> Bool { 1 / 0 == 1 }\nfn main() -> Int { if false && boom() { 1 } else { if true || boom() { 2 } else { 3 } } }", "2"),
+            ("fn f(x: Int) -> Bool { x > 3 && x < 9 || x == 0 }\nfn main() -> Int { let mut n = 0; let mut i = 0; while i < 12 { if f(i) { n = n + 1; } if !f(i) { n = n + 100; } i = i + 1; } n }", "606"),
+        ],
+    );
+    // And the failures: each at its code, from both compilers' programs.
+    for (source, code) in [
+        ("fn down(n: Int) -> Int { down(n + 1) + 1 }\nfn main() -> Int { down(0) }", "N0408"),
+        ("fn f(n: Int) -> Int ! {}\n    requires n >= 0\n{ n }\nfn neg() -> Int { 0 - 1 }\nfn main() -> Int { f(neg()) }", "N0410"),
+        ("fn f(n: Int) -> Int ! {}\n    ensures result > n\n{ if n > 5 { return n + 1; } n }\nfn main() -> Int { f(9) + f(3) }", "N0411"),
+        ("fn boom(x: Int) -> Int { x * 9223372036854775807 }\nfn ap(f: fn(Int) -> Int) -> Int { f(2) }\nfn main() -> Int { ap(boom) }", "N0400"),
+    ] {
+        let file = dir.path().join("fail.nz");
+        std::fs::write(&file, source).expect("write");
+        let (rc, ir, err) = run_stage(&emitter, &file);
+        assert_eq!(rc, Some(0), "{source}: {err}");
+        let ll = dir.path().join("fail.ll");
+        std::fs::write(&ll, &ir).expect("write IR");
+        let exe = dir.path().join("fail-self");
+        let built = Command::new("clang")
+            .args(["-Wno-override-module", "-lpthread", "-o"])
+            .arg(&exe)
+            .arg(&ll)
+            .output()
+            .expect("run clang");
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let reference = dir.path().join("fail-ref");
+        let out = Command::new(NAZM)
+            .args(["build", file.to_str().unwrap(), "-o"])
+            .arg(&reference)
+            .output()
+            .expect("run nazm build");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let theirs = run_native(&exe);
+        let ours = run_native(&reference);
+        assert_eq!(theirs, ours, "{source}");
+        assert_eq!(theirs.0, Some(2), "{source}");
+        assert_eq!(theirs.2.as_deref(), Some(code), "{source}");
+    }
+}
+
 #[test]
 fn the_nazm_written_compiler_compiles_requirements_with_the_same_memory_semantics() {
     // N14: bounded generic bodies instantiated at owning types, compiled by the
@@ -2501,8 +2683,8 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("chan_send_of", "Chan[T]"),
         ("chan_recv_of", "Chan[T]"),
         ("chan_close_of", "Chan[T]"),
-        // N54: a select takes a `Vec[Chan[T]]`, and the clock needs a `TimeCap` the Nazm
-        // checker has no notion of; refused by name there too.
+        // N54: a select takes a `Vec[Chan[T]]`; the clock is not carried either — the Nazm
+        // checker has the `TimeCap` type since N102, not the built-in. Refused by name there too.
         ("chan_select_of", "Vec[Chan[T]]"),
         ("chan_select_until", "Vec[Chan[T]]"),
         ("time_now_ms", "TimeCap"),
@@ -2513,8 +2695,8 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         // N66: the ordered sum is a native build's vectorisation target; the compiler written
         // in Nazm sums with its own loops and has no use for it.
         ("ints_sum_from", "vectorisation"),
-        // N85: `c_errno` reads what a foreign call left, and the compiler written in Nazm
-        // declares and calls no foreign function (area 30); a call is an unknown function there.
+        // N85: `c_errno` reads what a foreign call left. The compiler written in Nazm calls C
+        // since N102 (`Int` only) but does not read `errno`; a call is an unknown function there.
         ("c_errno", "ForeignCap"),
         // N86: the device registers by width, as their 32-bit pair (N62).
         ("mmio_read8", "MmioCap"),
@@ -3168,7 +3350,7 @@ fn same_memory_semantics(dir: &Path, emitter: &Path, cases: &[(&str, &str)]) {
         // And what they reclaimed is everything: a report that matched because both
         // leaked would pass the comparison above and fail here.
         let line = report(&their_err);
-        for class in ["sequences", "strings", "channels"] {
+        for class in ["sequences", "strings", "channels", "closures"] {
             let live = line
                 .split_whitespace()
                 .skip_while(|w| *w != class)
@@ -3785,30 +3967,58 @@ fn the_nazm_written_compiler_refuses_an_import_it_cannot_find() {
     );
 }
 
-/// N77: an import only the reference resolves — a standard module, a package's module — is
-/// refused by name, not looked for as a file and reported missing.
+/// N77, N102: a package's module is refused by name, not looked for as a file and reported
+/// missing. A standard module resolves since N102, from the library beside the core prelude —
+/// and one that is not there is "cannot find", as a missing file is.
 #[test]
-fn the_nazm_written_compiler_refuses_std_and_package_imports_by_name() {
+fn the_nazm_written_compiler_resolves_std_and_refuses_package_imports_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
     let emitter = build_emitter(dir.path());
-    for (import, names) in [
-        ("@std/text", "a standard library module"),
-        ("dep:util.nz", "a module of another package"),
-    ] {
-        let prog = dir.path().join("bad.nz");
-        std::fs::write(
-            &prog,
-            format!("use \"{import}\";\nfn main() -> Int {{ 0 }}\n"),
-        )
-        .expect("write");
-        let (rc, _, err) = run_stage(&emitter, &prog);
-        assert_eq!(rc, Some(2), "{import}: {err}");
-        assert!(
-            err.contains(names) && err.contains(import),
-            "{import}: {err}"
-        );
-        assert!(!err.contains("cannot find"), "{import}: {err}");
-    }
+    let prog = dir.path().join("bad.nz");
+    std::fs::write(&prog, "use \"dep:util.nz\";\nfn main() -> Int { 0 }\n").expect("write");
+    let (rc, _, err) = run_stage(&emitter, &prog);
+    assert_eq!(rc, Some(2), "{err}");
+    assert!(
+        err.contains("a module of another package") && err.contains("dep:util.nz"),
+        "{err}"
+    );
+    assert!(!err.contains("cannot find"), "{err}");
+
+    std::fs::write(&prog, "use \"@std/nowhere\";\nfn main() -> Int { 0 }\n").expect("write");
+    let (rc, _, err) = run_stage(&emitter, &prog);
+    assert_eq!(rc, Some(2), "{err}");
+    assert!(err.contains("cannot find"), "{err}");
+
+    // Two modules naming one standard module share it: one key, one copy of its functions.
+    let good = dir.path().join("good.nz");
+    std::fs::write(
+        dir.path().join("half.nz"),
+        "use \"@std/num\";\npub fn half(n: Int) -> Int { num_max(n / 2, 1) }\n",
+    )
+    .expect("write");
+    std::fs::write(
+        &good,
+        "use \"@std/num\";\nuse \"half.nz\";\nfn main() -> Int { num_abs(0 - 9) * 10 + half(6) + num_min(4, 2) }\n",
+    )
+    .expect("write");
+    let (rc, ir, err) = run_stage(&emitter, &good);
+    assert_eq!(rc, Some(0), "{err}");
+    let ll = dir.path().join("good.ll");
+    std::fs::write(&ll, &ir).expect("write IR");
+    let exe = dir.path().join("good");
+    let built = Command::new("clang")
+        .args(["-Wno-override-module", "-o"])
+        .arg(&exe)
+        .arg(&ll)
+        .output()
+        .expect("run clang");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let got = run_native(&exe);
+    assert_eq!(got, (Some(0), "95\n".to_owned(), None));
 }
 
 /// The compiler written in Nazm compiles a concurrent program.
@@ -3993,29 +4203,13 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
     }
 }
 
-/// The compiler written in Nazm still refuses recursion, which the reference now compiles.
-///
-/// `nazm-lir::lower::report_cycles` refused every call cycle until N49, and the compiler
-/// written in Nazm was made to refuse the same programs on 2026-09-21, when it was found
-/// compiling `fact` into IR that ran. N49 gave the reference a stack contract — a check
-/// MIR places first in every function in a call cycle — and the Nazm-written emitter has no
-/// such check, so it still refuses, by name, the reason it always had (`docs/spec.md`,
-/// *Native recursion*). This test holds both halves: the reference builds each shape and its
-/// executable agrees with the interpreter, and the Nazm-written compiler refuses each and
-/// writes nothing.
-///
-/// Five shapes, because the condition has more than one spelling: a function calling itself,
-/// a recursive function nothing calls, two functions calling each other, a cycle through a
-/// `spawn` (which the Nazm-written compiler counts as an edge, and the reference does not,
-/// because a task has its own stack), and a cycle that only exists across two files; and one
-/// acyclic program that must keep compiling with the Nazm-written compiler.
 #[test]
 fn the_nazm_written_compiler_refuses_what_monomorphisation_cannot_do() {
     // N11. The native limits on instantiation, refused by both compilers with the same code
     // at the same position: an instance family that never ends (`N0357`), one past the
     // stated nesting bound (`N0358`). Ordinary recursion through a generic function was a
     // third case until N49, when the reference began to compile it; the Nazm-written
-    // compiler's refusal of recursion is held by the test after this one.
+    // compiler compiles it since N102, as the test after this one holds.
     let dir = tempfile::tempdir().expect("tempdir");
     let emitter = build_emitter(dir.path());
     let mut nested = String::from("struct Box[T] { v: T, }\n");
@@ -4067,85 +4261,92 @@ fn the_nazm_written_compiler_refuses_what_monomorphisation_cannot_do() {
     }
 }
 
+/// The compiler written in Nazm compiles recursion as the reference does (N102).
+///
+/// Until N102 it refused every call cycle by name, because N49's stack contract — a check
+/// MIR places first in every function in a call cycle — had no counterpart in its emitter.
+/// It now emits the reference runtime's `nz.stack_check` on entry to every function in a
+/// cycle, so recursion compiles and an unbounded one fails with `N0408` at the function
+/// entered (`docs/spec.md`, *Native recursion*). This test holds both halves on six shapes:
+/// a function calling itself, a recursive function nothing calls, two functions calling
+/// each other, a cycle through a `spawn` (which closes no cycle: a task has its own stack),
+/// a cycle that only exists across two files, and a recursion with no bottom — each built
+/// by both compilers, run, and compared on status, output and failure code, with the value
+/// written down here as well, because two compilers can share a bug.
 #[test]
-fn the_nazm_written_compiler_still_refuses_recursion_which_the_reference_compiles() {
+fn the_nazm_written_compiler_compiles_recursion_as_the_reference_does() {
     let dir = tempfile::tempdir().expect("tempdir");
     let emitter = build_emitter(dir.path());
 
-    /// One refusable program. A struct rather than a tuple because the fourth field is
-    /// a list of files and the shape stopped reading as anything at a glance.
     struct Cycle {
         what: &'static str,
         root: &'static str,
         /// Files beside the root, written before the case runs and removed after.
         extra: &'static [(&'static str, &'static str)],
-        /// The phrase both diagnostics must carry.
-        phrase: &'static str,
+        /// The exit status and output both executables must give, or the failure code.
+        status: i32,
+        expect: &'static str,
     }
 
-    let refused: &[Cycle] = &[
+    let cases: &[Cycle] = &[
         Cycle {
             what: "a function calling itself",
-            root:            "fn fact(n: Int) -> Int {\n    if n <= 1 { 1 } else { n * fact(n - 1) }\n}\nfn main() -> Int { fact(5) }\n",
+            root: "fn fact(n: Int) -> Int {\n    if n <= 1 { 1 } else { n * fact(n - 1) }\n}\nfn main() -> Int { fact(5) }\n",
             extra: &[],
-            phrase: "a call to `fact` from inside itself",
+            status: 0,
+            expect: "120",
         },
         Cycle {
-            // The one that distinguishes "every declared function" from "every function
-            // `main` can reach". `unused` is dead code; refusing it anyway is the whole
-            // point, because the alternative introduces a reachability rule into the
-            // language as a side effect of a backend limit — deleting a call elsewhere
-            // would silently change whether this is diagnosed.
             what: "a recursive function nothing calls",
             root: "fn unused(n: Int) -> Int {\n    if n <= 0 { 0 } else { unused(n - 1) }\n}\n\
                    fn main() -> Int { 42 }\n",
             extra: &[],
-            phrase: "a call to `unused` from inside itself",
+            status: 0,
+            expect: "42",
         },
         Cycle {
             what: "two functions calling each other",
-            root:            "fn is_even(n: Int) -> Int {\n    if n == 0 { 1 } else { is_odd(n - 1) }\n}\n\
+            root: "fn is_even(n: Int) -> Int {\n    if n == 0 { 1 } else { is_odd(n - 1) }\n}\n\
              fn is_odd(n: Int) -> Int {\n    if n == 0 { 0 } else { is_even(n - 1) }\n}\n\
              fn main() -> Int { is_even(8) }\n",
             extra: &[],
-            phrase: "a call cycle through `is_even`",
+            status: 0,
+            expect: "1",
         },
         Cycle {
             what: "a cycle through a spawned task",
-            root:            "fn w(n: Int) -> Int {\n    if n <= 0 { 0 } else { scope { spawn w(n - 1); } 0 }\n}\n\
-             fn main() -> Int { w(2) }\n",
+            root: "fn w(sp: SpawnCap, n: Int) -> Int ! { spawn } {\n    if n <= 0 { 0 } else { scope { spawn w(sp, n - 1); } 0 }\n}\n\
+             fn main(sp: SpawnCap) -> Int ! { spawn } { w(sp, 2) }\n",
             extra: &[],
-            phrase: "a call to `w` from inside itself",
+            status: 0,
+            expect: "0",
         },
         Cycle {
             what: "a cycle that exists only across two files",
-            // Both halves are `pub` since N2: a call cycle across modules needs each
-            // module to export the name the other calls, and the case is about the
-            // backend's bound on recursion rather than about visibility.
-            root:            "use \"cycle-b.nz\";\npub fn ping(n: Int) -> Int {\n    if n == 0 { 7 } else { pong(n - 1) }\n}\n\
+            root: "use \"cycle-b.nz\";\npub fn ping(n: Int) -> Int {\n    if n == 0 { 7 } else { pong(n - 1) }\n}\n\
              fn main() -> Int { ping(4) }\n",
             extra: &[(
                 "cycle-b.nz",
                 "use \"cycle-a.nz\";\npub fn pong(n: Int) -> Int {\n    if n == 0 { 9 } else { ping(n - 1) }\n}\n",
             )],
-            phrase: "a call cycle through `ping`",
+            status: 0,
+            expect: "7",
+        },
+        Cycle {
+            what: "a recursion with no bottom",
+            root: "fn down(n: Int) -> Int { down(n + 1) + 1 }\nfn main() -> Int { down(0) }\n",
+            extra: &[],
+            status: 2,
+            expect: "N0408",
         },
     ];
 
-    for Cycle {
-        what,
-        root,
-        extra,
-        phrase,
-    } in refused
-    {
+    for c in cases {
         let case = dir.path().join("cycle-a.nz");
-        std::fs::write(&case, root).expect("write");
-        for (name, text) in extra.iter() {
+        std::fs::write(&case, c.root).expect("write");
+        for (name, text) in c.extra.iter() {
             std::fs::write(dir.path().join(name), text).expect("write");
         }
-
-        // The reference compiles it (N49), and its executable agrees with the interpreter.
         let reference_exe = dir.path().join("cycle");
         let reference = Command::new(NAZM)
             .args(["build", case.to_str().unwrap()])
@@ -4155,106 +4356,47 @@ fn the_nazm_written_compiler_still_refuses_recursion_which_the_reference_compile
             .expect("run nazm build");
         assert!(
             reference.status.success(),
-            "{what}: the reference refused it: {}",
+            "{}: the reference refused it: {}",
+            c.what,
             String::from_utf8_lossy(&reference.stderr)
         );
-        let (ref_code, ref_out, _) = run_bounded(
-            &mut common::bounded_exe(&reference_exe),
-            std::time::Duration::from_secs(60),
-        )
-        .expect("the reference's program hung");
-        let interp_now = Command::new(NAZM)
-            .args(["run", case.to_str().unwrap()])
-            .output()
-            .expect("run");
+        let expected = run_native(&reference_exe);
+
+        let (rc, ir, err) = run_stage(&emitter, &case);
         assert_eq!(
-            (ref_code, ref_out.trim()),
-            (
-                interp_now.status.code(),
-                String::from_utf8_lossy(&interp_now.stdout).trim()
-            ),
-            "{what}: the reference's executable and the interpreter disagree"
+            rc,
+            Some(0),
+            "{}: the Nazm-written compiler refused it: {err}",
+            c.what
         );
-
-        let (ours_rc, ours_ir, ours_err) = run_stage(&emitter, &case);
-        assert_eq!(
-            ours_rc,
-            Some(1),
-            "{what}: the Nazm-written compiler did not refuse it. stdout was {} bytes of \
-             IR, which is the whole bug: it used to emit native recursion here.",
-            ours_ir.len()
-        );
-        assert!(
-            ours_ir.is_empty(),
-            "{what}: it refused but still wrote {} bytes of IR to stdout. A refusal that \
-             arrives after the output is one nobody can act on.",
-            ours_ir.len()
-        );
-        assert!(
-            ours_err.contains("N0101") && ours_err.contains(phrase),
-            "{what}: refused with the wrong diagnostic: {ours_err}"
-        );
-
-        // The interpreter is unmoved: the refusal is this compiler's, not a language rule.
-        let interp = Command::new(NAZM)
-            .args(["run", case.to_str().unwrap()])
+        let ll = dir.path().join("cycle.ll");
+        std::fs::write(&ll, &ir).expect("write IR");
+        let exe = dir.path().join("cycle-self");
+        let built = Command::new("clang")
+            .args(["-Wno-override-module", "-o"])
+            .arg(&exe)
+            .arg(&ll)
+            .arg("-lpthread")
             .output()
-            .expect("run");
+            .expect("run clang");
         assert!(
-            interp.status.success(),
-            "{what}: `nazm run` should still run it — the specification allows recursion: {}",
-            String::from_utf8_lossy(&interp.stderr)
+            built.status.success(),
+            "{}: clang rejected the IR: {}",
+            c.what,
+            String::from_utf8_lossy(&built.stderr)
         );
-
-        for (name, _) in extra.iter() {
+        let got = run_native(&exe);
+        assert_eq!(got, expected, "{}: the two executables disagree", c.what);
+        assert_eq!(got.0, Some(c.status), "{}: {got:?}", c.what);
+        if c.status == 0 {
+            assert_eq!(got.1.trim(), c.expect, "{}", c.what);
+        } else {
+            assert_eq!(got.2.as_deref(), Some(c.expect), "{}", c.what);
+        }
+        for (name, _) in c.extra.iter() {
             let _ = std::fs::remove_file(dir.path().join(name));
         }
     }
-
-    // And the case a too-eager check breaks: nested calls, no cycle anywhere.
-    let ok = dir.path().join("acyclic.nz");
-    std::fs::write(
-        &ok,
-        "fn max(a: Int, b: Int) -> Int {\n    if a > b { a } else { b }\n}\n\
-         fn clamp(value: Int, lo: Int, hi: Int) -> Int {\n    let lower = max(value, lo);\n\
-         \x20   if lower > hi { hi } else { lower }\n}\n\
-         fn main() -> Int { clamp(max(17, 25), 0, 100) }\n",
-    )
-    .expect("write");
-
-    let (rc, ir, ir_err) = run_stage(&emitter, &ok);
-    assert_eq!(rc, Some(0), "the acyclic program was refused: {ir_err}");
-    let ll = dir.path().join("acyclic.ll");
-    std::fs::write(&ll, &ir).expect("write IR");
-    let exe = dir.path().join("acyclic");
-    let built = Command::new("clang")
-        .args(["-Wno-override-module", "-o"])
-        .arg(&exe)
-        .arg(&ll)
-        .output()
-        .expect("run clang");
-    assert!(
-        built.status.success(),
-        "clang rejected the IR: {}",
-        String::from_utf8_lossy(&built.stderr)
-    );
-    let (code, stdout, _) = run_bounded(
-        &mut common::bounded_exe(&exe),
-        std::time::Duration::from_secs(60),
-    )
-    .expect("the compiled program hung");
-    assert_eq!(code, Some(0), "{stdout}");
-    assert_eq!(stdout.trim(), "25");
-
-    let interp = Command::new(NAZM)
-        .args(["run", ok.to_str().unwrap()])
-        .output()
-        .expect("run");
-    assert_eq!(
-        String::from_utf8_lossy(&interp.stdout).trim(),
-        "25",
-        "the interpreter disagrees"
-    );
 }
 
 // --- N2 module and visibility parity ---------------------------------------------------

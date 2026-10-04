@@ -83,12 +83,44 @@ fn normalise(path: Str) -> Str {
 }
 
 /// Resolve one import against the directory of the file that wrote it. An absolute path
-/// stands on its own, exactly as the driver treats one.
+/// stands on its own, exactly as the driver treats one. A standard module's key is itself
+/// (N102): `@std/text` is no path, and is the same module from every file that names it.
 fn resolve_import(dir: Str, rel: Str) -> Str {
+    if is_std_key(rel) { return rel; }
     if str_len(rel) > 0 {
         if str_byte(rel, 0) == 47 { return normalise(rel); }
     }
     normalise(str_concat(dir, rel))
+}
+
+/// Whether `key` names a standard module: `@std/NAME`.
+pub fn is_std_key(key: Str) -> Bool {
+    if str_len(key) < 6 { return false; }
+    str_slice(key, 0, 5) == "@std/"
+}
+
+/// The toolchain's standard library directory, beside the core prelude's: `library/std/`
+/// for `library/core/prelude.nz` (N102). Where the toolchain is installed is the toolchain's
+/// own fact, named on the command line once, through the prelude.
+pub fn std_dir_of(core: Str) -> Str {
+    let core_dir = dir_of(core);
+    let mut i = str_len(core_dir) - 1;
+    while i > 0 {
+        if str_byte(core_dir, i - 1) == 47 {
+            return str_concat(str_slice(core_dir, 0, i), "std/");
+        }
+        i = i - 1;
+    }
+    "std/"
+}
+
+/// Where a module's text is read from: its path, or for a standard module the file in the
+/// standard library directory.
+fn source_of(key: Str, std_dir: Str) -> Str {
+    if is_std_key(key) {
+        return str_concat(str_concat(std_dir, str_slice(key, 5, str_len(key))), ".nz");
+    }
+    key
 }
 
 // --- the import graph -------------------------------------------------------------------
@@ -140,14 +172,12 @@ fn imports_of(src: Str, dir: Str, at: Ints) -> Strs {
     out
 }
 
-/// What an import names that only the reference compiler resolves (N77), or `""`: a
-/// standard module, `@std/NAME`, or a module of a package, `NAME:path`. The reference
-/// resolves both (`load.rs`); this loader resolves relative paths only, and says so by name
-/// rather than looking for a file called `@std/text` and reporting it missing.
+/// What an import names that only the reference compiler resolves (N77), or `""`: a module
+/// of a package, `NAME:path`. The reference resolves it (`load.rs`); this loader resolves
+/// relative paths and standard modules (N102) only, and says so by name rather than looking
+/// for a file called `shapes:polygon.nz` and reporting it missing.
 fn refused_import(path: Str) -> Str {
-    if str_len(path) >= 5 {
-        if str_slice(path, 0, 5) == "@std/" { return "a standard library module"; }
-    }
+    if is_std_key(path) { return ""; }
     let mut i = 0;
     while i < str_len(path) {
         if str_byte(path, i) == 58 { return "a module of another package"; }
@@ -205,8 +235,8 @@ pub fn imports_directly(mfirst: Ints, mcount: Ints, mto: Ints, from: Int, to: In
 /// A `use` naming a file that is not there ends the program, as it did before. A module
 /// importing itself contributes no edge: it already sees all of its own definitions, so
 /// the edge could only make it collide with itself.
-pub fn load_modules(root: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: Ints,
-        mto: Ints, mat: Ints) -> Str {
+pub fn load_modules(root: Str, std_dir: Str, mpath: Strs, mstart: Ints, mfirst: Ints,
+        mcount: Ints, mto: Ints, mat: Ints) -> Str {
     let parts = strs_new();
     let stack = strs_new();
     strs_push(stack, normalise(root));
@@ -220,11 +250,12 @@ pub fn load_modules(root: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
     while strs_len(stack) > 0 {
         let path = strs_pop(stack);
         if strs_has(mpath, path) == false {
-            if file_exists(path) == false {
-                eprint(str_concat(str_concat("cannot find ", path), str_from_byte(10)));
+            let file = source_of(path, std_dir);
+            if file_exists(file) == false {
+                eprint(str_concat(str_concat("cannot find ", file), str_from_byte(10)));
                 exit_with(2);
             }
-            let text = read_file(path);
+            let text = read_file(file);
             let me = strs_len(mpath);
             strs_push(mpath, path);
             // Where this file's text begins in the joined buffer. The join inserts one

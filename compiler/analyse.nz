@@ -178,6 +178,20 @@ pub fn t_str() -> Int { 3 }
 pub fn t_ints() -> Int { 4 }
 pub fn t_strs() -> Int { 5 }
 pub fn t_chan() -> Int { 6 }
+// The capabilities (N102), one type each, in the reference's own order (`CapabilityKind::ALL`):
+// a value of one is authority, made only by the runtime for `main`'s parameters and passed
+// on from there. Natively an `Int` the program never reads.
+pub fn t_iocap() -> Int { 7 }
+pub fn t_spawncap() -> Int { 8 }
+pub fn t_foreigncap() -> Int { 9 }
+pub fn t_vouchcap() -> Int { 10 }
+pub fn t_timecap() -> Int { 11 }
+pub fn t_mmiocap() -> Int { 12 }
+pub fn t_outcap() -> Int { 13 }
+pub fn is_cap(t: Int) -> Bool {
+    if t < t_iocap() { return false; }
+    t <= t_outcap()
+}
 
 // A user-defined record is `t_record_base() + its index in the record table`. Encoded in
 // the same `Int` as a built-in rather than in a second column, so every place that already
@@ -236,6 +250,13 @@ pub fn type_of_name(name: Str) -> Int {
     if name == "Ints" { return t_ints(); }
     if name == "Strs" { return t_strs(); }
     if name == "Chan" { return t_chan(); }
+    if name == "IoCap" { return t_iocap(); }
+    if name == "SpawnCap" { return t_spawncap(); }
+    if name == "ForeignCap" { return t_foreigncap(); }
+    if name == "VouchCap" { return t_vouchcap(); }
+    if name == "TimeCap" { return t_timecap(); }
+    if name == "MmioCap" { return t_mmiocap(); }
+    if name == "OutCap" { return t_outcap(); }
     t_unknown()
 }
 
@@ -304,6 +325,13 @@ fn type_name(t: Int) -> Str {
     if t == t_ints() { return "Ints"; }
     if t == t_strs() { return "Strs"; }
     if t == t_chan() { return "Chan"; }
+    if t == t_iocap() { return "IoCap"; }
+    if t == t_spawncap() { return "SpawnCap"; }
+    if t == t_foreigncap() { return "ForeignCap"; }
+    if t == t_vouchcap() { return "VouchCap"; }
+    if t == t_timecap() { return "TimeCap"; }
+    if t == t_mmiocap() { return "MmioCap"; }
+    if t == t_outcap() { return "OutCap"; }
     "?"
 }
 
@@ -352,10 +380,20 @@ pub fn is_vec(t: Int) -> Bool {
     if t < 1000000 { return false; }
     t < 2000000
 }
-pub fn is_param(t: Int) -> Bool { t >= 2000000 }
+pub fn is_param(t: Int) -> Bool {
+    if t < 2000000 { return false; }
+    t < 3000000
+}
+// A function type (N102): an entry whose arguments are its parameters then its result, and
+// whose effects are in `req` — interned, so two function types are one exactly when their
+// parameters, result and effects are equal.
+pub fn rk_fn() -> Int { 5 }
+pub fn t_fn(r: Int) -> Int { 3000000 + r }
+pub fn is_fn(t: Int) -> Bool { t >= 3000000 }
 
 // The table entry a user type's code names, or -1 for a built-in or `unknown`.
 pub fn entry_of(t: Int) -> Int {
+    if t >= 3000000 { return t - 3000000; }
     if t >= 2000000 { return t - 2000000; }
     if t >= 1000000 { return t - 1000000; }
     if t >= 100 { return t - 100; }
@@ -367,7 +405,82 @@ pub fn code_of(tb: Table, r: Int) -> Int {
     let k = ints_get(tb.kind, r);
     if k == rk_vec() { return t_vec(r); }
     if k == rk_param() { return t_param(r); }
+    if k == rk_fn() { return t_fn(r); }
     t_record(r)
+}
+
+// The function type with these parameters, result and effects: the one entry for them.
+pub fn fn_of(tb: Table, params: Ints, ret: Int, eff: Int) -> Int {
+    let n = ints_len(params);
+    let mut r = 0;
+    while r < strs_len(tb.names) {
+        if ints_get(tb.kind, r) == rk_fn() {
+            if ints_get(tb.acount, r) == n + 1 {
+                if ints_get(tb.req, r) == eff {
+                    let base = ints_get(tb.afirst, r);
+                    let mut same = ints_get(tb.args, base + n) == ret;
+                    let mut i = 0;
+                    while i < n {
+                        if ints_get(tb.args, base + i) != ints_get(params, i) { same = false; }
+                        i = i + 1;
+                    }
+                    if same { return t_fn(r); }
+                }
+            }
+        }
+        r = r + 1;
+    }
+    let mut shown = "fn(";
+    let mut i = 0;
+    while i < n {
+        if i > 0 { shown = str_concat(shown, ", "); }
+        shown = str_concat(shown, show_type(ints_get(params, i), tb.names));
+        i = i + 1;
+    }
+    shown = str_concat(str_concat(shown, ") -> "), show_type(ret, tb.names));
+    if eff > 0 { shown = str_concat(str_concat(shown, " ! "), fx_text(eff)); }
+    let e = new_entry(tb, shown, 0 - 1, 1, 0, 0 - 1, rk_fn(), 0 - 1);
+    ints_set(tb.afirst, e, ints_len(tb.args));
+    i = 0;
+    while i < n { ints_push(tb.args, ints_get(params, i)); i = i + 1; }
+    ints_push(tb.args, ret);
+    ints_set(tb.acount, e, n + 1);
+    ints_set(tb.req, e, eff);
+    t_fn(e)
+}
+
+pub fn fn_arity(tb: Table, t: Int) -> Int { ints_get(tb.acount, entry_of(t)) - 1 }
+pub fn fn_param(tb: Table, t: Int, i: Int) -> Int {
+    ints_get(tb.args, ints_get(tb.afirst, entry_of(t)) + i)
+}
+pub fn fn_result(tb: Table, t: Int) -> Int {
+    ints_get(tb.args, ints_get(tb.afirst, entry_of(t)) + fn_arity(tb, t))
+}
+pub fn fn_effect_bits(tb: Table, t: Int) -> Int { ints_get(tb.req, entry_of(t)) }
+
+// Whether a value of type `a` may be passed or returned where `b` is expected (N79's effect
+// subsumption): the same type, or two function types with equal parameters and results whose
+// effects in `a` are within `b`'s. Inside another type nothing is converted.
+pub fn accepts(tb: Table, a: Int, b: Int) -> Bool {
+    if agrees(a, b) { return true; }
+    if is_fn(a) == false { return false; }
+    if is_fn(b) == false { return false; }
+    if fn_arity(tb, a) != fn_arity(tb, b) { return false; }
+    let mut i = 0;
+    while i <= fn_arity(tb, a) {
+        if fn_param(tb, a, i) != fn_param(tb, b, i) { return false; }
+        i = i + 1;
+    }
+    let ea = fn_effect_bits(tb, a);
+    let eb = fn_effect_bits(tb, b);
+    let mut bit = 1;
+    while bit <= 4 {
+        if fx_has(ea, bit) {
+            if fx_has(eb, bit) == false { return false; }
+        }
+        bit = bit * 2;
+    }
+    true
 }
 
 // The record table, as one value.
@@ -409,6 +522,39 @@ pub struct Table {
     // `req[r]` — for a type parameter, `1` when its declaration requires equality
     // (`T: Equality`, N14), `0` otherwise and for every other entry.
     req: Ints,
+    // Traits (N102): name, module, `pub`, node, and their methods' signatures — trait, name,
+    // node, parameter types from `sfirst` in `sparams`, result, declared effects (`-1` none).
+    // `Self` is one type parameter entry, `selfp`, shared by every trait.
+    trn: Strs,
+    tro: Ints,
+    trp: Ints,
+    trnode: Ints,
+    strait: Ints,
+    sname: Strs,
+    snode: Ints,
+    sfirst: Ints,
+    scount: Ints,
+    sparams: Ints,
+    sret: Ints,
+    seff: Ints,
+    selfp: Ints,
+    // Impls: trait, type, module, node, and for each of the trait's methods in order the
+    // definition implementing it, from `ifirst` in `imeth` (`-1` when it does not).
+    itrait: Ints,
+    itype: Ints,
+    imod: Ints,
+    inode: Ints,
+    ifirst: Ints,
+    imeth: Ints,
+    // A definition's effect set where its text does not say: an impl method that writes none
+    // has its trait's. `-2` where the text decides.
+    fdecl: Ints,
+    // What each module offers of traits (N103): its own `pub` ones and those it re-exports.
+    toffer: Offers,
+    // Which module re-exports from which (N103): an impl in a module a direct import
+    // re-exports from is usable as that import's own are.
+    rsm: Ints,
+    rsf: Ints,
 }
 
 // The bound reported to a program: a written type, or one a generic call produces, may
@@ -429,7 +575,13 @@ pub fn new_table(names: Strs, owner: Ints, vis: Ints, at: Ints, node: Ints, kind
     Table(names: names, owner: owner, vis: vis, at: at, node: node, kind: kind,
             first: first, count: count, fname: fname, ftype: ftype, fat: fat,
             tpl: ints_new(), afirst: ints_new(), acount: ints_new(), args: ints_new(),
-            depth: ints_new(), state: state, pending: ints_new(), req: ints_new())
+            depth: ints_new(), state: state, pending: ints_new(), req: ints_new(),
+            trn: strs_new(), tro: ints_new(), trp: ints_new(), trnode: ints_new(),
+            strait: ints_new(), sname: strs_new(), snode: ints_new(), sfirst: ints_new(),
+            scount: ints_new(), sparams: ints_new(), sret: ints_new(), seff: ints_new(),
+            selfp: ints_new(), itrait: ints_new(), itype: ints_new(), imod: ints_new(),
+            inode: ints_new(), ifirst: ints_new(), imeth: ints_new(), fdecl: ints_new(),
+            toffer: new_offers(), rsm: ints_new(), rsf: ints_new())
 }
 
 // One more entry, with no fields and no arguments yet. Every per-entry array grows here and
@@ -497,6 +649,7 @@ pub fn type_args(tb: Table, t: Int) -> Ints {
     if r < 0 { return out; }
     let mut applies = false;
     if ints_get(tb.kind, r) == rk_vec() { applies = true; }
+    if ints_get(tb.kind, r) == rk_fn() { applies = true; }
     if ints_get(tb.tpl, r) >= 0 {
         if ints_get(tb.kind, r) != rk_variant() { applies = true; }
     }
@@ -754,10 +907,17 @@ pub fn substitute(tb: Table, t: Int, params: Ints, args: Ints) -> Int {
         }
         let mut result = x;
         if changed {
+            if is_fn(x) {
+                let ps = ints_new();
+                let mut q = 0;
+                while q < ints_len(made) - 1 { ints_push(ps, ints_get(made, q)); q = q + 1; }
+                result = fn_of(tb, ps, ints_get(made, ints_len(made) - 1), fn_effect_bits(tb, x));
+            } else {
             if is_vec(x) {
                 result = vec_of(tb, ints_get(made, 0));
             } else {
                 result = apply(tb, ints_get(tb.tpl, record_of(x)), made);
+            }
             }
         }
         ints_push(from, x);
@@ -956,6 +1116,19 @@ pub fn resolve_written(tb: Table, tt: Str, owner: Int, tscope: Ints, from: Int, 
             result = p;
             done = true;
         }
+        // A function type (N102): `fn%BITS`, its parameters and then its result.
+        if done == false {
+            if str_len(name) > 3 {
+                if str_slice(name, 0, 3) == "fn%" {
+                    let ps = ints_new();
+                    let mut q = 0;
+                    while q < ints_len(args) - 1 { ints_push(ps, ints_get(args, q)); q = q + 1; }
+                    result = fn_of(tb, ps, ints_get(args, ints_len(args) - 1),
+                            fx_number(str_slice(name, 3, str_len(name))));
+                    done = true;
+                }
+            }
+        }
         if done == false {
             if name == "Vec" {
                 if written < 0 {
@@ -989,8 +1162,14 @@ pub fn resolve_written(tb: Table, tt: Str, owner: Int, tscope: Ints, from: Int, 
         if done == false {
             let t = type_in(name, owner, tb.names, tb.owner, tmod, tname, trec);
             if t == t_unknown() {
-                report(diags, "N0305", at, name_end,
-                        str_concat(str_concat("`", name), "` is not a type"));
+                if trait_named(tb, name) >= 0 {
+                    // A trait as a type (N102): no trait objects, no dynamic dispatch.
+                    report(diags, "N0607", at, name_end,
+                            str_concat(str_concat("`", name), "` is a trait, not a type"));
+                } else {
+                    report(diags, "N0305", at, name_end,
+                            str_concat(str_concat("`", name), "` is not a type"));
+                }
             } else {
                 let decl = record_of(t);
                 let arity = generic_count(tb, decl);
@@ -1156,9 +1335,15 @@ pub fn declare_params(tb: Table, text: Str, allow: Bool, diags: Vec[Diag]) -> In
                 if cap == "Equality" {
                     ints_set(tb.req, p, 1);
                 } else {
+                    // A trait (N102): `[T: Show]` lets the body call its methods on a `T`.
+                    let tr = trait_named(tb, cap);
+                    if tr >= 0 {
+                        ints_set(tb.req, p, tr + 2);
+                    } else {
                     report(diags, "N0365", cap_at, cap_at + str_len(cap),
                             str_concat(str_concat("`", cap),
                             "` is not a capability a type parameter can require"));
+                    }
                 }
             }
         }
@@ -1669,6 +1854,8 @@ pub fn needs_cleanup(t: Int, rfirst: Ints, rcount: Ints, rftype: Ints) -> Bool {
     if t == t_int() { return false; }
     if t == t_bool() { return false; }
     if t == t_unknown() { return false; }
+    // A capability is authority, not storage (N102).
+    if is_cap(t) { return false; }
     if is_record(t) == false { return true; }
     let work = ints_new();
     let seen = ints_new();
@@ -1685,7 +1872,9 @@ pub fn needs_cleanup(t: Int, rfirst: Ints, rcount: Ints, rftype: Ints) -> Bool {
                 } else {
                     if ft != t_int() {
                         if ft != t_bool() {
-                            if ft != t_unknown() { return true; }
+                            if ft != t_unknown() {
+                                if is_cap(ft) == false { return true; }
+                            }
                         }
                     }
                 }
@@ -1718,6 +1907,8 @@ pub fn task_unsafe_path(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype
         // parameter is a type about which nothing is known — so neither may cross.
         if is_vec(t) { return "."; }
         if is_param(t) { return "."; }
+        // A function value may not be passed to a task (N50, N102).
+        if is_fn(t) { return "."; }
         return "";
     }
     let at = ints_new();
@@ -1745,6 +1936,7 @@ pub fn task_unsafe_path(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype
                 if ft == t_strs() { return joined(path, fname); }
                 if is_vec(ft) { return joined(path, fname); }
                 if is_param(ft) { return joined(path, fname); }
+                if is_fn(ft) { return joined(path, fname); }
             }
         }
     }
@@ -1759,6 +1951,9 @@ fn has_no_equality(t: Int, req: Ints) -> Bool {
     if t == t_strs() { return true; }
     if t == t_chan() { return true; }
     if is_vec(t) { return true; }
+    // Neither a function value nor a capability has equality (N50, N37).
+    if is_fn(t) { return true; }
+    if is_cap(t) { return true; }
     // A type parameter has equality exactly when its declaration requires it (N14).
     if is_param(t) {
         if entry_of(t) < ints_len(req) {
@@ -1837,6 +2032,11 @@ fn joined(path: Strs, last: Str) -> Str {
 fn agrees(a: Int, b: Int) -> Bool {
     if a == t_unknown() { return true; }
     if b == t_unknown() { return true; }
+    // An `IoCap` is accepted where an `OutCap` is expected (N79): the standard streams'
+    // attenuation, implied by the whole. One way only.
+    if a == t_iocap() {
+        if b == t_outcap() { return true; }
+    }
     a == b
 }
 
@@ -1896,6 +2096,7 @@ fn needs_value(ncomp: Vec[Completion], node: Int, nst: Ints, nen: Ints,
 fn value_child(kind: Int) -> Int {
     if kind == n_bin() { return 0 - 1; }
     if kind == n_neg() { return 0 - 1; }
+    if kind == n_not() { return 0 - 1; }
     if kind == n_call() { return 0 - 1; }
     if kind == n_spawn() { return 0 - 1; }
     if kind == n_construct() { return 0 - 1; }
@@ -1908,6 +2109,30 @@ fn value_child(kind: Int) -> Int {
     if kind == n_if() { return 0; }
     if kind == n_while() { return 0; }
     0 - 2
+}
+
+// A function's return type as written, without the effect set the parser carries after it
+// (N102): `Int@9` from `main:Int@9!io@20`.
+pub fn fn_ret(text: Str) -> Str {
+    let r = after_colon(text);
+    let mut i = 0;
+    while i < str_len(r) {
+        if str_byte(r, i) == 33 { return str_slice(r, 0, i); }
+        i = i + 1;
+    }
+    r
+}
+
+// The declared effect set, `!` and each name with its offset, or "" for a function that
+// declares none.
+pub fn fn_effects(text: Str) -> Str {
+    let r = after_colon(text);
+    let mut i = 0;
+    while i < str_len(r) {
+        if str_byte(r, i) == 33 { return str_slice(r, i, str_len(r)); }
+        i = i + 1;
+    }
+    ""
 }
 
 pub fn after_colon(s: Str) -> Str {
@@ -2328,7 +2553,7 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
 // namespace's, because it is the same rule.
 pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int, core: Int,
         rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints,
-        tmod: Ints, tname: Strs, trec: Ints,
+        tmod: Ints, tname: Strs, trec: Ints, types: Offers,
         diags: Vec[Diag]) -> Int {
     // `core` is the core prelude's module, as `core_module` resolved it from its key, and
     // every other module imports it with no `use` written. A collision with one of its names
@@ -2341,14 +2566,15 @@ pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modu
         while e < ints_get(mcount, m) {
             let target = ints_get(mto, first + e);
             let at = ints_get(mat, first + e);
-            let mut r = 0;
-            while r < strs_len(rnames) {
-                let mut offered = 0;
-                if ints_get(rowner, r) == target {
-                    if ints_get(rpub, r) == 1 { offered = 1; }
-                }
-                if offered == 1 {
-                    let name = strs_get(rnames, r);
+            // What the module it names offers (N103): its own `pub` types and those it
+            // re-exports, each under the name an importer writes.
+            let mut oi = 0;
+            while oi < ints_len(types.om) {
+                let mut is_offer = 0;
+                if ints_get(types.om, oi) == target { is_offer = 1; }
+                if is_offer == 1 {
+                    let name = strs_get(types.on, oi);
+                    let r = ints_get(types.ox, oi);
                     let mut taken = 1;
                     match record_owned(rnames, rowner, m, name) {
                         Option.None() => { },
@@ -2397,7 +2623,7 @@ pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modu
                         ints_push(trec, r);
                     }
                 }
-                r = r + 1;
+                oi = oi + 1;
             }
             e = e + 1;
         }
@@ -2711,7 +2937,7 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
         fowner: Ints, fpub: Ints, fgen: Ints, fgc: Ints, bnames: Strs, tb: Table,
         nrec: Ints, ntfirst: Ints, ntargs: Ints,
-        tmod: Ints, tname: Strs, trec: Ints,
+        tmod: Ints, tname: Strs, trec: Ints, fnode: Ints,
         diags: Vec[Diag]) -> Int {
     let rkind = tb.kind;
     // The declared types of every `fn` and `param` node are written onto the node, here,
@@ -2758,10 +2984,17 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
             }
             if refused == 0 {
                 if owned_index(fnames, fowner, owner, name) >= 0 {
-                    report(diags, "N0203",
-                            ints_get(nst, k), ints_get(nst, k) + str_len(name),
-                            str_concat(str_concat("`", name),
-                            "` is defined more than once in this module"));
+                    if str_byte(name, 0) == 35 {
+                        let at = name_offset(naux, k);
+                        report(diags, "N0203", at, at + str_len(shown_name(name)),
+                                str_concat(str_concat("`", shown_name(name)),
+                                "` is defined more than once in this impl"));
+                    } else {
+                        report(diags, "N0203",
+                                ints_get(nst, k), ints_get(nst, k) + str_len(name),
+                                str_concat(str_concat("`", name),
+                                "` is defined more than once in this module"));
+                    }
                     refused = 1;
                 }
             }
@@ -2773,6 +3006,20 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
             if refused == 1 { sink = vec_new[Diag](); }
             // The parameters first: the signature's types may name them.
             let tscope = declare_params(tb, from_bracket(before_colon(text)), true, sink);
+            // An impl's method may write `Self` for the impl's type (N102): resolved as the
+            // shared `Self` parameter, then substituted below.
+            let is_method = str_byte(name, 0) == 35;
+            let mut self_ty = 0;
+            if is_method {
+                self_ty = method_self_type(nk, nar, ntx, kids, kid_first, k, owner, tb,
+                        tmod, tname, trec);
+            }
+            // The scope a method's types are resolved in: its parameters and `Self` — which is
+            // not one of its parameters, so it is not generic.
+            let rscope = ints_new();
+            let mut rs = 0;
+            while rs < ints_len(tscope) { ints_push(rscope, ints_get(tscope, rs)); rs = rs + 1; }
+            if is_method { ints_push(rscope, t_param(ints_get(tb.selfp, 0))); }
             // `main` cannot be generic: there is no caller to choose its type arguments.
             if refused == 0 {
                 if owner == 0 {
@@ -2792,19 +3039,25 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
             let mut sp = 0;
             while sp < ints_len(tscope) { ints_push(ntargs, ints_get(tscope, sp)); sp = sp + 1; }
 
-            let rt = resolve_written(tb, after_colon(text), owner, tscope, ints_get(nst, k),
+            let mut rt = resolve_written(tb, fn_ret(text), owner, rscope, ints_get(nst, k),
                     ints_get(nen, k), tmod, tname, trec, sink);
+            let selfs = ints_new();
+            ints_push(selfs, t_param(ints_get(tb.selfp, 0)));
+            let sa = ints_new();
+            ints_push(sa, self_ty);
+            if is_method { rt = substitute(tb, rt, selfs, sa); }
             ints_set(nrec, k, rt);
             let arity = ints_get(nar, k);
             let first = ints_get(kid_first, k);
-            // Every child but the last is a parameter; the last is the body.
+            // The leading children are the parameters; then any contract clauses and the body.
             let ptypes = ints_new();
             let mut p = 0;
-            while p < arity - 1 {
+            while p < fn_param_count(nk, kids, first, arity) {
                 let child = ints_get(kids, first + p);
-                let pt = resolve_written(tb, after_colon(strs_get(ntx, child)), owner, tscope,
+                let mut pt = resolve_written(tb, after_colon(strs_get(ntx, child)), owner, rscope,
                         ints_get(nst, child), ints_get(nen, child), tmod, tname, trec,
                         sink);
+                if is_method { pt = substitute(tb, pt, selfs, sa); }
                 ints_set(nrec, child, pt);
                 ints_push(ptypes, pt);
                 p = p + 1;
@@ -2812,6 +3065,7 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
 
             if refused == 0 {
                 strs_push(fnames, name);
+                ints_push(fnode, k);
                 ints_push(fret, rt);
                 ints_push(ffirst, ints_len(fparams));
                 ints_push(fowner, owner);
@@ -2873,7 +3127,7 @@ pub fn owned_index(fnames: Strs, fowner: Ints, owner: Int, name: Str) -> Int {
 /// Both point at the `use` that created the situation.
 pub fn check_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int,
         fnames: Strs, fowner: Ints, fpub: Ints,
-        vmod: Ints, vname: Strs, vfn: Ints,
+        vmod: Ints, vname: Strs, vfn: Ints, fns: Offers,
         diags: Vec[Diag]) -> Int {
     let mut m = 0;
     while m < modules {
@@ -2882,14 +3136,15 @@ pub fn check_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: 
         while e < ints_get(mcount, m) {
             let target = ints_get(mto, first + e);
             let at = ints_get(mat, first + e);
-            let mut f = 0;
-            while f < strs_len(fnames) {
-                let mut offered = 0;
-                if ints_get(fowner, f) == target {
-                    if ints_get(fpub, f) == 1 { offered = 1; }
-                }
-                if offered == 1 {
-                    let name = strs_get(fnames, f);
+            // What the module it names offers (N103): its own `pub` functions and those it
+            // re-exports.
+            let mut oi = 0;
+            while oi < ints_len(fns.om) {
+                let mut is_offer = 0;
+                if ints_get(fns.om, oi) == target { is_offer = 1; }
+                if is_offer == 1 {
+                    let name = strs_get(fns.on, oi);
+                    let f = ints_get(fns.ox, oi);
                     let mut taken = 1;
                     if owned_index(fnames, fowner, m, name) >= 0 {
                         report(diags, "N0208", at, at + 1,
@@ -2911,7 +3166,7 @@ pub fn check_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: 
                         ints_push(vfn, f);
                     }
                 }
-                f = f + 1;
+                oi = oi + 1;
             }
             e = e + 1;
         }
@@ -3010,7 +3265,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
         fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
         tb: Table, fgen: Ints, fgc: Ints, bgen: Ints, ntfirst: Ints, ntargs: Ints,
-        tmod: Ints, tname: Strs, trec: Ints,
+        tmod: Ints, tname: Strs, trec: Ints, fnode: Ints,
         diags: Vec[Diag]) -> Int {
     let rnames = tb.names;
     let rowner = tb.owner;
@@ -3041,6 +3296,10 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     // The declared result of the function being checked, for `return` and for the body.
     // One slot: functions do not nest.
     let cur_ret = ints_new();
+    // The slot `result` lives in, in the `ensures` clauses of the function being checked
+    // (N102): one per function, allocated by its first clause.
+    let cur_rslot = ints_new();
+    ints_push(cur_rslot, 0 - 1);
     ints_push(cur_ret, t_unknown());
     // One entry per `match` now open, innermost last: the enum its scrutinee named, and
     // the variants its arms have covered so far as a comma-delimited list. A stack
@@ -3079,6 +3338,20 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     // the emitter knows how many `alloca`s its entry block needs.
     let counter = ints_new();
     ints_push(counter, 0);
+    // The closures open around the node being checked (N102), innermost last: each one's
+    // node, where its bindings begin in `names`, and what it set aside of the function around
+    // it — the slot counter, the declared result and `result`'s slot. And every capture made:
+    // the closure, the name, the slot it is copied from and the closure's own slot for it.
+    let cl_node = ints_new();
+    let cl_base = ints_new();
+    let cl_counter = ints_new();
+    let cl_ret = ints_new();
+    let cl_rslot = ints_new();
+    let cap_clo = ints_new();
+    let cap_name = strs_new();
+    let cap_outer = ints_new();
+    let cap_inner = ints_new();
+    let cap_type = ints_new();
     ints_push(work, root);
 
     while ints_len(work) > 0 {
@@ -3163,6 +3436,17 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 ints_push(ts, check_binary(text, l, r, op_at, op_at + str_len(text), rnames,
                         rfirst, rcount, rfname, rftype, tb.req, diags));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
+                continue;
+            }
+            if kind == n_not() {
+                let t = ints_pop(ts);
+                if agrees(t, t_bool()) == false {
+                    report(diags, "N0304", from, from + 1,
+                            str_concat(str_concat("`!` applies to `Bool`, but this is `",
+                            show_type(t, rnames)), "`"));
+                }
+                ints_push(ts, t_bool());
+                ints_set(ntype, k, t_bool());
                 continue;
             }
             if kind == n_neg() {
@@ -3508,6 +3792,115 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 ints_set(ntype, k, result);
                 continue;
             }
+            if kind == n_method() {
+                let c0 = ints_get(kids, first);
+                let ufcs = ints_get(nk, c0) == n_traitref();
+                let mut skip = 0;
+                if ufcs { skip = 1; }
+                let cnt = arity - skip;
+                let rev = ints_new();
+                let mut q = 0;
+                while q < cnt { ints_push(rev, ints_pop(ts)); q = q + 1; }
+                let got = ints_new();
+                let argn = ints_new();
+                q = cnt - 1;
+                while q >= 0 { ints_push(got, ints_get(rev, q)); q = q - 1; }
+                q = 0;
+                while q < cnt { ints_push(argn, ints_get(kids, first + skip + q)); q = q + 1; }
+                let mut fixed = 0 - 1;
+                if ufcs { fixed = ints_get(ncallee, c0); }
+                let here = module_at(mstart, from);
+                let mat = ints_get(naux, k);
+                let out = ints_new();
+                ints_push(out, 0);
+                ints_push(out, 0);
+                let mut ret = t_unknown();
+                let mut recv = t_unknown();
+                if cnt > 0 { recv = ints_get(got, 0); }
+                if cnt == 0 {
+                    report(diags, "N0303", from, to,
+                            str_concat(str_concat("`", text), "` was given the wrong number of arguments"));
+                } else {
+                    let sg = resolve_method(tb, here, recv, text, fixed, mat, mat + str_len(text),
+                            mfirst, mcount, mto, out, diags);
+                    if sg >= 0 {
+                        ret = check_method_args(tb, sg, recv, text, got, argn, nst, nen, from, to, diags);
+                        if ints_get(out, 0) == 1 {
+                            ints_set(ncallee, k, 0 - 10 - sg);
+                        } else {
+                            let g = ints_get(out, 1);
+                            if g >= 0 {
+                                ints_set(nk, k, n_call());
+                                strs_set(ntx, k, strs_get(fnames, g));
+                                ints_set(ncallee, k, g);
+                            }
+                        }
+                    }
+                }
+                // The trait's name is no argument: the call's children start after it.
+                if ufcs {
+                    ints_set(kid_first, k, first + 1);
+                    ints_set(nar, k, arity - 1);
+                }
+                ints_push(ts, ret);
+                ints_set(ntype, k, ret);
+                continue;
+            }
+            // A call through a binding of function type (N102): such a binding hides a
+            // function of the same name for calls in its scope.
+            let callee_name = before_bracket(text);
+            let mut indirect = false;
+            if kind == n_call() {
+                if scope_has(names, callee_name) { indirect = true; }
+            }
+            if indirect {
+                let ft = lookup_type(names, ntypes, callee_name);
+                let slot = closure_binding(names, ntypes, nmut, nslotof, cl_node, cl_base,
+                        cl_counter, counter, cap_clo, cap_name, cap_outer, cap_inner, cap_type, callee_name,
+                        from, from + str_len(callee_name), diags);
+                let got = ints_new();
+                let mut q = 0;
+                while q < arity { ints_push(got, ints_pop(ts)); q = q + 1; }
+                let mut ret = t_unknown();
+                if is_fn(ft) {
+                    if fn_arity(tb, ft) != arity {
+                        let mut plural = "s";
+                        if fn_arity(tb, ft) == 1 { plural = ""; }
+                        report(diags, "N0303", from, to,
+                                str_concat(str_concat(str_concat(str_concat(str_concat(str_concat("`",
+                                callee_name), "` takes "), int_to_str(fn_arity(tb, ft))),
+                                str_concat(" argument", plural)), ", but "),
+                                str_concat(int_to_str(arity), " were given")));
+                    } else {
+                        q = 0;
+                        while q < arity {
+                            let actual = ints_get(got, arity - 1 - q);
+                            let want = fn_param(tb, ft, q);
+                            if accepts(tb, actual, want) == false {
+                                let arg = ints_get(kids, first + q);
+                                report(diags, "N0300", ints_get(nst, arg), ints_get(nen, arg),
+                                        str_concat(str_concat(str_concat(str_concat(str_concat(
+                                        "argument ", int_to_str(q + 1)), str_concat(" of `", callee_name)),
+                                        "` is `"), str_concat(show_type(want, rnames), "`, but this is `")),
+                                        str_concat(show_type(actual, rnames), "`")));
+                            }
+                            q = q + 1;
+                        }
+                    }
+                    ret = fn_result(tb, ft);
+                    ints_set(ncallee, k, 0 - 3);
+                    ints_set(nslot, k, slot);
+                    ints_set(nrec, k, ft);
+                } else {
+                    if ft != t_unknown() {
+                        report(diags, "N0201", from, from + str_len(callee_name),
+                                str_concat(str_concat("`", callee_name), "` is not a function"));
+                    }
+                }
+                ints_push(ts, ret);
+                ints_set(ntype, k, ret);
+                continue;
+            }
             if kind == n_call() {
                 ints_push(ts, check_call(text, arity, ts, from, to,
                         kids, first, nst, nen, ncallee, k, module_at(mstart, from),
@@ -3839,15 +4232,99 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
+            if kind == n_closure() {
+                // The body against the closure's declared result, as a function's is.
+                let body = ints_get(kids, first + arity - 1);
+                let declared = ints_get(cur_ret, 0);
+                let bc = vec_get(ncomp, body);
+                if bc == Completion.Value() {
+                    let bt = ints_get(ts, ints_len(ts) - 1);
+                    if agrees(bt, declared) == false {
+                        let tail = ints_get(kids, ints_get(kid_first, body) + ints_get(nar, body) - 1);
+                        report(diags, "N0300", ints_get(nst, tail), ints_get(nen, tail),
+                                str_concat(str_concat(str_concat(str_concat("this closure returns `",
+                                show_type(bt, rnames)), "`, but its type says `"),
+                                show_type(declared, rnames)), "`"));
+                    }
+                }
+                if bc == Completion.Unit() {
+                    report(diags, "N0300", ints_get(nst, body), ints_get(nen, body),
+                            str_concat(str_concat("this closure must produce a `",
+                            show_type(declared, rnames)), "`, but its body does not"));
+                }
+                let mut d = 0;
+                while d < arity { ints_pop(ts); d = d + 1; }
+                let ps = ints_new();
+                let mut q = 0;
+                while q < arity - 1 {
+                    ints_push(ps, ints_get(nrec, ints_get(kids, first + q)));
+                    q = q + 1;
+                }
+                let mut eff = fx_declared(fn_effects(text), diags);
+                if eff < 0 { eff = 0; }
+                let ct = fn_of(tb, ps, declared, eff);
+                ints_set(nslot, k, ints_get(counter, 0));
+                // Its result, for the emitter, as a function's is on its node.
+                ints_set(nrec, k, declared);
+                // Its captures, on the node: `[count, outer slot, own slot, type, …]`.
+                ints_set(ntfirst, k, ints_len(ntargs));
+                let mut ncap = 0;
+                q = 0;
+                while q < ints_len(cap_clo) {
+                    if ints_get(cap_clo, q) == k { ncap = ncap + 1; }
+                    q = q + 1;
+                }
+                ints_push(ntargs, ncap);
+                q = 0;
+                while q < ints_len(cap_clo) {
+                    if ints_get(cap_clo, q) == k {
+                        ints_push(ntargs, ints_get(cap_outer, q));
+                        ints_push(ntargs, ints_get(cap_inner, q));
+                        ints_push(ntargs, ints_get(cap_type, q));
+                    }
+                    q = q + 1;
+                }
+                // Back to the function around it.
+                ints_set(counter, 0, ints_pop(cl_counter));
+                ints_set(cur_ret, 0, ints_pop(cl_ret));
+                ints_set(cur_rslot, 0, ints_pop(cl_rslot));
+                ints_pop(cl_node);
+                ints_pop(cl_base);
+                ints_push(ts, ct);
+                ints_set(ntype, k, ct);
+                continue;
+            }
+            if kind == n_contract() {
+                // Each clause a `Bool` (N102). What it may contain is asked once every call
+                // in it is resolved: see `check_contract_shapes`.
+                let cond = ints_get(kids, first);
+                let ct = ints_get(ts, ints_len(ts) - 1);
+                if vec_get(ncomp, cond) == Completion.Value() {
+                    if agrees(ct, t_bool()) == false {
+                        report(diags, "N0300", ints_get(nst, cond), ints_get(nen, cond),
+                                str_concat(str_concat("a contract clause is a `Bool`, but this is `",
+                                show_type(ct, rnames)), "`"));
+                    }
+                }
+                ints_pop(ts);
+                ints_push(ts, t_unknown());
+                ints_set(ntype, k, t_unknown());
+                vec_set(ncomp, k, Completion.Unit());
+                continue;
+            }
             if kind == n_fn() {
                 // The body against the signature, as the reference checks it: a body that
                 // returned on every path needs nothing; one with a value must have the
                 // declared type, reported at its tail; one with none is refused whole.
-                let body = ints_get(kids, first + arity - 1);
+                let body = fn_body_of(nk, kids, first, arity);
                 let declared = ints_get(nrec, k);
                 let bc = vec_get(ncomp, body);
                 if bc == Completion.Value() {
-                    let bt = ints_get(ts, ints_len(ts) - 1);
+                    // The body's entry on the type stack: one per child, in child order,
+                    // and `ensures` clauses come after the body.
+                    let mut bi = 0;
+                    while ints_get(kids, first + bi) != body { bi = bi + 1; }
+                    let bt = ints_get(ts, ints_len(ts) - arity + bi);
                     if agrees(bt, declared) == false {
                         let tail = ints_get(kids, ints_get(kid_first, body) + ints_get(nar, body) - 1);
                         report(diags, "N0300",
@@ -3933,6 +4410,14 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             ints_push(ts, t_int());
             continue;
         }
+        // A foreign function's body is C (N102): nothing here falls off its end, so the
+        // signature is the contract and there is no body to hold to it.
+        if kind == n_foreign() {
+            vec_set(ncomp, entry, Completion.Diverges());
+            ints_set(ntype, entry, t_unknown());
+            ints_push(ts, t_unknown());
+            continue;
+        }
         if kind == n_bool() {
             ints_set(ntype, entry, t_bool());
             ints_push(ts, t_bool());
@@ -3954,14 +4439,135 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             continue;
         }
 
+        // A method call (N102). `Trait.m(x)` names a trait where the receiver would stand:
+        // when the name is no value in scope and a trait in scope, it is the trait, and the
+        // receiver is the first argument.
+        if kind == n_method() {
+            let c0 = ints_get(kids, first);
+            if ints_get(nk, c0) == n_var() {
+                let nm = strs_get(ntx, c0);
+                if scope_has(names, nm) == false {
+                    let tr = trait_visible(tb, module_at(mstart, ints_get(nst, entry)), nm,
+                            mfirst, mcount, mto);
+                    if tr >= 0 {
+                        ints_set(nk, c0, n_traitref());
+                        ints_set(ncallee, c0, tr);
+                    }
+                }
+            }
+            if ints_get(nk, c0) == n_traitref() {
+                ints_push(work, mark_finish(entry));
+                let mut j = arity - 1;
+                while j >= 1 {
+                    ints_push(work, ints_get(kids, first + j));
+                    j = j - 1;
+                }
+                continue;
+            }
+        }
+        // `name.m()` is a variant until `name` is a value (N102, the reference's rule): then
+        // it is a method call on that value, with no argument node — the receiver is read
+        // from its binding's slot, recorded on the call.
+        if kind == n_makevariant() {
+            if arity == 0 {
+                let dot = index_of_byte(text, 46);
+                let ename = str_slice(text, 0, dot);
+                if scope_has(names, ename) {
+                    let m = str_slice(text, dot + 1, str_len(text) - 2);
+                    let here = module_at(mstart, ints_get(nst, entry));
+                    let recv = lookup_type(names, ntypes, ename);
+                    let mat = ints_get(nst, entry) + dot + 1;
+                    let out = ints_new();
+                    ints_push(out, 0);
+                    ints_push(out, 0);
+                    let sg = resolve_method(tb, here, recv, m, 0 - 1, mat, mat + str_len(m),
+                            mfirst, mcount, mto, out, diags);
+                    let mut ret = t_unknown();
+                    if sg >= 0 {
+                        let got = ints_new();
+                        ints_push(got, recv);
+                        ret = check_method_args(tb, sg, recv, m, got, ints_new(), nst, nen,
+                                ints_get(nst, entry), ints_get(nen, entry), diags);
+                        if ints_get(out, 0) == 1 {
+                            ints_set(nk, entry, n_method());
+                            ints_set(ncallee, entry, 0 - 10 - sg);
+                        } else {
+                            let g = ints_get(out, 1);
+                            if g >= 0 {
+                                ints_set(nk, entry, n_call());
+                                strs_set(ntx, entry, strs_get(fnames, g));
+                                ints_set(ncallee, entry, g);
+                            }
+                        }
+                    }
+                    ints_set(nslot, entry, lookup_slot(names, nslotof, ename));
+                    ints_set(nrec, entry, recv);
+                    ints_set(ntype, entry, ret);
+                    ints_push(ts, ret);
+                    continue;
+                }
+            }
+        }
         if kind == n_var() {
             if scope_has(names, text) == false {
-                report(diags, "N0200", ints_get(nst, entry),
-                        ints_get(nen, entry),
-                        str_concat(str_concat("`", text), "` is not defined"));
-                ints_push(ts, t_unknown());
+                // A function named where a value is (N102): a function value — non-generic,
+                // not foreign, not a built-in — of its signature's type.
+                let here = module_at(mstart, ints_get(nst, entry));
+                let g = visible_function(text, here, fnames, fowner, vmod, vname, vfn);
+                let vat = ints_get(nst, entry);
+                let vto = ints_get(nen, entry);
+                if builtin_index(bnames, text) >= 0 {
+                    report(diags, "N0387", vat, vto,
+                            str_concat(str_concat("`", text), "` is a built-in, and cannot be used as a value"));
+                    ints_push(ts, t_unknown());
+                } else {
+                    if g < 0 {
+                        report(diags, "N0200", vat, vto,
+                                str_concat(str_concat("`", text), "` is not defined"));
+                        ints_push(ts, t_unknown());
+                    } else {
+                        let mut refused = false;
+                        if ints_get(fgc, g) > 0 {
+                            report(diags, "N0387", vat, vto,
+                                    str_concat(str_concat("`", text), "` is generic, and cannot be used as a value"));
+                            refused = true;
+                        }
+                        if refused == false {
+                            if is_foreign_def(nk, nar, kids, kid_first, fnode, g) {
+                                report(diags, "N0387", vat, vto,
+                                        str_concat(str_concat("`", text), "` is a foreign function, and cannot be used as a value"));
+                                refused = true;
+                            }
+                        }
+                        if refused == false {
+                            if ints_len(tscope) > 0 {
+                                report(diags, "N0387", vat, vto,
+                                        "a function value inside a generic function is not supported yet");
+                                refused = true;
+                            }
+                        }
+                        if refused {
+                            ints_push(ts, t_unknown());
+                        } else {
+                            let ps = ints_new();
+                            let mut q = 0;
+                            while q < ints_get(fcount, g) {
+                                ints_push(ps, ints_get(fparams, ints_get(ffirst, g) + q));
+                                q = q + 1;
+                            }
+                            let ft = fn_of(tb, ps, ints_get(fret, g),
+                                    value_effects(tb, ntx, fnode, fowner, fparams, ffirst, fcount, g, here));
+                            ints_set(nk, entry, n_fnvalue());
+                            ints_set(ncallee, entry, g);
+                            ints_set(ntype, entry, ft);
+                            ints_push(ts, ft);
+                        }
+                    }
+                }
             } else {
-                ints_set(nslot, entry, lookup_slot(names, nslotof, text));
+                ints_set(nslot, entry, closure_binding(names, ntypes, nmut, nslotof, cl_node, cl_base,
+                        cl_counter, counter, cap_clo, cap_name, cap_outer, cap_inner, cap_type, text,
+                        ints_get(nst, entry), ints_get(nen, entry), diags));
                 let t = lookup_type(names, ntypes, text);
                 ints_set(ntype, entry, t);
                 ints_push(ts, t);
@@ -4142,8 +4748,53 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             // Slots are per function: a caller's local and a callee's cannot share one.
             ints_set(counter, 0, 0);
             ints_set(cur_ret, 0, ints_get(nrec, entry));
+            ints_set(cur_rslot, 0, 0 - 1);
             ints_push(marks, strs_len(names));
             ints_push(work, mark_leave(entry));
+        }
+        // A closure (N102): a function of its own, inside this one. Its slots are its own,
+        // numbered from zero; its result is its own; the bindings around it are reached by
+        // capture, which `closure_binding` makes on first use.
+        if kind == n_closure() {
+            if ints_len(tscope) > 0 {
+                report(diags, "N0387", ints_get(nst, entry), ints_get(nst, entry) + 2,
+                        "a closure inside a generic function is not supported yet");
+            }
+            ints_push(cl_node, entry);
+            ints_push(cl_base, strs_len(names));
+            ints_push(cl_counter, ints_get(counter, 0));
+            ints_push(cl_ret, ints_get(cur_ret, 0));
+            ints_push(cl_rslot, ints_get(cur_rslot, 0));
+            ints_set(counter, 0, 0);
+            ints_set(cur_rslot, 0, 0 - 1);
+            let owner = module_at(mstart, ints_get(nst, entry));
+            let mut p = 0;
+            while p < arity - 1 {
+                let pc = ints_get(kids, first + p);
+                ints_set(nrec, pc, resolve_written(tb, after_colon(strs_get(ntx, pc)), owner,
+                        tscope, ints_get(nst, pc), ints_get(nen, pc), tmod, tname, trec, diags));
+                p = p + 1;
+            }
+            ints_set(cur_ret, 0, resolve_written(tb, fn_ret(text), owner, tscope,
+                    ints_get(nst, entry), ints_get(nen, entry), tmod, tname, trec, diags));
+            ints_push(marks, strs_len(names));
+            ints_push(work, mark_leave(entry));
+        }
+        // An `ensures` clause sees `result`, the value being returned, in a slot of the
+        // function's own (N102, the reference's `check_contracts`).
+        if kind == n_contract() {
+            if text == "ensures" {
+                let mut rs = ints_get(cur_rslot, 0);
+                if rs < 0 {
+                    rs = ints_get(counter, 0);
+                    ints_set(counter, 0, rs + 1);
+                    ints_set(cur_rslot, 0, rs);
+                }
+                ints_set(nslot, entry, rs);
+                ints_push(marks, strs_len(names));
+                bind(names, ntypes, nmut, nslotof, "result", ints_get(cur_ret, 0), 0, rs);
+                ints_push(work, mark_leave(entry));
+            }
         }
         if kind == n_block() {
             ints_push(marks, strs_len(names));
@@ -4188,6 +4839,21 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
         diags: Vec[Diag]) -> Int {
     let mut ok = true;
     let mut why = "";
+    // `&&` and `||` (N102): `Bool` on both sides, the right evaluated only when the left
+    // does not decide.
+    let mut logical = op == "&&";
+    if op == "||" { logical = true; }
+    if logical {
+        if agrees(l, t_bool()) == false { ok = false; }
+        if agrees(r, t_bool()) == false { ok = false; }
+        if ok == false {
+            report(diags, "N0304", from, to,
+                    str_concat(str_concat(str_concat(str_concat(str_concat("`", op),
+                    "` cannot combine `"), show_type(l, rnames)), "` with `"),
+                    str_concat(show_type(r, rnames), "`")));
+        }
+        return t_bool();
+    }
     if is_comparison(op) {
         if is_ordering(op) {
             // Ordering is `Int` only: comparing strings needs a collation decision the
@@ -4238,11 +4904,26 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
 /// not expressible.
 ///
 /// `main` need not be `pub`: being the entry point is not the same as being importable.
-pub fn entry_point(fnames: Strs, fowner: Ints, diags: Vec[Diag]) -> Int {
+pub fn entry_point(fnames: Strs, fowner: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
+        fnode: Ints, nar: Ints, kids: Ints, kid_first: Ints, nst: Ints, nen: Ints,
+        diags: Vec[Diag]) -> Int {
     let at = owned_index(fnames, fowner, 0, "main");
     if at < 0 {
         report(diags, "N0204", 0, 0,
                 "this program has no `main` function");
+        return at;
+    }
+    // `main`'s parameters are the root of authority (N37, N102): the runtime hands it one of
+    // each capability it declares, and it can supply nothing else.
+    let mut p = 0;
+    while p < ints_get(fcount, at) {
+        if is_cap(ints_get(fparams, ints_get(ffirst, at) + p)) == false {
+            let node = ints_get(fnode, at);
+            let param = ints_get(kids, ints_get(kid_first, node) + p);
+            report(diags, "N0371", ints_get(nst, param), ints_get(nen, param),
+                    "a parameter of `main` must be a capability");
+        }
+        p = p + 1;
     }
     at
 }
@@ -4335,7 +5016,8 @@ fn check_call(text: Str, argc: Int, ts: Ints, from: Int, to: Int,
     if ints_len(generics) > 0 {
         return check_generic_call(name, written, argc, got, from, to, kids, first, nst, nen,
                 node, want_first, params, ret, generics, tb, tscope, ncomp, ntfirst, ntargs,
-                here, tmod, tname, trec, diags);
+                here, tmod, tname, trec, mfirst, mcount, mto,
+                diags);
     }
     if str_len(written) > 0 {
         report(diags, "N0351", from, from + str_len(name),
@@ -4378,6 +5060,7 @@ fn check_generic_call(name: Str, written: Str, argc: Int, got: Ints, from: Int, 
         kids: Ints, first: Int, nst: Ints, nen: Ints, node: Int, want_first: Int,
         params: Ints, ret: Int, generics: Ints, tb: Table, tscope: Ints, ncomp: Vec[Completion],
         ntfirst: Ints, ntargs: Ints, here: Int, tmod: Ints, tname: Strs, trec: Ints,
+        mfirst: Ints, mcount: Ints, mto: Ints,
         diags: Vec[Diag]) -> Int {
     let n = ints_len(generics);
     let solved = ints_new();
@@ -4498,6 +5181,35 @@ fn check_generic_call(name: Str, written: Str, argc: Int, got: Ints, from: Int, 
     g = 0;
     while g < n {
         if ints_get(solved, g) == 1 {
+            // A trait bound (N102): the argument for the parameter has an impl of the trait in
+            // this module's scope, or is a parameter bounded by it.
+            let rq = ints_get(tb.req, entry_of(ints_get(generics, g)));
+            if rq >= 2 {
+                let arg_t = ints_get(sval, g);
+                let tr = rq - 2;
+                let mut has = bound_trait(tb, arg_t) == tr;
+                if has == false {
+                    if impl_for(tb, tr, arg_t, here, mfirst, mcount, mto) >= 0 { has = true; }
+                }
+                if arg_t == t_unknown() { has = true; }
+                if has == false {
+                    let mut at_from = from;
+                    let mut at_to = from + str_len(name);
+                    if ints_get(sfrom, g) >= 0 {
+                        let src = ints_get(kids, first + ints_get(sfrom, g));
+                        at_from = ints_get(nst, src);
+                        at_to = ints_get(nen, src);
+                    }
+                    let pn = strs_get(tb.names, entry_of(ints_get(generics, g)));
+                    report(diags, "N0364", at_from, at_to,
+                            str_concat(str_concat(str_concat(str_concat(str_concat(str_concat(
+                            "`", name), "` requires `"), pn), str_concat(": ", strs_get(tb.trn, tr))),
+                            str_concat(str_concat(str_concat("`, and `", pn), "` is `"),
+                            show_type(arg_t, tb.names))),
+                            str_concat(str_concat("` here, which has no impl of `", strs_get(tb.trn, tr)),
+                            "` in this module's scope")));
+                }
+            }
             if ints_get(tb.req, entry_of(ints_get(generics, g))) == 1 {
                 let arg_t = ints_get(sval, g);
                 let why = equality_blocker(arg_t, tb.first, tb.count, tb.fname, tb.ftype, tb.req);
@@ -4734,11 +5446,9 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
     let trec = ints_new();
     collect_records(nk, nar, nst, nen, ntx, naux, mstart, tb, kids, kid_first,
             diags);
-    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath), core,
-            rnames, rowner, rpub, rat, tmod, tname, trec, diags);
-    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first, tb,
-            tmod, tname, trec, diags);
-    check_ownership(tb, diags);
+    // Each module's types and traits, and what its imports and re-exports bring in (N103).
+    let linked = link_types(kinds, starts, texts, nk, nar, nst, nen, ntx, naux, kids, kid_first,
+            mpath, mstart, mfirst, mcount, mto, mat, core, tb, tmod, tname, trec, diags);
     // The generic built-ins' `T` and `Vec[T]`, now that there is a table to hold them.
     let bgen = ints_new();
     generic_builtins(tb, bnames, bret, bparams, bgen);
@@ -4764,9 +5474,11 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
     let fpub = ints_new();
     let fgen = ints_new();
     let fgc = ints_new();
+    // Each definition's `fn` node, by definition index.
+    let fnode = ints_new();
     collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
             fnames, fret, ffirst, fcount, fparams, fowner, fpub, fgen, fgc, bnames, tb,
-            nrec, ntfirst, ntargs, tmod, tname, trec,
+            nrec, ntfirst, ntargs, tmod, tname, trec, fnode,
             diags);
 
     // What each module's imports bring in, and the collisions that creates. Nothing here
@@ -4775,20 +5487,14 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
     let vmod = ints_new();
     let vname = strs_new();
     let vfn = ints_new();
-    check_imports(mfirst, mcount, mto, mat, strs_len(mpath), fnames, fowner, fpub,
-            vmod, vname, vfn, diags);
-
-    let entry = entry_point(fnames, fowner, diags);
-
-    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
-            kids, kid_first, ints_len(nk) - 1,
-            mstart, mfirst, mcount, mto, core,
-            fnames, fret, ffirst, fcount, fparams,
-            fowner, fpub, vmod, vname, vfn,
-            bnames, bret, bfirst, bcount, bparams,
-            tb, fgen, fgc, bgen, ntfirst, ntargs,
-            tmod, tname, trec,
-            diags);
+    let entry = link_functions(linked, nk, nar, nst, nen, ntx, naux, kids, kid_first, mpath,
+            mstart, mfirst, mcount, mto, mat, fnames, fret, ffirst, fcount, fparams, fowner,
+            fpub, fnode, vmod, vname, vfn, tb, tmod, tname, trec, diags);
+    // Every body, then what the bodies require of effects and contracts (N102).
+    check_bodies(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec, kids, kid_first,
+            mstart, mfirst, mcount, mto, core, fnames, fret, ffirst, fcount, fparams, fowner,
+            fpub, vmod, vname, vfn, bnames, bret, bfirst, bcount, bparams, tb, fgen, fgc, bgen,
+            ntfirst, ntargs, tmod, tname, trec, fnode, diags);
 
     if vec_len(diags) > 0 {
         return Result[Checked, Vec[Diag]].Err(error: diags);
@@ -4797,4 +5503,1723 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
             ntx: ntx, naux: naux, kids: kids, kid_first: kid_first, nslot: nslot,
             ntype: ntype, ncallee: ncallee, nrec: nrec, ntfirst: ntfirst, ntargs: ntargs,
             tb: tb, fnames: fnames, fret: fret, fowner: fowner, fgc: fgc, entry: entry))
+}
+
+// --- effect sets, N102 ---------------------------------------------------------------
+//
+//
+// The reference's `nazm-core/src/effects.rs`, for what this compiler parses: each function's
+// declared set (`! { io, spawn, foreign }`) is checked for names (`N0367`) and repeats
+// (`N0368`), and a declared set must contain every effect its body requires (`N0366`).
+// What a body requires is found the reference's way, in rounds: first each body's own
+// effects — a built-in that reaches the outside world, a `spawn`, a foreign function, a call
+// to a declared function (its set), a call to another module's undeclared function (every
+// effect the bridge covers) — then, round by round, what this module's undeclared functions
+// it calls require, each round reading only the previous one's sets so the order functions
+// are visited in cannot change a result.
+//
+// The first reason for each effect is the one a diagnostic points at: a body's own effects
+// before anything it inherits, in the order the calls are written.
+//
+// An effect set is three bits: `io` 1, `spawn` 2, `foreign` 4 — `Effect::ALL`'s order.
+
+pub fn fx_io() -> Int { 1 }
+pub fn fx_spawn() -> Int { 2 }
+pub fn fx_foreign() -> Int { 4 }
+
+pub fn fx_bit(name: Str) -> Int {
+    if name == "io" { return fx_io(); }
+    if name == "spawn" { return fx_spawn(); }
+    if name == "foreign" { return fx_foreign(); }
+    0
+}
+
+pub fn fx_name(bit: Int) -> Str {
+    if bit == fx_io() { return "io"; }
+    if bit == fx_spawn() { return "spawn"; }
+    "foreign"
+}
+
+pub fn fx_has(set: Int, bit: Int) -> Bool { (set / bit) % 2 == 1 }
+
+pub fn fx_with(set: Int, bit: Int) -> Int {
+    if fx_has(set, bit) { return set; }
+    set + bit
+}
+
+// A set as source writes it: `{}` or `{ io, spawn }`.
+pub fn fx_text(set: Int) -> Str {
+    if set == 0 { return "{}"; }
+    let mut out = "{ ";
+    let mut bit = 1;
+    let mut first = true;
+    while bit <= 4 {
+        if fx_has(set, bit) {
+            if first == false { out = str_concat(out, ", "); }
+            out = str_concat(out, fx_name(bit));
+            first = false;
+        }
+        bit = bit * 2;
+    }
+    str_concat(out, " }")
+}
+
+// The effect a built-in exercises, by its name: `io` for what reaches the process's
+// arguments, files, streams or exit; none for the rest. (`c_errno`, whose effect is `foreign`,
+// is a built-in this compiler does not carry.)
+pub fn fx_of_builtin(name: Str) -> Int {
+    if name == "args_count" { return fx_io(); }
+    if name == "arg" { return fx_io(); }
+    if name == "read_file" { return fx_io(); }
+    if name == "write_file" { return fx_io(); }
+    if name == "file_exists" { return fx_io(); }
+    if name == "print" { return fx_io(); }
+    if name == "eprint" { return fx_io(); }
+    if name == "exit_with" { return fx_io(); }
+    0
+}
+
+// The declared set of a function's text, checked: `-1` when it declares none, or when a name
+// in it is not an effect — a set that could not be read declares nothing anyone can know.
+pub fn fx_declared(written: Str, report_into: Vec[Diag]) -> Int {
+    if written == "" { return 0 - 1; }
+    let mut set = 0;
+    let mut known = true;
+    let mut i = 1;
+    let n = str_len(written);
+    while i < n {
+        let mut j = i;
+        while j < n {
+            if str_byte(written, j) == 44 { break; }
+            j = j + 1;
+        }
+        let item = str_slice(written, i, j);
+        let mut at = 0;
+        let mut name = item;
+        let mut c = 0;
+        while c < str_len(item) {
+            if str_byte(item, c) == 64 {
+                name = str_slice(item, 0, c);
+                at = fx_number(str_slice(item, c + 1, str_len(item)));
+            }
+            c = c + 1;
+        }
+        let bit = fx_bit(name);
+        if bit == 0 {
+            known = false;
+            report(report_into, "N0367", at, at + str_len(name),
+                    str_concat(str_concat("`", name), "` is not an effect"));
+        } else {
+            if fx_has(set, bit) {
+                report(report_into, "N0368", at, at + str_len(name),
+                        str_concat(str_concat("`", name), "` is written twice in this effect set"));
+            } else {
+                set = set + bit;
+            }
+        }
+        i = j + 1;
+    }
+    if known { return set; }
+    0 - 1
+}
+
+// Whether a value of `t` can carry a `ForeignCap`: it is one, or a field of a record or a
+// variant it holds is, transitively — the only way a function could reach C.
+fn fx_carries_foreign(t: Int, tb: Table) -> Bool {
+    let work = ints_new();
+    ints_push(work, t);
+    let mut steps = 0;
+    while ints_len(work) > 0 {
+        let x = ints_pop(work);
+        steps = steps + 1;
+        if steps > 4096 { return true; }
+        if x == t_foreigncap() { return true; }
+        if is_record(x) {
+            let r = record_of(x);
+            if r < strs_len(tb.names) {
+                let mut f = 0;
+                while f < ints_get(tb.count, r) {
+                    ints_push(work, ints_get(tb.ftype, ints_get(tb.first, r) + f));
+                    f = f + 1;
+                }
+            }
+        }
+    }
+    false
+}
+
+// Check every function's declared effect set against what its body requires.
+pub fn check_effects(nk: Ints, nar: Ints, nst: Ints, ntx: Strs, naux: Ints, ncallee: Ints, nrec: Ints,
+        kids: Ints, kid_first: Ints, mstart: Ints,
+        fnames: Strs, fnode: Ints, fowner: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
+        fforeign: Ints, tb: Table, diags: Vec[Diag]) -> Int {
+    let nf = strs_len(fnames);
+    // Each definition's declared set, or `-1`.
+    let declared = ints_new();
+    let mut f = 0;
+    while f < nf {
+        let node = ints_get(fnode, f);
+        let mut d = fx_declared(fn_effects(strs_get(ntx, node)), diags);
+        // An impl method that writes no set has its trait's (N102).
+        if f < ints_len(tb.fdecl) {
+            if ints_get(tb.fdecl, f) != 0 - 2 { d = ints_get(tb.fdecl, f); }
+        }
+        // A foreign function's body is C: its contract is `foreign`, whatever is written.
+        if ints_get(fforeign, f) == 1 { d = fx_foreign(); }
+        ints_push(declared, d);
+        f = f + 1;
+    }
+    // Which definition each node belongs to: a function's subtree is contiguous and ends at
+    // its `fn` node, so one pass from each `fn` node back over its subtree says.
+    let parent = ints_new();
+    let childno = ints_new();
+    let substart = ints_new();
+    build_relations(nk, nar, kids, kid_first, parent, childno, substart);
+    let owner = ints_new();
+    let mut k = 0;
+    while k < ints_len(nk) { ints_push(owner, 0 - 1); k = k + 1; }
+    f = 0;
+    while f < nf {
+        let node = ints_get(fnode, f);
+        let mut j = ints_get(substart, node);
+        while j <= node { ints_set(owner, j, f); j = j + 1; }
+        f = f + 1;
+    }
+    // A closure's body is the closure's, not its function's (N102): making one exercises
+    // nothing. Each node inside one belongs to the innermost closure around it, outermost
+    // first so an inner one's claim stands.
+    let cowner = ints_new();
+    k = 0;
+    while k < ints_len(nk) { ints_push(cowner, 0 - 1); k = k + 1; }
+    k = ints_len(nk) - 1;
+    while k >= 0 {
+        if ints_get(nk, k) == n_closure() {
+            let mut j = ints_get(substart, k);
+            while j < k {
+                ints_set(cowner, j, k);
+                ints_set(owner, j, 0 - 1);
+                j = j + 1;
+            }
+        }
+        k = k - 1;
+    }
+    // Round zero: each body's own effects, the first reason for each — as three parallel
+    // per-definition arrays of three slots, the offset and end of the reason for each bit.
+    let sets = ints_new();
+    let why_at = ints_new();
+    let why_to = ints_new();
+    let why_text = strs_new();
+    f = 0;
+    while f < nf {
+        ints_push(sets, 0);
+        let mut b = 0;
+        while b < 3 {
+            ints_push(why_at, 0);
+            ints_push(why_to, 0);
+            strs_push(why_text, "");
+            b = b + 1;
+        }
+        f = f + 1;
+    }
+    // The calls to this module's undeclared functions: caller, callee and where.
+    let efrom = ints_new();
+    let eto = ints_new();
+    let eat = ints_new();
+    let eend = ints_new();
+    k = 0;
+    while k < ints_len(nk) {
+        let kind = ints_get(nk, k);
+        let mut is_call = false;
+        if kind == n_call() { is_call = true; }
+        if kind == n_spawn() { is_call = true; }
+        let me = ints_get(owner, k);
+        // A call through a bound exercises what the trait's signature declares (N102).
+        if kind == n_method() {
+            if me >= 0 {
+                let code = ints_get(ncallee, k);
+                if code <= 0 - 10 {
+                    let sg = 0 - 10 - code;
+                    let se = ints_get(tb.seff, sg);
+                    if se > 0 {
+                        let at = ints_get(naux, k);
+                        fx_reasons(sets, why_at, why_to, why_text, me, se, at,
+                                at + str_len(strs_get(ntx, k)),
+                                str_concat(str_concat("calls `", strs_get(ntx, k)),
+                                "`, whose declared set includes `"));
+                    }
+                }
+            }
+        }
+        if is_call {
+            if me >= 0 {
+                let name = shown_name(before_bracket(strs_get(ntx, k)));
+                // Where the callee is written: a call starts there; a `spawn` keeps it in its
+                // auxiliary column, its own span starting at the keyword.
+                let mut at = ints_get(nst, k);
+                if kind == n_spawn() { at = ints_get(naux, k); }
+                let to = at + str_len(name);
+                if kind == n_spawn() {
+                    fx_reason(sets, why_at, why_to, why_text, me, fx_spawn(), at, to,
+                            "`spawn` starts a task, which requires `spawn`");
+                }
+                let g = ints_get(ncallee, k);
+                // A call through a function value performs its type's effects (N50).
+                if g == 0 - 3 {
+                    let te = fn_effect_bits(tb, ints_get(nrec, k));
+                    if te > 0 {
+                        fx_reasons(sets, why_at, why_to, why_text, me, te, at, to,
+                                str_concat(str_concat("calls a function value of type `",
+                                show_type(ints_get(nrec, k), tb.names)), "`, whose type includes `"));
+                    }
+                }
+                if g == 0 - 2 {
+                    let e = fx_of_builtin(name);
+                    if e != 0 {
+                        fx_reason(sets, why_at, why_to, why_text, me, e, at, to,
+                                str_concat(str_concat(str_concat("the built-in `", name),
+                                "` requires `"), str_concat(fx_name(e), "`")));
+                    }
+                }
+                if g >= 0 {
+                    let local = ints_get(fowner, g) == ints_get(fowner, me);
+                    let theirs = ints_get(declared, g);
+                    if theirs >= 0 {
+                        fx_reasons(sets, why_at, why_to, why_text, me, theirs, at, to,
+                                str_concat(str_concat("calls `", name), "`, whose declared set includes `"));
+                    } else {
+                        if local {
+                            ints_push(efrom, me);
+                            ints_push(eto, g);
+                            ints_push(eat, at);
+                            ints_push(eend, to);
+                        } else {
+                            // Another module's undeclared function: every effect the bridge
+                            // covers, and `foreign` if it can be handed the authority for it.
+                            let mut assumed = fx_io() + fx_spawn();
+                            let mut p = 0;
+                            while p < ints_get(fcount, g) {
+                                if fx_carries_foreign(ints_get(fparams, ints_get(ffirst, g) + p), tb) {
+                                    assumed = fx_with(assumed, fx_foreign());
+                                }
+                                p = p + 1;
+                            }
+                            fx_reasons(sets, why_at, why_to, why_text, me, assumed, at, to,
+                                    str_concat(str_concat("calls `", name),
+                                    "`, which is in another module and declares no effect set, so `"));
+                        }
+                    }
+                }
+            }
+        }
+        k = k + 1;
+    }
+    // Then rounds, each reading the previous round's sets only.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let before = ints_new();
+        f = 0;
+        while f < nf { ints_push(before, ints_get(sets, f)); f = f + 1; }
+        let mut e = 0;
+        while e < ints_len(efrom) {
+            let me = ints_get(efrom, e);
+            let g = ints_get(eto, e);
+            let theirs = ints_get(before, g);
+            let mut bit = 1;
+            while bit <= 4 {
+                if fx_has(theirs, bit) {
+                    if fx_has(ints_get(sets, me), bit) == false {
+                        fx_reason(sets, why_at, why_to, why_text, me, bit,
+                                ints_get(eat, e), ints_get(eend, e),
+                                str_concat(str_concat(str_concat("calls `", strs_get(fnames, g)),
+                                "`, which requires `"), str_concat(fx_name(bit), "`")));
+                        changed = true;
+                    }
+                }
+                bit = bit * 2;
+            }
+            e = e + 1;
+        }
+    }
+    // Every closure's body against its declared set, `! {}` unwritten (N102).
+    check_closure_effects(nk, nst, ntx, naux, ncallee, nrec, cowner, owner, sets, declared,
+            fowner, ffirst, fcount, fparams, fnames, tb, diags);
+    // Every declared set against what its body requires.
+    f = 0;
+    while f < nf {
+        let d = ints_get(declared, f);
+        let mut checked = d >= 0;
+        if ints_get(fforeign, f) == 1 { checked = false; }
+        if checked {
+            let set = ints_get(sets, f);
+            let mut missing = 0;
+            let mut bit = 1;
+            let mut first = 0;
+            while bit <= 4 {
+                if fx_has(set, bit) {
+                    if fx_has(d, bit) == false {
+                        missing = missing + bit;
+                        if first == 0 { first = bit; }
+                    }
+                }
+                bit = bit * 2;
+            }
+            if missing != 0 {
+                let mut listed = "";
+                bit = 1;
+                while bit <= 4 {
+                    if fx_has(missing, bit) {
+                        if listed != "" { listed = str_concat(listed, " and "); }
+                        listed = str_concat(listed, str_concat(str_concat("`", fx_name(bit)), "`"));
+                    }
+                    bit = bit * 2;
+                }
+                let slot = f * 3 + fx_slot(first);
+                report(diags, "N0366", ints_get(why_at, slot), ints_get(why_to, slot),
+                        str_concat(str_concat(str_concat(str_concat("`", shown_name(strs_get(fnames, f))),
+                        "` declares `! "), str_concat(fx_text(d), "`, but its body requires ")),
+                        str_concat(listed, str_concat(": ", strs_get(why_text, slot)))));
+            }
+        }
+        f = f + 1;
+    }
+    nf
+}
+
+fn fx_slot(bit: Int) -> Int {
+    if bit == fx_io() { return 0; }
+    if bit == fx_spawn() { return 1; }
+    2
+}
+
+// Add one effect to a definition's set with its reason, if the set lacks it.
+fn fx_reason(sets: Ints, why_at: Ints, why_to: Ints, why_text: Strs, me: Int, bit: Int,
+        at: Int, to: Int, text: Str) -> Int {
+    if fx_has(ints_get(sets, me), bit) { return 0; }
+    ints_set(sets, me, ints_get(sets, me) + bit);
+    let slot = me * 3 + fx_slot(bit);
+    ints_set(why_at, slot, at);
+    ints_set(why_to, slot, to);
+    strs_set(why_text, slot, text);
+    1
+}
+
+// Every effect of `set`, each with the same reason, its effect named at the end.
+fn fx_reasons(sets: Ints, why_at: Ints, why_to: Ints, why_text: Strs, me: Int, set: Int,
+        at: Int, to: Int, lead: Str) -> Int {
+    let mut bit = 1;
+    while bit <= 4 {
+        if fx_has(set, bit) {
+            fx_reason(sets, why_at, why_to, why_text, me, bit, at, to,
+                    str_concat(lead, str_concat(fx_name(bit), "`")));
+        }
+        bit = bit * 2;
+    }
+    0
+}
+
+// The decimal offset the parser wrote after a name.
+fn fx_number(s: Str) -> Int {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        n = n * 10 + (str_byte(s, i) - 48);
+        i = i + 1;
+    }
+    n
+}
+
+// --- a function's children, N102 ------------------------------------------------------
+//
+// Its parameters, its `requires` clauses, its body, then its `ensures` clauses: the order
+// they are evaluated in. These two say where the parameters end and which child is the body,
+// so nothing else has to count.
+pub fn fn_param_count(nk: Ints, kids: Ints, first: Int, arity: Int) -> Int {
+    let mut p = 0;
+    while p < arity {
+        if ints_get(nk, ints_get(kids, first + p)) != n_param() { return p; }
+        p = p + 1;
+    }
+    p
+}
+
+pub fn fn_body_of(nk: Ints, kids: Ints, first: Int, arity: Int) -> Int {
+    let mut c = 0;
+    while c < arity {
+        let child = ints_get(kids, first + c);
+        let ck = ints_get(nk, child);
+        if ck != n_param() {
+            if ck != n_contract() { return child; }
+        }
+        c = c + 1;
+    }
+    ints_get(kids, first + arity - 1)
+}
+
+// What a contract clause may contain (N102, the reference's `impure_clause`): literals,
+// names, operators, field reads and calls of pure functions — ones declaring `! {}` that are
+// not foreign, and the built-ins that only read. The first thing that is not, left to right,
+// is `N0614`.
+fn pure_builtin(name: Str) -> Bool {
+    if name == "str_len" { return true; }
+    if name == "str_byte" { return true; }
+    if name == "ints_len" { return true; }
+    if name == "ints_get" { return true; }
+    if name == "strs_len" { return true; }
+    if name == "vec_len" { return true; }
+    if name == "vec_get" { return true; }
+    false
+}
+
+pub fn check_contract_shapes(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
+        ncallee: Ints, kids: Ints, kid_first: Ints, fnode: Ints, fforeign: Ints, tb: Table,
+        diags: Vec[Diag]) -> Int {
+    let mut k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nk, k) == n_contract() {
+            let work = ints_new();
+            ints_push(work, ints_get(kids, ints_get(kid_first, k)));
+            let mut found = false;
+            while ints_len(work) > 0 {
+                let e = ints_pop(work);
+                let ek = ints_get(nk, e);
+                let mut what = "";
+                let mut at = ints_get(nst, e);
+                let mut to = ints_get(nen, e);
+                let mut descend = true;
+                if ek == n_call() {
+                    let name = before_bracket(strs_get(ntx, e));
+                    let g = ints_get(ncallee, e);
+                    let mut pure = false;
+                    if g == 0 - 2 { pure = pure_builtin(name); }
+                    if g >= 0 {
+                        if ints_get(fforeign, g) == 0 {
+                            let mut d = fx_declared(fn_effects(strs_get(ntx, ints_get(fnode, g))), vec_new[Diag]());
+                            if g < ints_len(tb.fdecl) {
+                                if ints_get(tb.fdecl, g) != 0 - 2 { d = ints_get(tb.fdecl, g); }
+                            }
+                            if d == 0 { pure = true; }
+                        }
+                    }
+                    if pure == false {
+                        what = "call a function that is not pure";
+                        to = at + str_len(name);
+                    }
+                }
+                if ek == n_method() {
+                    let code = ints_get(ncallee, e);
+                    let mut pure = false;
+                    if code <= 0 - 10 {
+                        if ints_get(tb.seff, 0 - 10 - code) == 0 { pure = true; }
+                    }
+                    if pure == false {
+                        what = "call a function that is not pure";
+                        at = ints_get(naux, e);
+                        to = at + str_len(strs_get(ntx, e));
+                    }
+                }
+                if ek == n_construct() { what = "build a value"; }
+                if ek == n_makevariant() { what = "build a value"; }
+                if ek == n_if() { what = "branch; write the condition with `&&` and `||`"; }
+                if ek == n_match() { what = "branch; write the condition with `&&` and `||`"; }
+                if ek == n_blockexpr() { what = "contain a block"; }
+                if ek == n_propagate() { what = "propagate a failure"; }
+                if what != "" {
+                    if found == false {
+                        report(diags, "N0614", at, to,
+                                str_concat("a contract clause cannot ", what));
+                    }
+                    found = true;
+                    descend = false;
+                }
+                if descend {
+                    let mut c = ints_get(nar, e) - 1;
+                    while c >= 0 {
+                        ints_push(work, ints_get(kids, ints_get(kid_first, e) + c));
+                        c = c - 1;
+                    }
+                }
+            }
+        }
+        k = k + 1;
+    }
+    0
+}
+
+// --- traits and impls, N102 -------------------------------------------------------------
+//
+// The reference's N78 (`docs/spec.md`, *Traits and methods*): a trait is a list of
+// signatures whose first parameter is `self: Self`; an impl gives one type every method, each
+// with the trait's signature, `Self` replaced and effects included; a method call is resolved
+// here to exactly one definition — on a concrete type to the impl's, through a bound to the
+// impl of the type the generic function is instantiated at, which the emitter settles per
+// instance. A trait is never a type, and a method is in no function namespace.
+
+// The text before `@`: `Area` from `Area@10`.
+fn word_of(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 64 { return str_slice(s, 0, i); }
+        i = i + 1;
+    }
+    s
+}
+
+// The offset after `@`: `10` from `Area@10`.
+fn offset_of(s: Str) -> Int {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 64 { return fx_number(str_slice(s, i + 1, str_len(s))); }
+        i = i + 1;
+    }
+    0
+}
+
+// A method's own name, from its definition's: `area` from `#Area.Sq.area`.
+pub fn shown_name(name: Str) -> Str {
+    if str_len(name) == 0 { return name; }
+    if str_byte(name, 0) != 35 { return name; }
+    let mut i = str_len(name) - 1;
+    while i > 0 {
+        if str_byte(name, i) == 46 { return str_slice(name, i + 1, str_len(name)); }
+        i = i - 1;
+    }
+    name
+}
+
+// A trait of any module by name, for a requirement and for "this is a trait, not a type".
+pub fn trait_named(tb: Table, name: Str) -> Int {
+    let mut t = 0;
+    while t < strs_len(tb.trn) {
+        if strs_get(tb.trn, t) == name { return t; }
+        t = t + 1;
+    }
+    0 - 1
+}
+
+// The trait `name` as module `here` sees it: its own, or one a module it imports directly
+// exports.
+fn trait_visible(tb: Table, here: Int, name: Str, mfirst: Ints, mcount: Ints, mto: Ints) -> Int {
+    let mut t = 0;
+    while t < strs_len(tb.trn) {
+        if strs_get(tb.trn, t) == name {
+            if ints_get(tb.tro, t) == here { return t; }
+        }
+        t = t + 1;
+    }
+    // What a module it imports offers: its own `pub` traits and those it re-exports (N103).
+    let mut e = 0;
+    while e < ints_get(mcount, here) {
+        let x = offered(tb.toffer, ints_get(mto, ints_get(mfirst, here) + e), name);
+        if x >= 0 { return x; }
+        e = e + 1;
+    }
+    0 - 1
+}
+
+fn trait_in_scope(tb: Table, here: Int, t: Int, mfirst: Ints, mcount: Ints, mto: Ints) -> Bool {
+    if ints_get(tb.tro, t) == here { return true; }
+    let mut i = 0;
+    while i < ints_len(tb.toffer.om) {
+        if ints_get(tb.toffer.ox, i) == t {
+            if imports_directly(mfirst, mcount, mto, here, ints_get(tb.toffer.om, i)) { return true; }
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// The signature of trait `t` named `m`, or `-1`.
+fn sig_of(tb: Table, t: Int, m: Str) -> Int {
+    let mut s = 0;
+    while s < ints_len(tb.strait) {
+        if ints_get(tb.strait, s) == t {
+            if strs_get(tb.sname, s) == m { return s; }
+        }
+        s = s + 1;
+    }
+    0 - 1
+}
+
+// The impl of trait `t` for type `ty` that module `here` can use — in it, or in a module it
+// imports directly — or `-1`.
+pub fn impl_for(tb: Table, t: Int, ty: Int, here: Int, mfirst: Ints, mcount: Ints, mto: Ints) -> Int {
+    let mut i = 0;
+    while i < ints_len(tb.itrait) {
+        if ints_get(tb.itrait, i) == t {
+            if ints_get(tb.itype, i) == ty {
+                let m = ints_get(tb.imod, i);
+                if m == here { return i; }
+                if here < 0 { return i; }
+                if impl_usable(tb, here, m, mfirst, mcount, mto) { return i; }
+            }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Whether module `here` may use an impl declared in `m` (N78, N103): `m` is a module it
+// imports directly, or one those re-export from, however far.
+fn impl_usable(tb: Table, here: Int, m: Int, mfirst: Ints, mcount: Ints, mto: Ints) -> Bool {
+    let work = ints_new();
+    let seen = ints_new();
+    let mut e = 0;
+    while e < ints_get(mcount, here) {
+        ints_push(work, ints_get(mto, ints_get(mfirst, here) + e));
+        e = e + 1;
+    }
+    while ints_len(work) > 0 {
+        let x = ints_pop(work);
+        if x == m { return true; }
+        if contains(seen, x) == false {
+            ints_push(seen, x);
+            let mut i = 0;
+            while i < ints_len(tb.rsm) {
+                if ints_get(tb.rsm, i) == x { ints_push(work, ints_get(tb.rsf, i)); }
+                i = i + 1;
+            }
+        }
+    }
+    false
+}
+
+// The definition implementing signature `s` for type `ty`, from any module: what an instance
+// calls through a bound (the checker has already required the impl where the call is).
+pub fn method_for(tb: Table, s: Int, ty: Int) -> Int {
+    let t = ints_get(tb.strait, s);
+    let i = impl_for(tb, t, ty, 0 - 1, ints_new(), ints_new(), ints_new());
+    if i < 0 { return 0 - 1; }
+    // The signature's position among its trait's.
+    let mut pos = 0;
+    let mut x = 0;
+    while x < s {
+        if ints_get(tb.strait, x) == t { pos = pos + 1; }
+        x = x + 1;
+    }
+    ints_get(tb.imeth, ints_get(tb.ifirst, i) + pos)
+}
+
+// Every trait and its signatures, before any function's: a bound names a trait.
+pub fn collect_traits(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
+        kids: Ints, kid_first: Ints, mstart: Ints, tb: Table,
+        tmod: Ints, tname: Strs, trec: Ints, diags: Vec[Diag]) -> Int {
+    let sp = new_entry(tb, "Self", 0 - 1, 0, 0, 0 - 1, rk_param(), 0 - 1);
+    ints_push(tb.selfp, sp);
+    let tscope = ints_new();
+    ints_push(tscope, t_param(sp));
+    let mut k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nk, k) == n_trait() {
+            let t = strs_len(tb.trn);
+            let owner = module_at(mstart, ints_get(nst, k));
+            strs_push(tb.trn, strs_get(ntx, k));
+            ints_push(tb.tro, owner);
+            ints_push(tb.trp, is_public(naux, k));
+            ints_push(tb.trnode, k);
+            let mut c = 0;
+            while c < ints_get(nar, k) {
+                let sig = ints_get(kids, ints_get(kid_first, k) + c);
+                let stext = strs_get(ntx, sig);
+                let sname = before_colon(stext);
+                ints_push(tb.strait, t);
+                strs_push(tb.sname, sname);
+                ints_push(tb.snode, sig);
+                ints_push(tb.sfirst, ints_len(tb.sparams));
+                ints_push(tb.scount, ints_get(nar, sig));
+                let mut p = 0;
+                while p < ints_get(nar, sig) {
+                    let pc = ints_get(kids, ints_get(kid_first, sig) + p);
+                    let ptext = strs_get(ntx, pc);
+                    if p == 0 {
+                        let mut good = before_colon(ptext) == "self";
+                        if word_of(after_colon(ptext)) != "Self" { good = false; }
+                        if good == false {
+                            report(diags, "N0609", ints_get(nst, pc), ints_get(nen, pc),
+                                    str_concat(str_concat("`", sname),
+                                    "`'s first parameter must be `self: Self`"));
+                        }
+                    }
+                    ints_push(tb.sparams, resolve_written(tb, after_colon(ptext), owner, tscope,
+                            ints_get(nst, pc), ints_get(nen, pc), tmod, tname, trec, diags));
+                    p = p + 1;
+                }
+                if ints_get(nar, sig) == 0 {
+                    let at = name_offset(naux, sig);
+                    report(diags, "N0609", at, at + str_len(sname),
+                            str_concat(str_concat("`", sname),
+                            "`'s first parameter must be `self: Self`"));
+                }
+                ints_push(tb.sret, resolve_written(tb, fn_ret(stext), owner, tscope,
+                        ints_get(nst, sig), ints_get(nen, sig), tmod, tname, trec, diags));
+                ints_push(tb.seff, fx_declared(fn_effects(stext), diags));
+                c = c + 1;
+            }
+        }
+        k = k + 1;
+    }
+    strs_len(tb.trn)
+}
+
+// A signature as a message writes it: `fn area(self: Sq) -> Int`.
+fn sig_text(tb: Table, s: Int, ty: Int) -> Str {
+    let params = ints_new();
+    ints_push(params, t_param(ints_get(tb.selfp, 0)));
+    let args = ints_new();
+    ints_push(args, ty);
+    let node = ints_get(tb.snode, s);
+    let mut out = str_concat(str_concat("fn ", strs_get(tb.sname, s)), "(");
+    let mut p = 0;
+    while p < ints_get(tb.scount, s) {
+        if p > 0 { out = str_concat(out, ", "); }
+        let pt = substitute(tb, ints_get(tb.sparams, ints_get(tb.sfirst, s) + p), params, args);
+        let pname = if p == 0 { "self" } else { str_concat("p", int_to_str(p)) };
+        out = str_concat(str_concat(str_concat(out, pname), ": "), show_type(pt, tb.names));
+        p = p + 1;
+    }
+    let rt = substitute(tb, ints_get(tb.sret, s), params, args);
+    if node < 0 { return out; }
+    str_concat(str_concat(out, ") -> "), show_type(rt, tb.names))
+}
+
+// Every impl, after every signature: its trait in scope, its type one that may have one,
+// one impl per trait and type, in the trait's module or the type's, and every method the
+// trait's, with the trait's signature.
+pub fn check_impls(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
+        kids: Ints, kid_first: Ints, mstart: Ints, mfirst: Ints, mcount: Ints, mto: Ints,
+        fnames: Strs, fnode: Ints, ffirst: Ints, fcount: Ints, fparams: Ints, fret: Ints,
+        tb: Table, tmod: Ints, tname: Strs, trec: Ints, diags: Vec[Diag]) -> Int {
+    while ints_len(tb.fdecl) < strs_len(fnames) { ints_push(tb.fdecl, 0 - 2); }
+    let mut k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nk, k) == n_impl() {
+            let here = module_at(mstart, ints_get(nst, k));
+            let text = strs_get(ntx, k);
+            let tword = before_colon(text);
+            let yword = after_colon(text);
+            let tn = word_of(tword);
+            let tat = offset_of(tword);
+            let yn = word_of(yword);
+            let yat = offset_of(yword);
+            let start = ints_get(nst, k);
+            let t = trait_visible(tb, here, tn, mfirst, mcount, mto);
+            let mut ok = true;
+            if t < 0 {
+                report(diags, "N0305", tat, tat + str_len(tn),
+                        str_concat(str_concat("no trait named `", tn), "` is in scope"));
+                ok = false;
+            }
+            let ty = type_in(yn, here, tb.names, tb.owner, tmod, tname, trec);
+            if ok {
+                if ty == t_unknown() {
+                    report(diags, "N0305", yat, yat + str_len(yn),
+                            str_concat(str_concat("`", yn), "` is not a type"));
+                    ok = false;
+                }
+            }
+            if ok {
+                let mut allowed = false;
+                if ty == t_int() { allowed = true; }
+                if ty == t_bool() { allowed = true; }
+                if ty == t_str() { allowed = true; }
+                if is_record(ty) {
+                    if generic_count(tb, record_of(ty)) == 0 { allowed = true; }
+                }
+                if allowed == false {
+                    report(diags, "N0604", yat, yat + str_len(yn),
+                            str_concat(str_concat("`", yn),
+                            "` cannot have an impl: it is a built-in type other than `Int`, `Bool` or `Str`"));
+                    ok = false;
+                }
+            }
+            if ok {
+                // Coherence: one impl per trait and type in a compilation, in the trait's
+                // module or the type's — and for a built-in type, the trait's.
+                if impl_for(tb, t, ty, 0 - 1, mfirst, mcount, mto) >= 0 {
+                    report(diags, "N0600", start, start + 4,
+                            str_concat(str_concat(str_concat(str_concat("`", yn),
+                            "` already implements `"), tn), "`"));
+                    ok = false;
+                }
+            }
+            if ok {
+                let mut home = ints_get(tb.tro, t) == here;
+                if is_record(ty) {
+                    if ints_get(tb.owner, record_of(ty)) == here { home = true; }
+                }
+                if home == false {
+                    report(diags, "N0601", start, start + 4,
+                            str_concat(str_concat(str_concat(str_concat("an impl of `", tn),
+                            "` for `"), yn), "` belongs in the module that declares the trait or the type"));
+                    ok = false;
+                }
+            }
+            if ok {
+                let first = ints_len(tb.imeth);
+                ints_push(tb.itrait, t);
+                ints_push(tb.itype, ty);
+                ints_push(tb.imod, here);
+                ints_push(tb.inode, k);
+                ints_push(tb.ifirst, first);
+                let mut s = 0;
+                while s < ints_len(tb.strait) {
+                    if ints_get(tb.strait, s) == t { ints_push(tb.imeth, 0 - 1); }
+                    s = s + 1;
+                }
+                let sp = ints_new();
+                ints_push(sp, t_param(ints_get(tb.selfp, 0)));
+                let sa = ints_new();
+                ints_push(sa, ty);
+                let mut c = 0;
+                while c < ints_get(nar, k) {
+                    let mnode = ints_get(kids, ints_get(kid_first, k) + c);
+                    let mtext = strs_get(ntx, mnode);
+                    let m = shown_name(fn_name(mtext));
+                    let mat = name_offset(naux, mnode);
+                    let s = sig_of(tb, t, m);
+                    if s < 0 {
+                        report(diags, "N0603", mat, mat + str_len(m),
+                                str_concat(str_concat(str_concat(str_concat("`", m),
+                                "` is not a method of `"), tn), "`"));
+                    } else {
+                        // The definition this node is.
+                        let mut g = 0 - 1;
+                        let mut d = 0;
+                        while d < ints_len(fnode) {
+                            if ints_get(fnode, d) == mnode { g = d; }
+                            d = d + 1;
+                        }
+                        let mut same = g >= 0;
+                        if same {
+                            if ints_get(fcount, g) != ints_get(tb.scount, s) { same = false; }
+                        }
+                        if same {
+                            let mut p = 0;
+                            while p < ints_get(fcount, g) {
+                                let want = substitute(tb, ints_get(tb.sparams, ints_get(tb.sfirst, s) + p), sp, sa);
+                                if ints_get(fparams, ints_get(ffirst, g) + p) != want { same = false; }
+                                p = p + 1;
+                            }
+                            if substitute(tb, ints_get(tb.sret, s), sp, sa) != ints_get(fret, g) { same = false; }
+                            // The first parameter is named `self`.
+                            let p0 = ints_get(kids, ints_get(kid_first, mnode));
+                            if ints_get(nk, p0) == n_param() {
+                                if before_colon(strs_get(ntx, p0)) != "self" { same = false; }
+                            }
+                        }
+                        // Effects: a method that writes none has its trait's.
+                        let written = fx_declared(fn_effects(mtext), vec_new[Diag]());
+                        let mut eff = written;
+                        if fn_effects(mtext) == "" { eff = ints_get(tb.seff, s); }
+                        if eff != ints_get(tb.seff, s) { same = false; }
+                        if same {
+                            ints_set(tb.imeth, first + sig_position(tb, s), g);
+                            if fn_effects(mtext) == "" { ints_set(tb.fdecl, g, ints_get(tb.seff, s)); }
+                        } else {
+                            report(diags, "N0603", mat, mat + str_len(m),
+                                    str_concat(str_concat(str_concat(str_concat("`", m), "` must be `"),
+                                    sig_text(tb, s, ty)), str_concat(str_concat(str_concat(
+                                    "` with the trait's effects, as `", tn), "` declares it with `Self` = `"),
+                                    str_concat(yn, "`"))));
+                        }
+                    }
+                    c = c + 1;
+                }
+                // What the trait declares and the impl does not define.
+                let mut s2 = 0;
+                let mut pos = 0;
+                while s2 < ints_len(tb.strait) {
+                    if ints_get(tb.strait, s2) == t {
+                        if ints_get(tb.imeth, first + pos) < 0 {
+                            report(diags, "N0602", start, start + 4,
+                                    str_concat(str_concat(str_concat(str_concat(str_concat(
+                                    "this impl of `", tn), "` for `"), yn), "` does not define `"),
+                                    str_concat(strs_get(tb.sname, s2), "`")));
+                        }
+                        pos = pos + 1;
+                    }
+                    s2 = s2 + 1;
+                }
+            }
+        }
+        k = k + 1;
+    }
+    0
+}
+
+// A signature's position among its trait's.
+fn sig_position(tb: Table, s: Int) -> Int {
+    let t = ints_get(tb.strait, s);
+    let mut pos = 0;
+    let mut x = 0;
+    while x < s {
+        if ints_get(tb.strait, x) == t { pos = pos + 1; }
+        x = x + 1;
+    }
+    pos
+}
+
+// What a bound gives a type parameter: its trait, or `-1`.
+pub fn bound_trait(tb: Table, t: Int) -> Int {
+    if is_param(t) == false { return 0 - 1; }
+    let r = ints_get(tb.req, entry_of(t));
+    if r >= 2 { return r - 2; }
+    0 - 1
+}
+
+// The type an impl's method's `Self` is: its impl's, found as the impl node the method is a
+// child of; `0` for a function no impl holds.
+fn method_self_type(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Ints, k: Int,
+        owner: Int, tb: Table, tmod: Ints, tname: Strs, trec: Ints) -> Int {
+    let mut i = k + 1;
+    while i < ints_len(nk) {
+        if ints_get(nk, i) == n_impl() {
+            let mut c = 0;
+            while c < ints_get(nar, i) {
+                if ints_get(kids, ints_get(kid_first, i) + c) == k {
+                    return type_in(word_of(after_colon(strs_get(ntx, i))), owner, tb.names,
+                            tb.owner, tmod, tname, trec);
+                }
+                c = c + 1;
+            }
+            return 0;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// Resolve method `m` on a receiver of type `recv` in module `here` (N102): the signature, with
+// `out[0]` 1 for a call through a bound and `out[1]` the definition a concrete call calls. `fixed`
+// is the trait a `Trait.m(x)` names, or `-1`. `-1` when nothing resolves, reported.
+fn resolve_method(tb: Table, here: Int, recv: Int, m: Str, fixed: Int, at: Int, to: Int,
+        mfirst: Ints, mcount: Ints, mto: Ints, out: Ints, diags: Vec[Diag]) -> Int {
+    ints_set(out, 0, 0);
+    ints_set(out, 1, 0 - 1);
+    if recv == t_unknown() { return 0 - 1; }
+    let shown = show_type(recv, tb.names);
+    if is_param(recv) {
+        let bt = bound_trait(tb, recv);
+        let mut t = bt;
+        if fixed >= 0 {
+            if fixed != bt { t = 0 - 1; }
+        }
+        let mut s = 0 - 1;
+        if t >= 0 { s = sig_of(tb, t, m); }
+        if s < 0 {
+            report(diags, "N0605", at, to,
+                    str_concat(str_concat(str_concat(str_concat("`", shown), "` has no method `"), m), "`"));
+            return 0 - 1;
+        }
+        ints_set(out, 0, 1);
+        return s;
+    }
+    if fixed >= 0 {
+        let s = sig_of(tb, fixed, m);
+        let i = impl_for(tb, fixed, recv, here, mfirst, mcount, mto);
+        if s < 0 {
+            report(diags, "N0605", at, to,
+                    str_concat(str_concat(str_concat(str_concat("`", strs_get(tb.trn, fixed)),
+                    "` has no method `"), m), "`"));
+            return 0 - 1;
+        }
+        if i < 0 {
+            report(diags, "N0605", at, to,
+                    str_concat(str_concat(str_concat(str_concat(str_concat(str_concat("`", shown),
+                    "` has no impl of `"), strs_get(tb.trn, fixed)), "` giving it `"), m), "`"));
+            return 0 - 1;
+        }
+        ints_set(out, 1, ints_get(tb.imeth, ints_get(tb.ifirst, i) + sig_position(tb, s)));
+        return s;
+    }
+    // The traits in scope that declare `m` and have an impl for the receiver's type here.
+    let found = ints_new();
+    let mut t = 0;
+    while t < strs_len(tb.trn) {
+        if trait_in_scope(tb, here, t, mfirst, mcount, mto) {
+            if sig_of(tb, t, m) >= 0 {
+                if impl_for(tb, t, recv, here, mfirst, mcount, mto) >= 0 { ints_push(found, t); }
+            }
+        }
+        t = t + 1;
+    }
+    if ints_len(found) == 0 {
+        report(diags, "N0605", at, to,
+                str_concat(str_concat(str_concat(str_concat("no trait in scope gives `", shown),
+                "` a method `"), m), "`"));
+        return 0 - 1;
+    }
+    if ints_len(found) > 1 {
+        let mut listed = "";
+        let mut f = 0;
+        while f < ints_len(found) {
+            if f > 0 {
+                if f == ints_len(found) - 1 { listed = str_concat(listed, " and "); } else { listed = str_concat(listed, ", "); }
+            }
+            listed = str_concat(str_concat(str_concat(listed, "`"), strs_get(tb.trn, ints_get(found, f))), "`");
+            f = f + 1;
+        }
+        report(diags, "N0606", at, to,
+                str_concat(str_concat(str_concat(str_concat(str_concat(str_concat("`", m), "` on `"),
+                shown), "` is a method of "), listed), ""));
+        return 0 - 1;
+    }
+    let tt = ints_get(found, 0);
+    let s = sig_of(tb, tt, m);
+    let i = impl_for(tb, tt, recv, here, mfirst, mcount, mto);
+    ints_set(out, 1, ints_get(tb.imeth, ints_get(tb.ifirst, i) + sig_position(tb, s)));
+    s
+}
+
+// A method call's arguments against its signature, `Self` the receiver's type, and its
+// result. `got` holds the receiver's type then each argument's; `argn` the argument nodes.
+fn check_method_args(tb: Table, s: Int, recv: Int, m: Str, got: Ints, argn: Ints,
+        nst: Ints, nen: Ints, at: Int, to: Int, diags: Vec[Diag]) -> Int {
+    let sp = ints_new();
+    ints_push(sp, t_param(ints_get(tb.selfp, 0)));
+    let sa = ints_new();
+    ints_push(sa, recv);
+    let ret = substitute(tb, ints_get(tb.sret, s), sp, sa);
+    if ints_len(got) != ints_get(tb.scount, s) {
+        report(diags, "N0303", at, to,
+                str_concat(str_concat("`", m), "` was given the wrong number of arguments"));
+        return ret;
+    }
+    let mut a = 1;
+    while a < ints_len(got) {
+        let want = substitute(tb, ints_get(tb.sparams, ints_get(tb.sfirst, s) + a), sp, sa);
+        let actual = ints_get(got, a);
+        if agrees(actual, want) == false {
+            let arg = ints_get(argn, a);
+            report(diags, "N0300", ints_get(nst, arg), ints_get(nen, arg),
+                    str_concat(str_concat(str_concat(str_concat(str_concat(
+                    "argument ", int_to_str(a)), str_concat(" of `", m)), "` is `"),
+                    str_concat(show_type(want, tb.names), "`, but this is `")),
+                    str_concat(show_type(actual, tb.names), "`")));
+        }
+        a = a + 1;
+    }
+    ret
+}
+
+// Where byte `b` first is in `s`, or its length.
+fn index_of_byte(s: Str, b: Int) -> Int {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == b { return i; }
+        i = i + 1;
+    }
+    str_len(s)
+}
+
+// The slot a binding is read from where it is named (N102): its own, outside any closure; in
+// a closure, the closure's copy — made now if this is the first use, through every closure
+// between the binding and here, each copying from the one around it. A `let mut` binding is
+// never copied (`N0386`): a copy of a variable would be a second variable.
+fn closure_binding(names: Strs, ntypes: Ints, nmut: Ints, nslotof: Ints, cl_node: Ints,
+        cl_base: Ints, cl_counter: Ints, counter: Ints, cap_clo: Ints, cap_name: Strs, cap_outer: Ints,
+        cap_inner: Ints, cap_type: Ints, name: Str, at: Int, to: Int, diags: Vec[Diag]) -> Int {
+    let mut i = strs_len(names) - 1;
+    while i >= 0 {
+        if strs_get(names, i) == name { break; }
+        i = i - 1;
+    }
+    if i < 0 { return 0 - 1; }
+    let mut slot = ints_get(nslotof, i);
+    let depth = ints_len(cl_node);
+    if depth == 0 { return slot; }
+    if i >= ints_get(cl_base, depth - 1) { return slot; }
+    if ints_get(nmut, i) == 1 {
+        report(diags, "N0386", at, to,
+                str_concat(str_concat("a closure cannot capture `", name), "`, a `let mut` binding"));
+        return slot;
+    }
+    // The outermost closure the binding is outside of.
+    let mut level = depth - 1;
+    while level > 0 {
+        if i < ints_get(cl_base, level - 1) { level = level - 1; } else { break; }
+    }
+    while level < depth {
+        let c = ints_get(cl_node, level);
+        let mut found = 0 - 1;
+        let mut q = 0;
+        while q < ints_len(cap_clo) {
+            if ints_get(cap_clo, q) == c {
+                if strs_get(cap_name, q) == name { found = ints_get(cap_inner, q); }
+            }
+            q = q + 1;
+        }
+        if found < 0 {
+            // The closure's own slots are numbered by its counter, which for any but the
+            // innermost is the one set aside when the next closure opened.
+            let mut inner = 0;
+            if level == depth - 1 {
+                inner = ints_get(counter, 0);
+                ints_set(counter, 0, inner + 1);
+            } else {
+                inner = ints_get(cl_counter, level + 1);
+                ints_set(cl_counter, level + 1, inner + 1);
+            }
+            ints_push(cap_clo, c);
+            strs_push(cap_name, name);
+            ints_push(cap_outer, slot);
+            ints_push(cap_inner, inner);
+            ints_push(cap_type, ints_get(ntypes, i));
+            found = inner;
+        }
+        slot = found;
+        level = level + 1;
+    }
+    slot
+}
+
+// The function `name` names in module `here`: its own definition, or one an import brought.
+fn visible_function(name: Str, here: Int, fnames: Strs, fowner: Ints, vmod: Ints, vname: Strs,
+        vfn: Ints) -> Int {
+    let own = owned_index(fnames, fowner, here, name);
+    if own >= 0 { return own; }
+    let mut i = 0;
+    while i < ints_len(vmod) {
+        if ints_get(vmod, i) == here {
+            if strs_get(vname, i) == name { return ints_get(vfn, i); }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn is_foreign_def(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints, fnode: Ints, g: Int) -> Bool {
+    let node = ints_get(fnode, g);
+    let body = fn_body_of(nk, kids, ints_get(kid_first, node), ints_get(nar, node));
+    ints_get(nk, body) == n_foreign()
+}
+
+// The effects a named function's value type carries (N50): its declared set, or for an
+// undeclared function of this module none — its body is held to that — and of another module
+// every effect the bridge covers.
+fn value_effects(tb: Table, ntx: Strs, fnode: Ints, fowner: Ints, fparams: Ints, ffirst: Ints,
+        fcount: Ints, g: Int, here: Int) -> Int {
+    let mut d = fx_declared(fn_effects(strs_get(ntx, ints_get(fnode, g))), vec_new[Diag]());
+    if g < ints_len(tb.fdecl) {
+        if ints_get(tb.fdecl, g) != 0 - 2 { d = ints_get(tb.fdecl, g); }
+    }
+    if d >= 0 { return d; }
+    if ints_get(fowner, g) == here { return 0; }
+    let mut assumed = fx_io() + fx_spawn();
+    let mut p = 0;
+    while p < ints_get(fcount, g) {
+        if fx_carries_foreign(ints_get(fparams, ints_get(ffirst, g) + p), tb) {
+            assumed = fx_with(assumed, fx_foreign());
+        }
+        p = p + 1;
+    }
+    assumed
+}
+
+// What each closure's body requires, as a declared function's is found — its own calls, a
+// local undeclared callee's settled set — against its declared set (N102).
+fn check_closure_effects(nk: Ints, nst: Ints, ntx: Strs, naux: Ints, ncallee: Ints, nrec: Ints,
+        cowner: Ints, owner: Ints, sets: Ints, declared: Ints, fowner: Ints, ffirst: Ints,
+        fcount: Ints, fparams: Ints, fnames: Strs, tb: Table, diags: Vec[Diag]) -> Int {
+    let mut c = 0;
+    while c < ints_len(nk) {
+        if ints_get(nk, c) == n_closure() {
+            let mut want = fx_declared(fn_effects(strs_get(ntx, c)), vec_new[Diag]());
+            if want < 0 { want = 0; }
+            // The function the closure is written in, for its name and its module.
+            let mut f = 0 - 1;
+            let mut up = c + 1;
+            while up < ints_len(nk) {
+                if ints_get(owner, up) >= 0 { f = ints_get(owner, up); up = ints_len(nk); }
+                up = up + 1;
+            }
+            let mut have = 0;
+            let mut first_at = 0;
+            let mut first_to = 0;
+            let mut missing = 0;
+            let mut k = 0;
+            while k < c {
+                if ints_get(cowner, k) == c {
+                    let kind = ints_get(nk, k);
+                    let mut e = 0;
+                    let mut at = ints_get(nst, k);
+                    let name = before_bracket(strs_get(ntx, k));
+                    if kind == n_spawn() {
+                        e = fx_spawn();
+                        at = ints_get(naux, k);
+                    }
+                    if kind == n_call() {
+                        let g = ints_get(ncallee, k);
+                        if g == 0 - 2 { e = fx_of_builtin(name); }
+                        if g == 0 - 3 { e = fn_effect_bits(tb, ints_get(nrec, k)); }
+                        if g >= 0 {
+                            let d = ints_get(declared, g);
+                            if d >= 0 {
+                                e = d;
+                            } else {
+                                if f >= 0 {
+                                    if ints_get(fowner, g) == ints_get(fowner, f) {
+                                        e = ints_get(sets, g);
+                                    } else {
+                                        e = fx_io() + fx_spawn();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if kind == n_spawn() {
+                        let g = ints_get(ncallee, k);
+                        if g >= 0 {
+                            let d = ints_get(declared, g);
+                            if d >= 0 { e = fx_with(e, 0); }
+                        }
+                    }
+                    let mut bit = 1;
+                    while bit <= 4 {
+                        if fx_has(e, bit) {
+                            if fx_has(have, bit) == false {
+                                have = have + bit;
+                                if fx_has(want, bit) == false {
+                                    if missing == 0 {
+                                        first_at = at;
+                                        first_to = at + str_len(name);
+                                    }
+                                    missing = fx_with(missing, bit);
+                                }
+                            }
+                        }
+                        bit = bit * 2;
+                    }
+                }
+                k = k + 1;
+            }
+            if missing != 0 {
+                let mut listed = "";
+                let mut bit = 1;
+                while bit <= 4 {
+                    if fx_has(missing, bit) {
+                        if listed != "" { listed = str_concat(listed, " and "); }
+                        listed = str_concat(listed, str_concat(str_concat("`", fx_name(bit)), "`"));
+                    }
+                    bit = bit * 2;
+                }
+                let mut where_ = "a function";
+                if f >= 0 { where_ = shown_name(strs_get(fnames, f)); }
+                report(diags, "N0366", first_at, first_to,
+                        str_concat(str_concat(str_concat(str_concat(str_concat("this closure in `",
+                        where_), "` declares `! "), fx_text(want)), "`, but its body requires "), listed));
+            }
+        }
+        c = c + 1;
+    }
+    0
+}
+
+// --- re-exports, N103 ------------------------------------------------------------------
+//
+// `pub use "PATH";` offers every name the module it names offers; `pub use "PATH" { a, b as c
+// };` the names chosen, `c` the name `b` is offered under. A re-export is the **same**
+// definition under this module's name — the index it is offered by is the defining module's —
+// so nothing downstream learns that re-exports exist: an import reads what a module offers,
+// and a module offers its own `pub` definitions and what it re-exports.
+//
+// Read from the tokens, where the parser accepted it and the loader made the edge: the edge is
+// the one whose quoted path is at the same offset.
+
+pub struct Reexports {
+    // One entry per `pub use`: the module writing it, the module named, where `pub` is, and
+    // whether it re-exports everything; its chosen names from `ifirst`, `icount` of them.
+    emod: Ints,
+    eto: Ints,
+    eat: Ints,
+    eall: Ints,
+    ifirst: Ints,
+    icount: Ints,
+    // Each chosen name, where it is written, and the name it is offered under with where that
+    // is written (the same, without `as`).
+    iname: Strs,
+    iat: Ints,
+    ialias: Strs,
+    // Each `pub use` in the order it can be applied — every re-export it reads from before
+    // it — and `1` for one in a cycle of re-exports, which has no such order.
+    order: Ints,
+    cyclic: Ints,
+}
+
+// What modules offer of one kind: the module, the name an importer writes, and the index —
+// a definition, a table entry or a trait — that name means.
+pub struct Offers {
+    om: Ints,
+    on: Strs,
+    ox: Ints,
+}
+
+pub fn new_offers() -> Offers { Offers(om: ints_new(), on: strs_new(), ox: ints_new()) }
+
+pub fn offer(o: Offers, m: Int, name: Str, x: Int) -> Int {
+    ints_push(o.om, m);
+    strs_push(o.on, name);
+    ints_push(o.ox, x);
+    ints_len(o.om)
+}
+
+// What `m` offers under `name`, or `-1`.
+pub fn offered(o: Offers, m: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < ints_len(o.om) {
+        if ints_get(o.om, i) == m {
+            if strs_get(o.on, i) == name { return ints_get(o.ox, i); }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+pub fn collect_reexports(kinds: Ints, starts: Ints, texts: Strs, mstart: Ints, mfirst: Ints,
+        mcount: Ints, mto: Ints, mat: Ints, modules: Int) -> Reexports {
+    let rx = Reexports(emod: ints_new(), eto: ints_new(), eat: ints_new(), eall: ints_new(),
+            ifirst: ints_new(), icount: ints_new(), iname: strs_new(), iat: ints_new(),
+            ialias: strs_new(), order: ints_new(), cyclic: ints_new());
+    let mut i = 0;
+    while i + 2 < ints_len(kinds) {
+        let mut at_pub_use = false;
+        if ints_get(kinds, i) == k_pub() {
+            if ints_get(kinds, i + 1) == k_use() {
+                if ints_get(kinds, i + 2) == k_str() { at_pub_use = true; }
+            }
+        }
+        if at_pub_use {
+            let pub_at = ints_get(starts, i);
+            let path_at = ints_get(starts, i + 2);
+            let m = module_at(mstart, pub_at);
+            // The edge whose quoted path this is.
+            let mut target = 0 - 1;
+            let mut e = 0;
+            while e < ints_get(mcount, m) {
+                if ints_get(mat, ints_get(mfirst, m) + e) == path_at {
+                    target = ints_get(mto, ints_get(mfirst, m) + e);
+                }
+                e = e + 1;
+            }
+            let mut j = i + 3;
+            let mut all = 1;
+            ints_push(rx.ifirst, strs_len(rx.iname));
+            if ints_get(kinds, j) == k_lbrace() {
+                all = 0;
+                j = j + 1;
+                while ints_get(kinds, j) == k_ident() {
+                    let name = strs_get(texts, j);
+                    let nat = ints_get(starts, j);
+                    let mut alias = name;
+                    j = j + 1;
+                    if ints_get(kinds, j) == k_ident() {
+                        if strs_get(texts, j) == "as" {
+                            alias = strs_get(texts, j + 1);
+                            j = j + 2;
+                        }
+                    }
+                    strs_push(rx.iname, name);
+                    ints_push(rx.iat, nat);
+                    strs_push(rx.ialias, alias);
+                    if ints_get(kinds, j) == k_comma() { j = j + 1; }
+                }
+            }
+            ints_push(rx.icount, strs_len(rx.iname) - ints_get(rx.ifirst, ints_len(rx.ifirst) - 1));
+            if target >= 0 {
+                ints_push(rx.emod, m);
+                ints_push(rx.eto, target);
+                ints_push(rx.eat, pub_at);
+                ints_push(rx.eall, all);
+            } else {
+                // A self-import makes no edge, and re-exports nothing.
+                ints_pop(rx.ifirst);
+                ints_pop(rx.icount);
+            }
+            i = j;
+        } else {
+            i = i + 1;
+        }
+    }
+    // An order: a `pub use` is applied once every `pub use` of the module it names has been.
+    let n = ints_len(rx.emod);
+    let placed = ints_new();
+    let mut k = 0;
+    while k < n { ints_push(placed, 0); ints_push(rx.cyclic, 0); k = k + 1; }
+    let mut moved = true;
+    while moved {
+        moved = false;
+        k = 0;
+        while k < n {
+            if ints_get(placed, k) == 0 {
+                let mut ready = true;
+                let mut q = 0;
+                while q < n {
+                    if ints_get(placed, q) == 0 {
+                        if ints_get(rx.emod, q) == ints_get(rx.eto, k) { ready = false; }
+                    }
+                    q = q + 1;
+                }
+                if ready {
+                    ints_set(placed, k, 1);
+                    ints_push(rx.order, k);
+                    moved = true;
+                }
+            }
+            k = k + 1;
+        }
+    }
+    k = 0;
+    while k < n {
+        if ints_get(placed, k) == 0 { ints_set(rx.cyclic, k, 1); }
+        k = k + 1;
+    }
+    rx
+}
+
+// Apply the re-exports to one kind's offers: each `pub use`, in order, offering what the
+// module it names offers — every name, or the chosen ones under the names given. Collisions
+// and names offered by nothing are reported by `check_reexports`, which sees every kind.
+pub fn apply_reexports(rx: Reexports, o: Offers) -> Int {
+    let mut w = 0;
+    while w < ints_len(rx.order) {
+        let e = ints_get(rx.order, w);
+        let m = ints_get(rx.emod, e);
+        let t = ints_get(rx.eto, e);
+        if ints_get(rx.eall, e) == 1 {
+            let mut i = 0;
+            let n = ints_len(o.om);
+            while i < n {
+                if ints_get(o.om, i) == t {
+                    let name = strs_get(o.on, i);
+                    if offered(o, m, name) < 0 { offer(o, m, name, ints_get(o.ox, i)); }
+                }
+                i = i + 1;
+            }
+        } else {
+            let mut c = 0;
+            while c < ints_get(rx.icount, e) {
+                let it = ints_get(rx.ifirst, e) + c;
+                let x = offered(o, t, strs_get(rx.iname, it));
+                if x >= 0 {
+                    if offered(o, m, strs_get(rx.ialias, it)) < 0 {
+                        offer(o, m, strs_get(rx.ialias, it), x);
+                    }
+                }
+                c = c + 1;
+            }
+        }
+        w = w + 1;
+    }
+    0
+}
+
+// The refusals, once every kind is known: a cycle of re-exports (`N0213`, at `pub`), a chosen
+// name the module named offers in no kind (`N0211`), and a name offered twice (`N0212`).
+pub fn check_reexports(rx: Reexports, fns: Offers, types: Offers, traits: Offers,
+        own_fns: Offers, own_types: Offers, own_traits: Offers, diags: Vec[Diag]) -> Int {
+    let mut e = 0;
+    while e < ints_len(rx.emod) {
+        let m = ints_get(rx.emod, e);
+        let t = ints_get(rx.eto, e);
+        let at = ints_get(rx.eat, e);
+        if ints_get(rx.cyclic, e) == 1 {
+            report(diags, "N0213", at, at + 3, "this re-export is part of a cycle of re-exports");
+        } else {
+            if ints_get(rx.eall, e) == 0 {
+                let mut c = 0;
+                while c < ints_get(rx.icount, e) {
+                    let it = ints_get(rx.ifirst, e) + c;
+                    let name = strs_get(rx.iname, it);
+                    let nat = ints_get(rx.iat, it);
+                    let mut found = false;
+                    if offered(fns, t, name) >= 0 { found = true; }
+                    if offered(types, t, name) >= 0 { found = true; }
+                    if offered(traits, t, name) >= 0 { found = true; }
+                    if found == false {
+                        report(diags, "N0211", nat, nat + str_len(name),
+                                str_concat(str_concat("`", name),
+                                "` is not exported by the module this re-exports from"));
+                    } else {
+                        let alias = strs_get(rx.ialias, it);
+                        let mut clash = false;
+                        if offered(own_fns, m, alias) >= 0 {
+                            if offered(fns, t, name) >= 0 { clash = true; }
+                        }
+                        if offered(own_types, m, alias) >= 0 { clash = true; }
+                        if offered(own_traits, m, alias) >= 0 { clash = true; }
+                        if clash {
+                            report(diags, "N0212", nat, nat + str_len(name),
+                                    str_concat(str_concat("`", alias), "` is already offered by this module"));
+                        }
+                        if alias != name {
+                            if offered(traits, t, name) >= 0 {
+                                report(diags, "N0211", nat, nat + str_len(name),
+                                        str_concat(str_concat("`", name),
+                                        "` is a trait, which is re-exported under its own name"));
+                            }
+                        }
+                    }
+                    c = c + 1;
+                }
+            } else {
+                // Everything: each name it brings that this module already offers itself.
+                let mut i = 0;
+                while i < ints_len(fns.om) {
+                    if ints_get(fns.om, i) == t {
+                        if offered(own_fns, m, strs_get(fns.on, i)) >= 0 {
+                            report(diags, "N0212", at, at + 3,
+                                    str_concat(str_concat("`", strs_get(fns.on, i)), "` is already offered by this module"));
+                        }
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+        e = e + 1;
+    }
+    0
+}
+
+// --- the stages of `check_program`, N102 and N103 ----------------------------------------
+//
+// Grouped so the entry point reads as its stages: types and traits linked across modules,
+// then functions, then bodies. Each is the code `check_program` ran in that place.
+
+pub struct Linked {
+    rx: Reexports,
+    types: Offers,
+    own_types: Offers,
+    own_traits: Offers,
+}
+
+// Stage 0: what each module offers of types and traits, its own and re-exported (N103), what
+// each module's imports bring in, every record's fields and ownership, every trait.
+pub fn link_types(kinds: Ints, starts: Ints, texts: Strs, nk: Ints, nar: Ints, nst: Ints,
+        nen: Ints, ntx: Strs, naux: Ints, kids: Ints, kid_first: Ints, mpath: Strs,
+        mstart: Ints, mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, core: Int, tb: Table,
+        tmod: Ints, tname: Strs, trec: Ints, diags: Vec[Diag]) -> Linked {
+    // The `pub use`s (N103), from the tokens and the module graph.
+    let rx = collect_reexports(kinds, starts, texts, mstart, mfirst, mcount, mto, mat,
+            strs_len(mpath));
+    // What each module offers of types: its own `pub` records and enums, then re-exports.
+    let own_types = new_offers();
+    let types = new_offers();
+    let mut ot = 0;
+    while ot < strs_len(tb.names) {
+        if is_declaration(tb, ot) {
+            if ints_get(tb.vis, ot) == 1 {
+                let k = ints_get(tb.kind, ot);
+                let mut nameable = k == rk_record();
+                if k == rk_enum() { nameable = true; }
+                if nameable {
+                    offer(own_types, ints_get(tb.owner, ot), strs_get(tb.names, ot), ot);
+                    offer(types, ints_get(tb.owner, ot), strs_get(tb.names, ot), ot);
+                }
+            }
+        }
+        ot = ot + 1;
+    }
+    apply_reexports(rx, types);
+    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath), core,
+            tb.names, tb.owner, tb.vis, tb.at, tmod, tname, trec, types, diags);
+    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first, tb,
+            tmod, tname, trec, diags);
+    check_ownership(tb, diags);
+    // Traits before any signature: a bound names one (N102).
+    collect_traits(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart, tb,
+            tmod, tname, trec, diags);
+    // And of traits.
+    let own_traits = new_offers();
+    let mut tt = 0;
+    while tt < strs_len(tb.trn) {
+        if ints_get(tb.trp, tt) == 1 {
+            offer(own_traits, ints_get(tb.tro, tt), strs_get(tb.trn, tt), tt);
+            offer(tb.toffer, ints_get(tb.tro, tt), strs_get(tb.trn, tt), tt);
+        }
+        tt = tt + 1;
+    }
+    apply_reexports(rx, tb.toffer);
+    let mut rs = 0;
+    while rs < ints_len(rx.emod) {
+        ints_push(tb.rsm, ints_get(rx.emod, rs));
+        ints_push(tb.rsf, ints_get(rx.eto, rs));
+        rs = rs + 1;
+    }
+    Linked(rx: rx, types: types, own_types: own_types, own_traits: own_traits)
+}
+
+// Stage 1, after every signature: what each module's imports bring in of functions, the
+// re-exports' refusals, the entry point, and every impl against its trait. Returns `main`.
+pub fn link_functions(linked: Linked, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+        naux: Ints, kids: Ints, kid_first: Ints, mpath: Strs, mstart: Ints, mfirst: Ints,
+        mcount: Ints, mto: Ints, mat: Ints, fnames: Strs, fret: Ints, ffirst: Ints,
+        fcount: Ints, fparams: Ints, fowner: Ints, fpub: Ints, fnode: Ints, vmod: Ints,
+        vname: Strs, vfn: Ints, tb: Table, tmod: Ints, tname: Strs, trec: Ints,
+        diags: Vec[Diag]) -> Int {
+    let rx = linked.rx;
+    let types = linked.types;
+    let own_types = linked.own_types;
+    let own_traits = linked.own_traits;
+    // And of functions, an impl's methods being no module's names.
+    let own_fns = new_offers();
+    let fns = new_offers();
+    let mut of = 0;
+    while of < strs_len(fnames) {
+        if ints_get(fpub, of) == 1 {
+            if str_byte(strs_get(fnames, of), 0) != 35 {
+                offer(own_fns, ints_get(fowner, of), strs_get(fnames, of), of);
+                offer(fns, ints_get(fowner, of), strs_get(fnames, of), of);
+            }
+        }
+        of = of + 1;
+    }
+    apply_reexports(rx, fns);
+    check_reexports(rx, fns, types, tb.toffer, own_fns, own_types, own_traits, diags);
+    check_imports(mfirst, mcount, mto, mat, strs_len(mpath), fnames, fowner, fpub,
+            vmod, vname, vfn, fns, diags);
+
+    let entry = entry_point(fnames, fowner, ffirst, fcount, fparams, fnode, nar, kids,
+            kid_first, nst, nen, diags);
+    // Every impl against its trait, once every definition has a signature (N102).
+    check_impls(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart, mfirst, mcount, mto,
+            fnames, fnode, ffirst, fcount, fparams, fret, tb, tmod, tname, trec, diags);
+
+    entry
+}
+
+// Stage 2: every body, then what the bodies require of effects and contracts (N102).
+pub fn check_bodies(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
+        nslot: Ints, ntype: Ints, ncallee: Ints, nrec: Ints, kids: Ints, kid_first: Ints,
+        mstart: Ints, mfirst: Ints, mcount: Ints, mto: Ints, core: Int,
+        fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
+        fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
+        bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
+        tb: Table, fgen: Ints, fgc: Ints, bgen: Ints, ntfirst: Ints, ntargs: Ints,
+        tmod: Ints, tname: Strs, trec: Ints, fnode: Ints, diags: Vec[Diag]) -> Int {
+    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
+            kids, kid_first, ints_len(nk) - 1,
+            mstart, mfirst, mcount, mto, core,
+            fnames, fret, ffirst, fcount, fparams,
+            fowner, fpub, vmod, vname, vfn,
+            bnames, bret, bfirst, bcount, bparams,
+            tb, fgen, fgc, bgen, ntfirst, ntargs,
+            tmod, tname, trec, fnode,
+            diags);
+
+    // Declared effect sets against what each body requires (N102). A foreign function's
+    // contract is `foreign`.
+    let fforeign = ints_new();
+    let mut ff = 0;
+    while ff < strs_len(fnames) {
+        let node = ints_get(fnode, ff);
+        let body = fn_body_of(nk, kids, ints_get(kid_first, node), ints_get(nar, node));
+        if ints_get(nk, body) == n_foreign() { ints_push(fforeign, 1); } else { ints_push(fforeign, 0); }
+        ff = ff + 1;
+    }
+    check_contract_shapes(nk, nar, nst, nen, ntx, naux, ncallee, kids, kid_first, fnode, fforeign,
+            tb, diags);
+    check_effects(nk, nar, nst, ntx, naux, ncallee, nrec, kids, kid_first, mstart,
+            fnames, fnode, fowner, ffirst, fcount, fparams, fforeign, tb, diags);
+
+    0
 }

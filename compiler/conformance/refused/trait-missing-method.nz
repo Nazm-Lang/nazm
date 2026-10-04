@@ -1,0 +1,5 @@
+// expect: N0602
+trait Area { fn area(self: Self) -> Int; fn side(self: Self) -> Int; }
+struct Sq { s: Int }
+impl Area for Sq { fn area(self: Sq) -> Int { 1 } }
+fn main() -> Int { 0 }

@@ -1785,6 +1785,10 @@ fn check_runtime_parity() -> Result<(), Vec<String>> {
         ),
         ("task_runtime", &["TASK_RUNTIME"]),
         ("channel_runtime", &["CHANNEL_RUNTIME"]),
+        // The stack check (N49), since the compiler written in Nazm compiles recursion (N102).
+        ("stack_runtime", &["STACK_RUNTIME"]),
+        // Closure objects (N50), since the compiler written in Nazm compiles closures (N102).
+        ("closure_runtime", &["CLOSURE_RUNTIME"]),
     ];
 
     let mut bad = Vec::new();

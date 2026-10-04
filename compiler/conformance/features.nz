@@ -1,0 +1,30 @@
+// N102: recursion, contracts, traits, closures and the logical operators, compiled by every
+// stage and agreed with the interpreter.
+trait Area { fn area(self: Self) -> Int; }
+struct Sq { s: Int }
+impl Area for Sq { fn area(self: Sq) -> Int { self.s * self.s } }
+fn twice[T: Area](x: T) -> Int { x.area() + Area.area(x) }
+
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+
+fn isqrt(n: Int) -> Int ! {}
+    requires n >= 0
+    ensures result * result <= n
+{ let mut r = 0; while (r + 1) * (r + 1) <= n { r = r + 1; } r }
+
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn scale(n: Int) -> fn(Int) -> Int { fn(x: Int) -> Int { x * n } }
+
+fn main() -> Int {
+    let word = int_to_str(1000);
+    let width = fn(x: Int) -> Int { x + str_len(word) };
+    let triple = scale(3);
+    let mut hits = 0;
+    let mut i = 0;
+    while i < 10 {
+        if i > 2 && i < 7 || i == 9 { hits = hits + 1; }
+        if !(i < 5) { hits = hits + 10; }
+        i = i + 1;
+    }
+    fib(12) + isqrt(50) + Sq(s: 3).area() + twice(Sq(s: 2)) + apply(width, 1) + triple(5) + hits
+}

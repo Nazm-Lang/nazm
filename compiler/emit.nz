@@ -78,6 +78,11 @@ fn llvm_type(t: Int) -> Str {
     if t == t_ints() { return "ptr"; }
     if t == t_strs() { return "ptr"; }
     if t == t_chan() { return "ptr"; }
+    // A capability is authority, not data (N102): an `i64` nothing reads, as the reference's
+    // LIR has it.
+    if is_cap(t) { return "i64"; }
+    // A function value is its closure object, by pointer (N102).
+    if is_fn(t) { return "ptr"; }
     // A `Vec` is a sequence header by pointer, whatever it holds: the element's layout is
     // in the operations, not in the handle.
     if is_vec(t) { return "ptr"; }
@@ -493,6 +498,8 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
             Owning.Enum(at: r) => task_release_helper(t, r, ty, i),
             // A `Vec` never crosses into a task: the checker refuses it, whatever it holds.
             Owning.Vector(at: _) => 0,
+            // Nor does a function value (N50).
+            Owning.Closure() => 0,
         };
         i = i + 1;
     }
@@ -763,17 +770,131 @@ fn set_field(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int,
     0
 }
 
+// Leave the function with `value` (N102). A function with `ensures` clauses leaves through
+// one exit, `nz.ens`, where they are checked: the value waits in `result`'s slot, which the
+// frame owns, so a clause that fails releases it with everything else. Any other function
+// lets its frame go and returns here.
+fn leave_with(out: Strs, next: Ints, frame: Ints, rowns: Ints, ens: Ints, ty: Int,
+        value: Int) -> Int {
+    let rs = ints_get(ens, 0);
+    if rs < 0 {
+        release_frame(out, next, frame, rowns);
+        add_line(out, str_concat(str_concat("  ret ", llvm_type(ty)), str_concat(" ", v(value))));
+        return 0;
+    }
+    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(ty)),
+            str_concat(" ", v(value))), str_concat(", ptr %slot", int_to_str(rs))));
+    add_line(out, "  br label %nz.ens");
+    0
+}
+
+// --- closures, N102 ---------------------------------------------------------------------
+//
+// The reference's closure objects (N50): `{ count, code, release, captures… }`, made by
+// `nz.closure_new`, each capture retained into it, a closure's code taking the object first.
+// A named function used as a value is an object with no captures whose code is a thunk.
+
+// A closure object's LLVM type: the header, then what it carries.
+fn closure_object(ntargs: Ints, at: Int) -> Str {
+    let mut fields = "{ i64, ptr, ptr";
+    let mut i = 0;
+    while i < ints_get(ntargs, at) {
+        fields = str_concat(str_concat(fields, ", "), llvm_type(ints_get(ntargs, at + 3 + 3 * i)));
+        i = i + 1;
+    }
+    str_concat(fields, " }")
+}
+
+fn closure_owns(ntargs: Ints, at: Int, rowns: Ints) -> Bool {
+    let mut i = 0;
+    while i < ints_get(ntargs, at) {
+        if owns_anything(ints_get(ntargs, at + 3 + 3 * i), rowns) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn make_closure(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, vals: Ints,
+        owned: Ints, otype: Ints, rowns: Ints, ntype: Ints, nslot: Ints, ntfirst: Ints,
+        ntargs: Ints, k: Int, at: Str) -> Int {
+    let base = ints_get(ntfirst, k);
+    let object = closure_object(ntargs, base);
+    let end = take_number(next);
+    add_line(out, str_concat(str_concat(str_concat("  ", v(end)), " = getelementptr "),
+            str_concat(object, ", ptr null, i32 1")));
+    let size = take_number(next);
+    add_line(out, str_concat(str_concat(str_concat("  ", v(size)), " = ptrtoint ptr "),
+            str_concat(v(end), " to i64")));
+    let code = str_concat("@nz.c", int_to_str(k));
+    let mut release = "null";
+    if closure_owns(ntargs, base, rowns) { release = str_concat(code, ".release"); }
+    let c = take_number(next);
+    add_line(out, str_concat(str_concat(str_concat(str_concat("  ", v(c)),
+            " = call ptr @nz.closure_new(i64 "), v(size)),
+            str_concat(str_concat(str_concat(", ptr ", code), ", ptr "), str_concat(release, ")"))));
+    let null = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(null)), str_concat(" = icmp eq ptr ", str_concat(v(c), ", null"))));
+    guard(out, msgs, next, current, live, null, "N0406", "out of memory", at, owned, otype, rowns);
+    let mut i = 0;
+    while i < ints_get(ntargs, base) {
+        let outer = ints_get(ntargs, base + 1 + 3 * i);
+        let t = ints_get(ntargs, base + 3 + 3 * i);
+        let val = take_number(next);
+        add_line(out, str_concat(str_concat(str_concat("  ", v(val)), str_concat(" = load ", llvm_type(t))),
+                str_concat(", ptr %slot", int_to_str(outer))));
+        // The object's own reference to each capture.
+        emit_retain(out, next, val, t, rowns);
+        let p = take_number(next);
+        add_line(out, str_concat(str_concat(str_concat(str_concat("  ", v(p)), " = getelementptr "),
+                str_concat(object, ", ptr ")), str_concat(str_concat(v(c), ", i32 0, i32 "),
+                int_to_str(3 + i))));
+        add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(t)), str_concat(" ", v(val))),
+                str_concat(", ptr ", v(p))));
+        i = i + 1;
+    }
+    ints_push(vals, c);
+    own_add(owned, otype, c, ints_get(ntype, k));
+    0
+}
+
+fn make_fn_value(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, vals: Ints,
+        owned: Ints, otype: Ints, rowns: Ints, ntype: Ints, ncallee: Ints, k: Int, at: Str) -> Int {
+    let c = take_number(next);
+    add_line(out, str_concat(str_concat(str_concat("  ", v(c)),
+            " = call ptr @nz.closure_new(i64 24, ptr @nz.t"),
+            str_concat(int_to_str(ints_get(ncallee, k)), ", ptr null)")));
+    let null = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(null)), str_concat(" = icmp eq ptr ", str_concat(v(c), ", null"))));
+    guard(out, msgs, next, current, live, null, "N0406", "out of memory", at, owned, otype, rowns);
+    ints_push(vals, c);
+    own_add(owned, otype, c, ints_get(ntype, k));
+    0
+}
+
+// The innermost-but-one closure starting at `k` below `below`: in a closure's own pass, a
+// closure inside it may start where it does.
+fn closure_starting(nk: Ints, substart: Ints, k: Int, below: Int) -> Int {
+    let mut c = below - 1;
+    while c >= k {
+        if ints_get(nk, c) == n_closure() {
+            if ints_get(substart, c) == k { return c; }
+        }
+        c = c - 1;
+    }
+    0 - 1
+}
+
 fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
         nk: Ints, nar: Ints, ntx: Strs, ntype: Ints, nrec: Ints, nslot: Ints,
         kids: Ints, kid_first: Ints, k: Int,
         rowns: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, otype: Ints,
         phi_val: Ints, phi_blk: Strs, nin: Ints,
-        current: Strs, live: Ints, frame: Ints, ret_t: Int) -> Int {
+        current: Strs, live: Ints, frame: Ints, ret_t: Int, ens: Ints) -> Int {
     let kind = ints_get(nk, k);
     if kind == n_propagate() {
         return emit_propagate(out, next, current, live, vals, owned, otype, frame, rowns,
                 ntype, nrec, nslot, kids, kid_first, k, ret_t, rfirst, rcount, rfname,
-                rftype);
+                rftype, ens);
     }
     // A declaration is not code. Neither is a field of one, nor a variant of one.
     if kind == n_record() { return 1; }
@@ -781,6 +902,12 @@ fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
     if kind == n_enum() { return 1; }
     if kind == n_variant() { return 1; }
     if kind == n_payload() { return 1; }
+    // Traits and impls are declarations too (N102): an impl's methods are functions, emitted
+    // as any other; the name in `Trait.m(x)` is evaluated by nothing.
+    if kind == n_trait() { return 1; }
+    if kind == n_sig() { return 1; }
+    if kind == n_impl() { return 1; }
+    if kind == n_traitref() { return 1; }
     // An arm's value is its body's, which is already on the stack. The bindings were
     // stored when the arm's block was opened, which is the only place they can be: the
     // body is a child and runs after.
@@ -1057,7 +1184,7 @@ fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
 fn emit_propagate(out: Strs, next: Ints, current: Strs, live: Ints, vals: Ints,
         owned: Ints, otype: Ints, frame: Ints, rowns: Ints,
         ntype: Ints, nrec: Ints, nslot: Ints, kids: Ints, kid_first: Ints, k: Int,
-        ret_t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
+        ret_t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, ens: Ints) -> Int {
     let et = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
     let e = record_of(et);
     let ok_vr = ints_get(nrec, k);
@@ -1112,8 +1239,7 @@ fn emit_propagate(out: Strs, next: Ints, current: Strs, live: Ints, vals: Ints,
     // A `return` from here: `n_return`'s sequence, step for step.
     join_from(out, next, current, live, 2);
     release_temporaries(out, next, owned, otype, rowns);
-    release_frame(out, next, frame, rowns);
-    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));
+    leave_with(out, next, frame, rowns, ens, ret_t, returned);
 
     // The success carries on.
     open_block(out, current, live, blk("q", k));
@@ -1453,6 +1579,9 @@ enum Owning {
     // each element by `T`'s law before the storage. A `Vec` of `Int` owns only its storage
     // and is a `Sequence`, exactly as an `Ints` is.
     Vector(at: Int),
+    // A function value (N102): a handle to its closure object, counted, whose captures go
+    // when the last reference does.
+    Closure,
 }
 
 fn owns(t: Int, rowns: Ints) -> Owning {
@@ -1466,6 +1595,7 @@ fn owns(t: Int, rowns: Ints) -> Owning {
         }
         return Owning.Sequence();
     }
+    if is_fn(t) { return Owning.Closure(); }
     if is_record(t) {
         if record_of(t) < ints_len(rowns) {
             // A record owns every field; an enum owns the **active** variant's, which is a
@@ -1491,6 +1621,7 @@ fn owns_anything(t: Int, rowns: Ints) -> Bool {
         Owning.Record(at: _) => true,
         Owning.Enum(at: _) => true,
         Owning.Vector(at: _) => true,
+        Owning.Closure() => true,
     }
 }
 
@@ -1633,6 +1764,7 @@ fn emit_retain(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
         Owning.Enum(at: r) => helper_call(out, "@nz.rt", r, t, value),
         // A handle: another reference to the same storage, as for any sequence.
         Owning.Vector(at: _) => runtime_call(out, "@nz.arr_retain(ptr ", v(value)),
+        Owning.Closure() => runtime_call(out, "@nz.closure_retain(ptr ", v(value)),
     }
 }
 
@@ -1652,6 +1784,7 @@ fn emit_release(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
         Owning.Enum(at: r) => helper_call(out, "@nz.rl", r, t, value),
         Owning.Vector(at: r) => runtime_call(out,
                 str_concat(str_concat("@nz.vr", int_to_str(r)), "(ptr "), v(value)),
+        Owning.Closure() => runtime_call(out, "@nz.closure_release(ptr ", v(value)),
     }
 }
 
@@ -2640,15 +2773,22 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         nk: Ints, nar: Ints, nst: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
         kids: Ints, kid_first: Ints, fnames: Strs, fowner: Ints, mstart: Ints,
         frame: Ints, owned: Ints, k: Int, begin: Int, src: Str, path: Str, rowns: Ints,
-        nrec: Ints, otype: Ints, rfirst: Ints, rcount: Ints, rftype: Ints, me_sym: Str) -> Int {
+        nrec: Ints, otype: Ints, rfirst: Ints, rcount: Ints, rftype: Ints, me_sym: Str,
+        ntfirst: Ints, ntargs: Ints) -> Int {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
     ints_set(next, 0, 0);
     let text = strs_get(ntx, k);
-    let params = ints_get(nar, k) - 1;
     let first = ints_get(kid_first, k);
+    let params = fn_param_count(nk, kids, first, ints_get(nar, k));
 
     let mut list = "";
+    // A closure's code takes its object first (N102), as the reference's does.
+    let closure = ints_get(nk, k) == n_closure();
+    if closure {
+        list = "ptr %env";
+        if params > 0 { list = str_concat(list, ", "); }
+    }
     let mut p = 0;
     while p < params {
         if p > 0 { list = str_concat(list, ", "); }
@@ -2683,11 +2823,36 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     let styp = ints_new();
     let mut fill = 0;
     while fill < slots { ints_push(styp, t_int()); fill = fill + 1; }
+    // A closure inside is a function of its own, with slots of its own (N102): its nodes
+    // are not this frame's. Its subtree runs from its leftmost leaf to its node.
+    let inside = ints_new();
+    let mut m = begin;
+    while m <= k { ints_push(inside, 0); m = m + 1; }
+    m = begin;
+    while m <= k {
+        if ints_get(nk, m) == n_closure() {
+            if m != k {
+                let mut leaf = m;
+                while ints_get(nar, leaf) > 0 { leaf = ints_get(kids, ints_get(kid_first, leaf)); }
+                let mut j = leaf;
+                while j <= m { ints_set(inside, j - begin, 1); j = j + 1; }
+            }
+        }
+        m = m + 1;
+    }
     let mut scan = begin;
     while scan <= k {
-        let sk = ints_get(nk, scan);
+        let sk0 = ints_get(nk, scan);
+        let mut sk = sk0;
+        if ints_get(inside, scan - begin) == 1 { sk = 0 - 1; }
         if sk == n_param() {
             ints_set(styp, ints_get(nslot, scan), ints_get(nrec, scan));
+        }
+        // `result`, in a function with `ensures` clauses: the function's own type (N102).
+        if sk == n_contract() {
+            if strs_get(ntx, scan) == "ensures" {
+                ints_set(styp, ints_get(nslot, scan), ints_get(nrec, k));
+            }
         }
         if sk == n_let() {
             // A binding's type is its initialiser's, which the checker already recorded
@@ -2743,6 +2908,15 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         }
         scan = scan + 1;
     }
+    // A closure's captures are slots of its own, of the captured bindings' types (N102).
+    let cbase = ints_get(ntfirst, k);
+    if closure {
+        let mut ci = 0;
+        while ci < ints_get(ntargs, cbase) {
+            ints_set(styp, ints_get(ntargs, cbase + 2 + 3 * ci), ints_get(ntargs, cbase + 3 + 3 * ci));
+            ci = ci + 1;
+        }
+    }
     let mut sl = 0;
     while sl < slots {
         add_line(out, str_concat(str_concat("  %slot", int_to_str(sl)),
@@ -2795,6 +2969,26 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
                 str_concat(" %p", int_to_str(p))),
                 str_concat(", ptr %slot", int_to_str(slot))));
         p = p + 1;
+    }
+    // Each capture out of the object, a reference of this frame's own: retained here and
+    // released with the frame (N102, the reference's `Capture`).
+    if closure {
+        let object = closure_object(ntargs, cbase);
+        let mut ci = 0;
+        while ci < ints_get(ntargs, cbase) {
+            let t = ints_get(ntargs, cbase + 3 + 3 * ci);
+            let inner = ints_get(ntargs, cbase + 2 + 3 * ci);
+            let fp = take_number(next);
+            add_line(out, str_concat(str_concat(str_concat(str_concat("  ", v(fp)), " = getelementptr "),
+                    str_concat(object, ", ptr %env, i32 0, i32 ")), int_to_str(3 + ci)));
+            let fv = take_number(next);
+            add_line(out, str_concat(str_concat(str_concat("  ", v(fv)), str_concat(" = load ", llvm_type(t))),
+                    str_concat(", ptr ", v(fp))));
+            emit_retain(out, next, fv, t, rowns);
+            add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(t)), str_concat(" ", v(fv))),
+                    str_concat(", ptr %slot", int_to_str(inner))));
+            ci = ci + 1;
+        }
     }
     0
 }
@@ -2976,29 +3170,19 @@ fn refuse_expansion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent:
 
 // --- recursion ------------------------------------------------------------------------
 //
-// The refusal `nazm-lir::lower::report_cycles` makes, made here for the same reason and
-// with the same code: this backend emits one native call per call and has no plan for the
-// stack a recursive one needs, so it refuses rather than emitting something it cannot
-// bound. `nazm run` still runs recursive programs, with a bounded call depth. This is not
-// a language rule — `nazm check` accepts recursion, and the specification allows it.
+// N49's rule, made here by N102: a function in a call cycle checks its thread's stack on
+// entry, and a call that would exhaust it fails with `N0408` at the function entered —
+// the reference's `nz.stack_check`, the same instructions. Until N102 this emitter refused
+// recursion by name, because it had no such check; a refusal is not the language, and
+// `nazm check` always accepted recursion.
 //
-// Every *declared* function, not only the reachable ones. Checking reachability would
-// mean that deleting a call somewhere else could change whether a function is diagnosed:
-// a language-visible rule arriving as a side effect of a backend limitation.
+// Direct and mutual recursion are one condition: a function is in a cycle when its own
+// calls reach it again. A `spawn` starts a task on a stack of its own and closes no cycle.
 //
-// Direct and mutual recursion are one condition found one way, and a cycle that passes
-// through a `spawn` is the same condition again: a task is an edge like any other, and
-// going through a thread does not bound the stack.
-//
-// One difference from the reference, and it is a reporting difference rather than a
-// contract one: this refuses at the first cycle it finds, where the reference collects
-// one diagnostic per function. The set of programs refused is the same.
-fn refuse_recursion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent: Ints,
-        ncallee: Ints, fnames: Strs, fowner: Ints, mstart: Ints) -> Int {
-    // Which function each `fn` node is, by the same rule everything else uses: the
-    // definition its own module makes under its name. Counting `fn` nodes in order would
-    // have been equivalent until a declaration could be refused and skipped, and a call
-    // graph built on a stale numbering names the wrong function.
+// Every declared function, reachable or not, as the reference does.
+fn find_cycles(nk: Ints, nst: Ints, ntx: Strs, parent: Ints, ncallee: Ints, fnames: Strs,
+        fowner: Ints, mstart: Ints, tb: Table) -> Ints {
+    // Which function each `fn` node is, by the same rule everything else uses.
     let fnof = ints_new();
     let mut k = 0;
     while k < ints_len(nk) {
@@ -3013,25 +3197,32 @@ fn refuse_recursion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent:
         }
         k = k + 1;
     }
-
-    // One edge per call to a user function, carrying the call's own offset so the refusal
-    // points at the call rather than at the function.
+    // One edge per call to a user function, from the function the call sits in.
     let efrom = ints_new();
     let eto = ints_new();
-    let eat = ints_new();
     k = 0;
     while k < ints_len(nk) {
-        let mut calls = false;
-        if ints_get(nk, k) == n_call() { calls = true; }
-        if ints_get(nk, k) == n_spawn() { calls = true; }
-        if calls {
-            // The callee the **checker** resolved, not a name looked up again here. A
-            // built-in is `-2` and is not an edge: it is emitted as instructions, and
-            // instructions do not recurse.
-            let to = ints_get(ncallee, k);
+        // A call through a bound may reach any impl's method of its signature (N102).
+        let targets = ints_new();
+        if ints_get(nk, k) == n_call() { ints_push(targets, ints_get(ncallee, k)); }
+        if ints_get(nk, k) == n_method() {
+            let code = ints_get(ncallee, k);
+            if code <= 0 - 10 {
+                let sg = 0 - 10 - code;
+                let mut im = 0;
+                while im < ints_len(tb.itrait) {
+                    if ints_get(tb.itrait, im) == ints_get(tb.strait, sg) {
+                        ints_push(targets, method_for(tb, sg, ints_get(tb.itype, im)));
+                    }
+                    im = im + 1;
+                }
+            }
+        }
+        let mut ti = 0;
+        while ti < ints_len(targets) {
+            let to = ints_get(targets, ti);
+            ti = ti + 1;
             if to >= 0 {
-                // The function this call sits in, found by walking parents with a loop.
-                // A compiler about to refuse recursion should not need it to say so.
                 let mut up = k;
                 let mut from = 0 - 1;
                 while up >= 0 {
@@ -3045,73 +3236,179 @@ fn refuse_recursion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent:
                 if from >= 0 {
                     ints_push(efrom, from);
                     ints_push(eto, to);
-                    ints_push(eat, ints_get(nst, k));
                 }
             }
         }
         k = k + 1;
     }
-
-    // Depth-first search with an explicit stack: 0 unvisited, 1 on the current path,
-    // 2 finished. An edge to a function already on the path closes a cycle.
-    let mark = ints_new();
-    let mut i = 0;
-    while i < strs_len(fnames) {
-        ints_push(mark, 0);
-        i = i + 1;
+    // Each function's callees, as one flat list in caller order, for the walks below.
+    let nf = strs_len(fnames);
+    let out_first = ints_new();
+    let out_list = ints_new();
+    let mut f = 0;
+    while f < nf {
+        ints_push(out_first, ints_len(out_list));
+        let mut e = 0;
+        while e < ints_len(efrom) {
+            if ints_get(efrom, e) == f { ints_push(out_list, ints_get(eto, e)); }
+            e = e + 1;
+        }
+        f = f + 1;
     }
-    let stack = ints_new();
-    let cursor = ints_new();
-    let mut root = 0;
-    while root < strs_len(fnames) {
-        if ints_get(mark, root) == 0 {
-            ints_push(stack, root);
-            ints_push(cursor, 0);
-            ints_set(mark, root, 1);
-            while ints_len(stack) > 0 {
-                let top = ints_len(stack) - 1;
-                let node = ints_get(stack, top);
-                // The next edge out of `node`: one flat edge list, scanned forward from
-                // where this frame left off. The graph is small, and three arrays read
-                // more plainly than a bucketed one.
-                let mut e = ints_get(cursor, top);
-                let mut at = 0 - 1;
-                while e < ints_len(efrom) {
-                    if ints_get(efrom, e) == node {
-                        at = e;
-                        e = ints_len(efrom);
-                    } else {
-                        e = e + 1;
-                    }
-                }
-                if at < 0 {
-                    ints_set(mark, node, 2);
-                    ints_pop(stack);
-                    ints_pop(cursor);
-                } else {
-                    ints_set(cursor, top, at + 1);
-                    let to = ints_get(eto, at);
-                    let m = ints_get(mark, to);
-                    if m == 1 {
-                        let name = strs_get(fnames, to);
-                        let mut what = str_concat(str_concat("a call cycle through `", name), "`");
-                        if to == node {
-                            what = str_concat(str_concat("a call to `", name), "` from inside itself");
-                        }
-                        refuse(str_concat(what, " is not in this backend's subset yet"),
-                                position(src, path, ints_get(eat, at)));
-                    }
-                    if m == 0 {
-                        ints_push(stack, to);
-                        ints_push(cursor, 0);
-                        ints_set(mark, to, 1);
+    ints_push(out_first, ints_len(out_list));
+    // A function is in a cycle when a walk from its callees comes back to it.
+    let cyc = ints_new();
+    let seen = ints_new();
+    f = 0;
+    while f < nf {
+        ints_push(cyc, 0);
+        ints_push(seen, 0 - 1);
+        f = f + 1;
+    }
+    f = 0;
+    while f < nf {
+        let work = ints_new();
+        let mut c = ints_get(out_first, f);
+        while c < ints_get(out_first, f + 1) {
+            ints_push(work, ints_get(out_list, c));
+            c = c + 1;
+        }
+        while ints_len(work) > 0 {
+            let g = ints_pop(work);
+            if g == f {
+                ints_set(cyc, f, 1);
+                while ints_len(work) > 0 { ints_pop(work); }
+            } else {
+                if ints_get(seen, g) != f {
+                    ints_set(seen, g, f);
+                    let mut d = ints_get(out_first, g);
+                    while d < ints_get(out_first, g + 1) {
+                        ints_push(work, ints_get(out_list, d));
+                        d = d + 1;
                     }
                 }
             }
         }
-        root = root + 1;
+        f = f + 1;
     }
-    0
+    // A function that calls through a function value checks its stack too (N50): what the
+    // value calls is not known here, and may be the function itself.
+    k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nk, k) == n_call() {
+            if ints_get(ncallee, k) == 0 - 3 {
+                let mut up = k;
+                while up >= 0 {
+                    if ints_get(nk, up) == n_fn() {
+                        let fi = ints_get(fnof, up);
+                        if fi >= 0 { ints_set(cyc, fi, 1); }
+                        up = 0 - 1;
+                    } else {
+                        up = ints_get(parent, up);
+                    }
+                }
+            }
+        }
+        k = k + 1;
+    }
+    cyc
+}
+
+// The stack check itself (N49), the reference runtime's `nz.stack_check`, derived from
+// `STACK_RUNTIME` as `runtime` is from its constants and held to it by the same gate. Its
+// thread-local limit and the two declarations it needs are written beside the other globals.
+// Closure objects (N50), the reference runtime's, derived from `CLOSURE_RUNTIME` and held to
+// it by the same gate (N102): `{ count, code, release, captures… }`, counted as they are made
+// and reclaimed.
+fn closure_runtime() -> Str {
+    let r = strs_new();
+    strs_push(r, "define internal ptr @nz.closure_new(i64 %size, ptr %code, ptr %release) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %p = call ptr @malloc(i64 %size)");
+    strs_push(r, "  %oom = icmp eq ptr %p, null");
+    strs_push(r, "  br i1 %oom, label %none, label %fill");
+    strs_push(r, "none:");
+    strs_push(r, "  ret ptr null");
+    strs_push(r, "fill:");
+    strs_push(r, "  %n = atomicrmw add ptr @nz.clo_allocated, i64 1 monotonic");
+    strs_push(r, "  store i64 1, ptr %p");
+    strs_push(r, "  %cp = getelementptr i8, ptr %p, i64 8");
+    strs_push(r, "  store ptr %code, ptr %cp");
+    strs_push(r, "  %rp = getelementptr i8, ptr %p, i64 16");
+    strs_push(r, "  store ptr %release, ptr %rp");
+    strs_push(r, "  ret ptr %p");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal void @nz.closure_retain(ptr %c) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %none = icmp eq ptr %c, null");
+    strs_push(r, "  br i1 %none, label %done, label %bump");
+    strs_push(r, "bump:");
+    strs_push(r, "  %old = atomicrmw add ptr %c, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal void @nz.closure_release(ptr %c) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %none = icmp eq ptr %c, null");
+    strs_push(r, "  br i1 %none, label %done, label %drop");
+    strs_push(r, "drop:");
+    strs_push(r, "  %old = atomicrmw sub ptr %c, i64 1 release");
+    strs_push(r, "  %last = icmp eq i64 %old, 1");
+    strs_push(r, "  br i1 %last, label %free, label %done");
+    strs_push(r, "free:");
+    strs_push(r, "  fence acquire");
+    strs_push(r, "  %rp = getelementptr i8, ptr %c, i64 16");
+    strs_push(r, "  %rel = load ptr, ptr %rp");
+    strs_push(r, "  %has = icmp ne ptr %rel, null");
+    strs_push(r, "  br i1 %has, label %captures, label %object");
+    strs_push(r, "captures:");
+    strs_push(r, "  call void %rel(ptr %c)");
+    strs_push(r, "  br label %object");
+    strs_push(r, "object:");
+    strs_push(r, "  call void @free(ptr %c)");
+    strs_push(r, "  %n = atomicrmw add ptr @nz.clo_reclaimed, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    str_concat(str_join(r, nl()), nl())
+}
+
+fn stack_runtime() -> Str {
+    let r = strs_new();
+    strs_push(r, "define internal i32 @nz.stack_check() {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %rl = alloca [2 x i64], align 8");
+    strs_push(r, "  %fp = call ptr @llvm.frameaddress.p0(i32 0)");
+    strs_push(r, "  %sp = ptrtoint ptr %fp to i64");
+    strs_push(r, "  %lim = load i64, ptr @nz.stack_limit");
+    strs_push(r, "  %unset = icmp eq i64 %lim, 0");
+    strs_push(r, "  br i1 %unset, label %init, label %compare");
+    strs_push(r, "init:");
+    strs_push(r, "  ; RLIMIT_STACK is 3 on every v1 target, and struct rlimit is two 64-bit words there.");
+    strs_push(r, "  %rc = call i32 @getrlimit(i32 3, ptr %rl)");
+    strs_push(r, "  %cur = load i64, ptr %rl");
+    strs_push(r, "  %ok = icmp eq i32 %rc, 0");
+    strs_push(r, "  %cap = select i1 %ok, i64 %cur, i64 8388608");
+    strs_push(r, "  %small = icmp ult i64 %cap, 8388608");
+    strs_push(r, "  %size = select i1 %small, i64 %cap, i64 8388608");
+    strs_push(r, "  %quarter = lshr i64 %size, 2");
+    strs_push(r, "  %budget = sub i64 %size, %quarter");
+    strs_push(r, "  %under = icmp ult i64 %sp, %budget");
+    strs_push(r, "  %raw = sub i64 %sp, %budget");
+    strs_push(r, "  %limit = select i1 %under, i64 1, i64 %raw");
+    strs_push(r, "  store i64 %limit, ptr @nz.stack_limit");
+    strs_push(r, "  br label %compare");
+    strs_push(r, "compare:");
+    strs_push(r, "  %l = phi i64 [ %lim, %entry ], [ %limit, %init ]");
+    strs_push(r, "  %past = icmp ult i64 %sp, %l");
+    strs_push(r, "  %r = zext i1 %past to i32");
+    strs_push(r, "  ret i32 %r");
+    strs_push(r, "}");
+    str_concat(str_join(r, nl()), nl())
 }
 
 fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
@@ -3121,7 +3418,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, blocks: Strs, nrec: Ints, rowns: Ints,
         rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
         lo: Int, hi: Int, me_sym: Str, ninst: Ints, generic_fn: Ints, tb: Table,
-        eqs: Ints) -> Int {
+        eqs: Ints, cyc: Ints, ntfirst: Ints, ntargs: Ints) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     // Slot 1 is the block-label counter, separate from slot 0 because the labels are
@@ -3146,6 +3443,24 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             ints_set(fn_at, ints_get(substart, f), f);
         }
         f = f + 1;
+    }
+    // Where each closure's subtree starts (N102), the outermost one where two start together:
+    // the function around a closure steps over its body, which is a function of its own.
+    let clo_at = ints_new();
+    f = 0;
+    while f < ints_len(nk) { ints_push(clo_at, 0 - 1); f = f + 1; }
+    f = 0;
+    while f < ints_len(nk) {
+        if ints_get(nk, f) == n_closure() { ints_set(clo_at, ints_get(substart, f), f); }
+        f = f + 1;
+    }
+    // A closure's own pass: the range is the closure, and the closure is the function.
+    let mut self_closure = 0 - 1;
+    if str_len(me_sym) > 5 {
+        if str_slice(me_sym, 0, 5) == "@nz.c" {
+            self_closure = hi;
+            ints_set(fn_at, lo, hi);
+        }
     }
 
     // Where the loop header of each `while` must be opened: before its condition's
@@ -3201,6 +3516,16 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
     // `break` there is leaving the whole loop, temporaries the loop body produced before
     // the `match` included.
     let loop_own = ints_new();
+    // The slot `result` waits in while a function's `ensures` clauses are checked, or -1
+    // for a function with none (N102): see `leave_with`.
+    let ens = ints_new();
+    ints_push(ens, 0 - 1);
+    // `&&` and `||` (N102): the block the left operand ended in, for the join's `phi`, and
+    // whether control reached the right operand's test at all.
+    let sc_blk = strs_new();
+    let sc_live = ints_new();
+    let mut sci = 0;
+    while sci < ints_len(nk) { strs_push(sc_blk, ""); ints_push(sc_live, 0); sci = sci + 1; }
     let loop_m = ints_new();
     // And where the open scopes stood in `live`: a `break` joins the scopes opened
     // **inside** the loop, and the ones around it are still running.
@@ -3262,9 +3587,75 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             k = ints_get(fn_at, k) + 1;
             continue;
         }
-        let kind = ints_get(nk, k);
-        let from = ints_get(nst, k);
-        let text = strs_get(ntx, k);
+        // A foreign function (N102): the C symbol declared, and a function under this
+        // definition's own symbol that calls it, so a call site is a call like any other.
+        // `Int` arguments and results only: what C's ABI makes of anything else is a layout
+        // this backend has not written.
+        if ints_get(fn_at, k) >= 0 {
+            let fnode = ints_get(fn_at, k);
+            let fbody = fn_body_of(nk, kids, ints_get(kid_first, fnode), ints_get(nar, fnode));
+            if ints_get(nk, fbody) == n_foreign() {
+                let ftext = strs_get(ntx, fnode);
+                let fme = owned_index(fnames, fowner, module_at(mstart, ints_get(nst, fnode)),
+                        fn_name(ftext));
+                let fparams = fn_param_count(nk, kids, ints_get(kid_first, fnode), ints_get(nar, fnode));
+                let mut types = "";
+                let mut formals = "";
+                let mut actuals = "";
+                let mut fp = 0;
+                while fp < fparams {
+                    let pnode = ints_get(kids, ints_get(kid_first, fnode) + fp);
+                    if ints_get(nrec, pnode) != t_int() {
+                        refuse("a foreign function taking anything but `Int`",
+                                position(src, path, ints_get(nst, pnode)));
+                    }
+                    if fp > 0 {
+                        types = str_concat(types, ", ");
+                        formals = str_concat(formals, ", ");
+                        actuals = str_concat(actuals, ", ");
+                    }
+                    types = str_concat(types, "i64");
+                    formals = str_concat(formals, str_concat("i64 %p", int_to_str(fp)));
+                    actuals = str_concat(actuals, str_concat("i64 %p", int_to_str(fp)));
+                    fp = fp + 1;
+                }
+                if ints_get(nrec, fnode) != t_int() {
+                    refuse("a foreign function returning anything but `Int`",
+                            position(src, path, ints_get(nst, fnode)));
+                }
+                let csym = str_concat("@", strs_get(ntx, fbody));
+                add_line(out, str_concat(str_concat(str_concat("declare i64 ", csym), "("),
+                        str_concat(types, ")")));
+                add_line(out, str_concat(str_concat(str_concat("define internal i64 ", symbol(fme)),
+                        str_concat("(", formals)), str_concat(") {   ; extern ", fn_name(ftext))));
+                add_line(out, "entry:");
+                add_line(out, str_concat(str_concat(str_concat("  %r = call i64 ", csym), "("),
+                        str_concat(actuals, ")")));
+                add_line(out, "  ret i64 %r");
+                add_line(out, "}");
+                k = fnode + 1;
+                continue;
+            }
+        }
+        let mut kind = ints_get(nk, k);
+        let mut from = ints_get(nst, k);
+        let mut text = strs_get(ntx, k);
+        // A call through a bound (N102): the impl of the type this instance has for the
+        // receiver, found now, and the call emitted as a call of it. The checker's answer is
+        // put back after this node, for the next instance.
+        let mut bound_code = 0;
+        if kind == n_method() {
+            bound_code = ints_get(ncallee, k);
+            let mut recv_t = ints_get(nrec, k);
+            if ints_get(nar, k) > 0 { recv_t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k))); }
+            let g = method_for(tb, 0 - 10 - bound_code, recv_t);
+            if g < 0 {
+                refuse("a method call no impl answers", position(src, path, from));
+            }
+            ints_set(ncallee, k, g);
+            kind = n_call();
+            text = strs_get(fnames, g);
+        }
 
         // A function's definition opens before its body, for the same reason.
         if ints_get(fn_at, k) >= 0 {
@@ -3272,7 +3663,73 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             open_function(out, current, live, next, vals, nk, nar, nst, ntx, nslot, ntype,
                     kids, kid_first, fnames, fowner, mstart, frame, owned,
                     ints_get(fn_at, k), k, src, path, rowns, nrec, otype,
-                    rfirst, rcount, rftype, me_sym);
+                    rfirst, rcount, rftype, me_sym, ntfirst, ntargs);
+            // In a call cycle: the stack first, before anything is owned (N49, N102).
+            let cnode = ints_get(fn_at, k);
+            ints_set(ens, 0, 0 - 1);
+            let mut ci = 0;
+            while ci < ints_get(nar, cnode) {
+                let cc = ints_get(kids, ints_get(kid_first, cnode) + ci);
+                if ints_get(nk, cc) == n_contract() {
+                    if strs_get(ntx, cc) == "ensures" { ints_set(ens, 0, ints_get(nslot, cc)); }
+                }
+                ci = ci + 1;
+            }
+            let cme = owned_index(fnames, fowner, module_at(mstart, ints_get(nst, cnode)),
+                    fn_name(strs_get(ntx, cnode)));
+            if cme >= 0 {
+                if ints_get(cyc, cme) == 1 {
+                    let sr = take_number(next);
+                    add_line(out, str_concat(str_concat("  ", v(sr)), " = call i32 @nz.stack_check()"));
+                    let sbad = take_number(next);
+                    add_line(out, str_concat(str_concat("  ", v(sbad)),
+                            str_concat(" = icmp ne i32 ", str_concat(v(sr), ", 0"))));
+                    guard(out, msgs, next, current, live, sbad, "N0408",
+                            "the native call stack is exhausted",
+                            position(src, path, name_offset(naux, cnode)), owned, otype, rowns);
+                }
+            }
+        }
+        // A closure that calls through a value checks its stack on entry, as a function does.
+        if self_closure >= 0 {
+            if k == lo {
+                let mut calls_value = false;
+                let mut q = lo;
+                while q < hi {
+                    if ints_get(nk, q) == n_call() {
+                        if ints_get(ncallee, q) == 0 - 3 { calls_value = true; }
+                    }
+                    q = q + 1;
+                }
+                if calls_value {
+                    let sr = take_number(next);
+                    add_line(out, str_concat(str_concat("  ", v(sr)), " = call i32 @nz.stack_check()"));
+                    let sbad = take_number(next);
+                    add_line(out, str_concat(str_concat("  ", v(sbad)),
+                            str_concat(" = icmp ne i32 ", str_concat(v(sr), ", 0"))));
+                    guard(out, msgs, next, current, live, sbad, "N0408",
+                            "the native call stack is exhausted",
+                            position(src, path, ints_get(nst, hi)), owned, otype, rowns);
+                }
+            }
+        }
+        // A closure inside this function (N102): its body is not this function's code. Its
+        // node makes the object; the scan carries on from there.
+        let mut cstart = ints_get(clo_at, k);
+        if self_closure >= 0 {
+            if k == lo { cstart = closure_starting(nk, substart, k, hi); }
+        }
+        if cstart >= 0 {
+            if cstart != self_closure {
+                k = cstart;
+                kind = ints_get(nk, k);
+                text = strs_get(ntx, k);
+                from = ints_get(nst, k);
+            }
+        }
+        // And the closure whose pass this is, at its node: the end of a function.
+        if kind == n_closure() {
+            if k == self_closure { kind = n_fn(); }
         }
 
         // How deep the value stack was when the scan arrived here, which is where every
@@ -3314,6 +3771,41 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             }
         }
 
+        // The join of `&&` or `||` (N102): the left operand's answer where it decided, the
+        // right operand's where it did not.
+        if kind == n_bin() {
+            let mut logical = text == "&&";
+            if text == "||" { logical = true; }
+            if logical {
+                if ints_get(sc_live, k) == 1 {
+                    let decided = if text == "&&" { "false" } else { "true" };
+                    let mut incoming = str_concat(str_concat(str_concat(str_concat("[ ", decided), ", %"),
+                            strs_get(sc_blk, k)), " ]");
+                    if ints_get(live, 0) == 1 {
+                        let rv = ints_pop(vals);
+                        incoming = str_concat(incoming, str_concat(str_concat(str_concat(str_concat(
+                                ", [ ", v(rv)), ", %"), strs_get(current, 0)), " ]"));
+                        branch(out, live, blk("j", k));
+                    }
+                    open_block(out, current, live, blk("j", k));
+                    let r = take_number(next);
+                    add_line(out, str_concat(str_concat(str_concat("  ", v(r)), " = phi i1 "), incoming));
+                    ints_push(vals, r);
+                    kind = n_program();
+                }
+            }
+        }
+        // `!` (N102): one instruction.
+        if kind == n_not() {
+            if ints_get(live, 0) == 1 {
+                let a = ints_pop(vals);
+                let r = take_number(next);
+                add_line(out, str_concat(str_concat(str_concat("  ", v(r)), " = xor i1 "),
+                        str_concat(v(a), ", true")));
+                ints_push(vals, r);
+                kind = n_program();
+            }
+        }
         if kind == n_scope() {
             // The closing brace: wait for every task, take on the first failure any of
             // them had, and only then decide whether this program carries on. A scope that
@@ -3335,6 +3827,14 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                 let floor = ints_get(depth_at, ints_get(substart, k));
                 while ints_len(vals) > floor { ints_pop(vals); }
             } else {
+                if kind == n_closure() {
+                    make_closure(out, msgs, next, current, live, vals, owned, otype, rowns, ntype,
+                            nslot, ntfirst, ntargs, k, position(src, path, from));
+                } else {
+                if kind == n_fnvalue() {
+                    make_fn_value(out, msgs, next, current, live, vals, owned, otype, rowns, ntype,
+                            ncallee, k, position(src, path, from));
+                } else {
                 if kind == n_spawn() {
                     emit_spawn(out, msgs, next, current, live, tasks, blocks, owned, vals, nar, ntype,
                             kids, kid_first, fnames, fret, k, ints_get(ncallee, k),
@@ -3343,7 +3843,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     if emit_record_node(out, next, vals, owned, nk, nar, ntx, ntype, nrec,
                             nslot, kids, kid_first, k, rowns, rfirst, rcount, rfname,
                             rftype, otype, phi_val, phi_blk, nin,
-                            current, live, frame, current_return(nrec, cur_fn)) == 1 {
+                            current, live, frame, current_return(nrec, cur_fn), ens) == 1 {
                         // A declaration, a construction, a projection, or a `match`.
                     } else {
                         if kind == n_param() {
@@ -3361,7 +3861,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                 let mut o = argc - 1;
                                 while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
                                 let callee = before_bracket(text);
+                                let indirect = ints_get(ncallee, k) == 0 - 3;
                                 let mut built = 0 - 1;
+                                if indirect {
+                                    // A call through a function value (N102): the binding's closure object, its code
+                                    // at offset 8, called with the object first.
+                                } else {
                                 if is_vec_op(callee) {
                                     // A `Vec` operation is instructions over its element's layout,
                                     // which is the call's own type — or its first argument's.
@@ -3375,6 +3880,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                     built = emit_builtin(callee, ordered, owned, out, msgs, next, current,
                                             live, position(src, path, from), rowns, otype);
                                 }
+                                }
                                 if built >= 0 {
                                     // A built-in borrows its arguments, exactly as a function does,
                                     // so a temporary handed to one is nobody's after it returns.
@@ -3382,6 +3888,20 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                     ints_push(vals, built);
                                 } else {
                                     let mut list = "";
+                                    // `x.m()` (N102): the receiver is the binding's, read from its slot.
+                                    if argc == 0 {
+                                        // The slot is the receiver's, unless the call is through a value, whose slot is the callee's.
+                                        let mut receiver = ints_get(nslot, k) >= 0;
+                                        if indirect { receiver = false; }
+                                        if receiver {
+                                            let rt = ints_get(nrec, k);
+                                            let rv = take_number(next);
+                                            add_line(out, str_concat(str_concat(str_concat("  ", v(rv)),
+                                                    str_concat(" = load ", llvm_type(rt))),
+                                                    str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
+                                            list = str_concat(str_concat(llvm_type(rt), " "), v(rv));
+                                        }
+                                    }
                                     a = argc - 1;
                                     while a >= 0 {
                                         if a < argc - 1 { list = str_concat(list, ", "); }
@@ -3390,10 +3910,24 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                 v(ints_get(args, a))));
                                         a = a - 1;
                                     }
+                                    let mut target = callee_symbol(ncallee, ninst, k);
+                                    if indirect {
+                                        let cv = take_number(next);
+                                        add_line(out, str_concat(str_concat(str_concat("  ", v(cv)), " = load ptr, ptr %slot"),
+                                                int_to_str(ints_get(nslot, k))));
+                                        let cp = take_number(next);
+                                        add_line(out, str_concat(str_concat(str_concat("  ", v(cp)), " = getelementptr i8, ptr "),
+                                                str_concat(v(cv), ", i64 8")));
+                                        let code = take_number(next);
+                                        add_line(out, str_concat(str_concat(str_concat("  ", v(code)), " = load ptr, ptr "), v(cp)));
+                                        target = v(code);
+                                        if argc > 0 { list = str_concat(", ", list); }
+                                        list = str_concat(str_concat("ptr ", v(cv)), list);
+                                    }
                                     let n = take_number(next);
                                     add_line(out, str_concat(str_concat("  ", v(n)),
                                             str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
-                                            str_concat(" ", callee_symbol(ncallee, ninst, k))),
+                                            str_concat(" ", target)),
                                             str_concat(str_concat("(", list), ")"))));
                                     // A callee that failed has already left by its own exit and handed
                                     // back a stand-in. Noticed here, so the failure keeps travelling
@@ -3487,8 +4021,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                 // being returned. The slots are the frame's and
                                                                 // go just below.
                                                                 release_temporaries(out, next, owned, otype, rowns);
-                                                                release_frame(out, next, frame, rowns);
-                                                                add_line(out, str_concat(str_concat("  ret ", llvm_type(vt)), str_concat(" ", v(value))));
+                                                                leave_with(out, next, frame, rowns, ens, vt, value);
                                                                 ints_set(live, 0, 0);
                                                             } else {
                                                                 if kind == n_var() {
@@ -3588,14 +4121,14 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                                 if kind == n_fn() {
                                                                                                     if llvm_type(ints_get(nrec, k)) == "void" {
                                                                                                         refuse(str_concat(str_concat("a function returning `",
-                                                                                                                before_at(after_colon(text))), "`"),
+                                                                                                                before_at(fn_ret(text))), "`"),
                                                                                                                 position(src, path, from));
                                                                                                     }
                                                                                                     // The platform wrapper prints an `Int`, so `main` must
                                                                                                     // produce one. What a `Str` result would mean for a process
                                                                                                     // is a decision nobody has made.
                                                                                                     if fn_name(text) == "main" {
-                                                                                                        if before_at(after_colon(text)) != "Int" {
+                                                                                                        if before_at(fn_ret(text)) != "Int" {
                                                                                                             refuse("a `main` that does not return `Int`",
                                                                                                                     position(src, path, from));
                                                                                                         }
@@ -3604,6 +4137,19 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                                     // the end with and needs no terminator of its own — the
                                                                                                     // `ret` is already there.
                                                                                                     if ints_get(live, 0) == 1 {
+                                                                                                    if ints_get(ens, 0) >= 0 {
+                                                                                                    // `nz.ens`, every `ensures` checked: the value leaves `result`'s slot, which is
+                                                                                                    // zeroed so the frame does not release what the caller receives, and the frame goes.
+                                                                                                    let rt = ints_get(nrec, k);
+                                                                                                    let rs = ints_get(ens, 0);
+                                                                                                    let rv = take_number(next);
+                                                                                                    add_line(out, str_concat(str_concat(str_concat("  ", v(rv)), str_concat(" = load ", llvm_type(rt))),
+                                                                                                            str_concat(", ptr %slot", int_to_str(rs))));
+                                                                                                    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(rt)), str_concat(" ", unwind_value(rt))),
+                                                                                                            str_concat(", ptr %slot", int_to_str(rs))));
+                                                                                                    release_frame(out, next, frame, rowns);
+                                                                                                    add_line(out, str_concat(str_concat("  ret ", llvm_type(rt)), str_concat(" ", v(rv))));
+                                                                                                    } else {
                                                                                                         if ints_len(vals) != 1 {
                                                                                                             refuse("a body that produces no value",
                                                                                                                     position(src, path, from));
@@ -3617,6 +4163,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                                         add_line(out, str_concat(str_concat("  ret ",
                                                                                                                 llvm_type(ints_get(nrec, k))),
                                                                                                                 str_concat(" ", v(tv))));
+                                                                                                    }
                                                                                                     }
                                                                                                     // The one exit every failure in this function leaves by,
                                                                                                     // written only if something branched to it.
@@ -3639,7 +4186,11 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                                     // next function would inherit them.
                                                                                                     while ints_len(vals) > 0 { ints_pop(vals); }
                                                                                                 } else {
-                                                                                                    if kind != n_program() {
+                                                                                                    // A contract clause leaves its condition on the stack, for the check at the boundary
+                                                                                                    // after it (N102).
+                                                                                                    let mut known = kind == n_program();
+                                                                                                    if kind == n_contract() { known = true; }
+                                                                                                    if known == false {
                                                                                                         refuse(str_concat(str_concat("`", node_name(kind)), "`"),
                                                                                                                 position(src, path, from));
                                                                                                     }
@@ -3664,8 +4215,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         }
                     }
                 }
+                }
+                }
             }
         }
+
+        if bound_code != 0 { ints_set(ncallee, k, bound_code); }
 
         // --- the boundary between two children ------------------------------------
         //
@@ -3677,6 +4232,39 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             let pk = ints_get(nk, p);
             let which = ints_get(childno, k);
             let parity = ints_get(nar, p);
+
+            // A function's contract (N102): each clause checked as soon as its condition is
+            // known — a `requires` on entry, an `ensures` in `nz.ens` — and the body's value,
+            // in a function with `ensures` clauses, sent to `nz.ens` like any `return`.
+            if pk == n_fn() {
+                if ints_get(nk, k) == n_contract() {
+                    if ints_get(live, 0) == 1 {
+                        let c = ints_pop(vals);
+                        let bad = take_number(next);
+                        add_line(out, str_concat(str_concat("  ", v(bad)),
+                                str_concat(" = icmp eq i1 ", str_concat(v(c), ", false"))));
+                        let mut code = "N0410";
+                        let mut message = "this precondition does not hold";
+                        if text == "ensures" {
+                            code = "N0411";
+                            message = "this postcondition does not hold";
+                        }
+                        guard(out, msgs, next, current, live, bad, code, message,
+                                position(src, path, from), owned, otype, rowns);
+                    }
+                } else {
+                    if ints_get(ens, 0) >= 0 {
+                        if k == fn_body_of(nk, kids, ints_get(kid_first, p), parity) {
+                            if ints_get(live, 0) == 1 {
+                                let tv = ints_pop(vals);
+                                own_keep(out, next, owned, tv, ints_get(nrec, p), rowns, otype);
+                                leave_with(out, next, frame, rowns, ens, ints_get(nrec, p), tv);
+                            }
+                            open_block(out, current, live, "nz.ens");
+                        }
+                    }
+                }
+            }
 
             if pk == n_while() {
                 if which == 0 {
@@ -3814,6 +4402,31 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                 }
             }
 
+            if pk == n_bin() {
+                if which == 0 {
+                    let pt = strs_get(ntx, p);
+                    let mut logical = pt == "&&";
+                    if pt == "||" { logical = true; }
+                    if logical {
+                        if ints_get(live, 0) == 1 {
+                            let a = ints_pop(vals);
+                            strs_set(sc_blk, p, strs_get(current, 0));
+                            ints_set(sc_live, p, 1);
+                            // `&&` goes on only when the left is true; `||` only when false.
+                            let mut on_true = blk("r", p);
+                            let mut on_false = blk("j", p);
+                            if pt == "||" {
+                                on_true = blk("j", p);
+                                on_false = blk("r", p);
+                            }
+                            add_line(out, str_concat(str_concat("  br i1 ", v(a)),
+                                    str_concat(str_concat(", label %", on_true),
+                                    str_concat(", label %", on_false))));
+                            open_block(out, current, live, blk("r", p));
+                        }
+                    }
+                }
+            }
             if pk == n_if() {
                 if which == 0 {
                     // A condition that left has no value to branch on, so neither branch
@@ -3924,7 +4537,8 @@ fn main() -> Int {
     let mcount = ints_new();
     let mto = ints_new();
     let mat = ints_new();
-    let src = attach_core(arg(1), load_modules(path, mpath, mstart, mfirst, mcount, mto, mat),
+    let src = attach_core(arg(1), load_modules(path, std_dir_of(arg(1)), mpath, mstart, mfirst,
+            mcount, mto, mat),
             mpath, mstart, mfirst, mcount, mto, mat);
 
     // The program's IR, or the diagnostics that stopped it before any was written.
@@ -4010,7 +4624,13 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     // stdout would be a refusal nobody could act on.
     refuse_expansion(src, path, nk, nst, ntx, parent, ncallee, fnames, fowner, fgc, mstart,
             tb, ntfirst, ntargs);
-    refuse_recursion(src, path, nk, nst, ntx, parent, ncallee, fnames, fowner, mstart);
+    let cyc = find_cycles(nk, nst, ntx, parent, ncallee, fnames, fowner, mstart, tb);
+    let mut recursive = false;
+    let mut cy = 0;
+    while cy < ints_len(cyc) {
+        if ints_get(cyc, cy) == 1 { recursive = true; }
+        cy = cy + 1;
+    }
 
     // --- instances ------------------------------------------------------------------
     //
@@ -4103,6 +4723,9 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
             if jk == n_fn() { is_type = true; }
             if jk == n_param() { is_type = true; }
             if jk == n_assign() { is_type = true; }
+            // A method call's receiver type, for `x.m()` through a bound (N102).
+            if jk == n_method() { is_type = true; }
+            if jk == n_call() { is_type = true; }
             if is_type { rec = substitute(tb, rec, params, args); }
             if jk == n_construct() {
                 if rec >= 0 { rec = record_of(substitute(tb, t_record(rec), params, args)); }
@@ -4188,7 +4811,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
             parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
             body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
-            0, ints_len(nk) - 1, "", ninst, generic_fn, tb, eqs);
+            0, ints_len(nk) - 1, "", ninst, generic_fn, tb, eqs, cyc, ntfirst, ntargs);
     // Each instance, from its definition's own nodes — spans and all, so a failure inside
     // one is reported at the generic definition's line — with the node types substituted.
     ii = 0;
@@ -4206,8 +4829,87 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
         emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
                 parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
                 body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
-                lo, fnn, str_concat("@nz.g", int_to_str(ii)), ninst, generic_fn, tb, eqs);
+                lo, fnn, str_concat("@nz.g", int_to_str(ii)), ninst, generic_fn, tb, eqs, cyc,
+                ntfirst, ntargs);
         ii = ii + 1;
+    }
+
+    // Each closure's code (N102): a function of its own, over its own range of the arena,
+    // the object first. A closure inside one is made by it and emitted here in its turn.
+    let mut uses_closures = false;
+    let mut cn = 0;
+    while cn < ints_len(nk) {
+        let ck = ints_get(nk, cn);
+        if ck == n_fnvalue() { uses_closures = true; }
+        if ck == n_closure() {
+            uses_closures = true;
+            emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
+                    parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
+                    body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
+                    ints_get(substart, cn), cn, str_concat("@nz.c", int_to_str(cn)), ninst,
+                    generic_fn, tb, eqs, cyc, ntfirst, ntargs);
+            // What the object carries, released when the last reference to it goes.
+            let cbase = ints_get(ntfirst, cn);
+            if closure_owns(ntargs, cbase, rowns) {
+                let object = closure_object(ntargs, cbase);
+                add_line(body, str_concat(str_concat("define internal void @nz.c", int_to_str(cn)),
+                        ".release(ptr %c) {"));
+                add_line(body, "entry:");
+                let rn = ints_new();
+                ints_push(rn, 0);
+                let mut ci = 0;
+                while ci < ints_get(ntargs, cbase) {
+                    let t = ints_get(ntargs, cbase + 3 + 3 * ci);
+                    if owns_anything(t, rowns) {
+                        let fp = take_number(rn);
+                        add_line(body, str_concat(str_concat(str_concat(str_concat("  ", v(fp)),
+                                " = getelementptr "), str_concat(object, ", ptr %c, i32 0, i32 ")),
+                                int_to_str(3 + ci)));
+                        let fv = take_number(rn);
+                        add_line(body, str_concat(str_concat(str_concat("  ", v(fv)),
+                                str_concat(" = load ", llvm_type(t))), str_concat(", ptr ", v(fp))));
+                        emit_release(body, rn, fv, t, rowns);
+                    }
+                    ci = ci + 1;
+                }
+                add_line(body, "  ret void");
+                add_line(body, "}");
+            }
+        }
+        cn = cn + 1;
+    }
+    // A thunk per named function used as a value (N102): code of a function value's shape —
+    // the object first — that calls it.
+    let thunked = ints_new();
+    cn = 0;
+    while cn < ints_len(nk) {
+        if ints_get(nk, cn) == n_fnvalue() {
+            let g = ints_get(ncallee, cn);
+            if contains(thunked, g) == false {
+                ints_push(thunked, g);
+                let gnode = ints_get(fnode_of, g);
+                let gp = fn_param_count(nk, kids, ints_get(kid_first, gnode), ints_get(nar, gnode));
+                let mut formals = "ptr %env";
+                let mut actuals = "";
+                let mut q = 0;
+                while q < gp {
+                    let pt = llvm_type(ints_get(nrec, ints_get(kids, ints_get(kid_first, gnode) + q)));
+                    formals = str_concat(formals, str_concat(str_concat(str_concat(", ", pt), " %p"), int_to_str(q)));
+                    if q > 0 { actuals = str_concat(actuals, ", "); }
+                    actuals = str_concat(actuals, str_concat(str_concat(pt, " %p"), int_to_str(q)));
+                    q = q + 1;
+                }
+                let rt = llvm_type(ints_get(fret, g));
+                add_line(body, str_concat(str_concat(str_concat(str_concat("define internal ", rt),
+                        str_concat(" @nz.t", int_to_str(g))), str_concat("(", formals)), ") {"));
+                add_line(body, "entry:");
+                add_line(body, str_concat(str_concat(str_concat(str_concat("  %r = call ", rt), " "),
+                        symbol(g)), str_concat(str_concat("(", actuals), ")")));
+                add_line(body, str_concat(str_concat("  ret ", rt), " %r"));
+                add_line(body, "}");
+            }
+        }
+        cn = cn + 1;
     }
 
     // Whether this program can reach a channel. A `spawn` is not the only way: a program
@@ -4341,6 +5043,9 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     add_line(head, "@nz.str_reclaimed = internal global i64 0");
     add_line(head, "@nz.chan_allocated = internal global i64 0");
     add_line(head, "@nz.chan_reclaimed = internal global i64 0");
+    // And closures (N102): the reference's last pair, so a report names every kind.
+    add_line(head, "@nz.clo_allocated = internal global i64 0");
+    add_line(head, "@nz.clo_reclaimed = internal global i64 0");
     add_line(head, str_concat(str_concat("@.dec = private unnamed_addr constant [5 x i8] c", dq()),
             str_concat("%lld", str_concat(str_concat(bs(), "00"), dq()))));
     add_line(head, str_concat(str_concat("@.rb = private unnamed_addr constant [3 x i8] c", dq()),
@@ -4407,6 +5112,13 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     // neither may see the other's; first failure per thread wins, so one caused by
     // carrying on with the stand-in value of another cannot displace it.
     add_line(head, "@nz.failed = internal thread_local global i1 false");
+    // The lowest frame address this thread may reach before `nz.stack_check` reports (N49),
+    // and what that check calls. Only where a function is in a call cycle (N102).
+    if recursive {
+        add_line(head, "@nz.stack_limit = internal thread_local global i64 0");
+        add_line(head, "declare ptr @llvm.frameaddress.p0(i32)");
+        add_line(head, "declare i32 @getrlimit(i32, ptr)");
+    }
     add_line(head, "@nz.errmsg = internal thread_local global ptr null");
     add_line(head, "@nz.errlen = internal thread_local global i64 0");
     add_line(head, "define internal void @nz.fail(ptr %m, i64 %n) {");
@@ -4445,7 +5157,18 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     add_line(tail, "  store ptr %argv, ptr @nz.argv");
     // The **root** module's `main`, which the checker already located. An imported
     // module's `main` is one of its definitions and not an entry point.
-    add_line(tail, str_concat("  %r = call i64 ", str_concat(symbol(entry), "()")));
+    // One capability per parameter `main` declares: the runtime is the root of authority,
+    // and a capability is a value nothing reads, so each is a zero.
+    let mut root_args = "";
+    let mut ra = 0;
+    let main_node = ints_get(fnode_of, entry);
+    while ra < fn_param_count(nk, kids, ints_get(kid_first, main_node), ints_get(nar, main_node)) {
+        if ra > 0 { root_args = str_concat(root_args, ", "); }
+        root_args = str_concat(root_args, "i64 0");
+        ra = ra + 1;
+    }
+    add_line(tail, str_concat("  %r = call i64 ", str_concat(symbol(entry),
+            str_concat(str_concat("(", root_args), ")"))));
     // Before the failure is reported, not after: `@nz.report` ends the process and never
     // returns, so a report on the success path alone would say nothing about exactly the
     // runs where reclamation is hardest to get right. A runtime diagnostic, off unless
@@ -4464,7 +5187,10 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     add_line(tail, "  %chana = load i64, ptr @nz.chan_allocated");
     add_line(tail, "  %chanr = load i64, ptr @nz.chan_reclaimed");
     add_line(tail, "  %chanl = sub i64 %chana, %chanr");
-    add_line(tail, "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 512, ptr @.memfmt, i64 %seqa, i64 %seqr, i64 %seql, i64 %stra, i64 %strr, i64 %strl, i64 %chana, i64 %chanr, i64 %chanl, i64 0, i64 0, i64 0)");
+    add_line(tail, "  %cloa = load i64, ptr @nz.clo_allocated");
+    add_line(tail, "  %clor = load i64, ptr @nz.clo_reclaimed");
+    add_line(tail, "  %clol = sub i64 %cloa, %clor");
+    add_line(tail, "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 512, ptr @.memfmt, i64 %seqa, i64 %seqr, i64 %seql, i64 %stra, i64 %strr, i64 %strl, i64 %chana, i64 %chanr, i64 %chanl, i64 %cloa, i64 %clor, i64 %clol)");
     add_line(tail, "  %memlen = sext i32 %memout to i64");
     add_line(tail, "  %memwrote = call i64 @write(i32 2, ptr @.membuf, i64 %memlen)");
     add_line(tail, "  br label %nz.checked");
@@ -4485,6 +5211,12 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     // ordinary program carries none of it. A channel without a `spawn` needs the channel
     // half and not the task half.
     let mut rt = runtime();
+    if recursive {
+        rt = str_concat(rt, stack_runtime());
+    }
+    if uses_closures {
+        rt = str_concat(rt, closure_runtime());
+    }
     if strs_len(tasks) > 0 {
         rt = str_concat(rt, task_runtime());
     }

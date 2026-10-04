@@ -87,6 +87,34 @@ pub fn n_propagate() -> Int { 32 }
 // node, spanning the same bytes: the wrapper is the reference AST's `Expr::Block`, and it
 // is what tells a block used as a value from a branch's or a body's.
 pub fn n_blockexpr() -> Int { 33 }
+// A foreign function's body (N102): it has none, and this stands where one would be, its text
+// the C symbol the declaration names — `extern "C" fn labs(x: Int) -> Int = "labs";`.
+pub fn n_foreign() -> Int { 34 }
+// A contract clause (N102): one child, the condition; its text is `requires` or `ensures`.
+// A function's children are its parameters, its `requires` clauses, its body, then its
+// `ensures` clauses — the order they are evaluated in, which is not the order they are
+// written: an `ensures` is read before the body and checked as the function returns.
+pub fn n_contract() -> Int { 35 }
+// A method call (N102): the receiver, then the arguments; its text is the method's name and its
+// auxiliary column where that name is written. `Trait.m(x)` is parsed the same way, with `Trait`
+// a name where the receiver goes: the checker decides which it is, as the reference's does.
+pub fn n_method() -> Int { 36 }
+// A trait (N102): one `sig` child per method, whose children are its parameters.
+pub fn n_trait() -> Int { 37 }
+pub fn n_sig() -> Int { 38 }
+// An impl (N102): one `fn` child per method; its text is `Trait@at:Type@at`.
+pub fn n_impl() -> Int { 39 }
+// Never parsed (N102): what the checker makes of the name in `Trait.m(x)`, which names a trait
+// where a receiver would stand. Nothing evaluates it.
+pub fn n_traitref() -> Int { 40 }
+// A closure (N102): its parameters, then its body; its text is `closure:R!effects`, as a
+// function's after its name.
+pub fn n_closure() -> Int { 41 }
+// Never parsed (N102): what the checker makes of a name that is a function, not a value in
+// scope, written without a call — a named function as a value.
+pub fn n_fnvalue() -> Int { 42 }
+// `!operand` (N102): the reference's `Not`.
+pub fn n_not() -> Int { 43 }
 
 pub fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
@@ -122,6 +150,16 @@ pub fn node_name(k: Int) -> Str {
     if k == n_match() { return "match"; }
     if k == n_propagate() { return "propagate"; }
     if k == n_blockexpr() { return "blockexpr"; }
+    if k == n_foreign() { return "foreign"; }
+    if k == n_contract() { return "contract"; }
+    if k == n_method() { return "method"; }
+    if k == n_trait() { return "trait"; }
+    if k == n_sig() { return "sig"; }
+    if k == n_impl() { return "impl"; }
+    if k == n_traitref() { return "traitref"; }
+    if k == n_closure() { return "closure"; }
+    if k == n_fnvalue() { return "fnvalue"; }
+    if k == n_not() { return "not"; }
     "?"
 }
 
@@ -131,17 +169,20 @@ pub fn node_name(k: Int) -> Str {
 // sentinels that stop a reduction; 91 is a pending unary minus.
 
 fn prec_of(kind: Int) -> Int {
-    if kind == k_eqeq() { return 1; }
-    if kind == k_noteq() { return 1; }
-    if kind == k_lt() { return 1; }
-    if kind == k_lteq() { return 1; }
-    if kind == k_gt() { return 1; }
-    if kind == k_gteq() { return 1; }
-    if kind == k_plus() { return 2; }
-    if kind == k_minus() { return 2; }
-    if kind == k_star() { return 3; }
-    if kind == k_slash() { return 3; }
-    if kind == k_percent() { return 3; }
+    // `||` loosest, then `&&` (N102): the reference's binding powers.
+    if kind == k_pipepipe() { return 1; }
+    if kind == k_ampamp() { return 2; }
+    if kind == k_eqeq() { return 3; }
+    if kind == k_noteq() { return 3; }
+    if kind == k_lt() { return 3; }
+    if kind == k_lteq() { return 3; }
+    if kind == k_gt() { return 3; }
+    if kind == k_gteq() { return 3; }
+    if kind == k_plus() { return 4; }
+    if kind == k_minus() { return 4; }
+    if kind == k_star() { return 5; }
+    if kind == k_slash() { return 5; }
+    if kind == k_percent() { return 5; }
     0
 }
 
@@ -157,6 +198,8 @@ fn op_symbol(kind: Int) -> Str {
     if kind == k_star() { return "*"; }
     if kind == k_slash() { return "/"; }
     if kind == k_percent() { return "%"; }
+    if kind == k_ampamp() { return "&&"; }
+    if kind == k_pipepipe() { return "||"; }
     "?"
 }
 
@@ -195,6 +238,10 @@ fn sent_match() -> Int { 95 }
 // which is a decision rather than a guess, because the language has no methods and no
 // function values, so nothing else can put a `(` after a field read.
 fn sent_variant() -> Int { 96 }
+// A method call's argument list (N102): `recv.m(…)`, the receiver already an operand.
+fn sent_method() -> Int { 97 }
+// A pending `!` (N102), applied as soon as its operand exists, as a pending `-` is.
+fn sent_not() -> Int { 98 }
 
 // --- the arena ---------------------------------------------------------------------
 
@@ -268,6 +315,12 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             skip_primary = false;
         } else {
             // --- prefix: any run of unary minus -----------------------------------------
+            // And any `!` (N102), which binds the same way.
+            while kind_at(kinds, i) == k_bang() {
+                ints_push(ops, sent_not());
+                ints_push(opat, start_at(starts, i));
+                i = i + 1;
+            }
             while kind_at(kinds, i) == k_minus() {
                 // `-` immediately before an out-of-range literal is not a negation of it:
                 // the two fold into one literal, which is the only way `Int::MIN` can be
@@ -352,6 +405,82 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 ints_set(status, 0, 3);
                 return i;
             }
+            if t == k_fn() {
+                // A closure (N102): its parameters as `param` nodes now, its body by the frame
+                // machine, as a block used as an operand is. The header travels to the frame
+                // on `cname` and `cargs`, which the main loop takes straight back.
+                let cat = start_at(starts, i);
+                i = i + 1;
+                if kind_at(kinds, i) != k_lparen() {
+                    die("expected `(` after `fn` in a closure", start_at(starts, i));
+                }
+                i = i + 1;
+                let mut params = 0;
+                while kind_at(kinds, i) != k_rparen() {
+                    if kind_at(kinds, i) != k_ident() {
+                        die("expected a parameter name", start_at(starts, i));
+                    }
+                    let pname = text_at(texts, i);
+                    let pstart = start_at(starts, i);
+                    i = i + 1;
+                    if kind_at(kinds, i) != k_colon() {
+                        die("expected `:` after a parameter name", start_at(starts, i));
+                    }
+                    i = i + 1;
+                    let pty = strs_new();
+                    i = read_type(kinds, starts, ends, texts, i, "expected a type", pty);
+                    emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, end_at(ends, i - 1),
+                            str_concat(str_concat(pname, ":"), strs_get(pty, 0)));
+                    params = params + 1;
+                    if kind_at(kinds, i) == k_comma() { i = i + 1; }
+                }
+                i = i + 1;
+                if kind_at(kinds, i) != k_arrow() {
+                    die("expected `->` and a result type", start_at(starts, i));
+                }
+                i = i + 1;
+                let rty = strs_new();
+                let ret_at = start_at(starts, i);
+                i = read_type(kinds, starts, ends, texts, i, "expected a result type", rty);
+                let mut ret = strs_get(rty, 0);
+                if kind_at(kinds, i - 1) == k_ident() {
+                    ret = str_concat(str_concat(ret, "@"), int_to_str(ret_at));
+                }
+                if kind_at(kinds, i) == k_bang() {
+                    i = i + 1;
+                    if kind_at(kinds, i) != k_lbrace() {
+                        die("expected `{` after `!`, to open the effect set", start_at(starts, i));
+                    }
+                    i = i + 1;
+                    let mut effects = "!";
+                    let mut efirst = true;
+                    while kind_at(kinds, i) != k_rbrace() {
+                        let mut word = "";
+                        if kind_at(kinds, i) == k_ident() { word = text_at(texts, i); }
+                        if kind_at(kinds, i) == k_spawn() { word = "spawn"; }
+                        if word == "" { die("expected an effect name", start_at(starts, i)); }
+                        if efirst == false { effects = str_concat(effects, ","); }
+                        effects = str_concat(str_concat(str_concat(effects, word), "@"),
+                                int_to_str(start_at(starts, i)));
+                        efirst = false;
+                        i = i + 1;
+                        if kind_at(kinds, i) == k_comma() { i = i + 1; }
+                    }
+                    i = i + 1;
+                    ret = str_concat(ret, effects);
+                } else {
+                    // A closure that writes no set declares `! {}` (N50).
+                    ret = str_concat(ret, "!");
+                }
+                if kind_at(kinds, i) != k_lbrace() {
+                    die("expected `{` to start the closure's body", start_at(starts, i));
+                }
+                strs_push(cname, str_concat("closure:", ret));
+                ints_push(cargs, params);
+                ints_push(opat, cat);
+                ints_set(status, 0, 4);
+                return i;
+            }
             if t == k_match() {
                 // The scrutinee is an ordinary expression, exactly as an `if`'s condition
                 // is, and the sentinel is what tells the `{` after it what it belongs to.
@@ -387,6 +516,33 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     i = past - 1;
                 }
                 let named = str_concat(head, targs);
+                // `name.m(arg, …)` with an unlabelled argument is a method call (N102, the
+                // reference's rule): a variant's payload is always labelled, so the token after
+                // the `(` decides it. `name.m()` has nothing to decide by and stays a variant;
+                // the checker reads it as a call when `name` is a value.
+                let mut unlabelled = false;
+                if making_variant(kinds, i) {
+                    if kind_at(kinds, i + 4) != k_rparen() {
+                        unlabelled = true;
+                        if kind_at(kinds, i + 4) == k_ident() {
+                            if kind_at(kinds, i + 5) == k_colon() { unlabelled = false; }
+                        }
+                    }
+                }
+                if unlabelled {
+                    if targs != "" {
+                        die("type arguments cannot be written before a method call", head_at);
+                    }
+                    emit(nk, nar, nst, nen, ntx, n_var(), 0, head_at, end_at(ends, i), head);
+                    ints_push(vs, head_at);
+                    ints_push(ve, end_at(ends, i));
+                    ints_push(ops, sent_method());
+                    ints_push(opat, start_at(starts, i + 2));
+                    strs_push(cname, text_at(texts, i + 2));
+                    ints_push(cargs, 0);
+                    i = i + 4;
+                    continue;
+                }
                 if making_variant(kinds, i) {
                     // `E.V(…)`. The enum and the variant are one name for the node's
                     // text, because what a variant *is* is its enum and its name.
@@ -470,6 +626,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
         }
 
         // --- everything after an operand ---------------------------------------------
+        let mut method_open = false;
         while true {
             // A projection binds tighter than anything, **including a pending unary
             // minus**: `-p.x` is `-(p.x)`, because the reference parser reads a field
@@ -491,6 +648,27 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 if kind_at(kinds, i + 1) != k_ident() {
                     die("expected a field name after `.`", start_at(starts, i + 1));
                 }
+                // `receiver.m(…)` (N102): a method call on any receiver.
+                if kind_at(kinds, i + 2) == k_lparen() {
+                    if kind_at(kinds, i + 3) == k_rparen() {
+                        let at = ints_get(vs, ints_len(vs) - 1);
+                        let to = end_at(ends, i + 3);
+                        pop_val(vs, ve);
+                        emit(nk, nar, nst, nen, ntx, n_method(), 1, at, to, text_at(texts, i + 1));
+                        set_aux(naux, nk, start_at(starts, i + 1));
+                        ints_push(vs, at);
+                        ints_push(ve, to);
+                        i = i + 4;
+                        continue;
+                    }
+                    ints_push(ops, sent_method());
+                    ints_push(opat, start_at(starts, i + 1));
+                    strs_push(cname, text_at(texts, i + 1));
+                    ints_push(cargs, 0);
+                    i = i + 3;
+                    method_open = true;
+                    break;
+                }
                 let fname = text_at(texts, i + 1);
                 let to = end_at(ends, i + 1);
                 let at = ints_get(vs, ints_len(vs) - 1);
@@ -500,16 +678,24 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 ints_push(ve, to);
                 i = i + 2;
             }
+            // A method call's arguments are operands of their own: back to the primaries.
+            if method_open { break; }
 
             // Pending unary minus binds tighter than any binary operator, so it is
             // applied as soon as its operand exists.
             while ints_len(ops) > base {
-                if ints_get(ops, ints_len(ops) - 1) != sent_unary() { break; }
+                let top_op = ints_get(ops, ints_len(ops) - 1);
+                let mut unary = n_neg();
+                if top_op == sent_not() {
+                    unary = n_not();
+                } else {
+                    if top_op != sent_unary() { break; }
+                }
                 let at = ints_get(opat, ints_len(opat) - 1);
                 pop_op(ops, opat);
                 let e = ints_get(ve, ints_len(ve) - 1);
                 pop_val(vs, ve);
-                emit(nk, nar, nst, nen, ntx, n_neg(), 1, at, e, "");
+                emit(nk, nar, nst, nen, ntx, unary, 1, at, e, "");
                 ints_push(vs, at);
                 ints_push(ve, e);
             }
@@ -673,6 +859,25 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     // which is the order their values were computed in.
                     emit(nk, nar, nst, nen, ntx, n_construct(), argc, at, to,
                             str_concat(str_concat(str_concat(name, "("), fields), ")"));
+                    ints_push(vs, at);
+                    ints_push(ve, to);
+                    i = i + 1;
+                    continue;
+                }
+                if top == sent_method() {
+                    let mat = ints_get(opat, ints_len(opat) - 1);
+                    pop_op(ops, opat);
+                    let argc = ints_get(cargs, ints_len(cargs) - 1) + 1;
+                    let mname = strs_get(cname, strs_len(cname) - 1);
+                    pop_call(cname, cargs);
+                    let to = end_at(ends, i);
+                    let mut drop = 0;
+                    while drop < argc { pop_val(vs, ve); drop = drop + 1; }
+                    // The receiver's span starts the call's.
+                    let at = ints_get(vs, ints_len(vs) - 1);
+                    pop_val(vs, ve);
+                    emit(nk, nar, nst, nen, ntx, n_method(), argc + 1, at, to, mname);
+                    set_aux(naux, nk, mat);
                     ints_push(vs, at);
                     ints_push(ve, to);
                     i = i + 1;
@@ -865,6 +1070,11 @@ fn before_last_at(s: Str) -> Str {
 // the index just past it is returned.
 fn read_type(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, i: Int, what: Str,
         out: Strs) -> Int {
+    // `fn(T, …) -> R ! { e }` (N102): a function type, written as `fn%BITS@at[T,…,R]@end`, its
+    // effects as bits in a name no program can write — `io` 1, `spawn` 2, `foreign` 4.
+    if kind_at(kinds, i) == k_fn() {
+        return read_fn_type(kinds, starts, ends, texts, i, out);
+    }
     if kind_at(kinds, i) != k_ident() {
         die(what, start_at(starts, i));
     }
@@ -873,6 +1083,79 @@ fn read_type(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, i: Int, what: S
         return i + 1;
     }
     type_tail(kinds, starts, ends, texts, i, "", 0, out)
+}
+
+fn read_fn_type(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, i0: Int, out: Strs) -> Int {
+    let at = start_at(starts, i0);
+    let mut i = i0 + 1;
+    if kind_at(kinds, i) != k_lparen() {
+        die("expected `(` after `fn` in a function type", start_at(starts, i));
+    }
+    i = i + 1;
+    let mut items = "";
+    while kind_at(kinds, i) != k_rparen() {
+        if kind_at(kinds, i) == k_fn() {
+            die("a function type inside a function type is not in this compiler's subset",
+                    start_at(starts, i));
+        }
+        let one = strs_new();
+        let pat = start_at(starts, i);
+        i = read_type(kinds, starts, ends, texts, i, "expected a parameter type", one);
+        items = str_concat(str_concat(items, located(strs_get(one, 0), pat)), ",");
+        if kind_at(kinds, i) == k_comma() { i = i + 1; }
+    }
+    i = i + 1;
+    if kind_at(kinds, i) != k_arrow() {
+        die("expected `->` and a result type", start_at(starts, i));
+    }
+    i = i + 1;
+    if kind_at(kinds, i) == k_fn() {
+        die("a function type inside a function type is not in this compiler's subset",
+                start_at(starts, i));
+    }
+    let one = strs_new();
+    let rat = start_at(starts, i);
+    i = read_type(kinds, starts, ends, texts, i, "expected a result type", one);
+    items = str_concat(items, located(strs_get(one, 0), rat));
+    let mut bits = 0;
+    if kind_at(kinds, i) == k_bang() {
+        i = i + 1;
+        if kind_at(kinds, i) != k_lbrace() {
+            die("expected `{` after `!`, to open the effect set", start_at(starts, i));
+        }
+        i = i + 1;
+        while kind_at(kinds, i) != k_rbrace() {
+            let mut word = "";
+            if kind_at(kinds, i) == k_ident() { word = text_at(texts, i); }
+            if kind_at(kinds, i) == k_spawn() { word = "spawn"; }
+            let mut bit = 0;
+            if word == "io" { bit = 1; }
+            if word == "spawn" { bit = 2; }
+            if word == "foreign" { bit = 4; }
+            if bit == 0 {
+                die("expected `io`, `spawn` or `foreign`: an effect parameter in a function type is not in this compiler's subset",
+                        start_at(starts, i));
+            }
+            if (bits / bit) % 2 == 0 { bits = bits + bit; }
+            i = i + 1;
+            if kind_at(kinds, i) == k_comma() { i = i + 1; }
+        }
+        i = i + 1;
+    }
+    let end = end_at(ends, i - 1);
+    strs_push(out, str_concat(str_concat(str_concat(str_concat(str_concat(str_concat("fn%",
+            int_to_str(bits)), "@"), int_to_str(at)), "["), items), str_concat("]@", int_to_str(end))));
+    i
+}
+
+// A type's text with where it starts: a bare name gains `@offset`; one that has it keeps it.
+fn located(t: Str, at: Int) -> Str {
+    let mut i = 0;
+    while i < str_len(t) {
+        if str_byte(t, i) == 64 { return t; }
+        i = i + 1;
+    }
+    str_concat(str_concat(t, "@"), int_to_str(at))
 }
 
 // `[A, B]` after a declared name, or nothing: `[A@7,B@10]`, pushed onto `out`. At least
@@ -921,6 +1204,7 @@ fn innermost_is_call(ops: Ints, base: Int) -> Bool {
         if v == sent_call() { return true; }
         if v == sent_construct() { return true; }
         if v == sent_variant() { return true; }
+        if v == sent_method() { return true; }
         if v == sent_paren() { return false; }
         if v == sent_if() { return false; }
         if v == sent_match() { return false; }
@@ -982,6 +1266,8 @@ fn frame_scope() -> Int { 5 }
 // A block written as an expression: the expression that reached it is suspended underneath,
 // and resumes with the block as its operand once the block closes.
 fn frame_blockexpr() -> Int { 6 }
+// A closure's body (N102): when it closes, the `closure` node over its parameters and body.
+fn frame_closure() -> Int { 7 }
 
 // What to do once the expression now being parsed finally completes. It is a stack
 // because an `if` can suspend an expression that was itself the value of a `let`, and
@@ -995,6 +1281,7 @@ fn pend_stmt() -> Int { 5 }
 fn pend_spawn() -> Int { 6 }
 // The body of one `match` arm. The pattern is already read and travels on `ptext`.
 fn pend_arm() -> Int { 7 }
+fn pend_contract() -> Int { 8 }
 
 // `Enum.Variant(field: binding, …)` — one arm's pattern, as the text its node carries.
 // Returns the index just past the `)`; the pattern text is pushed onto `out`.
@@ -1107,6 +1394,156 @@ fn finish_if(ops: Ints, opat: Ints, vs: Ints, ve: Ints,
     0
 }
 
+// One trait method's signature, `fn m(p: T, …) -> R ! { … };` (N102): its parameters as
+// `param` nodes and the signature as a `sig` node over them, text as a function's.
+fn read_sig(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, at0: Int,
+        nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
+    let mut i = at0;
+    let sig_start = start_at(starts, i);
+    i = expect(kinds, starts, i, k_fn(), "expected `fn` in a trait");
+    if kind_at(kinds, i) != k_ident() { die("expected a method name", start_at(starts, i)); }
+    let name = text_at(texts, i);
+    let name_at = start_at(starts, i);
+    i = i + 1;
+    if kind_at(kinds, i) == k_lbracket() {
+        die("a generic method is not supported", start_at(starts, i));
+    }
+    i = expect(kinds, starts, i, k_lparen(), "expected `(` after the method name");
+    let mut params = 0;
+    while kind_at(kinds, i) != k_rparen() {
+        if kind_at(kinds, i) != k_ident() { die("expected a parameter name", start_at(starts, i)); }
+        let pname = text_at(texts, i);
+        let pstart = start_at(starts, i);
+        i = i + 1;
+        i = expect(kinds, starts, i, k_colon(), "expected `:` after a parameter name");
+        let pty = strs_new();
+        i = read_type(kinds, starts, ends, texts, i, "expected a type", pty);
+        emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, end_at(ends, i - 1),
+                str_concat(str_concat(pname, ":"), strs_get(pty, 0)));
+        params = params + 1;
+        if kind_at(kinds, i) == k_comma() { i = i + 1; }
+    }
+    i = i + 1;
+    i = expect(kinds, starts, i, k_arrow(), "expected `->` and a return type");
+    let rty = strs_new();
+    let ret_at = start_at(starts, i);
+    i = read_type(kinds, starts, ends, texts, i, "expected a return type", rty);
+    let mut ret = strs_get(rty, 0);
+    if kind_at(kinds, i - 1) == k_ident() {
+        ret = str_concat(str_concat(ret, "@"), int_to_str(ret_at));
+    }
+    if kind_at(kinds, i) == k_bang() {
+        i = i + 1;
+        i = expect(kinds, starts, i, k_lbrace(), "expected `{` after `!`, to open the effect set");
+        let mut effects = "!";
+        let mut first = true;
+        while kind_at(kinds, i) != k_rbrace() {
+            let mut word = "";
+            if kind_at(kinds, i) == k_ident() { word = text_at(texts, i); }
+            if kind_at(kinds, i) == k_spawn() { word = "spawn"; }
+            if word == "" { die("expected an effect name", start_at(starts, i)); }
+            if first == false { effects = str_concat(effects, ","); }
+            effects = str_concat(str_concat(str_concat(effects, word), "@"), int_to_str(start_at(starts, i)));
+            first = false;
+            i = i + 1;
+            if kind_at(kinds, i) == k_comma() { i = i + 1; }
+        }
+        i = i + 1;
+        ret = str_concat(ret, effects);
+    }
+    if kind_at(kinds, i) == k_lbrace() {
+        die("a trait method has no body: end its signature with `;`", start_at(starts, i));
+    }
+    let semi = end_at(ends, i);
+    i = expect(kinds, starts, i, k_semi(), "expected `;` after a method's signature");
+    emit(nk, nar, nst, nen, ntx, n_sig(), params, sig_start, semi,
+            str_concat(str_concat(name, ":"), ret));
+    set_aux(naux, nk, item_aux(0, name_at));
+    i
+}
+
+// `requires` or `ensures` at token `i`: a contract clause's word, recognised only between a
+// signature and its body, where no other word can stand.
+fn contract_word(kinds: Ints, texts: Strs, i: Int) -> Str {
+    if kind_at(kinds, i) != k_ident() { return ""; }
+    let w = text_at(texts, i);
+    if w == "requires" { return w; }
+    if w == "ensures" { return w; }
+    ""
+}
+
+// Open the next contract clause of the header in `hdr`, or the body when there is none.
+// `hdr` is the header waiting for its body: `[start, parameters, aux, requires, ensures,
+// first ensures node, first body node]`, and `hdrtext` its text.
+fn clause_or_body(kinds: Ints, starts: Ints, texts: Strs, i: Int, nk: Ints,
+        hdr: Ints, hdrtext: Strs,
+        pk: Ints, pstart: Ints, ptext: Strs, pdepth: Ints, pbase: Ints, fk: Ints, ops: Ints,
+        fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints, fvis: Ints,
+        ftext: Strs) -> Int {
+    let word = contract_word(kinds, texts, i);
+    if word != "" {
+        if word == "requires" {
+            if ints_get(hdr, 4) > 0 {
+                die("a `requires` after an `ensures`", start_at(starts, i));
+            }
+        }
+        if word == "ensures" {
+            if ints_get(hdr, 4) == 0 { ints_set(hdr, 5, ints_len(nk)); }
+        }
+        ints_push(pk, pend_contract());
+        ints_push(pdepth, ints_len(fk));
+        ints_push(pbase, ints_len(ops));
+        ints_push(pstart, start_at(starts, i));
+        strs_push(ptext, word);
+        return i + 1;
+    }
+    let brace = start_at(starts, i);
+    let at = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body");
+    ints_set(hdr, 6, ints_len(nk));
+    push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
+            frame_body(), brace, ints_get(hdr, 0),
+            ints_get(hdr, 1) + ints_get(hdr, 3) + ints_get(hdr, 4),
+            ints_get(hdr, 2), strs_get(hdrtext, 0));
+    at
+}
+
+// Move a function's `ensures` clauses after its body: the arena from `from` holds the
+// clauses up to `mid` and the body after, and leaves holding the body then the clauses.
+// Both are whole subtrees, so a post-order arena stays one.
+fn rotate_arena(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
+        from: Int, mid: Int) -> Int {
+    pad_aux(naux, nk);
+    let n = ints_len(nk);
+    let tk = ints_new();
+    let ta = ints_new();
+    let ts = ints_new();
+    let te = ints_new();
+    let tt = strs_new();
+    let tx = ints_new();
+    let mut j = mid;
+    while j < n {
+        ints_push(tk, ints_get(nk, j)); ints_push(ta, ints_get(nar, j));
+        ints_push(ts, ints_get(nst, j)); ints_push(te, ints_get(nen, j));
+        strs_push(tt, strs_get(ntx, j)); ints_push(tx, ints_get(naux, j));
+        j = j + 1;
+    }
+    j = from;
+    while j < mid {
+        ints_push(tk, ints_get(nk, j)); ints_push(ta, ints_get(nar, j));
+        ints_push(ts, ints_get(nst, j)); ints_push(te, ints_get(nen, j));
+        strs_push(tt, strs_get(ntx, j)); ints_push(tx, ints_get(naux, j));
+        j = j + 1;
+    }
+    j = 0;
+    while j < ints_len(tk) {
+        ints_set(nk, from + j, ints_get(tk, j)); ints_set(nar, from + j, ints_get(ta, j));
+        ints_set(nst, from + j, ints_get(ts, j)); ints_set(nen, from + j, ints_get(te, j));
+        strs_set(ntx, from + j, strs_get(tt, j)); ints_set(naux, from + j, ints_get(tx, j));
+        j = j + 1;
+    }
+    n
+}
+
 pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
     let fk = ints_new();
@@ -1148,6 +1585,20 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     // How deep the operator stack was when each pending expression started.
     let pbase = ints_new();
 
+    // The function header waiting for its body while its contract clauses are read (N102):
+    // see `clause_or_body`.
+    let hdr = ints_new();
+    let mut h = 0;
+    while h < 7 { ints_push(hdr, 0); h = h + 1; }
+    let hdrtext = strs_new();
+    strs_push(hdrtext, "");
+    // The impl being read (N102): `[open, methods, start, aux]` and its text.
+    let istate = ints_new();
+    ints_push(istate, 0); ints_push(istate, 0); ints_push(istate, 0); ints_push(istate, 0);
+    let itext = strs_new();
+    strs_push(itext, "");
+    strs_push(itext, "");
+
     let mut i = 0;
     // Functions **and** records: both are top-level items and both are children of the
     // program node, in the order they were written. The reference dump sorts its two
@@ -1179,6 +1630,21 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 i = i + 1;
                 push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
                         frame_blockexpr(), brace, 0, 0, 0, "");
+                continue;
+            }
+            if ints_get(status, 0) == 4 {
+                // A closure's header is read; its body is the frame machine's (N102).
+                ints_set(status, 0, 0);
+                let ctext = strs_get(cname, strs_len(cname) - 1);
+                let cparams = ints_get(cargs, ints_len(cargs) - 1);
+                let cat = ints_get(opat, ints_len(opat) - 1);
+                strs_pop(cname);
+                ints_pop(cargs);
+                ints_pop(opat);
+                let brace = start_at(starts, i);
+                i = i + 1;
+                push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
+                        frame_closure(), brace, cat, cparams, 0, ctext);
                 continue;
             }
             if ints_get(status, 0) == 2 {
@@ -1221,6 +1687,18 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body");
                 push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
                         frame_while(), brace, at, 0, 0, "");
+                continue;
+            }
+            if what == pend_contract() {
+                emit(nk, nar, nst, nen, ntx, n_contract(), 1, at, end_at(ends, i - 1), text);
+                if text == "requires" {
+                    ints_set(hdr, 3, ints_get(hdr, 3) + 1);
+                } else {
+                    ints_set(hdr, 4, ints_get(hdr, 4) + 1);
+                }
+                i = clause_or_body(kinds, starts, texts, i, nk, hdr, hdrtext,
+                        pk, pstart, ptext, pdepth, pbase, fk, ops,
+                        fstart, fcount, ftail, faux, fparams, fvis, ftext);
                 continue;
             }
             if what == pend_arm() {
@@ -1308,12 +1786,65 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         }
 
         if ints_len(fk) == 0 {
+            // --- the end of an impl (N102) -------------------------------------------
+            if ints_get(istate, 0) == 1 {
+                if kind_at(kinds, i) == k_rbrace() {
+                    emit(nk, nar, nst, nen, ntx, n_impl(), ints_get(istate, 1),
+                            ints_get(istate, 2), end_at(ends, i), strs_get(itext, 0));
+                    set_aux(naux, nk, ints_get(istate, 3));
+                    ints_set(istate, 0, 0);
+                    items = items + 1;
+                    i = i + 1;
+                    continue;
+                }
+                if kind_at(kinds, i) != k_fn() {
+                    die("an impl holds methods, each `fn …`", start_at(starts, i));
+                }
+            }
             // --- top level: an import, or a function header ------------------------
+            // `pub use` (N103): an import that re-exports. What it re-exports is the
+            // checker's to read from the tokens; the grammar only has to accept it.
+            let mut reexporting = false;
+            if kind_at(kinds, i) == k_pub() {
+                if kind_at(kinds, i + 1) == k_use() {
+                    reexporting = true;
+                    i = i + 1;
+                }
+            }
             if kind_at(kinds, i) == k_use() {
                 // Imports are the driver's business, not the grammar's, and contribute
                 // no node — exactly as the reference parser treats them.
                 i = i + 1;
                 i = expect(kinds, starts, i, k_str(), "expected a quoted path");
+                if reexporting {
+                    if kind_at(kinds, i) == k_lbrace() {
+                        i = i + 1;
+                        while kind_at(kinds, i) != k_rbrace() {
+                            if kind_at(kinds, i) != k_ident() {
+                                die("expected a name to re-export", start_at(starts, i));
+                            }
+                            i = i + 1;
+                            if kind_at(kinds, i) == k_ident() {
+                                if text_at(texts, i) == "as" {
+                                    i = i + 1;
+                                    if kind_at(kinds, i) != k_ident() {
+                                        die("expected the name to re-export it under, after `as`",
+                                                start_at(starts, i));
+                                    }
+                                    i = i + 1;
+                                }
+                            }
+                            if kind_at(kinds, i) == k_comma() {
+                                i = i + 1;
+                            } else {
+                                if kind_at(kinds, i) != k_rbrace() {
+                                    die("expected `,` or `}` in the names re-exported", start_at(starts, i));
+                                }
+                            }
+                        }
+                        i = i + 1;
+                    }
+                }
                 // `use "path" as name;` (N49) is not in the bootstrap subset, and says so.
                 if kind_at(kinds, i) == k_ident() {
                     if text_at(texts, i) == "as" {
@@ -1330,6 +1861,60 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if kind_at(kinds, i) == k_pub() {
                 vis = 1;
                 i = i + 1;
+            }
+
+            // `trait Name { fn m(self: Self, …) -> R; … }` (N102).
+            if kind_at(kinds, i) == k_trait() {
+                i = i + 1;
+                if kind_at(kinds, i) != k_ident() { die("expected a trait name", start_at(starts, i)); }
+                let tname = text_at(texts, i);
+                let tname_at = start_at(starts, i);
+                i = i + 1;
+                if kind_at(kinds, i) == k_lbracket() {
+                    die("a generic trait is not supported", start_at(starts, i));
+                }
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the trait");
+                let mut nsigs = 0;
+                while kind_at(kinds, i) != k_rbrace() {
+                    i = read_sig(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx, naux);
+                    nsigs = nsigs + 1;
+                }
+                let tclose = end_at(ends, i);
+                i = i + 1;
+                emit(nk, nar, nst, nen, ntx, n_trait(), nsigs, fn_start, tclose, tname);
+                set_aux(naux, nk, item_aux(vis, tname_at));
+                items = items + 1;
+                continue;
+            }
+            // `impl Trait for Type { fn … }` (N102): its methods are read as functions, and
+            // belong to the impl rather than to the module's namespace.
+            if kind_at(kinds, i) == k_impl() {
+                if vis == 1 { die("an impl is not `pub`: it is as visible as its trait and type", fn_start); }
+                if ints_get(istate, 0) == 1 { die("an impl inside an impl", fn_start); }
+                i = i + 1;
+                if kind_at(kinds, i) != k_ident() { die("expected a trait name", start_at(starts, i)); }
+                let trait_word = text_at(texts, i);
+                let trait_text = str_concat(str_concat(trait_word, "@"), int_to_str(start_at(starts, i)));
+                i = i + 1;
+                if kind_at(kinds, i) != k_ident() { die("expected `for`", start_at(starts, i)); }
+                if text_at(texts, i) != "for" { die("expected `for`", start_at(starts, i)); }
+                i = i + 1;
+                if kind_at(kinds, i) != k_ident() { die("expected a type", start_at(starts, i)); }
+                let type_word = text_at(texts, i);
+                let type_text = str_concat(str_concat(type_word, "@"), int_to_str(start_at(starts, i)));
+                i = i + 1;
+                if kind_at(kinds, i) == k_lbracket() {
+                    die("an impl for a generic type is not supported", start_at(starts, i));
+                }
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the impl");
+                ints_set(istate, 0, 1);
+                ints_set(istate, 1, 0);
+                ints_set(istate, 2, fn_start);
+                ints_set(istate, 3, item_aux(0, fn_start));
+                strs_set(itext, 0, str_concat(str_concat(trait_text, ":"), type_text));
+                strs_set(itext, 1, str_concat(str_concat(str_concat(str_concat("#", trait_word), "."),
+                        type_word), "."));
+                continue;
             }
 
             // `struct Name { field: Type, … }`. No frame machine and no expression: a
@@ -1438,13 +2023,34 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 continue;
             }
 
+            // `extern "C"` (N102): a foreign declaration. `extern` is contextual, a word
+            // everywhere else, and a declaration's first word only before a string — where no
+            // other item can begin.
+            let mut foreign = false;
+            if kind_at(kinds, i) == k_ident() {
+                if text_at(texts, i) == "extern" {
+                    if kind_at(kinds, i + 1) == k_str() {
+                        if text_at(texts, i + 1) != "C" {
+                            die("the only foreign ABI is `C`", start_at(starts, i + 1));
+                        }
+                        foreign = true;
+                        i = i + 2;
+                    }
+                }
+            }
             i = expect(kinds, starts, i, k_fn(), "expected `fn`");
             if kind_at(kinds, i) != k_ident() {
                 die("expected a function name", start_at(starts, i));
             }
             let ftp = strs_new();
-            let name = text_at(texts, i);
+            let mut name = text_at(texts, i);
             let fname_at = start_at(starts, i);
+            // A method's name is its impl's (N102): `#Trait.Type.m`. No program can write it,
+            // so a method is in no namespace a call by name searches; two impls of one trait
+            // for one type define it twice, which is how the reference sees them too.
+            if ints_get(istate, 0) == 1 {
+                name = str_concat(strs_get(itext, 1), name);
+            }
             i = read_type_params(kinds, starts, texts, i + 1, ftp);
             i = expect(kinds, starts, i, k_lparen(), "expected `(` after the function name");
             let mut params = 0;
@@ -1476,11 +2082,72 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if kind_at(kinds, i - 1) == k_ident() {
                 ret = str_concat(str_concat(ret, "@"), int_to_str(ret_at));
             }
-            let brace = start_at(starts, i);
-            i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body");
-            push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
-                    frame_body(), brace, fn_start, params, item_aux(vis, fname_at),
-                    str_concat(str_concat(str_concat(name, strs_get(ftp, 0)), ":"), ret));
+            // `! { name, … }`, the declared effect set (N102). Carried on the function's text
+            // after the return type — `!` then each name with its offset, `io@26,spawn@30` —
+            // because what a name means is the checker's question, and an empty set, `!`
+            // alone, is a declaration too. `spawn` is a keyword and names its own effect.
+            if kind_at(kinds, i) == k_bang() {
+                i = i + 1;
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` after `!`, to open the effect set");
+                let mut effects = "!";
+                let mut first = true;
+                while kind_at(kinds, i) != k_rbrace() {
+                    let ek = kind_at(kinds, i);
+                    let mut word = "";
+                    if ek == k_ident() { word = text_at(texts, i); }
+                    if ek == k_spawn() { word = "spawn"; }
+                    if word == "" { die("expected an effect name", start_at(starts, i)); }
+                    if first == false { effects = str_concat(effects, ","); }
+                    effects = str_concat(str_concat(str_concat(effects, word), "@"),
+                            int_to_str(start_at(starts, i)));
+                    first = false;
+                    i = i + 1;
+                    if kind_at(kinds, i) == k_comma() {
+                        i = i + 1;
+                    } else {
+                        if kind_at(kinds, i) != k_rbrace() {
+                            die("expected `,` or `}` in the effect set", start_at(starts, i));
+                        }
+                    }
+                }
+                i = i + 1;
+                ret = str_concat(ret, effects);
+            }
+            if foreign {
+                // `= "symbol";`: the symbol is written, never derived from the name. A body
+                // after it would make the function an export, which this parser does not read.
+                i = expect(kinds, starts, i, k_eq(), "expected `=` before a foreign function's symbol");
+                if kind_at(kinds, i) != k_str() {
+                    die("expected the foreign function's symbol as a string", start_at(starts, i));
+                }
+                let sym = text_at(texts, i);
+                let sym_at = start_at(starts, i);
+                let sym_end = end_at(ends, i);
+                i = i + 1;
+                if kind_at(kinds, i) == k_lbrace() {
+                    die("a foreign export, a body after the symbol, is not in this parser's subset",
+                            start_at(starts, i));
+                }
+                let semi = end_at(ends, i);
+                i = expect(kinds, starts, i, k_semi(), "expected `;` after a foreign function's symbol");
+                emit(nk, nar, nst, nen, ntx, n_foreign(), 0, sym_at, sym_end, sym);
+                emit(nk, nar, nst, nen, ntx, n_fn(), params + 1, fn_start, semi,
+                        str_concat(str_concat(str_concat(name, strs_get(ftp, 0)), ":"), ret));
+                set_aux(naux, nk, item_aux(vis, fname_at));
+                items = items + 1;
+                continue;
+            }
+            ints_set(hdr, 0, fn_start);
+            ints_set(hdr, 1, params);
+            ints_set(hdr, 2, item_aux(vis, fname_at));
+            ints_set(hdr, 3, 0);
+            ints_set(hdr, 4, 0);
+            ints_set(hdr, 5, 0);
+            ints_set(hdr, 6, 0);
+            strs_set(hdrtext, 0, str_concat(str_concat(str_concat(name, strs_get(ftp, 0)), ":"), ret));
+            i = clause_or_body(kinds, starts, texts, i, nk, hdr, hdrtext,
+                    pk, pstart, ptext, pdepth, pbase, fk, ops,
+                    fstart, fcount, ftail, faux, fparams, fvis, ftext);
             continue;
         }
 
@@ -1530,6 +2197,13 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 resuming = true;
                 continue;
             }
+            if kind == frame_closure() {
+                emit(nk, nar, nst, nen, ntx, n_closure(), params + 1, aux, close, text);
+                ints_push(vs, aux);
+                ints_push(ve, close);
+                resuming = true;
+                continue;
+            }
             if kind == frame_blockexpr() {
                 // The block is the operand the suspended expression was waiting for, with
                 // the block's own span — the brace to the brace, as the reference's is.
@@ -1552,12 +2226,22 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 emit(nk, nar, nst, nen, ntx, n_while(), 2, aux, close, "");
                 bump(fcount);
             } else {
+                // `ensures` clauses were read before the body and are checked after it.
+                if ints_get(hdr, 4) > 0 {
+                    rotate_arena(nk, nar, nst, nen, ntx, naux, ints_get(hdr, 5), ints_get(hdr, 6));
+                    ints_set(hdr, 4, 0);
+                }
                 emit(nk, nar, nst, nen, ntx, n_fn(), params + 1, aux, close, text);
                 // The auxiliary column, whose meaning is per node kind: an operator's
                 // offset on a `bin`, and here the visibility bit. `set_aux` has to follow
                 // the `emit` it belongs to, which is why it is written beside it.
                 set_aux(naux, nk, vis_of);
-                items = items + 1;
+                // A method is its impl's child, not the program's (N102).
+                if ints_get(istate, 0) == 1 {
+                    ints_set(istate, 1, ints_get(istate, 1) + 1);
+                } else {
+                    items = items + 1;
+                }
             }
             continue;
         }
