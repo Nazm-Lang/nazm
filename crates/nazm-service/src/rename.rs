@@ -131,8 +131,12 @@ pub enum Refusal {
     Incomplete(&'static str),
     /// The core prelude's: owned by the toolchain.
     ToolchainOwned,
-    /// Exported: modules no open program loads may use it.
+    /// Exported, with no workspace to find every use in: modules no open program loads may
+    /// use it.
     Exported,
+    /// Exported from a library package (N89): other packages import its API, and no walk of
+    /// this workspace finds them.
+    PackageApi,
     /// A compilation containing the entity has diagnostics, so its resolution is not a
     /// complete account of the program.
     NotClean,
@@ -160,7 +164,12 @@ impl fmt::Display for Refusal {
             }
             Self::Exported => f.write_str(
                 "this is exported, and a module no open program loads may use it, so every \
-                 occurrence cannot be known",
+                 occurrence cannot be known; declare a workspace (a `nazm.root` marker or \
+                 `--source-root`) and every module under it is searched",
+            ),
+            Self::PackageApi => f.write_str(
+                "this is part of a library package's API, which other packages import; no walk \
+                 of this workspace finds their uses, so it is not renamed",
             ),
             Self::NotClean => {
                 f.write_str("a program containing this has errors, so its uses are not all known")
@@ -216,6 +225,10 @@ impl LanguageService {
             return Err(Refusal::Unchanged);
         }
         let s = self.current(path, version).ok_or(Refusal::NotCurrent)?;
+        if exported(&s.analysis.resolution, entity) {
+            let root = self.workspace(path)?.ok_or(Refusal::Exported)?;
+            return self.workspace_plan(&root, s, &found, declared, new_name);
+        }
 
         // The edits: the declaration and every use, and nothing else. All in the declaring
         // file — that is what the scope rule above proved, and it is checked, not assumed.
@@ -330,7 +343,8 @@ impl LanguageService {
             return Err(Refusal::ToolchainOwned);
         }
         if exported(&s.analysis.resolution, entity) {
-            return Err(Refusal::Exported);
+            // Within a declared workspace every module that can name it is found (N89).
+            self.workspace(path)?.ok_or(Refusal::Exported)?;
         }
         let text = s
             .texts
@@ -394,6 +408,7 @@ impl LanguageService {
             let sources = Overlaid {
                 documents: &self.documents,
                 replaced: Some((identity_path, edited)),
+                many: &[],
             };
             let after = analyse(
                 &sources,
@@ -417,6 +432,252 @@ impl LanguageService {
         }
         Ok(())
     }
+}
+
+impl LanguageService {
+    /// The workspace a document is in (N89, §7.90): its source root when that is declared — by
+    /// `--source-root`, a `nazm.root` marker or a package's manifest — and `None` when the root
+    /// is merely the file's directory. A library package — a manifest with no `main` — is
+    /// [`Refusal::PackageApi`]: its exported API is other packages' to use.
+    pub(crate) fn workspace(&self, path: &Path) -> Result<Option<PathBuf>, Refusal> {
+        let Ok(root) = crate::root::decide(path, self.source_root.as_deref()) else {
+            return Ok(None);
+        };
+        match root.how() {
+            crate::root::How::Given | crate::root::How::Marker => {
+                Ok(Some(root.path().to_path_buf()))
+            }
+            crate::root::How::Package => {
+                if library_package(root.path()) {
+                    Err(Refusal::PackageApi)
+                } else {
+                    Ok(Some(root.path().to_path_buf()))
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Every `.nz` file under the workspace, analysed as a root over the open buffers, in path
+    /// order (N89). Hidden directories and `target/` are not walked, as no other walk walks
+    /// them.
+    fn workspace_compilations(&self, root: &Path, many: &[(PathBuf, String)]) -> Vec<Snapshot> {
+        let mut files = Vec::new();
+        walk(root, &mut files);
+        files.sort();
+        let sources = Overlaid {
+            documents: &self.documents,
+            replaced: None,
+            many,
+        };
+        files
+            .iter()
+            .map(|f| {
+                let version = self.documents.get(&identity(f)).map_or(0, |d| d.version);
+                analyse(
+                    &sources,
+                    self.source_root.as_deref(),
+                    f,
+                    version,
+                    self.generation,
+                    None,
+                )
+            })
+            .collect()
+    }
+
+    /// The plan renaming an exported entity across a workspace (N89, §7.90): found in every
+    /// compilation by its declaration's place, its occurrences across every file merged, the
+    /// candidate workspace re-analysed whole and required to mean what it meant.
+    fn workspace_plan(
+        &self,
+        root: &Path,
+        here: &Snapshot,
+        found: &Renameable,
+        declared: Span,
+        new_name: &str,
+    ) -> Result<RenamePlan, Refusal> {
+        let key = here
+            .files
+            .get(declared.file.index())
+            .cloned()
+            .ok_or(Refusal::Internal("the declaring file is unknown"))?;
+        let FileKey::Path(declaring) = &key else {
+            return Err(Refusal::ToolchainOwned);
+        };
+        if !declaring.starts_with(root) {
+            return Err(Refusal::Exported);
+        }
+        let before = self.workspace_compilations(root, &[]);
+        // Each file's text and the occurrences to change in it, from every compilation that
+        // contains the declaring file.
+        let mut per_file: std::collections::BTreeMap<PathBuf, Occurrences> =
+            std::collections::BTreeMap::new();
+        let mut holding = 0usize;
+        for s in &before {
+            let Some(f) = s.files.iter().position(|k| *k == key) else {
+                continue;
+            };
+            if !s.analysis.diagnostics.is_empty() {
+                return Err(Refusal::NotClean);
+            }
+            let at = Span::new(FileId::from_index(f), declared.start, declared.end);
+            let entity = s.index.target(at).ok_or(Refusal::Internal(
+                "the declaration is no entity in a compilation that contains it",
+            ))?;
+            holding += 1;
+            let decl = s.index.declaration(entity).into_iter();
+            for span in decl.chain(s.index.uses(entity).iter().copied()) {
+                let FileKey::Path(p) = s
+                    .files
+                    .get(span.file.index())
+                    .cloned()
+                    .unwrap_or(FileKey::Prelude)
+                else {
+                    return Err(Refusal::ToolchainOwned);
+                };
+                let text = s
+                    .texts
+                    .get(span.file.index())
+                    .cloned()
+                    .ok_or(Refusal::Internal("a file with no text"))?;
+                let entry = per_file
+                    .entry(p)
+                    .or_insert_with(|| (text.clone(), Default::default()));
+                if *entry.0 != *text {
+                    return Err(Refusal::NotCurrent);
+                }
+                entry.1.insert((span.start, span.end));
+            }
+        }
+        if holding == 0 {
+            return Err(Refusal::Internal(
+                "no compilation of the workspace contains it",
+            ));
+        }
+        let mut files = Vec::new();
+        let mut many: Vec<(PathBuf, String)> = Vec::new();
+        let mut shifts: Vec<(PathBuf, Vec<Edit>)> = Vec::new();
+        for (path, (text, spans)) in &per_file {
+            let mut edits: Vec<Edit> = Vec::with_capacity(spans.len());
+            for (start, end) in spans {
+                let expected = text
+                    .get(*start as usize..*end as usize)
+                    .ok_or(Refusal::Internal("an occurrence outside its file"))?;
+                if expected != found.name {
+                    return Err(Refusal::Internal(
+                        "an occurrence is not spelled as its entity",
+                    ));
+                }
+                if edits.last().is_some_and(|e| e.end > *start) {
+                    return Err(Refusal::Internal("two occurrences overlap"));
+                }
+                edits.push(Edit {
+                    start: *start,
+                    end: *end,
+                    expected: expected.to_owned(),
+                    replacement: new_name.to_owned(),
+                });
+            }
+            many.push((path.clone(), apply(text, &edits)));
+            shifts.push((path.clone(), edits.clone()));
+            files.push(FileEdit {
+                path: path.clone(),
+                version: self.documents.get(path).map(|d| d.version),
+                text: text.clone(),
+                edits,
+            });
+        }
+        // The candidate workspace, every compilation of it: clean, and the same partition.
+        let after = self.workspace_compilations(root, &many);
+        for (b, a) in before.iter().zip(&after) {
+            if !b
+                .files
+                .iter()
+                .any(|k| matches!(k, FileKey::Path(p) if per_file.contains_key(p)))
+            {
+                continue;
+            }
+            if !a.analysis.diagnostics.is_empty() {
+                return Err(Refusal::Rejected(a.analysis.diagnostics.clone()));
+            }
+            if partition_shifted(b, &shifts) != partition_shifted(a, &[]) {
+                return Err(Refusal::MeaningChanged);
+            }
+        }
+        Ok(RenamePlan {
+            kind: found.kind,
+            old_name: found.name.clone(),
+            new_name: new_name.to_owned(),
+            generation: self.generation,
+            files,
+        })
+    }
+}
+
+/// One file's text and the byte ranges in it a workspace rename changes (N89).
+type Occurrences = (Arc<str>, std::collections::BTreeSet<(u32, u32)>);
+
+/// Whether the package whose source root is `root` is a library: its manifest names no `main`.
+fn library_package(root: &Path) -> bool {
+    root.ancestors().any(|dir| {
+        let Ok(text) = std::fs::read_to_string(dir.join(nazm_package::MANIFEST)) else {
+            return false;
+        };
+        nazm_package::Manifest::parse(&text, "nazm.toml")
+            .is_ok_and(|m| dir.join(&m.root) == root && m.main.is_none())
+    })
+}
+
+/// Every `.nz` file under `dir`, skipping hidden directories and `target/`.
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if p.is_dir() {
+            if !name.starts_with('.') && name != "target" {
+                walk(&p, out);
+            }
+        } else if p.extension().is_some_and(|x| x == "nz") {
+            out.push(p);
+        }
+    }
+}
+
+/// [`partition`] with several files' offsets moved past their edits (N89).
+fn partition_shifted(
+    s: &Snapshot,
+    shifts: &[(PathBuf, Vec<Edit>)],
+) -> std::collections::BTreeSet<(&'static str, Vec<Place>)> {
+    let place = |span: Span| -> Option<Place> {
+        let key = s.files.get(span.file.index())?.clone();
+        let edits = match &key {
+            FileKey::Path(p) => shifts
+                .iter()
+                .find(|(q, _)| q == p)
+                .map(|(_, e)| e.as_slice()),
+            FileKey::Prelude => None,
+        };
+        let (start, end) = edits.map_or((span.start, span.end), |e| moved(span, e));
+        Some((key, start, end))
+    };
+    s.index
+        .iter()
+        .map(|(t, uses)| {
+            let mut places: Vec<Place> = s
+                .index
+                .declaration(t)
+                .into_iter()
+                .chain(uses.iter().copied())
+                .filter_map(place)
+                .collect();
+            places.sort();
+            (t.kind(), places)
+        })
+        .collect()
 }
 
 /// Whether the entity's owning top-level definition is exported: a function, record or enum
