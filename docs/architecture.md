@@ -8286,6 +8286,37 @@ traps `N0400` on its first turn, in the model and the interpreter alike.
 **What would prove this unsuitable.** A program of the bound the model and the interpreter answer
 differently — which, as N61's first run did, may be an error in either.
 
+## 7.99 The compiler written in Nazm: parity measured, not reached — N98, 2026-10-04
+
+Written before the code. The bootstrap is VERIFIED (C2 = C3, area 31), but the compiler written in
+Nazm (`compiler/*.nz`) compiles a subset of the language, and "the bootstrap subset" has been a
+standing limitation stated in prose, with no measure of which features it builds.
+
+**The parity record.** `compiler/parity/` holds one probe per feature, named by its dimension —
+`syntax`, `types`, `failure`, `modules`, `closures`, `traits`, `effects`, `concurrency`, `contracts`,
+`ffi` — each a program the reference compiler builds. A contained test builds every probe with the
+reference (`nazm build`, run natively) and with `compiler/emit.nz` (built by the reference, its LLVM
+IR linked by clang, run natively), and writes one verdict per probe: **equal** (the same exit status,
+output and failure code), **refused** (the compiler written in Nazm does not build it: a gap, with the
+code it gives), or **differs** (it builds something that behaves otherwise: a defect, which fails the
+test whatever the record says). `compiler/parity.json` (`nazm.parity/1`) is that record, and the test
+fails when it is not what the compilers do — so the record cannot go stale.
+
+**What this milestone does not do.** Port the missing features. Closures, traits, effects and
+capabilities, concurrency, contracts, foreign declarations and `@std` are each a body of work in a
+12,800-line compiler, and the acceptance criterion — the selfhost subset equal to the reference's
+native subset — is **not met**. N98 makes the gap measured and gated, which is what an honest N100
+needs to read.
+
+**Versions.** None. `nazm.parity/1` is a record.
+
+**Negative example.** A probe the emitter refuses is a refusal, never counted as equal. **Boundary
+example.** A failing probe — overflow, division by zero — is equal only when both exit with status 2
+and name the same code.
+
+**What would prove this unsuitable.** A probe recorded equal whose two executables behave differently
+on another input: probes are single programs, and equality is of those programs only.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
