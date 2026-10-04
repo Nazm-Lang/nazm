@@ -2648,6 +2648,30 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### Debugging and sampling — N91, measured 2026-10-04
+
+**Hypothesis:** sampling observes a run without changing what it measures much, and Cranelift's
+debug information costs a debug build little. **Method:** Apple M1 Pro, macOS 27.2, debug `nazm`;
+seven runs each, median (min–max). **Sampling:** one LLVM `--debug` executable of a 120,000,000-step
+checked loop (`work` in `crates/nazm-cli/tests/debugger_v3.rs`'s `SPIN`, at that count), run alone
+and under `/usr/bin/sample` at two intervals, wall time from launch to exit.
+
+| | wall, ms |
+| --- | ---: |
+| alone | 775 (774–802) |
+| sampled every 1 ms | 821 (811–822) |
+| sampled every 10 ms | 783 (782–784) |
+
+About 6% at the default interval, 1% at 10 ms: the sampler suspends the process for each sample, so
+the cost is per sample, not per instruction. **A Cranelift debug build:** `bench/programs/strings.nz`,
+`--no-cache`, five builds each — 198 ms ordinary, 222 ms with `--debug` (`dsymutil` included). Not
+measured: the cost on a large program, and memory.
+
+**A launch is not the program's time.** A fresh executable spends about 300 ms before its first
+instruction on this host, and a sample taken then names `_dyld_start` in `dyld`: `nazm profile`
+builds a new executable every time, so its `wall_ms` includes that launch, and its samples show it
+as system time — never as the program's.
+
 ### Accelerators v2 — N88, measured 2026-10-04
 
 **Hypothesis:** a zip and a fold are expressible and agree, and what they cost is stated whole —
