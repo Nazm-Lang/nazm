@@ -398,6 +398,14 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N90 — packages v3 — **complete as scoped, 2026-10-04; area 26 stays PARTIAL**
+
+`architecture.md` §7.91 first. The registry resolver backtracks: name order, newest first, the
+lockfile's choice first, bounded at 10,000 candidates, and a refusal names the package and every
+requirement on it with who placed it. `nazm update [NAME…]` re-resolves without the lockfile's
+preference and prints each change. No language or lockfile change. Not here: signatures, a remote
+registry, features, pre-releases, multi-root workspaces. Next: N91, debugger and profiler v3.
+
 ### N89 — LSP and MCP workspace editing — **complete as scoped, 2026-10-04; area 25 stays PARTIAL**
 
 `architecture.md` §7.90 first. A declared source root is a workspace: an exported entity is renamed

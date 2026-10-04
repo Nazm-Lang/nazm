@@ -177,10 +177,12 @@ found only by reading all of it.
 ## Packages and builds
 
 - A local registry and four requirement forms (N56); no remote registry or network source, no
-  signatures, no features or pre-releases, one version per package and no backtracking solve, no
-  multi-root workspaces (area 26). *Narrowed in N56:* until then, path dependencies only.
+  signatures, no features or pre-releases, one version per package, no multi-root workspaces
+  (area 26). *Narrowed in N56:* until then, path dependencies only. *Narrowed in N90:* resolution
+  backtracks, bounded at 10,000 candidates — past the bound it refuses saying it stopped, which is
+  not a proof that no answer exists — and `nazm update` exists.
 - Project tooling (N74): six templates, a library check, `nazm doc` from semantic definitions, a
-  publish dry run; no `nazm update`, no hosted documentation, no template beyond the six (area 26).
+  publish dry run; no hosted documentation, no template beyond the six (area 26).
   `nazm bindgen` translates the subset §7.86 lists and reads declarations, not the C preprocessor
   (area 17). The editor client (`editors/vscode`) is not exercised inside an editor here or
   published. An exported rename (N89) needs a declared workspace and is never of a library package's

@@ -3382,9 +3382,9 @@ geometry = { path = "../geometry", version = "0.3.1" }
 | | |
 | --- | --- |
 | **Requirement** | `1.2.3` / `=1.2.3` exactly; `^1.2.3` the same left-most non-zero component; `~1.2.3` the same minor |
-| **Choice** | per name, the lockfile's version while it satisfies every requirement, else the highest non-yanked one that does; one version per name, no backtracking (`N0513` otherwise) |
+| **Choice** | a backtracking search (N90): packages in name order, each one's non-yanked versions newest first, the lockfile's first while it satisfies; the first assignment satisfying every requirement; one version per name; at most 10,000 candidates (`N0513` otherwise, naming the package and every requirement on it with who placed it) |
 | **Store** | `REGISTRY/index/NAME.toml` and an immutable copy per version, checked against its digest (`N0507`), refused if it holds a link (`N0514`) or its index is malformed (`N0512`) |
-| **Commands** | `nazm publish DIR --registry REG`; `nazm yank NAME@VERSION --registry REG [--undo]`; `nazm lock`, `--locked` as N46 |
+| **Commands** | `nazm publish DIR --registry REG`; `nazm yank NAME@VERSION --registry REG [--undo]`; `nazm lock`, `--locked` as N46; `nazm update DIR [NAME…]` re-resolves without the lockfile's preference for the named packages (all without names) and prints each change |
 | **Imports** | unchanged: `use "shapes:polygon.nz";` |
 
 ### A freestanding target: device registers and no operating system — N62

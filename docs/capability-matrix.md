@@ -91,7 +91,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | VERIFIED |
 | 25 | LSP and MCP | PARTIAL / PARTIAL — across package boundaries tested; an editor client (N74) |
-| 26 | Package and build tooling | PARTIAL — templates, a library check, API docs and a publish dry run (N74) |
+| 26 | Package and build tooling | PARTIAL — templates, a library check, API docs and a publish dry run (N74); a backtracking resolver that explains a refusal, and `nazm update` (N90) |
 | 27 | Debugger and profiler | PARTIAL |
 | 28 | Performance measurement | PARTIAL |
 | 29 | Differential testing | VERIFIED |
@@ -2632,11 +2632,29 @@ alone; two copies byte-identical from empty caches; 200 packages resolved and lo
 No registry, no remote sources, no version ranges, no build scripts, no workspaces of several
 roots.
 
+*N90, 2026-10-04: packages v3 — VERIFIED for backtracking resolution and `nazm update`, one host;
+the area stays PARTIAL.* `architecture.md` §7.91 first. `crates/nazm-package/src/lib.rs` `Search`:
+registry packages in name order, each one's non-yanked versions newest first with the lockfile's
+first while it satisfies; a candidate is kept only if every requirement the current choice places
+on it holds, a later requirement on a package already chosen is checked again, and a dead end undoes
+the last choice. The first complete assignment is the answer — deterministic, the newest a lockfile
+allows. At most 10,000 candidates: past that the refusal says the search stopped, not that no answer
+exists. A refusal (`N0513`) names the package no version fitted where the search got deepest and
+every requirement on it with who placed it, a registry package at its version. `nazm update DIR
+[NAME…]` re-resolves with the lockfile's preference dropped for the named packages (every one
+without names), prints `name old → new` per change, and writes the lockfile; a name that is no
+registry package is `N0501`. Evidence: `crates/nazm-package/tests/registry.rs` (+4): an older version
+chosen where N56 refused, an explained conflict naming both requirements, the bound reached on
+100,000 dead-ending assignments, and `update` holding the packages not named;
+`crates/nazm-cli/tests/registry.rs` (+1): `nazm update` prints the change, rewrites the lockfile, and
+the build runs the new version. Five mutants. Still not here: signatures and trust roots, a remote
+registry, features and pre-releases, multi-root workspaces — the area stays PARTIAL.
+
 *N56, 2026-10-02: packages v2 — VERIFIED for a local registry, one host.* `architecture.md` §7.58
 first. `crates/nazm-package/src/registry.rs`: `nazm.registry-index/1` indexes and an immutable copy
 per version; `^`, `~`, `=` and exact requirements; per name, the lockfile's version while it still
-satisfies, else the highest non-yanked, one version per name and no backtracking (`N0513` naming
-every requirement); `nazm publish` and `nazm yank`. Refused by code: a version published twice and
+satisfies, else the highest non-yanked, one version per name and no backtracking — backtracking since
+N90 — (`N0513` naming every requirement); `nazm publish` and `nazm yank`. Refused by code: a version published twice and
 a malformed or equivocating index (`N0512`), a copy changed after publishing (`N0507`), a link in a
 package (`N0514`), a path package and a registry dependency of one name (`N0503`), a cycle through
 registry edges (`N0504`), a path dependency in a published package. A registry source is
