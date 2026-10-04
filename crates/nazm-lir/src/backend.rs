@@ -421,3 +421,139 @@ mod tests {
         assert!(!linux_x86.links_on(&linux_arm) && linux_arm.links_on(&linux_arm));
     }
 }
+
+/// What this compiler has shown of a target under one backend (N95, `docs/architecture.md` §7.96).
+/// There is no fourth answer: a cell is run, compiled only, or refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Support {
+    /// Programs built for it ran — on the host, under Rosetta, in a container or an emulator —
+    /// and agreed with the interpreter. The evidence: a test, or a contained command.
+    Run(&'static str),
+    /// Its objects are built and read from their headers; nothing built for it has run here.
+    /// The reason, and the test that reads the objects.
+    Compile(&'static str),
+    /// Refused by name, with why.
+    Unsupported(&'static str),
+}
+
+impl Support {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Run(_) => "run-verified",
+            Self::Compile(_) => "compile-only",
+            Self::Unsupported(_) => "unsupported",
+        }
+    }
+
+    #[must_use]
+    pub const fn evidence(self) -> &'static str {
+        match self {
+            Self::Run(e) | Self::Compile(e) | Self::Unsupported(e) => e,
+        }
+    }
+}
+
+/// One row of the support matrix.
+#[derive(Debug, Clone, Copy)]
+pub struct Cell {
+    pub triple: &'static str,
+    /// The CPU the LLVM backend's objects are compiled for: what the C compiler driver resolves
+    /// for the triple, which `platform_matrix.rs` checks against the driver itself.
+    pub llvm_cpu: &'static str,
+    /// The CPU Cranelift compiles for: the triple's baseline ISA, no feature of the building
+    /// host detected.
+    pub cranelift_cpu: &'static str,
+    pub llvm: Support,
+    pub cranelift: Support,
+    /// What a debugger has been shown to do with a `--debug` build for it (N48, N58, N91).
+    pub debugger: &'static str,
+}
+
+const NO_CRANELIFT_BOARD: Support = Support::Unsupported(
+    "Cranelift's object writer has no format for a target without an operating system",
+);
+
+/// The support matrix (N95): every target the compiler accepts, and what is known of each.
+pub const SUPPORT: &[Cell] = &[
+    Cell {
+        triple: "aarch64-apple-darwin",
+        llvm_cpu: "apple-m1",
+        cranelift_cpu: "aarch64 baseline",
+        llvm: Support::Run(
+            "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information",
+        ),
+        cranelift: Support::Run(
+            "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information",
+        ),
+        debugger: "lldb, breakpoints resolved statically, both backends",
+    },
+    Cell {
+        triple: "x86_64-apple-darwin",
+        llvm_cpu: "penryn",
+        cranelift_cpu: "x86-64 baseline (SSE2)",
+        llvm: Support::Run("a_program_for_the_other_macos_architecture_runs_where_rosetta_does"),
+        cranelift: Support::Run(
+            "a_program_for_the_other_macos_architecture_runs_where_rosetta_does",
+        ),
+        debugger: "not exercised",
+    },
+    Cell {
+        triple: "aarch64-unknown-linux-gnu",
+        llvm_cpu: "generic",
+        cranelift_cpu: "aarch64 baseline",
+        llvm: Support::Run("cargo xtask contained tests"),
+        cranelift: Support::Run("cargo xtask contained tests"),
+        debugger: "gdb, live, both backends (nazm-debug image)",
+    },
+    Cell {
+        triple: "x86_64-unknown-linux-gnu",
+        llvm_cpu: "x86-64",
+        cranelift_cpu: "x86-64 baseline (SSE2)",
+        llvm: Support::Compile("every_target_is_built_by_both_backends_in_its_own_format"),
+        cranelift: Support::Compile("every_target_is_built_by_both_backends_in_its_own_format"),
+        debugger: "not exercised",
+    },
+    Cell {
+        triple: "aarch64-unknown-none",
+        llvm_cpu: "generic",
+        cranelift_cpu: "none",
+        llvm: Support::Run("the_image_boots_on_qemu_and_reports_on_the_uart"),
+        cranelift: NO_CRANELIFT_BOARD,
+        debugger: "not exercised",
+    },
+    Cell {
+        triple: "riscv64gc-unknown-none-elf",
+        llvm_cpu: "generic-rv64",
+        cranelift_cpu: "none",
+        llvm: Support::Run("both_boards_boot_and_agree_under_qemu"),
+        cranelift: NO_CRANELIFT_BOARD,
+        debugger: "not exercised",
+    },
+    Cell {
+        triple: "wasm32-unknown-unknown",
+        llvm_cpu: "generic",
+        cranelift_cpu: "none",
+        llvm: Support::Run("the_corpus_runs_as_webassembly_as_the_interpreter_runs_it"),
+        cranelift: Support::Unsupported("this Cranelift is built without a WebAssembly backend"),
+        debugger: "DWARF sections present; a debugger not exercised",
+    },
+];
+
+/// What is refused by decision rather than by what this machine lacks, and why.
+pub const NON_GOALS: &[(&str, &str)] = &[
+    (
+        "Windows",
+        "unsupported: no Windows linker, SDK or machine here, and the runtime has no Windows port",
+    ),
+    (
+        "32-bit hosted targets",
+        "a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 is \
+         the one 32-bit target, freestanding",
+    ),
+    (
+        "big-endian targets",
+        "a non-goal: no big-endian machine or image is here to run one, and the DWARF writer and \
+         layouts assume little-endian",
+    ),
+];
