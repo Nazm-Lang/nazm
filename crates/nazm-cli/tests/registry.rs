@@ -175,3 +175,28 @@ fn a_registry_package_holding_a_link_is_refused_by_the_build() {
     assert!(!r.status.success());
     assert!(err(&r).contains("N0514"), "{}", err(&r));
 }
+
+#[test]
+fn update_rewrites_the_lockfile_and_prints_each_change() {
+    // N90, §7.91.
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    publish(root, "1.0.0", 10);
+    let app = app(root, "^1.0.0");
+    assert!(nazm(root, &["lock", "app"]).status.success());
+    publish(root, "1.1.0", 20);
+    // The lockfile still holds 1.0.0.
+    assert_eq!(out(&nazm(root, &["run", "app"])), "11\n");
+    let u = nazm(root, &["update", "app", "shapes"]);
+    assert!(u.status.success(), "{}", err(&u));
+    assert_eq!(out(&u), "shapes 1.0.0 → 1.1.0\n");
+    assert!(std::fs::read_to_string(app.join("nazm.lock"))
+        .unwrap()
+        .contains("registry+shapes@1.1.0"));
+    assert_eq!(out(&nazm(root, &["run", "app"])), "21\n");
+    let again = nazm(root, &["update", "app"]);
+    assert_eq!(out(&again), "no changes\n");
+    let unknown = nazm(root, &["update", "app", "circles"]);
+    assert_eq!(unknown.status.code(), Some(1));
+    assert!(err(&unknown).contains("N0501"), "{}", err(&unknown));
+}

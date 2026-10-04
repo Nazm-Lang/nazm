@@ -177,6 +177,52 @@ pub(crate) fn yank(which: &str, registry: &Path, undo: bool) -> ExitCode {
     }
 }
 
+/// `nazm update DIR [NAME…]` (N90): each registry package whose version changed, `name old →
+/// new` — `(new)` and `(removed)` for one that appeared or went — then the lockfile written.
+pub(crate) fn update(dir: &Path, names: &[String]) -> ExitCode {
+    let before = nazm_package::locked_versions(dir);
+    let graph = match nazm_package::resolve_updating(dir, names) {
+        Ok(g) => g,
+        Err(d) => return report(&d),
+    };
+    let after: std::collections::BTreeMap<&str, nazm_package::Version> = graph
+        .packages
+        .iter()
+        .filter(|p| p.source.starts_with("registry+"))
+        .map(|p| (p.name.as_str(), p.version))
+        .collect();
+    let mut changed = 0;
+    for (name, v) in &after {
+        match before.get(*name) {
+            Some(old) if old == v => {}
+            Some(old) => {
+                println!("{name} {old} → {v}");
+                changed += 1;
+            }
+            None => {
+                println!("{name} (new) → {v}");
+                changed += 1;
+            }
+        }
+    }
+    for (name, old) in &before {
+        if !after.contains_key(name.as_str()) {
+            println!("{name} {old} → (removed)");
+            changed += 1;
+        }
+    }
+    if changed == 0 {
+        println!("no changes");
+    }
+    match nazm_package::write_lock(&graph) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("nazm: could not write the lockfile: {e}");
+            ExitCode::from(exit::TOOLCHAIN_FAILED)
+        }
+    }
+}
+
 /// `nazm lock DIR`.
 pub(crate) fn lock(dir: &Path) -> ExitCode {
     let graph = match nazm_package::resolve(dir) {
