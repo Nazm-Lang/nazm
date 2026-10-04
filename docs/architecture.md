@@ -7733,6 +7733,88 @@ ahead of `_start`; AArch64's images were unaffected and its script gains the sam
 hosted refusal (`N0392`) names both boards** in its help. Epoch 26 and runtime ABI 13 as stated;
 `nazm inspect` gains `toolchain.boards`, additive.
 
+## 7.88 Assurance profiles v3: contracts, obligations and what each one's status is — N87, 2026-10-04
+
+Written before the code. Areas 19 and 20 are PARTIAL: `critical` and `cyber` are restriction rules
+over effects, spawning, foreign calls, recursion, allocation and locked builds, and a profile report
+names the rule a program broke. Neither can say what a function *promises*, and neither can say, of
+the places a program may fail, which are proved not to, which are checked as the program runs, and
+which nobody knows. This milestone adds **contracts** to the language and an **obligation report** to
+the tooling, and states, for each obligation, which of the three it is. It is profile enforcement and
+evidence for a reviewer; it is not certification, and §7.49's disclaimer stands in full.
+
+**Contracts.** A function may state preconditions and postconditions after its effect set:
+
+```nazm
+fn isqrt(n: Int) -> Int ! {}
+    requires n >= 0
+    ensures result >= 0 && result * result <= n
+{ … }
+```
+
+`requires E` and `ensures E` may each be written any number of times, in that order; each `E` is a
+`Bool` expression over the parameters (and, in `ensures`, `result`, the value being returned),
+literals, arithmetic, comparison, `&&`, `||`, `!`, and calls of functions that declare `! {}`. Nothing
+else: no effect, no capability, no allocation (a contract that could fail for want of memory would
+be a contract about memory) — each refused at the clause (`N0614`). `result` outside an `ensures` is an
+ordinary name.
+
+**What a contract means.** Every `requires` is evaluated, in order, when the function is entered,
+after its arguments; every `ensures` when it returns, on every path, with `result` the returned
+value. A clause that is false fails the call — `N0410` for a precondition, `N0411` for a
+postcondition — at the clause, through the failure path every other failure takes: status 2 natively,
+the same diagnostic from `nazm run`. A clause that itself fails (an overflow inside it) fails the call
+with that failure. Contracts are never compiled out: a program with contracts means the same under
+every backend, optimisation level and profile.
+
+**What the compiler proves.** One thing, exactly: a call whose arguments are all integer or boolean
+literals is checked against the callee's `requires` at compile time by evaluating each clause. False
+is `N0615` at the call — it would fail every time it ran; true makes that call's obligation **proved**.
+No other call is reasoned about.
+
+**Obligations, and their three statuses.** `nazm check --obligations` prints `nazm.obligations/1`: for
+each function, each obligation with its kind, its span and its status —
+
+- **proved**: discharged at compile time, with the witness (a literal call's evaluated clause; an
+  operation on two literals whose result the checker computed);
+- **checked**: not proved, and checked when the program runs — every contract clause, every
+  arithmetic operation that can overflow or divide by zero, every index and every allocation, since
+  Nazm checks all of them;
+- **unknown**: nothing about it is decided here — a call through a function value, whose callee and
+  so whose contract are not known (N50), and every foreign call (C's behaviour, N42).
+
+The kinds: `precondition`, `postcondition`, `call-precondition` (one per call of a function with a
+`requires`), `overflow`, `division`, `index`, `allocation`, `indirect-call`, `foreign-call`. The report
+is deterministic and states, as its first field, that it is compiler evidence and not certification.
+
+**Profiles.** `critical` gains `contracts-hold`: no `call-precondition` may be refuted (already
+`N0615`), and every `unknown` obligation is a witness the profile refuses (`N0510`), so a `critical`
+program's obligations are each proved or checked. `cyber` gains `no-unknown-calls` — the same refusal
+of indirect and foreign calls — and keeps N47's locked build; constant-time checking stays RESEARCH:
+the one subset precise enough to state (no branch, index or division whose operand is derived from a
+named secret) needs secrets in the type system, which N80's provenance tracks only to sinks.
+
+**Who owns what.** The parser owns the clauses' syntax; the checker owns their typing and the literal
+proof; Core IR lowering owns their meaning, as ordinary Core IR — a clause is a `Bool` expression and a
+call of an internal `contract_failed` built-in on its negation — so the interpreter, MIR and both
+backends run them with no new node; `nazm-core` owns the obligation census, read off Core IR.
+
+**Versions.** Semantic epoch `26 → 27` (two clause forms, three codes). Interface schema
+`nazm.interface/9 → 10`: an export's contracts are part of what a caller's literal proof and
+obligation report read. Runtime ABI unchanged: a contract failure is the existing failure path. Core
+IR and MIR print schemas unchanged (an internal built-in). `nazm.obligations/1` new, with its schema.
+
+**Negative example.** `isqrt(-4)` is `N0615` at compile time; `isqrt(x)` with `x` negative at run time
+is `N0410` at the `requires`. **Boundary example.** `isqrt(0)` is proved and returns `0`, its `ensures`
+holding as `0 * 0 <= 0`.
+
+**Not here.** Loop invariants and ranges as declarations, initialisation (every Nazm binding is
+initialised by construction), a solver or any proof beyond literal evaluation, separation logic,
+constant time, and any claim of absence of runtime error beyond the census's own `proved` entries.
+
+**What would prove this unsuitable.** A contract a backend or the interpreter does not run; a
+`proved` obligation that fails at run time; an obligation the census omits — a trap site not in it.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
