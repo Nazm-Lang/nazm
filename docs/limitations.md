@@ -193,8 +193,10 @@ found only by reading all of it.
   then, every exported rename was refused.
 - Reproducibility is verified on one host. Across toolchains it is measured, not claimed: Apple
   clang 21 and clang 19 give the same program objects and a different runtime object (N73, area 32).
-  A provenance record is evidence of what a build read and wrote, not a proof; Nazm neither signs nor
-  verifies an attestation. The compiler's bill of materials is what `Cargo.lock` claims; nothing
+  A provenance record is evidence of what a build read and wrote, not a proof. `nazm attest` signs and
+  verifies in-toto statements of it with OpenSSH keys the user holds — no transparency log, no keyless
+  signing, no SLSA level claimed — and reproducibility is verified on one host and one image, not on
+  independent machines (N94). The compiler's bill of materials is what `Cargo.lock` claims; nothing
   checks a crate against its upstream.
 - Coverage-guided fuzzing covers four targets — the front end, lowering with MIR's validator, the
   interpreter and package manifests — at 300 s each per campaign; no sanitizer, Miri or Loom run,
