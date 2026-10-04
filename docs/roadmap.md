@@ -398,6 +398,14 @@ ecosystem, evidence, platforms and contracts (N89–N96); formal trust, the comp
 and the interactive tier (N97–N99); and N100, an audit of the whole catalogue that may fail
 honestly. A row stays PARTIAL, RESEARCH or BLOCKED when that is what its evidence says.
 
+### N88 — AI/HPC v2 — **complete as scoped, 2026-10-04; area 21 stays PARTIAL**
+
+`architecture.md` §7.89 first. `nazm accel` runs maps and zips of `Int` kernels and folds them
+(`--reduce add|min|max`) in index order, every run held to the interpreter; a numeric oracle of
+generated kernels against 128-bit arithmetic on the GPU. `nazm.accel/2`. No language change. A
+second provider is BLOCKED here (no Metal compiler, no Vulkan); vector operations in LIR DESIGNED.
+Next: N89, LSP and MCP workspace editing.
+
 ### N87 — assurance profiles v3 — **complete as scoped, 2026-10-04; areas 19 and 20 VERIFIED as scoped, as enforcement**
 
 `architecture.md` §7.88 first. Contracts — `requires` and `ensures`, checked on entry and on every

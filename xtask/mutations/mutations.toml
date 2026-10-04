@@ -11483,10 +11483,11 @@ killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_functio
 
 [[mutation]]
 name = "n67-the-signature-is-not-checked"
-why = "a kernel of two parameters is accepted, though the map hands it one element"
+why = """a kernel of three parameters is accepted, though a map hands it one element and a zip two
+Repointed by N88, which made a kernel of two a zip: the rule is now one or two, never more."""
 file = "crates/nazm-service/src/kernel.rs"
-find = '    if entry.params != 1'
-replace = '    if entry.params > 2'
+find = '    if !(1..=2).contains(&entry.params) || !ints || entry.ret != Type::Int {'
+replace = '    if !(1..=3).contains(&entry.params) || !ints || entry.ret != Type::Int {'
 killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_function_is_refused_by_name_before_any_device" }]
 
 [[mutation]]
@@ -13235,3 +13236,34 @@ file = "crates/nazm-lir/src/emit.rs"
 find = "    if which == 0 {"
 replace = "    if which != 1 && which != 0 {"
 killers = [{ package = "nazm-cli", test = "contracts", name = "a_contract_holds_or_fails_alike_on_every_tier" }]
+
+
+# --- N88: accelerators v2 -----------------------------------------------------------------------
+
+[[mutation]]
+name = "n88-the-running-sum-wraps"
+why = "`--reduce add` wraps on overflow instead of failing where the running sum overflows"
+file = "crates/nazm-cli/src/accel.rs"
+find = "                    sum = sum.checked_add(*x).ok_or(i)?;"
+replace = "                    sum = sum.wrapping_add(*x);"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "accel::tests::a_fold_is_in_index_order_and_add_checks_the_running_sum" }]
+
+[[mutation]]
+name = "n88-unequal-inputs-are-zipped"
+why = "a zip over inputs of different lengths reaches the device, reading past the shorter one"
+file = "crates/nazm-cli/src/accel.rs"
+find = "            if columns.iter().any(|c| c.len() != elements.len()) {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "accel", name = "a_zip_needs_two_inputs_of_one_length_before_any_device" }]
+
+[[mutation]]
+name = "n88-a-zip-reads-its-first-input-twice"
+why = "the zip kernel passes the first input for both arguments"
+file = "crates/nazm-service/src/kernel.rs"
+find = '            "nz_in[nz_index], nz_in2[nz_index]",'
+replace = '            "nz_in[nz_index], nz_in[nz_index]",'
+killers = [{ package = "nazm-cli", test = "accel", name = "a_zip_needs_two_inputs_of_one_length_before_any_device" }]
+
+# `n88-the-fold-is-not-held-to-the-interpreter` is not a catalogue entry: only a device run can kill it,
+# and the campaign's container has no GPU. The ignored `a_zip_and_a_reduction_run_on_the_gpu_and_agree`
+# exercises it by hand.

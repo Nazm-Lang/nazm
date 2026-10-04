@@ -2648,6 +2648,28 @@ copy is the next cost, and it is not attacked here. No variance beyond the media
 peak memory was not measured. A revision holds the scan, the chunk table and the tree, which is more
 than a parse that drops its scan.
 
+### Accelerators v2 — N88, measured 2026-10-04
+
+**Hypothesis:** a zip and a fold are expressible and agree, and what they cost is stated whole —
+transfers and the host fold included. **Workload:** `zipped(x, y) = x * y + x` over 1,000,000 pairs
+(`x` = 1…1,000,000, `y` = `x % 7`) folded with `add`; the same as a native loop computing `y`
+itself. **Method:** debug `nazm`, OpenCL on the Apple M1 Pro's GPU, three runs (the first builds the
+kernel); the native loop at `--opt-level 2`, best of five including the 32 ms process floor.
+
+| | ms |
+| --- | ---: |
+| kernel build (first run / cached by the driver) | 129.6 / 1.5 |
+| host to device, two inputs (16 MB) | 2.9–3.2 |
+| run | 0.77–0.85 |
+| device to host (8 MB) | 0.94–0.99 |
+| fold on the host, in index order (a debug build of `nazm`) | 13.8–14.2 |
+| the whole job as a native loop, less the process floor | about 3 |
+
+The device is not the cost; the transfers and the fold are, and the CPU computes this workload faster
+than it can be shipped. This is the honest answer for a light kernel: the row's acceptance — a
+workload a CPU cannot serve — is unmet, and N88 does not claim it. The fold's time would shrink in a
+release build of `nazm`; a device-side `min`/`max` would remove it, and is not built.
+
 ### Contracts — N87, measured 2026-10-04
 
 **Hypothesis:** a contract costs its clauses' evaluation and nothing more. **Workload:** 20,000,000

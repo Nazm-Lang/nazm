@@ -64,9 +64,13 @@ found only by reading all of it.
   `Int`s and `Bool`s one array per field, whether or not its loops gain — it is 2× slower for a loop
   reading every field; the compiler does not choose; LLVM only (area 4). *Narrowed in N68:* until
   then, every element was laid out whole.
-- Accelerators are one command over one API: `nazm accel` maps a pure `(Int) -> Int` function over
-  `Int`s through macOS's OpenCL on Apple's GPU; no kernels in the language, no other vendor, API or
-  operating system, no layout specialisation (area 21). *Narrowed in N67:* until then, no GPU path.
+- Accelerators are one command over one API: `nazm accel` maps a pure `(Int) -> Int` function, or
+  zips a `(Int, Int) -> Int` one over two inputs, of `Int`s through macOS's OpenCL on Apple's GPU,
+  and folds the results (`add`, `min`, `max`) on the host in index order; no kernels in the
+  language, no other vendor, API or operating system (Metal and SPIR-V BLOCKED here for want of a
+  toolchain), no device-side reduction, no layout specialisation; a light workload is slower than a
+  native CPU loop once transfers are counted (area 21). *Narrowed in N88:* until then, maps of one
+  sequence only; *in N67:* no GPU path.
 - Vectorisation is one idiom: the counted `Ints` summation loop, replaced by `ints_sum_from` in native
   builds at `--opt-level 2` and above; no element-wise maps, no vector types, baseline target
   features only, and a fallback 1.33× slower than the scalar loop when elements exceed 2^56
