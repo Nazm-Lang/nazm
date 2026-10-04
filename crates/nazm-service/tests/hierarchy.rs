@@ -436,7 +436,7 @@ enum State {
 fn Box(x: Int) -> Int { x }
 fn worker(n: Int) -> Int { n }
 fn identity[T](x: T) -> T { x }
-fn mixed() -> Int {
+fn mixed(tasks: SpawnCap) -> Int {
     let b = Box(value: 1);
     let s = State.Done(code: 2);
     let r = State.Ready();

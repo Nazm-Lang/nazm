@@ -191,7 +191,7 @@ fn codes(src: &str) -> Vec<String> {
 fn a_select_takes_the_lowest_ready_channel_everywhere() {
     let line = agrees(
         r#"
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let a = chan_new_of[Int](2);
     let b = chan_new_of[Int](2);
     chan_send_of(a, 1);
@@ -232,7 +232,7 @@ fn a_value_select_did_not_choose_stays_queued_and_is_released_once() {
         r#"
 struct Note { text: Str, }
 
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let a = chan_new_of[Note](1);
     let b = chan_new_of[Note](1);
     chan_send_of(a, Note(text: str_concat("fi", "rst")));

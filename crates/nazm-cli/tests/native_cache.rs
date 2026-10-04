@@ -166,7 +166,7 @@ fn unit_of(units: &[(String, String)], module: &str) -> String {
 const A_CALLS_B: &[(&str, &str)] = &[
     (
         "a.nz",
-        "use \"b.nz\";\nfn main() -> Int { print(int_to_str(twice(21))); 0 }\n",
+        "use \"b.nz\";\nfn main(out: OutCap) -> Int { print(int_to_str(twice(21))); 0 }\n",
     ),
     (
         "b.nz",
@@ -307,7 +307,7 @@ fn a_called_signature_change_reaches_the_caller_s_own_ir() {
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\nfn main() -> Int { print(int_to_str(twice(21, 2))); 0 }\n",
+        "use \"b.nz\";\nfn main(out: OutCap) -> Int { print(int_to_str(twice(21, 2))); 0 }\n",
     );
     let after = unit_of(&emitted(dir.path(), "a.nz", "two"), "a.nz");
     assert!(
@@ -361,7 +361,7 @@ fn a_comment_recompiles_when_it_moves_a_position_the_ir_carries() {
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\n// a comment above the call\nfn main() -> Int { print(int_to_str(twice(21))); 0 }\n",
+        "use \"b.nz\";\n// a comment above the call\nfn main(out: OutCap) -> Int { print(int_to_str(twice(21))); 0 }\n",
     );
     let after = build(dir.path(), "a.nz");
     assert_eq!(after.compiled, 1);
@@ -924,7 +924,7 @@ const A_USES_B_RECORD: &[(&str, &str)] = &[
     (
         "a.nz",
         "use \"b.nz\";\n\
-         fn main() -> Int { let p = at(21); print(int_to_str(p.x + p.x)); 0 }\n",
+         fn main(out: OutCap) -> Int { let p = at(21); print(int_to_str(p.x + p.x)); 0 }\n",
     ),
     (
         "b.nz",
@@ -1085,7 +1085,7 @@ const A_USES_B_ENUM: &[(&str, &str)] = &[
     (
         "a.nz",
         "use \"b.nz\";\n\
-         fn main() -> Int { let s = start(21); \
+         fn main(out: OutCap) -> Int { let s = start(21); \
          print(int_to_str(match s { State.Ready() => 0, State.Done(code: c) => c * 20, })); 0 }\n",
     ),
     (

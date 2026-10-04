@@ -29,7 +29,7 @@ fn total(squares: Chan, results: Chan) -> Int {
     0
 }
 
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     // Small capacities on purpose: the producer runs ahead by at most four jobs, so this
     // is back-pressure rather than an unbounded queue that happens to drain.
     let jobs = chan_new(4);

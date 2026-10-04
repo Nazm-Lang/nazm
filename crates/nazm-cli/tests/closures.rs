@@ -189,7 +189,7 @@ fn inc(x: Int) -> Int { x + 1 }
 fn make_adder(n: Int) -> fn(Int) -> Int {
     fn(x: Int) -> Int { x + n }
 }
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let s = str_concat("hel", "lo");
     let k = 10;
     let add = make_adder(5);
@@ -220,7 +220,7 @@ fn a_capture_is_a_copy_taken_when_the_closure_is_made() {
     // is seen by both.
     agrees(
         r#"
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let n = 1;
     let xs = ints_new();
     let f = fn(x: Int) -> Int { x + n + ints_len(xs) };
@@ -246,7 +246,7 @@ fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int {
 }
 fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
 fn fact(n: Int) -> Int { if n <= 1 { 1 } else { n * apply(fact, n - 1) } }
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let tag = str_concat("ab", "cd");
     let xs = ints_new();
     ints_push(xs, 3);
@@ -270,7 +270,7 @@ fn a_closure_with_managed_results_and_arguments_agrees() {
     agrees(
         r#"
 struct Pair { a: Str, b: Int, }
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let sep = str_concat(", ", "");
     let join = fn(p: Pair, more: Str) -> Pair { Pair(a: str_concat(str_concat(p.a, sep), more), b: p.b + 1) };
     let mut p = Pair(a: "x", b: 0);
@@ -292,7 +292,7 @@ fn a_failure_inside_a_closure_reclaims_its_captures_and_its_callers() {
         &[(
             "prog.nz",
             r#"
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let d = 0;
     let s = str_concat("x", "y");
     let f = fn(x: Int) -> Int { x / d + str_len(s) };
@@ -326,7 +326,7 @@ fn pick(n: Int) -> Int {
     }
     total
 }
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     print(int_to_str(pick(10)));
     0
 }
@@ -349,7 +349,7 @@ fn make(k: Int) -> fn(Int) -> Str {
     let tag = str_concat("tag-", int_to_str(k));
     fn(i: Int) -> Str { str_concat(tag, int_to_str(ints_get(xs, i))) }
 }
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let g = make(5);
     let ys = ints_new();
     ints_push(ys, 99);
@@ -412,7 +412,7 @@ fn size_of(i: Item) -> Size { if i.cost > 10 { Size.Large(by: i.cost - 10) } els
 fn extra(acc: Int, s: Size) -> Int {
     match s { Size.Small() => acc, Size.Large(by: n) => acc + n, }
 }
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let items = vec_new[Item]();
     vec_push(items, Item(name: "a", cost: 4));
     vec_push(items, Item(name: "b", cost: 15));
@@ -439,7 +439,7 @@ fn a_function_type_crosses_a_module_boundary_and_its_interface() {
     let lib = "pub fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(f(x)) }\n\
                pub fn scaler(k: Int) -> fn(Int) -> Int ! {} { fn(x: Int) -> Int { x * k } }\n";
     let main = "use \"lib.nz\";\n\
-                fn main() -> Int { print(int_to_str(apply_twice(scaler(3), 2))); 0 }\n";
+                fn main(out: OutCap) -> Int { print(int_to_str(apply_twice(scaler(3), 2))); 0 }\n";
     agrees_on(&[("main.nz", main), ("lib.nz", lib)], "180", 0);
 
     // The interface publishes the function type, so a second check reuses both modules
@@ -544,8 +544,8 @@ fn a_function_value_carries_its_effects_and_takes_its_authority_as_parameters() 
     // An undeclared function used as a value is held to the none its type assumed.
     assert_eq!(
         codes(
-            "fn loud(x: Int) -> Int { print(\"a\"); x }\n\
-             fn main(io: IoCap) -> Int ! { io } { let f = loud; f(1) }\n"
+            "fn loud(x: Int, out: OutCap) -> Int { print(\"a\"); x }\n\
+             fn main(io: IoCap) -> Int ! { io } { let f = loud; f(1, io) }\n"
         ),
         ["N0366"]
     );

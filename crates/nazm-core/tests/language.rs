@@ -261,7 +261,7 @@ fn absent_features_are_refused_by_name() {
     // And `print` is no longer one of them: it is a built-in now, checked by the
     // ordinary call rule, so a wrong argument is a type error rather than a refusal.
     assert_eq!(
-        sole_error("fn main() -> Int { print(1) }"),
+        sole_error("fn main(out: OutCap) -> Int { print(1) }"),
         codes::TYPE_MISMATCH
     );
 
@@ -1722,7 +1722,7 @@ fn a_file_that_cannot_be_read_reports_n0407() {
     // harness's: `read_file` is an ordinary built-in and this is what it does when the
     // outside world says no.
     assert_eq!(
-        sole_error(r#"fn main() -> Int { str_len(read_file("/no/such/file/at/all.txt")) }"#),
+        sole_error(r#"fn main(io: IoCap) -> Int { str_len(read_file("/no/such/file/at/all.txt")) }"#),
         codes::IO_FAILED
     );
 }

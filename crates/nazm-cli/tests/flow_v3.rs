@@ -305,8 +305,8 @@ fn a_function_exported_to_c_is_handed_anything() {
 #[test]
 fn checked_paths_is_the_languages_rule_in_every_function() {
     // An undeclared helper is N37's bridge: the language does not check its own writes…
-    let src = "fn save(p: Str) -> Int { write_file(p, \"x\") }\n\
-               fn main() -> Int { save(read_file(\"c\")) }\n";
+    let src = "fn save(p: Str, io: IoCap) -> Int { write_file(p, \"x\") }\n\
+               fn main(io: IoCap) -> Int { save(read_file(\"c\"), io) }\n";
     accepted(src);
     // …and `cyber`'s `checked-paths` does, with the chain.
     let d = program(src);
@@ -322,8 +322,8 @@ fn checked_paths_is_the_languages_rule_in_every_function() {
     assert!(t.contains("a file's contents are read here"), "{t}");
     // A path from the command line passes it.
     let d = program(
-        "fn save(p: Str) -> Int { write_file(p, \"x\") }\n\
-         fn main() -> Int { save(arg(1)) }\n",
+        "fn save(p: Str, io: IoCap) -> Int { write_file(p, \"x\") }\n\
+         fn main(io: IoCap) -> Int { save(arg(1), io) }\n",
     );
     let o = nazm(
         d.path(),
@@ -336,8 +336,8 @@ fn checked_paths_is_the_languages_rule_in_every_function() {
 
 #[test]
 fn explain_flow_prints_each_origins_chain_from_where_it_entered() {
-    let src = "fn show(s: Str) -> Int { print(s) }\n\
-               fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"c\")); show(strs_get(xs, 0)); print(arg(0)); 0 }\n";
+    let src = "fn show(s: Str, out: OutCap) -> Int { print(s) }\n\
+               fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"c\")); show(strs_get(xs, 0), io); print(arg(0)); 0 }\n";
     let d = program(src);
     let o = nazm(d.path(), &["explain-flow", "--json", "p.nz"]);
     assert!(o.status.success(), "{}", text(&o));

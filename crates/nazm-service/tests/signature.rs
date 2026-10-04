@@ -351,7 +351,7 @@ fn a_call_the_checker_rejected_still_has_the_callee_it_resolved() {
     let t = "fn two(a: Int, b: Str) -> Int { a }\n\
 fn ping() -> Int { 0 }\n\
 fn worker(c: Chan) -> Int { 0 }\n\
-fn main() -> Int {\n    \
+fn main(tasks: SpawnCap) -> Int {\n    \
     let c = chan_new(1);\n    \
     scope { spawn worker(c); }\n    \
     two() + two(1, ) + two(1, \"s\", 3) + two(\"x\", 1) + ping() + nope(1)\n\

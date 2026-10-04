@@ -142,7 +142,7 @@ fn a_worker_pool_runs_natively() {
             while chan_recv(jobs, buf) { chan_send(results, ints_pop(buf) * 2); }
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(4);
             let results = chan_new(64);
             scope {
@@ -178,7 +178,7 @@ fn back_pressure_delivers_everything() {
             chan_send(results, sum);
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(1);
             let results = chan_new(1);
             scope {
@@ -208,7 +208,7 @@ fn closing_wakes_every_blocked_receiver() {
             while chan_recv(jobs, buf) { ints_pop(buf); }
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(4);
             scope {
                 spawn waiter(jobs);
@@ -239,7 +239,7 @@ fn closing_wakes_a_blocked_sender_and_refuses_its_value() {
             chan_send(results, refused);
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(2);
             let results = chan_new(1);
             scope {
@@ -281,7 +281,7 @@ fn scopes_nest() {
         "nested scopes",
         r"
         fn add(out: Chan, n: Int) -> Int { chan_send(out, n); 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let inner = chan_new(4);
             let outer = chan_new(4);
             scope {
@@ -325,7 +325,7 @@ fn every_message_is_delivered_exactly_once_under_contention() {
             chan_send(results, sum);
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let jobs = chan_new(1);
             let results = chan_new(8);
             scope {
@@ -358,7 +358,7 @@ fn many_scopes_in_sequence_leave_nothing_running() {
         "scope cleanup",
         r"
         fn one(out: Chan) -> Int { chan_send(out, 1); 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let out = chan_new(2048);
             let mut round = 0;
             while round < 200 {
@@ -410,7 +410,7 @@ fn a_return_out_of_a_scope_still_waits_for_its_tasks() {
             chan_send(out, n);
             0
         }
-        fn early(out: Chan) -> Int {
+        fn early(out: Chan, tasks: SpawnCap) -> Int {
             scope {
                 spawn slow(out, 5);
                 spawn slow(out, 5);
@@ -418,9 +418,9 @@ fn a_return_out_of_a_scope_still_waits_for_its_tasks() {
             }
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let out = chan_new(8);
-            early(out);
+            early(out, tasks);
             chan_close(out);
             let buf = ints_new();
             let mut total = 0;
@@ -446,7 +446,7 @@ fn a_break_out_of_a_scope_still_waits_for_its_tasks() {
             chan_send(out, n);
             0
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let out = chan_new(16);
             let mut round = 0;
             while round < 3 {
@@ -478,7 +478,7 @@ fn a_task_that_fails_ends_the_whole_program() {
             chan_recv(c, buf);
             1 / ints_pop(buf)
         }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let c = chan_new(1);
             scope {
                 spawn bad(c);
@@ -540,7 +540,7 @@ fn a_task_that_fails_ends_the_whole_program() {
 
 /// The worker half every program below shares.
 const WORKER: &str = r#"
-fn worker(started: Chan, go: Chan) -> Int {
+fn worker(started: Chan, go: Chan, out: OutCap) -> Int {
     let buf = ints_new();
     chan_send(started, 1);
     chan_recv(go, buf);
@@ -552,7 +552,7 @@ fn worker(started: Chan, go: Chan) -> Int {
 
 /// The body overflows while a worker it has just released is still running.
 const BODY_FAILS: &str = r#"
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let started = chan_new(1);
     let go = chan_new(1);
     let buf = ints_new();
@@ -576,7 +576,7 @@ fn bad(dead: Chan) -> Int {
     chan_recv(dead, buf);
     1 / ints_pop(buf)
 }
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let started = chan_new(1);
     let go = chan_new(1);
     let dead = chan_new(1);
@@ -598,7 +598,7 @@ fn main() -> Int {
 const HELPER_FAILS: &str = r#"
 fn divide(a: Int, b: Int) -> Int { a / b }
 fn deeper(a: Int, b: Int) -> Int { divide(a, b) + 1 }
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let started = chan_new(1);
     let go = chan_new(1);
     let buf = ints_new();
@@ -699,7 +699,7 @@ fn nested_scopes_each_join_before_the_failure_is_reported() {
     // Two scopes, a worker in each, and the failure in the inner body. Both workers must
     // finish: the inner scope's join is reached on the way out, and the outer's after it.
     let src = r#"
-fn worker(started: Chan, go: Chan, which: Int) -> Int {
+fn worker(started: Chan, go: Chan, which: Int, out: OutCap) -> Int {
     let buf = ints_new();
     chan_send(started, 1);
     chan_recv(go, buf);
@@ -707,7 +707,7 @@ fn worker(started: Chan, go: Chan, which: Int) -> Int {
     if which == 1 { print("inner finished"); } else { print("outer finished"); }
     0
 }
-fn main() -> Int {
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
     let os = chan_new(1);
     let og = chan_new(1);
     let is = chan_new(1);
@@ -715,12 +715,12 @@ fn main() -> Int {
     let buf = ints_new();
     let mut top = 1;
     scope {
-        spawn worker(os, og, 2);
+        spawn worker(os, og, 2, io);
         chan_recv(os, buf);
         ints_pop(buf);
         chan_send(og, 1);
         scope {
-            spawn worker(is, ig, 1);
+            spawn worker(is, ig, 1, io);
             chan_recv(is, buf);
             ints_pop(buf);
             chan_send(ig, 1);
@@ -753,7 +753,7 @@ fn bad(dead: Chan, done: Chan) -> Int {
     chan_send(done, 1);
     1 / z
 }
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let dead = chan_new(1);
     let done = chan_new(1);
     let buf = ints_new();
@@ -780,7 +780,7 @@ fn a_scope_that_joins_cleanly_still_produces_its_value() {
         "clean scope",
         r"
 fn w(c: Chan) -> Int { chan_send(c, 5); 0 }
-fn main() -> Int {
+fn main(tasks: SpawnCap) -> Int {
     let c = chan_new(2);
     let buf = ints_new();
     let mut t = 0;

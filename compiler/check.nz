@@ -6,7 +6,7 @@
 use "analyse.nz";
 use "module.nz";
 
-fn main() -> Int {
+fn main(io: IoCap) -> Int {
     if args_count() < 2 {
         eprint("usage: check FILE CORE-PRELUDE");
         eprint(str_from_byte(10));
@@ -33,11 +33,11 @@ fn main() -> Int {
     ints_push(mcount, 0);
     let mto = ints_new();
     let mat = ints_new();
-    let src = attach_core(arg(1), read_file(path), mpath, mstart, mfirst, mcount, mto, mat);
+    let src = attach_core(arg(1), read_file(path), mpath, mstart, mfirst, mcount, mto, mat, io);
 
     // The whole front end, as one stage: the checked program, or its diagnostics. This
     // driver's output is the diagnostics, so a program that checked prints nothing.
-    let diags = match check_program(src, mpath, mstart, mfirst, mcount, mto, mat) {
+    let diags = match check_program(src, mpath, mstart, mfirst, mcount, mto, mat, io) {
         Result.Ok(value: checked) => vec_new[Diag](),
         Result.Err(error: found) => found,
     };

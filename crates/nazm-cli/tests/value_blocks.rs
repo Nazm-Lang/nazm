@@ -327,13 +327,13 @@ fn a_question_mark_inside_an_arm_block_cleans_the_arm_and_joins_its_scope() {
          fn g(ok: Bool) -> Result[Int, Str] {\n    if ok { return Result[Int, Str].Ok(value: 41); }\n    \
          Result[Int, Str].Err(error: int_to_str(404))\n}\n\
          enum State {\n    A,\n    B,\n}\n\
-         fn f(s: State, ok: Bool, out: Chan) -> Result[Int, Str] {\n    let x = match s {\n        \
+         fn f(s: State, ok: Bool, out: Chan, tasks: SpawnCap) -> Result[Int, Str] {\n    let x = match s {\n        \
          State.A() => {\n            let held = str_concat(\"held-\", int_to_str(1));\n            let mut n = 0;\n            \
          scope {\n                spawn worker(out, held);\n                let inner = int_to_str(99);\n                \
          n = g(ok)? + str_len(inner);\n            }\n            n + str_len(held)\n        },\n        \
          State.B() => {\n            0\n        },\n    };\n    Result[Int, Str].Ok(value: x)\n}\n\
-         fn main() -> Int {\n    let out = chan_new(8);\n    let a = f(State.A(), true, out);\n    \
-         let b = f(State.A(), false, out);\n    let c = f(State.B(), false, out);\n    chan_close(out);\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let out = chan_new(8);\n    let a = f(State.A(), true, out, tasks);\n    \
+         let b = f(State.A(), false, out, tasks);\n    let c = f(State.B(), false, out, tasks);\n    chan_close(out);\n    \
          let buf = ints_new();\n    let got = chan_recv(out, buf);\n    let more = chan_recv(out, buf);\n    \
          let rest = chan_recv(out, buf);\n    churn();\n    \
          let va = match a { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, };\n    \
@@ -354,14 +354,14 @@ fn a_three_arm_match_joins_only_the_arm_that_arrives() {
         "enum E {\n    A,\n    B,\n    C,\n}\n\
          fn g(ok: Bool) -> Result[Int, Str] {\n    if ok { return Result[Int, Str].Ok(value: 5); }\n    \
          Result[Int, Str].Err(error: str_concat(\"x\", \"y\"))\n}\n\
-         fn f(e: E, ok: Bool) -> Result[Int, Str] {\n    let v = match e {\n        \
+         fn f(e: E, ok: Bool, tasks: SpawnCap) -> Result[Int, Str] {\n    let v = match e {\n        \
          E.A() => {\n            let gone = int_to_str(1);\n            return Result[Int, Str].Ok(value: 100);\n        },\n        \
          E.B() => {\n            let s = str_concat(\"ab\", \"c\");\n            str_len(s)\n        },\n        \
          E.C() => {\n            let held = int_to_str(22);\n            g(ok)? + str_len(held)\n        },\n    };\n    \
          Result[Int, Str].Ok(value: v)\n}\n\
          fn show(r: Result[Int, Str]) -> Int {\n    match r { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - str_len(e), }\n}\n\
-         fn main() -> Int {\n    let a = show(f(E.A(), true));\n    let b = show(f(E.B(), true));\n    \
-         let c = show(f(E.C(), true));\n    let d = show(f(E.C(), false));\n    churn();\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let a = show(f(E.A(), true, tasks));\n    let b = show(f(E.B(), true, tasks));\n    \
+         let c = show(f(E.C(), true, tasks));\n    let d = show(f(E.C(), false, tasks));\n    churn();\n    \
          a * 10000 + b * 1000 + c * 10 + d\n}\n",
     ));
     // 100, 3, 5 + 2 = 7, and "xy" propagated: -2.
@@ -374,11 +374,11 @@ fn a_match_whose_arms_all_leave_produces_no_value() {
     // §19: no arm reaches the join, so there is no join; each arm's owning local is
     // released by the `return` that leaves.
     let r = both(&with(
-        "fn f(o: Option[Str]) -> Int {\n    let n = match o {\n        \
+        "fn f(o: Option[Str], tasks: SpawnCap) -> Int {\n    let n = match o {\n        \
          Option.None() => {\n            let s = int_to_str(11);\n            return str_len(s);\n        },\n        \
          Option.Some(value: v) => {\n            let w = v;\n            return str_len(w) * 10;\n        },\n    };\n    n\n}\n\
-         fn main() -> Int {\n    let a = f(Option[Str].None());\n    \
-         let b = f(Option[Str].Some(value: str_concat(\"ab\", \"c\")));\n    churn();\n    a + b\n}\n",
+         fn main(tasks: SpawnCap) -> Int {\n    let a = f(Option[Str].None(), tasks);\n    \
+         let b = f(Option[Str].Some(value: str_concat(\"ab\", \"c\")), tasks);\n    churn();\n    a + b\n}\n",
     ));
     assert_eq!(r.value, "32");
     clean(&r);
@@ -461,13 +461,13 @@ fn a_block_producing_a_result_is_propagated_once() {
         "fn mk(log: Ints, ok: Bool) -> Result[Str, Str] {\n    ints_push(log, 1);\n    \
          if ok { return Result[Str, Str].Ok(value: int_to_str(4321)); }\n    \
          Result[Str, Str].Err(error: int_to_str(9))\n}\n\
-         fn f(log: Ints, c: Bool, ok: Bool) -> Result[Int, Str] {\n    \
+         fn f(log: Ints, c: Bool, ok: Bool, tasks: SpawnCap) -> Result[Int, Str] {\n    \
          let a = (if c { mk(log, ok) } else { mk(log, true) })?;\n    \
          let b = ({\n        let r = mk(log, ok);\n        r\n    })?;\n    \
          let m = (match Option[Int].Some(value: 1) {\n        Option.None() => {\n            mk(log, true)\n        },\n        \
          Option.Some(value: q) => {\n            let r2 = mk(log, ok);\n            r2\n        },\n    })?;\n    \
          Result[Int, Str].Ok(value: str_len(a) + str_len(b) + str_len(m))\n}\n\
-         fn main() -> Int {\n    let log = ints_new();\n    let x = f(log, true, true);\n    let y = f(log, true, false);\n    \
+         fn main(tasks: SpawnCap) -> Int {\n    let log = ints_new();\n    let x = f(log, true, true, tasks);\n    let y = f(log, true, false, tasks);\n    \
          churn();\n    let vx = match x { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1, };\n    \
          let vy = match y { Result.Ok(value: n) => 0 - 1, Result.Err(error: e) => str_len(e), };\n    \
          vx * 1000 + vy * 100 + ints_len(log)\n}\n",
@@ -537,19 +537,19 @@ fn completions_that_do_not_join_are_still_refused() {
     // §20 and the refusals: Value/Unit in an `if`, a Unit arm beside a Value arm used as a
     // value, arm blocks of two types, and a Unit block where a value is needed.
     assert!(refused(
-        "fn f(c: Bool) -> Int {\n    let mut z = 0;\n    if c { 1 } else { z = 2; }\n}\nfn main() -> Int { f(true) }\n"
+        "fn f(c: Bool, tasks: SpawnCap) -> Int {\n    let mut z = 0;\n    if c { 1 } else { z = 2; }\n}\nfn main(tasks: SpawnCap) -> Int { f(true, tasks) }\n"
     )
     .contains(&"N0302".to_owned()));
     assert!(refused(
-        "fn f(o: Option[Int]) -> Int {\n    let mut z = 0;\n    let x = match o {\n        \
+        "fn f(o: Option[Int], tasks: SpawnCap) -> Int {\n    let mut z = 0;\n    let x = match o {\n        \
          Option.None() => {\n            z = 1;\n        },\n        Option.Some(value: v) => {\n            v\n        },\n    };\n    x\n}\n\
-         fn main() -> Int { f(Option[Int].None()) }\n"
+         fn main(tasks: SpawnCap) -> Int { f(Option[Int].None(), tasks) }\n"
     )
     .contains(&"N0300".to_owned()));
     assert!(refused(
-        "fn f(o: Option[Int]) -> Int {\n    match o {\n        Option.None() => {\n            1\n        },\n        \
+        "fn f(o: Option[Int], tasks: SpawnCap) -> Int {\n    match o {\n        Option.None() => {\n            1\n        },\n        \
          Option.Some(value: v) => {\n            let s = int_to_str(v);\n            s\n        },\n    }\n}\n\
-         fn main() -> Int { f(Option[Int].None()) }\n"
+         fn main(tasks: SpawnCap) -> Int { f(Option[Int].None(), tasks) }\n"
     )
     .contains(&"N0302".to_owned()));
     assert!(refused(

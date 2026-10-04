@@ -422,7 +422,7 @@ fn a_record_of_task_safe_fields_may_cross() {
     let src = r"
         struct Message { id: Int, text: Str, reply: Chan, }
         fn worker(m: Message) -> Int { chan_send(m.reply, m.id + str_len(m.text)); 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let c = chan_new(2);
             let m = Message(id: 40, text: 'ab', reply: c);
             scope { spawn worker(m); }
@@ -441,7 +441,7 @@ fn a_record_containing_a_sequence_may_not_cross_and_the_diagnostic_says_which_fi
     let src = r"
         struct Work { values: Ints, }
         fn worker(w: Work) -> Int { 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let w = Work(values: ints_new());
             scope { spawn worker(w); }
             0
@@ -460,7 +460,7 @@ fn wrapping_a_sequence_two_levels_deep_does_not_launder_it() {
         struct Inner { values: Ints, }
         struct Outer { inner: Inner, }
         fn worker(o: Outer) -> Int { 0 }
-        fn main() -> Int {
+        fn main(tasks: SpawnCap) -> Int {
             let o = Outer(inner: Inner(values: ints_new()));
             scope { spawn worker(o); }
             0

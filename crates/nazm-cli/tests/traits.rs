@@ -148,7 +148,7 @@ fn a_method_call_on_a_record_an_enum_and_a_builtin_calls_its_impl() {
          impl Show for P {{ fn show(self: P) -> Str {{ str_concat(\"P\", int_to_str(self.x)) }} }}\n\
          impl Show for L {{ fn show(self: Self) -> Str {{ match self {{ L.Red() => \"red\", L.Green() => \"green\", }} }} }}\n\
          impl Show for Int {{ fn show(self: Int) -> Str {{ str_concat(\"#\", int_to_str(self)) }} }}\n\
-         fn main() -> Int {{\n\
+         fn main(out: OutCap) -> Int {{\n\
              print(str_concat(P(x: 4).show(), \"\\n\"));\n\
              print(str_concat(L.Green().show(), \"\\n\"));\n\
              let n = 7;\n\
@@ -168,7 +168,7 @@ fn a_call_through_a_bound_runs_the_instances_impl_through_two_generic_levels() {
          impl Show for Bool {{ fn show(self: Bool) -> Str {{ if self {{ \"yes\" }} else {{ \"no\" }} }} }}\n\
          fn twice[T: Show](x: T) -> Str {{ str_concat(x.show(), Show.show(x)) }}\n\
          fn outer[U: Show](u: U) -> Str {{ str_concat(\"<\", str_concat(twice(u), \">\")) }}\n\
-         fn main() -> Int {{\n\
+         fn main(out: OutCap) -> Int {{\n\
              print(str_concat(outer(P(x: 3)), \"\\n\"));\n\
              print(str_concat(outer(true), \"\\n\"));\n\
              str_len(twice(false))\n\
@@ -196,7 +196,7 @@ fn a_standard_trait_shows_a_vector_of_a_programs_own_records() {
     let src = "use \"@std/show\";\n\
          struct P { x: Int, }\n\
          impl Show for P { fn show(self: P) -> Str { str_concat(\"P\", int_to_str(self.x)) } }\n\
-         fn main() -> Int {\n\
+         fn main(io: IoCap, tasks: SpawnCap) -> Int {\n\
              let v = vec_new[P]();\n\
              vec_push(v, P(x: 1));\n\
              vec_push(v, P(x: 2));\n\

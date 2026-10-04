@@ -386,9 +386,9 @@ fn propagation_inside_a_scope_joins_its_tasks_first() {
     let src = format!(
         "{LEAF}fn worker(out: Chan) -> Int {{\n    let mut i = 0;\n    let mut s = 0;\n    \
          while i < 50000 {{ s = s + i % 7; i = i + 1; }}\n    chan_send(out, 7);\n    s\n}}\n\
-         fn run(out: Chan) -> Result[Int, Oops] {{\n    scope {{\n        spawn worker(out);\n        \
+         fn run(out: Chan, tasks: SpawnCap) -> Result[Int, Oops] {{\n    scope {{\n        spawn worker(out);\n        \
          let x = leaf(true, 3)?;\n        chan_send(out, x);\n    }}\n    Result[Int, Oops].Ok(value: 1)\n}}\n\
-         fn main() -> Int {{\n    let out = chan_new(4);\n    let code = match run(out) {{\n        \
+         fn main(tasks: SpawnCap) -> Int {{\n    let out = chan_new(4);\n    let code = match run(out, tasks) {{\n        \
          Result.Ok(value: v) => 0,\n        Result.Err(error: e) => e.code,\n    }};\n    chan_close(out);\n    \
          let buf = ints_new();\n    chan_recv(out, buf);\n    code * 10 + ints_get(buf, 0)\n}}\n"
     );
@@ -474,7 +474,7 @@ fn the_success_type_is_the_operands_not_the_functions() {
 fn a_result_holding_a_vec_does_not_cross_into_a_task() {
     let src = "struct Diag {\n    code: Str,\n}\n\
                fn work(r: Result[Int, Vec[Diag]]) -> Int { 0 }\n\
-               fn main() -> Int {\n    let r = Result[Int, Vec[Diag]].Ok(value: 1);\n    \
+               fn main(tasks: SpawnCap) -> Int {\n    let r = Result[Int, Vec[Diag]].Ok(value: 1);\n    \
                scope { spawn work(r); }\n    0\n}\n";
     let got = diagnostics(src);
     assert_eq!(got.len(), 1, "{got:?}");
@@ -485,7 +485,7 @@ fn a_result_holding_a_vec_does_not_cross_into_a_task() {
 fn a_result_of_task_safe_types_crosses_into_a_task() {
     let src = "fn work(r: Result[Int, Str], out: Chan) -> Int {\n    \
                match r {\n        Result.Ok(value: v) => chan_send(out, v),\n        Result.Err(error: e) => chan_send(out, 0),\n    };\n    0\n}\n\
-               fn main() -> Int {\n    let out = chan_new(1);\n    \
+               fn main(tasks: SpawnCap) -> Int {\n    let out = chan_new(1);\n    \
                scope { spawn work(Result[Int, Str].Ok(value: 42), out); }\n    \
                let buf = ints_new();\n    chan_recv(out, buf);\n    ints_get(buf, 0)\n}\n";
     assert_eq!(int(src), 42);

@@ -913,11 +913,11 @@ pub fn substitute(tb: Table, t: Int, params: Ints, args: Ints) -> Int {
                 while q < ints_len(made) - 1 { ints_push(ps, ints_get(made, q)); q = q + 1; }
                 result = fn_of(tb, ps, ints_get(made, ints_len(made) - 1), fn_effect_bits(tb, x));
             } else {
-            if is_vec(x) {
-                result = vec_of(tb, ints_get(made, 0));
-            } else {
-                result = apply(tb, ints_get(tb.tpl, record_of(x)), made);
-            }
+                if is_vec(x) {
+                    result = vec_of(tb, ints_get(made, 0));
+                } else {
+                    result = apply(tb, ints_get(tb.tpl, record_of(x)), made);
+                }
             }
         }
         ints_push(from, x);
@@ -1340,9 +1340,9 @@ pub fn declare_params(tb: Table, text: Str, allow: Bool, diags: Vec[Diag]) -> In
                     if tr >= 0 {
                         ints_set(tb.req, p, tr + 2);
                     } else {
-                    report(diags, "N0365", cap_at, cap_at + str_len(cap),
-                            str_concat(str_concat("`", cap),
-                            "` is not a capability a type parameter can require"));
+                        report(diags, "N0365", cap_at, cap_at + str_len(cap),
+                                str_concat(str_concat("`", cap),
+                                "` is not a capability a type parameter can require"));
                     }
                 }
             }
@@ -3343,6 +3343,10 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     // it — the slot counter, the declared result and `result`'s slot. And every capture made:
     // the closure, the name, the slot it is copied from and the closure's own slot for it.
     let cl_node = ints_new();
+    // The capability kinds already reported as not held (N104), one entry per function or
+    // closure open, innermost last: each kind is reported once per body, at its first site.
+    let auth = ints_new();
+    ints_push(auth, 0);
     let cl_base = ints_new();
     let cl_counter = ints_new();
     let cl_ret = ints_new();
@@ -3910,6 +3914,13 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                         tb, fgen, fgc, bgen, tscope, ncomp, ntfirst, ntargs, tmod, tname, trec,
                         diags));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
+                // A built-in that needs authority needs it held here (N104).
+                if ints_get(ncallee, k) == 0 - 2 {
+                    let bname = before_bracket(text);
+                    check_held(ntypes, auth_kind_of_builtin(bname),
+                            str_concat(str_concat("the built-in `", bname), "`"),
+                            from, from + str_len(bname), auth, diags);
+                }
                 continue;
             }
             if kind == n_if() {
@@ -4122,6 +4133,10 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 continue;
             }
             if kind == n_spawn() {
+                // Starting a task needs a `SpawnCap` held here (N104), reported at the callee.
+                let sname = before_bracket(text);
+                check_held(ntypes, t_spawncap(), "starting a task", ints_get(naux, k),
+                        ints_get(naux, k) + str_len(sname), auth, diags);
                 if ints_get(inscope, k) == 0 {
                     report(diags, "N0320", from, to,
                             "`spawn` outside a `scope`: nothing would join this task");
@@ -4289,6 +4304,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 ints_set(cur_ret, 0, ints_pop(cl_ret));
                 ints_set(cur_rslot, 0, ints_pop(cl_rslot));
                 ints_pop(cl_node);
+                ints_pop(auth);
                 ints_pop(cl_base);
                 ints_push(ts, ct);
                 ints_set(ntype, k, ct);
@@ -4749,6 +4765,8 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             ints_set(counter, 0, 0);
             ints_set(cur_ret, 0, ints_get(nrec, entry));
             ints_set(cur_rslot, 0, 0 - 1);
+            while ints_len(auth) > 1 { ints_pop(auth); }
+            ints_set(auth, 0, 0);
             ints_push(marks, strs_len(names));
             ints_push(work, mark_leave(entry));
         }
@@ -4761,6 +4779,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                         "a closure inside a generic function is not supported yet");
             }
             ints_push(cl_node, entry);
+            ints_push(auth, 0);
             ints_push(cl_base, strs_len(names));
             ints_push(cl_counter, ints_get(counter, 0));
             ints_push(cl_ret, ints_get(cur_ret, 0));
@@ -5388,12 +5407,12 @@ pub struct Checked {
 /// answer is the one or the other, and the type says so. Until N12 each driver ran these
 /// passes itself, threaded the sink through them, and then asked `vec_len(diags) > 0`.
 pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: Ints,
-        mto: Ints, mat: Ints) -> Result[Checked, Vec[Diag]] {
+        mto: Ints, mat: Ints, io: IoCap) -> Result[Checked, Vec[Diag]] {
     let kinds = ints_new();
     let starts = ints_new();
     let ends = ints_new();
     let texts = strs_new();
-    lex(src, kinds, starts, ends, texts);
+    lex(src, kinds, starts, ends, texts, io);
 
     let nk = ints_new();
     let nar = ints_new();
@@ -5401,7 +5420,7 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
     let nen = ints_new();
     let ntx = strs_new();
     let naux = ints_new();
-    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx, naux);
+    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx, naux, io);
 
     let kids = ints_new();
     let kid_first = ints_new();
@@ -5576,6 +5595,59 @@ pub fn fx_of_builtin(name: Str) -> Int {
     if name == "print" { return fx_io(); }
     if name == "eprint" { return fx_io(); }
     if name == "exit_with" { return fx_io(); }
+    0
+}
+
+// The capability a built-in needs held (N104): an `OutCap` for the standard streams, which
+// an `IoCap` implies; an `IoCap` for the rest of the outside world; none for the others.
+pub fn auth_kind_of_builtin(name: Str) -> Int {
+    if name == "print" { return t_outcap(); }
+    if name == "eprint" { return t_outcap(); }
+    if fx_of_builtin(name) == fx_io() { return t_iocap(); }
+    0
+}
+
+fn auth_bit(kind: Int) -> Int {
+    if kind == t_iocap() { return 1; }
+    if kind == t_outcap() { return 2; }
+    4
+}
+
+fn cap_name(kind: Int) -> Str {
+    if kind == t_iocap() { return "IoCap"; }
+    if kind == t_outcap() { return "OutCap"; }
+    "SpawnCap"
+}
+
+// Whether a binding in scope holds `kind`: one of its type, or an `IoCap` for an `OutCap`.
+// Lexical, as the reference's: a closure holds what it can capture.
+fn holds_kind(ntypes: Ints, kind: Int) -> Bool {
+    let mut i = 0;
+    while i < ints_len(ntypes) {
+        let t = ints_get(ntypes, i);
+        if t == kind { return true; }
+        if kind == t_outcap() {
+            if t == t_iocap() { return true; }
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// `N0369` for a site that needs `kind` and holds none, once per kind per body (N104): every
+// function holds what it exercises; nothing is inherited from a caller.
+fn check_held(ntypes: Ints, kind: Int, what: Str, at: Int, to: Int, auth: Ints,
+        diags: Vec[Diag]) -> Int {
+    if kind == 0 { return 0; }
+    let bit = auth_bit(kind);
+    let top = ints_len(auth) - 1;
+    let done = ints_get(auth, top);
+    if (done / bit) % 2 == 1 { return 0; }
+    if holds_kind(ntypes, kind) { return 0; }
+    ints_set(auth, top, done + bit);
+    report(diags, "N0369", at, to,
+            str_concat(str_concat(str_concat(what, " requires `"), cap_name(kind)),
+            str_concat("` authority, and this function holds none here", "")));
     0
 }
 
