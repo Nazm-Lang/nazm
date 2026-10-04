@@ -13406,3 +13406,43 @@ file = "crates/nazm-cli/src/run_profile.rs"
 find = "        build.args([\"--debug\", \"--no-cache\"]);"
 replace = "        build.args([\"--no-cache\"]);"
 killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_sampled_run_is_attributed_to_nazm_functions_and_lines" }]
+
+[[mutation]]
+name = "n92-a-measured-heading-goes-unfiled"
+why = "a new measured section of docs/performance.md is accepted with no entry in the claims register"
+file = "xtask/src/claims.rs"
+find = "        match filed.get(h) {"
+replace = "        match Some(&1usize) {"
+killers = [{ package = "xtask", bin = "xtask", name = "claims::tests::the_register_and_the_document_are_held_together" }]
+
+[[mutation]]
+name = "n92-a-reproducible-claim-names-nothing"
+why = "a claim filed as reproducible names a test the tree does not contain, and the gate accepts it"
+file = "xtask/src/claims.rs"
+find = "                if let Some(p) = command_problem(root, field(\"how\")) {"
+replace = "                if let Some(p) = None::<String> {"
+killers = [{ package = "xtask", bin = "xtask", name = "claims::tests::the_register_and_the_document_are_held_together" }]
+
+[[mutation]]
+name = "n92-a-dated-claim-says-nothing"
+why = "a claim is filed as dated or unreproduced without saying why"
+file = "xtask/src/claims.rs"
+find = "            _ if field(\"why\").is_empty() => {"
+replace = "            _ if false => {"
+killers = [{ package = "xtask", bin = "xtask", name = "claims::tests::the_register_and_the_document_are_held_together" }]
+
+[[mutation]]
+name = "n92-the-p90-is-the-median"
+why = "the recorded 90th percentile is the median, so a slow tail is invisible in the record"
+file = "xtask/src/bench.rs"
+find = "        let rank = (ms.len() * 9).div_ceil(10).max(1);"
+replace = "        let rank = ms.len().div_ceil(2).max(1);"
+killers = [{ package = "xtask", bin = "xtask", name = "bench::tests::the_spread_is_of_runs_that_were_observed" }]
+
+[[mutation]]
+name = "n92-a-v2-baseline-is-unread"
+why = "a nazm.bench/2 baseline's medians are not read, so --check compares nothing and reports nothing slower"
+file = "xtask/src/bench.rs"
+find = "        .split([',', '}'])"
+replace = "        .split(['}'])"
+killers = [{ package = "xtask", bin = "xtask", name = "bench::tests::a_baseline_of_either_version_is_read" }]

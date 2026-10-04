@@ -201,6 +201,17 @@ found only by reading all of it.
 - The compiler written in Nazm understands neither packages nor `@std` imports nor foreign
   declarations (areas 16, 17, 26).
 
+## Performance evidence
+
+- Checking is slower than at N75: `nazm check compiler/emit.nz` 107 → 166 ms in the contained
+  benchmark, the steps at N76 and N80; `channels` builds 13–31 % slower (area 28, `performance.md`).
+- Of the 71 measured sections of `performance.md`, 8 current claims (N80, N82–N88) have no command
+  that regenerates them, and 53 are dated records of earlier trees; `bench/claims.toml` names each
+  (area 28). The claims gate checks that a reproducible entry's command exists, not that its numbers
+  still hold. No energy measurement: no counter is readable here without privileges. No Zig
+  reference (no Zig toolchain); the Go reference is measured only where Go is installed, which the
+  contained runner is not. *Narrowed in N92.*
+
 ## Profiles
 
 - Formal evidence is a bounded model check of a small core (`docs/formal-core.md`, N61): every

@@ -93,7 +93,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 25 | LSP and MCP | PARTIAL / PARTIAL — across package boundaries tested; an editor client (N74) |
 | 26 | Package and build tooling | PARTIAL — templates, a library check, API docs and a publish dry run (N74); a backtracking resolver that explains a refusal, and `nazm update` (N90) |
 | 27 | Debugger and profiler | PARTIAL — lexical scopes, Cranelift line tables and a sampling profiler on macOS (N91); no Cranelift variables, no DAP |
-| 28 | Performance measurement | PARTIAL |
+| 28 | Performance measurement | PARTIAL — every measured claim filed in a gated register (N92): 10 reproducible, 53 dated, 8 current claims unreproduced |
 | 29 | Differential testing | VERIFIED |
 | 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — seeded front-end and differential fuzzers (N73); not coverage-guided |
 | 31 | Bootstrap | VERIFIED |
@@ -2801,6 +2801,25 @@ output first. One discarded warm-up, then N runs, median compared. Peak RSS capt
 readable. A regression must clear **both** 25% and 5 ms. External references are built and
 timed from `bench/reference/sieve.c` and `bench/reference/sieve.py`, and a reference whose
 answer differs from the Nazm program's is not timed.
+
+*N92, 2026-10-04: performance evidence v2 — the register VERIFIED; the area stays PARTIAL.*
+`architecture.md` §7.93 first. `bench/claims.toml` files each of `performance.md`'s 71 measured
+sections — 10 **reproducible** by a named command (`cargo xtask contained bench`, or a measurement
+test run with `--ignored`), 53 **dated** (records of the tree before the post-v1 baseline), 8
+**unreproduced**: the current claims of N80, N82, N83, N84, N85, N86, N87 and N88, measured once by
+the scripts their prose describes. `cargo xtask check` (**performance claims**, `xtask/src/claims.rs`)
+refuses a measured section with no entry, an entry for no section, a status it does not know, a dated
+or unreproduced entry with no reason, and a reproducible entry whose test or command is not in the
+tree. `nazm.bench/2` (`xtask/src/bench.rs`) records the CPU model, logical CPUs, memory and kernel;
+every run with p90, maximum and median absolute deviation; each executable's size; the noise floor;
+how each reference's arithmetic compares; and each reference not measured, with why. New references:
+`bench/reference/sieve.rs` (overflow- and bounds-checked, the closest to Nazm's meaning) and
+`sieve.go` (bounds-checked, wrapping). Evidence: the gate's fixture test, the statistics and baseline
+tests, a contained run's `bench/baseline-linux-aarch64.json` (replacing one older than N75 that made
+`--check` report its configuration as regressions); five mutants. The run measured two regressions
+since N75 and `performance.md` states them: checking the compiler written in Nazm is 54 % slower,
+stepping up at N76 and N80, and `channels` builds 13–31 % slower, not located. **The area is VERIFIED
+when the eight are reproducible**; the N91 section was made so by `what_debugging_and_sampling_cost`.
 
 **Limitation** · `bench/baseline.json` (Darwin) is **stale** and not a valid comparison;
 re-recording it means running generated programs on the host, which the resource contract
