@@ -96,10 +96,10 @@ found only by reading all of it.
 - Capabilities are coarse: an `IoCap` authorises every file alike, and the one narrower kind is
   `OutCap`, the standard streams. No per-file or per-directory kind exists, and revocation is
   outside the model by design (area 6). *Narrowed in N79.*
-- By default an undeclared function exercises its caller's authority (N37's bridge). Since N79 that
-  inheritance is recorded per function (`nazm inspect`'s `inherits`) and refused under the
-  `authority` profile, but the default is unchanged until the corpus and the compiler written in
-  Nazm declare their authority (areas 6, 19, 20).
+- An undeclared function in another module is assumed to have every effect, `{ io, spawn }`: its
+  interface publishes no set. That is an effect assumption and grants nothing — since N104 no
+  function inherits authority — but it makes such a call count against a caller's declared set
+  (area 5). *Narrowed in N104:* the authority bridge is gone.
 - Effect subsumption applies where a function value is passed or returned, not inside another
   type: a `Vec[fn() -> Int]` is not a `Vec[fn() -> Int ! { io }]` (area 5).
 - Provenance has three sink classes (`path`, `output`, `file-data`) solved through helpers,
