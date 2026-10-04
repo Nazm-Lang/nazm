@@ -267,9 +267,35 @@ fn link_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
     a
 }
 
-/// `-target TRIPLE` for a cross build (N57), nothing for the host's.
+/// `-target TRIPLE` for a cross build (N57), nothing for the host's. RISC-V's triple is LLVM's
+/// spelling with the ISA, the ABI and the code model beside it (N86): RV64GC, `lp64d`, and
+/// `medany`, since the board's image is at `0x8000_0000`, past `medlow`'s reach.
 fn target_args(cross: Option<&str>) -> Vec<String> {
-    cross.map_or_else(Vec::new, |t| vec!["-target".to_owned(), t.to_owned()])
+    match cross {
+        None => Vec::new(),
+        Some("riscv64gc-unknown-none-elf") => [
+            "-target",
+            "riscv64-unknown-elf",
+            "-march=rv64gc",
+            "-mabi=lp64d",
+            "-mcmodel=medany",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        Some(t) => vec!["-target".to_owned(), t.to_owned()],
+    }
+}
+
+/// Whether the driver has a code generator for `arch`, by its own list (`-print-targets`, N86).
+pub(crate) fn generates(arch: &str) -> bool {
+    Command::new(DRIVER)
+        .arg("-print-targets")
+        .output()
+        .is_ok_and(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l.split_whitespace().next() == Some(arch))
+        })
 }
 
 pub(crate) fn run_command(command: &mut Command) -> Outcome {
@@ -454,13 +480,15 @@ mod tests {
                 None,
                 Some("x86_64-apple-darwin"),
                 Some("aarch64-unknown-none"),
+                Some("riscv64gc-unknown-none-elf"),
             ] {
                 for a in compile_args(opt, cross)
                     .iter()
                     .chain(link_args(opt, cross).iter())
                 {
+                    // RISC-V's `-march=rv64gc` is the target's ISA baseline (N86), not a CPU.
                     assert!(
-                        !a.starts_with("-march")
+                        (!a.starts_with("-march") || a == "-march=rv64gc")
                             && !a.starts_with("-mcpu")
                             && !a.starts_with("-mtune")
                             && !a.contains("native"),

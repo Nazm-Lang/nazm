@@ -104,7 +104,7 @@ fn a_hosted_target_writes_no_linker_script() {
 fn the_board_runtime_has_no_thread_local_storage_and_no_c_library() {
     use nazm_lir::runtime::board;
     for stack in [false, true] {
-        let rt = board::emit_runtime(stack);
+        let rt = board::emit_runtime(board::AARCH64, stack);
         assert!(!rt.contains("thread_local"), "{rt}");
         for libc in [
             "@malloc",
@@ -120,7 +120,7 @@ fn the_board_runtime_has_no_thread_local_storage_and_no_c_library() {
         assert!(rt.contains("load volatile i32"), "{rt}");
         assert!(rt.contains("store volatile i32"), "{rt}");
     }
-    let entry = board::emit_entry("@nz.m.m0.main", 1, false);
+    let entry = board::emit_entry(board::AARCH64, "@nz.m.m0.main", 1, false);
     assert!(entry.contains("_start:"), "{entry}");
     assert!(entry.contains("ldr x0, =__stack_top"), "{entry}");
     assert!(entry.contains("msr cpacr_el1"), "{entry}");

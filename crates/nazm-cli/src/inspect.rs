@@ -22,11 +22,39 @@ pub(crate) const TARGETS: &[&str] = &[
     "x86_64-apple-darwin",
     "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
-    // A board, with no operating system (N62, §7.64): always objects and `link.ld`.
+    // The boards, with no operating system (N62, §7.64; N86, §7.87): always objects and
+    // `link.ld`.
     "aarch64-unknown-none",
+    "riscv64gc-unknown-none-elf",
     // WebAssembly (N64, §7.66): objects, `wasm-ld`'s line and a reference host.
     "wasm32-unknown-unknown",
 ];
+
+/// The board table, as data: where each image loads, its UART, how its machine stops, how it is
+/// booted, and whether it has ever run on hardware.
+fn boards() -> Vec<Value> {
+    use nazm_lir::runtime::board::{Stop, BOARDS};
+    BOARDS
+        .iter()
+        .map(|b| {
+            let stop = match b.stop {
+                Stop::Semihosting => json!({ "kind": "arm-semihosting" }),
+                Stop::SifiveTest { address } => {
+                    json!({ "kind": "sifive-test", "address": format!("{address:#x}") })
+                }
+            };
+            json!({
+                "triple": b.triple,
+                "name": b.name,
+                "load_address": format!("{:#x}", b.load_address),
+                "uart": format!("{:#x}", b.uart),
+                "stop": stop,
+                "emulator": b.emulator,
+                "hardware": b.hardware,
+            })
+        })
+        .collect()
+}
 
 pub(crate) fn effects(set: Option<nazm_core::sema::EffectSet>) -> Value {
     set.map_or(Value::Null, |s| json!(s.names()))
@@ -186,6 +214,8 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
             "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
             "target": target,
             "targets": targets,
+            // Each board's description (N86, §7.87): what is the board's and not the language's.
+            "boards": boards(),
             // What a native build still runs besides this compiler (N59, §7.61): the C
             // compiler driver, for the runtime's LLVM text under both backends and for the link.
             "needs": {

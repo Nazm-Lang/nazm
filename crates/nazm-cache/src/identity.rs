@@ -197,7 +197,9 @@ use crate::digest::{self, Framed};
 /// foreign result of a handle, a `Str` or an `Option` of either, moved from refused (`N0381`) to
 /// accepted; building or taking apart a handle is `N0611`, a callback that is not an export's
 /// name `N0612`, and `c_errno` is a name a program could not call before.
-pub const SEMANTIC_EPOCH: u32 = 25;
+/// `26` — N86, 2026-10-04. `mmio_read8`, `mmio_write8`, `mmio_read16` and `mmio_write16` are names
+/// a program could not call before, and `riscv64gc-unknown-none-elf` a board.
+pub const SEMANTIC_EPOCH: u32 = 26;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

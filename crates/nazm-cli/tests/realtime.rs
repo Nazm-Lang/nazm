@@ -342,7 +342,7 @@ fn the_watermark_is_the_board_s() {
     );
     assert_eq!(o.status.code(), Some(4));
     assert!(
-        err(&o).contains("`--stack-watermark` measures the board's stack"),
+        err(&o).contains("`--stack-watermark` measures a board's stack"),
         "{}",
         err(&o)
     );
@@ -359,8 +359,9 @@ fn the_watermark_is_the_board_s() {
         ],
     );
     assert!(o.status.success(), "{}", err(&o));
-    let plain = nazm_lir::runtime::board::emit_entry("@m", 0, false);
-    let painted = nazm_lir::runtime::board::emit_entry("@m", 0, true);
+    let a64 = nazm_lir::runtime::board::AARCH64;
+    let plain = nazm_lir::runtime::board::emit_entry(a64, "@m", 0, false);
+    let painted = nazm_lir::runtime::board::emit_entry(a64, "@m", 0, true);
     assert!(!plain.contains("nz.stack_used"), "{plain}");
     assert!(painted.contains("ldr x2, =0x5a5a5a5a5a5a5a5a"), "{painted}");
     assert!(painted.contains("call i64 @nz.stack_used()"), "{painted}");
