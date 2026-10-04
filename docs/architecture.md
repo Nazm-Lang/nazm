@@ -7985,6 +7985,61 @@ new version requires it — the exception the last paragraph's "not named" admit
 is `N0501`**, the code for a package that is not there. A path package's requirements are placed
 by `` `name` ``, a registry package's by `` `name` version ``.
 
+## 7.92 Debugger and profiler v3: lexical scopes, Cranelift's DWARF, and sampling — N91, 2026-10-04
+
+Written before the records. Area 27 is PARTIAL: an LLVM `--debug` build has line tables and
+`Int`/`Bool`/`Str` variables, but every variable is visible for its whole function; a Cranelift
+build refuses `--debug` (BLOCKED in N48 on "no DWARF through the API this backend uses"); and
+`nazm profile` counts events, never samples. This milestone gives bindings their blocks, gives
+Cranelift line tables, and samples a run — each claim exercised by a real debugger or sampler.
+
+**Lexical scopes (LLVM).** MIR records, for each `let`, the source block it is in
+(`LocalDecl.scope`; `None` for a parameter or a binding of the function's own body). The emitter's
+variable marker carries that block's first and last positions; `crate::debug` makes one
+`DILexicalBlock` per distinct block, nested by containment, gives each variable its block, and gives
+each instruction the innermost block containing its position. A debugger shows a branch's binding
+inside the branch and not before it. MIR's digest and printed form do not include the scope — it is
+display, like a local's name.
+
+**Cranelift's DWARF.** No Cranelift API writes DWARF, but Cranelift carries a source location on
+each instruction it is given one for and reports the code ranges each covers. The backend now sets
+one per MIR statement and terminator (the LLVM emitter's positions), and writes DWARF 4 with `gimli`
+— the version Cranelift itself depends on — into the object: a compile unit, a subprogram per MIR
+function, and a line program whose prologue carries the declaration's line and ends
+(`prologue_end`) where the first statement's code begins, a gap at line 0. Addresses are
+relocations: against the function's symbol in ELF; in Mach-O against its section, with the object
+address in place, as `dsymutil` maps addresses through the debug map. **Variables are not
+described** under Cranelift: where a value lives is reported only through value labels this backend
+does not track. A Cranelift debug object is never taken from the cache: its lines are a function of
+the source's text, which no MIR digest is.
+
+**Sampling.** `nazm profile --sample [--interval-ms N] FILE` builds with `--debug`, runs the program
+under the host's sampler, and attributes each sample to its innermost frame: a Nazm function and
+`.nz` line (line 0 for code no statement made); the runtime (`nz.*` code without a line); foreign
+code linked into the program; or the system — each system frame named, and those in a fixed list of
+waits (locks, condition variables, sleeps, `kevent`, Mach messages, reads) counted as **blocked**.
+The sampler is macOS's `sample`, the one available here; a host without it is refused before anything
+is built — never a profile without the samples asked for. `nazm.profile/1 → /2`: the same fields,
+and `samples`, `null` unless sampled. Allocations and scheduler events stay the runtime's own counts.
+
+**Owners.** MIR lowering owns where a binding is visible; `nazm-lir::debug` owns LLVM's metadata;
+`nazm-codegen-clif::dwarf` owns Cranelift's; the CLI owns running the sampler and attributing its
+report. No language, runtime, ABI or schema change but the profile's.
+
+**Versions.** Semantic epoch, interface, runtime ABI, Core IR/MIR/LIR print schemas unchanged (the
+scope is display only). `nazm.profile/2`. The Cranelift backend's version string gains ` debug` for
+a debug build, and a debug build has no object key.
+
+**Negative example.** Under Cranelift, `info locals` says `No locals.` — not a wrong value. **Boundary
+example.** At a function's first statement, a binding of a later branch is not in scope; at the
+branch's statement, it is, with its value.
+
+**Not here.** Cranelift variables; records, enums, sequences and closures described; DAP; a sampler
+on Linux (no `perf` in the images); timelines and event traces. Area 27 stays PARTIAL.
+
+**What would prove this unsuitable.** A breakpoint by line landing on another line; a variable shown
+outside its block; a sample attributed to a function that was not on the stack.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
