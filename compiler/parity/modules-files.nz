@@ -1,0 +1,2 @@
+use "helper.nz";
+fn main() -> Int { triple(14) }

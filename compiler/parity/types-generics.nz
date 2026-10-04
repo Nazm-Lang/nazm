@@ -1,0 +1,2 @@
+fn pick[T](a: T, b: T, first: Bool) -> T { if first { a } else { b } }
+fn main() -> Int { pick[Int](4, 9, false) }

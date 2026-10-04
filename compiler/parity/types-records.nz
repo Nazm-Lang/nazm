@@ -1,0 +1,2 @@
+struct P { x: Int, y: Int }
+fn main() -> Int { let p = P(x: 3, y: 4); p.x * p.y }

@@ -1,0 +1,137 @@
+{
+  "differs": 0,
+  "equal": 13,
+  "probes": 21,
+  "reference": "nazm build, run natively",
+  "refused": 8,
+  "results": [
+    {
+      "dimension": "closures",
+      "probe": "closures",
+      "refusal": "unnamed",
+      "selfhost": "refused"
+    },
+    {
+      "dimension": "concurrency",
+      "probe": "concurrency-tasks",
+      "refusal": "unnamed",
+      "selfhost": "refused"
+    },
+    {
+      "dimension": "contracts",
+      "probe": "contracts",
+      "refusal": "unnamed",
+      "selfhost": "refused"
+    },
+    {
+      "dimension": "effects",
+      "probe": "effects-io",
+      "refusal": "unnamed",
+      "selfhost": "refused"
+    },
+    {
+      "dimension": "failure",
+      "probe": "failure-divide",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "failure",
+      "probe": "failure-overflow",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "ffi",
+      "probe": "ffi-extern",
+      "refusal": "unnamed",
+      "selfhost": "refused"
+    },
+    {
+      "dimension": "modules",
+      "probe": "modules-files",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "modules",
+      "probe": "modules-std",
+      "refusal": "unnamed",
+      "selfhost": "refused"
+    },
+    {
+      "dimension": "syntax",
+      "probe": "syntax-arithmetic",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "syntax",
+      "probe": "syntax-functions",
+      "refusal": "N0101",
+      "selfhost": "refused"
+    },
+    {
+      "dimension": "syntax",
+      "probe": "syntax-loops",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "traits",
+      "probe": "traits-methods",
+      "refusal": "unnamed",
+      "selfhost": "refused"
+    },
+    {
+      "dimension": "types",
+      "probe": "types-enums",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "types",
+      "probe": "types-equality",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "types",
+      "probe": "types-generics",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "types",
+      "probe": "types-records",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "types",
+      "probe": "types-result",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "types",
+      "probe": "types-sequences",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "types",
+      "probe": "types-strings",
+      "refusal": null,
+      "selfhost": "equal"
+    },
+    {
+      "dimension": "types",
+      "probe": "types-vec",
+      "refusal": null,
+      "selfhost": "equal"
+    }
+  ],
+  "schema": "nazm.parity/1",
+  "selfhost": "compiler/emit.nz, built by the reference, its LLVM IR linked by clang"
+}

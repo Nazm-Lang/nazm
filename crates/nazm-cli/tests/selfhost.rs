@@ -4594,3 +4594,125 @@ fn the_two_compilers_agree_on_every_module_and_visibility_rule() {
         divergences.join("\n\n")
     );
 }
+
+// ---------------------------------------------------------------------------
+// N98: the parity record — what the compiler written in Nazm does with each feature the
+// reference compiler builds, measured, and kept as `compiler/parity.json`.
+// ---------------------------------------------------------------------------
+
+/// Run a native executable, bounded: its exit status, standard output, and the diagnostic code a
+/// failure names, if any.
+fn run_native(exe: &Path) -> (Option<i32>, String, Option<String>) {
+    let (rc, out, err) = run_bounded(&mut common::bounded_exe(exe), STAGE_LIMIT)
+        .unwrap_or_else(|| panic!("{} did not finish", exe.display()));
+    let code = err
+        .split("error[")
+        .nth(1)
+        .and_then(|r| r.split(']').next())
+        .map(str::to_owned);
+    (rc, out, code)
+}
+
+/// Every probe in `compiler/parity/`, built by both compilers and run: `equal` when the program
+/// built by the compiler written in Nazm exits and prints as the reference's does, `refused` when
+/// that compiler does not build it — a gap, recorded with the code it gives — and `differs` when it
+/// builds something that behaves otherwise, which is a defect.
+#[test]
+fn the_parity_record_is_what_both_compilers_do_with_each_feature() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let probes_dir = repo_root().join("compiler/parity");
+    let mut probes: Vec<PathBuf> = std::fs::read_dir(&probes_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().is_some_and(|e| e == "nz") && p.file_stem().is_some_and(|s| s != "helper")
+        })
+        .collect();
+    probes.sort();
+    let mut rows = Vec::new();
+    let mut differs = Vec::new();
+    for probe in &probes {
+        let name = probe.file_stem().unwrap().to_string_lossy().into_owned();
+        let reference = dir.path().join(format!("{name}.ref"));
+        let built = Command::new(NAZM)
+            .current_dir(&probes_dir)
+            .args(["build", "--no-cache"])
+            .arg(probe)
+            .arg("-o")
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "the reference refuses its own probe {name}: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let expected = run_native(&reference);
+        let (rc, ir, err) = run_stage(&emitter, probe);
+        let (verdict, detail) = if rc == Some(0) {
+            let ll = dir.path().join(format!("{name}.ll"));
+            std::fs::write(&ll, &ir).unwrap();
+            let exe = dir.path().join(format!("{name}.self"));
+            let linked = Command::new("clang")
+                .args(["-Wno-override-module", "-o"])
+                .arg(&exe)
+                .arg(&ll)
+                .arg("-lpthread")
+                .output()
+                .unwrap();
+            if linked.status.success() {
+                let got = run_native(&exe);
+                if got == expected {
+                    ("equal", String::new())
+                } else {
+                    differs.push(format!("{name}: reference {expected:?}, selfhost {got:?}"));
+                    ("differs", String::new())
+                }
+            } else {
+                // IR the emitter wrote that does not link is a defect, not a refusal.
+                differs.push(format!(
+                    "{name}: emitted IR does not link: {}",
+                    String::from_utf8_lossy(&linked.stderr)
+                ));
+                ("differs", String::new())
+            }
+        } else {
+            let code = err
+                .split("error[")
+                .nth(1)
+                .and_then(|r| r.split(']').next())
+                .unwrap_or("unnamed")
+                .to_owned();
+            ("refused", code)
+        };
+        let dimension = name.split('-').next().unwrap_or("").to_owned();
+        rows.push(serde_json::json!({
+            "probe": name,
+            "dimension": dimension,
+            "selfhost": verdict,
+            "refusal": if detail.is_empty() { serde_json::Value::Null } else { serde_json::json!(detail) },
+        }));
+    }
+    let equal = rows.iter().filter(|r| r["selfhost"] == "equal").count();
+    let record = serde_json::json!({
+        "schema": "nazm.parity/1",
+        "reference": "nazm build, run natively",
+        "selfhost": "compiler/emit.nz, built by the reference, its LLVM IR linked by clang",
+        "probes": rows.len(),
+        "equal": equal,
+        "refused": rows.len() - equal - differs.len(),
+        "differs": differs.len(),
+        "results": rows,
+    });
+    let text = format!("{record:#}\n");
+    // A disagreement is a defect whatever the record says.
+    assert!(differs.is_empty(), "{}", differs.join("\n"));
+    let committed =
+        std::fs::read_to_string(repo_root().join("compiler/parity.json")).unwrap_or_default();
+    assert_eq!(
+        committed, text,
+        "compiler/parity.json is not what the compilers do; the measured record:\n{text}"
+    );
+}

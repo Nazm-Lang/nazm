@@ -1,0 +1,2 @@
+fn work(c: Chan, n: Int) -> Int { chan_send(c, n * 2); 0 }
+fn main(sp: SpawnCap) -> Int ! { spawn } { let c = chan_new(4); scope { spawn work(c, 5); spawn work(c, 6); } let b = ints_new(); chan_recv(c, b); chan_recv(c, b); ints_get(b, 0) + ints_get(b, 1) }
