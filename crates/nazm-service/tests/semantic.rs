@@ -802,7 +802,15 @@ fn every_written_type_name_of_the_repository_is_classified() {
                 let got = class.get(&at).copied();
                 let ok = match kind {
                     SyntaxKind::TypeParam => got == Some((TypeParameter, D)),
-                    _ => matches!(got, Some((Record | Enum | BuiltinType | TypeParameter, R))),
+                    // A trait named where a type is written — `impl Show for P`, a bound —
+                    // is a trait (N78).
+                    _ => matches!(
+                        got,
+                        Some((
+                            Record | Enum | BuiltinType | TypeParameter | SemanticClass::Trait,
+                            R
+                        ))
+                    ),
                 };
                 assert!(ok, "{kind:?} at {at:?} in {}: {got:?}", path.display());
                 checked += 1;

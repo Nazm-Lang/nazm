@@ -546,7 +546,7 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
         }
     }
     for f in &program.functions {
-        let Some(body) = &f.body else { continue };
+        // A foreign declaration (N85) is a function item with parameters and no body.
         spans.push((SyntaxKind::FnItem, f.span));
         for p in &f.params {
             spans.push((SyntaxKind::Param, p.span));
@@ -556,7 +556,9 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
             spans.push((SyntaxKind::Contract, c.span));
             stack.push(Node::Expr(&c.expr));
         }
-        stack.push(Node::Block(body));
+        if let Some(body) = &f.body {
+            stack.push(Node::Block(body));
+        }
     }
     while let Some(node) = stack.pop() {
         match node {

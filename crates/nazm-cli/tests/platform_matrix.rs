@@ -125,6 +125,14 @@ fn each_llvm_cpu_is_the_one_the_driver_resolves() {
         return;
     };
     assert!(probe.status.success());
+    // The CPU is the driver's choice, and the table records Apple clang's, the host's. Another
+    // clang chooses otherwise — clang 19, in the Linux image, resolves `core2` for
+    // `x86_64-apple-darwin` where Apple clang 21 resolves `penryn` (found by N100's gate) — so
+    // the check is made against the driver the table describes, and nowhere else.
+    if !String::from_utf8_lossy(&probe.stdout).contains("Apple clang") {
+        eprintln!("SKIP: the recorded CPUs are Apple clang's; this driver is another");
+        return;
+    }
     let (cells, _) = support();
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("e.c"), "").unwrap();

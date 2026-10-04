@@ -458,8 +458,9 @@ impl Support {
 #[derive(Debug, Clone, Copy)]
 pub struct Cell {
     pub triple: &'static str,
-    /// The CPU the LLVM backend's objects are compiled for: what the C compiler driver resolves
-    /// for the triple, which `platform_matrix.rs` checks against the driver itself.
+    /// The CPU the LLVM backend's objects are compiled for: what the host's C compiler driver,
+    /// Apple clang, resolves for the triple, which `platform_matrix.rs` checks against it. Another
+    /// driver may choose another — clang 19 resolves `core2` for `x86_64-apple-darwin`.
     pub llvm_cpu: &'static str,
     /// The CPU Cranelift compiles for: the triple's baseline ISA, no feature of the building
     /// host detected.

@@ -1013,9 +1013,20 @@ fn written(text: &str) -> Vec<Written> {
         )
     }
     fn name(n: CstNode<'_>) -> (u32, u32) {
-        let l = n
-            .child_leaves()
-            .into_iter()
+        let leaves = n.child_leaves();
+        // A function's name follows `fn`: a foreign declaration's `extern` is an identifier
+        // before it (N85).
+        let from = if n.kind() == SyntaxKind::FnItem {
+            leaves
+                .iter()
+                .position(|l| l.kind == SyntaxKind::FnKw)
+                .map_or(0, |i| i + 1)
+        } else {
+            0
+        };
+        let l = leaves
+            .iter()
+            .skip(from)
             .find(|l| l.kind == SyntaxKind::Ident)
             .unwrap();
         (l.span.start, l.span.end)
