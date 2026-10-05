@@ -8681,3 +8681,41 @@ bytecode (N70) are other targets with their own generators, not native backends.
 **What would prove this wrong.** A failure code or message, a guard, an offset, a runtime entry or a
 retain/release decision found in a backend rather than in LIR; or a program whose observable
 behaviour differs between the LIR interpreter, LLVM and Cranelift.
+
+**As built (N105, 2026-10-05).** The level is as written above, with three differences, each now the
+record:
+
+- *Values cross blocks under dominance.* A value is used where its definition dominates the use, not
+  only in its own block: a checked operation's result is used in the block after the guard that
+  tests its overflow bit (`v3, v4 = mul.ovf v1, v2; branch v4, b3, b4` and `b4: return v3`), and
+  a promoted temporary (N59) is read past the guards its expression made. The validator checks
+  dominance (Cooper, Harvey and Kennedy's immediate dominators over reverse postorder). Its first
+  form was the cubic bit-vector iteration, which made the debug build of `compiler/emit.nz` spend
+  21 s of its 21 s validating; the contained selfhost suite went from 84 s (N104) to 236 s, and to 83 s
+  once replaced. A release build of `compiler/emit.nz` takes the same time as N104's (1.47 s and
+  1.50 s); the executable it makes runs the same (20.7 s and 21.0 s compiling the compiler, the
+  same bytes out) and is 17% smaller.
+- *`nazm.lir/2` carries text.* Each unit's `lir` is the module as `nazm lir --ops` prints it and its
+  BLAKE3 digest, not a structured form: the text is the stable, reviewable statement of the
+  instructions, and the digest is what keys a Cranelift object.
+- *`--layout soa` is both backends'.* N68's layout was LLVM's and refused on Cranelift; it is LIR's
+  now (`op/soa.rs`), so Cranelift takes it, and its object for one layout is never reused for the
+  other because the LIR differs.
+
+What the inventory deleted: `nazm-lir/src/emit.rs` (4,405 lines) and Cranelift's `func.rs`,
+`prims.rs`, `helpers.rs`, `unit.rs` and `layout.rs` (2,963; their deletion was committed by mistake
+in the N104 gate fix `edc31b5`, which does not build on its own). What replaced them: `op/` (5,982
+lines, the interpreter's 960 and the validator's tests included) and `translate.rs` (645). Of the
+mutation catalogue's 93 entries on the deleted files, 76 were repointed at the LIR line that now
+carries their rule, 16 retired as one of an LLVM/Cranelift pair that is now one rule, one
+(`n91-a-debug-object-is-reused`) retired as equivalent, and N68's `n68-cranelift-takes-the-layout-silently` retired with the refusal it attacked: a debug build's LIR carries every position,
+so the key moves when a line does. Eleven of the 76 survived their old killers, which compared the
+two backends — and two backends translating one LIR agree on its defects. Each has a killer with an
+independent expectation now. Eight new mutants attack what N105 added (`n105-*`).
+
+**Versions, decided.** Semantic epoch 29 and `nazm.interface/11`: unchanged, the language did not
+move. Runtime ABI: unchanged — no runtime entry was added or changed; generated code reaches only the
+word-level registry it reached before. `nazm.lir/1 → /2`. Core IR and MIR: unchanged. Cranelift
+object key: the unit's LIR digest, `TRANSLATOR_REVISION` 1, Cranelift's version and settings, the
+target and the runtime digest (was MIR without positions). LLVM object key: unchanged in form (its
+text and clang), every key moved because the text did. Package, lock and registry: unchanged.

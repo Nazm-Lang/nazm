@@ -122,10 +122,13 @@ found only by reading all of it.
 - A build generates its runtime unless given `--runtime DIR` (N82): the artifact is the way to build
   a runtime once and check what is linked, not yet the default. The runtime is LLVM text, not Rust,
   and has no allocator of its own (area 13).
-- The two native backends each translate MIR's operations themselves; their agreement rests on
-  differential testing (N73, N81), not on one lowering. Byte layouts and ownership are `nazm-lir`'s
-  and validated on every build (N81), but LLVM lays its own aggregates out, an enum as the product
-  of its variants (area 10).
+- Both native backends translate one instruction-level LIR (N105): every failure, guard, offset,
+  runtime call and retain or release is decided once, in `nazm-lir`. LIR's interpreter — the oracle
+  they are held to — runs the sequential subset only: a program with tasks, channels, a foreign call
+  or the clock is refused by it, and there the backends are held by their agreement and by the
+  memory and concurrency suites. *Narrowed in N105:* until then each backend translated MIR's
+  operations itself, their agreement rested on differential testing alone, and LLVM laid its own
+  aggregates out (area 10).
 - Two boards, both emulated and neither run on hardware: `aarch64-unknown-none` and (N86)
   `riscv64gc-unknown-none-elf`, each on its QEMU `virt` machine: objects and `link.ld`, linked by
   `ld.lld` outside this host; RISC-V is built only where `clang` has a RISC-V code generator (not
