@@ -405,6 +405,15 @@ the compiler written in Nazm at parity (N102), re-exports (N103), authority (N10
 (N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
 catalogue (N108).
 
+### N107 — the core's scope, audited — **complete, 2026-10-05; areas 2, 3, 5, 6, 7 VERIFIED**
+
+`architecture.md` §7.108 first; `audit-n107.md` the table. Every core candidate gap was checked for
+being a defect first (none was) and then for being required (none is): trait objects, generic traits,
+default methods, effect handlers, user effects, runtime or linear capabilities, implicit flow. The
+rows now say what VERIFIED promises — areas 3, 5, 6 and 7 as scoped — and every absent construct is
+still refused by name. Divergence and implicit flow stay registered research. Twenty-nine VERIFIED,
+eight PARTIAL, all ecosystem or domain. No code; no version moves. Next: N108.
+
 ### N106 — the pool by default; two regressions attributed — **complete, 2026-10-05; area 13 VERIFIED**
 
 `architecture.md` §7.107 first. N83's M:N pool is the default runtime on every hosted target with a
