@@ -1126,12 +1126,21 @@ fn emit_artefacts(
     if library {
         return Ok(out);
     }
+    // The scheduler's policy is the program's, not the linked runtime's (N106, §7.107): whether
+    // it declares a C function — Cranelift links every part of the runtime, C's included.
+    let calls_c = nazm_lir::backend::units(native)
+        .iter()
+        .any(|(_, u, _)| u.externals.iter().any(|e| e.foreign));
+    let entry_needs = nazm_lir::Needs {
+        foreign: calls_c,
+        ..needs
+    };
     out.push(Artefact {
         name: "entry".to_owned(),
         code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_entry(
             &native.entry,
             native.entry_roots,
-            needs,
+            entry_needs,
         )),
         instance: false,
         key: None,

@@ -2,7 +2,7 @@
 //!
 //! Both print facts the compiler already settled, for a reader or — with `--json` — for a tool:
 //! where each function allocates, retains, blocks, talks to a channel, calls C or starts a task,
-//! read off MIR (`nazm.cost/1`); and every sink and declassification with the origins that reach
+//! read off MIR (`nazm.cost/2`; the scheduler since N106); and every sink and declassification with the origins that reach
 //! it, as provenance solved them, with how each origin got there (`nazm.flow/2`, N80). A count is per call of its function, and is
 //! `at-most-once` or `unknown` — never a number the compiler does not know. Paths are durable
 //! module names, so the output does not depend on where the checkout is.
@@ -55,6 +55,33 @@ fn shown(p: &Value) -> String {
         (Some(m), Some(l), Some(c)) => format!("{m}:{l}:{c}"),
         _ => "(compiler-made)".to_owned(),
     }
+}
+
+/// Which scheduler a native build of the program runs its tasks on when the environment does not
+/// say, and why (N106, `docs/architecture.md` §7.107) — `null` for a program that starts none.
+fn scheduler(totals: &serde_json::Map<String, Value>) -> Value {
+    if !totals.contains_key("task") {
+        return Value::Null;
+    }
+    let needs = nazm_lir::Needs {
+        foreign: totals.contains_key("foreign"),
+        ..nazm_lir::Needs::default()
+    };
+    let (default, why) = if nazm_lir::runtime::scheduler_policy(needs) == 1 {
+        (
+            "threads",
+            "it calls C, and a task blocked in C would hold a pool worker and every task on it",
+        )
+    } else {
+        ("pool", "M:N: tasks on a bounded set of worker threads")
+    };
+    json!({
+        "default": default,
+        "why": why,
+        "workers": 4,
+        "task_stack_bytes": 262_144,
+        "environment": "NAZM_SCHEDULER=pool|threads, NAZM_WORKERS, NAZM_TASK_STACK",
+    })
 }
 
 pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
@@ -137,10 +164,11 @@ pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
         Ok(x) => x,
         Err(d) => return failed(&d, map),
     };
+    let scheduler = scheduler(&totals);
     if as_json {
         println!(
             "{}",
-            json!({ "schema": "nazm.cost/1", "functions": functions, "totals": totals, "loops": loops, "layouts": layouts })
+            json!({ "schema": "nazm.cost/2", "functions": functions, "totals": totals, "loops": loops, "layouts": layouts, "scheduler": scheduler })
         );
         return ExitCode::SUCCESS;
     }
@@ -164,6 +192,13 @@ pub(crate) fn cost(path: &Path, as_json: bool) -> ExitCode {
                 },
             );
         }
+    }
+    if let Some(d) = field(&scheduler, "default").as_str() {
+        println!(
+            "scheduler {d}: {} ({})",
+            field(&scheduler, "why").as_str().unwrap_or("?"),
+            field(&scheduler, "environment").as_str().unwrap_or("?")
+        );
     }
     for l in &layouts {
         match field(l, "soa").as_str() {

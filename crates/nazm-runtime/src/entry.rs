@@ -10,6 +10,17 @@ use crate::{
     escape, preamble, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, SCHED_FORMAT, SCHED_VARIABLE,
 };
 
+/// The scheduler a program runs when the environment does not say (N106, `docs/architecture.md`
+/// §7.107): 2 the pool, 1 a thread per task for a program that calls C.
+#[must_use]
+pub const fn policy(needs: Needs) -> i64 {
+    if needs.foreign {
+        1
+    } else {
+        2
+    }
+}
+
 /// Emit the platform entry point: one per executable, and the only thing that prints.
 ///
 /// # Why this is its own unit
@@ -83,6 +94,12 @@ pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
     }
     let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
     let _ = writeln!(out, "entry:");
+    // The scheduler's default for this program (N106, §7.107): the runtime's is the pool; a
+    // program that calls C runs a thread per task, where a blocked call would hold a worker.
+    // Stored before anything can start a task.
+    if (needs.tasks || needs.channels) && policy(needs) == 1 {
+        let _ = writeln!(out, "  store i64 1, ptr @nz.pool_policy");
+    }
     if needs.io {
         // One fewer than `argc`, because `argv[0]` is the program's own name and is
         // deliberately not visible.

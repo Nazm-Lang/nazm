@@ -24,7 +24,9 @@
 //! R2 and R3 for what a durable definition identity would have to be; this is deliberately
 //! not that.
 
-use std::collections::HashMap;
+// The resolver's tables are keyed by spans, filled and read once per check: the fast hasher
+// (N106, `nazm_span::fast`), not SipHash.
+use nazm_span::FastMap as HashMap;
 
 use nazm_span::Span;
 
@@ -789,7 +791,7 @@ impl Resolution {
         let id = FnId::from_index(self.functions.len());
         let m = def.module.index();
         if self.by_module.len() <= m {
-            self.by_module.resize_with(m + 1, HashMap::new);
+            self.by_module.resize_with(m + 1, HashMap::default);
         }
         if let Some(names) = self.by_module.get_mut(m) {
             names.entry(def.name.clone()).or_insert(id);

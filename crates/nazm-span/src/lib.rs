@@ -32,6 +32,10 @@
 //! beside file-local offsets. Adding `serde` back to this crate's manifest is the act a
 //! reviewer would have to see, and `cargo xtask check` fails if it appears.
 
+pub mod fast;
+
+pub use fast::{FastMap, FastSet, FastState};
+
 /// Which source a span belongs to.
 ///
 /// # Session-local, and deliberately so

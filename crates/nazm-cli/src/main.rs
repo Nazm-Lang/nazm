@@ -920,7 +920,8 @@ enum Command {
     },
     /// Print where each function allocates, retains, blocks, talks to a channel, calls C or
     /// starts a task (N52), read off MIR, each with its count per call — `at-most-once` or
-    /// `unknown`, never a guess. `--json` prints `nazm.cost/1`.
+    /// `unknown`, never a guess. `--json` prints `nazm.cost/2`, which since N106 also says which
+    /// scheduler a native build runs the program's tasks on, and why.
     /// Build the program and run it once with its memory and scheduler counters on (N58), and
     /// print `nazm.profile/2`: its exit status, wall time and the counts; with `--sample`, also
     /// where its samples fell (N91).
