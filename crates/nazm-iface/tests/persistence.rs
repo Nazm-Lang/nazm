@@ -231,7 +231,10 @@ fn a_future_schema_is_refused_and_never_read_as_this_one() {
     let ten = refuse(
         r#"{"schema":"nazm.interface/10","module":"a.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
     );
-    assert_eq!(ten, ReadError::UnknownSchema("nazm.interface/10".to_owned()));
+    assert_eq!(
+        ten,
+        ReadError::UnknownSchema("nazm.interface/10".to_owned())
+    );
     // `/9` (N85) had no preconditions (N87): an importer would count none of a call's.
     let nine = refuse(
         r#"{"schema":"nazm.interface/9","module":"a.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,

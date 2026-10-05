@@ -577,7 +577,13 @@ pub fn check_reusing(
     }
     // What `pub use` re-exports of types and traits (N103), before anything resolves a type
     // name an importer writes. Refusals wait for the full interfaces below.
-    apply_reexports(&units, &mut type_interfaces, &mut res, &mut Vec::new(), false);
+    apply_reexports(
+        &units,
+        &mut type_interfaces,
+        &mut res,
+        &mut Vec::new(),
+        false,
+    );
 
     // Stage 0b: each module's field types, against the type half of its imports'
     // interfaces. Stage 0c: the layouts those fields describe.

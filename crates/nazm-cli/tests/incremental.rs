@@ -428,7 +428,9 @@ fn the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one
         "{text}"
     );
     assert!(
-        text.contains(r#""name":"plain","kind":"fn","generics":0,"params":["OutCap"],"ret":"Int"}"#),
+        text.contains(
+            r#""name":"plain","kind":"fn","generics":0,"params":["OutCap"],"ret":"Int"}"#
+        ),
         "{text}"
     );
 }

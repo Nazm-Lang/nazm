@@ -502,7 +502,9 @@ fn manifest(name: &str, version: &str, main: bool, deps: &[(&str, &str, &str)]) 
     if !deps.is_empty() {
         s.push_str("[dependencies]\n");
         for (n, path, v) in deps {
-            s.push_str(&format!("{n} = {{ path = \"{path}\", version = \"{v}\" }}\n"));
+            s.push_str(&format!(
+                "{n} = {{ path = \"{path}\", version = \"{v}\" }}\n"
+            ));
         }
     }
     s
@@ -523,21 +525,34 @@ fn a_package_reexports_another_packages_definition_and_reuse_follows_it() {
         &manifest("geo", "1.2.0", false, &[("shapes", "../shapes", "0.3.1")]),
     );
     // Across the package boundary: `geo` offers `shapes`' function as its own `count`.
-    w("geo/src/lib.nz", "pub use \"shapes:poly.nz\" { sides as count };\n");
+    w(
+        "geo/src/lib.nz",
+        "pub use \"shapes:poly.nz\" { sides as count };\n",
+    );
     w(
         "app/nazm.toml",
         &manifest("app", "0.1.0", true, &[("geo", "../geo", "1.2.0")]),
     );
-    w("app/src/main.nz", "use \"geo:lib.nz\";\nfn main() -> Int { count(7) }\n");
+    w(
+        "app/src/main.nz",
+        "use \"geo:lib.nz\";\nfn main() -> Int { count(7) }\n",
+    );
     let r = nazm(d.path(), &["run", "app"]);
     assert_eq!(stdout(&r), "7\n", "{}", String::from_utf8_lossy(&r.stderr));
     // The identity is the defining package's, not the re-exporting one's.
     let i = nazm(&d.path().join("geo/src"), &["interface", "lib.nz"]);
     let text = stdout(&i);
-    assert!(text.contains("\"name\":\"count\""), "{text}{}", String::from_utf8_lossy(&i.stderr));
+    assert!(
+        text.contains("\"name\":\"count\""),
+        "{text}{}",
+        String::from_utf8_lossy(&i.stderr)
+    );
     assert!(text.contains("poly.nz::fn sides"), "{text}");
     // The defining package's source changes: the program's answer follows.
-    w("shapes/src/poly.nz", "pub fn sides(n: Int) -> Int { n + 1 }\n");
+    w(
+        "shapes/src/poly.nz",
+        "pub fn sides(n: Int) -> Int { n + 1 }\n",
+    );
     assert_eq!(stdout(&nazm(d.path(), &["run", "app"])), "8\n");
     // Its version moves past what `geo` requires: refused, never quietly the old one.
     w("shapes/nazm.toml", &manifest("shapes", "0.4.0", false, &[]));
