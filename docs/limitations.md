@@ -11,12 +11,12 @@ found only by reading all of it.
 - Traits and methods (N78) are nominal and static: no trait objects or dynamic dispatch, no default
   methods, associated items, generic traits or methods, supertraits, impls with bounds or for
   generic types, or inherent impls; one bound per type parameter; an impl is usable where its
-  module is the caller's or one it imports directly. A persisted interface's traits are not
-  rehydrated. *Narrowed in N78:* until then, no traits or methods. Function values and
+  module is the caller's or one it imports directly. A check against a persisted interface alone,
+  without the module's source, cannot use its traits (a cached check can: N107 checked it). *Narrowed in N78:* until then, no traits or methods. Function values and
   closures exist since N50, and effect parameters since N51 — one per function, named only in
   function types (`N0388`), with no effect subtyping; no closure or
     named function value inside a generic function (`N0387`); a closure captures by copy and
-  never a `let mut` binding (`N0386`); no attenuated capabilities and no revocation
+  never a `let mut` binding (`N0386`); no attenuation beyond `OutCap` (N79) and no revocation
   (`architecture.md` §7.53); a field of function type is called by
   binding it first; no function value crosses into a task (`N0321`); a path that went through a
   function value carries what every function value of its type may return, and a call through a
@@ -100,6 +100,11 @@ found only by reading all of it.
   interface publishes no set. That is an effect assumption and grants nothing — since N104 no
   function inherits authority — but it makes such a call count against a caller's declared set
   (area 5). *Narrowed in N104:* the authority bridge is gone.
+- The core's scope, as N107 audited it (`audit-n107.md`): effects are the compiler's two, with no
+  handlers and no user-defined effects, and **pure is not total** — a pure function may diverge;
+  capabilities are static, coarse and shareable — nothing checks them at run time, none is revoked,
+  and none is linear; information flow is explicit data flow only, never non-interference. Each
+  absent construct is refused by name.
 - Effect subsumption applies where a function value is passed or returned, not inside another
   type: a `Vec[fn() -> Int]` is not a `Vec[fn() -> Int ! { io }]` (area 5).
 - Provenance has three sink classes (`path`, `output`, `file-data`) solved through helpers,
