@@ -35,7 +35,6 @@
 //! layer on top. Its types stay in this module — the rest of the workspace sees [`Cst`],
 //! [`CstNode`], [`Leaf`] and [`SyntaxKind`].
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use cstree::build::GreenNodeBuilder;
@@ -444,7 +443,8 @@ pub struct Cst {
 #[derive(Debug, Clone, Default)]
 pub struct Strings {
     texts: Vec<Box<str>>,
-    index: HashMap<Box<str>, u32>,
+    /// The fast hasher (N106): interning every leaf's text was a tenth of a parse on SipHash.
+    index: nazm_span::FastMap<Box<str>, u32>,
 }
 
 /// More distinct leaf texts than a [`TokenKey`] can name.
@@ -764,20 +764,33 @@ impl<'a> Sink<'a> {
         } = self;
         // Nodes that begin at the same event nest the other way round from the order
         // they were recognised in: `a - b - c` recognises `a - b` first, and it is the
-        // inner one. So each position's nodes open latest-recognised first. The sort is
-        // stable, which keeps the order of different positions' nodes irrelevant.
-        let mut order: Vec<usize> = (0..opens.len()).collect();
-        order.sort_by_key(|&i| {
-            let (at, _) = opens
-                .get(i)
-                .copied()
-                .unwrap_or((usize::MAX, SyntaxKind::Error));
-            (at, std::cmp::Reverse(i))
-        });
-        let sorted: Vec<(usize, SyntaxKind)> = order
-            .iter()
-            .filter_map(|&i| opens.get(i).copied())
-            .collect();
+        // inner one. So each position's nodes open latest-recognised first: ordered by
+        // position, and within a position latest first. Positions are event indices, so a
+        // counting pass orders them in linear time — which a comparison sort, at a tenth of a
+        // parse, did not (N106) — and filling each position's bucket from the last-recognised
+        // node down gives the within-position order.
+        let positions = events.len() + 1;
+        let mut first = vec![0_usize; positions + 1];
+        for &(at, _) in &opens {
+            if let Some(c) = first.get_mut(at.min(positions - 1) + 1) {
+                *c += 1;
+            }
+        }
+        for k in 1..first.len() {
+            let before = first.get(k - 1).copied().unwrap_or(0);
+            if let Some(c) = first.get_mut(k) {
+                *c += before;
+            }
+        }
+        let mut sorted = vec![(0_usize, SyntaxKind::Error); opens.len()];
+        for &(at, kind) in opens.iter().rev() {
+            if let Some(next) = first.get_mut(at.min(positions - 1)) {
+                if let Some(slot) = sorted.get_mut(*next) {
+                    *slot = (at, kind);
+                }
+                *next += 1;
+            }
+        }
         opens.clear();
 
         let mut b = Builder {

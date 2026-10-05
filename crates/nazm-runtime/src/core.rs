@@ -1582,13 +1582,18 @@ const POOL_RUNTIME: &str = r#"
 @.pool.env.workers = private unnamed_addr constant [13 x i8] c"NAZM_WORKERS\00"
 @.pool.env.stack = private unnamed_addr constant [16 x i8] c"NAZM_TASK_STACK\00"
 @.pool.word = private unnamed_addr constant [5 x i8] c"pool\00"
+@.pool.threads = private unnamed_addr constant [8 x i8] c"threads\00"
+; The program's policy (N106, §7.107): 2 the pool, 1 a thread per task. The platform entry of a
+; program that calls C stores 1 before `main` runs; a library, which has no entry, keeps the pool.
+@nz.pool_policy = hidden global i64 2
 @.pool.fmt = private unnamed_addr constant [46 x i8] c"nazm-pool: workers=%lld peak=%lld stack=%lld\0A\00"
 
 declare void @nz_ctx_switch(ptr, ptr)
 declare ptr @nz_ctx_prepare(ptr, ptr)
 
-; The scheduler this process runs (N83, §7.84): 1 one OS thread per task, 2 the pool, 4 a pool
-; that was asked for and could not start. Decided once, at the first question; 3 while deciding.
+; The scheduler this process runs (N83, §7.84; the default N106's, §7.107): 1 one OS thread per
+; task, 2 the pool, 4 a pool that could not start or a NAZM_SCHEDULER that names neither — no
+; task starts. Decided once, at the first question; 3 while deciding.
 define hidden i64 @nz.pool_mode_get() {
 entry:
   br label %top
@@ -1610,15 +1615,30 @@ decide:
 ask:
   %v = call ptr @getenv(ptr @.pool.env.sched)
   %unset = icmp eq ptr %v, null
-  br i1 %unset, label %threads, label %len
+  br i1 %unset, label %policy, label %len
+policy:
+  ; Unset: the program's policy.
+  %pol = load i64, ptr @nz.pool_policy
+  %onthreads = icmp eq i64 %pol, 1
+  br i1 %onthreads, label %threads, label %start
 len:
   %n = call i64 @strlen(ptr %v)
   %four = icmp eq i64 %n, 4
-  br i1 %four, label %cmp, label %threads
+  br i1 %four, label %cmp, label %seven
 cmp:
   %c = call i32 @memcmp(ptr %v, ptr @.pool.word, i64 4)
   %is = icmp eq i32 %c, 0
-  br i1 %is, label %start, label %threads
+  br i1 %is, label %start, label %refused
+seven:
+  %sev = icmp eq i64 %n, 7
+  br i1 %sev, label %cmpt, label %refused
+cmpt:
+  %ct = call i32 @memcmp(ptr %v, ptr @.pool.threads, i64 7)
+  %ist = icmp eq i32 %ct, 0
+  br i1 %ist, label %threads, label %refused
+refused:
+  store atomic i64 4, ptr @nz.pool_mode release, align 8
+  ret i64 4
 threads:
   store atomic i64 1, ptr @nz.pool_mode release, align 8
   ret i64 1

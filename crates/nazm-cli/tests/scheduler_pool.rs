@@ -1,11 +1,11 @@
-//! N83: the task pool — M:N tasks on bounded workers, opt-in by `NAZM_SCHEDULER=pool`.
+//! N83: the task pool — M:N tasks on bounded workers, opt-in by `NAZM_SCHEDULER=pool` until N106
+//! made it the default (`scheduler_default.rs`); here the thread model is asked for by name.
 //!
 //! `docs/architecture.md` §7.84. What the programs show: every concurrency shape gives the same
 //! output, ending and memory report on the pool as on one thread per task, on both backends;
 //! ten thousand tasks run, all alive at once, on two workers; a task's failure and stack limit are
 //! its own on a shared worker; a task polling with a select that does not wait lets a sibling on
-//! the same worker run; a deadline fires for a parked task; and without the variable nothing about
-//! the run changes.
+//! the same worker run; a deadline fires for a parked task.
 
 #![allow(
     clippy::unwrap_used,
@@ -155,7 +155,7 @@ fn every_concurrency_shape_behaves_the_same_on_the_pool_on_both_backends() {
     for (name, src) in SHAPES {
         for backend in ["llvm", "cranelift"] {
             built(d.path(), name, src, backend);
-            let threads = run(d.path(), name, &[], &[]);
+            let threads = run(d.path(), name, &[], &[("NAZM_SCHEDULER", "threads")]);
             let pool = run(
                 d.path(),
                 name,
@@ -230,7 +230,7 @@ fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker() {
                    scope { spawn bad(io, c, str_len(\"\")); spawn good(io, c, done); let r = chan_recv(done, got); }\n\
                    print(int_to_str(ints_get(got, 0))); 0 }\n";
     built(d.path(), "fail", src, "llvm");
-    let threads = run(d.path(), "fail", &[], &[]);
+    let threads = run(d.path(), "fail", &[], &[("NAZM_SCHEDULER", "threads")]);
     let pool = run(
         d.path(),
         "fail",
@@ -259,7 +259,7 @@ fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker() {
     let small = run(d.path(), "deep", &[&n], &[("NAZM_SCHEDULER", "pool")]);
     assert_eq!(small.2, Some(2), "{}", small.1);
     assert!(small.1.contains("N0408"), "{}", small.1);
-    let threads = run(d.path(), "deep", &[&n], &[]);
+    let threads = run(d.path(), "deep", &[&n], &[("NAZM_SCHEDULER", "threads")]);
     let large = run(
         d.path(),
         "deep",

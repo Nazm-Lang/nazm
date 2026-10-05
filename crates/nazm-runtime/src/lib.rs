@@ -25,7 +25,7 @@ pub use self::core::{
     emit_runtime, runtime_declarations, MEMORY_FORMAT, MEMORY_VARIABLE, SCHED_FORMAT,
     SCHED_VARIABLE,
 };
-pub use self::entry::emit_entry;
+pub use self::entry::{emit_entry, policy as scheduler_policy};
 pub use self::os::declarations;
 
 /// What this runtime has been verified against, recorded so a reader does not have to
@@ -199,8 +199,10 @@ pub fn escape(s: &str) -> String {
 /// `nz.errno_last` for `c_errno()`, the thread-local `nz.errno_saved`, and the per-target `errno`
 /// unit defining `nz_errno_location` that a build reaching them links. 13 is N86's: the device
 /// registers by width (`nz.mmio_read8`, `nz.mmio_write8`, `nz.mmio_read16`, `nz.mmio_write16`),
-/// and a board's runtime generated from its description.
-pub const RUNTIME_ABI_REVISION: u32 = 13;
+/// and a board's runtime generated from its description. 14 is N106's: the pool is the default —
+/// `NAZM_SCHEDULER` unset runs it, `threads` asks for a thread per task, any other value starts
+/// no task — and `nz.pool_policy`, which the platform entry defines (1 for a program that calls C).
+pub const RUNTIME_ABI_REVISION: u32 = 14;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -503,7 +505,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.sel_signal", "void" () "", false, Channels, "", Never, Any, "advance the select event count and wake any select", "none"),
     rt!("nz.chanv_try", "i64" ("ptr", "ptr") "", false, Channels, "", Never, Locked, "one look at a channel without waiting", "borrows the channel; hands the slot's reference over when it returns 1"),
     rt!("nz.failed_now", "i32" () "", false, Base, "", Never, Any, "whether this thread has failed, for a second backend", "none"),
-    rt!("nz.pool_mode_get", "i64" () "", false, Tasks, "", Never, Any, "which scheduler this process runs, decided once from NAZM_SCHEDULER (N83)", "none"),
+    rt!("nz.pool_mode_get", "i64" () "", false, Tasks, "", Never, Any, "which scheduler this process runs, decided once from NAZM_SCHEDULER and the program's policy (N83, N106)", "none"),
     rt!("nz.pool_env", "i64" ("ptr", "i64") "", false, Tasks, "", Never, Any, "a positive count from an environment variable, or a default (N83)", "borrows the name"),
     rt!("nz.pool_sync", "ptr" () "", false, Tasks, "", Null, Any, "a mutex and a condition variable in one allocation (N83)", "the process owns it"),
     rt!("nz.pool_start", "i1" () "", false, Tasks, "", Status, Any, "start the pool's tables and workers (N83)", "the process owns them"),
@@ -548,6 +550,7 @@ pub struct RuntimeGlobal {
 /// Every global the runtime defines, in the order every unit declares them (§7.45).
 pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.pool_mode", ty: "i64", thread_local: false, writers: "`nz.pool_mode_get`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_policy", ty: "i64", thread_local: false, writers: "the platform entry, once, before `main`, for a program that calls C (N106)" },
     RuntimeGlobal { symbol: "nz.pool_workers", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_count", ty: "i64", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_next", ty: "i64", thread_local: false, writers: "`nz.task_start`, atomically (N83)" },
@@ -918,9 +921,14 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirteen_and_its_digest_covers_the_pool_and_errno() {
-        // N86's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 13);
+    fn the_runtime_is_revision_fourteen_and_its_digest_covers_the_pool_and_errno() {
+        // N106's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 14);
+        // The pool is the default, and a program's policy is the entry's (N106).
+        assert!(crate::emit_runtime(crate::EVERYTHING)
+            .contains("@nz.pool_policy = hidden global i64 2"));
+        assert!(crate::emit_entry("@nz_main", 1, crate::EVERYTHING)
+            .contains("store i64 1, ptr @nz.pool_policy"));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.mmio_write8("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.errno_save("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.cstr_len("));

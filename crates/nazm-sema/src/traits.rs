@@ -8,7 +8,10 @@
 //! this crate; durable keys are the caller's (`DefKind::Trait`, and `Trait/Type/m` for an
 //! impl's function).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+
+// Keyed by spans and by trait and type, per check: the fast hasher (N106).
+use nazm_span::FastMap as HashMap;
 
 use nazm_span::Span;
 

@@ -13,24 +13,17 @@
 
 use std::path::{Path, PathBuf};
 
-/// Codes no test asserts, and why each one cannot be reached from a test.
+/// Codes no test asserts, and why each one cannot be reached from a test. (`N0404` left the
+/// list in N106: a `NAZM_SCHEDULER` that names no scheduler provokes it on purpose.)
 ///
 /// Adding to this list is how a code escapes the requirement, so it takes a sentence
 /// that has to be true. Removing something from it is what happens when someone finds a
 /// way to provoke it.
-const UNPROVOKABLE: &[(&str, &str)] = &[
-    (
-        "N0404",
-        "the interpreter or a task could not be given a thread. Reaching it means \
-         exhausting the machine's threads, which a test cannot do without deciding \
-         what else on the machine fails first",
-    ),
-    (
-        "N0406",
-        "an allocation failed. Reaching it means exhausting memory, and a test that \
+const UNPROVOKABLE: &[(&str, &str)] = &[(
+    "N0406",
+    "an allocation failed. Reaching it means exhausting memory, and a test that \
          did would be measuring the machine rather than the compiler",
-    ),
-];
+)];
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

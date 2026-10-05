@@ -57,7 +57,8 @@
 //! be written is held by the corpus gate in `crates/nazm-service/tests/references.rs`, which
 //! requires every name token of the repository's source to be indexed or explained.
 
-use std::collections::HashMap;
+// Keyed by spans, per check: the fast hasher (N106).
+use nazm_span::FastMap as HashMap;
 
 use nazm_span::Span;
 

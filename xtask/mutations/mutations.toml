@@ -4303,8 +4303,8 @@ killers = [{ package = "nazm-syntax", test = "cst", name = "every_nazm_file_in_t
 name = "n15-nodes-at-one-place-nest-inside-out"
 why = "nodes that begin at the same token open in the order they were recognised, so `a - b - c` and every statement over its own first node nest inside out"
 file = "crates/nazm-syntax/src/cst.rs"
-find = "            (at, std::cmp::Reverse(i))"
-replace = "            (at, std::cmp::Reverse(0))"
+find = '''        for &(at, kind) in opens.iter().rev() {'''
+replace = '''        for &(at, kind) in opens.iter() {'''
 killers = [{ package = "nazm-syntax", test = "cst", name = "the_abstract_and_concrete_trees_agree_on_every_construct" }]
 
 [[mutation]]
@@ -10412,9 +10412,9 @@ Repointed by N83, which moved it to 11 for the task pool.
 Repointed by N85, which moved it to 12 for the errno capture and C strings returned.
 Repointed by N86, which moved it to 13 for device registers by width."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = "pub const RUNTIME_ABI_REVISION: u32 = 13;"
-replace = "pub const RUNTIME_ABI_REVISION: u32 = 12;"
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirteen_and_its_digest_covers_the_pool_and_errno" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 14;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 13;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_fourteen_and_its_digest_covers_the_pool_and_errno" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -13850,4 +13850,60 @@ find = '                let divisor = self.select(special, one, y);'
 replace = '''                let divisor = self.select(special, y, y);
                 let _ = one;'''
 killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_their_failures_agree_with_the_oracle" }]
+
+[[mutation]]
+name = "n106-the-default-is-threads"
+why = "with NAZM_SCHEDULER unset a program runs a thread per task, as before N106: the pool is verified and never used"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %onthreads = icmp eq i64 %pol, 1'''
+replace = '''  %onthreads = icmp ne i64 %pol, 1'''
+killers = [{ package = "nazm-cli", test = "scheduler_default", name = "with_no_variable_a_programs_tasks_run_on_the_pool_on_both_backends" }]
+
+[[mutation]]
+name = "n106-an-unnamed-scheduler-runs-threads"
+why = "a NAZM_SCHEDULER that names no scheduler is read as threads — a typo silently picks a model — where N106 refuses it"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  br i1 %is, label %start, label %refused'''
+replace = '''  br i1 %is, label %start, label %threads'''
+killers = [{ package = "nazm-cli", test = "scheduler_default", name = "a_scheduler_the_environment_does_not_name_starts_no_task" }]
+
+[[mutation]]
+name = "n106-threads-cannot-be-asked-for"
+why = "NAZM_SCHEDULER=threads starts the pool anyway, so the thread model is unreachable by name"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  br i1 %ist, label %threads, label %refused'''
+replace = '''  br i1 %ist, label %start, label %refused'''
+killers = [{ package = "nazm-cli", test = "scheduler_default", name = "with_no_variable_a_programs_tasks_run_on_the_pool_on_both_backends" }]
+
+[[mutation]]
+name = "n106-a-program-that-calls-c-runs-on-the-pool"
+why = "a program that calls C defaults to the pool, where a task blocked in C holds its worker and every task pinned to it"
+file = "crates/nazm-runtime/src/entry.rs"
+find = '''    if (needs.tasks || needs.channels) && policy(needs) == 1 {'''
+replace = '''    if (needs.tasks || needs.channels) && policy(needs) == 0 {'''
+killers = [{ package = "nazm-cli", test = "scheduler_default", name = "a_program_that_calls_c_runs_a_thread_per_task_unless_the_pool_is_asked_for" }]
+
+[[mutation]]
+name = "n106-the-policy-is-the-linked-runtimes"
+why = "the policy reads which runtime parts are linked rather than whether the program calls C, and Cranelift — which links every part — runs every program on threads"
+file = "crates/nazm-cli/src/build.rs"
+find = '''        foreign: calls_c,'''
+replace = '''        foreign: needs.foreign || calls_c,'''
+killers = [{ package = "nazm-cli", test = "scheduler_default", name = "with_no_variable_a_programs_tasks_run_on_the_pool_on_both_backends" }]
+
+[[mutation]]
+name = "n106-explain-cost-forgets-c"
+why = "`nazm explain-cost` says a program that calls C runs on the pool, which its build does not do"
+file = "crates/nazm-cli/src/explain.rs"
+find = '''        foreign: totals.contains_key("foreign"),'''
+replace = '''        foreign: false,'''
+killers = [{ package = "nazm-cli", test = "scheduler_default", name = "a_program_that_calls_c_runs_a_thread_per_task_unless_the_pool_is_asked_for" }]
+
+[[mutation]]
+name = "n106-the-fast-hash-ignores-its-input"
+why = "the fast hasher drops each word it is given, so every span and every name collides: the maps stay correct and every lookup is a scan"
+file = "crates/nazm-span/src/fast.rs"
+find = '''        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(SEED);'''
+replace = '''        self.0 = self.0.rotate_left(5).wrapping_mul(SEED) ^ (word & 0);'''
+killers = [{ package = "nazm-span", lib = true, name = "fast::tests::spans_that_differ_anywhere_hash_apart_and_equal_ones_together" }]
 
