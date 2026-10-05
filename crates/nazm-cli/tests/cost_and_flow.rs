@@ -219,7 +219,7 @@ fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {
 #[test]
 fn explain_cost_reports_each_site_with_a_count_per_call() {
     let cost = json_of(&[("prog.nz", COSTLY)], &["explain-cost"]);
-    assert_eq!(cost["schema"], "nazm.cost/1");
+    assert_eq!(cost["schema"], "nazm.cost/2");
     let main = sites_of(&cost, "main");
     let find = |kind: &str, op: &str| {
         main.iter()
