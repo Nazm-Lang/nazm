@@ -128,7 +128,10 @@ fn an_io_cap_given_for_an_out_cap_compiles_on_both_backends() {
     // `print` adds no newline; `nazm run` then prints `main`'s result.
     assert_eq!(String::from_utf8_lossy(&o.stdout), "7!0\n");
     for backend in ["llvm", "cranelift"] {
-        let o = nazm(d.path(), &["build", "--backend", backend, "p.nz", "-o", "p"]);
+        let o = nazm(
+            d.path(),
+            &["build", "--backend", backend, "p.nz", "-o", "p"],
+        );
         assert!(o.status.success(), "{backend}: {}", text(&o));
         let o = Command::new(d.path().join("p")).output().unwrap();
         assert!(o.status.success(), "{backend}");
@@ -229,7 +232,10 @@ fn the_authority_profile_and_the_default_refuse_the_same_programs() {
         "fn helper() -> Int { print(\"x\\n\"); 0 }\n\
          fn main(io: IoCap) -> Int ! {io} { helper() }\n",
     );
-    for args in [&["check", "p.nz"][..], &["check", "--profile", "authority", "p.nz"]] {
+    for args in [
+        &["check", "p.nz"][..],
+        &["check", "--profile", "authority", "p.nz"],
+    ] {
         let o = nazm(d.path(), args);
         let t = text(&o);
         assert!(!o.status.success(), "{args:?}: {t}");
@@ -242,7 +248,10 @@ fn the_authority_profile_and_the_default_refuse_the_same_programs() {
          fn pure(n: Int) -> Int { n + 1 }\n\
          fn main(io: IoCap) -> Int ! {io} { helper(io) + pure(1) }\n",
     );
-    for args in [&["check", "p.nz"][..], &["check", "--profile", "authority", "p.nz"]] {
+    for args in [
+        &["check", "p.nz"][..],
+        &["check", "--profile", "authority", "p.nz"],
+    ] {
         let o = nazm(d.path(), args);
         assert!(o.status.success(), "{args:?}: {}", text(&o));
     }

@@ -257,7 +257,10 @@ impl Traits {
     }
 
     /// The traits `module` re-exports (N103), under their own names.
-    pub fn reexported_by(&self, module: crate::module::ModuleId) -> impl Iterator<Item = TraitId> + '_ {
+    pub fn reexported_by(
+        &self,
+        module: crate::module::ModuleId,
+    ) -> impl Iterator<Item = TraitId> + '_ {
         self.reexported
             .iter()
             .filter(move |(m, _)| *m == module)

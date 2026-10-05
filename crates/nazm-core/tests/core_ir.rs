@@ -371,7 +371,8 @@ fn effects_and_authority_survive_as_function_metadata() {
 fn provenance_is_not_carried_into_core_ir() {
     // The checker's summary says `r` returns a file's contents; Core IR says nothing about
     // it — no section, no per-node origin set — because nothing below Core IR reads one.
-    let src = "fn r(io: IoCap) -> Str { read_file(\"f\") }\nfn main(io: IoCap) -> Int { str_len(r(io)) }";
+    let src =
+        "fn r(io: IoCap) -> Str { read_file(\"f\") }\nfn main(io: IoCap) -> Int { str_len(r(io)) }";
     let text = printed(src, true);
     for key in ["provenance", "origin\":\"file", "origins", "\"file\""] {
         assert!(!text.contains(key), "{key} in {text}");

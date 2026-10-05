@@ -38,7 +38,8 @@ use crate::ast::{
     Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm,
     MethodOf, Param, PatternField, Place, PlaceField, Program, Qualifier, Record, Reexport,
-    ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, While,
+    ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam,
+    Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -362,7 +363,10 @@ pub(crate) fn parse_region(
         }
         // `pub use` (N103) is an import that re-exports.
         let pub_use = p.at(&TokenKind::Pub)
-            && matches!(p.tokens.get(p.pos + 1).map(|t| &t.kind), Some(TokenKind::Use));
+            && matches!(
+                p.tokens.get(p.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Use)
+            );
         let item = if p.at(&TokenKind::Use) || pub_use {
             p.import().map(Item::Import)
         } else if p.at(&TokenKind::Impl) {

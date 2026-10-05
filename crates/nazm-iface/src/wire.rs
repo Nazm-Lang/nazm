@@ -840,7 +840,9 @@ impl PersistentUnitInterface {
             let self_ty = ty(i.self_ty)?;
             let shown = types.show(i.self_ty);
             // Its methods are the declaring module's, however it reached this interface.
-            let owner = graph.key(i.module).ok_or(PublishError::NoModuleKey(i.module))?;
+            let owner = graph
+                .key(i.module)
+                .ok_or(PublishError::NoModuleKey(i.module))?;
             impls.push(PersistentImpl {
                 methods: i
                     .methods
@@ -876,9 +878,9 @@ impl PersistentUnitInterface {
         let type_key = |t: Type| -> Option<String> {
             match t {
                 Type::Record(id) => types.records().get(id).and_then(|d| {
-                    graph
-                        .key(d.module)
-                        .map(|k| DefKey::new(k.clone(), DefKind::Record, d.name.clone()).to_string())
+                    graph.key(d.module).map(|k| {
+                        DefKey::new(k.clone(), DefKind::Record, d.name.clone()).to_string()
+                    })
                 }),
                 Type::Enum(id) => types.enums().get(id).and_then(|d| {
                     graph

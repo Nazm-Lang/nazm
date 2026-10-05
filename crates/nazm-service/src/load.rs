@@ -366,7 +366,12 @@ pub fn load_packaged(
             // on disk.
             if nazm_core::sema::stdlib::reserved(&import.path) {
                 if let Some((name, source)) = nazm_core::sema::stdlib::module(&import.path) {
-                    children.push((Item::Std(name, source), import.path_span, alias_of(import), reexport_of(import)));
+                    children.push((
+                        Item::Std(name, source),
+                        import.path_span,
+                        alias_of(import),
+                        reexport_of(import),
+                    ));
                 } else {
                     let known: Vec<String> = nazm_core::sema::stdlib::MODULES
                         .iter()
@@ -430,7 +435,12 @@ pub fn load_packaged(
                 }
             }
             if sources.exists(&target) {
-                children.push((Item::File(target), import.path_span, alias_of(import), reexport_of(import)));
+                children.push((
+                    Item::File(target),
+                    import.path_span,
+                    alias_of(import),
+                    reexport_of(import),
+                ));
             } else {
                 errors.push(
                     Diagnostic::error(
@@ -526,16 +536,19 @@ fn alias_of(import: &nazm_core::__syntax::Import) -> Option<(String, Span)> {
 
 /// What a `pub use` re-exports (N103), as the graph records it.
 fn reexport_of(import: &nazm_core::__syntax::Import) -> Option<nazm_core::sema::ReexportSpec> {
-    import.reexport.as_ref().map(|r| nazm_core::sema::ReexportSpec {
-        at: r.pub_span,
-        names: r.names.as_ref().map(|list| {
-            list.iter()
-                .map(|n| nazm_core::sema::ReexportItem {
-                    name: n.name.clone(),
-                    span: n.span,
-                    alias: n.alias.clone(),
-                })
-                .collect()
-        }),
-    })
+    import
+        .reexport
+        .as_ref()
+        .map(|r| nazm_core::sema::ReexportSpec {
+            at: r.pub_span,
+            names: r.names.as_ref().map(|list| {
+                list.iter()
+                    .map(|n| nazm_core::sema::ReexportItem {
+                        name: n.name.clone(),
+                        span: n.span,
+                        alias: n.alias.clone(),
+                    })
+                    .collect()
+            }),
+        })
 }

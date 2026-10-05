@@ -485,7 +485,9 @@ fn a_long_call_chain_is_solved_deterministically_and_in_bounded_time() {
             i + 1
         ));
     }
-    src.push_str(&format!("fn f{n}(s: Str, out: OutCap) -> Int {{ print(s) }}\n"));
+    src.push_str(&format!(
+        "fn f{n}(s: Str, out: OutCap) -> Int {{ print(s) }}\n"
+    ));
     src.push_str("fn main(io: IoCap) -> Int ! { io } { f0(read_file(\"prog.nz\"), io) }\n");
     let start = Instant::now();
     let a = json_of(&[("prog.nz", &src)], &["explain-flow"]);
