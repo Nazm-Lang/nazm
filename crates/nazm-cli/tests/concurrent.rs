@@ -552,13 +552,13 @@ fn worker(started: Chan, go: Chan, out: OutCap) -> Int {
 
 /// The body overflows while a worker it has just released is still running.
 const BODY_FAILS: &str = r#"
-fn main(tasks: SpawnCap) -> Int {
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
     let started = chan_new(1);
     let go = chan_new(1);
     let buf = ints_new();
     let mut top = 1;
     scope {
-        spawn worker(started, go);
+        spawn worker(started, go, io);
         chan_recv(started, buf);
         ints_pop(buf);
         chan_send(go, 1);
@@ -576,13 +576,13 @@ fn bad(dead: Chan) -> Int {
     chan_recv(dead, buf);
     1 / ints_pop(buf)
 }
-fn main(tasks: SpawnCap) -> Int {
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
     let started = chan_new(1);
     let go = chan_new(1);
     let dead = chan_new(1);
     let buf = ints_new();
     scope {
-        spawn worker(started, go);
+        spawn worker(started, go, io);
         spawn bad(dead);
         chan_recv(started, buf);
         ints_pop(buf);
@@ -598,13 +598,13 @@ fn main(tasks: SpawnCap) -> Int {
 const HELPER_FAILS: &str = r#"
 fn divide(a: Int, b: Int) -> Int { a / b }
 fn deeper(a: Int, b: Int) -> Int { divide(a, b) + 1 }
-fn main(tasks: SpawnCap) -> Int {
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
     let started = chan_new(1);
     let go = chan_new(1);
     let buf = ints_new();
     let mut r = 0;
     scope {
-        spawn worker(started, go);
+        spawn worker(started, go, io);
         chan_recv(started, buf);
         ints_pop(buf);
         chan_send(go, 1);
