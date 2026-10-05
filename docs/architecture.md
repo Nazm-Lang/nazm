@@ -8719,3 +8719,57 @@ word-level registry it reached before. `nazm.lir/1 → /2`. Core IR and MIR: unc
 object key: the unit's LIR digest, `TRANSLATOR_REVISION` 1, Cranelift's version and settings, the
 target and the runtime digest (was MIR without positions). LLVM object key: unchanged in form (its
 text and clang), every key moved because the text did. Package, lock and registry: unchanged.
+
+## 7.107 The pool by default, and two regressions attributed — N106, 2026-10-05
+
+Written before the code. Area 13 is PARTIAL with *one OS thread per task by default*: N83 built an
+M:N pool — stackful tasks on guarded stacks, pinned to bounded workers, parked at the four
+suspension points (`nz.cwait`, `nz.ctimedwait`, `nz.cwake`, `nz.join_one`) — and verified it, but
+only behind `NAZM_SCHEDULER=pool`. Area 28 names two regressions since N75 without causes inside
+the milestones that caused them. Owner: `nazm-runtime` (the scheduler's decision), `nazm-cli` (the
+build's policy and its report).
+
+**The default.** On every hosted target the pool has a switch for — AArch64 and x86-64, macOS and
+Linux — a native program's tasks run on the pool unless the environment says
+`NAZM_SCHEDULER=threads`. `NAZM_SCHEDULER=pool` asks for it explicitly, as before. Any other value
+is refused rather than read as one or the other: no task starts, and the first `spawn` fails as a
+pool that could not start does (`N0404`, *this task could not be started*). A pool that cannot start
+— its tables or workers not allocated — is the same refusal, never a quiet return to threads.
+Freestanding and WebAssembly targets have no tasks and are unchanged.
+
+**The one policy exception: C.** A program that declares a foreign function runs a thread per task
+unless `NAZM_SCHEDULER=pool` asks otherwise. A task blocked in C holds its worker and every task
+pinned to it, and there is no hand-off of a blocking foreign call (§7.84's non-goal); a program
+whose tasks wait on each other through C would deadlock on the pool and does not on threads. The
+build decides it from the program, the entry records it, and `nazm explain-cost` says which
+scheduler a program gets and why (`nazm.cost/1 → /2`, a `scheduler` object).
+
+**What is kept.** Scopes, joins, cancellation, failure adoption, channels, `select`, deadlines and
+cleanup are the pool's as N83 verified them, now on the default path; the thread model stays, by
+name. **A deterministic test mode:** `NAZM_WORKERS=1` runs every task on one worker, first in, first
+out, each until it suspends — the same interleaving on every run of a program that reads no clock.
+**The stack:** a pool task's stack is `NAZM_TASK_STACK` (default 256 KiB, at least four pages, a
+guard page below), where a task thread's is 8 MiB; the N49 stack check budgets each from its own
+stack, so a deep recursion in a task meets `N0408` sooner on the pool and is reported the same way.
+`docs/spec.md`'s N49 table says so. The interpreter keeps a thread per task (it is Rust); the
+compiler written in Nazm emits the thread model's runtime text (the `runtime parity` gate holds it
+to the Rust text), so its programs keep threads — recorded as a gap, not a semantic difference.
+
+**The regressions.** Attributed before anything is optimised, by builds of the milestones' own
+commits on one host and by sampling, then confirmed contained. Only a cause that is measured may be
+changed, and each change is measured against the same baseline; a cost that is the price of a
+feature is stated and accepted, not hidden. A benchmark claim is added for each cause found
+(`bench/claims.toml`), so it is held from now on.
+
+**Measured, and published in `performance.md`:** logical tasks against OS threads (the pool's
+`peak` against its workers), resident bytes per task with the page size, spawn and join, a channel
+round trip, and a blocked receive woken — on the pool and on threads, from the same programs.
+
+**Versions.** Semantic epoch 29: unchanged — no program means anything else. Runtime ABI revision
+5 → 6: the default and the policy global the entry defines. `nazm.cost/1 → /2`. Interface, MIR and
+LIR schemas unchanged. Every object key moves with the runtime's revision and digest.
+
+**Non-goals.** Work stealing, preemption, growable stacks, an event reactor, the blocking-C hand-off,
+the pool in the compiler written in Nazm. **What would prove this wrong:** a program that is correct
+on threads and deadlocks, fails or answers differently on the default; the suite not passing on the
+default; a `NAZM_SCHEDULER` value accepted as something it does not say.
