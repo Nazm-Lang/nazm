@@ -427,22 +427,39 @@ fn main() -> Int {
         })
         .filter_map(|s| s.as_str().map(str::to_owned))
         .collect();
-    let zero_store = |slot: usize| {
+    // Since N105 a value held in memory lives in a LIR slot, annotated with the MIR local it
+    // holds (`name : Type`), and emptied by zeroing its bytes: one `memset` of the slot.
+    let names: std::collections::BTreeMap<String, String> = main
+        .get("locals")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|l| {
+            Some((
+                l.get("local")?.as_str()?.to_owned(),
+                format!("{} : {}", l.get("name")?.as_str()?, l.get("ty")?.as_str()?),
+            ))
+        })
+        .collect();
+    let slot_of = |name: &str| -> Option<String> {
+        body.iter().find_map(|l| {
+            let (code, note) = l.split_once(';')?;
+            (note.trim() == name && code.contains(" = alloca ["))
+                .then(|| code.trim().split(' ').next().map(str::to_owned))
+                .flatten()
+        })
+    };
+    let zero_store = |slot: &str| {
         body.iter()
-            .filter(|l| {
-                let l = l.trim();
-                l.starts_with("store ")
-                    && (l.contains(" zeroinitializer, ") || l.contains(" null, "))
-                    && l.ends_with(&format!(" %slot{slot}"))
-            })
+            .filter(|l| l.contains(&format!("@llvm.memset.p0.i64(ptr {slot}, i8 0,")))
             .count()
     };
     let mut checked = 0;
-    for slot in 0..200 {
-        if zero_store(slot) == 0 {
+    for (local, name) in &names {
+        let Some(slot) = slot_of(name) else { continue };
+        if zero_store(&slot) == 0 {
             continue;
         }
-        let local = format!("_{slot}");
         let empties = lines
             .iter()
             .map(|l| {
@@ -458,9 +475,9 @@ fn main() -> Int {
             })
             .sum::<usize>();
         assert_eq!(
-            zero_store(slot),
+            zero_store(&slot),
             1 + empties,
-            "slot {slot}: one zero at entry and one per drop or move ({empties})\n{}",
+            "{local} ({name}, {slot}): one zero at entry and one per drop or move ({empties})\n{}",
             body.join("\n")
         );
         checked += 1;

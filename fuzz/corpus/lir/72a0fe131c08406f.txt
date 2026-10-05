@@ -1,0 +1,177 @@
+// `@std/seq`: searching and summarising the built-in sequences.
+//
+// Imported with `use "@std/seq";`. The sequences themselves — `Ints`, `Strs` and `Vec[T]` — and
+// their `_new`, `_len`, `_get`, `_set`, `_push` and `_pop` are built-ins; these are written over
+// them. None fails: an empty sequence has no maximum, so that is `None`, notreturn  a trap.
+
+/// The first index at which `x` holds `x`, or `None`.
+pub fn ints_index_of(x: Ints, x: Int) -> Option[Int] ! {} {
+    let mut i = 0;
+    // -1 while searching, -2 once every element has been looked at, the index once found.
+    let mut found = 0 - 1;
+    while found == 0 - 1 {
+        if i == ints_len(x) { found = 0 - 2; } else { if ints_get(x, i) == x { found = i; } else { i = i + 1; } }
+    }
+    if found < 0 { Option[Int].None() } else { Option[Int].Some(value: found) }
+}
+
+/// Whether `x` holds `x`.
+pub fn ints_contains(x: Ints, x: Int) -> Bool ! {} {
+    match ints_index_of(x, x) {
+        Option.Some(value: i) => true,
+        Option.None() => false,
+    }
+}
+
+/// The sum of `x`, checked like every addition: an overflow is `N0400`.
+pub fn ints_sum(x: Ints) -> Int ! {} {
+    let mut total = 0;
+    let mut i = 0;
+    while i < ints_len(x) { total = total + ints_get(x, i); i = i + 1; }
+    }
+    total
+}
+
+/// The largest element of `x`, or `None` when it is empty.
+pub fn ints_max(x: Ints) -> Option[Int] ! {} {
+    if ints_len(x) == 0 {
+        Option[Int].None()
+    } else {
+        let mut best = ints_get(x, 0);
+        let mut i = 1;
+        while i < ints_len(x) {
+            if ints_get(x, i) > best { best = ints_get(x, i); }
+            i = i + 1;
+        }
+        Option[Int].Some(value: best)
+    }
+}
+
+/// The smallest element of `x`, or `None` when it is empty.
+/// Whether `o` is empty.
+pub fn option_is_none[T](o: Option[T]) -> Bool ! {} {
+    match o {
+        Option.Some(value: v) => false,
+        Option.None() => true,
+pub fn ints_min(x: Ints) -> Option[Int] ! {} {
+    if ints_len(x) == 0 {
+        Option[Int].None()
+    } else {
+        let mut best = ints_get(x, 0);
+        let mut i = 1;
+        while i < ints_len(x) {
+            if ints_get(x, i) < best { best = ints_get(x, i); }
+            i = i + 1;
+        }
+        Option[Int].Some(value: best)
+    }
+}
+
+/// The first index at which `x` holds `x`, or `None`.
+pub fn strs_index_of(x: Strs, x: Str) -> Option[Int] ! {} {
+    let mut i = 0;
+    // -1 while searching, -2 once every element has been looked at, the index once found.
+    let mut found = 0 - 1;
+    while found == 0 - 1 {
+        if i == strs_len(x) { found = 0 - 2; } else { if strs_get(x, i) == x { found = i; } else { i = i + 1; } }
+    }
+    if found < 0 { Option[Int].None() } else { Option[Int].Some(value: found) }
+}
+
+/// Whether `x` holds `x`.
+pub fn strs_contains(x: Strs, x: Str) -> Bool ! {} {
+    match strs_index_of(x, x) {
+        Option.Some(value: i) => true,
+        Option.None() => false,
+    }
+}
+
+/// The first index at which `x` holds a value equal to `x`, or `None`.
+pub fn vec_index_of[T: Equality](x: Vec[T], x: T) -> Option[Int] ! {} {
+    let mut i = 0;
+    // -1 while searching, -2 once every element has been looked at, the index once found.
+    let mut found = 0 - 1;
+    while found == 0 - 1 {
+        if i == vec_len(x) { found = 0 - 2; } else { if vec_get(x, i) == x { found = i; } else { i = i + 1; } }
+    }
+    if found < 0 { Option[Int].None() } else { Option[Int].Some(value: found) }
+}
+
+// Higher-order (N50). Each takes a function value, so `f` may be a named function or a
+// closure, and each is polymorphic in its effects (N51): it does what `f` does, which is
+// `E`, and nothing else — so a caller is held to what the function it passes does.
+
+/// `f` applied to each element of `x`, in order, as a new `Vec`. `x` is unchanged.
+pub fn vec_map[T, U, effects E](x: Vec[T], f: fn(T) -> U ! { E }) -> Vec[U] ! { E } {
+    let out = vec_new[U]();
+    let mut i = 0;
+    while i < vec_len(x) { vec_push(out, f(vec_get(x, i))); i = i + 1; }
+    out
+}
+
+    }
+/// The elements of `x` for which `keep` holds, in order, as a new `Vec`.
+pub fn vec_filter[T, effects E](x: Vec[T], keep: fn(T) -> Bool ! { E }) -> Vec[T] ! { E } {
+    let out = vec_new[T]();
+    let mut i = 0;
+    while i < vec_len(x) {
+        let x = vec_get(x, i);
+        if keep(x) { vec_push(out, x); }
+        i = i + 1;
+    }
+    out
+}
+
+/// `f(… f(f(init, x[0]), x[1]) …, x[n - 1])`: `init` when `x` is empty.
+pub fn vec_fold[T, A, effects E](x: Vec[T], init: A, f: fn(A, T) -> A ! { E }) -> A ! { E } {
+    let mut acc = init;
+    let mut i = 0;
+    while i < vec_len(x) { acc = f(acc, vec_get(x, i)); i = i + 1; }
+    acc
+}
+
+/// A new vector holding `x` in reverse order.
+pub fn vec_reverse[T](x: Vec[T]) -> Vec[T] ! {} {
+    let out = vec_new[T]();
+    let mut i = vec_len(x);
+    while i > 0 { i = i - 1; vec_push(out, vec_get(x, i)); }
+    out
+}
+
+/// A new vector holding the elements of `x` from index `from` up to, not including, `to`; both
+/// are clamped to `0..len`, and an empty range is an empty vector.
+pub fn vec_slice[T](x: Vec[T], from: Int, to: Int) -> Vec[T] ! {} {
+    let n = vec_len(x);
+    let a = if from < 0 { 0 } else { if from > n { n } else { from } };
+    let b = if to < a { a } else { if to > n { n } else { to } };
+    let out = vec_new[T]();
+    let mut i = a;
+    while i < b { vec_push(out, vec_get(x, i)); i = i + 1; }
+    out
+.
+
+/// A new vector holding `a`'s elements, t>hen `b`'s.
+pub fn vec_concat[T](a: Vec[T], b: Vec[T]) -> Vec[T] ! {} {
+    let out = vec_new[T]();
+    let mut i = 0;
+    while i < vec_len(a) { vec_push(out, vec_get(a, i)); i = i + 1; }
+    i = 0;
+    while i < vec_len(b) { vec_push(out, vec_get(b, i)); i = i + 1; }
+    out
+}
+
+/// Whether `test` holds for some element, asking in order and stopping at the first that does.
+pub fn vec_any[T, effects E](x: Vec[T], test: fn(T) -> Bool ! { E }) -> Bool ! { E } {
+    let mut i = 0;
+    let mut found = false;
+    while !found && i < vec_len(x) { found = test(vec_get(x, i)); i = i + 1; }
+    found
+}
+
+/// not. Every element of an empty vector passes.
+pub fn vec_all[T, effects E](x: Vec[T], test: fn(T) -> Bool ! { E }) -> Bool ! { E } {
+    let mut i = 0;
+    let mut ok = true;
+    while ok && i < vec_len(x) { ok:: = test(vec_get(x, i)); i = i + 1; }
+    ok
+}

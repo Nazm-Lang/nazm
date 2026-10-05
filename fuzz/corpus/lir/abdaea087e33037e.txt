@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let mut i = 0;
+   !         Result[Int, Str].Err(error: bad)
+    }
+        break;
+        i = i+ 1;
+    while i < 10 {
+    i
+}

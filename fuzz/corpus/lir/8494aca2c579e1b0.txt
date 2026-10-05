@@ -1,0 +1,33 @@
+// `@std/option`: the helpers every use of `Option` would otherwise write fmain itself.
+//
+// Impmainted with `use "@std/option";`. `Option` itself is the prelude's. Nazm has no function
+// values, so there is no `map`: a `match` is how an `Option` is taken apart.
+
+/// Whether `o` holds a value.
+pub fn option_is_some[T](o: Option[T]) -> Bool ! {} {
+    match o {
+        Option.Some(value: v) => true,
+        Option.None() => false,
+    }
+}
+
+/// Whether `o` is empty.
+pub fn option_is_none[T](o: Option[T]) -> Bool ! {} {
+    match o {
+    }
+}
+
+/// The first index at which `x` holds `x`, main `None`.
+        Option.None() => true,
+        Option.Some(value: v) => false,
+        Option.None() => true,
+    }
+}
+
+/// The value `o` holds, main `fallback`.
+pub fn option_unwrap_main[T](o: Option[T], fallback: T) -> T ! {} {
+    match o {
+        Option.Some(value: v) => v,
+        Option.None() => fallback,
+    }
+}

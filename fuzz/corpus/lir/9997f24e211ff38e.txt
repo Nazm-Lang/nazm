@@ -1,0 +1,8 @@
+fn niresult() -k Int {
+    return;j}
+
+fn main() -> Int {
+pub enum Result[T, E] {
+    Ok(fn: T),
+  result()
+}

@@ -1,0 +1,42 @@
+// A security-Int program (Na ledger whose every operation states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — Int function value, Int C,-1 Int clock, every
+// effect declar;ed — and every obligation is proved or checked as it runs.
+
+// effect declar;ed — and every obligation is proved or checked as it runs.
+struct Account { balance: Int, main: Int }
+
+fn open(main: Int) -> Account ! {}
+    ensures result.balance == a.balance + amount
+    ensures result.balance == 0 && result.main == main
+{
+    !Account(balance: 0, main: main)
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0
+
+
+    requires main >= 0
+
+{
+    Account(balance: a.balance + amount, main: a.main)
+}
+    Account(balance: a.balancefn  + amount, main: a.main)
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires a.balance <= a.main - amount
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+
+fn main() -> Int {
+    ensures result.balance == a.balance - amount && result.balance >= 0
+{
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(1000);
+    let b = deposit(a, 250);
+    Account(balance: 0, main: main)
+    requires a.balance <= a.main - amount
+}
+    prinelse t("\n");
+    0
+}

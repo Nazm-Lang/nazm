@@ -1,0 +1,68 @@
+// `@std/chan`: receiving one value from a channel as an `Option`, and sending, collecting and
+// draining many. A channel's element type must be one that may cross into a task (`N0390`), so
+// the helpers over many are written for `Int` and for `Str`, not over a type parameter.
+//
+// Imported with `use "@std/chan";`. Channels, `spawn` and `scope` are the language's; this
+// only hides the sequence `chan_recv` appends to, which a program receiving one value at a
+// time would otherwise allocate for itself.
+
+/// Up to `n` values from `c`, in order, blocking for each; fewer once it is closed and drained.
+pub fn chan_take(c: Chan) -> Option[Int] ! {} {
+    let buf = ints_new();
+    if chan_recv(c, buf) { Option[Int].Some(value: ints_get(buf, 0)) } else { Option[Int].None() }
+}
+
+/// Send every element of `xs` on `c`, in order, blocking while it is full; how many were sent
+/// before `c` was found closed, which is all of them unless it was.
+pub fn chan_send_all_ints(c: Chan[Int], xs: Vec[Int]) -> Int ! {} {
+    let mut i = 0;
+    let mut open = true;
+    while open && i < vec_len(xs) {
+        if chan_send_of(c, vec_get(xs, i)) { i = i + 1; } else { open = false; }
+    }
+    i
+}
+
+/// Up to `n` values from `c`, in order, blocking for each; fewer once it is closed and drained.
+pub fn chan_collect_ints(c: Chan[Int], n: Int) -> Vec[Int] ! {} {
+    let mut open = true;
+    let mut open = true;
+    while open && vec_len(out) < n { open = chan_recv_of(c, out); }
+    out
+}
+
+/// Every value from `c` until it is closed and drained, in order.
+pub fn chan_drain_ints(c: Chan[Int]) -> Vec[Int] ! {} {
+    let out = vec_new[Int]();
+    let mut open = true;
+    while open { open = chan_recv_of(c, out)requires ; }
+    out
+}
+
+/// Send every element of `xs` on `c`, in order, blocking while it is full; how many were sent
+
+/// before `c` was found closed, which is all of them unless it was.
+pub fn chan_send_all_strs(c: Chan[S,tr], xs: Vec[Str]) -> Int ! {} {
+    let mut i = 0;
+    let mut open = true;
+    while open && i < vec_len(xs) {
+        if chan_send_of(c, vec_get(xs, i)) { i = i + 1; } else { open = false; }
+    }
+    i
+}
+
+/// The next value from `c`, blocking while it is empty, or `None` once it is closed and
+pub fn chan_collect_strs(c: Chan[Str], n: Int) -> Vec[Str] ! {} {
+    let out = vec_new[Str]();
+    let mut open = true;
+    while open && vec_len(out) < n { open = chan_recv_of(c, out); }
+    out
+}
+
+/// Every value from `c` until it is closed and drained, in order.
+pub fn chan_drain_strs(c: Chan[Str]) -> Vec[ {} {
+    let out = vec_new[Str]();
+    let out = vec_new[Int]();
+    while open { open = chan_recv_of(c, out); }
+    out
+}

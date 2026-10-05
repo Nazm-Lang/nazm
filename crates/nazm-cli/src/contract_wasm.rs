@@ -2,9 +2,9 @@
 //! contract's own unit, exporting `nazm_init` and `nazm_call_<entry>` and moving the state across
 //! the host imports `nazm_host.state_get`, `state_set` and `revert`.
 //!
-//! Everything it needs is read from the unit the ordinary backend emitted: each function's
-//! definition line names its symbol and its `State` and `Result` types, and the `State` type's
-//! definition gives its fields' layout order — by name, as every record's is (§7.9).
+//! Since N105 it reads the program, not the text: each function's symbol from its signature, and
+//! the state's and result's bytes from `abi` on `wasm32` — LIR's layout, which the unit's code
+//! uses.
 
 use std::fmt::Write as _;
 
@@ -30,45 +30,82 @@ fn encode(text: &str) -> String {
     out
 }
 
-/// The definition line of the function named `name` in `unit`: its symbol, result type and
-/// parameter types.
-fn define<'a>(unit: &'a str, name: &str) -> Option<(&'a str, &'a str, &'a str)> {
-    let suffix = format!(".{}(", encode(name));
-    unit.lines().find_map(|l| {
-        if !l.starts_with("define ") || !l.contains(&suffix) {
-            return None;
-        }
-        let at = l.find(" @nz.m.")?;
-        let open = l[at..].find('(')? + at;
-        let close = l.rfind(')')?;
-        let ret_start = l[..at].rfind(' ').map_or(0, |i| i + 1);
-        // The result type may itself contain spaces (`{ i64, … }`): it is what lies between the
-        // linkage keyword and the symbol.
-        let head = &l[..at];
-        let ret = head
-            .strip_prefix("define internal ")
-            .or_else(|| head.strip_prefix("define hidden "))
-            .or_else(|| head.strip_prefix("define "))
-            .unwrap_or(&head[ret_start..]);
-        // The symbol without its `@`.
-        Some((&l[at + 2..open], ret, &l[open + 1..close]))
-    })
+/// One Nazm function the adapter calls: its symbol, by its source name.
+fn symbol_of(native: &nazm_lir::Native, name: &str) -> Option<(nazm_mir::FuncId, String)> {
+    native
+        .program
+        .functions
+        .iter()
+        .find(|f| f.name == name && f.type_args.is_empty())
+        .and_then(|f| {
+            native
+                .sigs
+                .get(f.id.index())
+                .map(|s| (f.id, s.symbol.as_str().to_owned()))
+        })
 }
 
-/// The adapter for `shape`, to append to `unit`.
+/// Each state field, in declaration order — the host's index — with its offset in the record
+/// and whether it is a `Bool`. The record is laid out in its canonical order, not the declared
+/// one; `of_declaration` maps one to the other. The adapter's loads and stores both read this
+/// table, so a wrong map round-trips the host's state unchanged and only the contract's own code
+/// sees fields swapped — which is why `tests` holds it directly rather than through a run.
+fn field_offsets(bools: &[bool], of_declaration: &[u32], offsets: &[u32]) -> Vec<(u32, bool)> {
+    bools
+        .iter()
+        .enumerate()
+        .map(|(k, is_bool)| {
+            let pos = of_declaration.get(k).copied().unwrap_or(0) as usize;
+            (offsets.get(pos).copied().unwrap_or(0), *is_bool)
+        })
+        .collect()
+}
+
+/// The adapter for `shape`, to append to `unit`, the LLVM text of the contract's own unit (N71,
+/// N105). It calls the contract's functions by LIR's convention — the state record and the
+/// result in memory at the offsets `abi` gives them on `wasm32`, the result through a pointer
+/// passed first — so nothing about a value's bytes is decided here.
 ///
 /// # Errors
 ///
-/// A definition the adapter needs is not in the unit.
-pub(crate) fn adapter(unit: &str, shape: &Shape) -> Result<String, String> {
-    let (init, state_ty, _) = define(unit, "init").ok_or("the unit defines no `init`")?;
-    let state_ty = state_ty.to_owned();
-    // Layout order is by field name.
-    let mut by_name: Vec<&str> = shape.fields.iter().map(|(n, _)| n.as_str()).collect();
-    by_name.sort_unstable();
-    let layout = |name: &str| by_name.iter().position(|n| *n == name).unwrap_or(0);
-    let ty = |is_bool: bool| if is_bool { "i1" } else { "i64" };
-    // Attributes are numbered from 90, clear of the unit's own.
+/// A definition the adapter needs is not in the program, or its types are not a contract's.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn adapter(
+    unit: &str,
+    shape: &Shape,
+    native: &nazm_lir::Native,
+) -> Result<String, String> {
+    use nazm_lir::abi::{ByteLayouts, DataLayout, PAYLOAD};
+    use nazm_lir::Ty;
+    let (init_id, init) = symbol_of(native, "init").ok_or("the unit defines no `init`")?;
+    let home = nazm_lir::backend::units(native)
+        .into_iter()
+        .map(|(_, u, _)| u)
+        .find(|u| u.functions.contains(&init_id))
+        .ok_or("no unit defines `init`")?;
+    let lay = ByteLayouts::of(home, DataLayout::WASM32);
+    let state_ty = native
+        .sigs
+        .get(init_id.index())
+        .map(|s| s.ret)
+        .ok_or("`init` has no signature")?;
+    let Ty::Record(state_id) = state_ty else {
+        return Err("`init` does not return a record".to_owned());
+    };
+    let state = lay
+        .records
+        .get(&state_id.0)
+        .cloned()
+        .ok_or("the state has no layout")?;
+    let decl = home
+        .records
+        .iter()
+        .find(|r| r.id == state_id)
+        .map(|r| r.of_declaration.clone())
+        .ok_or("the state has no table")?;
+    let bools: Vec<bool> = shape.fields.iter().map(|(_, b)| *b).collect();
+    let fields = field_offsets(&bools, &decl, &state.offsets);
+    let size = state.lay.size.max(1);
     let mut attrs = vec![
         "\"wasm-import-module\"=\"nazm_host\" \"wasm-import-name\"=\"state_get\"".to_owned(),
         "\"wasm-import-module\"=\"nazm_host\" \"wasm-import-name\"=\"state_set\"".to_owned(),
@@ -88,58 +125,45 @@ pub(crate) fn adapter(unit: &str, shape: &Shape) -> Result<String, String> {
     if !unit.contains("@nz.failed = external global") {
         let _ = writeln!(out, "@nz.failed = external global i1");
     }
-    if !unit.contains("@nz.errmsg = external global") {
-        let _ = writeln!(out, "@nz.errmsg = external global ptr");
-    }
-    if !unit.contains("@nz.errlen = external global") {
-        let _ = writeln!(out, "@nz.errlen = external global i64");
-    }
-
-    // Read the state from the host: one field per index, into its layout position.
-    let load = |out: &mut String, var: &str| {
-        let mut agg = String::from("poison");
-        for (k, (name, is_bool)) in shape.fields.iter().enumerate() {
-            let _ = writeln!(
-                out,
-                "  %{var}.raw{k} = call i64 @nz.host_state_get(i64 {k})"
-            );
-            let v = if *is_bool {
-                let _ = writeln!(out, "  %{var}.v{k} = icmp ne i64 %{var}.raw{k}, 0");
-                format!("%{var}.v{k}")
+    let _ = writeln!(out, "@nz.errmsg = external global ptr");
+    let _ = writeln!(out, "@nz.errlen = external global i64");
+    // Read the state from the host into memory at `at`, field by field.
+    let load = |out: &mut String, at: &str| {
+        for (k, (off, is_bool)) in fields.iter().enumerate() {
+            let _ = writeln!(out, "  %{at}.raw{k} = call i64 @nz.host_state_get(i64 {k})");
+            let _ = writeln!(out, "  %{at}.p{k} = getelementptr i8, ptr %{at}, i64 {off}");
+            if *is_bool {
+                let _ = writeln!(out, "  %{at}.v{k} = icmp ne i64 %{at}.raw{k}, 0");
+                let _ = writeln!(out, "  store i1 %{at}.v{k}, ptr %{at}.p{k}");
             } else {
-                format!("%{var}.raw{k}")
-            };
-            let _ = writeln!(
-                out,
-                "  %{var}.a{k} = insertvalue {state_ty} {agg}, {} {v}, {}",
-                ty(*is_bool),
-                layout(name)
-            );
-            agg = format!("%{var}.a{k}");
+                let _ = writeln!(out, "  store i64 %{at}.raw{k}, ptr %{at}.p{k}");
+            }
         }
-        agg
     };
-    // Write a state back: every field, by index.
+    // Write a state in memory at `from` back to the host, by index.
     let store = |out: &mut String, var: &str, from: &str| {
-        for (k, (name, is_bool)) in shape.fields.iter().enumerate() {
+        for (k, (off, is_bool)) in fields.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "  %{var}.x{k} = extractvalue {state_ty} {from}, {}",
-                layout(name)
+                "  %{var}.p{k} = getelementptr i8, ptr {from}, i64 {off}"
             );
-            let v = if *is_bool {
-                let _ = writeln!(out, "  %{var}.w{k} = zext i1 %{var}.x{k} to i64");
-                format!("%{var}.w{k}")
+            if *is_bool {
+                let _ = writeln!(out, "  %{var}.b{k} = load i1, ptr %{var}.p{k}");
+                let _ = writeln!(out, "  %{var}.w{k} = zext i1 %{var}.b{k} to i64");
             } else {
-                format!("%{var}.x{k}")
-            };
-            let _ = writeln!(out, "  call void @nz.host_state_set(i64 {k}, i64 {v})");
+                let _ = writeln!(out, "  %{var}.w{k} = load i64, ptr %{var}.p{k}");
+            }
+            let _ = writeln!(
+                out,
+                "  call void @nz.host_state_set(i64 {k}, i64 %{var}.w{k})"
+            );
         }
     };
 
     let _ = writeln!(out, "define i64 @nazm_init() #93 {{");
     let _ = writeln!(out, "entry:");
-    let _ = writeln!(out, "  %s = call {state_ty} @{init}()");
+    let _ = writeln!(out, "  %s = alloca [{size} x i8], align 8");
+    let _ = writeln!(out, "  call void @{init}(ptr %s)");
     store(&mut out, "i", "%s");
     let _ = writeln!(out, "  ret i64 0");
     let _ = writeln!(out, "}}");
@@ -147,16 +171,42 @@ pub(crate) fn adapter(unit: &str, shape: &Shape) -> Result<String, String> {
 
     let conserved = if shape.conserved {
         Some(
-            define(unit, "conserved")
+            symbol_of(native, "conserved")
                 .ok_or("the unit defines no `conserved`")?
-                .0,
+                .1,
         )
     } else {
         None
     };
     for (i, (name, n)) in shape.entries.iter().enumerate() {
-        let (symbol, result_ty, _) =
-            define(unit, name).ok_or_else(|| format!("the unit defines no `{name}`"))?;
+        let (id, symbol) =
+            symbol_of(native, name).ok_or_else(|| format!("the unit defines no `{name}`"))?;
+        let Some(Ty::Enum(result_id)) = native.sigs.get(id.index()).map(|s| s.ret) else {
+            return Err(format!("`{name}` does not return a `Result`"));
+        };
+        let result = lay
+            .enums
+            .get(&result_id.0)
+            .cloned()
+            .ok_or("the result has no layout")?;
+        let table = home
+            .enums
+            .iter()
+            .find(|e| e.id == result_id)
+            .ok_or("the result has no table")?;
+        // `Err` and `Ok`, by their tags: canonical order is by name.
+        let tag_of = |v: &str| table.variants.iter().position(|x| x.source == v);
+        let (Some(err), Some(ok)) = (tag_of("Err"), tag_of("Ok")) else {
+            return Err(format!("`{name}` does not return a `Result`"));
+        };
+        let payload = |tag: usize| {
+            PAYLOAD
+                + result
+                    .variants
+                    .get(tag)
+                    .and_then(|v| v.offsets.first().copied())
+                    .unwrap_or(0)
+        };
         let attr = 94 + i;
         let params: Vec<String> = (0..*n).map(|k| format!("i64 %a{k}")).collect();
         let _ = writeln!(
@@ -167,11 +217,17 @@ pub(crate) fn adapter(unit: &str, shape: &Shape) -> Result<String, String> {
             params.join(", ")
         );
         let _ = writeln!(out, "entry:");
-        let s = load(&mut out, "s");
+        let _ = writeln!(out, "  %s = alloca [{size} x i8], align 8");
+        let _ = writeln!(
+            out,
+            "  %r = alloca [{} x i8], align 8",
+            result.lay.size.max(1)
+        );
+        load(&mut out, "s");
         let args: Vec<String> = (0..*n).map(|k| format!("i64 %a{k}")).collect();
         let _ = writeln!(
             out,
-            "  %r = call {result_ty} @{symbol}({state_ty} {s}, i64 %caller{}{})",
+            "  call void @{symbol}(ptr %r, ptr %s, i64 %caller{}{})",
             if args.is_empty() { "" } else { ", " },
             args.join(", ")
         );
@@ -184,19 +240,27 @@ pub(crate) fn adapter(unit: &str, shape: &Shape) -> Result<String, String> {
         let _ = writeln!(out, "  call void @nz.host_report(ptr %m, i32 %len32)");
         let _ = writeln!(out, "  ret i64 3");
         let _ = writeln!(out, "done:");
-        // `Err` is the canonical first variant, `Ok` the second: by name.
-        let _ = writeln!(out, "  %tag = extractvalue {result_ty} %r, 0");
-        let _ = writeln!(out, "  %ok = icmp eq i64 %tag, 1");
+        let _ = writeln!(out, "  %tag = load i64, ptr %r");
+        let _ = writeln!(out, "  %ok = icmp eq i64 %tag, {ok}");
         let _ = writeln!(out, "  br i1 %ok, label %commit, label %revert");
         let _ = writeln!(out, "revert:");
-        let _ = writeln!(out, "  %code = extractvalue {result_ty} %r, 1, 0");
+        let _ = writeln!(
+            out,
+            "  %cp = getelementptr i8, ptr %r, i64 {}",
+            payload(err)
+        );
+        let _ = writeln!(out, "  %code = load i64, ptr %cp");
         let _ = writeln!(out, "  call void @nz.host_revert(i64 %code)");
         let _ = writeln!(out, "  ret i64 1");
         let _ = writeln!(out, "commit:");
-        let _ = writeln!(out, "  %new = extractvalue {result_ty} %r, 2, 0");
-        if let Some(c) = conserved {
-            let _ = writeln!(out, "  %before = call i64 @{c}({state_ty} {s})");
-            let _ = writeln!(out, "  %after = call i64 @{c}({state_ty} %new)");
+        let _ = writeln!(
+            out,
+            "  %new = getelementptr i8, ptr %r, i64 {}",
+            payload(ok)
+        );
+        if let Some(c) = &conserved {
+            let _ = writeln!(out, "  %before = call i64 @{c}(ptr %s)");
+            let _ = writeln!(out, "  %after = call i64 @{c}(ptr %new)");
             let _ = writeln!(out, "  %same = icmp eq i64 %before, %after");
             let _ = writeln!(out, "  br i1 %same, label %write, label %rejected");
             let _ = writeln!(out, "rejected:");
@@ -275,3 +339,16 @@ const final = {};
 contract.state.fields.forEach((f, k) => { final[f.name] = f.type === 'Bool' ? String(state[k] !== 0n) : String(state[k]); });
 console.log(JSON.stringify({ schema: 'nazm.wasm-contract-run/1', transactions: runs, state: final }));
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::field_offsets;
+
+    #[test]
+    fn a_state_field_is_found_at_its_canonical_offset_not_its_declared_one() {
+        // `State { owner: Int, alice: Int, paused: Bool }` laid out by name: alice, owner,
+        // paused — owner is declared first and sits second.
+        let fields = field_offsets(&[false, false, true], &[1, 0, 2], &[0, 8, 16]);
+        assert_eq!(fields, [(8, false), (0, false), (16, true)]);
+    }
+}

@@ -1,0 +1,21 @@
+// What a module publishes about authority is its ::signatures: `report` takesspawn  an `IoCap`, so
+// every importer musd it one, and `total` takes none and~0.1.0 declares `! {}`.
+    printResult[Int, Str](value(n));
+pub fn total}(xs: Ints) -> Int ! {} {
+    let mut t = 0;
+pub fn reportResult[Int, Str](io: IoCap, title: Str, n: Int) -> Int ! { io } {
+    let mut i = 0;
+pub fn reportResult[Int, Str](io: IoCap, title: Str, n: Int) -> Int ! { io } {
+    while i < ints_lenUxs) {
+        t = t + ints_get(xs, i);
+        i = i + 1;
+    }
+
+}
+    t
+pub fn reportResult[Int, Str](io: IoCap, title: Str[dependencies]
+, n: Int) -> Int ! { io } {
+    print(title);
+
+    print(value(10))
+}

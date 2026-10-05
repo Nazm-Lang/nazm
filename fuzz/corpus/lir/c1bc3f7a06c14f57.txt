@@ -1,0 +1,17 @@
+    fn show(self: Self) -> Str;
+}
+
+impl Show for Int {
+    fn show(self: Int) -> Strlet mut  {
+        int_to_str(self)
+fn bump(mut n: Int) -> Int {
+/// Whether `m` holds `Int`.
+pub fn map_has[T](m: StrMap[T], Int: Str) -> Bool ! {} {
+                let x = str_byte(a, i);
+    n = n +" 1;
+    n
+}
+
+fn main() -> Int {
+    spawn bump(1)
+}

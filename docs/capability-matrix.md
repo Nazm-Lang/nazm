@@ -779,7 +779,7 @@ and a sieve are unchanged, which is the control. `performance.md` has the runtim
 about 13–16 ns per string operation, and nothing measurable anywhere else.
 
 **Self-hosted parity — VERIFIED**, records included. `compiler/emit.nz` emits the same model. Its runtime
-text is **derived** from `crates/nazm-lir/src/emit.rs` rather than transcribed, and
+text is **derived** from `crates/nazm-runtime/src/core.rs` rather than transcribed, and
 `cargo xtask check`'s `runtime parity` gate re-derives it and refuses a difference; its
 *decisions* are held by `the_nazm_written_compiler_emits_the_same_memory_semantics`, which
 builds eight programs with both compilers and requires the same reclamation report from
@@ -820,7 +820,7 @@ observe; a clean sanitizer run. `exit_with` reclaims nothing and reports nothing
 correct and is tested so nobody later treats it as a bug.
 
 **Limitation, in the words this row carried before N7** · *"Compiled programs allocate and
-never release: `@free` appears zero times in `crates/nazm-lir/src/emit.rs` and zero times
+never release: `@free` appears zero times in [the Rust emitter, `emit.rs`, retired by N105] and zero times
 in `compiler/emit.nz`, against 11 `@malloc` and 2 `@realloc` sites in each."* Both halves
 are false now, and the second was still true between N7 and N8. **Whole-language leak
 freedom is still NOT VERIFIED and is still not claimed** — the sentence above about types
@@ -1216,7 +1216,7 @@ checker: `lower.rs` settles layout (canonical by name, from the order MIR carrie
 MIR's durable identities, linkage, units and externals, and refuses what the native subset does
 not cover — recursion over MIR's call graph, a `main` taking anything but capabilities or not
 returning `Int`, a sequence handed to a task — with the same diagnostics as before;
-`emit.rs` writes each MIR block as a label, each local as a slot, each statement and terminator
+`op/lower.rs` (since N105; `emit.rs` before it) writes each MIR block as a label, each local as a slot, each statement and terminator
 as the instructions it means. The distinguishing information it adds is how each operation
 fails at the machine level; every fallible statement carries a span and a MIR failure edge.
 Layering is gated: `xtask/src/rules.rs` forbids `nazm-lir` depending on `nazm-core` or
@@ -1258,7 +1258,7 @@ it. That was accurate, and it is no longer true — see area 10a.*
 its own, and the objects are linked. `crates/nazm-lir/src/lower.rs` splits into a global
 `plan` — signature admissibility and, until N49, the recursion refusal, both of which span modules —
 and `lower_module`, which reads one module's bodies and every function's *signature*;
-`crates/nazm-lir/src/emit.rs` has `emit_unit`, and `crates/nazm-runtime/src/` `emit_runtime` and `emit_entry` (moved by N43, its own crate since N53);
+`crates/nazm-lir/src/op/lower.rs` has `lower_unit` (N105; `emit_unit` wraps it), and `crates/nazm-runtime/src/` `emit_runtime` and `emit_entry` (moved by N43, its own crate since N53);
 `crates/nazm-cli/src/build.rs` runs `clang -c` per artefact and links.
 
 A symbol is a spelling of the definition's `DefKey` (`crates/nazm-lir/src/symbol.rs`), not
@@ -1358,7 +1358,7 @@ claimed anywhere.
 
 ### 11. LLVM backend — VERIFIED
 
-**Evidence** · `crates/nazm-lir/src/emit.rs` emits LLVM IR as text; `crates/nazm-cli/src/build.rs`
+**Evidence** · `crates/nazm-lir/src/op/llvm.rs` prints the LIR as LLVM IR text (N105); `crates/nazm-cli/src/build.rs`
 hands it to `clang`. No LLVM is linked, so there is no build-time LLVM dependency. 127
 end-to-end tests in `crates/nazm-cli/tests/build.rs`, each at `-O0` **and** `-O2`, against
 a written expectation and against the interpreter.
@@ -1421,7 +1421,7 @@ the differential reference. `architecture.md` §7.43 is the constitution, writte
 | Claim | Status | Evidence |
 | --- | --- | --- |
 | A Cranelift-independent backend boundary | VERIFIED | `Backend` names no Cranelift type; `nazm-lir` and `nazm-cli` do not depend on a code generator (`cargo xtask check`, codegen reach) |
-| Cranelift consumes validated MIR, and nothing above it | VERIFIED | `nazm-codegen-clif` depends on `nazm-mir` and `nazm-lir` only (`the_cranelift_backend_reads_mir_and_nothing_above_it`) |
+| Cranelift consumes LIR, and nothing above it | VERIFIED | `nazm-codegen-clif` depends on `nazm-lir` (and `nazm-span`, `nazm-diag`) only, since N105 — not `nazm-mir` (`the_cranelift_backend_reads_lir_and_nothing_above_it`) |
 | The whole native subset compiles with Cranelift | VERIFIED | all 104 programs of the 205-source corpus that build: stdout, stderr, exit status and memory report identical to the LLVM backend's (`performance.md`, N41); `crates/nazm-cli/tests/cranelift.rs` against the interpreter too |
 | Traps and arithmetic edges | VERIFIED | `every_trap_is_the_same_trap` (overflow, `/` and `%` by zero, `MIN / -1`, bounds, capacities), `signed_arithmetic_and_its_edges_agree` (`MIN % -1` is 0) |
 | No silent fallback | VERIFIED | `choosing_cranelift_writes_no_llvm_text_for_any_unit`; a refusal writes nothing (`crates/nazm-cli/tests/cranelift.rs`); recursion compiles under both since N49 (`recursion_compiles_under_both_backends_and_agrees`) |
@@ -1883,7 +1883,7 @@ those stay DESIGNED, and the disclaimer above stands in full.
 
 **What exists that is genuinely relevant** · Three things, and they are real. Arithmetic is
 **specified rather than inherited from the hardware** — overflow traps, and
-`crates/nazm-lir/src/emit.rs` refuses `nsw` so no optimiser may delete the check. Recursion was
+`crates/nazm-lir/src/op/llvm.rs` refuses `nsw` so no optimiser may delete the check. Recursion was
 refused by both compilers until N49; it now compiles with a stack guard (`N0408`), so a profile
 that wants it refused would need a rule of its own (none exists yet). Everything outside a backend's coverage is **refused by
 name with a span**, never silently approximated or partially compiled.

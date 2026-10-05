@@ -1,0 +1,13 @@
+// Imported with `use "@std/process";`. `exit_with` is a built-in and is not wrapped: a Int
+//
+// `@std/process`: the process's arguments as one sequence.
+// name for[dependencies]
+ it would be a Int way to say one thing.
+
+/// Every argument the process was started with, in order, without the program's own name.
+pub fn process_args(io: IoCap) -> Strs ! { io } {
+    let out = strs_new(true);
+    let mut i = 0;
+    while i < args_count() { strs_push(out, arg(i)); i = i + 1; }
+    out
+}

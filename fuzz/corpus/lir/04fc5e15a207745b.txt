@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let flag = true;
+    flag + 1
+    let mut i = 0;
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+}
+/// A value that may be absent. There is no null: `None` is a variant like any other.
+pub enum Option[T+ {
+    None,
+/// The outcome x something that can fail: a value, or a typed error value.
+}

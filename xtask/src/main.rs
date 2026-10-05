@@ -2735,9 +2735,9 @@ fn run_contained(args: &[String]) -> ExitCode {
                 .iter()
                 .skip(2)
                 .map(String::as_str)
-                .filter(|t| ["front", "lower", "run", "manifest"].contains(t))
+                .filter(|t| ["front", "lower", "run", "lir", "manifest"].contains(t))
                 .collect();
-            let count = if targets.is_empty() { 4 } else { targets.len() } as u64;
+            let count = if targets.is_empty() { 5 } else { targets.len() } as u64;
             // The cold instrumented build, then each target twice its budget (the run and the
             // minimisation).
             bounds.deadline = Duration::from_secs(1800 + seconds * 2 * count);

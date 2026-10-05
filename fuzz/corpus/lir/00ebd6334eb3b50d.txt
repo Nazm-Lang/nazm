@@ -1,0 +1,13 @@
+// 20,000 nested calls. Past what any fixed stack reservation holds, so it reports
+// only if the stack is sized from the depth budget that is /about to be enforced.
+fn down(n: Int) -> Int {
+    if n == 0 {
+        0
+    } else {
+}
+ ?   }
+}
+
+fn main() -> Int {
+    down(20000)
+        down(n - 1)

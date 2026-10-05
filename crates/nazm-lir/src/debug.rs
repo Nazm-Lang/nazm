@@ -331,9 +331,14 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
                         ));
                         let loc = meta.location(scope, line, 0);
                         meta.vars = true;
+                        // `x3*`: the variable holds the value's address (a borrowed parameter).
+                        let (storage, expr) = match slot.strip_suffix('*') {
+                            Some(s) => (s, "!DIExpression(DW_OP_deref)"),
+                            None => (slot, "!DIExpression()"),
+                        };
                         let _ = writeln!(
                             out,
-                            "  call void @llvm.dbg.declare(metadata ptr %slot{slot}, metadata !{var}, metadata !DIExpression()), !dbg !{loc}"
+                            "  call void @llvm.dbg.declare(metadata ptr %{storage}, metadata !{var}, metadata {expr}), !dbg !{loc}"
                         );
                     }
                 }

@@ -165,7 +165,8 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
-    // The field-by-field layout (N68, §7.70) is the LLVM emitter's, and asked for by name.
+    // The field-by-field layout (N68, §7.70), asked for by name. LIR's since N105, so both
+    // backends take it.
     let soa = match choice.layout {
         "aos" => false,
         "soa" => true,
@@ -177,13 +178,6 @@ pub(crate) fn run(
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
     };
-    if soa && choice.backend == nazm_lir::backend::BackendId::Cranelift {
-        if summary {
-            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
-        }
-        eprintln!("nazm: `--layout soa` is the LLVM backend's; `--backend cranelift` lays out every `Vec` element whole");
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
-    }
     // The watermark is the board's (N63): a hosted program has an operating system's stack.
     if choice.stack_watermark && !target.is_board() {
         if summary {
@@ -215,8 +209,9 @@ pub(crate) fn run(
         .with_debug(choice.debug)
         .with_soa(soa);
     // Both backends write debug information (N48; Cranelift's since N91).
-    let cranelift =
-        nazm_codegen_clif::Cranelift::new(target.clone(), opt_level).with_debug(choice.debug);
+    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
+        .with_debug(choice.debug)
+        .with_soa(soa);
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
         nazm_lir::backend::BackendId::Llvm => &llvm,
         nazm_lir::backend::BackendId::Cranelift => &cranelift,
@@ -976,7 +971,7 @@ fn emit_artefacts(
     // caller's: the object cache then reuses each by its own identity, one instance
     // requested by two modules is one object, and a module's object does not change when
     // another module starts instantiating something. `docs/architecture.md` §7.12.
-    for (i, plan) in backend.plan(native).into_iter().enumerate() {
+    for (i, plan) in backend.plan(native, names).into_iter().enumerate() {
         if let Some(bytes) = plan.key.as_deref().and_then(cached) {
             out.push(Artefact {
                 name: plan.name,
@@ -1016,12 +1011,21 @@ fn emit_artefacts(
         // The contract adapter (N71, §7.73): text appended to the contract's own unit, so it can
         // call what that unit defines; the backend's code is unchanged.
         if let Some(shape) = adapter {
+            let init = native
+                .program
+                .functions
+                .iter()
+                .find(|f| f.name == "init")
+                .and_then(|f| native.sigs.get(f.id.index()))
+                .map(|s| format!("@{}(", s.symbol.as_str()));
             let unit = out.iter_mut().find(|a| {
-                matches!(&a.code, nazm_lir::backend::Code::Llvm(ir) if ir.contains(".init() {"))
+                matches!(&a.code, nazm_lir::backend::Code::Llvm(ir)
+                    if init.as_ref().is_some_and(|i| ir.contains(&format!("define hidden void {i}"))
+                        || ir.contains(&format!("define internal void {i}"))))
             });
             match unit.map(|a| &mut a.code) {
                 Some(nazm_lir::backend::Code::Llvm(ir)) => {
-                    match crate::contract_wasm::adapter(ir, shape) {
+                    match crate::contract_wasm::adapter(ir, shape, native) {
                         Ok(text) => ir.push_str(&text),
                         Err(why) => refused.push(format!("contract adapter ({why})")),
                     }

@@ -1,0 +1,12 @@
+    clamp(max(x, y), 0, 100)
+}
+fn main() -> Int {
+    Int mut i = 0;
+fn main() -> Int {
+    if i == 0 {
+        break;
+in() -> Int {
+    add(1)
+    R
+    i
+}

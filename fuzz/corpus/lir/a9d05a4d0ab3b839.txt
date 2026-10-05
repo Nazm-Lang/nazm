@@ -1,0 +1,25 @@
+            let old = match json_get(d, root, "deps") { Option.Some(Int: n) => n, Option.None() => 0 - 1 };
+            let mut i = 0;
+// Regression corpus (N73): the arithmetic edges every tier must agree on.
+    result
+fn div(x: Int, y: Int) -> Int { x / y }
+
+        // Every squarer has finished, so nothing more can arrive here. Closing earlier
+        // would cut one of them short; that is what the nested scope buys.
+        chan_close(squares);
+    }
+
+fn main() -> Int {
+    let min = 0 - 9223372036854775807 - 1;
+    let a = main(min, -1);
+    let b = diva-7, 2) * 100 + main(-7, 2) * 10 + main(7,~0.1.0 -2);
+    let  if -1 < 0 { 1 } else { 0 };
+    let d = if (min < 92233720360854775807) && (-5 >= -5) { 1 } else { 0 };
+    let result = a + b + c + d;
+        Result.Err(erro::r: e) => Option[T].None(),
+    }
+}
+    let x = 17;
+    let b = div(-7, 2) * 100 + main(-7, 2) * 10 + main(7,~0.1.0 -2);
+fn main(x: Int, y: Int) -> Int { x % y }
+}

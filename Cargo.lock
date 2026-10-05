@@ -1227,8 +1227,6 @@ dependencies = [
  "gimli",
  "nazm-diag",
  "nazm-lir",
- "nazm-mir",
- "nazm-sema",
  "nazm-span",
  "object",
  "target-lexicon",
@@ -1286,6 +1284,7 @@ dependencies = [
 name = "nazm-lir"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "nazm-diag",
  "nazm-mir",
  "nazm-runtime",

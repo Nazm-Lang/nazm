@@ -391,6 +391,13 @@ carries `reexport` and the defining module's identity; `reexported_types`), and
 `nazm.api-doc/1` → `nazm.api-doc/2` (a re-export is an item of kind `reexport` with `of`, the identity it
 offers).
 
+**Applied to N105, one LIR both backends consume.** No code appeared: a module LIR's validator refuses
+is still `N0900`, a compiler defect, and its message names the function and the broken rule. One
+schema moved: `nazm.lir/1` → `nazm.lir/2`, additive — each unit carries `lir`, its instruction-level
+LIR as text (what `nazm lir --ops` prints) and that text's BLAKE3 `digest`, validated before it is
+shown. `nazm lir --run` (LIR's interpreter) writes the program's own output and status, and exits 4,
+naming what it does not run, for a program outside its subset.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

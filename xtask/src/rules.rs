@@ -69,16 +69,12 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // The formal core (N61): its semantics owes nothing to the compiler; only its tests —
         // a dev-dependency — run the compiler, to hold it to the semantics.
         "nazm-formal" => &["nazm-core"],
-        // The Cranelift backend, N41: validated MIR and the backend boundary `nazm-lir` holds,
-        // and nothing above them — not Core IR, not the checker, not the syntax tree. The one
-        // crate besides `xtask` that may depend on a code generator (`may_depend_on_codegen`).
-        "nazm-codegen-clif" => &[
-            "nazm-span",
-            "nazm-diag",
-            "nazm-sema",
-            "nazm-mir",
-            "nazm-lir",
-        ],
+        // The Cranelift backend, N41: since N105 it translates LIR and reads nothing else of
+        // the compiler — not MIR, not the checker, not Core IR, not the syntax tree. A backend
+        // that could see MIR could decide a rule LIR already decided, and the two backends
+        // would drift apart again (`docs/architecture.md` §7.106). The one crate besides
+        // `xtask` that may depend on a code generator (`may_depend_on_codegen`).
+        "nazm-codegen-clif" => &["nazm-span", "nazm-diag", "nazm-lir"],
         // The driver library and the language service, N16. Through `nazm-core` only, like
         // the CLI and for the same reason: the service consumes the compiler's answers,
         // and a direct dependency on the parser or on `nazm-sema` would be the first step
@@ -264,12 +260,19 @@ mod tests {
     }
 
     #[test]
-    fn the_cranelift_backend_reads_mir_and_nothing_above_it() {
+    fn the_cranelift_backend_reads_lir_and_nothing_above_it() {
         let clif = allowed_internal_deps("nazm-codegen-clif").unwrap();
-        for above in ["nazm-cir", "nazm-core", "nazm-syntax", "nazm-service"] {
+        for above in [
+            "nazm-mir",
+            "nazm-sema",
+            "nazm-cir",
+            "nazm-core",
+            "nazm-syntax",
+            "nazm-service",
+        ] {
             assert!(!clif.contains(&above), "{above}");
         }
-        assert!(clif.contains(&"nazm-mir") && clif.contains(&"nazm-lir"));
+        assert!(clif.contains(&"nazm-lir"));
         assert!(may_depend_on_codegen("nazm-codegen-clif"));
         assert!(!may_depend_on_codegen("nazm-lir") && !may_depend_on_codegen("nazm-cli"));
     }
