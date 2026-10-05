@@ -1045,10 +1045,7 @@ replace = "r"
     fn an_entry_without_a_killer_must_say_why() {
         let w = workspace();
         let bad = validate(w.path(), &cat(ONE));
-        assert!(
-            bad.iter().any(|b| b.contains("has no killer")),
-            "{bad:?}"
-        );
+        assert!(bad.iter().any(|b| b.contains("has no killer")), "{bad:?}");
         let said = cat(&format!("{ONE}no_killer = \"a known survivor\"\n"));
         assert!(validate(w.path(), &said).is_empty());
         let blank = cat(&format!("{ONE}no_killer = \"  \"\n"));

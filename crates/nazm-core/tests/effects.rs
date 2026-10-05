@@ -371,9 +371,14 @@ fn a_large_call_graph_settles_without_recursion_or_explosion() {
     let mut src = String::new();
     let n = 2000;
     for i in 0..n {
-        src.push_str(&format!("fn c{i}(out: OutCap) -> Int {{ c{}(out) }}\n", i + 1));
+        src.push_str(&format!(
+            "fn c{i}(out: OutCap) -> Int {{ c{}(out) }}\n",
+            i + 1
+        ));
     }
-    src.push_str(&format!("fn c{n}(out: OutCap) -> Int {{ print(\"end\") }}\n"));
+    src.push_str(&format!(
+        "fn c{n}(out: OutCap) -> Int {{ print(\"end\") }}\n"
+    ));
     let fan = 300;
     // Flat statements, not a 300-deep `+` chain: the fan-out is wide, not nested.
     src.push_str("fn wide(out: OutCap) -> Int { let mut t = 0;");

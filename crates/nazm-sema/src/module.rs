@@ -92,7 +92,9 @@ impl ReexportItem {
     /// The name it is offered under: its alias, or its own.
     #[must_use]
     pub fn offered(&self) -> &str {
-        self.alias.as_ref().map_or(self.name.as_str(), |(a, _)| a.as_str())
+        self.alias
+            .as_ref()
+            .map_or(self.name.as_str(), |(a, _)| a.as_str())
     }
 }
 

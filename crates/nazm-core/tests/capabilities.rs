@@ -216,7 +216,11 @@ fn an_undeclared_function_holds_what_it_exercises() {
         fn f(io: IoCap) -> Int ! { io } { helper() }\n\
         fn main(io: IoCap) -> Int { f(io) }\n";
     let d = refused_at(src, codes::MISSING_AUTHORITY, at(src, "print"));
-    assert!(d.message.contains("`inner` holds no `OutCap`"), "{}", d.message);
+    assert!(
+        d.message.contains("`inner` holds no `OutCap`"),
+        "{}",
+        d.message
+    );
     // Threaded from `main`, as a parameter at every level, it is accepted.
     accepted(
         "fn inner(out: OutCap) -> Int { print(\"deep\") }\n\

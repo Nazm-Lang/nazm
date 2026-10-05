@@ -1042,7 +1042,9 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                     .map(|n| n.span())
                     .collect();
                 let in_a_trait = |span: nazm_span::Span| {
-                    traits.iter().any(|s| s.start <= span.start && span.end <= s.end)
+                    traits
+                        .iter()
+                        .any(|s| s.start <= span.start && span.end <= s.end)
                 };
                 let a_type_parameter = |span: nazm_span::Span, text: &str| {
                     params.iter().any(|(s, names)| {

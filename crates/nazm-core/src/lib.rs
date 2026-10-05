@@ -20,8 +20,8 @@ pub use nazm_cir as cir;
 
 pub use check::{
     check, check_reusing, check_unit, declare_trait_methods, declare_types, declare_unit,
-    declared_interfaces,
-    resolve_type_fields, validate_type_layouts, CheckEverything, Reuse, Signature, Unit,
+    declared_interfaces, resolve_type_fields, validate_type_layouts, CheckEverything, Reuse,
+    Signature, Unit,
 };
 pub use eval::{Interpreter, RuntimeError, Value};
 // `Type`, `Intrinsic` and `Resolution` moved to `nazm-syntax` on 2026-09-21, so the
