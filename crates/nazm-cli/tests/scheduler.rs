@@ -262,15 +262,16 @@ fn a_receiver_waiting_on_an_empty_channel_is_woken_by_a_send() {
 fn a_task_has_exactly_the_authority_it_is_handed() {
     // Passed: a declared child prints with the `IoCap` it was given.
     let passed = "fn child(io: IoCap, n: Int) -> Int ! { io } { print(int_to_str(n)) }\n\
-                  fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(io, 7, io); } 0 }\n\
+                  fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(io, 7); } 0 }\n\
                   fn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }\n";
     agrees(passed, "70");
     // Withheld: a declared child cannot print without one, whatever its spawner holds.
-    let withheld = "fn child(n: Int, out: OutCap) -> Int ! { io } { print(int_to_str(n)) }\n\
-                    fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(7, io); } 0 }\n\
+    let withheld = "fn child(n: Int) -> Int ! { io } { print(int_to_str(n)) }\n\
+                    fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(7); } 0 }\n\
                     fn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }\n";
     assert!(check_codes(withheld).contains(&"N0369".to_owned()));
-    // An undeclared child exercises its spawner's authority, so the spawner must hold it.
+    // An undeclared child has no authority of its own to borrow (N104): it is refused where it
+    // prints, whatever its spawner holds.
     let bridged = "fn child() -> Int { print(\"x\"); 0 }\n\
                    fn run(t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(); } 0 }\n\
                    fn main(io: IoCap, t: SpawnCap) -> Int { run(t) }\n";
