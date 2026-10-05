@@ -405,6 +405,15 @@ the compiler written in Nazm at parity (N102), re-exports (N103), authority (N10
 (N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
 catalogue (N108).
 
+### N105 — one LIR both backends consume — **complete, 2026-10-05; area 10 VERIFIED (v2)**
+
+`architecture.md` §7.106 first. An instruction-level LIR in `nazm-lir/src/op/`, lowered from MIR once,
+decides every failure, guard, offset, runtime call and retain or release; LLVM prints it and Cranelift
+translates it, and Cranelift may no longer depend on MIR. A validator and an interpreter of LIR — the
+oracle, for the sequential subset — with hand-written expectations and a fifth fuzz tier; `--layout
+soa` on both backends; `nazm.lir/2`; the Cranelift object key is the LIR's digest. Epoch, interface
+schema and runtime ABI unchanged. Next: N106.
+
 ### N104 — authority is a parameter — **complete, 2026-10-05; area 6 stays PARTIAL**
 
 `architecture.md` §7.105 first. The authority bridge removed: no function exercises its caller's

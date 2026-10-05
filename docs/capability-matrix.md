@@ -73,7 +73,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 7 | Provenance and information flow (language) | PARTIAL — explicit flow by cell, target and field (N80); no implicit flow, no labels a program writes |
 | 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | VERIFIED (v1) |
-| 10 | LIR and the backend contract | PARTIAL — bytes, ownership and `nazm.lir/1` owned by LIR and validated (N81); operations still translated per backend |
+| 10 | LIR and the backend contract | VERIFIED (v2) — one instruction-level LIR, lowered once, that LLVM prints and Cranelift translates; validated; LIR's interpreter the oracle for the sequential subset; `nazm.lir/2` (N105) |
 | 10a | Per-module code generation and linking | VERIFIED |
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
@@ -95,13 +95,16 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 27 | Debugger and profiler | PARTIAL — lexical scopes, Cranelift line tables and a sampling profiler on macOS (N91); no Cranelift variables, no DAP |
 | 28 | Performance measurement | PARTIAL — every measured claim filed in a gated register (N92): 10 reproducible, 53 dated, 8 current claims unreproduced |
 | 29 | Differential testing | VERIFIED |
-| 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of four targets with a replayed corpus (N93); no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
+| 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of five targets with a replayed corpus (N93; `lir`, N105); no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL — a stated five-part model, signed in-toto statements and a CycloneDX SBOM (N94); one host and one image, no transparency log |
 | 33 | Platform and target matrix | PARTIAL — every cell run-verified, compile-only or unsupported (N95): 9 run, 2 compile-only, 3 unsupported; x86_64 Linux not run |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72); both VMs held to the simulator on generated sequences (N96) |
 
-After N100, 2026-10-04 (`docs/audit-n100.md`): twenty-two VERIFIED (several as scoped, area 30 for
+After N105, 2026-10-05: twenty-three VERIFIED (area 10 moved: one LIR both backends translate, with its
+oracle), fourteen PARTIAL, none RESEARCH or MISSING. N101–N104 moved no row.
+
+*Historical.* After N100, 2026-10-04 (`docs/audit-n100.md`): twenty-two VERIFIED (several as scoped, area 30 for
 mutation testing), fifteen PARTIAL, none RESEARCH or MISSING; BLOCKED parts named inside areas 12
 (JIT), 34 (sBPF) and the formal evidence (proofs). Nothing moved between N88 and N100: N89–N99
 widened PARTIAL rows and measured them. The zero-partial objective is not met.
@@ -1191,7 +1194,57 @@ partial-construction slots and `?` completion rules, and the emitter's cleanup b
 `owned`, `outstanding`, `building` and `frame` sets and every per-exit release decision — are
 gone; a validator and a mechanical gate keep the boundary.
 
-### 10. LIR and the backend contract — PARTIAL
+### 10. LIR and the backend contract — VERIFIED (v2, N105: one instruction-level LIR both backends translate)
+
+*N105, 2026-10-05: one LIR both backends consume — VERIFIED; LIR validator v2 — VERIFIED; LIR
+oracle interpreter — VERIFIED for the sequential subset (tasks, channels, C and the clock refused by
+name); `nazm.lir/2` — VERIFIED.* `architecture.md` §7.106 is the constitution, written before the
+code. `crates/nazm-lir/src/op/` is an instruction set below MIR: values of a machine class (`bit`,
+`i8`, `i32`, `i64`, `ptr`) defined once and used where they dominate, variables, stack slots, loads
+and stores at byte offsets, wrapping and overflow-checked arithmetic, comparisons, selects, calls
+direct, indirect and to the runtime, copies, and source positions. `op/lower.rs`, `func.rs`,
+`prims.rs`, `helpers.rs` and `soa.rs` lower each unit's MIR to it once, and that lowering is the
+only place a failure's code, message and position, a guard and its order, an offset, a runtime
+entry, or a retain or release is decided. The LLVM backend is a printer of it (`op/llvm.rs`); the
+Cranelift backend a translator of it (`nazm-codegen-clif/src/translate.rs`), and since N105 may not
+depend on `nazm-mir` at all (`xtask/src/rules.rs`,
+`the_cranelift_backend_reads_lir_and_nothing_above_it`). The old per-backend lowerings are deleted:
+`nazm-lir/src/emit.rs` (4,405 lines) and Cranelift's `func.rs`, `prims.rs`, `helpers.rs`, `unit.rs`
+and `layout.rs` (2,963). `op/validate.rs` checks every module before either backend sees it —
+definition before use under dominance, classes, every symbol, slot, variable and block, every call
+against its callee's signature, every return against its function's — and a broken module is
+`N0900`; `validate::tests` breaks each rule by hand and requires it named. `op/interp.rs` executes
+LIR against a model of the runtime's services and is `nazm lir --run`.
+
+**Independent evidence** · `crates/nazm-cli/tests/lir_oracle.rs`: programs with answers worked out
+by hand — arithmetic and both failure codes, `Int::MIN % -1`, control flow and recursion, strings and
+sequences, records, enums and equality, closures in vectors, the program's arguments — each run on
+the oracle, LLVM `-O0` and `-O2` and Cranelift, all four required to equal the hand-written answer
+(and a program with tasks refused by the oracle, not answered). `crates/nazm-cli/tests/fuzz_diff.rs`
+gains the oracle as a fifth tier beside the tree-walking interpreter (independent of LIR): the default
+run and 300 further generated programs (seed 105105) agree on all five. The coverage fuzzer gains an
+`lir` target (`fuzz/src/main.rs`): a checked program's LIR must validate and run without the oracle
+finding a defect. `crates/nazm-cli/tests/layout.rs`: `--layout soa`, refused on Cranelift until N105,
+is LIR's now and agrees on both backends. **Falsifier, run:** the host suite (2,424 tests in 196 binaries, the selfhost
+suite refusing to run uncontained), and contained: the workspace (2,464 passed, 0 failed, 46 ignored),
+selfhost (43 of 43), bootstrap (C2 = C3, 34 conformance cases and 29 refusals agreeing) and the `lir`
+fuzz target (319,609 executions in 300 s, no crash); the 76
+historical mutants on the deleted code repointed at the LIR and each caught by a named killer.
+
+**What N105 found** · Two-backend agreement is no evidence for a decision both now share. Eleven of
+the 76 repointed mutants survived their old killers, which compared LLVM with Cranelift; each now
+has a killer with an independent expectation (the memory suite's counts, a unit test, or a
+hand-written answer), and three new tests exist for that reason
+(`a_reassigned_sequence_is_released_once_when_a_failure_follows`,
+`a_c_bool_is_zero_extended_and_an_internal_one_is_not`,
+`a_state_field_is_found_at_its_canonical_offset_not_its_declared_one`). The Cranelift object key was
+MIR without positions until N105 and reused an object reporting a moved failure at its old line; it
+is now the unit's LIR digest, which carries every position, with the translator's revision.
+
+**Limitation** · The oracle runs the sequential subset only: a program with tasks, channels, a
+foreign call or the clock is refused (status 4), and those are held by backend agreement and the
+memory and concurrency suites as before. The runtime itself is LLVM text both backends link (area 13),
+not LIR. No optimisation happens in LIR; clang's and Cranelift's do.
 
 *N81, 2026-10-03: Target data layout v1 — VERIFIED; Byte layouts owned by LIR v1 — VERIFIED;
 Ownership table v1 — VERIFIED; Layout validator v1 — VERIFIED; `nazm.lir/1` — VERIFIED. One
@@ -1207,9 +1260,10 @@ handles with nothing else moving, ownership through containment, refusals, and a
 every shape agreeing on the interpreter, LLVM and Cranelift; `abi::tests` — the validator naming
 each broken invariant; `schemas.rs`; the N73 fuzzer generating a three-width record inside an
 enum's payload on every tier. **Falsifier, run:** every program in the repository built with both
-backends by N79 and by N81 produced byte-identical objects. **Still PARTIAL**: each backend still
-translates MIR's operations itself, so their agreement is tested, not constructed; LLVM's enum is
-the product of its variants, not the tagged union these tables describe.
+backends by N79 and by N81 produced byte-identical objects. *N81 left the row PARTIAL because each
+backend still translated MIR's operations itself, so their agreement was tested, not constructed, and
+LLVM's enum was the product of its variants, not the tagged union these tables describe; N105 closed
+both — one lowering, and both backends lay every value out by these tables.*
 
 **Evidence** · Since N40 `crates/nazm-lir` reads **validated MIR** (area 9) and nothing of the
 checker: `lower.rs` settles layout (canonical by name, from the order MIR carries), symbols from
@@ -2974,6 +3028,13 @@ invisible to all five. `docs/spec.md` names what must be settled before
 **Accepted when** · Met.
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — PARTIAL (N73; MISSING until then)
+
+*N105, 2026-10-05: a fifth fuzz target and an oracle tier.* `lir` (`fuzz/src/main.rs`): a checked
+program's instruction-level LIR must validate and run on LIR's interpreter without a defect; run
+contained for 300 s — 319,609 executions, 19,245 edges, no crash, no hang — and its minimised corpus
+(532 inputs) is `fuzz/corpus/lir/`. The N73 differential gains LIR's interpreter as a fifth tier. The
+mutation catalogue: 76 entries on code N105 deleted repointed, 18 retired with their reasons, 8 new
+(`n105-*`), each new or repointed one caught by its named killer on the host.
 
 *N101, 2026-10-05: no silent tier.* `architecture.md` §7.102. N100's one survivor,
 `n79-a-held-io-cap-is-read-alone`, is reachable and caught by
