@@ -8794,3 +8794,29 @@ span tables. Contained, `compiler/check` 213.7 → 180.2 ms. The bench baseline 
 tree. Mutants: seven new (`n106-*`), two repointed (`n15-nodes-at-one-place-nest-inside-out`,
 `n53-the-runtime-abi-stays`), and N83's nine re-verified against the tests that now ask for threads
 by name.
+
+## 7.108 The core's scope, audited — N107, 2026-10-05
+
+Written before the audit's results. Five language-core rows are PARTIAL — 2 (resolution and modules),
+3 (types), 5 (effects), 6 (capabilities), 7 (provenance) — each for a list of features another
+language has. A row that is PARTIAL until it has every mechanism anyone has built is a checklist,
+and a checklist inflates a kernel law 12 says stays small. Owner: `docs/capability-matrix.md`, with
+this section as its reason.
+
+**The method, for every candidate gap.** The root problem the row exists for; what Nazm already
+does about it, with its evidence; whether the candidate is *required* — a program the repository or
+a stated goal needs and cannot write, or an unsound answer — or merely another language's
+mechanism; whether it conflicts with the small kernel; and whether a real Nazm use case asks for it.
+Required gaps stay, as named blockers or future work. Gaps that are not required leave the row, and
+the row's name and limitation say exactly what VERIFIED promises, with every absent construct still
+refused by name. **What may not happen:** a defect scoped away, a refusal turned into a silent
+absence, or a row renamed because the work is hard. Each candidate is first checked for being a
+defect — a wrong answer on a path a program takes — and a defect stays a defect.
+
+**Not in scope:** the ecosystem and domain rows (21 AI/HPC, 25 the language service, 26 packages,
+27 the debugger, 28 performance, 30's fuzzing half, 32 reproducibility, 33 platforms, 34 contracts),
+which N108 classifies; no code changes, so no epoch, schema, ABI or key moves.
+
+**What would prove the audit wrong:** a program in the repository, or one a stated goal describes,
+that the narrowed promise says Nazm handles and it does not; or a dropped candidate that turns out
+to be an unsound answer rather than a missing feature.
