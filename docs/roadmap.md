@@ -405,6 +405,15 @@ the compiler written in Nazm at parity (N102), re-exports (N103), authority (N10
 (N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
 catalogue (N108).
 
+### N106 — the pool by default; two regressions attributed — **complete, 2026-10-05; area 13 VERIFIED**
+
+`architecture.md` §7.107 first. N83's M:N pool is the default runtime on every hosted target with a
+switch; `threads` by name, any other name refused (`N0404`), a program that calls C on threads unless
+it asks; `nazm.cost/2` says which; runtime ABI 14. The `channels` build regression is the pool's
+runtime text, accepted; the check regression is N76's lossless tree and N80's provenance, with a sort
+and SipHash inside them removed (contained `compiler/check` 213.7 → 180.2 ms), the rest accepted; the
+bench baseline re-saved. Next: N107.
+
 ### N105 — one LIR both backends consume — **complete, 2026-10-05; area 10 VERIFIED (v2)**
 
 `architecture.md` §7.106 first. An instruction-level LIR in `nazm-lir/src/op/`, lowered from MIR once,

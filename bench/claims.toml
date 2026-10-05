@@ -377,3 +377,9 @@ why = "measured on the tree of its date by the method its prose describes, befor
 heading = "The compiler written in Nazm at parity — N102, measured 2026-10-05"
 status = "unreproduced"
 why = "measured once on the host with the debug binary by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
+
+[[claim]]
+heading = "The default scheduler and the two regressions — N106, measured 2026-10-05"
+status = "reproducible"
+how = "cargo test --release -p nazm-cli --test scheduler_default -- --ignored --nocapture what_the_default_scheduler_costs"
+metric = "spawn and join, a round trip, a parked receive woken, and resident memory per live task, on the pool and on threads; the regressions' contained numbers are `cargo xtask contained bench`'s"

@@ -391,6 +391,13 @@ carries `reexport` and the defining module's identity; `reexported_types`), and
 `nazm.api-doc/1` → `nazm.api-doc/2` (a re-export is an item of kind `reexport` with `of`, the identity it
 offers).
 
+**Applied to N106, the pool by default.** No new code. `N0404`, *this task could not be started*,
+is now provoked on purpose as well: a `NAZM_SCHEDULER` that names neither `pool` nor `threads` starts
+no task, and the first `spawn` reports it at its span — the unprovokable list lost it. One schema
+moved: `nazm.cost/1` → `nazm.cost/2`, additive — `scheduler`, `null` for a program that starts no
+task, otherwise `default` (`pool` or `threads`), `why`, `workers`, `task_stack_bytes` and the
+`environment` that changes it.
+
 **Applied to N105, one LIR both backends consume.** No code appeared: a module LIR's validator refuses
 is still `N0900`, a compiler defect, and its message names the function and the broken rule. One
 schema moved: `nazm.lir/1` → `nazm.lir/2`, additive — each unit carries `lir`, its instruction-level

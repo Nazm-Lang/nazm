@@ -2832,6 +2832,60 @@ The map is a sorted array: an insertion moves every entry after it, so building 
 quadratic; at 10,000 keys that is the cost above. A hash map needs hashing in the library, and is not
 in 1.0. Sorting is a merge sort through `vec_sort_by`, its comparison an indirect call.
 
+### The default scheduler and the two regressions — N106, measured 2026-10-05
+
+**Hypothesis:** the pool, now the default, keeps N83's advantage over threads; and the two
+regressions N92 recorded have causes inside the milestones that introduced them, which can be named,
+and — where they are not the price of a feature — removed.
+
+**The scheduler.** `cargo test --release -p nazm-cli --test scheduler_default -- --ignored --nocapture
+what_the_default_scheduler_costs`: each program built at `-O2`, five runs, median, resident set from
+`/usr/bin/time`; Apple M1 Pro, macOS 27.2, page size 16 KiB. Per operation, process start included:
+
+| | Pool (the default, 4 workers) | Threads (`NAZM_SCHEDULER=threads`) |
+| --- | ---: | ---: |
+| Spawn and join one task (50,000) | 6.66 µs | 26.07 µs |
+| Round trip `main` ↔ a task over two `Chan`s (50,000) | 4.51 µs | 4.24 µs |
+| A blocked receive woken, scope and channel made each time (20,000) | 7.75 µs | 24.63 µs |
+| 1,000 tasks alive at once | 19.8 MB, 17.8 KB per task, 41 ms | 20.4 MB, 18.4 KB per task, 816 ms |
+| 10,000 tasks alive at once | 179.9 MB, 17.8 KB per task, 387 ms; **4 OS threads** | not run: 10,000 OS threads |
+
+Logical tasks against OS threads: the pool's report line says `workers=4 peak=10000` for the last
+row — ten thousand tasks on four threads. A round trip with `main` still crosses threads (`main`
+is not a pool task), so it is no cheaper on the pool; starting a task and waking a parked one are
+about three times cheaper. Memory per task is the stack page it touches and its record, as N83
+found: the pool saves threads and start-up, not bytes. Not measured: Linux, where the suite runs on
+the pool by default but nothing here was timed.
+
+**The regressions, attributed.** Release builds of each milestone's commit on the host, and
+samples of the phase harness (`core_ir.rs`'s `what_each_phase_costs_on_the_compiler`) with symbols.
+
+*`channels` builds, 13–31 % slower:* N83. The commit before the pool (`9ae0e55`) builds `channels.nz`
+as N75 does — 149 and 200 ms at `-O0` and `-O2` (`--no-cache`, eleven runs, median), against N75's
+151 and 203 — and the pool's commit (`5e63d32`) in 181 and 261: the runtime unit grew from 38,322 to
+62,537 bytes of LLVM text (clang `-O2` on it alone: 69 → 102 ms) and a `switch` unit joined it. It is
+the pool's code, which is now the default runtime's: **accepted**, and paid once — the runtime's
+object is reused by every warm build, keyed by its digest.
+
+*Checking the compiler written in Nazm, 54 % slower:* N76 and N80, as N92 located, and now inside
+them. Of the time `analyse_parsed` spends on `compiler/emit.nz` and what it imports, the lossless
+tree (N76) is about a third — `cst::Builder::leaf`, interning each leaf's text, `finish_node`, the
+lossless lexer — and provenance (N80) about a fifth (`provenance::solve`). Two parts of that were not
+the features' necessary cost and were removed: a comparison sort ordering node openings (a tenth of
+a parse; a counting pass gives the same order in linear time), and SipHash in the interner and in
+the resolver's span-keyed tables (about a tenth of a check; the multiply-rotate hash rustc's tables
+use, `nazm_span::fast`). The fixed-input program — a 3,001-function chain, the same text at every
+milestone — parsed in 15.1 ms at N75, 19.0 before N106 and 15.5 after; checked in 14.5, 17.0 and
+15.5. **Contained** (`cargo xtask contained bench`, one CPU, Linux aarch64, at N105 and at N106's
+tree): `compiler/check` 213.7 → 180.2 ms, every other measurement within noise. The compiler's own
+source grew by 31 % since N92 (609 → 797 KB), which is the rest of the distance from N92's 165.6 ms:
+per kilobyte of source, 0.177 ms at N75, 0.272 at N92, 0.226 at N106. What remains above N75 is the
+lossless tree and provenance — **accepted** as the cost of the formatter, the language service and
+information-flow checking, and stated.
+
+**Held from now on:** `bench/baseline-linux-aarch64.json` is re-saved at N106's tree, so
+`cargo xtask contained bench` flags either cost growing again by more than 25 % and 5 ms.
+
 ### The task pool — N83, measured 2026-10-04
 
 **Hypothesis:** tasks on a bounded pool start faster than threads, wait as cheaply, and let far more
