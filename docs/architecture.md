@@ -8773,3 +8773,24 @@ LIR schemas unchanged. Every object key moves with the runtime's revision and di
 the pool in the compiler written in Nazm. **What would prove this wrong:** a program that is correct
 on threads and deadlocks, fails or answers differently on the default; the suite not passing on the
 default; a `NAZM_SCHEDULER` value accepted as something it does not say.
+
+**As built (N106, 2026-10-05).** As written, with three corrections, each now the record:
+
+- *The revision was 13, not 5:* the constitution read an old count; the runtime ABI moves 13 → 14.
+- *The policy is a runtime global, not a weak one.* The first form declared `nz.pool_policy`
+  `extern_weak` for the entry to define; on macOS a weak reference resolves only against a dylib,
+  so a library and the C harness that links the runtime alone failed to link. The runtime defines it
+  (2, the pool) and the entry of a program that calls C stores 1 before `main` runs; a library, which
+  has no entry, keeps the pool.
+- *"Calls C" is the program's declaration, not the linked runtime.* Cranelift links every part of the
+  runtime, C's included, so a policy read from the runtime's parts ran every Cranelift program on
+  threads; the build asks whether any unit declares a foreign function.
+
+The regressions, as measured (`performance.md`, N106): the `channels` build's is N83's pool text,
+accepted; the check's is N76's lossless tree and N80's provenance, a third and a fifth of the
+analysis, with a comparison sort and SipHash inside them removed — a counting pass orders node
+openings, and `nazm_span::fast` (multiply-rotate, FxHash's) keys the interner and the resolver's
+span tables. Contained, `compiler/check` 213.7 → 180.2 ms. The bench baseline is re-saved at this
+tree. Mutants: seven new (`n106-*`), two repointed (`n15-nodes-at-one-place-nest-inside-out`,
+`n53-the-runtime-abi-stays`), and N83's nine re-verified against the tests that now ask for threads
+by name.

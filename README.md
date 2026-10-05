@@ -438,9 +438,10 @@ Almost everything. Specifically:
   true now. Everything under *Open* is undecided.
 - **Concurrency is an initial model, and only that.** `scope`, `spawn` and a bounded
   `Chan` of `Int`, specified in `docs/spec.md` before being implemented, running
-  interpreted and compiled. **One operating-system thread per task and nothing more**:
-  no M:N scheduling, no work stealing, no task density, no fairness, no deadlock
-  freedom, and no cancellation beyond closing a channel. **Superseded 2026-09-21:** this
+  interpreted and compiled. Compiled programs run their tasks on a bounded pool of worker
+  threads by default (N106; `NAZM_SCHEDULER=threads` for one thread per task); the
+  interpreter uses a thread per task. No work stealing, no preemption, no fairness, no
+  deadlock freedom, and no cancellation beyond closing a channel. **Superseded 2026-09-21:** this
   entry used to end *"The compiler written in Nazm does not accept it — concurrency is
   outside the bootstrap subset, and says so by name."* It does accept it. The Nazm-written
   compiler parses, checks and lowers `scope`, `spawn` and `Chan`, emitting the same task
