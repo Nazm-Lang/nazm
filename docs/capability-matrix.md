@@ -78,9 +78,9 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
 | 12 | Cranelift backend | VERIFIED (v1, native subset, host) |
-| 13 | Runtime | PARTIAL (v1 contract VERIFIED; a built, versioned, verified artifact, N82) — one OS thread per task |
+| 13 | Runtime | VERIFIED (v1 contract; a built, versioned, verified artifact, N82; M:N tasks on bounded workers by default, N106) — no allocator of its own, runtime still text |
 | 14 | Structured concurrency | VERIFIED |
-| 15 | Advanced scheduler | VERIFIED as scoped (N83): an opt-in M:N pool, `NAZM_SCHEDULER=pool`, macOS aarch64 and x86-64; Linux compile-only; no stealing or preemption |
+| 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
 | 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; no networking, cryptography or floats |
 | 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
@@ -101,7 +101,10 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL — every cell run-verified, compile-only or unsupported (N95): 9 run, 2 compile-only, 3 unsupported; x86_64 Linux not run |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72); both VMs held to the simulator on generated sequences (N96) |
 
-After N105, 2026-10-05: twenty-three VERIFIED (area 10 moved: one LIR both backends translate, with its
+After N106, 2026-10-05: twenty-four VERIFIED (area 13 moved: the M:N pool by default, its policy
+stated), thirteen PARTIAL, none RESEARCH or MISSING.
+
+*Historical.* After N105, 2026-10-05: twenty-three VERIFIED (area 10 moved: one LIR both backends translate, with its
 oracle), fourteen PARTIAL, none RESEARCH or MISSING. N101–N104 moved no row.
 
 *Historical.* After N100, 2026-10-04 (`docs/audit-n100.md`): twenty-two VERIFIED (several as scoped, area 30 for
@@ -1498,7 +1501,26 @@ convention and layout; nothing passes a value between code the two backends gene
 
 ## Runtime and concurrency
 
-### 13. Runtime — PARTIAL (the v1 contract VERIFIED; its own crate since N53; no scheduler)
+### 13. Runtime — VERIFIED (the v1 contract; the M:N pool by default since N106; no allocator, and text, not a Rust crate)
+
+*N106, 2026-10-05: the pool by default — VERIFIED; the C policy — VERIFIED; a refused scheduler name
+— VERIFIED; a deterministic single-worker mode — VERIFIED.* `architecture.md` §7.107, written first.
+With `NAZM_SCHEDULER` unset a native program's tasks run on N83's pool — `NAZM_WORKERS` (4) workers,
+each task a guarded `NAZM_TASK_STACK` (256 KiB) stack — on every hosted target with a switch;
+`threads` asks for a thread per task, `pool` for the pool, and any other value starts no task
+(`N0404`). A program that calls C runs a thread per task unless the pool is asked for — a task
+blocked in C would hold its worker — and `nazm explain-cost` says which scheduler and why
+(`nazm.cost/2`). Runtime ABI revision 14 (`nz.pool_policy`, stored by the entry before `main`).
+Evidence: `crates/nazm-cli/tests/scheduler_default.rs` — the default on both backends with the same
+output, ending and reports as on threads; ten thousand tasks on four workers
+(`workers=4 peak=10000`); four names refused; the C policy on both backends and in the cost report;
+one worker giving the same order five times — and the whole suite, host (macOS aarch64) and
+contained (Linux aarch64), running every native program on the default. x86-64 macOS under Rosetta:
+a channel program runs on the pool by default. `docs/performance.md` (N106): spawn and join 6.7 µs
+against 26.1 on threads, a parked receive woken 7.8 against 24.6, 17.8 KB per live task. **Scope:**
+the interpreter and the compiler written in Nazm keep a thread per task; no work stealing,
+preemption or hand-off of a blocking C call.
+
 
 **Evidence** · N43 (2026-10-01): `architecture.md` §7.45 is the runtime constitution, written
 first. The runtime is LLVM text generated into each program, emitted only for the parts reached,
@@ -1524,16 +1546,18 @@ threads started with an 8 MiB stack (`a_task_thread_has_the_stack_the_check_budg
 | Failure classes | VERIFIED | language, host-refused, I/O and explicit exit distinguished; a `Result` never becomes one (`an_err_is_data_and_never_a_failure`) |
 | Portable core, one OS adapter | VERIFIED | `a_runtime_calls_the_operating_system_only_through_the_adapter`; the same POSIX surface on every v1 target |
 | A built, versioned, verified runtime artifact (N82) | VERIFIED | `nazm runtime build` writes `libnazmrt.a` and a `nazm.runtime/1` manifest per target and profile (hosted, board, wasm); `nazm build --runtime DIR` links it on both backends and refuses every artifact that does not fit, by name, before writing anything; `nazm runtime verify`. `crates/nazm-cli/tests/runtime_artifact.rs` (build and determinism, a program reaching every service identical with the artifact on both backends, nine refusals, profiles and a board's archive, provenance), `schemas.rs`; every program in the repository built both ways, 228 builds, identical output, ending and memory report |
-| A runtime crate, a scheduler, an allocator | MISSING | one OS thread per task (N44's); the runtime is still LLVM text, one implementation for every target |
+| A scheduler beyond one thread per task, by default | VERIFIED | N106: the pool, with its policy stated (`scheduler_default.rs`) |
+| A runtime crate, an allocator | MISSING | the runtime is still LLVM text, one implementation for every target; `malloc` is the C library's |
 
 **Limitation** · Still no `nazm-rt` crate: the runtime is text, so its tests link it with a C
 harness rather than call it from Rust. Thread safety is by construction (atomic string and channel
-counts, sequences confined by `N0321`), not by a sanitizer run. One OS thread per task.
+counts, sequences confined by `N0321`), not by a sanitizer run. *One OS thread per task* stood here
+until N106.
 
 **Next dependency** · N44's scheduler, and a reason for a runtime crate (stack switching, a custom
 allocator).
 
-**Accepted when** · For v1: met. For the area: a scheduler beyond one thread per task, with its
+**Accepted when** · For v1: met. For the area (met by N106): a scheduler beyond one thread per task, with its
 policy stated.
 
 ### 14. Structured concurrency — VERIFIED
@@ -1592,6 +1616,9 @@ and Cranelift agree on it. `crates/nazm-cli/tests/select.rs`, 9 tests; sixteen N
 **Accepted when** · Met for the model as specified.
 
 ### 15. Advanced scheduler — VERIFIED as scoped (N83)
+
+*N106, 2026-10-05: the pool is the default (area 13); the whole suite runs on it, on macOS aarch64 and,
+contained, Linux aarch64 — the Linux run N83 did not have.*
 
 *N83, 2026-10-04: M:N tasks on bounded workers v1 — VERIFIED (opt-in); suspension instead of a
 blocked worker — VERIFIED; per-task failure state and stack limit — VERIFIED; deadlines on parked
@@ -2898,6 +2925,15 @@ baseline target features only (NEON, SSE2), no per-build feature selection; x86_
 
 ### 28. Performance measurement — PARTIAL
 
+
+*N106, 2026-10-05: the two regressions since N75 attributed, one partly recovered, both accepted.*
+`performance.md` (N106). `channels` builds: N83's pool — the runtime unit grew from 38 to 62.5 KB of
+LLVM text and a `switch` unit joined it; the pool is the default runtime's now, paid once per cold
+build. Checking the compiler: N76's lossless tree (about a third of the analysis) and N80's
+provenance (about a fifth); a comparison sort and SipHash inside them removed — contained,
+the contained bench's compiler check 213.7 → 180.2 ms; the fixed-input chain back at N75's parse time. The baseline is
+re-saved at N106's tree, so the bench gate holds both. Eight claims are still unreproduced, so the
+area stays PARTIAL.
 **Evidence** · `xtask/src/bench.rs` times five stages per program plus the compiler's own
 source, with a correctness gate that refuses to time anything not producing its `.expected`
 output first. One discarded warm-up, then N runs, median compared. Peak RSS captured where

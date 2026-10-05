@@ -1547,7 +1547,7 @@ both native backends.
 | | |
 | --- | --- |
 | **What is checked** | The stack itself, not a count. On entry to every function that is in a call cycle (a cycle of calls; `spawn` starts a task on its own stack and closes none), the frame's address is compared with the thread's limit |
-| **The limit** | Computed once per thread, at its first check: that frame's address minus three quarters of the smaller of `RLIMIT_STACK` and 8 MiB. Task threads are created with 8 MiB, so no thread's budget exceeds its stack |
+| **The limit** | Computed once per thread, at its first check: that frame's address minus three quarters of the smaller of `RLIMIT_STACK` and 8 MiB. Task threads are created with 8 MiB, so no thread's budget exceeds its stack. A task on the pool — the default since N106 — has its own `NAZM_TASK_STACK` (256 KiB unless set) and a limit a quarter of the way up it, saved and restored at every switch, so deep recursion in a task meets `N0408` sooner there and is reported the same way |
 | **What a program sees** | `N0408`, *the native call stack is exhausted*, at the function entered, and then the failure unwinds like any other: what the frames own is released, an enclosing `scope` joins its tasks, and the process exits 2 with the diagnostic |
 | **What is guaranteed** | Unbounded recursion meets a check. A chain of non-recursive calls between two checks is bounded by the program's call graph but its stack is not measured: the guarantee holds while such a chain fits in the quarter kept as headroom (2 MiB at 8 MiB), and a program whose non-recursive frames are larger can still be killed by the operating system |
 | **What is not** | Tail calls are ordinary calls: no tail-call optimisation is performed or promised. Recursion depth is not bounded by the language, and the depth at which `N0408` arrives depends on frame sizes, the backend and the optimisation level |
@@ -2547,21 +2547,24 @@ program can write runs at reclamation.
 
 #### What this model does not promise
 
-**The runtime is one operating-system thread per task, and that is all it is.** That is
-true of both implementations: `nazm run` uses a thread per task and a mutex and condition
-variable per channel, and `nazm build` emits `pthread_create`, `pthread_join` and the
-same mutex-and-condition-variable ring. The two are written the same way on purpose, so
+**The runtime was one operating-system thread per task until N106.** `nazm run` still is: a
+thread per task and a mutex and condition variable per channel. `nazm build`'s programs run their
+tasks on a pool of worker threads by default (§7.107), parking a task that waits instead of its
+worker, with the same mutex-and-condition-variable ring; `NAZM_SCHEDULER=threads` gives the thread
+model, `pthread_create` and `pthread_join` per task. The two are written the same way on purpose, so
 that they agree by construction rather than by testing — though they are tested against
 each other as well, at both optimisation levels.
 
 Every one of the following is *not* claimed, because none of it is implemented:
 
-- No M:N scheduling by default, and no work stealing. A program that spawns ten thousand tasks
-  will try to create ten thousand OS threads — unless it runs with `NAZM_SCHEDULER=pool` (N83,
-  `architecture.md` §7.84), which runs a native program's tasks on `NAZM_WORKERS` threads, parking a
-  task that waits instead of its worker. The pool changes how tasks are carried, never what a program
-  means: the same output, ending and memory report. A task's stack is then `NAZM_TASK_STACK` bytes
-  (256 KiB by default), and recursion past it is `N0408`.
+- No work stealing and no preemption. A native program's tasks run on `NAZM_WORKERS` threads by
+  default (N83's pool, the default since N106, `architecture.md` §7.107): a task that waits is parked
+  and its worker freed; a task that computes without waiting holds its worker. `NAZM_SCHEDULER` is
+  `pool` or `threads`; any other value starts no task (`N0404`). A program that calls C runs a thread
+  per task unless the pool is asked for, because a task blocked in C would hold its worker and every
+  task on it. The scheduler changes how tasks are carried, never what a program means: the same
+  output, ending and memory report. A pool task's stack is `NAZM_TASK_STACK` bytes (256 KiB by
+  default), and recursion past it is `N0408`. The interpreter runs a thread per task.
 - **No deadlock freedom.** Two tasks that each wait for the other wait forever. Nothing in
   the capture rules prevents it, and no ownership discipline implies it. Neither does a
   scope: it waits for its tasks unconditionally, so a body that blocks on a task that
