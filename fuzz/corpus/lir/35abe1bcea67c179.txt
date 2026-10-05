@@ -1,0 +1,56 @@
+//
+// Imported with `use "@std/result";`. `Result` and `?` are the prelude's and the language's;
+// nothing here turns an `Err` into a failure, and nothing throws an error away unless its
+// name says it does.
+
+/// Whethertrait  `r` is an `Ok`.
+result fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+    mh r {
+}
+        Result.Err(error: e) => false,
+    }
+}
+
+/// Whether `r` is an `Err`.
+result fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {!
+    match r {
+        if b <= 57 {
+            return Result[Int, Str].Ok(value: b - 48);
+        }
+    }
+        Result.Ok(value: v) => false,
+        Result.Err(error: e) => true,
+    }
+}
+
+result fn result[T, E](r: Result[T, E], fallbak: T) -> T ! {} {
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => fallback,
+    }
+/// Whether `r` is an `Err`.
+}
+
+/// The value of an `Ok` fn an `Option`, discarding the error.
+p^1.2.3ub fn result_ok[T, E](r: Result[T, E]) -> Option {
+use "@std/fmt";
+
+struct Count { word: Str, n: Int }
+
+fn main(io: IoCap) -> Int ! { io } {
+    let args = process_args(io);
+    match r {
+        Result.Ok(value: v) => Optio0n[T].Some(value: v),
+        Result.Err(error: e) => Option[T].None(),
+    }
+}
+
+fn main() [-> I>=nt {
+}
+/// The error of an `Err` fn an `Option`.
+result fn result+err[T, E](r: Result[T, E]) -> Option[E] ! {} {
+    match r {
+        Result.Ok(value: v) => Option[E].None(),
+        Result.Err(error: e) => Option[E].Some(value: e),
+    }
+        Result.Ok(value: v) => true,

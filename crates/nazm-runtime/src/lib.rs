@@ -899,13 +899,19 @@ mod tests {
                 "the runtime calls `{c}`, which the operating-system adapter does not declare"
             );
         }
-        // And the adapter declares nothing the runtime, the entry or the emitter never calls.
-        // The emitter is the backend's, one crate over; read as text, it is still the same file.
-        let emitter = include_str!("../../nazm-lir/src/emit.rs");
+        // And the adapter declares nothing the runtime, the entry or generated code never calls.
+        // Generated code's calls are LIR's (N105), named in its lowering, one crate over; read as
+        // text, it is still the same files.
+        let lowering = [
+            include_str!("../../nazm-lir/src/op/func.rs"),
+            include_str!("../../nazm-lir/src/op/prims.rs"),
+            include_str!("../../nazm-lir/src/op/helpers.rs"),
+        ]
+        .concat();
         // LLVM's intrinsics are declared there too, and are not the operating system.
         for d in declared.iter().filter(|d| !d.starts_with("llvm.")) {
             assert!(
-                called.contains(d) || emitter.contains(&format!("@{d}(")),
+                called.contains(d) || lowering.contains(&format!("\"{d}\"")),
                 "the adapter declares `{d}`, which nothing calls"
             );
         }

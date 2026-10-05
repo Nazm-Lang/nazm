@@ -98,8 +98,32 @@ fn the_tables_are_the_same_bytes_every_time() {
     assert_eq!(a.stdout, b.stdout);
     assert_eq!(String::from_utf8_lossy(&a.stdout).lines().count(), 1);
     let doc: Value = serde_json::from_slice(&a.stdout).unwrap();
-    assert_eq!(doc["schema"], "nazm.lir/1");
+    assert_eq!(doc["schema"], "nazm.lir/2");
     assert_eq!(doc["target"], "x86_64-unknown-linux-gnu");
+    // N105: every unit carries the instructions both backends translate, with their digest.
+    for u in doc["units"].as_array().unwrap() {
+        let text = u["lir"]["text"].as_str().unwrap();
+        assert!(text.contains("\nfunction @"), "{text}");
+        let digest = u["lir"]["digest"].as_str().unwrap();
+        assert_eq!(digest.len(), 64, "{digest}");
+    }
+    let ops = nazm(
+        d.path(),
+        &[
+            "lir",
+            "--ops",
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "p.nz",
+        ],
+    );
+    let texts: String = doc["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| format!("{}\n", u["lir"]["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(String::from_utf8_lossy(&ops.stdout), texts);
 }
 
 #[test]

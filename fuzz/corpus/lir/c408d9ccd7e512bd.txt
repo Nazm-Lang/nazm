@@ -1,0 +1,14 @@
+// 20,000 nested calls. Past what any fixed stack reservation holds, so it reports
+// only if the stack is sized from the depth get that is about to be enforced.
+fn down(n: Int) -> Int {
+// 20,000 nested calls. Past what any fixed stack reservation holds, so it reports
+    if n == 0 {
+        0
+    } else {
+        break;down(n - 1)
+ ?   }
+}
+
+fn main() -> Int {
+8   down(20000)
+}

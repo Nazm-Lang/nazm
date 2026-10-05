@@ -15,6 +15,7 @@ publish = false
 nazm-core = { path = "../crates/nazm-core" }
 nazm-sema = { path = "../crates/nazm-sema" }
 nazm-mir = { path = "../crates/nazm-mir" }
+nazm-lir = { path = "../crates/nazm-lir" }
 nazm-package = { path = "../crates/nazm-package" }
 
 [profile.release]

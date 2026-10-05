@@ -2730,14 +2730,13 @@ fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
     );
 
     // The value-position `if` whose `then` continues: since N40 its value reaches the join
-    // through a slot, stored only by the branch that arrives — so there is no `phi` at all,
-    // and in particular none naming a branch that transferred.
+    // through a slot, stored only by the branch that arrives — so no `phi` names a branch that
+    // transferred. Since N105 there is no `phi` at all: a LIR value that crosses a join lives
+    // in a variable, and `Int::MIN % -1` divides by 1 instead of branching around `srem`.
     assert_eq!(
         ir.lines().filter(|l| l.contains(" = phi ")).count(),
-        // `n % 4` in `keep` and `o % 2` in `main`: each remainder's own join, where
-        // `Int::MIN % -1` answers zero without reaching `srem`.
-        2,
-        "the only phis are the two remainders' own:\n{ir}"
+        0,
+        "no phi in the program's code:\n{ir}"
     );
 
     // And the whole thing produces the same number as the interpreter.
@@ -3036,15 +3035,20 @@ fn the_emitted_ir_for_a_return_heavy_function_is_well_formed() {
     let blocks = assert_control_flow_is_well_formed(&ir);
     assert!(blocks > 10, "only {blocks} blocks");
 
-    // Three `ret`s in `classify` plus one in `main` plus the wrapper's `ret i32`, and
-    // now one failure exit each in `classify` and `main` plus `@nz.fail`'s `ret void`.
-    // A failure leaves a function by an ordinary `ret` — the emitted code has no other
-    // way out of one — so a function that can fail has one more return site than it has
-    // `return`s. `@nz.report` is not counted: it ends in `unreachable` after `@exit`. Since
-    // N62 the runtime defines the two device-register helpers too, one `ret` each, and since N86
-    // four more, the 8- and 16-bit widths.
-    let rets = ir.lines().filter(|l| l.trim().starts_with("ret ")).count();
-    assert_eq!(rets, 14, "expected one `ret` per return site:\n{ir}");
+    // One `ret` per return site, and no more: since N105 every return site is a LIR `return`
+    // — the three in `classify`, `main`'s, and each function's failure exit, a failure
+    // leaving by an ordinary return — and the LLVM text writes one `ret` for each.
+    let unit = unit_ir(dir.path());
+    let rets = unit
+        .lines()
+        .filter(|l| l.trim().starts_with("ret "))
+        .count();
+    assert_eq!(
+        rets,
+        lir_returns(&path),
+        "expected one `ret` per return site:\n{unit}"
+    );
+    assert!(rets >= 6, "{unit}");
     // The specific regression: a terminator written *after* a `ret`. Checked as that
     // adjacency rather than by looking for `unreachable` anywhere — the `@nz.fail`
     // helper ends in one legitimately, and an assertion that cannot tell the two apart
@@ -3419,16 +3423,18 @@ fn the_emitted_ir_for_strings_is_well_formed() {
         ir.contains("@memcmp"),
         "no byte comparison was emitted:\n{ir}"
     );
-    // Every literal gets a constant triple, so nothing is assembled from `undef` for a
-    // value known at compile time — and its owner is `null`, which is how the IR says a
-    // literal is immortal storage this program must never free.
+    // Every literal gets a constant value, so nothing is assembled at run time for a value
+    // known at compile time — its bytes' address, then its length and a zero owner, which is
+    // how the IR says a literal is immortal storage this program must never free (N105: LIR's
+    // `{ pointer, length, owner }` bytes, the pointer a relocation).
+    let unit = unit_ir(dir.path());
+    let literal = unit
+        .lines()
+        .find(|l| l.contains("= private unnamed_addr constant <{ ptr, [16 x i8] }>"))
+        .unwrap_or_else(|| panic!("no literal value:\n{unit}"));
     assert!(
-        ir.contains(".v = private unnamed_addr constant { ptr, i64, ptr }"),
-        "{ir}"
-    );
-    assert!(
-        ir.contains(", ptr null }"),
-        "a literal claimed an owner:\n{ir}"
+        literal.ends_with("\\00\\00\\00\\00\\00\\00\\00\\00\" }>, align 8"),
+        "a literal claimed an owner: {literal}"
     );
 
     let interp = interpret(src);
@@ -3537,6 +3543,29 @@ fn every_sequence_bound_fails_at_its_own_position() {
 /// every unit declares every external unconditionally, which costs nothing and removes a
 /// class of "it was not declared" bug, and LLVM emits no reference for one never used. So
 /// these tests ask about `define`.
+/// The program unit's own LLVM text (not the runtime's or the entry's).
+fn unit_ir(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("prog.m0.ll")).expect("the unit's IR")
+}
+
+/// How many `return` terminators the program's LIR has (N105): the returns the LLVM printer
+/// writes one `ret` for.
+fn lir_returns(path: &Path) -> usize {
+    let out = Command::new(NAZM)
+        .args(["lir", "--ops", path.to_str().unwrap()])
+        .output()
+        .expect("nazm lir");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.trim_start().starts_with("return"))
+        .count()
+}
+
 fn emitted_ir(dir: &Path) -> String {
     let mut all = String::new();
     for entry in std::fs::read_dir(dir).expect("read dir").flatten() {

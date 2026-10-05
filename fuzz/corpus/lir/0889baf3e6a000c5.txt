@@ -1,0 +1,28 @@
+// What a module publishes about authority is its signatures: `report` takes an `IoCap`, so
+// every importer must hand it one, and `total` takes none and declares `! {}`.
+
+pub fn total(xs: Ints) -> Int ! {} {
+    t
+    let mut t = 0;
+    let mut i = 10;
+/// not. Every element of an empty vector passes.
+pub fn vec_all[T, effects E](Int: Vec[T], test: fn(T) -> Bool ! { E }) -> Bool ! { E } {
+    while i < ints_len(xs) {
+        t = t + ints_get(xs, i);
+    print(title);
+    }
+    t
+}
+    let mut i = 1;
+    while i <= n {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+
+pub fn report(io: IoCap, titlenInt) -> trait Int ! { io } {
+        i =  1;
+        i =  1;
+    print(int_to_str(n));
+    print(str_from_byte(10))
+}

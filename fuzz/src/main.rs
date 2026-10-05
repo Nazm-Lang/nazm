@@ -11,8 +11,10 @@
 //!
 //! The targets are the compiler's own entry points, called in process:
 //! `front` (parse and check), `lower` (check, Core IR, MIR, and MIR's validator — which must
-//! accept every program the checker accepts), `run` (the interpreter, with its step budgets), and
-//! `manifest` (a package manifest and the version requirements in it).
+//! accept every program the checker accepts), `run` (the interpreter, with its step budgets), `lir`
+//! (N105: the instruction-level LIR both backends translate, which must validate, run on LIR's own
+//! interpreter without a defect), and `manifest` (a package manifest and the version requirements
+//! in it).
 
 #![allow(unsafe_code)]
 
@@ -57,6 +59,9 @@ enum Target {
     Lower,
     Run,
     Manifest,
+    /// N105: a checked program's instruction-level LIR validates, and LIR's interpreter — the
+    /// oracle both backends are held to — finds no defect running it.
+    Lir,
 }
 
 impl Target {
@@ -66,6 +71,7 @@ impl Target {
             "lower" => Self::Lower,
             "run" => Self::Run,
             "manifest" => Self::Manifest,
+            "lir" => Self::Lir,
             _ => return None,
         })
     }
@@ -129,6 +135,40 @@ fn exec(target: Target, input: &str) -> Result<(), String> {
                 max_depth: 64,
             };
             let _ = nazm_core::run_with_limits(input, limits);
+        }
+        Target::Lir => {
+            let (map, graph) = nazm_core::one_file(input);
+            let g = &graph;
+            let names = nazm_lir::SourceNames::of(&map, &graph);
+            let _ = nazm_core::on_lowered(&map, &graph, nazm_core::Entry::Required, |core, res| {
+                let mir = nazm_mir::lower(core, res, g)?;
+                // Outside the native subset is a refusal, not a defect.
+                let Ok(native) = nazm_lir::lower(mir, &names) else {
+                    return Ok(());
+                };
+                let mut modules = Vec::new();
+                for (_, u, _) in nazm_lir::backend::units(&native) {
+                    let m = nazm_lir::op::lower_unit(
+                        &native,
+                        u,
+                        &names,
+                        nazm_lir::abi::DataLayout::LP64,
+                        false,
+                        false,
+                    )?;
+                    if let Err(e) = nazm_lir::op::validate::module(&m) {
+                        panic!("LIR lowered from a checked program does not validate: {e:?}");
+                    }
+                    modules.push(m);
+                }
+                let entry = native.entry.as_str().to_owned();
+                if let Err(nazm_lir::op::interp::Stop::Defect(why)) =
+                    nazm_lir::op::interp::run(&modules, &entry, native.entry_roots, &[], 200_000)
+                {
+                    panic!("the LIR interpreter found a defect: {why}");
+                }
+                Ok(())
+            });
         }
         Target::Manifest => {
             let _ = nazm_package::Manifest::parse(input, "nazm.toml");

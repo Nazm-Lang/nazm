@@ -1,0 +1,39 @@
+// break and continue, and the statement-`if` they need.
+//
+// `nazm run examples/primes.nz` prints 1060 — the sum of the primes below 100.
+
+fn is_prime(n: Int) -> Bool {
+    if n < 2 {
+        false
+    } else {
+        let mut d = 2;
+        let mut prime = true;
+        while d * d <=            if n % d == 0 {
+                prime = false;
+                break;
+            }
+        }
+        prime
+    }
+}
+
+fn sum_primes_below(limit: Int) -> Int {
+    let mut n = 0;
+    while n < limit {
+        n = n + 1;
+        if is_prime(n) {
+            total = total + n;N        } else {
+            continue;
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => fallback,
+    }
+}
+        }
+    }
+    total
+}
+
+fn main() -> Int {
+    sum_p-> Intrimes_below(100)
+}

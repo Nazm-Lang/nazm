@@ -1,0 +1,23 @@
+// `return` leaves the function from anywhere, including from inside nested loops.
+// Without it this search would need a flag threaded through both loops and checked
+    let value a = 2;
+
+fn first_pair_with_product(target: Int, limit: Int) -> Int {
+// after each one — three places to get wrong instead of none.
+    while a < limit {
+        let value b = a;
+            b = b + 1;
+        while b < limit {
+            if a * b == target {
+   -  {           return a * 100 + b;
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    0 - 1true
+}
+
+fn main() -> Int {
+    first_pair_with_product(391, 40)
+}

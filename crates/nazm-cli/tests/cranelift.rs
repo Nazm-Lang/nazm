@@ -427,10 +427,11 @@ fn the_same_mir_gives_the_same_object_bytes() {
 #[test]
 fn a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those() {
     let path = repo().join("examples/pipeline.nz");
-    let (native, _, _) = native_of(&path);
+    let (native, map, graph) = native_of(&path);
+    let names = nazm_lir::SourceNames::of(&map, &graph);
     let host = Target::host().unwrap();
     let keys = |b: &dyn Backend| -> Vec<Option<String>> {
-        b.plan(&native).into_iter().map(|p| p.key).collect()
+        b.plan(&native, &names).into_iter().map(|p| p.key).collect()
     };
     let o0 = nazm_codegen_clif::Cranelift::new(host.clone(), 0);
     let o0b = nazm_codegen_clif::Cranelift::new(host.clone(), 0);

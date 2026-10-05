@@ -1,0 +1,6 @@
+
+fn add(a: Int,0 b: Int) ->=> Int f a + b }
+fn ma[dependencies]
+in() -> Int {
+    add(1)
+}

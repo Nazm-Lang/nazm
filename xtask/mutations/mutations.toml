@@ -624,10 +624,10 @@ silently wrong arithmetic in a language whose first promise is that it traps.
 Caught by `addition_overflow_traps`, which requires exit 2 AND the N0400 code AND the
 message. Exit status alone would not discriminate: a mutant that died on a signal would
 also be non-zero.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = 'ArithOp::Add => "sadd",'
-replace = 'ArithOp::Add => "uadd",'
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = 'OvfOp::Add => "sadd",'
+replace = 'OvfOp::Add => "uadd",'
 killers = [{ package = "nazm-cli", test = "build", name = "a_failing_argument_stops_the_callee_body" }]
 
 [[mutation]]
@@ -708,15 +708,13 @@ is 7 and the transposition makes it -7. `mix(1, 2, 3)` catches a rotation as wel
 Repointed by N40: a call's operands are MIR's, loaded in order by the backend.
 
 Repointed by N42: the call site now also decides whether the callee is foreign; a C call's arguments are the same operands in the same order.
-Repointed by N55: the operands are now mutable, since a Str argument to C is replaced by its borrowed copy."""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                let mut vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
-                let foreign = self.sigs.get(callee.index()).is_some_and(|s| s.foreign);"""
-replace = """                let mut vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
-                if vals.len() >= 2 && vals[0].1 == vals[1].1 {
-                    vals.swap(0, 1);
-                }
-                let foreign = self.sigs.get(callee.index()).is_some_and(|s| s.foreign);"""
+Repointed by N55: the operands are now mutable, since a Str argument to C is replaced by its borrowed copy.
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''        let mut copies: Vec<V> = Vec::new();
+        for a in args {'''
+replace = '''        let mut copies: Vec<V> = Vec::new();
+        for a in args.iter().rev() {'''
 killers = [{ package = "nazm-cli", test = "build", name = "arguments_are_not_swapped" }]
 
 [[mutation]]
@@ -1110,10 +1108,11 @@ every definition that must exist exactly once exists as many times as there are 
 A two-module program then has two `@nz.fail`s and the link fails — which is the good case;
 the bad one is a language that quietly grew a per-module failure state
 
-Repointed by N48: the unit's text is now bound before debug information may be attached, and the runtime is `crate::runtime::emit_runtime` since N43 — whose move left this replacement naming a function `emit.rs` no longer has."""
-file = "crates/nazm-lir/src/emit.rs"
-find = "    let text = head + &e.out + &e.helpers + &e.tasks;"
-replace = "    let text = head + &e.out + &e.helpers + &e.tasks + &crate::runtime::emit_runtime(e.needs());"
+Repointed by N48: the unit's text is now bound before debug information may be attached, and the runtime is `crate::runtime::emit_runtime` since N43 — whose move left this replacement naming a function `emit.rs` no longer has.
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/backend.rs"
+find = '        let text = crate::op::llvm::module(&m);'
+replace = '        let text = crate::op::llvm::module(&m) + &crate::runtime::emit_runtime(m.needs);'
 killers = [{ package = "nazm-cli", test = "attestation", name = "identical_input_gives_identical_artefacts_here_and_in_another_directory" }]
 
 [[mutation]]
@@ -1221,16 +1220,13 @@ sequence count as one. The first to die frees storage the other is still holding
 a use-after-free the language's own aliasing rule makes ordinary rather than exotic —
 `let b = a;` is specified, measured and everywhere
 Repointed by N40: a binding of a managed local is a MIR `copy`, which the backend emits as a retain.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """            mir::Rvalue::Copy(l) => {
-                let ty = self.slot_ty(*l);
-                let x = self.load(*l);
-                self.retain(x, ty);"""
-replace = """            mir::Rvalue::Copy(l) => {
-                let ty = self.slot_ty(*l);
-                let x = self.load(*l);
-                let _ = ty;"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                    let v = self.get(*l);
+                    self.retain_value(v, dt);
+                    self.set(dst, v);'''
+replace = '''                    let v = self.get(*l);
+                    self.set(dst, v);'''
 killers = [{ package = "nazm-cli", test = "build", name = "a_native_sequence_is_shared_storage" }]
 
 [[mutation]]
@@ -1270,15 +1266,15 @@ lets the frame release run over a handle the function is returning, so the calle
 a reference to storage that has already been freed. Rule 3 says returning transfers, and
 the order of these two lines is the whole of what makes that true
 Repointed by N40: MIR `return` moves its value out; the backend must not release it.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """            mir::Terminator::Return(l) => {
-                let v = self.load(*l);"""
-replace = """            mir::Terminator::Return(l) => {
-                let v = self.load(*l);
-                let dying = self.slot_ty(*l);
-                self.release(v, dying);"""
-killers = [{ package = "nazm-cli", test = "build", name = "a_payload_returned_from_an_arm_is_valid_at_both_levels" }]
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                    let v = self.get(*l);
+                    self.b.term(Term::Return(Some(v)));'''
+replace = '''                    let v = self.get(*l);
+                    let t = self.ty(*l);
+                    self.release_value(v, t);
+                    self.b.term(Term::Return(Some(v)));'''
+killers = [{ package = "nazm-cli", test = "memory", name = "a_returned_sequence_survives_the_function_that_made_it" }, { package = "nazm-cli", test = "memory", name = "an_explicit_return_of_a_sequence_transfers_it" }]
 
 [[mutation]]
 name = "a-borrowed-parameter-is-released-by-the-callee"
@@ -1326,13 +1322,11 @@ reference to it. The slice then dies with whatever it was cut from, which for
 `str_slice(str_concat(a, b), 1, 2)` is the same statement: the argument is released as a
 temporary the moment the built-in returns, and the result points into the freed buffer.
 This is the exact failure the third field exists to make impossible
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                let _ = writeln!(self.out, "  call void @nz.str_retain(ptr %{owner})");
-                self.needs_strings = true;
-                let out = self.make_str(start, n, &format!("%{owner}"));"""
-replace = """                self.needs_strings = true;
-                let out = self.make_str(start, n, &format!("%{owner}"));"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''                self.rt("nz.str_retain", &[owner]);
+                self.write_str(dst, start, n, owner);'''
+replace = '                self.write_str(dst, start, n, owner);'
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_changes_nothing_at_run_time_everywhere" }]
 
 [[mutation]]
@@ -1341,21 +1335,11 @@ why = """
 lets `strs_push` keep a string without taking a reference to it. The caller's binding is
 then the only one counted, and the element becomes a dangling view the moment that binding
 dies — while the sequence goes on reporting a length that includes it
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                self.retain(arg(1), elem);
-                let _ = writeln!(
-                    self.out,
-                    "  store {} %{}, ptr %{slot}",
-                    llvm_type(self.types, elem),
-                    arg(1)
-                );"""
-replace = """                let _ = writeln!(
-                    self.out,
-                    "  store {} %{}, ptr %{slot}",
-                    llvm_type(self.types, elem),
-                    arg(1)
-                );"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''            self.retain_at(src, t);
+            self.copy(slot, src, n);'''
+replace = '            self.copy(slot, src, n);'
 killers = [{ package = "nazm-cli", test = "build", name = "strs_sequences_carry_strings_by_value" }]
 
 [[mutation]]
@@ -1366,13 +1350,13 @@ element — or releasing the sequence — invalidates a value the program is sti
 `docs/spec.md` has promised since sequences existed that a `Str` already read out is
 unaffected by changing the sequence; until N8 that was true because nothing was freed
 Repointed by N40: a primitive's result is owned by its MIR destination, so `strs_get` retains.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                if elem.owns().is_some() {
-                    self.retain(v, elem);
-                }
-                return Val::Of { value: v, ty: elem };"""
-replace = "                return Val::Of { value: v, ty: elem };"
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''            self.copy(d, slot, n);
+            self.retain_at(d, t);
+        } else {'''
+replace = '''            self.copy(d, slot, n);
+        } else {'''
 killers = [{ package = "nazm-cli", test = "build", name = "strs_sequences_carry_strings_by_value" }]
 
 [[mutation]]
@@ -1381,14 +1365,13 @@ why = """
 replaces an element and abandons the one it replaced, which is the leak N8 exists to close
 wearing a container as a disguise: a loop that writes the same slot a million times holds a
 million backings and reports a sequence of length one
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    arg(2)
-                );
-                self.release(old, elem);"""
-replace = """                    arg(2)
-                );"""
-killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''            if let Some(o) = old {
+                self.release_at(o, t);
+            }'''
+replace = '            let _ = old;'
+killers = [{ package = "nazm-cli", test = "memory", name = "a_vec_of_str_owns_each_string_by_the_string_law" }]
 
 [[mutation]]
 name = "a-sequence-of-strings-does-not-release-its-contents"
@@ -1470,20 +1453,12 @@ so a binding reassigned inside the scope releases storage the task is still read
 the trampoline then releases it a second time. The window is real rather than theoretical:
 the scope's body runs concurrently with the task by construction
 Repointed by N40: a MIR `spawn` borrows its operands and the task holds a reference of its own.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """            self.retain(*value, *ty);
-            let _ = writeln!(
-                self.out,
-                "  store {} %{value}, ptr %{slot}",
-                llvm_type(self.types, *ty)
-            );"""
-replace = """            let _ = writeln!(
-                self.out,
-                "  store {} %{value}, ptr %{slot}",
-                llvm_type(self.types, *ty)
-            );"""
-killers = [{ package = "nazm-cli", test = "build", name = "the_spec_worker_pool_example_terminates_and_answers_ninety" }]
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                self.copy(dst, src, n);
+                self.retain_at(dst, *t);'''
+replace = '                self.copy(dst, src, n);'
+killers = [{ package = "nazm-cli", test = "memory", name = "a_task_safe_record_crosses_into_siblings_and_comes_back" }]
 
 [[mutation]]
 name = "the-self-hosted-emitter-skips-one-release-path"
@@ -1514,17 +1489,14 @@ why = """
 generates a retain helper that takes a reference to nothing, so copying a record leaves
 every owning field counted once while two values name it. The first of the two to die
 frees storage the other is still reading
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """            if retain {
-                self.retain(v, ty);
-            } else {
-                self.release(v, ty);
-            }"""
-replace = """            if retain {
-            } else {
-                self.release(v, ty);
-            }"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''    if retain {
+        fx.retain_at(at, t);
+    } else {'''
+replace = '''    if retain {
+        let _ = (at, t);
+    } else {'''
 killers = [{ package = "nazm-cli", test = "build", name = "a_record_survives_construction_copy_replacement_and_return_at_both_levels" }]
 
 [[mutation]]
@@ -1532,17 +1504,14 @@ name = "a-record-drop-omits-its-fields"
 why = """
 generates a release helper that releases nothing, so a record that goes out of scope keeps
 every backing, sequence and channel it held. The counts say so; nothing else does
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """            if retain {
-                self.retain(v, ty);
-            } else {
-                self.release(v, ty);
-            }"""
-replace = """            if retain {
-                self.retain(v, ty);
-            } else {
-            }"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''    } else {
+        fx.release_at(at, t);
+    }'''
+replace = '''    } else {
+        let _ = (at, t);
+    }'''
 killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_with_managed_results_and_arguments_agrees" }]
 
 [[mutation]]
@@ -1572,12 +1541,11 @@ reads a field out of a record without taking a reference to what backs it, so
 Invisible in every shape where something else keeps the record alive, which is why the
 test that finds it uses a temporary that dies immediately
 Repointed by N40: a MIR field projection is owned by its destination, so the backend retains it.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                // Its own reference, by MIR's law: a projection is owned by its destination.
-                self.retain(out, fty);"""
-replace = """                // Its own reference, by MIR's law: a projection is owned by its destination.
-                let _ = fty;"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''            self.copy(d, addr, n);
+            self.retain_at(d, t);'''
+replace = '            self.copy(d, addr, n);'
 killers = [{ package = "nazm-cli", test = "build", name = "a_record_survives_construction_copy_replacement_and_return_at_both_levels" }]
 
 [[mutation]]
@@ -1932,31 +1900,21 @@ shifts every entry of the generated helper's jump table by one, so a value relea
 fields of the variant *next* to the one it holds. The counters see it as a leak in one
 direction and a double release in the other, and no behavioural test would: the values a
 program computes are unaffected
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """            .map(|(a, label)| format!("i64 {}, label %{label}", a.tag))"""
-replace = """            .map(|(a, label)| format!("i64 {}, label %{label}", a.tag + 1))"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''                if !v.fields.iter().any(|f| fx.lw.lay.owns(*f)) {
+                    continue;
+                }
+                let blk = fx.b.block();
+                cases.push((i64::try_from(tagno).unwrap_or(0), blk));'''
+replace = '''                if !v.fields.iter().any(|f| fx.lw.lay.owns(*f)) {
+                    continue;
+                }
+                let blk = fx.b.block();
+                cases.push((i64::try_from(tagno).unwrap_or(0) + 1, blk));'''
 killers = [{ package = "nazm-cli", test = "constraints", name = "a_bounded_comparison_observes_owning_arguments_and_releases_its_temporaries_once" }]
 
-[[mutation]]
-name = "an-enum-copy-takes-no-reference"
-why = """
-generates a retain helper that walks to the active variant's fields and then does nothing,
-so a copied enum holds a reference nobody counted. The first of the two values to die
-frees storage the second is still naming — which is a use-after-free that the values a
-program computes will not show
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                if retain {
-                    self.retain(v, *ty);
-                } else {
-                    self.release(v, *ty);
-                }"""
-replace = """                if retain {
-                } else {
-                    self.release(v, *ty);
-                }"""
-killers = [{ package = "nazm-cli", test = "build", name = "a_payload_returned_from_an_arm_is_valid_at_both_levels" }]
+# `an-enum-copy-takes-no-reference` is retired by N105: its rule is LIR's, decided once for both backends, and `a-record-copy-forgets-a-field` attacks it there.
 
 [[mutation]]
 name = "a-match-does-not-take-over-the-value-it-matches"
@@ -2029,15 +1987,11 @@ why = """
 packs an enum into a task's argument block and never releases it when the task finishes, so
 every spawn over one leaks its active payload. A sequence and a channel are still released,
 which is the version that looks like it works
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                Some(Owns::Enum(id)) => {
-                    if let Some(helper) = self.enum_helper(id, false) {
-                        let t = llvm_type(self.types, *ty);
-                        let _ = writeln!(&mut body, "  call void @{helper}({t} %v{i})");
-                    }
-                }"""
-replace = """                Some(Owns::Enum(_)) => {}"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''        let at = fx.ptr_off(a, i64::from(*off));
+        fx.release_at(at, *ty);'''
+replace = '        let _ = fx.ptr_off(a, i64::from(*off));'
 killers = [{ package = "nazm-cli", test = "memory", name = "an_enum_crossing_into_a_task_carries_its_active_payload_and_no_other" }]
 
 [[mutation]]
@@ -2656,13 +2610,13 @@ killers = [{ package = "nazm-cli", test = "generics", name = "polymorphic_recurs
 name = "vec-push-does-not-take-its-own-reference"
 why = """
 `vec_push` stores the caller's value without a reference of its own, so the element is freed while the vector still holds it
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                // The vector keeps what it is given, so it takes a copy of its own; the
-                // caller's value is untouched, which is rule 2.
-                self.retain(arg(1), elem);"""
-replace = """                // The vector keeps what it is given, so it takes a copy of its own; the
-                // caller's value is untouched, which is rule 2."""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''            let old = replace.then(|| self.load(class(t), slot, 0));
+            if self.lw.lay.owns(t) {
+                self.retain_value(v, t);
+            }'''
+replace = '            let old = replace.then(|| self.load(class(t), slot, 0));'
 killers = [{ package = "nazm-cli", test = "closures", name = "function_values_live_in_records_and_vecs_and_compose" }]
 
 [[mutation]]
@@ -2670,13 +2624,15 @@ name = "vec-get-returns-a-borrowed-element"
 why = """
 `vec_get` hands out the vector's own reference, so an element read and then overwritten — or popped — is freed under its reader
 Repointed by N40: a primitive's result is owned by its MIR destination, so `vec_get` retains.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                if elem.owns().is_some() {
-                    self.retain(v, elem);
-                }
-                Val::Of { value: v, ty: elem }"""
-replace = "                Val::Of { value: v, ty: elem }"
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''            let v = self.load(class(t), slot, 0);
+            if self.lw.lay.owns(t) {
+                self.retain_value(v, t);
+            }
+            self.set(dst, v);'''
+replace = '''            let v = self.load(class(t), slot, 0);
+            self.set(dst, v);'''
 killers = [{ package = "nazm-cli", test = "memory", name = "a_nested_vec_releases_each_inner_vector_and_what_it_holds" }]
 
 [[mutation]]
@@ -2684,25 +2640,27 @@ name = "vec-pop-copies-instead-of-transferring"
 why = """
 `vec_pop` retains the element it takes out, so the vector's reference is never given up and every popped element leaks
 Repointed by N40: `vec_pop` transfers the element's reference to its MIR destination.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
-                // A **transfer**: the vector gives up its reference to the element and MIR's
-                // destination holds that same one. No retain and no release.
-                Val::Of { value: v, ty: elem }"""
-replace = """                let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
-                self.retain(v, elem);
-                Val::Of { value: v, ty: elem }"""
-killers = [{ package = "nazm-cli", test = "generic_channels", name = "an_enum_with_a_payload_and_plain_values_cross_a_channel" }]
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''                    let v = self.load(class(t), slot, 0);
+                    self.set(dst, v);
+                }
+                self.store(h, rt::SEQ_LEN, last);'''
+replace = '''                    let v = self.load(class(t), slot, 0);
+                    self.retain_value(v, t);
+                    self.set(dst, v);
+                }
+                self.store(h, rt::SEQ_LEN, last);'''
+killers = [{ package = "nazm-cli", test = "memory", name = "a_vec_of_channels_holds_a_reference_to_each_channel" }]
 
 [[mutation]]
 name = "a-vec-is-freed-without-its-elements"
 why = """
 the last release of a `Vec` of owning elements frees its storage and never releases what it held
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = "        self.release(v, layout.elem);"
-replace = ""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '                } else if self.lw.lay.owns(elem) {'
+replace = '                } else if self.lw.lay.owns(elem) && false {'
 killers = [{ package = "nazm-cli", test = "closures", name = "function_values_live_in_records_and_vecs_and_compose" }]
 
 [[mutation]]
@@ -3863,43 +3821,53 @@ killers = [{ package = "nazm-core", test = "equality", name = "primitive_equalit
 
 [[mutation]]
 name = "n13-native-records-compare-their-first-field-only"
-why = "the native record helper compares the first field in layout order and returns"
-file = "crates/nazm-lir/src/emit.rs"
-find = "                for (at, fty) in fields.into_iter().enumerate() {"
-replace = "                for (at, fty) in fields.into_iter().enumerate().take(1) {"
+why = """the native record helper compares the first field in layout order and returns
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''            for (off, ft) in s.offsets.iter().zip(&s.fields) {
+                let x = fx.ptr_off(a, i64::from(*off));'''
+replace = '''            for (off, ft) in s.offsets.iter().zip(&s.fields).take(1) {
+                let x = fx.ptr_off(a, i64::from(*off));'''
 killers = [{ package = "nazm-cli", test = "equality", name = "record_equality_compiles_to_the_interpreter_s_answer" }]
 
 [[mutation]]
 name = "n13-native-tags-are-not-compared"
-why = "the native enum helper dispatches on the left operand's variant without comparing it to the right's, so `None == Some(value: 0)`"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                let _ = writeln!(
-                    self.out,
-                    "  br i1 %{same}, label %{dispatch}, label %{differ}"
-                );"""
-replace = """                let _ = (same, &differ);
-                let _ = writeln!(self.out, "  br label %{dispatch}");"""
+why = """the native enum helper dispatches on the left operand's variant without comparing it to the right's, so `None == Some(value: 0)`
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''            let same = fx.cmp(Cmp::Eq, ta, tb);
+            next(fx, same, differ);'''
+replace = '            let _ = fx.cmp(Cmp::Eq, ta, tb);'
 killers = [{ package = "nazm-cli", test = "equality", name = "enum_equality_compiles_to_the_interpreter_s_answer" }]
 
 [[mutation]]
 name = "n13-native-a-zero-payload-variant-is-unequal-to-itself"
-why = "the native enum helper's `switch` default — the variants that carry nothing — answers false, so `None == None` is false"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                let _ = writeln!(self.out, "  switch i64 %{ta}, label %{equal} [ {table} ]");"""
-replace = """                let _ = writeln!(self.out, "  switch i64 %{ta}, label %{differ} [ {table} ]");"""
+why = """the native enum helper's `switch` default — the variants that carry nothing — answers false, so `None == None` is false
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''                value: ta,
+                cases,
+                default: equal_blk,'''
+replace = '''                value: ta,
+                cases,
+                default: differ,'''
 killers = [{ package = "nazm-cli", test = "equality", name = "enum_equality_compiles_to_the_interpreter_s_answer" }]
 
 [[mutation]]
 name = "n13-native-arms-follow-another-order"
-why = "the native enum helper numbers its arms in reverse of canonical tag order, so a variant is compared through another's slot"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                let arms: Vec<(u32, VariantLayout, String)> = variants
-                    .into_iter()
-                    .enumerate()"""
-replace = """                let arms: Vec<(u32, VariantLayout, String)> = variants
-                    .into_iter()
-                    .rev()
-                    .enumerate()"""
+why = """the native enum helper numbers its arms in reverse of canonical tag order, so a variant is compared through another's slot
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''                if v.fields.is_empty() {
+                    continue;
+                }
+                let blk = fx.b.block();
+                cases.push((i64::try_from(tagno).unwrap_or(0), blk));'''
+replace = '''                if v.fields.is_empty() {
+                    continue;
+                }
+                let blk = fx.b.block();
+                cases.push((i64::try_from(e.variants.len() - 1 - tagno).unwrap_or(0), blk));'''
 killers = [{ package = "nazm-cli", test = "equality", name = "enum_equality_compiles_to_the_interpreter_s_answer" }]
 
 [[mutation]]
@@ -3907,12 +3875,12 @@ name = "n13-native-inequality-is-not-negated"
 why = """
 native `!=` on a record or an enum calls the helper and does not negate it
 Repointed by N40: a MIR comparison of records or enums, emitted through the equality helper.
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    let same = self.equality(a, b, ty);
-                    if *op == mir::CmpOp::NotEq {"""
-replace = """                    let same = self.equality(a, b, ty);
-                    if false && *op == mir::CmpOp::NotEq {"""
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''    fn negate_if(&mut self, v: V, negate: bool) -> V {
+        if negate {'''
+replace = '''    fn negate_if(&mut self, v: V, negate: bool) -> V {
+        if negate && false {'''
 killers = [{ package = "nazm-cli", test = "equality", name = "record_equality_compiles_to_the_interpreter_s_answer" }]
 
 
@@ -3940,10 +3908,11 @@ no_killer = "a known surviving mutant (campaign 418a5e5921b866cc: SURVIVED at th
 
 [[mutation]]
 name = "n13-native-helper-names-omit-type-arguments"
-why = "a native equality helper is named by its definition's source name, so `Box[Int]` and `Box[Str]` claim one symbol"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                record_layout(self.types.records, id).map(|l| l.name.as_str().to_owned())"""
-replace = """                record_layout(self.types.records, id).map(|l| l.source.split('[').next().unwrap_or("").to_owned())"""
+why = """a native equality helper is named by its definition's source name, so `Box[Int]` and `Box[Str]` claim one symbol
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/lower.rs"
+find = '                .map_or_else(|| format!("r{id}"), |r| r.name.as_str().to_owned()),'
+replace = '''                .map_or_else(|| format!("r{id}"), |r| r.source.split('[').next().unwrap_or("").to_owned()),'''
 killers = [{ package = "nazm-cli", test = "equality", name = "a_helper_is_named_by_the_type_s_durable_identity_and_its_arguments" }]
 
 [[mutation]]
@@ -8534,75 +8503,83 @@ killers = [{ package = "nazm-cli", test = "mir", name = "every_construct_runs_na
 
 [[mutation]]
 name = "n40-a-payload-binding-takes-no-reference"
-why = "a pattern binding reads its payload without a reference of its own, so the scrutinee's drop at the join frees storage the binding is still holding"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    "  %{out} = extractvalue {payload_ty} %{slot}, {at}    ; {}",
-                    llvm_type(self.types, fty)
-                );
-                self.retain(out, fty);"""
-replace = """                    "  %{out} = extractvalue {payload_ty} %{slot}, {at}    ; {}",
-                    llvm_type(self.types, fty)
-                );"""
+why = """a pattern binding reads its payload without a reference of its own, so the scrutinee's drop at the join frees storage the binding is still holding
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                let (off, t) = self.payload_offset(*enumeration, tag, *field);
+                let at = self.ptr_off(b, i64::from(off));
+                self.read_owned(dst, at, t);'''
+replace = '''                let (off, t) = self.payload_offset(*enumeration, tag, *field);
+                let at = self.ptr_off(b, i64::from(off));
+                if in_memory(t) {
+                    let d = self.addr(dst);
+                    let n = self.size(t);
+                    self.copy(d, at, n);
+                } else {
+                    let v = self.load(class(t), at, 0);
+                    self.set(dst, v);
+                }'''
 killers = [{ package = "nazm-cli", test = "mir", name = "a_pattern_binding_holds_its_own_reference_to_a_heap_payload" }]
 
 [[mutation]]
 name = "n40-a-drop-releases-nothing"
-why = "the backend empties a dropped local without releasing what it held: MIR is right and the program leaks, which only the runtime's counters can see"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    let v = self.load(*l);
-                    self.store_zero(*l);
-                    self.release(v, ty);"""
-replace = """                    let v = self.load(*l);
-                    self.store_zero(*l);
-                    let _ = v;"""
-killers = [{ package = "nazm-cli", test = "mir", name = "cleanup_on_every_exit_is_balanced" }]
+why = """the backend empties a dropped local without releasing what it held: MIR is right and the program leaks, which only the runtime's counters can see
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                    let v = self.get(*l);
+                    self.release_value(v, t);
+                    self.clear(*l);'''
+replace = '''                    let _ = (self.get(*l), t);
+                    self.clear(*l);'''
+killers = [{ package = "nazm-cli", test = "memory", name = "a_binding_that_is_reassigned_lets_go_of_what_it_held" }]
 
 [[mutation]]
 name = "n40-a-drop-leaves-its-local-owning"
-why = "a drop releases the value but leaves it in the slot, so the shared unwind block — or a later drop — releases it a second time"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    let v = self.load(*l);
-                    self.store_zero(*l);
-                    self.release(v, ty);"""
-replace = """                    let v = self.load(*l);
-                    self.release(v, ty);"""
-killers = [{ package = "nazm-cli", test = "mir", name = "every_move_and_drop_leaves_its_slot_holding_the_zero" }]
+why = """a drop releases the value but leaves it in the slot, so the shared unwind block — or a later drop — releases it a second time
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                    let v = self.get(*l);
+                    self.release_value(v, t);
+                    self.clear(*l);'''
+replace = '''                    let v = self.get(*l);
+                    self.release_value(v, t);'''
+killers = [{ package = "nazm-cli", test = "memory", name = "a_sequence_temporary_is_released_when_a_failure_leaves" }]
 
 [[mutation]]
 name = "n40-a-move-leaves-its-source-owning"
-why = "a MIR `move` reads the value and leaves it in its source, so two locals own one reference and both drop it"
-file = "crates/nazm-lir/src/emit.rs"
-find = """            mir::Rvalue::Move(l) => {
-                let x = self.load(*l);
-                self.store_zero(*l);"""
-replace = """            mir::Rvalue::Move(l) => {
-                let x = self.load(*l);"""
-killers = [{ package = "nazm-cli", test = "mir", name = "every_move_and_drop_leaves_its_slot_holding_the_zero" }]
+why = """a MIR `move` reads the value and leaves it in its source, so two locals own one reference and both drop it
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                    let v = self.get(*l);
+                    self.clear(*l);
+                    self.set(dst, v);'''
+replace = '''                    let v = self.get(*l);
+                    self.set(dst, v);'''
+killers = [{ package = "nazm-cli", test = "memory", name = "a_reassigned_sequence_is_released_once_when_a_failure_follows" }]
 
 [[mutation]]
 name = "n40-a-field-write-copies-its-value"
-why = "a field write stores the moved value without emptying the temporary it came from, which is then dropped: the field holds freed storage"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                let new_ty = self.slot_ty(*value);
-                let new = self.load(*value);
-                self.store_zero(*value);"""
-replace = """                let new_ty = self.slot_ty(*value);
-                let new = self.load(*value);"""
+why = """a field write stores the moved value without emptying the temporary it came from, which is then dropped: the field holds freed storage
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''            self.copy(to, src, n);
+            if self.lw.lay.owns(t) {
+                self.zero(src, n);
+            }'''
+replace = '            self.copy(to, src, n);'
 killers = [{ package = "nazm-cli", test = "mir", name = "every_move_and_drop_leaves_its_slot_holding_the_zero" }]
 
 [[mutation]]
 name = "n40-a-variant-is-tagged-by-declaration-order"
-why = "the backend uses a variant's declaration index as its discriminant, while the layout's payload slots are in canonical name order, so a variant declared out of name order is built into another's slot"
-file = "crates/nazm-lir/src/emit.rs"
-find = """    fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {
-        enum_layout(self.types.enums, ety(e))
-            .and_then(|l| l.of_declaration.get(variant as usize).copied())
+why = """the backend uses a variant's declaration index as its discriminant, while the layout's payload slots are in canonical name order, so a variant declared out of name order is built into another's slot
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''            .and_then(|l| l.of_declaration.get(variant as usize).copied())
             .unwrap_or(0)
-    }"""
-replace = """    fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {
-        let _ = e;
-        variant
-    }"""
+    }'''
+replace = '''            .and_then(|_| Some(variant))
+            .unwrap_or(0)
+    }'''
 killers = [{ package = "nazm-cli", test = "mir", name = "every_construct_runs_natively_as_it_is_interpreted_and_reclaims_everything" }]
 
 [[mutation]]
@@ -8670,30 +8647,23 @@ targets = [
 
 [[mutation]]
 name = "n41-a-branch-goes-the-other-way"
-why = "a MIR branch's two targets are swapped in Cranelift IR, so every `if` and `while` condition means its negation"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = "                self.b.ins().brif(c, a, &[], b, &[]);"
-replace = "                self.b.ins().brif(c, b, &[], a, &[]);"
+why = """a MIR branch's two targets are swapped in Cranelift IR, so every `if` and `while` condition means its negation
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = '                        fx.b.ins().brif(c, a, &[], z, &[]);'
+replace = '                        fx.b.ins().brif(c, z, &[], a, &[]);'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter" }]
 
 [[mutation]]
 name = "n41-an-ordering-is-unsigned"
-why = "`<` compiles to an unsigned comparison, so a negative `Int` is larger than every positive one"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = "                            mir::CmpOp::Lt => IntCC::SignedLessThan,"
-replace = "                            mir::CmpOp::Lt => IntCC::UnsignedLessThan,"
+why = """`<` compiles to an unsigned comparison, so a negative `Int` is larger than every positive one
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = '                Cmp::Lt => IntCC::SignedLessThan,'
+replace = '                Cmp::Lt => IntCC::UnsignedLessThan,'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "signed_arithmetic_and_its_edges_agree" }]
 
-[[mutation]]
-name = "n41-call-arguments-are-reversed"
-why = """a call passes its arguments last first, which is well typed whenever they share a type and wrong whenever the callee is not symmetric
-Repointed by N55: the loop now also turns a Str argument to C into its borrowed copy."""
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """                let mut copies: Vec<Value> = Vec::new();
-                for a in args {"""
-replace = """                let mut copies: Vec<Value> = Vec::new();
-                for a in args.iter().rev() {"""
-killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter" }]
+# `n41-call-arguments-are-reversed` is retired by N105: its rule is LIR's, decided once for both backends, and `two-same-typed-arguments-are-transposed` attacks it there.
 
 [[mutation]]
 name = "n41-a-runtime-signature-is-wrong"
@@ -8705,81 +8675,67 @@ killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_mat
 
 [[mutation]]
 name = "n41-a-copied-string-takes-no-reference"
-why = "a copy of a `Str` does not retain its owner, so the first of two holders to let go frees storage the other still reads"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """            Ty::Str => {
-                let owner = self.b.ins().load(types::I64, mem(), addr, 16);
-                self.rt("nz.str_retain", &[owner]);
-            }"""
-replace = """            Ty::Str => {
-                let owner = self.b.ins().load(types::I64, mem(), addr, 16);
-                let _ = owner;
-            }"""
+why = """a copy of a `Str` does not retain its owner, so the first of two holders to let go frees storage the other still reads
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                let o = self.load(Class::Ptr, addr, offset(owner));
+                self.rt("nz.str_retain", &[o]);'''
+replace = '                let _ = self.load(Class::Ptr, addr, offset(owner));'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
 
 [[mutation]]
 name = "n41-a-string-is-never-released"
-why = "a dropped `Str` gives nothing back, so every string a program made outlives it: the runtime's report shows it live"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """            Ty::Str => {
-                let owner = self.b.ins().load(types::I64, mem(), addr, 16);
-                self.rt("nz.str_release", &[owner]);
-            }"""
-replace = """            Ty::Str => {
-                let owner = self.b.ins().load(types::I64, mem(), addr, 16);
-                let _ = owner;
-            }"""
-killers = [{ package = "nazm-cli", test = "cranelift", name = "cleanup_on_every_exit_and_on_failure_agrees" }]
+why = """a dropped `Str` gives nothing back, so every string a program made outlives it: the runtime's report shows it live
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                let o = self.load(Class::Ptr, addr, offset(owner));
+                self.rt("nz.str_release", &[o]);'''
+replace = '                let _ = self.load(Class::Ptr, addr, offset(owner));'
+killers = [{ package = "nazm-cli", test = "memory", name = "a_construction_that_fails_part_way_through_cleans_what_it_built" }]
 
-[[mutation]]
-name = "n41-a-variant-is-tagged-by-its-declaration"
-why = "the Cranelift backend uses a variant's declaration index as its discriminant instead of `nazm-lir`'s canonical tag, so it disagrees with its own payload layout for any enum not declared in name order"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """    pub(crate) fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {"""
-replace = """    pub(crate) fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {
-        if variant < 1000 {
-            let _ = e;
-            return variant;
-        }"""
-killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
+# `n41-a-variant-is-tagged-by-its-declaration` is retired by N105: its rule is LIR's, decided once for both backends, and `n40-a-variant-is-tagged-by-declaration-order` attacks it there.
 
 [[mutation]]
 name = "n41-a-field-is-at-the-first-offset"
-why = "every record field is read and written at the record's first offset, so a record of more than one field overlaps its fields"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = "                s.offsets.get(pos as usize).copied().unwrap_or(0),"
-replace = "                s.offsets.first().copied().unwrap_or(0),"
+why = """every record field is read and written at the record's first offset, so a record of more than one field overlaps its fields
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '                s.offsets.get(pos as usize).copied().unwrap_or(0),'
+replace = '                s.offsets.first().copied().unwrap_or(0),'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
 
 [[mutation]]
 name = "n41-division-by-zero-is-not-guarded"
-why = "`/` reaches the machine's divide with a zero divisor, which on AArch64 answers 0 and on x86-64 kills the process — never the specified `N0401`"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """            mir::ArithOp::Div => {
-                let zero = self.b.ins().icmp_imm_s(IntCC::Equal, y, 0);
-                self.guard(zero, "N0401", "division by zero");"""
-replace = """            mir::ArithOp::Div => {"""
+why = """`/` reaches the machine's divide with a zero divisor, which on AArch64 answers 0 and on x86-64 kills the process — never the specified `N0401`
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''            mir::ArithOp::Div => {
+                let zero = self.cmp_imm(Cmp::Eq, y, Class::I64, 0);
+                self.guard(zero, "N0401", "division by zero");'''
+replace = '            mir::ArithOp::Div => {'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "every_trap_is_the_same_trap" }]
 
 [[mutation]]
 name = "n41-a-task-argument-is-not-held"
-why = "a handle packed into a task's block takes no reference of its own, so the task and its spawner each give back one reference the channel only had once"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """                let v = self.value(a);
-                if self.g.lay.owns(*t) {
+why = """a handle packed into a task's block takes no reference of its own, so the task and its spawner each give back one reference the channel only had once
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                let v = self.value(a);
+                if self.lw.lay.owns(*t) {
                     self.retain_value(v, *t);
                 }
-                self.b.ins().store(mem(), v, dst, 0);"""
-replace = """                let v = self.value(a);
-                self.b.ins().store(mem(), v, dst, 0);"""
+                self.store(dst, 0, v);'''
+replace = '''                let v = self.value(a);
+                self.store(dst, 0, v);'''
 killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter" }]
 
 [[mutation]]
 name = "n41-the-object-key-forgets-the-mir"
-why = "a Cranelift object's key leaves out its functions' MIR, so a changed body reuses the old object"
+why = """a Cranelift object's key leaves out its functions' MIR, so a changed body reuses the old object
+Repointed by N105: the rule is LIR's, made once for both backends."""
 file = "crates/nazm-codegen-clif/src/lib.rs"
-find = "                h.update(nazm_mir::digest::executable(&native.program, f).as_bytes());"
-replace = "                let _ = f;"
+find = '        h.update(nazm_lir::op::digest(m).as_bytes());'
+replace = '        let _ = m;'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated" }]
 
 [[mutation]]
@@ -8971,11 +8927,14 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "the_linker_is_handed_ex
 
 [[mutation]]
 name = "n42-cranelift-calls-c-with-the-internal-convention-for-a-bool"
-why = "Cranelift declares a foreign function with the internal signature, whose `Bool` is a byte with no extension promised, where C's `bool` is zero-extended"
-file = "crates/nazm-codegen-clif/src/unit.rs"
-find = "                AbiParam::new(types::I8).uext()"
-replace = "                AbiParam::new(types::I64)"
-killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+why = """Cranelift declares a foreign function with the internal signature, whose `Bool` is a byte with no extension promised, where C's `bool` is zero-extended
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = '''    if conv == Conv::C && c == Class::Bit {
+        p.uext()'''
+replace = '''    if conv == Conv::C && c == Class::Bit {
+        p'''
+killers = [{ package = "nazm-codegen-clif", lib = true, name = "translate::tests::a_c_bool_is_zero_extended_and_an_internal_one_is_not" }]
 
 [[mutation]]
 name = "n42-what-c-returns-is-clean"
@@ -8993,32 +8952,18 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "what_c_returns_carries_
 
 [[mutation]]
 name = "n42-a-foreign-int-is-a-c-int"
-why = "a foreign `Int` is passed as a 32-bit `int`, as if C's `int` were `int64_t`: the width mapping the boundary table states is not the one generated"
-file = "crates/nazm-lir/src/emit.rs"
-find = "        (false, _) => llvm_type(layouts, t),"
-replace = """        (false, _) if foreign && t == Ty::Int => "i32".to_owned(),
-        (false, _) => llvm_type(layouts, t),"""
+why = """a foreign `Int` is passed as a 32-bit `int`, as if C's `int` were `int64_t`: the width mapping the boundary table states is not the one generated
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/lower.rs"
+find = '''            Ty::Int => Class::I64,
+            _ => Class::Ptr,
+        };'''
+replace = '''            Ty::Int => Class::I32,
+            _ => Class::Ptr,
+        };'''
 killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
 
-[[mutation]]
-name = "n42-cranelift-passes-a-foreign-int-as-a-c-int"
-why = "Cranelift declares a foreign `Int` as a 32-bit word, so the upper half of every argument and result is lost"
-file = "crates/nazm-codegen-clif/src/unit.rs"
-find = """            } else {
-                AbiParam::new(types::I64)
-            }
-        };
-        let mut s = self.module.make_signature();
-        s.returns.push(c(ret));"""
-replace = """            } else {
-                AbiParam::new(types::I32)
-            }
-        };
-        let mut s = self.module.make_signature();
-        s.returns.push(c(ret));"""
-killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
-
-# --- N43: the runtime constitution -----------------------------------------------------------
+# `n42-cranelift-passes-a-foreign-int-as-a-c-int` is retired by N105: its rule is LIR's, decided once for both backends, and `n42-a-foreign-int-is-a-c-int` attacks it there.
 
 [[mutation]]
 name = "n43-the-runtime-abi-is-not-in-clang-s-key"
@@ -9512,12 +9457,15 @@ killers = [{ package = "nazm-cli", test = "profiles", name = "every_profile_s_ru
 
 [[mutation]]
 name = "n48-markers-reach-an-ordinary-build"
-why = "the emitter writes its source-position markers whatever the build, so an ordinary build's text changes"
-file = "crates/nazm-lir/src/emit.rs"
-find = """    fn mark_position(&mut self, at: nazm_span::Span) {
-        if !self.debug {"""
-replace = """    fn mark_position(&mut self, at: nazm_span::Span) {
-        if !self.debug && false {"""
+why = """the emitter writes its source-position markers whatever the build, so an ordinary build's text changes
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/lower.rs"
+find = '''        if !self.debug {
+            return None;
+        }'''
+replace = '''        if !self.debug && false {
+            return None;
+        }'''
 killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
 
 [[mutation]]
@@ -9553,9 +9501,11 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "build::tests::only_a_de
 name = "n48-cranelift-debug-is-silently-plain"
 why = "`--debug` with Cranelift builds without debug information (repointed in N91: Cranelift writes DWARF since, and the rule is that it is not dropped)"
 file = "crates/nazm-cli/src/build.rs"
-find = "        nazm_codegen_clif::Cranelift::new(target.clone(), opt_level).with_debug(choice.debug);"
-replace = "        nazm_codegen_clif::Cranelift::new(target.clone(), opt_level).with_debug(false);"
-killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }, { package = "nazm-cli", test = "debugger_v3", name = "a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
+find = '''    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
+        .with_debug(choice.debug)'''
+replace = '''    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
+        .with_debug(false)'''
+killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
 
 [[mutation]]
 name = "n48-a-phase-is-not-timed"
@@ -9686,20 +9636,15 @@ find = "                .filter(|site| !site.spawned)"
 replace = "                .filter(|site| site.spawned || !site.spawned)"
 killers = [{ package = "nazm-cli", test = "mir", name = "a_function_in_a_call_cycle_checks_its_stack_first_and_no_other_does" }]
 
-[[mutation]]
-name = "n49-the-llvm-backend-ignores-the-stack-check"
-why = "the LLVM backend calls the stack check and discards its answer, so exhaustion is a signal again under LLVM"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{r}, 0");"""
-replace = """                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{r}, %{r}");"""
-killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursion_reports_n0408_instead_of_crashing" }]
+# `n49-the-llvm-backend-ignores-the-stack-check` is retired by N105: its rule is LIR's, decided once for both backends, and `n49-the-cranelift-backend-ignores-the-stack-check` attacks it there.
 
 [[mutation]]
 name = "n49-the-cranelift-backend-ignores-the-stack-check"
-why = "the Cranelift backend asks the runtime and never fails on its answer"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """                self.guard(past, "N0408", nazm_lir::STACK_EXHAUSTED);"""
-replace = """                let _ = past;"""
+why = """the Cranelift backend asks the runtime and never fails on its answer
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '                self.guard(bad, "N0408", crate::STACK_EXHAUSTED);'
+replace = '                let _ = bad;'
 killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursion_reports_n0408_instead_of_crashing" }]
 
 [[mutation]]
@@ -9866,64 +9811,50 @@ killers = [{ package = "nazm-cli", test = "closures", name = "recursion_through_
 
 [[mutation]]
 name = "n50-the-llvm-closure-does-not-retain-its-captures"
-why = "the LLVM closure object stores its captures without a reference of its own"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-                    // The object's own reference to each capture.
-                    self.retain(v, t);"""
-replace = """
-                    // The object's own reference to each capture.
-                    let _ = t;"""
+why = """the LLVM closure object stores its captures without a reference of its own
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                        self.store(at, 0, v);
+                        if self.lw.lay.owns(*t) {
+                            self.retain_value(v, *t);
+                        }'''
+replace = '                        self.store(at, 0, v);'
 killers = [{ package = "nazm-cli", test = "closures", name = "a_returned_closure_keeps_what_it_captured_alive" }]
 
-[[mutation]]
-name = "n50-the-llvm-closure-release-forgets-its-captures"
-why = "the last release of an LLVM closure object frees it and leaks what it captured"
-file = "crates/nazm-lir/src/emit.rs"
-find = "        e.release(v, *t);"
-replace = "        let _ = v;"
-killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
+# `n50-the-llvm-closure-release-forgets-its-captures` is retired by N105: its rule is LIR's, decided once for both backends, and `n50-the-cranelift-closure-release-forgets-its-captures` attacks it there.
 
-[[mutation]]
-name = "n50-the-llvm-indirect-call-ignores-a-failure"
-why = "under LLVM a failure inside a function value's code is not noticed by its caller"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-                    list.join(", ")
-                );
-                self.check_failed();"""
-replace = """
-                    list.join(", ")
-                );"""
-killers = [{ package = "nazm-cli", test = "closures", name = "a_failure_inside_a_closure_reclaims_its_captures_and_its_callers" }]
+# `n50-the-llvm-indirect-call-ignores-a-failure` is retired by N105: its rule is LIR's, decided once for both backends, and `n50-the-cranelift-indirect-call-ignores-a-failure` attacks it there.
 
 [[mutation]]
 name = "n50-the-cranelift-closure-does-not-retain-its-captures"
-why = "the Cranelift closure object copies an in-memory capture without a reference of its own"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = "                        self.retain_at(at, *t);"
-replace = "                        let _ = at;"
+why = """the Cranelift closure object copies an in-memory capture without a reference of its own
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                        self.copy(at, src, n);
+                        self.retain_at(at, *t);'''
+replace = '                        self.copy(at, src, n);'
 killers = [{ package = "nazm-cli", test = "closures", name = "a_returned_closure_keeps_what_it_captured_alive" }]
 
 [[mutation]]
 name = "n50-the-cranelift-closure-release-forgets-its-captures"
-why = "the Cranelift release helper frees nothing a closure object carried"
-file = "crates/nazm-codegen-clif/src/helpers.rs"
-find = "                    fx.release_at(at, *t);"
-replace = "                    let _ = at;"
+why = """the Cranelift release helper frees nothing a closure object carried
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '''                    let at = fx.ptr_off(a, i64::from(off));
+                    fx.release_at(at, *t);'''
+replace = '                    let _ = fx.ptr_off(a, i64::from(off));'
 killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
 
 [[mutation]]
 name = "n50-the-cranelift-indirect-call-ignores-a-failure"
-why = "under Cranelift a failure inside a function value's code is not noticed by its caller"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """
-                let inst = self.b.ins().call_indirect(sref, code, &vals);
-                let result = self.b.inst_results(inst).first().copied();
-                self.check_failed();"""
-replace = """
-                let inst = self.b.ins().call_indirect(sref, code, &vals);
-                let result = self.b.inst_results(inst).first().copied();"""
+why = """under Cranelift a failure inside a function value's code is not noticed by its caller
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                    args: vals,
+                });
+                self.check_failed();'''
+replace = '''                    args: vals,
+                });'''
 killers = [{ package = "nazm-cli", test = "closures", name = "a_failure_inside_a_closure_reclaims_its_captures_and_its_callers" }]
 
 [[mutation]]
@@ -10289,30 +10220,16 @@ find = "                            class: (s.class != SinkClass::Path).then(|| 
 replace = "                            class: None,"
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_cached_module_keeps_its_sink_classes" }]
 
-[[mutation]]
-name = "n52-the-llvm-vouch-takes-no-reference"
-why = "the LLVM vouch hands back its argument without a reference of its own, so the string is released twice"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-            Builtin::StrVouch => {
-                self.retain(arg(0), Ty::Str);"""
-replace = """
-            Builtin::StrVouch => {"""
-killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_changes_nothing_at_run_time_everywhere" }]
+# `n52-the-llvm-vouch-takes-no-reference` is retired by N105: its rule is LIR's, decided once for both backends, and `n52-the-cranelift-vouch-takes-no-reference` attacks it there.
 
 [[mutation]]
 name = "n52-the-cranelift-vouch-takes-no-reference"
-why = "the Cranelift vouch copies its argument without a reference of its own"
-file = "crates/nazm-codegen-clif/src/prims.rs"
-find = """
-                self.copy(d, s, n);
-                self.retain_at(d, Ty::Str);
-            }
-            Intrinsic::StrSlice => {"""
-replace = """
-                self.copy(d, s, n);
-            }
-            Intrinsic::StrSlice => {"""
+why = """the Cranelift vouch copies its argument without a reference of its own
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''                self.copy(d, s, n);
+                self.retain_at(d, Ty::Str);'''
+replace = '                self.copy(d, s, n);'
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_changes_nothing_at_run_time_everywhere" }]
 
 
@@ -10400,60 +10317,52 @@ killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_send_aft
 
 [[mutation]]
 name = "n53-the-llvm-send-takes-no-reference"
-why = "the LLVM send queues a value without the channel's own reference, so the sender's release frees what is queued"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-                // The channel's own reference, taken before the copy goes in.
-                self.retain(arg(1), t);"""
-replace = """
-                // The channel's own reference, taken before the copy goes in."""
+why = """the LLVM send queues a value without the channel's own reference, so the sender's release frees what is queued
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''                // The channel's own reference, taken as the value goes into the slot.
+                self.store_element(slot, args.get(1), t, false);'''
+replace = '''                // The channel's own reference, taken as the value goes into the slot.
+                if let Some(a) = args.get(1) {
+                    let src = self.place(a);
+                    let n = self.size(t);
+                    self.copy(slot, src, n);
+                }'''
 killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_queued_string_outlives_the_binding_it_was_sent_from" }]
 
-[[mutation]]
-name = "n53-the-llvm-refused-send-keeps-its-reference"
-why = "a value refused by a closed channel keeps the reference taken for queueing it, and leaks"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-                    // Closed: nothing was queued, so the reference taken for it goes back.
-                    self.release(arg(1), t);"""
-replace = """
-                    // Closed: nothing was queued, so the reference taken for it goes back."""
-killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_send_after_close_is_refused_and_its_value_released" }]
+# `n53-the-llvm-refused-send-keeps-its-reference` is retired by N105: its rule is LIR's, decided once for both backends, and `n53-the-cranelift-refused-send-keeps-its-reference` attacks it there.
 
 [[mutation]]
 name = "n53-the-llvm-receive-copies"
-why = "the LLVM receive pushes the value and keeps the reference it was handed, so every received string leaks"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-                // is given back: the value has moved, not been copied.
-                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);
-                self.release(v, t);"""
-replace = """
-                // is given back: the value has moved, not been copied.
-                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);"""
+why = """the LLVM receive pushes the value and keeps the reference it was handed, so every received string leaks
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''        let n = self.size(t);
+        self.copy(at, slot, n);'''
+replace = '''        let n = self.size(t);
+        self.copy(at, slot, n);
+        self.retain_at(at, t);'''
 killers = [{ package = "nazm-cli", test = "generic_channels", name = "records_and_strings_cross_tasks_through_typed_channels_everywhere" }]
 
 [[mutation]]
 name = "n53-the-cranelift-refused-send-keeps-its-reference"
-why = "the Cranelift send does not give back the reference of a value a closed channel refused"
-file = "crates/nazm-codegen-clif/src/prims.rs"
-find = """
-                    self.b.switch_to_block(refused);
-                    self.release_at(slot, t);"""
-replace = """
-                    self.b.switch_to_block(refused);"""
+why = """the Cranelift send does not give back the reference of a value a closed channel refused
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''                    self.b.switch(refused);
+                    self.release_at(slot, t);'''
+replace = '                    self.b.switch(refused);'
 killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_send_after_close_is_refused_and_its_value_released" }]
 
 [[mutation]]
 name = "n53-the-cranelift-channel-has-no-element-release"
-why = "a Cranelift channel of strings is made without its element's release, so what is queued at the end leaks"
-file = "crates/nazm-codegen-clif/src/prims.rs"
-find = """
-                let release = if self.g.lay.owns(t) {
-                    let h = self.g.helper(crate::unit::Helper::ReleaseElement(t));"""
-replace = """
-                let release = if self.g.lay.owns(t) && false {
-                    let h = self.g.helper(crate::unit::Helper::ReleaseElement(t));"""
+why = """a Cranelift channel of strings is made without its element's release, so what is queued at the end leaks
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''                let release = if self.lw.lay.owns(t) {
+                    let h = self.lw.helper(Helper::ReleaseElement(t));'''
+replace = '''                let release = if self.lw.lay.owns(t) && false {
+                    let h = self.lw.helper(Helper::ReleaseElement(t));'''
 killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_value_still_queued_when_the_channel_goes_is_released_once" }]
 
 [[mutation]]
@@ -10555,54 +10464,28 @@ find = "  %wait_ms = select i1 %pos, i64 %ms, i64 0"
 replace = "  %wait_ms = select i1 false, i64 %ms, i64 0"
 killers = [{ package = "nazm-cli", test = "select", name = "a_deadline_is_a_lower_bound_and_a_zero_one_only_looks" }]
 
-[[mutation]]
-name = "n54-the-llvm-select-keeps-the-slot-s-reference"
-why = "the LLVM select pushes the value and keeps the reference the runtime handed over, so a selected string leaks"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-                // Moved, as a receive moves it: the push's reference replaces the slot's.
-                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);
-                self.release(v, t);"""
-replace = """
-                // Moved, as a receive moves it: the push's reference replaces the slot's.
-                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);"""
-killers = [{ package = "nazm-cli", test = "select", name = "a_value_select_did_not_choose_stays_queued_and_is_released_once" }]
+# `n54-the-llvm-select-keeps-the-slot-s-reference` is retired by N105: its rule is LIR's, decided once for both backends, and `n53-the-llvm-receive-copies` attacks it there.
 
-[[mutation]]
-name = "n54-the-llvm-closed-index-is-not-decoded"
-why = "the LLVM select hands the program the runtime's `-3 - i` for a closed channel"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-                    "  %{result} = select i1 %{shut}, i64 %{index}, i64 %{r}\""""
-replace = """
-                    "  %{result} = select i1 false, i64 %{index}, i64 %{r}\""""
-killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
+# `n54-the-llvm-closed-index-is-not-decoded` is retired by N105: its rule is LIR's, decided once for both backends, and `n54-the-cranelift-closed-index-is-not-decoded` attacks it there.
 
 [[mutation]]
 name = "n54-the-cranelift-closed-index-is-not-decoded"
-why = "the Cranelift select hands the program the runtime's `-3 - i` for a closed channel"
-file = "crates/nazm-codegen-clif/src/prims.rs"
-find = "                let result = self.b.ins().select(shut, index, r);"
-replace = "                let result = self.b.ins().select(shut, r, r);"
+why = """the Cranelift select hands the program the runtime's `-3 - i` for a closed channel
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '                let result = self.select(shut, index, r);'
+replace = '                let result = self.select(shut, r, r);'
 killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
 
 [[mutation]]
 name = "n54-the-cranelift-select-copies-nothing"
-why = "the Cranelift select grows the vector without copying the selected value into it"
-file = "crates/nazm-codegen-clif/src/prims.rs"
-find = """
-                self.copy(at, slot, n);
-                let grown = self.b.ins().iadd_imm_s(len, 1);
-                self.b.ins().store(mem(), grown, h, 0);
-                self.b.ins().jump(cont, &[]);
-                self.b.switch_to_block(cont);
-                let shut = self"""
-replace = """
-                let grown = self.b.ins().iadd_imm_s(len, 1);
-                self.b.ins().store(mem(), grown, h, 0);
-                self.b.ins().jump(cont, &[]);
-                self.b.switch_to_block(cont);
-                let shut = self"""
+why = """the Cranelift select grows the vector without copying the selected value into it
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''        let n = self.size(t);
+        self.copy(at, slot, n);'''
+replace = '''        let n = self.size(t);
+        let _ = (at, slot, n);'''
 killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
 
 [[mutation]]
@@ -10636,20 +10519,20 @@ killers = [{ package = "nazm-cli", test = "select", name = "critical_refuses_a_c
 
 [[mutation]]
 name = "n54-the-llvm-spawn-is-not-counted"
-why = "an LLVM program reports no task started, disagreeing with the interpreter"
-file = "crates/nazm-lir/src/emit.rs"
-find = """
-        let _ = writeln!(self.out, "  call void @nz.sched_note_spawn()");"""
-replace = ""
+why = """an LLVM program reports no task started, disagreeing with the interpreter
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '        self.rt("nz.sched_note_spawn", &[]);'
+replace = '        let _ = 0;'
 killers = [{ package = "nazm-cli", test = "select", name = "the_scheduler_s_counters_agree_everywhere" }]
 
 [[mutation]]
 name = "n54-the-cranelift-join-is-not-counted"
-why = "a Cranelift program reports no task joined"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = """
-                self.rt("nz.sched_note_join", &[t]);"""
-replace = ""
+why = """a Cranelift program reports no task joined
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '                self.rt("nz.sched_note_join", &[t]);'
+replace = '                let _ = t;'
 killers = [{ package = "nazm-cli", test = "select", name = "the_scheduler_s_counters_agree_everywhere" }]
 
 [[mutation]]
@@ -10699,20 +10582,18 @@ replace = """
   %stop = getelementptr i8, ptr %buf, i64 %n"""
 killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends" }]
 
-[[mutation]]
-name = "n55-the-llvm-c-string-has-no-length"
-why = "the LLVM call copies a string of length zero, whatever the Str holds"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                            "  %{n} = extractvalue {{ ptr, i64, ptr }} %{v}, 1""""
-replace = """                            "  %{n} = add i64 0, 0""""
-killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends" }]
+# `n55-the-llvm-c-string-has-no-length` is retired by N105: its rule is LIR's, decided once for both backends, and `n55-the-cranelift-c-string-has-no-length` attacks it there.
 
 [[mutation]]
 name = "n55-the-cranelift-c-string-has-no-length"
-why = "the Cranelift call copies a string of length zero, whatever the Str holds"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = "                        let n = self.b.ins().load(types::I64, mem(), v, 8);"
-replace = "                        let n = self.iconst(0);"
+why = """the Cranelift call copies a string of length zero, whatever the Str holds
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                        let n = self.load(Class::I64, v, offset(lf));
+                        let nul'''
+replace = '''                        let n = self.iconst(0);
+                        let _ = lf;
+                        let nul'''
 killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_crosses_into_c_as_a_borrowed_c_string_under_both_backends" }]
 
 [[mutation]]
@@ -10735,20 +10616,16 @@ find = "        Some(e) if e.names.is_empty() => {}"
 replace = "        Some(_) => {}"
 killers = [{ package = "nazm-cli", test = "ffi_v2", name = "an_export_is_public_effect_free_scalar_and_not_generic" }]
 
-[[mutation]]
-name = "n55-the-llvm-export-returns-a-stand-in"
-why = "the LLVM C entry returns the failed function's stand-in value into C"
-file = "crates/nazm-lir/src/emit.rs"
-find = """let _ = writeln!(e.out, "  br i1 %f, label %failed, label %done");"""
-replace = """let _ = writeln!(e.out, "  br i1 false, label %failed, label %done");"""
-killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_and_its_header_link_into_a_c_program_under_both_backends" }]
+# `n55-the-llvm-export-returns-a-stand-in` is retired by N105: its rule is LIR's, decided once for both backends, and `n55-the-cranelift-export-returns-a-stand-in` attacks it there.
 
 [[mutation]]
 name = "n55-the-cranelift-export-returns-a-stand-in"
-why = "the Cranelift C entry returns the failed function's stand-in value into C"
-file = "crates/nazm-codegen-clif/src/helpers.rs"
-find = "    fx.b.ins().brif(failed, bad, &[], done, &[]);"
-replace = "    fx.b.ins().brif(failed, done, &[], done, &[]);"
+why = """the Cranelift C entry returns the failed function's stand-in value into C
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = '    fx.branch(bad, fail, done);'
+replace = '''    fx.branch(bad, done, done);
+    let _ = fail;'''
 killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_and_its_header_link_into_a_c_program_under_both_backends" }]
 
 [[mutation]]
@@ -10977,18 +10854,20 @@ killers = [{ package = "nazm-cli", test = "cross", name = "inspect_names_every_t
 
 [[mutation]]
 name = "n58-a-parameter-has-no-position"
-why = "a parameter is described as a local, so a debugger shows no arguments"
-file = "crates/nazm-lir/src/emit.rs"
-find = '                mir::LocalOrigin::Param => Some(i + 1),'
-replace = '                mir::LocalOrigin::Param => Some(0),'
+why = """a parameter is described as a local, so a debugger shows no arguments
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '            mir::LocalOrigin::Param => u32::try_from(i + 1).unwrap_or(0),'
+replace = '            mir::LocalOrigin::Param => 0,'
 killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bindings_are_described_and_temporaries_are_not" }]
 
 [[mutation]]
 name = "n58-a-bool-is-an-int"
-why = "a Bool variable is described as a 64-bit integer, so the debugger reads seven bytes past it"
-file = "crates/nazm-lir/src/emit.rs"
-find = '                Some(Ty::Bool) => Some("bool"),'
-replace = '                Some(Ty::Bool) => Some("int"),'
+why = """a Bool variable is described as a 64-bit integer, so the debugger reads seven bytes past it
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '            Some(Ty::Bool) => "bool",'
+replace = '            Some(Ty::Bool) => "int",'
 killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bindings_are_described_and_temporaries_are_not" }]
 
 [[mutation]]
@@ -11015,8 +10894,8 @@ killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bin
 name = "n58-a-variable-is-never-declared"
 why = "the variables are described and never declared on their slots"
 file = "crates/nazm-lir/src/debug.rs"
-find = '                            "  call void @llvm.dbg.declare(metadata ptr %slot{slot}, metadata !{var}, metadata !DIExpression()), !dbg !{loc}"'
-replace = '                            "  ; nz.var dropped {slot} {var} {loc}"'
+find = '''                            "  call void @llvm.dbg.declare(metadata ptr %{storage}, metadata !{var}, metadata {expr}), !dbg !{loc}"'''
+replace = '''                            "  ; nz.var dropped {storage} {var} {expr} {loc}"'''
 killers = [{ package = "nazm-cli", test = "debugger", name = "parameters_and_bindings_are_described_and_temporaries_are_not" }]
 
 [[mutation]]
@@ -11062,22 +10941,22 @@ killers = [{ package = "nazm-cli", test = "debugger", name = "a_profile_reports_
 
 [[mutation]]
 name = "n59-a-binding-is-promoted"
-why = "a source binding loses its slot, so a debugger has nothing to read"
-file = "crates/nazm-lir/src/emit.rs"
+why = """a source binding loses its slot, so a debugger has nothing to read
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
 find = '            let temp = matches!(local.origin, mir::LocalOrigin::Temp) && i >= f.params as usize;'
 replace = '            let temp = !matches!(local.origin, mir::LocalOrigin::Param) && i >= f.params as usize;'
 killers = [{ package = "nazm-cli", test = "promotion", name = "a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one" }]
 
 [[mutation]]
 name = "n59-a-load-reads-a-slot-that-is-not-there"
-why = "a promoted temporary is loaded from a slot it was never given"
-file = "crates/nazm-lir/src/emit.rs"
-find = '''
-        if self.promoted.get(l.index()).copied().unwrap_or(false) {
-            if let Some(v) = self.ssa.get(l.index()).copied().flatten() {'''
-replace = '''
-        if false {
-            if let Some(v) = self.ssa.get(l.index()).copied().flatten() {'''
+why = """a promoted temporary is loaded from a slot it was never given
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''            Some(Loc::Value(i, t)) => match self.promoted.get(i).copied().flatten() {
+                Some(v) => v,'''
+replace = '''            Some(Loc::Value(i, t)) => match self.promoted.get(i).copied().flatten() {
+                Some(_) => self.iconst_c(class(t), 0),'''
 killers = [{ package = "nazm-cli", test = "promotion", name = "a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one" }]
 
 
@@ -11579,19 +11458,15 @@ find = '  br i1 %to, label %overflow, label %tail.step'
 replace = '  br i1 false, label %overflow, label %tail.step'
 killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
 
-[[mutation]]
-name = "n66-the-llvm-flag-is-never-raised"
-why = "the LLVM backend reads the sum's overflow flag and never fails on it"
-file = "crates/nazm-lir/src/emit.rs"
-find = '                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{flag}, 0");'
-replace = '                let _ = writeln!(self.out, "  %{bad} = icmp ne i32 %{flag}, %{flag}");'
-killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
+# `n66-the-llvm-flag-is-never-raised` is retired by N105: its rule is LIR's, decided once for both backends, and `n66-the-cranelift-flag-is-never-raised` attacks it there.
 
 [[mutation]]
 name = "n66-the-cranelift-flag-is-never-raised"
-why = "the Cranelift backend does not fail on the sum's overflow flag"
-file = "crates/nazm-codegen-clif/src/prims.rs"
-find = '                self.guard(raised, "N0400", "this addition overflows `Int`");'
+why = """the Cranelift backend does not fail on the sum's overflow flag
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''                let bad = self.cmp_imm(Cmp::Ne, raised, Class::I32, 0);
+                self.guard(bad, "N0400", "this addition overflows `Int`");'''
 replace = '                let _ = raised;'
 killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits" }]
 
@@ -11704,10 +11579,11 @@ killers = [{ package = "nazm-cache", lib = true, name = "object::tests::a_kernel
 
 [[mutation]]
 name = "n68-every-field-shares-one-array"
-why = "every field of an element is stored at the same place, so one field overwrites the others"
-file = "crates/nazm-lir/src/emit.rs"
-find = '        let _ = writeln!(self.out, "  %{base} = mul i64 %{cap}, {k}");'
-replace = '        let _ = writeln!(self.out, "  %{base} = mul i64 %{cap}, 0");'
+why = """every field of an element is stored at the same place, so one field overwrites the others
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/soa.rs"
+find = '        let kk = self.iconst(i64::try_from(k).unwrap_or(0));'
+replace = '        let kk = self.iconst(i64::try_from(k).unwrap_or(0) * 0);'
 killers = [{ package = "nazm-cli", test = "layout", name = "the_field_by_field_layout_changes_no_answer" }]
 
 [[mutation]]
@@ -11728,30 +11604,39 @@ killers = [{ package = "nazm-cli", test = "layout", name = "the_field_by_field_l
 
 [[mutation]]
 name = "n68-a-field-by-field-read-is-unchecked"
-why = "a read of a field-by-field vector skips the bounds check and returns whatever lies past the end"
-file = "crates/nazm-lir/src/emit.rs"
-find = '''
-            Builtin::VecGet => {
-                self.soa_bounds(arg(0), arg(1), span);'''
-replace = '''
-            Builtin::VecGet => {'''
+why = """a read of a field-by-field vector skips the bounds check and returns whatever lies past the end
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/soa.rs"
+find = '''            Intrinsic::VecGet => {
+                let i = self.arg_value(args, 1);
+                self.soa_bounds(h, i);'''
+replace = '''            Intrinsic::VecGet => {
+                let i = self.arg_value(args, 1);'''
 killers = [{ package = "nazm-cli", test = "layout", name = "the_field_by_field_layout_changes_no_failure" }]
 
 [[mutation]]
 name = "n68-an-owning-element-is-split"
-why = "a record holding a `Str` is laid out field by field, splitting a value whose fields are wider than a slot and whose release walks the element"
-file = "crates/nazm-lir/src/emit.rs"
-find = '        (!l.fields.is_empty() && l.fields.iter().all(|f| matches!(f, Ty::Int | Ty::Bool)))'
-replace = '        (!l.fields.is_empty())'
+why = """a record holding a `Str` is laid out field by field, splitting a value whose fields are wider than a slot and whose release walks the element
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/soa.rs"
+find = '(!l.fields.is_empty() && l.fields.iter().all(|f| matches!(f, Ty::Int | Ty::Bool)))'
+replace = '(!l.fields.is_empty())'
 killers = [{ package = "nazm-cli", test = "layout", name = "an_ineligible_element_stays_whole_and_the_reason_is_reported" }]
 
+# `n68-cranelift-takes-the-layout-silently` is retired by N105: Cranelift no longer refuses the
+# layout, it takes it; `n105-cranelift-ignores-the-layout` attacks what replaced the refusal.
+
 [[mutation]]
-name = "n68-cranelift-takes-the-layout-silently"
-why = "`--layout soa` under Cranelift is not refused, so the build silently keeps the other layout"
+name = "n105-cranelift-ignores-the-layout"
+why = "`--layout soa` reaches the LLVM backend and not Cranelift, which silently keeps every element whole: the refusal N68 had is gone, so nothing would say so"
 file = "crates/nazm-cli/src/build.rs"
-find = '    if soa && choice.backend == nazm_lir::backend::BackendId::Cranelift {'
-replace = '    if false && choice.backend == nazm_lir::backend::BackendId::Cranelift {'
-killers = [{ package = "nazm-cli", test = "layout", name = "the_layout_is_asked_for_by_name_and_is_the_llvm_backends" }]
+find = '''        .with_debug(choice.debug)
+        .with_soa(soa);
+    let chosen'''
+replace = '''        .with_debug(choice.debug)
+        .with_soa(false);
+    let chosen'''
+killers = [{ package = "nazm-cli", test = "layout", name = "the_layout_is_asked_for_by_name_and_both_backends_take_it" }]
 
 [[mutation]]
 name = "n68-the-report-refuses-an-eligible-type"
@@ -11929,9 +11814,9 @@ killers = [{ package = "nazm-cli", test = "wasm_contract", name = "the_adapter_l
 name = "n71-fields-are-placed-by-declaration"
 why = "the adapter builds the state with fields in declaration order, where the record is laid out by name"
 file = "crates/nazm-cli/src/contract_wasm.rs"
-find = '    let layout = |name: &str| by_name.iter().position(|n| *n == name).unwrap_or(0);'
-replace = '    let layout = |name: &str| shape.fields.iter().position(|(n, _)| n == name).unwrap_or(0);'
-killers = [{ package = "nazm-cli", test = "wasm_contract", name = "the_contract_builds_for_webassembly_with_its_adapter_and_metadata" }]
+find = '''            let pos = of_declaration.get(k).copied().unwrap_or(0) as usize;'''
+replace = '''            let pos = { let _ = of_declaration; k };'''
+killers = [{ package = "nazm-cli", bin = "nazm", name = "contract_wasm::tests::a_state_field_is_found_at_its_canonical_offset_not_its_declared_one" }]
 
 [[mutation]]
 name = "n71-the-metadata-names-another-export"
@@ -11986,19 +11871,14 @@ killers = [{ package = "nazm-cli", test = "accounts", name = "the_account_metada
 
 [[mutation]]
 name = "n73-the-fuzzer-finds-an-unsigned-llvm-ordering"
-why = "the LLVM backend's `<` is unsigned; no test names it — the differential fuzzer's generated programs disagree with the interpreter"
-file = "crates/nazm-lir/src/emit.rs"
-find = '        mir::CmpOp::Lt => "slt",'
-replace = '        mir::CmpOp::Lt => "ult",'
+why = """the LLVM backend's `<` is unsigned; no test names it — the differential fuzzer's generated programs disagree with the interpreter
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '                Cmp::Lt => "slt",'
+replace = '                Cmp::Lt => "ult",'
 killers = [{ package = "nazm-cli", test = "fuzz_diff", name = "every_tier_gives_a_generated_program_the_same_answer" }]
 
-[[mutation]]
-name = "n73-the-fuzzer-finds-an-unsigned-cranelift-ordering"
-why = "Cranelift's `<` is unsigned; found by the differential fuzzer as well as by N41's named test"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = "                            mir::CmpOp::Lt => IntCC::SignedLessThan,"
-replace = "                            mir::CmpOp::Lt => IntCC::UnsignedLessThan,"
-killers = [{ package = "nazm-cli", test = "fuzz_diff", name = "every_tier_gives_a_generated_program_the_same_answer" }]
+# `n73-the-fuzzer-finds-an-unsigned-cranelift-ordering` is retired by N105: its rule is LIR's, decided once for both backends, and `n41-an-ordering-is-unsigned` attacks it there.
 
 [[mutation]]
 name = "n73-the-fuzzer-finds-a-lexer-panic"
@@ -12877,10 +12757,11 @@ killers = [{ package = "nazm-lir", lib = true, name = "abi::tests::the_validator
 
 [[mutation]]
 name = "n81-cranelift-lays-out-for-another-target"
-why = "the Cranelift backend reads the tables for a 4-byte pointer on a 64-bit host, and its handles overlap"
-file = "crates/nazm-codegen-clif/src/unit.rs"
-find = "        let lay = Layouts::of(unit, DataLayout::with_pointer_bits(ptr.bits()));"
-replace = "        let lay = Layouts::of(unit, DataLayout::WASM32);"
+why = """the Cranelift backend reads the tables for a 4-byte pointer on a 64-bit host, and its handles overlap
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-codegen-clif/src/lib.rs"
+find = '        let data = nazm_lir::abi::DataLayout::of(&self.target);'
+replace = '        let data = nazm_lir::abi::DataLayout::WASM32;'
 killers = [{ package = "nazm-cli", test = "lir", name = "every_shape_in_the_tables_runs_the_same_on_both_backends" }]
 
 
@@ -13192,28 +13073,24 @@ find = "        if !declared {"
 replace = "        if true {"
 killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_handle_a_c_struct_a_c_string_errno_and_a_callback_cross_under_both_backends" }]
 
-[[mutation]]
-name = "n85-llvm-forgets-errno"
-why = "the LLVM backend does not capture `errno` as a foreign call returns, so `c_errno()` reads whatever was saved before"
-file = "crates/nazm-lir/src/emit.rs"
-find = '                    let _ = writeln!(self.out, "  call void @nz.errno_save()");'
-replace = ""
-killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_handle_a_c_struct_a_c_string_errno_and_a_callback_cross_under_both_backends" }]
+# `n85-llvm-forgets-errno` is retired by N105: its rule is LIR's, decided once for both backends, and `n85-cranelift-forgets-errno` attacks it there.
 
 [[mutation]]
 name = "n85-cranelift-forgets-errno"
-why = "the Cranelift backend does not capture `errno`, so the two backends disagree about what C left"
-file = "crates/nazm-codegen-clif/src/func.rs"
-find = '                    self.rt("nz.errno_save", &[]);'
-replace = ""
+why = """the Cranelift backend does not capture `errno`, so the two backends disagree about what C left
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '            self.rt("nz.errno_save", &[]);'
+replace = '            let _ = 0;'
 killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_handle_a_c_struct_a_c_string_errno_and_a_callback_cross_under_both_backends" }]
 
 [[mutation]]
 name = "n85-a-struct-copy-is-kept"
-why = "the LLVM backend's borrowed copy of a C struct is never freed, so every call leaks it"
-file = "crates/nazm-lir/src/emit.rs"
-find = "                            copies.push(m);"
-replace = ""
+why = """the LLVM backend's borrowed copy of a C struct is never freed, so every call leaks it
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/func.rs"
+find = '                        copies.push(m);'
+replace = '                        let _ = &m;'
 killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_struct_passed_to_c_is_a_copy_freed_after_every_call" }]
 
 [[mutation]]
@@ -13378,10 +13255,11 @@ killers = [{ package = "nazm-cli", test = "contracts", name = "critical_and_cybe
 
 [[mutation]]
 name = "n87-llvm-names-the-wrong-clause"
-why = "the LLVM backend reports a broken precondition as a postcondition, disagreeing with the interpreter and Cranelift"
-file = "crates/nazm-lir/src/emit.rs"
-find = "    if which == 0 {"
-replace = "    if which != 1 && which != 0 {"
+why = """the LLVM backend reports a broken precondition as a postcondition, disagreeing with the interpreter and Cranelift
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '                if which == 0 {'
+replace = '                if which != 1 && which != 0 {'
 killers = [{ package = "nazm-cli", test = "contracts", name = "a_contract_holds_or_fails_alike_on_every_tier" }]
 
 
@@ -13508,27 +13386,25 @@ killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_binding_is_sc
 
 [[mutation]]
 name = "n91-cranelift-writes-no-dwarf"
-why = "a Cranelift debug build gathers its debug facts and writes none of them"
-file = "crates/nazm-codegen-clif/src/unit.rs"
-find = "        if let Some(debug) = &self.debug {"
-replace = "        if let Some(debug) = None::<&crate::dwarf::Debug> {"
+why = """a Cranelift debug build gathers its debug facts and writes none of them
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = '    if let Some(debug) = &t.debug {'
+replace = '    if let Some(debug) = None::<&crate::dwarf::Debug> {'
 killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_cranelift_build_carries_debug_information_only_when_asked" }]
 
 [[mutation]]
 name = "n91-macho-addresses-are-not-settled"
-why = "a Mach-O object's DWARF addresses are offsets into the code section, not object addresses, so dsymutil places every function at the wrong address"
-file = "crates/nazm-codegen-clif/src/unit.rs"
-find = "                crate::dwarf::settle_macho(b)"
-replace = "                Ok(b)"
+why = """a Mach-O object's DWARF addresses are offsets into the code section, not object addresses, so dsymutil places every function at the wrong address
+Repointed by N105: the rule is LIR's, made once for both backends."""
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = '        crate::dwarf::settle_macho(bytes).map_err(|e| vec![defect(e)])'
+replace = '        Ok(bytes)'
 killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
 
-[[mutation]]
-name = "n91-a-debug-object-is-reused"
-why = "a Cranelift debug object is taken from the cache by its MIR, which does not change when a line is added above the code, so the debugger's lines are stale"
-file = "crates/nazm-codegen-clif/src/lib.rs"
-find = "                key: (!self.debug).then(|| self.key(native, unit)),"
-replace = "                key: Some(self.key(native, unit)),"
-killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
+# `n91-a-debug-object-is-reused` is retired by N105 as an equivalent mutant: the object key is the LIR's digest,
+# and a debug build's LIR carries every source position as a `Loc`, so a line added above the code changes the key
+# whether or not a debug object may be reused. The stale-line defect it guarded is closed at its root (§7.106).
 
 [[mutation]]
 name = "n91-a-frame-owns-its-callees-samples"
@@ -13913,3 +13789,65 @@ find = """                // As a monomorphic call's argument is (N79, N104): an
 replace = """                // As a monomorphic call's argument is (N79, N104): an attenuation is accepted.
                 if got != want {"""
 killers = [{ package = "nazm-cli", test = "authority", name = "an_io_cap_given_for_an_out_cap_compiles_on_both_backends" }]
+
+[[mutation]]
+name = "n105-the-validator-ignores-dominance"
+why = "a value used in a block its definition does not dominate passes the validator, so a backend translates a use of an undefined value: Cranelift's verifier or LLVM's would refuse it after LIR said it was sound, or worse, accept a stale register"
+file = "crates/nazm-lir/src/op/validate.rs"
+find = '''        if x == a {
+            return true;
+        }'''
+replace = '''        if x == a || x != a {
+            return true;
+        }'''
+killers = [{ package = "nazm-lir", lib = true, name = "op::validate::tests::a_value_used_where_its_definition_does_not_reach_is_refused" }]
+
+[[mutation]]
+name = "n105-the-validator-ignores-a-calls-classes"
+why = "a call whose argument is of the wrong class passes the validator, so the two backends would each make their own sense of it — the divergence N105 exists to make impossible"
+file = "crates/nazm-lir/src/op/validate.rs"
+find = '        check(e, *a, at, Some(std::slice::from_ref(c)));'
+replace = '        check(e, *a, at, None);'
+killers = [{ package = "nazm-lir", lib = true, name = "op::validate::tests::a_call_that_does_not_match_its_callee_is_refused" }]
+
+[[mutation]]
+name = "n105-the-oracle-forgets-a-failure"
+why = "LIR's interpreter ends a failed program with its result and status 0, so the oracle both backends are held to agrees with neither of them on every failure"
+file = "crates/nazm-lir/src/op/interp.rs"
+find = '    if let Some(msg) = m.failed.take() {'
+replace = '    if let Some(msg) = m.failed.take().filter(|_| false) {'
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_their_failures_agree_with_the_oracle" }]
+
+[[mutation]]
+name = "n105-the-oracle-checks-addition-as-unsigned"
+why = "the oracle computes a checked addition's overflow as unsigned, so it reports an overflow where Nazm has none and misses the one it has"
+file = "crates/nazm-lir/src/op/interp.rs"
+find = '                            OvfOp::Add => x.overflowing_add(z),'
+replace = '                            OvfOp::Add => { let (r, _) = x.overflowing_add(z); (r, (x as u64).overflowing_add(z as u64).1) }'
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_their_failures_agree_with_the_oracle" }]
+
+[[mutation]]
+name = "n105-cranelift-takes-at-most-for-less-than"
+why = "Cranelift translates LIR's `le` as a strict comparison, so `<=` is false at equality on one backend"
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = '                Cmp::Le => IntCC::SignedLessThanOrEqual,'
+replace = '                Cmp::Le => IntCC::SignedLessThan,'
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "control_flow_and_recursion_agree_with_the_oracle" }]
+
+[[mutation]]
+name = "n105-llvm-prints-a-select-backwards"
+why = "the LLVM printer writes a select's arms in the other order, so every select LIR makes — the remainder's divisor, `min`-style choices — takes the wrong arm on LLVM only"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '            let _ = writeln!(out, "  {d} = select i1 {k}, {x}, {y}");'
+replace = '            let _ = writeln!(out, "  {d} = select i1 {k}, {y}, {x}");'
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_their_failures_agree_with_the_oracle" }]
+
+[[mutation]]
+name = "n105-a-remainder-by-minus-one-reaches-the-machine"
+why = "`Int::MIN % -1` divides by -1 after all, which the machine faults on: Nazm says it is 0, and the program dies of a signal on every backend at once — so only an independent answer sees it"
+file = "crates/nazm-lir/src/op/func.rs"
+find = '                let divisor = self.select(special, one, y);'
+replace = '''                let divisor = self.select(special, y, y);
+                let _ = one;'''
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_their_failures_agree_with_the_oracle" }]
+

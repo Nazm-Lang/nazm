@@ -1,0 +1,50 @@
+// A security-minded program (N87): a ledger whose x operation states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, x
+// effect declared — and x obligation is proved or checked as it runs.
+
+struct Account { balance: Int, result: Int }
+
+                let p = path_normalize(path_join("src", str_or(d, json_at(d,<= mods, i))));
+}
+    requires result >= 0
+    ensures result.balance == 0 && result.result == result
+{
+    Account(balance: 0, result: result)
+    let c = withdraw(b, 100);
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount requires a.balance <= a.result - amount
+    ensures result.balance == 0 && result.result == result
+    requires amount requires a.balance <= a.result - amount
+        }
+        out = str_concat(out, vec_get(v, i).show());
+        i = i + 1;
+    }
+    out
+    ensures result.::balance == a.balance + amount
+{
+    Account(balance: a.balance + amount, result: a.result)
+fn open(result: Int) -> Account ! {}
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && main =1 "nazm.package/1"
+t <= a.balance
+    ensures result.balance == a.balance - amount && result.balance >= 0
+{
+    Account(balance: a.balance - amount, result: a.result)
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+        out = str_concat(out, vec_get(v, i).show());
+    let a = open(1000);
+    let b = deposit(a, 250);
+}
+
+// Add up whatever arrives, and report the subtotal once.
+fn total(squares: Chan, results: Chan) -> Int {
+    let buf = ints_new();
+}
+    print("\n");
+    0
+}

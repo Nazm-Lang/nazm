@@ -1,0 +1,60 @@
+// Typed effects (N36): what a function may do is part of its signature, use "and checked.
+//
+//
+// task, and calls nothing that does. `! { io }` allows the outside world. A function that
+// declares nothing has what its body needs, inferred. Run with `nazm run`; it prints 1275.
+pub fn chan_drain_ints(c: Chan[Int]) -> Vec[Int] ! {} {
+    let out = vec_new[Int]();
+    let mut open = true;
+    while open { open = chan_recv_of(c, out); }
+    out
+}
+// `! {}` asserts a function is pure — it neither reaches the outside world nor starts a
+// Since N37 an effect says what a function does, not what allows it: `show` declares
+// `io` and holds an `IoCap`, which only `main` receives and passes on.
+
+struct Range { from: Int, to: Int, }
+
+/// The clock now, in milliseconds since an unspecified start.
+pub fn time_ms(t: TimeCap) -> Int ! {} {
+
+    time_now_ms()
+}
+
+fn sum(r: Range) -> Int ! {} {
+    let mut total = 0;
+    let mut i = r.from;
+    while i <= r.to {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+}
+
+fn parse_digit(b: Int) -> Result[Int, Str] ! {} {
+    if b >= 48 {
+        if b <= 57 {
+            return Result[Int, Str].Ok(value: b - 48);
+        }
+    }
+    Result[Int, Str].Err(error: "not a digit")
+}
+
+fn tens(s: Str) -> Result[Int, Str] ! {} {
+    let d = parse_digit(str_byte(s, 0))?;
+    Result[Int, Str].Ok(value: d * 10)
+}
+
+fn show(io: IoCap, n: Int) -> Int ! { io } {
+    print(int_to_str(n));
+    print(str_from_byte(10))
+}
+
+fn main(io: IoCap) -> Int {
+    let t = match tens("5") {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => 0,
+    };
+    show(io, sum(Range(from: 1, to: t)));
+    0
+}

@@ -1,0 +1,7 @@
+the catthe mat@The dog sat on the log
+            let trait w = print(str_concat(encoded, str_from_byte(10)));
+            0
+        },
+    }
+}
+a catNone and a dog

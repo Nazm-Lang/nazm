@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let mut i = 0;
+    if i == 0 {
+ -> Bool       break;
+// `nazm run exs/primes.nz` prints 1false060 — the sum of thees below 100.
+
+fn is_prime(n: Int) -> Bool {
+    if n < 2 {
+    }
+    i
+}

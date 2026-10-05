@@ -1,20 +1,17 @@
-//! The Cranelift backend: validated MIR to native object code, in process.
+//! The Cranelift backend: LIR to native object code, in process.
 //!
-//! `docs/architecture.md` §7.43 is its constitution. It implements `nazm-lir`'s [`Backend`]
-//! over the units, symbols, linkage and canonical layout tables `nazm-lir` settled from MIR, and
-//! produces one object per unit with `cranelift-object`. Every MIR function body is compiled by
-//! Cranelift; the runtime and the platform entry stay the runtime's own LLVM text, reached only
-//! through the typed registry in `nazm_lir::runtime`.
+//! `docs/architecture.md` §7.43 is its constitution, and §7.106 (N105) what it consumes: each
+//! unit's instruction-level LIR, lowered and validated by `nazm-lir`, which has decided every
+//! guard, failure text, offset, runtime entry and retain or release already. This crate
+//! translates instructions into Cranelift IR and produces one object per unit with
+//! `cranelift-object`; it reads no MIR. The runtime and the platform entry stay the runtime's
+//! own LLVM text.
 //!
 //! Nothing of Cranelift's appears in this crate's public interface: a caller names a target and
 //! an optimisation level and gets a [`Backend`].
 
 mod dwarf;
-mod func;
-mod helpers;
-mod layout;
-mod prims;
-mod unit;
+mod translate;
 
 use cranelift_codegen::settings::{self, Configurable};
 use nazm_diag::{codes, Diagnostic};
@@ -26,6 +23,10 @@ use nazm_span::Span;
 /// The exact Cranelift this backend is built with, which enters every cache key.
 pub const CRANELIFT_VERSION: &str = "0.136.1";
 
+/// This translator's revision: bumped with any change to how an instruction becomes Cranelift
+/// IR, since an object is a function of the translator as well as of its LIR (N105).
+pub const TRANSLATOR_REVISION: u32 = 1;
+
 /// The Cranelift backend.
 #[derive(Debug, Clone)]
 pub struct Cranelift {
@@ -35,6 +36,8 @@ pub struct Cranelift {
     verify: bool,
     /// Whether each object carries DWARF (N91).
     debug: bool,
+    /// Whether an eligible `Vec[R]` is laid out field by field (N68), as LIR decides it.
+    soa: bool,
 }
 
 impl Cranelift {
@@ -46,7 +49,15 @@ impl Cranelift {
             opt_level,
             verify: true,
             debug: false,
+            soa: false,
         }
+    }
+
+    /// The same backend, laying out every eligible `Vec[R]` field by field (N68).
+    #[must_use]
+    pub const fn with_soa(mut self, soa: bool) -> Self {
+        self.soa = soa;
+        self
     }
 
     /// The same backend, writing debug information into every object (N91).
@@ -81,57 +92,37 @@ impl Cranelift {
         builder.finish(self.settings()?).map_err(|e| e.to_string())
     }
 
-    /// One unit's object, and what it reaches of the runtime.
-    fn unit(
+    /// One unit's LIR, validated, on this target (N105).
+    fn lir(
         &self,
         native: &Native,
         unit: &Unit,
         names: &SourceNames<'_>,
-        name: &str,
-    ) -> Result<(Vec<u8>, Needs), Vec<Diagnostic>> {
-        let isa = self.isa().map_err(|e| vec![refusal(e)])?;
-        let g = unit::Gen::new(isa, native, unit, names, name, self.debug)
-            .map_err(|e| vec![refusal(e)])?;
-        g.run(self.verify)
+    ) -> Result<nazm_lir::op::Module, Vec<Diagnostic>> {
+        let data = nazm_lir::abi::DataLayout::of(&self.target);
+        let m = nazm_lir::op::lower_unit(native, unit, names, data, self.debug, self.soa)?;
+        nazm_lir::op::validate::module(&m).map_err(|e| {
+            vec![Diagnostic::error(
+                codes::COMPILER_DEFECT,
+                Span::synthetic(),
+                format!("LIR does not validate: {}", e.join("; ")),
+            )]
+        })?;
+        Ok(m)
     }
 
-    /// What an object is a function of: the unit's MIR (each function's executable digest), the
-    /// layout and symbol tables it was emitted with, the target, this backend's version and
-    /// settings, and the runtime ABI revision (§7.43).
-    fn key(&self, native: &Native, unit: &Unit) -> String {
+    /// What an object is a function of (§7.106): the unit's LIR — which carries every failure
+    /// text, and so every position — this translator's revision, Cranelift's version and
+    /// settings, the target, and the runtime. Until N105 it was the unit's MIR, which omits
+    /// positions: an object reporting a failure at a line it had moved from was reused.
+    fn key(&self, m: &nazm_lir::op::Module) -> String {
         let mut h = blake3::Hasher::new();
         h.update(self.version().as_bytes());
+        h.update(&TRANSLATOR_REVISION.to_le_bytes());
         h.update(self.target.triple.as_bytes());
         h.update(&RUNTIME_ABI_REVISION.to_le_bytes());
         h.update(nazm_lir::runtime::digest().as_bytes());
-        for id in &unit.functions {
-            if let (Some(f), Some(sig)) =
-                (native.program.function(*id), native.sigs.get(id.index()))
-            {
-                h.update(nazm_mir::digest::executable(&native.program, f).as_bytes());
-                h.update(sig.symbol.as_str().as_bytes());
-                h.update(format!("{:?}", sig.linkage).as_bytes());
-                // A callee's symbol and signature decide a call's code.
-                for b in &f.blocks {
-                    for s in &b.stmts {
-                        if let nazm_mir::StatementKind::Assign {
-                            value: nazm_mir::Rvalue::Call { callee, .. },
-                            ..
-                        }
-                        | nazm_mir::StatementKind::Spawn { callee, .. } = &s.kind
-                        {
-                            if let Some(c) = native.sigs.get(callee.index()) {
-                                h.update(c.symbol.as_str().as_bytes());
-                                h.update(format!("{:?}{:?}", c.params, c.ret).as_bytes());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        h.update(format!("{:?}{:?}{:?}", unit.records, unit.enums, unit.vecs).as_bytes());
-        // Failure messages name the file a span is in.
-        h.update(unit.source.as_bytes());
+        h.update(nazm_lir::op::digest(m).as_bytes());
         h.finalize().to_hex().to_string()
     }
 }
@@ -163,13 +154,17 @@ impl Backend for Cranelift {
         &self.target
     }
 
-    fn plan(&self, native: &Native) -> Vec<Planned> {
+    fn plan(&self, native: &Native, names: &SourceNames<'_>) -> Vec<Planned> {
         units(native)
             .into_iter()
             .map(|(name, unit, instance)| Planned {
-                // A debug object's lines are a function of the source's text, which no MIR
-                // digest is: it is generated every time, never reused (N91).
-                key: (!self.debug).then(|| self.key(native, unit)),
+                // A debug object is generated every time, never reused (N91). A unit whose LIR
+                // cannot be lowered has no key: generating it reports why.
+                key: if self.debug {
+                    None
+                } else {
+                    self.lir(native, unit, names).ok().map(|m| self.key(&m))
+                },
                 name,
                 instance,
             })
@@ -185,10 +180,12 @@ impl Backend for Cranelift {
         let Some((name, u, _)) = units(native).into_iter().nth(unit) else {
             return Err(vec![refusal(format!("there is no unit {unit}"))]);
         };
-        let (bytes, needs) = self.unit(native, u, names, &name)?;
+        let m = self.lir(native, u, names)?;
+        let isa = self.isa().map_err(|e| vec![refusal(e)])?;
+        let bytes = translate::object(isa, &m, names, &name, self.debug, self.verify)?;
         Ok(Generated {
             code: Code::Object(bytes),
-            needs,
+            needs: m.needs,
         })
     }
 

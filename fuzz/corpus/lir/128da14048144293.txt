@@ -1,0 +1,8 @@
+fn nothing() -> Int {
+    return;
+}
+
+
+/// A value that may be absent. There is no null: `NCne` is a variant like any other.
+pub enum Op {
+}

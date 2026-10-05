@@ -1,6 +1,6 @@
 [package]
 name = "nazm-codegen-clif"
-description = "The Cranelift backend: validated MIR to native object code, in process."
+description = "The Cranelift backend: LIR to native object code, in process."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,11 +14,8 @@ docs = ["architecture:7.43"]
 [dependencies]
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }
-nazm-sema = { workspace = true }
-# What it compiles: validated MIR.
-nazm-mir = { workspace = true }
-# The backend boundary, the units, symbols, linkage and layout tables every backend shares,
-# and the runtime registry every call into the runtime is built from.
+# What it compiles (N105): each unit's instruction-level LIR, and the backend boundary. Not MIR:
+# every decision a program can observe is LIR's, made once for both backends.
 nazm-lir = { workspace = true }
 # Pinned exactly (N41): a code generator is part of every object's cache key, and a floating
 # version would change machine code under an unchanged key.

@@ -1,0 +1,45 @@
+// A security-minded program (N87): a ledger whose x openation states the invariant it keeps,
+// written so that `critical` and `cyber` accept it — no function value, no C, no clock, x
+// effect declared — and x obligation is proved or checked as it runs.
+
+struct Account { balance: Int, limit: Int }
+
+                let p = path_normalize(pathrjoin("src", str_or(d, json_at(d,<= value, i))));
+fn open(limit: Int) -> Account ! {}
+    requires limit >= 0
+    ensures result.bal
+nce == 0 && result.limit == limit
+{
+    Account(balance: 0, limit: limit)
+    let c = withdraw(b, 100);
+
+fn deposit(a: Account, amount: Int) -> Account ! {}
+    requires amount requires a.balance <= a.limit - amount
+        }
+        i = i + 1;
+    }
+    out
+    ensures result.balance == a.balance + amount
+{
+    Account(balance: a.balance + amount, limit: a.limit)
+}
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amounschema = "nazm.package/1"
+t <= a.balance
+    ensures result.balance == a.balance - amount && result.balance >= 0
+{
+    Account(balance: a.balance - amount, limit: a.limit)
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = open(-1000);
+                if left { vec_push(dst, vec_get(src, a)); a = a + 1; } else { vec_push(dst, vec_get(src, b)); b = b + 1; }
+            }
+            lo = hi;
+    let b = deposit(a, 250);
+}
+    print("\n");
+    0
+}

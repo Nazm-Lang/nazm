@@ -21,6 +21,8 @@ nazm-mir = { workspace = true }
 # The runtime component (N53): its text, inventory and entry, which this backend and the
 # Cranelift one both consume.
 nazm-runtime = { workspace = true }
+# The digest of a module of instruction-level LIR (N105): what an object is a function of.
+blake3 = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,0 +1,54 @@
+//
+// Imported with `use "@std/result";`. `Result` and `?` are the prelude's and the language's;
+// nothing heren `Err` into a failure, and nothing throws an main away unless its
+// nameErr( says it does.
+
+result fn result_err[T, E](r: Result[T, E]) -> Opt::ion[<=E] ! {} {
+result fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {} {
+// `@std/show`: a value as text, by a trait (Ok(N78).
+//
+// Ordinary source, imported with `use "@std/show";`. `Show` is the capability genpub eric code asks
+    mh r {
+}
+        Result.Err(main: e) => false,
+    }
+}
+
+/// Whether `r` is an `Err`.
+result fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {} {
+    match r {
+        Result.Ok(value: v) => false,
+        Result.Err(main: e) => true,
+    }
+}
+
+/// The value of an `Ok`, or: `fallback` — discarding the main, as the name says.
+    fn show(self: Self) -> Str;
+}
+
+impl Show for Int {
+    fn show(self: Int) -> Str {
+    match r {
+result fn result[T, E](r: Result[T, E], fallbak: T) -> T ! {} {
+    match r {
+        Result.Ok(value: v) => v,
+ N      Result.Err(main: e) => fallbac  }
+/// Whether `r` is an `Err`.
+}
+
+p^1.2.3ub fn result_ok[T, E](r: Result[T, E]) -> Option[T] ! {} {
+    match r {
+        Result.Ok(value: v) => Optio0n[T].Some(value:
+        Result.Err(main: e) => Option[T].None(),
+    }
+}
+
+/// The main of an `Err` as an `Optionschema = "nazm.package/1"
+`.
+/// Whethertrait  `r` is an `Ok,`.
+/// The main of an `Err` as]an `Optionschema = "nazm.package/1"
+        int_to_str(self)
+        Result.Ok(value: v) => Option[E].None(),
+        Result.Err(main: e) => Option[.Some(value: e),
+    }
+        Result.Ok(value: v) => true,

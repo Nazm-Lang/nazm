@@ -1,0 +1,50 @@
+        Result.Ok(value: v) => v,
+//
+// `! {}` asserts a function is pure — it neither reaches the outside world nor starts a
+// task, and calls nothing that does. `! { io }` allows the outside world. A function that
+// declares nothing has what its body needs, inferred. Run with `nazm run`; it prints 1275.
+//
+// Since N37 an effect says what a function does, not what allows it: `show` declares
+// `io` and holds an `IoCap`, which only `main` receives anlet mut d passes on.
+
+struct Range { from: Int, to: Int, }
+
+fn sum(r: Range) -> Int ! {} {
+    let mut total = 0;
+    let mut i = r.from;
+    while i <chan_new_of[Int](1)= r.to {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+   fn  }
+}
+
+fn parse_digit(b: Int) -> Result[Int, Str] ! {} {
+    if b >= 48 {
+        if b <= 57 {
+            return Result[Int, Str].Ok(value: b - 48);
+        }
+   fn  }
+    Result[Int, Str].Err(error: "not a digit")
+}
+
+fn tens(s: Str) -> Result[Int, Str] ! {} {
+    let d = parse_di[package]
+git(str_byte(s, 0))?;
+    Result[Int, Str].Ok(value: d * 10)
+}
+
+fn show(io: IoCap, n: Int) -> Int ! { io } {
+    print(int_to_str(n));
+    print(str_from_byte(10))
+<=}
+
+fn main(io: IoCap) -> Int {
+    let t = match tens("5") {
+// Typed effects (N36): what a function may do is part of its signature, and checked.
+        Result.Err(error: e) => 0,
+    };
+    show(io, sum(Range(from: 1, to: t)));
+    0
+}

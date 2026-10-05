@@ -1,4 +1,4 @@
-//! `nazm lir` — print what LIR decided for a checked program, `nazm.lir/1` (N81).
+//! `nazm lir` — print what LIR decided for a checked program, `nazm.lir/2` (N81, N105).
 //!
 //! `docs/architecture.md` §7.82. One deterministic line of JSON: the target's data layout, and
 //! for every unit its functions' symbols and linkage, what it declares from elsewhere, every
@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use crate::{exit, load};
 
 /// The schema this prints.
-pub(crate) const SCHEMA: &str = "nazm.lir/1";
+pub(crate) const SCHEMA: &str = "nazm.lir/2";
 
 fn ty_name(u: &Unit, t: Ty) -> String {
     match t {
@@ -66,15 +66,34 @@ fn structure(u: &Unit, s: &Struct, name: &str, owns: Option<bool>) -> Value {
     Value::Object(m)
 }
 
-/// `nazm.lir/1` for `native` on `target`, or the first table that does not hold.
-fn printed(native: &nazm_lir::Native, target: &Target) -> Result<Value, String> {
+/// `nazm.lir/2` for `native` on `target`, or the first table that does not hold, or a unit whose
+/// LIR does not validate.
+fn printed(
+    native: &nazm_lir::Native,
+    names: &nazm_lir::SourceNames<'_>,
+    target: &Target,
+) -> Result<Value, Vec<nazm_diag::Diagnostic>> {
+    let defect = |e: String| {
+        vec![nazm_diag::Diagnostic::error(
+            nazm_diag::codes::COMPILER_DEFECT,
+            nazm_span::Span::synthetic(),
+            e,
+        )]
+    };
     let data = DataLayout::of(target);
     let str_fields = data.str_fields();
     let mut units = Vec::new();
     for (artefact, u, instance) in nazm_lir::backend::units(native) {
         let lay = ByteLayouts::of(u, data);
-        lay.verify()
-            .map_err(|e| format!("unit `{artefact}`: {e}"))?;
+        lay.verify().map_err(|e| {
+            defect(format!(
+                "the layout tables do not hold: unit `{artefact}`: {e}"
+            ))
+        })?;
+        // The unit's instructions (N105, `nazm.lir/2`): what both backends translate, validated.
+        let m = nazm_lir::op::lower_unit(native, u, names, data, false, false)?;
+        nazm_lir::op::validate::module(&m)
+            .map_err(|e| defect(format!("LIR does not validate: {}", e.join("; "))))?;
         let functions: Vec<Value> = u
             .functions
             .iter()
@@ -130,6 +149,7 @@ fn printed(native: &nazm_lir::Native, target: &Target) -> Result<Value, String> 
             "externals": externals,
             "records": records,
             "enums": enums,
+            "lir": { "digest": nazm_lir::op::digest(&m), "text": nazm_lir::op::print::module(&m) },
         }));
     }
     Ok(json!({
@@ -147,7 +167,36 @@ fn printed(native: &nazm_lir::Native, target: &Target) -> Result<Value, String> 
     }))
 }
 
-pub(crate) fn run(path: &Path, target: Option<&str>, declared: Option<&Path>) -> ExitCode {
+/// Every unit's instruction-level LIR as text, each validated (N105).
+fn ops(
+    native: &nazm_lir::Native,
+    names: &nazm_lir::SourceNames<'_>,
+    target: &Target,
+    soa: bool,
+) -> Result<String, Vec<nazm_diag::Diagnostic>> {
+    let mut out = String::new();
+    for (_, u, _) in nazm_lir::backend::units(native) {
+        let m = nazm_lir::op::lower_unit(native, u, names, DataLayout::of(target), false, soa)?;
+        if let Err(e) = nazm_lir::op::validate::module(&m) {
+            return Err(vec![nazm_diag::Diagnostic::error(
+                nazm_diag::codes::COMPILER_DEFECT,
+                nazm_span::Span::synthetic(),
+                format!("LIR does not validate: {}", e.join("; ")),
+            )]);
+        }
+        out.push_str(&nazm_lir::op::print::module(&m));
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+pub(crate) fn run(
+    path: &Path,
+    target: Option<&str>,
+    declared: Option<&Path>,
+    as_ops: bool,
+    soa: bool,
+) -> ExitCode {
     let target = match target.map_or_else(Target::host, Target::parse) {
         Ok(t) => t,
         Err(e) => {
@@ -178,16 +227,17 @@ pub(crate) fn run(path: &Path, target: Option<&str>, declared: Option<&Path>) ->
         |core, res| {
             let program = crate::mir::lower(core, res, &loaded.graph)?;
             let native = nazm_lir::lower(program, &names).map_err(|e| e.diagnostics)?;
-            printed(&native, &target).map_err(|e| {
-                vec![nazm_diag::Diagnostic::error(
-                    nazm_diag::codes::COMPILER_DEFECT,
-                    nazm_span::Span::synthetic(),
-                    format!("the layout tables do not hold: {e}"),
-                )]
-            })
+            if as_ops {
+                return ops(&native, &names, &target, soa).map(Value::String);
+            }
+            printed(&native, &names, &target)
         },
     );
     match done {
+        Ok(Value::String(text)) => {
+            print!("{text}");
+            ExitCode::from(exit::OK)
+        }
         Ok(v) => {
             println!("{v}");
             ExitCode::from(exit::OK)
@@ -197,6 +247,104 @@ pub(crate) fn run(path: &Path, target: Option<&str>, declared: Option<&Path>) ->
             crate::emit(&diagnostics, map, false);
             eprintln!("nazm: {n} error{}", if n == 1 { "" } else { "s" });
             ExitCode::from(exit::CHECK_FAILED)
+        }
+    }
+}
+
+/// `nazm lir --run`: the program on LIR's interpreter (N105), ended as the platform entry ends a
+/// native build — its output, then `main`'s result and status 0, or the failure and status 2.
+/// Outside the interpreter's subset (tasks, channels, the clock, C) it says so and exits 4.
+pub(crate) fn oracle(path: &Path, declared: Option<&Path>, args: &[String]) -> ExitCode {
+    use std::io::Write as _;
+    let source_root = match crate::root::decide(path, declared) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("nazm: {e}");
+            return ExitCode::from(exit::NO_SUCH_FILE);
+        }
+    };
+    let loaded = match load::load(path, source_root.path()) {
+        Ok(f) => f,
+        Err((partial, diagnostics)) => {
+            crate::emit(&diagnostics, &partial.map, false);
+            return ExitCode::from(exit::NO_SUCH_FILE);
+        }
+    };
+    let map = &loaded.map;
+    let names = nazm_lir::SourceNames::of(map, &loaded.graph);
+    let target = match Target::host() {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("nazm: {e}");
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
+    };
+    let done = nazm_core::on_lowered(
+        map,
+        &loaded.graph,
+        nazm_core::Entry::Required,
+        |core, res| {
+            let program = crate::mir::lower(core, res, &loaded.graph)?;
+            let native = nazm_lir::lower(program, &names).map_err(|e| e.diagnostics)?;
+            let mut modules = Vec::new();
+            for (_, u, _) in nazm_lir::backend::units(&native) {
+                let m = nazm_lir::op::lower_unit(
+                    &native,
+                    u,
+                    &names,
+                    DataLayout::of(&target),
+                    false,
+                    false,
+                )?;
+                if let Err(e) = nazm_lir::op::validate::module(&m) {
+                    return Err(vec![nazm_diag::Diagnostic::error(
+                        nazm_diag::codes::COMPILER_DEFECT,
+                        nazm_span::Span::synthetic(),
+                        format!("LIR does not validate: {}", e.join("; ")),
+                    )]);
+                }
+                modules.push(m);
+            }
+            Ok((
+                modules,
+                native.entry.as_str().to_owned(),
+                native.entry_roots,
+            ))
+        },
+    );
+    let (modules, entry, roots) = match done {
+        Ok(x) => x,
+        Err(diagnostics) => {
+            let n = diagnostics.len();
+            crate::emit(&diagnostics, map, false);
+            eprintln!("nazm: {n} error{}", if n == 1 { "" } else { "s" });
+            return ExitCode::from(exit::CHECK_FAILED);
+        }
+    };
+    // On a thread of its own with room for the oracle's depth, as the interpreter has.
+    let args = args.to_vec();
+    let run = std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(move || nazm_lir::op::interp::run(&modules, &entry, roots, &args, 2_000_000_000))
+        .map_err(|e| e.to_string())
+        .and_then(|h| h.join().map_err(|_| "the oracle panicked".to_owned()));
+    match run {
+        Ok(Ok(o)) => {
+            let _ = std::io::stdout().write_all(&o.stdout);
+            let _ = std::io::stderr().write_all(&o.stderr);
+            ExitCode::from(u8::try_from(o.code).unwrap_or(1))
+        }
+        Ok(Err(nazm_lir::op::interp::Stop::Refused(why))) => {
+            eprintln!("nazm: the LIR interpreter does not run this: {why}");
+            ExitCode::from(4)
+        }
+        Ok(Err(nazm_lir::op::interp::Stop::Budget)) => {
+            eprintln!("nazm: the LIR interpreter's budget is spent");
+            ExitCode::from(4)
+        }
+        Ok(Err(nazm_lir::op::interp::Stop::Defect(why))) | Err(why) => {
+            eprintln!("nazm: error[N0900]: the LIR interpreter found a defect: {why}");
+            ExitCode::from(exit::TOOLCHAIN_FAILED)
         }
     }
 }

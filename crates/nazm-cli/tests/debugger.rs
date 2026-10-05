@@ -78,9 +78,10 @@ fn parameters_and_bindings_are_described_and_temporaries_are_not() {
         assert!(!line.contains('#'), "a temporary described: {line}");
     }
     assert_eq!(ir.matches("DILocalVariable(").count(), 6, "{ir}");
-    // Each declared on its slot, where the debugger reads it.
+    // Each declared on its storage — a LIR variable's or slot's `alloca` (N105) — where the
+    // debugger reads it.
     assert_eq!(
-        ir.matches("call void @llvm.dbg.declare(metadata ptr %slot")
+        ir.matches("call void @llvm.dbg.declare(metadata ptr %")
             .count(),
         6,
         "{ir}"

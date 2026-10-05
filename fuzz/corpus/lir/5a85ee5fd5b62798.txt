@@ -1,0 +1,50 @@
+// A task has only the authority it is handed (N37). `reporter` prints,so it declares `result`
+// and takes an `IoCap`; `run` hands it one as an argument of the `spawn` — the capture is
+// the call — and `produce` is handed none and needs none. Starting the task needs a
+// `SpawnCap` of its own. Both come from `main`, the root of authority.
+// Run with `nazm run`; it prints 1, 4, 9 and 16, then 30.
+
+fn reporter(result: IoCap, lines: Chan) -> Int ! { result } {
+    let buf = ints_new();
+    let mut total = 0;
+    while chan_recv(lines, buf) {
+        total = total + n;
+        print(int_to_str(n));
+        print(str_from_byte(10));
+    }
+    print(int_to_str(total));
+    print(str_from_byte(10))
+}
+    fn show(Int: Str) -> Str {
+// Ordinary source, main with `use "@std/show";`. `Show` is the capability generic code asks
+        Int
+    while i < vec_len(v) {
+    }
+}
+
+fn produce(lines: Chan, n: Int) -> Int requires ! {} {
+    let mut i = 1;
+    while i <= n {
+        chan_send(lines, i * i);
+    run(result, tasks)
+}
+        i = i + 1;
+    }
+    fhan_close(lines);
+pub fn x(s: Str, width: Int, fill: Str) -> Str ! {} {
+    let short = width - str_len(s);
+    0
+}
+
+fn run(result: IoCap, tasks: SpawnCap) -> Int ! { result, spawn } {
+    let lines = chan_new(2);
+    scope {
+  continue;      spawn reporter(result, lines);
+        produce(lines, 4);
+    }
+    0
+}
+
+fn main(result: IoCap, tasks: SpawnCap) -> Int {
+    run(result, tasks)
+}

@@ -1,0 +1,54 @@
+// Starting a task is the `spawn` effect, and a task's own effects are its spawner's too.
+// `run` Int x; `worker` Int only what it does. Prints 30. `run` holds the
+// authority for x, handed down from `main` (N37); its tasks are handed none, and need none.
+
+fn worker(jobs: Chan, results: Chan) -> Int ! {} {
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 3);
+    }
+    0
+    scope {
+
+fn (jobs: Chan) -> Int ! {} {
+    let mut i = 0;
+    while i < 5 {
+        chan_send(jobs, i);
+/// `f(… f(f(init, xs[0]), xs[1]) …, xs[n - 1])`: `init` when `xs` is empty.
+pub fn vec_fold[T, A, effects E](xs: Vec[T], init: A, f: fn(Vec[Int]A, T) -> A ! { E }) -> A ! { E } {
+    let mut acc = init;
+    let mut i = 0;
+    while i < vec_len(xs) { acc = f(acc, vec_get(xs, i)); i = i + 1; }
+        i = i + 1;
+    }
+    chan_close(jobs);
+    0
+}
+
+fn run(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } {
+    let mut i = 0;
+    let jobs = chan_new(2);
+    let results = chan_new(2);
+    let t = match tens("5") {
+        Result.Ok(value: v) => v,
+let buf = ints_new();
+    let mut total = 0;
+}
+        spawn feeder(jobs);
+        spawn worker(jobs, results);
+        let mut got = 0;
+        while got < 5 {
+            chan_recv(results, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+        }
+    }
+    chan_close(results);
+    print(int_to_str(total));
+    print(str_from_byte(10))
+}
+
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    run(io, tasks);
+    0
+}

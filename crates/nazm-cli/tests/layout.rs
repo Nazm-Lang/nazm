@@ -2,7 +2,8 @@
 //!
 //! `docs/architecture.md` §7.70. What whole builds show: `--layout soa` changes no answer and no
 //! failure — growth through many capacities, set, pop, get, out-of-bounds and empty-pop failures —
-//! under both optimisation levels against the interpreter and the element-by-element layout; a
+//! under both optimisation levels and (since N105) on Cranelift, against the interpreter and the
+//! element-by-element layout; a
 //! record whose fields are reordered is the same program and the same code; the layout is in every
 //! object's identity, so neither layout's object is ever taken for the other's; an ineligible
 //! element stays element by element; and `nazm explain-cost` says which and why.
@@ -62,15 +63,18 @@ fn everywhere(src: &str) -> Vec<(String, String, Option<i32>, String)> {
             .unwrap_or_default()
             .to_owned(),
     )];
+    // Both backends since N105: the layout is LIR's, and each translates it.
     for layout in ["aos", "soa"] {
-        for opt in ["0", "2"] {
-            let exe = d.path().join(format!("p-{layout}-{opt}"));
+        for (backend, opt) in [("llvm", "0"), ("llvm", "2"), ("cranelift", "2")] {
+            let exe = d.path().join(format!("p-{layout}-{backend}-{opt}"));
             let b = nazm(
                 d.path(),
                 &[
                     "build",
                     "--layout",
                     layout,
+                    "--backend",
+                    backend,
                     "--opt-level",
                     opt,
                     "prog.nz",
@@ -78,10 +82,14 @@ fn everywhere(src: &str) -> Vec<(String, String, Option<i32>, String)> {
                     exe.to_str().unwrap(),
                 ],
             );
-            assert!(b.status.success(), "{layout} -O{opt}: {}", err(&b));
+            assert!(
+                b.status.success(),
+                "{layout} {backend} -O{opt}: {}",
+                err(&b)
+            );
             let o = Command::new(&exe).output().unwrap();
             out.push((
-                format!("{layout} -O{opt}"),
+                format!("{layout} {backend} -O{opt}"),
                 String::from_utf8_lossy(&o.stdout).into_owned(),
                 o.status.code(),
                 err(&o)
@@ -263,7 +271,7 @@ fn an_ineligible_element_stays_whole_and_the_reason_is_reported() {
 }
 
 #[test]
-fn the_layout_is_asked_for_by_name_and_is_the_llvm_backends() {
+fn the_layout_is_asked_for_by_name_and_both_backends_take_it() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), PARTICLES).unwrap();
     let o = nazm(
@@ -276,23 +284,40 @@ fn the_layout_is_asked_for_by_name_and_is_the_llvm_backends() {
         "{}",
         err(&o)
     );
-    let o = nazm(
-        d.path(),
-        &[
-            "build",
-            "--layout",
-            "soa",
-            "--backend",
-            "cranelift",
-            "prog.nz",
-            "-o",
-            "p",
-        ],
+    // Until N105 Cranelift refused the layout; since then it is LIR's, and Cranelift's build
+    // takes it — its object for the other layout is not reused, because the LIR differs.
+    let report = |layout: &str| -> serde_json::Value {
+        let o = nazm(
+            d.path(),
+            &[
+                "build",
+                "--layout",
+                layout,
+                "--backend",
+                "cranelift",
+                "--build-report",
+                "prog.nz",
+                "-o",
+                "p",
+            ],
+        );
+        assert!(o.status.success(), "{}", err(&o));
+        let line = String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .find(|l| l.contains("nazm.build-report/1"))
+            .unwrap_or_default()
+            .to_owned();
+        serde_json::from_str(&line).unwrap_or(serde_json::Value::Null)
+    };
+    let _ = report("aos");
+    let soa = report("soa");
+    assert_eq!(
+        soa.pointer("/native/compiled")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+        "{soa}"
     );
-    assert_eq!(o.status.code(), Some(4));
-    assert!(
-        err(&o).contains("`--layout soa` is the LLVM backend's"),
-        "{}",
-        err(&o)
-    );
+    let out = Command::new(d.path().join("p")).output().unwrap();
+    let interpreted = nazm(d.path(), &["run", "prog.nz"]);
+    assert_eq!(out.stdout, interpreted.stdout);
 }

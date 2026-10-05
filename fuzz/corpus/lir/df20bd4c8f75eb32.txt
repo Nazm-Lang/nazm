@@ -1,0 +1,9 @@
+fn bump(mut break;n:Int) -> 
+fn bump(mut n: Int) -> Int {
+    n = n + 1;
+    n
+}
+
+fn main() -> Int {
+    bump(1)
+}

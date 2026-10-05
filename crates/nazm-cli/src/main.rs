@@ -731,15 +731,28 @@ enum Command {
         #[command(subcommand)]
         action: RuntimeAction,
     },
-    /// Print what LIR decided for a checked program, `nazm.lir/1` (N81): the target's data
+    /// Print what LIR decided for a checked program, `nazm.lir/2` (N81, N105): the target's data
     /// layout, every unit's symbols and linkage, every record's and enum's byte layout on that
-    /// target, and which types own anything — the tables both backends read, validated.
-    /// `docs/architecture.md` §7.82.
+    /// target, which types own anything, and every unit's instructions — what both backends
+    /// read, validated. `docs/architecture.md` §7.82 and §7.106.
     Lir {
         file: PathBuf,
         /// The target whose layout to print; the host's when absent.
         #[arg(long, value_name = "TRIPLE")]
         target: Option<String>,
+        /// Print each unit's instructions as text (N105), validated, instead of the tables.
+        #[arg(long)]
+        ops: bool,
+        /// With `--ops`: lay out every eligible `Vec[R]` field by field (N68).
+        #[arg(long)]
+        soa: bool,
+        /// Run the program on LIR's interpreter, the oracle the native backends are held to
+        /// (N105): its output, and the status a native build would end with.
+        #[arg(long)]
+        run: bool,
+        /// With `--run`: the program's arguments.
+        #[arg(last = true)]
+        args: Vec<String>,
         /// Where this project begins. As `nazm check --source-root`.
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
@@ -1321,7 +1334,16 @@ fn main() -> ExitCode {
             file,
             target,
             source_root,
-        } => return lir::run(&file, target.as_deref(), source_root.as_deref()),
+            ops,
+            soa,
+            run,
+            args,
+        } => {
+            if run {
+                return lir::oracle(&file, source_root.as_deref(), &args);
+            }
+            return lir::run(&file, target.as_deref(), source_root.as_deref(), ops, soa);
+        }
         Command::Runtime { action } => {
             return match action {
                 RuntimeAction::Build {

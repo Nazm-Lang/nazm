@@ -1291,6 +1291,22 @@ fn a_sequence_temporary_is_released_when_a_failure_leaves() {
 }
 
 #[test]
+fn a_reassigned_sequence_is_released_once_when_a_failure_follows() {
+    // N105. A reassignment goes through a temporary that is moved into the binding, and a
+    // move must leave the temporary holding the zero: the failure's unwind releases every
+    // managed local, the temporary included, and a temporary still naming the sequence would
+    // release it a second time. Both backends translate the same LIR, so only the count can
+    // say so — they would agree with each other on the double release.
+    let (r, text) = both_failing(
+        "fn main() -> Int {\n    let mut xs = ints_new();\n    xs = ints_new();\n    \
+         ints_push(xs, 1);\n    let mut i = 0;\n    while i < 3 {\n        xs = ints_new();\n        \
+         ints_push(xs, i);\n        i = i + 1;\n    }\n    ints_get(xs, 5)\n}\n",
+    );
+    assert!(text.contains("N04"), "{text}");
+    assert_eq!(r.sequences, expected(5), "{r:?}");
+}
+
+#[test]
 fn a_failure_in_one_branch_does_not_reach_across_to_the_other() {
     // The dominance half of the rule above. A value created in the `then` block does not
     // dominate the `else` block, so a failure over there may not release it — and the

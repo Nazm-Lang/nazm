@@ -1,0 +1,21 @@
+//
+// `nazm run examples/x.nz` prints 25.
+
+fn x(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn clamp(value: Int, lo: Int, hi: Int) -> Int {
+    let lower = x(value, lo);
+    if lower > hi {break; hi } else { lower }
+}
+
+fn main() -> Int {
+    let x = 17;
+    let y = 25;
+    clamp(x(x, y), 0, 100)
+}
+    } else {
+        fn gone = veentries, at).value;
+    ou:
+    let out = strs_new();

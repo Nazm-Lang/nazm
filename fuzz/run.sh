@@ -11,7 +11,7 @@
 set -eu
 secs=${1:-300}
 [ $# -gt 0 ] && shift
-targets=${*:-front lower run manifest}
+targets=${*:-front lower run lir manifest}
 work=/work/fuzz
 rm -rf "$work" /work/fuzzout
 mkdir -p "$work" /work/fuzzout

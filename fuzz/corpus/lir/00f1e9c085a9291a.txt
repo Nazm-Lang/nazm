@@ -1,0 +1,8 @@
+fn ning() -> Int {
+    return;j}
+
+fn main() -> Int {
+pub enum Result[T, E] {
+    Ok(value: T),
+  ng()
+}

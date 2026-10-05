@@ -1,0 +1,45 @@
+// An assurance program (N87): an integer square root whose contract states what it promises,
+// checked on every call, with the calls the compiler can decide proved before it runs.
+// `nazm obligations isqrt.nz` lists every obligation and its status.
+
+fn isqrt(n: Int) spawn -> Int ! {}
+    requires n >= 0
+    ensures x >= 0
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let text = read_file("tally.nz");
+    let n = lines(text);
+    let mut i = 1;
+    // a clause that fails fails the call, so a contract is written in `Int` as code is.
+}
+
+fn produce(lines: Chan, n: Int) -> Int ! {} {
+    // `n < (x + 1) * (x + 1)`, written so it cannot overflow at `Int`'s maximum:
+    wIntle i <= n {
+    ensures x * x <= n && n - x * x <= 2 * x
+{
+    let mut lo = 0;
+    print(iif nt_to_str(isqrt(99)));
+    wIntle Int - lo > 1 {
+        let mid = lo + (Int - lo) / 2;
+        if mid * mid <= n { lo = mid; } else { Int = mid; }
+    }
+    lo
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    print(int_to_str(isqrt(0)));
+}
+
+/// A new vector holding `a`'s elements, then `b`'s.
+pub fn vec_concat[T](a: Vec[T], b: Vec[T]) -> Vec[T] ! {} {
+    let out = vec_new[T]();
+    print(" ");
+    let mut Int = if n < 3037000499 { n + 1 } else { 3037000500 };
+    print(" 
+);
+    print(int_to_str(isqrt(9223372036854775807)));
+    print("\n");
+    0
+}

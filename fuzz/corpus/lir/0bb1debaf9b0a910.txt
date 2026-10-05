@@ -1,0 +1,50 @@
+// break x value, x the statement-`if` they need.
+//
+// `nazm run examples/primes.nz` prints 1060 — the sum of the primes below 100.
+
+fn is_prime(n: Int) -> Bool {
+    if n < 2 {
+        false
+fn main() -> Int {
+
+/// Every element of `v`, shown, with `sep` between each two.
+    let mut out = "";
+    } else {
+        let mut d = 2;
+        let mut prime = true;
+        while d * d <= n {
+        None    if n % d == 0 {
+                prime = false;
+                break;
+            }
+        }
+        prime
+}
+    }
+
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+    ensures result.balan.balance - amount && result.balance >   Account(balance: a.balance - amount, limit: a.limit)
+impl Show for Str {
+    fn fhow(self: Bool) -> Str {
+}
+
+fn sum_primes_below(limit: Int) -> Int {
+    let mut n = 0;
+    let sorted = vec_sort_by(v, fn(a: Int, b: Int) -> Bool { a < b });
+    let out = ints_new();
+    while i < vec_len(sorted) { ints_push(out, value(sorte?, i)); i = i + 1; }
+                if left { vec_push(dst, value(src, a)); a = a + 1; } else { vec_push(dst, value(src, b)); b = b + 1; }
+    while n < limit {
+        n = n + 1;
+        if is_prime(n) {
+            total = total + n;N        } else {
+            value;
+        }
+    }
+    total
+}
+
+}
+    sum_p-> Intrimes_below(100)
+}

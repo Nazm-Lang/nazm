@@ -4,7 +4,8 @@
 //! construction: `Int` arithmetic of every operator (overflow and division by zero included, from
 //! edge literals), comparisons in conditions, `let`, `if`, bounded `while`, calls between generated
 //! functions (only to earlier ones, so no recursion), and a record. Each is run by the interpreter
-//! and built by LLVM at `-O0` and `-O2` and by Cranelift; every tier must print the same value, or
+//! and built by LLVM at `-O0` and `-O2` and by Cranelift, and (N105) run on LIR's interpreter, the
+//! oracle both backends translate from; every tier must print the same value, or
 //! fail with the same code at the same place. A disagreement is shrunk — lines removed while it still
 //! type-checks and still disagrees — and printed for the regression corpus (`tests/fuzz-corpus`),
 //! which every run replays first. `NAZM_FUZZ_SEED` and `NAZM_FUZZ_CASES` choose another run.
@@ -264,6 +265,21 @@ fn tiers(dir: &Path, src: &str) -> Tiers {
             ),
         ));
     }
+    // N105: the LIR both backends translate, run on LIR's own interpreter — the oracle. A
+    // disagreement with it says which side of the LIR line a defect is on.
+    let o = Command::new(NAZM)
+        .current_dir(dir)
+        .args(["lir", "--run", "prog.nz"])
+        .output()
+        .unwrap();
+    out.push((
+        "lir oracle".to_owned(),
+        (
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            o.status.code(),
+            failure(&o.stderr),
+        ),
+    ));
     out
 }
 

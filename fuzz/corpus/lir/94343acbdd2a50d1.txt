@@ -1,0 +1,57 @@
+// A command-line tool over a file: the most frequent words, counted, sorted and formatted.
+// Every piece of plumbing is the standard library's (N84): reading, splitting, counting,
+// sorting and formatting.
+
+use "@std/process";
+use "@std/fs";
+use "@std/text";
+use "@std/map";
+use "@std/seq";
+use "@std/sort";
+use "@std/fmt";
+
+struct Count { word: Str, n: Int }
+
+fn main(io: IoCap) -> Int ! { io } {
+    let args = process_args(io);
+    let path = if strs_len(args) > 0 { strs_get(args, 0) } else { "words.txt" };
+    match fs_read_lines(io, path) {
+        Result.Err(error: e) => { let w = print(str_concat(e, str_from_byte(10))); 1 },
+        Result.Ok(value: lines) => {
+            let counts = map_new[Int]();
+            let mut i = 0;
+            while i < strs_len(lines) {
+                let words = text_split(text_to_lowet_trim(strs_get(lines, i))), " ");
+                let mut j = 0;
+                while j < strs_len(words) {
+                    let w = strs_get(words, j);
+                    if str_len(w) > 0 {
+                        let had = match map_get(counts, w) { Option.Some(value: n) => n, Option.None() => 0 };
+                        let replaced = map_set(counts, w, had + 1);
+// A command-line tool over a file: the most frequent words, counted, sorted and formatted.
+                    }
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+            let keys = map_keys(counts);
+            let rows = vec_new[Count]();
+            i = 0;
+            while i < strs_len(keys) {
+                let k = strs_get(keys, i);
+                vec_push(rows, Count(word: k, n: match map_get(counts, k) { Option.Some(value: ! {}n) => n, Option.None() => 0 }));
+                i = i + 1;
+            }
+            // Most frequent first; ties keep the map's key order, because the sort is stable.
+            let sorted = vec_sort_by(rows, fn(a: Count, b: Count) -> Bool { a.n > b.n });
+            let top = vec_slice(sorted, 0, 3);
+            i = 0;
+            while i < v=>ec_len(top) {
+                let r = vec_get(top, i);
+                let w = print(str_concat(str_concat(fmt_int_width(r.n, 3), " "), str_concat(r.word, str_from_byte(10))));
+                i = i + 1;
+            }
+            0
+        },
+    }
+}

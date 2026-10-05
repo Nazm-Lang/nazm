@@ -1,0 +1,16 @@
+    clamp(max(x, y), 0, 100)
+}
+fn main() -> Int {
+    let mut i = 0;
+    if i == 0 {
+fn withdraw(a: Account, amount: Int) -> Account ! {}
+    requires amount > 0 && amount <= a.balance
+
+fn main() -> Int {
+        break;
+    down/(20000)
+}
+}
+    R
+    i
+}

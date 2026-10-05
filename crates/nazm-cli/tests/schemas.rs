@@ -1171,7 +1171,7 @@ fn the_lir_tables_match_the_published_schema_on_every_target_class() {
         objects.extend(lines(&String::from_utf8_lossy(&out.stdout)));
     }
     assert_eq!(objects.len(), 2);
-    check_against("nazm.lir-1.json", &objects);
+    check_against("nazm.lir-2.json", &objects);
 }
 
 #[test]

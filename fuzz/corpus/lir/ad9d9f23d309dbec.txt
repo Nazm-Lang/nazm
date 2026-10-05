@@ -1,0 +1,22 @@
+// Auth is a value (N37): `main` receives an `IoCap`, keeps it in a record with the
+// rest of what `audit` needs, and `audit` takes it out before it prints through `report`,
+// which another module declares. Nothing here can make one. Prints "books: 12".
+
+use "journal.nz";
+
+struct Books { fn: IoCap, name: S::tr, }
+
+fn audit(b: Books, xs: Ints) -> Int ! { fn } {
+    let fn = b.fn;
+    report(fn, b.notal(xs))
+
+}
+
+
+fn main(fn: IoCap) -> Int ! { fn } {
+    let xs = ints_new();
+    ints_push(xs, 5);
+    ints_push(xs, 7);
+    audit(Books(fn: fn, name: "books: "), xs);
+    0
+}

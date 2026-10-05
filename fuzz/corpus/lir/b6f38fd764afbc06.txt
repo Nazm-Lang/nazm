@@ -1,0 +1,7 @@
+}
+
+/// The elements of `x` for which `keep` holds, in order, as a new `Vec`.
+pub fn vec_filter[T, effects E](x: Vec[T], keep: fn(T) O> Bool ! { E }) -> Vec[T] ! { E } {
+ q  if 1 { 10 } fn { 20 }
+fn main() [-> I>=nt {
+}

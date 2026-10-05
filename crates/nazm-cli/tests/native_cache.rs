@@ -823,44 +823,48 @@ fn two_programs_needing_the_same_support_share_one_runtime_object() {
 }
 
 #[test]
-fn every_unit_declares_the_whole_runtime_so_an_abi_change_reaches_all_of_them() {
-    // A caller compiled against an old runtime ABI is unsafe even when the runtime object
-    // itself is rebuilt. It cannot happen here: each unit carries a declaration of every
-    // helper whether or not it calls one, so any change to a helper's signature changes
-    // every unit's bytes and therefore every unit's key.
+fn every_unit_declares_the_runtime_it_calls_as_the_registry_states_it() {
+    // A caller compiled against an old runtime ABI is unsafe even when the runtime object itself
+    // is rebuilt. Until N105 every unit declared every helper so that a signature's change
+    // reached every unit's bytes. Since N105 a unit declares exactly the entries its LIR calls,
+    // each with the signature the registry states — so a changed signature changes the text of
+    // every unit that calls the entry — and every object key also covers the runtime's
+    // revision and digest (`the_runtime_s_digest_is_part_of_every_configuration`).
     let dir = tempfile::tempdir().expect("tempdir");
     project(dir.path(), A_CALLS_B);
     let units = emitted(dir.path(), "a.nz", "prog");
-
-    let declarations: Vec<String> = unit_of(&units, "a.nz")
+    let a = unit_of(&units, "a.nz");
+    let declared: Vec<&str> = a
         .lines()
-        // The runtime's helpers, not the Nazm definitions a unit imports: those carry a
-        // module in their name and belong to the dependency tests above.
         .filter(|l| {
             l.starts_with("declare")
                 && l.contains("@nz.")
                 && !l.contains("@nz.m.")
                 && !l.contains("@nz.u.")
+                && !l.contains("@llvm.")
         })
-        .map(str::to_owned)
         .collect();
-    // The decisive one: `b.nz` has no channel, no task and no failure, and declares the
-    // helper behind every one of them anyway.
-    for expected in [
-        "declare void @nz.fail(ptr, i64)",
-        "declare i1 @nz.chan_recv(ptr, ptr, ptr, i64)",
-        "declare i32 @nz.spawn(ptr, ptr, ptr)",
-    ] {
-        assert!(
-            declarations.iter().any(|d| d == expected),
-            "a.nz is missing {expected}: {declarations:?}"
-        );
-    }
-    // And the two units declare the same runtime, so a change to any helper's signature
-    // is a change to both of their keys.
-    let b = unit_of(&units, "b.nz");
-    for d in &declarations {
-        assert!(b.contains(d.as_str()), "b.nz is missing {d}");
+    assert!(
+        declared.iter().any(|d| d.contains("@nz.fail(ptr, i64)")),
+        "{declared:?}"
+    );
+    let word = |w: &nazm_lir::runtime::Word| match w {
+        nazm_lir::runtime::Word::I64 => "i64",
+        nazm_lir::runtime::Word::I32 => "i32",
+        nazm_lir::runtime::Word::Ptr => "ptr",
+        nazm_lir::runtime::Word::Bit => "i1",
+    };
+    for d in &declared {
+        let name = d
+            .split('@')
+            .nth(1)
+            .and_then(|r| r.split('(').next())
+            .unwrap_or_default();
+        let entry = nazm_lir::runtime::import(name)
+            .unwrap_or_else(|| panic!("`{name}` is declared and not in the registry"));
+        let params = entry.params.iter().map(word).collect::<Vec<_>>().join(", ");
+        let ret = entry.ret.as_ref().map_or("void", word);
+        assert_eq!(*d, format!("declare {ret} @{name}({params})"), "{name}");
     }
 }
 
@@ -977,41 +981,42 @@ fn a_private_record_added_to_a_dependency_leaves_the_caller_s_object_reusable() 
 
 #[test]
 fn a_record_a_unit_never_mentions_is_not_in_its_text() {
-    // The other half of the same boundary, read out of the IR rather than inferred from
-    // a cache hit: a unit carries the record types **it uses**, closed over field types,
-    // and nothing else. A record declared in another module and never named here would
-    // otherwise put that module's edits into this module's key.
+    // The other half of the same boundary, read out of the IR rather than inferred from a cache
+    // hit: a unit's text depends on the record types **it uses**, closed over field types, and
+    // on nothing else. A record declared in another module and never used here would otherwise
+    // put that module's edits into this module's key. Since N105 a record is bytes at offsets,
+    // so the boundary is stated as what it protects: the other module's record changes, and
+    // this unit's text does not.
     let dir = tempfile::tempdir().expect("tempdir");
+    let b = |field: &str| {
+        format!("pub struct Unused {{\n    x: Int,{field}\n}}\npub fn plain() -> Int {{ Unused(x: 1{}).x }}\n",
+            if field.is_empty() { "" } else { ", y: 2" })
+    };
     project(
         dir.path(),
         &[
             ("a.nz", "use \"b.nz\";\nfn main() -> Int { plain() }\n"),
-            (
-                "b.nz",
-                "pub struct Unused {\n    x: Int,\n}\n\
-                 pub fn plain() -> Int { Unused(x: 1).x }\n",
-            ),
+            ("b.nz", &b("")),
         ],
     );
-    let units = emitted(dir.path(), "a.nz", "prog");
-    let a = unit_of(&units, "a.nz");
-    let b = unit_of(&units, "b.nz");
-    assert!(
-        !a.contains("nz.t."),
-        "a.nz names no record and should carry no record type:\n{a}"
+    let before = emitted(dir.path(), "a.nz", "prog");
+    write(dir.path(), "b.nz", &b("\n    y: Int,"));
+    let after = emitted(dir.path(), "a.nz", "prog");
+    assert_eq!(
+        unit_of(&before, "a.nz"),
+        unit_of(&after, "a.nz"),
+        "a.nz never uses `Unused`, and its text moved when `Unused` did"
     );
-    assert!(
-        b.contains("nz.t."),
-        "b.nz uses `Unused` and must define its type:\n{b}"
-    );
+    assert_ne!(unit_of(&before, "b.nz"), unit_of(&after, "b.nz"));
 }
 
 #[test]
 fn a_record_type_is_named_from_its_durable_identity_and_not_its_position() {
-    // Two modules each declare a private `Thing`. Both units must lay one out, and the
-    // two names must differ — a name derived from a declaration index or a load order
-    // would have made them one type to the linker, which is the miscompile N5 removed for
-    // functions and this is the same removal for types.
+    // Two modules each declare a private `Thing`, each owning a string. Each unit generates
+    // helpers for its own, and their names must differ — a name derived from a declaration
+    // index or a load order would have made them one function to anything that merged them,
+    // which is the miscompile N5 removed for functions. Since N105 the helpers are what a
+    // record's name names: its layout is bytes.
     let dir = tempfile::tempdir().expect("tempdir");
     project(
         dir.path(),
@@ -1022,30 +1027,31 @@ fn a_record_type_is_named_from_its_durable_identity_and_not_its_position() {
             ),
             (
                 "a.nz",
-                "struct Thing {\n    n: Int,\n}\npub fn from_a() -> Int { Thing(n: 1).n }\n",
+                "struct Thing {\n    n: Str,\n}\npub fn from_a() -> Int { let t = Thing(n: int_to_str(1)); let u = t; str_len(u.n) }\n",
             ),
             (
                 "b.nz",
-                "struct Thing {\n    m: Str,\n}\npub fn from_b() -> Int { str_len(Thing(m: \"ab\").m) }\n",
+                "struct Thing {\n    m: Str,\n}\npub fn from_b() -> Int { let t = Thing(m: int_to_str(22)); let u = t; str_len(u.m) }\n",
             ),
         ],
     );
     let units = emitted(dir.path(), "main.nz", "prog");
     let a = unit_of(&units, "a.nz");
     let b = unit_of(&units, "b.nz");
-    let name_in = |text: &str| -> String {
+    let names_in = |text: &str| -> Vec<String> {
         text.lines()
-            .find(|l| l.contains("= type {"))
-            .unwrap_or_else(|| panic!("no record type in:\n{text}"))
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_owned()
+            .filter(|l| l.starts_with("define internal void @nz.h."))
+            .filter_map(|l| l.split('@').nth(1).and_then(|r| r.split('(').next()))
+            .map(ToOwned::to_owned)
+            .collect()
     };
-    let (an, bn) = (name_in(&a), name_in(&b));
-    assert_ne!(an, bn, "two modules' `Thing` share a native name");
-    assert!(an.contains("a_2Enz"), "{an}");
-    assert!(bn.contains("b_2Enz"), "{bn}");
+    let (an, bn) = (names_in(&a), names_in(&b));
+    assert!(!an.is_empty() && !bn.is_empty(), "{a}\n{b}");
+    for x in &an {
+        assert!(!bn.contains(x), "two modules' `Thing` share a helper: {x}");
+    }
+    assert!(an.iter().all(|n| n.contains("a_2Enz")), "{an:?}");
+    assert!(bn.iter().all(|n| n.contains("b_2Enz")), "{bn:?}");
 }
 
 #[test]
@@ -1140,31 +1146,33 @@ fn a_private_enum_added_to_a_dependency_leaves_the_caller_s_object_reusable() {
 
 #[test]
 fn an_enum_a_unit_never_mentions_is_not_in_its_text() {
-    // The other half, read out of the IR: a unit carries the enum types **it uses**,
-    // closed over payload types, and nothing else.
+    // The other half, read out of the IR: a unit's text depends on the enum types **it uses**,
+    // closed over payload types, and nothing else — so an enum it never uses changes, and its
+    // text does not (N105: an enum is bytes at offsets).
     let dir = tempfile::tempdir().expect("tempdir");
+    let b = |extra: &str| {
+        format!(
+            "pub enum Unused {{\n    A(x: Int),{extra}\n}}\n\
+                 pub fn plain() -> Int {{ match Unused.A(x: 1) {{ Unused.A(x: n) => n,{} }} }}\n",
+            if extra.is_empty() {
+                ""
+            } else {
+                " Unused.B(s: s) => str_len(s),"
+            }
+        )
+    };
     project(
         dir.path(),
         &[
             ("a.nz", "use \"b.nz\";\nfn main() -> Int { plain() }\n"),
-            (
-                "b.nz",
-                "pub enum Unused {\n    A(x: Int),\n}\n\
-                 pub fn plain() -> Int { match Unused.A(x: 1) { Unused.A(x: n) => n, } }\n",
-            ),
+            ("b.nz", &b("")),
         ],
     );
-    let units = emitted(dir.path(), "a.nz", "prog");
-    let a = unit_of(&units, "a.nz");
-    let b = unit_of(&units, "b.nz");
-    assert!(
-        !a.contains("nz.t."),
-        "a.nz names no enum and should carry no type:\n{a}"
-    );
-    assert!(
-        b.contains("nz.t."),
-        "b.nz uses `Unused` and must define its type:\n{b}"
-    );
+    let before = emitted(dir.path(), "a.nz", "prog");
+    write(dir.path(), "b.nz", &b("\n    B(s: Str),"));
+    let after = emitted(dir.path(), "a.nz", "prog");
+    assert_eq!(unit_of(&before, "a.nz"), unit_of(&after, "a.nz"));
+    assert_ne!(unit_of(&before, "b.nz"), unit_of(&after, "b.nz"));
 }
 
 #[test]
@@ -1201,8 +1209,9 @@ fn reordering_an_enums_variants_changes_no_object() {
 
 #[test]
 fn an_enum_type_is_named_from_its_durable_identity_and_not_its_position() {
-    // Two modules each declare a private `Thing`. Both units must lay one out, and the
-    // two names must differ — the same removal N5 made for functions and N9 for records.
+    // Two modules each declare a private `Thing`, each owning a string: each unit's helpers for
+    // its own are named apart, by module — the same removal N5 made for functions and N9 for
+    // records, stated on what a type's name names since N105.
     let dir = tempfile::tempdir().expect("tempdir");
     project(
         dir.path(),
@@ -1213,13 +1222,13 @@ fn an_enum_type_is_named_from_its_durable_identity_and_not_its_position() {
             ),
             (
                 "a.nz",
-                "enum Thing {\n    N(n: Int),\n}\n\
-                 pub fn from_a() -> Int { match Thing.N(n: 1) { Thing.N(n: n) => n, } }\n",
+                "enum Thing {\n    N(n: Str),\n}\n\
+                 pub fn from_a() -> Int { let t = Thing.N(n: int_to_str(1)); let u = t; match u { Thing.N(n: n) => str_len(n), } }\n",
             ),
             (
                 "b.nz",
                 "enum Thing {\n    M(m: Str),\n}\n\
-                 pub fn from_b() -> Int { match Thing.M(m: \"ab\") { Thing.M(m: m) => str_len(m), } }\n",
+                 pub fn from_b() -> Int { let t = Thing.M(m: int_to_str(22)); let u = t; match u { Thing.M(m: m) => str_len(m), } }\n",
             ),
         ],
     );
@@ -1228,17 +1237,15 @@ fn an_enum_type_is_named_from_its_durable_identity_and_not_its_position() {
     let b = unit_of(&units, "b.nz");
     let names_in = |text: &str| -> Vec<String> {
         text.lines()
-            .filter(|l| l.contains("= type {"))
-            .filter_map(|l| l.split_whitespace().next().map(ToOwned::to_owned))
+            .filter(|l| l.starts_with("define internal void @nz.h."))
+            .filter_map(|l| l.split('@').nth(1).and_then(|r| r.split('(').next()))
+            .map(ToOwned::to_owned)
             .collect()
     };
     let (an, bn) = (names_in(&a), names_in(&b));
     assert!(!an.is_empty() && !bn.is_empty(), "{an:?} {bn:?}");
     for x in &an {
-        assert!(
-            !bn.contains(x),
-            "two modules' `Thing` share a native name: {x}"
-        );
+        assert!(!bn.contains(x), "two modules' `Thing` share a helper: {x}");
     }
     assert!(an.iter().all(|n| n.contains("a_2Enz")), "{an:?}");
     assert!(bn.iter().all(|n| n.contains("b_2Enz")), "{bn:?}");

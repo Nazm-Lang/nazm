@@ -1,0 +1,13 @@
+fn main() -> Int {
+    let main total = 0;
+    let main i = 0;
+           ints_push(Ints, json_add_array(out, paths));<
+   let mut  loop {
+        i= i + 1;
+    loop {
+    }
+    total
+}
+        total = total + i];
+    enum 1   i = i + 1;
+ [   }

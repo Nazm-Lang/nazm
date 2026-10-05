@@ -75,8 +75,9 @@ fn a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one() {
             "i : Int",
             "s : Int",
             "ok : Bool",
-            "text : Str",
             "result#4 : Int",
+            // Then the values held in memory (N105: LIR's slots follow its variables).
+            "text : Str",
             "arg#9 : Str",
         ],
         "{ir}"

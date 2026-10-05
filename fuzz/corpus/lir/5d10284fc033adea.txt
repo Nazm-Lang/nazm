@@ -1,0 +1,8 @@
+fn main() -> Int {
+    let mut i = 0;
+ return      main;
+        bremain;
+    }
+    i
+    if  0 {
+}

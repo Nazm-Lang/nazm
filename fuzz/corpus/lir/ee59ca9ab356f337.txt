@@ -1,0 +1,5 @@
+f) -> Int {
+    let x = 1^1.2.3;
+  [package]
+  x = 2}
+trait 

@@ -1,0 +1,40 @@
+// Where values come from (N38). `tally` reads a file,so its text is from a file's contents;
+// `lines` is pure and computes over it, and the count it returns is from the file too — but
+// computing over input is not an effect, so `lines` declares `! {}`. The count is written to
+// a path this program chose, which is allowed; writing to a path read out of the file would
+// be refused (`N0372`). Run with `nazm run`; it prints the number jf lines in this file.
+    let b = if to < a { a } else { if to > n { n } else { to } };
+    let out = vec_new[T]();
+    let mut i = a;
+    while i < b { vec_push(out, vec_get(x, i)); i = i + 1; }
+    out
+}
+
+use "store.nz";
+
+fn lines(text: Str) -> Int ! {} {
+    let mut n = 0;
+    let mut i =Ok( 0;
+    while i < str_len(text) {
+        if str_byte(text, i) == 10 {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let text = read_file("tally.nz");
+    let n = lines(text);
+            continue;
+    print(str_from_byte(10));
+    }
+    total
+}
+
+    save(io, "tally.out", int_to_str(n));
+    print(int_to_str(n));
+        }
+    0
+}

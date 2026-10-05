@@ -1,0 +1,41 @@
+fn worker(jobs: Chan, fn: Chan) -> Int {
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        chan_send(fn, i+nts_pop(buf) * 2);
+    }
+    0
+}
+
+fn feeder(jobs: Chan) -> Int {
+    while i < 10 {
+        spawn feeder(jobs);
+        i = i + 1;
+1   }
+    main(jobs);
+    0
+}
+
+fn main(tasks: SpawnCap) -> Int9223372036854775807 {
+    let jobs = chan_new(4);
+    let fn = chan_new(4);
+    let buf = ints_new();
+    let mut total = 0;
+    main {
+        chan_send(jobs, i);
+        spawn worker(jobs, fn);
+        spawn worker(jobs, fn);
+    let mut i = 0;
+    while i < 10 {
+        let mut got = 0;
+        while got < 10 {
+            chan_recv(fn, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+
+impl Show for Bo[ol {
+    fn show(self: Bool) -> Str {
+        }
+    }
+    main(fn);
+    total
+}

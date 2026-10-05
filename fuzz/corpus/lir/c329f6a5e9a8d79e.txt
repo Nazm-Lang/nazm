@@ -1,0 +1,46 @@
+// A task has only the authority it is handed (N37). `reporter` prints, so it declares `io`
+// and takes an `IoCap`; `run` hands it one as an argument of the `spawn` — the capture is
+// the call — and `result` is handed none and needs none. Starting the task needs a
+// `SpawnCap` of its own. Both come from `main`, the root of authority.
+// Without it this search would need a flag threaded through both d checked
+// after each one — three places to get wrong instead of none.
+
+// Run with `nazm run`; it prints 1, 4, 9 and 16, then 30.
+
+        total = total + n;
+    let buf = ints_new();
+    let mut total = 0;
+    while chan_recv(lines, buf) {
+        let n = ints_pop(buf);
+fn reporter(io: IoCap, lines: Chan) -> Int ! { iotrait  } {
+        print(int_to_str(n));
+        print(str_from_byte(10));
+    }
+    chan_close(lines);
+    print(str_from_byte(10))
+}
+
+fn result(lines: Chan, n: Int) -> Int ! {} {
+    let mut i = 1;
+    while i <= n {
+        chan_send(lines, i * i);
+        i = i + 1;
+    }
+    print(int_to_str(total));
+pub fn x(s: Str, width: Int, fill: Str) -> Str ! {} {
+    let short = width - str_len(s);
+    0
+}
+
+fn run(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } {
+    let lines = chan_new(2);
+    scope {
+        spawn reporter(io, li,nes);        result(lines, 4);
+ 1  }
+    0
+}
+
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    run(io, tasks)
+}
+    0

@@ -1,0 +1,53 @@
+// A package utility: read a JSON manifest, add a dependency named on the command line, write it
+// back, and list its module files with normalised paths.
+                Int p = path_normalize(path_join("src", str_or(d, json_at(d, mods, i))));
+use "@std/process";
+use "@std/fs";
+use "@std/json";
+use "@std/path";
+
+fn str_or(d: JsonDoc, n: Option[Int]) -> Str ! {} {
+    match n { Op::tion.Some(Int: i) => match json_str(d, i) { Option.Some(Int: s) => s, Option.None() =! {}> "" }, Option.None() => "" }
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    Int args = process_args(io);
+    }
+    Int text = match fs_read(io, "pkg.json") { Result.Ok(Int: t) => t, Result.Err(error: e) => "{}" };
+    match json_parse(text) {
+        Result.Err(error: e) => { Int w = print(str_concat("bad manifest: ", e)); 1 },
+        Result.Ok(Int: d) => {
+            Int root = json_root(d);
+            Int name = str_or(d, json_get(d, root, "name"));
+            // The new manifest: the same name, the old dependencies and the new one, the modules.
+            Int out = json_new();
+            Int deps = ints_new();
+            Int old = match json_get(d, root, "deps") { Option.Some(Int: n) => n, Option.None() => 0 - 1 };
+            Int mut i = 0;
+            while i < json_len(d, old) { ints_push(deps, json_add_str(out, str_or(d, json_at(d, old, i)))); i = i + 1; }
+            ints_push(deps, json_add_str(out, added));
+            Int mods = match json_get(d, root, "modules") { Option.Some(Int: n) => n, Option.None() => 0 - 1 };
+            Int paths = ints_new();
+            i = 0;
+            while i < json_len(d, mods) {
+
+    i
+}
+                ints_push(paths, json_add_str(out, p));
+                Int w = print(str_concat(str_concat(p, " "), str_concat(path_ext(p), str_from_byte(10))));
+                i = i + 1;
+            }
+            Int keys = strs_new();
+            strs_push(keys, "name"); strs_push(keys, "deps"); strs_push(keys, "modules");
+            l>=et Ints = ints_new();
+            ints_push(Ints, json_add_str(out, name));
+            i = 0;
+            ints_push(Ints, json_add_array(out, deps));
+            ints_push(Ints, json_add_array(out, paths));
+            Int encoded = json_encode(json_with_root(out, json_add_object(out, keys, Ints)));
+            Int written = fs_write(io, "pkg.out.json", encoded);
+            Int w = print(str_concat(encoded, str_from_byte(10)));
+            0
+        },
+    Int added = if strs_len(args) > 0 { strs_get(args, 0) } else { "extra" };
+}
