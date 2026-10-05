@@ -8820,3 +8820,41 @@ which N108 classifies; no code changes, so no epoch, schema, ABI or key moves.
 **What would prove the audit wrong:** a program in the repository, or one a stated goal describes,
 that the narrowed promise says Nazm handles and it does not; or a dropped candidate that turns out
 to be an unsound answer rather than a missing feature.
+
+## 7.109 The core release gate — N108, 2026-10-05
+
+Written before the gate runs. N108 adds nothing: it decides whether the core N101–N107 closed is
+a release candidate, on one tree, by evidence gathered on that tree. Owner: the release record
+(`docs/releases/`), with this section as its method.
+
+**Classification.** *A — core*, required for the language, compiler, runtime, backends and the
+compiler written in Nazm to be mature: areas 1, 2, 2a, 3–9, 10, 10a, 10b, 11–15, 22–24, 29, 30's
+mutation half, 31, and the selfhost parity record. *B — ecosystem and domain*, a release limitation
+and never core debt: 16 (stdlib breadth), 17 (FFI breadth), 18–20 (profiles and boards), 21
+(AI/HPC), 25 (LSP/MCP), 26 (packages, registry scale, build check reuse), 27 (debugger), 28
+(performance claims), 30's fuzzing half, 32 (transparency log), 33 (platform breadth), 34
+(contracts). *C — external blockers*, stated with their cause: the in-process JIT (area 12:
+`unsafe` forbidden, no executable-memory crate offline), proofs of the formal core (no proof
+assistant or solver in the image), sBPF execution (area 34: no toolchain offline), a second GPU
+provider (area 21).
+
+**The gate, contained, serial, from a clean worktree of one candidate.** The entire mutation
+catalogue, targeted with every killer verified, resumed until every entry has a verdict, each entry
+accounted for (CAUGHT, SURVIVED, UNUSABLE, NOT INJECTED, MUTANT CRASH, TIMED OUT, RUNNER ERROR or
+UNEXECUTED, never converted); the workspace suite; the full lifecycle suite; the selfhost suite;
+the bootstrap; fuzzing of every target from its corpus; the LIR oracle and backend differential (in
+the suite, and the N73 generator at a larger budget); scheduler and channel stress (the pool's ten
+thousand tasks, in the suite); supported platforms and emulators that run offline here; the FFI,
+embedded, WebAssembly and contract smoke tests the suite and its images hold; the performance
+baseline checked; `cargo xtask contained release` — assembly, provenance, evidence bundle — and
+the manifest redigested independently of the tool that wrote it. Anything that cannot run here is
+recorded as not run, with why.
+
+**Accepted only if** no class-A row is PARTIAL (N107), N102's parity holds, the authority bridge is
+gone (N104), the single-LIR contract holds (N105), the default runtime is the pool (N106), every
+catalogue entry is accounted for with no unresolved SURVIVED, and the artifact and its evidence
+verify independently. A survivor is fixed — a killer or the code — and re-run, or the gate is NOT
+ACCEPTED and says so. Nothing is tagged, pushed or published; the release procedure stays manual.
+
+**Versions frozen:** whatever the candidate carries — semantic epoch 29, `nazm.interface/11`,
+runtime ABI 14, `nazm.lir/2`, `nazm.cost/2` — recorded, not moved.
