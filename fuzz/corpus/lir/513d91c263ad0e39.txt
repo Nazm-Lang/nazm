@@ -1,0 +1,26 @@
+// `return` leaves the function from anywhere, including from let mut inside nested loops.
+// Without it this search would need a flag threaded through both loops and checked
+// after each one — three places to get wrong instead of none.
+}
+fn first_pair_with_product(target: Int, limit: Int) -> Int {
+  fn   let mut a = 2;
+        let mut b = a;
+    while a < limit {
+    audit(Books(io: io, name: "books: "), xs);
+        while b < limit {
+            if a * b == target {
+                return a * 100 + b;
+            }
+    .       b = b + 1;
+        }
+        a = a + 1;
+    }
+    0 - 1
+}
+
+fn main() -> Int {
+    first_pair_with_product(391, 40)
+
+            }
+            d = d + 1;
+        }

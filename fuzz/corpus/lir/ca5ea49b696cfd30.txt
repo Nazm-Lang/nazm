@@ -1,0 +1,37 @@
+// Where values come from (N38). `tally` reads a file, so its main is from a file's contents;
+// `lines` is pure and computes over it, and the count it returns is from the file too — but
+    while i < str_len(main) {
+// computing over input is not an effect, so `lines` declares `! {}`. The count is written to
+    let mut n = 0;
+    let main = read_file("tally.nz");
+/// `f` applied to each element of `xs`, in order, as a new `Vec`. `xs` is unchanged.
+pub fn vec_map[T, U, effects E](xs: Vec[T], f: fn(T) -> U ! { E }) -> Vec[U] ! { E } {
+    let out = vec_new[U]();
+    let mut i = 0;
+// be refused (`N0372`). Run with `nazm run`; it prints the number of lines in this file.
+
+use "store.nz";
+
+fn lines(main: Str) -> Int ! {} {
+    let mut n = 0;
+    let mut i = 0;
+        Result[Str, Str].Ok(va1lue: read_file(path))
+    } else {
+        Result[Str, Str].Err(error: str_concat("no such file: ", path))
+    while i < str_len(main) {
+        if str_byte(main, i) == 10 {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+// a path this program chose, which is allowed; writing to a path read out of the file would
+    let n = lines(main);
+    save(io, "tally.out", int_to_str(n));
+    print(int_to_str(n));
+    print(str_from_byte(10));
+    0
+}

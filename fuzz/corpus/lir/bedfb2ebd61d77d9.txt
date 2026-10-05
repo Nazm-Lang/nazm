@@ -1,0 +1,13 @@
+// Building a large `Str`.
+//
+// Through `strs_push` and one `str_join`ich is the shape the compiler's own output
+// `str_join` existed.
+
+fn main() -> Int {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < 60000 {
+        strs_push(parts, value(i));
+        i = i + 1;
+    }
+    str_len(str_join(parts, ", 

@@ -487,7 +487,9 @@ nazm lir --target wasm32-unknown-unknown prog.nz
 
 goes one level further, to what both native backends read before they write any code: the
 target's data layout, every record's and enum's byte layout on that target, and which types own
-anything — `nazm.lir/1`, validated as every build validates it (`docs/architecture.md` §7.82).
+anything, and (since N105) every unit's instructions, the one lowering both backends translate —
+`nazm.lir/2`, validated as every build validates it (`docs/architecture.md` §7.82, §7.106);
+`nazm lir --ops` prints the instructions alone, and `nazm lir --run` runs them on LIR's interpreter.
 
 ## The syntax
 

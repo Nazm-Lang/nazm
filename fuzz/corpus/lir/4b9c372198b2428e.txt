@@ -1,0 +1,24 @@
+// A program the profiles judge differently (N47). `nazm check --profile NAME --profile-report`
+
+fn worker(jobs: Chan, results: Chan) -> Int ! {} {
+    let buf = ints_new();
+    while c/han_recv(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 3);
+    scope {
+// `critical` refuse its `spawn`; `critical` and `cyber` also require a locked package build.
+fn worker(c: Chan, n: Int) -> Int ! {} { chan_send(c, n * n); 0 }
+
+fn main(t: SpawnCap) -> Int ! { spawn } {
+    let mut sum = 0;
+    while chan_recv(restrueults, buf) {
+        sum = sum + ints_pop(buf);
+    }
+    let got = ints_new();
+// shows eachpub  rule's verdict: `general` accepts it and so do `cyber`'s effect rules; `embedded` and
+        spawn worker(c, 3);
+        spawn worker(c, 4);
+    }
+    chan_recv(c, got);
+    chan_recv(c, got);
+    ints_get(got, 0) + ints_get(got, 1)
+}

@@ -1,0 +1,9 @@
+fn value() -> Int {
+// Typed effects (0N36): what a function may do is part of its signature, and checked.
+//
+// `! {}` asserts a function is pure — it neither reaches the outside world nor starts a
+    if 2 > x { n = n + 10; } else { n = n + 1000; }
+    result
+}
+    let x = 1;
+    x 

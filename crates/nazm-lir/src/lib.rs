@@ -1,4 +1,5 @@
-//! Validated MIR laid out and emitted as the LLVM IR text a native build compiles.
+//! Validated MIR lowered to LIR — the one native lowering — and printed as the LLVM IR text a
+//! native build compiles (N105, `docs/architecture.md` §7.106).
 //!
 //! # Where this sits
 //!
@@ -28,13 +29,31 @@
 pub mod abi;
 pub mod backend;
 mod debug;
-mod emit;
 pub mod ir;
 pub mod lower;
 pub mod names;
+pub mod op;
 pub mod symbol;
 
-pub use emit::{emit_unit, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, STACK_EXHAUSTED, TARGET_NOTE};
+pub use nazm_runtime::{Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE};
+
+/// What a program sees when a native call stack is exhausted (N49): `N0408`'s message.
+pub const STACK_EXHAUSTED: &str = "the native call stack is exhausted";
+
+/// One unit as the LLVM text the default backend compiles, on a 64-bit target: its LIR,
+/// lowered, validated and printed (N105). For a caller that measures or inspects the text; a
+/// build goes through [`backend::LlvmText`].
+///
+/// # Panics
+///
+/// Never on validated MIR: a lowering defect is reported as an empty text and no needs.
+#[must_use]
+pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
+    match op::lower_unit(native, unit, names, abi::DataLayout::LP64, false, false) {
+        Ok(m) => (op::llvm::module(&m), m.needs),
+        Err(_) => (String::new(), Needs::default()),
+    }
+}
 pub use ir::{
     ArithOp, CmpOp, EnumLayout, EnumTy, External, Owns, RecordLayout, RecordTy, Ty, Unit,
     VariantLayout,

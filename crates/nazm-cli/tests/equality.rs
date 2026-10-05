@@ -228,7 +228,7 @@ fn function<'a>(ir: &'a str, symbol: &str) -> &'a str {
 fn helper(ir: &str, ty: &str) -> String {
     let found: Vec<&str> = ir
         .lines()
-        .filter(|l| l.starts_with("define internal i1 @nz.eq."))
+        .filter(|l| l.starts_with("define internal i1 @nz.h.eq."))
         .filter_map(|l| l.split('@').nth(1))
         .filter_map(|l| l.split('(').next())
         .filter(|s| s.contains(ty))
@@ -406,8 +406,9 @@ fn equality_inside_a_value_block_and_after_propagation_compiles() {
 
 #[test]
 fn an_enum_helper_reads_only_the_active_variant_s_slot() {
-    // Different discriminants leave before any payload is extracted, and each arm of the
-    // `switch` extracts exactly its own slot — the tag plus one — from each operand.
+    // Different tags leave before any payload is read, and each arm of the `switch` reads one
+    // variant's payload at the same offsets from both operands (N105: the helper is LIR's, its
+    // fields bytes at `abi`'s offsets).
     let ir = ir_of(
         "enum Shape { Plain, Named(label: Str), Pair(left: Str, right: Int), }\n\
          fn main() -> Int { if Shape.Named(label: \"a\") == Shape.Plain() { 1 } else { 0 } }\n",
@@ -415,7 +416,7 @@ fn an_enum_helper_reads_only_the_active_variant_s_slot() {
     let body = function(&ir, &helper(&ir, "Shape"));
     let entry: &str = body.split("\nb").next().unwrap_or("");
     assert!(
-        !entry.contains(", 1 ") && !entry.contains(", 2 "),
+        !entry.contains("getelementptr"),
         "a payload read before the tags agree:\n{body}"
     );
     assert!(entry.contains("icmp eq i64"), "{body}");
@@ -430,35 +431,34 @@ fn an_enum_helper_reads_only_the_active_variant_s_slot() {
         !body.contains("i64 2, label"),
         "a zero-payload variant has an arm:\n{body}"
     );
-    for arm in body
-        .split("\nb")
-        .skip(1)
-        .filter(|a| a.contains("extractvalue %"))
-    {
-        let slots: Vec<&str> = arm
+    let offsets = |arm: &str, p: &str| -> Vec<String> {
+        let mut o: Vec<String> = arm
             .lines()
-            .filter(|l| l.contains("%a, ") || l.contains("%b, "))
+            .filter(|l| l.contains(&format!("getelementptr i8, ptr {p}, i64 ")))
+            .filter_map(|l| l.rsplit(' ').next().map(str::to_owned))
             .collect();
-        if slots.is_empty() {
+        o.sort();
+        o
+    };
+    let mut arms = 0;
+    for arm in body.split("\nb").skip(1) {
+        let (a, b) = (offsets(arm, "%p0"), offsets(arm, "%p1"));
+        if a.is_empty() && b.is_empty() {
             continue;
         }
-        assert_eq!(slots.len(), 2, "{arm}");
-        let slot = |l: &str| {
-            l.split(", ")
-                .nth(1)
-                .map(|s| s.split_whitespace().next().unwrap_or("").to_owned())
-        };
-        assert_eq!(
-            slot(slots[0]),
-            slot(slots[1]),
-            "two different slots compared:\n{arm}"
-        );
+        arms += 1;
+        assert_eq!(a, b, "two different payloads compared:\n{arm}");
     }
+    assert!(arms >= 2, "{body}");
     // `!=` calls the same helper and negates it: there is no second one.
     let ir = ir_of(
         "enum E { A(n: Int), B, }\nfn main() -> Int { if E.A(n: 1) != E.A(n: 1) { 1 } else { 0 } }\n",
     );
-    assert_eq!(ir.matches("define internal i1 @nz.eq.").count(), 1, "{ir}");
+    assert_eq!(
+        ir.matches("define internal i1 @nz.h.eq.").count(),
+        1,
+        "{ir}"
+    );
     assert!(ir.contains("xor i1"), "{ir}");
 }
 
@@ -492,7 +492,7 @@ fn a_helper_is_named_by_the_type_s_durable_identity_and_its_arguments() {
     );
     let helpers: Vec<&str> = ir
         .lines()
-        .filter(|l| l.starts_with("define internal i1 @nz.eq."))
+        .filter(|l| l.starts_with("define internal i1 @nz.h.eq."))
         .collect();
     assert_eq!(helpers.len(), 2, "{helpers:#?}");
     assert_ne!(helpers[0], helpers[1]);

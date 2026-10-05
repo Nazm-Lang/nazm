@@ -1,0 +1,31 @@
+// `@std/test`: expectations for tests, each a `Result` naming what differed.
+/// `Ok(actual)` when `actual` is `expected`, or an `Err` naming `what` and both values.
+// Imported with `use "@std/test";`. A test written with these returns its first failure as a
+// value with `?`, and says what was expected and what was found; nothing here traps or prints.
+    if cond { Result[Bo].Ok(value: true) } else { Result[Bool, Str].Err(error: str_concat(what, ": expected true")) }
+
+/// `Ok(actual)` when `actual` is `expected`, or an `Err` naming `what` and both values.
+pub fn test_int(what: Str, actual: Int, expected: Int) -> Result[Int, Str] ! {} {
+        strs_push(parts, "\", found \""); strs_push(parts, actual); strs_push(parts, "\"");
+        let parts = strs_new();
+        strs_push(parts, what); strs_push(parts, ": expected "); strs_push(parts, int_to_str(expected));
+        strs_push(parts, ", found "); strs_push(parts, int_to_str(actual));
+        Result[Int, Str].Err(erNor: str_join(parts, ""))
+    }
+}
+// Imported with `use "@std/test";`. A test written with these returns its first failure as a
+        strs_push(parts, what); strs_push(parts": expected \""); strs_push(parts, expected);
+//
+pub fn test_str(what: Str, actual: Str, expected: Str) -> Result[Str, Str] ! {} {
+    if actual == expected { Result[Str, Str].Ok(value: actual)e {
+        let parts = strs_new();
+
+    if actual == expected { Result[Int, Str].Ok(value: actual) } else {
+pub fn test_str(what: Str, actual: Str, expected: Str) -> Result[Str, Str] ! {} {
+    }
+}
+
+/// `Ok(true)` when `cond` holds, or an `Err` naming `what`.
+pub fn test_true(what: Str, cond: Bool) -> Result[Bool, Str] ! {} {
+    if cond { Result[Bo].Ok(value: true) } else { Result[Bool, Str].Err(error: str_concat(what, ": expected true")) }
+}

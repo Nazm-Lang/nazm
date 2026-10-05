@@ -440,7 +440,7 @@ fn an_imported_modules_main_is_not_the_process_entry() {
 #[test]
 fn string_constants_from_two_modules_do_not_collide() {
     // §19. Each unit numbers its own constants from zero, so two artefacts both contain
-    // `@.s0`. That is safe because the linkage is `private`, which makes them local
+    // `@nz.l.s.0` (N105's name for a unit's first literal). That is safe because the linkage is `private`, which makes them local
     // labels rather than symbol-table entries — established here by linking and running
     // rather than by reasoning about it.
     let dir = tempfile::tempdir().expect("tempdir");
@@ -454,7 +454,7 @@ fn string_constants_from_two_modules_do_not_collide() {
     let art = artefacts(dir.path(), files);
     assert!(
         art.iter()
-            .filter(|(_, ir)| ir.contains("@.s0 = private"))
+            .filter(|(_, ir)| ir.contains("@nz.l.s.0 = private"))
             .count()
             >= 2,
         "both units should have numbered a constant from zero"

@@ -297,7 +297,7 @@ fn a_requirement_leaves_no_trace_in_the_program() {
          fn main() -> Int { if same(Box[Int](value: 1), Box[Int](value: 1)) { if same(Box[Str](value: \"a\"), Box[Str](value: \"b\")) { 2 } else { 1 } } else { 0 } }\n",
     );
     assert_eq!(
-        boxed.matches("define internal i1 @nz.eq.").count(),
+        boxed.matches("define internal i1 @nz.h.eq.").count(),
         2,
         "{boxed}"
     );

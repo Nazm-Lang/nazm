@@ -9,9 +9,9 @@
 
 use nazm_diag::Diagnostic;
 
-use crate::emit::Needs;
 use crate::lower::Native;
 use crate::names::SourceNames;
+use crate::Needs;
 
 /// Which backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -204,7 +204,7 @@ pub trait Backend {
     fn version(&self) -> String;
     fn target(&self) -> &Target;
     /// Every unit of a program, modules first and then instances, in the order they link.
-    fn plan(&self, native: &Native) -> Vec<Planned>;
+    fn plan(&self, native: &Native, names: &SourceNames<'_>) -> Vec<Planned>;
     /// One unit, by its position in [`Self::plan`].
     ///
     /// # Errors
@@ -230,7 +230,7 @@ pub trait Backend {
         let mut needs = self.baseline();
         let mut units = Vec::new();
         let mut errors = Vec::new();
-        for (i, p) in self.plan(native).into_iter().enumerate() {
+        for (i, p) in self.plan(native, names).into_iter().enumerate() {
             match self.generate(native, names, i) {
                 Ok(g) => {
                     needs = needs.union(g.needs);
@@ -320,7 +320,7 @@ impl Backend for LlvmText {
         &self.target
     }
 
-    fn plan(&self, native: &Native) -> Vec<Planned> {
+    fn plan(&self, native: &Native, _names: &SourceNames<'_>) -> Vec<Planned> {
         units(native)
             .into_iter()
             .map(|(name, _, instance)| Planned {
@@ -343,18 +343,30 @@ impl Backend for LlvmText {
                 needs: Needs::default(),
             });
         };
-        // The unit's byte layouts on this target, validated before any code (N81): LLVM lays its
-        // aggregates out itself, and the tables are still the contract every backend is held to.
-        if let Err(e) =
-            crate::abi::ByteLayouts::of(u, crate::abi::DataLayout::of(&self.target)).verify()
-        {
+        // The unit as LIR on this target, validated (N105, §7.106): every decision a program can
+        // observe is made there, and this backend prints it.
+        let m = crate::op::lower_unit(
+            native,
+            u,
+            names,
+            crate::abi::DataLayout::of(&self.target),
+            self.debug,
+            self.soa,
+        )?;
+        if let Err(e) = crate::op::validate::module(&m) {
             return Err(vec![Diagnostic::error(
                 nazm_diag::codes::COMPILER_DEFECT,
                 nazm_span::Span::synthetic(),
-                format!("the layout tables of unit `{}` do not hold: {e}", u.source),
+                format!("LIR does not validate: {}", e.join("; ")),
             )]);
         }
-        let (ir, needs) = crate::emit::emit_unit_with(native, u, names, self.debug, self.soa);
+        let text = crate::op::llvm::module(&m);
+        let ir = if self.debug {
+            crate::debug::attach(&text, &|i| names.debug_file(i))
+        } else {
+            text
+        };
+        let needs = m.needs;
         // A freestanding image has one thread and no thread-local storage (N62, §7.64): the
         // failure state the unit declares is an ordinary global there.
         let ir = if self.target.os == Os::None {

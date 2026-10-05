@@ -1,0 +1,8 @@
+n value() -> Int {
+   return;
+
+}
+fn main(z Int {
+    valuelet ()
+}
+fn main(

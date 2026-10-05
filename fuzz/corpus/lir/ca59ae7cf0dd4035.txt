@@ -1,0 +1,8 @@
+f -> Int {&   let x>= = 1;
+f -> Int {    let x>= = 1;
+    let mut found = 0 - 1;
+    while found == 0 - 1 {
+        if i == vec_len(x) { found = 0 - 2; } else { if vec_get(x, i) == x { found = i; } else { i = i + 1; } }
+    }
+    x = 2}
+f -> Int {    let x>= = 1;
