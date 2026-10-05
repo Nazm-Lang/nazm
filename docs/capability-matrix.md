@@ -64,13 +64,13 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | # | Area | Status |
 | --- | --- | --- |
 | 1 | Syntax, parser, CST | VERIFIED — the reference parser: incremental reparse and recovery (N76); the compiler written in Nazm's syntax is N98's |
-| 2 | Name resolution and modules | PARTIAL |
+| 2 | Name resolution and modules | VERIFIED — durable identities, interfaces and resolved units, a declared root, packages, re-exports with one identity (N103, N107); check reuse for builds is area 26's |
 | 2a | Incremental semantic checking | VERIFIED |
-| 3 | Type system | PARTIAL — traits, impls and methods (N78); no trait objects, generic traits or default methods |
+| 3 | Type system | VERIFIED as scoped (N107) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); trait objects, generic traits and default methods refused by name |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe |
-| 5 | Effects | PARTIAL — effect subsumption for function values (N79); no handlers, user effects or divergence |
-| 6 | Capabilities (language) | PARTIAL — no inherited authority: every function holds what it exercises (N104); `OutCap` attenuation (N79); static only, coarse, shareable |
-| 7 | Provenance and information flow (language) | PARTIAL — explicit flow by cell, target and field (N80); no implicit flow, no labels a program writes |
+| 5 | Effects | VERIFIED as scoped (N107) — inferred, checked compiler-owned effects with subsumption (N79); no handlers or user effects; pure is not total |
+| 6 | Capabilities (language) | VERIFIED as scoped (N107) — static, coarse, shareable: no inherited authority (N104), `OutCap` attenuation (N79) |
+| 7 | Provenance and information flow (language) | VERIFIED as scoped (N107) — explicit data flow by cell, target and field (N80); implicit flow RESEARCH (R6), not claimed |
 | 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | VERIFIED (v1) |
 | 10 | LIR and the backend contract | VERIFIED (v2) — one instruction-level LIR, lowered once, that LLVM prints and Cranelift translates; validated; LIR's interpreter the oracle for the sequential subset; `nazm.lir/2` (N105) |
@@ -101,7 +101,10 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 33 | Platform and target matrix | PARTIAL — every cell run-verified, compile-only or unsupported (N95): 9 run, 2 compile-only, 3 unsupported; x86_64 Linux not run |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72); both VMs held to the simulator on generated sequences (N96) |
 
-After N106, 2026-10-05: twenty-four VERIFIED (area 13 moved: the M:N pool by default, its policy
+After N107, 2026-10-05: twenty-nine VERIFIED (areas 2, 3, 5, 6 and 7 moved, the last four as scoped:
+`audit-n107.md`), eight PARTIAL — every one an ecosystem or domain row — none RESEARCH or MISSING.
+
+*Historical.* After N106, 2026-10-05: twenty-four VERIFIED (area 13 moved: the M:N pool by default, its policy
 stated), thirteen PARTIAL, none RESEARCH or MISSING.
 
 *Historical.* After N105, 2026-10-05: twenty-three VERIFIED (area 10 moved: one LIR both backends translate, with its
@@ -259,7 +262,9 @@ item reparses that item; recovery reaches every delimited list; the escape polic
 before that, 2026-09-25 (N15): a round trip through the tree preserves every byte including trivia,
 and the parser produces a usable tree for a file with an error in the middle of a function.
 
-### 2. Name resolution and modules — PARTIAL
+### 2. Name resolution and modules — VERIFIED (N107)
+
+*N107, 2026-10-05: the scope audited (`audit-n107.md`, `architecture.md` §7.108).* Every answer a name has is the same whether a build re-checks a module or reuses it, so the one remaining gap — `nazm build` and `nazm run` re-checking every module — is a cost, and is area 26's limitation now. What VERIFIED means here: one durable identity per definition across modules, packages and re-exports, persisted and read back, in both compilers.
 
 *N103, 2026-10-05: re-exports, one identity.* `architecture.md` §7.104 first. `pub use "PATH";`
 offers everything the module at `PATH` offers; `pub use "PATH" { a, b as c };` the names chosen,
@@ -432,7 +437,9 @@ rather than met.
 **Accepted when** · Met for semantic checking. Native reuse is a separate row that does not
 exist.
 
-### 3. Type system — PARTIAL
+### 3. Type system — VERIFIED as scoped (N107)
+
+*N107, 2026-10-05: the scope audited (`audit-n107.md`, `architecture.md` §7.108).* The scope is the type system the spec states — records, closed enums, exhaustive variant match, first-order generics with `Vec[T]`, typed `Result` and `?`, structural equality and equality bounds, function values and closures, traits with impls, methods and bounds, dispatched statically. Trait objects, generic traits, associated types, default methods and supertraits are not required by any program or stated goal (dynamic dispatch exists through function values and enums, and the goals ask that it be exposed and restricted, not added); each stays refused by name (`N0602`–`N0608`). Checking against a persisted interface alone, without source, cannot use traits: a tooling boundary (area 26), not a wrong answer — the cached check path handles traits.
 
 **N78 (2026-10-03)** · *Traits and methods* (`architecture.md` §7.79, `spec.md`, *Traits and
 methods*). `trait Name { fn m(self: Self, …) -> R; }`, `impl Name for Type { … }`, `recv.m(…)` and
@@ -843,7 +850,9 @@ N8**, and unmoved by N9: contained on Linux aarch64, the compiler written in Naz
 `compiler/emit.nz` peaks at 32.75 MiB against a 3,756-line input, and 80,000 short-lived
 records with heap fields peak at the empty-program floor.
 
-### 5. Effects — PARTIAL
+### 5. Effects — VERIFIED as scoped (N107)
+
+*N107, 2026-10-05: the scope audited (`audit-n107.md`, `architecture.md` §7.108).* The scope is two compiler-owned effects, inferred and checked, with declared sets as contracts and purity assertable. Handlers and user-defined effects are algebraic effects, a control mechanism; who may act is capabilities' (area 6), so neither is required. **Pure is not total:** a pure function may diverge; whether divergence is an effect stays an open question (`research-register.md`), and nothing relies on the answer.
 
 *N36, 2026-09-30: Typed Effects v1 — VERIFIED; Effect propagation v1 — VERIFIED; Effect-bearing
 interfaces v1 — VERIFIED; Purity checking v1 — VERIFIED. The row is PARTIAL: handlers, effect
@@ -929,7 +938,9 @@ failure and panic are effects.
 **Accepted when** · A function's row is inferred, checked, and a compile-fail test shows an
 effectful call refused where a pure one is accepted.
 
-### 6. Capabilities, as a language feature — PARTIAL
+### 6. Capabilities, as a language feature — VERIFIED as scoped (N107: static, coarse, shareable)
+
+*N107, 2026-10-05: the scope audited (`audit-n107.md`, `architecture.md` §7.108).* The promise is the static one the checker keeps: no authority without being handed it, `main` the only root, `OutCap` narrower than `IoCap`. Runtime enforcement, revocation, finer kinds and linear capabilities are not required — finer authority is a library built from today's kinds — and the row's name now says the scope.
 
 *N104, 2026-10-05: no inherited authority — VERIFIED.* `architecture.md` §7.105 first. The
 bridge's authority half is removed: every body, declared or not, holds what it exercises
@@ -1032,7 +1043,9 @@ plan of record and then not adopted. N37 adopted a capability parameter on `main
 a compile error with a span — met for every function that declares its effects, and not for an
 ambient one, which is the bridge above.
 
-### 7. Provenance and information flow, as a language feature — PARTIAL
+### 7. Provenance and information flow, as a language feature — VERIFIED as scoped (N107: explicit data flow)
+
+*N107, 2026-10-05: the scope audited (`audit-n107.md`, `architecture.md` §7.108).* The promise is explicit data flow: a `Secret` that reaches an output through data is refused, by cell, target and field, through calls, values, bounds and channels. Implicit flow — non-interference — was never claimed and is RESEARCH (`research-register.md` R6); labels a program writes and per-handle precision would only refine it.
 
 *N80, 2026-10-03: Container cells v1 — VERIFIED; Indirect targets v1 — VERIFIED; Local field and
 variant shapes v1 — VERIFIED; Flow policy engine v1 — VERIFIED; Origin-to-sink traces v1 —
@@ -2835,6 +2848,8 @@ every status valid against both schemas. `crates/nazm-mcp/tests/protocol.rs` —
 summary tool accepting only `check` (not `build`, `test`, a root, arguments or a command), nothing
 written, and 1,000 calls through edits, breaks and repairs with flat resident memory.
 Fifteen N31 mutations, and seven in its closure (area 30).
+
+**Since N107 (moved from area 2)** · `nazm build` and `nazm run` check every module on every run; a warm build reuses objects, not checks. Every answer is the same either way — it is a cost. A check against a persisted interface alone, without source, cannot use that module's traits.
 
 **Limitation** · There is no project manifest, no dependency resolution, no lockfile and no
 registry. `nazm build` takes one root file, and since N3 the **source root is derived from
