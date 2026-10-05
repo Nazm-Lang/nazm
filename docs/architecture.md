@@ -8616,3 +8616,68 @@ Choices for the compiler, with the corrections an external review forced:
 | Diagnostics | `ariadne` to render; **own structured schema** | The renderer is cosmetic. Stable codes, JSON, machine-applicable fixits are the artifact |
 | LSP / MCP | `lsp-server` (not `tower-lsp` — cancellation control) · `rmcp` | |
 | Testing | `insta` · `tests/ui/` golden tests · `proptest` + `arbitrary` + `libfuzzer-sys` | Golden UI tests are the highest-value compiler test investment |
+
+## 7.106 One LIR both backends consume — N105, 2026-10-05
+
+Written before the code. Area 10 is PARTIAL because LIR owns bytes and nothing else: since N40 each
+native backend translates MIR itself. An inventory at N105's start found three decisions made once
+— byte layouts and the ownership predicate (`abi.rs`), symbols and linkage (`symbol.rs`), the
+runtime's functions — and everything else made twice, in `nazm-lir/src/emit.rs` (LLVM text) and in
+`nazm-codegen-clif` (Cranelift): every guard, its order, failure code and message; 33 of the 57
+built-ins' semantics; which runtime function retains or releases each type; the record, enum,
+closure and task-block layouts the code actually uses (LLVM's enum was one slot per variant, the
+tables' a tagged union); the internal calling convention; literals. The two agreed because tests
+compared them, not because they were one. Owner: `nazm-lir`.
+
+**The level.** LIR is an instruction set below MIR and above either backend, target-shaped but
+backend-neutral, in `nazm-lir/src/op/`:
+
+- *Values* are typed by a machine class — `I8`, `I32`, `I64`, `Ptr` — and are defined once and used
+  only in the block that defines them; a value that crosses blocks lives in a *variable* (a mutable
+  scalar) or a *slot* (stack memory of a stated size and alignment).
+- *Instructions*: constants and symbol addresses; slot addresses; loads and stores at a byte offset;
+  wrapping and overflow-checked arithmetic; comparisons; selects; extensions and truncations;
+  pointer offsets; variable reads and writes; direct, indirect and runtime calls; memory copy and
+  zero of a constant size; a source position for debug information.
+- *Terminators*: jump, branch, switch on an integer, return, and `unreachable`.
+- A *module* is one unit: its functions (MIR's, and every helper, trampoline, closure release and C
+  entry they need), the data they reference (literals, failure texts), what they import, and which
+  parts of the runtime they reach.
+
+**What the lowering from MIR decides, once.** Every failure: code, message and its
+`file:line:col` text. Every guard and its order (division by zero before overflow; `MIN % -1` is 0).
+Comparisons, string equality and the equality helpers. Which runtime entry each operation calls —
+only the runtime's word-level view, the same symbol for both backends. Every retain and release, and
+the helpers that do them. Every offset — records, the enum's tag word and one payload area, closure
+objects, task blocks, `--layout soa` — from `abi.rs`, which gains the closure and task layouts. The
+calling convention: a value held in memory by pointer, an in-memory result through a pointer passed
+first; a foreign function's C classes and extensions.
+
+**What a backend decides.** Instruction selection, registers, the object or text format, and how a
+position becomes debug information. Nothing it decides is observable to a program. The LLVM backend
+becomes a printer of LIR as LLVM text; the Cranelift backend a translator of LIR into Cranelift IR.
+Neither reads MIR: a layering rule refuses the dependency.
+
+**Validation and an oracle.** A validator holds every module to the rules above — classes agree,
+a value is defined before it is used in its block, every symbol and slot and block exists, every
+call matches its callee's signature — before either backend sees it, and a broken module is
+`N0900`. An interpreter of LIR executes it against a model of the runtime's services, for the
+sequential subset: tasks, channels, foreign calls, the clock and device registers are refused by
+name. It is the oracle that the three executions are held to — LLVM `-O0` and `-O2` and Cranelift
+against the LIR interpreter — over the N73 generator's programs and a new fuzz target.
+
+**Keys.** A Cranelift object is a function of its unit's LIR (which carries every failure text, and
+so every position), the translator's revision, Cranelift's version and settings, the target and the
+runtime; until N105 it omitted positions and reused an object reporting a moved failure at its old
+line. An LLVM object stays keyed by its text and clang.
+
+**Versions.** Semantic epoch and interface schema: unchanged — the language does not move. Runtime
+ABI: unchanged unless a word-level entry is added, and then a revision. `nazm.lir/1 → /2`: the
+document gains each unit's instructions. Every object key moves, since the code does.
+
+**Non-goals.** No optimisation in LIR: clang's and Cranelift's. The GPU kernels (N88) and contract
+bytecode (N70) are other targets with their own generators, not native backends.
+
+**What would prove this wrong.** A failure code or message, a guard, an offset, a runtime entry or a
+retain/release decision found in a backend rather than in LIR; or a program whose observable
+behaviour differs between the LIR interpreter, LLVM and Cranelift.
