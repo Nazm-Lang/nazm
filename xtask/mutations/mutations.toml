@@ -329,7 +329,7 @@ a different number instead of being refused
 file = "crates/nazm-syntax/src/parser.rs"
 find = "                    Ok(v) if v == 1u64 << 63 => {"
 replace = "                    Ok(_) => {"
-killers = [{ package = "nazm-cli", test = "selfhost", name = "a_program_from_the_nazm_compiler_joins_its_scope_before_reporting" }]
+killers = [{ package = "nazm-core", test = "language", name = "a_negative_literal_past_the_smallest_int_is_refused" }]
 
 [[mutation]]
 name = "a-failed-body-drops-the-function"
