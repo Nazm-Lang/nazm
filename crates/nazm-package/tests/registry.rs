@@ -589,3 +589,32 @@ fn update_drops_the_lockfiles_preference_only_for_the_packages_named() {
     let e = nazm_package::resolve_updating(&app, &["nope".to_owned()]).unwrap_err();
     assert_eq!(e.first().unwrap().code, codes::PACKAGE_NOT_FOUND);
 }
+
+#[test]
+fn a_candidate_must_satisfy_every_requirement_already_placed_on_it() {
+    // `base` sorts first, so it is chosen first and places `~1.1.0` on `core` before `core` is
+    // chosen; the app places `~1.2.0`. No version satisfies both, and the search knows it at
+    // once: it tries `base` and no version of `core` at all. A filter that admitted a version
+    // satisfying *any* requirement would try two of `core`'s and refuse the same — N108 found
+    // nothing held the difference.
+    let w = World::new();
+    for v in ["1.0.0", "1.1.0", "1.2.0"] {
+        w.publish("reg", "core", v, &[]);
+    }
+    w.publish("reg", "base", "1.0.0", &["core = { version = \"~1.1.0\" }"]);
+    let app = w.app(
+        &[
+            "base = { version = \"^1.0.0\" }",
+            "core = { version = \"~1.2.0\" }",
+        ],
+        "reg",
+    );
+    let e = resolve(&app).unwrap_err();
+    let d = e.first().unwrap();
+    assert_eq!(d.code, codes::VERSION_UNSATISFIABLE);
+    assert!(
+        d.message.contains("(after trying 1 candidate version)"),
+        "{}",
+        d.message
+    );
+}

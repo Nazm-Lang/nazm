@@ -461,3 +461,16 @@ fn a_large_program_settles_quickly_and_the_same_every_time() {
     assert_eq!(summary(&src, "r7").origins, OriginSet::of(Origin::File));
     assert_eq!(check_source(&src), d);
 }
+
+#[test]
+fn a_path_from_where_the_checker_cannot_follow_is_refused_too() {
+    // `Unknown` — a device register or C's `errno` — is restricted like a file's contents: the
+    // checker cannot say where it came from, so it may not name a path (in a function that
+    // declares its effects: the language rule's scope). N108 found the
+    // restriction's `Unknown` half held by no program.
+    let src = "fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } { write_file(int_to_str(c_errno()), \"x\"); 0 }\n";
+    let d = restricted_at(src, at(src, "write_file"));
+    assert_eq!(d.code, codes::RESTRICTED_FLOW, "{}", d.message);
+    // The same program with a command-line argument is allowed.
+    accepted("fn main(io: IoCap) -> Int ! { io } { write_file(arg(0), \"x\"); 0 }\n");
+}

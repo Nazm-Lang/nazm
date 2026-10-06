@@ -112,6 +112,14 @@ fn integers_and_their_failures_agree_with_the_oracle() {
         &[],
         "-1\n",
     );
+    // Each remainder alone, so no two wrong answers can cancel (N108 found the sum above does on
+    // AArch64 Linux when a select's arms are swapped): 10 % 7 = 3, -9 % 7 = -2, 7 % -2 = 1.
+    agree(
+        "fn r(a: Int, b: Int) -> Int { a % b }\n\
+         fn main() -> Int { r(10, 7) * 100 + r(0 - 9, 7) * 10 + r(7, 0 - 2) }\n",
+        &[],
+        "281\n",
+    );
     agree(
         "fn main() -> Int { let big = 9223372036854775807; big + 1 }\n",
         &[],
@@ -238,4 +246,54 @@ fn a_program_with_tasks_is_refused_and_not_answered() {
         "{stderr}"
     );
     assert!(said.0.is_empty(), "a refusal printed an answer: {said:?}");
+}
+
+#[test]
+fn a_remainder_never_divides_by_minus_one() {
+    // `Int::MIN % -1` is 0 (`docs/spec.md`), and the machine faults on that one pair on some
+    // targets and not on others (AArch64 does not), so no program's output on this host can say
+    // whether the lowering kept the guard. The LIR can: the divisor is a select between 1 and the
+    // operand, never the operand twice.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "fn r(a: Int, b: Int) -> Int { a % b }\nfn main() -> Int { r(7, 2) }\n",
+    )
+    .unwrap();
+    let o = Command::new(NAZM)
+        .current_dir(d.path())
+        .args(["lir", "--ops", "prog.nz"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+    let body = text
+        .split("function ")
+        .find(|f| f.contains("; r\n"))
+        .expect("r");
+    let one = body
+        .lines()
+        .find_map(|l| l.trim().strip_suffix(" = const i64 1"))
+        .expect("the constant 1");
+    let select = body
+        .lines()
+        .find(|l| l.contains(" = select "))
+        .expect("a select for the divisor");
+    let arms: Vec<&str> = select
+        .split(" = select ")
+        .nth(1)
+        .unwrap()
+        .split(", ")
+        .skip(1)
+        .collect();
+    assert_eq!(arms.len(), 2, "{select}");
+    assert_ne!(
+        arms[0], arms[1],
+        "the divisor's select chooses nothing: {select}"
+    );
+    assert!(
+        arms.contains(&one),
+        "the divisor is never 1: {select}\n{body}"
+    );
+    assert!(body.contains("srem"), "{body}");
 }
