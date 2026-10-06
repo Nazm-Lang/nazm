@@ -405,6 +405,15 @@ the compiler written in Nazm at parity (N102), re-exports (N103), authority (N10
 (N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
 catalogue (N108).
 
+### N108 — the core release gate — **complete, 2026-10-06; candidate `82936f6`**
+
+`architecture.md` §7.109 first; `releases/82936f6.md` the record. The whole catalogue, contained:
+1,268 of 1,268 caught, after 34 entries the campaign could not decide were repaired — killers chosen on
+macOS that Linux does not see, and nine whose code N90, N104 and N105 had moved. The platform runs
+found a debugger regression from N105, fixed. Workspace, selfhost, bootstrap, lifecycle, fuzzing,
+benchmark, platforms and the release assembly pass; the manifest redigested independently, 206 of 206.
+No class-A row is PARTIAL. Nothing tagged, pushed or published.
+
 ### N107 — the core's scope, audited — **complete, 2026-10-05; areas 2, 3, 5, 6, 7 VERIFIED**
 
 `architecture.md` §7.108 first; `audit-n107.md` the table. Every core candidate gap was checked for

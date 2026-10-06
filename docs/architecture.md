@@ -8858,3 +8858,30 @@ ACCEPTED and says so. Nothing is tagged, pushed or published; the release proced
 
 **Versions frozen:** whatever the candidate carries — semantic epoch 29, `nazm.interface/11`,
 runtime ABI 14, `nazm.lir/2`, `nazm.cost/2` — recorded, not moved.
+
+**As run (N108, 2026-10-05/06).** The gate ran in the order written, and found four things, each fixed
+in a commit of its own and gated again where it reached (`releases/82936f6.md`).
+
+- *Thirty-four catalogue entries no contained run could decide.* A targeted session defers a mutant
+  every declared killer passed on, and retries it in every later session, so these consumed most of
+  each session and would have looped. Sixteen killers saw their defect on macOS only — glibc keeps a
+  freed block's bytes; AArch64 does not fault on `MIN % -1`; one oracle sum let two wrong remainders
+  cancel — and the killers that see it on Linux were found by running each mutant in a container of
+  its own. Nine survived on macOS too: N90's resolver had left `Index::choose` without a caller (deleted,
+  its mutants repointed); N105 decided a foreign function's exclusion twice, each copy masking the other
+  (decided once); N104 left a capability table read only by its consistency test; a restriction's
+  `Unknown` origin, a requirement filter and a statement's debug line had no test that saw them (three
+  added). One was equivalent and is retired. Eight are observable only with macOS tools or Apple's clang
+  and are verified on the host. **What this says about the catalogue:** a killer verified on one
+  platform is evidence on that platform; `architecture.md` keeps N101's no-silent-tier law, and N108
+  adds that the release gate's platform is where its killers are verified.
+- *A timing-dependent killer:* the polling-select test, fixed to fix who waits first and to run five
+  times.
+- *A debugger regression from N105,* found by the live gdb test the suite ignores (it needs an image):
+  the prologue's `llvm.memset` carried a line and a guard's continuation took the text's last line.
+  Fixed in the lowering and the debug pass, held by two debugger-free tests.
+- *The release assembly no longer fits one CPU in the runner's 2,400 s;* it ran with four.
+
+Versions frozen as written. Classes: no class-A row PARTIAL; class B's eight PARTIAL rows and class C's
+four blockers are the release's limitations. **ACCEPTED** as a candidate; tagging and publishing stay
+a person's.

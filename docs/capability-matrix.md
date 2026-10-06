@@ -3080,6 +3080,12 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — PARTIAL (N73; MISSING until then)
 
+*N108, 2026-10-06: the whole catalogue at the release gate — 1,268 of 1,268 caught.* Contained,
+targeted with every killer verified (`releases/82936f6.md`). Thirty-four entries were first undecidable
+on Linux — killers verified on macOS only, and nine whose code N90, N104 and N105 had moved — and were
+repaired; eight are observable only with macOS tools and are verified there. Every fuzz target ran 300 s
+at the gate, 0 crashes.
+
 *N105, 2026-10-05: a fifth fuzz target and an oracle tier.* `lir` (`fuzz/src/main.rs`): a checked
 program's instruction-level LIR must validate and run on LIR's interpreter without a defect; run
 contained for 300 s — 319,609 executions, 19,245 edges, no crash, no hang — and its minimised corpus
