@@ -291,10 +291,13 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
                 out.push('\n');
                 continue;
             }
+            // An intrinsic call carries no location either: LLVM needs one only on a call it could
+            // inline, and since N105 a slot is zeroed by `llvm.memset`, which a line here would
+            // make the row a debugger stops on — before the zeroing (N108).
+            let intrinsic = l.contains(" @llvm.");
             if prologue
                 && instruction(l)
-                && !l.contains(" call ")
-                && !l.trim_start().starts_with("call ")
+                && (intrinsic || (!l.contains(" call ") && !l.trim_start().starts_with("call ")))
             {
                 out.push_str(l);
                 out.push('\n');
