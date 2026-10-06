@@ -490,9 +490,9 @@ impl Search<'_> {
 
 impl Resolver {
     /// Solve every registry dependency (N56, §7.58), once every path package is known: in rounds,
-    /// each choosing for every required name the version [`Index::choose`] picks for the
-    /// requirements on it, until a round changes nothing. No backtracking: the highest version
-    /// that satisfies every requirement wins, or the solve is refused naming them.
+    /// searching each package's candidates newest first, backtracking (N90): the first
+    /// complete assignment in name order wins, or the solve is refused naming the requirements
+    /// where the search got furthest.
     fn solve_registry(
         &mut self,
         root_dir: &Path,

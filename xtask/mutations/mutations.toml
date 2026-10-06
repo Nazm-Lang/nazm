@@ -1094,11 +1094,12 @@ then gets different symbols depending on which file the compilation began at, wh
 exactly what a durable identity exists to prevent
 Repointed by N40: symbols are spelled from MIR's durable identity of each function.
 
-Repointed by N42: a foreign function's symbol is its declared C name; every other function's is still its durable identity."""
+Repointed by N42: a foreign function's symbol is its declared C name; every other function's is still its durable identity.
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/lower.rs"
 find = "                    .map_or_else(|| of_identity(&f.identity), NativeSymbol::foreign),"
 replace = "                    .map_or_else(|| NativeSymbol::of_unkeyed(f.module, &f.name), NativeSymbol::foreign),"
-killers = [{ package = "nazm-cli", test = "attestation", name = "a_signed_statement_verifies_for_its_signer_and_its_artefacts_only" }]
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "control_flow_and_recursion_agree_with_the_oracle" }]
 
 [[mutation]]
 name = "the-runtime-is-emitted-into-every-unit"
@@ -1122,11 +1123,12 @@ makes every definition internal to its own object, including the exported ones a
 root module's entry. Nothing outside a module can then bind its definitions, so a
 cross-module call has no definition to reach and the platform wrapper cannot find `main`
 Repointed by N40: linkage is decided from MIR's `exported`, `reached_from_generic`, instance and entry facts.
-"""
+
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/lower.rs"
 find = "                if f.exported || f.reached_from_generic || instance || Some(f.id) == entry_id {"
 replace = "                if false {"
-killers = [{ package = "nazm-cli", test = "attestation", name = "a_signed_statement_verifies_for_its_signer_and_its_artefacts_only" }]
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "control_flow_and_recursion_agree_with_the_oracle" }]
 
 [[mutation]]
 name = "the-object-key-forgets-its-input"
@@ -1335,12 +1337,13 @@ why = """
 lets `strs_push` keep a string without taking a reference to it. The caller's binding is
 then the only one counted, and the element becomes a dangling view the moment that binding
 dies — while the sequence goes on reporting a length that includes it
-Repointed by N105: the rule is LIR's, made once for both backends."""
+Repointed by N105: the rule is LIR's, made once for both backends.
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/op/prims.rs"
 find = '''            self.retain_at(src, t);
             self.copy(slot, src, n);'''
 replace = '            self.copy(slot, src, n);'
-killers = [{ package = "nazm-cli", test = "build", name = "strs_sequences_carry_strings_by_value" }]
+killers = [{ package = "nazm-cli", test = "memory", name = "a_string_read_out_of_a_sequence_survives_being_overwritten" }]
 
 [[mutation]]
 name = "a-string-read-out-of-a-sequence-is-only-borrowed"
@@ -1350,14 +1353,15 @@ element — or releasing the sequence — invalidates a value the program is sti
 `docs/spec.md` has promised since sequences existed that a `Str` already read out is
 unaffected by changing the sequence; until N8 that was true because nothing was freed
 Repointed by N40: a primitive's result is owned by its MIR destination, so `strs_get` retains.
-Repointed by N105: the rule is LIR's, made once for both backends."""
+Repointed by N105: the rule is LIR's, made once for both backends.
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/op/prims.rs"
 find = '''            self.copy(d, slot, n);
             self.retain_at(d, t);
         } else {'''
 replace = '''            self.copy(d, slot, n);
         } else {'''
-killers = [{ package = "nazm-cli", test = "build", name = "strs_sequences_carry_strings_by_value" }]
+killers = [{ package = "nazm-cli", test = "memory", name = "a_string_read_out_of_a_sequence_survives_being_overwritten" }]
 
 [[mutation]]
 name = "an-overwritten-element-is-never-released"
@@ -1381,7 +1385,8 @@ sequences then looks perfect — the header really was reclaimed — while the b
 for good. Converting a leak into a leak inside a container is the failure §17 of the N8
 directive names by that description
 
-Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
+Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged.
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-runtime/src/core.rs"
 find = """  %last = icmp sle i64 %rc2, 0
   br i1 %last, label %contents, label %done
@@ -1409,7 +1414,7 @@ test:
   br i1 %more, label %body, label %storage
 body:
   %e = getelementptr { ptr, i64, ptr }, ptr %data, i64 %i"""
-killers = [{ package = "nazm-cli", test = "attestation", name = "identical_input_gives_identical_artefacts_here_and_in_another_directory" }]
+killers = [{ package = "nazm-cli", test = "memory", name = "a_sequence_of_strings_releases_its_contents_when_it_goes" }]
 
 [[mutation]]
 name = "string-storage-goes-while-another-view-remains"
@@ -1489,7 +1494,8 @@ why = """
 generates a retain helper that takes a reference to nothing, so copying a record leaves
 every owning field counted once while two values name it. The first of the two to die
 frees storage the other is still reading
-Repointed by N105: the rule is LIR's, made once for both backends."""
+Repointed by N105: the rule is LIR's, made once for both backends.
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/op/helpers.rs"
 find = '''    if retain {
         fx.retain_at(at, t);
@@ -1497,7 +1503,7 @@ find = '''    if retain {
 replace = '''    if retain {
         let _ = (at, t);
     } else {'''
-killers = [{ package = "nazm-cli", test = "build", name = "a_record_survives_construction_copy_replacement_and_return_at_both_levels" }]
+killers = [{ package = "nazm-cli", test = "build", name = "a_payload_returned_from_an_arm_is_valid_at_both_levels" }]
 
 [[mutation]]
 name = "a-record-drop-omits-its-fields"
@@ -1541,12 +1547,13 @@ reads a field out of a record without taking a reference to what backs it, so
 Invisible in every shape where something else keeps the record alive, which is why the
 test that finds it uses a temporary that dies immediately
 Repointed by N40: a MIR field projection is owned by its destination, so the backend retains it.
-Repointed by N105: the rule is LIR's, made once for both backends."""
+Repointed by N105: the rule is LIR's, made once for both backends.
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/op/func.rs"
 find = '''            self.copy(d, addr, n);
             self.retain_at(d, t);'''
 replace = '            self.copy(d, addr, n);'
-killers = [{ package = "nazm-cli", test = "build", name = "a_record_survives_construction_copy_replacement_and_return_at_both_levels" }]
+killers = [{ package = "nazm-cli", test = "build", name = "a_payload_returned_from_an_arm_is_valid_at_both_levels" }]
 
 [[mutation]]
 name = "a-partly-built-record-is-not-cleaned"
@@ -1809,7 +1816,8 @@ stops checking an exported enum's payload types, so a module publishes a variant
 payload an importer must name to match it and cannot. The closure has to run through both
 kinds; this removes the enum half and leaves the record half in place, which is the
 version that looks like it works
-"""
+
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-core/src/check.rs"
 find = """        let payloads: Vec<(Type, Span)> = def
             .variants
@@ -1817,7 +1825,7 @@ find = """        let payloads: Vec<(Type, Span)> = def
             .flat_map(|v| v.fields.iter().map(|f| (f.ty, f.ty_span)))
             .collect();"""
 replace = "        let payloads: Vec<(Type, Span)> = Vec::new();"
-killers = [{ package = "nazm-cli", test = "selfhost", name = "a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_interpreter" }]
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_enums_and_matching" }]
 
 [[mutation]]
 name = "an-enums-properties-come-from-its-first-variant"
@@ -2668,24 +2676,26 @@ name = "a-vec-hides-what-it-owns"
 why = """
 the ownership graph does not follow a `Vec` to its element, so `struct Node { children: Vec[Node] }` is accepted and its values can own themselves
 Repointed by N53, whose `Chan[T]` arm repeats the line: the find now names the `Vec` arm's element.
-"""
+
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-sema/src/udt.rs"
 find = """
                 if let Some(e) = self.vec_element(v) {
                     self.owned_by(e, COUNTED, via, uses, out);"""
 replace = """
                 if let Some(e) = self.vec_element(v) {"""
-killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_generics" }]
 
 [[mutation]]
 name = "a-parameter-no-field-uses-counts-as-used"
 why = """
 every parameter of a generic definition is taken to be stored, inline and counted, so `Tag[T] { n: Int }` applied to its own record is refused — acyclic nesting over-rejected
-"""
+
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-sema/src/udt.rs"
 find = "                        used |= self.reaches_param(ty, p, &uses);"
 replace = "                        used |= self.reaches_param(ty, p, &uses) | INLINE | COUNTED;"
-killers = [{ package = "nazm-cli", test = "selfhost", name = "a_transfer_in_a_value_position_is_never_a_value" }]
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_generics" }]
 
 [[mutation]]
 name = "selfhost-accepts-the-wrong-number-of-type-arguments"
@@ -8049,11 +8059,12 @@ killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_a_f
 
 [[mutation]]
 name = "n38-unknown-is-trusted"
-why = "what the checker does not follow is not restricted, so a path read out of a sequence is written to unchecked"
+why = """what the checker does not follow is not restricted, so a path read out of a sequence is written to unchecked
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-sema/src/provenance.rs"
 find = "    pub const RESTRICTED: Self = Self(Origin::File.bit() | Origin::Unknown.bit());"
 replace = "    pub const RESTRICTED: Self = Self(Origin::File.bit());"
-killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_a_files_contents_is_refused_with_its_witness" }]
+killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_where_the_checker_cannot_follow_is_refused_too" }]
 
 [[mutation]]
 name = "n38-a-join-is-order-dependent"
@@ -8887,18 +8898,20 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_
 
 [[mutation]]
 name = "n42-a-module-s-own-foreign-function-is-not-declared"
-why = "a module's unit calls a foreign function it neither defines nor declares, so the unit does not compile"
+why = """a module's unit calls a foreign function it neither defines nor declares, so the unit does not compile
+N108: the unit's externals now also decide the scheduler's C policy (N106), which is what observes this."""
 file = "crates/nazm-lir/src/lower.rs"
 find = "                if owns_module && sig.module == module && !sig.instance && !sig.foreign {"
 replace = "                if owns_module && sig.module == module && !sig.instance {"
-killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+killers = [{ package = "nazm-cli", test = "scheduler_default", name = "a_program_that_calls_c_runs_a_thread_per_task_unless_the_pool_is_asked_for" }]
 
 [[mutation]]
 name = "n42-a-foreign-function-is-defined-by-its-unit"
-why = "a foreign function is given a definition with no body in its module's unit, which shadows the C one or fails to compile"
+why = """a foreign function is given a definition with no body in its module's unit, which shadows the C one or fails to compile
+N108: the instruction-level lowering re-checked this too, so each check masked the other; it decides once now, here."""
 file = "crates/nazm-lir/src/lower.rs"
-find = "                .filter(|f| f.module == *m && f.type_args.is_empty() && f.foreign.is_none())"
-replace = "                .filter(|f| f.module == *m && f.type_args.is_empty())"
+find = '''                .filter(|f| f.module == *m && f.type_args.is_empty() && f.foreign.is_none())'''
+replace = '''                .filter(|f| f.module == *m && f.type_args.is_empty())'''
 killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
 
 [[mutation]]
@@ -9476,7 +9489,7 @@ find = """                if let [_, ln, col, ..] = numbers(rest)[..] {
                     here = (ln, col);"""
 replace = """                if let [_, _ln, col, ..] = numbers(rest)[..] {
                     here = (fline, col);"""
-killers = [{ package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+killers = [{ package = "nazm-cli", test = "debugging", name = "each_statement_carries_its_own_line_in_the_debug_information" }]
 
 [[mutation]]
 name = "n48-a-switch-is-given-a-location-mid-instruction"
@@ -9499,13 +9512,14 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "build::tests::only_a_de
 
 [[mutation]]
 name = "n48-cranelift-debug-is-silently-plain"
-why = "`--debug` with Cranelift builds without debug information (repointed in N91: Cranelift writes DWARF since, and the rule is that it is not dropped)"
+why = """`--debug` with Cranelift builds without debug information (repointed in N91: Cranelift writes DWARF since, and the rule is that it is not dropped)
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-cli/src/build.rs"
 find = '''    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
         .with_debug(choice.debug)'''
 replace = '''    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
         .with_debug(false)'''
-killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_debugger_finds_a_cranelift_build_s_functions_and_lines" }]
+killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_cranelift_build_carries_debug_information_only_when_asked" }]
 
 [[mutation]]
 name = "n48-a-phase-is-not-timed"
@@ -9665,10 +9679,11 @@ killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_task_thread_
 
 [[mutation]]
 name = "n49-an-instance-declares-itself"
-why = "an instance that calls itself is declared as external by the unit that defines it, and clang refuses the redefinition"
-file = "crates/nazm-lir/src/lower.rs"
-find = "                if !sig.foreign && functions.contains(&callee) {"
-replace = "                if false && !sig.foreign && functions.contains(&callee) {"
+why = """an instance that calls itself is declared as external by the unit that defines it, and clang refuses the redefinition
+Repointed by N108: since N105 the instruction-level lowering decides this, and the unit's tables no longer reach code."""
+file = "crates/nazm-lir/src/op/lower.rs"
+find = '''            let own = self.unit.functions.contains(&id) && !sig.foreign;'''
+replace = '''            let own = false && self.unit.functions.contains(&id) && !sig.foreign;'''
 killers = [{ package = "nazm-cli", test = "usability", name = "direct_mutual_generic_and_cross_module_recursion_compile_and_agree" }]
 
 # N49: qualified names.
@@ -10498,11 +10513,12 @@ killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_l
 
 [[mutation]]
 name = "n54-a-clock-needs-no-authority"
-why = "a clock read needs no TimeCap, so time is ambient"
+why = """a clock read needs no TimeCap, so time is ambient
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-sema/src/capability.rs"
 find = "            Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => Some(Self::Time),"
 replace = "            Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => None,"
-killers = [{ package = "nazm-cli", test = "select", name = "a_clock_needs_a_time_cap_held_where_it_is_read" }]
+killers = [{ package = "nazm-cli", test = "select", name = "critical_refuses_a_clock" }]
 
 [[mutation]]
 name = "n54-critical-admits-a-clock"
@@ -10677,29 +10693,32 @@ killers = [{ package = "nazm-package", lib = true, name = "registry::tests::a_re
 
 [[mutation]]
 name = "n56-a-yanked-version-is-chosen-anew"
-why = "a yanked version is chosen for a build with no lockfile"
-file = "crates/nazm-package/src/registry.rs"
-find = "            .find(|e| !e.yanked && ok(e.version))"
-replace = "            .find(|e| ok(e.version))"
+why = """a yanked version is chosen for a build with no lockfile
+Repointed by N108: `Index::choose`, where this pointed, had no caller since N90's resolver; it is deleted, and the rule is the resolver's."""
+file = "crates/nazm-package/src/lib.rs"
+find = '''            if !e.yanked && ok(e.version) && Some(e.version) != preferred {'''
+replace = '''            if ok(e.version) && Some(e.version) != preferred {'''
 killers = [{ package = "nazm-package", test = "registry", name = "a_yanked_version_is_never_chosen_anew_and_a_locked_one_stands" }]
 
 [[mutation]]
 name = "n56-the-lowest-version-wins"
-why = "the solve takes the lowest satisfying version"
-file = "crates/nazm-package/src/registry.rs"
-find = """
-            .rev()
-            .find(|e| !e.yanked"""
-replace = "            .find(|e| !e.yanked"
+why = """the solve takes the lowest satisfying version
+Repointed by N108: `Index::choose`, where this pointed, had no caller since N90's resolver; it is deleted, and the rule is the resolver's."""
+file = "crates/nazm-package/src/lib.rs"
+find = '''        for e in index.entries.iter().rev() {
+            if !e.yanked'''
+replace = '''        for e in index.entries.iter() {
+            if !e.yanked'''
 killers = [{ package = "nazm-package", test = "registry", name = "the_highest_version_satisfying_every_requirement_is_chosen" }]
 
 [[mutation]]
 name = "n56-one-requirement-is-enough"
-why = "a version satisfying any requirement is chosen, so a transitive requirement narrows nothing"
-file = "crates/nazm-package/src/registry.rs"
-find = "        let ok = |v: Version| reqs.iter().all(|r| r.matches(v));"
-replace = "        let ok = |v: Version| reqs.iter().any(|r| r.matches(v));"
-killers = [{ package = "nazm-package", test = "registry", name = "a_transitive_requirement_narrows_the_choice_and_a_conflict_is_refused_naming_both" }]
+why = """a version satisfying any requirement is chosen, so a transitive requirement narrows nothing
+Repointed by N108: `Index::choose`, where this pointed, had no caller since N90's resolver; it is deleted, and the rule is the resolver's."""
+file = "crates/nazm-package/src/lib.rs"
+find = '''        let ok = |v: Version| only.iter().all(|r| r.matches(v));'''
+replace = '''        let ok = |v: Version| only.iter().any(|r| r.matches(v));'''
+killers = [{ package = "nazm-package", test = "registry", name = "a_candidate_must_satisfy_every_requirement_already_placed_on_it" }]
 
 [[mutation]]
 name = "n56-the-lockfile-is-not-preferred"
@@ -11082,11 +11101,12 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_regis
 
 [[mutation]]
 name = "n62-a-register-needs-no-authority"
-why = "a function holding no `MmioCap` may write a device register"
+why = """a function holding no `MmioCap` may write a device register
+N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-sema/src/capability.rs"
 find = '            | Intrinsic::MmioWrite16 => Some(Self::Mmio),'
 replace = '            | Intrinsic::MmioWrite16 => None,'
-killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_register_needs_an_mmio_cap_held" }]
+killers = [{ package = "nazm-sema", lib = true, name = "capability::tests::every_built_in_needs_exactly_the_authority_for_its_effect" }]
 
 [[mutation]]
 name = "n62-a-board-unit-keeps-thread-local-storage"
@@ -11120,13 +11140,8 @@ find = '    .filter(|(part, _)| missing.iter().any(|s| part_of(s) == *part))'
 replace = '    .filter(|(part, _)| *part != Part::Libc && missing.iter().any(|s| part_of(s) == *part))'
 killers = [{ package = "nazm-cli", test = "freestanding", name = "what_a_board_cannot_have_is_refused_by_name" }]
 
-[[mutation]]
-name = "n62-every-declaration-is-needed"
-why = "the whole declared inventory counts as reached, so every board program is refused"
-file = "crates/nazm-cli/src/build.rs"
-find = '            named.contains(*s)'
-replace = '            true'
-killers = [{ package = "nazm-cli", test = "freestanding", name = "a_board_program_is_built_to_objects_a_link_list_and_a_linker_script" }]
+# `n62-every-declaration-is-needed` is retired by N108 as an equivalent mutant: since N105 a unit declares only what
+# it calls, so every declared symbol is also named and the condition can no longer be false.
 
 [[mutation]]
 name = "n62-a-register-read-is-not-volatile"
@@ -13849,7 +13864,7 @@ file = "crates/nazm-lir/src/op/func.rs"
 find = '                let divisor = self.select(special, one, y);'
 replace = '''                let divisor = self.select(special, y, y);
                 let _ = one;'''
-killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_their_failures_agree_with_the_oracle" }]
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "a_remainder_never_divides_by_minus_one" }]
 
 [[mutation]]
 name = "n106-the-default-is-threads"

@@ -172,9 +172,8 @@ pub fn lower_unit(
         else {
             continue;
         };
-        if sig.foreign {
-            continue;
-        }
+        // A foreign function is never in `unit.functions`: the unit's plan decides that, once
+        // (`lower.rs`), and nothing here decides it again (N108).
         let Some(sym) = lw.funcs.get(&id).copied() else {
             continue;
         };

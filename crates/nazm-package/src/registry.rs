@@ -189,24 +189,6 @@ impl Index {
         })
     }
 
-    /// The version to use: `preferred` when it satisfies every requirement and is published
-    /// (yanked or not — a lockfile's choice stands); otherwise the highest non-yanked version
-    /// that does. Never a version the requirements exclude.
-    #[must_use]
-    pub fn choose(&self, reqs: &[VersionReq], preferred: Option<Version>) -> Option<Version> {
-        let ok = |v: Version| reqs.iter().all(|r| r.matches(v));
-        if let Some(p) = preferred {
-            if ok(p) && self.entries.iter().any(|e| e.version == p) {
-                return Some(p);
-            }
-        }
-        self.entries
-            .iter()
-            .rev()
-            .find(|e| !e.yanked && ok(e.version))
-            .map(|e| e.version)
-    }
-
     /// Where a version's published copy is.
     #[must_use]
     pub fn dir(&self, v: Version) -> PathBuf {
@@ -492,29 +474,5 @@ mod tests {
         for bad in ["^", "~1.2", ">=1.0.0", "1.2.x", "^^1.0.0"] {
             assert!(VersionReq::parse(bad).is_none(), "{bad}");
         }
-    }
-
-    #[test]
-    fn the_highest_unyanked_match_wins_unless_a_preference_still_matches() {
-        let index = Index {
-            name: "a".to_owned(),
-            entries: ["1.0.0", "1.1.0", "1.2.0", "2.0.0"]
-                .iter()
-                .map(|s| Entry {
-                    version: v(s),
-                    digest: String::new(),
-                    yanked: *s == "1.2.0",
-                })
-                .collect(),
-            registry: PathBuf::new(),
-        };
-        let caret = [VersionReq::parse("^1.0.0").unwrap()];
-        assert_eq!(index.choose(&caret, None), Some(v("1.1.0")));
-        assert_eq!(index.choose(&caret, Some(v("1.0.0"))), Some(v("1.0.0")));
-        // A lockfile may keep a yanked version; nothing chooses one anew.
-        assert_eq!(index.choose(&caret, Some(v("1.2.0"))), Some(v("1.2.0")));
-        assert_eq!(index.choose(&caret, Some(v("2.0.0"))), Some(v("1.1.0")));
-        let none = [VersionReq::parse("^3.0.0").unwrap()];
-        assert_eq!(index.choose(&none, None), None);
     }
 }
