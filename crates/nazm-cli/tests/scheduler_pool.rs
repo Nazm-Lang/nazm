@@ -273,25 +273,36 @@ fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker() {
 #[test]
 fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
     let d = tempfile::tempdir().unwrap();
-    let src = "fn sender(io: IoCap, c: Chan[Int]) -> Int ! { io } { chan_send_of(c, 42); 0 }\n\
-               fn poller(io: IoCap, tm: TimeCap, c: Chan[Int], done: Chan[Int]) -> Int ! { io } {\n\
+    // The sender waits until the poller is about to poll (N108: without `go`, which task ran
+    // first was not fixed, and a sender that ran first left nothing to wait for — the mutant that
+    // takes the yield away survived one run in three). Whichever starts, the sender is parked when
+    // the polling begins, and only a select that gives its worker back lets it run.
+    let src = "fn sender(io: IoCap, go: Chan[Int], c: Chan[Int]) -> Int ! { io } {\n\
+                   let g = vec_new[Int](); let r = chan_recv_of(go, g); chan_send_of(c, 42); 0 }\n\
+               fn poller(io: IoCap, tm: TimeCap, go: Chan[Int], c: Chan[Int], done: Chan[Int]) -> Int ! { io } {\n\
                    let cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\n\
+                   chan_send_of(go, 1);\n\
                    let mut spins = 0;\n\
                    while chan_select_until(cs, out, 0) == 0 - 2 { spins = spins + 1; }\n\
                    chan_send_of(done, vec_pop(out)); 0 }\n\
                fn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\n\
-                   let c = chan_new_of[Int](1); let done = chan_new_of[Int](1); let got = vec_new[Int]();\n\
-                   scope { spawn poller(io, tm, c, done); spawn sender(io, c); let r = chan_recv_of(done, got); }\n\
+                   let go = chan_new_of[Int](1); let c = chan_new_of[Int](1); let done = chan_new_of[Int](1); let got = vec_new[Int]();\n\
+                   scope { spawn poller(io, tm, go, c, done); spawn sender(io, go, c); let r = chan_recv_of(done, got); }\n\
                    print(int_to_str(vec_get(got, 0))); 0 }\n";
     built(d.path(), "poll", src, "llvm");
-    let (out, err, code) = run(
-        d.path(),
-        "poll",
-        &[],
-        &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")],
-    );
-    assert_eq!(code, Some(0), "{err}");
-    assert_eq!(out, "420\n");
+    // Five runs, every one required: a worker that is never given back is seen in most runs, not
+    // in all — the order the two tasks first run in is the scheduler's (N108 measured one run in
+    // five finishing under that mutant), so one run is not evidence and five are.
+    for _ in 0..5 {
+        let (out, err, code) = run(
+            d.path(),
+            "poll",
+            &[],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")],
+        );
+        assert_eq!(code, Some(0), "{err}");
+        assert_eq!(out, "420\n");
+    }
 }
 
 #[test]
