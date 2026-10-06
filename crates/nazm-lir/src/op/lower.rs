@@ -561,6 +561,10 @@ pub(crate) struct Fb {
     pub var_names: Vec<String>,
     pub slot_names: Vec<String>,
     pub debug_vars: Vec<DebugVar>,
+    /// The last source position emitted (N108): a block switched to restates it, so a block
+    /// printed after unrelated ones — a guard's continuation — keeps its statement's position
+    /// rather than inheriting whichever position the text happened to show last.
+    pub here: Option<super::ir::Pos>,
 }
 
 impl Fb {
@@ -574,6 +578,7 @@ impl Fb {
             var_names: Vec::new(),
             slot_names: Vec::new(),
             debug_vars: Vec::new(),
+            here: None,
         };
         let entry = fb.block();
         fb.switch(entry);
@@ -591,6 +596,15 @@ impl Fb {
 
     pub(crate) fn switch(&mut self, b: B) {
         self.current = Some(b);
+        if let Some(p) = self.here {
+            if self
+                .blocks
+                .get(b.index())
+                .is_some_and(|blk| blk.insts.is_empty())
+            {
+                self.push(super::ir::Inst::Loc(p));
+            }
+        }
     }
 
     pub(crate) fn value(&mut self) -> V {
@@ -617,6 +631,9 @@ impl Fb {
     }
 
     pub(crate) fn push(&mut self, i: super::ir::Inst) {
+        if let super::ir::Inst::Loc(p) = i {
+            self.here = Some(p);
+        }
         // An instruction after a terminator has nowhere to go: it is unreachable code, and
         // dropped, so every block keeps exactly one terminator.
         if let Some(b) = self.current {

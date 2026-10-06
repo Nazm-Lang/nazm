@@ -13922,3 +13922,23 @@ find = '''        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(SEED);'''
 replace = '''        self.0 = self.0.rotate_left(5).wrapping_mul(SEED) ^ (word & 0);'''
 killers = [{ package = "nazm-span", lib = true, name = "fast::tests::spans_that_differ_anywhere_hash_apart_and_equal_ones_together" }]
 
+[[mutation]]
+name = "n108-a-block-forgets-its-statement"
+why = "a block switched to does not restate its statement's position, so a guard's continuation — printed after unrelated blocks — takes whatever line the text showed last, and a debugger steps to the wrong line (N108 found N105 did this)"
+file = "crates/nazm-lir/src/op/lower.rs"
+find = '''                .is_some_and(|blk| blk.insts.is_empty())
+            {
+                self.push(super::ir::Inst::Loc(p));'''
+replace = '''                .is_some_and(|blk| blk.insts.is_empty())
+            {
+                let _ = p;'''
+killers = [{ package = "nazm-cli", test = "debugging", name = "a_statements_continuation_keeps_the_statements_line" }]
+
+[[mutation]]
+name = "n108-the-zeroing-has-a-line"
+why = "the prologue's `llvm.memset` carries the function's line, so a breakpoint on the function stops before the slots are zeroed and a binding shows stale bytes (N108 found N105 did this)"
+file = "crates/nazm-lir/src/debug.rs"
+find = '''            let intrinsic = l.contains(" @llvm.");'''
+replace = '''            let intrinsic = l.contains(" @llvm.") && false;'''
+killers = [{ package = "nazm-cli", test = "debugging", name = "the_prologue_carries_no_line_so_a_breakpoint_lands_after_it" }]
+

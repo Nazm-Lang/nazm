@@ -335,3 +335,92 @@ fn each_statement_carries_its_own_line_in_the_debug_information() {
     assert_eq!(line_of("llvm.sadd.with.overflow"), 3, "{ir}");
     assert_eq!(line_of("llvm.smul.with.overflow"), 4, "{ir}");
 }
+
+/// `greet`'s body in a debug build's LLVM text, and the line each `!dbg` id names.
+fn debug_ir_of(src: &str, function: &str) -> (Vec<String>, std::collections::HashMap<String, u32>) {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("v.nz"), src).unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_nazm"))
+        .current_dir(d.path())
+        .args([
+            "build",
+            "--debug",
+            "--no-cache",
+            "--emit-ir",
+            "v.nz",
+            "-o",
+            "v",
+        ])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let ir = std::fs::read_to_string(d.path().join("v.m0.ll")).unwrap();
+    let body: Vec<String> = ir
+        .lines()
+        .skip_while(|l| !(l.starts_with("define ") && l.contains(function)))
+        .take_while(|l| *l != "}")
+        .map(str::to_owned)
+        .collect();
+    let lines = ir
+        .lines()
+        .filter_map(|l| {
+            let (id, rest) = l.split_once(" = !DILocation(line: ")?;
+            Some((
+                id.trim_start_matches('!').to_owned(),
+                rest.split(',').next()?.parse().ok()?,
+            ))
+        })
+        .collect();
+    (body, lines)
+}
+
+// The live debugger test's program (`debugger.rs`): the branch puts blocks between a statement
+// and its continuation in the printed text, which is what the position must survive.
+const GREET: &str = "fn greet(name: Str, times: Int, loud: Bool) -> Int {\n    let line = str_concat(\"hello \", name);\n    let n = str_len(line) * times;\n    if loud { n + 1 } else { n }\n}\nfn main() -> Int { greet(str_concat(\"wor\", \"ld\"), 2, true) }\n";
+
+#[test]
+fn the_prologue_carries_no_line_so_a_breakpoint_lands_after_it() {
+    // N58's rule, which N108 found N105 had broken: the slots are zeroed before the first
+    // statement, by an `llvm.memset` since N105, and that call must carry no line — a line there is
+    // the row a debugger stops on, before the zeroing, where a binding shows stale bytes.
+    let (body, _) = debug_ir_of(GREET, "greet");
+    let prologue: Vec<&String> = body
+        .iter()
+        .skip(1)
+        .take_while(|l| !l.trim_start().starts_with("br "))
+        .collect();
+    let zeroing: Vec<&&String> = prologue
+        .iter()
+        .filter(|l| l.contains("@llvm.memset"))
+        .collect();
+    assert!(
+        !zeroing.is_empty(),
+        "no zeroing in the prologue:\n{}",
+        body.join("\n")
+    );
+    for l in zeroing {
+        assert!(
+            !l.contains("!dbg"),
+            "the prologue's zeroing has a line: {l}"
+        );
+    }
+}
+
+#[test]
+fn a_statements_continuation_keeps_the_statements_line() {
+    // A checked operation splits its statement across blocks, and the continuation is printed
+    // after unrelated ones; it must still say line 2 (`str_concat`'s copy), not whatever line the
+    // text showed last (N108).
+    let (body, lines) = debug_ir_of(GREET, "greet");
+    let copies: Vec<u32> = body
+        .iter()
+        .filter(|l| l.contains("@memcpy(") && l.contains("!dbg !"))
+        .map(|l| lines[l.rsplit("!dbg !").next().unwrap().trim()])
+        .collect();
+    assert!(!copies.is_empty(), "{}", body.join("\n"));
+    assert!(
+        copies.iter().all(|l| *l == 2),
+        "{copies:?}\n{}",
+        body.join("\n")
+    );
+}
