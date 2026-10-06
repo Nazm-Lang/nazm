@@ -293,3 +293,45 @@ fn timings_account_for_every_phase() {
         assert!(sum <= v["total_ms"].as_f64().unwrap() + 0.01, "{line}");
     }
 }
+
+#[test]
+fn each_statement_carries_its_own_line_in_the_debug_information() {
+    // What a debugger stops on, read without a debugger, so a host without one still holds it
+    // (N108): every statement's line is a location of its own, not the function's line repeated.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main() -> Int {\n    let a = 1;\n    let b = a + 2;\n    let c = b * 3;\n    c\n}\n",
+    )
+    .unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_nazm"))
+        .current_dir(d.path())
+        .args(["build", "--debug", "--emit-ir", "p.nz", "-o", "p"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let ir = std::fs::read_to_string(d.path().join("p.m0.ll")).unwrap();
+    // The instruction itself, not a variable's declaration: the checked multiply of `b * 3`
+    // points at a location on line 4, and the addition of `a + 2` at one on line 3.
+    let line_of = |op: &str| -> u32 {
+        let inst = ir
+            .lines()
+            .find(|l| l.contains(op) && l.contains("!dbg !"))
+            .unwrap_or_else(|| panic!("no {op} with a location:\n{ir}"));
+        let id = inst.rsplit("!dbg !").next().unwrap().trim();
+        let def = ir
+            .lines()
+            .find(|l| l.starts_with(&format!("!{id} = !DILocation(line: ")))
+            .unwrap_or_else(|| panic!("no !{id}:\n{ir}"));
+        def.split("line: ")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    assert_eq!(line_of("llvm.sadd.with.overflow"), 3, "{ir}");
+    assert_eq!(line_of("llvm.smul.with.overflow"), 4, "{ir}");
+}
