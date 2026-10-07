@@ -24,7 +24,7 @@ today, the matrix decides.*
 | MIR | `nazm-mir` | every copy, move and drop explicit and validated; monomorphisation for the native path |
 | LIR | `nazm-lir` | the instruction-level IR both native backends translate (`nazm.lir/2`) |
 | Code generation | `nazm-lir` (LLVM text, compiled by `clang`), `nazm-codegen-clif` (Cranelift, in process) | machine code; neither backend falls back to the other |
-| Runtime | `nazm-runtime` | LLVM IR for the task scheduler, channels, reclamation and the outside-world built-ins, generated into every native program (runtime ABI 14) |
+| Runtime | `nazm-runtime` | LLVM IR for the task scheduler, channels, reclamation and the outside-world built-ins, generated into every native program (runtime ABI 15) |
 | Tooling | `nazm-service`, `nazm-cli`, `nazm-mcp`, `nazm-docs`, `nazm-repo`, `nazm-formal` | the language service, the command line, the MCP server, documentation and repository maps, bounded formal checks |
 | Measurement | `nazm-bench`, `nazm-agent-bench`, `nazm-tokens`, `xtask` | benchmarks, the agent benchmark, token-cost counting, the repository's gates, contained runner and release tooling |
 
