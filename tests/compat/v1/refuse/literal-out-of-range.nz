@@ -1,0 +1,6 @@
+// expect: N0003
+// A literal outside the type it is written at is refused (spec: numbers).
+fn main() -> Int {
+    let a = UInt8(256);
+    0
+}

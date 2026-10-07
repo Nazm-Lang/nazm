@@ -62,6 +62,8 @@ use crate::lexer::{Lexeme, TokenKind};
 pub enum SyntaxKind {
     // --- tokens: literals and names ---
     Int,
+    /// A floating-point literal (Gate 2).
+    Float,
     Str,
     Ident,
     // --- tokens: keywords ---
@@ -115,6 +117,12 @@ pub enum SyntaxKind {
     LtEq,
     Gt,
     GtEq,
+    Amp,
+    Pipe,
+    Caret,
+    Tilde,
+    Shl,
+    Shr,
     // --- trivia, and bytes that are not Nazm ---
     Whitespace,
     Comment,
@@ -158,6 +166,8 @@ pub enum SyntaxKind {
     NameRef,
     NegExpr,
     NotExpr,
+    /// `~x` — bit complement (Gate 2).
+    BitNotExpr,
     ClosureExpr,
     FnType,
     BinaryExpr,
@@ -197,6 +207,7 @@ impl SyntaxKind {
     /// directions, and a test checks that each entry's raw value is its position.
     pub const ALL: &'static [Self] = &[
         Self::Int,
+        Self::Float,
         Self::Str,
         Self::Ident,
         Self::FnKw,
@@ -248,6 +259,12 @@ impl SyntaxKind {
         Self::LtEq,
         Self::Gt,
         Self::GtEq,
+        Self::Amp,
+        Self::Pipe,
+        Self::Caret,
+        Self::Tilde,
+        Self::Shl,
+        Self::Shr,
         Self::Whitespace,
         Self::Comment,
         Self::Invalid,
@@ -284,6 +301,7 @@ impl SyntaxKind {
         Self::NameRef,
         Self::NegExpr,
         Self::NotExpr,
+        Self::BitNotExpr,
         Self::ClosureExpr,
         Self::FnType,
         Self::BinaryExpr,
@@ -320,6 +338,7 @@ impl SyntaxKind {
     pub const fn of_token(kind: &TokenKind) -> Option<Self> {
         Some(match kind {
             TokenKind::Int(_) | TokenKind::IntTooLarge(_) => Self::Int,
+            TokenKind::Float(_) => Self::Float,
             TokenKind::Str(_) => Self::Str,
             TokenKind::Ident(_) => Self::Ident,
             TokenKind::Fn => Self::FnKw,
@@ -371,6 +390,12 @@ impl SyntaxKind {
             TokenKind::LtEq => Self::LtEq,
             TokenKind::Gt => Self::Gt,
             TokenKind::GtEq => Self::GtEq,
+            TokenKind::Amp => Self::Amp,
+            TokenKind::Pipe => Self::Pipe,
+            TokenKind::Caret => Self::Caret,
+            TokenKind::Tilde => Self::Tilde,
+            TokenKind::Shl => Self::Shl,
+            TokenKind::Shr => Self::Shr,
             TokenKind::Eof => return None,
         })
     }
@@ -378,7 +403,7 @@ impl SyntaxKind {
     /// A leaf the grammar reads: one of the language's tokens.
     #[must_use]
     pub fn is_token(self) -> bool {
-        self <= Self::GtEq
+        self <= Self::Shr
     }
 
     /// A leaf the grammar skips: whitespace, a comment, or bytes that are not Nazm.

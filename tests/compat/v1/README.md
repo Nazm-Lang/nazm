@@ -25,6 +25,11 @@ refusals that keep absent constructs absent.
 - **Append-only within 1.x.** A case may be added; none is removed or edited. Every file is
   pinned by its BLAKE3 digest in `BLAKE3SUMS`, so an edit fails the test until the pin is
   changed too, and a changed pin is a reviewed change.
+- **A refusal a later 1.x supersedes is kept, and held to the opposite.** `docs/stability.md`
+  makes adding a construct 1.0 refused by name a minor addition, because no valid program
+  changes meaning. Such a case is listed in `SUPERSEDED` with the addition that superseded it,
+  stays in the corpus unedited and pinned, and must then check. `refuse/float-literal.nz` is
+  the first: Gate 2 added floating point before the first 1.0.0 release.
 - **An edited expectation is a changed meaning.** That is a 2.0 change, or the fix of a defect
   in the 1.0 toolchain, recorded in the release record that makes it with the case named. A
   change of diagnostic *text* is not one: cases name codes, never messages.

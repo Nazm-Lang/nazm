@@ -314,6 +314,7 @@ fn all() -> nazm_lir::Needs {
         stack: true,
         closures: true,
         foreign: true,
+        numbers: true,
     }
 }
 

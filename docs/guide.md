@@ -547,12 +547,16 @@ accepts.
 | `expression` | `disjunction` |
 | `disjunction` | `conjunction , { "\|\|" , conjunction }` |
 | `conjunction` | `comparison , { "&&" , comparison }` |
-| `comparison` | `sum , { ( "==" \| "!=" \| "<" \| "<=" \| ">" \| ">=" ) , sum }` |
+| `comparison` | `bit_or , { ( "==" \| "!=" \| "<" \| "<=" \| ">" \| ">=" ) , bit_or }` |
+| `bit_or` | `bit_xor , { "\|" , bit_xor }` |
+| `bit_xor` | `bit_and , { "^" , bit_and }` |
+| `bit_and` | `shift , { "&" , shift }` |
+| `shift` | `sum , { ( "<<" \| ">>" ) , sum }` |
 | `sum` | `product , { ( "+" \| "-" ) , product }` |
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
-| `unary` | `[ "-" \| "!" ] , primary` |
+| `unary` | `[ "-" \| "!" \| "~" ] , primary` |
 | `primary` | `atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] \| "?" }` |
-| `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| closure \| "(" , expression , ")"` |
+| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| closure \| "(" , expression , ")"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
 | `construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
@@ -1234,7 +1238,7 @@ fn main() -> Int { if 1 < 2 && 2 < 3 { 1 } else { 0 } }
 ### `comparison`
 
 ```ebnf
-comparison = sum , { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) , sum } ;
+comparison = bit_or , { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) , bit_or } ;
 ```
 
 Each operator gets an example. Listing six and demonstrating one would be a grammar
@@ -1265,6 +1269,50 @@ fn main() -> Int { if 2 > 1 { 1 } else { 0 } }
 fn main() -> Int { if 2 >= 2 { 1 } else { 0 } }
 ```
 
+### `bit_or`
+
+```ebnf
+bit_or = bit_xor , { "|" , bit_xor } ;
+```
+
+The bit operators (Gate 2): two integers of one type, or for a shift an integer and an
+`Int` amount. They bind tighter than comparison — `a & m == 0` is `(a & m) == 0`, not C's
+reading — and looser than arithmetic. See `docs/general-purpose.md` §3.
+
+```nazm
+fn main() -> Int { 6 | 1 }
+```
+
+### `bit_xor`
+
+```ebnf
+bit_xor = bit_and , { "^" , bit_and } ;
+```
+
+```nazm
+fn main() -> Int { 6 ^ 3 }
+```
+
+### `bit_and`
+
+```ebnf
+bit_and = shift , { "&" , shift } ;
+```
+
+```nazm
+fn main() -> Int { 6 & 3 }
+```
+
+### `shift`
+
+```ebnf
+shift = sum , { ( "<<" | ">>" ) , sum } ;
+```
+
+```nazm
+fn main() -> Int { 1 << 4 >> 2 }
+```
+
 ### `sum`
 
 ```ebnf
@@ -1288,11 +1336,12 @@ fn main() -> Int { 2 * 3 / 4 % 5 }
 ### `unary`
 
 ```ebnf
-unary = [ "-" | "!" ] , primary ;
+unary = [ "-" | "!" | "~" ] , primary ;
 ```
 
 `!` is logical negation, as tight as `-`: `!a && b` is `(!a) && b`. It is never the `!` of
 an effect set, which follows a result type, where no expression is.
+`~` is the bit complement of an integer (Gate 2).
 
 ```nazm
 fn main() -> Int { -1 }
@@ -1300,6 +1349,10 @@ fn main() -> Int { -1 }
 
 ```nazm
 fn main() -> Int { if !false { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { ~0 }
 ```
 
 ### `primary`
@@ -1351,11 +1404,18 @@ trait Size { fn size(self: Self) -> Int; } fn f[T: Size](x: T) -> Int { x.size()
 ### `atom`
 
 ```ebnf
-atom = INTEGER | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | match_expression | closure | "(" , expression , ")" ;
+atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | match_expression | closure | "(" , expression , ")" ;
 ```
+
+A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
+`INTEGER` may be written `0x`, `0o` or `0b`, with `_` between digits.
 
 ```nazm
 fn main() -> Int { 1 }
+```
+
+```nazm
+fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 }
 ```
 
 ### `closure`

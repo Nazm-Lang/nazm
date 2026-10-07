@@ -153,6 +153,14 @@ fn equal(fx: &mut Fx<'_, '_>, a: V, b: V, t: Ty, differ: B) {
             let same = fx.cmp(Cmp::Eq, x, y);
             next(fx, same, differ);
         }
+        // A number's equality is its kind's (Gate 2): IEEE 754's for a float, so a NaN field
+        // makes two records unequal.
+        Ty::Num(k) => {
+            let x = fx.load(class(t), a, 0);
+            let y = fx.load(class(t), b, 0);
+            let same = fx.num_compare(nazm_mir::CmpOp::Eq, k, x, y);
+            next(fx, same, differ);
+        }
         Ty::Str => {
             let same = fx.string_equal(a, b);
             next(fx, same, differ);

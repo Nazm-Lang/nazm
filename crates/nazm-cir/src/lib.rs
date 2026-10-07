@@ -30,9 +30,9 @@ pub mod verify;
 
 pub use digest::{digests, Digests};
 pub use ir::{
-    ArithOp, Arm, Binding, Block, CmpOp, Const, ConstId, Effects, Ends, Expr, ExprKind, Function,
-    ImplRow, Init, Law, Local, LocalId, LocalOrigin, LoopId, Match, MatchOrigin, Program, Step,
-    Stmt, Temp,
+    ArithOp, Arm, Binding, BitOp, Block, CmpOp, Const, ConstId, Effects, Ends, Expr, ExprKind,
+    Function, ImplRow, Init, Law, Local, LocalId, LocalOrigin, LoopId, Match, MatchOrigin, Program,
+    Step, Stmt, Temp,
 };
 pub use names::Names;
 pub use print::{print, Options};

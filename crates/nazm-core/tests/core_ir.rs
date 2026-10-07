@@ -119,8 +119,13 @@ fn stmt_exprs(s: &Stmt, out: &mut Vec<cir::Expr>) {
 fn expr_all(e: &cir::Expr, out: &mut Vec<cir::Expr>) {
     out.push(e.clone());
     match &e.kind {
-        ExprKind::Neg(x) => expr_all(x, out),
-        ExprKind::Arith { lhs, rhs, .. } | ExprKind::Compare { lhs, rhs, .. } => {
+        ExprKind::Neg(x)
+        | ExprKind::Complement(x)
+        | ExprKind::Convert { operand: x, .. }
+        | ExprKind::Fits { operand: x, .. } => expr_all(x, out),
+        ExprKind::Arith { lhs, rhs, .. }
+        | ExprKind::Bits { lhs, rhs, .. }
+        | ExprKind::Compare { lhs, rhs, .. } => {
             expr_all(lhs, out);
             expr_all(rhs, out);
         }

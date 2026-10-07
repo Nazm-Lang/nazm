@@ -26,7 +26,9 @@ use nazm_span::Span;
 use cir::{Block, ExprKind, Stmt};
 use nazm_sema::enums::EnumId;
 use nazm_sema::intrinsic::Intrinsic;
+use nazm_sema::numeric::{self, NumError, NumVal};
 use nazm_sema::record::RecordId;
+use nazm_sema::NumKind;
 
 /// A runtime value.
 ///
@@ -39,6 +41,9 @@ use nazm_sema::record::RecordId;
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
+    /// A number of any other numeric type (Gate 2): its kind and canonical bits, operated on
+    /// only through [`nazm_sema::numeric`], the semantics both interpreters share.
+    Num(NumVal),
     Bool(bool),
     /// **Bytes, not text.** `docs/spec.md` specifies `Str` as a byte sequence, and
     /// `str_slice` is allowed to split a multi-byte character — so the representation
@@ -392,6 +397,7 @@ impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Num(a), Self::Num(b)) => a == b,
             (Self::Bool(a), Self::Bool(b)) => a == b,
             (Self::Str(a), Self::Str(b)) => a == b,
             (Self::Ints(a), Self::Ints(b)) => Arc::ptr_eq(a, b),
@@ -645,6 +651,7 @@ impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Int(v) => write!(f, "{v}"),
+            Self::Num(v) => f.write_str(&numeric::to_str(*v)),
             Self::Bool(v) => write!(f, "{v}"),
             // Rendering, not semantics: a `Str` that is not valid UTF-8 has no text
             // form, and showing the replacement character is a display decision. No
@@ -1335,6 +1342,10 @@ impl Interpreter {
                 Diagnostic::error(codes::IO_FAILED, span, message).help(format!("`{path}`: {e}")),
             ),
         };
+
+        if let Some(v) = numeric_intrinsic(i, args, span) {
+            return v;
+        }
 
         match (i, args) {
             (Intrinsic::StrLen, [Value::Str(s)]) => {
@@ -2043,6 +2054,10 @@ impl Interpreter {
                 // the interpreter must not pretend it allocated one, or the two would
                 // disagree about what a program with no allocation did.
                 Some(cir::Const::Str(v)) => Value::Str(Str::immortal(v.clone())),
+                Some(cir::Const::Num { kind, bits }) => from_num(NumVal {
+                    kind: *kind,
+                    bits: *bits,
+                }),
                 None => {
                     return Err(fail(
                         codes::TYPE_MISMATCH,
@@ -2078,6 +2093,9 @@ impl Interpreter {
                         "this negation overflows `Int`",
                     )
                 })?,
+                Value::Num(v) => numeric::neg(v)
+                    .map(from_num)
+                    .map_err(|err| num_failure(err, e.at, "negation", v.kind))?,
                 other => {
                     return Err(fail(
                         codes::INVALID_OPERANDS,
@@ -2099,6 +2117,57 @@ impl Interpreter {
                 let l = take!(self, f, lhs, env);
                 let r = take!(self, f, rhs, env);
                 compare(*op, &l, &r, e.at)?
+            }
+
+            // Gate 2's numeric forms, through the shared semantics.
+            ExprKind::Bits { op, lhs, rhs } => {
+                let l = take!(self, f, lhs, env);
+                let r = take!(self, f, rhs, env);
+                let (Some(a), Some(b)) = (as_num(&l), as_num(&r)) else {
+                    return Err(fail(
+                        codes::INVALID_OPERANDS,
+                        e.at,
+                        "a bit operation on a non-integer",
+                    ));
+                };
+                numeric::bit(op.numeric(), a, b)
+                    .map(from_num)
+                    .map_err(|err| num_failure(err, e.at, "shift", a.kind))?
+            }
+            ExprKind::Complement(x) => {
+                let v = take!(self, f, x, env);
+                let Some(a) = as_num(&v) else {
+                    return Err(fail(
+                        codes::INVALID_OPERANDS,
+                        e.at,
+                        "a complement of a non-integer",
+                    ));
+                };
+                from_num(numeric::complement(a))
+            }
+            ExprKind::Convert { mode, operand } => {
+                let v = take!(self, f, operand, env);
+                let (Some(a), Some(to)) = (as_num(&v), e.ty.and_then(nazm_sema::Type::num)) else {
+                    return Err(fail(
+                        codes::INVALID_OPERANDS,
+                        e.at,
+                        "a conversion of a non-number",
+                    ));
+                };
+                numeric::convert(to, *mode, a)
+                    .map(from_num)
+                    .map_err(|err| num_failure(err, e.at, "conversion", to))?
+            }
+            ExprKind::Fits { to, operand } => {
+                let v = take!(self, f, operand, env);
+                let (Some(a), Some(to)) = (as_num(&v), to.num()) else {
+                    return Err(fail(
+                        codes::INVALID_OPERANDS,
+                        e.at,
+                        "a conversion of a non-number",
+                    ));
+                };
+                Value::Bool(numeric::fits(to, a))
             }
 
             ExprKind::Record {
@@ -2421,6 +2490,24 @@ fn arith(op: cir::ArithOp, l: &Value, r: &Value, at: Span) -> Result<Value, Runt
         // to memorise. `wrapping_rem` is the correct answer here, and the zero divisor is
         // already handled above.
         (Rem, Int(a), Int(b)) => Ok(Int(a.wrapping_rem(*b))),
+        (op, Value::Num(a), Value::Num(b)) => {
+            let nop = match op {
+                Add => numeric::Arith::Add,
+                Sub => numeric::Arith::Sub,
+                Mul => numeric::Arith::Mul,
+                Div => numeric::Arith::Div,
+                Rem => numeric::Arith::Rem,
+            };
+            let what = match op {
+                Add => "addition",
+                Sub => "subtraction",
+                Mul => "multiplication",
+                Div | Rem => "division",
+            };
+            numeric::arith(nop, *a, *b)
+                .map(from_num)
+                .map_err(|err| num_failure(err, at, what, a.kind))
+        }
         // Unreachable after checking. A diagnostic rather than a panic.
         (op, a, b) => Err(fail(
             codes::INVALID_OPERANDS,
@@ -2435,6 +2522,51 @@ fn arith(op: cir::ArithOp, l: &Value, r: &Value, at: Span) -> Result<Value, Runt
     }
 }
 
+/// A value as a number of the shared semantics, `Int` included (Gate 2).
+fn as_num(v: &Value) -> Option<NumVal> {
+    match v {
+        Value::Int(i) => NumVal::int(NumKind::I64, i128::from(*i)),
+        Value::Num(n) => Some(*n),
+        _ => None,
+    }
+}
+
+/// A number as a value: an `Int` for that kind, a [`Value::Num`] for every other.
+fn from_num(n: NumVal) -> Value {
+    if n.kind == NumKind::I64 {
+        #[allow(clippy::cast_possible_wrap)]
+        Value::Int(n.bits as i64)
+    } else {
+        Value::Num(n)
+    }
+}
+
+/// The failure a numeric operation stops the program with — the same codes and sentences the
+/// compiled program reports.
+fn num_failure(err: NumError, at: Span, what: &str, kind: NumKind) -> RuntimeError {
+    let d = match err {
+        NumError::Overflow => Diagnostic::error(
+            codes::INTEGER_OVERFLOW,
+            at,
+            format!("this {what} overflows `{}`", kind.name()),
+        )
+        .help("overflow stops the program rather than wrapping; `wrapping_add` and its kin wrap"),
+        NumError::DivideByZero => {
+            Diagnostic::error(codes::DIVISION_BY_ZERO, at, "division by zero")
+                .help("guard the divisor, for example `if d != 0 { n / d } else { 0 }`")
+        }
+        NumError::ShiftRange => Diagnostic::error(
+            codes::SHIFT_OUT_OF_RANGE,
+            at,
+            format!("this shift amount is outside `0..{}`", kind.bits()),
+        )
+        .help("a shift by a negative amount, or by the width or more, stops the program"),
+    };
+    RuntimeError {
+        diagnostic: Box::new(d),
+    }
+}
+
 /// A comparison. Ordering is `Int`'s; equality is [`equal`], the language's law, and `!=` is
 /// its negation rather than a second walk that could drift from it.
 fn compare(op: cir::CmpOp, l: &Value, r: &Value, at: Span) -> Result<Value, RuntimeError> {
@@ -2446,7 +2578,12 @@ fn compare(op: cir::CmpOp, l: &Value, r: &Value, at: Span) -> Result<Value, Runt
     } else {
         None
     };
+    let ordering = |o: numeric::Cmp, a: &NumVal, b: &NumVal| Ok(Bool(numeric::compare(o, *a, *b)));
     match (op, l, r) {
+        (Lt, Value::Num(a), Value::Num(b)) => ordering(numeric::Cmp::Lt, a, b),
+        (LtEq, Value::Num(a), Value::Num(b)) => ordering(numeric::Cmp::LtEq, a, b),
+        (Gt, Value::Num(a), Value::Num(b)) => ordering(numeric::Cmp::Gt, a, b),
+        (GtEq, Value::Num(a), Value::Num(b)) => ordering(numeric::Cmp::GtEq, a, b),
         (Lt, Int(a), Int(b)) => Ok(Bool(a < b)),
         (LtEq, Int(a), Int(b)) => Ok(Bool(a <= b)),
         (Gt, Int(a), Int(b)) => Ok(Bool(a > b)),
@@ -2495,6 +2632,8 @@ fn equal(a: &Value, b: &Value) -> Option<bool> {
     };
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Some(x == y),
+        // IEEE 754's for a float (Gate 2): a NaN equals nothing.
+        (Value::Num(x), Value::Num(y)) => Some(numeric::compare(numeric::Cmp::Eq, *x, *y)),
         (Value::Bool(x), Value::Bool(y)) => Some(x == y),
         (Value::Str(x), Value::Str(y)) => Some(x.bytes() == y.bytes()),
         (Value::Record(x), Value::Record(y)) => all(&x.fields, &y.fields),
@@ -2511,6 +2650,7 @@ fn equal(a: &Value, b: &Value) -> Option<bool> {
 fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Int(_) => "Int",
+        Value::Num(n) => n.kind.name(),
         Value::Bool(_) => "Bool",
         Value::Str(_) => "Str",
         Value::Ints(_) => "Ints",
@@ -2524,4 +2664,80 @@ fn type_name(v: &Value) -> &'static str {
         Value::Cap(k) => k.type_name(),
         Value::Func(_) => "a function value",
     }
+}
+
+/// Gate 2's numeric built-ins, through the shared semantics; `None` for every other built-in.
+fn numeric_intrinsic(
+    i: Intrinsic,
+    args: &[Value],
+    at: Span,
+) -> Option<Result<Value, RuntimeError>> {
+    use numeric::{Arith, Binary, Count, Unary};
+    let a = args.first().and_then(as_num);
+    let b = args.get(1).and_then(as_num);
+    let unary = |f: Unary| a.map(|a| Ok(from_num(numeric::unary(f, a))));
+    let binary = |f: Binary| Some(Ok(from_num(numeric::binary(f, a?, b?))));
+    let predicate = |p: fn(f64) -> bool| a.map(|a| Ok(Value::Bool(p(a.as_f64()))));
+    let count = |c: Count| a.map(|a| Ok(Value::Int(numeric::count(c, a))));
+    let str_arg = || match args.first() {
+        Some(Value::Str(s)) => Some(String::from_utf8_lossy(s.bytes()).into_owned()),
+        _ => None,
+    };
+    let bits_of = |k: NumKind, bits: u64| Some(Ok(from_num(NumVal { kind: k, bits })));
+    Some(match i {
+        Intrinsic::WrappingAdd => Ok(from_num(numeric::wrapping(Arith::Add, a?, b?))),
+        Intrinsic::WrappingSub => Ok(from_num(numeric::wrapping(Arith::Sub, a?, b?))),
+        Intrinsic::WrappingMul => Ok(from_num(numeric::wrapping(Arith::Mul, a?, b?))),
+        Intrinsic::SaturatingAdd => Ok(from_num(numeric::saturating(Arith::Add, a?, b?))),
+        Intrinsic::SaturatingSub => Ok(from_num(numeric::saturating(Arith::Sub, a?, b?))),
+        Intrinsic::SaturatingMul => Ok(from_num(numeric::saturating(Arith::Mul, a?, b?))),
+        Intrinsic::CountOnes => return count(Count::Ones),
+        Intrinsic::LeadingZeros => return count(Count::LeadingZeros),
+        Intrinsic::TrailingZeros => return count(Count::TrailingZeros),
+        Intrinsic::RotateLeft | Intrinsic::RotateRight => {
+            let a = a?;
+            let n = match args.get(1) {
+                Some(Value::Int(n)) => *n,
+                _ => return None,
+            };
+            numeric::rotate(i == Intrinsic::RotateLeft, a, n)
+                .map(from_num)
+                .map_err(|err| num_failure(err, at, "rotation", a.kind))
+        }
+        Intrinsic::SwapBytes => Ok(from_num(numeric::swap_bytes(a?))),
+        Intrinsic::ToBigEndian | Intrinsic::FromBigEndian => {
+            Ok(from_num(numeric::endian(true, a?)))
+        }
+        Intrinsic::ToLittleEndian | Intrinsic::FromLittleEndian => {
+            Ok(from_num(numeric::endian(false, a?)))
+        }
+        Intrinsic::FloatSqrt => return unary(Unary::Sqrt),
+        Intrinsic::FloatAbs => return unary(Unary::Abs),
+        Intrinsic::FloatFloor => return unary(Unary::Floor),
+        Intrinsic::FloatCeil => return unary(Unary::Ceil),
+        Intrinsic::FloatTrunc => return unary(Unary::Trunc),
+        Intrinsic::FloatRound => return unary(Unary::Round),
+        Intrinsic::FloatSin => return unary(Unary::Sin),
+        Intrinsic::FloatCos => return unary(Unary::Cos),
+        Intrinsic::FloatTan => return unary(Unary::Tan),
+        Intrinsic::FloatExp => return unary(Unary::Exp),
+        Intrinsic::FloatLn => return unary(Unary::Ln),
+        Intrinsic::FloatLog2 => return unary(Unary::Log2),
+        Intrinsic::FloatLog10 => return unary(Unary::Log10),
+        Intrinsic::FloatPow => return binary(Binary::Pow),
+        Intrinsic::FloatAtan2 => return binary(Binary::Atan2),
+        Intrinsic::FloatMin => return binary(Binary::Min),
+        Intrinsic::FloatMax => return binary(Binary::Max),
+        Intrinsic::FloatIsNan => return predicate(f64::is_nan),
+        Intrinsic::FloatIsInfinite => return predicate(f64::is_infinite),
+        Intrinsic::FloatIsFinite => return predicate(f64::is_finite),
+        Intrinsic::NumToStr => Ok(Value::Str(Str::heap(numeric::to_str(a?).into_bytes()))),
+        Intrinsic::Float64ToBits => return bits_of(NumKind::U64, a?.bits),
+        Intrinsic::Float64FromBits => return bits_of(NumKind::F64, a?.bits),
+        Intrinsic::Float32ToBits => return bits_of(NumKind::U32, a?.bits),
+        Intrinsic::Float32FromBits => return bits_of(NumKind::F32, a?.bits),
+        Intrinsic::FloatParses => Ok(Value::Bool(numeric::parses(&str_arg()?))),
+        Intrinsic::FloatParseRaw => Ok(from_num(NumVal::f64(numeric::parse(&str_arg()?)))),
+        _ => return None,
+    })
 }

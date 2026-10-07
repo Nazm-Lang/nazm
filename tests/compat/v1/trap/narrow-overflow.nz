@@ -1,0 +1,9 @@
+// expect: N0400
+// An integer of any width traps where its value leaves its type (spec: numbers).
+fn add(a: UInt8, b: UInt8) -> UInt8 {
+    a + b
+}
+
+fn main() -> Int {
+    Int(add(UInt8(200), UInt8(100)))
+}

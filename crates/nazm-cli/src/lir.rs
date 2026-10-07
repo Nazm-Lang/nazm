@@ -22,6 +22,7 @@ pub(crate) const SCHEMA: &str = "nazm.lir/2";
 fn ty_name(u: &Unit, t: Ty) -> String {
     match t {
         Ty::Int => "Int".to_owned(),
+        Ty::Num(k) => k.name().to_owned(),
         Ty::Bool => "Bool".to_owned(),
         Ty::Str => "Str".to_owned(),
         Ty::Ints => "Ints".to_owned(),

@@ -107,6 +107,15 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
         .filter_map(|t| {
             let kind = match &t.kind {
                 T::Int(_) | T::IntTooLarge(_) => 1,
+                // Gate 2's numbers and bit operators, outside the Nazm-written compiler's
+                // subset; no source this test reads writes one.
+                T::Float(_) => 60,
+                T::Amp => 61,
+                T::Pipe => 62,
+                T::Caret => 63,
+                T::Tilde => 64,
+                T::Shl => 65,
+                T::Shr => 66,
                 T::Str(_) => 2,
                 T::Ident(_) => 3,
                 T::Fn => 10,
@@ -572,6 +581,16 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         }
         E::Bool { value, span } => {
             push_node(out, "bool", 0, span.start, span.end, &value.to_string());
+        }
+        // Gate 2's numbers, outside the Nazm-written compiler's subset: no agreement corpus
+        // holds one.
+        E::WideInt { value, span } => {
+            push_node(out, "wide", 0, span.start, span.end, &value.to_string());
+        }
+        E::Float { text, span } => push_node(out, "float", 0, span.start, span.end, text),
+        E::BitNot { operand, span, .. } => {
+            dump_expr(operand, out);
+            push_node(out, "bitnot", 1, span.start, span.end, "");
         }
         E::Str { value, span } => push_node(out, "str", 0, span.start, span.end, value),
         E::Var { name, span } => push_node(out, "var", 0, span.start, span.end, name),

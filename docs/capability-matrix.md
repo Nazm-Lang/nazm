@@ -88,7 +88,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 1 | Syntax, parser, CST | VERIFIED — the reference parser: incremental reparse and recovery (N76); the compiler written in Nazm's syntax is N98's |
 | 2 | Name resolution and modules | VERIFIED — durable identities, interfaces and resolved units, a declared root, packages, re-exports with one identity (N103, N107); check reuse for builds is area 26's |
 | 2a | Incremental semantic checking | VERIFIED |
-| 3 | Type system | VERIFIED as scoped (N107) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); trait objects, generic traits and default methods refused by name |
+| 3 | Type system | VERIFIED as scoped (N107, Gate 2) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); fixed-width integers, `Float32`/`Float64`, bit operators and conversions (Gate 2); trait objects, generic traits and default methods refused by name |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe — closure environments are ownership-graph nodes; the capture that could close a cycle is refused (`N0616`, Gate 1-C1) |
 | 5 | Effects | VERIFIED as scoped (N107) — inferred, checked compiler-owned effects with subsumption (N79); no handlers or user effects; pure is not total |
 | 6 | Capabilities (language) | VERIFIED as scoped (N107) — static, coarse, shareable: no inherited authority (N104), `OutCap` attenuation (N79) |
@@ -103,7 +103,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 13 | Runtime | VERIFIED (v1 contract; a built, versioned, verified artifact, N82; M:N tasks on bounded workers by default, N106) — no allocator of its own, runtime still text |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
-| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; no networking, cryptography or floats |
+| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; no networking or cryptography; numbers are the language's since Gate 2 (area 3) |
 | 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
 | 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
@@ -459,7 +459,21 @@ rather than met.
 **Accepted when** · Met for semantic checking. Native reuse is a separate row that does not
 exist.
 
-### 3. Type system — VERIFIED as scoped (N107)
+### 3. Type system — VERIFIED as scoped (N107, Gate 2)
+
+**Gate 2 (2026-10-07)** · *Numbers* (`spec.md`, *Numbers*; `general-purpose.md` §1–§3). `Int8`,
+`Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float32` and `Float64` beside `Int`;
+float, hexadecimal, octal and binary literals typed by the type expected; `&`, `|`, `^`, `~`, `<<`,
+`>>`; `T(x)`, `try_convert`, `wrap_convert`, `saturate_convert`; 43 numeric built-ins, generic over
+a class of types. One semantics, `nazm_sema::numeric`, is what the interpreter and the LIR oracle
+run; both native backends are held to it by `crates/nazm-cli/tests/numbers.rs` — eleven tests,
+each run under the interpreter, LLVM `-O0` and `-O2` and Cranelift: shortest-digit float text,
+IEEE comparison with NaN, every width's range and signedness, wrapping and saturation, shifts,
+rotations and counts, every conversion mode, numbers in records, vectors and tasks, every trap
+(`N0400`, `N0401`, `N0412`) with its code, every refusal (`N0003`, `N0300`, `N0304`, `N0354`,
+`N0617`), and the C library's functions to six places. Compatibility corpus: one run case, two
+trap cases, three refusals, and the superseded `1.5` refusal now held to checking. Not crossing
+the C boundary yet, and not in the EVM or accelerator-kernel targets, which refuse them by name.
 
 *N107, 2026-10-05: the scope audited (`audit-n107.md`, `architecture.md` §7.108).* The scope is the type system the spec states — records, closed enums, exhaustive variant match, first-order generics with `Vec[T]`, typed `Result` and `?`, structural equality and equality bounds, function values and closures, traits with impls, methods and bounds, dispatched statically. Trait objects, generic traits, associated types, default methods and supertraits are not required by any program or stated goal (dynamic dispatch exists through function values and enums, and the goals ask that it be exposed and restricted, not added); each stays refused by name (`N0602`–`N0608`). Checking against a persisted interface alone, without source, cannot use traits: a tooling boundary (area 26), not a wrong answer — the cached check path handles traits.
 

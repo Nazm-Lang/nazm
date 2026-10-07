@@ -200,10 +200,16 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                     let c = known(*a).unwrap_or(Class::I64);
                     define(&mut e, *dst, c);
                 }
-                Inst::Ovf { dst, ovf, .. } => {
-                    define(&mut e, *dst, Class::I64);
+                Inst::Ovf { dst, ovf, a, .. } => {
+                    let c = known(*a).unwrap_or(Class::I64);
+                    define(&mut e, *dst, c);
                     define(&mut e, *ovf, Class::Bit);
                 }
+                Inst::Un { dst, a, .. } => {
+                    let c = known(*a).unwrap_or(Class::I64);
+                    define(&mut e, *dst, c);
+                }
+                Inst::Conv { dst, to, .. } => define(&mut e, *dst, *to),
                 Inst::Cmp { dst, .. } => define(&mut e, *dst, Class::Bit),
                 Inst::Select { dst, a, .. } => {
                     let c = known(*a).unwrap_or(Class::I64);
@@ -283,7 +289,16 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                 }
             }
         };
-        let ints: &[Class] = &[Class::I8, Class::I32, Class::I64];
+        let ints: &[Class] = &[Class::I8, Class::I16, Class::I32, Class::I64];
+        let floats: &[Class] = &[Class::F32, Class::F64];
+        let numbers: &[Class] = &[
+            Class::I8,
+            Class::I16,
+            Class::I32,
+            Class::I64,
+            Class::F32,
+            Class::F64,
+        ];
         let ptr: &[Class] = &[Class::Ptr];
         let bit: &[Class] = &[Class::Bit];
         let i64c: &[Class] = &[Class::I64];
@@ -297,8 +312,9 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                 Inst::Bin { op, a, b: y, .. } => {
                     let allowed: &[Class] = match op {
                         BinOp::And | BinOp::Or | BinOp::Xor => {
-                            &[Class::Bit, Class::I8, Class::I32, Class::I64]
+                            &[Class::Bit, Class::I8, Class::I16, Class::I32, Class::I64]
                         }
+                        BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::FDiv => floats,
                         _ => ints,
                     };
                     check(&mut e, *a, ii, Some(allowed));
@@ -308,9 +324,25 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                     }
                 }
                 Inst::Ovf { a, b: y, .. } => {
-                    check(&mut e, *a, ii, Some(i64c));
-                    check(&mut e, *y, ii, Some(i64c));
+                    check(&mut e, *a, ii, Some(ints));
+                    check(&mut e, *y, ii, Some(ints));
+                    if class_of(&def, *a) != class_of(&def, *y) {
+                        e.push(format!("v{} and v{} differ in class in b{bi}", a.0, y.0));
+                    }
                 }
+                Inst::Un { op, a, .. } => {
+                    let allowed = match op {
+                        super::ir::UnOp::FNeg
+                        | super::ir::UnOp::FSqrt
+                        | super::ir::UnOp::FAbs
+                        | super::ir::UnOp::FFloor
+                        | super::ir::UnOp::FCeil
+                        | super::ir::UnOp::FTrunc => floats,
+                        _ => ints,
+                    };
+                    check(&mut e, *a, ii, Some(allowed));
+                }
+                Inst::Conv { src, .. } => check(&mut e, *src, ii, Some(numbers)),
                 Inst::Cmp { a, b: y, .. } => {
                     check(&mut e, *a, ii, None);
                     check(&mut e, *y, ii, None);

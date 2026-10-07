@@ -7,18 +7,33 @@
 use std::fmt::Write as _;
 
 use super::ir::{
-    BinOp, Class, Cmp, Conv, Function, Inst, Linkage, Module, OvfOp, Sig, Storage, SymId, SymKind,
-    Term, V,
+    BinOp, Class, Cmp, Conv, ConvOp, Function, Inst, Linkage, Module, OvfOp, Sig, Storage, SymId,
+    SymKind, Term, UnOp, V,
 };
 
 const fn ty(c: Class) -> &'static str {
     match c {
         Class::Bit => "i1",
         Class::I8 => "i8",
+        Class::I16 => "i16",
         Class::I32 => "i32",
         Class::I64 => "i64",
+        Class::F32 => "float",
+        Class::F64 => "double",
         Class::Ptr => "ptr",
     }
+}
+
+/// A float constant as LLVM writes one exactly: the hexadecimal of its value as a `double`,
+/// which a `Float32` value always has exactly (Gate 2).
+fn float_text(class: Class, bits: i64) -> String {
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let as_double = if class == Class::F32 {
+        f64::from(f32::from_bits(bits as u32)).to_bits()
+    } else {
+        bits as u64
+    };
+    format!("0x{as_double:016X}")
 }
 
 /// A parameter's or result's type in a signature: C's `bool` is zero-extended (N42).
@@ -66,18 +81,34 @@ fn name(m: &Module, s: SymId) -> String {
 pub fn module(m: &Module) -> String {
     let mut out = String::new();
     crate::runtime::preamble(&mut out, &m.source);
-    let _ = writeln!(
-        out,
-        "declare {{i64, i1}} @llvm.sadd.with.overflow.i64(i64, i64)"
-    );
-    let _ = writeln!(
-        out,
-        "declare {{i64, i1}} @llvm.ssub.with.overflow.i64(i64, i64)"
-    );
-    let _ = writeln!(
-        out,
-        "declare {{i64, i1}} @llvm.smul.with.overflow.i64(i64, i64)"
-    );
+    // Every width's overflow-checked operations, bit counts and rotations, and the float
+    // operations LLVM has exactly (Gate 2). An unused declaration costs nothing.
+    for w in ["i8", "i16", "i32", "i64"] {
+        for o in ["sadd", "ssub", "smul", "uadd", "usub", "umul"] {
+            let _ = writeln!(
+                out,
+                "declare {{{w}, i1}} @llvm.{o}.with.overflow.{w}({w}, {w})"
+            );
+        }
+        let _ = writeln!(out, "declare {w} @llvm.ctpop.{w}({w})");
+        for (f, t) in [("f32", "float"), ("f64", "double")] {
+            for o in ["fptosi", "fptoui"] {
+                let _ = writeln!(out, "declare {w} @llvm.{o}.sat.{w}.{f}({t})");
+            }
+        }
+        let _ = writeln!(out, "declare {w} @llvm.ctlz.{w}({w}, i1)");
+        let _ = writeln!(out, "declare {w} @llvm.cttz.{w}({w}, i1)");
+        let _ = writeln!(out, "declare {w} @llvm.fshl.{w}({w}, {w}, {w})");
+        let _ = writeln!(out, "declare {w} @llvm.fshr.{w}({w}, {w}, {w})");
+        if w != "i8" {
+            let _ = writeln!(out, "declare {w} @llvm.bswap.{w}({w})");
+        }
+    }
+    for (f, t) in [("f32", "float"), ("f64", "double")] {
+        for o in ["sqrt", "fabs", "floor", "ceil", "trunc"] {
+            let _ = writeln!(out, "declare {t} @llvm.{o}.{f}({t})");
+        }
+    }
     let _ = writeln!(
         out,
         "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)"
@@ -375,6 +406,7 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
                 Class::Bit => if *value != 0 { "true" } else { "false" }.to_owned(),
                 Class::Ptr if *value == 0 => "null".to_owned(),
                 Class::Ptr => format!("inttoptr (i64 {value} to ptr)"),
+                Class::F32 | Class::F64 => float_text(*class, *value),
                 _ => value.to_string(),
             };
             p.alias(*dst, text, *class);
@@ -410,42 +442,136 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
                 BinOp::And => "and",
                 BinOp::Or => "or",
                 BinOp::Xor => "xor",
+                BinOp::UDiv => "udiv",
+                BinOp::URem => "urem",
+                BinOp::Shl => "shl",
+                BinOp::LShr => "lshr",
+                BinOp::AShr => "ashr",
+                BinOp::FAdd => "fadd",
+                BinOp::FSub => "fsub",
+                BinOp::FMul => "fmul",
+                BinOp::FDiv => "fdiv",
+                BinOp::Rotl | BinOp::Rotr => {
+                    let f = if *op == BinOp::Rotl { "fshl" } else { "fshr" };
+                    let (x, y) = (p.v(*a), p.v(*b));
+                    let d = p.named(*dst, c);
+                    let t = ty(c);
+                    let _ = writeln!(
+                        out,
+                        "  {d} = call {t} @llvm.{f}.{t}({t} {x}, {t} {x}, {t} {y})"
+                    );
+                    return;
+                }
             };
             let (x, y) = (p.v(*a), p.v(*b));
             let d = p.named(*dst, c);
             let _ = writeln!(out, "  {d} = {o} {} {x}, {y}", ty(c));
         }
         Inst::Ovf { dst, ovf, op, a, b } => {
+            let c = p.c(*a);
+            let w = ty(c);
             let o = match op {
                 OvfOp::Add => "sadd",
                 OvfOp::Sub => "ssub",
                 OvfOp::Mul => "smul",
+                OvfOp::UAdd => "uadd",
+                OvfOp::USub => "usub",
+                OvfOp::UMul => "umul",
             };
             let t = p.temp();
             let _ = writeln!(
                 out,
-                "  {t} = call {{i64, i1}} @llvm.{o}.with.overflow.i64(i64 {}, i64 {})",
+                "  {t} = call {{{w}, i1}} @llvm.{o}.with.overflow.{w}({w} {}, {w} {})",
                 p.v(*a),
                 p.v(*b)
             );
-            let d = p.named(*dst, Class::I64);
-            let _ = writeln!(out, "  {d} = extractvalue {{i64, i1}} {t}, 0");
+            let d = p.named(*dst, c);
+            let _ = writeln!(out, "  {d} = extractvalue {{{w}, i1}} {t}, 0");
             let o = p.named(*ovf, Class::Bit);
-            let _ = writeln!(out, "  {o} = extractvalue {{i64, i1}} {t}, 1");
+            let _ = writeln!(out, "  {o} = extractvalue {{{w}, i1}} {t}, 1");
+        }
+        Inst::Un { dst, op, a } => {
+            let c = p.c(*a);
+            let t = ty(c);
+            let x = p.v(*a);
+            let f = if c == Class::F32 { "f32" } else { "f64" };
+            let d = p.named(*dst, c);
+            let _ = match op {
+                UnOp::FNeg => writeln!(out, "  {d} = fneg {t} {x}"),
+                UnOp::FSqrt => writeln!(out, "  {d} = call {t} @llvm.sqrt.{f}({t} {x})"),
+                UnOp::FAbs => writeln!(out, "  {d} = call {t} @llvm.fabs.{f}({t} {x})"),
+                UnOp::FFloor => writeln!(out, "  {d} = call {t} @llvm.floor.{f}({t} {x})"),
+                UnOp::FCeil => writeln!(out, "  {d} = call {t} @llvm.ceil.{f}({t} {x})"),
+                UnOp::FTrunc => writeln!(out, "  {d} = call {t} @llvm.trunc.{f}({t} {x})"),
+                UnOp::Popcnt => writeln!(out, "  {d} = call {t} @llvm.ctpop.{t}({t} {x})"),
+                UnOp::Clz => writeln!(out, "  {d} = call {t} @llvm.ctlz.{t}({t} {x}, i1 false)"),
+                UnOp::Ctz => writeln!(out, "  {d} = call {t} @llvm.cttz.{t}({t} {x}, i1 false)"),
+                UnOp::Bswap if c == Class::I8 => writeln!(out, "  {d} = or i8 {x}, 0"),
+                UnOp::Bswap => writeln!(out, "  {d} = call {t} @llvm.bswap.{t}({t} {x})"),
+            };
+        }
+        // Float to integer saturates, as Cranelift's does: the lowering has range-checked an exact
+        // conversion and wants saturation from the other, so neither ever meets LLVM's poison.
+        Inst::Conv {
+            dst,
+            op: op @ (ConvOp::FToS | ConvOp::FToU),
+            to,
+            src,
+        } => {
+            let from = p.c(*src);
+            let (f, ft) = if from == Class::F32 {
+                ("f32", "float")
+            } else {
+                ("f64", "double")
+            };
+            let s = p.v(*src);
+            let t = ty(*to);
+            let o = if *op == ConvOp::FToS {
+                "fptosi"
+            } else {
+                "fptoui"
+            };
+            let d = p.named(*dst, *to);
+            let _ = writeln!(out, "  {d} = call {t} @llvm.{o}.sat.{t}.{f}({ft} {s})");
+        }
+        Inst::Conv { dst, op, to, src } => {
+            let s = p.tv(*src);
+            let d = p.named(*dst, *to);
+            let o = match op {
+                ConvOp::SToF => "sitofp",
+                ConvOp::UToF => "uitofp",
+                ConvOp::FToS => "fptosi",
+                ConvOp::FToU => "fptoui",
+                ConvOp::FExt => "fpext",
+                ConvOp::FTrunc => "fptrunc",
+                ConvOp::Bits => "bitcast",
+            };
+            let _ = writeln!(out, "  {d} = {o} {s} to {}", ty(*to));
         }
         Inst::Cmp { dst, op, a, b } => {
             let c = p.c(*a);
-            let o = match op {
-                Cmp::Eq => "eq",
-                Cmp::Ne => "ne",
-                Cmp::Lt => "slt",
-                Cmp::Le => "sle",
-                Cmp::Gt => "sgt",
-                Cmp::Ge => "sge",
+            let (inst, o) = match op {
+                Cmp::Eq => ("icmp", "eq"),
+                Cmp::Ne => ("icmp", "ne"),
+                Cmp::Lt => ("icmp", "slt"),
+                Cmp::Le => ("icmp", "sle"),
+                Cmp::Gt => ("icmp", "sgt"),
+                Cmp::Ge => ("icmp", "sge"),
+                Cmp::ULt => ("icmp", "ult"),
+                Cmp::ULe => ("icmp", "ule"),
+                Cmp::UGt => ("icmp", "ugt"),
+                Cmp::UGe => ("icmp", "uge"),
+                // Ordered, false with a NaN; `!=` unordered, true with one: IEEE 754's.
+                Cmp::FEq => ("fcmp", "oeq"),
+                Cmp::FNe => ("fcmp", "une"),
+                Cmp::FLt => ("fcmp", "olt"),
+                Cmp::FLe => ("fcmp", "ole"),
+                Cmp::FGt => ("fcmp", "ogt"),
+                Cmp::FGe => ("fcmp", "oge"),
             };
             let (x, y) = (p.v(*a), p.v(*b));
             let d = p.named(*dst, Class::Bit);
-            let _ = writeln!(out, "  {d} = icmp {o} {} {x}, {y}", ty(c));
+            let _ = writeln!(out, "  {d} = {inst} {o} {} {x}, {y}", ty(c));
         }
         Inst::Select { dst, cond, a, b } => {
             let c = p.c(*a);

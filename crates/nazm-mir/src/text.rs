@@ -63,6 +63,14 @@ fn callee(program: &Program, f: FuncId) -> String {
 fn constant(c: &Const) -> String {
     match c {
         Const::Int(v) => v.to_string(),
+        Const::Num { kind, bits } => format!(
+            "{}:{}",
+            nazm_sema::numeric::to_str(nazm_sema::numeric::NumVal {
+                kind: *kind,
+                bits: *bits
+            }),
+            kind.name()
+        ),
         Const::Bool(v) => v.to_string(),
         Const::Str(b) => {
             let mut s = String::from("b\"");
@@ -115,6 +123,19 @@ pub fn rvalue(program: &Program, v: &Rvalue) -> String {
         Rvalue::Move(l) => format!("move _{}", l.0),
         Rvalue::Neg(o) => format!("neg {}", operand(o)),
         Rvalue::Arith(op, a, b) => format!("{} {} {}", operand(a), op.symbol(), operand(b)),
+        Rvalue::Bits(op, a, b) => format!("{} {} {}", operand(a), op.symbol(), operand(b)),
+        Rvalue::Complement(o) => format!("~{}", operand(o)),
+        Rvalue::Convert {
+            mode,
+            to,
+            operand: o,
+        } => format!(
+            "convert.{} {} to {}",
+            nazm_cir::digest::convert_name(*mode),
+            operand(o),
+            ty(program, *to)
+        ),
+        Rvalue::Fits { to, operand: o } => format!("fits {} in {}", operand(o), ty(program, *to)),
         Rvalue::Compare {
             op,
             law,

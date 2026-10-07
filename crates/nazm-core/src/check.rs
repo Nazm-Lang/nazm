@@ -23,6 +23,7 @@ use nazm_sema::interface::{
 };
 use nazm_sema::intrinsic::{Intrinsic, Shape};
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
+use nazm_sema::numeric::NumVal;
 use nazm_sema::record::{CRepr, FieldDef, RecordDef, RecordId, OPAQUE_FIELD};
 use nazm_sema::resolve::{
     CallSite, Callee, CheckedCall, FieldRef, FnDef, FnId, Instantiation, LocalDef, LocalRef,
@@ -32,6 +33,7 @@ use nazm_sema::traits::{ImplDef, TraitCall, TraitDef, TraitId, TraitMethodDef};
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
 use nazm_sema::ModuleFacts;
+use nazm_sema::{ConvertMode, NumKind, NumericFact};
 
 #[derive(Debug, Clone)]
 pub struct Signature {
@@ -387,6 +389,8 @@ pub struct Checker<'a> {
     /// prelude's durable identity. A project enum shaped like it, or named like it, is a
     /// different definition and never this.
     result: Option<EnumId>,
+    /// The core prelude's `Option`, by definition — what `try_convert` returns (Gate 2).
+    option: Option<EnumId>,
     /// How many `scope` blocks enclose the statement being checked.
     ///
     /// `spawn` needs one: a task with no scope would be detached work, and the model
@@ -1904,6 +1908,19 @@ impl Lit {
     }
 }
 
+/// The conversion functions that are not type names (Gate 2), reserved as built-ins are.
+const CONVERSIONS: [&str; 3] = ["try_convert", "wrap_convert", "saturate_convert"];
+
+/// Whether `e` is a number literal, possibly negated — the operand that takes its type from the
+/// other side of a binary operator (Gate 2).
+fn is_number_literal(e: &Expr) -> bool {
+    match e {
+        Expr::Int { .. } | Expr::WideInt { .. } | Expr::Float { .. } => true,
+        Expr::Neg { operand, .. } => is_number_literal(operand),
+        _ => false,
+    }
+}
+
 /// `e`'s value from literals and the names in `env`, or `None` for anything else — including
 /// an operation that would fail, which is then not proved. `&&` and `||` short-circuit, as at
 /// run time, so a clause guarded by one is evaluated as the program would evaluate it.
@@ -1941,6 +1958,17 @@ fn literal(e: &Expr, env: &HashMap<&str, Lit>) -> Option<Lit> {
                     BinOp::LtEq => Some(Lit::Bool(a <= b)),
                     BinOp::Gt => Some(Lit::Bool(a > b)),
                     BinOp::GtEq => Some(Lit::Bool(a >= b)),
+                    BinOp::BitAnd => Some(Lit::Int(a & b)),
+                    BinOp::BitOr => Some(Lit::Int(a | b)),
+                    BinOp::BitXor => Some(Lit::Int(a ^ b)),
+                    BinOp::Shl => u32::try_from(b)
+                        .ok()
+                        .filter(|n| *n < 64)
+                        .map(|n| Lit::Int(a << n)),
+                    BinOp::Shr => u32::try_from(b)
+                        .ok()
+                        .filter(|n| *n < 64)
+                        .map(|n| Lit::Int(a >> n)),
                     BinOp::And | BinOp::Or => None,
                 },
                 (Lit::Bool(a), Lit::Bool(b)) => match op {
@@ -1980,6 +2008,11 @@ fn describe_clause(e: &Expr) -> String {
                 BinOp::GtEq => ">=",
                 BinOp::And => "&&",
                 BinOp::Or => "||",
+                BinOp::BitAnd => "&",
+                BinOp::BitOr => "|",
+                BinOp::BitXor => "^",
+                BinOp::Shl => "<<",
+                BinOp::Shr => ">>",
             };
             format!("{} {o} {}", describe_clause(lhs), describe_clause(rhs))
         }
@@ -3336,7 +3369,9 @@ pub fn declare_unit(
         // A built-in has no source span to point at, so "first defined here" would aim
         // at byte zero. Said plainly instead. Built-ins are not a module's definitions,
         // so no visibility rule makes this one legal.
-        if method.is_none() && Intrinsic::by_name(&f.name).is_some() {
+        if method.is_none()
+            && (Intrinsic::by_name(&f.name).is_some() || CONVERSIONS.contains(&f.name.as_str()))
+        {
             errors.push(
                 Diagnostic::error(
                     codes::DUPLICATE_FUNCTION,
@@ -3706,6 +3741,9 @@ pub fn check_unit(
     let result = unit
         .prelude
         .and_then(|m| res.enums().declared(m, nazm_sema::prelude::RESULT));
+    let option = unit
+        .prelude
+        .and_then(|m| res.enums().declared(m, nazm_sema::prelude::OPTION));
     let impl_modules = impl_scope(unit, res);
     let mut c = Checker {
         res,
@@ -3719,6 +3757,7 @@ pub fn check_unit(
         return_type: None,
         return_span: None,
         result,
+        option,
         scope_depth: 0,
         loop_depth: 0,
         type_scope: Vec::new(),
@@ -6310,8 +6349,15 @@ impl Checker<'_> {
     /// The first part of a clause a contract may not contain (N87), with what it is.
     fn impure_clause(&self, e: &Expr) -> Option<(Span, &'static str)> {
         match e {
-            Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } | Expr::Var { .. } => None,
-            Expr::Neg { operand, .. } | Expr::Not { operand, .. } => self.impure_clause(operand),
+            Expr::Int { .. }
+            | Expr::WideInt { .. }
+            | Expr::Float { .. }
+            | Expr::Bool { .. }
+            | Expr::Str { .. }
+            | Expr::Var { .. } => None,
+            Expr::Neg { operand, .. }
+            | Expr::Not { operand, .. }
+            | Expr::BitNot { operand, .. } => self.impure_clause(operand),
             Expr::Binary { lhs, rhs, .. } => {
                 self.impure_clause(lhs).or_else(|| self.impure_clause(rhs))
             }
@@ -6834,7 +6880,14 @@ impl Checker<'_> {
     /// mismatch.
     fn check_expr(&mut self, e: &Expr, expected: Option<Type>) -> Completion {
         match e {
-            Expr::Int { .. } => Completion::Value(Type::Int),
+            Expr::Int { value, span } => {
+                Completion::Value(self.integer_literal(i128::from(*value), *span, expected))
+            }
+            Expr::WideInt { value, span } => {
+                Completion::Value(self.integer_literal(i128::from(*value), *span, expected))
+            }
+            // `Float32` where one is expected, `Float64` everywhere else (Gate 2).
+            Expr::Float { span, .. } => Completion::Value(self.float_literal(*span, expected)),
             Expr::Bool { .. } => Completion::Value(Type::Bool),
             Expr::Str { .. } => Completion::Value(Type::Str),
 
@@ -6877,17 +6930,12 @@ impl Checker<'_> {
 
             Expr::Neg {
                 operand, op_span, ..
-            } => {
-                let t = self.value_type(operand, Some(Type::Int));
-                if t != Type::Int {
-                    self.errors.push(Diagnostic::error(
-                        codes::INVALID_OPERANDS,
-                        *op_span,
-                        format!("`-` applies to `Int`, but this is `{}`", self.show(t)),
-                    ));
-                }
-                Completion::Value(Type::Int)
-            }
+            } => Completion::Value(self.check_negation(operand, *op_span, expected)),
+
+            // `~x` (Gate 2): the complement of an integer of any width.
+            Expr::BitNot {
+                operand, op_span, ..
+            } => Completion::Value(self.check_complement(operand, *op_span, expected)),
 
             Expr::Not {
                 operand, op_span, ..
@@ -6909,21 +6957,7 @@ impl Checker<'_> {
                 rhs,
                 op_span,
                 ..
-            } => {
-                let lt = self.value_type(lhs, None);
-                let rt = self.value_type(rhs, None);
-                Completion::Value(self.check_binary(
-                    &BinaryCheck {
-                        op: *op,
-                        lt,
-                        rt,
-                        op_span: *op_span,
-                        lhs_span: lhs.span(),
-                        rhs_span: rhs.span(),
-                    },
-                    expected,
-                ))
-            }
+            } => Completion::Value(self.check_binary_expr(*op, lhs, rhs, *op_span, expected)),
 
             Expr::Call {
                 qualifier,
@@ -6946,6 +6980,19 @@ impl Checker<'_> {
                         *span,
                         expected,
                     ));
+                }
+                // `UInt8(x)`, `try_convert[T](x)` and its kin (Gate 2): a numeric conversion,
+                // where no function of the name is in scope.
+                if qualifier.is_none() {
+                    if let Some(t) = self.maybe_conversion(
+                        callee,
+                        *callee_span,
+                        type_args.as_deref(),
+                        args,
+                        *span,
+                    ) {
+                        return Completion::Value(t);
+                    }
                 }
                 // `m::f` is looked up as one key (N49); everything below names it as written.
                 let key = written_key(qualifier.as_ref(), callee);
@@ -7742,6 +7789,23 @@ impl Checker<'_> {
         for t in &settled {
             self.mention(*t);
         }
+        // A generic numeric built-in's `T` is in its class (Gate 2): `count_ones` takes an
+        // integer, `float_sqrt` a float.
+        if let ParamOwner::Builtin(i) = owner {
+            if let (Some(class), Some(t)) = (i.requires(), settled.first().copied()) {
+                if !class.admits(t) {
+                    self.errors.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        at,
+                        format!(
+                            "`{name}` applies to {}, and this is `{}`",
+                            class.describe(),
+                            self.show(t)
+                        ),
+                    ));
+                }
+            }
+        }
         // The one generic built-in that makes a `Chan[T]` from a written `T` (N53).
         if owner == ParamOwner::Builtin(Intrinsic::ChanNewOf) {
             if let Some(d) = settled
@@ -7931,14 +7995,19 @@ impl Checker<'_> {
             rhs_span,
         } = *b;
         let ok = match op {
-            // Arithmetic is `Int` only. No string concatenation in v0.1, and `+` on two
-            // `Bool`s is a mistake rather than something to define.
+            // Arithmetic is on two numbers of **one** type (Gate 2; `Int` only before it). No
+            // string concatenation, and `+` on two `Bool`s is a mistake rather than something
+            // to define. Nothing converts: `Int + UInt8` is refused.
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
-                lt == Type::Int && rt == Type::Int
+                lt == rt && lt.num().is_some()
             }
-            // Ordering is `Int` only: comparing strings needs a collation decision, and
+            // Ordering is numeric only: comparing strings needs a collation decision, and
             // ordering booleans is almost always a mistake.
-            BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => lt == Type::Int && rt == Type::Int,
+            BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => lt == rt && lt.num().is_some(),
+            // The bit operators (Gate 2): two integers of one type, or for a shift an integer
+            // and an `Int` amount.
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => lt == rt && lt.is_integer(),
+            BinOp::Shl | BinOp::Shr => lt.is_integer() && rt == Type::Int,
             // Equality needs **one** type — two records with identical fields are two
             // types, and nothing converts — and that type must have equality, which is
             // derived rather than listed (`docs/spec.md`, *Equality is derived*, N13).
@@ -8006,6 +8075,8 @@ impl Checker<'_> {
             // fiction. Adopt what the context wanted instead.
             return expected.unwrap_or(if op.is_comparison() || op.is_logical() {
                 Type::Bool
+            } else if lt.num().is_some() {
+                lt
             } else {
                 Type::Int
             });
@@ -8014,7 +8085,302 @@ impl Checker<'_> {
         if op.is_comparison() || op.is_logical() {
             Type::Bool
         } else {
-            Type::Int
+            lt
         }
+    }
+
+    /// A float literal's type (Gate 2): `Float32` where one is expected, `Float64` everywhere else.
+    #[inline(never)]
+    fn float_literal(&mut self, span: Span, expected: Option<Type>) -> Type {
+        if expected == Some(Type::Num(NumKind::F32)) {
+            self.res
+                .record_numeric(span, NumericFact::Literal(Type::Num(NumKind::F32)));
+            Type::Num(NumKind::F32)
+        } else {
+            Type::Num(NumKind::F64)
+        }
+    }
+
+    /// `-operand` (Gate 2 widened it to every numeric type). Its own function, out of
+    /// [`Self::check_expr`]: that one recurses once per nesting level, and its frame is what
+    /// bounds how deep a program may nest before the checker's stack runs out.
+    #[inline(never)]
+    fn check_negation(&mut self, operand: &Expr, op_span: Span, expected: Option<Type>) -> Type {
+        // `-128` written where an `Int8` is expected is one literal, judged whole.
+        if let Expr::Int { value, span } = operand {
+            if let Some(k) = expected.and_then(Type::num).filter(|k| k.is_integer()) {
+                if k != NumKind::I64 {
+                    return self.integer_literal(-i128::from(*value), *span, expected);
+                }
+            }
+        }
+        let hint = expected.filter(|t| t.num().is_some()).or(Some(Type::Int));
+        let t = self.value_type(operand, hint);
+        if t.num().is_none() {
+            self.errors.push(Diagnostic::error(
+                codes::INVALID_OPERANDS,
+                op_span,
+                format!("`-` applies to a number, but this is `{}`", self.show(t)),
+            ));
+            return Type::Int;
+        }
+        t
+    }
+
+    /// `~operand` (Gate 2), out of [`Self::check_expr`] for the reason [`Self::check_negation`] is.
+    #[inline(never)]
+    fn check_complement(&mut self, operand: &Expr, op_span: Span, expected: Option<Type>) -> Type {
+        let hint = expected.filter(|t| t.is_integer()).or(Some(Type::Int));
+        let t = self.value_type(operand, hint);
+        if !t.is_integer() {
+            self.errors.push(Diagnostic::error(
+                codes::INVALID_OPERANDS,
+                op_span,
+                format!("`~` applies to an integer, but this is `{}`", self.show(t)),
+            ));
+            return Type::Int;
+        }
+        t
+    }
+
+    /// A binary operator's operands and result, out of [`Self::check_expr`] for the reason
+    /// [`Self::check_negation`] is. A literal takes the type the other operand has (Gate 2): `x + 1`
+    /// and `1 + x` with `x: UInt8` are both `UInt8` arithmetic. A shift's amount is an `Int`.
+    #[inline(never)]
+    fn check_binary_expr(
+        &mut self,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        op_span: Span,
+        expected: Option<Type>,
+    ) -> Type {
+        let shift = matches!(op, BinOp::Shl | BinOp::Shr);
+        let hint = if op.is_comparison() || op.is_logical() {
+            None
+        } else {
+            expected.filter(|t| t.num().is_some())
+        };
+        let (lt, rt) = if shift {
+            let lt = self.value_type(lhs, hint.filter(|t| t.is_integer()));
+            let rt = self.value_type(rhs, Some(Type::Int));
+            (lt, rt)
+        } else if is_number_literal(lhs) && !is_number_literal(rhs) {
+            let rt = self.value_type(rhs, hint);
+            let lt = self.value_type(lhs, Some(rt).filter(|t| t.num().is_some()).or(hint));
+            (lt, rt)
+        } else {
+            let lt = self.value_type(lhs, hint);
+            let rt = self.value_type(rhs, Some(lt).filter(|t| t.num().is_some()).or(hint));
+            (lt, rt)
+        };
+        if shift {
+            self.refuse_constant_shift(lt, rhs);
+        }
+        self.check_binary(
+            &BinaryCheck {
+                op,
+                lt,
+                rt,
+                op_span,
+                lhs_span: lhs.span(),
+                rhs_span: rhs.span(),
+            },
+            expected,
+        )
+    }
+
+    /// A numeric conversion's type, where `callee` names one and no function of that name is
+    /// in scope; `None` for every other call (Gate 2).
+    #[inline(never)]
+    fn maybe_conversion(
+        &mut self,
+        callee: &str,
+        at: Span,
+        written: Option<&[TypeName]>,
+        args: &[Expr],
+        span: Span,
+    ) -> Option<Type> {
+        if self.env.contains(callee) {
+            return None;
+        }
+        let mode = match callee {
+            "try_convert" => ConvertMode::Try,
+            "wrap_convert" => ConvertMode::Wrap,
+            "saturate_convert" => ConvertMode::Saturate,
+            name if NumKind::by_name(name).is_some() => ConvertMode::Exact,
+            _ => return None,
+        };
+        Some(self.check_conversion(callee, at, written, args, span, mode))
+    }
+
+    /// An integer literal's type (Gate 2): the integer type expected, where one is, and `Int`
+    /// everywhere else — refused, by name, when its value does not fit that type.
+    #[inline(never)]
+    fn integer_literal(&mut self, v: i128, span: Span, expected: Option<Type>) -> Type {
+        let ty = match expected.and_then(Type::num) {
+            Some(k) if k.is_integer() => Type::of_num(k),
+            _ => Type::Int,
+        };
+        let k = ty.num().unwrap_or(NumKind::I64);
+        if NumVal::int(k, v).is_none() {
+            let (lo, hi) = k.int_range().unwrap_or((0, 0));
+            self.errors.push(
+                Diagnostic::error(
+                    codes::INTEGER_TOO_LARGE,
+                    span,
+                    format!("`{v}` does not fit in `{}`", k.name()),
+                )
+                .help(format!("`{}` holds {lo} to {hi}", k.name())),
+            );
+        }
+        if ty != Type::Int {
+            self.res.record_numeric(span, NumericFact::Literal(ty));
+        }
+        ty
+    }
+
+    /// A shift by a constant amount outside `0..width` (Gate 2): it would stop the program
+    /// every time it ran, so it is refused where it is written (`N0617`).
+    fn refuse_constant_shift(&mut self, lt: Type, amount: &Expr) {
+        let Some(k) = lt.num().filter(|k| k.is_integer()) else {
+            return;
+        };
+        let n = match amount {
+            Expr::Int { value, .. } => i128::from(*value),
+            Expr::Neg { operand, .. } => match operand.as_ref() {
+                Expr::Int { value, .. } => -i128::from(*value),
+                _ => return,
+            },
+            _ => return,
+        };
+        if n < 0 || n >= i128::from(k.bits()) {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::SHIFT_AMOUNT_REFUSED,
+                    amount.span(),
+                    format!("`{}` cannot be shifted by {n}", k.name()),
+                )
+                .help(format!(
+                    "a shift's amount is 0 to {} for a `{}`; a larger or negative one stops \
+                     the program (`N0412`) rather than being masked",
+                    k.bits() - 1,
+                    k.name()
+                )),
+            );
+        }
+    }
+
+    /// A numeric conversion (Gate 2): `T(x)` exactly, or `try_convert[T](x)`,
+    /// `wrap_convert[T](x)`, `saturate_convert[T](x)`. `docs/general-purpose.md` §1–§2.
+    fn check_conversion(
+        &mut self,
+        name: &str,
+        at: Span,
+        written: Option<&[TypeName]>,
+        args: &[Expr],
+        span: Span,
+        mode: ConvertMode,
+    ) -> Type {
+        let to = if mode == ConvertMode::Exact {
+            if written.is_some() {
+                self.errors
+                    .push(not_generic(name, "a conversion, not generic", at));
+            }
+            NumKind::by_name(name).map_or(Type::Int, Type::of_num)
+        } else {
+            match written {
+                Some([one]) => {
+                    let t = self.resolve_written_type(one);
+                    if t.num().is_none() {
+                        self.errors.push(Diagnostic::error(
+                            codes::TYPE_MISMATCH,
+                            at,
+                            format!(
+                                "`{name}` converts to a numeric type, and `{}` is not one",
+                                self.show(t)
+                            ),
+                        ));
+                        Type::Int
+                    } else {
+                        t
+                    }
+                }
+                _ => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::CANNOT_INFER_TYPE_ARGUMENT,
+                            at,
+                            format!("`{name}` needs the type it converts to, written"),
+                        )
+                        .help(format!("write it as `{name}[UInt8](x)`")),
+                    );
+                    Type::Int
+                }
+            }
+        };
+        if args.len() != 1 {
+            self.errors.push(Diagnostic::error(
+                codes::WRONG_ARGUMENT_COUNT,
+                span,
+                format!(
+                    "`{name}` takes 1 argument, but {} {} given",
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" }
+                ),
+            ));
+        }
+        // A literal converted exactly is that literal, written at the target type.
+        let hint = (mode == ConvertMode::Exact).then_some(to);
+        let mut from = Type::Int;
+        for (i, a) in args.iter().enumerate() {
+            let t = self.value_type(a, hint);
+            if i == 0 {
+                from = t;
+            }
+        }
+        if from.num().is_none() {
+            if let Some(a) = args.first() {
+                self.errors.push(Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    a.span(),
+                    format!(
+                        "`{name}` converts a number, but this is `{}`",
+                        self.show(from)
+                    ),
+                ));
+            }
+        } else if mode == ConvertMode::Wrap && !(from.is_integer() && to.is_integer()) {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    at,
+                    format!(
+                        "`wrap_convert` is between integer types, and this converts `{}` to `{}`",
+                        self.show(from),
+                        self.show(to)
+                    ),
+                )
+                .help("a float converts by `T(x)`, `try_convert` or `saturate_convert`"),
+            );
+        }
+        let result = if mode == ConvertMode::Try {
+            match self.option {
+                Some(o) => self.res.types_mut().apply_enum(o, vec![to]),
+                None => to,
+            }
+        } else {
+            to
+        };
+        self.res.record_numeric(
+            at,
+            NumericFact::Convert {
+                to,
+                from,
+                mode,
+                result,
+            },
+        );
+        result
     }
 }

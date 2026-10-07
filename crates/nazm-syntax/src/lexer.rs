@@ -30,6 +30,10 @@ pub enum TokenKind {
     /// than `i64::MAX` — so the lexer cannot produce it and the negation has to fold with
     /// it in the parser. Rejecting it here would make the smallest `Int` unwritable.
     IntTooLarge(String),
+    /// A floating-point literal (Gate 2): digits, a `.` and digits, and/or an exponent, kept as
+    /// written with any `_` removed. Its value — `Float64` or `Float32` — is decided where its
+    /// type is, so the lexer does not round it. `docs/general-purpose.md` §1.
+    Float(String),
     Str(String),
     Ident(String),
 
@@ -115,6 +119,13 @@ pub enum TokenKind {
     LtEq,
     Gt,
     GtEq,
+    /// `&`, `|`, `^`, `~`, `<<` and `>>` — the bit operators (Gate 2), on integers only.
+    Amp,
+    Pipe,
+    Caret,
+    Tilde,
+    Shl,
+    Shr,
 
     Eof,
 }
@@ -130,6 +141,7 @@ impl TokenKind {
     /// not compile until someone has touched both.
     pub const ALL: &'static [Self] = &[
         Self::Int(0),
+        Self::Float(String::new()),
         Self::Str(String::new()),
         Self::Ident(String::new()),
         Self::Fn,
@@ -181,6 +193,12 @@ impl TokenKind {
         Self::LtEq,
         Self::Gt,
         Self::GtEq,
+        Self::Amp,
+        Self::Pipe,
+        Self::Caret,
+        Self::Tilde,
+        Self::Shl,
+        Self::Shr,
     ];
 
     /// How this token is spelled in source, for the ones with a fixed spelling.
@@ -194,7 +212,12 @@ impl TokenKind {
     #[must_use]
     pub const fn written(&self) -> Option<&'static str> {
         match self {
-            Self::Int(_) | Self::IntTooLarge(_) | Self::Str(_) | Self::Ident(_) | Self::Eof => None,
+            Self::Int(_)
+            | Self::IntTooLarge(_)
+            | Self::Float(_)
+            | Self::Str(_)
+            | Self::Ident(_)
+            | Self::Eof => None,
             Self::Fn => Some("fn"),
             Self::Let => Some("let"),
             Self::If => Some("if"),
@@ -244,6 +267,12 @@ impl TokenKind {
             Self::LtEq => Some("<="),
             Self::Gt => Some(">"),
             Self::GtEq => Some(">="),
+            Self::Amp => Some("&"),
+            Self::Pipe => Some("|"),
+            Self::Caret => Some("^"),
+            Self::Tilde => Some("~"),
+            Self::Shl => Some("<<"),
+            Self::Shr => Some(">>"),
         }
     }
 
@@ -253,6 +282,7 @@ impl TokenKind {
         match self {
             Self::Int(v) => format!("integer `{v}`"),
             Self::IntTooLarge(d) => format!("integer `{d}`"),
+            Self::Float(d) => format!("number `{d}`"),
             Self::Str(_) => "string literal".to_owned(),
             Self::Ident(n) => format!("`{n}`"),
             Self::Fn => "`fn`".to_owned(),
@@ -304,6 +334,12 @@ impl TokenKind {
             Self::LtEq => "`<=`".to_owned(),
             Self::Gt => "`>`".to_owned(),
             Self::GtEq => "`>=`".to_owned(),
+            Self::Amp => "`&`".to_owned(),
+            Self::Pipe => "`|`".to_owned(),
+            Self::Caret => "`^`".to_owned(),
+            Self::Tilde => "`~`".to_owned(),
+            Self::Shl => "`<<`".to_owned(),
+            Self::Shr => "`>>`".to_owned(),
             Self::Eof => "end of file".to_owned(),
         }
     }
@@ -613,10 +649,77 @@ pub(crate) fn scan_one(
         emit!(Lexeme::Comment(Span::new(file, at(start), at(i))));
     }
 
-    // Numbers
+    // Numbers: decimal, `0x`, `0o` and `0b` integers, and decimal floating point (Gate 2).
     if c.is_ascii_digit() {
+        let radix = match (c, byte(i + 1)) {
+            (b'0', Some(b'x' | b'X')) => 16,
+            (b'0', Some(b'o' | b'O')) => 8,
+            (b'0', Some(b'b' | b'B')) => 2,
+            _ => 10,
+        };
+        if radix != 10 {
+            i += 2;
+            let digits_start = i;
+            while byte(i).is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                i += 1;
+            }
+            let digits: String = text
+                .get(digits_start..i)
+                .unwrap_or_default()
+                .chars()
+                .filter(|c| *c != '_')
+                .collect();
+            let span = Span::new(file, at(start), at(i));
+            match u128::from_str_radix(&digits, radix) {
+                Ok(v) => match i64::try_from(v) {
+                    Ok(v) => emit!(Lexeme::Token(Token {
+                        kind: TokenKind::Int(v),
+                        span,
+                    })),
+                    // Too large for `Int`, and perhaps right for a `UInt64`: the checker
+                    // judges it against the type it is written as, in decimal like any other.
+                    Err(_) => emit!(Lexeme::Token(Token {
+                        kind: TokenKind::IntTooLarge(v.to_string()),
+                        span,
+                    })),
+                },
+                Err(_) => {
+                    let name = match radix {
+                        16 => "hexadecimal",
+                        8 => "octal",
+                        _ => "binary",
+                    };
+                    errors.push(Diagnostic::error(
+                        codes::UNKNOWN_CHARACTER,
+                        span,
+                        format!("this is not a {name} integer"),
+                    ));
+                    emit!(Lexeme::Invalid(span));
+                }
+            }
+        }
         while byte(i).is_some_and(|b| b.is_ascii_digit() || b == b'_') {
             i += 1;
+        }
+        // A fraction needs a digit after the `.`, so `1.f` stays a projection and `x.0` is
+        // never a number; an exponent needs a digit after its `e` and optional sign.
+        let mut float = false;
+        if byte(i) == Some(b'.') && byte(i + 1).is_some_and(|b| b.is_ascii_digit()) {
+            float = true;
+            i += 1;
+            while byte(i).is_some_and(|b| b.is_ascii_digit() || b == b'_') {
+                i += 1;
+            }
+        }
+        if matches!(byte(i), Some(b'e' | b'E')) {
+            let sign = usize::from(matches!(byte(i + 1), Some(b'+' | b'-')));
+            if byte(i + 1 + sign).is_some_and(|b| b.is_ascii_digit()) {
+                float = true;
+                i += 1 + sign;
+                while byte(i).is_some_and(|b| b.is_ascii_digit() || b == b'_') {
+                    i += 1;
+                }
+            }
         }
         let raw: String = text
             .get(start..i)
@@ -624,6 +727,12 @@ pub(crate) fn scan_one(
             .chars()
             .filter(|c| *c != '_')
             .collect();
+        if float {
+            emit!(Lexeme::Token(Token {
+                kind: TokenKind::Float(raw),
+                span: Span::new(file, at(start), at(i)),
+            }));
+        }
         match raw.parse::<i64>() {
             Ok(v) => emit!(Lexeme::Token(Token {
                 kind: TokenKind::Int(v),
@@ -731,6 +840,8 @@ pub(crate) fn scan_one(
         Some((b'&', b'&')) => (Some(TokenKind::AmpAmp), 2),
         Some((b':', b':')) => (Some(TokenKind::ColonColon), 2),
         Some((b'|', b'|')) => (Some(TokenKind::PipePipe), 2),
+        Some((b'<', b'<')) => (Some(TokenKind::Shl), 2),
+        Some((b'>', b'>')) => (Some(TokenKind::Shr), 2),
         _ => (None, 0),
     };
     if let Some(kind) = kind {
@@ -762,6 +873,10 @@ pub(crate) fn scan_one(
         b'%' => Some(TokenKind::Percent),
         b'<' => Some(TokenKind::Lt),
         b'>' => Some(TokenKind::Gt),
+        b'&' => Some(TokenKind::Amp),
+        b'|' => Some(TokenKind::Pipe),
+        b'^' => Some(TokenKind::Caret),
+        b'~' => Some(TokenKind::Tilde),
         _ => None,
     };
     match single {

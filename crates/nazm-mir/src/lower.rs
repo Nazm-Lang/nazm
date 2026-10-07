@@ -843,6 +843,10 @@ impl Fx<'_> {
             Some(cir::Const::Int(v)) => Const::Int(*v),
             Some(cir::Const::Bool(v)) => Const::Bool(*v),
             Some(cir::Const::Str(b)) => Const::Str(b.clone()),
+            Some(cir::Const::Num { kind, bits }) => Const::Num {
+                kind: *kind,
+                bits: *bits,
+            },
             None => {
                 self.fail(at, "a constant missing from its function's table");
                 Const::Int(0)
@@ -1257,8 +1261,13 @@ impl Fx<'_> {
             cir::ExprKind::CallIndirect { callee, args, .. } => {
                 Self::hazardous(callee) || args.iter().any(Self::hazardous)
             }
-            cir::ExprKind::Neg(x) => Self::hazardous(x),
-            cir::ExprKind::Arith { lhs, rhs, .. } | cir::ExprKind::Compare { lhs, rhs, .. } => {
+            cir::ExprKind::Neg(x)
+            | cir::ExprKind::Complement(x)
+            | cir::ExprKind::Convert { operand: x, .. }
+            | cir::ExprKind::Fits { operand: x, .. } => Self::hazardous(x),
+            cir::ExprKind::Arith { lhs, rhs, .. }
+            | cir::ExprKind::Bits { lhs, rhs, .. }
+            | cir::ExprKind::Compare { lhs, rhs, .. } => {
                 Self::hazardous(lhs) || Self::hazardous(rhs)
             }
             cir::ExprKind::Call { args, .. }
@@ -1377,6 +1386,48 @@ impl Fx<'_> {
                 let (a, b) = two(ops);
                 self.write(dst, Rvalue::Arith(*op, a, b), at);
                 self.release_all(held, at);
+            }
+            cir::ExprKind::Bits { op, lhs, rhs } => {
+                let Some((ops, held)) = self.operands(&[(**lhs).clone(), (**rhs).clone()]) else {
+                    return;
+                };
+                let (a, b) = two(ops);
+                self.write(dst, Rvalue::Bits(*op, a, b), at);
+                self.release_all(held, at);
+            }
+            cir::ExprKind::Complement(x) => {
+                let Some((a, h)) = self.operand(x, false) else {
+                    return;
+                };
+                self.write(dst, Rvalue::Complement(a), at);
+                self.release(h, at);
+            }
+            cir::ExprKind::Convert { mode, operand } => {
+                let to = match e.ty {
+                    Some(t) => self.ty(t, at),
+                    None => return,
+                };
+                let Some((a, h)) = self.operand(operand, false) else {
+                    return;
+                };
+                self.write(
+                    dst,
+                    Rvalue::Convert {
+                        mode: *mode,
+                        to,
+                        operand: a,
+                    },
+                    at,
+                );
+                self.release(h, at);
+            }
+            cir::ExprKind::Fits { to, operand } => {
+                let to = self.ty(*to, at);
+                let Some((a, h)) = self.operand(operand, false) else {
+                    return;
+                };
+                self.write(dst, Rvalue::Fits { to, operand: a }, at);
+                self.release(h, at);
             }
             cir::ExprKind::Compare {
                 op,
@@ -1840,7 +1891,7 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         | Type::ChanOf(_)
         | Type::Vec(_)
         | Type::Fn(_) => true,
-        Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) => false,
+        Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) | Type::Num(_) => false,
         Type::Record(id) => res
             .records()
             .get(id)
