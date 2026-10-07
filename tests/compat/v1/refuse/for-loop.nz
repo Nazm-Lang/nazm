@@ -1,0 +1,5 @@
+// expect: N0101
+// There is no `for`; it is refused by name (spec: not-in-v0-3).
+fn main() -> Int {
+    for x { 1 }
+}

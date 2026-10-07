@@ -1,0 +1,13 @@
+// Arguments are evaluated left to right, observably (spec: evaluation-order).
+fn say(out: OutCap, n: Int) -> Int ! { io } {
+    print(str_concat(int_to_str(n), "\n"));
+    n
+}
+
+fn sub(a: Int, b: Int) -> Int ! {} {
+    a - b
+}
+
+fn main(out: OutCap) -> Int ! { io } {
+    sub(say(out, 5), say(out, 2))
+}

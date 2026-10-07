@@ -1,0 +1,12 @@
+// expect: N0343
+// `match` must handle every variant (spec: enums, exhaustiveness).
+enum E {
+    A,
+    B,
+}
+
+fn main() -> Int {
+    match E.A() {
+        E.A() => 1,
+    }
+}

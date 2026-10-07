@@ -1,0 +1,6 @@
+// expect: N0372
+// A path read out of a file may not be written to (spec: provenance, the restricted flow).
+fn main(io: IoCap) -> Int ! { io } {
+    let target = read_file("config.txt");
+    write_file(target, "data")
+}

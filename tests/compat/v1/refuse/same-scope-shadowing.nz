@@ -1,0 +1,7 @@
+// expect: N0202
+// Shadowing in the same scope is refused (spec: shadowing).
+fn main() -> Int {
+    let x = 1;
+    let x = 2;
+    x
+}

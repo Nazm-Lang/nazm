@@ -1,0 +1,6 @@
+// expect: N0313
+// Code after `return` is an error (spec: unreachable-code).
+fn main() -> Int {
+    return 1;
+    2
+}

@@ -1,0 +1,9 @@
+// expect: N0367
+// The effects are the compiler's; there are no user-defined ones (spec: effects).
+fn f() -> Int ! { alloc } {
+    0
+}
+
+fn main() -> Int {
+    f()
+}

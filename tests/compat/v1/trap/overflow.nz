@@ -1,0 +1,6 @@
+// expect: N0400
+// Overflow traps, in every build (spec: overflow).
+fn main() -> Int {
+    let big = 9223372036854775807;
+    big + 1
+}

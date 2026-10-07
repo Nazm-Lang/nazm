@@ -1,0 +1,13 @@
+// expect: N0337
+// A public item may not name a private type (spec: records, visibility).
+struct Secret {
+    value: Int,
+}
+
+pub fn get() -> Secret {
+    Secret(value: 1)
+}
+
+fn main() -> Int {
+    get().value
+}
