@@ -26,6 +26,10 @@ found only by reading all of it.
   arguments, as every `name[…]` did before Gate 2.
   Constants (Gate 2) are module-private (`pub const` is refused) and are computed from literals,
   other constants, operators and numeric conversions only.
+- Bytes and text (Gate 2): a `Bytes` does not cross into a task or the C boundary yet, and
+  there is no view of an array or a `Str` as `Bytes` without a copy (`bytes_from_str`). `Text` has
+  no grapheme, normalisation, case-mapping or locale operations, and `Text(s)` validates every
+  time — nothing remembers that a `Str` was checked.
 - Numbers (Gate 2): nothing converts implicitly — every mixed operation is written with a
   conversion — and a local has no type annotation, so a typed constant is written `UInt8(250)`.
   The C library's `float_sin` and its kin are as accurate as the host's library and may differ
