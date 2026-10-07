@@ -30,10 +30,12 @@ struct Inventory {
     version: &'static str,
     /// What `nazm build` has been verified against, verbatim from the emitter.
     native_target: &'static str,
+    /// Every built-in type, from the checker's own vocabulary. Capability types are in it since
+    /// Gate 1-C1, where until then only `IoCap` and `SpawnCap` were: new values in an array, which
+    /// `nazm.capabilities/1` allows.
     types: Vec<&'static str>,
-    /// Every capability type — the authority a parameter can carry — whether or not it is in
-    /// `types` (N74): `types` is the checker's fixed vocabulary, unchanged since it entered the
-    /// checker's identity.
+    /// Every capability type — the authority a parameter can carry (N74). Each is also in
+    /// `types`; this list says which of them are authority.
     authority: Vec<&'static str>,
     /// Every target `nazm build --target` accepts.
     targets: Vec<String>,
@@ -234,7 +236,7 @@ fn inventory() -> Inventory {
         // vocabulary — it exists in one program — and listing one here would confuse an
         // inventory of what the *compiler* has with an inventory of what a *source file*
         // declares. `docs/spec.md` keeps the two apart.
-        types: Type::ALL.iter().filter_map(|t| t.builtin_name()).collect(),
+        types: Type::every_builtin_name(),
         authority: nazm_core::sema::CapabilityKind::ALL
             .iter()
             .map(|k| k.type_name())
@@ -275,9 +277,8 @@ fn render(i: &Inventory) {
     println!("nazm {}", i.version);
     println!("native target: {}", i.native_target);
     println!();
-    // The whole list a program can write, capability types included: the JSON keeps `types`
-    // (fixed by `nazm.capabilities/1`) and `authority` apart, but a person reads `types:` as
-    // every type, and until 1.0 it stopped at `IoCap, SpawnCap`.
+    // The whole list a program can write, from the checker's vocabulary; until 1.0 it stopped
+    // at `IoCap, SpawnCap`.
     println!("types: {}", Type::every_builtin_name().join(", "));
     println!("authority: {}", i.authority.join(", "));
     println!("targets: {}", i.targets.join(", "));

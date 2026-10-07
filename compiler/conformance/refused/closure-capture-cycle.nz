@@ -1,0 +1,14 @@
+// expect: N0616
+// A closure capturing a `Vec` whose elements hold a function value (Gate 1-C1). `Vec[fn(…)]` is
+// outside this compiler's subset — its type arguments are never function types — so the cycle is
+// written through a record, as it can be.
+struct Job {
+    run: fn(Int) -> Int,
+}
+
+fn main() -> Int {
+    let jobs = vec_new[Job]();
+    let f = fn(x: Int) -> Int { vec_len(jobs) + x };
+    vec_push(jobs, Job(run: f));
+    0
+}

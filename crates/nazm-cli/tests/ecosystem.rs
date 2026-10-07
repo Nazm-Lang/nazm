@@ -429,8 +429,8 @@ fn the_capability_inventory_names_every_authority_target_and_command() {
 }
 
 /// The human `types:` line lists every built-in type a program can write, capability types
-/// included, each once. Until 1.0 it printed the checker's vocabulary alone and stopped at
-/// `IoCap, SpawnCap`; the JSON keeps `types` and `authority` apart, as its schema fixes.
+/// included, each once, and the JSON `types` is the same list. Until 1.0 both stopped at
+/// `IoCap, SpawnCap`.
 #[test]
 fn the_human_types_line_names_every_capability_type_once() {
     let d = tempfile::tempdir().unwrap();
@@ -461,9 +461,15 @@ fn the_human_types_line_names_every_capability_type_once() {
     }
     let v: serde_json::Value =
         serde_json::from_str(&ok(d.path(), &["capabilities", "--json"])).unwrap();
-    assert!(
-        !v["types"].as_array().unwrap().iter().any(|e| e == "OutCap"),
-        "the JSON `types` stays the checker's vocabulary"
+    let json: Vec<&str> = v["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e.as_str())
+        .collect();
+    assert_eq!(
+        json, types,
+        "the JSON `types` and the human line are one inventory"
     );
 }
 
@@ -507,7 +513,10 @@ fn every_command_has_its_own_help_naming_the_schema_it_prints() {
 fn the_help_and_version_name_the_release() {
     let d = tempfile::tempdir().unwrap();
     let version = ok(d.path(), &["--version"]);
-    assert_eq!(version.trim(), format!("nazm {}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        version.trim(),
+        format!("nazm {}", env!("CARGO_PKG_VERSION"))
+    );
     let help = ok(d.path(), &["--help"]);
     let language = env!("CARGO_PKG_VERSION")
         .rsplit_once('.')

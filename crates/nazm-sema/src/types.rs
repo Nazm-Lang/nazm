@@ -192,6 +192,11 @@ impl Type {
     /// Records and enums are not here and must not be: this is the fixed vocabulary every
     /// compilation has, and a user type exists only in the compilation that declared it.
     /// `nazm capabilities` reports from this, which is why it lists no user type.
+    ///
+    /// Every capability type is here since Gate 1-C1. It held `IoCap` and `SpawnCap` alone
+    /// from N37 to 1.0 while five more kinds arrived through [`Type::from_name`], so module
+    /// scopes — and with them the language service's completion — offered two of seven. It
+    /// is hashed into the checker's identity, so it moved with a semantic epoch (30).
     pub const ALL: &'static [Self] = &[
         Self::Int,
         Self::Bool,
@@ -201,6 +206,11 @@ impl Type {
         Self::Chan,
         Self::Cap(CapabilityKind::Io),
         Self::Cap(CapabilityKind::Spawn),
+        Self::Cap(CapabilityKind::Foreign),
+        Self::Cap(CapabilityKind::Vouch),
+        Self::Cap(CapabilityKind::Time),
+        Self::Cap(CapabilityKind::Mmio),
+        Self::Cap(CapabilityKind::Out),
     ];
 
     /// The written name of a **built-in** type, which is also how it is spelled in
@@ -306,25 +316,11 @@ impl Type {
         }
     }
 
-    /// Every built-in type a program can write, by name: [`Type::ALL`] in its order, then
-    /// each capability type it does not hold.
-    ///
-    /// [`Type::ALL`] is the checker's fixed vocabulary — module scopes are built from it and
-    /// the checker's identity hashes it — and has held two of the seven capability types
-    /// since before the other five existed, while [`Type::from_name`] reads all seven. A
-    /// person asking what they can write wants the seven, so the help text and
-    /// `nazm capabilities` list this rather than [`Type::ALL`]: until 1.0 both said `IoCap`
-    /// and `SpawnCap` and stopped.
+    /// Every built-in type a program can write, by name, in [`Type::ALL`]'s order: the one
+    /// inventory the help text, `nazm capabilities` and the language service read.
     #[must_use]
     pub fn every_builtin_name() -> Vec<&'static str> {
-        let mut names: Vec<&'static str> =
-            Self::ALL.iter().filter_map(|t| t.builtin_name()).collect();
-        for k in CapabilityKind::ALL {
-            if !names.contains(&k.type_name()) {
-                names.push(k.type_name());
-            }
-        }
-        names
+        Self::ALL.iter().filter_map(|t| t.builtin_name()).collect()
     }
 
     /// [`Type::every_builtin_name`], as help text writes a list of names.
@@ -367,6 +363,17 @@ mod tests {
             Type::every_builtin_name().len() * 2,
             "the help text lists a different number of types than there are"
         );
+    }
+
+    #[test]
+    fn every_capability_kind_is_a_built_in_type() {
+        for k in crate::CapabilityKind::ALL {
+            assert!(
+                Type::ALL.contains(&Type::Cap(k)),
+                "{} is a capability type the checker's vocabulary does not hold",
+                k.type_name()
+            );
+        }
     }
 
     #[test]
