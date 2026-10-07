@@ -142,7 +142,7 @@ const CONSTRUCTS: &[ConstructRow] = &[
         name: "modules: `use`, relative resolution, diamonds, cycles",
         interpreted: true,
         compiled: true,
-        evidence: "nazm-cli/tests/cli.rs; no visibility control (docs/spec.md)",
+        evidence: "nazm-cli/tests/cli.rs; private by default, `pub` exports (docs/spec.md, Visibility)",
     },
     ConstructRow {
         name: "structured concurrency: `scope`, `spawn`, `Chan`",
@@ -190,7 +190,8 @@ const CONSTRUCTS: &[ConstructRow] = &[
         name: "an iteration budget that stops a runaway loop",
         interpreted: true,
         compiled: false,
-        evidence: "stated in README.md: a compiled program has no budget and does not stop",
+        evidence: "docs/spec.md, The iteration and depth limits are the interpreter's: a compiled \
+                   program has no budget and does not stop",
     },
 ];
 

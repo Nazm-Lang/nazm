@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-agent-bench"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-core",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-bench"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1171,7 +1171,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-cache"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-iface",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-cir"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-sema",
@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-cli"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "clap",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-codegen-clif"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "cranelift-codegen",
@@ -1234,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-core"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "nazm-cir",
  "nazm-diag",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-diag"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "nazm-span",
  "serde",
@@ -1254,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-docs"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "serde",
@@ -1264,14 +1264,14 @@ dependencies = [
 
 [[package]]
 name = "nazm-formal"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "nazm-core",
 ]
 
 [[package]]
 name = "nazm-iface"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-sema",
@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-lir"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-diag",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-mcp"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "nazm-core",
  "nazm-docs",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-mir"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-cir",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-package"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-diag",
@@ -1332,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-repo"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-core",
@@ -1346,21 +1346,21 @@ dependencies = [
 
 [[package]]
 name = "nazm-runtime"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
 ]
 
 [[package]]
 name = "nazm-sema"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "nazm-span",
 ]
 
 [[package]]
 name = "nazm-service"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-core",
@@ -1374,11 +1374,11 @@ dependencies = [
 
 [[package]]
 name = "nazm-span"
-version = "0.0.1"
+version = "0.3.0"
 
 [[package]]
 name = "nazm-syntax"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "cstree",
  "nazm-diag",
@@ -1387,7 +1387,7 @@ dependencies = [
 
 [[package]]
 name = "nazm-tokens"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-core",
@@ -2489,7 +2489,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xtask"
-version = "0.0.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "nazm-docs",
