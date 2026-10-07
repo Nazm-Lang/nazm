@@ -10,6 +10,7 @@ mod claims;
 mod contained;
 mod evidence;
 mod gate;
+mod governance;
 mod guide;
 mod metadata;
 mod mutate;
@@ -224,6 +225,7 @@ fn run_checks() -> ExitCode {
         ("guide from grammar", guide::check()),
         ("docs corpus", check_docs_corpus()),
         ("performance claims", claims::check(&bench::root())),
+        ("agent governance", governance::check(&guide::root())),
     ])
 }
 
