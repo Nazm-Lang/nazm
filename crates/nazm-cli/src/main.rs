@@ -121,17 +121,16 @@ enum RuntimeAction {
 #[command(
     name = "nazm",
     about = "The Nazm programming language.",
-    long_about = "Nazm v0.3: an executable subset — functions, `let` and `let mut`, \
-                  `if`/`else`, `while` with `break` and `continue`, `return`, recursion, \
-                  arithmetic and comparison over Int, Bool and Str, the Ints and Strs \
-                  sequences, modules, file and output built-ins, and structured \
-                  concurrency (scope, spawn, Chan). No user-defined types, pattern \
-                  matching, generics, effects or floats yet; programs using them are \
-                  refused by name rather than misparsed. `nazm build` compiles a narrower \
-                  subset than `nazm run` — notably it refuses recursion. `nazm check` \
-                  reuses the result of checking an unchanged module; nothing else does, \
-                  and native compilation is not incremental. Run `nazm capabilities` for \
-                  this build's own answer. See docs/spec.md.",
+    long_about = "Nazm language v0.3, toolchain 0.3.0 — an experimental release. Records, \
+                  enums and `match`, first-order generics, traits and methods, `Result`, \
+                  `Option` and `?`, closures, modules and packages, declared effects, \
+                  capabilities and provenance, and structured concurrency (scope, spawn, \
+                  channels). `nazm run` interprets a program; `nazm build` compiles it \
+                  natively through LLVM or Cranelift, and the two are held to the same \
+                  results. Floating point, trait objects and effect handlers are not in \
+                  the language; a program using an absent construct is refused by name \
+                  rather than misparsed. Run `nazm capabilities` for this build's own \
+                  answer. See docs/spec.md and docs/stability.md.",
     version
 )]
 struct Cli {

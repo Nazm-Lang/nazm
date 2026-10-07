@@ -1,16 +1,33 @@
 # Nazm language specification
 
-**Status: this is not yet a specification — it is the list of decisions a specification
-has to make, with the ones already settled marked as such.**
+**Status: the specification of Nazm language v0.3, the executable language of the toolchain
+0.3.0 release.** It is normative for what it settles: a program's meaning under v0.3 is what
+the *Settled* sections say, and where the reference implementation disagrees with a settled
+section, that is a defect in one of them, not a second meaning. Version identities and what
+v0.x promises across releases are in [`stability.md`](stability.md).
 
-**The current executable language is v0.3.** Sections are versioned and kept in order, so
-a *Settled for v0.1* entry records what v0.1 decided, not what is true now; where a later
-version changed one, the earlier entry says so and points forward. Everything under *Open*
-is undecided.
+The document holds four kinds of text, and every section says which it is:
 
-Publishing the open questions before the answers is deliberate. Every one of them was
-either wrong or unstated in an earlier draft of the design, and the cost of discovering
-that after 150k lines of compiler is the entire reason this document exists first.
+| Kind | Where | Normative for v0.3? |
+| --- | --- | --- |
+| **Current language** | *Settled for v0.1*, *Settled for v0.2*, and the sections after them up to *Open* | yes — a later section or a marked correction governs an earlier one |
+| **Historical** | an entry or paragraph marked *Superseded*, *Corrected* or *Achieved*, kept with its original wording | no — it records what an earlier version decided and why |
+| **Design commitments** | *Settled*, directly below | they bind future design; where one names a mechanism v0.3 does not have, the commitment constrains how it is added, and v0.3 refuses the construct |
+| **Open / research** | *Open — later phases must settle these*, and *Non-goals* | no — undecided, or deliberately out of scope |
+
+Sections are versioned and kept in order, so a *Settled for v0.1* entry records what v0.1
+decided; where a later version changed one, the earlier entry says so and points forward.
+What v0.3 does not have is listed under *Not in v0.3*, and a program using any of it is
+refused by name. Ecosystem and domain support — targets, profiles, tools — is evidence rather
+than semantics, and lives in `capability-matrix.md` and `limitations.md`.
+
+*History.* Until R1 (2026-10-07) this paragraph read: "this is not yet a specification — it
+is the list of decisions a specification has to make, with the ones already settled marked as
+such." Publishing the open questions before the answers was deliberate: every one of them
+was either wrong or unstated in an earlier draft of the design, and the cost of discovering
+that after 150k lines of compiler is the entire reason this document exists first. The open
+questions are still here; what changed is that the settled part now describes a released
+language.
 
 ---
 
@@ -18,6 +35,14 @@ that after 150k lines of compiler is the entire reason this document exists firs
 <!-- id: settled -->
 
 These are design commitments. Changing one is a re-founding decision, not an edit.
+
+*Status for v0.3:* commitments, not a list of features. Items 1, 2, 6 and 7 hold of v0.3 as
+implemented. Item 3's parameter conventions beyond `let` are not in v0.3 — a mutable
+parameter is refused (*Not in v0.3*) — and no region calculus is exposed; item 4 is realised
+as declared and inferred effect sets with one effect parameter per function (*Effects*,
+*Effect parameters*); item 5 is realised as provenance with one restricted sink
+(*Provenance*). Where v0.3 has less, the commitment says how more may be added, not that it
+exists.
 
 1. **Source of truth is plain UTF-8 `.nz` files in git.** Content addressing applies to
    derived artifacts only. (`architecture.md` §3)
@@ -3522,6 +3547,13 @@ through `nazm_host.report`) — and imports only `nazm_host.state_get(index) -> 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, floating point. A
 program using any of them is rejected by name rather than misparsed into something else.
 
+**Corrected 2026-10-07, R1.** The N50 correction below says traits and methods "remain absent
+and are refused"; N78 added them, nominal and static (*Traits and methods — N78*, above).
+Trait objects and dynamic dispatch, effect handlers, user-defined effects and effect
+variables beyond one effect parameter per function remain absent. This list, with these
+corrections, is the current answer for v0.3; `limitations.md` names the narrower boundaries
+of what is present.
+
 **Corrected 2026-10-01, N50.** Function values and closures exist, specified above; traits and
 methods remain absent and are refused.
 
@@ -3561,6 +3593,10 @@ The original paragraph, unedited:
 
 ## Open — later phases must settle these
 <!-- id: open -->
+
+*Not normative.* Everything below this heading is undecided or research. Nothing in it
+describes what v0.3 does; where an item was later settled, it is struck through or marked
+*Settled by …* and points to the section that now governs.
 
 ### Source identity and definition identity
 <!-- id: open-identity -->
@@ -3725,6 +3761,12 @@ Required before `nazm test --backend=all` means anything:
 
 ## Non-goals for the current interpreter milestone
 <!-- id: non-goals -->
+
+*Historical.* This list was written for the first interpreter milestone and is kept as
+that milestone's record. Several items have since been built — a package manager (N46, N56),
+`comptime` as a command (N65) and one opt-in layout (N68) — and are specified above; its
+later paragraphs are history too. What v0.3 still leaves out is *Not in v0.3*, above, and
+`limitations.md`.
 
 Deliberately out of scope:
 
