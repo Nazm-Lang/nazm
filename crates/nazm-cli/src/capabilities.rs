@@ -275,7 +275,10 @@ fn render(i: &Inventory) {
     println!("nazm {}", i.version);
     println!("native target: {}", i.native_target);
     println!();
-    println!("types: {}", i.types.join(", "));
+    // The whole list a program can write, capability types included: the JSON keeps `types`
+    // (fixed by `nazm.capabilities/1`) and `authority` apart, but a person reads `types:` as
+    // every type, and until 1.0 it stopped at `IoCap, SpawnCap`.
+    println!("types: {}", Type::every_builtin_name().join(", "));
     println!("authority: {}", i.authority.join(", "));
     println!("targets: {}", i.targets.join(", "));
     println!("commands: {}", i.commands.join(", "));

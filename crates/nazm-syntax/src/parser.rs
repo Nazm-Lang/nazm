@@ -44,7 +44,7 @@ use crate::ast::{
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
 
-/// Constructs that are deliberately absent from v0.1, so they can be refused by name.
+/// Constructs that are deliberately absent from the language, so they can be refused by name.
 const RESERVED: &[(&str, &str)] = &[
     ("for", "there is no `for`; iterate with `while`"),
     (
@@ -68,12 +68,19 @@ const RESERVED: &[(&str, &str)] = &[
 ];
 
 /// What the language does have, for the help text on a refused construct.
+///
+/// The language's own summary, not a list of what one release added: `docs/spec.md` is
+/// the definition, and `nazm capabilities` is the build's answer construct by construct.
+/// It once listed the v0.1 subset — `Int`, `Bool` and `Str`, records and enums — and kept
+/// saying so through traits, generics and concurrency, which is why a test now holds it to
+/// the constructs it names.
 const SUPPORTED: &str = concat!(
-    "the supported subset is functions, `let` and `let mut`, assignment, `while` with ",
-    "`break` and `continue`, `return`, `if`/`else` as a statement or an expression, ",
-    "arithmetic and comparison over `Int`, `Bool` and `Str`, the `Ints` and `Strs` ",
-    "sequences, `struct` records with named fields, `enum` variants with `match`, and the ",
-    "built-in operations on them — see docs/spec.md"
+    "Nazm 1.0 has functions and `let`/`let mut`, `while` with `break` and `continue`, ",
+    "`return`, `if`/`else`, `Int`, `Bool` and `Str`, `struct` records, `enum` and `match`, ",
+    "generics and `Vec[T]`, `Result`, `Option` and `?`, function values and closures, ",
+    "`trait`, `impl` and methods, declared effects, capabilities and provenance, ",
+    "`scope`/`spawn` with channels, selection and deadlines, `extern \"C\"`, and modules ",
+    "and packages with `use` — see docs/spec.md, or run `nazm capabilities`"
 );
 
 #[derive(Debug)]
@@ -3041,10 +3048,33 @@ impl<'a> Parser<'a> {
                 out = self.member_hole(at, out, depth)?;
                 continue;
             }
+            let dot_span = self.peek_span();
             self.advance();
             let name_span = self.peek_span();
             let name = match self.advance() {
                 TokenKind::Ident(n) => n,
+                // `1.5`: an integer, a `.` and an integer, written with nothing between them.
+                // Floating point is not in the language, and it is refused by name (spec:
+                // *Not in v0.3*) rather than reported as a field read with a number for a
+                // name, which is what this was until 1.0.
+                TokenKind::Int(_)
+                    if matches!(out, Expr::Int { span, .. }
+                        if span.end == dot_span.start && dot_span.end == name_span.start) =>
+                {
+                    self.report(
+                        Diagnostic::error(
+                            codes::UNSUPPORTED_CONSTRUCT,
+                            out.span().join(name_span),
+                            "floating point is not supported",
+                        )
+                        .primary_label("a floating-point literal")
+                        .help(format!(
+                            "Nazm 1.0 has `Int`, a 64-bit signed integer, and no floating point; \
+                             scale to an integer unit instead. In general, {SUPPORTED}"
+                        )),
+                    );
+                    return None;
+                }
                 other => {
                     self.report(
                         Diagnostic::error(

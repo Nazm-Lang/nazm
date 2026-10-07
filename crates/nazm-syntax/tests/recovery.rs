@@ -220,3 +220,50 @@ fn a_list_given_up_inside_a_statement_still_resumes_inside_its_block() {
     let names: Vec<&str> = program.functions.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["main", "after"]);
 }
+
+/// A refused construct's help says what the language has, and it is held to the current
+/// language: until 1.0 it still described the v0.1 subset (`Int`, `Bool`, `Str`, the `Ints`
+/// and `Strs` sequences, records and enums) through every construct added after it.
+#[test]
+fn a_refused_construct_points_at_the_current_language() {
+    let text = "fn main() -> Int { for x { 1 } }\n";
+    let (_, _, d) = parse(text);
+    let help = d
+        .iter()
+        .find(|d| d.code == codes::UNSUPPORTED_CONSTRUCT)
+        .and_then(|d| d.help.clone())
+        .unwrap_or_else(|| panic!("`for` is refused with help: {d:?}"));
+    for construct in [
+        "Nazm 1.0",
+        "generics",
+        "`Result`, `Option` and `?`",
+        "closures",
+        "`trait`",
+        "effects",
+        "capabilities",
+        "`scope`/`spawn`",
+        "`extern \"C\"`",
+        "packages",
+        "nazm capabilities",
+    ] {
+        assert!(help.contains(construct), "help names {construct}: {help}");
+    }
+    assert!(!help.contains("supported subset"), "{help}");
+    assert!(!help.contains("`Ints` and `Strs`"), "{help}");
+}
+
+/// `1.5` is refused by name as floating point (spec: *Not in v0.3*), not reported as a field
+/// read whose name is a number; written apart, `1 . 5` is still the field read it looks like.
+#[test]
+fn a_floating_point_literal_is_refused_by_name() {
+    let text = "fn main() -> Int { let x = 1.5; 0 }\n";
+    let (_, _, d) = parse(text);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(d[0].code, codes::UNSUPPORTED_CONSTRUCT);
+    assert_eq!(d[0].message, "floating point is not supported");
+    assert_eq!(at(text, &d), ["1.5"]);
+
+    let text = "fn main() -> Int { let x = 1 . 5; 0 }\n";
+    let (_, _, d) = parse(text);
+    assert_eq!(d[0].code, codes::UNEXPECTED_TOKEN, "{d:?}");
+}

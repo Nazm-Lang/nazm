@@ -88,7 +88,7 @@ interface stays `nazm.interface/6`, and the cache's own entry format moved to `n
 contradicted itself — a program that checked with no diagnostic could not be lowered to Core IR,
 or its Core IR broke an invariant (`architecture.md` §7.41). It describes the compiler, not the
 program, carries no fix, and nothing is run or built after it. The printed Core IR,
-`nazm.core-ir/1`, is a debugging form with its own version and is not one of these schemas.
+`nazm.core-ir/2`, is a debugging form with its own version and is not one of these schemas.
 
 **Applied to N40, MIR.** No schema moved and no code appeared. `N0900` gained one more way to be
 raised: a program that checked whose MIR the validator rejects (`architecture.md` §7.42) — `nazm
