@@ -118,7 +118,7 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
             };
             assert!(listed.contains(want), "{listed}");
             let libs = if triple.contains("linux") {
-                "-lpthread"
+                "-lpthread -lm"
             } else {
                 ""
             };

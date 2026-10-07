@@ -209,7 +209,10 @@ impl Backend {
             .args(link_args(self.opt_level, self.cross.as_deref()))
             .arg("-o")
             .arg(output)
-            .args(objects);
+            .args(objects)
+            // After the objects, which is where a linker that drops unneeded libraries
+            // (`--as-needed`, Ubuntu's default) still sees what they need.
+            .args(system_libraries(self.cross.as_deref()));
         c
     }
 
@@ -265,6 +268,19 @@ fn link_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
     let mut a = vec![format!("-O{opt_level}"), "-Wno-override-module".to_owned()];
     a.extend(target_args(cross));
     a
+}
+
+/// The system libraries a link needs beyond the C library, for the target being linked: on
+/// Linux, the C library's mathematics (`-lm`), which Gate 2's float built-ins call (`round`,
+/// `sin`, `pow`, …) and which glibc keeps apart; on macOS they are in `libSystem`. M1: Gate 2C
+/// linked without it, so every Linux build calling one failed to link.
+pub(crate) fn system_libraries(cross: Option<&str>) -> Vec<String> {
+    let linux = cross.map_or(std::env::consts::OS == "linux", |t| t.contains("linux"));
+    if linux {
+        vec!["-lm".to_owned()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// `-target TRIPLE` for a cross build (N57), nothing for the host's. RISC-V's triple is LLVM's
@@ -470,6 +486,30 @@ fn split(line: &str) -> Vec<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_linux_link_names_the_c_librarys_mathematics_and_no_other_does() {
+        // M1: glibc keeps `round`, `sin`, `pow` and the rest of Gate 2's float built-ins in
+        // libm, which a Linux link must name; macOS has them in libSystem; a board or a
+        // WebAssembly module links neither.
+        for t in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+            assert_eq!(system_libraries(Some(t)), ["-lm"], "{t}");
+        }
+        for t in [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-unknown-none",
+            "riscv64gc-unknown-none-elf",
+            "wasm32-unknown-unknown",
+        ] {
+            assert!(system_libraries(Some(t)).is_empty(), "{t}");
+        }
+        assert_eq!(
+            system_libraries(None).is_empty(),
+            std::env::consts::OS != "linux",
+            "the host's own link"
+        );
+    }
 
     #[test]
     fn no_compile_line_asks_for_the_host_s_own_cpu() {

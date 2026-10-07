@@ -1341,7 +1341,7 @@ fn write_objects(
         listed.push(to);
     }
     let libs = match target.os {
-        nazm_lir::backend::Os::Linux => "-lpthread".to_owned(),
+        nazm_lir::backend::Os::Linux => "-lpthread -lm".to_owned(),
         nazm_lir::backend::Os::Macos => String::new(),
         // A WebAssembly module links nothing but itself, by `wasm-ld` (N64).
         nazm_lir::backend::Os::None if target.is_wasm() => {
