@@ -22,3 +22,7 @@
 # The benchmark runner writes this per run; the baseline beside it is committed.
 /bench/record.json
 /target/bench-scratch/
+
+# Agent working state is local and machine-specific (docs/agent-governance.md §6).
+/.agent/state.md
+/.agent/plans/
