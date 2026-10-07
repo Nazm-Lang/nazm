@@ -66,7 +66,7 @@ numbers before the first 1.0.0 release; its later slices move what they change a
 | --- | --- | --- | --- | --- |
 | **Language version** | v0.3 | **1.0** | the settled semantics are frozen as the 1.x contract | `docs/spec.md`'s status line; `nazm --help` |
 | **Toolchain version** | 0.3.0 | **1.0.0** | the release | `nazm --version`; `toolchain.compiler` in `nazm inspect`; the release manifest |
-| **Semantic epoch** | 29 | **31** | Gate 1-C1 (30): a closure capturing a value that can hold a function value behind a counted handle moved from accepted to refused (`N0616`), and `Type::ALL`, in the checker's identity, gained five capability types. Gate 2 (31): numbers — integer widths, floats, bit operators and conversions — moved from refused to accepted, and literals take the type expected. (Gate 1 alone moved nothing: `1.5`'s refusal changed code, `N0100` → `N0101`, not acceptance) | `toolchain.semantic_epoch` in `nazm inspect`; build provenance |
+| **Semantic epoch** | 29 | **32** | Gate 1-C1 (30): a closure capturing a value that can hold a function value behind a counted handle moved from accepted to refused (`N0616`), and `Type::ALL`, in the checker's identity, gained five capability types. Gate 2 (31): numbers — integer widths, floats, bit operators and conversions — moved from refused to accepted, and literals take the type expected. Gate 2 (32): fixed arrays of plain data and module constants moved from refused to accepted. (Gate 1 alone moved nothing: `1.5`'s refusal changed code, `N0100` → `N0101`, not acceptance) | `toolchain.semantic_epoch` in `nazm inspect`; build provenance |
 | **Interface schema** | `nazm.interface/11` | **`nazm.interface/11`** | no module's published facts changed shape | `toolchain.interface` in `nazm inspect` |
 | **Runtime ABI** | 14 | **15** | Gate 2: floats and narrow integers cross runtime entries, and the numbers part (`nz.format_float`, `nz.format_u64`, `nz.float_parses`, `nz.float_parse`) and the C library's mathematics join the runtime | `toolchain.runtime_abi` in `nazm inspect`; `nazm.runtime/1` manifests |
 | **Package and lock schemas** | `nazm.package/1`, `nazm.lock/1`, `nazm.registry-index/1` | **unchanged** | no shape changed | the `schema` field of each file |
@@ -89,6 +89,9 @@ STABLE 1.0 surface is:
 - **Values and operators.** `Int` (64-bit signed, overflow traps in every build), `Bool`, `Str`
   (bytes, with escapes), `Ints`, `Strs`; arithmetic, comparison, logical operators; division and
   remainder by zero trap; the four integer boundaries; left-to-right evaluation.
+- **Numbers, arrays and constants (Gate 2).** The fixed-width integers, `Float32` and `Float64`,
+  bit operators and conversions (`spec.md`, *Numbers*); `[T; N]` of plain data with checked
+  indexing (*Arrays*); module-private `const` (*Constants*).
 - **Bindings and control.** `let` and `let mut`, same-scope shadowing refused, `while`, `break`,
   `continue`, `return`, `if`/`else` as a statement and an expression, blocks whose completion is
   decided by checking, unreachable code refused.

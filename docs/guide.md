@@ -504,7 +504,8 @@ accepts.
 
 | Rule | Definition |
 | --- | --- |
-| `program` | `{ use_item } , { function \| foreign_function \| record \| foreign_struct \| enumeration \| trait_item \| impl_item }` |
+| `program` | `{ use_item } , { function \| foreign_function \| record \| foreign_struct \| enumeration \| trait_item \| impl_item \| constant }` |
+| `constant` | `[ visibility ] , "const" , IDENT , ":" , type , "=" , expression , ";"` |
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
 | `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";"` |
 | `impl_item` | `"impl" , type , IDENT , type , "{" , { function } , "}"` |
@@ -529,14 +530,15 @@ accepts.
 | `payload` | `field , { "," , field } , [ "," ]` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
-| `type` | `function_type \| [ qualifier ] , IDENT , [ type_arguments ]` |
+| `type` | `function_type \| array_type \| [ qualifier ] , IDENT , [ type_arguments ]` |
+| `array_type` | `"[" , type , ";" , ( INTEGER \| IDENT ) , "]"` |
 | `function_type` | `"fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ]` |
 | `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
 | `statement` | `let_statement \| assignment \| while_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
 | `let_statement` | `"let" , [ "mut" ] , IDENT , "=" , expression , ";"` |
 | `assignment` | `place , "=" , expression , ";"` |
-| `place` | `IDENT , { "." , IDENT }` |
+| `place` | `IDENT , { "." , IDENT \| "[" , expression , "]" }` |
 | `while_statement` | `"while" , expression , block` |
 | `return_statement` | `"return" , expression , ";"` |
 | `break_statement` | `"break" , ";"` |
@@ -555,8 +557,9 @@ accepts.
 | `sum` | `product , { ( "+" \| "-" ) , product }` |
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" \| "~" ] , primary` |
-| `primary` | `atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] \| "?" }` |
-| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| closure \| "(" , expression , ")"` |
+| `primary` | `atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] \| "?" \| "[" , expression , "]" }` |
+| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| closure \| array \| "(" , expression , ")"` |
+| `array` | `"[" , expression , ( { "," , expression } , [ "," ] \| ";" , expression ) , "]"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
 | `construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
@@ -574,7 +577,7 @@ accepts.
 ### `program`
 
 ```ebnf
-program = { use_item } , { function | foreign_function | record | foreign_struct | enumeration | trait_item | impl_item } ;
+program = { use_item } , { function | foreign_function | record | foreign_struct | enumeration | trait_item | impl_item | constant } ;
 ```
 
 ```nazm
@@ -599,6 +602,24 @@ fn identity[T](value: T) -> T { value } fn main() -> Int { identity(7) }
 
 ```nazm
 trait Show { fn show(self: Self) -> Str; } impl Show for Int { fn show(self: Int) -> Str { int_to_str(self) } } fn main() -> Int { str_len(7.show()) }
+```
+
+```nazm
+const SIZE: Int = 4; fn main() -> Int { SIZE }
+```
+
+### `constant`
+
+```ebnf
+constant = [ visibility ] , "const" , IDENT , ":" , type , "=" , expression , ";" ;
+```
+
+A constant (Gate 2): a value the checker computes from literals, other constants,
+operators and numeric conversions. `const` is a word only here, before a name and a `:`,
+so it remains an ordinary name everywhere else. See `docs/spec.md`, *Constants*.
+
+```nazm
+const MASK: UInt8 = 0xF0; fn main() -> Int { Int(MASK) }
 ```
 
 ### `trait_item`
@@ -1006,7 +1027,7 @@ fn f(n: Int) -> Int { n } fn main() -> Int { f(1) }
 ### `type`
 
 ```ebnf
-type = function_type | [ qualifier ] , IDENT , [ type_arguments ] ;
+type = function_type | array_type | [ qualifier ] , IDENT , [ type_arguments ] ;
 ```
 
 A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
@@ -1031,6 +1052,23 @@ fn f(xs: Vec[Vec[Int]]) -> Int { vec_len(xs) } fn main() -> Int { f(vec_new[Vec[
 
 ```nazm
 fn say(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int { say(io, "hi") }
+```
+
+```nazm
+fn f(xs: [Int; 4]) -> Int { xs[0] } fn main() -> Int { f([1, 2, 3, 4]) }
+```
+
+### `array_type`
+
+```ebnf
+array_type = "[" , type , ";" , ( INTEGER | IDENT ) , "]" ;
+```
+
+A fixed-size array type (Gate 2): its element type and its length, an integer literal or a
+constant's name. See `docs/spec.md`, *Arrays*.
+
+```nazm
+const N: Int = 3; fn f(xs: [UInt8; N]) -> Int { Int(xs[2]) } fn main() -> Int { f([UInt8(1), 2, 3]) }
 ```
 
 ### `function_type`
@@ -1124,11 +1162,15 @@ struct P { x: Int, } fn main() -> Int { let mut p = P(x: 1); p.x = 2; p.x }
 ### `place`
 
 ```ebnf
-place = IDENT , { "." , IDENT } ;
+place = IDENT , { "." , IDENT | "[" , expression , "]" } ;
 ```
 
 ```nazm
 struct I { n: Int, } struct O { i: I, } fn main() -> Int { let mut o = O(i: I(n: 1)); o.i.n = 2; o.i.n }
+```
+
+```nazm
+fn main() -> Int { let mut g = [[0; 2]; 2]; g[1][0] = 5; g[1][0] }
 ```
 
 ### `while_statement`
@@ -1358,7 +1400,7 @@ fn main() -> Int { ~0 }
 ### `primary`
 
 ```ebnf
-primary = atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] | "?" } ;
+primary = atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] | "?" | "[" , expression , "]" } ;
 ```
 
 `?` is a postfix beside projection, in any order and any number: `r?`, `make()?.x`,
@@ -1368,6 +1410,9 @@ See `docs/spec.md`, *Propagation*.
 `.name(…)` after an operand is a method call (N78): `p.show()`, `make().size()`. With a
 trait's name as the operand, `Show.show(p)`, the trait chooses the method and the first
 argument is the receiver.
+`[index]` after an operand reads an array's element (Gate 2): `xs[i]`, `grid[r][c]`,
+`points[i].x`. After a name, a `[` followed by types and then `(` is type arguments instead,
+as it always was: `vec_new[Int]()`; a method call on an element is written `(xs[i]).m()`.
 
 ```nazm
 fn main() -> Int { (1 + 2) * 3 }
@@ -1401,10 +1446,14 @@ struct P { x: Int, } fn f(r: Result[P, Str]) -> Result[Int, Str] { Result[Int, S
 trait Size { fn size(self: Self) -> Int; } fn f[T: Size](x: T) -> Int { x.size() + Size.size(x) } fn main() -> Int { 0 }
 ```
 
+```nazm
+fn main() -> Int { let xs = [1, 2, 3]; xs[1] }
+```
+
 ### `atom`
 
 ```ebnf
-atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | match_expression | closure | "(" , expression , ")" ;
+atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | match_expression | closure | array | "(" , expression , ")" ;
 ```
 
 A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
@@ -1416,6 +1465,18 @@ fn main() -> Int { 1 }
 
 ```nazm
 fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 }
+```
+
+### `array`
+
+```ebnf
+array = "[" , expression , ( { "," , expression } , [ "," ] | ";" , expression ) , "]" ;
+```
+
+An array (Gate 2): its elements, or one value and a count.
+
+```nazm
+fn main() -> Int { let a = [1, 2, 3]; let b = [0; 4]; a[2] + b[3] }
 ```
 
 ### `closure`
