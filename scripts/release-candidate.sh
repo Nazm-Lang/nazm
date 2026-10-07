@@ -73,8 +73,8 @@ fi
 
 say "formatting"
 cargo fmt --all -- --check
-./target/debug/nazm fmt --check compiler/*.nz examples/*.nz bench/programs/*.nz 2>/dev/null \
-    || cargo run -q -p nazm-cli -- fmt --check compiler/*.nz examples/*.nz bench/programs/*.nz
+./target/debug/nazm fmt --check compiler/*.nz examples/*.nz examples/tour/*.nz bench/programs/*.nz 2>/dev/null \
+    || cargo run -q -p nazm-cli -- fmt --check compiler/*.nz examples/*.nz examples/tour/*.nz bench/programs/*.nz
 
 say "lints"
 cargo lint
@@ -107,7 +107,7 @@ fi
 # --- assemble -----------------------------------------------------------------------
 out="$target/release-candidate"
 rm -rf "$out"
-mkdir -p "$out/bin" "$out/docs" "$out/schema" "$out/examples" "$out/scripts" \
+mkdir -p "$out/bin" "$out/docs" "$out/schema" "$out/examples/tour" "$out/scripts" \
          "$out/compiler/conformance" "$out/bench/programs" "$out/bench/reference"
 
 # Two different executables, named so they cannot be mistaken for one another.
@@ -123,10 +123,11 @@ if [ -x "$target/bootstrap/stage2/nazmc" ]; then
 else
     fail "the bootstrap produced no stage-2 compiler to package"
 fi
-cp README.md LICENSE* "$out/" 2>/dev/null || cp README.md "$out/"
+cp README.md LICENSE* SECURITY.md CONTRIBUTING.md "$out/"
 cp docs/*.md docs/*.ebnf "$out/docs/"
 cp schema/*.json "$out/schema/"
 cp examples/*.nz "$out/examples/"
+cp examples/tour/*.nz "$out/examples/tour/"
 
 # The bootstrap's own inputs. A candidate that claims a byte-identical C2 and C3 and
 # does not carry the source they were built from is asking to be taken on trust.
@@ -160,19 +161,16 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf 'nazm release candidate — provenance\n\n'
     printf 'source-commit:      %s\n' "$commit"
     printf 'source-tree-clean:  %s\n' "$([ -z "$dirty" ] && echo yes || echo 'no (--allow-dirty)')"
-    # Independent of git: the source *files* as they were on disk, in a fixed order,
-    # digested together. Named for what it covers and not "tree", because it is not one:
-    # Cargo.toml and every crate manifest, Cargo.lock, rust-toolchain.toml,
-    # docker/contained.Dockerfile, the mutation catalogue and every .expected fixture all
-    # fall outside it. It corroborates the commit for the sources; it cannot detect a
-    # changed dependency pin or a changed expectation.
-    printf 'source-digest:      %s\n' \
-        "$(find compiler crates xtask docs schema examples scripts bench/programs -type f \
-            \( -name '*.rs' -o -name '*.nz' -o -name '*.md' -o -name '*.json' -o -name '*.sh' -o -name '*.ebnf' \) \
-            2>/dev/null | LC_ALL=C sort | while read -r f; do sha256 "$f"; done | \
-            { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | cut -d' ' -f1)"
-    printf 'source-digest-scope: %s\n' \
-        '*.rs *.nz *.md *.json *.sh *.ebnf under compiler crates xtask docs schema examples scripts bench/programs'
+    # Independent of git: every file the build reads, tests with or ships, as it was on
+    # disk — manifests, Cargo.lock, the toolchain pin, the Dockerfiles, the mutation
+    # catalogue, every fixture, the runtime, linker scripts, schemas and this script — with
+    # its path, so a rename counts. `xtask/tests/release.rs` holds its file set equal to what
+    # git tracks. Re-derive it in a checkout of the commit above with
+    # `sh scripts/source-digest.sh`. Until R1 the line here was `source-digest`, over six
+    # extensions in nine directories, and missed every one of those inputs.
+    printf 'build-input-digest: %s\n' "$(sh scripts/source-digest.sh)"
+    printf 'build-input-scope:  %s\n' \
+        'every tracked file, as scripts/source-digest.sh --list names them (SHA-256 of "digest  path" lines)'
     printf '\n'
     printf 'target:             %s\n' "$(uname -sm)"
     printf 'rustc:              %s\n' "$(rustc --version)"
@@ -210,17 +208,23 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf '%s\n' \
         'Archive entry metadata is normalised: the tar is written with --sort=name,' \
         '--owner=0 --group=0 --numeric-owner and --mtime=@0, and the gzip stream carries' \
-        'no timestamp. That makes entry order and metadata stable across runs. It does' \
-        'NOT make the archive bit-reproducible, and this one is not: the bootstrap record' \
-        'and this file both embed the run date above, so two runs differ by construction.' \
-        'The packaged executables have not been tested for bit-reproducibility either.' \
-        'What is verified is that the contents match MANIFEST.txt, and that C2 and C3 are' \
-        'byte-identical to each other within this run.'
+        'no timestamp. Every date inside the candidate is SOURCE_DATE_EPOCH when it is set,' \
+        'which `cargo xtask contained release` sets to the commit time, so no date in it is' \
+        'the run date. Two runs of one commit in one image are meant to produce the same' \
+        'archive bytes; the release record for this commit says whether they did. Nothing' \
+        'is claimed across hosts, images or toolchains. The time a candidate was actually' \
+        'built belongs outside the archive, in its release record.'
 } > "$out/PROVENANCE.txt"
 
 {
     printf 'nazm release candidate\n\n'
-    printf 'date-utc:    %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+        printf 'date-utc:    %s (SOURCE_DATE_EPOCH, the commit time)\n' \
+            "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+               || date -u -r "$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+    else
+        printf 'date-utc:    %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
     printf 'commit:      %s\n' "$commit"
     printf 'tree-clean:  %s\n' "$([ -z "$dirty" ] && echo yes || echo 'no (--allow-dirty)')"
     printf 'host:        %s\n' "$(uname -sm)"
@@ -229,10 +233,10 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf 'version:     %s\n' "$("$out/bin/nazm" --version 2>/dev/null || echo unknown)"
     printf 'binary-sha:  %s\n' "$(sha256 "$out/bin/nazm")"
     printf '\n'
-    printf 'This is an EXPERIMENTAL candidate built and verified on one machine.\n'
-    printf 'It has been checked on %s and nowhere else; other targets are\n' "$(uname -sm)"
-    printf 'unverified rather than unsupported. See docs/performance.md for what has\n'
-    printf 'been measured, and README.md for what is not built.\n'
+    printf 'This is an EXPERIMENTAL candidate, built and verified on %s.\n' "$(uname -sm)"
+    printf 'Its binaries run there. What each target has shown is in docs/support.md,\n'
+    printf 'what is measured in docs/performance.md, and what is not done in\n'
+    printf 'docs/limitations.md.\n'
     printf '\n'
     printf 'contains: the binary, the documentation, the JSON schemas, the examples,\n'
     printf 'the compiler written in Nazm with its bootstrap script and conformance\n'

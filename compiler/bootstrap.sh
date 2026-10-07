@@ -83,8 +83,17 @@ mkdir -p "$out/stage1" "$out/stage2" "$out/stage3"
 # --- the record -------------------------------------------------------------------
 # Identities first, so a result can be attributed. Without these a reproducibility claim
 # names no toolchain and is not checkable.
+# The record's date. With SOURCE_DATE_EPOCH set — the release gate sets it to the commit's
+# time — it is that instant, so two runs of one commit write the same record; otherwise it is
+# the run's own. GNU `date -d @N` in the contained image, BSD `date -r N` on macOS.
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+  stamp="$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -r "$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ) (SOURCE_DATE_EPOCH)"
+else
+  stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
 {
-  say "date-utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  say "date-utc: $stamp"
   say "host: $(uname -sm)"
   say "rustc: $(rustc --version 2>/dev/null || echo 'not on PATH')"
   say "clang: $(clang --version | head -1)"
