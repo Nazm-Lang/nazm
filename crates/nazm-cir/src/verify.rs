@@ -167,6 +167,26 @@ impl Verifier<'_> {
                 self.expr(value);
                 let mut target = self.local_ty(*local);
                 for step in path {
+                    let step = match step {
+                        crate::ir::PathStep::Field(s) => s,
+                        crate::ir::PathStep::Index { index, len, .. } => {
+                            self.expr(index);
+                            let info = match target {
+                                Some(Type::Array(a)) => self.res.types().array_info(a),
+                                _ => None,
+                            };
+                            match info {
+                                Some((e, n)) if n == *len && fits(index, Type::Int) => {
+                                    target = Some(e);
+                                }
+                                _ => {
+                                    self.bad("an assignment path indexes something that is not its array");
+                                    target = None;
+                                }
+                            }
+                            continue;
+                        }
+                    };
                     if target != Some(Type::Record(step.record)) {
                         self.bad("an assignment path steps into something that is not its record");
                     }
@@ -384,6 +404,45 @@ impl Verifier<'_> {
                 if !from_numeric || !to_numeric || !wrap_ok || *mode == nazm_sema::ConvertMode::Try
                 {
                     self.bad("a conversion between types it cannot convert");
+                }
+            }
+            ExprKind::Array { elems } => {
+                let ok = match e.ty {
+                    Some(Type::Array(a)) => self.res.types().array_info(a).is_some_and(|(t, n)| {
+                        n as usize == elems.len() && elems.iter().all(|x| fits(x, t))
+                    }),
+                    _ => false,
+                };
+                for x in elems {
+                    self.expr(x);
+                }
+                if !ok {
+                    self.bad("an array whose elements are not its element type and length");
+                }
+            }
+            ExprKind::ArrayRepeat { value, count } => {
+                self.expr(value);
+                let ok = match e.ty {
+                    Some(Type::Array(a)) => self
+                        .res
+                        .types()
+                        .array_info(a)
+                        .is_some_and(|(t, n)| n == *count && fits(value, t)),
+                    _ => false,
+                };
+                if !ok {
+                    self.bad("a repeated array of another element type or length");
+                }
+            }
+            ExprKind::Index { base, index } => {
+                self.expr(base);
+                self.expr(index);
+                let elem = match base.ty {
+                    Some(Type::Array(a)) => self.res.types().array_info(a).map(|(t, _)| t),
+                    _ => None,
+                };
+                if elem.is_none() || e.ty != elem || !fits(index, Type::Int) {
+                    self.bad("an index into something that is not an array, or by a non-`Int`");
                 }
             }
             ExprKind::Fits { to, operand } => {

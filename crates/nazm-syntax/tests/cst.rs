@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 use nazm_syntax::{
-    parse_both, parse_cst, Block, Cst, Expr, Program, Stmt, SyntaxKind, MAX_NESTING,
+    parse_both, parse_cst, Block, Cst, Expr, PlaceStep, Program, Stmt, SyntaxKind, MAX_NESTING,
     PARSE_STACK_BYTES,
 };
 
@@ -573,6 +573,11 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                         Stmt::Assign(a) => {
                             spans.push((SyntaxKind::AssignStmt, a.span));
                             spans.push((SyntaxKind::Place, a.place.span));
+                            for step in &a.place.path {
+                                if let PlaceStep::Index { index, .. } = step {
+                                    stack.push(Node::Expr(index));
+                                }
+                            }
                             stack.push(Node::Expr(&a.value));
                         }
                         Stmt::Return(r) => {
@@ -664,6 +669,24 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                     }
                 }
                 Expr::Field { base, .. } => stack.push(Node::Expr(base)),
+                Expr::Array { elems, span } => {
+                    spans.push((SyntaxKind::ArrayExpr, *span));
+                    for x in elems {
+                        stack.push(Node::Expr(x));
+                    }
+                }
+                Expr::ArrayRepeat { value, count, span } => {
+                    spans.push((SyntaxKind::ArrayExpr, *span));
+                    stack.push(Node::Expr(value));
+                    stack.push(Node::Expr(count));
+                }
+                Expr::Index {
+                    base, index, span, ..
+                } => {
+                    spans.push((SyntaxKind::IndexExpr, *span));
+                    stack.push(Node::Expr(base));
+                    stack.push(Node::Expr(index));
+                }
                 Expr::Propagate {
                     operand, op_span, ..
                 } => {

@@ -530,8 +530,14 @@ fn dump_stmt(s: &nazm_core::__syntax::Stmt, out: &mut String) {
             // one parser and another in the other is a difference the dump shows.
             let mut place = a.place.name.clone();
             for f in &a.place.path {
-                place.push('.');
-                place.push_str(&f.name);
+                match f {
+                    nazm_core::__syntax::PlaceStep::Field(f) => {
+                        place.push('.');
+                        place.push_str(&f.name);
+                    }
+                    // An index (Gate 2), outside the Nazm-written compiler's subset.
+                    nazm_core::__syntax::PlaceStep::Index { .. } => place.push_str("[]"),
+                }
             }
             push_node(out, "assign", 1, a.span.start, a.span.end, &place);
         }
@@ -581,6 +587,11 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         }
         E::Bool { value, span } => {
             push_node(out, "bool", 0, span.start, span.end, &value.to_string());
+        }
+        // Gate 2's arrays, outside the Nazm-written compiler's subset: no agreement corpus holds
+        // one.
+        E::Array { span, .. } | E::ArrayRepeat { span, .. } | E::Index { span, .. } => {
+            push_node(out, "array", 0, span.start, span.end, "");
         }
         // Gate 2's numbers, outside the Nazm-written compiler's subset: no agreement corpus
         // holds one.

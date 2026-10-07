@@ -1,0 +1,55 @@
+// Fixed arrays and constants: values, indexing, writing, copying, equality (spec: arrays, constants).
+const N: Int = 4;
+const SCALE: Float64 = 0.5;
+const MASK: UInt8 = 0xF0 | 0x0F;
+
+struct Pixel { r: UInt8, g: UInt8, b: UInt8, }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} {
+    print(str_concat(s, "\n"))
+}
+
+fn sum(xs: [Int; N]) -> Int {
+    let mut t = 0;
+    let mut i = 0;
+    while i < N {
+        t = t + xs[i];
+        i = i + 1;
+    }
+    t
+}
+
+fn bump(xs: [Int; N]) -> [Int; N] {
+    let mut ys = xs;
+    ys[0] = ys[0] + 100;
+    ys
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = [1, 2, 3, 4];
+    let ys = bump(xs);
+    show(out, int_to_str(sum(xs)));
+    show(out, int_to_str(sum(ys)));
+    let mut grid = [[0; 3]; 2];
+    grid[1][2] = 7;
+    grid[0][0] = grid[1][2] * 2;
+    show(out, int_to_str(grid[0][0] + grid[1][2]));
+    let mut row = [Pixel(r: UInt8(0), g: UInt8(0), b: UInt8(0)); 2];
+    row[1].g = MASK;
+    show(out, num_to_str((row[1]).g));
+    show(out, num_to_str(Float64(N) * SCALE));
+    let a = [1.5, 2.5];
+    let b = [1.5, 2.5];
+    if a == b {
+        show(out, "equal by elements");
+    } else {
+        show(out, "not equal");
+    };
+    let nan = [0.0 / 0.0];
+    if nan == nan {
+        show(out, "nan equal");
+    } else {
+        show(out, "nan not equal");
+    };
+    0
+}

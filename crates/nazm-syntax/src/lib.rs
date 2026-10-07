@@ -13,11 +13,11 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::{
-    Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
+    Assign, BinOp, Block, Const, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm,
-    MethodOf, Param, PatternField, Place, PlaceField, Program, Qualifier, Record, Reexport,
-    ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam,
-    Variant, While,
+    MethodOf, Param, PatternField, Place, PlaceField, PlaceStep, Program, Qualifier, Record,
+    Reexport, ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName,
+    TypeParam, Variant, While,
 };
 pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;
@@ -134,6 +134,7 @@ pub fn parse_map_with_root(
         imports: Vec::new(),
         traits: Vec::new(),
         impls: Vec::new(),
+        consts: Vec::new(),
         hole: None,
     };
     let mut errors = Vec::new();
@@ -148,6 +149,7 @@ pub fn parse_map_with_root(
         program.imports.extend(p.imports);
         program.traits.extend(p.traits);
         program.impls.extend(p.impls);
+        program.consts.extend(p.consts);
         errors.extend(file_errors);
     }
     (program, errors, reusable.is_some())
@@ -165,6 +167,7 @@ pub fn parse_map_at(
     let mut imports = Vec::new();
     let mut traits = Vec::new();
     let mut impls = Vec::new();
+    let mut consts = Vec::new();
     let mut errors = Vec::new();
     let mut found = None;
     let mut root = None;
@@ -185,6 +188,7 @@ pub fn parse_map_at(
         imports.extend(program.imports);
         traits.extend(program.traits);
         impls.extend(program.impls);
+        consts.extend(program.consts);
         errors.extend(file_errors);
     }
     (
@@ -195,6 +199,7 @@ pub fn parse_map_at(
             imports,
             traits,
             impls,
+            consts,
             hole: found,
         },
         errors,

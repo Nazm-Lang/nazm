@@ -1,0 +1,7 @@
+// expect: N0623
+// A constant whose value would trap is refused where it is declared (spec: constants).
+const LIMIT: UInt8 = 200 + 100;
+
+fn main() -> Int {
+    0
+}

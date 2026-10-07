@@ -159,6 +159,58 @@ fn structure(program: &Program, f: &Function, out: &mut Vec<String>) {
                         out.push(at(e));
                     }
                 }
+                // Through array elements (Gate 2): every step follows its type, each index is an
+                // `Int`, and the value is the place's type.
+                StatementKind::SetElement {
+                    base, path, value, ..
+                } => {
+                    let Some(mut t) = cx.value(*base) else {
+                        out.push(at(
+                            "an element write on a local that does not exist".to_owned()
+                        ));
+                        continue;
+                    };
+                    let mut ok = true;
+                    for step in path {
+                        match step {
+                            crate::ir::PathRef::Field(FieldRef { record, field }) => {
+                                match (t == Type::Record(*record))
+                                    .then(|| program.types.field(*record, *field))
+                                    .flatten()
+                                {
+                                    Some(ft) => t = ft,
+                                    None => ok = false,
+                                }
+                            }
+                            crate::ir::PathRef::Index { index, len } => {
+                                let elem = match t {
+                                    Type::Array(a) => program
+                                        .types
+                                        .array(a)
+                                        .filter(|(_, n)| n == len)
+                                        .map(|(e, _)| e),
+                                    _ => None,
+                                };
+                                match elem {
+                                    Some(e) if cx.value(*index) == Some(Type::Int) => t = e,
+                                    _ => ok = false,
+                                }
+                            }
+                        }
+                        if !ok {
+                            break;
+                        }
+                    }
+                    if !ok {
+                        out.push(at(
+                            "an element path that does not follow its types".to_owned()
+                        ));
+                    } else if cx.value(*value) != Some(t) {
+                        out.push(at(
+                            "an element written with a value of another type".to_owned()
+                        ));
+                    }
+                }
                 StatementKind::SetField { base, path, value } => {
                     let Some(mut t) = cx.value(*base) else {
                         out.push(at("a field write on a local that does not exist".to_owned()));
@@ -340,6 +392,34 @@ fn rvalue(cx: &Ctx<'_>, value: &Rvalue, want: Type, arm: Option<(LocalId, u32)>)
         Rvalue::Convert { to, operand, .. } => {
             (*to != want || to.num().is_none() || cx.operand(operand).and_then(Type::num).is_none())
                 .then(|| "a conversion that is not between numbers".to_owned())
+        }
+        Rvalue::Array { elems } => {
+            let ok = match want {
+                Type::Array(a) => cx.program.types.array(a).is_some_and(|(t, n)| {
+                    n as usize == elems.len() && elems.iter().all(|e| cx.operand(e) == Some(t))
+                }),
+                _ => false,
+            };
+            (!ok).then(|| "an array whose elements are not its type".to_owned())
+        }
+        Rvalue::ArrayRepeat { value, count } => {
+            let ok = match want {
+                Type::Array(a) => cx
+                    .program
+                    .types
+                    .array(a)
+                    .is_some_and(|(t, n)| n == *count && cx.operand(value) == Some(t)),
+                _ => false,
+            };
+            (!ok).then(|| "a repeated array of another type".to_owned())
+        }
+        Rvalue::Index { base, index } => {
+            let elem = match cx.operand(base) {
+                Some(Type::Array(a)) => cx.program.types.array(a).map(|(t, _)| t),
+                _ => None,
+            };
+            (elem != Some(want) || cx.operand(index) != Some(Type::Int))
+                .then(|| "an index that is not an array's element by an `Int`".to_owned())
         }
         Rvalue::Fits { to, operand } => (want != Type::Bool
             || to.num().is_none()
@@ -790,6 +870,10 @@ fn ownership(types: &Types, f: &Function, out: &mut Vec<String>) {
                     read(&st, *value, "moves", &mut report);
                     set(&mut st, *value, One::Empty);
                 }
+                StatementKind::SetElement { base, value, .. } => {
+                    read(&st, *base, "writes an element of", &mut report);
+                    read(&st, *value, "copies", &mut report);
+                }
                 StatementKind::Drop(l) => set(&mut st, *l, One::Empty),
                 StatementKind::ScopeOpen { list, .. } => {
                     if let Some(Some(i)) = index.get(list.index()) {
@@ -860,7 +944,11 @@ fn rvalue_reads(v: &Rvalue) -> Vec<LocalId> {
         | Rvalue::Complement(o)
         | Rvalue::Convert { operand: o, .. }
         | Rvalue::Fits { operand: o, .. } => vec![o],
-        Rvalue::Arith(_, a, b) | Rvalue::Bits(_, a, b) => vec![a, b],
+        Rvalue::Arith(_, a, b) | Rvalue::Bits(_, a, b) | Rvalue::Index { base: a, index: b } => {
+            vec![a, b]
+        }
+        Rvalue::Array { elems } => elems.iter().collect(),
+        Rvalue::ArrayRepeat { value, .. } => vec![value],
         Rvalue::Compare { lhs, rhs, .. } => vec![lhs, rhs],
         Rvalue::Call { args, .. } | Rvalue::Primitive { args, .. } => args.iter().collect(),
         Rvalue::CallIndirect { callee, args } => std::iter::once(callee).chain(args).collect(),

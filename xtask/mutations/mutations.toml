@@ -8279,10 +8279,11 @@ Repointed by N87, which moved it to 27 for contracts: an entry that refused a `r
 Repointed by N103, which moved it to 28 for re-exports: an entry that refused `pub use` must not be reused.
 Repointed by N104, which moved it to 29 for authority without inheritance: an entry that accepted a printing `fn main()` must not be reused.
 Repointed by Gate 1-C1, which moved it to 30 for closure environments in the ownership graph: an entry that accepted a closure capturing a `Vec[fn() -> Int]` must not be reused.
-Repointed by Gate 2, which moved it to 31 for numbers: an entry that refused `1.5` must not be reused."""
+Repointed by Gate 2, which moved it to 31 for numbers: an entry that refused `1.5` must not be reused.
+Repointed by Gate 2 again, which moved it to 32 for arrays and constants: an entry that refused `[1, 2]` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 31;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 30;"
+find = "pub const SEMANTIC_EPOCH: u32 = 32;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 31;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -14217,3 +14218,90 @@ file = "crates/nazm-core/src/check.rs"
 find = "                if !class.admits(t) {"
 replace = "                if false {"
 killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_refused_before_anything_runs" }]
+
+# --- Gate 2: fixed arrays and constants -------------------------------------------------------
+#
+# Each attacks one law of `docs/spec.md`, *Arrays* and *Constants*: every index is checked in
+# every implementation, read and write; `[value; count]` fills every element; `==` compares every
+# element; an element owns nothing; the 64 KiB bound is exact; a constant that would trap, or is
+# exported, is refused; a constant index at the length is refused where it is written.
+
+[[mutation]]
+name = "g2-the-interpreter-reads-past-an-array"
+why = "the interpreter answers an index outside an array with its first element rather than stopping with `N0405`"
+file = "crates/nazm-core/src/eval.rs"
+find = "                    None => return Err(index_outside(e.at, *i, items.len())),"
+replace = "                    None => items[0].clone(),"
+killers = [{ package = "nazm-cli", test = "arrays", name = "every_index_is_checked_against_the_length_everywhere" }]
+
+[[mutation]]
+name = "g2-the-interpreter-writes-past-an-array"
+why = "the interpreter writes an element outside an array into its last one rather than stopping with `N0405`"
+file = "crates/nazm-core/src/eval.rs"
+find = "                    let Some(next) = usize::try_from(i).ok().and_then(|i| items.get_mut(i)) else {"
+replace = "                    let Some(next) = usize::try_from(i).ok().and_then(|i| items.get_mut(i.min(n - 1))) else {"
+killers = [{ package = "nazm-cli", test = "arrays", name = "every_index_is_checked_against_the_length_everywhere" }]
+
+[[mutation]]
+name = "g2-a-native-index-is-not-checked"
+why = "a compiled index is not compared with the length, so both backends read and write outside the array"
+file = "crates/nazm-lir/src/op/arrays.rs"
+find = "        self.guard(outside, \"N0405\", OUTSIDE);"
+replace = "        let _ = (outside, OUTSIDE);"
+killers = [{ package = "nazm-cli", test = "arrays", name = "every_index_is_checked_against_the_length_everywhere" }]
+
+[[mutation]]
+name = "g2-a-repeated-array-fills-one-element"
+why = "a compiled `[value; count]` stores the value once, leaving the rest of the array as it was"
+file = "crates/nazm-lir/src/op/arrays.rs"
+find = "                let more = self.cmp_imm(Cmp::Lt, iv, Class::I64, i64::from(*count));"
+replace = "                let more = self.cmp_imm(Cmp::Lt, iv, Class::I64, 1);"
+killers = [{ package = "nazm-cli", test = "arrays", name = "an_array_is_a_value_built_copied_and_written_in_place" }]
+
+[[mutation]]
+name = "g2-array-equality-reads-one-element"
+why = "compiled `==` on arrays compares the first element only, so `[1, 2, 3] != [1, 2, 4]` is false"
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = "            let more = fx.cmp_imm(Cmp::Lt, iv, Class::I64, i64::from(len));"
+replace = "            let more = fx.cmp_imm(Cmp::Lt, iv, Class::I64, i64::from(len.min(1)));"
+killers = [{ package = "nazm-cli", test = "arrays", name = "an_array_is_a_value_built_copied_and_written_in_place" }]
+
+[[mutation]]
+name = "g2-an-array-may-own-something"
+why = "an array of strings or of records holding a `Vec` checks, so a copy by bytes would share what it owns"
+file = "crates/nazm-sema/src/udt.rs"
+find = "        if let Some(owner) = self.not_plain(elem) {"
+replace = "        if let Some(owner) = self.not_plain(elem).filter(|_| false) {"
+killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]
+
+[[mutation]]
+name = "g2-the-array-bound-is-a-byte-larger"
+why = "an array of 65,537 bytes checks, one past the bound the specification states"
+file = "crates/nazm-sema/src/udt.rs"
+find = "        (bytes > MAX_ARRAY_BYTES).then_some(ArrayProblem::TooLarge(bytes))"
+replace = "        (bytes > MAX_ARRAY_BYTES + 1).then_some(ArrayProblem::TooLarge(bytes))"
+killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]
+
+[[mutation]]
+name = "g2-a-failing-constant-is-accepted"
+why = "a constant whose computation overflows is given its left operand instead of being refused with `N0623`"
+file = "crates/nazm-core/src/constants.rs"
+find = "                out.map_err(|err| self.fails(at, err))"
+replace = "                out.or(Ok(ConstValue::Num(a)))"
+killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]
+
+[[mutation]]
+name = "g2-a-public-constant-is-accepted"
+why = "`pub const` checks, though a module's persisted interface carries no value, so a cold and a cached build could disagree"
+file = "crates/nazm-core/src/constants.rs"
+find = "        if let Some(p) = c.pub_span {"
+replace = "        if let Some(p) = c.pub_span.filter(|_| false) {"
+killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]
+
+[[mutation]]
+name = "g2-a-constant-index-at-the-length-is-accepted"
+why = "a constant index equal to the length checks, and is left to trap at run time"
+file = "crates/nazm-core/src/check.rs"
+find = "            if i < 0 || i >= i128::from(n) {"
+replace = "            if i < 0 || i > i128::from(n) {"
+killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]

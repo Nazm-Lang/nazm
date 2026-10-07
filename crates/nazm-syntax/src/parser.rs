@@ -37,9 +37,9 @@ use nazm_span::{FileId, Span};
 use crate::ast::{
     Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm,
-    MethodOf, Param, PatternField, Place, PlaceField, Program, Qualifier, Record, Reexport,
-    ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam,
-    Variant, While,
+    MethodOf, Param, PatternField, Place, PlaceField, PlaceStep, Program, Qualifier, Record,
+    Reexport, ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName,
+    TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -195,6 +195,8 @@ pub(crate) enum Item {
     Trait(Trait),
     /// An impl: its header and its methods, each a function marked as the impl's.
     Impl(ImplDecl, Vec<Function>),
+    /// A constant (Gate 2).
+    Const(crate::ast::Const),
 }
 
 /// Where a parse of top-level items starts and where it may stop (N76).
@@ -256,6 +258,7 @@ pub(crate) fn parse_lossless(
         crate::cst::Strings::default(),
     );
     let mut program = Program {
+        consts: Vec::new(),
         functions: Vec::new(),
         records: Vec::new(),
         enums: Vec::new(),
@@ -287,6 +290,7 @@ impl Item {
             Self::Enum(e) => program.enums.push(e),
             Self::Import(i) => program.imports.push(i),
             Self::Trait(t) => program.traits.push(t),
+            Self::Const(c) => program.consts.push(c),
             Self::Impl(decl, methods) => {
                 program.impls.push(decl);
                 program.functions.extend(methods);
@@ -398,11 +402,26 @@ pub(crate) fn parse_region(
                 next += 2;
             }
             let after_pub = p.tokens.get(next).map(|t| t.kind.clone());
-            match after_pub {
-                Some(TokenKind::Struct) => p.record().map(Item::Record),
-                Some(TokenKind::Enum) => p.enumeration().map(Item::Enum),
-                Some(TokenKind::Trait) => p.trait_decl().map(Item::Trait),
-                _ => p.function().map(Item::Function),
+            // `const NAME:` (Gate 2): a word only at the start of an item, before a name and a
+            // `:`, so no name a program already uses stops being one.
+            let constant = matches!(&after_pub, Some(TokenKind::Ident(w)) if w == "const")
+                && matches!(
+                    p.tokens.get(next + 1).map(|t| &t.kind),
+                    Some(TokenKind::Ident(_))
+                )
+                && matches!(
+                    p.tokens.get(next + 2).map(|t| &t.kind),
+                    Some(TokenKind::Colon)
+                );
+            if constant {
+                p.constant().map(Item::Const)
+            } else {
+                match after_pub {
+                    Some(TokenKind::Struct) => p.record().map(Item::Record),
+                    Some(TokenKind::Enum) => p.enumeration().map(Item::Enum),
+                    Some(TokenKind::Trait) => p.trait_decl().map(Item::Trait),
+                    _ => p.function().map(Item::Function),
+                }
             }
         };
         // A declaration that needed recovery is in the concrete tree and not the abstract
@@ -2043,6 +2062,7 @@ impl<'a> Parser<'a> {
         let end = effects.as_ref().map_or(ret.span, |e| e.span);
         self.wrap(at, SyntaxKind::FnType);
         Some(TypeName {
+            length: None,
             qualifier: None,
             function: Some(Box::new(FnTypeName {
                 params,
@@ -2094,6 +2114,9 @@ impl<'a> Parser<'a> {
         if self.at(&TokenKind::Fn) {
             return self.fn_type(at);
         }
+        if self.at(&TokenKind::LBracket) {
+            return self.array_type(at);
+        }
         let name_span = self.peek_span();
         let qualifier = self.qualifier_before_name();
         let name_span = if qualifier.is_some() {
@@ -2117,6 +2140,7 @@ impl<'a> Parser<'a> {
                     name_span,
                     span: name_span.join(end),
                     args,
+                    length: None,
                 })
             }
             other => {
@@ -2128,6 +2152,156 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    /// `[T; N]` (Gate 2): a fixed-size array type. Its length is an integer literal or a
+    /// constant's name, which the checker evaluates.
+    fn array_type(&mut self, at: Checkpoint) -> Option<TypeName> {
+        let open = self.expect(&TokenKind::LBracket, "to start an array type")?;
+        let elem = self.type_name()?;
+        self.expect(
+            &TokenKind::Semi,
+            "between an array's element type and its length",
+        )?;
+        let length = self.primary()?;
+        let close = self.expect(&TokenKind::RBracket, "to close an array type")?;
+        self.wrap(at, SyntaxKind::ArrayType);
+        let span = open.join(close);
+        Some(TypeName {
+            qualifier: None,
+            function: None,
+            name: TypeName::ARRAY.to_owned(),
+            name_span: span,
+            span,
+            args: Some(vec![elem]),
+            length: Some(Box::new(length)),
+        })
+    }
+
+    /// `const NAME: Type = value;`, optionally `pub` (Gate 2).
+    fn constant(&mut self) -> Option<crate::ast::Const> {
+        let at = self.checkpoint();
+        let start = self.peek_span();
+        let pub_span = self.at(&TokenKind::Pub).then(|| {
+            let s = self.peek_span();
+            self.advance();
+            s
+        });
+        self.advance(); // `const`
+        let name_span = self.peek_span();
+        let TokenKind::Ident(name) = self.advance() else {
+            return None;
+        };
+        if self.reserved(&name, name_span) {
+            return None;
+        }
+        self.expect(&TokenKind::Colon, "before a constant's type")?;
+        let ty = self.type_name()?;
+        self.expect(&TokenKind::Eq, "before a constant's value")?;
+        let value = self.expr()?;
+        let end = self.expect(&TokenKind::Semi, "to end a constant")?;
+        self.wrap(at, SyntaxKind::ConstItem);
+        self.drop_item = self.poisoned;
+        Some(crate::ast::Const {
+            name,
+            name_span,
+            pub_span,
+            ty,
+            value,
+            span: start.join(end),
+        })
+    }
+
+    /// Whether the `[` at `open` begins type arguments — `vec_new[Int]()`, `Pair[Int, Str](…)`,
+    /// `Maybe[Int].None()` — rather than an index (Gate 2): every token inside is one a type is
+    /// written with, and what follows the `]` is what type arguments always come before.
+    fn bracket_is_type_args(&self, open: usize) -> bool {
+        let mut depth = 0usize;
+        let mut at = open;
+        loop {
+            let Some(t) = self.tokens.get(at).map(|t| &t.kind) else {
+                return false;
+            };
+            match t {
+                TokenKind::LBracket | TokenKind::LParen | TokenKind::LBrace => depth += 1,
+                TokenKind::RBracket | TokenKind::RParen | TokenKind::RBrace => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                TokenKind::Ident(_)
+                | TokenKind::Comma
+                | TokenKind::ColonColon
+                | TokenKind::Fn
+                | TokenKind::Arrow
+                | TokenKind::Bang
+                | TokenKind::Colon => {}
+                _ => return false,
+            }
+            at += 1;
+        }
+        match self.tokens.get(at + 1).map(|t| &t.kind) {
+            Some(TokenKind::LParen) => true,
+            Some(TokenKind::Dot) => {
+                // At a completion hole, `Maybe[Int].` and `Maybe[Int].So` are an applied
+                // enum's variant being written: nothing else completes after `].`.
+                let at_hole = self.ends_at_hole(at + 1)
+                    || (self.ident_at(at + 2) && self.ends_at_hole(at + 2));
+                at_hole
+                    || (self.ident_at(at + 2)
+                        && matches!(
+                            self.tokens.get(at + 3).map(|t| &t.kind),
+                            Some(TokenKind::LParen)
+                        ))
+            }
+            _ => false,
+        }
+    }
+
+    /// `[a, b, c]` or `[value; count]` (Gate 2).
+    #[inline(never)]
+    fn array_literal(&mut self, at: Checkpoint) -> Option<Expr> {
+        let open = self.expect(&TokenKind::LBracket, "to start an array")?;
+        let mut deepest = 0;
+        if !self.at(&TokenKind::RBracket) {
+            let first = self.expr()?;
+            deepest = deepest.max(self.child());
+            if self.eat(&TokenKind::Semi) {
+                let count = self.expr()?;
+                deepest = deepest.max(self.child());
+                let close = self.expect(&TokenKind::RBracket, "to close an array")?;
+                self.built(deepest + 1)?;
+                self.wrap(at, SyntaxKind::ArrayExpr);
+                return Some(Expr::ArrayRepeat {
+                    value: Box::new(first),
+                    count: Box::new(count),
+                    span: open.join(close),
+                });
+            }
+            let mut elems = vec![first];
+            while self.eat(&TokenKind::Comma) {
+                if self.at(&TokenKind::RBracket) {
+                    break;
+                }
+                elems.push(self.expr()?);
+                deepest = deepest.max(self.child());
+            }
+            let close = self.expect(&TokenKind::RBracket, "to close an array")?;
+            self.built(deepest + 1)?;
+            self.wrap(at, SyntaxKind::ArrayExpr);
+            return Some(Expr::Array {
+                elems,
+                span: open.join(close),
+            });
+        }
+        let close = self.expect(&TokenKind::RBracket, "to close an array")?;
+        self.built(1)?;
+        self.wrap(at, SyntaxKind::ArrayExpr);
+        Some(Expr::Array {
+            elems: Vec::new(),
+            span: open.join(close),
+        })
     }
 
     /// `[T, U]` — type arguments, possibly none.
@@ -2501,6 +2675,10 @@ impl<'a> Parser<'a> {
     /// `Ok(None)` means "not an assignment", which is different from "an assignment that
     /// failed to parse" — the second has already reported and must not be retried as an
     /// expression.
+    ///
+    /// Not inlined: `statement` recurses once per nested block, and this body in its frame
+    /// would cost every level.
+    #[inline(never)]
     fn try_assign(&mut self) -> Option<Option<Assign>> {
         if !matches!(self.peek(), TokenKind::Ident(_)) {
             return Some(None);
@@ -2511,6 +2689,27 @@ impl<'a> Parser<'a> {
         loop {
             match self.tokens.get(at).map(|t| &t.kind) {
                 Some(TokenKind::Eq) => break,
+                // `[index]` (Gate 2): skipped, balanced, to see what follows.
+                Some(TokenKind::LBracket) => {
+                    let mut depth = 0usize;
+                    loop {
+                        match self.tokens.get(at).map(|t| &t.kind) {
+                            Some(TokenKind::LBracket) => depth += 1,
+                            Some(TokenKind::RBracket) => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            Some(TokenKind::Eof | TokenKind::Semi | TokenKind::LBrace) | None => {
+                                return Some(None)
+                            }
+                            _ => {}
+                        }
+                        at += 1;
+                    }
+                    at += 1;
+                }
                 Some(TokenKind::Dot) => {
                     if matches!(
                         self.tokens.get(at + 1).map(|t| &t.kind),
@@ -2532,16 +2731,31 @@ impl<'a> Parser<'a> {
         };
         let mut path = Vec::new();
         let mut last = name_span;
-        while self.eat(&TokenKind::Dot) {
+        loop {
+            if self.at(&TokenKind::LBracket) {
+                let open = self.peek_span();
+                self.advance();
+                let index = self.expr()?;
+                let close = self.expect(&TokenKind::RBracket, "to close an index")?;
+                last = close;
+                path.push(PlaceStep::Index {
+                    index: Box::new(index),
+                    span: open.join(close),
+                });
+                continue;
+            }
+            if !self.eat(&TokenKind::Dot) {
+                break;
+            }
             let field_span = self.peek_span();
             let TokenKind::Ident(field) = self.advance() else {
                 return Some(None);
             };
             last = field_span;
-            path.push(PlaceField {
+            path.push(PlaceStep::Field(PlaceField {
                 name: field,
                 name_span: field_span,
-            });
+            }));
         }
         // The place is its own node: the name and its field path, without the `=`.
         // Wrapped after the fact, at the same checkpoint the statement will use.
@@ -3009,6 +3223,27 @@ impl<'a> Parser<'a> {
         Some(lhs)
     }
 
+    /// `base[index]` (Gate 2), with the tree depth it reaches.
+    #[inline(never)]
+    fn index(&mut self, at: Checkpoint, base: Expr, depth: usize) -> Option<(Expr, usize)> {
+        let open = self.peek_span();
+        self.advance();
+        let index = self.expr()?;
+        let close = self.expect(&TokenKind::RBracket, "to close an index")?;
+        let depth = depth.max(self.child()) + 1;
+        self.built(depth)?;
+        self.wrap(at, SyntaxKind::IndexExpr);
+        Some((
+            Expr::Index {
+                span: base.span().join(close),
+                base: Box::new(base),
+                index: Box::new(index),
+                bracket_span: open.join(close),
+            },
+            depth,
+        ))
+    }
+
     fn primary(&mut self) -> Option<Expr> {
         if !self.enter() {
             return None;
@@ -3025,6 +3260,10 @@ impl<'a> Parser<'a> {
     ///
     /// A loop rather than recursion: `a.b?.c` is a left spine, so it costs one tree level
     /// per postfix and no parser recursion at all.
+    ///
+    /// Not inlined: `primary` is on the path every nested block recurses through, and this
+    /// loop's temporaries in its frame would cost every level.
+    #[inline(never)]
     fn projections(&mut self, at: Checkpoint, base: Expr) -> Option<Expr> {
         let mut out = base;
         let mut depth = self.child();
@@ -3040,6 +3279,11 @@ impl<'a> Parser<'a> {
                     operand: Box::new(out),
                     op_span,
                 };
+                continue;
+            }
+            // `base[index]` (Gate 2): an element of an array.
+            if self.at(&TokenKind::LBracket) {
+                (out, depth) = self.index(at, out, depth)?;
                 continue;
             }
             if !self.at(&TokenKind::Dot) {
@@ -3127,9 +3371,10 @@ impl<'a> Parser<'a> {
         } else {
             (None, name, span)
         };
-        // `name[T, …]` — type arguments, before a call, a construction or a
-        // variant. Nothing else can follow a name with `[`: there is no indexing.
-        let type_args = if self.at(&TokenKind::LBracket) {
+        // `name[T, …]` — type arguments, before a call, a construction or a variant. Since
+        // Gate 2 a `[` after a name may also index it; [`Self::bracket_is_type_args`] decides,
+        // and an index is left to the projections after the name.
+        let type_args = if self.at(&TokenKind::LBracket) && self.bracket_is_type_args(self.pos) {
             let (args, _) = self.type_args()?;
             // `Maybe[Int].` with the cursor right after the `.`: a probe's hole,
             // the empty variant name of an applied enum's construction (N26).
@@ -3374,6 +3619,10 @@ impl<'a> Parser<'a> {
         // Prefix bit complement (Gate 2). Binds as tightly as `-` and `!`.
         if self.at(&TokenKind::Tilde) {
             return self.complement(at);
+        }
+        // An array (Gate 2).
+        if self.at(&TokenKind::LBracket) {
+            return self.array_literal(at);
         }
 
         // Prefix negation, before anything else can claim the `-`.
@@ -3868,6 +4117,19 @@ mod ast_depth_tests {
                         }
                     }
                     Expr::Field { base, .. } => stack.push((Node::Expr(base), d + 1)),
+                    Expr::Array { elems, .. } => {
+                        for x in elems {
+                            stack.push((Node::Expr(x), d + 1));
+                        }
+                    }
+                    Expr::ArrayRepeat { value, count, .. } => {
+                        stack.push((Node::Expr(value), d + 1));
+                        stack.push((Node::Expr(count), d + 1));
+                    }
+                    Expr::Index { base, index, .. } => {
+                        stack.push((Node::Expr(base), d + 1));
+                        stack.push((Node::Expr(index), d + 1));
+                    }
                     Expr::Propagate { operand, .. } => stack.push((Node::Expr(operand), d + 1)),
                     Expr::If {
                         cond,

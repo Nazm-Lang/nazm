@@ -210,6 +210,36 @@ fn equal(fx: &mut Fx<'_, '_>, a: V, b: V, t: Ty, differ: B) {
             }
             fx.b.switch(equal_blk);
         }
+        // Element by element, in a loop: a length is up to 65,536 (Gate 2).
+        Ty::Array(crate::ir::ArrayTy(id)) => {
+            let Some((elem, len)) = fx.lw.lay.arrays.get(&id).copied() else {
+                return;
+            };
+            let stride = fx.size(elem);
+            let i = fx.b.var(Class::I64);
+            let zero = fx.iconst(0);
+            fx.set_var(i, zero);
+            let head = fx.b.block();
+            let body = fx.b.block();
+            let done = fx.b.block();
+            fx.jump(head);
+            fx.b.switch(head);
+            let iv = fx.get_var(i);
+            let more = fx.cmp_imm(Cmp::Lt, iv, Class::I64, i64::from(len));
+            fx.branch(more, body, done);
+            fx.b.switch(body);
+            let iv = fx.get_var(i);
+            let k = fx.iconst(i64::from(stride));
+            let off = fx.bin(super::ir::BinOp::Mul, iv, k);
+            let x = fx.ptr_add(a, off);
+            let y = fx.ptr_add(b, off);
+            field_equal(fx, x, y, elem, differ);
+            let iv = fx.get_var(i);
+            let step = fx.add_imm(iv, 1);
+            fx.set_var(i, step);
+            fx.jump(head);
+            fx.b.switch(done);
+        }
         // No equality exists for a handle; the checker refuses the comparison.
         _ => {
             fx.jump(differ);

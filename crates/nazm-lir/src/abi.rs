@@ -148,6 +148,8 @@ pub struct ByteLayouts {
     pub enums: BTreeMap<u32, Sum>,
     owning_records: BTreeMap<u32, bool>,
     owning_enums: BTreeMap<u32, bool>,
+    /// Array element types and lengths, by array id (Gate 2).
+    pub arrays: BTreeMap<u32, (Ty, u32)>,
 }
 
 impl ByteLayouts {
@@ -169,6 +171,11 @@ impl ByteLayouts {
                 .enums
                 .iter()
                 .map(|e| (e.id.0, owns(&unit.records, &unit.enums, Ty::Enum(e.id))))
+                .collect(),
+            arrays: unit
+                .arrays
+                .iter()
+                .map(|a| (a.id.0, (a.elem, a.len)))
                 .collect(),
         };
         let mut pending: Vec<(bool, u32)> = unit
@@ -254,6 +261,13 @@ impl ByteLayouts {
             Ty::Str => Some(self.data.str()),
             Ty::Record(RecordTy(id)) => self.records.get(&id).map(|s| s.lay),
             Ty::Enum(EnumTy(id)) => self.enums.get(&id).map(|s| s.lay),
+            // Its elements, contiguous, each at a multiple of its own size, which its
+            // alignment divides (Gate 2).
+            Ty::Array(crate::ir::ArrayTy(id)) => {
+                let (elem, len) = self.arrays.get(&id).copied()?;
+                let l = self.lay(elem)?;
+                Some(Lay::new(l.size.saturating_mul(len), l.align))
+            }
         }
     }
 
@@ -261,7 +275,7 @@ impl ByteLayouts {
     #[must_use]
     pub fn owns(&self, t: Ty) -> bool {
         match t {
-            Ty::Int | Ty::Bool | Ty::Num(_) => false,
+            Ty::Int | Ty::Bool | Ty::Num(_) | Ty::Array(_) => false,
             Ty::Str | Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) | Ty::ChanOf(_) => {
                 true
             }
@@ -384,6 +398,7 @@ mod tests {
             enums: enums.into_iter().collect(),
             owning_records: BTreeMap::new(),
             owning_enums: BTreeMap::new(),
+            arrays: BTreeMap::new(),
         }
     }
 

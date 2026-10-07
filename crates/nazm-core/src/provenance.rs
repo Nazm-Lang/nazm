@@ -673,6 +673,28 @@ impl<'b> Walk<'_, 'b> {
             Expr::Neg { operand, .. } | Expr::BitNot { operand, .. } => {
                 Shaped::whole(self.expr(operand))
             }
+            // An array carries what its elements carry; an element carries its array's and its
+            // index's (Gate 2).
+            Expr::Array { elems, .. } => {
+                let mut flow: Option<Flow> = None;
+                for x in elems {
+                    let f = self.expr(x);
+                    flow = Some(match flow {
+                        Some(acc) => acc.joined(&f),
+                        None => f,
+                    });
+                }
+                flow.map_or_else(Shaped::default, Shaped::whole)
+            }
+            Expr::ArrayRepeat { value, count, .. } => {
+                self.expr(count);
+                Shaped::whole(self.expr(value))
+            }
+            Expr::Index { base, index, .. } => {
+                let b = self.expr(base);
+                let i = self.expr(index);
+                Shaped::whole(b.joined(&i))
+            }
             // The logical operators are the `if`s they lower to (N49): the deciding operand is a
             // condition — walked, contributing no provenance — and the value is the other
             // operand's or a constant's.

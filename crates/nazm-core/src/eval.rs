@@ -44,6 +44,9 @@ pub enum Value {
     /// A number of any other numeric type (Gate 2): its kind and canonical bits, operated on
     /// only through [`nazm_sema::numeric`], the semantics both interpreters share.
     Num(NumVal),
+    /// A fixed-size array (Gate 2): its elements, inline, by value. Plain data only — numbers,
+    /// `Bool`s, records and enums of them — so a clone is the copy the language specifies.
+    Array(Vec<Value>),
     Bool(bool),
     /// **Bytes, not text.** `docs/spec.md` specifies `Str` as a byte sequence, and
     /// `str_slice` is allowed to split a multi-byte character — so the representation
@@ -398,6 +401,7 @@ impl PartialEq for Value {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a == b,
             (Self::Num(a), Self::Num(b)) => a == b,
+            (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Bool(a), Self::Bool(b)) => a == b,
             (Self::Str(a), Self::Str(b)) => a == b,
             (Self::Ints(a), Self::Ints(b)) => Arc::ptr_eq(a, b),
@@ -652,6 +656,7 @@ impl std::fmt::Display for Value {
         match self {
             Self::Int(v) => write!(f, "{v}"),
             Self::Num(v) => f.write_str(&numeric::to_str(*v)),
+            Self::Array(v) => write!(f, "array({} elements)", v.len()),
             Self::Bool(v) => write!(f, "{v}"),
             // Rendering, not semantics: a `Str` that is not valid UTF-8 has no text
             // form, and showing the replacement character is a display decision. No
@@ -1952,12 +1957,23 @@ impl Interpreter {
         &mut self,
         f: &cir::Function,
         local: cir::LocalId,
-        path: &[cir::Step],
+        path: &[cir::PathStep],
         value: &cir::Expr,
         at: Span,
         env: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
         let v = take!(self, f, value, env);
+        // The value, then each index, outermost first (Gate 2), before anything is written.
+        let mut indexes = Vec::new();
+        for step in path {
+            if let cir::PathStep::Index { index, .. } = step {
+                match take!(self, f, index, env) {
+                    Value::Int(i) => indexes.push(i),
+                    _ => return Err(no_such_place(at)),
+                }
+            }
+        }
+        let mut indexes = indexes.into_iter();
         let Some(Some(mut slot)) = env.get_mut(local.index()).map(Option::as_mut) else {
             return Err(fail(
                 codes::UNDEFINED_VARIABLE,
@@ -1972,6 +1988,21 @@ impl Interpreter {
             // Unreachable if checking ran: the checker resolved this path and refused
             // anything it could not. A diagnostic rather than a panic, so a checker bug
             // surfaces as a report.
+            let step = match step {
+                cir::PathStep::Field(s) => s,
+                cir::PathStep::Index { at: bracket, .. } => {
+                    let i = indexes.next().unwrap_or(-1);
+                    let Value::Array(items) = slot else {
+                        return Err(no_such_place(at));
+                    };
+                    let n = items.len();
+                    let Some(next) = usize::try_from(i).ok().and_then(|i| items.get_mut(i)) else {
+                        return Err(index_outside(*bracket, i, n));
+                    };
+                    slot = next;
+                    continue;
+                }
+            };
             let Value::Record(r) = slot else {
                 return Err(no_such_place(at));
             };
@@ -2157,6 +2188,33 @@ impl Interpreter {
                 numeric::convert(to, *mode, a)
                     .map(from_num)
                     .map_err(|err| num_failure(err, e.at, "conversion", to))?
+            }
+            // Arrays (Gate 2): built in order, copied, and read by a checked index.
+            ExprKind::Array { elems } => {
+                let mut out = Vec::with_capacity(elems.len());
+                for x in elems {
+                    out.push(take!(self, f, x, env));
+                }
+                Value::Array(out)
+            }
+            ExprKind::ArrayRepeat { value, count } => {
+                let v = take!(self, f, value, env);
+                Value::Array(vec![v; *count as usize])
+            }
+            ExprKind::Index { base, index } => {
+                let b = take!(self, f, base, env);
+                let i = take!(self, f, index, env);
+                let (Value::Array(items), Value::Int(i)) = (&b, &i) else {
+                    return Err(fail(
+                        codes::INVALID_OPERANDS,
+                        e.at,
+                        "an index into a non-array",
+                    ));
+                };
+                match usize::try_from(*i).ok().and_then(|i| items.get(i)) {
+                    Some(v) => v.clone(),
+                    None => return Err(index_outside(e.at, *i, items.len())),
+                }
             }
             ExprKind::Fits { to, operand } => {
                 let v = take!(self, f, operand, env);
@@ -2433,6 +2491,20 @@ fn as_bool(v: &Value, cond: &cir::Expr) -> Result<bool, RuntimeError> {
     }
 }
 
+/// An array index outside the array (Gate 2): the sentence the compiled program writes too.
+fn index_outside(at: Span, i: i64, n: usize) -> RuntimeError {
+    RuntimeError {
+        diagnostic: Box::new(
+            Diagnostic::error(
+                codes::INDEX_OUT_OF_BOUNDS,
+                at,
+                "this index is outside the array",
+            )
+            .help(format!("asked for element {i} of an array of {n}")),
+        ),
+    }
+}
+
 fn no_such_place(at: Span) -> RuntimeError {
     fail(
         codes::UNDEFINED_VARIABLE,
@@ -2634,6 +2706,8 @@ fn equal(a: &Value, b: &Value) -> Option<bool> {
         (Value::Int(x), Value::Int(y)) => Some(x == y),
         // IEEE 754's for a float (Gate 2): a NaN equals nothing.
         (Value::Num(x), Value::Num(y)) => Some(numeric::compare(numeric::Cmp::Eq, *x, *y)),
+        // Element by element (Gate 2).
+        (Value::Array(x), Value::Array(y)) => all(x, y),
         (Value::Bool(x), Value::Bool(y)) => Some(x == y),
         (Value::Str(x), Value::Str(y)) => Some(x.bytes() == y.bytes()),
         (Value::Record(x), Value::Record(y)) => all(&x.fields, &y.fields),
@@ -2651,6 +2725,7 @@ fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Int(_) => "Int",
         Value::Num(n) => n.kind.name(),
+        Value::Array(_) => "an array",
         Value::Bool(_) => "Bool",
         Value::Str(_) => "Str",
         Value::Ints(_) => "Ints",

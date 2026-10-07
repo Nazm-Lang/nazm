@@ -35,6 +35,8 @@ pub struct Program {
     /// `impl Trait for Type` headers, in source order (N78). An impl's methods are in
     /// [`Program::functions`], each with [`Function::method_of`] naming its impl.
     pub impls: Vec<ImplDecl>,
+    /// `const NAME: Type = value;` declarations, in source order (Gate 2).
+    pub consts: Vec<Const>,
     /// The completion hole a probe parse was asked about and found (N26); `None` for every
     /// ordinary parse. See [`HoleSite`].
     pub hole: Option<HoleSite>,
@@ -98,6 +100,20 @@ pub enum HoleSite {
     Call { callee: Span },
     /// After `E.V(`, in a variant construction or (`pattern`) a match pattern.
     Payload { variant: Span, pattern: bool },
+}
+
+/// `const NAME: Type = value;`, optionally `pub` (Gate 2, `docs/spec.md`, *Constants*): a
+/// value the checker computes, usable wherever an expression is and as an array's length.
+/// `const` is a word only here, at the start of an item, so no name a program already uses
+/// stops being one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Const {
+    pub name: String,
+    pub name_span: Span,
+    pub pub_span: Option<Span>,
+    pub ty: TypeName,
+    pub value: Expr,
+    pub span: Span,
 }
 
 /// `use "path";` or `use "path" as name;`
@@ -351,6 +367,9 @@ pub struct TypeName {
     /// The whole written type, arguments included.
     pub span: Span,
     pub args: Option<Vec<TypeName>>,
+    /// `[T; N]` (Gate 2): a fixed-size array, whose `name` is `[]`, whose one argument is the
+    /// element type, and whose length is this — an integer literal or a constant's name.
+    pub length: Option<Box<Expr>>,
 }
 
 impl TypeName {
@@ -364,8 +383,12 @@ impl TypeName {
             name_span: span,
             span,
             args: None,
+            length: None,
         }
     }
+
+    /// The name an array type is written under in a [`TypeName`]: `[T; N]`.
+    pub const ARRAY: &'static str = "[]";
 }
 
 /// One declared type parameter: `T` in `fn identity[T](…)`, or `T: Equality` in
@@ -456,6 +479,15 @@ impl Block {
                 | Expr::Not { operand, .. }
                 | Expr::BitNot { operand, .. }
                 | Expr::Propagate { operand, .. } => exprs.push(operand),
+                Expr::Array { elems, .. } => exprs.extend(elems.iter()),
+                Expr::ArrayRepeat { value, count, .. } => {
+                    exprs.push(value);
+                    exprs.push(count);
+                }
+                Expr::Index { base, index, .. } => {
+                    exprs.push(base);
+                    exprs.push(index);
+                }
                 Expr::Field { base, .. } => exprs.push(base),
                 Expr::Binary { lhs, rhs, .. } => {
                     exprs.push(lhs);
@@ -592,12 +624,23 @@ pub struct Place {
     /// `docs/spec.md`, *Binding mutability reaches every field*.
     pub name: String,
     pub name_span: Span,
-    /// The fields, outermost first: `a.b.c` is `["b", "c"]`.
-    pub path: Vec<PlaceField>,
+    /// The fields and indexes, outermost first: `a.b[i].c` is `[b, [i], c]`.
+    pub path: Vec<PlaceStep>,
     pub span: Span,
 }
 
-/// One step of a projection path.
+/// One step of an assignment's place: a field, or an array element (Gate 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaceStep {
+    Field(PlaceField),
+    /// `[index]`; `span` covers the brackets.
+    Index {
+        index: Box<Expr>,
+        span: Span,
+    },
+}
+
+/// One field step of a projection path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaceField {
     pub name: String,
@@ -717,6 +760,25 @@ pub enum Expr {
     Not {
         operand: Box<Expr>,
         op_span: Span,
+        span: Span,
+    },
+    /// `[a, b, c]` — a fixed-size array of the elements written, in order (Gate 2).
+    Array {
+        elems: Vec<Expr>,
+        span: Span,
+    },
+    /// `[value; count]` — `count` copies of `value`; `count` is a literal or a constant.
+    ArrayRepeat {
+        value: Box<Expr>,
+        count: Box<Expr>,
+        span: Span,
+    },
+    /// `base[index]` — an array's element, by an `Int` index (Gate 2).
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+        /// The brackets, which a bounds failure points at.
+        bracket_span: Span,
         span: Span,
     },
     /// `~operand` — the bit complement of an integer (Gate 2).
@@ -854,6 +916,9 @@ impl Expr {
             | Self::Neg { span, .. }
             | Self::Not { span, .. }
             | Self::BitNot { span, .. }
+            | Self::Array { span, .. }
+            | Self::ArrayRepeat { span, .. }
+            | Self::Index { span, .. }
             | Self::Closure { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
@@ -880,6 +945,9 @@ impl Expr {
             | Self::Neg { span, .. }
             | Self::Not { span, .. }
             | Self::BitNot { span, .. }
+            | Self::Array { span, .. }
+            | Self::ArrayRepeat { span, .. }
+            | Self::Index { span, .. }
             | Self::Closure { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }

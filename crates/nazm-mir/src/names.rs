@@ -73,6 +73,11 @@ pub fn type_key(t: Type, types: &UserTypes, graph: &ModuleGraph) -> String {
                 format!("{head}({})", inner.join(","))
             }
         }
+        // `[T; N]` (Gate 2): its element's key and its length.
+        Type::Array(a) => match types.array_info(a) {
+            Some((e, n)) => format!("Array({},{n})", type_key(e, types, graph)),
+            None => "?".to_owned(),
+        },
         Type::Param(_) => "?".to_owned(),
         other => other.builtin_name().unwrap_or("?").to_owned(),
     }

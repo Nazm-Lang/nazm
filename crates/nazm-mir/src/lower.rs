@@ -1015,8 +1015,25 @@ impl Fx<'_> {
         self.goto(to, at);
     }
 
-    fn assign_stmt(&mut self, local: LocalId, path: &[cir::Step], value: &cir::Expr, at: Span) {
+    fn assign_stmt(&mut self, local: LocalId, path: &[cir::PathStep], value: &cir::Expr, at: Span) {
         let root = self.local_ty(local);
+        // Through an array element (Gate 2): the value, then each index, outermost first, then
+        // one checked write.
+        if path
+            .iter()
+            .any(|p| matches!(p, cir::PathStep::Index { .. }))
+        {
+            self.element_assign(local, root, path, value, at);
+            return;
+        }
+        let path: Vec<cir::Step> = path
+            .iter()
+            .filter_map(|p| match p {
+                cir::PathStep::Field(s) => Some(*s),
+                cir::PathStep::Index { .. } => None,
+            })
+            .collect();
+        let path = path.as_slice();
         if path.is_empty() {
             if self.managed(root) {
                 // The new value first, then the old one let go, then the move: `a = a` and a
@@ -1058,6 +1075,69 @@ impl Fx<'_> {
             at,
         );
         self.forget(tmp);
+    }
+
+    /// An assignment through an array element (Gate 2).
+    fn element_assign(
+        &mut self,
+        local: LocalId,
+        root: Type,
+        path: &[cir::PathStep],
+        value: &cir::Expr,
+        at: Span,
+    ) {
+        let mut current = root;
+        let mut shape: Vec<Result<FieldRef, u32>> = Vec::with_capacity(path.len());
+        for step in path {
+            match step {
+                cir::PathStep::Field(s) => {
+                    let Type::Record(rid) = current else {
+                        self.fail(s.at, "a field written on something that is not a record");
+                        return;
+                    };
+                    shape.push(Ok(FieldRef {
+                        record: rid,
+                        field: s.field,
+                    }));
+                    current = self.record_field_ty(rid, s.field, s.at);
+                }
+                cir::PathStep::Index { len, at: i_at, .. } => {
+                    let Type::Array(a) = current else {
+                        self.fail(*i_at, "an index into something that is not an array");
+                        return;
+                    };
+                    shape.push(Err(*len));
+                    current = self.res.types().array_info(a).map_or(Type::Int, |(e, _)| e);
+                }
+            }
+        }
+        let tmp = self.temp(current, at, "element");
+        self.expr_into(value, Some(tmp));
+        let mut refs = Vec::with_capacity(path.len());
+        for (step, s) in path.iter().zip(shape) {
+            match (step, s) {
+                (_, Ok(f)) => refs.push(crate::ir::PathRef::Field(f)),
+                (cir::PathStep::Index { index, .. }, Err(len)) => {
+                    let i = self.temp(Type::Int, at, "index");
+                    self.expr_into(index, Some(i));
+                    refs.push(crate::ir::PathRef::Index { index: i, len });
+                }
+                _ => {}
+            }
+        }
+        if self.cur.is_none() {
+            return;
+        }
+        let unwind = self.unwind();
+        self.push(
+            StatementKind::SetElement {
+                base: local,
+                path: refs,
+                value: tmp,
+                unwind,
+            },
+            at,
+        );
     }
 
     fn record_field_ty(&mut self, rid: RecordId, field: u32, at: Span) -> Type {
@@ -1264,7 +1344,10 @@ impl Fx<'_> {
             cir::ExprKind::Neg(x)
             | cir::ExprKind::Complement(x)
             | cir::ExprKind::Convert { operand: x, .. }
-            | cir::ExprKind::Fits { operand: x, .. } => Self::hazardous(x),
+            | cir::ExprKind::Fits { operand: x, .. }
+            | cir::ExprKind::ArrayRepeat { value: x, .. } => Self::hazardous(x),
+            cir::ExprKind::Array { elems } => elems.iter().any(Self::hazardous),
+            cir::ExprKind::Index { base, index } => Self::hazardous(base) || Self::hazardous(index),
             cir::ExprKind::Arith { lhs, rhs, .. }
             | cir::ExprKind::Bits { lhs, rhs, .. }
             | cir::ExprKind::Compare { lhs, rhs, .. } => {
@@ -1420,6 +1503,37 @@ impl Fx<'_> {
                     at,
                 );
                 self.release(h, at);
+            }
+            // Arrays (Gate 2): plain data, so every element is a copy and nothing is retained.
+            cir::ExprKind::Array { elems } => {
+                let Some((ops, held)) = self.operands(elems) else {
+                    return;
+                };
+                self.write(dst, Rvalue::Array { elems: ops }, at);
+                self.release_all(held, at);
+            }
+            cir::ExprKind::ArrayRepeat { value, count } => {
+                let Some((a, h)) = self.operand(value, false) else {
+                    return;
+                };
+                self.write(
+                    dst,
+                    Rvalue::ArrayRepeat {
+                        value: a,
+                        count: *count,
+                    },
+                    at,
+                );
+                self.release(h, at);
+            }
+            cir::ExprKind::Index { base, index } => {
+                let Some((ops, held)) = self.operands(&[(**base).clone(), (**index).clone()])
+                else {
+                    return;
+                };
+                let (b, i) = two(ops);
+                self.write(dst, Rvalue::Index { base: b, index: i }, at);
+                self.release_all(held, at);
             }
             cir::ExprKind::Fits { to, operand } => {
                 let to = self.ty(*to, at);
@@ -1891,7 +2005,9 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         | Type::ChanOf(_)
         | Type::Vec(_)
         | Type::Fn(_) => true,
-        Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) | Type::Num(_) => false,
+        Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) | Type::Num(_) | Type::Array(_) => {
+            false
+        }
         Type::Record(id) => res
             .records()
             .get(id)
@@ -2034,6 +2150,22 @@ fn collect_types(res: &Resolution, graph: &ModuleGraph, functions: &[Function]) 
                     VecInfo {
                         elem,
                         elem_key: type_key(elem, res.types(), graph),
+                        source: res.types().show(t),
+                    },
+                );
+            }
+            Type::Array(a) => {
+                let key = u32::try_from(a.index()).unwrap_or(u32::MAX);
+                if types.arrays.contains_key(&key) {
+                    continue;
+                }
+                let (elem, len) = res.types().array_info(a).unwrap_or((Type::Int, 1));
+                work.push(elem);
+                types.arrays.insert(
+                    key,
+                    crate::ir::ArrayInfo {
+                        elem,
+                        len,
                         source: res.types().show(t),
                     },
                 );

@@ -23,6 +23,10 @@ fn ty_name(u: &Unit, t: Ty) -> String {
     match t {
         Ty::Int => "Int".to_owned(),
         Ty::Num(k) => k.name().to_owned(),
+        Ty::Array(a) => u.arrays.iter().find(|x| x.id == a).map_or_else(
+            || "array".to_owned(),
+            |x| format!("[{}; {}]", ty_name(u, x.elem), x.len),
+        ),
         Ty::Bool => "Bool".to_owned(),
         Ty::Str => "Str".to_owned(),
         Ty::Ints => "Ints".to_owned(),
