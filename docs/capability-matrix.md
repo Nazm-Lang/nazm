@@ -4,8 +4,10 @@
 
 Two things are kept apart here. **Frozen candidates** are commits a release candidate was tested
 at, each with an immutable record in `releases/` that nothing later updates: the latest is
-**`84d3c801f4b14056297bc6ceadc5f6441873c594`** ([`releases/84d3c80.md`](releases/84d3c80.md), the
-v1 foundation, N40–N48), and the first was `4fb15542dfbf9af0bf34c42fe52783637b3daed4`
+**`7a16a40640b44f93713f8209d714f1fd20f45420`** ([`releases/7a16a40.md`](releases/7a16a40.md), the
+v0.3.0 candidate, R1), before it `82936f6` ([`releases/82936f6.md`](releases/82936f6.md), the core
+closure, N101–N108) and `84d3c80` ([`releases/84d3c80.md`](releases/84d3c80.md), the v1 foundation,
+N40–N48), and the first was `4fb15542dfbf9af0bf34c42fe52783637b3daed4`
 ([`releases/4fb1554.md`](releases/4fb1554.md)). **The claims below are current-tree claims**: they
 include behaviour added after any candidate, each milestone having changed the compiler and run its
 own evidence, and a row is checked against its own evidence, not against a candidate commit.
@@ -39,11 +41,13 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 2,492 passed, 0 failed, 47 ignored, across 200 test binaries**, run contained and
-offline at `47daadf` (R1-C1, 2026-10-07), with selfhost 43 of 43 and the bootstrap's fixpoint. The
-mutation catalogue's 1,268 entries at N108's gate were all caught (`releases/82936f6.md`); R1-C1
-added two, both caught in its 14-mutant campaign. Each release record under `releases/` is the
-frozen account of its own candidate, and the latest one supersedes this line.
+**Current suite: 2,492 passed, 0 failed, 47 ignored**, run contained and offline at the v0.3.0
+candidate `7a16a40` inside both release assemblies (2026-10-07), with selfhost 43 of 43, the
+bootstrap's fixpoint and the lifecycle tests 19 of 19 (`releases/7a16a40.md`). The mutation
+catalogue holds 1,273 entries: the 1,268 present at N108's gate were all caught there
+(`releases/82936f6.md`), and R1-C1's two and R1's three were caught in their own
+responsibility-mapped campaigns. Each release record under `releases/` is the frozen account of its
+own candidate, and the latest one supersedes this line.
 
 *Historical, not current:* the N48 release gate (2026-10-01, at `a8a7b3f`) ended at 2,021 passed,
 0 failed, 29 ignored, across 136 suites, with the catalogue 808 of 808 caught. The durable record of
@@ -4080,10 +4084,18 @@ tracks or would (`scripts/source-digest.sh`) — Cargo manifests, `Cargo.lock`,
 records embedded their own run date, which made bit-reproducibility impossible, and only the
 declared set was digested.*
 
+*R1, 2026-10-07: two assemblies, one archive — on one host and one image.* `cargo xtask contained
+--profile p4t4 release`, run twice at `7a16a40` in `nazm-contained:1.98.1` on one macOS host, gave
+byte-identical archives (`a5e2ee97…`) with identical `MANIFEST.txt` and `PROVENANCE.txt`, every date
+inside the commit's; the manifest was redigested independently, 220 of 220
+(`releases/7a16a40.md`). The archive was signed by nobody, and nothing is claimed across hosts.
+
 **Next dependency** · A comparison across two independent hosts, which needs a second machine.
 
 **Accepted when** · Two runs at one commit produce identical archives, or the claim is
-permanently retired.
+permanently retired. *Met on one host and one image, R1 (2026-10-07); the row stays PARTIAL for what
+N94 lists as not here — a transparency log, keyless signing, SLSA levels and rebuilds on independent
+machines.*
 
 ### 33. Platform and target matrix — PARTIAL
 

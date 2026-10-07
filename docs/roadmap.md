@@ -428,6 +428,21 @@ repository, or a deliberate non-goal; none is promised, and none blocks the rele
 | Trait objects, effect handlers, user effects, implicit-flow tracking | research | N107 checked each and found none a defect or a requirement of the core (`audit-n107.md`) |
 | Windows, 32-bit hosted, big-endian targets | non-goal | stated reasons in `support.md` |
 
+### R1 — public release readiness — **complete, 2026-10-07; candidate `7a16a40`**
+
+`releases/7a16a40.md` the record. No language or runtime semantics changed intentionally. The
+version is settled — language v0.3, toolchain 0.3.0, tag `v0.3.0` — and `docs/stability.md` keeps the
+six identities apart; `docs/spec.md` opens as the v0.3 specification with each section's kind
+stated. CI runs the host-safe subset and leaves the contained stages out by reading the guard; it is
+not the release gate. N108's lifecycle "timing flake" was an inherited ignored SIGINT, and the test
+now restores the default itself. A public README, a getting-started page and a tour the suite runs as
+written, a support matrix checked against the compiler's table, `SECURITY.md` and `CONTRIBUTING.md`.
+Dates inside a candidate are the commit's, and a build-input digest covers every tracked file. **R1-C1**
+fixed the one defect R1 found — a function written as a value was missing from the reference index
+(`architecture.md` §7.110) — and a claims audit brought the current documents to the compiler. Two
+assemblies of the candidate were byte-identical; the manifest redigested independently, 220 of 220;
+five catalogue entries added and caught in their own campaigns. Nothing tagged, pushed or published.
+
 ### N108 — the core release gate — **complete, 2026-10-06; candidate `82936f6`**
 
 `architecture.md` §7.109 first; `releases/82936f6.md` the record. The whole catalogue, contained:
