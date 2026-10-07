@@ -379,6 +379,12 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.format_u64", [Ptr, I64], Some(Word::I64), Numbers, "writes a UInt64's decimal digits into 21 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.float_parses", [Ptr, I64], Some(Word::Bit), Numbers, "borrows the bytes; whether they are a floating-point number as `float_parses` reads one (Gate 2)"),
     import!("nz.float_parse", [Ptr, I64], Some(Word::F64), Numbers, "borrows the bytes; the Float64 they write, or NaN (Gate 2)"),
+    import!("nz.utf8_valid", [Ptr, I64], Some(Word::Bit), Strings, "borrows the bytes; whether they are UTF-8 (Gate 2)"),
+    import!("nz.utf8_count", [Ptr, I64], Some(Word::I64), Strings, "borrows the bytes, which are UTF-8; how many scalar values they encode (Gate 2)"),
+    import!("nz.utf8_decode", [Ptr, I64, I64], Some(Word::I64), Strings, "borrows the bytes, which are UTF-8; the scalar value starting at a boundary (Gate 2)"),
+    import!("nz.utf8_encode", [Ptr, I64], Some(Word::I64), Strings, "writes a scalar value's UTF-8 into 4 bytes the caller owns and returns how many (Gate 2)"),
+    import!("nz.mem_zero", [Ptr, I64], None, Strings, "zeroes bytes the caller owns (Gate 2)"),
+    import!("nz.mem_move", [Ptr, Ptr, I64], None, Strings, "copies bytes that may overlap, borrowing the source (Gate 2)"),
     import!("fmod", [F64, F64], Some(Word::F64), Libc, "the remainder of truncated division"),
     import!("fmodf", [F32, F32], Some(Word::F32), Libc, "the remainder of truncated division"),
     import!("round", [F64], Some(Word::F64), Libc, "half away from zero"),
@@ -585,6 +591,12 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.float_parses", "i1" ("ptr", "i64") "", false, Numbers, "", Never, Any, "whether bytes are a floating-point number as `float_parses` reads one (Gate 2)", "borrows the bytes"),
     rt!("nz.digits_from", "i64" ("ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "the index after a run of decimal digits (Gate 2)", "borrows the bytes"),
     rt!("nz.float_parse", "double" ("ptr", "i64") "", false, Numbers, "", Null, Any, "the Float64 bytes write, or NaN (Gate 2)", "borrows the bytes"),
+    rt!("nz.utf8_valid", "i1" ("ptr", "i64") "", false, Strings, "", Never, Any, "whether bytes are UTF-8: shortest forms, no surrogates, at most U+10FFFF (Gate 2)", "borrows the bytes"),
+    rt!("nz.utf8_count", "i64" ("ptr", "i64") "", false, Strings, "", Never, Any, "the scalar values UTF-8 bytes encode (Gate 2)", "borrows the bytes"),
+    rt!("nz.utf8_decode", "i64" ("ptr", "i64", "i64") "", false, Strings, "", Never, Any, "the scalar value UTF-8 bytes hold at a boundary (Gate 2)", "borrows the bytes"),
+    rt!("nz.utf8_encode", "i64" ("ptr", "i64") "", false, Strings, "", Never, Any, "a scalar value's UTF-8, into a 4-byte buffer (Gate 2)", "writes into the caller's buffer"),
+    rt!("nz.mem_zero", "void" ("ptr", "i64") "", false, Strings, "", Never, Any, "zero a buffer's bytes (Gate 2)", "writes into the caller's buffer"),
+    rt!("nz.mem_move", "void" ("ptr", "ptr", "i64") "", false, Strings, "", Never, Any, "copy bytes that may overlap (Gate 2)", "writes into the destination, borrows the source"),
 ];
 
 /// One global the runtime defines.

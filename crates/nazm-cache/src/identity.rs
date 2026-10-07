@@ -225,7 +225,13 @@ use crate::digest::{self, Framed};
 /// (`N0618`), a constant computable (`N0622`, `N0623`), and an index on a non-array or a
 /// constant index out of range is refused (`N0624`). A cached check from epoch 31 refused
 /// programs this one accepts.
-pub const SEMANTIC_EPOCH: u32 = 32;
+/// `33` — Gate 2, 2026-10-08. Bytes and text: `Bytes`, `Text`, their built-ins, `Text(s)` and
+/// `try_convert[Text](s)` moved from refused to accepted, and a string literal is a `Text`
+/// where one is expected; the names `Bytes` and `Text` and the new built-ins' names moved
+/// from a program's own to the language's (`N0331`, `N0203`), as did the C symbols the
+/// numbers part calls (`strtod`, `sin`, …) for a foreign declaration. A cached check from epoch
+/// 32 refused programs this one accepts, and accepted some it refuses.
+pub const SEMANTIC_EPOCH: u32 = 33;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

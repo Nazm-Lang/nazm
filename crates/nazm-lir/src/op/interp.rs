@@ -864,6 +864,49 @@ impl Machine<'_> {
                     std::cmp::Ordering::Greater => 1,
                 })
             }
+            // Bytes and text (Gate 2), by the host's UTF-8: the oracle the runtime's text is
+            // held to.
+            "nz.utf8_valid" => {
+                let b = self.bytes(arg(0), arg(1))?;
+                Some(u64::from(std::str::from_utf8(&b).is_ok()))
+            }
+            "nz.utf8_count" => {
+                let b = self.bytes(arg(0), arg(1))?;
+                Some(b.iter().filter(|&&x| x & 0xC0 != 0x80).count() as u64)
+            }
+            "nz.utf8_decode" => {
+                let b = self.bytes(arg(0), arg(1))?;
+                let at = usize::try_from(arg(2)).unwrap_or(usize::MAX);
+                let c = b
+                    .get(at..)
+                    .and_then(|rest| {
+                        let n = rest.len().min(4);
+                        (1..=n).find_map(|k| std::str::from_utf8(&rest[..k]).ok())
+                    })
+                    .and_then(|s| s.chars().next())
+                    .map_or(0, u64::from);
+                Some(c)
+            }
+            "nz.utf8_encode" => {
+                let c = u32::try_from(arg(1))
+                    .ok()
+                    .and_then(char::from_u32)
+                    .unwrap_or('\u{fffd}');
+                let mut buf = [0u8; 4];
+                let e = c.encode_utf8(&mut buf);
+                self.put(arg(0), e.as_bytes())?;
+                Some(e.len() as u64)
+            }
+            "nz.mem_zero" => {
+                let n = usize::try_from(arg(1)).unwrap_or(0);
+                self.put(arg(0), &vec![0u8; n])?;
+                None
+            }
+            "nz.mem_move" => {
+                let b = self.bytes(arg(1), arg(2))?;
+                self.put(arg(0), &b)?;
+                None
+            }
             other => return Err(Stop::Refused(format!("the runtime's `{other}`"))),
         })
     }

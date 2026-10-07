@@ -677,6 +677,21 @@ impl<'a> Lower<'a> {
                 Some(Type::Bool),
                 *span,
             ),
+            // A literal where a `Text` is expected (Gate 2): the literal's bytes, which are UTF-8,
+            // as the `Text` they are.
+            AstExpr::Str { value, span }
+                if matches!(
+                    self.res.numeric(*span),
+                    Some(NumericFact::Literal(Type::Text))
+                ) =>
+            {
+                let s = Expr {
+                    kind: ExprKind::Const(self.constant(Const::Str(value.clone().into_bytes()))),
+                    ty: Some(Type::Str),
+                    at: *span,
+                };
+                self.internal(nazm_sema::Intrinsic::TextAssume, s, Type::Text)
+            }
             AstExpr::Str { value, span } => node(
                 ExprKind::Const(self.constant(Const::Str(value.clone().into_bytes()))),
                 Some(Type::Str),
@@ -1416,6 +1431,10 @@ impl<'a> Lower<'a> {
             return defect(at, "a conversion with no argument");
         };
         let operand = self.expr(arg)?;
+        // `Text(s)` checks; `try_convert[Text](s)` asks first (Gate 2).
+        if to == Type::Text && mode != ConvertMode::Try {
+            return Ok(self.internal(nazm_sema::Intrinsic::TextFromStr, operand, Type::Text));
+        }
         if mode != ConvertMode::Try {
             return Ok(Expr {
                 kind: ExprKind::Convert {
@@ -1449,21 +1468,30 @@ impl<'a> Lower<'a> {
             ty: Some(from),
             at,
         };
-        let test = Expr {
-            kind: ExprKind::Fits {
-                to,
-                operand: Box::new(read.clone()),
-            },
-            ty: Some(Type::Bool),
-            at,
-        };
-        let converted = Expr {
-            kind: ExprKind::Convert {
-                mode: ConvertMode::Exact,
-                operand: Box::new(read),
-            },
-            ty: Some(to),
-            at,
+        let (test, converted) = if to == Type::Text {
+            (
+                self.internal(nazm_sema::Intrinsic::Utf8Valid, read.clone(), Type::Bool),
+                self.internal(nazm_sema::Intrinsic::TextAssume, read, Type::Text),
+            )
+        } else {
+            (
+                Expr {
+                    kind: ExprKind::Fits {
+                        to,
+                        operand: Box::new(read.clone()),
+                    },
+                    ty: Some(Type::Bool),
+                    at,
+                },
+                Expr {
+                    kind: ExprKind::Convert {
+                        mode: ConvertMode::Exact,
+                        operand: Box::new(read),
+                    },
+                    ty: Some(to),
+                    at,
+                },
+            )
         };
         let variant_of = |variant: u32, fields: Vec<Init>| Expr {
             kind: ExprKind::Variant {

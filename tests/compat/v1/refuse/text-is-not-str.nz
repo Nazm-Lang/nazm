@@ -1,0 +1,6 @@
+// expect: N0300
+// A `Text` is read as a `Str` by `text_as_str`, not silently (spec: text).
+fn main() -> Int {
+    let t = Text("a");
+    str_len(t)
+}

@@ -585,6 +585,8 @@ impl<'b> Walk<'_, 'b> {
             Some(Shape::Ints) => Some("Ints".to_owned()),
             Some(Shape::Strs) => Some("Strs".to_owned()),
             Some(Shape::Chan) => Some("Chan".to_owned()),
+            // Every buffer and every view of one (Gate 2).
+            Some(Shape::Bytes) => Some("Bytes".to_owned()),
             Some(Shape::VecT) => elem().map(|t| format!("Vec[{t}]")),
             // A select's channels: the cell is their elements', `Chan[T]`.
             Some(Shape::ChanT | Shape::ChansT) => elem().map(|t| format!("Chan[{t}]")),

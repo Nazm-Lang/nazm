@@ -175,6 +175,32 @@ impl CapabilityKind {
             | Intrinsic::Float32FromBits
             | Intrinsic::FloatParses
             | Intrinsic::FloatParseRaw => CapabilitySet::EMPTY,
+            // Bytes and text (Gate 2): computed from their arguments and the buffers they hold.
+            Intrinsic::BytesNew
+            | Intrinsic::BytesFromStr
+            | Intrinsic::BytesLen
+            | Intrinsic::BytesGet
+            | Intrinsic::BytesSet
+            | Intrinsic::BytesSlice
+            | Intrinsic::BytesToStr
+            | Intrinsic::BytesCopy
+            | Intrinsic::BytesReadLe
+            | Intrinsic::BytesReadBe
+            | Intrinsic::BytesWriteLe
+            | Intrinsic::BytesWriteBe
+            | Intrinsic::Utf8Valid
+            | Intrinsic::TextAsStr
+            | Intrinsic::TextLen
+            | Intrinsic::TextConcat
+            | Intrinsic::TextIsBoundary
+            | Intrinsic::TextSlice
+            | Intrinsic::TextScalarAt
+            | Intrinsic::TextNext
+            | Intrinsic::TextScalarCount
+            | Intrinsic::ScalarValid
+            | Intrinsic::ScalarText
+            | Intrinsic::TextFromStr
+            | Intrinsic::TextAssume => CapabilitySet::EMPTY,
             // v1 is coarse: one `IoCap` authorises the arguments, the files, the standard
             // streams and ending the process alike.
             Intrinsic::ArgsCount

@@ -330,6 +330,13 @@ pub enum Type {
     Num(NumKind),
     /// `[T; N]` (Gate 2): `N` elements of a plain-data `T`, inline, by value, like a record.
     Array(ArrayId),
+    /// A fixed-length mutable byte buffer, by reference (Gate 2): a counted handle whose
+    /// slices are views of the same storage, so it is shared like a `Vec` and does not
+    /// cross into a task. It holds no values, so it closes no ownership cycle.
+    Bytes,
+    /// Text that is valid UTF-8 by construction (Gate 2): `Str`'s representation, an
+    /// immutable value like `Str`, made only by validating.
+    Text,
 }
 
 impl Type {
@@ -370,6 +377,8 @@ impl Type {
         Self::Num(NumKind::U64),
         Self::Num(NumKind::F32),
         Self::Num(NumKind::F64),
+        Self::Bytes,
+        Self::Text,
     ];
 
     /// The written name of a **built-in** type, which is also how it is spelled in
@@ -390,6 +399,8 @@ impl Type {
             Self::Chan => Some("Chan"),
             Self::Cap(k) => Some(k.type_name()),
             Self::Num(k) => Some(k.name()),
+            Self::Bytes => Some("Bytes"),
+            Self::Text => Some("Text"),
             Self::Record(_)
             | Self::Enum(_)
             | Self::Vec(_)
@@ -461,7 +472,7 @@ impl Type {
     /// which lists the types with equality rather than the ones without.
     #[must_use]
     pub fn is_sequence(self) -> bool {
-        matches!(self, Self::Ints | Self::Strs | Self::Vec(_))
+        matches!(self, Self::Ints | Self::Strs | Self::Vec(_) | Self::Bytes)
     }
 
     /// Whether this is a capability type (N37).
@@ -504,6 +515,8 @@ impl Type {
             "Ints" => Some(Self::Ints),
             "Strs" => Some(Self::Strs),
             "Chan" => Some(Self::Chan),
+            "Bytes" => Some(Self::Bytes),
+            "Text" => Some(Self::Text),
             other => CapabilityKind::by_type_name(other)
                 .map(Self::Cap)
                 .or_else(|| NumKind::by_name(other).map(Self::of_num)),

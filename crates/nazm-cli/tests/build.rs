@@ -3333,6 +3333,10 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
                 Shape::F32 => "Float32(1.5)",
                 Shape::U64 => "UInt64(1)",
                 Shape::U32 => "UInt32(1)",
+                Shape::U8 => "UInt8(1)",
+                Shape::Bytes => "bytes_new(4)",
+                // A literal is a `Text` where one is expected (Gate 2).
+                Shape::Text => "\"ab\"",
                 Shape::VecT => "vec_new[Int]()",
                 Shape::ChanT => "chan_new_of[Int](1)",
                 Shape::ChansT => "vec_new[Chan[Int]]()",
@@ -3358,7 +3362,11 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
             Shape::T if i.requires() == Some(nazm_core::sema::NumClass::Float) => {
                 format!("Int({call})")
             }
-            Shape::F64 | Shape::F32 | Shape::U64 | Shape::U32 => format!("Int({call})"),
+            Shape::F64 | Shape::F32 | Shape::U64 | Shape::U32 | Shape::U8 => {
+                format!("Int({call})")
+            }
+            Shape::Bytes => format!("bytes_len({call})"),
+            Shape::Text => format!("text_len({call})"),
             Shape::Int | Shape::T => call,
             Shape::Str => format!("str_len({call})"),
             Shape::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),

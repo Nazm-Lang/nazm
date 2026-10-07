@@ -783,6 +783,8 @@ impl Types {
             | Type::Chan
             | Type::ChanOf(_)
             | Type::Vec(_)
+            | Type::Bytes
+            | Type::Text
             | Type::Fn(_) => true,
             // An array holds plain data (Gate 2).
             Type::Int

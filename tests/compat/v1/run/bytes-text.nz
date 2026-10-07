@@ -1,0 +1,37 @@
+// Bytes and text: a buffer and its views, byte order, UTF-8 by construction (spec: bytes, text).
+fn show(out: OutCap, s: Str) -> Int ! {io} {
+    print(str_concat(s, "\n"))
+}
+
+fn scalars(t: Text) -> Str {
+    let mut i = 0;
+    let mut acc = "";
+    while i < text_len(t) {
+        acc = str_concat(acc, str_concat(int_to_str(text_scalar_at(t, i)), " "));
+        i = text_next(t, i);
+    }
+    acc
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let packet = bytes_new(8);
+    let header = bytes_slice(packet, 0, 4);
+    bytes_write_be(header, 0, UInt32(0xCAFE0001));
+    show(out, num_to_str(bytes_get(packet, 1)));
+    show(out, num_to_str(bytes_read_le[UInt16](packet, 2)));
+    bytes_write_le(packet, 4, Float32(1.5));
+    show(out, num_to_str(bytes_read_le[Float32](packet, 4)));
+    let word = bytes_from_str("nazm");
+    bytes_copy(bytes_slice(word, 1, 4), bytes_slice(word, 0, 3));
+    show(out, bytes_to_str(word));
+    show(out, scalars("aé世😀"));
+    let t = Text("añb");
+    show(out, int_to_str(text_scalar_count(t)));
+    show(out, text_as_str(text_slice(t, 1, 3)));
+    match try_convert[Text](str_from_byte(255)) {
+        Option.Some(value: x) => show(out, "UTF-8"),
+        Option.None() => show(out, "not UTF-8"),
+    };
+    if t == "añb" { show(out, "equal by bytes"); } else { show(out, "unequal"); };
+    0
+}

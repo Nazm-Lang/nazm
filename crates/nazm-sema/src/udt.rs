@@ -567,7 +567,9 @@ impl UserTypes {
         // from it and nothing about bounds is written anywhere else.
         let leaf = |t: Type| match t {
             // Every numeric type has equality (Gate 2); a float's is IEEE 754's.
-            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,
+            // `Text` is equal by its bytes, as `Str` is; a `Bytes` is a mutable handle and,
+            // like a `Vec`, has none.
+            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) => true,
             Type::Param(p) => self.requires_equality(p),
             _ => false,
         };

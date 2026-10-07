@@ -139,6 +139,32 @@ impl Effect {
             | Intrinsic::Float32FromBits
             | Intrinsic::FloatParses
             | Intrinsic::FloatParseRaw => None,
+            // Bytes and text (Gate 2): memory the program holds, and nothing outside it.
+            Intrinsic::BytesNew
+            | Intrinsic::BytesFromStr
+            | Intrinsic::BytesLen
+            | Intrinsic::BytesGet
+            | Intrinsic::BytesSet
+            | Intrinsic::BytesSlice
+            | Intrinsic::BytesToStr
+            | Intrinsic::BytesCopy
+            | Intrinsic::BytesReadLe
+            | Intrinsic::BytesReadBe
+            | Intrinsic::BytesWriteLe
+            | Intrinsic::BytesWriteBe
+            | Intrinsic::Utf8Valid
+            | Intrinsic::TextAsStr
+            | Intrinsic::TextLen
+            | Intrinsic::TextConcat
+            | Intrinsic::TextIsBoundary
+            | Intrinsic::TextSlice
+            | Intrinsic::TextScalarAt
+            | Intrinsic::TextNext
+            | Intrinsic::TextScalarCount
+            | Intrinsic::ScalarValid
+            | Intrinsic::ScalarText
+            | Intrinsic::TextFromStr
+            | Intrinsic::TextAssume => None,
             Intrinsic::ArgsCount
             | Intrinsic::Arg
             | Intrinsic::ReadFile

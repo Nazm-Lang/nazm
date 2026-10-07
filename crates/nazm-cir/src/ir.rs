@@ -698,7 +698,7 @@ impl Law {
             // An array compares element by element, by its element's law (Gate 2).
             (false, Type::Array(_)) => Some(Self::Structural),
             (false, Type::Bool) => Some(Self::Bool),
-            (false, Type::Str) => Some(Self::Bytes),
+            (false, Type::Str | Type::Text) => Some(Self::Bytes),
             (false, Type::Record(_) | Type::Enum(_)) => Some(Self::Structural),
             (false, Type::Param(_)) => Some(Self::Parametric),
             (
@@ -708,6 +708,7 @@ impl Law {
                 | Type::Chan
                 | Type::ChanOf(_)
                 | Type::Vec(_)
+                | Type::Bytes
                 | Type::Cap(_)
                 | Type::Fn(_),
             ) => None,

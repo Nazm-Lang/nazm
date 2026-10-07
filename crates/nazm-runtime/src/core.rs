@@ -202,6 +202,7 @@ pub fn emit_runtime(needs: Needs) -> String {
     }
     if needs.strings {
         out.push_str(FOREIGN_STRING_RUNTIME);
+        out.push_str(TEXT_RUNTIME);
     }
     if needs.foreign {
         out.push_str(ERRNO_RUNTIME);
@@ -1483,6 +1484,228 @@ entry:
 /// hold a NUL, which no C string can; `nz.cstr_borrow` makes the NUL-terminated copy C borrows for
 /// the call, or null out of memory, and the caller frees it after the call. Their own part,
 /// outside the string runtime the self-hosted compiler's parity gate holds.
+/// Bytes and text (Gate 2, `docs/general-purpose.md` §5–§6): UTF-8 validation, counting,
+/// decoding and encoding, and zeroing and moving a buffer's bytes. Its own text rather than
+/// `STRING_RUNTIME`'s, which `compiler/emit.nz` carries line by line and needs none of these.
+const TEXT_RUNTIME: &str = r"
+define hidden i1 @nz.utf8_valid(ptr %p, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %end, %ok ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %lead, label %yes
+lead:
+  %bp = getelementptr i8, ptr %p, i64 %i
+  %b8 = load i8, ptr %bp
+  %b = zext i8 %b8 to i32
+  %is1 = icmp ult i32 %b, 128
+  %ge2 = icmp uge i32 %b, 194
+  %le2 = icmp ule i32 %b, 223
+  %is2 = and i1 %ge2, %le2
+  %ge3 = icmp uge i32 %b, 224
+  %le3 = icmp ule i32 %b, 239
+  %is3 = and i1 %ge3, %le3
+  %ge4 = icmp uge i32 %b, 240
+  %le4 = icmp ule i32 %b, 244
+  %is4 = and i1 %ge4, %le4
+  %l4 = select i1 %is4, i32 4, i32 0
+  %l3 = select i1 %is3, i32 3, i32 %l4
+  %l2 = select i1 %is2, i32 2, i32 %l3
+  %len = select i1 %is1, i32 1, i32 %l2
+  %e0 = icmp eq i32 %b, 224
+  %f0 = icmp eq i32 %b, 240
+  %lo1 = select i1 %f0, i32 144, i32 128
+  %lo = select i1 %e0, i32 160, i32 %lo1
+  %ed = icmp eq i32 %b, 237
+  %f4 = icmp eq i32 %b, 244
+  %hi1 = select i1 %f4, i32 143, i32 191
+  %hi = select i1 %ed, i32 159, i32 %hi1
+  %none = icmp eq i32 %len, 0
+  %len64 = zext i32 %len to i64
+  %end = add i64 %i, %len64
+  %over = icmp sgt i64 %end, %n
+  %bad = or i1 %none, %over
+  br i1 %bad, label %no, label %check
+check:
+  %need1 = icmp uge i32 %len, 2
+  br i1 %need1, label %c1, label %ok
+c1:
+  %p1 = getelementptr i8, ptr %bp, i64 1
+  %x1 = load i8, ptr %p1
+  %y1 = zext i8 %x1 to i32
+  %a1 = icmp uge i32 %y1, %lo
+  %z1 = icmp ule i32 %y1, %hi
+  %in1 = and i1 %a1, %z1
+  %need2 = icmp uge i32 %len, 3
+  br i1 %in1, label %t2, label %no
+t2:
+  br i1 %need2, label %c2, label %ok
+c2:
+  %p2 = getelementptr i8, ptr %bp, i64 2
+  %x2 = load i8, ptr %p2
+  %y2 = zext i8 %x2 to i32
+  %m2 = and i32 %y2, 192
+  %in2 = icmp eq i32 %m2, 128
+  %need3 = icmp uge i32 %len, 4
+  br i1 %in2, label %t3, label %no
+t3:
+  br i1 %need3, label %c3, label %ok
+c3:
+  %p3 = getelementptr i8, ptr %bp, i64 3
+  %x3 = load i8, ptr %p3
+  %y3 = zext i8 %x3 to i32
+  %m3 = and i32 %y3, 192
+  %in3 = icmp eq i32 %m3, 128
+  br i1 %in3, label %ok, label %no
+ok:
+  br label %loop
+yes:
+  ret i1 true
+no:
+  ret i1 false
+}
+
+define hidden i64 @nz.utf8_count(ptr %p, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i1, %step ]
+  %c = phi i64 [ 0, %entry ], [ %c1, %step ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %step, label %done
+step:
+  %bp = getelementptr i8, ptr %p, i64 %i
+  %b8 = load i8, ptr %bp
+  %b = zext i8 %b8 to i32
+  %m = and i32 %b, 192
+  %cont = icmp eq i32 %m, 128
+  %add = select i1 %cont, i64 0, i64 1
+  %c1 = add i64 %c, %add
+  %i1 = add i64 %i, 1
+  br label %loop
+done:
+  ret i64 %c
+}
+
+define hidden i64 @nz.utf8_decode(ptr %p, i64 %n, i64 %i) {
+entry:
+  %bp = getelementptr i8, ptr %p, i64 %i
+  %b8 = load i8, ptr %bp
+  %b = zext i8 %b8 to i64
+  %one = icmp ult i64 %b, 128
+  br i1 %one, label %r1, label %multi
+r1:
+  ret i64 %b
+multi:
+  %p1 = getelementptr i8, ptr %bp, i64 1
+  %x1 = load i8, ptr %p1
+  %y1 = zext i8 %x1 to i64
+  %k1 = and i64 %y1, 63
+  %two = icmp ult i64 %b, 224
+  br i1 %two, label %r2, label %more
+r2:
+  %h2 = and i64 %b, 31
+  %s2 = shl i64 %h2, 6
+  %v2 = or i64 %s2, %k1
+  ret i64 %v2
+more:
+  %p2 = getelementptr i8, ptr %bp, i64 2
+  %x2 = load i8, ptr %p2
+  %y2 = zext i8 %x2 to i64
+  %k2 = and i64 %y2, 63
+  %three = icmp ult i64 %b, 240
+  br i1 %three, label %r3, label %r4
+r3:
+  %h3 = and i64 %b, 15
+  %s3 = shl i64 %h3, 12
+  %t3 = shl i64 %k1, 6
+  %u3 = or i64 %s3, %t3
+  %v3 = or i64 %u3, %k2
+  ret i64 %v3
+r4:
+  %p3 = getelementptr i8, ptr %bp, i64 3
+  %x3 = load i8, ptr %p3
+  %y3 = zext i8 %x3 to i64
+  %k3 = and i64 %y3, 63
+  %h4 = and i64 %b, 7
+  %s4 = shl i64 %h4, 18
+  %t4 = shl i64 %k1, 12
+  %w4 = shl i64 %k2, 6
+  %u4 = or i64 %s4, %t4
+  %z4 = or i64 %u4, %w4
+  %v4 = or i64 %z4, %k3
+  ret i64 %v4
+}
+
+define hidden i64 @nz.utf8_encode(ptr %buf, i64 %c) {
+entry:
+  %one = icmp ult i64 %c, 128
+  br i1 %one, label %e1, label %m2
+e1:
+  %b1 = trunc i64 %c to i8
+  store i8 %b1, ptr %buf
+  ret i64 1
+m2:
+  %lo6 = and i64 %c, 63
+  %cont0 = or i64 %lo6, 128
+  %c0 = trunc i64 %cont0 to i8
+  %sh6 = lshr i64 %c, 6
+  %two = icmp ult i64 %c, 2048
+  br i1 %two, label %e2, label %m3
+e2:
+  %l2 = or i64 %sh6, 192
+  %a2 = trunc i64 %l2 to i8
+  store i8 %a2, ptr %buf
+  %q2 = getelementptr i8, ptr %buf, i64 1
+  store i8 %c0, ptr %q2
+  ret i64 2
+m3:
+  %mid = and i64 %sh6, 63
+  %cont1 = or i64 %mid, 128
+  %c1 = trunc i64 %cont1 to i8
+  %sh12 = lshr i64 %c, 12
+  %three = icmp ult i64 %c, 65536
+  br i1 %three, label %e3, label %e4
+e3:
+  %l3 = or i64 %sh12, 224
+  %a3 = trunc i64 %l3 to i8
+  store i8 %a3, ptr %buf
+  %q31 = getelementptr i8, ptr %buf, i64 1
+  store i8 %c1, ptr %q31
+  %q32 = getelementptr i8, ptr %buf, i64 2
+  store i8 %c0, ptr %q32
+  ret i64 3
+e4:
+  %hi = and i64 %sh12, 63
+  %cont2 = or i64 %hi, 128
+  %c2 = trunc i64 %cont2 to i8
+  %sh18 = lshr i64 %c, 18
+  %l4 = or i64 %sh18, 240
+  %a4 = trunc i64 %l4 to i8
+  store i8 %a4, ptr %buf
+  %q41 = getelementptr i8, ptr %buf, i64 1
+  store i8 %c2, ptr %q41
+  %q42 = getelementptr i8, ptr %buf, i64 2
+  store i8 %c1, ptr %q42
+  %q43 = getelementptr i8, ptr %buf, i64 3
+  store i8 %c0, ptr %q43
+  ret i64 4
+}
+
+define hidden void @nz.mem_zero(ptr %p, i64 %n) {
+entry:
+  call void @llvm.memset.p0.i64(ptr %p, i8 0, i64 %n, i1 false)
+  ret void
+}
+
+define hidden void @nz.mem_move(ptr %d, ptr %s, i64 %n) {
+entry:
+  call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)
+  ret void
+}
+";
+
 const FOREIGN_STRING_RUNTIME: &str = r"
 define hidden i1 @nz.cstr_has_nul(ptr %p, i64 %n) {
 entry:
