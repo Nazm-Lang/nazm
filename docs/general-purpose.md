@@ -217,6 +217,14 @@ constitution excludes. Data meant to be viewed lives in a `Bytes` or a `Str`.
 views outliving their source binding, reclamation counted (`bytes` joins the memory report), task
 transfer refused (a `Bytes` is mutable shared state and does not cross, like `Vec`).
 
+**As built (2026-10-08).** As designed, with three settlements; `spec.md`, *Bytes*, is the rule.
+The fixed-width loads and stores are four generic built-ins — `bytes_read_le[T]`,
+`bytes_read_be[T]`, `bytes_write_le`, `bytes_write_be`, over every numeric type — rather than
+thirty-two named ones: one rule, the class mechanism the numeric built-ins already use.
+`bytes_copy` moves, so two views of one buffer may overlap. A `Bytes` is `Str`'s triple over a
+buffer the program allocated, so the memory report counts buffers with the strings rather than in
+a class of their own, in both implementations alike.
+
 ## 6. Bytes and text — `Text`
 
 **Problem.** Applications exchange Unicode text, and need to know whether a byte string is valid
@@ -239,6 +247,17 @@ validation, never a copy.
 **Evidence plan.** The UTF-8 validation table (overlongs, surrogates, out-of-range, truncated
 sequences) agreeing in every implementation; scalar iteration over multi-byte text; a JSON pipeline
 that validates its input (§24).
+
+**As built (2026-10-08).** A built-in cannot return an `Option` — it lives in the prelude, as
+source — so the validating conversion is the conversion mechanism §1 already has: `Text(s)` (`s` or
+`N0413`, as `UInt8(300)` is `N0400`) and `try_convert[Text](s) -> Option[Text]`, beside
+`utf8_valid`. `text_from_str` is the conversion's internal name, not callable. `text_slice` and
+`scalar_text` stop on a bad boundary or value (`N0413`) and are paired with `text_is_boundary` and
+`scalar_valid`, rather than returning `Option`. A literal is a `Text` where one is expected — a
+parameter, an operand beside a `Text`, a conversion's argument — as a numeric literal takes the
+type expected. Ordering is `@std/text`'s `text_compare` over `text_as_str`, since `text_compare`
+was already that module's name and byte order is scalar order; `text_from_scalar` is
+`scalar_text`.
 
 ## 7. Collections — hashing, `HashMap`, `HashSet`, `Deque`
 
@@ -529,7 +548,7 @@ The set widens from eight bits to sixteen. Ids never change.
 
 | | Before | After |
 | --- | --- | --- |
-| Semantic epoch | 30 | bumped by each semantic commit of Gate 2 — 31 (numbers), 32 (arrays and constants) |
+| Semantic epoch | 30 | bumped by each semantic commit of Gate 2 — 31 (numbers), 32 (arrays and constants), 33 (bytes and text) |
 | `nazm.interface` | 11 | 11 so far — numeric types and arrays are new type names and shapes, which a reader from before Gate 2 refuses rather than misreads (`wire.rs`, the `IoCap` precedent); the major moves when the interface carries something an older reader would misread |
 | Runtime ABI | 14 | 15 — new runtime entry points (floats, reactor, handles) |
 | Standard library API | 1.0 | 1.1 — additions only, `API-1.0` unchanged |

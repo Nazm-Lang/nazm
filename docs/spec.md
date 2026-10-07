@@ -101,6 +101,8 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `wasm-contract` | EXPERIMENTAL | |
 | `accounts` | EXPERIMENTAL | |
 | `provenance-record` | STABLE 1.0 | `nazm.provenance/1` |
+| `bytes` | STABLE 1.0 | |
+| `text` | STABLE 1.0 | graphemes and normalisation are not the language's |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
 | `numbers` | STABLE 1.0 | Gate 2: fixed-width integers, `Float32`, `Float64`, bit operators and conversions; the C library's transcendental functions are promised to the host library's accuracy, not bit for bit |
@@ -3780,6 +3782,59 @@ refused where the constant is declared (`N0623`), and so is one that depends on 
 every use is the value, written as a literal. A constant is its own module's in Gate 2: `pub
 const` is refused (`N0101`), because a module's published interface does not carry values yet.
 `const` is a word only at the start of an item, so a binding may still be named `const`.
+
+### Bytes: a buffer and its views — Gate 2
+<!-- id: bytes -->
+
+Settled by Gate 2, 2026-10-08 (`docs/general-purpose.md` §5).
+
+```nazm
+fn main(out: OutCap) -> Int ! {io} {
+    let packet = bytes_new(8);
+    let header = bytes_slice(packet, 0, 4);
+    bytes_write_be(header, 0, UInt32(0xCAFE0001));
+    print(num_to_str(bytes_get(packet, 1)));         // 254: one buffer, two views
+    0
+}
+```
+
+| | |
+| --- | --- |
+| **Type** | `Bytes`: a **counted handle** to a view of a fixed-length buffer of bytes — shared like a `Vec` (*Sequences are shared*): assignment and passing copy the handle, a write through one view is seen through every view of the buffer, and the buffer lives while any view does. It has no `==` (`N0304`), does not cross into a task (`N0321`) and is not plain data, so no array holds one (`N0621`). It holds no values, so it closes no ownership cycle |
+| **Making one** | `bytes_new(n)`: `n` zero bytes (`n < 0` stops the program, `N0405`). `bytes_from_str(s)`: a new buffer holding a copy of `s`'s bytes |
+| **Bytes** | `bytes_len(b)`; `bytes_get(b, i) -> UInt8`; `bytes_set(b, i, v: UInt8) -> Int` (`0`). An index outside `0..bytes_len(b)` stops the program (`N0405`) |
+| **Views** | `bytes_slice(b, lo, hi) -> Bytes`: bytes `lo..hi` of `b`, sharing its buffer, `0 <= lo <= hi <= bytes_len(b)` or `N0405`. A view's bounds are its own, and a buffer never changes length, so no view is ever invalidated |
+| **Numbers** | `bytes_read_le[T](b, i)`, `bytes_read_be[T](b, i)`: the `T` whose bytes are `b[i..i + size]` in little- or big-endian order; `bytes_write_le(b, i, v)`, `bytes_write_be(b, i, v)`: `v`'s bytes there, returning `0`. `T` is any numeric type (`Int` is 8 bytes; a float is its IEEE 754 bits); a range not inside the view is `N0405`. No alignment is required |
+| **Copying** | `bytes_copy(dst, src) -> Int`: `src`'s bytes over the start of `dst`, as if through a temporary, so two views of one buffer may overlap; returns `bytes_len(src)`, which must not exceed `bytes_len(dst)` (`N0405`). `bytes_to_str(b)`: a new `Str` holding a copy, so a `Str` stays immutable |
+| **Provenance** | A buffer is a container whose cell every `Bytes` shares; reads join it, writes add to it. `bytes_from_str(s)` carries `s`'s origin on the new handle, and every read through it or a view of it joins that in |
+
+### Text: UTF-8 by construction — Gate 2
+<!-- id: text -->
+
+Settled by Gate 2, 2026-10-08 (`docs/general-purpose.md` §6). `Str` stays bytes (*Strings are
+bytes*); `Text` is the type whose values are **always valid UTF-8** — RFC 3629: shortest forms
+only, no surrogates, at most U+10FFFF — with `Str`'s representation, so a `Text` is read as a
+`Str` for free and a `Str` becomes a `Text` by validation, never by a copy.
+
+```nazm
+fn scalars(t: Text) -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < text_len(t) {
+        n = n + text_scalar_at(t, i);
+        i = text_next(t, i);
+    }
+    n
+}
+```
+
+| | |
+| --- | --- |
+| **Type** | `Text`: an immutable value like `Str` — copied freely, equal by its bytes (`==`, `!=`; byte order is scalar order, so `@std/text`'s `text_compare` of `text_as_str` orders it), crossing into a task |
+| **Making one** | A string literal where a `Text` is expected — a parameter, an operand beside a `Text`, `Text(…)`'s argument — since a literal is UTF-8 by construction. `Text(s)` for a `Str`: `s`, or `N0413` if it is not UTF-8. `try_convert[Text](s) -> Option[Text]`: `None` where `Text(s)` would stop. `utf8_valid(s) -> Bool` asks without converting. `scalar_text(c)`: the scalar value `c` as a `Text`, or `N0413` unless `scalar_valid(c)` — `0 <= c <= 0x10FFFF` and not `0xD800..=0xDFFF` |
+| **Using one** | `text_as_str(t)`, free; `text_len(t)` in bytes; `text_concat(a, b)`; `text_slice(t, lo, hi)`: bytes `lo..hi`, sharing `t`'s storage — `N0405` unless `0 <= lo <= hi <= text_len(t)`, then `N0413` unless both ends are boundaries. `text_is_boundary(t, i)`: whether `i` is `text_len(t)` or the start of a scalar value — `false`, never a failure, for any other `i` |
+| **Scalars** | `text_scalar_at(t, i)`: the scalar value starting at byte `i`; `text_next(t, i)`: the byte index after it; both `N0405` unless `0 <= i < text_len(t)` and `N0413` unless `i` is a boundary. Iteration is a `while` over byte indexes, as above. `text_scalar_count(t)` |
+| **Not** | Graphemes, normalisation, case beyond ASCII, collation and locale: the ecosystem's. `Text` is not a `Str` (`N0300`), nor the reverse — `text_as_str` and `Text(…)` say which way |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
