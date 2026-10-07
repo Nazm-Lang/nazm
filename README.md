@@ -197,9 +197,9 @@ does **not** establish as carefully as by what it does:
   escapes, `::` and `as`, packages, `Chan[T]`, `select`, the clock, device registers and most of
   the C boundary are outside its subset — and the Rust compiler remains the reference. A fixpoint
   is not an independent proof of semantics ([`docs/bootstrap.md`](docs/bootstrap.md)).
-- **Mutation testing:** a catalogue of deliberately injected defects, 1,279 entries, each required
+- **Mutation testing:** a catalogue of deliberately injected defects, 1,285 entries, each required
   to be caught by a named test; all 1,268 it held at the core release gate were caught there, and
-  the eleven added since in their own responsibility-mapped campaigns
+  the seventeen added since in their own responsibility-mapped campaigns
   ([`docs/releases/82936f6.md`](docs/releases/82936f6.md),
   [`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)). Zero survivors describes the
   catalogue, not the absence of bugs.
