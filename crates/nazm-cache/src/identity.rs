@@ -209,7 +209,11 @@ use crate::digest::{self, Framed};
 /// `29` — N104, 2026-10-05. No inherited authority: a function with no declared effect set
 /// exercised its caller's capabilities (N37's bridge); now every body must hold what it
 /// exercises, so programs accepted under 28 are refused (`N0369`).
-pub const SEMANTIC_EPOCH: u32 = 29;
+/// `30` — Gate 1-C1, 2026-10-07. Closure environments in the ownership graph: a closure that
+/// captures a value able to hold a function value behind a counted handle moved from accepted to
+/// refused (`N0616`) — the route by which a closure stored into a `Vec` it captured owned itself
+/// and was never reclaimed. A cached check from epoch 29 accepted programs this one refuses.
+pub const SEMANTIC_EPOCH: u32 = 30;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -229,6 +233,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CALLBACK_NOT_EXPORT",
     "CANNOT_INFER_TYPE_ARGUMENT",
     "CAPABILITY_CONSTRUCTED",
+    "CAPTURE_CYCLE",
     "CAPTURE_REFUSED",
     "CHANNEL_ELEMENT",
     "CONDITION_NOT_BOOL",

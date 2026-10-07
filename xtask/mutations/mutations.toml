@@ -8271,10 +8271,11 @@ Repointed by N85, which moved it to 25 for FFI v3: an entry that refused an `ext
 Repointed by N86, which moved it to 26 for device registers by width: an entry that refused `mmio_write8` must not be reused.
 Repointed by N87, which moved it to 27 for contracts: an entry that refused a `requires` must not be reused.
 Repointed by N103, which moved it to 28 for re-exports: an entry that refused `pub use` must not be reused.
-Repointed by N104, which moved it to 29 for authority without inheritance: an entry that accepted a printing `fn main()` must not be reused."""
+Repointed by N104, which moved it to 29 for authority without inheritance: an entry that accepted a printing `fn main()` must not be reused.
+Repointed by Gate 1-C1, which moved it to 30 for closure environments in the ownership graph: an entry that accepted a closure capturing a `Vec[fn() -> Int]` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 29;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 28;"
+find = "pub const SEMANTIC_EPOCH: u32 = 30;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 29;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -14014,11 +14015,11 @@ killers = [{ package = "nazm-syntax", test = "recovery", name = "a_floating_poin
 
 [[mutation]]
 name = "g1-the-type-list-stops-at-spawncap"
-why = "the built-in type list in help text names `IoCap` and `SpawnCap` and none of the five later capability types"
+why = "the checker's vocabulary of built-in types loses a capability type, so the help text, `nazm capabilities` and completion stop short of the seven. Retargeted by Gate 1-C1, which made `Type::ALL` the one inventory: until then it held two of seven and a loop added the rest for help text alone"
 file = "crates/nazm-sema/src/types.rs"
-find = "            if !names.contains(&k.type_name()) {"
-replace = "            if false {"
-killers = [{ package = "nazm-sema", lib = true, name = "types::tests::every_capability_type_is_named_once_and_parses" }, { package = "nazm-cli", test = "ecosystem", name = "the_human_types_line_names_every_capability_type_once" }]
+find = "        Self::Cap(CapabilityKind::Mmio),\n        Self::Cap(CapabilityKind::Out),"
+replace = "        Self::Cap(CapabilityKind::Mmio),"
+killers = [{ package = "nazm-sema", lib = true, name = "types::tests::every_capability_kind_is_a_built_in_type" }, { package = "nazm-service", test = "completion", name = "built_ins_come_from_the_compilers_own_inventories" }]
 
 [[mutation]]
 name = "g1-the-human-types-line-is-the-checkers-vocabulary"
@@ -14035,3 +14036,54 @@ file = "crates/nazm-cli/src/main.rs"
 find = "`--json` prints `nazm.cost/2`, which since N106 also says which"
 replace = "`--json` prints `nazm.cost/1`, which since N106 also says which"
 killers = [{ package = "nazm-cli", test = "ecosystem", name = "every_command_has_its_own_help_naming_the_schema_it_prints" }]
+
+# Gate 1-C1: closure environments in the ownership graph (`docs/spec.md`, *Cycles*). Killers
+# verified with `cargo xtask contained mutate --verify-killer`.
+
+[[mutation]]
+name = "g1c1-a-capture-is-not-checked"
+why = "a closure may capture a `Vec[fn() -> Int]`, so a closure stored into the vector it captured owns itself and is never reclaimed"
+file = "crates/nazm-core/src/check.rs"
+find = "        if first_capture {\n            if let Some(holder) = self.res.types().function_holder(b.ty) {"
+replace = "        if false && first_capture {\n            if let Some(holder) = self.res.types().function_holder(b.ty) {"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape" }, { package = "nazm-cli", test = "compat_v1", name = "every_refusal_case_is_refused_with_its_code_and_not_built" }]
+
+[[mutation]]
+name = "g1c1-only-a-later-use-is-checked"
+why = "the check runs where a captured name is used again rather than where it is first captured, so a closure naming the container once escapes it"
+file = "crates/nazm-core/src/check.rs"
+find = ".is_some_and(|c| !c.captured.contains_key(&b.slot));"
+replace = ".is_some_and(|c| c.captured.contains_key(&b.slot));"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape" }]
+
+[[mutation]]
+name = "g1c1-a-function-value-owns-nothing"
+why = "a function value behind a handle is treated as owning nothing, so no container of function values is ever found"
+file = "crates/nazm-sema/src/udt.rs"
+find = "                Type::Fn(_) => {\n                    if holder.is_some() {"
+replace = "                Type::Fn(_) => {\n                    if false && holder.is_some() {"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape" }]
+
+[[mutation]]
+name = "g1c1-a-vec-is-not-a-counted-handle"
+why = "a `Vec`'s elements are followed as if held inline, so a `Vec[fn() -> Int]` holds no function value behind a handle and its capture is accepted"
+file = "crates/nazm-sema/src/udt.rs"
+find = "if let Some(e) = self.vec_element(v) {\n                        work.push((e, holder.or(Some(ty))));"
+replace = "if let Some(e) = self.vec_element(v) {\n                        work.push((e, holder));"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape" }]
+
+[[mutation]]
+name = "g1c1-a-record-field-is-not-followed"
+why = "the walk stops at a record or enum, so a record holding a `Vec[fn() -> Int]`, or a `Vec` of records with a function field, is captured and can own itself"
+file = "crates/nazm-sema/src/udt.rs"
+find = "                        for (_, _, f) in self.contained(node) {\n                            work.push((f, holder));"
+replace = "                        for (_, _, f) in self.contained(node).into_iter().take(0) {\n                            work.push((f, holder));"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape" }]
+
+[[mutation]]
+name = "g1c1-selfhost-a-capture-is-not-checked"
+why = "the compiler written in Nazm accepts a closure capturing a `Vec` of records with a function field, which the reference refuses (`N0616`)"
+file = "compiler/analyse.nz"
+find = "                if holds_functions(tb, ints_get(ntypes, i)) {"
+replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]

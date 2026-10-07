@@ -10,7 +10,12 @@
 //! is a schema file nothing documents, or a documented target the emitter disagrees
 //! with.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -298,7 +303,10 @@ fn every_spec_section_is_classified_for_1_0() {
             open_family = true;
         }
         let id = section.split('`').nth(1).unwrap_or_default().to_owned();
-        assert!(ids.contains(&id), "the table classifies `{id}`, which is no section");
+        assert!(
+            ids.contains(&id),
+            "the table classifies `{id}`, which is no section"
+        );
         assert!(!classified.contains(&id), "`{id}` is classified twice");
         classified.push(id);
     }
@@ -344,7 +352,10 @@ fn the_stability_contract_classifies_every_command_and_schema_file() {
         .split("### Machine-readable output")
         .nth(1)
         .expect("the schema section");
-    for e in std::fs::read_dir(repo_root().join("schema")).unwrap().flatten() {
+    for e in std::fs::read_dir(repo_root().join("schema"))
+        .unwrap()
+        .flatten()
+    {
         let file = e.file_name().to_string_lossy().into_owned();
         let Some(stem) = file.strip_suffix(".json") else {
             continue;
@@ -352,6 +363,9 @@ fn the_stability_contract_classifies_every_command_and_schema_file() {
         // `nazm.api-doc-2.json` is `nazm.api-doc/2`.
         let (name, major) = stem.rsplit_once('-').unwrap();
         let id = format!("`{name}/{major}`");
-        assert!(schemas.contains(&id), "{id} ({file}) is not classified in docs/stability.md");
+        assert!(
+            schemas.contains(&id),
+            "{id} ({file}) is not classified in docs/stability.md"
+        );
     }
 }

@@ -1,0 +1,13 @@
+// expect: N0616
+// A record holding a container of function values is such a container too (spec: memory,
+// Cycles).
+struct Handlers {
+    hs: Vec[fn() -> Int],
+}
+
+fn main() -> Int {
+    let h = Handlers(hs: vec_new[fn() -> Int]());
+    let f = fn() -> Int { vec_len(h.hs) };
+    vec_push(h.hs, f);
+    0
+}

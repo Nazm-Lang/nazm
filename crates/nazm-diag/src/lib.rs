@@ -456,6 +456,13 @@ pub mod codes {
     /// would fail every time it ran.
     pub const PRECONDITION_REFUTED: Code = Code::new("N0615");
 
+    // Gate 1-C1: closure environments in the ownership graph (`docs/spec.md`, *Cycles*).
+    /// A closure capturing a value that can hold a function value behind a counted handle —
+    /// a `Vec[fn() -> Int]`, a `Vec` of records with a function field, a record holding one.
+    /// The only way a closure's environment could come to own itself, and so a value no count
+    /// could reclaim; decided by the captured type, where the closure is written.
+    pub const CAPTURE_CYCLE: Code = Code::new("N0616");
+
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no
     /// diagnostic could not be lowered to Core IR, or its Core IR broke an invariant every

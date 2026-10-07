@@ -1,0 +1,12 @@
+// expect: N0616
+// A `Vec` of records with a function field can hold function values (spec: memory, Cycles).
+struct Job {
+    run: fn() -> Int,
+}
+
+fn main() -> Int {
+    let jobs = vec_new[Job]();
+    let f = fn() -> Int { vec_len(jobs) };
+    vec_push(jobs, Job(run: f));
+    0
+}

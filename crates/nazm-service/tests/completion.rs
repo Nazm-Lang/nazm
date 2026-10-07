@@ -413,6 +413,15 @@ fn built_ins_come_from_the_compilers_own_inventories() {
             .collect();
         expected.sort();
         assert_eq!(got, expected);
+        // Every capability type among them, read from the capability kinds themselves: until
+        // Gate 1-C1 completion offered `IoCap` and `SpawnCap` and none of the five later ones.
+        for k in nazm_core::sema::CapabilityKind::ALL {
+            assert!(
+                got.iter().any(|n| n == k.type_name()),
+                "completion does not offer {}: {got:?}",
+                k.type_name()
+            );
+        }
         // And a prefix filters: exactly the names that begin with what is written.
         let str_ = complete(&s, &m, 1, at(T, "str_len", 0, 4));
         assert!(!str_.items.is_empty());

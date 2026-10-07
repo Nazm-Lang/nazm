@@ -301,6 +301,59 @@ impl UserTypes {
         false
     }
 
+    /// The first counted handle in `t` whose elements can be, or contain, a function value —
+    /// or `None` when a value of `t` can hold no function value behind one (Gate 1-C1).
+    ///
+    /// A closure's environment owns what it captured, and it is the one node of the ownership
+    /// graph a definition does not show: a function type says nothing of what its closure
+    /// holds. An environment never changes after it is made and holds only older values, so
+    /// it can come to own itself only by capturing a container a later store puts it into — a
+    /// container whose elements can be function values. This finds such a container in a
+    /// captured binding's type: a `Vec` or channel element that is a function type, or reaches
+    /// one through record and enum fields or further handles, at any depth of `t`. The answer
+    /// is the outermost such handle, for the message. Every owning container is asked the
+    /// same way, by its element type, so one added later is covered by being one.
+    ///
+    /// An explicit worklist over `(type, under a handle)`, with each pair visited once, so a
+    /// containment cycle being refused in the same run cannot make it loop.
+    #[must_use]
+    pub fn function_holder(&self, t: Type) -> Option<Type> {
+        let mut seen: Vec<(Type, bool)> = Vec::new();
+        let mut work: Vec<(Type, Option<Type>)> = vec![(t, None)];
+        while let Some((ty, holder)) = work.pop() {
+            if seen.contains(&(ty, holder.is_some())) {
+                continue;
+            }
+            seen.push((ty, holder.is_some()));
+            match ty {
+                Type::Fn(_) => {
+                    if holder.is_some() {
+                        return holder;
+                    }
+                }
+                Type::Vec(v) => {
+                    if let Some(e) = self.vec_element(v) {
+                        work.push((e, holder.or(Some(ty))));
+                    }
+                }
+                Type::ChanOf(c) => {
+                    if let Some(e) = self.chan_element(c) {
+                        work.push((e, holder.or(Some(ty))));
+                    }
+                }
+                Type::Record(_) | Type::Enum(_) => {
+                    if let Some(node) = TypeNode::of(ty) {
+                        for (_, _, f) in self.contained(node) {
+                            work.push((f, holder));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     /// Whether this definition is an opaque C handle (N85).
     fn opaque(&self, node: TypeNode) -> bool {
         match node {
