@@ -306,9 +306,35 @@ impl Type {
         }
     }
 
+    /// Every built-in type a program can write, by name: [`Type::ALL`] in its order, then
+    /// each capability type it does not hold.
+    ///
+    /// [`Type::ALL`] is the checker's fixed vocabulary — module scopes are built from it and
+    /// the checker's identity hashes it — and has held two of the seven capability types
+    /// since before the other five existed, while [`Type::from_name`] reads all seven. A
+    /// person asking what they can write wants the seven, so the help text and
+    /// `nazm capabilities` list this rather than [`Type::ALL`]: until 1.0 both said `IoCap`
+    /// and `SpawnCap` and stopped.
     #[must_use]
-    pub fn all_names() -> &'static str {
-        "`Int`, `Bool`, `Str`, `Ints`, `Strs`, `Chan`, `IoCap`, `SpawnCap`"
+    pub fn every_builtin_name() -> Vec<&'static str> {
+        let mut names: Vec<&'static str> =
+            Self::ALL.iter().filter_map(|t| t.builtin_name()).collect();
+        for k in CapabilityKind::ALL {
+            if !names.contains(&k.type_name()) {
+                names.push(k.type_name());
+            }
+        }
+        names
+    }
+
+    /// [`Type::every_builtin_name`], as help text writes a list of names.
+    #[must_use]
+    pub fn all_names() -> String {
+        Self::every_builtin_name()
+            .iter()
+            .map(|n| format!("`{n}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -338,8 +364,25 @@ mod tests {
         // would itself be a defect in the text and a division would hide it.
         assert_eq!(
             Type::all_names().matches('`').count(),
-            Type::ALL.len() * 2,
-            "the help text lists a different number of types than ALL has"
+            Type::every_builtin_name().len() * 2,
+            "the help text lists a different number of types than there are"
         );
+    }
+
+    #[test]
+    fn every_capability_type_is_named_once_and_parses() {
+        let names = Type::every_builtin_name();
+        for k in crate::CapabilityKind::ALL {
+            let name = k.type_name();
+            assert_eq!(names.iter().filter(|n| **n == name).count(), 1, "{name}");
+            assert_eq!(Type::from_name(name), Some(Type::Cap(k)), "{name}");
+            assert!(Type::all_names().contains(&format!("`{name}`")), "{name}");
+        }
+        for name in &names {
+            assert!(
+                Type::from_name(name).is_some(),
+                "`{name}` is named but does not parse"
+            );
+        }
     }
 }

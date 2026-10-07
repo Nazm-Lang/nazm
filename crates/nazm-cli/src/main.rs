@@ -121,7 +121,7 @@ enum RuntimeAction {
 #[command(
     name = "nazm",
     about = "The Nazm programming language.",
-    long_about = "Nazm language v0.3, toolchain 0.3.0 — an experimental release. Records, \
+    long_about = "Nazm language 1.0, toolchain 1.0.0 — the first stable release. Records, \
                   enums and `match`, first-order generics, traits and methods, `Result`, \
                   `Option` and `?`, closures, modules and packages, declared effects, \
                   capabilities and provenance, and structured concurrency (scope, spawn, \
@@ -615,7 +615,7 @@ enum Command {
     },
     /// Map a kernel over `Int`s on the GPU (N67): an eligible pure `(Int) -> Int` function of the
     /// file, as an OpenCL kernel, over the whitespace-separated `Int`s of `--input`. One
-    /// `nazm.accel/1` line: the device, every transfer and the synchronisation, timings, the
+    /// `nazm.accel/2` line: the device, every transfer and the synchronisation, timings, the
     /// kernel's identity, and whether the results agree with the interpreter's. macOS only.
     Accel {
         file: PathBuf,
@@ -675,7 +675,7 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
-    /// Print a checked program's Core IR, `nazm.core-ir/1`: what each function became,
+    /// Print a checked program's Core IR, `nazm.core-ir/2`: what each function became,
     /// typed, with every name resolved and every transfer explicit.
     ///
     /// A debugging view of the one representation `nazm run` and `nazm build` both start
@@ -918,10 +918,6 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         def: Option<String>,
     },
-    /// Print where each function allocates, retains, blocks, talks to a channel, calls C or
-    /// starts a task (N52), read off MIR, each with its count per call — `at-most-once` or
-    /// `unknown`, never a guess. `--json` prints `nazm.cost/2`, which since N106 also says which
-    /// scheduler a native build runs the program's tasks on, and why.
     /// Build the program and run it once with its memory and scheduler counters on (N58), and
     /// print `nazm.profile/2`: its exit status, wall time and the counts; with `--sample`, also
     /// where its samples fell (N91).
@@ -938,13 +934,17 @@ enum Command {
         #[arg(long, value_name = "MS", default_value_t = 1, requires = "sample")]
         interval_ms: u64,
     },
+    /// Print where each function allocates, retains, blocks, talks to a channel, calls C or
+    /// starts a task (N52), read off MIR, each with its count per call — `at-most-once` or
+    /// `unknown`, never a guess. `--json` prints `nazm.cost/2`, which since N106 also says which
+    /// scheduler a native build runs the program's tasks on, and why.
     ExplainCost {
         file: PathBuf,
         #[arg(long)]
         json: bool,
     },
     /// Print every sink — a path written to, standard output, a file's data — and every
-    /// declassification, with the origins that reach it (N52). `--json` prints `nazm.flow/1`.
+    /// declassification, with the origins that reach it (N52). `--json` prints `nazm.flow/2`.
     ExplainFlow {
         file: PathBuf,
         #[arg(long)]

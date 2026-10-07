@@ -427,3 +427,98 @@ fn the_capability_inventory_names_every_authority_target_and_command() {
         assert!(has("commands", c), "{c}");
     }
 }
+
+/// The human `types:` line lists every built-in type a program can write, capability types
+/// included, each once. Until 1.0 it printed the checker's vocabulary alone and stopped at
+/// `IoCap, SpawnCap`; the JSON keeps `types` and `authority` apart, as its schema fixes.
+#[test]
+fn the_human_types_line_names_every_capability_type_once() {
+    let d = tempfile::tempdir().unwrap();
+    let text = ok(d.path(), &["capabilities"]);
+    let line = text
+        .lines()
+        .find_map(|l| l.strip_prefix("types: "))
+        .unwrap_or_else(|| panic!("a types line: {text}"));
+    let types: Vec<&str> = line.split(", ").collect();
+    for t in [
+        "Int",
+        "Bool",
+        "Str",
+        "Chan",
+        "IoCap",
+        "SpawnCap",
+        "ForeignCap",
+        "VouchCap",
+        "TimeCap",
+        "MmioCap",
+        "OutCap",
+    ] {
+        assert_eq!(
+            types.iter().filter(|x| **x == t).count(),
+            1,
+            "{t} in {line}"
+        );
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(&ok(d.path(), &["capabilities", "--json"])).unwrap();
+    assert!(
+        !v["types"].as_array().unwrap().iter().any(|e| e == "OutCap"),
+        "the JSON `types` stays the checker's vocabulary"
+    );
+}
+
+/// Every command says what it does, in its own help, and names the schema it prints at the
+/// version it prints. Until 1.0 `explain-cost`'s description sat on `profile`, so one had two
+/// and the other none, and three commands named a schema a major version behind.
+#[test]
+fn every_command_has_its_own_help_naming_the_schema_it_prints() {
+    let d = tempfile::tempdir().unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&ok(d.path(), &["capabilities", "--json"])).unwrap();
+    for c in v["commands"].as_array().unwrap() {
+        let c = c.as_str().unwrap();
+        let help = ok(d.path(), &["help", c]);
+        let first = help.lines().next().unwrap_or_default();
+        assert!(
+            !first.starts_with("Usage:") && !first.trim().is_empty(),
+            "`nazm {c}` has no description: {help}"
+        );
+    }
+    for (c, schema, not) in [
+        ("explain-cost", "nazm.cost/2", "nazm.profile/"),
+        ("profile", "nazm.profile/2", "nazm.cost/"),
+        ("explain-flow", "nazm.flow/2", "nazm.flow/1"),
+        ("accel", "nazm.accel/2", "nazm.accel/1"),
+        ("core-ir", "nazm.core-ir/2", "nazm.core-ir/1"),
+    ] {
+        let help = ok(d.path(), &["help", c]);
+        assert!(help.contains(schema), "`nazm {c}` names {schema}: {help}");
+        assert!(
+            !help.contains(not),
+            "`nazm {c}` does not name {not}: {help}"
+        );
+    }
+}
+
+/// `nazm --version` and `nazm --help` name the release they are: toolchain 1.0.0, language 1.0
+/// (`docs/stability.md`). The crate version is the toolchain version; the help's sentence is
+/// written by hand and is held to it here.
+#[test]
+fn the_help_and_version_name_the_release() {
+    let d = tempfile::tempdir().unwrap();
+    let version = ok(d.path(), &["--version"]);
+    assert_eq!(version.trim(), format!("nazm {}", env!("CARGO_PKG_VERSION")));
+    let help = ok(d.path(), &["--help"]);
+    let language = env!("CARGO_PKG_VERSION")
+        .rsplit_once('.')
+        .map(|(major_minor, _)| major_minor)
+        .unwrap();
+    assert!(
+        help.contains(&format!(
+            "Nazm language {language}, toolchain {}",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{help}"
+    );
+    assert!(!help.contains("experimental release"), "{help}");
+}
