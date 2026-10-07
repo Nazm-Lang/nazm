@@ -1,0 +1,13 @@
+// expect: N0321
+// Only values that may cross into a task are `spawn` arguments (spec: concurrency).
+fn work(xs: Ints) -> Int ! {} {
+    ints_len(xs)
+}
+
+fn main(tasks: SpawnCap) -> Int ! { spawn } {
+    let xs = ints_new();
+    scope {
+        spawn work(xs);
+    }
+    0
+}

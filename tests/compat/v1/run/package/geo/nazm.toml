@@ -1,0 +1,5 @@
+schema = "nazm.package/1"
+
+[package]
+name = "geo"
+version = "1.2.0"

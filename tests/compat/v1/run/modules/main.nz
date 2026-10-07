@@ -1,0 +1,8 @@
+// A file is a module; `pub` exports; `use "PATH" as NAME` qualifies; `pub use` re-exports
+// (spec: modules, qualified-names).
+use "shapes.nz";
+use "util.nz" as u;
+
+fn main() -> Int {
+    area(Square(side: 4)) + u::twice(5)
+}

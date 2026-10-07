@@ -1,0 +1,32 @@
+// `while` with `break` and `continue`, `return` from inside a loop, `if` as an expression
+// (spec: while, break-continue, return).
+fn first_over(limit: Int) -> Int {
+    let mut i = 0;
+    while i < 100 {
+        i = i + 1;
+        if i % 2 == 0 {
+            continue;
+        }
+        if i * i > limit {
+            return i;
+        }
+    }
+    0
+}
+
+fn sum_until(n: Int) -> Int {
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        i = i + 1;
+        if s > 20 {
+            break;
+        }
+        s = s + i;
+    }
+    s
+}
+
+fn main() -> Int {
+    first_over(50) * 100 + sum_until(100) + if 3 > 2 { 1000 } else { 0 }
+}

@@ -1,0 +1,20 @@
+// Values and handles (spec: memory). A record read out of a vector is a copy; a vector inside
+// a record is the same handle wherever the record is copied; a closure captures by copy.
+struct Box {
+    n: Int,
+    log: Vec[Int],
+}
+
+fn main() -> Int {
+    let shared = vec_new[Int]();
+    let boxes = vec_new[Box]();
+    vec_push(boxes, Box(n: 1, log: shared));
+    let mut b = vec_get(boxes, 0);
+    b.n = 50;
+    vec_push(b.log, 7);
+    let again = vec_get(boxes, 0);
+    let frozen = b;
+    let seen = fn() -> Int { frozen.n };
+    b.n = 900;
+    again.n * 1000 + vec_len(again.log) * 100 + vec_get(shared, 0) + seen()
+}

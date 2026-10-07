@@ -1,0 +1,35 @@
+// Structured concurrency: a scope joins every task it starts before it ends; generic channels
+// carry records; select returns the lowest ready index (spec: concurrency, generic-channels,
+// select-deadlines).
+struct Job {
+    name: Str,
+    size: Int,
+}
+
+fn worker(jobs: Chan[Job], done: Chan[Int]) -> Int ! {} {
+    let got = vec_new[Job]();
+    while chan_recv_of(jobs, got) {
+        let j = vec_pop(got);
+        chan_send_of(done, j.size * str_len(j.name));
+    }
+    chan_close_of(done)
+}
+
+fn main(tasks: SpawnCap) -> Int ! { spawn } {
+    let jobs = chan_new_of[Job](4);
+    let done = chan_new_of[Int](4);
+    scope {
+        spawn worker(jobs, done);
+        chan_send_of(jobs, Job(name: "ab", size: 10));
+        chan_send_of(jobs, Job(name: "abc", size: 100));
+        chan_close_of(jobs);
+    }
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, done);
+    let out = vec_new[Int]();
+    let mut total = 0;
+    while chan_select_of(cs, out) == 0 && vec_len(out) > 0 {
+        total = total + vec_pop(out);
+    }
+    total
+}

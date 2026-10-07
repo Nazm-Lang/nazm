@@ -1,0 +1,8 @@
+// expect: N0386
+// A closure may not capture a `let mut` binding (spec: function-values, effect-parameters).
+fn main() -> Int {
+    let mut k = 1;
+    let f = fn(x: Int) -> Int { x + k };
+    k = 2;
+    f(k)
+}

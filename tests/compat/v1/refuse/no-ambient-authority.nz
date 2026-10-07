@@ -1,0 +1,10 @@
+// expect: N0369
+// A function with no declared set holds only the capabilities its scope holds (spec:
+// capabilities, N104): `main`'s authority is not inherited by a callee.
+fn helper() -> Int {
+    print("x")
+}
+
+fn main(o: OutCap) -> Int ! { io } {
+    helper()
+}

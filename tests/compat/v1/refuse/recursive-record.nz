@@ -1,0 +1,9 @@
+// expect: N0336
+// A record that contains itself has no layout and is refused (spec: records).
+struct Node {
+    next: Node,
+}
+
+fn main() -> Int {
+    0
+}

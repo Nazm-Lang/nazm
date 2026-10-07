@@ -1,0 +1,11 @@
+pub struct Square {
+    side: Int,
+}
+
+pub fn area(s: Square) -> Int {
+    s.side * s.side
+}
+
+fn hidden() -> Int {
+    0
+}

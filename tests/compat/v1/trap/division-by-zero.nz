@@ -1,0 +1,9 @@
+// expect: N0401
+// Division by zero stops the program with a diagnostic (spec: division).
+fn div(a: Int, b: Int) -> Int {
+    a / b
+}
+
+fn main() -> Int {
+    div(10, 0)
+}

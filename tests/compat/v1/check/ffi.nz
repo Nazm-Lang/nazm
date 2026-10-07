@@ -1,0 +1,14 @@
+// The stable C boundary checks without a C compiler: `Int` and `Bool` by value, a symbol, the
+// `foreign` effect and a `ForeignCap` at every call (spec: foreign). Running it needs
+// `nazm build --link`; `nazm run` refuses a program that calls C.
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+extern "C" fn c_is_even(n: Int) -> Bool = "c_is_even";
+
+fn classify(f: ForeignCap, n: Int) -> Int ! { foreign } {
+    if c_is_even(n) { c_add(n, 1000) } else { c_add(n, 100) }
+}
+
+fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
+    print(int_to_str(classify(f, 3)));
+    0
+}

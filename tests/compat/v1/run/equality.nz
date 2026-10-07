@@ -1,0 +1,28 @@
+// `==` is derived structurally on value types, records and enums included, and on `Str` by
+// contents (spec: equality).
+struct P {
+    x: Int,
+    s: Str,
+}
+
+enum E {
+    A(n: Int),
+    B,
+}
+
+fn main() -> Int {
+    let mut n = 0;
+    if P(x: 1, s: "a") == P(s: "a", x: 1) {
+        n = n + 1;
+    }
+    if E.A(n: 2) != E.A(n: 3) {
+        n = n + 10;
+    }
+    if E.B() == E.B() {
+        n = n + 100;
+    }
+    if "ab" == str_concat("a", "b") {
+        n = n + 1000;
+    }
+    n
+}

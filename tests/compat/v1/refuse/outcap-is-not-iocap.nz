@@ -1,0 +1,9 @@
+// expect: N0300
+// An `OutCap` does not imply an `IoCap`; there is no path back (spec: capabilities, N79).
+fn read(io: IoCap) -> Int ! { io } {
+    args_count()
+}
+
+fn main(o: OutCap) -> Int ! { io } {
+    read(o)
+}

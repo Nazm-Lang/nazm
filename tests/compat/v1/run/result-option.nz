@@ -1,0 +1,40 @@
+// `?` propagates an `Err` as a `return`; `Option` is taken apart with `match` (spec: errors).
+fn half(n: Int) -> Option[Int] {
+    if n % 2 == 0 { Option[Int].Some(value: n / 2) } else { Option[Int].None() }
+}
+
+fn quarter(n: Int) -> Option[Int] {
+    match half(n) {
+        Option.Some(value: h) => half(h),
+        Option.None() => Option[Int].None(),
+    }
+}
+
+fn get(o: Option[Int]) -> Int {
+    match o {
+        Option.Some(value: v) => v,
+        Option.None() => 0 - 1,
+    }
+}
+
+fn checked(n: Int) -> Result[Int, Str] {
+    if n > 100 {
+        return Result[Int, Str].Err(error: "too big");
+    }
+    Result[Int, Str].Ok(value: n)
+}
+
+fn sum2(a: Int, b: Int) -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: checked(a)? + checked(b)?)
+}
+
+fn code(r: Result[Int, Str]) -> Int {
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => 0 - str_len(e),
+    }
+}
+
+fn main() -> Int {
+    get(quarter(12)) * 10 + get(quarter(6)) + code(sum2(40, 2)) * 1000 + code(sum2(1, 500))
+}

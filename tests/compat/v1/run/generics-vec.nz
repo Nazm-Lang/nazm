@@ -1,0 +1,23 @@
+// `Vec[T]` is a shared mutable handle: a second binding and a callee see the same vector.
+// Generic records and functions are instantiated at each use (spec: generics).
+struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+fn swap[A, B](p: Pair[A, B]) -> Pair[B, A] {
+    Pair[B, A](first: p.second, second: p.first)
+}
+
+fn fill(xs: Vec[Int], n: Int) -> Int {
+    vec_push(xs, n)
+}
+
+fn main() -> Int {
+    let a = vec_new[Int]();
+    let b = a;
+    fill(b, 5);
+    vec_push(a, 7);
+    let p = swap(Pair[Int, Str](first: 1, second: "abc"));
+    vec_len(a) * 100 + vec_get(b, 0) * 10 + vec_get(a, 1) + str_len(p.first)
+}

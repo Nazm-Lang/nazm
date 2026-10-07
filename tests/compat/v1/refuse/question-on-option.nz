@@ -1,0 +1,14 @@
+// expect: N0360
+// `?` propagates the prelude's `Result` and nothing else (spec: errors).
+fn half(n: Int) -> Option[Int] {
+    Option[Int].Some(value: n / 2)
+}
+
+fn quarter(n: Int) -> Option[Int] {
+    let h = half(n)?;
+    half(h)
+}
+
+fn main() -> Int {
+    0
+}

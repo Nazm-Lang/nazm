@@ -1,0 +1,11 @@
+// The standard library is imported by `use "@std/…"` (spec: std).
+use "@std/seq";
+
+fn main() -> Int {
+    let xs = vec_new[Int]();
+    vec_push(xs, 1);
+    vec_push(xs, 2);
+    vec_push(xs, 3);
+    let doubled = vec_map(xs, fn(x: Int) -> Int { x * 2 });
+    vec_fold(doubled, 0, fn(acc: Int, x: Int) -> Int { acc + x })
+}

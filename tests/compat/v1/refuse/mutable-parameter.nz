@@ -1,0 +1,9 @@
+// expect: N0311
+// A parameter is never `mut` (spec: mutation).
+fn bump(mut n: Int) -> Int {
+    n
+}
+
+fn main() -> Int {
+    bump(1)
+}

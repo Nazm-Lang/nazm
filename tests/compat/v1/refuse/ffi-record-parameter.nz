@@ -1,0 +1,11 @@
+// expect: N0381
+// A record has no C layout Nazm promises, so it does not cross the C boundary (spec: foreign).
+struct P {
+    x: Int,
+}
+
+extern "C" fn take(p: P) -> Int = "take";
+
+fn main() -> Int {
+    0
+}

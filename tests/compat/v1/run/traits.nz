@@ -1,0 +1,44 @@
+// Traits are nominal and static; a bound on a type parameter resolves each call to one impl
+// at compile time (spec: traits).
+trait Describe {
+    fn code(self: Self) -> Int;
+}
+
+struct A {
+    n: Int,
+}
+
+enum B {
+    One,
+    Two,
+}
+
+impl Describe for A {
+    fn code(self: A) -> Int { self.n }
+}
+
+impl Describe for B {
+    fn code(self: B) -> Int {
+        match self {
+            B.One() => 1,
+            B.Two() => 2,
+        }
+    }
+}
+
+fn total[T: Describe](xs: Vec[T]) -> Int {
+    let mut s = 0;
+    let mut i = 0;
+    while i < vec_len(xs) {
+        s = s + vec_get(xs, i).code();
+        i = i + 1;
+    }
+    s
+}
+
+fn main() -> Int {
+    let v = vec_new[B]();
+    vec_push(v, B.One());
+    vec_push(v, B.Two());
+    A(n: 40).code() + total(v)
+}
