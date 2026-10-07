@@ -136,6 +136,9 @@ pub fn rvalue(program: &Program, v: &Rvalue) -> String {
             ty(program, *to)
         ),
         Rvalue::Fits { to, operand: o } => format!("fits {} in {}", operand(o), ty(program, *to)),
+        Rvalue::Array { elems } => format!("[{}]", operands(elems)),
+        Rvalue::ArrayRepeat { value, count } => format!("[{}; {count}]", operand(value)),
+        Rvalue::Index { base, index } => format!("{}[{}]", operand(base), operand(index)),
         Rvalue::Compare {
             op,
             law,
@@ -242,6 +245,27 @@ pub fn statement(program: &Program, s: &StatementKind) -> String {
         StatementKind::SetField { base, path, value } => {
             let p: Vec<String> = path.iter().map(|f| field(program, *f)).collect();
             format!("_{}.[{}] = move _{}", base.0, p.join(" / "), value.0)
+        }
+        StatementKind::SetElement {
+            base,
+            path,
+            value,
+            unwind,
+        } => {
+            let p: Vec<String> = path
+                .iter()
+                .map(|s| match s {
+                    crate::ir::PathRef::Field(f) => field(program, *f),
+                    crate::ir::PathRef::Index { index, len } => format!("[_{} of {len}]", index.0),
+                })
+                .collect();
+            format!(
+                "_{}.[{}] = _{}{}",
+                base.0,
+                p.join(" / "),
+                value.0,
+                edge(Some(*unwind))
+            )
         }
         StatementKind::Drop(l) => format!("drop _{}", l.0),
         StatementKind::ScopeOpen { list, unwind } => {

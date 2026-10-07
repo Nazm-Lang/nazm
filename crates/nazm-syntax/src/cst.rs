@@ -195,6 +195,14 @@ pub enum SyntaxKind {
     ImplItem,
     /// `receiver.method(args)` (N78).
     MethodCallExpr,
+    /// `const NAME: Type = value;` (Gate 2).
+    ConstItem,
+    /// `[T; N]` (Gate 2).
+    ArrayType,
+    /// `[a, b]` and `[x; N]` (Gate 2).
+    ArrayExpr,
+    /// `base[index]` (Gate 2).
+    IndexExpr,
     /// A region that did not parse: the partial construct and the tokens skipped to the
     /// next place the grammar can resume. Its bytes are the author's, unchanged.
     Error,
@@ -325,6 +333,10 @@ impl SyntaxKind {
         Self::TraitMethod,
         Self::ImplItem,
         Self::MethodCallExpr,
+        Self::ConstItem,
+        Self::ArrayType,
+        Self::ArrayExpr,
+        Self::IndexExpr,
         Self::Error,
     ];
 

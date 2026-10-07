@@ -444,6 +444,9 @@ impl Gen {
             return Err(Self::refuse(f, e.at, "it uses a number other than `Int`"));
         }
         Ok(match &e.kind {
+            ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } | ExprKind::Index { .. } => {
+                return Err(Self::refuse(f, e.at, "it uses an array"))
+            }
             ExprKind::Bits { .. }
             | ExprKind::Complement(_)
             | ExprKind::Convert { .. }

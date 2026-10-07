@@ -51,6 +51,23 @@ impl ChanId {
     }
 }
 
+/// A fixed-size array type of this compilation, `[T; N]`, interned by element type and
+/// length (Gate 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArrayId(u32);
+
+impl ArrayId {
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    #[must_use]
+    pub fn from_index(i: usize) -> Self {
+        Self(u32::try_from(i).unwrap_or(u32::MAX))
+    }
+}
+
 /// A function type of this compilation, by its session-local interned id (N50). Session-local
 /// like [`VecId`]; the durable spelling of a function type is its parameters, result and effects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -180,6 +197,17 @@ impl NumKind {
         }
     }
 
+    /// Width in bytes.
+    #[must_use]
+    pub const fn bytes(self) -> u32 {
+        match self {
+            Self::I8 | Self::U8 => 1,
+            Self::I16 | Self::U16 => 2,
+            Self::I32 | Self::U32 | Self::F32 => 4,
+            Self::I64 | Self::U64 | Self::F64 => 8,
+        }
+    }
+
     #[must_use]
     pub const fn is_float(self) -> bool {
         matches!(self, Self::F32 | Self::F64)
@@ -300,6 +328,8 @@ pub enum Type {
     /// A fixed-width integer or a float (Gate 2): a value, like `Int`. Never
     /// `Num(NumKind::I64)` — that is [`Self::Int`]; build one with [`Type::of_num`].
     Num(NumKind),
+    /// `[T; N]` (Gate 2): `N` elements of a plain-data `T`, inline, by value, like a record.
+    Array(ArrayId),
 }
 
 impl Type {
@@ -365,7 +395,8 @@ impl Type {
             | Self::Vec(_)
             | Self::Param(_)
             | Self::Fn(_)
-            | Self::ChanOf(_) => None,
+            | Self::ChanOf(_)
+            | Self::Array(_) => None,
         }
     }
 

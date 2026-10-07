@@ -302,7 +302,20 @@ impl Block {
     }
 }
 
-/// One step of an assignment's place: a field of a record, by identity.
+/// One step of an assignment's place: a field of a record, or an element of an array
+/// (Gate 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathStep {
+    Field(Step),
+    /// `[index]` into an array of `len` elements; out of range stops the program (`N0405`).
+    Index {
+        index: Expr,
+        len: u32,
+        at: Span,
+    },
+}
+
+/// A field step of an assignment's place: a field of a record, by identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Step {
     pub record: RecordId,
@@ -321,7 +334,7 @@ pub enum Stmt {
     /// Write a local, or a field path inside one. The value is evaluated first.
     Assign {
         local: LocalId,
-        path: Vec<Step>,
+        path: Vec<PathStep>,
         value: Expr,
         at: Span,
     },
@@ -419,6 +432,21 @@ pub enum ExprKind {
     Fits {
         to: Type,
         operand: Box<Expr>,
+    },
+    /// An array of the elements, in the order written, which is evaluation order (Gate 2).
+    Array {
+        elems: Vec<Expr>,
+    },
+    /// An array of `count` copies of `value`, which is evaluated once (Gate 2).
+    ArrayRepeat {
+        value: Box<Expr>,
+        count: u32,
+    },
+    /// An element of an array: the base, then the index, evaluated in that order; an index
+    /// outside the array stops the program (`N0405`) (Gate 2).
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
     },
     /// A comparison, with the law it compares by already settled.
     Compare {
@@ -667,6 +695,8 @@ impl Law {
             (_, Type::Int) => Some(Self::Int),
             (_, Type::Num(_)) => Some(Self::Num),
             (true, _) => None,
+            // An array compares element by element, by its element's law (Gate 2).
+            (false, Type::Array(_)) => Some(Self::Structural),
             (false, Type::Bool) => Some(Self::Bool),
             (false, Type::Str) => Some(Self::Bytes),
             (false, Type::Record(_) | Type::Enum(_)) => Some(Self::Structural),

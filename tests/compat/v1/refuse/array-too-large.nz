@@ -1,0 +1,6 @@
+// expect: N0618
+// An array is at most 64 KiB; a larger buffer is a Vec (spec: arrays).
+fn main() -> Int {
+    let big = [0; 9000];
+    0
+}

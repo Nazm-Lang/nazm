@@ -79,8 +79,10 @@ pub use resolve::{
 };
 pub use scope::{Candidate, Named, ScopeTrace, Unavailable, Visible};
 pub use types::{
-    ChanId, ConvertMode, FnSignature, FnTypeId, NumKind, ParamOwner, Type, TypeParam, VecId,
+    ArrayId, ChanId, ConvertMode, FnSignature, FnTypeId, NumKind, ParamOwner, Type, TypeParam,
+    VecId,
 };
 pub use udt::{
-    CycleEdge, LayoutCycle, NoEquality, OwnershipCycle, Reach, TypeNode, UserTypes, MAX_TYPE_DEPTH,
+    ArrayProblem, CycleEdge, LayoutCycle, NoEquality, OwnershipCycle, Reach, TypeNode, UserTypes,
+    MAX_ARRAY_BYTES, MAX_TYPE_DEPTH,
 };

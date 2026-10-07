@@ -1,0 +1,11 @@
+// expect: N0622
+// A constant is computed by the checker: no call, binding or effect (spec: constants).
+fn seven() -> Int {
+    7
+}
+
+const SEVEN: Int = seven();
+
+fn main() -> Int {
+    SEVEN
+}

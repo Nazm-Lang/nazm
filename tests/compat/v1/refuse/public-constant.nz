@@ -1,0 +1,7 @@
+// expect: N0101
+// A constant is its own module's: a published interface does not carry values yet (spec: constants).
+pub const LIMIT: Int = 10;
+
+fn main() -> Int {
+    LIMIT
+}

@@ -5,6 +5,7 @@
 //! rules every backend relies on; [`print`] writes it as text, which is also what its digest is
 //! of; [`interp`] executes it, as the oracle the backends are held to.
 
+mod arrays;
 mod func;
 mod helpers;
 pub mod interp;

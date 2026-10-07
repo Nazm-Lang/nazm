@@ -122,7 +122,17 @@ fn expr_all(e: &cir::Expr, out: &mut Vec<cir::Expr>) {
         ExprKind::Neg(x)
         | ExprKind::Complement(x)
         | ExprKind::Convert { operand: x, .. }
-        | ExprKind::Fits { operand: x, .. } => expr_all(x, out),
+        | ExprKind::Fits { operand: x, .. }
+        | ExprKind::ArrayRepeat { value: x, .. } => expr_all(x, out),
+        ExprKind::Array { elems } => {
+            for x in elems {
+                expr_all(x, out);
+            }
+        }
+        ExprKind::Index { base, index } => {
+            expr_all(base, out);
+            expr_all(index, out);
+        }
         ExprKind::Arith { lhs, rhs, .. }
         | ExprKind::Bits { lhs, rhs, .. }
         | ExprKind::Compare { lhs, rhs, .. } => {

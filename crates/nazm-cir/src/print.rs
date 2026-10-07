@@ -330,15 +330,19 @@ impl Printer<'_> {
                     "path",
                     J::Arr(
                         path.iter()
-                            .map(|p| {
-                                J::Obj(vec![
+                            .map(|p| match p {
+                                crate::ir::PathStep::Field(p) => J::Obj(vec![
                                     (
                                         "record",
                                         J::Str(self.names.ty(nazm_sema::Type::Record(p.record))),
                                     ),
                                     ("field", J::uint(p.field)),
                                     ("name", J::Str(self.names.field(p.record, p.field))),
-                                ])
+                                ]),
+                                crate::ir::PathStep::Index { index, len, .. } => J::Obj(vec![
+                                    ("index", self.expr(index)),
+                                    ("len", J::uint(*len)),
+                                ]),
                             })
                             .collect(),
                     ),
@@ -510,6 +514,23 @@ impl Printer<'_> {
                 o.push(Self::op("fits"));
                 o.push(("to", J::Str(self.names.ty(*to))));
                 o.push(("operand", self.expr(operand)));
+            }
+            ExprKind::Array { elems } => {
+                o.push(Self::op("array"));
+                o.push((
+                    "elems",
+                    J::Arr(elems.iter().map(|e| self.expr(e)).collect()),
+                ));
+            }
+            ExprKind::ArrayRepeat { value, count } => {
+                o.push(Self::op("array-repeat"));
+                o.push(("value", self.expr(value)));
+                o.push(("count", J::uint(*count)));
+            }
+            ExprKind::Index { base, index } => {
+                o.push(Self::op("index"));
+                o.push(("base", self.expr(base)));
+                o.push(("index", self.expr(index)));
             }
             ExprKind::Compare {
                 op,

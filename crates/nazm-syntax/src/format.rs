@@ -261,6 +261,9 @@ struct Printer<'a> {
     /// the stack the formatter would have to guess from the token alone, and would get
     /// one of the two wrong.
     brackets: Vec<bool>,
+    /// Which bracket opened each nesting level, innermost last: `true` for `[` (Gate 2), where
+    /// a `;` separates an array's element from its length rather than ending a statement.
+    squares: Vec<bool>,
     /// The last two tokens printed. Two, because whether a `-` is negation depends on
     /// what came before *it*, not on the `-`.
     previous: Option<&'a TokenKind>,
@@ -289,6 +292,7 @@ fn print<'a>(text: &'a str, pieces: &'a [Piece<'a>], layout: &'a Layout) -> Stri
         indent: 0,
         inline: Vec::new(),
         brackets: Vec::new(),
+        squares: Vec::new(),
         previous: None,
         before: None,
         previous_end: 0,
@@ -349,6 +353,7 @@ impl<'a> Printer<'a> {
         let closing_inline = *kind == TokenKind::RBrace && self.inline.pop().unwrap_or(false);
         if *kind == TokenKind::RBrace {
             self.brackets.pop();
+            self.squares.pop();
         }
         if *kind == TokenKind::RBrace && !closing_inline {
             self.indent = self.indent.saturating_sub(1);
@@ -409,6 +414,7 @@ impl<'a> Printer<'a> {
                 let inline = self.layout.inline.get(at).copied().unwrap_or(false);
                 self.inline.push(inline);
                 self.brackets.push(true);
+                self.squares.push(false);
                 if !inline {
                     self.indent += 1;
                     self.continuing = false;
@@ -417,11 +423,17 @@ impl<'a> Printer<'a> {
             }
             // A type parameter or argument list is one line, like an argument list:
             // `Pair[Int, Str]` is a type, and breaking inside it would be breaking a name.
-            TokenKind::LParen | TokenKind::LBracket => self.brackets.push(false),
+            TokenKind::LParen | TokenKind::LBracket => {
+                self.brackets.push(false);
+                self.squares.push(*kind == TokenKind::LBracket);
+            }
             TokenKind::RParen | TokenKind::RBracket => {
                 self.brackets.pop();
+                self.squares.pop();
             }
-            TokenKind::Semi if !self.in_inline() => {
+            TokenKind::Semi
+                if !self.in_inline() && !self.squares.last().copied().unwrap_or(false) =>
+            {
                 self.continuing = false;
                 self.break_line();
             }
@@ -502,10 +514,14 @@ impl<'a> Printer<'a> {
         {
             return false;
         }
-        // `Pair[` is one thing: a type argument list is glued to what it applies to, and
-        // only a name can come before one.
+        // `Pair[` is one thing: a type argument list is glued to what it applies to, and an
+        // index to what it indexes (Gate 2) — a name, a closing bracket or a call. Anywhere
+        // else a `[` begins an array or an array type, and is spaced like any operand.
         if *next == TokenKind::LBracket {
-            return false;
+            return !matches!(
+                previous,
+                TokenKind::Ident(_) | TokenKind::RBracket | TokenKind::RParen
+            );
         }
         // `f(` is one thing; `while (` is two. The bracket is glued to a name — or to the
         // type arguments after one, `f[Int](` — and separated from anything else.

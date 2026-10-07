@@ -222,9 +222,18 @@ impl<'a> Canon<'a> {
                 self.n(u64::from(local.0));
                 self.len(path.len());
                 for p in path {
-                    self.ty(Type::Record(p.record));
-                    let name = self.names.field(p.record, p.field);
-                    self.bytes(name.as_bytes());
+                    match p {
+                        crate::ir::PathStep::Field(p) => {
+                            self.ty(Type::Record(p.record));
+                            let name = self.names.field(p.record, p.field);
+                            self.bytes(name.as_bytes());
+                        }
+                        crate::ir::PathStep::Index { index, len, .. } => {
+                            self.tag("index");
+                            self.n(u64::from(*len));
+                            self.expr(index);
+                        }
+                    }
                 }
                 self.expr(value);
             }
@@ -369,6 +378,23 @@ impl<'a> Canon<'a> {
                 self.tag("fits");
                 self.ty(*to);
                 self.expr(operand);
+            }
+            ExprKind::Array { elems } => {
+                self.tag("array");
+                self.len(elems.len());
+                for e in elems {
+                    self.expr(e);
+                }
+            }
+            ExprKind::ArrayRepeat { value, count } => {
+                self.tag("array-repeat");
+                self.n(u64::from(*count));
+                self.expr(value);
+            }
+            ExprKind::Index { base, index } => {
+                self.tag("index");
+                self.expr(base);
+                self.expr(index);
             }
             ExprKind::Compare {
                 op,

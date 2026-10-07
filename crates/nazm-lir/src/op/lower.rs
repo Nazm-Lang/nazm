@@ -69,7 +69,7 @@ pub(crate) struct Trampoline {
 /// Whether a value of `t` is held in memory rather than in a scalar.
 #[must_use]
 pub const fn in_memory(t: Ty) -> bool {
-    matches!(t, Ty::Str | Ty::Record(_) | Ty::Enum(_))
+    matches!(t, Ty::Str | Ty::Record(_) | Ty::Enum(_) | Ty::Array(_))
 }
 
 /// The class a scalar value of `t` is held in.
@@ -533,6 +533,12 @@ impl<'a> Lw<'a> {
                 .map_or_else(|| format!("v{}", v.0), |l| format!("vec.{}", l.name)),
             // One name per generic channel type, as a `Vec`'s is per element (N54).
             Ty::ChanOf(c) => format!("chan.{}", c.0),
+            // One per element type and length, by structure, so it is durable (Gate 2).
+            Ty::Array(crate::ir::ArrayTy(id)) => match self.lay.arrays.get(&id).copied() {
+                Some((elem, len)) => format!("arr{len}.{}", self.type_name(elem)),
+                None => format!("arr.{id}"),
+            },
+            Ty::Num(k) => k.name().to_owned(),
             other => other.name().to_owned(),
         }
     }
