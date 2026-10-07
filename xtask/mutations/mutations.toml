@@ -8285,10 +8285,11 @@ Repointed by N104, which moved it to 29 for authority without inheritance: an en
 Repointed by Gate 1-C1, which moved it to 30 for closure environments in the ownership graph: an entry that accepted a closure capturing a `Vec[fn() -> Int]` must not be reused.
 Repointed by Gate 2, which moved it to 31 for numbers: an entry that refused `1.5` must not be reused.
 Repointed by Gate 2 again, which moved it to 32 for arrays and constants: an entry that refused `[1, 2]` must not be reused.
-Repointed by Gate 2's bytes and text, which moved it to 33: an entry that accepted a record named `Text` must not be reused."""
+Repointed by Gate 2's bytes and text, which moved it to 33: an entry that accepted a record named `Text` must not be reused.
+Repointed by M1, which moved it to 34: an entry that refused a pure call of an imported impl's method must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 33;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 32;"
+find = "pub const SEMANTIC_EPOCH: u32 = 34;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 33;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -14422,3 +14423,13 @@ file = "crates/nazm-core/src/check.rs"
 find = "            Expr::Str { span, .. } if expected == Some(Type::Text) => {"
 replace = "            Expr::Str { span, .. } if false && expected == Some(Type::Text) => {"
 killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by_scalar_value_and_cuts_only_at_boundaries" }]
+
+# --- M1: an imported impl method's effects ------------------------------------------------------
+
+[[mutation]]
+name = "m1-an-imported-impl-method-has-no-contract"
+why = "a direct or UFCS call of a method whose impl is in another module is taken for an undeclared function's, every effect assumed, so a pure caller is refused"
+file = "crates/nazm-core/src/effects.rs"
+find = "            .or_else(|| impl_method_contract(res, id).map(Some))"
+replace = "            .or(None)"
+killers = [{ package = "nazm-cli", test = "traits", name = "an_imported_impls_method_is_checked_against_its_traits_effects" }]

@@ -189,12 +189,17 @@ pub(crate) fn analyse(
         .collect();
     nodes.extend(closures);
     let index = |id: FnId, nodes: &[Node]| nodes.iter().position(|n| n.id == id);
-    // What another module publishes for a function: its contract, or nothing.
+    // What another module publishes for a function: its contract, or nothing. An impl's
+    // method is never an export — methods are not in the function namespace — and its contract
+    // is its trait method's, which the impl is held to (`N0603`, effects included), so that is
+    // what a direct or UFCS call of one in another module is checked against. Until M1 such a
+    // call was taken for an undeclared function's, and every effect assumed of it.
     let contract = |id: FnId| -> Option<Option<EffectSet>> {
         deps.iter()
             .flat_map(|d| d.exports())
             .find(|e| e.def == id)
             .map(|e| e.effects)
+            .or_else(|| impl_method_contract(res, id).map(Some))
     };
 
     for n in 0..nodes.len() {
@@ -594,6 +599,18 @@ fn set_text(set: EffectSet, param: &str) -> String {
     }
     let names: Vec<String> = set.iter().map(|e| effect_text(e, param)).collect();
     format!("{{ {} }}", names.join(", "))
+}
+
+/// The declared effects of `id` when it is a method of an impl: its trait method's.
+fn impl_method_contract(res: &Resolution, id: FnId) -> Option<EffectSet> {
+    res.traits().impls().find_map(|(_, i)| {
+        let at = i.methods.iter().position(|m| *m == Some(id))?;
+        res.traits()
+            .get(i.trait_id)?
+            .methods
+            .get(at)
+            .map(|m| m.effects)
+    })
 }
 
 /// One hop of a witness, in words.
