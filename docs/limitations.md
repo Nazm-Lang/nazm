@@ -19,6 +19,13 @@ found only by reading all of it.
 - `for`, `loop`, loop labels, valueless `return` and mutable parameters are not in 1.0, each
   refused by name (`N0101`, `N0311`). *Narrowed in Gate 2:* floating point and integers other than
   the 64-bit `Int` exist (`spec.md`, *Numbers*).
+- Arrays (Gate 2) hold plain data only — numbers, `Bool`s, and records, enums and arrays of them —
+  at most 64 KiB, and do not cross the C boundary; there are no slices or views of an array, no
+  iteration form beyond `while`, and a method call on an element is written `(xs[i]).m()` —
+  as is completion after an element whose index is a name: at a hole, `xs[i].` reads as type
+  arguments, as every `name[…]` did before Gate 2.
+  Constants (Gate 2) are module-private (`pub const` is refused) and are computed from literals,
+  other constants, operators and numeric conversions only.
 - Numbers (Gate 2): nothing converts implicitly — every mixed operation is written with a
   conversion — and a local has no type annotation, so a typed constant is written `UInt8(250)`.
   The C library's `float_sin` and its kin are as accurate as the host's library and may differ
