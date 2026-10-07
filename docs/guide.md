@@ -672,6 +672,10 @@ pub use "shapes.nz" { double, Sq as Square }; fn main() -> Int { 0 }
 reexport_name = IDENT , [ IDENT , IDENT ] ;
 ```
 
+```nazm
+pub use "shapes.nz" { Sq as Square }; fn main() -> Int { 0 }
+```
+
 ### `qualifier`
 
 ```ebnf

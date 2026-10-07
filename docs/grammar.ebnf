@@ -61,6 +61,7 @@ impl_item = "impl" , type , IDENT , type , "{" , { function } , "}" ;
 use_item = "use" , STRING , [ IDENT , IDENT ] , ";"
          | visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";" ;
 
+(* @example pub use "shapes.nz" { Sq as Square }; fn main() -> Int { 0 } *)
 reexport_name = IDENT , [ IDENT , IDENT ] ;
 
 (* `NAME ::` before the name of a definition: a function, a record, an enum. Nazm has no
