@@ -1,27 +1,114 @@
 # Nazm language specification
 
-**Status: the specification of Nazm language v0.3, the executable language of the toolchain
-0.3.0 release.** It is normative for what it settles: a program's meaning under v0.3 is what
-the *Settled* sections say, and where the reference implementation disagrees with a settled
-section, that is a defect in one of them, not a second meaning. Version identities and what
-v0.x promises across releases are in [`stability.md`](stability.md).
+**Status: the specification of Nazm language 1.0, the executable language of the toolchain
+1.0.0 release, and the stable contract of the 1.x line.** It is normative for what it settles:
+a program's meaning under 1.0 is what the sections classified STABLE 1.0 say, and where the
+reference implementation disagrees with one, that is a defect in one of them, not a second
+meaning. What 1.x promises across releases, and what may change, is in
+[`stability.md`](stability.md); every section of this document is classified below.
 
 The document holds four kinds of text, and every section says which it is:
 
-| Kind | Where | Normative for v0.3? |
+| Kind | Where | Normative for 1.0? |
 | --- | --- | --- |
-| **Current language** | *Settled for v0.1*, *Settled for v0.2*, and the sections after them up to *Open* | yes — a later section or a marked correction governs an earlier one |
+| **Current language** | *Settled for v0.1*, *Settled for v0.2*, and the sections after them up to *Open* | yes, as classified below — a later section or a marked correction governs an earlier one |
 | **Historical** | an entry or paragraph marked *Superseded*, *Corrected* or *Achieved*, kept with its original wording | no — it records what an earlier version decided and why |
-| **Design commitments** | *Settled*, directly below | they bind future design; where one names a mechanism v0.3 does not have, the commitment constrains how it is added, and v0.3 refuses the construct |
+| **Design commitments** | *Settled*, directly below | they bind future design; where one names a mechanism 1.0 does not have, the commitment constrains how it is added, and 1.0 refuses the construct |
 | **Open / research** | *Open — later phases must settle these*, and *Non-goals* | no — undecided, or deliberately out of scope |
 
 Sections are versioned and kept in order, so a *Settled for v0.1* entry records what v0.1
-decided; where a later version changed one, the earlier entry says so and points forward.
-What v0.3 does not have is listed under *Not in v0.3*, and a program using any of it is
-refused by name. Ecosystem and domain support — targets, profiles, tools — is evidence rather
-than semantics, and lives in `capability-matrix.md` and `limitations.md`.
+decided; where a later version changed one, the earlier entry says so and points forward. The
+"v0.1", "v0.2" and "v0.3" in headings and corrections date a decision; they do not limit it —
+a section classified STABLE 1.0 is current whatever version first settled it. What 1.0 does not
+have is listed under *Not in Nazm 1.0*, and a program using any of it is refused by name.
+Ecosystem and domain support — targets, profiles, tools — is evidence rather than semantics, and
+lives in `capability-matrix.md` and `limitations.md`.
 
-*History.* Until R1 (2026-10-07) this paragraph read: "this is not yet a specification — it
+## Stability classification for 1.0
+<!-- id: classification -->
+
+Every section with an anchor, by class (Gate 1, 2026-10-07). **STABLE 1.0** is covered by the
+1.x promise (`stability.md`). **COMPATIBLE EXTENSION POINT** is stable as written and names where
+1.x may add without changing a valid program's meaning. **EXPERIMENTAL** may change in a 1.x
+minor release, announced. **RESEARCH/OPEN** is undecided. **NON-GOAL** is out of scope by
+decision. **HISTORICAL** records an earlier decision and governs nothing. A subsection without an
+anchor takes its section's class, except where its own heading or a marked correction says it is
+history (*What records are not, in N9* and its siblings are HISTORICAL). No current rule rests on
+historical wording: where a section's own sentence was superseded, the class names what governs.
+`crates/nazm-cli/tests/docs.rs` fails if an anchored section is missing here.
+
+| Section | Class | Notes |
+| --- | --- | --- |
+| `settled` | STABLE 1.0 | design commitments; items 3 (parameter conventions beyond `let`, a region calculus) and 4–5 beyond what is realised are COMPATIBLE EXTENSION POINTS |
+| `v0-1` | STABLE 1.0 | heading of the sections below |
+| `overflow` | STABLE 1.0 | an explicit wrapping operator would be an extension |
+| `division` | STABLE 1.0 | |
+| `shadowing` | STABLE 1.0 | |
+| `evaluation-order` | STABLE 1.0 | |
+| `returns` | HISTORICAL | superseded by `return` and `blocks`: a function's value is its final expression, and `return` leaves early |
+| `types` | STABLE 1.0 | the built-in types grew later; no inference across function boundaries stands |
+| `records` | STABLE 1.0 | *What records are not, in N9* is HISTORICAL |
+| `enums` | STABLE 1.0 | *What enums are not, in N10* is HISTORICAL |
+| `generics` | STABLE 1.0 | *What generics are not, in N11* is HISTORICAL; higher-order generics would be an extension |
+| `errors` | STABLE 1.0 | `?` on `Result` only |
+| `std` | STABLE 1.0 | the API is `library/std/API-1.0` |
+| `equality` | STABLE 1.0 | |
+| `equality-requirement` | STABLE 1.0 | traits widened bounds (`traits`) |
+| `v0-2` | STABLE 1.0 | heading of the sections below |
+| `traits` | STABLE 1.0 | nominal and static; trait objects are not in 1.0 |
+| `mutation` | STABLE 1.0 | |
+| `while` | STABLE 1.0 | |
+| `blocks` | STABLE 1.0 | |
+| `break-continue` | STABLE 1.0 | |
+| `return` | STABLE 1.0 | |
+| `unreachable-code` | STABLE 1.0 | |
+| `limits` | STABLE 1.0 | the rule is stable; the limits' values are the implementation's and may be raised, not lowered, in 1.x |
+| `nesting` | STABLE 1.0 | the bound may be raised, not lowered, in 1.x |
+| `native-recursion` | STABLE 1.0 | stack sizes are the implementation's |
+| `strings` | STABLE 1.0 | |
+| `string-escapes` | STABLE 1.0 | |
+| `sequences` | STABLE 1.0 | its *Destruction* row is superseded by `memory`: storage is reclaimed |
+| `memory` | STABLE 1.0 | its *Cycles* claim has a recorded exception: a closure stored into a `Vec` it captures (*Corrected 2026-10-07, Gate 1*, in the section) |
+| `outside-world` | STABLE 1.0 | *Authority is explicit where a contract is written, and ambient elsewhere* is HISTORICAL: `capabilities` (N104) governs |
+| `modules` | STABLE 1.0 | |
+| `packages` | STABLE 1.0 | |
+| `profiles` | STABLE 1.0 / EXPERIMENTAL | the mechanism — a profile only refuses, and never changes what an accepted program does — is stable; each profile's rule set is experimental and may grow |
+| `durable-identity` | STABLE 1.0 / DEBUG | what a module path resolves to is stable; the persisted key format is internal (`nazm.interface/11`) |
+| `concurrency` | STABLE 1.0 | the M:N scheduler is an implementation choice |
+| `effects` | STABLE 1.0 | three effects (the section's own "exactly two" is corrected in place) |
+| `capabilities` | STABLE 1.0 | revocation and finer-grained authority would be extensions |
+| `foreign` | STABLE 1.0 | widened by `ffi-v2` and `ffi-v3` |
+| `provenance` | STABLE 1.0 | no implicit-flow or non-interference claim |
+| `integer-boundaries` | STABLE 1.0 | |
+| `one-error` | EXPERIMENTAL | diagnostic recovery: codes are stable, which further errors are reported is not |
+| `logical-operators` | STABLE 1.0 | |
+| `qualified-names` | STABLE 1.0 | |
+| `function-values` | STABLE 1.0 | its capability-capture row is superseded by `effect-parameters` (N51): a closure may capture a capability |
+| `effect-parameters` | STABLE 1.0 | more than one effect parameter would be an extension |
+| `declassification` | STABLE 1.0 | |
+| `generic-channels` | STABLE 1.0 | |
+| `select-deadlines` | STABLE 1.0 | |
+| `ffi-v2` | STABLE 1.0 | |
+| `ffi-v3` | STABLE 1.0 | |
+| `function-contracts` | STABLE 1.0 | what is proved at compile time may grow; a clause's run-time check is never removed |
+| `registry` | STABLE 1.0 | local registries; no hosted registry is promised |
+| `freestanding` | EXPERIMENTAL | emulator-verified boards, a restricted subset |
+| `webassembly` | EXPERIMENTAL | |
+| `interactive` | EXPERIMENTAL | `repl`, `comptime`, `reload-check` |
+| `accel` | EXPERIMENTAL | |
+| `contracts` | EXPERIMENTAL | the `web3` profile and `nazm contract` |
+| `evm` | EXPERIMENTAL | |
+| `wasm-contract` | EXPERIMENTAL | |
+| `accounts` | EXPERIMENTAL | |
+| `provenance-record` | STABLE 1.0 | `nazm.provenance/1` |
+| `project-tooling` | STABLE 1.0 / EXPERIMENTAL | `init`, `doc`, library checking and `publish --dry-run` are stable (what a template writes is not); `bindgen` is experimental |
+| `not-in-v0-3` | STABLE 1.0 | each construct is refused by name; adding one is a compatible extension |
+| `classification` | STABLE 1.0 | this table |
+| `open` and every `open-*` | RESEARCH/OPEN | |
+| `non-goals` | HISTORICAL / NON-GOAL | the first interpreter milestone's list; what 1.0 leaves out is `not-in-v0-3` |
+
+*History.* Until Gate 1 (2026-10-07) the status paragraph named language v0.3 and toolchain
+0.3.0 and pointed to a pre-1.0 policy. Until R1 (2026-10-07) it read: "this is not yet a specification — it
 is the list of decisions a specification has to make, with the ones already settled marked as
 such." Publishing the open questions before the answers was deliberate: every one of them
 was either wrong or unstated in an earlier draft of the design, and the cost of discovering
@@ -36,12 +123,12 @@ language.
 
 These are design commitments. Changing one is a re-founding decision, not an edit.
 
-*Status for v0.3:* commitments, not a list of features. Items 1, 2, 6 and 7 hold of v0.3 as
-implemented. Item 3's parameter conventions beyond `let` are not in v0.3 — a mutable
-parameter is refused (*Not in v0.3*) — and no region calculus is exposed; item 4 is realised
+*Status for 1.0:* commitments, not a list of features. Items 1, 2, 6 and 7 hold of 1.0 as
+implemented. Item 3's parameter conventions beyond `let` are not in 1.0 — a mutable
+parameter is refused (*Not in Nazm 1.0*) — and no region calculus is exposed; item 4 is realised
 as declared and inferred effect sets with one effect parameter per function (*Effects*,
 *Effect parameters*); item 5 is realised as provenance with one restricted sink
-(*Provenance*). Where v0.3 has less, the commitment says how more may be added, not that it
+(*Provenance*). Where 1.0 has less, the commitment says how more may be added, not that it
 exists.
 
 1. **Source of truth is plain UTF-8 `.nz` files in git.** Content addressing applies to
@@ -122,7 +209,7 @@ something to guard against.
 > **Superseded in v0.3.** `return` exists and is implemented — see [`return`](#return)
 > below. This entry is kept rather than edited because it records what v0.1 committed to
 > and why, and the reasoning ("deferred until there is something to guard against") is
-> what the later section answers. **The current executable language is v0.3**; a function's
+> what the later section answers. **The current executable language is 1.0**; a function's
 > value is still its final expression, and `return` is for the paths that leave early.
 
 ### Types — `Int`, `Bool`, `Str`, and no inference across function boundaries
@@ -1921,9 +2008,28 @@ either: it is a composition of existing kinds of which one is live at a time, an
 between leaves is a leaf. The claim now covers every record **and every enum** built from
 the six built-in types. What would end it is unchanged and still absent.
 
+**Corrected 2026-10-07, Gate 1: one cycle is not refused.** N50 added function values, and a
+closure holds a handle to what it captures. A closure that captures a `Vec` whose elements can
+be function values, and is then stored into that `Vec`, is a value that owns itself:
+
+```nazm
+let fs = vec_new[fn() -> Int]();
+let f = fn() -> Int { vec_len(fs) };
+vec_push(fs, f);   // `fs` holds `f`, which holds `fs`
+```
+
+The checker accepts it and counting does not reclaim it: a native run's memory report ends with
+that sequence and that closure live. *Cycles* required in advance that a new value kind able to
+form a cycle arrive with a policy, and N50 did not supply one; this is a defect against this
+section, recorded rather than hidden. Until it is resolved — by refusing such a capture, as
+`N0359` refuses ownership cycles in definitions, or by a policy for closures — the claim above
+holds for every program that forms no such cycle through a closure, and for nothing wider.
+
 #### What is not promised
 
-- **Leak freedom for a whole program, as a permanent property.** Every heap-backed type
+- **Leak freedom for a whole program, as a permanent property.** *Gate 1:* not even for
+  every program 1.0 accepts — a closure stored into a `Vec` it captures forms a cycle (*Cycles*,
+  below). Otherwise every heap-backed type
   the language *currently has* is reclaimed, which is a claim about `Int`, `Bool`, `Str`,
   `Ints`, `Strs`, `Chan` and the records and enums composed of them, and about nothing else. It rests on the cycle argument below,
   which is a fact about this type system rather than about counting in general: the first
@@ -3553,11 +3659,16 @@ through `nazm_host.report`) — and imports only `nazm_host.state_get(index) -> 
 | **`nazm bindgen HEADER [-o FILE]`** | A prototype is translated when every parameter is `int64_t`, `bool` or `const char *` and its result `int64_t` or `bool`, and the checker accepts its declaration; anything else — other integer widths, `void`, other pointers, floating point, structs, variadics, function pointers, macros, a declaration the checker refuses — is refused with the reason. Exit 1 when anything was refused |
 | **`nazm publish DIR --registry REG --dry-run`** | Every check a publish makes, and `nazm.publish-plan/1` — the version, the digest the index would record, the files it would copy — with nothing written |
 
-### Not in v0.3, and unsupported rather than half-present
+### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, floating point. A
 program using any of them is rejected by name rather than misparsed into something else.
+
+**Corrected 2026-10-07, Gate 1.** The section's anchor and the corrections below keep the name
+*Not in v0.3*; the list, with them, is the current answer for 1.0. Floating point was the one
+entry not refused by name: `1.5` was reported as a field read whose name is a number (`N0100`).
+It is refused by name as floating point (`N0101`) since Gate 1.
 
 **Corrected 2026-10-07, R1.** The N50 correction below says traits and methods "remain absent
 and are refused"; N78 added them, nominal and static (*Traits and methods — N78*, above).
@@ -3607,7 +3718,7 @@ The original paragraph, unedited:
 <!-- id: open -->
 
 *Not normative.* Everything below this heading is undecided or research. Nothing in it
-describes what v0.3 does; where an item was later settled, it is struck through or marked
+describes what 1.0 does; where an item was later settled, it is struck through or marked
 *Settled by …* and points to the section that now governs.
 
 ### Source identity and definition identity
@@ -3794,7 +3905,10 @@ collections, no user-defined types, no pattern matching, no string concatenation
 I/O, so a compiler cannot be written in it yet at all"* — was true when written and is now
 false in four of five clauses. Collections, string concatenation, modules and I/O exist,
 and the compiler written in Nazm reaches a C2 ≡ C3 fixpoint. User-defined types and pattern
-matching are still absent; the compiler was written around them with parallel `Ints`/`Strs`
-arrays rather than waiting. The heading above — *"the current interpreter milestone"* — no
+matching were still absent then; the compiler was written around them with parallel `Ints`/`Strs`
+arrays rather than waiting. *Corrected 2026-10-07, Gate 1:* records, enums and `match` arrived in
+N9 and N10, and the compiler written in Nazm handles them since N102. The fixpoint shows that
+compiler reproduces itself, not that it is correct or that it covers the language: it compiles a
+declared subset (`limitations.md`, `bootstrap.md`). The heading above — *"the current interpreter milestone"* — no
 longer describes the project either. What this list still correctly records is what that
 milestone chose not to do.

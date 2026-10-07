@@ -1,6 +1,6 @@
 # Support matrix
 
-What Nazm v0.3.0 has shown on each target and for each optional feature, in words that mean one
+What Nazm 1.0.0 has shown on each target and for each optional feature, in words that mean one
 thing each. The target table is the compiler's own — `nazm_lir::backend::SUPPORT`, printed by
 `nazm inspect` as `toolchain.support` — and `crates/nazm-cli/tests/docs.rs` fails if this page and
 that table disagree. The evidence behind every cell is in `capability-matrix.md`, area 33.
@@ -57,7 +57,7 @@ compiler.
 
 ## Optional features
 
-| Feature | Status in v0.3.0 | What exists, and what stops more |
+| Feature | Status in 1.0.0 | What exists, and what stops more |
 | --- | --- | --- |
 | WebAssembly | verified, scoped | the freestanding subset, run on Node.js's engine and held to the interpreter; no WASI, no heap |
 | GPU (`nazm accel`) | verified, scoped; experimental | maps, zips and reductions of `Int` kernels through OpenCL on Apple's GPU (macOS); a second provider **blocked** — no Metal or SPIR-V toolchain here |

@@ -428,6 +428,22 @@ repository, or a deliberate non-goal; none is promised, and none blocks the rele
 | Trait objects, effect handlers, user effects, implicit-flow tracking | research | N107 checked each and found none a defect or a requirement of the core (`audit-n107.md`) |
 | Windows, 32-bit hosted, big-endian targets | non-goal | stated reasons in `support.md` |
 
+### V1 Gate 1 — core stability and the 1.x constitution — **2026-10-07; awaiting review**
+
+The v1 programme's first gate (its brief is kept outside the tracked tree, and is a goal, not
+evidence). Language 1.0, toolchain 1.0.0; the semantic epoch (29), `nazm.interface/11`, runtime
+ABI 14 and every schema unchanged, each for its own reason (`stability.md`). `stability.md` is the
+1.x compatibility constitution — the promise, the patch/minor/major lines, and a class for every
+spec section, schema, command and option; `spec.md` classifies each of its sections and a test
+holds it to that. `tests/compat/v1/` is the append-only compatibility corpus, pinned by digest.
+Public outputs that described an earlier language were fixed: the refusal help, the built-in type
+list in help text and `nazm capabilities`, `1.5` refused by name as floating point, and four
+commands' help. Selfhost claims are scoped to the declared subset; `licensing.md` is the technical
+audit, and **a licensing decision is required before public release**. **Found, not fixed:** a
+closure stored into a `Vec` it captures forms a reference cycle that is never reclaimed — a defect
+against `spec.md`'s *Cycles*, reported for decision (area 4 is PARTIAL). Nothing tagged, pushed or
+published.
+
 ### R1 — public release readiness — **complete, 2026-10-07; candidate `7a16a40`**
 
 `releases/7a16a40.md` the record. No language or runtime semantics changed intentionally. The
