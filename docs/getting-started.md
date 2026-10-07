@@ -218,8 +218,9 @@ declared in `nazm.toml`; see `docs/spec.md`, *Packages*.
 ## Where next
 
 - [`examples/tour/`](../examples/tour/) — records and enums, `Result` and `?`, generics,
-  closures, traits, each checked, run and built under both backends by the test suite;
-  [`examples/worker-pool.nz`](../examples/worker-pool.nz) for structured concurrency.
+  closures and function values, traits, and tasks with declared effects and a `SpawnCap`, each
+  checked, run and built under both backends by the test suite;
+  [`examples/worker-pool.nz`](../examples/worker-pool.nz) for a larger concurrent program.
 - [`guide.md`](guide.md) — the language, a page per idea.
 - [`spec.md`](spec.md) — what each construct means, exactly.
 - [`support.md`](support.md) — targets and optional features, and what is verified on each.

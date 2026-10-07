@@ -2464,7 +2464,7 @@ own, and the parent drains while the workers run.
 
 | | |
 | --- | --- |
-| **Creation** | `spawn f(args);` starts a task running `f`. It is a statement, and `f` must be a named function — there are no function values, so there is nothing else it could be |
+| **Creation** | `spawn f(args);` starts a task running `f`. It is a statement, and `f` must be a named function. *Corrected 2026-10-07, R1:* this row gave "there are no function values" as the reason, true until N50; a function value may now be a `spawn` *argument* (*Function values and closures — N50*), and the callee is still a named function |
 | **Where** | Only inside a `scope { … }` block. `spawn` outside one is `N0320` |
 | **Joining** | A `scope` block does not finish until **every** task spawned inside it has finished. There is no way to leave a task running past its scope, and no way to detach one. That is the whole point of the word |
 | **Nesting** | A `scope` may contain another. The inner one joins first, because it closes first |
@@ -2633,6 +2633,9 @@ fn run(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } {
 There are exactly two, and they are the compiler's. An effect is identified by the compiler,
 never by where or how it is written, and there are **no user-defined effects**.
 
+*Corrected 2026-10-07, R1:* written for N36. N42 added a third, `foreign`, exercised by every
+call into C (*Foreign functions: calling C*); there are three, and still none user-defined.
+
 | Effect | Exercised by |
 | --- | --- |
 | `io` | the eight built-ins that reach the outside world — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` — and nothing else |
@@ -2715,6 +2718,13 @@ function values and no methods, so nothing a type argument brings can call anyth
 the same reason there is no effect polymorphism — no effect variables, no handler, nothing
 that removes an effect once it is required. Those are later work, and a later milestone
 adds them rather than N36 pretending concrete sets cover them.
+
+*Corrected 2026-10-07, R1:* the paragraph above is N36's. Function values (N50), one effect
+parameter per function (N51) and methods (N78) now exist: a call through a function value
+performs its type's effects, a call through a trait bound exercises no more than the trait
+method declares, and an effect parameter is bound at each call (*Function values and closures —
+N50*, *Effect parameters and captured authority — N51*, *Traits and methods — N78*). Handlers,
+user-defined effects and effect variables beyond the one parameter remain absent.
 
 **Effects are not authority.** A function declaring `! { io }` says what kind of power it
 uses, not that anything granted it. Since N37 who may exercise a power is a separate
@@ -2937,7 +2947,9 @@ fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
 enum has no C layout Nazm promises; a sequence or a channel is the runtime's; and a capability is
 authority, never a word C could forge or keep. No pointer crosses, so C cannot retain, free or
 alias anything Nazm owns, and nothing Nazm owns needs pinning across a call. No callback crosses
-either: Nazm has no function values.
+either: Nazm has no function values. *Corrected 2026-10-07, R1:* this is the v1 boundary; later
+sections widen it — strings and exports (N55), handles, C structs and callbacks that are an
+export's name (N85).
 
 **The declaration.** `extern` begins it, before the ABI string — `"C"`, the only ABI (`N0380`);
 `extern` is recognised only there, and is not otherwise reserved. The symbol after `=` is the C

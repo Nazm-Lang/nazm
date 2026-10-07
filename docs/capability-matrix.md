@@ -39,10 +39,14 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 2,021 passed, 0 failed, 29 ignored, across 136 suites**, run contained and
-offline in the N48 release gate (2026-10-01, at `a8a7b3f`, scheduled at P4W2T4). With it: the xtask
-lifecycle tests 19 of 19, selfhost 38 of 38 and bootstrap passed (at `74727bb`), and the mutation
-catalogue **808 of 808 caught**, composed across the commits the gate caused. The durable record of
+**Current suite: 2,492 passed, 0 failed, 47 ignored, across 200 test binaries**, run contained and
+offline at `47daadf` (R1-C1, 2026-10-07), with selfhost 43 of 43 and the bootstrap's fixpoint. The
+mutation catalogue's 1,268 entries at N108's gate were all caught (`releases/82936f6.md`); R1-C1
+added two, both caught in its 14-mutant campaign. Each release record under `releases/` is the
+frozen account of its own candidate, and the latest one supersedes this line.
+
+*Historical, not current:* the N48 release gate (2026-10-01, at `a8a7b3f`) ended at 2,021 passed,
+0 failed, 29 ignored, across 136 suites, with the catalogue 808 of 808 caught. The durable record of
 that gate, and of N40–N48 as a whole, is [`releases/84d3c80.md`](releases/84d3c80.md): frozen
 release-candidate notes for the tested candidate `84d3c80`, not updated by later commits — the
 documentation commits after it do not change what it says. It is the canonical N40–N48 evidence
@@ -253,7 +257,7 @@ the parse time and 1.8× the peak parse heap (`performance.md`). The compiler wr
 concrete tree, does not recover, and refuses every escape (N98). Parse nesting is bounded at 512 with
 a 24 MiB parse stack. `\x` above `7F` stays refused (`spec.md`, *String escapes*).
 
-**Next dependency** · None inside this area's scope. Parity of the compiler written in Nazm is N98.
+**Next dependency** · None inside this area's scope. The compiler written in Nazm reached parity on its probes in N102 (area 31).
 
 **Accepted when** · Met, 2026-10-03 (N76), for the reference parser: an edit sequence converges
 exactly to a fresh parse in lexemes, both trees and diagnostics, so no stale node or span survives;
@@ -598,20 +602,20 @@ Generic function values and closures inside generic functions (`N0387`) are outs
 model: each would need a thunk per instance, and a bound covers the programs that wanted one. No
 higher kinds, const generics, defaults, variance or specialisation. A persisted interface's traits
 are not rehydrated, so a module checked against one (rather than its source) cannot use them. The
-compiler written in Nazm has no traits (N98). A requirement cannot be written on a record's or an enum's parameter (`N0101`).
+compiler written in Nazm has traits, closures and function values since N102. A requirement cannot be written on a record's or an enum's parameter (`N0101`).
 `Option` has no `?`, `Result` no
 methods and no conversion between error types, and `main` cannot return one; no
-indexing syntax on a `Vec`; no `spawn` of a generic function. No closures or function
-values, no unit type, no `Never`.
+indexing syntax on a `Vec`; no `spawn` of a generic function. Function values and closures
+exist (N50) but not inside a generic function (`N0387`); no unit type, no `Never`.
 Since N78 a generic definition can require a trait of `T`, and a program can declare traits of its
 own; nothing can say "`T` can be passed to a task". No ordering, hashing or custom equality on any user type, and no
 equality at all on a sequence, a `Vec` or a `Chan`. No field-level or per-variant visibility, no
 default field values, no record update syntax. The pattern language is variant selection
 with named payload bindings and `_` — no top-level wildcard arm, no guards, no or-patterns,
-no literal, record, tuple or range patterns, and no `let` destructuring. Five keywords
-remain reserved and refused by name rather than silently absent
-(`crates/nazm-syntax/src/parser.rs`); `struct` left that list in N9 and `enum` and `match`
-in N10, for the same reason `print` did in B3 — a reserved word earns its place by naming
+no literal, record, tuple or range patterns, and no `let` destructuring. Four words — `for`,
+`label`, `loop` and `mod` — remain reserved and refused by name rather than silently absent
+(`crates/nazm-syntax/src/parser.rs`); `struct` left that list in N9, `enum` and `match`
+in N10 and `impl` in N78, for the same reason `print` did in B3 — a reserved word earns its place by naming
 something absent. *Until N11 this said neither a record nor an enum could be put in a
 sequence; `Vec[T]` holds either.*
 
@@ -884,14 +888,14 @@ and compiled. `crates/nazm-service/tests/context.rs`, `snapshot.rs` and `effects
 effects with reasons, an effect-only change as its own snapshot section, and every program of the
 tree still checking. Seventeen N36 mutations (area 30).
 
-**Limitation** · Two effects only, and a function that declares nothing is, to another module,
+**Limitation** · Three effects only (`io`, `spawn`, `foreign`), and a function that declares nothing is, to another module,
 every effect — so in the multi-module compiler sources 152 of 1,044 function checks come out
 `{ io, spawn }`, most because they call an undeclared import, not because they print or spawn.
 Pure means *no effect*, not *referentially transparent*: a function may write into a sequence it
-was handed. No effect polymorphism, though since N50 function values need it — a function type's effects are
-fixed, so the higher-order library takes only pure functions; no handlers; allocation,
-channels, traps and divergence are not effects. The Nazm-written compiler does not read effect
-sets. Effects are not authority: since N37 that is area 6, checked apart. Typed diagnostic facts (`nazm.diagnostic-detail/1`)
+was handed. Effect polymorphism is one effect parameter per function (N51), which the
+higher-order library uses; no handlers and no user-defined effects; allocation, channels, traps
+and divergence are not effects. The compiler written in Nazm reads effect sets and checks a
+function value's against the expected type's (N102). Effects are not authority: since N37 that is area 6, checked apart. Typed diagnostic facts (`nazm.diagnostic-detail/1`)
 stay unavailable; the effect facts are in the packet.
 
 **Next dependency** · Handlers; more than one effect parameter, and effect subtyping, when a
@@ -933,7 +937,7 @@ Without an answer, "drop an unused pure call" is unsound, so the optimiser canno
 that transformation at all. `docs/spec.md` *Open* carries it, along with whether allocation
 failure and panic are effects.
 
-**Next dependency** · A typed core IR to carry a row on a function type.
+**Next dependency** · An answer to whether divergence is an effect. *Until R1 this named a typed core IR to carry a row on a function type: Core IR (N39) and effect-carrying function types (N50) met it.*
 
 **Accepted when** · A function's row is inferred, checked, and a compile-fail test shows an
 effectful call refused where a pure one is accepted.
@@ -1167,7 +1171,7 @@ constitution, written before the code.
 | Digests used as a cache key | MISSING | nothing keys on them yet; the object cache keys on emitted IR (area 10b) |
 
 **Limitation** · Level 3 by responsibility, not by `architecture.md` §2's shape: a tree of
-structured regions, not ANF, and there are no traits to lower. Core IR is built from each run's
+structured regions, not ANF. Core IR is built from each run's
 full check and never persisted, so no reuse happens at this level. Generic bodies stay generic;
 instantiation is the native backend's. Ownership operations are not in it — regions state what
 they own, and a MIR would lower from that.
@@ -1292,9 +1296,10 @@ fails at the machine level; every fallible statement carries a span and a MIR fa
 Layering is gated: `xtask/src/rules.rs` forbids `nazm-lir` depending on `nazm-core` or
 `nazm-cir`.
 
-**Limitation** · There is no level 7 of its own since N40: the structured LIR tree is gone, and
-what remains is layout, symbols and LLVM text emission over MIR — level 9's responsibility. No
-optimisation, inlining or constant folding happens here; clang's does.
+**Limitation** · Since N105 LIR is an instruction-level IR of its own, lowered from MIR, validated,
+interpreted as an oracle and translated by both backends; between N40 and N105 only layout, symbols
+and LLVM text emission over MIR were left of it. No optimisation, inlining or constant folding
+happens here; the backends' own do.
 
 *The duplicate built-in table and the second resolver this row used to name were removed by
 N1; the forbidden dependency on `nazm-core` still holds, and is satisfied by both crates
@@ -1318,7 +1323,7 @@ counter. `architecture.md` §7.14.
 module, functions numbered `@nz.fN`, modules existing in the front end and nowhere below
 it. That was accurate, and it is no longer true — see area 10a.*
 
-**Next dependency** · Only whatever a second backend or a real optimisation pass demands.
+**Next dependency** · Only what a real optimisation pass demands. The second backend (Cranelift, N41) consumes the same LIR since N105.
 
 **Accepted when** · A second consumer exists that the contract serves unchanged.
 
@@ -1454,8 +1459,8 @@ for the runtime's text and the C driver for the link; `nazm inspect` names both.
 
 **Limitation** · The arithmetic contract is the load-bearing part and is deliberately
 conservative: `nsw` is not used, because it would promise overflow cannot happen and
-license an optimiser to delete the trap. No debug info is emitted and `clang` is invoked
-without `-g`, so a compiled program cannot be debugged symbolically.
+license an optimiser to delete the trap. Debug information is emitted only under `nazm build
+--debug` (N48, N58, N91; area 27); an ordinary build carries none.
 
 **Next dependency** · None for correctness.
 
@@ -1567,8 +1572,9 @@ harness rather than call it from Rust. Thread safety is by construction (atomic 
 counts, sequences confined by `N0321`), not by a sanitizer run. *One OS thread per task* stood here
 until N106.
 
-**Next dependency** · N44's scheduler, and a reason for a runtime crate (stack switching, a custom
-allocator).
+**Next dependency** · None for the v1 contract. The scheduler arrived as the pool (N83, the default
+since N106, area 15); a runtime written as a Rust crate would need the `unsafe` allowance the
+workspace forbids, and no program has needed an allocator of its own.
 
 **Accepted when** · For v1: met. For the area (met by N106): a scheduler beyond one thread per task, with its
 policy stated.
@@ -1600,8 +1606,10 @@ nested scopes, records and enums handed to tasks, a waiting receiver woken, auth
 withheld and bridged, provenance through a spawn (`N0372`), nothing mutable crossing (`N0321`,
 transitively), `exit_with` from a task. Peak RSS stays at 3.8 MB from 5,000 to 500,000 tasks.
 
-**Limitation** · One OS thread per task and nothing more. No M:N, no work stealing, no
-fairness, no task density, no timeouts, and **no cancellation beyond closing a channel**.
+**Limitation** · A native program's tasks run on the M:N pool by default (N106, area 15) — bounded
+workers, a task pinned to one, no work stealing, no preemption and no fairness guarantee; the
+interpreter, the compiler written in Nazm and a program that calls C keep a thread per task.
+Deadlines exist on selects (N54), and there is **no cancellation beyond closing a channel**.
 `Chan` alone carries `Int`; `Chan[T]` (N53) carries any `T` that may cross into a task, no
 sequence or closure (`N0390`); since N54 a select over `Chan[T]` receives, a deadline needs a
 `TimeCap`, and closing a channel is how a task is cancelled — cooperatively, where it waits. Ownership prevents data races; **that is not deadlock freedom**
@@ -1670,12 +1678,16 @@ that can block — and named what has to move first: the thread-local first-fail
 limit, and a hand-off for blocking foreign calls. Select, deadlines and cancellation were built so
 that nothing in them depends on the thread model.
 
-**Limitation** · None of it exists and none of it is measured. `architecture.md` records
-that the "1M live tasks under 2GB" target was **withdrawn** as arithmetically unsupported —
-the right precedent for anything proposed here.
+**Limitation** · No work stealing, no preemption, no hand-off of a blocking foreign call and no
+model checker (N83): a task that computes without waiting holds its worker, and a program that
+calls C runs a thread per task unless `NAZM_SCHEDULER=pool`. Measured on macOS (N83) and run,
+contained, on Linux aarch64 (N106). `architecture.md` records that the "1M live tasks under 2GB"
+target was **withdrawn** as arithmetically unsupported — the right precedent for anything proposed
+here. *Until R1 this said "none of it exists", true before N83.*
 
-**Next dependency** · `nazm-rt`, which needs the `unsafe` allowance, which needs the memory
-model.
+**Next dependency** · Work stealing and a blocking-FFI hand-off, each with its own measurement; neither
+is scheduled. *Until R1 this named `nazm-rt` and the `unsafe` allowance; the pool was built without
+either.*
 
 **Accepted when** · Spawn-to-first-instruction latency, context-switch cost and task memory
 as **RSS, not virtual reservation, with page size recorded**, measured against a named
@@ -1724,13 +1736,15 @@ without a `use`.
 | Higher-order helpers | PARTIAL | `vec_map`, `vec_filter`, `vec_fold` in `@std/seq` (N50), plain Nazm over function values, on records and enums (`map_filter_and_fold_work_over_records_and_enums`); pure functions only until effects can be abstracted over |
 | Formatting, domains (HTTP, JSON, time, crypto) | MISSING | out of scope for v1 |
 
-**Limitation** · Functions carry their module's name because there are no qualified names. The
-compiler written in Nazm reports an `@std` import as a missing module. Pre-1.0: modules may change.
-*Narrowed in N49:* `use "@std/text" as t;` and `t::text_split` qualify a standard module's
-functions; the functions keep their prefixed names, which a plain import still needs.
+**Limitation** · Functions carry their module's name (`text_split`): `use "@std/text" as t;` and
+`t::text_split` qualify them since N49, and a plain import still needs the prefix. The compiler
+written in Nazm resolves `@std` since N102. No networking, cryptography or floating point, by
+decision; a listed item does not change within 1.x (`library/std/API-1.0`). *Until R1 this said
+there were no qualified names and that the compiler written in Nazm reported an `@std` import as a
+missing module — true before N49 and N102.*
 
-**Next dependency** · Effect polymorphism (N51), so a higher-order helper can take an effectful
-function; an ordering capability for sorting by key.
+**Next dependency** · None forced by a program: effect polymorphism (N51) lets the higher-order
+helpers take effectful functions, and `@std/sort` sorts by a caller's ordering (N84).
 
 **Accepted when** · For v1: met. For the area: a library a real program can be written against
 without reimplementing collections or text handling, with a stability policy past 1.0.
@@ -2861,11 +2875,13 @@ Fifteen N31 mutations, and seven in its closure (area 30).
 
 **Since N107 (moved from area 2)** · `nazm build` and `nazm run` check every module on every run; a warm build reuses objects, not checks. Every answer is the same either way — it is a cost. A check against a persisted interface alone, without source, cannot use that module's traits.
 
-**Limitation** · There is no project manifest, no dependency resolution, no lockfile and no
-registry. `nazm build` takes one root file, and since N3 the **source root is derived from
-it** — so a module's durable identity is relative to whichever file was named. A declared
-root is what would make a key independent of that, and it is a build-system feature this
-project does not have.
+**Limitation** · A package is built from its `nazm.toml` and `nazm.lock` (N46), resolved by a
+backtracking resolver that explains a refusal (N90) against a **local** registry (N56): no remote
+registry or network source, and no signature on a registry entry. A declared root — a `nazm.root`
+marker, `--source-root` or a package directory — fixes where a module's durable identity is
+relative to; without one, the source root is derived from the file named (N3). The compiler
+written in Nazm reads no manifest and refuses a package import by name. *Until R1 this said there
+was no manifest, resolution, lockfile, registry or declared root — true before N46 and N56.*
 
 The two resolvers still differ deliberately — the Nazm one normalises paths textually
 because the emitted runtime has no `realpath`, so a symlinked file is read twice there and
@@ -2873,8 +2889,8 @@ once here. N3 settled what that means for identity rather than closing it: a mod
 under two names gets **no** durable key, in either implementation, so the two cannot
 disagree about one (`spec.md`, *Durable identity*).
 
-**Next dependency** · A declared source root, which is the same decision as a project
-manifest.
+**Next dependency** · A remote registry source and signed entries (a post-release track); the
+compiler written in Nazm reading manifests.
 
 **Accepted when** · A project builds from a manifest and the two resolvers agree on
 identity.
@@ -3903,19 +3919,18 @@ recurses 200 levels now, leaving the out-of-process check to fail. It took six s
 23 verdicts were established twice. 34 verdicts are at `ab0a761`; the three repaired entries' are at
 `eb80464`.
 
-**Limitation** · One catalogued defect is a MUTANT CRASH, not caught (above; N39 turned the other,
-`stack-not-sized-from-the-budget`, into a catch), and one N13
-defect is a known survivor (above): the suite cannot observe a read of freed storage nothing
-has reused. **VERIFIED here means the harness runs every catalogued mutant and accounts for
-every verdict — not that every meaningful mutation is killed.** A campaign is
-five sessions, each paying a cold build and a baseline (about 355 s); journal lines reach the
-host when a container ends, so a supervisor killed mid-session loses that session's verdicts,
-which then simply run again. The 71 entries in `compiler/` cost 45 % of per-mutant time,
-almost all at the selfhost profile, because 51 of them have no killer yet. **Fuzzing does not
-exist** — no fuzz directory at the repository root, no targets, no corpus.
+**Limitation** · **VERIFIED here means the harness runs every catalogued mutant and accounts for
+every verdict — not that every meaningful mutation is killed.** A killer verified on one platform
+is evidence on that platform (N108); eight entries are observable only with macOS tools or Apple's
+clang and are verified on the host. A whole-catalogue campaign takes several contained sessions,
+resumed from its journal; a supervisor killed mid-session loses that session's verdicts, which then
+simply run again. Fuzzing covers five targets — the front end, lowering with MIR's validator, the
+interpreter, package manifests and LIR — at 300 s each per campaign, with no sanitizer, Miri or Loom
+run and no backend or FFI target (`limitations.md`). *Until R1 this named a crashing entry and a
+known survivor (neither remains: N108 caught all 1,268 entries) and said fuzzing did not exist (N73 began it).*
 
-**Next dependency** · For mutation, killers for the older `compiler/` entries, and the one
-remaining crashing case moved out of process. For fuzzing, a decision to start.
+**Next dependency** · For fuzzing, a sanitizer run and backend and FFI targets. For mutation, none
+for the catalogue as it stands.
 
 **Accepted when** · A full catalogue run completes with every verdict accounted for. **Met on
 2026-09-25**: 233 of 233, as above. Fuzzing's status is separate and unchanged.
@@ -4054,16 +4069,18 @@ package's sources and refuses a changed one. Not claimed across hosts, operating
 toolchain versions.
 
 **Limitation** · Three claims, kept apart. Archive **entry metadata is normalised** — tar
-sorted with zeroed owner and mtime, gzip with no timestamp. Whole-archive
-**bit-reproducibility is not established and cannot be** while the provenance and bootstrap
-records embed their own run date. **C2 and C3 are byte-identical within one run** after the
-build-id is stripped. Separately, the source digest covers a **declared file set**, not the
-tree — it omits every Cargo manifest, `Cargo.lock`, `rust-toolchain.toml`,
-`docker/contained.Dockerfile`, the mutation catalogue and every `.expected` fixture, so it
-cannot detect a changed dependency pin.
+sorted with zeroed owner and mtime, gzip with no timestamp — and since R1 the dates the provenance
+and bootstrap records carry are the commit's (`SOURCE_DATE_EPOCH`), not the run's. Whether two
+assemblies of one commit are byte-identical is recorded in that candidate's release record
+(`releases/`), on one host and one image — never across hosts, operating systems or toolchains.
+**C2 and C3 are byte-identical within one run** after the build-id is stripped. The source digest
+covers a **declared file set**; since R1 a `build-input-digest` beside it covers every file git
+tracks or would (`scripts/source-digest.sh`) — Cargo manifests, `Cargo.lock`,
+`rust-toolchain.toml`, the Dockerfile, the catalogue and every fixture included. *Until R1 the
+records embedded their own run date, which made bit-reproducibility impossible, and only the
+declared set was digested.*
 
-**Next dependency** · Moving the run date out of the digested set, if bit-reproducibility
-is wanted.
+**Next dependency** · A comparison across two independent hosts, which needs a second machine.
 
 **Accepted when** · Two runs at one commit produce identical archives, or the claim is
 permanently retired.

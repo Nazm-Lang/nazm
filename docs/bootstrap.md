@@ -117,10 +117,10 @@ exercised the thing it was meant to prove.
 | --- | --- |
 | Host | **Linux aarch64**, inside `nazm-contained:1.98.1` — the configuration of record since containment became mandatory. Darwin arm64 remains *a* verified configuration, historically |
 | Toolchain | rustc 1.98.1 (pinned); Debian clang 19.1.7 in the container, Apple clang 21.0.0 on Darwin |
-| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **5,041 lines** |
+| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **16,573 lines** (5,041 at the first result, 2026-09) |
 | **C2 vs C3, emitted IR** | **byte-identical** |
 | **C2 vs C3, executables** | **byte-identical**, including the runnable form |
-| Conformance | 10 cases, each agreeing across C2, C3 **and the reference** — 5 of them multi-module |
+| Conformance | 34 cases and 29 refusals, each agreeing across C2, C3 **and the reference** — 14 of the cases multi-module (10 cases, 5 multi-module, at the first result) |
 
 The IR being identical is the fixpoint: compiling S with a compiler built by Rust and with
 a compiler built by itself produces the same output. That is what self-hosting means, and

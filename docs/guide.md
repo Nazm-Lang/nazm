@@ -78,7 +78,7 @@ build's time went, and `nazm inspect` prints everything the compiler knows about
 | a `struct` you declare | A **record**: a value with named fields, each keeping its own type's rules |
 | an `enum` you declare | One of a fixed set of named **variants**, each with its own named fields |
 | `Vec[T]` | A growable sequence of **any** type — records, enums, strings, other `Vec`s — by reference |
-| `IoCap`, `OutCap`, `SpawnCap` | **Capabilities**: authority to reach the outside world, only its standard streams, and to start a task. Only `main` receives them; nothing constructs one, and an `IoCap` is accepted where an `OutCap` is expected |
+| `IoCap`, `OutCap`, `SpawnCap` | **Capabilities**: authority to reach the outside world, only its standard streams, and to start a task. Only `main` receives them; nothing constructs one, and an `IoCap` is accepted where an `OutCap` is expected. Four more — `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap` — authorise calling C, vouching for a string, reading the clock and device registers (`docs/spec.md`, *The capabilities*) |
 
 `Ints`, `Strs`, `Vec[T]` and `Chan` are handles: two bindings of one sequence are the same storage,
 and `==` is not offered on them, because it would have to mean either identity or
@@ -217,9 +217,10 @@ Six things to know, and then you know generics:
 
 - **A generic function is checked once, for every `T` at once.** So its body can only do
   what every type can: bind a `T`, pass it, return it, store it, push it into a `Vec[T]`.
-  It cannot add two `T`s, read a field of one or pass one to a task — there is no way to say
-  "only for types that can", so none of those is offered. Comparing two `T`s with `==` is the
-  one exception, and only when the function declares `T: Equality` (see *Equality*).
+  It cannot add two `T`s, read a field of one or pass one to a task. What a bound grants is
+  the exception: `T: Equality` gives `==` (see *Equality*), and `T: Trait` gives that trait's
+  methods (N78, `docs/spec.md` *Traits and methods*). Nothing can say "`T` may be passed to a
+  task".
 - **A call's type arguments come from its arguments, or you write them.** `or_else(m, 0)`
   works out `T` from `m`; `vec_new[Int]()` has no argument to work it out from, so it is
   written. What the result is *used for* never decides it.
@@ -269,7 +270,7 @@ Inside it `T` can be compared, and so can `Box[T]` or `Option[T]`. Every caller 
 type that has equality — `same(1, 2)`, `same(Point(…), Point(…))` and `same(Box[Int](…), …)`
 are fine, `same(v, v)` for a `Vec[Int]` is refused, and so is an `Option[Vec[Int]]` even when
 it holds `None`. A generic caller can pass its own `T` on only if its `T` says
-`: Equality` too. `Equality` is the only requirement there is, it adds nothing at run time —
+`: Equality` too. `Equality` is the one built-in requirement — a trait is the other kind — it adds nothing at run time —
 the compiled `same` at `Int` is the same code as one written for `Int` — and it is not a way
 to define your own `==`: what `==` means is still worked out from the type.
 
@@ -350,8 +351,10 @@ fn first_or(xs: Vec[Int], fallback: Int) -> Int {
 }
 ```
 
-There are no methods on either — no `unwrap`, no `map` — and runtime failures such as an
-index out of bounds are still runtime failures, not `Err` values.
+Neither has methods: the prelude gives them no impls, and an impl for a generic type is
+refused. `@std/option` and `@std/result` offer functions instead — `option_unwrap_or`,
+`result_ok` and the like — and there is no `map` on either. Runtime failures such as an index
+out of bounds are still runtime failures, not `Err` values.
 
 ## Effects and capabilities
 
@@ -466,7 +469,7 @@ keys (`main.nz::fn helper`), so the output is the same from any checkout; `--no-
 out source positions, and `--json` gives one line. A program that does not check prints
 nothing but its diagnostics. It is a view for a person asking *what did this source become*,
 not a syntax to write or a format to depend on: `docs/architecture.md` §7.41 says what its
-version, `nazm.core-ir/1`, promises and what it does not.
+version, `nazm.core-ir/2`, promises and what it does not.
 
 ```
 nazm mir prog.nz
@@ -505,7 +508,8 @@ accepts.
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
 | `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";"` |
 | `impl_item` | `"impl" , type , IDENT , type , "{" , { function } , "}"` |
-| `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";"` |
+| `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";" \| visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";"` |
+| `reexport_name` | `IDENT , [ IDENT , IDENT ]` |
 | `qualifier` | `IDENT , "::"` |
 | `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , { contract } , block` |
 | `contract` | `( "requires" \| "ensures" ) , expression` |
@@ -635,12 +639,16 @@ trait Size { fn size(self: Self) -> Int; } struct P { x: Int, } impl Size for P 
 ### `use_item`
 
 ```ebnf
-use_item = "use" , STRING , [ IDENT , IDENT ] , ";" ;
+use_item = "use" , STRING , [ IDENT , IDENT ] , ";" | visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";" ;
 ```
 
 `as NAME` imports the module under a name (N49): its exports are written `NAME::item`
 and are not brought into scope. `as` is a word here and nowhere else. See `docs/spec.md`,
 *Qualified names*.
+`pub use` re-exports (N103): every name the module offers, or the names in braces, each
+optionally offered under another name with the word `as`. A re-export is also an ordinary
+import, and is never under a name: `pub use "PATH" as m;` is refused. See `docs/spec.md`,
+*`pub use` offers another module's definitions*.
 
 ```nazm
 use "lib/helpers.nz"; fn main() -> Int { 0 }
@@ -648,6 +656,20 @@ use "lib/helpers.nz"; fn main() -> Int { 0 }
 
 ```nazm
 use "other.nz" as other; fn main() -> Int { 0 }
+```
+
+```nazm
+pub use "shapes.nz"; fn main() -> Int { 0 }
+```
+
+```nazm
+pub use "shapes.nz" { double, Sq as Square }; fn main() -> Int { 0 }
+```
+
+### `reexport_name`
+
+```ebnf
+reexport_name = IDENT , [ IDENT , IDENT ] ;
 ```
 
 ### `qualifier`
@@ -797,10 +819,10 @@ here, before a name. At most one, only on a function that declares its effect se
 never on a record or an enum (`N0388`); its name may then be written in the function's
 effect sets. See `docs/spec.md`, *Effect parameters and captured authority*.
 A parameter may require a capability of every type it stands for: one name after a
-`:`, and no list. `Equality` is the only capability, only a function's parameter may
-require it, and inside the function the parameter then has `==`. The name is not a
-type and nothing declares it. See `docs/spec.md`, *A type parameter may require
-equality*.
+`:`, and no list: `Equality`, which gives the parameter `==`, or a trait (N78), which
+gives it the trait's methods. Only a function's parameter may require one. `Equality` is
+not a type and nothing declares it. See `docs/spec.md`, *A type parameter may require
+equality* and *Traits and methods*.
 
 ```nazm
 fn same[T: Equality](a: T, b: T) -> Bool { a == b } fn main() -> Int { if same(1, 1) { 1 } else { 0 } }
@@ -818,8 +840,8 @@ visibility = "pub" ;
 
 One bit, and one spelling for it. Absent means private to this module; `pub` exports
 it to the modules that directly import this one. There is no `private` keyword,
-because the default needs no word, and no package or friend visibility, because there
-are no packages and no friends. See `docs/spec.md`.
+because the default needs no word, and no package or friend visibility: a package offers
+what its modules export, and nothing sits between. See `docs/spec.md`.
 
 ```nazm
 pub fn helper() -> Int { 1 } fn main() -> Int { helper() }
@@ -980,7 +1002,7 @@ type = function_type | [ qualifier ] , IDENT , [ type_arguments ] ;
 ```
 
 A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
-`Str`, `Ints`, `Strs`, `Chan` (and `Chan[T]`, N53), the capabilities `IoCap` and `SpawnCap`, `Vec`, a
+`Str`, `Ints`, `Strs`, `Chan` (and `Chan[T]`, N53), the seven capabilities (`IoCap`, `OutCap`, `SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap`), `Vec`, a
 declared record or enum, a type parameter in scope — is a *checking* question, not a grammatical one: the parser accepts any
 identifier here and the checker reports `N0305` for one that is not a type. A grammar
 that listed them would be claiming the parser rejects `fn f(x: Widget)`, which it does
@@ -1340,8 +1362,8 @@ closure = "fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , blo
 
 A closure (N50): a function written where a value is, its parameters and result in
 full, its effects declared or none. Its body may name the bindings around it, each
-copied in when the closure is made; a `let mut` binding or a capability may not be
-(`N0386`).
+copied in when the closure is made; a `let mut` binding may not be (`N0386`). A
+capability may be (N51): the closure holds it, and its type says what it does.
 
 ```nazm
 fn main() -> Int { let k = 2; let f = fn(x: Int) -> Int { x * k }; f(3) }
@@ -1414,9 +1436,10 @@ variant_construction = [ qualifier ] , IDENT , [ type_arguments ] , "." , IDENT 
 
 Always qualified by the enum, and always parenthesised — including for a variant with
 no payload, because `E.V` alone is exactly the shape of a field projection. Told apart
-from one by three tokens, `IDENT "." IDENT "("`, which is a decision rather than a
-guess: the language has no methods and no function values, so nothing else can put a
-`(` after a projection. See `docs/spec.md`, *Variants are named by their enum*.
+from one by three tokens, `IDENT "." IDENT "("`. Since N78 a method call has that shape
+too: `x.m(…)` with an unlabelled argument is always a call, and `x.m()` is a call when the
+checker finds `x` names a value rather than an enum — an enum keeps every meaning it had.
+See `docs/spec.md`, *Variants are named by their enum* and *Traits and methods*.
 
 ```nazm
 enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } }
