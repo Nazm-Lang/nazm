@@ -62,7 +62,9 @@ Three rules govern their use, and the first is the one this project has actually
 ## 2. The twelve laws
 
 Each law is followed by where the repository actually stands against it. That second line
-is the point: a law nobody has checked against the tree is decoration.
+is the point: a law nobody has checked against the tree is decoration. *Every status below was
+checked against the tree again for the v0.3.0 release (R1, 2026-10-07); a status that had
+fallen behind was rewritten, with what it used to say kept where the argument needs it.*
 
 **1 — Plain UTF-8 `.nz` files in git are the authoritative source.**
 *Honoured.* No derived-source store exists. `architecture.md` §3 gives the reasoning and
@@ -70,11 +72,12 @@ the counter-example (Unison) it is drawn from. Content addressing, if it ever ar
 applies to derived artefacts only.
 
 **2 — Native execution is the primary execution model.**
-*Partial, and the gap is the wrong way round.* `nazm build` produces a native executable
-with no runtime process. But the interpreter's subset is **larger**: recursion runs under
-`nazm run` and is refused by both compilers with `N0101`
-(`crates/nazm-lir/src/lower.rs`, `compiler/emit.nz`). Until the two subsets coincide, the
-native path is primary by intent and second by coverage.
+*Honoured.* `nazm build` produces a native executable with no runtime process, through LLVM
+or Cranelift, and the two paths cover the same language: `nazm capabilities` lists every
+construct for both, and the only differences are deliberate — a call into C is compiled and not
+interpreted, and the iteration budget is the interpreter's. *Until N49 this read "partial, and the
+gap is the wrong way round": recursion ran under `nazm run` and both compilers refused it with
+`N0101`. Native recursion has a stack check on entry to every function in a call cycle (`N0408`).*
 
 **3 — Safety must not require a mandatory garbage collector.**
 *Honoured, and partly earned as of N7 (2026-09-22).* There is no GC and no tracing of any
@@ -105,8 +108,9 @@ reclamation at all"; both halves were true and both are now closed.*
 
 **4 — Runtime cost is zero where possible and observable where it is not.**
 *Partial.* The costs that exist are observable and specified: checked arithmetic traps
-rather than wrapping, and `crates/nazm-lir/src/emit.rs:1-30` refuses `nsw` precisely
-because it would license an optimiser to delete the check. There is no opt-out, so
+rather than wrapping, and the LLVM translation (`crates/nazm-lir/src/op/llvm.rs`) emits the
+`llvm.s*.with.overflow` intrinsics and never `nsw`, precisely because `nsw` would license an
+optimiser to delete the check (`crates/nazm-cli/tests/build.rs` holds it). There is no opt-out, so
 "zero-cost where possible" has not been tested against a case where it conflicts with
 safety.
 
@@ -117,7 +121,7 @@ and are compiled by the compiler written in Nazm. There is no library alternativ
 way to express a task without them.
 
 **6 — AI-native means machine-consumable compiler interfaces, never AI-themed syntax.**
-*Honoured.* Four versioned schemas under `schema/`, a diagnostic stream with byte-exact
+*Honoured.* Twenty-nine versioned schemas under `schema/`, a diagnostic stream with byte-exact
 spans, a capability inventory read from the compiler's own tables. No keyword anywhere
 exists to support the label, and `roadmap.md` forbids adding one.
 
@@ -138,16 +142,22 @@ unavailable. When `nazm-rt` eventually needs it, the allowance narrows to that c
 
 **9 — Reproducibility and provenance are first-class.**
 *Partial, and honestly scoped.* A bootstrap record, `PROVENANCE.txt` and `MANIFEST.txt`
-are produced and self-validated. What is **not** established: the source digest covers a
-declared file set rather than the tree — omitting every Cargo manifest, `Cargo.lock`,
-`rust-toolchain.toml` and the Dockerfile — and the archive is not bit-reproducible and
-cannot be while the provenance embeds its own run date. The release report states the
-three-way split precisely; it is not restated here.
+are produced and self-validated; an SBOM and signed in-toto statements are available (N94).
+Since R1 the records' dates are the commit's rather than the run's (`SOURCE_DATE_EPOCH`), and a
+`build-input-digest` covers every file git tracks or would, beside the older source digest over a
+declared file set. Whether two assemblies of one commit are byte-identical is a per-release fact,
+recorded in that release's record under `docs/releases/`; nothing is claimed across hosts.
+`capability-matrix.md` area 32 keeps the claims apart. *Until R1 this said the archive could not be
+bit-reproducible while the provenance embedded its own run date, and that the source digest omitted
+every Cargo manifest, `Cargo.lock`, `rust-toolchain.toml` and the Dockerfile — both true then.*
 
 **10 — One semantic language, exposed through capability and restriction profiles — never
 incompatible dialects.**
-*Designed only.* No profile is implemented, no restriction mechanism exists, and there is
-exactly one dialect. §4 states the invariant; `capability-matrix.md` states what exists.
+*Honoured as built.* Restriction profiles exist — `general`, `embedded`, `critical`, `cyber`,
+`realtime`, `authority` and `web3`, chosen with `--profile NAME` or by a package's manifest
+(`spec.md` *Restriction profiles*) — and each refuses more and reinterprets nothing; there is
+exactly one dialect. §4 states the invariant; `capability-matrix.md` *Domain profiles* states how
+far each is verified, and none is a certification. *Until N47 this read "designed only".*
 
 **11 — Claims follow evidence.**
 *Honoured in intent, and it failed in practice.* The discipline was cultural, and culture
@@ -158,10 +168,14 @@ complete. The response is not more prose — it is
 [`capability-matrix.md`](capability-matrix.md) with a gate under it.
 
 **12 — The semantic kernel stays small.**
-*Honoured.* Six types, 31 built-ins, one module mechanism, and eight reserved words —
-`for`, `label`, `loop`, `struct`, `enum`, `match`, `mod`, `impl` — refused **by name**
-rather than silently unavailable (`crates/nazm-syntax/src/parser.rs:18-36`). Refusing by
-name is what makes a small kernel legible instead of merely incomplete.
+*Honoured, and grown on purpose.* The kernel is the compiler's own answer: `nazm
+capabilities` lists 8 built-in types (two of them capabilities), 7 kinds of authority and 53
+built-ins, with one module mechanism; four words — `for`, `label`, `loop` and `mod` — are
+reserved and refused **by name** rather than silently unavailable
+(`crates/nazm-syntax/src/parser.rs`, `RESERVED`). `struct`, `enum`, `match` and `impl` left that
+list as each became the construct it reserved. Refusing by name is what makes a small kernel
+legible instead of merely incomplete. *It once listed six types, 31 built-ins and eight
+reserved words.*
 
 ### Two invariants that are easy to lose in a refactor
 
@@ -247,6 +261,12 @@ Two consequences worth naming, because both are dependencies rather than complai
 > by `crates/nazm-lir/src/lower.rs` as it lowered, and is now decided once. It is level 3 by
 > responsibility, not by §2's shape: a tree of regions, not ANF. HIR, MIR and
 > monomorphisation remain absent.
+>
+> **2026-10-07 (R1).** Two more levels exist since, each owning a responsibility: MIR (N40,
+> `capability-matrix.md` area 9), where every copy, move and drop is explicit and validated, and
+> an instruction-level LIR both native backends translate (N105, area 10). Generic bodies are
+> monomorphised by the native path. HIR is still absent, and the language server has existed since
+> N16.
 
 **An IR level earns its existence by owning a semantic responsibility no existing level
 owns.** Matching the diagram is not such a reason. By that test, the next level is the one
@@ -283,9 +303,10 @@ it. **A profile becomes real in this order**, and the first step is the one usua
 5. **Only then** describe it as existing, in `capability-matrix.md`, with a path.
 
 What each profile is *for* is `NAZM_LANGUAGE_GOALS.md` §10. What exists today is
-`capability-matrix.md` under *Domain profiles*. Today that is one profile, unnamed, and
-five ambitions — and the Critical one in particular is an architectural intention that says
-nothing about certification or fitness for safety-related use.
+`capability-matrix.md` under *Domain profiles*. Today that is seven named profiles (`spec.md` *Restriction
+profiles*), each VERIFIED or PARTIAL as scoped there — and the Critical one in particular is
+enforcement and evidence that says nothing about certification or fitness for safety-related use.
+*Until N47 this read "one profile, unnamed, and five ambitions".*
 
 ## 5. Documentation authority
 
@@ -360,16 +381,19 @@ directly imports.
 on rather than a description of an intention. What does **not** exist is anything that
 hands an agent that subset: no context packet, no semantic delta, no language server, and
 no interface that can be written to a file. `capability-matrix.md` area 2 says so. The
-structure is a precondition for those; it is not a smaller version of them.
+structure is a precondition for those; it is not a smaller version of them. *All four exist
+since — `nazm interface` (N3), `nazm lsp` (N16), `nazm context` (N27) and `nazm delta` (N28) —
+and the paragraph is kept for the order of the argument.*
 
 ---
 
 ## 7. What this document deliberately does not decide
 
 The surface memory model (mutable value semantics against a full region calculus in the
-IR), whether divergence is an effect, the eligibility predicate for layout selection, the
-authority model that replaces ambient I/O, and whether the scheduler becomes M:N. Each has
-a home — `spec.md` *Open*, `architecture.md` §§4-5, `research-register.md` — and each is
+IR), whether divergence is an effect, and the eligibility predicate for layout selection.
+*The authority model that replaces ambient I/O and whether the scheduler becomes M:N stood here
+too; both are settled now, by evidence — authority as a parameter (N37, N104; area 6) and the M:N
+pool by default (N83, N106; area 15).* Each has a home — `spec.md` *Open*, `architecture.md` §§4-5, `research-register.md` — and each is
 open on purpose. A constitution that settled them would be a design document with
 delusions of permanence.
 

@@ -14,7 +14,8 @@ found only by reading all of it.
   module is the caller's or one it imports directly. A check against a persisted interface alone,
   without the module's source, cannot use its traits (a cached check can: N107 checked it). *Narrowed in N78:* until then, no traits or methods. Function values and
   closures exist since N50, and effect parameters since N51 — one per function, named only in
-  function types (`N0388`), with no effect subtyping; no closure or
+  function types (`N0388`), with effect subsumption only where a function value is passed or
+  returned (N79); no closure or
     named function value inside a generic function (`N0387`); a closure captures by copy and
   never a `let mut` binding (`N0386`); no attenuation beyond `OutCap` (N79) and no revocation
   (`architecture.md` §7.53); a field of function type is called by
@@ -100,8 +101,8 @@ found only by reading all of it.
   interface publishes no set. That is an effect assumption and grants nothing — since N104 no
   function inherits authority — but it makes such a call count against a caller's declared set
   (area 5). *Narrowed in N104:* the authority bridge is gone.
-- The core's scope, as N107 audited it (`audit-n107.md`): effects are the compiler's two, with no
-  handlers and no user-defined effects, and **pure is not total** — a pure function may diverge;
+- The core's scope, as N107 audited it (`audit-n107.md`): effects are the compiler's three (`io`, `spawn`,
+  `foreign`), with no handlers and no user-defined effects, and **pure is not total** — a pure function may diverge;
   capabilities are static, coarse and shareable — nothing checks them at run time, none is revoked,
   and none is linear; information flow is explicit data flow only, never non-interference. Each
   absent construct is refused by name.
@@ -179,10 +180,11 @@ found only by reading all of it.
   N106:* until then one OS thread per task by default, and the pool verified on macOS only. No detached tasks; deadlock is possible and not detected, on either model
   (areas 14, 15). *Narrowed in N54:* select over typed channels, a select deadline under
   a `TimeCap`, and cancellation by closing a channel a task selects on exist; nothing is cancelled
-  on a sibling's failure, nothing selects over sends or over the `Int` channel, and the stackful
-  pool §7.56 chose is not built. So the tasks alive at once are bounded by
-  the host's thread limit — a container's process ceiling counts every thread — and a `spawn` the
-  host refuses is `N0404`, not a wait.
+  on a sibling's failure, and nothing selects over sends or over the `Int` channel. Where a task is
+  a thread — the interpreter, the compiler written in Nazm, a program that calls C, or
+  `NAZM_SCHEDULER=threads` — the tasks alive at once are bounded by the host's thread limit — a
+  container's process ceiling counts every thread — and a `spawn` the host refuses is `N0404`, not a
+  wait.
 - A channel carries one element type, and only one that may cross into a task — `Int`, `Bool`,
   `Str`, channels, and records and enums of those (`N0390`); no unbounded channel, no channel of
   sequences or closures (area 14). *Narrowed in N53:* until then, `Int` only.
@@ -213,8 +215,8 @@ found only by reading all of it.
   signing, no SLSA level claimed — and reproducibility is verified on one host and one image, not on
   independent machines (N94). The compiler's bill of materials is what `Cargo.lock` claims; nothing
   checks a crate against its upstream.
-- Coverage-guided fuzzing covers four targets — the front end, lowering with MIR's validator, the
-  interpreter and package manifests — at 300 s each per campaign; no sanitizer, Miri or Loom run,
+- Coverage-guided fuzzing covers five targets — the front end, lowering with MIR's validator, the
+  interpreter, package manifests and LIR — at 300 s each per campaign; no sanitizer, Miri or Loom run,
   no backend, FFI or registry-archive fuzzing, and the differential generator writes `Int` and
   `Bool` programs only (area 30). A minimised corpus reaches 99.3 % or more of its campaign's edges.
   *Narrowed in N73 and N93.*

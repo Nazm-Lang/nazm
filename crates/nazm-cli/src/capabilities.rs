@@ -136,13 +136,27 @@ const CONSTRUCTS: &[ConstructRow] = &[
         interpreted: true,
         compiled: true,
         evidence: "nazm-core/tests/constraints.rs, nazm-cli/tests/constraints.rs; functions \
-                   only, `Equality` the only requirement, nothing emitted at run time",
+                   only, nothing emitted at run time; the one built-in requirement, a trait the other",
+    },
+    ConstructRow {
+        name: "traits and methods: `trait`, `impl Trait for Type`, `x.m()`, `[T: Trait]`",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-cli/tests/traits.rs; nominal and static, no trait objects (N0607) and no \
+                   method values (N0608) (docs/spec.md, Traits and methods)",
     },
     ConstructRow {
         name: "modules: `use`, relative resolution, diamonds, cycles",
         interpreted: true,
         compiled: true,
         evidence: "nazm-cli/tests/cli.rs; private by default, `pub` exports (docs/spec.md, Visibility)",
+    },
+    ConstructRow {
+        name: "re-exports: `pub use \"path\";` and `pub use \"path\" { a, b as c };`",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-cli/tests/reexports.rs; one definition under another module's names \
+                   (docs/spec.md, `pub use` offers another module's definitions)",
     },
     ConstructRow {
         name: "structured concurrency: `scope`, `spawn`, `Chan`",

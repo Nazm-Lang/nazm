@@ -51,7 +51,17 @@ impl_item = "impl" , type , IDENT , type , "{" , { function } , "}" ;
  * *Qualified names*.
  *)
 (* @example use "other.nz" as other; fn main() -> Int { 0 } *)
-use_item = "use" , STRING , [ IDENT , IDENT ] , ";" ;
+(* `pub use` re-exports (N103): every name the module offers, or the names in braces, each
+ * optionally offered under another name with the word `as`. A re-export is also an ordinary
+ * import, and is never under a name: `pub use "PATH" as m;` is refused. See `docs/spec.md`,
+ * *`pub use` offers another module's definitions*.
+ *)
+(* @example pub use "shapes.nz"; fn main() -> Int { 0 } *)
+(* @example pub use "shapes.nz" { double, Sq as Square }; fn main() -> Int { 0 } *)
+use_item = "use" , STRING , [ IDENT , IDENT ] , ";"
+         | visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";" ;
+
+reexport_name = IDENT , [ IDENT , IDENT ] ;
 
 (* `NAME ::` before the name of a definition: a function, a record, an enum. Nazm has no
  * module-level values, so a qualified name is never a variable.
@@ -123,10 +133,10 @@ type_parameters = "[" , type_parameter , { "," , type_parameter } , "]" ;
  * effect sets. See `docs/spec.md`, *Effect parameters and captured authority*.
  *
  * A parameter may require a capability of every type it stands for: one name after a
- * `:`, and no list. `Equality` is the only capability, only a function's parameter may
- * require it, and inside the function the parameter then has `==`. The name is not a
- * type and nothing declares it. See `docs/spec.md`, *A type parameter may require
- * equality*.
+ * `:`, and no list: `Equality`, which gives the parameter `==`, or a trait (N78), which
+ * gives it the trait's methods. Only a function's parameter may require one. `Equality` is
+ * not a type and nothing declares it. See `docs/spec.md`, *A type parameter may require
+ * equality* and *Traits and methods*.
  *)
 (* @example fn same[T: Equality](a: T, b: T) -> Bool { a == b } fn main() -> Int { if same(1, 1) { 1 } else { 0 } } *)
 (* @example fn apply[effects E](f: fn() -> Int ! { E }) -> Int ! { E } { f() } fn main() -> Int { apply(fn() -> Int { 1 }) } *)
@@ -134,8 +144,8 @@ type_parameter = IDENT , [ ":" , IDENT ] | "effects" , IDENT ;
 
 (* One bit, and one spelling for it. Absent means private to this module; `pub` exports
  * it to the modules that directly import this one. There is no `private` keyword,
- * because the default needs no word, and no package or friend visibility, because there
- * are no packages and no friends. See `docs/spec.md`.
+ * because the default needs no word, and no package or friend visibility: a package offers
+ * what its modules export, and nothing sits between. See `docs/spec.md`.
  *)
 (* @example pub fn helper() -> Int { 1 } fn main() -> Int { helper() } *)
 visibility = "pub" ;
@@ -203,7 +213,7 @@ parameters = parameter , { "," , parameter } ;
 parameter = IDENT , ":" , type ;
 
 (* A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
- * `Str`, `Ints`, `Strs`, `Chan` (and `Chan[T]`, N53), the capabilities `IoCap` and `SpawnCap`, `Vec`, a
+ * `Str`, `Ints`, `Strs`, `Chan` (and `Chan[T]`, N53), the seven capabilities (`IoCap`, `OutCap`, `SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap`), `Vec`, a
  * declared record or enum, a type parameter in scope — is a *checking* question, not a grammatical one: the parser accepts any
  * identifier here and the checker reports `N0305` for one that is not a type. A grammar
  * that listed them would be claiming the parser rejects `fn f(x: Widget)`, which it does
@@ -354,8 +364,8 @@ atom = INTEGER
 
 (* A closure (N50): a function written where a value is, its parameters and result in
  * full, its effects declared or none. Its body may name the bindings around it, each
- * copied in when the closure is made; a `let mut` binding or a capability may not be
- * (`N0386`).
+ * copied in when the closure is made; a `let mut` binding may not be (`N0386`). A
+ * capability may be (N51): the closure holds it, and its type says what it does.
  *)
 (* @example fn main() -> Int { let k = 2; let f = fn(x: Int) -> Int { x * k }; f(3) } *)
 closure = "fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block ;
@@ -388,9 +398,10 @@ initialiser = IDENT , ":" , expression ;
 
 (* Always qualified by the enum, and always parenthesised — including for a variant with
  * no payload, because `E.V` alone is exactly the shape of a field projection. Told apart
- * from one by three tokens, `IDENT "." IDENT "("`, which is a decision rather than a
- * guess: the language has no methods and no function values, so nothing else can put a
- * `(` after a projection. See `docs/spec.md`, *Variants are named by their enum*.
+ * from one by three tokens, `IDENT "." IDENT "("`. Since N78 a method call has that shape
+ * too: `x.m(…)` with an unlabelled argument is always a call, and `x.m()` is a call when the
+ * checker finds `x` names a value rather than an enum — an enum keeps every meaning it had.
+ * See `docs/spec.md`, *Variants are named by their enum* and *Traits and methods*.
  *)
 (* @example enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } } *)
 (* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1 + 1) { E.V(x: n) => n, } } *)
