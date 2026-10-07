@@ -256,3 +256,102 @@ fn the_support_page_states_the_compilers_own_matrix() {
         );
     }
 }
+
+/// Every anchored section of `docs/spec.md` is classified for 1.0, once, in one of the six
+/// classes, and the table names no section that does not exist (Gate 1). A section added
+/// without a class would be a rule nobody has said is stable.
+#[test]
+fn every_spec_section_is_classified_for_1_0() {
+    let spec = read("docs/spec.md");
+    let ids: BTreeSet<String> = spec
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("<!-- id:"))
+        .filter_map(|r| r.strip_suffix("-->"))
+        .map(|id| id.trim().to_owned())
+        .collect();
+    assert!(ids.len() > 60, "only {} anchors", ids.len());
+
+    let table = spec
+        .split("## Stability classification for 1.0")
+        .nth(1)
+        .expect("the classification section");
+    let table = table.split("\n## ").next().unwrap_or_default();
+    const CLASSES: [&str; 7] = [
+        "STABLE 1.0",
+        "COMPATIBLE EXTENSION POINT",
+        "EXPERIMENTAL",
+        "RESEARCH/OPEN",
+        "NON-GOAL",
+        "HISTORICAL",
+        "DEBUG",
+    ];
+    let mut classified: Vec<String> = Vec::new();
+    let mut open_family = false;
+    for row in table.lines().filter(|l| l.starts_with("| `")) {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let (section, class) = (cells[1], cells[2]);
+        assert!(
+            class.split(" / ").all(|c| CLASSES.contains(&c)),
+            "`{section}` has class `{class}`"
+        );
+        if section.contains("every `open-*`") {
+            open_family = true;
+        }
+        let id = section.split('`').nth(1).unwrap_or_default().to_owned();
+        assert!(ids.contains(&id), "the table classifies `{id}`, which is no section");
+        assert!(!classified.contains(&id), "`{id}` is classified twice");
+        classified.push(id);
+    }
+    for id in &ids {
+        let covered = classified.contains(id) || (open_family && id.starts_with("open-"));
+        assert!(covered, "spec section `{id}` has no 1.0 classification");
+    }
+}
+
+/// `docs/stability.md` puts every command of this build in exactly one class, and classifies
+/// every schema `schema/` holds (Gate 1).
+#[test]
+fn the_stability_contract_classifies_every_command_and_schema_file() {
+    let out = Command::new(NAZM)
+        .args(["capabilities", "--json"])
+        .output()
+        .expect("run");
+    let inv: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    let stability = read("docs/stability.md");
+    let commands = stability
+        .split("### The command line")
+        .nth(1)
+        .expect("the command-line section");
+    let rows: Vec<&str> = commands
+        .lines()
+        .filter(|l| {
+            l.starts_with("| **Stable public**")
+                || l.starts_with("| **Experimental**")
+                || l.starts_with("| **Debug/internal**")
+        })
+        .collect();
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    for c in inv["commands"].as_array().unwrap() {
+        let c = c.as_str().unwrap();
+        let n = rows
+            .iter()
+            .filter(|r| r.contains(&format!("`{c}`")))
+            .count();
+        assert_eq!(n, 1, "`nazm {c}` is in {n} classes of docs/stability.md");
+    }
+
+    let schemas = stability
+        .split("### Machine-readable output")
+        .nth(1)
+        .expect("the schema section");
+    for e in std::fs::read_dir(repo_root().join("schema")).unwrap().flatten() {
+        let file = e.file_name().to_string_lossy().into_owned();
+        let Some(stem) = file.strip_suffix(".json") else {
+            continue;
+        };
+        // `nazm.api-doc-2.json` is `nazm.api-doc/2`.
+        let (name, major) = stem.rsplit_once('-').unwrap();
+        let id = format!("`{name}/{major}`");
+        assert!(schemas.contains(&id), "{id} ({file}) is not classified in docs/stability.md");
+    }
+}

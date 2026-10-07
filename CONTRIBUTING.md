@@ -49,6 +49,21 @@ too.
 - **Refuse by name.** An unsupported construct is rejected with a diagnostic that names it, never
   misparsed into something else or silently ignored.
 
+## Compatibility within 1.x
+
+Nazm 1.x promises that a program valid under stable Nazm 1.0, using only stable public surfaces,
+does not silently change meaning ([`docs/stability.md`](docs/stability.md)). A change that would
+alter what a stable program means is a 2.0 change, or the fix of a recorded defect against the
+specification. [`tests/compat/v1/`](tests/compat/v1) holds every 1.x toolchain to that: it is
+append-only, every file is pinned by its digest, and a new stable rule adds a case with its pin
+(`tests/compat/v1/README.md`). Never edit a case to make a change pass.
+
+## Licensing of contributions
+
+Contributor terms (DCO, CLA, or inbound-equals-outbound) are not yet decided; that decision, and
+whether the runtime and standard library carry an exception, are recorded as open in
+[`docs/licensing.md`](docs/licensing.md).
+
 ## Evidence, in its own vocabulary
 
 `docs/capability-matrix.md` is the status authority. Use its words — VERIFIED, VERIFIED as scoped,

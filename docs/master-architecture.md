@@ -64,7 +64,10 @@ Three rules govern their use, and the first is the one this project has actually
 Each law is followed by where the repository actually stands against it. That second line
 is the point: a law nobody has checked against the tree is decoration. *Every status below was
 checked against the tree again for the v0.3.0 release (R1, 2026-10-07); a status that had
-fallen behind was rewritten, with what it used to say kept where the argument needs it.*
+fallen behind was rewritten, with what it used to say kept where the argument needs it. Gate 1
+of the v1 programme (2026-10-07) froze the 1.x contract (`stability.md`) without moving a law,
+and found one status that had overclaimed: law 3's reclamation claim has a recorded exception, a
+closure stored into a `Vec` it captures (`spec.md`, *Cycles*).*
 
 **1 — Plain UTF-8 `.nz` files in git are the authoritative source.**
 *Honoured.* No derived-source store exists. `architecture.md` §3 gives the reasoning and
@@ -100,6 +103,12 @@ that refers back. The first recursive user-defined type ends that argument, and
 `docs/spec.md`'s *Cycles* states in advance what admitting one requires.
 `capability-matrix.md` area 4 states the scope per type.
 
+*Gate 1, 2026-10-07: an exception was found.* Function values (N50) are a value kind that can
+refer back: a closure holds the handles it captured, so a closure stored into a `Vec` it captures
+owns itself, and counting does not reclaim it. The checker accepts that program; *Cycles* is now
+corrected to say so, and the claim holds for programs that form no such cycle. Resolving it —
+refusing the capture, or a policy for closures — is an open decision, not done in Gate 1.
+
 *Until N7 this paragraph read: "There is also no reclamation of any kind … 'No GC' is
 currently achieved by never freeing, which is not a memory strategy." That was accurate,
 and it is the sentence the milestone was written to retire. Between N7 and N8 it read
@@ -117,7 +126,8 @@ safety.
 **5 — Concurrency is part of the language, not a library.**
 *Honoured.* `scope`, `spawn` and `Chan` are grammar (`docs/grammar.ebnf`), are checked
 (`N0320` outside a scope, `N0321` for a sequence crossing into a task), lower natively,
-and are compiled by the compiler written in Nazm. There is no library alternative and no
+and are compiled by the compiler written in Nazm — `Chan` of `Int`; `Chan[T]` of another
+element type and selection are outside its subset (*corrected Gate 1, 2026-10-07*). There is no library alternative and no
 way to express a task without them.
 
 **6 — AI-native means machine-consumable compiler interfaces, never AI-themed syntax.**

@@ -635,7 +635,21 @@ blocks as values in the native backends.*
 
 ## Semantic core
 
-### 4. Memory model and reclamation — VERIFIED for the current type universe
+### 4. Memory model and reclamation — PARTIAL: verified for the current type universe, one recorded cycle defect (Gate 1)
+
+**Gate 1 (2026-10-07)** · *Status moved from VERIFIED to PARTIAL by a defect, not by a goal.* A
+closure that captures a `Vec` able to hold function values and is then stored into that `Vec` is
+a value that owns itself. The checker accepts it, and counting does not reclaim it: built natively,
+`let fs = vec_new[fn() -> Int](); let f = fn() -> Int { vec_len(fs) }; vec_push(fs, f);` ends
+with `nazm-memory: sequences allocated=1 reclaimed=0 live=1 … closures allocated=1 reclaimed=0
+live=1`, where the same program with the closure capturing another vector reclaims everything.
+N50 added the value kind *Cycles* said must arrive with a policy, and supplied none; the *Next
+dependency* below already named "a closure capturing its own handle" as the case to settle, and it
+was not settled. `docs/spec.md` *Cycles* carries the correction; the reclamation claim holds for
+programs that form no such cycle. **Accepted when** the cycle is refused by the type system (as
+`N0359` refuses ownership cycles in definitions) or reclaimed by a stated policy, with a test
+either way — a decision for review, not taken in Gate 1.
+
 
 **N52 (2026-10-02)** · resource sites are facts: `nazm explain-cost` (`nazm.cost/1`) lists each
 function's allocation, retain, block, channel, foreign and task sites from MIR with a count per

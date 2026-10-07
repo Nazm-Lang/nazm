@@ -4,11 +4,14 @@
 
 | Release | Supported |
 | --- | --- |
-| 0.3.x | yes — fixes land in the next 0.3 patch release |
-| earlier commits, and anything before 0.3.0 | no |
+| the latest 1.x release | yes — a fix lands in the next patch release of the latest 1.x minor |
+| an older 1.x minor | no — upgrade to the latest 1.x, which the 1.x compatibility promise keeps safe for programs on stable surfaces (`docs/stability.md`) |
+| 0.3.x, and anything before 1.0.0 | no |
 
-Nazm is pre-1.0 and experimental (`docs/stability.md`). A fix may require a minor release when the
-fault is in the language's own rules.
+No maintenance branch is kept for an older minor release, and none is promised. A security fix
+may refuse a program that was accepted only because of the defect it fixes; it is then refused
+with a diagnostic naming the rule, never run with a different result, and the release record
+says so (`docs/stability.md`, *What a 1.x release may change*).
 
 ## Reporting a vulnerability
 
@@ -20,6 +23,11 @@ maintainer have agreed a disclosure date.
   *Report a vulnerability*.
 - **Otherwise:** email the maintainer at the address in the workspace manifest's `authors`
   (`Cargo.toml`), with "Nazm security" in the subject.
+
+*Status, Gate 1 (2026-10-07):* this checkout has no git remote, and the GitHub API reports the
+repository `mdferdousalam/nazm` as not found, so private vulnerability reporting **could not be
+verified as enabled**. It must be enabled, and the fallback address confirmed, before any public
+release (`docs/releases/7a16a40.md`, step 7). The fallback address is present in `Cargo.toml`.
 
 Include the toolchain version (`nazm --version`), the host and target, a minimal program or
 input that shows the problem, and what you expected. You will get an acknowledgement, and the

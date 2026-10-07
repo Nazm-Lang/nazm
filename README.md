@@ -5,28 +5,37 @@
 **Nazm is a natively compiled programming language with explicit, specified semantics,
 deterministic memory reclamation without a garbage collector or lifetime annotations,
 structured concurrency, compiler-checked effects, authority and data provenance, and
-machine-readable tooling for people and coding agents alike. Its compiler is also written in
-Nazm, and compiles itself.**
+machine-readable tooling for people and coding agents alike. A second compiler, written in Nazm
+for a declared subset of the language, compiles itself.**
 
-## Current release: v0.3.0 — the first core-complete experimental release
+## Current release: 1.0.0 — the first stable language and toolchain release
 
-Nazm v0.3.0 is the first release in which the language and compiler core is closed under its
-declared support scope: the reference compiler and the compiler written in Nazm agree on the
-release's native feature surface, native compilation passes through one shared low-level IR into
-LLVM and Cranelift, the hosted runtime runs tasks on a structured M:N scheduler, and the release
-is backed by contained bootstrap, mutation, fuzzing, platform and artifact-verification evidence.
-Ecosystem and domain capabilities remain experimental or partial where documented.
+Nazm 1.0.0 is the first stable language/toolchain release. A program valid under stable Nazm 1.0,
+using only stable public surfaces, does not silently change meaning under a later 1.x toolchain:
+[`docs/stability.md`](docs/stability.md) is that contract — what is stable, what is experimental or
+internal, and what a patch, minor or major release may change — and
+[`tests/compat/v1/`](tests/compat/v1) is the corpus every 1.x toolchain is held to.
 
-**Experimental** means: the language may change between minor versions — deliberately, documented
-and versioned, never by silently reinterpreting existing code ([`docs/stability.md`](docs/stability.md)).
-It is not production-ready for general workloads, and nothing in it is certified for anything.
+A stable contract is not a complete ecosystem. Optional subsystems — GPU kernels, smart contracts,
+the freestanding and WebAssembly targets, the agent and editor tooling — remain experimental or
+partial where documented, and nothing in Nazm is certified, proved correct or claimed free of
+defects. Native compilation passes through one shared low-level IR into LLVM and Cranelift, the
+hosted runtime runs tasks on a structured M:N scheduler, and the release is backed by contained
+bootstrap, mutation, fuzzing, platform and artifact-verification evidence.
+
+**Not yet released.** The tree says 1.0.0; no `v1.0.0` tag exists. The v1 programme's later gates
+and its final release gate stand between this tree and one, and two decisions are open: a
+**licensing decision is required before public release** ([`docs/licensing.md`](docs/licensing.md)),
+and a recorded memory defect — a closure stored into a `Vec` it captures is never reclaimed — awaits
+its resolution ([`docs/limitations.md`](docs/limitations.md)). The last published candidate is
+v0.3.0 ([`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)).
 
 | | |
 | --- | --- |
-| Language | **v0.3** — [`docs/spec.md`](docs/spec.md) |
-| Toolchain | **0.3.0** — `nazm --version` |
+| Language | **1.0** — [`docs/spec.md`](docs/spec.md) |
+| Toolchain | **1.0.0** — `nazm --version` |
 | Standard library | **1.0**, stable within 1.x |
-| Licence | Apache-2.0 |
+| Licence | Apache-2.0 — a decision on the runtime and standard library is open ([`docs/licensing.md`](docs/licensing.md)) |
 
 ## A taste
 
@@ -78,7 +87,7 @@ git clone https://github.com/mdferdousalam/nazm
 cd nazm
 cargo build --release -p nazm-cli            # target/release/nazm
 # or: cargo install --path crates/nazm-cli --locked
-nazm --version                                # nazm 0.3.0
+nazm --version                                # nazm 1.0.0
 ```
 
 The binary carries the standard library inside it and needs no installation directory. Nothing
@@ -161,7 +170,7 @@ the matrix is the current answer.
 
 ## What is experimental, and what is not done
 
-The core above is what v0.3.0 closes. Around it, eight capability areas remain **partial** —
+The core above is what 1.0 makes stable. Around it, eight capability areas remain **partial** —
 GPU and HPC, LSP and MCP, package tooling, the debugger and profiler, performance measurement,
 reproducibility and provenance, the platform matrix, and smart contracts — and four things are **blocked by
 something outside this repository**: an in-process JIT (it needs `unsafe`, which the workspace
@@ -181,13 +190,16 @@ does **not** establish as carefully as by what it does:
 
 - **Differential testing:** the interpreter, both native backends and LIR's own interpreter are
   held to the same results on a shared corpus; passing says nothing about bugs all of them share.
-- **Self-hosting:** `compiler/*.nz` is a compiler for Nazm written in Nazm. The bootstrap
-  (Rust → C1 → C2 → C3) reaches a fixpoint — C2 and C3 byte-identical — and agrees with the
-  reference compiler on its conformance corpus. A fixpoint is not an independent proof of
-  semantics ([`docs/bootstrap.md`](docs/bootstrap.md)).
-- **Mutation testing:** a catalogue of deliberately injected defects, 1,273 entries, each required
+- **Self-hosting:** `compiler/*.nz` is a compiler for a declared subset of Nazm, written in Nazm.
+  The bootstrap (Rust → C1 → C2 → C3) reaches a fixpoint — C2 and C3 byte-identical — which shows
+  it reproduces itself, and it agrees with the reference compiler on its conformance corpus (34
+  cases and 29 refusals) and 21 parity probes. It does not cover the whole language — string
+  escapes, `::` and `as`, packages, `Chan[T]`, `select`, the clock, device registers and most of
+  the C boundary are outside its subset — and the Rust compiler remains the reference. A fixpoint
+  is not an independent proof of semantics ([`docs/bootstrap.md`](docs/bootstrap.md)).
+- **Mutation testing:** a catalogue of deliberately injected defects, 1,279 entries, each required
   to be caught by a named test; all 1,268 it held at the core release gate were caught there, and
-  the five added since in their own responsibility-mapped campaigns
+  the eleven added since in their own responsibility-mapped campaigns
   ([`docs/releases/82936f6.md`](docs/releases/82936f6.md),
   [`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)). Zero survivors describes the
   catalogue, not the absence of bugs.
@@ -325,4 +337,6 @@ result out, and report what is left as JSON.
 
 Apache-2.0. See [`LICENSE`](LICENSE). Whether the runtime and standard library need an exception
 clause, as Swift and LLVM use, so that compiled programs are unambiguously unencumbered, is an open
-question.
+question. **LICENSING DECISION REQUIRED BEFORE PUBLIC v1.0.0 RELEASE** — the technical audit of
+what a compiled program contains, and what a human must decide, is
+[`docs/licensing.md`](docs/licensing.md).

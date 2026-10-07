@@ -617,7 +617,7 @@ pub fn build() -> Result<Suite, String> {
         (
             "spec:returns",
             &returns,
-            "**The current executable language is v0.3**",
+            "**The current executable language is 1.0**",
         ),
         (
             "spec:returns",
@@ -654,7 +654,7 @@ pub fn build() -> Result<Suite, String> {
             },
             Field {
                 name: "current_version",
-                truth: text("v0.3", &["v0.3", "0.3", "version 0.3", "nazm v0.3"]),
+                truth: text("1.0", &["1.0", "v1.0", "version 1.0", "nazm 1.0", "1.0.0"]),
             },
             Field {
                 name: "return_leaves",
