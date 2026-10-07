@@ -3326,7 +3326,13 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
                 // The generic built-ins, at `T = Int`. No built-in names a user type, and
                 // none can: a built-in is part of the language and a record or enum exists
                 // in one program.
+                // A float built-in's `T` is a float (Gate 2).
+                Shape::T if i.requires() == Some(nazm_core::sema::NumClass::Float) => "1.5",
                 Shape::T => "0",
+                Shape::F64 => "1.5",
+                Shape::F32 => "Float32(1.5)",
+                Shape::U64 => "UInt64(1)",
+                Shape::U32 => "UInt32(1)",
                 Shape::VecT => "vec_new[Int]()",
                 Shape::ChanT => "chan_new_of[Int](1)",
                 Shape::ChansT => "vec_new[Chan[Int]]()",
@@ -3349,6 +3355,10 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
         // program is only built, never run, so an index that would be out of bounds at
         // run time is fine here — this test is about lowering coverage.
         let body = match i.ret() {
+            Shape::T if i.requires() == Some(nazm_core::sema::NumClass::Float) => {
+                format!("Int({call})")
+            }
+            Shape::F64 | Shape::F32 | Shape::U64 | Shape::U32 => format!("Int({call})"),
             Shape::Int | Shape::T => call,
             Shape::Str => format!("str_len({call})"),
             Shape::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),

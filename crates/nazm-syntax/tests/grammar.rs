@@ -207,6 +207,7 @@ fn every_token_the_lexer_has_is_written_in_the_grammar() {
             None => {
                 let class = match kind {
                     TokenKind::Int(_) => "INTEGER",
+                    TokenKind::Float(_) => "FLOAT",
                     TokenKind::Str(_) => "STRING",
                     TokenKind::Ident(_) => "IDENT",
                     other => panic!("{other:?} has no spelling and is not a class"),
@@ -278,6 +279,7 @@ fn the_examples_between_them_use_every_token() {
                 }
                 used.insert(match &t.kind {
                     TokenKind::Int(_) => "INTEGER".to_owned(),
+                    TokenKind::Float(_) => "FLOAT".to_owned(),
                     TokenKind::Str(_) => "STRING".to_owned(),
                     TokenKind::Ident(_) => "IDENT".to_owned(),
                     other => other.written().unwrap_or("?").to_owned(),
@@ -290,6 +292,7 @@ fn the_examples_between_them_use_every_token() {
     for kind in TokenKind::ALL {
         let want = match kind {
             TokenKind::Int(_) => "INTEGER".to_owned(),
+            TokenKind::Float(_) => "FLOAT".to_owned(),
             TokenKind::Str(_) => "STRING".to_owned(),
             TokenKind::Ident(_) => "IDENT".to_owned(),
             other => other.written().unwrap_or("?").to_owned(),

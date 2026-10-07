@@ -6,7 +6,9 @@
 //! the source was written or how a backend will lay it out.
 
 use nazm_sema::traits::TraitId;
-use nazm_sema::{EffectSet, EnumId, FnId, Intrinsic, ModuleId, RecordId, Type};
+use nazm_sema::{
+    ConvertMode, EffectSet, EnumId, FnId, Intrinsic, ModuleId, NumKind, RecordId, Type,
+};
 use nazm_span::Span;
 
 /// A checked compilation's Core IR.
@@ -219,6 +221,8 @@ pub enum Temp {
     Foreign,
     /// The value a function returns, held while its `ensures` clauses are checked (N87).
     Result,
+    /// The value `try_convert` tests before converting it (Gate 2).
+    Convert,
 }
 
 impl Temp {
@@ -229,6 +233,7 @@ impl Temp {
             Self::Err => "err",
             Self::Foreign => "c",
             Self::Result => "result",
+            Self::Convert => "convert",
         }
     }
 }
@@ -240,6 +245,12 @@ pub enum Const {
     Bool(bool),
     /// Bytes: `docs/spec.md` makes a `Str` a byte sequence.
     Str(Vec<u8>),
+    /// A value of a numeric type other than `Int` (Gate 2), as its canonical bits
+    /// ([`nazm_sema::numeric::NumVal`]).
+    Num {
+        kind: NumKind,
+        bits: u64,
+    },
 }
 
 impl Const {
@@ -249,6 +260,7 @@ impl Const {
             Self::Int(_) => Type::Int,
             Self::Bool(_) => Type::Bool,
             Self::Str(_) => Type::Str,
+            Self::Num { kind, .. } => Type::of_num(*kind),
         }
     }
 }
@@ -378,13 +390,35 @@ pub struct Expr {
 pub enum ExprKind {
     Const(ConstId),
     Local(LocalId),
-    /// `-x`, which fails on the one `Int` it cannot negate.
+    /// `-x`, which fails on the one `Int` it cannot negate — and, at any other integer width,
+    /// on its minimum, or on an unsigned value other than zero. A float's sign flips.
     Neg(Box<Expr>),
-    /// Checked `Int` arithmetic: overflow and a zero divisor stop the program.
+    /// Checked arithmetic on one numeric type, the expression's own (Gate 2 for every type but
+    /// `Int`): for integers, overflow and a zero divisor stop the program; floats never do.
     Arith {
         op: ArithOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+    },
+    /// A bit operation on one integer type (Gate 2): for a shift, `rhs` is the amount, an
+    /// `Int`, and an amount out of `0..width` stops the program (`N0408`).
+    Bits {
+        op: BitOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    /// `~x` (Gate 2).
+    Complement(Box<Expr>),
+    /// A numeric conversion to the expression's type (Gate 2): exact, wrapping or saturating.
+    /// `try_convert` is a [`Self::Fits`] test around an exact one.
+    Convert {
+        mode: ConvertMode,
+        operand: Box<Expr>,
+    },
+    /// Whether the operand converts to `to` exactly (Gate 2): a `Bool`.
+    Fits {
+        to: Type,
+        operand: Box<Expr>,
     },
     /// A comparison, with the law it compares by already settled.
     Compare {
@@ -541,6 +575,42 @@ impl ArithOp {
     }
 }
 
+/// A bit operator (Gate 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BitOp {
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+}
+
+impl BitOp {
+    #[must_use]
+    pub const fn symbol(self) -> &'static str {
+        match self {
+            Self::And => "&",
+            Self::Or => "|",
+            Self::Xor => "^",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
+        }
+    }
+
+    /// The shared semantics' operator.
+    #[must_use]
+    pub const fn numeric(self) -> nazm_sema::numeric::Bit {
+        use nazm_sema::numeric::Bit;
+        match self {
+            Self::And => Bit::And,
+            Self::Or => Bit::Or,
+            Self::Xor => Bit::Xor,
+            Self::Shl => Bit::Shl,
+            Self::Shr => Bit::Shr,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CmpOp {
     Eq,
@@ -583,6 +653,9 @@ pub enum Law {
     Structural,
     /// A type parameter that requires equality: its instance's law.
     Parametric,
+    /// A numeric type other than `Int` (Gate 2): its kind's order and equality — unsigned for
+    /// an unsigned integer, IEEE 754 for a float.
+    Num,
 }
 
 impl Law {
@@ -592,6 +665,7 @@ impl Law {
     pub fn of(op: CmpOp, operand: Type) -> Option<Self> {
         match (op.is_ordering(), operand) {
             (_, Type::Int) => Some(Self::Int),
+            (_, Type::Num(_)) => Some(Self::Num),
             (true, _) => None,
             (false, Type::Bool) => Some(Self::Bool),
             (false, Type::Str) => Some(Self::Bytes),
@@ -618,6 +692,7 @@ impl Law {
             Self::Bytes => "bytes",
             Self::Structural => "structural",
             Self::Parametric => "parametric",
+            Self::Num => "num",
         }
     }
 }

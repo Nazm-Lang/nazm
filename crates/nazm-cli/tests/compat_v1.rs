@@ -17,6 +17,11 @@
 //! | `trap/` | `NAME.nz`, first line `// expect: CODE` | exit status 2 and `CODE`, interpreted and compiled by both backends |
 //! | `refuse/` | `NAME.nz`, first line `// expect: CODE` | `nazm check` exits 1 and its first error is `CODE`; `nazm build` refuses too |
 //! | `check/` | `NAME.nz` | `nazm check` exits 0 |
+//!
+//! A refusal case whose construct a later 1.x added — `docs/stability.md` makes adding a
+//! construct 1.0 refused by name a minor addition, because no valid program changes meaning —
+//! is listed in `SUPERSEDED` with the addition that superseded it. It stays in the corpus,
+//! unedited and pinned, and is held to the opposite: it must now check.
 
 #![allow(
     clippy::unwrap_used,
@@ -32,7 +37,7 @@ use std::process::{Command, Output};
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
 /// Fewer cases than this in a directory means the corpus lost some, not that it is small.
-const AT_LEAST: [(&str, usize); 4] = [("run", 20), ("trap", 4), ("refuse", 27), ("check", 1)];
+const AT_LEAST: [(&str, usize); 4] = [("run", 21), ("trap", 6), ("refuse", 30), ("check", 1)];
 
 /// The corpus as committed. Only read: a run writes caches beside what it checks, so every
 /// case is run from a [`staged`] copy and the tree is never written to.
@@ -281,11 +286,50 @@ fn every_trap_case_traps_with_its_code_interpreted_and_compiled_by_both_backends
     }
 }
 
+/// The refusal cases a later 1.x superseded by adding their construct, by path from the corpus
+/// root, each with the addition that superseded it (`SUPERSEDED`, pinned like every case).
+fn superseded(root: &Path) -> BTreeMap<String, String> {
+    let text = std::fs::read_to_string(root.join("SUPERSEDED")).unwrap_or_default();
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let (path, why) = l.split_once("  ").expect("`PATH  WHY`");
+            (path.to_owned(), why.to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn a_superseded_refusal_is_kept_and_now_checks() {
+    let corpus = staged();
+    let listed = superseded(&committed());
+    assert!(
+        !listed.is_empty(),
+        "SUPERSEDED lists the cases a 1.x addition superseded"
+    );
+    for (path, why) in &listed {
+        assert!(!why.trim().is_empty(), "{path}: SUPERSEDED says why");
+        let entry = corpus.path().join(path);
+        assert!(entry.is_file(), "{path} is superseded, never removed");
+        let out = nazm(&["check", entry.to_str().unwrap()], entry.parent().unwrap());
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{path} is superseded by an addition, so it checks now: {}",
+            text(&out.stderr)
+        );
+    }
+}
+
 #[test]
 fn every_refusal_case_is_refused_with_its_code_and_not_built() {
     let scratch = tempfile::tempdir().unwrap();
     let corpus = staged();
+    let superseded = superseded(&committed());
     for (name, entry) in cases(corpus.path(), "refuse") {
+        if superseded.contains_key(&format!("refuse/{name}.nz")) {
+            continue;
+        }
         let cwd = entry.parent().unwrap();
         let code = expected_code(&entry);
         let arg = entry.to_str().unwrap();

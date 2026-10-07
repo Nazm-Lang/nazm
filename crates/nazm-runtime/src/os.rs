@@ -62,6 +62,9 @@ pub fn declarations(out: &mut String) {
         "declare i32 @posix_memalign(ptr, i64, i64)",
         "declare i32 @mprotect(ptr, i64, i32)",
         "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)",
+        "declare double @strtod(ptr, ptr)",
+        "declare float @strtof(ptr, ptr)",
+        "declare double @llvm.fabs.f64(double)",
     ] {
         let _ = writeln!(out, "{d}");
     }

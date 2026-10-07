@@ -116,6 +116,123 @@ pub struct TypeParam {
     pub index: u32,
 }
 
+/// A numeric representation (Gate 2, `docs/general-purpose.md` §1–§2).
+///
+/// Ten kinds, of which nine are types of their own, [`Type::Num`]; the tenth, [`NumKind::I64`],
+/// is `Int`, which keeps its own variant and its own name, so `Type::Num(NumKind::I64)` is never
+/// made — [`Type::of_num`] is the one constructor and maps it to [`Type::Int`]. The kind is what
+/// arithmetic, comparison and conversion dispatch on everywhere, `Int` included, through
+/// [`Type::num`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NumKind {
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    F32,
+    F64,
+}
+
+impl NumKind {
+    /// Every kind, `I64` (`Int`) included, in a reader's order.
+    pub const ALL: [Self; 10] = [
+        Self::I8,
+        Self::I16,
+        Self::I32,
+        Self::I64,
+        Self::U8,
+        Self::U16,
+        Self::U32,
+        Self::U64,
+        Self::F32,
+        Self::F64,
+    ];
+
+    /// The type's written name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::I8 => "Int8",
+            Self::I16 => "Int16",
+            Self::I32 => "Int32",
+            Self::I64 => "Int",
+            Self::U8 => "UInt8",
+            Self::U16 => "UInt16",
+            Self::U32 => "UInt32",
+            Self::U64 => "UInt64",
+            Self::F32 => "Float32",
+            Self::F64 => "Float64",
+        }
+    }
+
+    /// Width in bits.
+    #[must_use]
+    pub const fn bits(self) -> u32 {
+        match self {
+            Self::I8 | Self::U8 => 8,
+            Self::I16 | Self::U16 => 16,
+            Self::I32 | Self::U32 | Self::F32 => 32,
+            Self::I64 | Self::U64 | Self::F64 => 64,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_float(self) -> bool {
+        matches!(self, Self::F32 | Self::F64)
+    }
+
+    #[must_use]
+    pub const fn is_integer(self) -> bool {
+        !self.is_float()
+    }
+
+    /// Whether an integer kind is signed; floats are signed too.
+    #[must_use]
+    pub const fn is_signed(self) -> bool {
+        !matches!(self, Self::U8 | Self::U16 | Self::U32 | Self::U64)
+    }
+
+    /// The smallest and largest value of an integer kind; `None` for a float.
+    #[must_use]
+    pub const fn int_range(self) -> Option<(i128, i128)> {
+        Some(match self {
+            Self::I8 => (i8::MIN as i128, i8::MAX as i128),
+            Self::I16 => (i16::MIN as i128, i16::MAX as i128),
+            Self::I32 => (i32::MIN as i128, i32::MAX as i128),
+            Self::I64 => (i64::MIN as i128, i64::MAX as i128),
+            Self::U8 => (0, u8::MAX as i128),
+            Self::U16 => (0, u16::MAX as i128),
+            Self::U32 => (0, u32::MAX as i128),
+            Self::U64 => (0, u64::MAX as i128),
+            Self::F32 | Self::F64 => return None,
+        })
+    }
+
+    /// The kind written `name`, `Int` included.
+    #[must_use]
+    pub fn by_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+}
+
+/// How a numeric conversion treats a value its target cannot represent (Gate 2, §1–§2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ConvertMode {
+    /// `T(x)`: the value, or a trap (`N0400`). Integer to float rounds to nearest-even, and
+    /// float to integer truncates toward zero first.
+    Exact,
+    /// `try_convert[T](x)`: `Some` of the exact conversion, or `None`.
+    Try,
+    /// `wrap_convert[T](x)`: two's complement modulo `2^n`; integers only.
+    Wrap,
+    /// `saturate_convert[T](x)`: clamped to `T`'s range, a NaN to zero.
+    Saturate,
+}
+
 /// # Why a user-defined type is an id and not a shape
 ///
 /// `Record(RecordId)` and `Enum(EnumId)` name definitions. Neither carries its fields or
@@ -180,6 +297,9 @@ pub enum Type {
     /// `Chan[T]` (N53), interned by element type: a bounded channel of `T`, by reference, for
     /// a `T` that may cross into a task. `Chan` alone is [`Self::Chan`], the `Int` channel.
     ChanOf(ChanId),
+    /// A fixed-width integer or a float (Gate 2): a value, like `Int`. Never
+    /// `Num(NumKind::I64)` — that is [`Self::Int`]; build one with [`Type::of_num`].
+    Num(NumKind),
 }
 
 impl Type {
@@ -211,6 +331,15 @@ impl Type {
         Self::Cap(CapabilityKind::Time),
         Self::Cap(CapabilityKind::Mmio),
         Self::Cap(CapabilityKind::Out),
+        Self::Num(NumKind::I8),
+        Self::Num(NumKind::I16),
+        Self::Num(NumKind::I32),
+        Self::Num(NumKind::U8),
+        Self::Num(NumKind::U16),
+        Self::Num(NumKind::U32),
+        Self::Num(NumKind::U64),
+        Self::Num(NumKind::F32),
+        Self::Num(NumKind::F64),
     ];
 
     /// The written name of a **built-in** type, which is also how it is spelled in
@@ -230,6 +359,7 @@ impl Type {
             Self::Strs => Some("Strs"),
             Self::Chan => Some("Chan"),
             Self::Cap(k) => Some(k.type_name()),
+            Self::Num(k) => Some(k.name()),
             Self::Record(_)
             | Self::Enum(_)
             | Self::Vec(_)
@@ -237,6 +367,37 @@ impl Type {
             | Self::Fn(_)
             | Self::ChanOf(_) => None,
         }
+    }
+
+    /// The numeric type of kind `k`: [`Self::Int`] for `I64`, [`Self::Num`] otherwise.
+    #[must_use]
+    pub const fn of_num(k: NumKind) -> Self {
+        match k {
+            NumKind::I64 => Self::Int,
+            other => Self::Num(other),
+        }
+    }
+
+    /// The numeric kind of a numeric type, `Int` included; `None` for everything else.
+    #[must_use]
+    pub const fn num(self) -> Option<NumKind> {
+        match self {
+            Self::Int => Some(NumKind::I64),
+            Self::Num(k) => Some(k),
+            _ => None,
+        }
+    }
+
+    /// Whether this is an integer type of any width (Gate 2), `Int` included.
+    #[must_use]
+    pub const fn is_integer(self) -> bool {
+        matches!(self.num(), Some(k) if k.is_integer())
+    }
+
+    /// Whether this is `Float32` or `Float64`.
+    #[must_use]
+    pub const fn is_float(self) -> bool {
+        matches!(self.num(), Some(k) if k.is_float())
     }
 
     /// Whether this is a user-defined record.
@@ -312,7 +473,9 @@ impl Type {
             "Ints" => Some(Self::Ints),
             "Strs" => Some(Self::Strs),
             "Chan" => Some(Self::Chan),
-            other => CapabilityKind::by_type_name(other).map(Self::Cap),
+            other => CapabilityKind::by_type_name(other)
+                .map(Self::Cap)
+                .or_else(|| NumKind::by_name(other).map(Self::of_num)),
         }
     }
 

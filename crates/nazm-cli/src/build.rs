@@ -1235,6 +1235,7 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
         (Part::Channels, "channels"),
         (Part::Join, "task joins"),
         (Part::Closures, "closures"),
+        (Part::Numbers, "numbers"),
         (
             Part::Foreign,
             "`c_errno()` (N0613: no C library keeps an `errno`)",

@@ -30,6 +30,8 @@ use crate::symbol::{NativeSymbol, NativeTypeName};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Ty {
     Int,
+    /// A fixed-width integer or a float (Gate 2): a scalar of its kind's class.
+    Num(nazm_sema::NumKind),
     Bool,
     /// An immutable byte sequence, as `{ pointer, byte length, owner }` by value.
     ///
@@ -313,7 +315,7 @@ impl Ty {
     #[must_use]
     pub fn owns(self) -> Option<Owns> {
         match self {
-            Self::Int | Self::Bool => None,
+            Self::Int | Self::Bool | Self::Num(_) => None,
             Self::Str => Some(Owns::Backing),
             Self::Ints => Some(Owns::Ints),
             Self::Strs => Some(Owns::Strs),
@@ -380,6 +382,14 @@ impl Ty {
     pub fn builtin_llvm(self) -> &'static str {
         match self {
             Self::Int => "i64",
+            Self::Num(k) => match k {
+                nazm_sema::NumKind::I8 | nazm_sema::NumKind::U8 => "i8",
+                nazm_sema::NumKind::I16 | nazm_sema::NumKind::U16 => "i16",
+                nazm_sema::NumKind::I32 | nazm_sema::NumKind::U32 => "i32",
+                nazm_sema::NumKind::I64 | nazm_sema::NumKind::U64 => "i64",
+                nazm_sema::NumKind::F32 => "float",
+                nazm_sema::NumKind::F64 => "double",
+            },
             Self::Bool => "i1",
             Self::Str => "{ ptr, i64, ptr }",
             Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) | Self::Fn(_) | Self::ChanOf(_) => {
@@ -405,6 +415,8 @@ impl Ty {
     pub fn unwind_value(self) -> &'static str {
         match self {
             Self::Int => "0",
+            Self::Num(k) if k.is_float() => "0.0",
+            Self::Num(_) => "0",
             Self::Bool => "false",
             // Valid for any aggregate, and it is also the value a record slot holds
             // before anything is stored in it: every owning field null, so releasing it
@@ -425,6 +437,7 @@ impl Ty {
     pub fn name(self) -> &'static str {
         match self {
             Self::Int => "Int",
+            Self::Num(k) => k.name(),
             Self::Bool => "Bool",
             Self::Str => "Str",
             Self::Ints => "Ints",
@@ -469,6 +482,7 @@ impl Ty {
             }
             nazm_sema::Type::Param(_) => Self::Int,
             nazm_sema::Type::Int => Self::Int,
+            nazm_sema::Type::Num(k) => Self::Num(k),
             nazm_sema::Type::Bool => Self::Bool,
             nazm_sema::Type::Str => Self::Str,
             nazm_sema::Type::Ints => Self::Ints,

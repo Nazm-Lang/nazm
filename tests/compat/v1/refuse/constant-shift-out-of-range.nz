@@ -1,0 +1,6 @@
+// expect: N0617
+// A shift by a constant outside 0..width is refused where it is written (spec: numbers).
+fn main() -> Int {
+    let a = UInt8(1) << 8;
+    0
+}

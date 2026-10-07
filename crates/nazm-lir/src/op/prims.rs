@@ -38,7 +38,62 @@ impl Fx<'_, '_> {
         if self.soa_primitive(dst, op, elem, args) {
             return;
         }
+        if let Some(v) = self.num_primitive(op, elem, args) {
+            self.set(dst, v);
+            return;
+        }
+        if self.num_text(dst, op, elem, args) {
+            return;
+        }
         match op {
+            // Gate 2's numbers, lowered above; reaching here is a defect.
+            Intrinsic::WrappingAdd
+            | Intrinsic::WrappingSub
+            | Intrinsic::WrappingMul
+            | Intrinsic::SaturatingAdd
+            | Intrinsic::SaturatingSub
+            | Intrinsic::SaturatingMul
+            | Intrinsic::CountOnes
+            | Intrinsic::LeadingZeros
+            | Intrinsic::TrailingZeros
+            | Intrinsic::RotateLeft
+            | Intrinsic::RotateRight
+            | Intrinsic::SwapBytes
+            | Intrinsic::ToBigEndian
+            | Intrinsic::FromBigEndian
+            | Intrinsic::ToLittleEndian
+            | Intrinsic::FromLittleEndian
+            | Intrinsic::FloatSqrt
+            | Intrinsic::FloatAbs
+            | Intrinsic::FloatFloor
+            | Intrinsic::FloatCeil
+            | Intrinsic::FloatTrunc
+            | Intrinsic::FloatRound
+            | Intrinsic::FloatSin
+            | Intrinsic::FloatCos
+            | Intrinsic::FloatTan
+            | Intrinsic::FloatExp
+            | Intrinsic::FloatLn
+            | Intrinsic::FloatLog2
+            | Intrinsic::FloatLog10
+            | Intrinsic::FloatPow
+            | Intrinsic::FloatAtan2
+            | Intrinsic::FloatMin
+            | Intrinsic::FloatMax
+            | Intrinsic::FloatIsNan
+            | Intrinsic::FloatIsInfinite
+            | Intrinsic::FloatIsFinite
+            | Intrinsic::NumToStr
+            | Intrinsic::Float64ToBits
+            | Intrinsic::Float64FromBits
+            | Intrinsic::Float32ToBits
+            | Intrinsic::Float32FromBits
+            | Intrinsic::FloatParses
+            | Intrinsic::FloatParseRaw => {
+                let at = self.at;
+                self.lw
+                    .defect(at, "a numeric built-in its lowering did not take");
+            }
             Intrinsic::StrLen => {
                 let s = self.arg_place(args, 0);
                 let (_, n) = self.str_parts(s);
@@ -640,5 +695,60 @@ pub(crate) fn element(op: Intrinsic, elem: Option<Ty>) -> Ty {
             Ty::Str
         }
         _ => elem.unwrap_or(Ty::Int),
+    }
+}
+
+impl Fx<'_, '_> {
+    /// `num_to_str`, `float_parses` and `float_parse_raw` (Gate 2): the runtime's numbers part.
+    fn num_text(
+        &mut self,
+        dst: mir::LocalId,
+        op: Intrinsic,
+        elem: Option<Ty>,
+        args: &[mir::Operand],
+    ) -> bool {
+        use nazm_sema::NumKind;
+        match op {
+            Intrinsic::NumToStr => {
+                let k = elem
+                    .and_then(super::numeric::kind_of)
+                    .unwrap_or(NumKind::I64);
+                let x = self.arg(args, 0);
+                let room = self.iconst(48);
+                let (owner, buf) = self.string_backing(room);
+                let n = if k.is_float() {
+                    let d = if k == NumKind::F32 {
+                        self.conv(super::ir::ConvOp::FExt, Class::F64, x)
+                    } else {
+                        x
+                    };
+                    let single = self.bit(k == NumKind::F32);
+                    self.rt_v("nz.format_float", &[buf, d, single], Class::I64)
+                } else if k == NumKind::U64 {
+                    self.rt_v("nz.format_u64", &[buf, x], Class::I64)
+                } else {
+                    let wide = if super::lower::num_class(k) == Class::I64 {
+                        x
+                    } else {
+                        self.ext(Class::I64, x, k.is_signed())
+                    };
+                    self.rt_v("nz.format_int", &[buf, wide], Class::I64)
+                };
+                self.write_str(dst, buf, n, owner);
+                true
+            }
+            Intrinsic::FloatParses | Intrinsic::FloatParseRaw => {
+                let s = self.arg_place(args, 0);
+                let (p, len) = self.str_parts(s);
+                let r = if op == Intrinsic::FloatParses {
+                    self.rt_v("nz.float_parses", &[p, len], Class::Bit)
+                } else {
+                    self.rt_v("nz.float_parse", &[p, len], Class::F64)
+                };
+                self.set(dst, r);
+                true
+            }
+            _ => false,
+        }
     }
 }

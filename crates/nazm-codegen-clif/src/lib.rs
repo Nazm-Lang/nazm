@@ -203,6 +203,7 @@ impl Backend for Cranelift {
             stack: true,
             closures: true,
             foreign: true,
+            numbers: true,
         }
     }
 }

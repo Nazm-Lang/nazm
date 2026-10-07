@@ -430,12 +430,39 @@ impl<'a> Gen<'a> {
     /// One value, pushed.
     fn expr(&mut self, fr: &mut Frame<'a>, e: &'a Expr) -> R<()> {
         let f = fr.f;
+        // The EVM backend computes in `Int` and `Bool` only (Gate 2 added other numbers to the
+        // language, not to this target).
+        let other_number =
+            e.ty.is_some_and(|t| matches!(t, nazm_core::sema::Type::Num(_)))
+                || matches!(&e.kind, ExprKind::Compare { operand, .. }
+                if matches!(operand, nazm_core::sema::Type::Num(_)));
+        if other_number
+            || matches!(
+                e.kind,
+                ExprKind::Bits { .. }
+                    | ExprKind::Complement(_)
+                    | ExprKind::Convert { .. }
+                    | ExprKind::Fits { .. }
+            )
+        {
+            return Err(refuse(
+                f,
+                e.at,
+                "it uses a number other than `Int`, or a bit operation",
+            ));
+        }
         match &e.kind {
             ExprKind::Const(k) => match f.constant(*k) {
                 Some(Const::Int(n)) => self.push_int(*n),
                 Some(Const::Bool(b)) => self.push_int(i64::from(*b)),
                 _ => return Err(refuse(f, e.at, "it uses a `Str`")),
             },
+            ExprKind::Bits { .. }
+            | ExprKind::Complement(_)
+            | ExprKind::Convert { .. }
+            | ExprKind::Fits { .. } => {
+                return Err(refuse(f, e.at, "it uses a bit operation or a conversion"))
+            }
             ExprKind::Local(l) => {
                 if Some(*l) == fr.caller {
                     self.op(op::CALLER);

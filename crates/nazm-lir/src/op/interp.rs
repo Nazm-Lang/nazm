@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use super::ir::{BinOp, Class, Cmp, Inst, Linkage, Module, OvfOp, SymKind, Term};
+use super::ir::{BinOp, Class, Cmp, ConvOp, Inst, Linkage, Module, OvfOp, SymKind, Term, UnOp};
 use super::lower::rt;
 
 /// How a run ended, as the platform entry would have ended it.
@@ -375,8 +375,9 @@ impl Machine<'_> {
         let width = |c: Class, p: u32| -> u64 {
             match c {
                 Class::Bit | Class::I8 => 1,
-                Class::I32 => 4,
-                Class::I64 => 8,
+                Class::I16 => 2,
+                Class::I32 | Class::F32 => 4,
+                Class::I64 | Class::F64 => 8,
                 Class::Ptr => u64::from(p),
             }
         };
@@ -424,32 +425,8 @@ impl Machine<'_> {
                         self.write(a, n, vals[value.index()])?;
                     }
                     Inst::Bin { dst, op, a, b: y } => {
-                        let (x, z) = (vals[a.index()] as i64, vals[y.index()] as i64);
-                        let r = match op {
-                            BinOp::Add => x.wrapping_add(z),
-                            BinOp::Sub => x.wrapping_sub(z),
-                            BinOp::Mul => x.wrapping_mul(z),
-                            BinOp::SDiv => {
-                                if z == 0 {
-                                    return Err(Stop::Defect(
-                                        "a division by zero LIR did not guard".to_owned(),
-                                    ));
-                                }
-                                x.wrapping_div(z)
-                            }
-                            BinOp::SRem => {
-                                if z == 0 {
-                                    return Err(Stop::Defect(
-                                        "a remainder by zero LIR did not guard".to_owned(),
-                                    ));
-                                }
-                                x.wrapping_rem(z)
-                            }
-                            BinOp::And => x & z,
-                            BinOp::Or => x | z,
-                            BinOp::Xor => x ^ z,
-                        };
-                        vals[dst.index()] = r as u64;
+                        let cl = classes.get(a.index()).copied().unwrap_or(Class::I64);
+                        vals[dst.index()] = bin_op(*op, cl, vals[a.index()], vals[y.index()])?;
                     }
                     Inst::Ovf {
                         dst,
@@ -458,25 +435,14 @@ impl Machine<'_> {
                         a,
                         b: y,
                     } => {
-                        let (x, z) = (vals[a.index()] as i64, vals[y.index()] as i64);
-                        let (r, o) = match op {
-                            OvfOp::Add => x.overflowing_add(z),
-                            OvfOp::Sub => x.overflowing_sub(z),
-                            OvfOp::Mul => x.overflowing_mul(z),
-                        };
-                        vals[dst.index()] = r as u64;
+                        let cl = classes.get(a.index()).copied().unwrap_or(Class::I64);
+                        let (r, o) = ovf_op(*op, cl, vals[a.index()], vals[y.index()]);
+                        vals[dst.index()] = r;
                         vals[ovf.index()] = u64::from(o);
                     }
                     Inst::Cmp { dst, op, a, b: y } => {
-                        let (x, z) = (vals[a.index()] as i64, vals[y.index()] as i64);
-                        let r = match op {
-                            Cmp::Eq => x == z,
-                            Cmp::Ne => x != z,
-                            Cmp::Lt => x < z,
-                            Cmp::Le => x <= z,
-                            Cmp::Gt => x > z,
-                            Cmp::Ge => x >= z,
-                        };
+                        let cl = classes.get(a.index()).copied().unwrap_or(Class::I64);
+                        let r = cmp_op(*op, cl, vals[a.index()], vals[y.index()]);
                         vals[dst.index()] = u64::from(r);
                     }
                     Inst::Select { dst, cond, a, b: y } => {
@@ -490,20 +456,20 @@ impl Machine<'_> {
                         dst,
                         to,
                         src,
-                        signed,
+                        signed: sign,
                     } => {
                         let from = classes.get(src.index()).copied().unwrap_or(Class::I64);
                         let v = vals[src.index()];
-                        let r = if *signed {
-                            match from {
-                                Class::I8 => v as u8 as i8 as i64 as u64,
-                                Class::I32 => v as u32 as i32 as i64 as u64,
-                                _ => v,
-                            }
-                        } else {
-                            v
-                        };
+                        let r = if *sign { signed(from, v) as u64 } else { v };
                         vals[dst.index()] = norm(*to, r);
+                    }
+                    Inst::Un { dst, op, a } => {
+                        let cl = classes.get(a.index()).copied().unwrap_or(Class::I64);
+                        vals[dst.index()] = un_op(*op, cl, vals[a.index()]);
+                    }
+                    Inst::Conv { dst, op, to, src } => {
+                        let from = classes.get(src.index()).copied().unwrap_or(Class::I64);
+                        vals[dst.index()] = conv_op(*op, from, *to, vals[src.index()]);
                     }
                     Inst::Trunc { dst, to, src } => {
                         vals[dst.index()] = norm(*to, vals[src.index()]);
@@ -908,9 +874,212 @@ fn norm(class: Class, v: u64) -> u64 {
     match class {
         Class::Bit => v & 1,
         Class::I8 => v & 0xff,
-        Class::I32 => v & 0xffff_ffff,
-        Class::I64 | Class::Ptr => v,
+        Class::I16 => v & 0xffff,
+        Class::I32 | Class::F32 => v & 0xffff_ffff,
+        Class::I64 | Class::F64 | Class::Ptr => v,
     }
+}
+
+/// A value of an integer class read as signed.
+fn signed(class: Class, v: u64) -> i64 {
+    match class {
+        Class::Bit => (v & 1) as i64,
+        Class::I8 => i64::from(v as u8 as i8),
+        Class::I16 => i64::from(v as u16 as i16),
+        Class::I32 => i64::from(v as u32 as i32),
+        _ => v as i64,
+    }
+}
+
+fn f32_of(v: u64) -> f32 {
+    f32::from_bits(v as u32)
+}
+
+fn f64_of(v: u64) -> f64 {
+    f64::from_bits(v)
+}
+
+/// A wrapping or float operation on two values of `class` (Gate 2 widened this to every class).
+fn bin_op(op: BinOp, class: Class, x: u64, y: u64) -> Result<u64, Stop> {
+    let w = class.bits();
+    let unguarded = |what: &str| Err(Stop::Defect(format!("a {what} LIR did not guard")));
+    let float = |f: fn(f64, f64) -> f64, g: fn(f32, f32) -> f32| {
+        if class == Class::F32 {
+            u64::from(g(f32_of(x), f32_of(y)).to_bits())
+        } else {
+            f(f64_of(x), f64_of(y)).to_bits()
+        }
+    };
+    let r = match op {
+        BinOp::Add => x.wrapping_add(y),
+        BinOp::Sub => x.wrapping_sub(y),
+        BinOp::Mul => x.wrapping_mul(y),
+        BinOp::SDiv | BinOp::SRem => {
+            let (a, b) = (signed(class, x), signed(class, y));
+            if b == 0 {
+                return unguarded("division by zero");
+            }
+            (if op == BinOp::SDiv {
+                a.wrapping_div(b)
+            } else {
+                a.wrapping_rem(b)
+            }) as u64
+        }
+        BinOp::UDiv | BinOp::URem => {
+            let (a, b) = (norm(class, x), norm(class, y));
+            if b == 0 {
+                return unguarded("division by zero");
+            }
+            if op == BinOp::UDiv {
+                a / b
+            } else {
+                a % b
+            }
+        }
+        BinOp::And => x & y,
+        BinOp::Or => x | y,
+        BinOp::Xor => x ^ y,
+        BinOp::Shl | BinOp::LShr | BinOp::AShr => {
+            let n = norm(class, y);
+            if n >= u64::from(w) {
+                return unguarded("shift out of range");
+            }
+            match op {
+                BinOp::Shl => x << n,
+                BinOp::LShr => norm(class, x) >> n,
+                _ => (signed(class, x) >> n) as u64,
+            }
+        }
+        BinOp::Rotl | BinOp::Rotr => {
+            let v = norm(class, x);
+            let n = (norm(class, y) % u64::from(w)) as u32;
+            if n == 0 {
+                v
+            } else if op == BinOp::Rotl {
+                (v << n) | (v >> (w - n))
+            } else {
+                (v >> n) | (v << (w - n))
+            }
+        }
+        BinOp::FAdd => float(|a, b| a + b, |a, b| a + b),
+        BinOp::FSub => float(|a, b| a - b, |a, b| a - b),
+        BinOp::FMul => float(|a, b| a * b, |a, b| a * b),
+        BinOp::FDiv => float(|a, b| a / b, |a, b| a / b),
+    };
+    Ok(norm(class, r))
+}
+
+/// An overflow-checked operation on two values of an integer class.
+fn ovf_op(op: OvfOp, class: Class, x: u64, y: u64) -> (u64, bool) {
+    let w = class.bits();
+    let (lo, hi) = (-(1i128 << (w - 1)), (1i128 << (w - 1)) - 1);
+    let umax = (1i128 << w) - 1;
+    let (sa, sb) = (i128::from(signed(class, x)), i128::from(signed(class, y)));
+    let (ua, ub) = (i128::from(norm(class, x)), i128::from(norm(class, y)));
+    let (r, ok) = match op {
+        OvfOp::Add => (sa + sb, (lo..=hi).contains(&(sa + sb))),
+        OvfOp::Sub => (sa - sb, (lo..=hi).contains(&(sa - sb))),
+        OvfOp::Mul => (sa * sb, (lo..=hi).contains(&(sa * sb))),
+        OvfOp::UAdd => (ua + ub, ua + ub <= umax),
+        OvfOp::USub => (ua - ub, ua >= ub),
+        OvfOp::UMul => (ua * ub, ua * ub <= umax),
+    };
+    (norm(class, r as u64), !ok)
+}
+
+/// A comparison of two values of `class`.
+#[allow(clippy::float_cmp, clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn cmp_op(op: Cmp, class: Class, x: u64, y: u64) -> bool {
+    let (sa, sb) = (signed(class, x), signed(class, y));
+    let (ua, ub) = (norm(class, x), norm(class, y));
+    let (fa, fb) = if class == Class::F32 {
+        (f64::from(f32_of(x)), f64::from(f32_of(y)))
+    } else {
+        (f64_of(x), f64_of(y))
+    };
+    match op {
+        Cmp::Eq => ua == ub,
+        Cmp::Ne => ua != ub,
+        Cmp::Lt => sa < sb,
+        Cmp::Le => sa <= sb,
+        Cmp::Gt => sa > sb,
+        Cmp::Ge => sa >= sb,
+        Cmp::ULt => ua < ub,
+        Cmp::ULe => ua <= ub,
+        Cmp::UGt => ua > ub,
+        Cmp::UGe => ua >= ub,
+        Cmp::FEq => fa == fb,
+        Cmp::FNe => fa != fb,
+        Cmp::FLt => fa < fb,
+        Cmp::FLe => fa <= fb,
+        Cmp::FGt => fa > fb,
+        Cmp::FGe => fa >= fb,
+    }
+}
+
+/// An operation of one operand.
+fn un_op(op: UnOp, class: Class, x: u64) -> u64 {
+    let w = class.bits();
+    let float = |f: fn(f64) -> f64, g: fn(f32) -> f32| {
+        if class == Class::F32 {
+            u64::from(g(f32_of(x)).to_bits())
+        } else {
+            f(f64_of(x)).to_bits()
+        }
+    };
+    let v = norm(class, x);
+    norm(
+        class,
+        match op {
+            UnOp::FNeg => float(|a| -a, |a| -a),
+            UnOp::FSqrt => float(f64::sqrt, f32::sqrt),
+            UnOp::FAbs => float(f64::abs, f32::abs),
+            UnOp::FFloor => float(f64::floor, f32::floor),
+            UnOp::FCeil => float(f64::ceil, f32::ceil),
+            UnOp::FTrunc => float(f64::trunc, f32::trunc),
+            UnOp::Popcnt => u64::from(v.count_ones()),
+            UnOp::Clz => u64::from(v.leading_zeros() - (64 - w)),
+            UnOp::Ctz => {
+                if v == 0 {
+                    u64::from(w)
+                } else {
+                    u64::from(v.trailing_zeros())
+                }
+            }
+            UnOp::Bswap => v.swap_bytes() >> (64 - w),
+        },
+    )
+}
+
+/// A conversion between classes.
+#[allow(clippy::float_cmp, clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn conv_op(op: ConvOp, from: Class, to: Class, x: u64) -> u64 {
+    let fval = || {
+        if from == Class::F32 {
+            f64::from(f32_of(x))
+        } else {
+            f64_of(x)
+        }
+    };
+    let float_out = |v: f64| {
+        if to == Class::F32 {
+            u64::from((v as f32).to_bits())
+        } else {
+            v.to_bits()
+        }
+    };
+    let r = match op {
+        // Directly to `f32` from the integer, so it is rounded once.
+        ConvOp::SToF if to == Class::F32 => u64::from((signed(from, x) as f32).to_bits()),
+        ConvOp::UToF if to == Class::F32 => u64::from((norm(from, x) as f32).to_bits()),
+        ConvOp::SToF => float_out(signed(from, x) as f64),
+        ConvOp::UToF => float_out(norm(from, x) as f64),
+        ConvOp::FToS => fval() as i64 as u64,
+        ConvOp::FToU => fval() as u64,
+        ConvOp::FExt | ConvOp::FTrunc => float_out(fval()),
+        ConvOp::Bits => x,
+    };
+    norm(to, r)
 }
 
 /// The runtime names the oracle models.
@@ -949,10 +1118,16 @@ fn value_classes(f: &super::ir::Function, m: &Module) -> Vec<Class> {
                     }
                     Inst::Ext { dst, to, .. } | Inst::Trunc { dst, to, .. } => set(*dst, *to),
                     Inst::Cmp { dst, .. } => set(*dst, Class::Bit),
-                    Inst::Ovf { dst, ovf, .. } => {
-                        set(*dst, Class::I64);
-                        set(*ovf, Class::Bit);
+                    Inst::Ovf { dst, ovf, a, .. } => {
+                        let k = c.get(a.index()).copied().unwrap_or(Class::I64);
+                        if let Some(x) = c.get_mut(dst.index()) {
+                            *x = k;
+                        }
+                        if let Some(x) = c.get_mut(ovf.index()) {
+                            *x = Class::Bit;
+                        }
                     }
+                    Inst::Conv { dst, to, .. } => set(*dst, *to),
                     Inst::Addr { dst, .. }
                     | Inst::SlotAddr { dst, .. }
                     | Inst::PtrAdd { dst, .. }
@@ -964,7 +1139,9 @@ fn value_classes(f: &super::ir::Function, m: &Module) -> Vec<Class> {
                             f.vars.get(var.0 as usize).copied().unwrap_or(Class::I64),
                         );
                     }
-                    Inst::Bin { dst, a, .. } | Inst::Select { dst, a, .. } => {
+                    Inst::Bin { dst, a, .. }
+                    | Inst::Select { dst, a, .. }
+                    | Inst::Un { dst, a, .. } => {
                         let k = c.get(a.index()).copied().unwrap_or(Class::I64);
                         if let Some(x) = c.get_mut(dst.index()) {
                             *x = k;

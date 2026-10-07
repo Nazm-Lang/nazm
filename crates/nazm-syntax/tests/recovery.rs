@@ -252,16 +252,14 @@ fn a_refused_construct_points_at_the_current_language() {
     assert!(!help.contains("`Ints` and `Strs`"), "{help}");
 }
 
-/// `1.5` is refused by name as floating point (spec: *Not in v0.3*), not reported as a field
-/// read whose name is a number; written apart, `1 . 5` is still the field read it looks like.
+/// `1.5` is one floating-point literal since Gate 2 (it was refused by name as floating point
+/// in Gate 1, and read as a field whose name is a number before that); written apart, `1 . 5`
+/// is still the field read it looks like, and refused as one.
 #[test]
-fn a_floating_point_literal_is_refused_by_name() {
+fn a_floating_point_literal_is_one_literal() {
     let text = "fn main() -> Int { let x = 1.5; 0 }\n";
     let (_, _, d) = parse(text);
-    assert_eq!(d.len(), 1, "{d:?}");
-    assert_eq!(d[0].code, codes::UNSUPPORTED_CONSTRUCT);
-    assert_eq!(d[0].message, "floating point is not supported");
-    assert_eq!(at(text, &d), ["1.5"]);
+    assert!(d.is_empty(), "{d:?}");
 
     let text = "fn main() -> Int { let x = 1 . 5; 0 }\n";
     let (_, _, d) = parse(text);

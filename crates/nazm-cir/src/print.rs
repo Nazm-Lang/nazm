@@ -228,6 +228,13 @@ impl Printer<'_> {
                     Const::Int(n) => ("Int", J::Int(*n)),
                     Const::Bool(b) => ("Bool", J::Bool(*b)),
                     Const::Str(bytes) => ("Str", J::Str(text(bytes))),
+                    Const::Num { kind, bits } => (
+                        kind.name(),
+                        J::Str(nazm_sema::numeric::to_str(nazm_sema::numeric::NumVal {
+                            kind: *kind,
+                            bits: *bits,
+                        })),
+                    ),
                 };
                 J::Obj(vec![
                     ("id", J::uint(u64::try_from(i).unwrap_or(u64::MAX))),
@@ -481,6 +488,28 @@ impl Printer<'_> {
                 o.push(Self::op(op.symbol()));
                 o.push(("lhs", self.expr(lhs)));
                 o.push(("rhs", self.expr(rhs)));
+            }
+            ExprKind::Bits { op, lhs, rhs } => {
+                o.push(Self::op(op.symbol()));
+                o.push(("lhs", self.expr(lhs)));
+                o.push(("rhs", self.expr(rhs)));
+            }
+            ExprKind::Complement(x) => {
+                o.push(Self::op("~"));
+                o.push(("operand", self.expr(x)));
+            }
+            ExprKind::Convert { mode, operand } => {
+                o.push(Self::op("convert"));
+                o.push((
+                    "mode",
+                    J::Str(crate::digest::convert_name(*mode).to_owned()),
+                ));
+                o.push(("operand", self.expr(operand)));
+            }
+            ExprKind::Fits { to, operand } => {
+                o.push(Self::op("fits"));
+                o.push(("to", J::Str(self.names.ty(*to))));
+                o.push(("operand", self.expr(operand)));
             }
             ExprKind::Compare {
                 op,

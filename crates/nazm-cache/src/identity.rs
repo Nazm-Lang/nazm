@@ -213,7 +213,13 @@ use crate::digest::{self, Framed};
 /// captures a value able to hold a function value behind a counted handle moved from accepted to
 /// refused (`N0616`) — the route by which a closure stored into a `Vec` it captured owned itself
 /// and was never reclaimed. A cached check from epoch 29 accepted programs this one refuses.
-pub const SEMANTIC_EPOCH: u32 = 30;
+/// `31` — Gate 2, 2026-10-07. Numbers: fixed-width integers, `Float32`, `Float64`, bit
+/// operators, conversions and their built-ins moved from refused (`N0101`, `N0305`, the lexer's
+/// unknown character) to accepted; an integer literal takes the numeric type expected where it is
+/// written and is refused out of that type's range (`N0003`, now raised by the checker); a
+/// constant shift out of range is refused (`N0617`). A cached check from epoch 30 refused
+/// programs this one accepts, and typed literals it did not type.
+pub const SEMANTIC_EPOCH: u32 = 31;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -263,6 +269,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "IMPL_ORPHAN",
     "IMPL_TYPE_REFUSED",
     "IMPORT_COLLIDES_WITH_DEFINITION",
+    "INTEGER_TOO_LARGE",
     "INVALID_OPERANDS",
     "INVALID_PROJECTION",
     "MAIN_PARAMETER",
@@ -291,6 +298,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "REEXPORT_CYCLE",
     "REEXPORT_UNKNOWN",
     "RESTRICTED_FLOW",
+    "SHIFT_AMOUNT_REFUSED",
     "SPAWN_OUTSIDE_SCOPE",
     "TRAIT_METHOD_SELF",
     "TRAIT_NOT_A_TYPE",

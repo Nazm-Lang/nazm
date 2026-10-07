@@ -1,0 +1,44 @@
+// Integer widths, floating point, bit operators and conversions (spec: numbers).
+fn show(out: OutCap, s: Str) -> Int ! {io} {
+    print(str_concat(s, "\n"))
+}
+
+struct Sample { value: Float64, flags: UInt8, }
+
+fn mean(xs: Vec[Float64]) -> Float64 {
+    let mut sum = 0.0;
+    let mut i = 0;
+    while i < vec_len(xs) {
+        sum = sum + vec_get(xs, i);
+        i = i + 1;
+    }
+    sum / Float64(vec_len(xs))
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = vec_new[Float64]();
+    vec_push(xs, 1.5);
+    vec_push(xs, 2.25);
+    vec_push(xs, -0.75);
+    show(out, num_to_str(mean(xs)));
+    show(out, num_to_str(0.1 + 0.2));
+    show(out, num_to_str(1e21));
+    show(out, num_to_str(Float32(0.1)));
+    show(out, num_to_str(UInt8(250) + UInt8(5)));
+    show(out, num_to_str(wrapping_add(UInt8(250), UInt8(10))));
+    show(out, num_to_str(UInt64(18446744073709551615)));
+    let m = UInt32(0xFF00_FF00);
+    show(out, num_to_str((m >> 8) & 0xFF));
+    show(out, num_to_str(~m));
+    show(out, num_to_str(Int8(-128) >> 7));
+    show(out, num_to_str(count_ones(m)));
+    show(out, num_to_str(Int(-7.9)));
+    show(out, num_to_str(saturate_convert[UInt8](300)));
+    match try_convert[UInt8](300) {
+        Option.Some(value: v) => show(out, "some"),
+        Option.None() => show(out, "none"),
+    };
+    let s = Sample(value: 0.0 / 0.0, flags: UInt8(1));
+    if s == s { show(out, "equal"); } else { show(out, "a NaN is not equal to itself"); };
+    0
+}

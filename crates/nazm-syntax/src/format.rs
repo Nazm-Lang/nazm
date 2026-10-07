@@ -197,6 +197,7 @@ fn ends_a_value(k: &TokenKind) -> bool {
         k,
         TokenKind::Int(_)
             | TokenKind::IntTooLarge(_)
+            | TokenKind::Float(_)
             | TokenKind::Str(_)
             | TokenKind::Ident(_)
             | TokenKind::True
@@ -236,6 +237,11 @@ fn continues_the_line(next: Option<&TokenKind>) -> bool {
                 | TokenKind::GtEq
                 | TokenKind::AmpAmp
                 | TokenKind::PipePipe
+                | TokenKind::Amp
+                | TokenKind::Pipe
+                | TokenKind::Caret
+                | TokenKind::Shl
+                | TokenKind::Shr
         )
     )
 }
@@ -465,8 +471,10 @@ impl<'a> Printer<'a> {
         };
         // Negation binds to its operand, arithmetic or logical. A `!` after a value is the
         // effect-set marker, `-> Int ! {io}`, and keeps its spaces.
-        if matches!(previous, TokenKind::Minus | TokenKind::Bang)
-            && !self.before.is_some_and(ends_a_value)
+        if matches!(
+            previous,
+            TokenKind::Minus | TokenKind::Bang | TokenKind::Tilde
+        ) && !self.before.is_some_and(ends_a_value)
         {
             return false;
         }
