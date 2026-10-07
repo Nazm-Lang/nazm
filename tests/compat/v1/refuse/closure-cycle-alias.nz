@@ -1,0 +1,10 @@
+// expect: N0616
+// Decided by the captured type, not by a name: an alias of the container is the same refusal
+// (spec: memory, Cycles).
+fn main() -> Int {
+    let fs = vec_new[fn() -> Int]();
+    let alias = fs;
+    let f = fn() -> Int { vec_len(alias) };
+    vec_push(fs, f);
+    0
+}

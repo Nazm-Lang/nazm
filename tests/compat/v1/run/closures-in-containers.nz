@@ -1,0 +1,40 @@
+// What stays accepted (spec: memory, Cycles; function-values): a named function in a `Vec`,
+// closures capturing an `Int`, a `Str`, a `Vec[Int]` and another closure, and a function value
+// stored by a function that cannot know what it captured — storing one is never refused.
+fn double(x: Int) -> Int {
+    x * 2
+}
+
+fn keep(fs: Vec[fn(Int) -> Int], f: fn(Int) -> Int) -> Int {
+    vec_push(fs, f)
+}
+
+fn run_all(fs: Vec[fn(Int) -> Int], x: Int) -> Int {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < vec_len(fs) {
+        let g = vec_get(fs, i);
+        acc = acc + g(x);
+        i = i + 1;
+    }
+    acc
+}
+
+fn main() -> Int {
+    let fs = vec_new[fn(Int) -> Int]();
+    let others = vec_new[fn(Int) -> Int]();
+    let n = 10;
+    let word = str_concat("ab", "c");
+    let data = vec_new[Int]();
+    vec_push(data, 5);
+    let add_n = fn(x: Int) -> Int { x + n };
+    let len_w = fn(x: Int) -> Int { x + str_len(word) };
+    let sum_d = fn(x: Int) -> Int { x + vec_get(data, 0) };
+    let twice_add = fn(x: Int) -> Int { add_n(add_n(x)) };
+    vec_push(fs, double);
+    vec_push(fs, add_n);
+    keep(fs, len_w);
+    keep(fs, sum_d);
+    vec_push(others, twice_add);
+    run_all(fs, 1) * 100 + run_all(others, 1)
+}

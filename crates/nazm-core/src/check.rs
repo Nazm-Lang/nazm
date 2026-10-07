@@ -4273,6 +4273,42 @@ impl Checker<'_> {
                 ..b
             });
         }
+        // Gate 1-C1: a closure's environment owns what it captures, so capturing a container
+        // that can hold a function value is the one way it could come to own itself
+        // (`docs/spec.md`, *Cycles*). Decided by the captured binding's type, once per capture.
+        let first_capture = crossing
+            .first()
+            .and_then(|i| self.closures.get(*i))
+            .is_some_and(|c| !c.captured.contains_key(&b.slot));
+        if first_capture {
+            if let Some(holder) = self.res.types().function_holder(b.ty) {
+                let ty = self.res.types().show(b.ty);
+                let holder = self.res.types().show(holder);
+                let through = if ty == holder {
+                    String::new()
+                } else {
+                    format!(" through `{holder}`")
+                };
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::CAPTURE_CYCLE,
+                        at,
+                        format!(
+                            "a closure cannot capture `{name}`: a `{ty}` can hold function \
+                             values{through}"
+                        ),
+                    )
+                    .primary_label("captured here")
+                    .help(
+                        "a closure owns what it captures, so storing it into this value — or into \
+                         any value sharing its storage — would make a value that owns itself, \
+                         which reference counting never reclaims. Nazm refuses the capture rather \
+                         than leak it, by the captured type alone. Pass the value to the function \
+                         as an argument instead of capturing it",
+                    ),
+                );
+            }
+        }
         let mut slot = b.slot;
         for i in crossing {
             let Some(c) = self.closures.get(i) else {
