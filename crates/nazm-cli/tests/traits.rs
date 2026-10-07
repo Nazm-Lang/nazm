@@ -227,6 +227,42 @@ fn traits_and_impls_cross_modules_and_aliases() {
     );
 }
 
+#[test]
+fn an_imported_impls_method_is_checked_against_its_traits_effects() {
+    // M1: a direct or UFCS call of a method whose impl is in another module was taken for a call
+    // of an undeclared function, and every effect assumed of it — so a caller declaring `! {}`
+    // was refused (`N0366`) for calling a method its trait declares pure. Its contract is its
+    // trait method's, the set the impl is held to.
+    let lib = "pub trait Show { fn show(self: Self) -> Str ! {}; }\n\
+               pub trait Say { fn say(self: Self, out: OutCap) -> Int ! {io}; }\n\
+               pub struct P { x: Int, }\n\
+               impl Show for P { fn show(self: P) -> Str ! {} { int_to_str(self.x) } }\n\
+               impl Show for Int { fn show(self: Int) -> Str ! {} { int_to_str(self) } }\n\
+               impl Say for P { fn say(self: P, out: OutCap) -> Int ! {io} { print(\"P\\n\") } }\n";
+    let main = "use \"lib.nz\";\n\
+                fn direct(p: P) -> Str ! {} { p.show() }\n\
+                fn named(p: P) -> Str ! {} { Show.show(p) }\n\
+                fn builtin(n: Int) -> Str ! {} { n.show() }\n\
+                fn main() -> Int { str_len(direct(P(x: 7))) + str_len(named(P(x: 10))) + str_len(builtin(123)) }\n";
+    agrees_on(&[("main.nz", main), ("lib.nz", lib)], "6", 0);
+    // Checked from the dependency's persisted interface too: the second check reads it.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("lib.nz"), lib).unwrap();
+    std::fs::write(d.path().join("main.nz"), main).unwrap();
+    for pass in ["cold", "cached"] {
+        let r = nazm(d.path(), &["check", "main.nz"]);
+        assert_eq!(r.code, Some(0), "{pass}: {}", r.stderr);
+    }
+    // And the contract is still enforced: a method its trait declares `! {io}` is not pure.
+    let impure = "use \"lib.nz\";\n\
+                  fn quiet(p: P, out: OutCap) -> Int ! {} { p.say(out) }\n\
+                  fn main() -> Int { 0 }\n";
+    assert_eq!(
+        check_codes(&[("main.nz", impure), ("lib.nz", lib)]),
+        ["N0366"]
+    );
+}
+
 // --- refusals, each by its own code -------------------------------------------------------
 
 #[test]
