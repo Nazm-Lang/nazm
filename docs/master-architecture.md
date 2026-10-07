@@ -66,8 +66,9 @@ is the point: a law nobody has checked against the tree is decoration. *Every st
 checked against the tree again for the v0.3.0 release (R1, 2026-10-07); a status that had
 fallen behind was rewritten, with what it used to say kept where the argument needs it. Gate 1
 of the v1 programme (2026-10-07) froze the 1.x contract (`stability.md`) without moving a law,
-and found one status that had overclaimed: law 3's reclamation claim has a recorded exception, a
-closure stored into a `Vec` it captures (`spec.md`, *Cycles*).*
+and found one status that had overclaimed: law 3's reclamation claim had an exception, a closure
+stored into a `Vec` it captured (`spec.md`, *Cycles*). Gate 1-C1 closed it by refusing the
+capture (`N0616`), so the law stands as it was written.*
 
 **1 — Plain UTF-8 `.nz` files in git are the authoritative source.**
 *Honoured.* No derived-source store exists. `architecture.md` §3 gives the reasoning and
@@ -105,9 +106,11 @@ that refers back. The first recursive user-defined type ends that argument, and
 
 *Gate 1, 2026-10-07: an exception was found.* Function values (N50) are a value kind that can
 refer back: a closure holds the handles it captured, so a closure stored into a `Vec` it captures
-owns itself, and counting does not reclaim it. The checker accepts that program; *Cycles* is now
-corrected to say so, and the claim holds for programs that form no such cycle. Resolving it —
-refusing the capture, or a policy for closures — is an open decision, not done in Gate 1.
+owned itself, and counting did not reclaim it. **Gate 1-C1 (2026-10-07) refused it** the way N11
+refused cycles of definitions: a closure's environment is a node of the ownership graph, and a
+closure may not capture a value that can hold a function value behind a counted handle (`N0616`).
+No collector was added — counting is still the whole reclamation story — and the claim again covers
+every value a program can write, environments included (`architecture.md` §7.111).
 
 *Until N7 this paragraph read: "There is also no reclamation of any kind … 'No GC' is
 currently achieved by never freeing, which is not a memory strategy." That was accurate,

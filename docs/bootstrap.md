@@ -120,7 +120,7 @@ exercised the thing it was meant to prove.
 | S | `compiler/{lex,parse,analyse,module,emit}.nz`, **16,573 lines** (5,041 at the first result, 2026-09) |
 | **C2 vs C3, emitted IR** | **byte-identical** |
 | **C2 vs C3, executables** | **byte-identical**, including the runnable form |
-| Conformance | 34 cases and 29 refusals, each agreeing across C2, C3 **and the reference** — 14 of the cases multi-module (10 cases, 5 multi-module, at the first result) |
+| Conformance | 34 cases and 30 refusals, each agreeing across C2, C3 **and the reference** — 14 of the cases multi-module (10 cases, 5 multi-module, at the first result) |
 
 The IR being identical is the fixpoint: compiling S with a compiler built by Rust and with
 a compiler built by itself produces the same output. That is what self-hosting means, and
@@ -658,6 +658,13 @@ of its kind in scope — at the reference's spans. **The digest moved**: `8cc750
 `ir: identical`, executables byte-identical once the linker UUID is removed, 34 conformance cases
 (14 of them multi-module) and 29 refusals agreeing across C2, C3 and the reference, at 16,573
 source lines.
+
+### A closure's environment in the ownership graph — Gate 1-C1, 2026-10-07
+
+The compiler written in Nazm refuses a closure that captures a value able to hold a function value
+behind a `Vec`'s handle (`N0616`), at the reference's span. Its type arguments are never function
+types, so in its subset that container is a `Vec` of records with a function field — the form of
+the new refusal case, `refused/closure-capture-cycle.nz`. 34 conformance cases and 30 refusals.
 
 ## 6. Reproducing it
 

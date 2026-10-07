@@ -405,6 +405,16 @@ LIR as text (what `nazm lir --ops` prints) and that text's BLAKE3 `digest`, vali
 shown. `nazm lir --run` (LIR's interpreter) writes the program's own output and status, and exits 4,
 naming what it does not run, for a program outside its subset.
 
+**Applied to Gate 1 and Gate 1-C1, Nazm 1.0.** One code appeared, compatible: `N0616`, a closure
+capturing a value that can hold a function value behind a counted handle — the one way a closure's
+environment could come to own itself (`spec.md`, *Cycles*). It names the captured binding and its
+type, and the handle through which it can hold function values where that differs; it carries no
+fix, because the remedy — passing the value as an argument instead — changes a signature. It
+continues N78's block, the N03xx block being full. One refusal changed code: `1.5` is `N0101`
+(floating point, refused by name) where it was `N0100`; `N0100`'s meaning is unchanged, and no
+code's meaning moved. `nazm.capabilities/1`'s `types` gained the five capability types it lacked,
+new array values.
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of

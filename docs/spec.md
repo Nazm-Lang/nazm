@@ -68,7 +68,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `strings` | STABLE 1.0 | |
 | `string-escapes` | STABLE 1.0 | |
 | `sequences` | STABLE 1.0 | its *Destruction* row is superseded by `memory`: storage is reclaimed |
-| `memory` | STABLE 1.0 | its *Cycles* claim has a recorded exception: a closure stored into a `Vec` it captures (*Corrected 2026-10-07, Gate 1*, in the section) |
+| `memory` | STABLE 1.0 | *Cycles* covers closure environments since Gate 1-C1 (`N0616`) |
 | `outside-world` | STABLE 1.0 | *Authority is explicit where a contract is written, and ambient elsewhere* is HISTORICAL: `capabilities` (N104) governs |
 | `modules` | STABLE 1.0 | |
 | `packages` | STABLE 1.0 | |
@@ -2008,29 +2008,64 @@ either: it is a composition of existing kinds of which one is live at a time, an
 between leaves is a leaf. The claim now covers every record **and every enum** built from
 the six built-in types. What would end it is unchanged and still absent.
 
-**Corrected 2026-10-07, Gate 1: one cycle is not refused.** N50 added function values, and a
-closure holds a handle to what it captures. A closure that captures a `Vec` whose elements can
-be function values, and is then stored into that `Vec`, is a value that owns itself:
+**Gate 1 found a cycle that was not refused, 2026-10-07.** N50 added function values, and a
+closure holds a handle to what it captures. A closure that captured a `Vec` whose elements can
+be function values, and was then stored into that `Vec`, was a value that owned itself:
 
 ```nazm
 let fs = vec_new[fn() -> Int]();
-let f = fn() -> Int { vec_len(fs) };
-vec_push(fs, f);   // `fs` holds `f`, which holds `fs`
+let f = fn() -> Int { vec_len(fs) };   // refused since Gate 1-C1: N0616
+vec_push(fs, f);                       // `fs` would hold `f`, which holds `fs`
 ```
 
-The checker accepts it and counting does not reclaim it: a native run's memory report ends with
-that sequence and that closure live. *Cycles* required in advance that a new value kind able to
-form a cycle arrive with a policy, and N50 did not supply one; this is a defect against this
-section, recorded rather than hidden. Until it is resolved — by refusing such a capture, as
-`N0359` refuses ownership cycles in definitions, or by a policy for closures — the claim above
-holds for every program that forms no such cycle through a closure, and for nothing wider.
+The checker accepted it and counting did not reclaim it: a native run's memory report ended with
+that sequence and that closure live. *Cycles* had required in advance that a new value kind able
+to form a cycle arrive with a policy, and N50 had supplied none.
+
+**Gate 1-C1 took the first option a third time, 2026-10-07.** A closure is a node of the
+ownership graph: its **environment** owns each value it captured, by that value's own law — a
+copy of a value, a share of a handle, a share of another function value's environment. Three
+facts make the rule small:
+
+1. **An environment never changes after it is made.** What a closure captures is copied in when
+   it is created, a `let mut` binding is never captured (`N0386`), and nothing can be stored into
+   an environment later. Its edges point only at values that already existed — so environments
+   alone can never close a cycle.
+2. **An edge into an existing value is made only by storing into a counted handle** — `vec_push`,
+   `vec_set`, a channel send. Records and enums are values: storing into one stores into a copy.
+3. **A counted handle whose elements cannot be or contain a function value holds no
+   environment**, and what it holds is finite and acyclic by `N0336` and `N0359`.
+
+So the one rule needed is: **a closure may not capture a value that can hold a function value
+behind a counted handle** (`N0616`) — a `Vec` whose element type is, or contains through record
+and enum fields or further `Vec`s, a function type; or a record or enum with such a `Vec`
+anywhere among its fields. With it, no environment reaches a container that can hold an
+environment; from an environment only older environments and containers that hold none are
+reachable; and a cycle through an environment would have to come back through one of those,
+which none can. A cycle that runs through no environment is a cycle of definitions, refused by
+`N0336` and `N0359`. **Every value of every type a program can write is again reclaimed by
+counting**, environments included.
+
+The rule is decided by the captured binding's **type**, where the closure is written: not by
+names, aliases or what the program later does with either value. `let alias = fs;` captured
+instead of `fs` is refused the same way, two vectors each meant to hold a closure capturing the
+other cannot be built, and a record carrying a `Vec[fn() -> Int]` field cannot be captured. It
+refuses some programs that would never close a cycle — a closure that only reads a vector of
+handlers — and that is the price of a rule a reader can apply without running the program:
+pass such a vector to the function value as an argument instead of capturing it. Storing a
+function value is never refused, wherever it came from — a named function has no environment,
+and a closure was held to this rule where it was written, in whatever module — so a function
+taking `fs: Vec[fn() -> Int]` and `f: fn() -> Int` may push `f` into `fs` without knowing what `f`
+captured. Channels cannot carry a function value at all (`N0390`), so no channel is such a
+container today; a future owning container is one by the same derivation over its element type.
+No collector was introduced: counting stays the whole reclamation story, deterministic and with
+no pause, and a future kind of value that needs cycles must arrive with its own policy.
 
 #### What is not promised
 
-- **Leak freedom for a whole program, as a permanent property.** *Gate 1:* not even for
-  every program 1.0 accepts — a closure stored into a `Vec` it captures forms a cycle (*Cycles*,
-  below). Otherwise every heap-backed type
-  the language *currently has* is reclaimed, which is a claim about `Int`, `Bool`, `Str`,
+- **Leak freedom for a whole program, as a permanent property.** Every heap-backed type
+  the language *currently has* is reclaimed — function values and their environments included
+  since Gate 1-C1 (*Cycles*, below) — which is a claim about `Int`, `Bool`, `Str`,
   `Ints`, `Strs`, `Chan` and the records and enums composed of them, and about nothing else. It rests on the cycle argument below,
   which is a fact about this type system rather than about counting in general: the first
   recursive user-defined type ends it, and the paragraph after next says in advance what
@@ -3349,6 +3384,7 @@ fn main() -> Int {
 | **A named function as a value** | A non-generic function that is not foreign, written without a call: `double`. Its type is its signature's. A generic function, a built-in and a foreign function are not values (`N0387`); write a closure that calls one |
 | **A closure** | `fn(x: Int) -> Int { … }` in expression position, its parameters and result written in full, its effects `! { … }` declared or none. Its body is checked against its declared effects as a declared function's is |
 | **Capture** | A closure may name the bindings of the functions and closures around it. Each it names is **copied** into the closure when the closure is created: a value is a copy, a handle (`Ints`, `Vec`, `Chan`) is the same storage. A `let mut` binding and a capability may not be captured (`N0386`) |
+| **Capture of a function-value container** (Gate 1-C1) | A closure may not capture a value that can hold a function value behind a counted handle — a `Vec[fn(…) -> R]`, a `Vec` of records or enums with a function field, a record or enum holding either (`N0616`). Such a capture is the only way a closure could come to own itself; *The memory constitution*'s *Cycles* gives the argument. Storing a function value into a `Vec` is never refused |
 | **Call** | `f(a, b)`, where `f` is a parameter or binding of function type: the arguments must match its parameters, the result is its result, and the call performs its type's effects. Such a binding hides a function of the same name for calls in its scope. A function stored in a field is called by binding it first: `let g = r.f; g(1)` |
 | **Ownership** | A function value is a handle to its closure; copies share it, and what it captured is released when the last copy goes |
 | **Tasks** | A function value may not be passed to a task (`N0321`) |
