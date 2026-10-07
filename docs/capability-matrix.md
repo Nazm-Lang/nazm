@@ -41,7 +41,15 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 2,492 passed, 0 failed, 47 ignored**, run contained and offline at the v0.3.0
+**Current suite: 2,505 passed, 0 failed, 47 ignored** across 180 test binaries, run contained and
+offline at `07e44a6` (Gate 1 of the v1 programme, 2026-10-07; toolchain 1.0.0, not yet a release
+candidate), with selfhost 43 of 43 and the bootstrap's fixpoint, C2 = C3 = `18481f2a…`, 34
+conformance cases and 29 refusals agreeing. The thirteen tests added by Gate 1 include the
+compatibility corpus (`tests/compat/v1/`). The catalogue holds 1,279 entries: Gate 1's six were
+caught in their own campaign (`b05c9651bed81041`, 6 of 6 at tier 1, 8 of 8 killers verified).
+Area 4 is PARTIAL since Gate 1 — a recorded cycle defect, open for decision.
+
+*Historical, not current:* 2,492 passed, 0 failed, 47 ignored, run contained and offline at the v0.3.0
 candidate `7a16a40` inside both release assemblies (2026-10-07), with selfhost 43 of 43, the
 bootstrap's fixpoint and the lifecycle tests 19 of 19 (`releases/7a16a40.md`). The mutation
 catalogue holds 1,273 entries: the 1,268 present at N108's gate were all caught there
