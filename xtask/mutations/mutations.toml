@@ -13984,3 +13984,54 @@ find = '''            let intrinsic = l.contains(" @llvm.");'''
 replace = '''            let intrinsic = l.contains(" @llvm.") && false;'''
 killers = [{ package = "nazm-cli", test = "debugging", name = "the_prologue_carries_no_line_so_a_breakpoint_lands_after_it" }]
 
+
+# Gate 1 (v1.0.0): the public outputs that described an earlier language, and the release's
+# own name. Killers verified with `cargo xtask contained mutate --verify-killer`.
+
+[[mutation]]
+name = "g1-the-help-names-the-pre-1-0-release"
+why = "`nazm --help` goes on calling the release language v0.3, toolchain 0.3.0, an experimental release"
+file = "crates/nazm-cli/src/main.rs"
+find = "long_about = \"Nazm language 1.0, toolchain 1.0.0 — the first stable release. Records, \\"
+replace = "long_about = \"Nazm language v0.3, toolchain 0.3.0 — an experimental release. Records, \\"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_help_and_version_name_the_release" }]
+
+[[mutation]]
+name = "g1-the-refusal-help-is-the-v0-1-subset"
+why = "a refused construct's help still says the language is the v0.1 subset, with none of what came after it"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "\"Nazm 1.0 has functions and `let`/`let mut`, `while` with `break` and `continue`, \","
+replace = "\"the supported subset is functions, `let` and `let mut`, assignment, `while` with \","
+killers = [{ package = "nazm-syntax", test = "recovery", name = "a_refused_construct_points_at_the_current_language" }]
+
+[[mutation]]
+name = "g1-a-float-literal-is-a-field-read"
+why = "`1.5` is reported as a field read whose name is a number, not refused by name as floating point"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "if span.end == dot_span.start && dot_span.end == name_span.start) =>"
+replace = "if span.end == dot_span.start && dot_span.end == name_span.start && false) =>"
+killers = [{ package = "nazm-syntax", test = "recovery", name = "a_floating_point_literal_is_refused_by_name" }, { package = "nazm-cli", test = "compat_v1", name = "every_refusal_case_is_refused_with_its_code_and_not_built" }]
+
+[[mutation]]
+name = "g1-the-type-list-stops-at-spawncap"
+why = "the built-in type list in help text names `IoCap` and `SpawnCap` and none of the five later capability types"
+file = "crates/nazm-sema/src/types.rs"
+find = "            if !names.contains(&k.type_name()) {"
+replace = "            if false {"
+killers = [{ package = "nazm-sema", lib = true, name = "types::tests::every_capability_type_is_named_once_and_parses" }, { package = "nazm-cli", test = "ecosystem", name = "the_human_types_line_names_every_capability_type_once" }]
+
+[[mutation]]
+name = "g1-the-human-types-line-is-the-checkers-vocabulary"
+why = "`nazm capabilities` prints the checker's fixed vocabulary as the type list, which stops at `IoCap, SpawnCap`"
+file = "crates/nazm-cli/src/capabilities.rs"
+find = "println!(\"types: {}\", Type::every_builtin_name().join(\", \"));"
+replace = "println!(\"types: {}\", i.types.join(\", \"));"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_human_types_line_names_every_capability_type_once" }]
+
+[[mutation]]
+name = "g1-a-help-names-a-schema-a-major-behind"
+why = "`nazm explain-cost --help` names `nazm.cost/1` while the command prints `nazm.cost/2`"
+file = "crates/nazm-cli/src/main.rs"
+find = "`--json` prints `nazm.cost/2`, which since N106 also says which"
+replace = "`--json` prints `nazm.cost/1`, which since N106 also says which"
+killers = [{ package = "nazm-cli", test = "ecosystem", name = "every_command_has_its_own_help_naming_the_schema_it_prints" }]
