@@ -41,7 +41,18 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 2,509 passed, 0 failed, 47 ignored** across 180 test binaries, run contained and
+**Current suite: 2,538 passed, 0 failed, 58 ignored** across 203 test binaries, run contained at
+`531769a` (M1 of the v4 programme, 2026-10-08; toolchain 1.0.0, semantic epoch 34, runtime ABI 15,
+not yet a release candidate; `target/gates/m1/contained-tests-3.log`), selfhost 43 of 43 with the
+bootstrap chain's fixpoint test passing. Over Gate 1-C1: Gate 2's numbers, arrays and constants,
+bytes and text (areas 3 and 16), and M1's fixes — an imported impl method's effects
+(`f0023cd`), libm on a Linux link (`7a74cd6`), and the self-hosted checker's not-carried list
+(`531769a`) — the last two found only by this contained run. The catalogue holds 1,324 entries;
+M1's two new ones were caught at tier 1 in campaigns `341a6c89cbacc724` and `9c22557773af4909`.
+Gate 2's 38 entries have not yet been run in a campaign; Gate 2's contained gate is still owed.
+The eleven more ignored tests are the Docker-backed ones M1 marked `integration-external`.
+
+*Historical, not current:* 2,509 passed, 0 failed, 47 ignored across 180 test binaries, run contained and
 offline at `ea4741f` (Gate 1-C1 of the v1 programme, 2026-10-07; toolchain 1.0.0, semantic epoch
 30, not yet a release candidate), with selfhost 43 of 43 and the bootstrap's fixpoint, C2 = C3 =
 `178a799c…`, 34 conformance cases and 30 refusals agreeing. The catalogue holds 1,285 entries:
