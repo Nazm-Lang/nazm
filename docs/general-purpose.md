@@ -169,6 +169,20 @@ not scale and cannot be indexed.
 arrays, arrays of records and of strings with reclamation counts at `live=0`, bounds traps, size
 refusals; MIR validation of the copies.
 
+**As built (2026-10-08).** Narrower than designed above, and `spec.md`, *Arrays*, is the rule:
+
+- **Plain data only.** The element is a number, `Bool`, or a record, enum or array of them
+  (`N0621`, new), so an array owns nothing and is copied by its bytes. An array of strings would
+  need per-element reference counting at every copy, drop and task crossing in three
+  implementations; a collection of strings is a `Vec`, and nothing in the use cases above needs
+  one inline. Widening the element class later is an addition.
+- **No `array_len`.** The length is the type's `N`, written where the type is — a literal or a
+  constant (§15) — so the constant is the length's name.
+- **Calling an element** is moot (a function value is not plain data); a method call on an
+  element is written `(xs[i]).m()`, since `name[T](` stays type arguments.
+- The bound counts each element's scalars without padding (`data_bytes`), so `[UInt8; 65536]` is
+  an array and `[UInt8; 65537]` is not.
+
 ## 5. Zero-copy views — `Bytes`, and `Str` slices as they already are
 
 **Problem.** Parsing a packet, a file region or a text without copying it.
@@ -392,13 +406,21 @@ reads return `Result`.
 **Existing mechanism considered.** `nazm comptime` (a command), and contract `requires` evaluated
 when literal (N87). Neither puts a value into a program.
 
-**The mechanism.** `const NAME: T = expr;` at module level, `pub` to export. `T` is a numeric type,
+**The mechanism (as designed; see *As built*).** `const NAME: T = expr;` at module level, `pub` to export. `T` is a numeric type,
 `Bool` or `Str`; `expr` is evaluated by the checker, using the same evaluator `comptime` uses, under
 its budget; it may use literals, other constants, operators and pure built-in calls, and nothing
 else. A constant is usable anywhere an expression is, and where an array size is required. The
 smallest mechanism that solves the use cases; textual macros and declaration generation are not
 added — no use case in the tree needs them, and they are the uncontrolled mechanism the programme
 forbids.
+
+**As built (2026-10-08).** Narrower, and `spec.md`, *Constants*, is the rule. The value is
+literals, other constants, operators and numeric conversions — no built-in calls, so nothing a
+constant computes depends on a library's implementation; it is computed with
+`nazm_sema::numeric`, the semantics every implementation runs, so a constant and the same
+expression at run time cannot differ. `pub const` is refused (`N0101`): an importer would need
+the value, and the persisted interface carries none, so a cold check and a cached one could
+disagree. Exporting constants comes with the interface carrying values.
 
 ## 16. Attributes
 
@@ -507,8 +529,8 @@ The set widens from eight bits to sixteen. Ids never change.
 
 | | Before | After |
 | --- | --- | --- |
-| Semantic epoch | 30 | bumped by each semantic commit of Gate 2 |
-| `nazm.interface` | 11 | 12 — array types, constants and attributes are persisted |
+| Semantic epoch | 30 | bumped by each semantic commit of Gate 2 — 31 (numbers), 32 (arrays and constants) |
+| `nazm.interface` | 11 | 11 so far — numeric types and arrays are new type names and shapes, which a reader from before Gate 2 refuses rather than misreads (`wire.rs`, the `IoCap` precedent); the major moves when the interface carries something an older reader would misread |
 | Runtime ABI | 14 | 15 — new runtime entry points (floats, reactor, handles) |
 | Standard library API | 1.0 | 1.1 — additions only, `API-1.0` unchanged |
 | Language | 1.0 | 1.0 — Gate 2 lands before the first 1.0.0 release; the compatibility corpus is the check that no 1.0 program changed meaning |

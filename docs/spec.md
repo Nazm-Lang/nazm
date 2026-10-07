@@ -101,6 +101,8 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `wasm-contract` | EXPERIMENTAL | |
 | `accounts` | EXPERIMENTAL | |
 | `provenance-record` | STABLE 1.0 | `nazm.provenance/1` |
+| `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
+| `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
 | `numbers` | STABLE 1.0 | Gate 2: fixed-width integers, `Float32`, `Float64`, bit operators and conversions; the C library's transcendental functions are promised to the host library's accuracy, not bit for bit |
 | `project-tooling` | STABLE 1.0 / EXPERIMENTAL | `init`, `doc`, library checking and `publish --dry-run` are stable (what a template writes is not); `bindgen` is experimental |
 | `not-in-v0-3` | STABLE 1.0 | each construct is refused by name; adding one is a compatible extension, and Gate 2 added floating point and integer widths |
@@ -3730,6 +3732,54 @@ hosts. A NaN's sign and payload are observable only through the bit functions an
 promised. No floating-point exception flag or rounding mode is exposed.
 
 **Across the C boundary.** Not yet: Gate 2's C interface work states it (*Foreign functions*).
+
+### Arrays: fixed-size storage — Gate 2
+<!-- id: arrays -->
+
+Settled by Gate 2, 2026-10-07 (`docs/general-purpose.md` §4).
+
+```nazm
+const N: Int = 4;
+
+fn sum(xs: [Int; N]) -> Int {
+    let mut t = 0;
+    let mut i = 0;
+    while i < N {
+        t = t + xs[i];
+        i = i + 1;
+    }
+    t
+}
+
+fn main() -> Int {
+    let mut grid = [[0; 3]; 2];
+    grid[1][2] = 7;
+    sum([1, 2, 3, 4]) + grid[1][2]
+}
+```
+
+| | |
+| --- | --- |
+| **Type** | `[T; N]`: `N` elements of `T`. `N` is an integer literal or an `Int` constant's name (*Constants*), at least 1. `T` is **plain data** — a numeric type, `Bool`, or a record, enum or array of them — and the array at most 65,536 bytes, counting each element's scalars without padding (`N0621` for an element that owns something, `N0618` for one too large or empty). A collection of strings or handles, or a larger buffer, is a `Vec` |
+| **Values** | `[a, b, c]` — every element of one type (`N0300`), the length the count; `[value; count]` — `count` copies, `count` a literal or a constant. An empty array cannot be written |
+| **Indexing** | `xs[i]`, `i` an `Int`, is a copy of the element. An index outside `0..N` stops the program (`N0405`), and a constant one is refused (`N0624`); `[…]` on anything but an array is refused (`N0624`), and a `Vec`'s element is `vec_get`. After a name, a `[` followed by types and a `(` is still type arguments, so a method call on an element is written `(xs[i]).show()` |
+| **Writing** | `xs[i] = v`, `grid[r][c] = v`, `points[i].x = v` and `frame.data[i] = v` on a `let mut` binding: the value, then each index outermost first, then one checked write |
+| **Value semantics** | An array is a value held inline, like a record: assignment and passing copy it, no two bindings share one, and it owns nothing. Equality, task crossing and every ownership rule are its element's (*Equality is derived*); `==` compares element by element, so an array holding a NaN is not equal to itself |
+| **Layout** | Its elements contiguous, in index order, each at a multiple of the element's size. Arrays do not cross the C boundary in Gate 2 |
+
+### Constants — Gate 2
+<!-- id: constants -->
+
+Settled by Gate 2, 2026-10-07 (`docs/general-purpose.md` §15). `const NAME: T = value;` at a
+module's top level declares a value the checker computes once. `T` is a numeric type, `Bool` or
+`Str`; `value` is literals, other constants of the module, the operators and numeric conversions
+`T(x)` — no call, binding or effect (`N0622`). A literal in it takes `T` where `T` is numeric.
+Computing it with the numeric rules every implementation shares, a value that would trap is
+refused where the constant is declared (`N0623`), and so is one that depends on itself
+(`N0622`). A constant is used by its name anywhere an expression is, and as an array's length;
+every use is the value, written as a literal. A constant is its own module's in Gate 2: `pub
+const` is refused (`N0101`), because a module's published interface does not carry values yet.
+`const` is a word only at the start of an item, so a binding may still be named `const`.
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
