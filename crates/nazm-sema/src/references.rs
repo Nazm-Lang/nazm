@@ -18,6 +18,12 @@
 //!   payload fields);
 //! - the uses, from the answers the checker recorded, span by span.
 //!
+//! **The contract (R1-C1).** Every occurrence the checker resolved to an entity this index
+//! models is a use of it here, whatever its syntactic role: a function's name is a use
+//! whether it is called, spawned or written as a value (`apply_twice(double, 5)`). A new
+//! kind of recorded answer is not finished until `Resolution::each_use` reports it; the
+//! index never finds a use by reading the source again.
+//!
 //! **It resolves nothing.** It never reads a name to decide what anything means, holds no
 //! scope, and cannot be wrong about a use in a way the checker was not: a span is in an
 //! entity's set because the checker put that entity against that span. The declaration is
@@ -127,8 +133,9 @@ impl ReferenceTarget {
     #[must_use]
     pub const fn rename_coverage(self) -> Coverage {
         match self {
-            // Its declaration and its calls, `spawn` included. There are no function
-            // values and no import lists: a function's name appears nowhere else.
+            // Its declaration, its calls (`spawn` included), every name written as a value
+            // (N50 — indexed only since R1-C1, before which a rename re-checked and was
+            // refused), and the names of a re-export's list (N103).
             Self::Function(_) => Coverage::Complete,
             // A parameter, a `let` or a pattern binding, and every mention and assignment
             // of it — all in one body.
