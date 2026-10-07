@@ -1,8 +1,19 @@
-# The gate `cargo lint` and the README claim to mirror.
+# Continuous integration: the host-safe gates, on every push and pull request.
 #
-# Until this file existed, both of them described a CI that did not exist — `.cargo/
-# config.toml` said "mirrors the CI gate exactly" and the README said the same, and there
-# was nothing on the other side of the comparison.
+# **This is not the release gate.** `docs/runbook.md` (*Mandatory containment*) allows the
+# generated compiler stages, the selfhost suite, `compiler/bootstrap.sh`, fuzzing, the
+# mutation catalogue and heavy benchmarks to run only through the verified contained runner,
+# `cargo xtask contained`, and that runner has not been verified on GitHub's runners. So this
+# workflow runs everything that may run on a host and leaves those out by name; they run in
+# the contained release gate (`docs/releases/`, and `scripts/release-candidate.sh` through
+# `cargo xtask contained release`). A green run here is evidence for the host-safe subset and
+# for nothing else.
+#
+# Until R1 (2026-10-07) this ran `cargo test --workspace`, which reaches the selfhost suite's
+# containment guard and fails by design, and `cargo xtask mutate`, which the runbook allows
+# only inside the runner. Neither is weakened or waived here: the first is left out by
+# `--host-safe`, which reads the guard to decide what to leave out, and the second moved to
+# the contained gate where it already ran.
 name: ci
 
 on:
@@ -14,19 +25,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  gates:
+  host-safe:
     # Linux on purpose, and not only for cost. Some behaviour cannot be exercised on
     # macOS at all: APFS refuses to create a filename that is not valid UTF-8, so the
     # end-to-end test for that refusal can only run on a filesystem that permits the
     # name. `NAZM_REQUIRE_NONUTF8` below turns that test's skip into a failure, so the
     # coverage is enforced here rather than left to whoever happens to read stderr.
+    #
+    # The runner is x86_64. That does not make `x86_64-unknown-linux-gnu` run-verified:
+    # `docs/support.md` names what that would take, and the target stays compile-only until a
+    # recorded run says otherwise.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          # Matches rust-toolchain.toml. Pinned because cranelift 0.135 declares MSRV
-          # 1.95.0, so the eventual backend could not build on anything older.
+          # Matches rust-toolchain.toml. Pinned because cranelift declares MSRV 1.95.0.
           toolchain: "1.98.1"
           components: clippy, rustfmt
 
@@ -36,31 +50,21 @@ jobs:
       - name: lint
         run: cargo lint
 
-      - name: test
-        env:
-          NAZM_REQUIRE_NONUTF8: "1"
-        run: cargo test --workspace --locked
-
-      # `cargo test` does not run these: they drive nested cargo builds and kill real
-      # process groups, and `cargo xtask mutate` below would pay their cost 109 times
-      # over. Ignored by default and run here, so they are executed rather than merely
-      # present.
-      - name: mutation-runner lifecycle
-        run: cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
-
       - name: project checks
         run: cargo xtask check
 
+      # Every test binary of the workspace is built; each is run except those whose source
+      # calls the containment guard, which the step names as NOT RUN. Doc-tests run too.
+      - name: test (host-safe subset)
+        env:
+          NAZM_REQUIRE_NONUTF8: "1"
+        run: cargo xtask workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci
+
+      # `cargo test` does not run these: they drive nested cargo builds of a disposable
+      # project and kill real process groups. They touch no compiler stage, so they are
+      # host-safe, and they are ignored by default only for their cost.
+      - name: mutation-runner lifecycle
+        run: cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
+
       - name: accounting selftest
         run: cargo run -p nazm-bench -- selftest
-
-      # Last: it injects every catalogued defect in turn and is far slower than the rest.
-      # A failure here means a defect the suite no longer detects.
-      #
-      # Each injection runs the suite with one job and one test thread, matching
-      # `cargo xtask contained tests`. That is slower than cargo's defaults and it is the
-      # only way the verdict means anything: a spurious failure while measuring a mutant
-      # is counted as CAUGHT and is invisible, so a nondeterministic suite manufactures
-      # coverage it does not have. See `run_tests` in xtask/src/mutate.rs.
-      - name: mutation coverage
-        run: cargo xtask mutate
