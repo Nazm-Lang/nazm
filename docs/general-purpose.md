@@ -104,7 +104,7 @@ numeric storage are written in specific widths and signedness.
 | **Arithmetic** | `+ - * / %` and unary `-` on two operands of **one** integer type, with `Int`'s rules at that width: overflow traps (`N0400`), division by zero traps (`N0401`), `MIN / -1` traps, `MIN % -1` is 0, unsigned `-x` traps unless `x` is 0. Mixed types are refused (`N0302`): nothing converts implicitly |
 | **Explicit wrapping and saturation** | `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `saturating_add`, `saturating_sub`, `saturating_mul`, generic over every integer type — the "explicit wrapping operator" *Integer overflow* promised, as functions rather than new operators |
 | **Conversions** | `T(x)` from any integer or float type: exact or trap (`N0400`). `try_convert[T](x) -> Option[T]`, `wrap_convert[T](x)` (two's complement modulo `2^n`, integers only), `saturate_convert[T](x)` |
-| **Literals** | Decimal, `0x`, `0o` and `0b` forms with `_` separators. An unannotated literal is an `Int`; where an integer type is expected it is that type, and a literal out of that type's range is refused at compile time (`N0400` as a refusal, by name) |
+| **Literals** | Decimal, `0x`, `0o` and `0b` forms with `_` separators. An unannotated literal is an `Int`; where an integer type is expected it is that type, and a literal out of that type's range is refused at compile time (`N0003`, the code a literal too large for `Int` always had) |
 | **Equality, order, hashing** | `==`, `!=`, `< <= > >=` within one type; every integer type has `Equality` and `Hash` |
 | **FFI and layout** | `int8_t` … `uint64_t`, with the C size and alignment, in calls and in C-layout structs |
 | **Formatting** | `num_to_str(x)` for every numeric type; `int_to_str` keeps its `Int` signature |
@@ -130,7 +130,7 @@ registers need bitwise operations. The spec records "No bitwise operators" (N49)
 | --- | --- |
 | **Operators** | `&`, `\|`, `^` (two operands of one integer type), prefix `~` (complement), `<<` and `>>`. On `Bool`, `&&`/`\|\|`/`!` stay the only operators |
 | **Precedence** | Unary, then `* / %`, then `+ -`, then `<< >>`, then `&`, then `^`, then `\|`, then comparisons, then `&&`, then `\|\|` — so `a & MASK == 0` is `(a & MASK) == 0`, not C's `a & (MASK == 0)` |
-| **Shifts** | The amount is an `Int`. `>>` is arithmetic for signed types and logical for unsigned. A shift by a negative amount or by the width or more **traps** (`N0408`, new): no masking of the amount, no "implementation-defined" result. A constant amount out of range is refused when checked. `<<` discards the bits shifted out — it is a bit operation, not multiplication, and does not trap on them |
+| **Shifts** | The amount is an `Int`. `>>` is arithmetic for signed types and logical for unsigned. A shift by a negative amount or by the width or more **traps** (`N0412`, new — `N0408` was already the exhausted stack): no masking of the amount, no "implementation-defined" result. A constant amount out of range is refused when checked (`N0617`). `<<` discards the bits shifted out — it is a bit operation, not multiplication, and does not trap on them |
 | **Bit functions** | `count_ones`, `leading_zeros`, `trailing_zeros` (returning `Int`), `rotate_left`, `rotate_right`, `swap_bytes`, and the endian conversions `to_big_endian`, `from_big_endian`, `to_little_endian`, `from_little_endian` — generic over the integer types |
 
 **Semantic cost.** Five operators and one prefix operator; `<<`/`>>` lexed as tokens of their own
@@ -152,7 +152,7 @@ not scale and cannot be indexed.
 
 | | |
 | --- | --- |
-| **Type** | `[T; N]`, `N` an integer literal or a constant (§15) of type `Int`, `0 < N`, and the array at most 65,536 bytes; larger is refused (`N0617`, new) with the advice to use `Vec` or `Bytes` |
+| **Type** | `[T; N]`, `N` an integer literal or a constant (§15) of type `Int`, `0 < N`, and the array at most 65,536 bytes; larger is refused (`N0618`, new) with the advice to use `Vec` or `Bytes` |
 | **Construction** | `[a, b, c]` (every element of one type; `N` is the count) and `[x; N]` (N copies of `x`) |
 | **Indexing** | `a[i]` with `i: Int`; out of range traps (`N0405`), as every index does. A constant index out of range is refused |
 | **Mutation** | `a[i] = v` where `a` is a `let mut` binding or a field path of one, like a field assignment |
@@ -406,8 +406,8 @@ forbids.
 layout, section placement, interrupts and exports all need to annotate a declaration.
 
 **The mechanism.** One syntax: `@name` or `@name(args)` before a declaration, with a **closed,
-compiler-owned vocabulary**; an unknown attribute is refused (`N0618`, new). Gate 2 defines
-`@deprecated("why")` (a warning at each use, `N0619`), `@test`, `@test(fails)`, `@bench`, `@fuzz`,
+compiler-owned vocabulary**; an unknown attribute is refused (`N0619`, new). Gate 2 defines
+`@deprecated("why")` (a warning at each use, `N0620`), `@test`, `@test(fails)`, `@bench`, `@fuzz`,
 and `@cfg(...)`. Attributes are part of a declaration's identity where they change its meaning
 (`@cfg`) and of its interface where importers can observe them (`@deprecated`). No keyword per
 domain, and nothing user-defined.
