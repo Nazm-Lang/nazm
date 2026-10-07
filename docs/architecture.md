@@ -9031,3 +9031,23 @@ of `Vec`s, a closure made in a helper); an acyclic program — named functions, 
 generic function and one stored by a function that cannot know what it captured — agreeing under
 the interpreter, LLVM at `-O0` and `-O2` and Cranelift with every count `live=0`; and a closure made
 in another module. `tests/compat/v1/`: five refusals and one run case. Catalogue entries `g1c1-*`.
+
+## 7.112 The general-purpose foundation — Gate 2, 2026-10-07
+
+Gate 2's decisions are recorded in [`general-purpose.md`](general-purpose.md), written before its
+code: one section per mechanism, each with the problem, the mechanism Nazm already had, why it was
+not enough, the semantic cost, its placement and its evidence plan. The constraints it states are
+architectural and are restated here so that they are found where the laws are:
+
+- **No second mechanism where one exists.** Floats and fixed-width integers are built-in types with
+  the existing operator and call rules; wrapping is a function, not an operator. A view is a counted
+  reference, as `Str`'s slices already were — no lifetime syntax. A socket wait parks through the
+  pool's existing hooked wait, woken by a reactor, not through a second suspension mechanism or an
+  `async` syntax. Maps are library code over one new derived requirement, `Hash`, the twin of
+  `Equality`.
+- **Authority stays a capability.** `NetCap`, `RandomCap` and `ProcessCap` join the seven kinds;
+  the set widens to sixteen bits and no id changes.
+- **Every new value kind joins the ownership graph.** `Bytes` and `OsHandle` hold no values and
+  close no cycle; arrays are inline and own what their elements own.
+- **Conditions are the build's, never the environment's.** `@cfg` is decided from target, features
+  and profiles, which are part of every key that could reuse a result.
