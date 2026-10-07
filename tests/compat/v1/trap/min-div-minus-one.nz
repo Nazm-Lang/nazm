@@ -1,0 +1,6 @@
+// expect: N0400
+// The smallest `Int` divided by -1 has no representation and traps (spec: integer-boundaries).
+fn main() -> Int {
+    let m = -9223372036854775808;
+    m / -1
+}

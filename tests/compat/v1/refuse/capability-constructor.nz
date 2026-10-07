@@ -1,0 +1,6 @@
+// expect: N0370
+// A capability cannot be constructed; only `main` is handed one (spec: capabilities).
+fn main() -> Int {
+    let o = OutCap();
+    0
+}

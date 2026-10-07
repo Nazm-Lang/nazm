@@ -1,0 +1,16 @@
+// Function values and closures. A closure captures by copy at creation, so a later assignment
+// to the captured binding's source is not seen (spec: function-values).
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() -> Int {
+    let k = 10;
+    let add = fn(x: Int) -> Int { x + k };
+    let g = inc;
+    apply(add, 1) + apply(g, 1) + apply(fn(x: Int) -> Int { x * 100 }, 1)
+}

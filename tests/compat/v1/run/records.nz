@@ -1,0 +1,19 @@
+// A record is a value: binding copies, a field write changes one binding only, and field order
+// in construction is not part of the meaning (spec: records).
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn moved(p: Point) -> Point {
+    Point(x: p.x + 1, y: p.y)
+}
+
+fn main() -> Int {
+    let mut a = Point(x: 1, y: 2);
+    let b = a;
+    a.x = 10;
+    let c = moved(b);
+    let d = Point(y: 5, x: 4);
+    a.x * 100 + b.x * 10 + c.x + d.y
+}

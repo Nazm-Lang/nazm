@@ -1,0 +1,9 @@
+// expect: N0366
+// A declared effect set is a contract; a pure function may not print (spec: effects).
+fn quiet(o: OutCap) -> Int ! {} {
+    print("x")
+}
+
+fn main(o: OutCap) -> Int ! { io } {
+    quiet(o)
+}

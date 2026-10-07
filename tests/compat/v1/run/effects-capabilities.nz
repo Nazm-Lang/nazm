@@ -1,0 +1,21 @@
+// Effects are declared or inferred; authority is a value handed down. An `IoCap` attenuates
+// to an `OutCap` by passing; an effect parameter is bound from the argument (spec: effects,
+// capabilities, effect-parameters).
+fn shout(o: OutCap, n: Int) -> Int ! { io } {
+    print(str_concat(int_to_str(n), "\n"));
+    n
+}
+
+fn twice[effects E](f: fn(Int) -> Int ! { E }, x: Int) -> Int ! { E } {
+    f(f(x))
+}
+
+fn pure_add(x: Int) -> Int ! {} {
+    x + 3
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = twice(pure_add, 1);
+    let b = twice(fn(x: Int) -> Int ! { io } { shout(io, x) * 2 }, 1);
+    a + b
+}

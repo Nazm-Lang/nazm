@@ -1,0 +1,10 @@
+// A nested scope may shadow; the outer binding is untouched (spec: shadowing).
+fn main() -> Int {
+    let x = 1;
+    let mut y = 0;
+    if true {
+        let x = 10;
+        y = x;
+    }
+    x + y
+}

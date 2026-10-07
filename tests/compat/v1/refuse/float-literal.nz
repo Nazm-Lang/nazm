@@ -1,0 +1,6 @@
+// expect: N0101
+// There is no floating point in Nazm 1.0 (spec: not-in-v0-3).
+fn main() -> Int {
+    let x = 1.5;
+    0
+}

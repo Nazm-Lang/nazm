@@ -1,0 +1,5 @@
+// expect: N0101
+// `return;` with no value is not supported (spec: return).
+fn main() -> Int {
+    return;
+}

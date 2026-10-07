@@ -1,0 +1,13 @@
+// expect: N0607
+// A trait is not a type: there are no trait objects (spec: traits).
+trait Area {
+    fn area(self: Self) -> Int;
+}
+
+fn total(a: Area) -> Int {
+    0
+}
+
+fn main() -> Int {
+    0
+}

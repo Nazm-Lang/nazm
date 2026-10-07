@@ -1,0 +1,7 @@
+// expect: N0369
+// Every call into C needs a `ForeignCap` in scope (spec: foreign).
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+
+fn main() -> Int ! { foreign } {
+    c_add(1, 2)
+}

@@ -1,0 +1,9 @@
+// expect: N0369
+// Authority is a value in scope: printing needs an `OutCap` or `IoCap` (spec: capabilities).
+fn say() -> Int ! { io } {
+    print("x")
+}
+
+fn main(o: OutCap) -> Int ! { io } {
+    say()
+}

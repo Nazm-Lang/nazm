@@ -1,0 +1,16 @@
+// Data read from a file may be computed over and printed; a `VouchCap` declassifies with
+// `str_vouch` (spec: provenance, declassification). Reads its own source.
+fn first_line_len(text: Str) -> Int ! {} {
+    let mut i = 0;
+    while i < str_len(text) && str_byte(text, i) != 10 {
+        i = i + 1;
+    }
+    i
+}
+
+fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
+    let text = read_file("provenance.nz");
+    let shown = str_vouch(str_slice(text, 0, 2));
+    print(str_concat(shown, "\n"));
+    first_line_len(text)
+}

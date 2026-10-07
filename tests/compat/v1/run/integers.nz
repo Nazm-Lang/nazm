@@ -1,0 +1,14 @@
+// `Int` is 64-bit signed; `*` binds tighter than `+`; `/` and `%` on positive operands; the
+// smallest `Int` is writable as a literal, and `% -1` of it is 0 (spec: integer-boundaries).
+fn main() -> Int {
+    let a = 7 + 3 * 4;
+    let b = (7 + 3) * 4;
+    let c = 17 / 5;
+    let d = 17 % 5;
+    let e = -9223372036854775808 % -1;
+    let mut total = a + b + c + d + e;
+    if 3 < 4 && !(2 == 3) || false {
+        total = total + 1;
+    }
+    total
+}

@@ -1,0 +1,6 @@
+// A package imports a dependency's module by `NAME:path` (spec: packages).
+use "geo:lib.nz";
+
+fn main() -> Int {
+    perimeter(3, 4)
+}
