@@ -35,6 +35,8 @@ pub(crate) struct Binary {
     pub(crate) version: String,
     pub(crate) manifest_dir: PathBuf,
     pub(crate) executable: PathBuf,
+    /// The target's root source file, as Cargo reported it.
+    pub(crate) src_path: PathBuf,
 }
 
 impl Binary {
@@ -72,12 +74,30 @@ pub(crate) fn binaries(stdout: &str) -> Vec<Binary> {
                 version,
                 manifest_dir: manifest.parent()?.to_path_buf(),
                 executable,
+                src_path: PathBuf::from(text("/target/src_path").unwrap_or_default()),
             })
         })
         .collect();
     out.sort();
     out.dedup_by(|a, b| a.id() == b.id());
     out
+}
+
+/// Whether this binary builds and runs generated compiler stages, which only the contained
+/// runner may do (`docs/runbook.md`, *Mandatory containment*).
+///
+/// Read from the guard itself rather than from a list: a target whose own source calls
+/// `require_containment(` is one, so a new stage-building test is recognised the day it is
+/// written and a test that stops building stages stops being excluded. A call reached only
+/// through another file of the target is not seen here — that target then runs, reaches the
+/// guard and fails loudly, which is the guard doing its job and never a silent pass.
+pub(crate) fn needs_containment(b: &Binary) -> bool {
+    std::fs::read_to_string(&b.src_path).is_ok_and(|text| {
+        text.lines().any(|l| {
+            let l = l.trim_start();
+            !l.starts_with("//") && l.contains("require_containment(")
+        })
+    })
 }
 
 /// The order binaries start in: longest known duration first; a binary with no history is
@@ -220,7 +240,38 @@ mod tests {
             version: "0.0.1".to_owned(),
             manifest_dir: PathBuf::from("/p"),
             executable: PathBuf::from(format!("/t/{target}")),
+            src_path: PathBuf::from(format!("/p/tests/{target}.rs")),
         }
+    }
+
+    #[test]
+    fn a_target_that_calls_the_containment_guard_is_the_one_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, text: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, text).unwrap();
+            Binary {
+                src_path: p,
+                ..bin("p", name)
+            }
+        };
+        let stages = file(
+            "selfhost.rs",
+            "mod common;\nfn build() {\n    common::require_containment(\"nzlex\");\n}\n",
+        );
+        let mentions = file(
+            "other.rs",
+            "// require_containment(\"x\") is called by selfhost.rs only\nmod common;\n",
+        );
+        let plain = file("plain.rs", "#[test]\nfn t() {}\n");
+        let missing = Binary {
+            src_path: dir.path().join("absent.rs"),
+            ..bin("p", "absent")
+        };
+        assert!(needs_containment(&stages));
+        assert!(!needs_containment(&mentions));
+        assert!(!needs_containment(&plain));
+        assert!(!needs_containment(&missing));
     }
 
     #[test]

@@ -870,6 +870,30 @@ fn pid_alive(pid: u32) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// `program`, started with SIGINT at its default action whatever this suite inherited.
+///
+/// An ignored signal stays ignored across `exec`, and a POSIX shell with job control off
+/// ignores SIGINT in every job it starts with `&`. So a suite launched from a script's
+/// background job hands every child an ignored SIGINT, and a test that interrupts one
+/// interrupts nothing. That is what failed N108's first lifecycle run, and it was not a
+/// race: the runner never saw the ^C, finished the slow mutant and finalized it. In the
+/// foreground the same test passed in under three seconds; as a background job it
+/// failed every time, after the mutant's full minute and a half.
+///
+/// Nothing here can undo it directly: the workspace forbids `unsafe`, so no `sigaction`,
+/// and a non-interactive `sh` may not reset a signal that was ignored on entry. Perl can,
+/// in the same process immediately before it `exec`s, so the pid, the process group and
+/// everything the test signals are the program's own.
+fn with_default_sigint(program: &str) -> Command {
+    let mut c = Command::new("perl");
+    c.args([
+        "-e",
+        "$SIG{INT} = 'DEFAULT'; exec { $ARGV[0] } @ARGV or die \"exec $ARGV[0]: $!\\n\"",
+        program,
+    ]);
+    c
+}
+
 // ---------------------------------------------------------------------------
 // E. A restore that fails, at the real boundary, in a real run.
 // ---------------------------------------------------------------------------
@@ -1562,11 +1586,11 @@ fn an_interrupted_campaign_resumes_its_own_journal_and_refuses_any_other() {
 #[test]
 #[ignore = "kills the harness mid-invocation; run with --ignored"]
 fn the_invocation_dies_with_the_harness_however_the_harness_dies() {
-    use std::os::unix::process::CommandExt as _;
-    for signal in ["-KILL", "-INT"] {
+    use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+    for (signal, number) in [("-KILL", 9), ("-INT", 2)] {
         let scratch = tempfile::tempdir().expect("scratch");
         let gc = scratch.path().join("gc.pid");
-        let mut harness = Command::new(XTASK)
+        let mut harness = with_default_sigint(XTASK)
             .args([
                 "mutate-exec",
                 "--script",
@@ -1597,7 +1621,14 @@ fn the_invocation_dies_with_the_harness_however_the_harness_dies() {
         let _ = Command::new("kill")
             .args([signal, &harness.id().to_string()])
             .status();
-        harness.wait().expect("reap harness");
+        // Ended by the signal, not by the script finishing: with SIGINT ignored the harness
+        // outlived the `kill`, `sleep 120` ran out, and this test passed for that reason.
+        let ended = harness.wait().expect("reap harness");
+        assert_eq!(
+            ended.signal(),
+            Some(number),
+            "the harness was not ended by {signal}: {ended:?}"
+        );
         until(
             &format!("the grandchild to stop after {signal}"),
             Duration::from_secs(30),
@@ -1616,7 +1647,7 @@ fn the_invocation_dies_with_the_harness_however_the_harness_dies() {
 #[test]
 #[ignore = "interrupts a real mutation run; run with --ignored"]
 fn a_sigint_during_a_mutant_leaves_it_unfinalized_and_recoverable() {
-    use std::os::unix::process::CommandExt as _;
+    use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
     let project = disposable_project();
     let root = project.path();
     let root_s = root.display().to_string();
@@ -1635,7 +1666,7 @@ fn a_sigint_during_a_mutant_leaves_it_unfinalized_and_recoverable() {
     );
     let expected_mutated = SOURCE.replacen("u64 { 0 }", "u64 { 30_000 }", 1);
 
-    let mut runner = Command::new(XTASK)
+    let mut runner = with_default_sigint(XTASK)
         .args([
             "mutate-run",
             "--root",
@@ -1664,7 +1695,14 @@ fn a_sigint_during_a_mutant_leaves_it_unfinalized_and_recoverable() {
     let _ = Command::new("kill")
         .args(["-INT", "--", &format!("-{}", runner.id())])
         .status();
-    runner.wait().expect("reap");
+    // Ended by the interrupt. Anything else — an exit — means the runner did not see it,
+    // and every assertion below would be about a run that was never interrupted.
+    let ended = runner.wait().expect("reap");
+    assert_eq!(
+        ended.signal(),
+        Some(2),
+        "the runner was not ended by the SIGINT: {ended:?}"
+    );
     until(
         "the watchdog to end the mutant's test",
         Duration::from_secs(30),

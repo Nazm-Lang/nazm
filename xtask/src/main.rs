@@ -178,6 +178,8 @@ fn help() {
                            id unique, every link resolved, the grammar parsed\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            evidence DIR    write DIR/sbom.json and DIR/index.json (every file's BLAKE3); --verify checks them\n  \
+           workspace-tests every test binary of the workspace, scheduled; --host-safe leaves\n  \
+                           out, by name, each that builds compiler stages (CI's subset)\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
                            --runs N sets the repetitions (default 5)\n  \
            mutate          inject catalogued defects; each must be caught. Run it as\n  \
@@ -2990,6 +2992,12 @@ fn shell(cmd: &str) -> Vec<String> {
 /// binary `cargo test --workspace` would run, built by Cargo and named by its JSON messages,
 /// each run once over W workers, longest first by the timing history for NAME; then the
 /// doc-tests. The report is in canonical order and a failure cancels nothing. N32-H3.
+///
+/// `--host-safe` (R1) builds every binary and runs every one except those that build and run
+/// generated compiler stages ([`suite::needs_containment`]), naming each it leaves out. It is
+/// what may run where no contained runner exists — GitHub's CI — and it is a subset: the
+/// stages it leaves out run in `cargo xtask contained tests` and the release gate, never
+/// uncontained, and the guard that refuses them is not weakened.
 fn workspace_tests(rest: &[String]) -> ExitCode {
     let value = |flag: &str, default: &str| -> String {
         rest.iter()
@@ -3009,6 +3017,7 @@ fn workspace_tests(rest: &[String]) -> ExitCode {
         num("--test-threads", 1),
     );
     let shape = value("--shape", "default");
+    let host_safe = rest.iter().any(|a| a == "--host-safe");
     let Some(root) = workspace_root() else {
         eprintln!("workspace-tests: could not locate the workspace root");
         return ExitCode::FAILURE;
@@ -3040,7 +3049,17 @@ fn workspace_tests(rest: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let built = started.elapsed().as_secs_f64();
-    let bins = suite::binaries(&build.stdout);
+    let (bins, contained_only): (Vec<suite::Binary>, Vec<suite::Binary>) =
+        suite::binaries(&build.stdout)
+            .into_iter()
+            .partition(|b| !(host_safe && suite::needs_containment(b)));
+    for b in &contained_only {
+        eprintln!(
+            "workspace-tests: NOT RUN {} — it builds generated compiler stages, which run only \
+             under `cargo xtask contained`",
+            b.id()
+        );
+    }
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map_or_else(|| root.join("target"), std::path::PathBuf::from);
     let history_file = suite::history_path(&target);
@@ -3099,6 +3118,13 @@ fn workspace_tests(rest: &[String]) -> ExitCode {
         doc.elapsed.as_secs_f64(),
         if history.is_empty() { "none (canonical order)" } else { "used" }
     );
+    if host_safe {
+        eprintln!(
+            "workspace-tests: host-safe subset — {} binar{} not run here; this is not the whole suite",
+            contained_only.len(),
+            if contained_only.len() == 1 { "y" } else { "ies" }
+        );
+    }
     for (id, secs) in slowest.iter().take(10) {
         eprintln!("workspace-tests: slowest {secs:7.2}s {id}");
     }
