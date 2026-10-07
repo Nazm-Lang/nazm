@@ -6,6 +6,7 @@
 //! of; [`interp`] executes it, as the oracle the backends are held to.
 
 mod arrays;
+mod bytes;
 mod func;
 mod helpers;
 pub mod interp;

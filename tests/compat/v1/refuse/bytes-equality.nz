@@ -1,0 +1,6 @@
+// expect: N0304
+// A `Bytes` is a handle, and like a `Vec` has no `==` (spec: bytes).
+fn main() -> Int {
+    let a = bytes_new(1);
+    if a == a { 1 } else { 0 }
+}

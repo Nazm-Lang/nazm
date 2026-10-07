@@ -3711,26 +3711,29 @@ targets = [
 
 [[mutation]]
 name = "n13-a-vec-has-equality"
-why = "`Vec[T]` is given `==`, which would have to mean the same storage or the same contents — the choice the language has not made"
+why = """`Vec[T]` is given `==`, which would have to mean the same storage or the same contents — the choice the language has not made
+Repointed by Gate 2, whose `Text` joined the types with equality on that line."""
 file = "crates/nazm-sema/src/udt.rs"
-find = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
-replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) | Type::Vec(_) => true,"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) | Type::Vec(_) => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
 name = "n13-a-sequence-has-equality"
-why = "`Ints` and `Strs` are given `==`, for the same unmade choice"
+why = """`Ints` and `Strs` are given `==`, for the same unmade choice
+Repointed by Gate 2, whose `Text` joined the types with equality on that line."""
 file = "crates/nazm-sema/src/udt.rs"
-find = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
-replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) | Type::Ints | Type::Strs => true,"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) | Type::Ints | Type::Strs => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
 name = "n13-a-chan-has-equality"
-why = "`Chan` is given `==`, exposing a channel's identity as a value"
+why = """`Chan` is given `==`, exposing a channel's identity as a value
+Repointed by Gate 2, whose `Text` joined the types with equality on that line."""
 file = "crates/nazm-sema/src/udt.rs"
-find = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
-replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) | Type::Chan => true,"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) | Type::Chan => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
@@ -7993,10 +7996,11 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "main_is_the_r
 
 [[mutation]]
 name = "n37-a-capability-has-equality"
-why = "a capability is given equality, and a record holding one derives it, so authority values can be compared as data"
+why = """a capability is given equality, and a record holding one derives it, so authority values can be compared as data
+Repointed by Gate 2, whose `Text` joined the types with equality on that line."""
 file = "crates/nazm-sema/src/udt.rs"
-find = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
-replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) | Type::Cap(_) => true,"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) | Type::Cap(_) => true,"
 killers = [{ package = "nazm-core", test = "capabilities", name = "nothing_a_program_writes_constructs_a_capability" }]
 
 [[mutation]]
@@ -8280,10 +8284,11 @@ Repointed by N103, which moved it to 28 for re-exports: an entry that refused `p
 Repointed by N104, which moved it to 29 for authority without inheritance: an entry that accepted a printing `fn main()` must not be reused.
 Repointed by Gate 1-C1, which moved it to 30 for closure environments in the ownership graph: an entry that accepted a closure capturing a `Vec[fn() -> Int]` must not be reused.
 Repointed by Gate 2, which moved it to 31 for numbers: an entry that refused `1.5` must not be reused.
-Repointed by Gate 2 again, which moved it to 32 for arrays and constants: an entry that refused `[1, 2]` must not be reused."""
+Repointed by Gate 2 again, which moved it to 32 for arrays and constants: an entry that refused `[1, 2]` must not be reused.
+Repointed by Gate 2's bytes and text, which moved it to 33: an entry that accepted a record named `Text` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 32;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 31;"
+find = "pub const SEMANTIC_EPOCH: u32 = 33;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 32;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -14305,3 +14310,115 @@ file = "crates/nazm-core/src/check.rs"
 find = "            if i < 0 || i >= i128::from(n) {"
 replace = "            if i < 0 || i > i128::from(n) {"
 killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]
+
+# --- Gate 2: bytes and text -------------------------------------------------------------------
+#
+# Each attacks one law of `docs/spec.md`, *Bytes* and *Text*: every range is checked in every
+# implementation; the runtime's UTF-8 validator refuses surrogates and overlong forms; a boundary
+# is never a continuation byte; byte order is the one asked for; a view keeps its buffer; `Text(s)`
+# validates; a surrogate is not a scalar value; a `Bytes` does not cross into a task; `Text` is
+# equal by its bytes; and a literal is a `Text` where one is expected.
+
+[[mutation]]
+name = "g2-the-interpreter-reads-a-byte-past-a-view"
+why = "the interpreter's range check for a `Bytes` lets one byte past the end through, so a read or write lands outside the view"
+file = "crates/nazm-core/src/eval.rs"
+find = "        usize::try_from(i).is_ok_and(|i| i.checked_add(width).is_some_and(|end| end <= len))"
+replace = "        usize::try_from(i).is_ok_and(|i| i.checked_add(width).is_some_and(|end| end <= len + 1))"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "every_bytes_and_text_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "g2-a-native-bytes-range-is-one-short"
+why = "the compiled range check for a `Bytes` or `Text` measures from one byte too far, so a read past the end is not stopped"
+file = "crates/nazm-lir/src/op/bytes.rs"
+find = "        let last = self.add_imm(len, -width);"
+replace = "        let last = self.add_imm(len, 1 - width);"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "every_bytes_and_text_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "g2-a-surrogate-is-utf8-natively"
+why = "the runtime's validator takes `ED A0 80` — a UTF-16 surrogate — for UTF-8"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %hi = select i1 %ed, i32 159, i32 %hi1"
+replace = "  %hi = select i1 %ed, i32 191, i32 %hi1"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "utf8_validation_agrees_on_every_edge_everywhere" }]
+
+[[mutation]]
+name = "g2-an-overlong-form-is-utf8-natively"
+why = "the runtime's validator takes the overlong `E0 9F BF` for UTF-8"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %lo = select i1 %e0, i32 160, i32 %lo1"
+replace = "  %lo = select i1 %e0, i32 128, i32 %lo1"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "utf8_validation_agrees_on_every_edge_everywhere" }]
+
+[[mutation]]
+name = "g2-a-continuation-byte-is-a-boundary"
+why = "the interpreter takes a UTF-8 continuation byte for the start of a scalar value, so a `Text` can be cut inside one"
+file = "crates/nazm-core/src/eval.rs"
+find = "        Ok(i) => s.get(i).is_some_and(|b| b & 0xC0 != 0x80),"
+replace = "        Ok(i) => s.get(i).is_some(),"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by_scalar_value_and_cuts_only_at_boundaries" }]
+
+[[mutation]]
+name = "g2-native-boundaries-are-inverted"
+why = "compiled code takes a continuation byte for a boundary and a lead byte for none"
+file = "crates/nazm-lir/src/op/bytes.rs"
+find = "        let lead = self.cmp_imm(Cmp::Ne, top, Class::I64, 0x80);"
+replace = "        let lead = self.cmp_imm(Cmp::Eq, top, Class::I64, 0x80);"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by_scalar_value_and_cuts_only_at_boundaries" }]
+
+[[mutation]]
+name = "g2-a-native-read-ignores-byte-order"
+why = "a compiled `bytes_read_le` assembles its bytes big-endian"
+file = "crates/nazm-lir/src/op/bytes.rs"
+find = "                    let shift = if op == Intrinsic::BytesReadLe {\n                        j\n                    } else {\n                        w - 1 - j\n                    } * 8;"
+replace = "                    let shift = if op == Intrinsic::BytesReadLe {\n                        w - 1 - j\n                    } else {\n                        j\n                    } * 8;"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "every_width_reads_and_writes_in_either_byte_order_everywhere" }]
+
+[[mutation]]
+name = "g2-a-view-does-not-keep-its-buffer"
+why = "a compiled `bytes_slice` does not count the buffer it shares, so the buffer is freed while the view lives"
+file = "crates/nazm-lir/src/op/bytes.rs"
+find = "                self.rt(\"nz.str_retain\", &[owner]);\n                self.write_str(dst, start, n, owner);\n            }\n            Intrinsic::BytesCopy"
+replace = "                self.write_str(dst, start, n, owner);\n            }\n            Intrinsic::BytesCopy"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "every_buffer_is_reclaimed_by_its_last_view_everywhere" }]
+
+[[mutation]]
+name = "g2-text-is-made-without-validation"
+why = "the interpreter's `Text(s)` accepts bytes that are not UTF-8"
+file = "crates/nazm-core/src/eval.rs"
+find = "            if std::str::from_utf8(s.bytes()).is_ok() {\n                Ok(Value::Str(s.clone()))"
+replace = "            if true {\n                Ok(Value::Str(s.clone()))"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "every_bytes_and_text_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "g2-a-surrogate-is-a-scalar-natively"
+why = "compiled `scalar_valid` and `scalar_text` take U+D800 for a scalar value"
+file = "crates/nazm-lir/src/op/bytes.rs"
+find = "        let lo = self.cmp_imm(Cmp::Ge, c, Class::I64, 0xD800);"
+replace = "        let lo = self.cmp_imm(Cmp::Ge, c, Class::I64, 0xD801);"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by_scalar_value_and_cuts_only_at_boundaries" }]
+
+[[mutation]]
+name = "g2-a-bytes-crosses-into-a-task"
+why = "a `Bytes` is not a handle to shared storage, so one crosses into a task and two threads write one buffer"
+file = "crates/nazm-sema/src/types.rs"
+find = "        matches!(self, Self::Ints | Self::Strs | Self::Vec(_) | Self::Bytes)"
+replace = "        matches!(self, Self::Ints | Self::Strs | Self::Vec(_))"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "bytes_and_text_misuse_is_refused_before_anything_runs" }]
+
+[[mutation]]
+name = "g2-text-has-no-equality"
+why = "`Text` is not equal by its bytes, so `==` on two is refused"
+file = "crates/nazm-sema/src/udt.rs"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Text | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by_scalar_value_and_cuts_only_at_boundaries" }]
+
+[[mutation]]
+name = "g2-a-literal-is-never-text"
+why = "a string literal stays a `Str` where a `Text` is expected"
+file = "crates/nazm-core/src/check.rs"
+find = "            Expr::Str { span, .. } if expected == Some(Type::Text) => {"
+replace = "            Expr::Str { span, .. } if false && expected == Some(Type::Text) => {"
+killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by_scalar_value_and_cuts_only_at_boundaries" }]

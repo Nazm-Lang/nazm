@@ -164,6 +164,9 @@ pub mod codes {
     /// A shift or rotation by a negative amount, or a shift by the operand's width or more
     /// (Gate 2): refused rather than masked or left to the machine.
     pub const SHIFT_OUT_OF_RANGE: Code = Code::new("N0412");
+    /// Bytes that are not UTF-8 made into a `Text`, a `Text` cut or read away from a scalar
+    /// boundary, or an `Int` that is not a Unicode scalar value made into one (Gate 2).
+    pub const NOT_UTF8: Code = Code::new("N0413");
 
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");

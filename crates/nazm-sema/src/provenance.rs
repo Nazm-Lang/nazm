@@ -154,6 +154,36 @@ impl Origin {
             | Intrinsic::Float32FromBits
             | Intrinsic::FloatParses
             | Intrinsic::FloatParseRaw => BuiltinFlow::Derive,
+            // Bytes (Gate 2): a buffer is a container, its cell named `Bytes`, so a view and
+            // the buffer it was cut from share it. A new zeroed one carries nothing; one made
+            // from a `Str` carries the string's origin on its handle, which every read through
+            // it, or through a view of it, joins in.
+            Intrinsic::BytesNew => BuiltinFlow::Fresh,
+            Intrinsic::BytesLen
+            | Intrinsic::BytesGet
+            | Intrinsic::BytesSlice
+            | Intrinsic::BytesToStr
+            | Intrinsic::BytesReadLe
+            | Intrinsic::BytesReadBe => BuiltinFlow::Read,
+            Intrinsic::BytesSet
+            | Intrinsic::BytesWriteLe
+            | Intrinsic::BytesWriteBe
+            | Intrinsic::BytesCopy => BuiltinFlow::Derive,
+            // Text (Gate 2): a value, like `Str`, computed from its arguments.
+            Intrinsic::BytesFromStr
+            | Intrinsic::Utf8Valid
+            | Intrinsic::TextAsStr
+            | Intrinsic::TextLen
+            | Intrinsic::TextConcat
+            | Intrinsic::TextIsBoundary
+            | Intrinsic::TextSlice
+            | Intrinsic::TextScalarAt
+            | Intrinsic::TextNext
+            | Intrinsic::TextScalarCount
+            | Intrinsic::ScalarValid
+            | Intrinsic::ScalarText
+            | Intrinsic::TextFromStr
+            | Intrinsic::TextAssume => BuiltinFlow::Derive,
             Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),
             Intrinsic::ReadFile | Intrinsic::FileExists => BuiltinFlow::Source(Self::File),
             // Where a file is written is the one restricted sink v1 has.
@@ -274,6 +304,38 @@ impl Origin {
             | Intrinsic::Float32FromBits
             | Intrinsic::FloatParses
             | Intrinsic::FloatParseRaw => ContainerUse::None,
+            Intrinsic::BytesLen
+            | Intrinsic::BytesGet
+            | Intrinsic::BytesSlice
+            | Intrinsic::BytesToStr
+            | Intrinsic::BytesReadLe
+            | Intrinsic::BytesReadBe => ContainerUse::Read { handle: 0 },
+            Intrinsic::BytesSet | Intrinsic::BytesWriteLe | Intrinsic::BytesWriteBe => {
+                ContainerUse::Write {
+                    handle: 0,
+                    value: 2,
+                }
+            }
+            // What `src` holds is written into `dst`'s cell.
+            Intrinsic::BytesCopy => ContainerUse::Write {
+                handle: 0,
+                value: 1,
+            },
+            Intrinsic::BytesNew
+            | Intrinsic::BytesFromStr
+            | Intrinsic::Utf8Valid
+            | Intrinsic::TextAsStr
+            | Intrinsic::TextLen
+            | Intrinsic::TextConcat
+            | Intrinsic::TextIsBoundary
+            | Intrinsic::TextSlice
+            | Intrinsic::TextScalarAt
+            | Intrinsic::TextNext
+            | Intrinsic::TextScalarCount
+            | Intrinsic::ScalarValid
+            | Intrinsic::ScalarText
+            | Intrinsic::TextFromStr
+            | Intrinsic::TextAssume => ContainerUse::None,
             Intrinsic::IntsLen
             | Intrinsic::IntsGet
             | Intrinsic::IntsPop

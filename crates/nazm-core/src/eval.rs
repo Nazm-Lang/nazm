@@ -62,6 +62,10 @@ pub enum Value {
     /// which is what the native representation is, so the two agree about *when* string
     /// storage is reclaimed and not only about what the bytes are.
     Str(Str),
+    /// A `Bytes` (Gate 2): a view of a fixed-length mutable buffer, **by reference** — a
+    /// write through one view is seen through every view of the buffer. A `Text` needs no
+    /// variant: it is a [`Value::Str`] the checker knows is UTF-8.
+    Bytes(BytesView),
     /// A growable sequence of `Int`, **by reference**.
     ///
     /// `Rc<RefCell<…>>` is the reference semantics, stated rather than incidental: two
@@ -548,6 +552,66 @@ impl PartialEq for Str {
 
 impl Eq for Str {}
 
+/// A `Bytes` (Gate 2): `len` bytes starting at `start` of a shared buffer.
+///
+/// The native value is `Str`'s triple over a buffer `nz.str_alloc` made, so the buffer is
+/// counted with the strings — the two implementations' memory reports count the same
+/// allocations. Cloning shares the buffer: a `Bytes` is a handle.
+#[derive(Debug, Clone)]
+pub struct BytesView {
+    buf: Arc<Buffer>,
+    start: usize,
+    len: usize,
+}
+
+/// A `Bytes` buffer: fixed in length once made, its bytes written in place.
+#[derive(Debug)]
+pub struct Buffer(Mutex<Vec<u8>>);
+
+impl Buffer {
+    fn new(bytes: Vec<u8>) -> Arc<Self> {
+        STRINGS_ALLOCATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Arc::new(Self(Mutex::new(bytes)))
+    }
+}
+
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        STRINGS_RECLAIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl BytesView {
+    fn whole(bytes: Vec<u8>) -> Self {
+        let len = bytes.len();
+        Self {
+            buf: Buffer::new(bytes),
+            start: 0,
+            len,
+        }
+    }
+
+    /// A copy of the bytes this view names.
+    fn read(&self) -> Vec<u8> {
+        self.buf
+            .0
+            .lock()
+            .ok()
+            .and_then(|b| b.get(self.start..self.start + self.len).map(<[u8]>::to_vec))
+            .unwrap_or_default()
+    }
+
+    /// Write `bytes` at `at` within this view; the caller has checked the range.
+    fn write(&self, at: usize, bytes: &[u8]) {
+        if let Ok(mut b) = self.buf.0.lock() {
+            let from = self.start + at;
+            if let Some(dst) = b.get_mut(from..from + bytes.len()) {
+                dst.copy_from_slice(bytes);
+            }
+        }
+    }
+}
+
 /// Sequence storage, and the two counters that prove it is reclaimed.
 ///
 /// # Why this type exists at all
@@ -673,6 +737,7 @@ impl std::fmt::Display for Value {
                 Err(_) => f.write_str("Strs(unreadable)"),
             },
             Self::Chan(_) => f.write_str("Chan"),
+            Self::Bytes(b) => write!(f, "Bytes({} bytes)", b.len),
             Self::Cap(k) => f.write_str(k.type_name()),
             Self::Vec(v) => match v.lock() {
                 Ok(v) => write!(f, "Vec({} items)", v.len()),
@@ -2292,7 +2357,10 @@ impl Interpreter {
                 for a in args {
                     values.push(take!(self, f, a, env));
                 }
-                self.intrinsic(*op, &values, e.at)?
+                match bytes_text_intrinsic(*op, &values, e.ty, e.at) {
+                    Some(r) => r?,
+                    None => self.intrinsic(*op, &values, e.at)?,
+                }
             }
 
             ExprKind::Closure {
@@ -2731,6 +2799,7 @@ fn type_name(v: &Value) -> &'static str {
         Value::Ints(_) => "Ints",
         Value::Strs(_) => "Strs",
         Value::Chan(_) => "Chan",
+        Value::Bytes(_) => "Bytes",
         // Only reached by a built-in handed the wrong type, which checking has already
         // refused — and no built-in takes a record, so no message can name one usefully.
         Value::Record(_) => "a record",
@@ -2739,6 +2808,227 @@ fn type_name(v: &Value) -> &'static str {
         Value::Cap(k) => k.type_name(),
         Value::Func(_) => "a function value",
     }
+}
+
+/// A `Bytes` or `Text` built-in (Gate 2), with the sentences the compiled program writes;
+/// `None` for any other. `ty` is the call's result type, which is a read's `T`.
+#[allow(clippy::too_many_lines)]
+fn bytes_text_intrinsic(
+    op: Intrinsic,
+    args: &[Value],
+    ty: Option<nazm_sema::Type>,
+    at: Span,
+) -> Option<Result<Value, RuntimeError>> {
+    let outside = |message: &str, detail: String| RuntimeError {
+        diagnostic: Box::new(
+            Diagnostic::error(codes::INDEX_OUT_OF_BOUNDS, at, message).help(detail),
+        ),
+    };
+    let not_utf8 = |message: &str| fail(codes::NOT_UTF8, at, message);
+    let bug = || {
+        fail(
+            codes::TYPE_MISMATCH,
+            at,
+            format!("`{}` was called with the wrong values", op.name()),
+        )
+    };
+    // `0 <= i` and `i + width <= len`, without overflow.
+    let within = |i: i64, width: usize, len: usize| {
+        usize::try_from(i).is_ok_and(|i| i.checked_add(width).is_some_and(|end| end <= len))
+    };
+    let range = |from: i64, to: i64, len: usize| {
+        from >= 0 && to >= from && usize::try_from(to).is_ok_and(|t| t <= len)
+    };
+    let at_boundary = |s: &[u8], i: i64| match usize::try_from(i) {
+        Ok(i) if i == s.len() => true,
+        Ok(i) => s.get(i).is_some_and(|b| b & 0xC0 != 0x80),
+        Err(_) => false,
+    };
+    let scalar = |c: i64| u32::try_from(c).ok().and_then(char::from_u32);
+    let index = |i: i64| usize::try_from(i).unwrap_or(0);
+    let count = |n: usize| i64::try_from(n).ok().map(Value::Int);
+    Some(match (op, args) {
+        (Intrinsic::BytesNew, [Value::Int(n)]) => match usize::try_from(*n) {
+            Ok(n) => Ok(Value::Bytes(BytesView::whole(vec![0; n]))),
+            Err(_) => Err(outside(
+                "a buffer's length is never negative",
+                format!("asked for a buffer of {n} bytes"),
+            )),
+        },
+        (Intrinsic::BytesFromStr, [Value::Str(s)]) => {
+            Ok(Value::Bytes(BytesView::whole(s.bytes().to_vec())))
+        }
+        (Intrinsic::BytesToStr, [Value::Bytes(b)]) => Ok(Value::Str(Str::heap(b.read()))),
+        (Intrinsic::BytesLen, [Value::Bytes(b)]) => count(b.len).ok_or_else(bug),
+        (Intrinsic::TextLen, [Value::Str(s)]) => count(s.len()).ok_or_else(bug),
+        (Intrinsic::BytesGet, [Value::Bytes(b), Value::Int(i)]) => {
+            if within(*i, 1, b.len) {
+                Ok(Value::Num(NumVal::wrapped(
+                    NumKind::U8,
+                    u64::from(b.read().get(index(*i)).copied().unwrap_or(0)),
+                )))
+            } else {
+                Err(outside(
+                    "this index is outside the `Bytes`",
+                    format!("asked for byte {i} of a `Bytes` {} long", b.len),
+                ))
+            }
+        }
+        (Intrinsic::BytesSet, [Value::Bytes(b), Value::Int(i), v]) => {
+            if within(*i, 1, b.len) {
+                let byte = as_num(v).map_or(0, |n| n.bits.to_le_bytes()[0]);
+                b.write(index(*i), &[byte]);
+                Ok(Value::Int(0))
+            } else {
+                Err(outside(
+                    "this index is outside the `Bytes`",
+                    format!("asked for byte {i} of a `Bytes` {} long", b.len),
+                ))
+            }
+        }
+        (Intrinsic::BytesSlice, [Value::Bytes(b), Value::Int(from), Value::Int(to)]) => {
+            if range(*from, *to, b.len) {
+                Ok(Value::Bytes(BytesView {
+                    buf: Arc::clone(&b.buf),
+                    start: b.start + index(*from),
+                    len: index(*to) - index(*from),
+                }))
+            } else {
+                Err(outside(
+                    "this slice is not inside the `Bytes`",
+                    format!("asked for {from}..{to} of a `Bytes` {} long", b.len),
+                ))
+            }
+        }
+        (Intrinsic::BytesCopy, [Value::Bytes(d), Value::Bytes(s)]) => {
+            if s.len > d.len {
+                Err(outside(
+                    "the source is longer than the destination",
+                    format!("{} bytes into {}", s.len, d.len),
+                ))
+            } else {
+                // Read first: the two may be views of one buffer.
+                let bytes = s.read();
+                d.write(0, &bytes);
+                count(s.len).ok_or_else(bug)
+            }
+        }
+        (Intrinsic::BytesReadLe | Intrinsic::BytesReadBe, [Value::Bytes(b), Value::Int(i)]) => {
+            let kind = ty.and_then(nazm_sema::Type::num).unwrap_or(NumKind::I64);
+            let w = kind.bytes() as usize;
+            if !within(*i, w, b.len) {
+                return Some(Err(outside(
+                    "this read is outside the `Bytes`",
+                    format!("asked for {w} bytes at {i} of a `Bytes` {} long", b.len),
+                )));
+            }
+            let all = b.read();
+            let mut raw = [0u8; 8];
+            let at = index(*i);
+            for j in 0..w {
+                let byte = all.get(at + j).copied().unwrap_or(0);
+                let k = if op == Intrinsic::BytesReadLe {
+                    j
+                } else {
+                    w - 1 - j
+                };
+                if let Some(slot) = raw.get_mut(k) {
+                    *slot = byte;
+                }
+            }
+            Ok(from_num(NumVal::wrapped(kind, u64::from_le_bytes(raw))))
+        }
+        (
+            Intrinsic::BytesWriteLe | Intrinsic::BytesWriteBe,
+            [Value::Bytes(b), Value::Int(i), v],
+        ) => {
+            let Some(n) = as_num(v) else {
+                return Some(Err(bug()));
+            };
+            let w = n.kind.bytes() as usize;
+            if !within(*i, w, b.len) {
+                return Some(Err(outside(
+                    "this write is outside the `Bytes`",
+                    format!("asked for {w} bytes at {i} of a `Bytes` {} long", b.len),
+                )));
+            }
+            let le = n.bits.to_le_bytes();
+            let mut out = vec![0u8; w];
+            for (j, slot) in out.iter_mut().enumerate() {
+                let k = if op == Intrinsic::BytesWriteLe {
+                    j
+                } else {
+                    w - 1 - j
+                };
+                *slot = le.get(k).copied().unwrap_or(0);
+            }
+            b.write(index(*i), &out);
+            Ok(Value::Int(0))
+        }
+        (Intrinsic::Utf8Valid, [Value::Str(s)]) => {
+            Ok(Value::Bool(std::str::from_utf8(s.bytes()).is_ok()))
+        }
+        (Intrinsic::TextFromStr, [Value::Str(s)]) => {
+            if std::str::from_utf8(s.bytes()).is_ok() {
+                Ok(Value::Str(s.clone()))
+            } else {
+                Err(not_utf8("this is not UTF-8"))
+            }
+        }
+        (Intrinsic::TextAssume | Intrinsic::TextAsStr, [Value::Str(s)]) => {
+            Ok(Value::Str(s.clone()))
+        }
+        (Intrinsic::TextConcat, [Value::Str(a), Value::Str(b)]) => {
+            let mut out = Vec::with_capacity(a.len() + b.len());
+            out.extend_from_slice(a.bytes());
+            out.extend_from_slice(b.bytes());
+            Ok(Value::Str(Str::heap(out)))
+        }
+        (Intrinsic::TextIsBoundary, [Value::Str(s), Value::Int(i)]) => {
+            Ok(Value::Bool(at_boundary(s.bytes(), *i)))
+        }
+        (Intrinsic::TextSlice, [Value::Str(s), Value::Int(from), Value::Int(to)]) => {
+            if !range(*from, *to, s.len()) {
+                Err(outside(
+                    "this slice is not inside the `Text`",
+                    format!("asked for {from}..{to} of a `Text` {} bytes long", s.len()),
+                ))
+            } else if !(at_boundary(s.bytes(), *from) && at_boundary(s.bytes(), *to)) {
+                Err(not_utf8("this is not UTF-8"))
+            } else {
+                Ok(Value::Str(s.slice(index(*from), index(*to))))
+            }
+        }
+        (Intrinsic::TextScalarAt | Intrinsic::TextNext, [Value::Str(s), Value::Int(at_i)]) => {
+            if !within(*at_i, 1, s.len()) {
+                return Some(Err(outside(
+                    "this index is outside the `Text`",
+                    format!("asked for byte {at_i} of a `Text` {} bytes long", s.len()),
+                )));
+            }
+            if !at_boundary(s.bytes(), *at_i) {
+                return Some(Err(not_utf8("this is not UTF-8")));
+            }
+            let rest = s.bytes().get(index(*at_i)..).unwrap_or(&[]);
+            let c = (1..=rest.len().min(4))
+                .find_map(|k| std::str::from_utf8(rest.get(..k)?).ok())
+                .and_then(|t| t.chars().next());
+            match (op, c) {
+                (Intrinsic::TextScalarAt, Some(c)) => Ok(Value::Int(i64::from(u32::from(c)))),
+                (_, Some(c)) => Ok(Value::Int(*at_i + c.len_utf8() as i64)),
+                (_, None) => Err(bug()),
+            }
+        }
+        (Intrinsic::TextScalarCount, [Value::Str(s)]) => {
+            count(s.bytes().iter().filter(|&&b| b & 0xC0 != 0x80).count()).ok_or_else(bug)
+        }
+        (Intrinsic::ScalarValid, [Value::Int(c)]) => Ok(Value::Bool(scalar(*c).is_some())),
+        (Intrinsic::ScalarText, [Value::Int(c)]) => match scalar(*c) {
+            Some(ch) => Ok(Value::Str(Str::heap(ch.to_string().into_bytes()))),
+            None => Err(not_utf8("this is not a Unicode scalar value")),
+        },
+        _ => return None,
+    })
 }
 
 /// Gate 2's numeric built-ins, through the shared semantics; `None` for every other built-in.

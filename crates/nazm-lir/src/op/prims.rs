@@ -12,14 +12,14 @@ use super::lower::{class, in_memory, rt, Helper};
 use crate::ir::Ty;
 
 impl Fx<'_, '_> {
-    fn arg(&mut self, args: &[mir::Operand], i: usize) -> V {
+    pub(crate) fn arg(&mut self, args: &[mir::Operand], i: usize) -> V {
         match args.get(i) {
             Some(a) => self.value(a),
             None => self.iconst(0),
         }
     }
 
-    fn arg_place(&mut self, args: &[mir::Operand], i: usize) -> V {
+    pub(crate) fn arg_place(&mut self, args: &[mir::Operand], i: usize) -> V {
         match args.get(i) {
             Some(a) => self.place(a),
             None => self.null(),
@@ -43,6 +43,9 @@ impl Fx<'_, '_> {
             return;
         }
         if self.num_text(dst, op, elem, args) {
+            return;
+        }
+        if self.bytes_text(dst, op, elem, args) {
             return;
         }
         match op {
@@ -93,6 +96,36 @@ impl Fx<'_, '_> {
                 let at = self.at;
                 self.lw
                     .defect(at, "a numeric built-in its lowering did not take");
+            }
+            // Gate 2's bytes and text, lowered above (`op/bytes.rs`); reaching here is a defect.
+            Intrinsic::BytesNew
+            | Intrinsic::BytesFromStr
+            | Intrinsic::BytesLen
+            | Intrinsic::BytesGet
+            | Intrinsic::BytesSet
+            | Intrinsic::BytesSlice
+            | Intrinsic::BytesToStr
+            | Intrinsic::BytesCopy
+            | Intrinsic::BytesReadLe
+            | Intrinsic::BytesReadBe
+            | Intrinsic::BytesWriteLe
+            | Intrinsic::BytesWriteBe
+            | Intrinsic::Utf8Valid
+            | Intrinsic::TextAsStr
+            | Intrinsic::TextLen
+            | Intrinsic::TextConcat
+            | Intrinsic::TextIsBoundary
+            | Intrinsic::TextSlice
+            | Intrinsic::TextScalarAt
+            | Intrinsic::TextNext
+            | Intrinsic::TextScalarCount
+            | Intrinsic::ScalarValid
+            | Intrinsic::ScalarText
+            | Intrinsic::TextFromStr
+            | Intrinsic::TextAssume => {
+                let at = self.at;
+                self.lw
+                    .defect(at, "a bytes or text built-in its lowering did not take");
             }
             Intrinsic::StrLen => {
                 let s = self.arg_place(args, 0);
@@ -582,12 +615,12 @@ impl Fx<'_, '_> {
         (p, n)
     }
 
-    fn str_owner(&mut self, s: V) -> V {
+    pub(crate) fn str_owner(&mut self, s: V) -> V {
         let [_, _, of] = self.lw.data.str_fields();
         self.load(Class::Ptr, s, offset(of))
     }
 
-    fn write_str(&mut self, dst: mir::LocalId, p: V, n: V, owner: V) {
+    pub(crate) fn write_str(&mut self, dst: mir::LocalId, p: V, n: V, owner: V) {
         let d = self.addr(dst);
         let [pf, lf, of] = self.lw.data.str_fields();
         self.store(d, offset(pf), p);
@@ -596,7 +629,7 @@ impl Fx<'_, '_> {
     }
 
     /// A string backing of `bytes` usable bytes, as `(owner, data)`.
-    fn string_backing(&mut self, bytes: V) -> (V, V) {
+    pub(crate) fn string_backing(&mut self, bytes: V) -> (V, V) {
         let owner = self.rt_v("nz.str_alloc", &[bytes], Class::Ptr);
         let null = self.is_null(owner);
         self.guard(null, "N0406", "out of memory");

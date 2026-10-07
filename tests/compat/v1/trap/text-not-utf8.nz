@@ -1,0 +1,6 @@
+// expect: N0413
+// A `Str` that is not UTF-8 does not become a `Text` (spec: text).
+fn main() -> Int {
+    let t = Text(str_from_byte(255));
+    0
+}

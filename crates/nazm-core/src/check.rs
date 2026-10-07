@@ -3040,6 +3040,37 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "posix_memalign",
     "mprotect",
     "memset",
+    // Gate 2: the numbers part's parsing and the C library's mathematics, and the move bytes
+    // and text make.
+    "strtod",
+    "strtof",
+    "memmove",
+    "atan2",
+    "atan2f",
+    "cos",
+    "cosf",
+    "exp",
+    "expf",
+    "fmax",
+    "fmaxf",
+    "fmin",
+    "fminf",
+    "fmod",
+    "fmodf",
+    "log",
+    "log10",
+    "log10f",
+    "log2",
+    "log2f",
+    "logf",
+    "pow",
+    "powf",
+    "round",
+    "roundf",
+    "sin",
+    "sinf",
+    "tan",
+    "tanf",
     "nz_ctx_switch",
     "nz_ctx_prepare",
     "nz_task_main",
@@ -7047,6 +7078,12 @@ impl Checker<'_> {
             // `Float32` where one is expected, `Float64` everywhere else (Gate 2).
             Expr::Float { span, .. } => Completion::Value(self.float_literal(*span, expected)),
             Expr::Bool { .. } => Completion::Value(Type::Bool),
+            // A literal is UTF-8 by construction, so it is a `Text` where one is expected (Gate 2).
+            Expr::Str { span, .. } if expected == Some(Type::Text) => {
+                self.res
+                    .record_numeric(*span, NumericFact::Literal(Type::Text));
+                Completion::Value(Type::Text)
+            }
             Expr::Str { .. } => Completion::Value(Type::Str),
 
             Expr::Var { name, span } => match self.lookup_var(name, *span) {
@@ -8404,7 +8441,9 @@ impl Checker<'_> {
                     bracket,
                     format!("`[…]` indexes an array, and this is `{}`", self.show(bt)),
                 );
-                if bt.is_sequence() {
+                if bt == Type::Bytes {
+                    d = d.help("a `Bytes`'s byte is read with `bytes_get(b, i)`");
+                } else if bt.is_sequence() {
                     d = d.help("a `Vec`'s element is read with `vec_get(xs, i)`");
                 }
                 self.errors.push(d);
@@ -8489,14 +8528,22 @@ impl Checker<'_> {
             let lt = self.value_type(lhs, hint.filter(|t| t.is_integer()));
             let rt = self.value_type(rhs, Some(Type::Int));
             (lt, rt)
-        } else if is_number_literal(lhs) && !is_number_literal(rhs) {
-            let rt = self.value_type(rhs, hint);
-            let lt = self.value_type(lhs, Some(rt).filter(|t| t.num().is_some()).or(hint));
-            (lt, rt)
         } else {
-            let lt = self.value_type(lhs, hint);
-            let rt = self.value_type(rhs, Some(lt).filter(|t| t.num().is_some()).or(hint));
-            (lt, rt)
+            // A literal takes the type of the operand beside it, when that is a number or —
+            // for a string literal — a `Text` (Gate 2); so the literal is checked second.
+            let takes = |t: &Type| t.num().is_some() || *t == Type::Text;
+            let string = |e: &Expr| matches!(e, Expr::Str { .. });
+            let literal_first = (is_number_literal(lhs) && !is_number_literal(rhs))
+                || (string(lhs) && !string(rhs));
+            if literal_first {
+                let rt = self.value_type(rhs, hint);
+                let lt = self.value_type(lhs, Some(rt).filter(takes).or(hint));
+                (lt, rt)
+            } else {
+                let lt = self.value_type(lhs, hint);
+                let rt = self.value_type(rhs, Some(lt).filter(takes).or(hint));
+                (lt, rt)
+            }
         };
         if shift {
             self.refuse_constant_shift(lt, rhs);
@@ -8532,7 +8579,7 @@ impl Checker<'_> {
             "try_convert" => ConvertMode::Try,
             "wrap_convert" => ConvertMode::Wrap,
             "saturate_convert" => ConvertMode::Saturate,
-            name if NumKind::by_name(name).is_some() => ConvertMode::Exact,
+            name if NumKind::by_name(name).is_some() || name == "Text" => ConvertMode::Exact,
             _ => return None,
         };
         Some(self.check_conversion(callee, at, written, args, span, mode))
@@ -8611,12 +8658,18 @@ impl Checker<'_> {
                 self.errors
                     .push(not_generic(name, "a conversion, not generic", at));
             }
-            NumKind::by_name(name).map_or(Type::Int, Type::of_num)
+            if name == "Text" {
+                Type::Text
+            } else {
+                NumKind::by_name(name).map_or(Type::Int, Type::of_num)
+            }
         } else {
             match written {
                 Some([one]) => {
                     let t = self.resolve_written_type(one);
-                    if t.num().is_none() {
+                    // `Text` (Gate 2): `Text(s)` and `try_convert[Text](s)`, nothing else.
+                    let text = t == Type::Text && mode == ConvertMode::Try;
+                    if t.num().is_none() && !text {
                         self.errors.push(Diagnostic::error(
                             codes::TYPE_MISMATCH,
                             at,
@@ -8655,7 +8708,7 @@ impl Checker<'_> {
             ));
         }
         // A literal converted exactly is that literal, written at the target type.
-        let hint = (mode == ConvertMode::Exact).then_some(to);
+        let hint = (mode == ConvertMode::Exact && to != Type::Text).then_some(to);
         let mut from = Type::Int;
         for (i, a) in args.iter().enumerate() {
             let t = self.value_type(a, hint);
@@ -8663,7 +8716,20 @@ impl Checker<'_> {
                 from = t;
             }
         }
-        if from.num().is_none() {
+        if to == Type::Text {
+            if from != Type::Str {
+                if let Some(a) = args.first() {
+                    self.errors.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        a.span(),
+                        format!(
+                            "`{name}` converts a `Str` to `Text`, and this is `{}`",
+                            self.show(from)
+                        ),
+                    ));
+                }
+            }
+        } else if from.num().is_none() {
             if let Some(a) = args.first() {
                 self.errors.push(Diagnostic::error(
                     codes::TYPE_MISMATCH,
