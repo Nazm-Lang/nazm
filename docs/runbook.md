@@ -80,6 +80,20 @@ the same numbers, workloads never overlap, mutants never run two at once, and a 
 journal is bound to the profile it ran under — a resume under another profile reuses
 nothing.
 
+### CI runs the host-safe subset, and is not the release gate
+
+*R1, 2026-10-07.* GitHub's runners have no verified contained runner, so
+`.github/workflows/ci.yml` runs only what may run on a host: formatting, `cargo lint`,
+`cargo xtask check`, `cargo xtask workspace-tests --host-safe` (every test binary built; each run
+except those whose source calls the containment guard, which it names as NOT RUN), the lifecycle
+suite and the accounting selftest. The selfhost suite, the bootstrap, fuzzing and the mutation
+catalogue are never run there and never waived: they run in `cargo xtask contained` and in the
+release gate. A green CI run says nothing about them.
+
+The lifecycle suite's interruption tests restore SIGINT's default action in the process they
+interrupt (through `perl`, since `unsafe` is forbidden), because a suite started as a `&` job of
+a non-interactive shell hands every child an *ignored* SIGINT — N108's one lifecycle failure.
+
 ### Autonomy limits
 
 Do not publish, push, tag, deploy, buy services, use paid model APIs, expose credentials,

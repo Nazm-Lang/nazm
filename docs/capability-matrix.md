@@ -4149,8 +4149,18 @@ reading, those tests cannot pass in CI. CI also runs on `ubuntu-latest` x86_64, 
 `cargo xtask contained`, or exclude them from the CI test step and say so — and choosing
 between them is outside this task.
 
-**Next dependency** · Deciding what CI is for: a gate on the verified targets, or a smoke
-test on a third.
+*R1, 2026-10-07: decided, not yet evidenced.* CI is the **host-safe subset**, and not the release
+gate. `.github/workflows/ci.yml` runs `cargo xtask workspace-tests --host-safe`, which builds every
+test binary and runs each except those whose source calls the containment guard — today
+`nazm-cli test:selfhost` — naming each one it leaves out; the guard itself is unchanged. The
+mutation catalogue left CI for the contained gate, where the runbook already required it. The
+selfhost stages, bootstrap, fuzzing and mutation run only in `cargo xtask contained` and the release
+gate. The runner is x86_64 Linux, and that changes no target cell: a compile-only target becomes
+run-verified by a recorded run of Nazm-built programs there, not by CI compiling the project.
+Nothing has been pushed, so the workflow has not run on GitHub; its first run is the evidence this
+section is still waiting for.
+
+**Next dependency** · A first green run of the host-safe workflow on GitHub, recorded.
 
 **Accepted when** · CI runs green on a stated target and the stated target is one the
 project verifies.
