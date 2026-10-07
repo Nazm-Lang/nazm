@@ -170,3 +170,29 @@ fn a_dependency_declaring_general_does_not_weaken_the_root_s_profile() {
         "{err}"
     );
 }
+
+#[test]
+fn every_command_offering_a_profile_names_every_profile_in_its_help() {
+    // M1: the `--profile` help named four of the eight profiles for three commands, written by
+    // hand when there were four. The list is `Profile::ALL`; the help is held to it.
+    let mut offered = 0;
+    for cmd in ["check", "build", "run", "test", "inspect"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_nazm"))
+            .args([cmd, "--help"])
+            .output()
+            .expect("run nazm");
+        let help = String::from_utf8_lossy(&out.stdout);
+        if !help.contains("--profile") {
+            continue;
+        }
+        offered += 1;
+        for p in nazm_service::profile::Profile::ALL {
+            assert!(
+                help.contains(&format!("`{}`", p.name())),
+                "`nazm {cmd} --help` does not name the profile `{}`",
+                p.name()
+            );
+        }
+    }
+    assert!(offered > 0, "no command offers --profile any more");
+}

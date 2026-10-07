@@ -10,47 +10,12 @@
 
 mod common;
 
+use common::{run_bounded, Ran};
+
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
-
-/// Every program here finishes in well under a second; one that does not fails by name.
-const DEADLINE: Duration = Duration::from_secs(60);
-
-#[derive(Debug, PartialEq, Eq)]
-struct Ran {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_bounded(cmd: &mut Command, what: &str) -> Ran {
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn");
-    let start = Instant::now();
-    loop {
-        if child.try_wait().expect("try_wait").is_some() {
-            let o = child.wait_with_output().expect("collect output");
-            return Ran {
-                code: o.status.code(),
-                stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
-            };
-        }
-        if start.elapsed() >= DEADLINE {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("{what} did not terminate within {DEADLINE:?}");
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
 
 fn nazm(dir: &Path, args: &[&str]) -> Ran {
     run_bounded(Command::new(NAZM).current_dir(dir).args(args), "nazm")

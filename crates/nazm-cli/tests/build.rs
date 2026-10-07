@@ -3305,6 +3305,81 @@ fn the_backend_and_the_front_end_name_one_inventory(
     b
 }
 
+/// A program calling built-in `i` once with arguments of its signature's shapes, its result
+/// folded into `main`'s `Int`. The generic built-ins are at `T = Int` — no built-in names a
+/// user type, and none can — and a float built-in's `T` is a float (Gate 2).
+fn builtin_program(i: nazm_core::Intrinsic) -> String {
+    use nazm_core::sema::Shape;
+    let args: Vec<&str> = i
+        .params()
+        .iter()
+        .map(|t| match t {
+            Shape::Int => "0",
+            Shape::Bool => "true",
+            Shape::Str => "\"ab\"",
+            Shape::Ints => "ints_new()",
+            Shape::Strs => "strs_new()",
+            Shape::Chan => "chan_new(1)",
+            // The generic built-ins, at `T = Int`. No built-in names a user type, and
+            // none can: a built-in is part of the language and a record or enum exists
+            // in one program.
+            // A float built-in's `T` is a float (Gate 2).
+            Shape::T if i.requires() == Some(nazm_core::sema::NumClass::Float) => "1.5",
+            Shape::T => "0",
+            Shape::F64 => "1.5",
+            Shape::F32 => "Float32(1.5)",
+            Shape::U64 => "UInt64(1)",
+            Shape::U32 => "UInt32(1)",
+            Shape::U8 => "UInt8(1)",
+            Shape::Bytes => "bytes_new(4)",
+            // A literal is a `Text` where one is expected (Gate 2).
+            Shape::Text => "\"ab\"",
+            Shape::VecT => "vec_new[Int]()",
+            Shape::ChanT => "chan_new_of[Int](1)",
+            Shape::ChansT => "vec_new[Chan[Int]]()",
+        })
+        .collect();
+    // `vec_new` is the one built-in whose type argument nothing else could say.
+    // `chan_new_of` likewise: its one parameter is the capacity, not a `T`.
+    let name = if i.generics() > 0
+        && !i
+            .params()
+            .iter()
+            .any(|p| matches!(p, Shape::T | Shape::VecT | Shape::ChanT | Shape::ChansT))
+    {
+        format!("{}[Int]", i.name())
+    } else {
+        i.name().to_owned()
+    };
+    let call = format!("{name}({})", args.join(", "));
+    // Wrapped so `main` still returns `Int`, whatever the built-in produces. The
+    // program is only built, never run, so an index that would be out of bounds at
+    // run time is fine here — this test is about lowering coverage.
+    let body = match i.ret() {
+        Shape::T if i.requires() == Some(nazm_core::sema::NumClass::Float) => {
+            format!("Int({call})")
+        }
+        Shape::F64 | Shape::F32 | Shape::U64 | Shape::U32 | Shape::U8 => {
+            format!("Int({call})")
+        }
+        Shape::Bytes => format!("bytes_len({call})"),
+        Shape::Text => format!("text_len({call})"),
+        Shape::Int | Shape::T => call,
+        Shape::Str => format!("str_len({call})"),
+        Shape::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),
+        Shape::Ints => format!("ints_len({call})"),
+        Shape::Strs => format!("strs_len({call})"),
+        Shape::VecT => format!("vec_len({call})"),
+        // No `chan_len`, and none is wanted: a channel's length is not a thing a
+        // program may observe without racing. Sending into it is the shortest way
+        // to reach an `Int` from one.
+        Shape::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
+        Shape::ChanT => format!("if chan_send_of({call}, 0) {{ 1 }} else {{ 0 }}"),
+        Shape::ChansT => format!("vec_len({call})"),
+    };
+    format!("fn main() -> Int {{ {body} }}\n")
+}
+
 #[test]
 fn every_front_end_builtin_is_lowered_or_refused_by_name() {
     // Backend *coverage* is still its own statement, and still worth asserting: sharing
@@ -3312,75 +3387,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
     // emit every one. Each must therefore either compile or be refused **by its own
     // name**, never fail some other way.
     for i in nazm_core::Intrinsic::ALL {
-        use nazm_core::sema::Shape;
-        let args: Vec<&str> = i
-            .params()
-            .iter()
-            .map(|t| match t {
-                Shape::Int => "0",
-                Shape::Bool => "true",
-                Shape::Str => "\"ab\"",
-                Shape::Ints => "ints_new()",
-                Shape::Strs => "strs_new()",
-                Shape::Chan => "chan_new(1)",
-                // The generic built-ins, at `T = Int`. No built-in names a user type, and
-                // none can: a built-in is part of the language and a record or enum exists
-                // in one program.
-                // A float built-in's `T` is a float (Gate 2).
-                Shape::T if i.requires() == Some(nazm_core::sema::NumClass::Float) => "1.5",
-                Shape::T => "0",
-                Shape::F64 => "1.5",
-                Shape::F32 => "Float32(1.5)",
-                Shape::U64 => "UInt64(1)",
-                Shape::U32 => "UInt32(1)",
-                Shape::U8 => "UInt8(1)",
-                Shape::Bytes => "bytes_new(4)",
-                // A literal is a `Text` where one is expected (Gate 2).
-                Shape::Text => "\"ab\"",
-                Shape::VecT => "vec_new[Int]()",
-                Shape::ChanT => "chan_new_of[Int](1)",
-                Shape::ChansT => "vec_new[Chan[Int]]()",
-            })
-            .collect();
-        // `vec_new` is the one built-in whose type argument nothing else could say.
-        // `chan_new_of` likewise: its one parameter is the capacity, not a `T`.
-        let name = if i.generics() > 0
-            && !i
-                .params()
-                .iter()
-                .any(|p| matches!(p, Shape::T | Shape::VecT | Shape::ChanT | Shape::ChansT))
-        {
-            format!("{}[Int]", i.name())
-        } else {
-            i.name().to_owned()
-        };
-        let call = format!("{name}({})", args.join(", "));
-        // Wrapped so `main` still returns `Int`, whatever the built-in produces. The
-        // program is only built, never run, so an index that would be out of bounds at
-        // run time is fine here — this test is about lowering coverage.
-        let body = match i.ret() {
-            Shape::T if i.requires() == Some(nazm_core::sema::NumClass::Float) => {
-                format!("Int({call})")
-            }
-            Shape::F64 | Shape::F32 | Shape::U64 | Shape::U32 | Shape::U8 => {
-                format!("Int({call})")
-            }
-            Shape::Bytes => format!("bytes_len({call})"),
-            Shape::Text => format!("text_len({call})"),
-            Shape::Int | Shape::T => call,
-            Shape::Str => format!("str_len({call})"),
-            Shape::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),
-            Shape::Ints => format!("ints_len({call})"),
-            Shape::Strs => format!("strs_len({call})"),
-            Shape::VecT => format!("vec_len({call})"),
-            // No `chan_len`, and none is wanted: a channel's length is not a thing a
-            // program may observe without racing. Sending into it is the shortest way
-            // to reach an `Int` from one.
-            Shape::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
-            Shape::ChanT => format!("if chan_send_of({call}, 0) {{ 1 }} else {{ 0 }}"),
-            Shape::ChansT => format!("vec_len({call})"),
-        };
-        let src = format!("fn main() -> Int {{ {body} }}\n");
+        let src = builtin_program(i);
 
         let (dir, path) = write_program(&src);
         let out = Command::new(NAZM)
@@ -3397,6 +3404,55 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
             stderr.contains(&format!("the built-in `{}`", i.name())),
             "`{}` neither compiles nor is refused by name: {stderr}",
             i.name()
+        );
+    }
+}
+
+#[test]
+fn every_front_end_builtin_is_evaluated_by_the_interpreter() {
+    // M1: the interpreter's built-in dispatch ends in a wildcard that reports "a bug in the
+    // interpreter", so a built-in it never learned to evaluate checks and then fails only
+    // when it runs. Each built-in, run once: an answer, or a specified failure (exit 2 with
+    // an `N04xx` code) — never the wildcard. Receiving from or selecting over a channel no
+    // one sends on waits by specification, so those may run out the clock instead.
+    let waits = [
+        "chan_recv",
+        "chan_recv_of",
+        "chan_select_of",
+        "chan_select_until",
+    ];
+    for i in nazm_core::Intrinsic::ALL {
+        let src = builtin_program(i);
+        let (dir, path) = write_program(&src);
+        let ran = run_bounded(
+            Command::new(NAZM).args(["run", path.to_str().unwrap()]),
+            Duration::from_secs(20),
+        );
+        drop(dir);
+        let Some(r) = ran else {
+            assert!(
+                waits.contains(&i.name()),
+                "`{}` did not finish:\n{src}",
+                i.name()
+            );
+            continue;
+        };
+        assert!(
+            !r.stderr.contains("bug in the interpreter"),
+            "`{}` reached the interpreter's wildcard: {}\n{src}",
+            i.name(),
+            r.stderr
+        );
+        // Refused before it runs, by name — authority it cannot hold here — is the backend
+        // test's answer too, and never reaches the interpreter.
+        let refused =
+            r.code == Some(1) && r.stderr.contains(&format!("the built-in `{}`", i.name()));
+        assert!(
+            refused || r.code == Some(0) || (r.code == Some(2) && r.stderr.contains("[N04")),
+            "`{}` neither answered nor failed as specified ({:?}): {}\n{src}",
+            i.name(),
+            r.code,
+            r.stderr
         );
     }
 }

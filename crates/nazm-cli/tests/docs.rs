@@ -369,3 +369,44 @@ fn the_stability_contract_classifies_every_command_and_schema_file() {
         );
     }
 }
+
+#[test]
+fn the_stability_contract_states_the_current_identities() {
+    // M1: `docs/stability.md` restates the identities a build carries, and every Gate 2 slice
+    // moves one. The table is held to the constants rather than to whoever remembered.
+    let text = read("docs/stability.md");
+    let row = |name: &str| -> String {
+        text.lines()
+            .find(|l| l.starts_with(&format!("| **{name}** |")))
+            .unwrap_or_else(|| panic!("docs/stability.md has no `{name}` row"))
+            .to_owned()
+    };
+    let current = |line: &str| -> String {
+        // The third cell: what the identity is now.
+        line.split('|').nth(3).unwrap_or("").trim().to_owned()
+    };
+    let epoch = row("Semantic epoch");
+    assert_eq!(
+        current(&epoch),
+        format!("**{}**", nazm_cache::SEMANTIC_EPOCH),
+        "docs/stability.md's semantic epoch row is stale: {epoch}"
+    );
+    let abi = row("Runtime ABI");
+    assert_eq!(
+        current(&abi),
+        format!("**{}**", nazm_lir::runtime::RUNTIME_ABI_REVISION),
+        "docs/stability.md's runtime ABI row is stale: {abi}"
+    );
+    let iface = row("Interface schema");
+    assert_eq!(
+        current(&iface),
+        format!("**`{}`**", nazm_iface::SCHEMA),
+        "docs/stability.md's interface schema row is stale: {iface}"
+    );
+    let toolchain = row("Toolchain version");
+    assert_eq!(
+        current(&toolchain),
+        format!("**{}**", env!("CARGO_PKG_VERSION")),
+        "docs/stability.md's toolchain row is stale: {toolchain}"
+    );
+}

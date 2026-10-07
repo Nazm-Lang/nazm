@@ -138,3 +138,74 @@ exec "$0" "$@""#
     c.arg("-c").arg(script).arg(exe);
     c
 }
+
+/// What one bounded run of a child produced.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Ran {
+    pub(crate) code: Option<i32>,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+/// How long [`run_bounded`] lets a child run.
+pub(crate) const DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+/// The most of one stream [`run_bounded`] keeps; the rest is read and dropped, so a child is
+/// never blocked on a full pipe.
+const KEEP: usize = 16 << 20;
+
+/// Run `cmd` to completion within [`DEADLINE`], both streams drained as it runs.
+///
+/// M1: ten suites carried one copy of this that read the pipes only after the child exited,
+/// so a child writing more than a pipe holds (about 64 KiB) blocked, and was reported as not
+/// terminating. Draining on two threads removes that; output past [`KEEP`] bytes per stream is
+/// discarded rather than buffered. On the deadline the child is killed and reaped and the test
+/// fails, naming `what`.
+pub(crate) fn run_bounded(cmd: &mut std::process::Command, what: &str) -> Ran {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    fn drain(mut r: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut chunk = [0_u8; 8192];
+            while let Ok(n) = r.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                let room = KEEP.saturating_sub(kept.len());
+                kept.extend_from_slice(chunk.get(..n.min(room)).unwrap_or_default());
+            }
+            kept
+        })
+    }
+
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let out = drain(child.stdout.take().expect("stdout pipe"));
+    let err = drain(child.stderr.take().expect("stderr pipe"));
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().expect("try_wait") {
+            break s;
+        }
+        if start.elapsed() >= DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = (out.join(), err.join());
+            panic!("{what} did not terminate within {DEADLINE:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let text = |h: std::thread::JoinHandle<Vec<u8>>| {
+        String::from_utf8_lossy(&h.join().unwrap_or_default()).into_owned()
+    };
+    Ran {
+        code: status.code(),
+        stdout: text(out),
+        stderr: text(err),
+    }
+}

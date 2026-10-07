@@ -47,8 +47,9 @@ Three rules govern their use, and the first is the one this project has actually
 2. **VERIFIED cites a path.** A row without one is PARTIAL at best. `cargo xtask check`
    now enforces this — see `xtask/src/main.rs`, `check_doc_claims`.
 3. **Absence of a refutation is not evidence.** A quiet period is observation. A test that
-   self-skips has established nothing; `crates/nazm-bench/tests/docker_boundary.rs` skips
-   without `NAZM_REQUIRE_DOCKER=1` and says so rather than counting itself as coverage.
+   self-skips has established nothing; `crates/nazm-bench/tests/docker_boundary.rs` is ignored
+   by default (M1) and refuses without `NAZM_REQUIRE_DOCKER=1`, rather than counting itself as
+   coverage (`docs/integration-testing.md`).
 4. **A count is not a proof.** Source inspection, a successful compile, runtime behaviour,
    mutation discrimination, performance and platform support are **different evidence
    classes**, and one never substitutes for another. Test counts are not capability proofs.

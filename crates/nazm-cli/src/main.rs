@@ -274,8 +274,9 @@ enum Command {
         #[arg(long)]
         locked: bool,
         /// A restriction profile to hold the program to (N47): `general`, `embedded`,
-        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
-        /// refuses, and never changes what an accepted program does.
+        /// `critical`, `cyber`, `realtime`, `web3`, `accounts` or `authority`. Added to any the
+        /// packages' manifests require; a profile only refuses, and never changes what an
+        /// accepted program does.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
     },
@@ -315,8 +316,9 @@ enum Command {
         #[arg(long)]
         locked: bool,
         /// A restriction profile to hold the program to (N47): `general`, `embedded`,
-        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
-        /// refuses, and never changes what an accepted program does.
+        /// `critical`, `cyber`, `realtime`, `web3`, `accounts` or `authority`. Added to any the
+        /// packages' manifests require; a profile only refuses, and never changes what an
+        /// accepted program does.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
         /// One `nazm.profile-report/1` object on stdout: every rule of the profiles in force,
@@ -890,8 +892,9 @@ enum Command {
         #[arg(long)]
         locked: bool,
         /// A restriction profile to hold the program to (N47): `general`, `embedded`,
-        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
-        /// refuses, and never changes what an accepted program does.
+        /// `critical`, `cyber`, `realtime`, `web3`, `accounts` or `authority`. Added to any the
+        /// packages' manifests require; a profile only refuses, and never changes what an
+        /// accepted program does.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
         /// After a successful build, write `nazm.provenance/1` to FILE (N73): every source module

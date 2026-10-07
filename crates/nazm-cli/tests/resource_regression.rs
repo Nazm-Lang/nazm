@@ -108,6 +108,7 @@ const MEMORY_CAP_MB: u32 = 128;
 const INPUT_FUNCTIONS: usize = 1600;
 
 #[test]
+#[ignore = "integration-external: Docker (docs/integration-testing.md)"]
 fn nzlex_stays_within_a_small_memory_budget_on_input_that_used_to_exhaust_it() {
     if !docker_or_skip() {
         return;
