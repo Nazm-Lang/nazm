@@ -2691,6 +2691,16 @@ library's bytes, ambiguous flags refused, every status valid against both schema
 never a path, answers equal to the library's and carried once, a disk edit stale by state, and
 1,000 task contexts with flat resident memory. Nineteen N33 mutations (area 30).
 
+*R1-C1, 2026-10-07: a function written as a value is a reference — corrected.* Until this step the
+reference index held a function's calls and not its uses as a value (`apply_twice(double, 5)`,
+N50), so references, `nazm references`, the LSP and a snapshot's `references` left them out, and
+rename refused such a function (its re-check found the name undefined). Undocumented until R1's
+precheck found it; fixed before v0.3.0 by reading the checker's recorded function values into the
+index (`architecture.md` §7.110), with no change to the language. Evidence:
+`crates/nazm-service/tests/references.rs`, `rename.rs`, `snapshot.rs`, `closures.rs` and
+`structure.rs`; `crates/nazm-cli/tests/lsp.rs` and `resolved_units.rs`; two catalogue entries
+(area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
 help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
 formatting, refactors, source actions or inlay hints, no cancellation and no watched files.
@@ -2724,7 +2734,7 @@ syntax recovery. Signature help is for calls and `spawn`s whose callee
 the checker resolved — not record or variant constructions, and none while any file of the
 compilation needs syntax recovery (an unclosed argument list included); a built-in's parameters
 are shown by type, having no names; no documentation. Structure completion offers no methods
-(the language has none), no import paths, no auto-import and no ranking. At a hole — right after
+(a method's name after `.` has no member answer; methods are N78's), no import paths, no auto-import and no ranking. At a hole — right after
 a `.` or `(` with nothing written (N26) — it needs the probe's anchor: nothing at a `(` the
 module calls as a function (a record of the same name included), after a generic enum or record
 with no type arguments, after a record type, an unknown name, an enum value or a second `.`; no

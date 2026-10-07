@@ -355,3 +355,55 @@ fn a_member_is_its_own_entity_apart_from_its_item() {
     }
     assert_eq!(variant["uses"].as_array().unwrap().len(), 2);
 }
+
+/// R1-C1: a named function written as a value is a use of it, as a call is — in this module
+/// and in an importer — and a reused module's unit holds it as the checked one did.
+#[test]
+fn a_function_written_as_a_value_is_a_use_of_it_cold_and_warm() {
+    let lib = "pub fn triple(x: Int) -> Int ! {} { x * 3 }\n";
+    let main = "use \"lib.nz\";\n\
+fn double(x: Int) -> Int { x * 2 }\n\
+fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\n\
+fn main() -> Int { let d = double; apply_twice(double, 5) + double(1) + d(2) + apply_twice(triple, 1) + triple(0) }\n";
+    let d = project(&[("lib.nz", lib), ("main.nz", main)]);
+    let every = |text: &str, name: &str| -> Vec<(u64, u64)> {
+        text.match_indices(name)
+            .map(|(i, _)| (i as u64, (i + name.len()) as u64))
+            .collect()
+    };
+    let uses = |r: &Value| -> Vec<(String, u64, u64)> {
+        r["uses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| {
+                (
+                    u["module"].as_str().unwrap().to_owned(),
+                    u["start"].as_u64().unwrap(),
+                    u["end"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let in_main = |name: &str| -> Vec<(String, u64, u64)> {
+        // Every occurrence of the name in `main.nz` but its declaration, in order.
+        every(main, name)
+            .into_iter()
+            .filter(|(s, _)| !main[..*s as usize].ends_with("fn "))
+            .map(|(s, e)| ("main.nz".to_owned(), s, e))
+            .collect()
+    };
+    for pass in ["cold", "warm"] {
+        let r = references(d.path(), "main.nz::fn double");
+        assert_eq!(r["kind"], "function", "{pass}: {r}");
+        // `let d = double`, `apply_twice(double, 5)` and `double(1)`: three, each once.
+        assert_eq!(uses(&r), in_main("double"), "{pass}: {r}");
+        assert_eq!(uses(&r).len(), 3, "{pass}: {r}");
+        let r = references(d.path(), "lib.nz::fn triple");
+        assert_eq!(uses(&r), in_main("triple"), "{pass}: {r}");
+        assert_eq!(uses(&r).len(), 2, "{pass}: {r}");
+        if pass == "warm" {
+            assert_eq!(r["checked"], 0, "{r}");
+        }
+    }
+}

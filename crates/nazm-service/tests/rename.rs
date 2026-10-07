@@ -451,6 +451,31 @@ fn a_function_rename_that_collides_or_takes_a_built_ins_name_is_refused() {
     assert!(rename_in(R, 7, "Q").is_err(), "another record");
 }
 
+const VALUES: &str = "fn double(x: Int) -> Int { x * 2 }\n\
+fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\n\
+fn main() -> Int { let d = double; apply_twice(double, 5) + double(1) + d(2) }\n";
+
+#[test]
+fn renaming_a_function_renames_it_where_it_is_written_as_a_value() {
+    // R1-C1: before the reference index held a function written as a value, this plan
+    // missed `apply_twice(double, 5)` and `let d = double`, and the re-check refused it. Now
+    // the plan is complete — the definition, the call and both values — and the same
+    // re-check is what accepts it; no precondition was relaxed.
+    let every = all(VALUES, "double", 0);
+    assert_eq!(every.len(), 4);
+    for from in &every {
+        let plan = rename_in(VALUES, from + 1, "twice").expect("a plan");
+        assert_eq!(plan.kind, "function");
+        assert_eq!(
+            applied(&plan),
+            replaced_at(VALUES, &every, "double", "twice")
+        );
+    }
+    // And a value use can still collide like any other: renaming `double` to `apply_twice`
+    // is refused, as renaming any function onto another's name is.
+    assert!(rename_in(VALUES, every[2] + 1, "apply_twice").is_err());
+}
+
 #[test]
 fn a_new_name_must_be_one_identifier() {
     const T: &str = "fn a() -> Int { 1 }\nfn main() -> Int { a() }\n";
