@@ -2515,8 +2515,9 @@ fn run_contained(args: &[String]) -> ExitCode {
         // It has to be exported, because `/work` is the container's writable layer and
         // goes with the container — a candidate assembled there and merely reported on is
         // a candidate nobody has. The archive is deterministic in the ways that are free
-        // to make so (sorted entries, fixed owner and mtime), so two runs of the same
-        // revision produce the same bytes.
+        // to make so (sorted entries, fixed owner and mtime), and since R1 every date inside
+        // it is the commit's (SOURCE_DATE_EPOCH, below) — so two runs of the same revision
+        // are meant to produce the same bytes, which the release record checks.
         Some("release") => {
             bounds.deadline = Duration::from_secs(2400);
             let dest = repo.join("target").join("release-candidate");
@@ -2568,10 +2569,27 @@ fn run_contained(args: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             let clean = if dirty.is_empty() { "yes" } else { "no" };
+            // The commit's own time, as SOURCE_DATE_EPOCH: every date written into the
+            // candidate is this instant rather than the run's, so two runs of one commit can
+            // produce the same archive (R1). Digits only, or nothing is passed.
+            let epoch = Command::new("git")
+                .args(["log", "-1", "--format=%ct", "HEAD"])
+                .current_dir(&repo)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
+            let Some(epoch) = epoch else {
+                eprintln!("contained: cannot read the commit's time, so the candidate's dates would be the run's");
+                return ExitCode::FAILURE;
+            };
             // Only the verdict crosses, not the porcelain text: a changed path may contain
             // a quote, and interpolating it into a shell command is how a filename becomes
             // an instruction.
-            let identity = format!("NAZM_SOURCE_COMMIT={commit} NAZM_SOURCE_TREE_CLEAN={clean} ");
+            let identity = format!(
+                "NAZM_SOURCE_COMMIT={commit} NAZM_SOURCE_TREE_CLEAN={clean} SOURCE_DATE_EPOCH={epoch} "
+            );
             (
                 "release",
                 shell(
