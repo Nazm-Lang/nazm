@@ -405,6 +405,29 @@ the compiler written in Nazm at parity (N102), re-exports (N103), authority (N10
 (N105), the default M:N runtime (N106), a core-scope audit (N107) and a release gate over the full
 catalogue (N108).
 
+### After v0.3.0: post-release tracks, not core defects
+
+The core is closed under its declared scope (N108), and v0.3.0 is its first public release (R1).
+What follows is classified so that nothing reads as missing compiler-core correctness merely
+because another language has it. Each is a later track or a research item, blocked outside this
+repository, or a deliberate non-goal; none is promised, and none blocks the release.
+
+| Ambition | Class | Why |
+| --- | --- | --- |
+| Distributed runtime, supervision trees, durable actors | post-release track | a runtime layer over structured concurrency; nothing in v0.3 depends on it |
+| Hard real-time and WCET bounds | research | `wcet` is always `null`; needs a timing model per target (area 18) |
+| Macros and compile-time metaprogramming | research | `nazm comptime` is a command; a macro system is a language decision not yet made (`spec.md`, *Non-goals*) |
+| A verified optimizer, more proof systems | blocked / research | no proof assistant here; formal evidence is bounded model checking (area 19) |
+| New architectures and platform ports | post-release track | each needs a machine or emulator to run on; x86_64 Linux first (`support.md`) |
+| Database and HTTP frameworks, networking | post-release track | the standard library has no network authority yet (area 16) |
+| A public package registry | post-release track | the registry is local; signatures and a remote source come first (area 26) |
+| Multi-agent semantic collaboration, deterministic replay | research | the semantic tooling (snapshots, deltas, patches) is the substrate; neither is designed |
+| A second GPU provider | blocked | no Metal or SPIR-V toolchain here (area 21) |
+| sBPF / Solana execution | blocked | no sBPF toolchain or validator (area 34) |
+| An in-process JIT | blocked | needs `unsafe`, which the workspace forbids (area 12) |
+| Trait objects, effect handlers, user effects, implicit-flow tracking | research | N107 checked each and found none a defect or a requirement of the core (`audit-n107.md`) |
+| Windows, 32-bit hosted, big-endian targets | non-goal | stated reasons in `support.md` |
+
 ### N108 — the core release gate — **complete, 2026-10-06; candidate `82936f6`**
 
 `architecture.md` §7.109 first; `releases/82936f6.md` the record. The whole catalogue, contained:

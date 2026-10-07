@@ -1,0 +1,26 @@
+// Function values: named functions passed as values, closures that capture by copy, and
+// the standard library's higher-order sequence functions.
+use "@std/seq";
+
+fn double(n: Int) -> Int {
+    n * 2
+}
+
+fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int {
+    f(f(x))
+}
+
+fn main() -> Int {
+    let offset = 3;
+    let add = fn(x: Int) -> Int { x + offset };
+    let xs = vec_new[Int]();
+    let mut i = 1;
+    while i <= 4 {
+        vec_push(xs, i);
+        i = i + 1;
+    }
+    let squares = vec_map(xs, fn(x: Int) -> Int { x * x });
+    let evens = vec_filter(squares, fn(x: Int) -> Bool { x % 2 == 0 });
+    let sum = vec_fold(evens, 0, fn(acc: Int, x: Int) -> Int { acc + x });
+    apply_twice(double, 5) + apply_twice(add, 1) + sum
+}

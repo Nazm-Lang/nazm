@@ -1,304 +1,268 @@
 # Nazm
 
-**An AI-native programming language: fast, memory-efficient, concurrent — with a compiler
-eventually written in Nazm itself.**
-
 > نظم — *systematic order, well-formed arrangement.*
 
-Nazm starts from a claim that is popular and, as usually stated, wrong: that because AI now
-writes most code, languages should be redesigned to save tokens. The evidence says
-otherwise. What the evidence *does* show is that agents waste enormous effort fighting
-compilers and churning over code that already works — and that is attackable.
+**Nazm is a natively compiled programming language with explicit, specified semantics,
+deterministic memory reclamation without a garbage collector or lifetime annotations,
+structured concurrency, compiler-checked effects, authority and data provenance, and
+machine-readable tooling for people and coding agents alike. Its compiler is also written in
+Nazm, and compiles itself.**
 
-So this repository contains two things. **The language** — an interpreter and a native
-compiler over an overlapping subset, which since 2026-09-21 compiles itself to a fixpoint.
-And **an agent-cost harness** built to measure specific claims about it honestly, including
-the uncomfortable one: that better tooling on an existing language might capture much of
-the benefit.
+## Current release: v0.3.0 — the first core-complete experimental release
 
-The language is the primary track. That was decided on 2026-09-20 and recorded in
-a decision record Git retains; what comes next, in dependency order, is
-[`docs/roadmap.md`](docs/roadmap.md). The harness keeps its protocol, its thresholds and
-its control arm unchanged — it is now evidence for claims rather than a gate on the
-project's existence.
+Nazm v0.3.0 is the first release in which the language and compiler core is closed under its
+declared support scope: the reference compiler and the compiler written in Nazm agree on the
+release's native feature surface, native compilation passes through one shared low-level IR into
+LLVM and Cranelift, the hosted runtime runs tasks on a structured M:N scheduler, and the release
+is backed by contained bootstrap, mutation, fuzzing, platform and artifact-verification evidence.
+Ecosystem and domain capabilities remain experimental or partial where documented.
 
-## What is actually here
-
-**A `.nz` program runs, compiles, and — for the compiler's own subset — compiles
-itself.**
-
-```sh
-$ cargo run -p nazm-cli --bin nazm -- run examples/max.nz
-25
-
-$ cargo run -p nazm-cli --bin nazm -- build arithmetic.nz -o arithmetic
-arithmetic
-$ ./arithmetic          # no interpreter, no nazm process
--54
-
-$ cargo xtask contained bootstrap   # the compiler written in Nazm, compiling itself
-bootstrap complete: C2 and C3 are byte-identical, 5 conformance cases agree
-```
-
-`compiler/*.nz` is a compiler for Nazm **written in Nazm** — lexer, parser, checker and
-LLVM emission. The bootstrap source is five files and **5,041 lines**; `compiler/*.nz` is
-5,272 across eight, the difference being three thin command-line drivers, one per stage.
-Since 2026-09-22 it states its own module boundaries — 84 of its 224 functions are `pub`
-and 140 are private — and **enforces them**: fifteen module and visibility rules are run
-through both compilers and required to give the same answer. Every component is differentially verified against the Rust
-implementation rather than merely run. It compiles itself to a fixpoint;
-[`docs/bootstrap.md`](docs/bootstrap.md) says what that does and does not establish,
-and the answer is narrower than it sounds.
-
-`nazm build` is the native path, and its subset is deliberate:
-several functions over `Int` and `Bool` with `fn main() -> Int` as the entry point,
-literals, `let` and `let mut` bindings, immutable parameters, assignment, `while` with
-`break` and `continue`, `return`, unary `-`, `+ - * / %`, the comparisons
-`== != < <= > >=`, `if` in **both statement and value position**, and non-recursive
-direct calls — plus `Str` as a byte sequence, the `Ints` and `Strs` growable sequences,
-and the outside-world built-ins (arguments, files, output, exit), and structured
-concurrency — `scope`, `spawn` and the bounded `Chan`, compiled to one POSIX thread per
-task. `docs/roadmap.md` carries the conformance table. What is left outside — recursion,
-bare blocks used as expressions, records, modules — is **refused by name** after
-ordinary checking, with no partial compilation, and still runs under `nazm run`. The arithmetic the specification
-promises is preserved rather than inherited from the hardware: overflow is a checked
-intrinsic and a branch (never `nsw`, which would let the optimiser delete the check),
-`Int::MIN / -1` fails, and `Int::MIN % -1` is `0`. See
-[`docs/roadmap.md`](docs/roadmap.md).
-
-**A compiled program has no iteration budget.** `nazm run` stops a runaway loop after
-`--max-iterations` and says so (`N0402`); a `nazm build` executable does not stop. The
-limits are the interpreter's and never were the language's — `docs/spec.md` says so — and
-the native backend has not adopted a replacement. The two implementations agree on what a
-*terminating* program produces, which is the claim the test suite makes and the only one
-it is entitled to.
-
-```nazm
-fn first_pair_with_product(target: Int, limit: Int) -> Int {
-    let mut a = 2;
-    while a < limit {
-        let mut b = a;
-        while b < limit {
-            if a * b == target {
-                return a * 100 + b;
-            }
-            b = b + 1;
-        }
-        a = a + 1;
-    }
-    0 - 1
-}
-```
-
-An executable subset — functions, `let` and `let mut`, assignment, `while` with `break`
-and `continue`, `return`, `if`/`else`, arithmetic and comparison over `Int`, `Bool` and
-`Str`, the `Ints` and `Strs` sequences, file and output built-ins, modules, and structured
-concurrency — lexed, parsed, type-checked and evaluated. **Recursion runs here and is
-refused by `nazm build`**; that asymmetry is the one place the two paths disagree, and it
-is reported by name. Still absent: user-defined types, pattern matching, generics and
-floats. (Effects were in this list until N36: a function may now declare `! { io }` or
-`! {}` — see [`docs/spec.md`](docs/spec.md), *Effects*. Since N37 one that declares a set must
-also hold the authority for it, an `IoCap` or `SpawnCap` handed down from `main` — *Capabilities*;
-the check is static and is not a sandbox.) A program using one of those is **refused by name** rather than misparsed into
-something else.
-
-The semantics it commits to are in [`docs/spec.md`](docs/spec.md): overflow traps
-identically in every build, division by zero is an error, bindings are immutable unless
-written `let mut`, parameters are never mutable, assignment is a statement so `if (x = 1)`
-does not parse, shadowing is allowed in a nested scope and refused in the same one,
-arguments evaluate left to right, and a function's value is its final expression.
-
-There is **one** block and **one** `if`. A block is statements followed by an optional
-tail expression — an expression with no `;` after it — and whether a block or an `if`
-produces a value is decided when checking, not by its syntax. So `break`, `continue` and
-`return` need no second form of anything: a branch that leaves takes the other branch's
-type, and a body where every path returns needs no tail. Code after a `break` is an error
-rather than a warning — relaxing an error later is a compatible change, tightening a
-warning is not.
-
-One mistake produces one error. A syntax error inside a function body does not delete the
-function: the signature survives, so calls to it still check against real types rather
-than reporting that it does not exist.
-
-`nazm run` stops a non-terminating program after a configurable number of loop iterations
-(`--max-iterations`) or nested calls (`--max-depth`), and the parser refuses a syntax tree
-more than 512 deep — measuring the tree as it builds it, node by node, not guessing from
-how deeply it recursed. Those are different numbers: `((((1))))` recurses four times and
-builds a tree of depth 2, while `1 + 1 + …` is parsed by a loop that never recurses and
-builds one level per operator. Both are bounded, separately.
-
-Three guards because there are three ways to run out and none implies the others:
-`fn f(n: Int) -> Int { f(n) }` never loops, and a deep expression adds no call frames at
-all while recursing through the parser, the checker, the evaluator and the destructor of
-the tree.
-
-The pipeline runs on a thread whose stack the interpreter sets itself, **sized from the
-depth budget it is about to enforce**, so raising `--max-depth` raises the reservation with
-it and the bound holds above the default rather than only at it. A machine that will not
-grant the reservation reports it; a budget no machine would grant is refused with the
-figure. The tests parse the deepest tree the parser accepts — four shapes, each edge found
-by asking the parser — on exactly the stack the contract documents.
-
-Alongside it, a benchmark harness. `crates/nazm-bench` measures what it costs an agent to
-build and maintain small backend services, with a validated execution path for its
-development fixtures — containers, a restricted database role, verified cleanup. It cannot
-produce a benchmark number yet: there is no task corpus, no agent driver, and no provider
-adapter.
-
-The harness was built first, and that was the right order: an instrument has to be shown
-to work before anything it measures means anything. It is now maintained rather than
-extended, until the claims in the roadmap need it.
-
-## The argument
-
-The "terse languages save tokens" figure that motivates most AI-native language projects
-comes from Rosetta Code problems — tasks solvable in 70–109 tokens. On real work it
-inverts:
-
-- [Dan Luu](https://danluu.com/pl-tokens/) ran agents at full effort on a zstd decoder and
-  on Pandoc. The variable that predicted cost and correctness was language **popularity**,
-  not density.
-- ["The Best Programming Language for Tokenmaxxing"](https://arxiv.org/html/2607.22807v1)
-  — 2,000 trajectories, 5 models, 4 languages — found terse OCaml consumed **1.3–1.7×
-  Python's output tokens**. Problem identity explained 73–97% of cost variance; language
-  was second-order.
-- The Stack v2 holds roughly 200GB each of Java and Python, and **12GB of Rust**. A new
-  language starts at zero, which is the worst possible position on the variable that
-  actually predicts cost.
-
-The diagnosis underneath is still right, just misattributed. Agents burn budget on compile
-errors in unfamiliar languages, on rewriting code that already passes, and on cosmetic
-churn. None of that is fixed by shorter keywords. All of it is attackable by making invalid
-programs unrepresentable, closing the check loop in milliseconds, and giving formatting no
-degrees of freedom to churn over.
-
-**Whether that is worth a new language, or just better tooling for TypeScript, is a real
-question and the harness is built to keep answering it honestly** — see
-[`docs/research/evaluation.md`](docs/research/evaluation.md) for what changed about how the answer is used.
-
-## The experiment
-
-Three arms. The third is the hypothesis; the second is why the experiment is honest. It
-measures specific claims — it no longer decides whether the language gets built
-([`docs/research/evaluation.md`](docs/research/evaluation.md)).
-
-| Arm | Contents |
-| --- | --- |
-| A1 | TypeScript, baseline tooling |
-| **A2** | **TypeScript + improved agent tooling** — structured diagnostics, canonical formatter, repeat-edit detection |
-| A3 | Nazm + comparable tooling |
-
-If A2 captures most of the benefit, that is a finding about the claim under test and it
-stays in the record. The decision rule, its thresholds and the cost policy are unchanged,
-and are written down **before** the evaluation runs — see
-[`docs/research/evaluation.md`](docs/research/evaluation.md).
-
-First workload: small HTTP/JSON services on PostgreSQL — validation, transactions,
-authorization, error handling, cancellation. First user: a backend developer using coding
-agents to build and maintain services, so debugging and operations stay in scope rather
-than just "generated programs pass tests".
-
-## The design it is being built toward
-
-Documented in [`docs/architecture.md`](docs/architecture.md), and staged in
-[`docs/roadmap.md`](docs/roadmap.md). In brief: memory safety with no lifetime annotations
-and no garbage collector; effect rows, capabilities, and position-sensitive taint so
-untrusted data cannot reach a code-construction site; structured concurrency where data
-races are a compile error; and a four-tier compilation strategy where `nazm check` — no
-codegen at all — is the loop agents actually live in.
-
-*That first clause read "mutable value semantics so memory safety needs no lifetime
-annotations" until N7 (2026-09-22), when the memory model was settled from an audit rather
-than from the hypothesis. It is not mutable value semantics: sequences alias, observably
-and by specification, and `spec.md`'s memory constitution reclaims their storage without
-changing that. `research-register.md` R1 records what happened to the hypothesis and where
-it is still live. **N8, the same day, finished the job for the types that exist**: strings
-and channels are reclaimed too, with no annotation, no collector and no source change to
-the compiler written in Nazm. It is not whole-language leak freedom and
-`capability-matrix.md` area 4 says exactly what it is.*
-
-The answer to "does this need a new compiler design?" is **new front end, new IR, new
-middle end, reused back end**. Code generation is decades of work with no novelty available
-in it.
-
-**The design it was built toward, and where that stands.** M1, M2 and M3 below are all
-complete as of 2026-09-21; the table is kept as the record of the order they were done in.
-What exists now, area by area with evidence, is
-[`docs/capability-matrix.md`](docs/capability-matrix.md):
+**Experimental** means: the language may change between minor versions — deliberately, documented
+and versioned, never by silently reinterpreting existing code ([`docs/stability.md`](docs/stability.md)).
+It is not production-ready for general workloads, and nothing in it is certified for anything.
 
 | | |
 | --- | --- |
-| **M1** | A native vertical slice. The existing lexer, parser, checker and diagnostics, one new typed IR, LLVM IR emitted as text and assembled by `clang`, one target. A compiled program runs with no interpreter, and is differentially compared against the interpreter on the existing 98-case corpus (114 cases today) |
-| **M2** | The facilities a compiler actually needs — value/copy/move and cleanup first, then strings, tagged unions, collections, arena-indexed recursive structures, modules, and a narrow capability-based I/O contract |
-| **M3** | The bootstrap: `Rust → C1`, `C1 → C2`, `C2 → C3`, with byte equality asserted only where determinism has been established |
+| Language | **v0.3** — [`docs/spec.md`](docs/spec.md) |
+| Toolchain | **0.3.0** — `nazm --version` |
+| Standard library | **1.0**, stable within 1.x |
+| Licence | Apache-2.0 |
 
-**Superseded 2026-09-21.** This paragraph read: *"Self-hosting is the long-term objective
-and it is M3, not next. Nazm today has no collections, no user-defined types, no pattern
-matching, no string concatenation and no I/O, so a compiler cannot be written in it in any
-form."* Four of those five are now false — collections, string concatenation, modules and
-I/O all exist — and the compiler has been written in it. Only user-defined types and
-pattern matching remain absent, and the compiler was written around them with parallel
-`Ints`/`Strs` arrays rather than waiting for them. The Rust implementation is still
-retained as the bootstrap seed and the differential oracle, which has not changed.
+## A taste
 
-## What this does not establish
+<!-- file: taste.nz -->
+```nazm
+trait Area {
+    fn area(self: Self) -> Int;
+}
 
-Stated up front, because these are easy to blur:
+struct Rect {
+    w: Int,
+    h: Int,
+}
+
+impl Area for Rect {
+    fn area(self: Rect) -> Int { self.w * self.h }
+}
+
+fn doubled[T: Area](shape: T) -> Int {
+    shape.area() * 2
+}
+
+fn main() -> Int {
+    let r = Rect(w: 3, h: 4);
+    r.area() + doubled(r)
+}
+```
+
+<!-- run -->
+```console
+$ nazm run taste.nz
+36
+$ nazm build taste.nz -o taste && ./taste
+taste
+36
+```
+
+`nazm run` checks and interprets; `nazm build` compiles the same program to a native executable,
+which gives the same answer.
+
+## Install
+
+You need the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it on first use) and
+`clang`, which `nazm build` uses for the runtime and the link — Apple's on macOS (Xcode
+command-line tools), your distribution's `clang` package on Linux.
+
+```sh
+git clone https://github.com/mdferdousalam/nazm
+cd nazm
+cargo build --release -p nazm-cli            # target/release/nazm
+# or: cargo install --path crates/nazm-cli --locked
+nazm --version                                # nazm 0.3.0
+```
+
+The binary carries the standard library inside it and needs no installation directory. Nothing
+else is required for the language itself. Optional tools unlock optional features only:
+
+| Optional tool | For |
+| --- | --- |
+| Docker | `cargo xtask contained …`, the bounded runner the heavy gates (selfhost, bootstrap, fuzzing, mutation) must use, and the Linux, QEMU, WebAssembly and EVM test images |
+| `lldb` / `gdb` | debugging a `nazm build --debug` executable |
+| Node.js, `wasm-ld` | running a `wasm32-unknown-unknown` build (the reference host) |
+| py-evm (in the `nazm-evm` image) | running `nazm contract --evm` output |
+| QEMU, `ld.lld` (in the `nazm-qemu` image) | booting the freestanding board targets |
+| OpenCL (built into macOS) | `nazm accel` |
+
+## Try it
+
+[`docs/getting-started.md`](docs/getting-started.md) goes from nothing to a checked, tested,
+formatted, natively built program and a package in about ten minutes, and the test suite runs
+every command on it. In short:
+
+```sh
+nazm run FILE.nz        # check, then interpret; prints main's value
+nazm check FILE.nz      # type-check only; --json for nazm.diagnostic/1
+nazm build FILE.nz -o OUT [--backend llvm|cranelift] [--debug]
+nazm test DIR           # every NAME.nz with a NAME.expected, interpreted and compiled
+nazm fmt FILE…          # the one layout; --check to verify
+nazm inspect FILE.nz    # everything the compiler knows about a program, as JSON
+nazm init DIR --template cli    # a new package: cli, library, server, embedded, wasm, contract
+```
+
+[`examples/tour/`](examples/tour/) has small programs for records and enums, `Result` and `?`,
+generics, closures and traits — each checked, run and built under both backends by the suite —
+and [`examples/worker-pool.nz`](examples/worker-pool.nz) shows structured concurrency.
+
+## What is in the language
+
+- **Values and types:** `Int` (64-bit, every operation checked — overflow and division by zero
+  stop the program, never wrap), `Bool`, `Str` (bytes); records, enums with exhaustive `match`,
+  first-order generics with an `Equality` bound, traits and methods (nominal, static dispatch),
+  closures and function values.
+- **Errors as values:** `Result`, `Option` and `?`. No exceptions, no null.
+- **Memory:** values are reclaimed deterministically without a garbage collector or lifetime
+  annotations; sequences are shared handles, by specification
+  ([`docs/spec.md`](docs/spec.md), *The memory constitution*).
+- **Effects, authority, provenance:** a function may declare its effects (`! { io }`, `! {}`);
+  authority to touch the outside world is a value passed down from `main`, never ambient; data
+  from files and arguments is tracked to the sinks it may not reach. All checked statically —
+  none of it is a sandbox.
+- **Concurrency:** `scope` / `spawn` with typed channels, `select` and deadlines; no task outlives
+  its scope. Compiled programs run tasks on a bounded M:N worker pool by default.
+- **Modules and packages:** a file is a module, `pub` exports; `nazm.toml`, a lockfile with
+  BLAKE3 digests, a local registry and a backtracking resolver.
+- **Native code:** one shared LIR, translated by LLVM or Cranelift; C interop (a stated ABI
+  subset); WebAssembly and two freestanding boards; restriction profiles (`embedded`,
+  `realtime`, `critical`, `cyber`, `web3`, …) that refuse whole classes of construct.
+- **Tooling:** formatter, machine-applicable fixes, LSP server, a read-only MCP server, JSON
+  output under versioned schemas for every command, build provenance, SBOMs and signed
+  attestations.
+
+What each of these does **not** do is in [`docs/limitations.md`](docs/limitations.md).
+
+## Platforms
+
+| Target | LLVM | Cranelift |
+| --- | --- | --- |
+| `aarch64-apple-darwin` | run-verified | run-verified |
+| `x86_64-apple-darwin` | run-verified (Rosetta 2) | run-verified (Rosetta 2) |
+| `aarch64-unknown-linux-gnu` | run-verified (Linux container) | run-verified (Linux container) |
+| `x86_64-unknown-linux-gnu` | compile-only | compile-only |
+| `aarch64-unknown-none`, `riscv64gc-unknown-none-elf` | emulator-verified (QEMU) | unsupported |
+| `wasm32-unknown-unknown` | run-verified (Node.js) | unsupported |
+
+Windows, 32-bit hosted and big-endian targets are not supported. [`docs/support.md`](docs/support.md)
+has the full matrix — debuggers, runtime restrictions, the optional features (GPU, WebAssembly,
+EVM, sBPF, JIT, formal proof) and the evidence for each cell — and is checked against the
+compiler's own table. Every emitted LLVM module still carries the note it was first given, *"verified on
+aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"*;
+the matrix is the current answer.
+
+## What is experimental, and what is not done
+
+The core above is what v0.3.0 closes. Around it, eight capability areas remain **partial** —
+GPU and HPC, LSP and MCP, package tooling, the debugger and profiler, performance measurement,
+reproducibility and provenance, the platform matrix, and smart contracts — and four things are **blocked by
+something outside this repository**: an in-process JIT (it needs `unsafe`, which the workspace
+forbids), theorem proving (no proof assistant; formal evidence is bounded model checking),
+sBPF/Solana execution (no toolchain or validator), and a second GPU provider (no Metal or SPIR-V
+toolchain). Among the language's own boundaries: no floating point, no trait objects, no effect
+handlers, no networking in the standard library, and **a compiled program has no iteration
+budget** — `nazm run` stops a runaway loop after `--max-iterations`, a native executable does not.
+
+[`docs/limitations.md`](docs/limitations.md) is the full list;
+[`docs/capability-matrix.md`](docs/capability-matrix.md) is the evidence, area by area.
+
+## Evidence
+
+Every claim above is backed by a test or a recorded run, and the evidence is described by what it
+does **not** establish as carefully as by what it does:
+
+- **Differential testing:** the interpreter, both native backends and LIR's own interpreter are
+  held to the same results on a shared corpus; passing says nothing about bugs all of them share.
+- **Self-hosting:** `compiler/*.nz` is a compiler for Nazm written in Nazm. The bootstrap
+  (Rust → C1 → C2 → C3) reaches a fixpoint — C2 and C3 byte-identical — and agrees with the
+  reference compiler on its conformance corpus. A fixpoint is not an independent proof of
+  semantics ([`docs/bootstrap.md`](docs/bootstrap.md)).
+- **Mutation testing:** a catalogue of 1,268 deliberately injected defects, each required to be
+  caught by a named test; all 1,268 were caught at the core release gate
+  ([`docs/releases/82936f6.md`](docs/releases/82936f6.md)). Zero survivors describes the
+  catalogue, not the absence of bugs.
+- **Fuzzing:** coverage-guided fuzzing of five targets with a replayed corpus.
+- **Contained gates:** the heavy work runs only inside a bounded container (memory, swap, pids,
+  disk and time all capped), because a runaway compiler stage once took the development machine
+  down ([`docs/runbook.md`](docs/runbook.md)).
+- **Artifacts:** a release is assembled by `scripts/release-candidate.sh` with a SHA-256 manifest
+  of every file, a provenance record, and a BLAKE3-indexed evidence bundle with an SBOM.
 
 | Mechanism | Does **not** establish |
 | --- | --- |
-| Ownership / exclusivity | Business-logic correctness. Two valid transactions can still oversell inventory |
-| Provenance / taint | Authorization. Correctly-parameterised SQL can still read another tenant's rows |
-| Effect rows / purity | That an edit preserves behaviour — and not, alone, that a call can be dropped or reordered |
-| Capabilities (static, N37) | Isolation at runtime. Nothing sandboxes the process, and a function with no declared effects still uses its caller's authority |
-| Provenance (static, N38) | Non-interference or confidentiality. Only explicit data flow is tracked, one sink is restricted, and containers are coarse |
-| Definition-hash equality | All behaviour-preserving rewrites. Only one class: normalised-Core alpha-equivalence |
-| Foreign functions (N42) | Anything about the C side. Only `Int` and `Bool` cross and authority is required, but a C function can corrupt memory, block or never return |
-| Restriction profiles (N47) | Certification, sandboxing or a security property beyond the rule. Each rule refuses a stated fact and nothing else |
-| Reproducible builds (N46) | Identity across hosts, operating systems or toolchain versions. Two builds on one host are byte-identical |
+| Ownership and reclamation | Business-logic correctness |
+| Effects and purity | That an edit preserves behaviour, or that a call may be dropped or reordered |
+| Capabilities (static) | Isolation at run time: nothing sandboxes the process |
+| Provenance (static) | Non-interference or confidentiality: only explicit data flow is tracked |
+| Structured concurrency | Deadlock freedom: a deadlock is possible and not detected |
+| Foreign functions | Anything about the C side, which is trusted entirely once called |
+| Restriction profiles | Certification, sandboxing or a security property beyond each rule |
+| Bounded model checking | A proof: nothing beyond the stated bounds is covered |
+| Reproducible builds | Identity across hosts, operating systems or toolchain versions |
+| The bootstrap fixpoint | Compiler trustworthiness |
 | Passing the test suite | Correctness |
-| Reproducible bootstrap | Compiler trustworthiness |
-| Differential testing | Absence of bugs shared by all implementations |
 
-"Verified-correct" does not appear anywhere in this project. The phrase is **"passes
-independent acceptance tests and specified static checks."**
+"Verified-correct" does not appear anywhere in this project.
 
-## Build and check
+## Documentation
+
+| | |
+| --- | --- |
+| [`docs/getting-started.md`](docs/getting-started.md) | The first ten minutes |
+| [`docs/guide.md`](docs/guide.md) | The language, for someone writing a program in it |
+| [`docs/spec.md`](docs/spec.md) | What each construct means, and the decision behind it |
+| [`docs/stability.md`](docs/stability.md) | Version identities, and what v0.x promises |
+| [`docs/support.md`](docs/support.md) | Targets and optional features, cell by cell |
+| [`docs/limitations.md`](docs/limitations.md) | What Nazm does not do |
+| [`docs/capability-matrix.md`](docs/capability-matrix.md) | **"Does X exist?"** — every area, with evidence; the status authority |
+| [`docs/diagnostics.md`](docs/diagnostics.md) | The machine interface: schemas, fixes, exit statuses |
+| [`docs/architecture.md`](docs/architecture.md) | The compiler design record |
+| [`docs/master-architecture.md`](docs/master-architecture.md) | The durable laws and the evidence vocabulary |
+| [`docs/bootstrap.md`](docs/bootstrap.md) | Self-hosting: what it does and does not establish |
+| [`docs/performance.md`](docs/performance.md) | What has been measured, and the noise floor under it |
+| [`docs/roadmap.md`](docs/roadmap.md) | What came in which order, and what is next |
+| [`docs/runbook.md`](docs/runbook.md) | **Containment and resource safety — read before running anything heavy** |
+| [`docs/releases/`](docs/releases/) | Frozen evidence, one file per release candidate |
+| [`docs/background.md`](docs/background.md) | Why the project exists: the argument, the agent-cost experiment, and the design it was built toward |
+| [`docs/NAZM_LANGUAGE_GOALS.md`](docs/NAZM_LANGUAGE_GOALS.md) | Long-term ambitions — **goals, not evidence** |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md) | How to contribute, and how to report a vulnerability |
+
+## Developing Nazm
 
 ```sh
 cargo build --workspace
-cargo xtask contained tests
-cargo lint              # clippy; CI runs this same alias, so they cannot drift
-cargo xtask check       # architectural gates, and the guide against the grammar
-cargo xtask guide       # rewrite docs/guide.md from docs/grammar.ebnf
-
-# Not in the default set: these drive nested cargo builds and kill real process
-# groups, and `cargo xtask mutate` would otherwise pay their cost once per entry.
-cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
-
-# Each catalogued defect is injected and must be caught. One full build and test run
-# per entry, so `--only NAME` selects a subset by substring.
-cargo xtask contained mutate
-
-# The coverage-guided fuzzer (N93): each target for SECONDS (300 by default); the minimised
-# corpora land in target/fuzz/ to commit under fuzz/corpus/, which the suite replays.
-cargo xtask contained fuzz 300 front lower run manifest
+cargo lint                      # clippy, as CI runs it
+cargo xtask check               # architectural and documentation gates
+cargo xtask workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci
+cargo xtask contained tests     # the whole suite, selfhost included, in the bounded runner
+cargo xtask contained bootstrap # C1 → C2 → C3
 ```
 
-The toolchain is pinned to 1.98.1 in `rust-toolchain.toml`. That pin is load-bearing:
-`cranelift` 0.135 declares MSRV 1.95.0, so the 1.93.1 an earlier draft assumed could not
-have built the eventual backend. The workspace's declared MSRV floor is 1.85; `xtask`
-declares 1.89 for itself, because it uses std's file locking and a development tool has no
-business raising the floor for the crates that ship.
+The generated compiler stages, the selfhost suite, the bootstrap, fuzzing and the mutation
+catalogue run **only** through `cargo xtask contained`; they refuse to run on a bare host.
+CI runs the host-safe subset ([`docs/runbook.md`](docs/runbook.md)).
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the rest.
 
-## The commands
+Alongside the compiler: `nazm-mcp`, a read-only Model Context Protocol server over the same
+compilation ([`docs/mcp.md`](docs/mcp.md)); `nazm-tokens`, which counts text under four pinned
+tokenizers; and `nazm-bench` and `nazm-agent-bench`, the agent-cost evaluation harness
+([`docs/background.md`](docs/background.md)). Nothing that ships depends on them.
+
+## Command reference
 
 | | |
 | --- | --- |
 | `nazm init DIR [--template T]` | A new project from a template — `cli`, `library`, `server`, `embedded`, `wasm` or `contract` — whose README names the commands that check, test, build and document it; an existing non-empty directory is refused (N74) |
 | `nazm run FILE` | Check and evaluate, printing the value of `main` |
 | `nazm check FILE` | Check without evaluating. Reuses the result of checking a module whose source and dependencies' interfaces are unchanged; `--no-cache` checks everything, `--cache-report` says what it did, `--summary-json` prints one compact `nazm.command-summary/1` — status, exit status and a reference to each diagnostic, no prose |
-| `nazm build FILE` | Compile to a native executable. Each module becomes its own object, and an object whose exact LLVM input, backend and codegen configuration were compiled before is reused instead; `--no-cache` compiles everything, `--build-report` says what it did, `--summary-json` prints one `nazm.command-summary/1` with the artifact written. The link runs every time. `--backend llvm\|cranelift` picks the code generator (N41), `--target` must be the host, `--link FILE` adds C objects (N42), `--locked` and a package directory build a package against its lockfile (N46), `--profile NAME` holds it to a restriction profile (N47), `--debug` writes DWARF — under either backend since N91 — and `--timings` reports each phase (N48) |
+| `nazm build FILE` | Compile to a native executable. Each module becomes its own object, and an object whose exact LLVM input, backend and codegen configuration were compiled before is reused instead; `--no-cache` compiles everything, `--build-report` says what it did, `--summary-json` prints one `nazm.command-summary/1` with the artifact written. The link runs every time. `--backend llvm\|cranelift` picks the code generator (N41), `--target TRIPLE` names one of the seven targets — an executable where this host links it, `--objects` elsewhere (N57) — `--link FILE` adds C objects (N42), `--locked` and a package directory build a package against its lockfile (N46), `--profile NAME` holds it to a restriction profile (N47), `--debug` writes DWARF — under either backend since N91 — and `--timings` reports each phase (N48) |
 | `nazm test PATH…` | Run every `NAME.nz` with a `NAME.expected` beside it, interpreted **and** compiled. `--summary-json` prints one `nazm.test-summary/1`: counts, and only the cases that did not pass, with how each leg ended |
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
@@ -352,154 +316,8 @@ schema**; the schemas are in [`schema/`](schema) and the compatibility rules are
 loop as one command: apply every automatic fix until a pass changes nothing, lay the
 result out, and report what is left as JSON.
 
-### An MCP server, read-only
-
-`nazm-mcp` (a separate binary: `cargo build --release -p nazm-mcp`) serves eleven Model Context
-Protocol tools over stdio, each answering from the compilation of the root it was started with,
-read from disk at every call: `nazm.semantic_context`, the same `nazm.context/1` packet as
-`nazm context` for a file and byte offset; `nazm.semantic_snapshot`, the same `nazm.snapshot/1` as
-`nazm snapshot`; and `nazm.semantic_delta`, the `nazm.delta/1` against a snapshot the client kept
-and passes back as data — the server keeps none; and `nazm.semantic_patch`, the same
-`nazm.patch/1` as `nazm patch`, a planned rename or fix it never applies; and `nazm.diagnostics`
-and `nazm.diagnostic_detail`, the same index and detail as `nazm diagnostics`; and
-`nazm.command_summary`, the `nazm check --summary-json` of its root (it neither builds nor runs
-tests); and `nazm.docs_index` and `nazm.docs_section`, Nazm's own documentation by section, as
-`nazm docs` gives it — by id, never by path; and `nazm.repository_map` and `nazm.task_context`,
-the repository's entities and the minimum context for a task, as `nazm repo` gives them — seeds
-are ids, never paths. It writes nothing and reads no file that compilation does not load, beyond
-the fixed documentation corpus and the repository's fixed inputs. An MCP client starts it as a stdio command:
-
-```json
-{ "command": "nazm-mcp", "args": ["--root", "/absolute/path/to/root.nz"] }
-```
-
-[`docs/mcp.md`](docs/mcp.md) says what it answers and what it does not.
-
-### Token counts under several tokenizers
-
-`nazm-tokens` (a separate tool: `cargo build --release -p nazm-tokens`) counts the exact text on
-standard input under four pinned tokenizers of three families — OpenAI byte-level BPE
-(`cl100k_base`, `o200k_base`), SentencePiece BPE (Mistral 7B v0.1) and SentencePiece Unigram
-(T5-small) — offline, as `nazm.token-cost/1`: `nazm repo --task --seed ID --json | nazm-tokens
-measure`. It measures; it decides nothing, and nothing that ships depends on it
-([`docs/architecture.md`](docs/architecture.md) §7.36).
-
-### An agent task benchmark
-
-`nazm-agent-bench` (evaluation tooling: `cargo build --release -p nazm-agent-bench`) puts eight
-repository tasks — understand, edit, diagnose, documentation, test selection — to a real model
-twice, once with the naive files and once with `nazm repo --task`'s context, and scores each
-answer fact by fact against the repository's own authorities, with usage and dated prices kept
-apart. On `claude-haiku-4-5-20251001` through the Claude Code client, two trials, the N33 context
-solved 12 of 16 requests to the naive arm's 6 with 94 % fewer input tokens; the 123-byte
-diagnostic stays the one task where raw source is cheaper
-([`docs/performance.md`](docs/performance.md)). The OpenAI and Anthropic adapters bring their own
-key; the steps are in [`docs/runbook.md`](docs/runbook.md). Nothing that ships depends on it.
-
-## The documents
-
-| | |
-| --- | --- |
-| [`docs/capability-matrix.md`](docs/capability-matrix.md) | **Start here for "does X exist?"** Every area, with evidence — the only status authority, and the one with a gate under it |
-| [`docs/master-architecture.md`](docs/master-architecture.md) | The durable constitution: the laws, the evidence vocabulary, and **context routing** — which documents to read for which task |
-| [`docs/NAZM_LANGUAGE_GOALS.md`](docs/NAZM_LANGUAGE_GOALS.md) | Where Nazm is ultimately going and why: the historical barriers, the long-term goals, the token-efficiency constitution. **Goals, not evidence** |
-| [`docs/guide.md`](docs/guide.md) | The language, for someone writing a program in it. Its syntax section is generated from the grammar |
-| [`docs/spec.md`](docs/spec.md) | What each construct means, and the decision behind it |
-| [`docs/architecture.md`](docs/architecture.md) | The compiler design record: IR levels, type system, layout boundary, toolchain choices |
-| [`docs/roadmap.md`](docs/roadmap.md) | What comes next, and why in that order |
-| [`docs/research-register.md`](docs/research-register.md) | Hypotheses, each with what would invalidate it. Not plans |
-| [`docs/diagnostics.md`](docs/diagnostics.md) | The machine interface: schemas, fixes, capabilities, exit statuses |
-| [`docs/mcp.md`](docs/mcp.md) | `nazm-mcp`, the read-only MCP server: its tools, its root, and what it reads |
-| [`docs/bootstrap.md`](docs/bootstrap.md) | Self-hosting: how it was designed, what it does, and what it does **not** establish |
-| [`docs/performance.md`](docs/performance.md) | What has been measured, and the noise floor under it |
-| [`docs/runbook.md`](docs/runbook.md) | **Containment and resource safety. Read before running anything heavy** |
-| [`docs/releases/`](docs/releases/) | Frozen evidence, one file per tested commit |
-| [`docs/research/evaluation.md`](docs/research/evaluation.md) | The comparative agent-cost protocol, with frozen thresholds |
-
-## What is not built yet
-
-Almost everything. Specifically:
-
-- **The language is an interpreter and a native path over *almost* the same subset** —
-  since N49 recursion compiles too, and what separates them is the interpreter's iteration
-  budget and the native-only foreign call (`nazm capabilities` lists both). Lexer, parser,
-  type checker, one lowering to Core IR (`nazm-cir`), and an evaluator over Core IR;
-  `nazm build` compiles everything in the list above from the same Core IR. Two IR levels
-  (Core IR and `nazm-lir`), one backend (LLVM IR as text → `clang`), two verified
-  targets (`aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`, the latter inside the
-  contained runner); other targets are **unverified rather than unsupported**, and there
-  is no cross-compilation at all. Run `nazm capabilities` for what this build actually has,
-  read from the compiler's own tables rather than from this paragraph. `-O0` is still the
-  default. Measurements now exist — one profile-driven optimisation pass and two recorded
-  baselines, of which only the Linux one is current — and
-  [`docs/performance.md`](docs/performance.md) states what they do and do not support.
-  `docs/spec.md` keeps its sections
-  versioned, so a *Settled for v0.1* entry records what v0.1 decided rather than what is
-  true now. Everything under *Open* is undecided.
-- **Concurrency is an initial model, and only that.** `scope`, `spawn` and a bounded
-  `Chan` of `Int`, specified in `docs/spec.md` before being implemented, running
-  interpreted and compiled. Compiled programs run their tasks on a bounded pool of worker
-  threads by default (N106; `NAZM_SCHEDULER=threads` for one thread per task); the
-  interpreter uses a thread per task. No work stealing, no preemption, no fairness, no
-  deadlock freedom, and no cancellation beyond closing a channel. **Superseded 2026-09-21:** this
-  entry used to end *"The compiler written in Nazm does not accept it — concurrency is
-  outside the bootstrap subset, and says so by name."* It does accept it. The Nazm-written
-  compiler parses, checks and lowers `scope`, `spawn` and `Chan`, emitting the same task
-  and channel runtime, and the exclusion list that enforced the old statement is now
-  asserted by test to be **absent**.
-- **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
-  **51** catalogued defects, 48 caught with 0 survivors and 2 not injected **as of
-  `524cd24`** — plus two defects
-  documented in `mutations.toml` as *uncovered*, which a passing run says nothing about):
-  the accounting and comparison path (`nazm-bench selftest`, 19 cases), per-attempt
-  workspace management, the submission freeze, and the independent acceptance runner.
-  **Not written:** agent drivers, a provider adapter, and all but one task fixture — so
-  the harness cannot produce a benchmark number, and `run` stays disabled. The corpus has
-  **never accepted a known-good solution or rejected a known-bad one**: there is no
-  `reference/` or `broken/` directory anywhere, so it has not been shown to discriminate
-  at all.
-- **Confinement works and is tested against a real daemon.** Each attempt gets a private
-  internal network, its own PostgreSQL container, and a candidate container with all
-  capabilities dropped, no published ports, and no host namespaces. Four tests under
-  `NAZM_REQUIRE_DOCKER=1` establish what the fake engine cannot: a candidate cannot read a
-  host sentinel or route off its network, killing it reaps a detached grandchild, teardown
-  is verified clean, and a separate process recovers what a killed harness left behind.
-  Run them with `NAZM_REQUIRE_DOCKER=1 cargo test --test docker_boundary -- --test-threads=1`.
-- **One complete attempt runs end to end.** Candidate work → stop → freeze the submission
-  and record its digest → reset the database so the candidate's own writes are not what it
-  is graded against → grade the frozen snapshot against tests it never saw → record the
-  outcome and costs → verified cleanup. Demonstrated with three submissions: accepted,
-  wrong answer, and a timeout that outranks a correct answer written before the deadline.
-  A grade is **provisional until cleanup verifies**, because a leak means the next attempt
-  starts from this one's leftovers and that cannot be detected afterwards.
-- **`run` is still disabled.** There is no task corpus, no agent driver, and no provider
-  adapter — the path is validated for the development fixtures, not for a benchmark.
-- **Holdout isolation is a workflow control, not a boundary.** The API refuses holdout
-  fixtures without a verified freeze; it does nothing about filesystem access. Real
-  isolation for the gate run is operational — see `docs/research/evaluation.md` §3.
-- **No task corpus.** The six task families in `docs/research/evaluation.md` are described, not
-  written.
-- **The decision rule is not pre-registered.** It is a draft until committed with its hash
-  recorded, and it is not binding before then. Registration is bound by git ancestry plus a
-  runner preflight record; neither is an independent timestamp, so third-party-verifiable
-  chronology would need an external registration event.
-- **The spec is part specification, part list of open questions** — see
-  [`docs/spec.md`](docs/spec.md). Its *Settled* strata are real and versioned; its *Open*
-  section is the register of what is not. Notably unsettled: whether divergence is an
-  effect, which determines whether an unused pure call may be dropped at all.
-- **No performance targets**, and the numbers that exist are narrow.
-  [`docs/performance.md`](docs/performance.md) carries one optimisation pass measured
-  against its own baseline, an interpreter-against-native comparison, and a single external
-  reference (`clang` and `python3` on one program). There are still no targets, because a
-  target set from one program on one host would be a number pretending to be a goal. The
-  Darwin baseline is **stale and not a valid comparison**; the Linux one is current.
-- **No literature review** on automatic layout selection, so this project is not entitled
-  to claim the idea is novel. Phase 1 deliverable.
-
 ## Licence
 
-Apache-2.0. See [`LICENSE`](LICENSE).
-
-**Open question:** whether the runtime and standard library need an exception clause — as
-Swift and LLVM use — so that programs compiled with Nazm are unambiguously unencumbered.
-Compiler and runtime licensing are different problems, and this is a Phase 1 decision.
+Apache-2.0. See [`LICENSE`](LICENSE). Whether the runtime and standard library need an exception
+clause, as Swift and LLVM use, so that compiled programs are unambiguously unencumbered, is an open
+question.
