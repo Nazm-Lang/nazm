@@ -1,0 +1,40 @@
+// First-order generics: a generic record, generic functions, and a type parameter that
+// requires equality.
+struct Stack[T] {
+    items: Vec[T],
+}
+
+fn stack_new[T]() -> Stack[T] {
+    Stack[T](items: vec_new[T]())
+}
+
+fn push[T](s: Stack[T], x: T) -> Int {
+    vec_push(s.items, x)
+}
+
+fn pop_or[T](s: Stack[T], fallback: T) -> T {
+    if vec_len(s.items) == 0 { fallback } else { vec_pop(s.items) }
+}
+
+fn count[T: Equality](xs: Vec[T], x: T) -> Int {
+    let mut n = 0;
+    let mut i = 0;
+    while i < vec_len(xs) {
+        if vec_get(xs, i) == x {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn main() -> Int {
+    let s = stack_new[Int]();
+    push(s, 10);
+    push(s, 20);
+    let words = vec_new[Str]();
+    vec_push(words, "a");
+    vec_push(words, "b");
+    vec_push(words, "a");
+    pop_or(s, 0) + pop_or(s, 0) + pop_or(s, 99) + count(words, "a")
+}

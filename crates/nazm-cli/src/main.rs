@@ -838,8 +838,9 @@ enum Command {
         /// compile is refused by name.
         #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
         backend: String,
-        /// The target triple. v1 builds for the host only, so any other triple is refused
-        /// rather than silently built for this machine.
+        /// The target triple: one of the seven `nazm capabilities` lists (N57). A target this
+        /// host links is built to an executable; any other needs `--objects`. An unknown
+        /// triple is refused rather than silently built for this machine.
         #[arg(long, value_name = "TRIPLE")]
         target: Option<String>,
         /// An object file or static library that defines foreign (`extern "C"`) functions

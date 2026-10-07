@@ -1,0 +1,6 @@
+// The smallest complete program. `main` receives the authority to write to standard
+// output as a parameter; nothing in Nazm reaches the outside world without one.
+fn main(out: OutCap) -> Int {
+    print("Hello, Nazm!\n");
+    0
+}
