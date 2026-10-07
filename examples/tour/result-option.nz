@@ -1,0 +1,53 @@
+// Errors are values: `Result`, `Option` and `?`. Nothing is thrown or caught.
+struct ParseError {
+    at: Int,
+}
+
+fn digit(s: Str, i: Int) -> Result[Int, ParseError] {
+    let d = str_byte(s, i) - 48;
+    if d < 0 || d > 9 {
+        return Result[Int, ParseError].Err(error: ParseError(at: i));
+    }
+    Result[Int, ParseError].Ok(value: d)
+}
+
+// `?` returns the error at once; on success it gives the digit.
+fn parse(s: Str) -> Result[Int, ParseError] {
+    let mut i = 0;
+    let mut n = 0;
+    while i < str_len(s) {
+        n = n * 10 + digit(s, i)?;
+        i = i + 1;
+    }
+    Result[Int, ParseError].Ok(value: n)
+}
+
+fn first_even(xs: Vec[Int]) -> Option[Int] {
+    let mut i = 0;
+    while i < vec_len(xs) {
+        let x = vec_get(xs, i);
+        if x % 2 == 0 {
+            return Option[Int].Some(value: x);
+        }
+        i = i + 1;
+    }
+    Option[Int].None()
+}
+
+fn score(s: Str) -> Int {
+    match parse(s) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0 - e.at,
+    }
+}
+
+fn main() -> Int {
+    let xs = vec_new[Int]();
+    vec_push(xs, 3);
+    vec_push(xs, 8);
+    let even = match first_even(xs) {
+        Option.None() => 0,
+        Option.Some(value: x) => x,
+    };
+    score("42") + score("4x2") + even
+}

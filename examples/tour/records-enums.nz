@@ -1,0 +1,34 @@
+// A record is a value with named fields; an enum is one of its variants at a time, and
+// `match` must handle every variant.
+struct Account {
+    owner: Str,
+    balance: Int,
+}
+
+enum Event {
+    Deposit(amount: Int),
+    Withdraw(amount: Int),
+    Close,
+}
+
+fn apply(a: Account, e: Event) -> Account {
+    match e {
+        Event.Deposit(amount: n) => Account(owner: a.owner, balance: a.balance + n),
+        Event.Withdraw(amount: n) => Account(owner: a.owner, balance: a.balance - n),
+        Event.Close() => Account(owner: a.owner, balance: 0),
+    }
+}
+
+fn main() -> Int {
+    let events = vec_new[Event]();
+    vec_push(events, Event.Deposit(amount: 100));
+    vec_push(events, Event.Withdraw(amount: 30));
+    vec_push(events, Event.Deposit(amount: 5));
+    let mut account = Account(owner: "ada", balance: 0);
+    let mut i = 0;
+    while i < vec_len(events) {
+        account = apply(account, vec_get(events, i));
+        i = i + 1;
+    }
+    account.balance
+}

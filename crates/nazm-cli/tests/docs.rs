@@ -186,3 +186,73 @@ fn the_documented_target_is_the_one_the_emitter_names() {
         );
     }
 }
+
+#[test]
+#[allow(clippy::indexing_slicing)] // the row's length is asserted first
+fn the_support_page_states_the_compilers_own_matrix() {
+    // `docs/support.md` is the public answer to "does it run on X?", and the compiler carries
+    // the same answer in `SUPPORT` (N95). A page edited by hand drifts from a table edited in
+    // code, so every cell is compared: the status under each backend — with a QEMU run
+    // written `emulator-verified`, a kind of run-verified — and the debugger, word for word.
+    use nazm_lir::backend::{Support, NON_GOALS, SUPPORT};
+    let page = read("docs/support.md");
+    let label = |s: Support, row: &str| -> Vec<&'static str> {
+        match s {
+            Support::Run(_) if row.contains("QEMU") => vec!["emulator-verified"],
+            Support::Run(_) => vec!["run-verified"],
+            Support::Compile(_) => vec!["compile-only"],
+            Support::Unsupported(_) => vec!["unsupported"],
+        }
+    };
+    let mut seen = 0;
+    for line in page.lines() {
+        let cells: Vec<&str> = line
+            .trim()
+            .trim_matches('|')
+            .split(" | ")
+            .map(str::trim)
+            .collect();
+        let Some(triple) = cells
+            .first()
+            .and_then(|c| c.strip_prefix('`')?.strip_suffix('`'))
+        else {
+            continue;
+        };
+        let Some(cell) = SUPPORT.iter().find(|c| c.triple == triple) else {
+            continue;
+        };
+        assert_eq!(
+            cells.len(),
+            5,
+            "docs/support.md: the row for {triple} is malformed: {line}"
+        );
+        assert!(
+            label(cell.llvm, line).contains(&cells[1]),
+            "docs/support.md says {triple} is `{}` under LLVM; the compiler says {}",
+            cells[1],
+            cell.llvm.name()
+        );
+        assert!(
+            label(cell.cranelift, line).contains(&cells[2]),
+            "docs/support.md says {triple} is `{}` under Cranelift; the compiler says {}",
+            cells[2],
+            cell.cranelift.name()
+        );
+        assert_eq!(
+            cells[4], cell.debugger,
+            "docs/support.md: the debugger cell for {triple}"
+        );
+        seen += 1;
+    }
+    assert_eq!(
+        seen,
+        SUPPORT.len(),
+        "docs/support.md must have one row per target the compiler accepts"
+    );
+    for (what, why) in NON_GOALS {
+        assert!(
+            page.contains(&format!("| {what} | {why} |")),
+            "docs/support.md does not state the non-goal `{what}` as the compiler does"
+        );
+    }
+}

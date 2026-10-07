@@ -28,8 +28,8 @@ has clang compile it; `--backend cranelift` compiles every function in process w
 which builds noticeably faster. They produce programs that behave identically — the same output,
 the same failures, the same memory report — and neither ever stands in for the other: a program
 one cannot compile is refused, never quietly built by the other. `--target` names the target
-triple, and v1 builds for the machine it runs on only, so any other triple is refused rather than
-built for this one.
+triple: one of seven (`docs/support.md`), built to an executable where this host can link it and to
+objects with `--objects` elsewhere; an unknown triple is refused rather than built for this one.
 
 A native program can call C. `extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";` declares a
 C function by its signature and its symbol, and `nazm build --link add.o` hands the object that
