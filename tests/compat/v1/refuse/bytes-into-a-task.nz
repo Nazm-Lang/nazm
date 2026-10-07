@@ -1,0 +1,12 @@
+// expect: N0321
+// A `Bytes` is shared mutable storage and does not cross into a task (spec: bytes).
+fn worker(b: Bytes) -> Int ! {spawn} {
+    0
+}
+
+fn main(s: SpawnCap) -> Int ! {spawn} {
+    scope {
+        spawn worker(bytes_new(1));
+    }
+    0
+}

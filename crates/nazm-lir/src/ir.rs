@@ -501,6 +501,10 @@ impl Ty {
             nazm_sema::Type::Num(k) => Self::Num(k),
             nazm_sema::Type::Bool => Self::Bool,
             nazm_sema::Type::Str => Self::Str,
+            // `Str`'s triple, `{ptr, len, owner}` (Gate 2): a `Bytes` is always a view of a
+            // heap buffer it counts, which its built-ins write through; a `Text` is a `Str`
+            // the checker knows is UTF-8.
+            nazm_sema::Type::Bytes | nazm_sema::Type::Text => Self::Str,
             nazm_sema::Type::Ints => Self::Ints,
             nazm_sema::Type::Strs => Self::Strs,
             nazm_sema::Type::Chan => Self::Chan,

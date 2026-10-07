@@ -37,7 +37,7 @@ use std::process::{Command, Output};
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
 /// Fewer cases than this in a directory means the corpus lost some, not that it is small.
-const AT_LEAST: [(&str, usize); 4] = [("run", 22), ("trap", 7), ("refuse", 36), ("check", 1)];
+const AT_LEAST: [(&str, usize); 4] = [("run", 23), ("trap", 9), ("refuse", 39), ("check", 1)];
 
 /// The corpus as committed. Only read: a run writes caches beside what it checks, so every
 /// case is run from a [`staged`] copy and the tree is never written to.

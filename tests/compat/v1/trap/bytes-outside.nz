@@ -1,0 +1,9 @@
+// expect: N0405
+// A read that does not fit inside the view stops the program (spec: bytes).
+fn read(b: Bytes, at: Int) -> UInt32 {
+    bytes_read_le[UInt32](b, at)
+}
+
+fn main() -> Int {
+    Int(read(bytes_new(4), 1))
+}

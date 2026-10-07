@@ -2237,7 +2237,10 @@ impl<'a> Parser<'a> {
                 | TokenKind::Arrow
                 | TokenKind::Bang
                 | TokenKind::Colon => {}
-                _ => return false,
+                // Not a type. An index — unless the bracket never closes, which neither reading
+                // parses: then it is read as type arguments, as every `name[` was before Gate 2,
+                // and reported as one missing its `]`.
+                _ => return !self.bracket_closes(open),
             }
             at += 1;
         }
@@ -2257,6 +2260,29 @@ impl<'a> Parser<'a> {
             }
             _ => false,
         }
+    }
+
+    /// Whether the `[` at `open` has its `]` before the statement it is in ends.
+    fn bracket_closes(&self, open: usize) -> bool {
+        let mut depth = 0usize;
+        let mut at = open;
+        while let Some(t) = self.tokens.get(at) {
+            at += 1;
+            match &t.kind {
+                TokenKind::LBracket | TokenKind::LParen => depth += 1,
+                TokenKind::RBracket | TokenKind::RParen => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return matches!(t.kind, TokenKind::RBracket);
+                    }
+                }
+                TokenKind::Semi | TokenKind::LBrace | TokenKind::RBrace | TokenKind::Eof => {
+                    return false
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     /// `[a, b, c]` or `[value; count]` (Gate 2).

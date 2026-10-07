@@ -2004,6 +2004,8 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         | Type::Chan
         | Type::ChanOf(_)
         | Type::Vec(_)
+        | Type::Bytes
+        | Type::Text
         | Type::Fn(_) => true,
         Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) | Type::Num(_) | Type::Array(_) => {
             false

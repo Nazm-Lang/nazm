@@ -52,6 +52,10 @@ pub enum Shape {
     F32,
     U64,
     U32,
+    /// `UInt8`, `Bytes` and `Text` (Gate 2, `docs/general-purpose.md` §5–§6).
+    U8,
+    Bytes,
+    Text,
 }
 
 /// Which numeric types a generic numeric built-in's `T` ranges over (Gate 2). Checked where
@@ -103,6 +107,9 @@ impl Shape {
             Self::F32 => Some(Type::Num(NumKind::F32)),
             Self::U64 => Some(Type::Num(NumKind::U64)),
             Self::U32 => Some(Type::Num(NumKind::U32)),
+            Self::U8 => Some(Type::Num(NumKind::U8)),
+            Self::Bytes => Some(Type::Bytes),
+            Self::Text => Some(Type::Text),
             Self::T | Self::VecT | Self::ChanT | Self::ChansT => None,
         }
     }
@@ -125,6 +132,9 @@ impl Shape {
             Self::F32 => "Float32",
             Self::U64 => "UInt64",
             Self::U32 => "UInt32",
+            Self::U8 => "UInt8",
+            Self::Bytes => "Bytes",
+            Self::Text => "Text",
         }
     }
 }
@@ -393,11 +403,44 @@ pub enum Intrinsic {
     FloatParses,
     /// `float_parse_raw(s: Str) -> Float64` — the value `s` writes, or NaN when it is not one.
     FloatParseRaw,
+
+    // --- bytes and text, Gate 2 (`docs/general-purpose.md` §5–§6) ------------------------
+    //
+    // A `Bytes` is a counted view of a fixed-length buffer: its built-ins read and write
+    // through it, and a slice shares it. A `Text` is a `Str` known to be UTF-8: made only by
+    // `Text(s)`, `try_convert[Text](s)`, a literal, or these, each of which keeps it so.
+    BytesNew,
+    BytesFromStr,
+    BytesLen,
+    BytesGet,
+    BytesSet,
+    BytesSlice,
+    BytesToStr,
+    BytesCopy,
+    BytesReadLe,
+    BytesReadBe,
+    BytesWriteLe,
+    BytesWriteBe,
+    Utf8Valid,
+    TextAsStr,
+    TextLen,
+    TextConcat,
+    TextIsBoundary,
+    TextSlice,
+    TextScalarAt,
+    TextNext,
+    TextScalarCount,
+    ScalarValid,
+    ScalarText,
+    /// `Text(s)`: `s`, checked to be UTF-8 (`N0413`). Not callable by name.
+    TextFromStr,
+    /// `try_convert[Text](s)`'s `Some`, after `utf8_valid`: `s`, unchecked. Not callable by name.
+    TextAssume,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 96] = [
+    pub const ALL: [Self; 119] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -494,6 +537,29 @@ impl Intrinsic {
         Self::Float32FromBits,
         Self::FloatParses,
         Self::FloatParseRaw,
+        Self::BytesNew,
+        Self::BytesFromStr,
+        Self::BytesLen,
+        Self::BytesGet,
+        Self::BytesSet,
+        Self::BytesSlice,
+        Self::BytesToStr,
+        Self::BytesCopy,
+        Self::BytesReadLe,
+        Self::BytesReadBe,
+        Self::BytesWriteLe,
+        Self::BytesWriteBe,
+        Self::Utf8Valid,
+        Self::TextAsStr,
+        Self::TextLen,
+        Self::TextConcat,
+        Self::TextIsBoundary,
+        Self::TextSlice,
+        Self::TextScalarAt,
+        Self::TextNext,
+        Self::TextScalarCount,
+        Self::ScalarValid,
+        Self::ScalarText,
     ];
 
     #[must_use]
@@ -599,6 +665,31 @@ impl Intrinsic {
             Self::Float32FromBits => "float32_from_bits",
             Self::FloatParses => "float_parses",
             Self::FloatParseRaw => "float_parse_raw",
+            Self::BytesNew => "bytes_new",
+            Self::BytesFromStr => "bytes_from_str",
+            Self::BytesLen => "bytes_len",
+            Self::BytesGet => "bytes_get",
+            Self::BytesSet => "bytes_set",
+            Self::BytesSlice => "bytes_slice",
+            Self::BytesToStr => "bytes_to_str",
+            Self::BytesCopy => "bytes_copy",
+            Self::BytesReadLe => "bytes_read_le",
+            Self::BytesReadBe => "bytes_read_be",
+            Self::BytesWriteLe => "bytes_write_le",
+            Self::BytesWriteBe => "bytes_write_be",
+            Self::Utf8Valid => "utf8_valid",
+            Self::TextAsStr => "text_as_str",
+            Self::TextLen => "text_len",
+            Self::TextConcat => "text_concat",
+            Self::TextIsBoundary => "text_is_boundary",
+            Self::TextSlice => "text_slice",
+            Self::TextScalarAt => "text_scalar_at",
+            Self::TextNext => "text_next",
+            Self::TextScalarCount => "text_scalar_count",
+            Self::ScalarValid => "scalar_valid",
+            Self::ScalarText => "scalar_text",
+            Self::TextFromStr => "text_from_str",
+            Self::TextAssume => "text_assume",
         }
     }
 
@@ -665,7 +756,11 @@ impl Intrinsic {
             | Self::FloatIsNan
             | Self::FloatIsInfinite
             | Self::FloatIsFinite => Some(NumClass::Float),
-            Self::NumToStr => Some(NumClass::Numeric),
+            Self::NumToStr
+            | Self::BytesReadLe
+            | Self::BytesReadBe
+            | Self::BytesWriteLe
+            | Self::BytesWriteBe => Some(NumClass::Numeric),
             _ => None,
         }
     }
@@ -756,6 +851,31 @@ impl Intrinsic {
             Self::Float32ToBits => &[Shape::F32],
             Self::Float32FromBits => &[Shape::U32],
             Self::FloatParses | Self::FloatParseRaw => &[Shape::Str],
+            Self::BytesNew => &[Shape::Int],
+            Self::BytesFromStr => &[Shape::Str],
+            Self::BytesLen => &[Shape::Bytes],
+            Self::BytesGet => &[Shape::Bytes, Shape::Int],
+            Self::BytesSet => &[Shape::Bytes, Shape::Int, Shape::U8],
+            Self::BytesSlice => &[Shape::Bytes, Shape::Int, Shape::Int],
+            Self::BytesToStr => &[Shape::Bytes],
+            Self::BytesCopy => &[Shape::Bytes, Shape::Bytes],
+            Self::BytesReadLe => &[Shape::Bytes, Shape::Int],
+            Self::BytesReadBe => &[Shape::Bytes, Shape::Int],
+            Self::BytesWriteLe => &[Shape::Bytes, Shape::Int, Shape::T],
+            Self::BytesWriteBe => &[Shape::Bytes, Shape::Int, Shape::T],
+            Self::Utf8Valid => &[Shape::Str],
+            Self::TextAsStr => &[Shape::Text],
+            Self::TextLen => &[Shape::Text],
+            Self::TextConcat => &[Shape::Text, Shape::Text],
+            Self::TextIsBoundary => &[Shape::Text, Shape::Int],
+            Self::TextSlice => &[Shape::Text, Shape::Int, Shape::Int],
+            Self::TextScalarAt => &[Shape::Text, Shape::Int],
+            Self::TextNext => &[Shape::Text, Shape::Int],
+            Self::TextScalarCount => &[Shape::Text],
+            Self::ScalarValid => &[Shape::Int],
+            Self::ScalarText => &[Shape::Int],
+            Self::TextFromStr => &[Shape::Str],
+            Self::TextAssume => &[Shape::Str],
         }
     }
 
@@ -847,6 +967,31 @@ impl Intrinsic {
             Self::Float64FromBits | Self::FloatParseRaw => Shape::F64,
             Self::Float32ToBits => Shape::U32,
             Self::Float32FromBits => Shape::F32,
+            Self::BytesNew => Shape::Bytes,
+            Self::BytesFromStr => Shape::Bytes,
+            Self::BytesLen => Shape::Int,
+            Self::BytesGet => Shape::U8,
+            Self::BytesSet => Shape::Int,
+            Self::BytesSlice => Shape::Bytes,
+            Self::BytesToStr => Shape::Str,
+            Self::BytesCopy => Shape::Int,
+            Self::BytesReadLe => Shape::T,
+            Self::BytesReadBe => Shape::T,
+            Self::BytesWriteLe => Shape::Int,
+            Self::BytesWriteBe => Shape::Int,
+            Self::Utf8Valid => Shape::Bool,
+            Self::TextAsStr => Shape::Str,
+            Self::TextLen => Shape::Int,
+            Self::TextConcat => Shape::Text,
+            Self::TextIsBoundary => Shape::Bool,
+            Self::TextSlice => Shape::Text,
+            Self::TextScalarAt => Shape::Int,
+            Self::TextNext => Shape::Int,
+            Self::TextScalarCount => Shape::Int,
+            Self::ScalarValid => Shape::Bool,
+            Self::ScalarText => Shape::Text,
+            Self::TextFromStr => Shape::Text,
+            Self::TextAssume => Shape::Text,
         }
     }
 
