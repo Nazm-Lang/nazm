@@ -9912,6 +9912,23 @@ find = "        ReferenceTarget::Local(l) => ReferenceTarget::Local(res.binding_
 replace = "        ReferenceTarget::Local(l) => ReferenceTarget::Local(l),"
 killers = [{ package = "nazm-service", test = "closures", name = "a_captured_binding_is_one_binding_to_references" }]
 
+# R1-C1: a named function written as a value is a use of it in the reference index.
+[[mutation]]
+name = "r1c1-a-function-value-is-no-use"
+why = "a named function written as a value, `apply_twice(double, 5)`, is left out of the reference index, so references, the LSP, snapshots and rename miss it"
+file = "crates/nazm-sema/src/resolve.rs"
+find = "            f(*span, T::Function(value.function));"
+replace = "            let _ = (span, value);"
+killers = [{ package = "nazm-service", test = "references", name = "a_function_written_as_a_value_is_a_use_of_it_in_every_position_the_language_allows" }]
+
+[[mutation]]
+name = "r1c1-a-function-value-is-a-use-of-its-maker"
+why = "a function written as a value is indexed under the function whose body wrote it, not the function it names"
+file = "crates/nazm-sema/src/resolve.rs"
+find = "            f(*span, T::Function(value.function));"
+replace = "            f(*span, T::Function(value.within.unwrap_or(value.function)));"
+killers = [{ package = "nazm-service", test = "references", name = "a_function_written_as_a_value_is_a_use_of_it_in_every_position_the_language_allows" }]
+
 [[mutation]]
 name = "n50-an-interface-forgets-a-function-types-effects"
 why = "a published function type loses its effects, so an importer reads a pure type"

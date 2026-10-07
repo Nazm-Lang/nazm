@@ -1893,3 +1893,67 @@ fn a_hole_completes_over_the_protocol_triggered_by_a_dot_in_utf16() {
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
 }
+
+// R1-C1: a named function written as a value — `apply_twice(double, 5)` — is a reference to
+// it over the protocol, as a call is; in its own module and from an importer.
+const VALUE_LIB: &str = "pub fn triple(n: Int) -> Int ! {} { n * 3 }\n";
+const VALUE_MAIN: &str = "use \"lib.nz\";\n\
+fn double(n: Int) -> Int { n * 2 }\n\
+fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\n\
+fn main() -> Int { let s = \"é→😀\"; apply_twice(double, str_len(s)) + double(1) + apply_twice(triple, 2) }\n";
+
+#[test]
+fn a_function_written_as_a_value_is_one_of_its_references_over_the_protocol() {
+    let (_dir, root) = project(&[("lib.nz", VALUE_LIB), ("main.nz", VALUE_MAIN)]);
+    let (lib, main) = (root.join("lib.nz"), root.join("main.nz"));
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&main, 1, VALUE_MAIN);
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["diagnostics"], json!([]), "{d}");
+
+    let (lu, mu) = (uri(&lib), uri(&main));
+    let lines: Vec<&str> = VALUE_MAIN.lines().collect();
+    let span = |uri: &str, n: usize, line: &str, at: usize, name: &str| {
+        (
+            uri.to_owned(),
+            n as u64,
+            u64::from(utf16(line, at)),
+            u64::from(utf16(line, at + name.len())),
+        )
+    };
+    let body = lines[3];
+    let value = body.find("(double").unwrap() + 1;
+    let call = body.find("double(1)").unwrap();
+    let declaration = span(&mu, 1, lines[1], lines[1].find("double").unwrap(), "double");
+    let as_value = span(&mu, 3, body, value, "double");
+    let as_call = span(&mu, 3, body, call, "double");
+    // From the definition, from the value and from the call: one answer, the value included.
+    for (line, at) in [(1, lines[1].find("double").unwrap()), (3, value), (3, call)] {
+        let q = utf16(lines[line], at) + 1;
+        assert_eq!(
+            located(&c.references(&main, u32::try_from(line).unwrap(), q, true)),
+            [declaration.clone(), as_value.clone(), as_call.clone()],
+            "from line {line}, column {q}"
+        );
+    }
+    // An imported function written as a value: its declaration is in the module that
+    // exports it.
+    let triple = body.find("triple").unwrap();
+    assert_eq!(
+        located(&c.references(&main, 3, utf16(body, triple), true)),
+        [
+            span(
+                &lu,
+                0,
+                VALUE_LIB,
+                VALUE_LIB.find("triple").unwrap(),
+                "triple"
+            ),
+            span(&mu, 3, body, triple, "triple"),
+        ]
+    );
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}

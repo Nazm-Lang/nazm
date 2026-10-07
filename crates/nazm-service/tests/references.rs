@@ -738,6 +738,109 @@ fn a_thousand_edits_that_add_and_remove_uses_leave_one_current_index() {
 }
 
 // ---------------------------------------------------------------------------------------
+// A named function written as a value (N50) is a use of it (R1-C1).
+// ---------------------------------------------------------------------------------------
+
+const VALUE_LIB: &str = "pub fn triple(x: Int) -> Int ! {} { x * 3 }\n";
+const VALUE_RE: &str = "pub use \"lib.nz\" { triple as thrice };\n";
+const VALUE_MAIN: &str = "use \"lib.nz\";\n\
+use \"re.nz\";\n\
+struct Holder { f: fn(Int) -> Int, }\n\
+fn double(x: Int) -> Int { x * 2 }\n\
+fn pick() -> fn(Int) -> Int { double }\n\
+fn apply[T](f: fn(T) -> T, x: T) -> T { f(x) }\n\
+fn main() -> Int {\n    \
+    let h = Holder(f: double);\n    \
+    let hf = h.f;\n    \
+    let g = pick();\n    \
+    let d = double;\n    \
+    apply(double, 1) + hf(2) + g(3) + d(4) + double(5) + apply(triple, 6) + apply(thrice, 7)\n\
+}\n";
+
+#[test]
+fn a_function_written_as_a_value_is_a_use_of_it_in_every_position_the_language_allows() {
+    use nazm_core::sema::{ReferenceIndex, ReferenceTarget};
+    let p = Project::new(&[
+        ("lib.nz", VALUE_LIB),
+        ("re.nz", VALUE_RE),
+        ("main.nz", VALUE_MAIN),
+    ]);
+    let (main, lib) = (p.path("main.nz"), p.path("lib.nz"));
+    on_the_service_stack(move || {
+        // The index, as every consumer reads it.
+        let decided = nazm_service::root::decide(&main, None).unwrap();
+        let loaded = nazm_service::load::load(&main, decided.path()).unwrap();
+        let a = nazm_core::analyse(&loaded.map, &loaded.graph, nazm_core::Entry::Absent);
+        assert!(a.diagnostics.is_empty(), "{:#?}", a.diagnostics);
+        let index = ReferenceIndex::of(&a.resolution);
+        let main_file = loaded
+            .map
+            .ids()
+            .find(|f| loaded.map.name(*f).ends_with("main.nz"))
+            .unwrap();
+        let named = |name: &str| -> Vec<u32> {
+            VALUE_MAIN
+                .match_indices(name)
+                .map(|(i, _)| u32::try_from(i).unwrap())
+                .collect()
+        };
+        let double = named("double");
+        let declared = nazm_span::Span::new(main_file, double[0], double[0] + 6);
+        let Some(entity @ ReferenceTarget::Function(_)) = index.target(declared) else {
+            panic!("`double` is not declared as a function");
+        };
+        let uses: Vec<u32> = index.uses(entity).iter().map(|u| u.start).collect();
+        // Returned from `pick`, stored in a field, bound by `let`, passed to a generic
+        // function, and called: every one, exactly at the name, each once.
+        assert_eq!(uses, double[1..], "{uses:?}");
+        for u in index.uses(entity) {
+            assert_eq!(
+                u.end - u.start,
+                6,
+                "the name's span, not the expression's: {u:?}"
+            );
+            assert_eq!(index.target(*u), Some(entity));
+        }
+        for w in index.uses(entity).windows(2) {
+            assert!(w[0] < w[1], "ordered, and no occurrence twice");
+        }
+
+        // Through the service: from a value use, the same set and the declaration; and an
+        // imported function written as a value, under its own name and under an alias a
+        // re-export gave it, is a use of the definition in the module that declares it.
+        let mut s = LanguageService::new();
+        for (path, text) in [(&main, VALUE_MAIN), (&lib, VALUE_LIB)] {
+            for published in s.open(path, 1, text.into()) {
+                assert!(published.diagnostics.is_empty(), "{published:#?}");
+            }
+        }
+        let r = refs(&s, &main, 1, double[2] + 1);
+        assert_eq!(r.kind, "function");
+        assert_eq!(
+            r.declaration.as_ref().map(spot),
+            Some(want("main.nz", double[0], "double"))
+        );
+        assert_eq!(
+            spots(&r.uses),
+            double[1..]
+                .iter()
+                .map(|at| want("main.nz", *at, "double"))
+                .collect::<Vec<_>>()
+        );
+        let triple = named("triple")[0];
+        let thrice = named("thrice")[0];
+        let r = refs(&s, &main, 1, triple);
+        assert_eq!(
+            r.declaration.as_ref().map(spot),
+            Some(want("lib.nz", 7, "triple"))
+        );
+        let got = spots(&r.uses);
+        assert!(got.contains(&want("main.nz", triple, "triple")), "{got:?}");
+        assert!(got.contains(&want("main.nz", thrice, "thrice")), "{got:?}");
+    });
+}
+
+// ---------------------------------------------------------------------------------------
 // The repository's own source: the index against the resolution it was read from.
 // ---------------------------------------------------------------------------------------
 
@@ -791,7 +894,15 @@ fn resolved_declaration(
     if let Some(Callee::Function(id)) = res.callee(span) {
         return Some(("function", res.function(id)?.name_span));
     }
+    // A named function written as a value, `apply_twice(double, 5)` (N50): a use of it, as
+    // a call is (R1-C1).
+    if let Some(v) = res.fn_value(span) {
+        return Some(("function", res.function(v.function)?.name_span));
+    }
     if let Some(l) = res.local(span) {
+        // A closure's capture is a slot of the closure that holds a copy at run time, not a
+        // binding the source declares (N50): the name is the binding it copies.
+        let l = res.binding_of(l);
         let f = res.function(l.function)?;
         return Some(("local", f.locals.get(l.slot as usize)?.span));
     }
@@ -814,6 +925,12 @@ fn resolved_declaration(
     // N78: a trait named in a bound, an impl or a call, by the trait it names.
     if let Some((_, t)) = res.traits().mentions().find(|(s, _)| *s == span) {
         return Some(("trait", res.traits().get(t)?.name_span));
+    }
+    // N78: a method called through a bound, `shape.area()` with `shape: T` and `T: Area`, is a
+    // use of the trait's method — not a field projection, and not any one impl's function.
+    if let Some((_, c)) = res.traits().trait_calls().find(|(s, _)| *s == span) {
+        let t = res.traits().get(c.trait_id)?;
+        return Some(("trait method", t.methods.get(c.method as usize)?.name_span));
     }
     // N18: a written type name, by the definition the checker resolved it to.
     match res.type_name(span)? {

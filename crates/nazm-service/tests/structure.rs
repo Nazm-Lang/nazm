@@ -755,6 +755,59 @@ fn main() -> Int { let r = R(a: 1); let e = E.Y(q: \"s\"); r.zz }\n";
 // The repository's own source.
 // ---------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------
+// `x.field` and `x.method()`: told apart by what the checker decided (N78, R1-C1).
+// ---------------------------------------------------------------------------------------
+
+const METHODS: &str = "trait Area { fn area(self: Self) -> Int; }\n\
+struct Sq { side: Int, area: Int, }\n\
+impl Area for Sq { fn area(self: Sq) -> Int { self.side * self.side } }\n\
+fn doubled[T: Area](shape: T) -> Int { shape.area() * 2 }\n\
+fn main() -> Int { let s = Sq(side: 2, area: 0); s.side + s.area + s.area() + doubled(s) }\n";
+
+#[test]
+fn a_field_and_a_method_of_one_name_are_told_apart_by_the_checker_not_the_tree() {
+    // `name.m()` with nothing between the parentheses is parsed in a variant's shape —
+    // nothing in the tokens says otherwise — and the checker reads it as a method call when
+    // `name` is a value (N78). A field of the same name, `s.area`, is a member. Structure
+    // answers for the field and has no member to offer at a method's name; references
+    // answer for both, each with its own entity.
+    let p = Project::new(&[("main.nz", METHODS)]);
+    let main = p.path("main.nz");
+    on_the_service_stack(move || {
+        let mut s = LanguageService::new();
+        let published = s.open(&main, 1, METHODS.into());
+        assert!(
+            published[0].diagnostics.is_empty(),
+            "{:?}",
+            published[0].diagnostics
+        );
+        let field = at(METHODS, "s.area +", 0, 2);
+        let concrete = at(METHODS, "s.area()", 0, 2);
+        let bound = at(METHODS, "shape.area()", 0, 6);
+
+        let site = s.structure_at(&main, 1, field).expect("a member");
+        assert!(
+            matches!(site.site, StructureSite::Member { .. }),
+            "{site:?}"
+        );
+        assert!(names(&complete(&s, &main, 1, field)).contains(&"area"));
+        for method in [concrete, bound] {
+            assert_eq!(
+                s.structure_at(&main, 1, method).map(|x| x.site),
+                Err(NoStructure::Unanchored),
+                "at {method}: a method is no member of anything"
+            );
+        }
+
+        let kind = |offset: u32| s.references(&main, 1, offset).expect("references").kind;
+        assert_eq!(kind(field), "field");
+        // On a concrete receiver, the impl's function; through a bound, the trait's method.
+        assert_eq!(kind(concrete), "function");
+        assert_eq!(kind(bound), "trait method");
+    });
+}
+
 fn workspace() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -800,7 +853,7 @@ fn every_resolved_member_is_among_what_its_site_offers() {
     }
     roots.extend(walk(&root.join("examples")));
     on_the_service_stack(move || {
-        let mut counts = [0usize; 4];
+        let mut counts = [0usize; 5];
         for path in &roots {
             let decided = nazm_service::root::decide(path, None).unwrap();
             let Ok(loaded) = nazm_service::load::load(path, decided.path()) else {
@@ -834,6 +887,27 @@ fn every_resolved_member_is_among_what_its_site_offers() {
                             (0, res.field(l.span).map(ReferenceTarget::Field))
                         }
                         SyntaxKind::VariantExpr | SyntaxKind::Pattern if after_dot => {
+                            // `x.m()` is parsed in a variant's shape and is a method call when
+                            // the checker read `x` as a value (N78): no member of anything, so
+                            // structure has nothing to offer there. Which it is is the
+                            // checker's answer, not the tree's.
+                            let method = res.variant(l.span).is_none()
+                                && (res.traits().trait_calls().any(|(s, _)| s == l.span)
+                                    || matches!(
+                                        res.callee(l.span),
+                                        Some(nazm_core::sema::Callee::Function(_))
+                                    ));
+                            if method {
+                                assert_eq!(
+                                    service.structure_at(path, 1, l.span.start).map(|x| x.site),
+                                    Err(NoStructure::Unanchored),
+                                    "a method at {:?} in {}",
+                                    l.span,
+                                    path.display()
+                                );
+                                counts[4] += 1;
+                                continue;
+                            }
                             (1, res.variant(l.span).map(ReferenceTarget::Variant))
                         }
                         SyntaxKind::FieldInit if i == 0 && labelled => (
@@ -872,8 +946,8 @@ fn every_resolved_member_is_among_what_its_site_offers() {
             }
         }
         eprintln!(
-            "members {}, variants {}, construction labels {}, pattern labels {}",
-            counts[0], counts[1], counts[2], counts[3]
+            "members {}, variants {}, construction labels {}, pattern labels {}, method calls {}",
+            counts[0], counts[1], counts[2], counts[3], counts[4]
         );
         assert!(counts.iter().all(|c| *c > 0), "{counts:?}");
     });

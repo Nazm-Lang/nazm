@@ -476,6 +476,35 @@ fn a_use_elsewhere_changes_references_of_a_type() {
 }
 
 #[test]
+fn a_new_use_of_a_function_as_a_value_changes_its_references_and_nothing_else_of_it() {
+    // R1-C1: `apply(double, …)` refers to `double` as much as `double(…)` does, so a snapshot
+    // counts it, and a delta that adds one reports `double`'s references — and no call edge,
+    // because a value is not a call.
+    let before_text = "fn double(x: Int) -> Int { x * 2 }\n\
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }\n\
+fn main() -> Int { apply(double, 1) }\n";
+    let p = Project::new(&[("main.nz", before_text)]);
+    let before = snapshot(&p.root());
+    p.write(
+        "main.nz",
+        &before_text.replace("apply(double, 1)", "apply(double, 1) + apply(double, 2)"),
+    );
+    let after = snapshot(&p.root());
+    let d = delta(&p.root(), &before);
+    assert_eq!(changed(&d, "main.nz::fn double"), ["references"], "{d}");
+    assert_eq!(
+        definition(&before, "main.nz::fn double")["digests"]["callers"],
+        definition(&after, "main.nz::fn double")["digests"]["callers"],
+        "a value use is no call"
+    );
+    // And `main` now depends on `double` twice where it did once.
+    assert!(
+        changed(&d, "main.nz::fn main").contains(&"dependencies".to_owned()),
+        "{d}"
+    );
+}
+
+#[test]
 fn a_new_diagnostic_is_a_diagnostics_change() {
     let p = project();
     let before = snapshot(&p.root());

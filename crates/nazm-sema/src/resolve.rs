@@ -741,8 +741,8 @@ impl Resolution {
     }
 
     /// Every use this resolution recorded, with what it was resolved to, in a fixed order
-    /// of kinds — calls, variables, constructions, variants, fields, payload fields and
-    /// (N18) type names — and
+    /// of kinds — calls, named functions written as values (N50, indexed since R1-C1),
+    /// variables, constructions, variants, fields, payload fields and (N18) type names — and
     /// in no particular order within one. For [`crate::references`], which is the only
     /// consumer that wants them all rather than one at a time.
     ///
@@ -753,6 +753,11 @@ impl Resolution {
             if let Callee::Function(id) = callee {
                 f(*span, T::Function(*id));
             }
+        }
+        // `apply_twice(double, 5)`: the name of a function written as a value refers to it as
+        // much as a call does. The checker recorded which function, by the name's span.
+        for (span, value) in &self.fn_values {
+            f(*span, T::Function(value.function));
         }
         for (span, local) in &self.vars {
             f(*span, T::Local(*local));

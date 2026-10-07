@@ -79,3 +79,54 @@ fn renaming_a_captured_binding_renames_it_inside_every_closure() {
         assert!(out[0].diagnostics.is_empty(), "{out:#?}");
     });
 }
+
+#[test]
+fn a_closures_copy_of_a_capture_is_no_source_definition() {
+    // At run time a closure holds a private copy of what it captures, in a slot of its own
+    // definition; the checker records that slot for the backend, declared nowhere. To a
+    // reader the name is the binding it copies (R1-C1): every capture use is a use of the
+    // `let`, and no slot is an entity with a declaration of its own — not at a fake span,
+    // not at the closure, not at the use.
+    use nazm_core::sema::{ReferenceIndex, ReferenceTarget};
+    let dir = tempfile::tempdir().unwrap();
+    let m = dir.path().join("m.nz");
+    std::fs::write(&m, SRC).unwrap();
+    on_the_service_stack(move || {
+        let decided = nazm_service::root::decide(&m, None).unwrap();
+        let loaded = nazm_service::load::load(&m, decided.path()).unwrap();
+        let a = nazm_core::analyse(&loaded.map, &loaded.graph, nazm_core::Entry::Absent);
+        assert!(a.diagnostics.is_empty(), "{:#?}", a.diagnostics);
+        let res = &a.resolution;
+        let index = ReferenceIndex::of(res);
+        let file = loaded
+            .map
+            .ids()
+            .find(|f| loaded.map.name(*f).ends_with("m.nz"))
+            .unwrap();
+        let at = every("step");
+        let span = |start: u32| nazm_span::Span::new(file, start, start + 4);
+        let binding = index.target(span(at[0])).expect("the `let` is declared");
+        assert!(matches!(binding, ReferenceTarget::Local(_)));
+        let mut copies = 0;
+        for u in &at[1..] {
+            assert_eq!(index.target(span(*u)), Some(binding), "at {u}");
+            // The checker's own answer at a capture is the closure's slot, which is why
+            // this test means something: the index reads it back to the binding.
+            if res.local(span(*u)) != res.local(span(at[0])) {
+                copies += 1;
+            }
+        }
+        assert_eq!(copies, 2, "the two uses inside closures are copies");
+        assert_eq!(index.uses(binding).len(), at.len() - 1);
+        // No local of any closure is an entity without a declaration in source.
+        for (t, _) in index.iter() {
+            if let ReferenceTarget::Local(_) = t {
+                let d = index
+                    .declaration(t)
+                    .expect("every local entity is declared");
+                assert_ne!(d, nazm_span::Span::synthetic());
+                assert!(d.end > d.start, "{t:?} at {d:?}");
+            }
+        }
+    });
+}

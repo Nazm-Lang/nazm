@@ -783,7 +783,10 @@ fn every_resolved_name_is_among_what_its_scope_offers() {
                         // A closure's copy of a captured binding means the binding it
                         // copies, as references and rename read it (N50,
                         // `Resolution::binding_of`); scope offers that binding.
-                        (0, Candidate::Entity(ReferenceTarget::Local(res.binding_of(l))))
+                        (
+                            0,
+                            Candidate::Entity(ReferenceTarget::Local(res.binding_of(l))),
+                        )
                     } else if let Some(c) = res.callee(span) {
                         let c = match c {
                             Callee::Function(id) => {

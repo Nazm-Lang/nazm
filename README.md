@@ -184,8 +184,8 @@ does **not** establish as carefully as by what it does:
   (Rust → C1 → C2 → C3) reaches a fixpoint — C2 and C3 byte-identical — and agrees with the
   reference compiler on its conformance corpus. A fixpoint is not an independent proof of
   semantics ([`docs/bootstrap.md`](docs/bootstrap.md)).
-- **Mutation testing:** a catalogue of 1,268 deliberately injected defects, each required to be
-  caught by a named test; all 1,268 were caught at the core release gate
+- **Mutation testing:** a catalogue of deliberately injected defects, 1,270 entries, each required
+  to be caught by a named test; all 1,268 it held at the core release gate were caught there
   ([`docs/releases/82936f6.md`](docs/releases/82936f6.md)). Zero survivors describes the
   catalogue, not the absence of bugs.
 - **Fuzzing:** coverage-guided fuzzing of five targets with a replayed corpus.

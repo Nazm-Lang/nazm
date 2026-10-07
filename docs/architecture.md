@@ -8885,3 +8885,60 @@ in a commit of its own and gated again where it reached (`releases/82936f6.md`).
 Versions frozen as written. Classes: no class-A row PARTIAL; class B's eight PARTIAL rows and class C's
 four blockers are the release's limitations. **ACCEPTED** as a candidate; tagging and publishing stay
 a person's.
+
+## 7.110 A function written as a value is a reference to it — R1-C1, 2026-10-07
+
+Found by R1's precheck, when the tour's `examples/tour/closures.nz` entered the corpus the
+reference audits read: `apply_twice(double, 5)` checked, ran and compiled, and `double` there was
+in no entity's set. A corrective step before v0.3.0, not a language change. Owner: the reference
+index (`crates/nazm-sema/src/references.rs`).
+
+**The contract, stated first.** Every occurrence the checker resolved to an entity the reference
+index models is a use of that entity, whatever the occurrence's syntactic role: a function's name
+is a use whether it is called, spawned or written as a value. It is therefore in the index, in
+`nazm references` and `nazm resolve`, in the LSP's references, in a snapshot's `references` and
+`dependencies`, and in every plan read from the index (rename, patch). There is one way a use is
+found — the checker's recorded answer — and no second one: nothing reads the source again.
+
+**What was wrong.** N50 records each named function written as a value
+(`Resolution::record_fn_value`, keyed by the name's span, with the `FnId` the checker resolved).
+Lowering, MIR and effects read it; `Resolution::each_use`, the one list the index is built from,
+did not, so the index — and everything over it — held the call `double(1)` and not the value
+`double`. N50 had taught the index that a capture is the binding it copies (`binding_of`) and left
+this out. Rename was never unsafe: its plan missed the value, the re-check found `double` undefined
+in the candidate, and it refused (`Rejected`, `N0200`); the comment that justified
+`Coverage::Complete` for a function ("there are no function values") predated N50.
+
+**The fix.** `each_use` reports every recorded function value as a use of the function it names,
+at the name's span, between calls and variables — the kinds are recorded in disjoint positions, so
+no occurrence has two answers and none is listed twice. Every form the language accepts is one
+path in the checker and so is covered by it: passed as an argument, bound by `let`, returned,
+stored in a field, passed to a generic parameter, imported, and imported under a re-export's alias
+(where rename keeps the alias's spelling, as for a call). A qualified name (`m::f`) and a method
+(`x.m`) are refused as values (`N0100`, `N0608`), so neither has a use to record. A closure is not a
+named function and refers to none.
+
+**What did not move.** No checking rule, diagnostic, interface, lowering or runtime behaviour:
+semantic epoch 29, `nazm.interface/11`, `nazm.diagnostic/1`, runtime ABI 14. `nazm.resolved/1` and
+`nazm.snapshot/3` keep their shapes and now carry the occurrences they always promised — a
+correctness fix within the schema, so no major moves; a snapshot of a program with a function
+value has different `references` and `dependencies` digests than before, which is the fix. A check
+cache entry stores its module's resolved unit under the checker's identity; the crate version in
+that identity moved to 0.3.0 in R1A, so only unreleased builds since then could have stored a unit
+without these uses, and the repository's own `.nazm` caches were deleted.
+
+**Two audits, stale since N50 and N78, fixed with it.** The corpus audit that asks the resolution
+one accessor at a time took a closure's capture slot for a declaration of its own (a capture is
+`binding_of`'s binding, N50) and knew no call through a bound (N78). The structure audit took every
+name after `x.` in a variant's shape for a variant; `x.m()` with no arguments has that shape and is
+a method call when the checker read `x` as a value (N78, *Unchanged meanings*). Structure has no
+member to offer at a method's name, which is now stated by a test rather than assumed.
+
+**Evidence.** `crates/nazm-service/tests/references.rs` (every accepted position, exact spans, no
+duplicate, imported and aliased); `crates/nazm-cli/tests/resolved_units.rs` (`nazm references`,
+cold and from a reused unit); `crates/nazm-cli/tests/lsp.rs` (the real process, UTF-16, local and
+imported); `crates/nazm-service/tests/snapshot.rs` (a value use changes the function's
+`references` and no call edge); `crates/nazm-service/tests/rename.rs` (a complete plan, from every
+occurrence); `crates/nazm-service/tests/closures.rs` (no capture slot is a source definition);
+`crates/nazm-service/tests/structure.rs` (a field and a method of one name told apart); two
+catalogue entries, `r1c1-a-function-value-is-no-use` and `r1c1-a-function-value-is-a-use-of-its-maker`.
