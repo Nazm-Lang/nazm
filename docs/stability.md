@@ -59,15 +59,16 @@ A release carries several version identities. They answer different questions an
 independently: a toolchain release does **not** imply a new semantic epoch, interface schema or
 runtime ABI, and none of those implies a new toolchain release. Gate 1 moved the two that name the
 release; Gate 1-C1 then moved the semantic epoch, because the checker began refusing programs it
-had accepted. Nothing else changed its contract.
+had accepted. Gate 2 moved the semantic epoch again and the runtime ABI, adding the language's
+numbers before the first 1.0.0 release; its later slices move what they change and say so here.
 
 | Identity | Before (R1, `7a16a40`) | 1.0 | Why it moved, or did not | Where it is reported |
 | --- | --- | --- | --- | --- |
 | **Language version** | v0.3 | **1.0** | the settled semantics are frozen as the 1.x contract | `docs/spec.md`'s status line; `nazm --help` |
 | **Toolchain version** | 0.3.0 | **1.0.0** | the release | `nazm --version`; `toolchain.compiler` in `nazm inspect`; the release manifest |
-| **Semantic epoch** | 29 | **30** | Gate 1-C1: a closure capturing a value that can hold a function value behind a counted handle moved from accepted to refused (`N0616`), and `Type::ALL`, in the checker's identity, gained five capability types. (Gate 1 alone moved nothing: `1.5`'s refusal changed code, `N0100` → `N0101`, not acceptance) | `toolchain.semantic_epoch` in `nazm inspect`; build provenance |
+| **Semantic epoch** | 29 | **31** | Gate 1-C1 (30): a closure capturing a value that can hold a function value behind a counted handle moved from accepted to refused (`N0616`), and `Type::ALL`, in the checker's identity, gained five capability types. Gate 2 (31): numbers — integer widths, floats, bit operators and conversions — moved from refused to accepted, and literals take the type expected. (Gate 1 alone moved nothing: `1.5`'s refusal changed code, `N0100` → `N0101`, not acceptance) | `toolchain.semantic_epoch` in `nazm inspect`; build provenance |
 | **Interface schema** | `nazm.interface/11` | **`nazm.interface/11`** | no module's published facts changed shape | `toolchain.interface` in `nazm inspect` |
-| **Runtime ABI** | 14 | **14** | no runtime symbol, layout or calling rule changed | `toolchain.runtime_abi` in `nazm inspect`; `nazm.runtime/1` manifests |
+| **Runtime ABI** | 14 | **15** | Gate 2: floats and narrow integers cross runtime entries, and the numbers part (`nz.format_float`, `nz.format_u64`, `nz.float_parses`, `nz.float_parse`) and the C library's mathematics join the runtime | `toolchain.runtime_abi` in `nazm inspect`; `nazm.runtime/1` manifests |
 | **Package and lock schemas** | `nazm.package/1`, `nazm.lock/1`, `nazm.registry-index/1` | **unchanged** | no shape changed | the `schema` field of each file |
 | **Standard library API** | 1.0 | **1.0** | already stable within 1.x since it was published | `library/std/API-1.0` |
 | **Machine schemas** | each `name/major` | **unchanged** | none changed shape | the `schema` field of each output |
@@ -104,11 +105,14 @@ STABLE 1.0 surface is:
   `nazm.lock`.
 - **The C boundary** — below.
 
-**Explicitly not in 1.0, and refused by name rather than half-present:** floating point, integer
-types other than `Int`, `for`, `loop`, loop labels, valueless `return`, mutable parameters, trait
+**Explicitly not in 1.0, and refused by name rather than half-present:** `for`, `loop`, loop
+labels, valueless `return`, mutable parameters, trait
 objects and dynamic dispatch, user-defined effects and effect handlers, more than one effect
 parameter, macros, generic function values. Adding one is a 1.x minor addition (it was refused,
-so no valid program changes meaning); none is promised.
+so no valid program changes meaning); none is promised. *Floating point and integer types other
+than `Int` were on this list until Gate 2 added them, before the first 1.0.0 release (`spec.md`,
+*Numbers*); the compatibility corpus keeps the refusal case that pinned the old answer, listed as
+superseded.*
 
 ### The memory contract
 

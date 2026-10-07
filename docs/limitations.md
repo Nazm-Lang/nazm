@@ -16,9 +16,15 @@ found only by reading all of it.
   handlers; pass the vector as an argument instead (area 4). *Narrowed from a defect:* Gate 1
   found that such a closure, stored into the `Vec` it captured, was never reclaimed; the refusal
   closes that route and no collector was added.
-- Floating point, integers other than the 64-bit `Int`, `for`, `loop`, loop labels, valueless
-  `return` and mutable parameters are not in 1.0, each refused by name (`N0101`, `N0311`); `1.5`
-  is refused as floating point since Gate 1, where it was a field-read error before.
+- `for`, `loop`, loop labels, valueless `return` and mutable parameters are not in 1.0, each
+  refused by name (`N0101`, `N0311`). *Narrowed in Gate 2:* floating point and integers other than
+  the 64-bit `Int` exist (`spec.md`, *Numbers*).
+- Numbers (Gate 2): nothing converts implicitly — every mixed operation is written with a
+  conversion — and a local has no type annotation, so a typed constant is written `UInt8(250)`.
+  The C library's `float_sin` and its kin are as accurate as the host's library and may differ
+  in the last place between hosts. There is no `Int64` alias, no 128-bit integer, no decimal
+  floating point, no access to floating-point flags or rounding modes, and no SIMD vector type in
+  the language. The EVM and accelerator-kernel targets refuse every number but `Int`.
 
 - Traits and methods (N78) are nominal and static: no trait objects or dynamic dispatch, no default
   methods, associated items, generic traits or methods, supertraits, impls with bounds or for

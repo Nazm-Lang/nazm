@@ -41,7 +41,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | --- | --- | --- |
 | `settled` | STABLE 1.0 | design commitments; items 3 (parameter conventions beyond `let`, a region calculus) and 4–5 beyond what is realised are COMPATIBLE EXTENSION POINTS |
 | `v0-1` | STABLE 1.0 | heading of the sections below |
-| `overflow` | STABLE 1.0 | an explicit wrapping operator would be an extension |
+| `overflow` | STABLE 1.0 | the explicit wrapping it promised is `wrapping_add` and its kin since Gate 2 (`numbers`) |
 | `division` | STABLE 1.0 | |
 | `shadowing` | STABLE 1.0 | |
 | `evaluation-order` | STABLE 1.0 | |
@@ -101,8 +101,9 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `wasm-contract` | EXPERIMENTAL | |
 | `accounts` | EXPERIMENTAL | |
 | `provenance-record` | STABLE 1.0 | `nazm.provenance/1` |
+| `numbers` | STABLE 1.0 | Gate 2: fixed-width integers, `Float32`, `Float64`, bit operators and conversions; the C library's transcendental functions are promised to the host library's accuracy, not bit for bit |
 | `project-tooling` | STABLE 1.0 / EXPERIMENTAL | `init`, `doc`, library checking and `publish --dry-run` are stable (what a template writes is not); `bindgen` is experimental |
-| `not-in-v0-3` | STABLE 1.0 | each construct is refused by name; adding one is a compatible extension |
+| `not-in-v0-3` | STABLE 1.0 | each construct is refused by name; adding one is a compatible extension, and Gate 2 added floating point and integer widths |
 | `classification` | STABLE 1.0 | this table |
 | `open` and every `open-*` | RESEARCH/OPEN | |
 | `non-goals` | HISTORICAL / NON-GOAL | the first interpreter milestone's list; what 1.0 leaves out is `not-in-v0-3` |
@@ -3695,11 +3696,50 @@ through `nazm_host.report`) — and imports only `nazm_host.state_get(index) -> 
 | **`nazm bindgen HEADER [-o FILE]`** | A prototype is translated when every parameter is `int64_t`, `bool` or `const char *` and its result `int64_t` or `bool`, and the checker accepts its declaration; anything else — other integer widths, `void`, other pointers, floating point, structs, variadics, function pointers, macros, a declaration the checker refuses — is refused with the reason. Exit 1 when anything was refused |
 | **`nazm publish DIR --registry REG --dry-run`** | Every check a publish makes, and `nazm.publish-plan/1` — the version, the digest the index would record, the files it would copy — with nothing written |
 
+### Numbers: integer widths, floating point and bits — Gate 2
+<!-- id: numbers -->
+
+Settled by Gate 2, 2026-10-07. `docs/general-purpose.md` §1–§3 is the design record;
+`crates/nazm-sema/src/numeric.rs` is the one implementation of these rules the interpreter runs,
+and the native backends are held to it by `crates/nazm-cli/tests/numbers.rs`.
+
+**The types.** `Int` is unchanged: 64-bit signed, and the type of an integer literal where
+nothing else is expected. Beside it, `Int8`, `Int16`, `Int32` (signed), `UInt8`, `UInt16`,
+`UInt32`, `UInt64` (unsigned), and `Float32` and `Float64`, IEEE 754 binary32 and binary64. There
+is no `Int64` alias: one type, one name. Each is a value, copied freely, with equality, owning
+nothing, and free to cross into a task.
+
+| | |
+| --- | --- |
+| **Integer literals** | Decimal, `0x`, `0o` or `0b`, with `_` between digits. A literal is an `Int` unless a numeric type is **expected** where it is written — an argument's parameter type, a function's result, the other operand of a binary operator, an element of a `Vec` being pushed, a conversion's target — and then it is that type. A literal outside the range of the type it is written at is refused, `N0003`, naming the type and its range. `-128` written as an `Int8` is one literal |
+| **Float literals** | `1.5`, `0.25`, `2e9`, `2.5e-3`: digits, a `.` and digits, and/or an exponent. A `Float64`, or a `Float32` where one is expected; the decimal text is rounded once, to the nearest value of that type. `1.` and `.5` are not literals, and `1 . 5` is a field read |
+| **Arithmetic** | `+ - * / %` and unary `-` on two operands of **one** numeric type, never two: nothing converts implicitly, and `Int + UInt8` is refused, `N0304`. On an integer type, `Int`'s rules at that width: a result outside the type traps (`N0400`), a zero divisor traps (`N0401`), `MIN / -1` traps and `MIN % -1` is 0, and `-x` of an unsigned value other than 0 traps. On a float type: IEEE 754, round to nearest, ties to even, never trapping — overflow is an infinity and an invalid operation a NaN; `%` is the remainder of truncated division, C's `fmod` |
+| **Comparison** | `< <= > >=` on two numbers of one type; unsigned types compare as unsigned. `==` and `!=` on every numeric type, and so on records and enums holding them (*Equality is derived*). On floats both are IEEE 754's: every comparison with a NaN is false except `!=`, and `-0.0 == 0.0` — so a record holding a NaN is not equal to itself |
+| **Bits** | `&`, `\|`, `^` on two integers of one type; prefix `~`; `<<` and `>>` with an `Int` amount. Precedence, loosest first: `\|\|`, `&&`, comparisons, `\|`, `^`, `&`, shifts, `+ -`, `* / %`, unary — so `a & m == 0` is `(a & m) == 0`. `>>` is arithmetic on a signed type and logical on an unsigned one; `<<` drops the bits shifted out and never traps on them. An amount below 0 or not below the width traps, `N0412`, and a constant one is refused, `N0617`: no amount is masked and none is left to the machine |
+| **Conversions** | `T(x)`, `T` a numeric type's name, from any numeric value: the same value or a trap (`N0400`). Integer to float rounds to nearest, ties to even; `Float64` to `Float32` rounds the same way and may become an infinity; float to integer truncates toward zero and traps on a NaN, an infinity or a result outside `T`. `try_convert[T](x)` gives `Option[T]`: `Some` of the exact conversion, `None` where `T(x)` would trap. `wrap_convert[T](x)` is two's complement modulo `2^n`, between integer types only. `saturate_convert[T](x)` clamps to `T`'s range, a NaN to 0. `T(x)` of a literal is the literal written at `T` |
+| **Functions** | Integers: `wrapping_add`/`_sub`/`_mul`, `saturating_add`/`_sub`/`_mul`, `count_ones`, `leading_zeros`, `trailing_zeros`, `rotate_left`, `rotate_right` (amount modulo the width; negative traps, `N0412`), `swap_bytes`, `to_big_endian`, `from_big_endian`, `to_little_endian`, `from_little_endian` — each generic over every integer type, `T` inferred. Floats: `float_sqrt`, `float_abs`, `float_floor`, `float_ceil`, `float_trunc`, `float_round` (half away from zero), `float_min`, `float_max` (a NaN loses), `float_is_nan`, `float_is_infinite`, `float_is_finite`, and from the C library `float_sin`, `float_cos`, `float_tan`, `float_exp`, `float_ln`, `float_log2`, `float_log10`, `float_pow`, `float_atan2`. Bits: `float64_to_bits`, `float64_from_bits`, `float32_to_bits`, `float32_from_bits`. Text: `num_to_str` for every numeric type, `float_parses` and `float_parse_raw`. A built-in applied outside its class is refused, `N0300` |
+| **Text** | `num_to_str` writes an integer in decimal, and a float by ECMAScript's `Number::toString` layout over the shortest digits that read back to the same value in its own type: `100`, `1.5`, `0.001`, `1e+21`, `1.5e-7`, `-0`, `inf`, `-inf`, `nan`. `float_parses(s)` accepts exactly `[+-]? (D+ (. D*)? \| . D+) ([eE] [+-]? D+)?` or `[+-]? (inf \| nan)`; `float_parse_raw(s)` is the correctly rounded `Float64` it writes, or NaN |
+
+**What is exact, and what is not.** The basic operations, `float_sqrt`, `float_floor` and its kin,
+every conversion and comparison, `num_to_str` and `float_parse_raw` are exactly specified and
+bit-identical in the interpreter, under LLVM at every optimisation level and under Cranelift, on
+every supported host: nothing folds a float operation differently from how it runs, contracts
+`a * b + c` into a fused multiply-add, or enables fast arithmetic. The C library's functions —
+`float_sin` to `float_atan2` — are the host library's and may differ in the last place between
+hosts. A NaN's sign and payload are observable only through the bit functions and are not
+promised. No floating-point exception flag or rounding mode is exposed.
+
+**Across the C boundary.** Not yet: Gate 2's C interface work states it (*Foreign functions*).
+
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, floating point. A
 program using any of them is rejected by name rather than misparsed into something else.
+
+**Corrected 2026-10-07, Gate 2.** Floating point left this list: `Float32` and `Float64` exist,
+with fixed-width integers and bit operators (*Numbers*, above). The compatibility corpus keeps
+its refusal case for `1.5` and lists it as superseded (`tests/compat/v1/SUPERSEDED`).
 
 **Corrected 2026-10-07, Gate 1.** The section's anchor and the corrections below keep the name
 *Not in v0.3*; the list, with them, is the current answer for 1.0. Floating point was the one
