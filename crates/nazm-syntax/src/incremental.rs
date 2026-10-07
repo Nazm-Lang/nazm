@@ -444,6 +444,7 @@ impl Revision {
             imports: Vec::new(),
             traits: Vec::new(),
             impls: Vec::new(),
+            consts: Vec::new(),
             hole: None,
         };
         for c in &self.chunks {
@@ -692,11 +693,30 @@ impl Item {
             Self::Enum(e) => e.shift(file, by),
             Self::Import(i) => i.shift(file, by),
             Self::Trait(t) => t.shift(file, by),
+            Self::Const(c) => c.shift(file, by),
             Self::Impl(decl, methods) => {
                 decl.shift(file, by);
                 methods.shift(file, by);
             }
         }
+    }
+}
+
+impl Shift for crate::ast::Const {
+    fn shift(&mut self, file: FileId, by: i64) {
+        let Self {
+            name: _,
+            name_span,
+            pub_span,
+            ty,
+            value,
+            span,
+        } = self;
+        name_span.shift(file, by);
+        pub_span.shift(file, by);
+        ty.shift(file, by);
+        value.shift(file, by);
+        span.shift(file, by);
     }
 }
 
@@ -943,12 +963,14 @@ impl Shift for TypeName {
             name_span,
             span,
             args,
+            length,
         } = self;
         qualifier.shift(file, by);
         function.shift(file, by);
         name_span.shift(file, by);
         span.shift(file, by);
         args.shift(file, by);
+        length.shift(file, by);
     }
 }
 
@@ -1062,7 +1084,13 @@ impl Shift for Place {
         } = self;
         name_span.shift(file, by);
         for p in path {
-            p.name_span.shift(file, by);
+            match p {
+                crate::ast::PlaceStep::Field(f) => f.name_span.shift(file, by),
+                crate::ast::PlaceStep::Index { index, span } => {
+                    index.shift(file, by);
+                    span.shift(file, by);
+                }
+            }
         }
         span.shift(file, by);
     }
@@ -1119,6 +1147,26 @@ impl Shift for FieldInit {
 impl Shift for Expr {
     fn shift(&mut self, file: FileId, by: i64) {
         match self {
+            Self::Array { elems, span } => {
+                elems.shift(file, by);
+                span.shift(file, by);
+            }
+            Self::ArrayRepeat { value, count, span } => {
+                value.shift(file, by);
+                count.shift(file, by);
+                span.shift(file, by);
+            }
+            Self::Index {
+                base,
+                index,
+                bracket_span,
+                span,
+            } => {
+                base.shift(file, by);
+                index.shift(file, by);
+                bracket_span.shift(file, by);
+                span.shift(file, by);
+            }
             Self::Int { value: _, span }
             | Self::WideInt { value: _, span }
             | Self::Float { text: _, span }

@@ -517,6 +517,14 @@ pub fn lower_as(
                         }
                     }
                 }
+                // An array's element is laid out in this unit (Gate 2).
+                Type::Array(id) => {
+                    if let Some((elem, _)) = program.types.array(id) {
+                        if !used.contains(&elem) {
+                            used.push(elem);
+                        }
+                    }
+                }
                 // What a generic channel carries is laid out in this unit, as an element is.
                 Type::ChanOf(id) => {
                     if let Some(c) = program.types.chan(id) {
@@ -548,6 +556,16 @@ pub fn lower_as(
                 .iter()
                 .filter(|v| vs.contains(&v.id.0))
                 .cloned()
+                .collect(),
+            arrays: program
+                .types
+                .arrays
+                .iter()
+                .map(|(id, a)| crate::ir::ArrayLayout {
+                    id: crate::ir::ArrayTy(*id),
+                    elem: Ty::of(a.elem),
+                    len: a.len,
+                })
                 .collect(),
         }
     };

@@ -1,0 +1,6 @@
+// expect: N0624
+// A constant index outside the array is refused where it is written (spec: arrays).
+fn main() -> Int {
+    let xs = [1, 2, 3];
+    xs[3]
+}

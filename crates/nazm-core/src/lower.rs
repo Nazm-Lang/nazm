@@ -522,15 +522,41 @@ impl<'a> Lower<'a> {
                 let value = self.expr(&a.value)?;
                 let local = self.local_at(a.place.name_span)?;
                 let mut path = Vec::with_capacity(a.place.path.len());
+                let mut target = self.local_ty(local)?;
                 for step in &a.place.path {
+                    let step = match step {
+                        nazm_syntax::PlaceStep::Field(f) => f,
+                        // An element of an array (Gate 2), whose length the type says.
+                        nazm_syntax::PlaceStep::Index { index, span } => {
+                            let Some((elem, len)) = (match target {
+                                Type::Array(arr) => self.res.types().array_info(arr),
+                                _ => None,
+                            }) else {
+                                return defect(*span, "an index into something not an array");
+                            };
+                            path.push(cir::PathStep::Index {
+                                index: self.expr(index)?,
+                                len,
+                                at: *span,
+                            });
+                            target = elem;
+                            continue;
+                        }
+                    };
                     let Some(to) = self.res.field(step.name_span) else {
                         return defect(step.name_span, "a field the checker did not resolve");
                     };
-                    path.push(Step {
+                    target = self
+                        .res
+                        .records()
+                        .get(to.record)
+                        .and_then(|d| d.fields.get(to.field as usize))
+                        .map_or(Type::Int, |f| f.ty);
+                    path.push(cir::PathStep::Field(Step {
                         record: to.record,
                         field: to.field,
                         at: step.name_span,
-                    });
+                    }));
                 }
                 Stmt::Assign {
                     local,
@@ -656,6 +682,27 @@ impl<'a> Lower<'a> {
                 Some(Type::Str),
                 *span,
             ),
+            // A constant (Gate 2): the value the checker computed, written as a literal.
+            AstExpr::Var { span, .. } if self.res.const_use(*span).is_some() => {
+                let Some(value) = self.res.const_use(*span).cloned() else {
+                    return defect(*span, "a constant the checker did not compute");
+                };
+                let ty = value.ty();
+                let c = match value {
+                    nazm_sema::numeric::ConstValue::Num(n) if n.kind == NumKind::I64 =>
+                    {
+                        #[allow(clippy::cast_possible_wrap)]
+                        Const::Int(n.bits as i64)
+                    }
+                    nazm_sema::numeric::ConstValue::Num(n) => Const::Num {
+                        kind: n.kind,
+                        bits: n.bits,
+                    },
+                    nazm_sema::numeric::ConstValue::Bool(b) => Const::Bool(b),
+                    nazm_sema::numeric::ConstValue::Str(s) => Const::Str(s),
+                };
+                node(ExprKind::Const(self.constant(c)), Some(ty), *span)
+            }
             // A named function as a value (N50): the checker recorded which, and its type.
             AstExpr::Var { span, .. } if self.res.var(*span).is_none() => {
                 match self.res.fn_value(*span) {
@@ -702,6 +749,65 @@ impl<'a> Lower<'a> {
                 let operand = self.expr(operand)?;
                 let ty = operand.ty.or(Some(Type::Int));
                 node(ExprKind::Neg(Box::new(operand)), ty, *op_span)
+            }
+            // Arrays (Gate 2). The type is the checker's, read back from the elements' and the
+            // count's: `[x; N]`'s `N` is a literal or a constant, both already computed.
+            AstExpr::Array { elems, span } => {
+                let mut lowered = Vec::with_capacity(elems.len());
+                for x in elems {
+                    lowered.push(self.expr(x)?);
+                }
+                let elem = lowered.first().and_then(|x| x.ty).unwrap_or(Type::Int);
+                let n = u32::try_from(lowered.len()).unwrap_or(u32::MAX);
+                let Some(ty) = self.res.types().find_array(elem, n) else {
+                    return defect(*span, "an array type the checker did not form");
+                };
+                node(ExprKind::Array { elems: lowered }, Some(ty), *span)
+            }
+            AstExpr::ArrayRepeat { value, count, span } => {
+                let v = self.expr(value)?;
+                let n = match count.as_ref() {
+                    AstExpr::Int { value, .. } => u32::try_from(*value).ok(),
+                    AstExpr::Var { span, .. } => self
+                        .res
+                        .const_use(*span)
+                        .and_then(nazm_sema::numeric::ConstValue::as_int)
+                        .and_then(|n| u32::try_from(n).ok()),
+                    _ => None,
+                };
+                let elem = v.ty.unwrap_or(Type::Int);
+                let Some(ty) = n.and_then(|n| self.res.types().find_array(elem, n)) else {
+                    return defect(*span, "a repeated array the checker did not form");
+                };
+                node(
+                    ExprKind::ArrayRepeat {
+                        value: Box::new(v),
+                        count: n.unwrap_or(0),
+                    },
+                    Some(ty),
+                    *span,
+                )
+            }
+            AstExpr::Index {
+                base,
+                index,
+                bracket_span,
+                ..
+            } => {
+                let b = self.expr(base)?;
+                let i = self.expr(index)?;
+                let elem = match b.ty {
+                    Some(Type::Array(a)) => self.res.types().array_info(a).map(|(t, _)| t),
+                    _ => None,
+                };
+                node(
+                    ExprKind::Index {
+                        base: Box::new(b),
+                        index: Box::new(i),
+                    },
+                    elem,
+                    *bracket_span,
+                )
             }
             AstExpr::BitNot {
                 operand, op_span, ..

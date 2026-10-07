@@ -1019,7 +1019,21 @@ fn max_depth(raw: &str) -> Result<usize, String> {
     Ok(n)
 }
 
+/// Every command on the stack `parse_source` asks its caller for, rather than the main
+/// thread's: a check of the deepest accepted nesting needs more than the 8 MiB a main thread
+/// gets, and a bound that depends on which command reached it is not a bound. A panic is the
+/// main thread's exit status, 101.
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .name("nazm".to_owned())
+        .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
+        .spawn(command)
+        .map_or(ExitCode::from(101), |t| {
+            t.join().unwrap_or(ExitCode::from(101))
+        })
+}
+
+fn command() -> ExitCode {
     let mut cli = Cli::parse();
     // A package (N46): its directory stands for its `main`, and `--locked` holds the build to
     // its lockfile — both settled before any command sees the file.

@@ -463,6 +463,9 @@ impl<'a> Gen<'a> {
             | ExprKind::Fits { .. } => {
                 return Err(refuse(f, e.at, "it uses a bit operation or a conversion"))
             }
+            ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } | ExprKind::Index { .. } => {
+                return Err(refuse(f, e.at, "it uses an array"))
+            }
             ExprKind::Local(l) => {
                 if Some(*l) == fr.caller {
                     self.op(op::CALLER);

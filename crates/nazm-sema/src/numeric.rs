@@ -21,6 +21,37 @@
 
 use crate::types::{ConvertMode, NumKind};
 
+/// A constant's value (Gate 2, `docs/spec.md`, *Constants*): what the checker computed, and what
+/// every implementation then uses as a literal.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConstValue {
+    /// A number of any numeric type, `Int` included.
+    Num(NumVal),
+    Bool(bool),
+    Str(Vec<u8>),
+}
+
+impl ConstValue {
+    /// Its type.
+    #[must_use]
+    pub fn ty(&self) -> crate::types::Type {
+        match self {
+            Self::Num(n) => crate::types::Type::of_num(n.kind),
+            Self::Bool(_) => crate::types::Type::Bool,
+            Self::Str(_) => crate::types::Type::Str,
+        }
+    }
+
+    /// The value as an `Int`, for an array's length.
+    #[must_use]
+    pub fn as_int(&self) -> Option<i128> {
+        match self {
+            Self::Num(n) if n.kind == NumKind::I64 => Some(n.as_i128()),
+            _ => None,
+        }
+    }
+}
+
 /// A numeric value: its kind and its canonical bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NumVal {

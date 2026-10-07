@@ -219,7 +219,13 @@ use crate::digest::{self, Framed};
 /// written and is refused out of that type's range (`N0003`, now raised by the checker); a
 /// constant shift out of range is refused (`N0617`). A cached check from epoch 30 refused
 /// programs this one accepts, and typed literals it did not type.
-pub const SEMANTIC_EPOCH: u32 = 31;
+/// `32` — Gate 2, 2026-10-08. Fixed arrays and constants: `[T; N]`, `[a, b]`, `[v; n]`,
+/// `xs[i]` and `const NAME: T = value;` moved from refused (the parser's unexpected token) to
+/// accepted; an array's element must be plain data (`N0621`) and the array at most 64 KiB
+/// (`N0618`), a constant computable (`N0622`, `N0623`), and an index on a non-array or a
+/// constant index out of range is refused (`N0624`). A cached check from epoch 31 refused
+/// programs this one accepts.
+pub const SEMANTIC_EPOCH: u32 = 32;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -233,6 +239,9 @@ pub const CHECKER_CODES: &[&str] = &[
     "ALREADY_DEFINED_IN_SCOPE",
     "AMBIGUOUS_IMPORT",
     "AMBIGUOUS_METHOD",
+    "ARRAY_ELEMENT",
+    "ARRAY_INDEX",
+    "ARRAY_TOO_LARGE",
     "ASSIGN_TO_IMMUTABLE",
     "BRANCH_TYPES_DIFFER",
     "BUILTIN_TYPE_REDEFINED",
@@ -245,6 +254,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CONDITION_NOT_BOOL",
     "CONFLICTING_EFFECT_ARGUMENT",
     "CONFLICTING_TYPE_ARGUMENTS",
+    "CONSTANT_FAILS",
     "CONTRACT_SHAPE",
     "DUPLICATE_EFFECT",
     "DUPLICATE_FIELD",
@@ -280,6 +290,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "MISSING_MAIN",
     "MISSING_TYPE_ARGUMENTS",
     "NON_EXHAUSTIVE_MATCH",
+    "NOT_A_CONSTANT",
     "NOT_A_FUNCTION_VALUE",
     "NOT_A_TRAIT",
     "NOT_IN_A_LOOP",

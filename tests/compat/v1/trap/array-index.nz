@@ -1,0 +1,9 @@
+// expect: N0405
+// An index outside the array stops the program rather than reading past it (spec: arrays).
+fn at(xs: [Int; 3], i: Int) -> Int {
+    xs[i]
+}
+
+fn main() -> Int {
+    at([1, 2, 3], 3)
+}

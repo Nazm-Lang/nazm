@@ -297,7 +297,17 @@ fn expr_blocks<'a>(e: &'a Expr, visit: &mut dyn FnMut(&'a Block)) {
         | ExprKind::Complement(x)
         | ExprKind::Convert { operand: x, .. }
         | ExprKind::Fits { operand: x, .. }
+        | ExprKind::ArrayRepeat { value: x, .. }
         | ExprKind::Field { base: x, .. } => expr_blocks(x, visit),
+        ExprKind::Array { elems } => {
+            for x in elems {
+                expr_blocks(x, visit);
+            }
+        }
+        ExprKind::Index { base, index } => {
+            expr_blocks(base, visit);
+            expr_blocks(index, visit);
+        }
         ExprKind::Arith { lhs, rhs, .. }
         | ExprKind::Bits { lhs, rhs, .. }
         | ExprKind::Compare { lhs, rhs, .. } => {

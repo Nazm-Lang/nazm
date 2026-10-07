@@ -243,6 +243,9 @@ struct Types {
     /// Every alias this module imports a module under (N49); its types are in `names` as
     /// `alias::Name`, which no identifier can collide with.
     aliases: Vec<String>,
+    /// The module's constants, computed (Gate 2): the values its bodies name and the lengths
+    /// its array types are written with.
+    consts: crate::constants::Constants,
 }
 
 /// What one module may name.
@@ -294,6 +297,8 @@ pub struct Unit<'a> {
     traits: Vec<&'a Trait>,
     impls: Vec<&'a ImplDecl>,
     imports: &'a [Dependency],
+    /// Its constants (Gate 2).
+    consts: Vec<&'a nazm_syntax::Const>,
     /// The core prelude's module in this compilation, found by its durable key. `None`
     /// for a compilation assembled without one, which then has no `Result` for `?` to
     /// recognise — the answer, not an error.
@@ -343,6 +348,11 @@ impl<'a> Unit<'a> {
             traits,
             impls,
             imports: graph.imports(module),
+            consts: program
+                .consts
+                .iter()
+                .filter(|c| graph.module_of(c.name_span.file) == Some(module))
+                .collect(),
             prelude: graph.prelude(),
         }
     }
@@ -646,6 +656,8 @@ pub fn check_reusing(
         }
     }
     errors.extend(refused);
+    // The arrays the signatures wrote (Gate 2).
+    validate_new_arrays(&mut res, &mut errors);
 
     reuse.plan(graph, &interfaces, res.types());
 
@@ -1908,6 +1920,23 @@ impl Lit {
     }
 }
 
+/// A place's path as a reader writes it: `b.c`, `items[…].x` (Gate 2 added indexes).
+fn shown_path(path: &[nazm_syntax::PlaceStep]) -> String {
+    let mut out = String::new();
+    for step in path {
+        match step {
+            nazm_syntax::PlaceStep::Field(f) => {
+                if !out.is_empty() {
+                    out.push('.');
+                }
+                out.push_str(&f.name);
+            }
+            nazm_syntax::PlaceStep::Index { .. } => out.push_str("[…]"),
+        }
+    }
+    out
+}
+
 /// The conversion functions that are not type names (Gate 2), reserved as built-ins are.
 const CONVERSIONS: [&str; 3] = ["try_convert", "wrap_convert", "saturate_convert"];
 
@@ -2167,6 +2196,8 @@ fn resolve_fields(
 /// complaining about one is a refusal that arrives after the compiler decided the program
 /// was fine.
 pub fn validate_type_layouts(res: &mut Resolution, errors: &mut Vec<Diagnostic>) {
+    // Every array written in a field (Gate 2), once every definition it might contain is known.
+    validate_new_arrays(res, errors);
     // Over **definitions**, since N11. An applied type is not a declaration and has no
     // name span of its own to point at, and whether it can contain itself is decided by
     // the definitions it applies: `nazm_sema::UserTypes::ownership_cycles` says how.
@@ -2474,10 +2505,104 @@ fn type_environment(
             names.insert(name, offer);
         }
     }
+    // Constants are computed here, where every type position can read them; their refusals
+    // are reported by the pass that reports collisions, once.
+    let mut scratch = Vec::new();
+    let sink = if matches!(collisions, Collisions::Report) {
+        errors
+    } else {
+        &mut scratch
+    };
+    let consts = crate::constants::evaluate(&unit.consts, sink);
     Types {
         names,
         refused,
         aliases,
+        consts,
+    }
+}
+
+/// Hold every array type written since the last stage to its element and size rules (Gate 2).
+pub fn validate_new_arrays(res: &mut Resolution, errors: &mut Vec<Diagnostic>) {
+    for (t, at) in res.take_arrays_to_validate() {
+        if let Some(d) = array_refusal(res, t, at) {
+            errors.push(d);
+        }
+    }
+}
+
+/// An array's length, written as an integer literal or a constant's name (Gate 2).
+fn array_length(types: &Types, e: &Expr, errors: &mut Vec<Diagnostic>) -> Option<u32> {
+    let n = match e {
+        Expr::Int { value, .. } => Some(i128::from(*value)),
+        Expr::Var { name, .. } => types.consts.values.get(name).and_then(|(_, v)| v.as_int()),
+        _ => None,
+    };
+    let Some(n) = n else {
+        errors.push(
+            Diagnostic::error(
+                codes::NOT_A_CONSTANT,
+                e.span(),
+                "an array's length is an integer literal or an `Int` constant's name",
+            )
+            .help("declare one at the top of the module: `const SIZE: Int = 64;`"),
+        );
+        return None;
+    };
+    match u32::try_from(n) {
+        Ok(n) if n > 0 => Some(n),
+        _ => {
+            errors.push(Diagnostic::error(
+                codes::ARRAY_TOO_LARGE,
+                e.span(),
+                format!("an array has 1 to {} elements, and this is {n}", u32::MAX),
+            ));
+            None
+        }
+    }
+}
+
+/// Why an array type is refused, as a diagnostic at `at` (Gate 2); `None` when it is one the
+/// language has.
+fn array_refusal(res: &Resolution, t: Type, at: Span) -> Option<Diagnostic> {
+    let Type::Array(a) = t else {
+        return None;
+    };
+    let (elem, len) = res.types().array_info(a)?;
+    match res.types().array_problem(elem, len)? {
+        nazm_sema::ArrayProblem::Empty => Some(Diagnostic::error(
+            codes::ARRAY_TOO_LARGE,
+            at,
+            "an array has at least one element",
+        )),
+        nazm_sema::ArrayProblem::NotPlain(owner) => Some(
+            Diagnostic::error(
+                codes::ARRAY_ELEMENT,
+                at,
+                format!(
+                    "an array holds plain data, and `{}` holds a `{}`",
+                    res.types().show(elem),
+                    res.types().show(owner)
+                ),
+            )
+            .help(
+                "an array's elements are numbers, `Bool`s, and records, enums and arrays of \
+                 them — values that own nothing and are copied by their bytes; a collection \
+                 of strings or handles is a `Vec`",
+            ),
+        ),
+        nazm_sema::ArrayProblem::TooLarge(bytes) => Some(
+            Diagnostic::error(
+                codes::ARRAY_TOO_LARGE,
+                at,
+                format!(
+                    "`{}` holds {bytes} bytes, and an array holds at most {}",
+                    res.types().show(t),
+                    nazm_sema::MAX_ARRAY_BYTES
+                ),
+            )
+            .help("an array lives inline, on a task's stack; a larger buffer is a `Vec`"),
+        ),
     }
 }
 
@@ -2701,6 +2826,17 @@ fn resolve_written_inner(
                 ),
             );
         }
+    }
+    // `[T; N]` (Gate 2): an array of the element written, its length a constant.
+    if let (Some(len), true) = (&written.length, written.name == TypeName::ARRAY) {
+        let elem = args
+            .as_ref()
+            .and_then(|a| a.first().copied())
+            .unwrap_or(Type::Int);
+        let n = array_length(types, len, errors).unwrap_or(1);
+        let t = res.types_mut().array_of(elem, n);
+        res.record_array_written(t, written.span);
+        return t;
     }
     // `fn(T…) -> R ! {e}` (N50): its parts resolved as any type is, interned.
     if let Some(f) = &written.function {
@@ -3256,6 +3392,7 @@ pub fn declared_interfaces(
         })
         .collect();
     apply_reexports(units, &mut interfaces, res, errors, true);
+    validate_new_arrays(res, errors);
     interfaces
 }
 
@@ -6358,6 +6495,12 @@ impl Checker<'_> {
             Expr::Neg { operand, .. }
             | Expr::Not { operand, .. }
             | Expr::BitNot { operand, .. } => self.impure_clause(operand),
+            Expr::Array { span, .. } | Expr::ArrayRepeat { span, .. } => {
+                Some((*span, "build a value"))
+            }
+            Expr::Index { base, index, .. } => self
+                .impure_clause(base)
+                .or_else(|| self.impure_clause(index)),
             Expr::Binary { lhs, rhs, .. } => {
                 self.impure_clause(lhs).or_else(|| self.impure_clause(rhs))
             }
@@ -6701,12 +6844,7 @@ impl Checker<'_> {
                 format!(
                     "`{}` is not mutable, so its `{}` cannot be replaced",
                     place.name,
-                    place
-                        .path
-                        .iter()
-                        .map(|f| f.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(".")
+                    shown_path(&place.path)
                 )
             };
             let d = Diagnostic::error(codes::ASSIGN_TO_IMMUTABLE, place.name_span, written);
@@ -6738,6 +6876,35 @@ impl Checker<'_> {
         let mut target = binding.ty;
         let mut declared_at = binding.declared_at;
         for step in &place.path {
+            // An element of an array (Gate 2).
+            let step = match step {
+                nazm_syntax::PlaceStep::Field(f) => f,
+                nazm_syntax::PlaceStep::Index { index, span } => {
+                    let info = match target {
+                        Type::Array(arr) => self.res.types().array_info(arr),
+                        _ => None,
+                    };
+                    self.check_index_value(index, info.map(|(_, n)| n));
+                    match info {
+                        Some((elem, _)) => {
+                            target = elem;
+                            continue;
+                        }
+                        None => {
+                            self.errors.push(Diagnostic::error(
+                                codes::ARRAY_INDEX,
+                                *span,
+                                format!(
+                                    "`[…]` indexes an array, and this is `{}`",
+                                    self.show(target)
+                                ),
+                            ));
+                            self.check_expr(&a.value, None);
+                            return;
+                        }
+                    }
+                }
+            };
             match self.check_projection(target, &step.name, step.name_span) {
                 Some(t) => {
                     declared_at = self
@@ -6769,16 +6936,7 @@ impl Checker<'_> {
             let written = if place.path.is_empty() {
                 place.name.clone()
             } else {
-                format!(
-                    "{}.{}",
-                    place.name,
-                    place
-                        .path
-                        .iter()
-                        .map(|f| f.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(".")
-                )
+                format!("{}.{}", place.name, shown_path(&place.path))
             };
             let (starget, svt) = (self.show(target), self.show(vt));
             let mut d = Diagnostic::error(
@@ -6898,6 +7056,10 @@ impl Checker<'_> {
                     self.record_var(*span, b.slot);
                     Completion::Value(b.ty)
                 }
+                // A constant (Gate 2): its type, and its value for Core IR to write.
+                None if self.types.consts.values.contains_key(name) => {
+                    Completion::Value(self.const_value(name, *span))
+                }
                 None if self.env.contains(name) => {
                     Completion::Value(self.function_value(name, *span, expected))
                 }
@@ -6936,6 +7098,20 @@ impl Checker<'_> {
             Expr::BitNot {
                 operand, op_span, ..
             } => Completion::Value(self.check_complement(operand, *op_span, expected)),
+
+            // Arrays (Gate 2).
+            Expr::Array { elems, span } => {
+                Completion::Value(self.check_array_literal(elems, *span, expected))
+            }
+            Expr::ArrayRepeat { value, count, span } => {
+                Completion::Value(self.check_array_repeat(value, count, *span, expected))
+            }
+            Expr::Index {
+                base,
+                index,
+                bracket_span,
+                ..
+            } => Completion::Value(self.check_index(base, index, *bracket_span, expected)),
 
             Expr::Not {
                 operand, op_span, ..
@@ -8086,6 +8262,154 @@ impl Checker<'_> {
             Type::Bool
         } else {
             lt
+        }
+    }
+
+    /// A constant named as a value (Gate 2): its declared type, its value recorded for lowering.
+    #[inline(never)]
+    fn const_value(&mut self, name: &str, at: Span) -> Type {
+        let Some((ty, value)) = self.types.consts.values.get(name).cloned() else {
+            return Type::Int;
+        };
+        self.res.record_const_use(at, value);
+        ty
+    }
+
+    /// The element type an expected array type gives, if one is expected.
+    fn expected_element(&self, expected: Option<Type>) -> Option<Type> {
+        match expected {
+            Some(Type::Array(a)) => self.res.types().array_info(a).map(|(e, _)| e),
+            _ => None,
+        }
+    }
+
+    /// Refuse an array type written or made in a body, where every definition is known.
+    fn validate_array(&mut self, t: Type, at: Span) {
+        if let Some(d) = array_refusal(self.res, t, at) {
+            self.errors.push(d);
+        }
+    }
+
+    /// `[a, b, c]` (Gate 2): every element of one type, the first's or the one expected.
+    #[inline(never)]
+    fn check_array_literal(&mut self, elems: &[Expr], span: Span, expected: Option<Type>) -> Type {
+        let want = self.expected_element(expected);
+        let Some(first) = elems.first() else {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::ARRAY_TOO_LARGE,
+                    span,
+                    "an array has at least one element",
+                )
+                .help("an empty collection is a `Vec`: `vec_new[Int]()`"),
+            );
+            return expected.unwrap_or(Type::Int);
+        };
+        let elem = self.value_type(first, want);
+        for e in elems.iter().skip(1) {
+            let t = self.value_type(e, Some(elem));
+            if t != elem {
+                self.errors.push(Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    e.span(),
+                    format!(
+                        "this array's elements are `{}`, and this is `{}`",
+                        self.show(elem),
+                        self.show(t)
+                    ),
+                ));
+            }
+        }
+        let n = u32::try_from(elems.len()).unwrap_or(u32::MAX);
+        let t = self.res.types_mut().array_of(elem, n);
+        self.validate_array(t, span);
+        t
+    }
+
+    /// `[value; count]` (Gate 2): `count` copies, `count` a literal or a constant.
+    #[inline(never)]
+    fn check_array_repeat(
+        &mut self,
+        value: &Expr,
+        count: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Type {
+        let want = self.expected_element(expected);
+        let elem = self.value_type(value, want);
+        let n = match count {
+            Expr::Var { name, span } if self.types.consts.values.contains_key(name) => {
+                self.const_value(name, *span);
+                array_length(&self.types, count, &mut self.errors)
+            }
+            _ => array_length(&self.types, count, &mut self.errors),
+        };
+        let t = self.res.types_mut().array_of(elem, n.unwrap_or(1));
+        if n.is_some() {
+            self.validate_array(t, span);
+        }
+        t
+    }
+
+    /// An index's type, which is an `Int`, and a constant one's range (Gate 2).
+    fn check_index_value(&mut self, index: &Expr, len: Option<u32>) {
+        let it = self.value_type(index, Some(Type::Int));
+        if it != Type::Int {
+            self.errors.push(Diagnostic::error(
+                codes::TYPE_MISMATCH,
+                index.span(),
+                format!("an index is an `Int`, and this is `{}`", self.show(it)),
+            ));
+            return;
+        }
+        let constant = match index {
+            Expr::Int { value, .. } => Some(i128::from(*value)),
+            Expr::Neg { operand, .. } => match operand.as_ref() {
+                Expr::Int { value, .. } => Some(-i128::from(*value)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let (Some(i), Some(n)) = (constant, len) {
+            if i < 0 || i >= i128::from(n) {
+                self.errors.push(Diagnostic::error(
+                    codes::ARRAY_INDEX,
+                    index.span(),
+                    format!("index {i} is outside an array of {n} elements"),
+                ));
+            }
+        }
+    }
+
+    /// `base[index]` (Gate 2): an element of an array.
+    #[inline(never)]
+    fn check_index(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        bracket: Span,
+        expected: Option<Type>,
+    ) -> Type {
+        let bt = self.value_type(base, None);
+        let info = match bt {
+            Type::Array(a) => self.res.types().array_info(a),
+            _ => None,
+        };
+        self.check_index_value(index, info.map(|(_, n)| n));
+        match info {
+            Some((elem, _)) => elem,
+            None => {
+                let mut d = Diagnostic::error(
+                    codes::ARRAY_INDEX,
+                    bracket,
+                    format!("`[…]` indexes an array, and this is `{}`", self.show(bt)),
+                );
+                if bt.is_sequence() {
+                    d = d.help("a `Vec`'s element is read with `vec_get(xs, i)`");
+                }
+                self.errors.push(d);
+                expected.unwrap_or(Type::Int)
+            }
         }
     }
 

@@ -988,7 +988,12 @@ fn ovf_op(op: OvfOp, class: Class, x: u64, y: u64) -> (u64, bool) {
 }
 
 /// A comparison of two values of `class`.
-#[allow(clippy::float_cmp, clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::float_cmp,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn cmp_op(op: Cmp, class: Class, x: u64, y: u64) -> bool {
     let (sa, sb) = (signed(class, x), signed(class, y));
     let (ua, ub) = (norm(class, x), norm(class, y));
@@ -1052,7 +1057,12 @@ fn un_op(op: UnOp, class: Class, x: u64) -> u64 {
 }
 
 /// A conversion between classes.
-#[allow(clippy::float_cmp, clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::float_cmp,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn conv_op(op: ConvOp, from: Class, to: Class, x: u64) -> u64 {
     let fval = || {
         if from == Class::F32 {

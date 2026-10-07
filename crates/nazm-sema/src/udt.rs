@@ -164,7 +164,9 @@ impl UserTypes {
             TypeNode::Record(id) => {
                 if let Some(def) = self.records.get(id) {
                     for (i, f) in def.fields.iter().enumerate() {
-                        out.push((None, u32::try_from(i).unwrap_or(u32::MAX), f.ty));
+                        // An array field contains its elements inline (Gate 2).
+                        let ty = self.strip_array(f.ty);
+                        out.push((None, u32::try_from(i).unwrap_or(u32::MAX), ty));
                     }
                 }
             }
@@ -173,7 +175,8 @@ impl UserTypes {
                     for (vi, v) in def.variants.iter().enumerate() {
                         let vi = u32::try_from(vi).unwrap_or(u32::MAX);
                         for (i, f) in v.fields.iter().enumerate() {
-                            out.push((Some(vi), u32::try_from(i).unwrap_or(u32::MAX), f.ty));
+                            let ty = self.strip_array(f.ty);
+                            out.push((Some(vi), u32::try_from(i).unwrap_or(u32::MAX), ty));
                         }
                     }
                 }
@@ -225,6 +228,10 @@ impl UserTypes {
                 }
             }
             Type::Vec(_) => format!("Vec[{}]", shown(self)),
+            Type::Array(a) => match self.array_info(a) {
+                Some((e, n)) => format!("[{}; {n}]", self.show(e)),
+                None => "[?; ?]".to_owned(),
+            },
             Type::ChanOf(_) => format!("Chan[{}]", shown(self)),
             Type::Fn(f) => match self.fn_signature(f) {
                 Some(sig) => {
@@ -272,6 +279,7 @@ impl UserTypes {
     /// one, since the backend asks only about instances.
     #[must_use]
     pub fn needs_cleanup(&self, t: Type) -> bool {
+        let t = self.strip_array(t);
         let Some(root) = TypeNode::of(t) else {
             return !matches!(t, Type::Int | Type::Bool | Type::Num(_));
         };
@@ -319,7 +327,7 @@ impl UserTypes {
     #[must_use]
     pub fn function_holder(&self, t: Type) -> Option<Type> {
         let mut seen: Vec<(Type, bool)> = Vec::new();
-        let mut work: Vec<(Type, Option<Type>)> = vec![(t, None)];
+        let mut work: Vec<(Type, Option<Type>)> = vec![(self.strip_array(t), None)];
         while let Some((ty, holder)) = work.pop() {
             if seen.contains(&(ty, holder.is_some())) {
                 continue;
@@ -354,6 +362,96 @@ impl UserTypes {
         None
     }
 
+    /// Why `[elem; len]` is not an array the language has, if it is not (Gate 2): its elements
+    /// must be plain data — numbers, `Bool`, and records, enums and arrays of them, which own
+    /// nothing — and the whole at most [`MAX_ARRAY_BYTES`] by [`Self::data_bytes`].
+    #[must_use]
+    pub fn array_problem(&self, elem: Type, len: u32) -> Option<ArrayProblem> {
+        if len == 0 {
+            return Some(ArrayProblem::Empty);
+        }
+        if let Some(owner) = self.not_plain(elem) {
+            return Some(ArrayProblem::NotPlain(owner));
+        }
+        let bytes = self.data_bytes(elem).saturating_mul(u64::from(len));
+        (bytes > MAX_ARRAY_BYTES).then_some(ArrayProblem::TooLarge(bytes))
+    }
+
+    /// The first component of `t` that is not plain data, or `None` when `t` is plain: a
+    /// number, `Bool`, or a record, enum or array of them — something that owns nothing and
+    /// is copied by its bytes.
+    #[must_use]
+    pub fn not_plain(&self, t: Type) -> Option<Type> {
+        let mut seen: Vec<Type> = Vec::new();
+        let mut work = vec![self.strip_array(t)];
+        while let Some(ty) = work.pop() {
+            if seen.contains(&ty) {
+                continue;
+            }
+            seen.push(ty);
+            match ty {
+                Type::Int | Type::Bool | Type::Num(_) => {}
+                Type::Record(_) | Type::Enum(_) => {
+                    let Some(node) = TypeNode::of(ty) else {
+                        return Some(ty);
+                    };
+                    if self.opaque(node) {
+                        return Some(ty);
+                    }
+                    for (_, _, f) in self.contained(node) {
+                        work.push(f);
+                    }
+                }
+                other => return Some(other),
+            }
+        }
+        None
+    }
+
+    /// The bytes a plain value of `t` holds, counted without padding: a number its width, a
+    /// `Bool` one, a record its fields, an enum eight for its discriminant and its largest
+    /// variant, an array its elements. The bound arrays are held to is stated in these units.
+    #[must_use]
+    pub fn data_bytes(&self, t: Type) -> u64 {
+        self.data_bytes_within(t, 0)
+    }
+
+    fn data_bytes_within(&self, t: Type, depth: usize) -> u64 {
+        if depth > crate::MAX_TYPE_DEPTH * 4 {
+            return 0;
+        }
+        match t {
+            Type::Int => 8,
+            Type::Bool => 1,
+            Type::Num(k) => u64::from(k.bytes()),
+            Type::Array(a) => self.array_info(a).map_or(0, |(e, n)| {
+                self.data_bytes_within(e, depth + 1)
+                    .saturating_mul(u64::from(n))
+            }),
+            Type::Record(id) => self.records().get(id).map_or(0, |r| {
+                r.fields
+                    .iter()
+                    .map(|f| self.data_bytes_within(f.ty, depth + 1))
+                    .sum()
+            }),
+            Type::Enum(id) => {
+                8 + self.enums().get(id).map_or(0, |e| {
+                    e.variants
+                        .iter()
+                        .map(|v| {
+                            v.fields
+                                .iter()
+                                .map(|f| self.data_bytes_within(f.ty, depth + 1))
+                                .sum::<u64>()
+                        })
+                        .max()
+                        .unwrap_or(0)
+                })
+            }
+            _ => 8,
+        }
+    }
+
     /// Whether this definition is an opaque C handle (N85).
     fn opaque(&self, node: TypeNode) -> bool {
         match node {
@@ -383,6 +481,7 @@ impl UserTypes {
     ///
     /// [`TaskUnsafe`] naming the field path and the type that cannot cross.
     pub fn task_safety(&self, t: Type) -> Result<(), TaskUnsafe> {
+        let t = self.strip_array(t);
         let Some(root) = TypeNode::of(t) else {
             return if t.may_cross_into_a_task() {
                 Ok(())
@@ -461,6 +560,7 @@ impl UserTypes {
     ///
     /// [`NoEquality`] naming the field path and the type that has no equality.
     pub fn equality(&self, t: Type) -> Result<(), NoEquality> {
+        let t = self.strip_array(t);
         // A type parameter has equality exactly when its declaration requires it (N14):
         // that is what the body may assume, and every argument is checked against it where
         // the definition is used. One rule, so `T`, `Box[T]` and `Result[T, E]` all answer
@@ -698,6 +798,21 @@ fn compose(outer: u8, inner: u8) -> u8 {
         out |= COUNTED;
     }
     out
+}
+
+/// The most an array may hold, in [`UserTypes::data_bytes`]: 64 KiB, which a task's stack holds
+/// four times over (Gate 2). A larger buffer is a `Vec` or `Bytes`.
+pub const MAX_ARRAY_BYTES: u64 = 65_536;
+
+/// Why an array type is refused (Gate 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayProblem {
+    /// No elements.
+    Empty,
+    /// An element type that owns something, by the first component that does.
+    NotPlain(Type),
+    /// Over [`MAX_ARRAY_BYTES`], by how many bytes it would hold.
+    TooLarge(u64),
 }
 
 /// One edge of the ownership graph: a definition, how it is reached, and from which field.

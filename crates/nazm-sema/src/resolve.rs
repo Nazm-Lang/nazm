@@ -428,6 +428,14 @@ pub struct Resolution {
     /// What the checker decided about each numeric literal whose type is not the default, and
     /// each conversion, by the literal's or the callee's span (Gate 2).
     numeric: HashMap<Span, NumericFact>,
+    /// Each use of a constant, by the name's span, with the value the checker computed
+    /// (Gate 2): what Core IR writes as a literal.
+    const_uses: HashMap<Span, crate::numeric::ConstValue>,
+    /// Each array type where it was first written (Gate 2), for the stage that holds every
+    /// array to its element and size rules once every definition is known.
+    arrays_written: Vec<(Type, Span)>,
+    /// How many of [`Self::arrays_written`] a stage has held to the rules already.
+    arrays_validated: usize,
     /// Traits, impls, bounds and calls through a bound (N78).
     traits: crate::traits::Traits,
     /// Each named function written as a value, by the name's span (N50).
@@ -963,6 +971,40 @@ impl Resolution {
 
     pub fn record_numeric(&mut self, span: Span, fact: NumericFact) {
         self.numeric.insert(span, fact);
+    }
+
+    /// The constant a name written at `span` is, with its value (Gate 2).
+    #[must_use]
+    pub fn const_use(&self, span: Span) -> Option<&crate::numeric::ConstValue> {
+        self.const_uses.get(&span)
+    }
+
+    pub fn record_const_use(&mut self, span: Span, value: crate::numeric::ConstValue) {
+        self.const_uses.insert(span, value);
+    }
+
+    /// Every array type written, with where it was first (Gate 2).
+    #[must_use]
+    pub fn arrays_written(&self) -> &[(Type, Span)] {
+        &self.arrays_written
+    }
+
+    /// The array types written since the last call, each once: a stage that resolves types
+    /// holds what it wrote to the rules, and none twice.
+    pub fn take_arrays_to_validate(&mut self) -> Vec<(Type, Span)> {
+        let new = self
+            .arrays_written
+            .get(self.arrays_validated..)
+            .map(<[_]>::to_vec)
+            .unwrap_or_default();
+        self.arrays_validated = self.arrays_written.len();
+        new
+    }
+
+    pub fn record_array_written(&mut self, t: Type, at: Span) {
+        if !self.arrays_written.iter().any(|(u, _)| *u == t) {
+            self.arrays_written.push((t, at));
+        }
     }
 
     pub fn record_call(&mut self, span: Span, callee: Callee) {

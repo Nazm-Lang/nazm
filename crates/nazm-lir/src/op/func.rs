@@ -869,6 +869,9 @@ impl<'l, 'a> Fx<'l, 'a> {
                 self.release_at(a, last);
                 self.move_into(a, *value);
             }
+            mir::StatementKind::SetElement {
+                base, path, value, ..
+            } => self.set_element(*base, path, *value),
             mir::StatementKind::Drop(l) => {
                 let t = self.ty(*l);
                 if !self.lw.lay.owns(t) {
@@ -927,6 +930,9 @@ impl<'l, 'a> Fx<'l, 'a> {
 
     fn assign(&mut self, dst: mir::LocalId, value: &mir::Rvalue) {
         let dt = self.ty(dst);
+        if self.array_rvalue(dst, value) {
+            return;
+        }
         match value {
             mir::Rvalue::Use(o) => {
                 if in_memory(dt) {
@@ -1015,6 +1021,10 @@ impl<'l, 'a> Fx<'l, 'a> {
                 };
                 self.set(dst, r);
             }
+            // Taken by `array_rvalue` above.
+            mir::Rvalue::Array { .. }
+            | mir::Rvalue::ArrayRepeat { .. }
+            | mir::Rvalue::Index { .. } => {}
             mir::Rvalue::Fits { to, operand } => {
                 let from = super::numeric::kind_of(self.operand_ty(operand));
                 let to = super::numeric::kind_of(Ty::of(*to));
@@ -1040,7 +1050,7 @@ impl<'l, 'a> Fx<'l, 'a> {
                         let eq = self.string_equal(a, b);
                         self.negate_if(eq, *op == mir::CmpOp::NotEq)
                     }
-                    Ty::Record(_) | Ty::Enum(_) => {
+                    Ty::Record(_) | Ty::Enum(_) | Ty::Array(_) => {
                         let a = self.place(lhs);
                         let b = self.place(rhs);
                         let h = self.lw.helper(Helper::Equal(t));

@@ -1360,14 +1360,15 @@ fn check_cache_soundness() -> Result<(), Vec<String>> {
 
     // 1. The codes the checker can raise, against the list the identity is built from.
     // The checker is `check.rs` and, since N36, the effect checker beside it — and since
-    // N38 the provenance solver.
+    // N38 the provenance solver, and since Gate 2 the constant evaluator.
     let checker = match (
         read("crates/nazm-core/src/check.rs"),
         read("crates/nazm-core/src/effects.rs"),
         read("crates/nazm-core/src/provenance.rs"),
+        read("crates/nazm-core/src/constants.rs"),
     ) {
-        (Some(check), Some(effects), Some(provenance)) => {
-            Some(format!("{check}\n{effects}\n{provenance}"))
+        (Some(check), Some(effects), Some(provenance), Some(constants)) => {
+            Some(format!("{check}\n{effects}\n{provenance}\n{constants}"))
         }
         _ => None,
     };

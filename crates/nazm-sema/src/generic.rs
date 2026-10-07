@@ -33,7 +33,7 @@ use std::collections::HashMap;
 
 use crate::enums::EnumId;
 use crate::record::RecordId;
-use crate::types::{ChanId, FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};
+use crate::types::{ArrayId, ChanId, FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};
 use crate::udt::{TypeNode, UserTypes};
 
 /// Which definition an applied entry applies, and to what.
@@ -61,6 +61,9 @@ pub struct Generics {
     /// Generic channel element types, by [`ChanId`] (N53).
     chans: Vec<Type>,
     chan_ids: HashMap<Type, ChanId>,
+    /// Array element types and lengths, by [`ArrayId`] (Gate 2).
+    arrays: Vec<(Type, u32)>,
+    array_ids: HashMap<(Type, u32), ArrayId>,
     /// Function types, by [`FnTypeId`] (N50).
     fns: Vec<FnSignature>,
     fn_ids: HashMap<FnSignature, FnTypeId>,
@@ -120,6 +123,57 @@ impl UserTypes {
     #[must_use]
     pub fn fn_signature(&self, id: FnTypeId) -> Option<&FnSignature> {
         self.generics().fns.get(id.index())
+    }
+
+    /// `[elem; len]`, interned (Gate 2).
+    pub fn array_of(&mut self, elem: Type, len: u32) -> Type {
+        let g = self.generics_mut();
+        if let Some(id) = g.array_ids.get(&(elem, len)) {
+            return Type::Array(*id);
+        }
+        let id = ArrayId::from_index(g.arrays.len());
+        g.arrays.push((elem, len));
+        g.array_ids.insert((elem, len), id);
+        Type::Array(id)
+    }
+
+    /// An array type's element type and length (Gate 2).
+    #[must_use]
+    pub fn array_info(&self, id: ArrayId) -> Option<(Type, u32)> {
+        self.generics().arrays.get(id.index()).copied()
+    }
+
+    /// `[elem; len]` if it has been interned already. Never creates one.
+    #[must_use]
+    pub fn find_array(&self, elem: Type, len: u32) -> Option<Type> {
+        self.generics()
+            .array_ids
+            .get(&(elem, len))
+            .map(|id| Type::Array(*id))
+    }
+
+    /// How many array types this compilation has interned.
+    #[must_use]
+    pub fn array_count(&self) -> usize {
+        self.generics().arrays.len()
+    }
+
+    /// `t` with every enclosing array removed: its innermost element type. An array is
+    /// inline, so for every question about what a type contains — what it owns, whether it
+    /// may cross into a task, whether it has equality, whether it contains itself — an
+    /// array answers as its element does.
+    #[must_use]
+    pub fn strip_array(&self, mut t: Type) -> Type {
+        for _ in 0..crate::MAX_TYPE_DEPTH {
+            match t {
+                Type::Array(id) => match self.array_info(id) {
+                    Some((e, _)) => t = e,
+                    None => return t,
+                },
+                _ => return t,
+            }
+        }
+        t
     }
 
     /// `Chan[elem]`, interned (N53).

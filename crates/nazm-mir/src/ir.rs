@@ -237,6 +237,15 @@ pub enum StatementKind {
         path: Vec<FieldRef>,
         value: LocalId,
     },
+    /// `base.path = value` where the path passes through an array element (Gate 2): each
+    /// index is a local read before anything is written, checked against its array's length,
+    /// and a failure leaves by `unwind`. Arrays hold plain data, so nothing is released.
+    SetElement {
+        base: LocalId,
+        path: Vec<PathRef>,
+        value: LocalId,
+        unwind: BlockId,
+    },
     /// Give back what `local` owns and leave it empty. A no-op on an empty local.
     Drop(LocalId),
     /// Allocate the task list a `scope` holds, into `list`.
@@ -310,7 +319,16 @@ impl Rvalue {
             | Self::Convert { operand: o, .. }
             | Self::Fits { operand: o, .. } => operand_locals(o, &mut out),
             Self::Copy(l) | Self::Move(l) | Self::Capture { env: l, .. } => out.push(*l),
-            Self::Arith(_, a, b) | Self::Bits(_, a, b) | Self::Compare { lhs: a, rhs: b, .. } => {
+            Self::Array { elems } => {
+                for a in elems {
+                    operand_locals(a, &mut out);
+                }
+            }
+            Self::ArrayRepeat { value: a, .. } => operand_locals(a, &mut out),
+            Self::Arith(_, a, b)
+            | Self::Bits(_, a, b)
+            | Self::Index { base: a, index: b }
+            | Self::Compare { lhs: a, rhs: b, .. } => {
                 operand_locals(a, &mut out);
                 operand_locals(b, &mut out);
             }
@@ -347,6 +365,18 @@ impl StatementKind {
         match self {
             Self::Assign { value, .. } => value.reads(),
             Self::SetField { base, value, .. } => vec![*base, *value],
+            Self::SetElement {
+                base, path, value, ..
+            } => {
+                let mut out = vec![*base];
+                for p in path {
+                    if let PathRef::Index { index, .. } = p {
+                        out.push(*index);
+                    }
+                }
+                out.push(*value);
+                out
+            }
             Self::Drop(l) | Self::ScopeOpen { list: l, .. } | Self::ScopeJoin { list: l } => {
                 vec![*l]
             }
@@ -399,7 +429,8 @@ impl StatementKind {
             Self::ScopeOpen { unwind, .. }
             | Self::Spawn { unwind, .. }
             | Self::CheckFailed { unwind }
-            | Self::StackCheck { unwind } => Some(*unwind),
+            | Self::StackCheck { unwind }
+            | Self::SetElement { unwind, .. } => Some(*unwind),
             Self::SetField { .. } | Self::Drop(_) | Self::ScopeJoin { .. } => None,
         }
     }
@@ -413,6 +444,13 @@ impl Block {
         out.extend(self.term.successors());
         out
     }
+}
+
+/// One step of an element write's path (Gate 2): a field, or an element by an index local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathRef {
+    Field(FieldRef),
+    Index { index: LocalId, len: u32 },
 }
 
 /// A value an operation reads without taking ownership of it.
@@ -476,6 +514,12 @@ pub enum Rvalue {
     },
     /// Whether the operand converts to `to` exactly (Gate 2). Total.
     Fits { to: Type, operand: Operand },
+    /// An array of these elements (Gate 2), copied in: plain data owns nothing.
+    Array { elems: Vec<Operand> },
+    /// An array of `count` copies of one value (Gate 2).
+    ArrayRepeat { value: Operand, count: u32 },
+    /// An element of an array, copied out; an index outside it fails (Gate 2).
+    Index { base: Operand, index: Operand },
     /// Total. Both operands borrowed and of type `operand`, compared under `law`.
     Compare {
         op: CmpOp,
@@ -537,6 +581,7 @@ impl Rvalue {
                 | Self::Arith(..)
                 | Self::Bits(..)
                 | Self::Convert { .. }
+                | Self::Index { .. }
                 | Self::Call { .. }
                 | Self::CallIndirect { .. }
                 | Self::Closure { .. }
@@ -556,6 +601,16 @@ pub struct Types {
     pub fns: std::collections::BTreeMap<u32, FnInfo>,
     /// Generic channel types, by `ChanId` index (N53): the element, as a `Vec`'s is.
     pub chans: std::collections::BTreeMap<u32, VecInfo>,
+    /// Array types, by `ArrayId` index (Gate 2): the element and the length.
+    pub arrays: std::collections::BTreeMap<u32, ArrayInfo>,
+}
+
+/// An array type, concrete (Gate 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArrayInfo {
+    pub elem: Type,
+    pub len: u32,
+    pub source: String,
 }
 
 /// A function type's signature, concrete (N50).
@@ -630,6 +685,14 @@ impl Types {
     pub fn enumeration(&self, id: EnumId) -> Option<&EnumInfo> {
         self.enums
             .get(&(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+    }
+
+    /// An array type's element and length (Gate 2).
+    #[must_use]
+    pub fn array(&self, id: nazm_sema::ArrayId) -> Option<(Type, u32)> {
+        self.arrays
+            .get(&(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+            .map(|a| (a.elem, a.len))
     }
 
     #[must_use]
@@ -721,7 +784,13 @@ impl Types {
             | Type::ChanOf(_)
             | Type::Vec(_)
             | Type::Fn(_) => true,
-            Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) | Type::Num(_) => false,
+            // An array holds plain data (Gate 2).
+            Type::Int
+            | Type::Bool
+            | Type::Cap(_)
+            | Type::Param(_)
+            | Type::Num(_)
+            | Type::Array(_) => false,
             Type::Record(id) => self.record(id).is_some_and(|r| {
                 r.fields
                     .iter()

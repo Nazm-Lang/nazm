@@ -218,6 +218,18 @@ impl Census<'_> {
                 self.expr(operand);
             }
             ExprKind::Fits { operand, .. } => self.expr(operand),
+            ExprKind::Array { elems } => {
+                for x in elems {
+                    self.expr(x);
+                }
+            }
+            ExprKind::ArrayRepeat { value, .. } => self.expr(value),
+            // An index is checked against its array's length when it runs (Gate 2).
+            ExprKind::Index { base, index } => {
+                self.push(Kind::Index, Status::Checked, e.at, None);
+                self.expr(base);
+                self.expr(index);
+            }
             ExprKind::Neg(x) => {
                 // Only `Int`'s minimum cannot be negated.
                 match self.int(x) {

@@ -144,6 +144,10 @@ use nazm_span::Span;
 /// module's; a type offered by another module is listed in `reexported_types` under the name
 /// an importer writes. A `/10` reader would refuse the identity as foreign or miss the type,
 /// so the major moves.
+///
+/// Gate 2 adds the numeric types by name (`UInt8`, `Float64`, …) and an array type as
+/// `{"array":T,"len":N}` without moving it: a `/11` reader from before Gate 2 refuses either as
+/// an unknown type rather than misreading it, as an older reader did `IoCap`.
 pub const SCHEMA: &str = "nazm.interface/11";
 
 /// A type as persisted.
@@ -160,6 +164,11 @@ pub const SCHEMA: &str = "nazm.interface/11";
 /// | definition | `{"def":"a.nz::record Box","args":[T]}` | that definition applied to those arguments — none for one that is not generic |
 /// | channel | `{"chan":T}` | `Chan[T]` (N53); a `/7` reader refuses it as it refuses any shape it does not know |
 /// | function | `{"fn":[T],"ret":R,"effects":["io"]}` | `fn(T) -> R ! { io }` (N50), its effects by name in effect-id order |
+/// | array | `{"array":T,"len":4}` | `[T; 4]` (Gate 2) |
+///
+/// The array shape, and the numeric built-ins' names, arrived in Gate 2 the way the function
+/// shape did: an older reader refuses a file that has one rather than reading it as something
+/// else.
 ///
 /// The function shape arrived in N50 without a schema move: a `/7` reader that meets one
 /// cannot read it as any other shape, refuses the file, and so treats it as no entry — it is
@@ -180,6 +189,11 @@ pub enum PersistentType {
     /// `Chan[T]` (N53), written `{"chan":T}`.
     Chan {
         chan: Box<PersistentType>,
+    },
+    /// `[T; N]` (Gate 2), written `{"array":T,"len":N}`.
+    Array {
+        array: Box<PersistentType>,
+        len: u32,
     },
     Def {
         def: String,
@@ -372,6 +386,13 @@ fn persist(t: Type, types: &UserTypes, graph: &ModuleGraph) -> Option<Persistent
         Type::ChanOf(c) => Some(PersistentType::Chan {
             chan: Box::new(persist(types.chan_element(c)?, types, graph)?),
         }),
+        Type::Array(a) => {
+            let (elem, len) = types.array_info(a)?;
+            Some(PersistentType::Array {
+                array: Box::new(persist(elem, types, graph)?),
+                len,
+            })
+        }
         Type::Fn(f) => {
             let sig = types.fn_signature(f)?;
             Some(PersistentType::Fn {
@@ -626,6 +647,9 @@ fn validate_type(
         PersistentType::Vec { vec } => validate_type(vec, params, defined, depth + 1, owner)?,
         PersistentType::Chan { chan } => {
             validate_type(chan, params, defined, depth + 1, owner)?;
+        }
+        PersistentType::Array { array, .. } => {
+            validate_type(array, params, defined, depth + 1, owner)?;
         }
         PersistentType::Fn {
             params: ps,
@@ -1496,6 +1520,10 @@ fn read_type(
         PersistentType::Chan { chan } => {
             let elem = read_type(chan, ids, types, owner);
             types.chan_of(elem)
+        }
+        PersistentType::Array { array, len } => {
+            let elem = read_type(array, ids, types, owner);
+            types.array_of(elem, *len)
         }
         PersistentType::Fn {
             params,

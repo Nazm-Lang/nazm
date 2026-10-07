@@ -471,6 +471,18 @@ pub mod codes {
     /// A shift whose amount is a constant outside `0..width` (Gate 2): it would stop the
     /// program every time it ran (`N0412`), so it is refused where it is written.
     pub const SHIFT_AMOUNT_REFUSED: Code = Code::new("N0617");
+    /// An array over 64 KiB, or of no elements (Gate 2): a larger buffer is a `Vec`.
+    pub const ARRAY_TOO_LARGE: Code = Code::new("N0618");
+    /// An array whose element owns something — a `Str`, a handle, a function value — rather
+    /// than plain data (Gate 2).
+    pub const ARRAY_ELEMENT: Code = Code::new("N0621");
+    /// A constant's value, or an array's length, that is not computed from literals, other
+    /// constants, operators and numeric conversions (Gate 2).
+    pub const NOT_A_CONSTANT: Code = Code::new("N0622");
+    /// A constant whose computation overflows, divides by zero or shifts out of range (Gate 2).
+    pub const CONSTANT_FAILS: Code = Code::new("N0623");
+    /// An index that is not into an array, or a constant index outside it (Gate 2).
+    pub const ARRAY_INDEX: Code = Code::new("N0624");
 
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no

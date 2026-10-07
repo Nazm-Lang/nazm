@@ -88,7 +88,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 1 | Syntax, parser, CST | VERIFIED — the reference parser: incremental reparse and recovery (N76); the compiler written in Nazm's syntax is N98's |
 | 2 | Name resolution and modules | VERIFIED — durable identities, interfaces and resolved units, a declared root, packages, re-exports with one identity (N103, N107); check reuse for builds is area 26's |
 | 2a | Incremental semantic checking | VERIFIED |
-| 3 | Type system | VERIFIED as scoped (N107, Gate 2) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); fixed-width integers, `Float32`/`Float64`, bit operators and conversions (Gate 2); trait objects, generic traits and default methods refused by name |
+| 3 | Type system | VERIFIED as scoped (N107, Gate 2) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); fixed-width integers, `Float32`/`Float64`, bit operators and conversions, fixed arrays of plain data and module constants (Gate 2); trait objects, generic traits and default methods refused by name |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe — closure environments are ownership-graph nodes; the capture that could close a cycle is refused (`N0616`, Gate 1-C1) |
 | 5 | Effects | VERIFIED as scoped (N107) — inferred, checked compiler-owned effects with subsumption (N79); no handlers or user effects; pure is not total |
 | 6 | Capabilities (language) | VERIFIED as scoped (N107) — static, coarse, shareable: no inherited authority (N104), `OutCap` attenuation (N79) |
@@ -460,6 +460,20 @@ rather than met.
 exist.
 
 ### 3. Type system — VERIFIED as scoped (N107, Gate 2)
+
+**Gate 2 (2026-10-08)** · *Arrays* and *Constants* (`spec.md`; `general-purpose.md` §4, §15).
+`[T; N]` of plain data — numbers, `Bool`, and records, enums and arrays of them — at most 64 KiB;
+`[a, b]`, `[value; count]`, a checked `xs[i]` and `xs[i] = v` through any path of fields and
+indexes; copied as a value, compared element by element, held inline in records, vectors and
+tasks; and `const NAME: T = value;`, computed by the checker with the same numeric semantics,
+module-private. `crates/nazm-cli/tests/arrays.rs` — seven tests, each program run under the
+interpreter, LLVM `-O0` and `-O2` and Cranelift: building, copying and writing in place, arrays in
+records and records in arrays, a copy crossing into a task, every index (read, write, negative,
+nested) stopping with `N0405`, constants, every refusal (`N0003`, `N0101`, `N0300`, `N0618`,
+`N0621`–`N0624`) with the 64 KiB bound exact, and an array in a public signature across modules,
+cold and from the cached interface. Compatibility corpus: one run case, one trap case, six
+refusals. Ten mutants (`g2-…array…`, `g2-…constant…`). Not crossing the C boundary, not in the EVM
+or accelerator-kernel targets (refused by name), and no slices or views — that is §5's.
 
 **Gate 2 (2026-10-07)** · *Numbers* (`spec.md`, *Numbers*; `general-purpose.md` §1–§3). `Int8`,
 `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float32` and `Float64` beside `Int`;

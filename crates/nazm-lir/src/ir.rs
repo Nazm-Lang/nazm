@@ -97,6 +97,20 @@ pub enum Ty {
     /// A `Chan[T]` (N53): a pointer to a generic channel, by its index in the program's
     /// channel types. Null when it owns nothing.
     ChanOf(ChanTy),
+    /// `[T; N]` (Gate 2): held in memory, `N` elements of plain data, owning nothing.
+    Array(ArrayTy),
+}
+
+/// An array type, by its index in the program's array types (Gate 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArrayTy(pub u32);
+
+/// An array type's element and length (Gate 2): `len` elements of `elem`'s layout, contiguous.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArrayLayout {
+    pub id: ArrayTy,
+    pub elem: Ty,
+    pub len: u32,
 }
 
 /// A generic channel type, by its index in the program's channel types (N53).
@@ -315,7 +329,7 @@ impl Ty {
     #[must_use]
     pub fn owns(self) -> Option<Owns> {
         match self {
-            Self::Int | Self::Bool | Self::Num(_) => None,
+            Self::Int | Self::Bool | Self::Num(_) | Self::Array(_) => None,
             Self::Str => Some(Owns::Backing),
             Self::Ints => Some(Owns::Ints),
             Self::Strs => Some(Owns::Strs),
@@ -401,6 +415,7 @@ impl Ty {
             // IR rather than a silent one.
             Self::Record(_) => "<record>",
             Self::Enum(_) => "<enum>",
+            Self::Array(_) => "<array>",
         }
     }
 
@@ -426,7 +441,7 @@ impl Ty {
             // variant's fields and finds null in each, which is a no-op in every one of
             // the runtime's release functions. So a zeroed enum slot is safe to release
             // exactly as a zeroed record slot is.
-            Self::Str | Self::Record(_) | Self::Enum(_) => "zeroinitializer",
+            Self::Str | Self::Record(_) | Self::Enum(_) | Self::Array(_) => "zeroinitializer",
             Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) | Self::Fn(_) | Self::ChanOf(_) => {
                 "null"
             }
@@ -448,6 +463,7 @@ impl Ty {
             Self::Vec(_) => "a `Vec`",
             Self::Fn(_) => "a function value",
             Self::ChanOf(_) => "a `Chan[T]`",
+            Self::Array(_) => "an array",
         }
     }
 }
@@ -510,6 +526,9 @@ impl Ty {
             nazm_sema::Type::Fn(id) => {
                 Self::Fn(FnTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
             }
+            nazm_sema::Type::Array(id) => {
+                Self::Array(ArrayTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+            }
         }
     }
 }
@@ -551,6 +570,8 @@ pub struct Unit {
     pub enums: Vec<EnumLayout>,
     /// The `Vec` types this unit's text mentions, closed over element types.
     pub vecs: Vec<VecLayout>,
+    /// Every array type of the program (Gate 2): few, and laid out from their elements.
+    pub arrays: Vec<ArrayLayout>,
 }
 
 /// A definition another unit owns, as this one needs to see it.
