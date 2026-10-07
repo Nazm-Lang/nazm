@@ -24,10 +24,10 @@ hosted runtime runs tasks on a structured M:N scheduler, and the release is back
 bootstrap, mutation, fuzzing, platform and artifact-verification evidence.
 
 **Not yet released.** The tree says 1.0.0; no `v1.0.0` tag exists. The v1 programme's later gates
-and its final release gate stand between this tree and one, and two decisions are open: a
-**licensing decision is required before public release** ([`docs/licensing.md`](docs/licensing.md)),
-and a recorded memory defect — a closure stored into a `Vec` it captures is never reclaimed — awaits
-its resolution ([`docs/limitations.md`](docs/limitations.md)). The last published candidate is
+and its final release gate stand between this tree and one, and a **licensing decision is required
+before public release** ([`docs/licensing.md`](docs/licensing.md)). Gate 1 found a memory defect — a
+closure stored into a `Vec` it captured was never reclaimed — and Gate 1-C1 closed it by refusing
+the capture (`N0616`, [`docs/spec.md`](docs/spec.md), *Cycles*). The last published candidate is
 v0.3.0 ([`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)).
 
 | | |
@@ -193,7 +193,7 @@ does **not** establish as carefully as by what it does:
 - **Self-hosting:** `compiler/*.nz` is a compiler for a declared subset of Nazm, written in Nazm.
   The bootstrap (Rust → C1 → C2 → C3) reaches a fixpoint — C2 and C3 byte-identical — which shows
   it reproduces itself, and it agrees with the reference compiler on its conformance corpus (34
-  cases and 29 refusals) and 21 parity probes. It does not cover the whole language — string
+  cases and 30 refusals) and 21 parity probes. It does not cover the whole language — string
   escapes, `::` and `as`, packages, `Chan[T]`, `select`, the clock, device registers and most of
   the C boundary are outside its subset — and the Rust compiler remains the reference. A fixpoint
   is not an independent proof of semantics ([`docs/bootstrap.md`](docs/bootstrap.md)).

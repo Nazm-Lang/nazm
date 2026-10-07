@@ -8978,3 +8978,56 @@ imported); `crates/nazm-service/tests/snapshot.rs` (a value use changes the func
 occurrence); `crates/nazm-service/tests/closures.rs` (no capture slot is a source definition);
 `crates/nazm-service/tests/structure.rs` (a field and a method of one name told apart); two
 catalogue entries, `r1c1-a-function-value-is-no-use` and `r1c1-a-function-value-is-a-use-of-its-maker`.
+
+## 7.111 A closure's environment is a node of the ownership graph — Gate 1-C1, 2026-10-07
+
+**What Gate 1 found.** N11 refused every ownership cycle a *definition* could describe (`N0359`),
+and the argument that counting reclaims everything rested on the graph of definitions being the
+whole graph. N50 added a node the graph of definitions does not show: a closure's environment,
+which owns what it captured, behind a function type that says nothing of it. A closure capturing
+a `Vec[fn() -> Int]` and stored into that vector owned itself; the checker accepted it and the
+memory report ended with it live.
+
+**The decision: refuse, by type, at the capture.** Three facts carry it (`spec.md`, *Cycles*): an
+environment is made once and never changes, so its edges point at older values; an edge into an
+existing value is made only by storing into a counted handle; and a counted handle that cannot
+hold a function value holds nothing that leads back to an environment. So the only way to close a
+cycle through an environment is for it to capture a container that can hold one, and that is
+what `N0616` refuses. `nazm_sema::UserTypes::function_holder` answers the question over a captured
+binding's type — a `Vec` or channel element that is, or reaches through record and enum fields or
+further handles, a function type — and `check.rs`'s capture lookup asks it once per capture, where
+it already refuses a captured `let mut` (`N0386`). It reads the same instance fields every derived
+property reads (`task_safety`, `equality`), so it is not a second type walker, and a future owning
+container is covered by being asked the same way.
+
+**What was considered and not done.** A rule at the store — `vec_push(fs, f)` refused when `f`
+might reach `fs` — needs to know what an opaque function value captured, which its type does not
+say, and alias analysis of handles; either a new capture-carrying component of function types or
+refusing every store of an unknown function value, including inside every generic container
+function. Refusing at the capture needs neither: every function value, wherever it came from,
+was held to the rule where it was written, so storing one is always safe and generic code is
+untouched. A cycle collector was the constitution's third option; it would be a second
+reclamation mechanism with its own timing, pauses, task-safety and profile questions, beside a
+counting scheme that is otherwise complete. Not introduced.
+
+**What it costs.** Some closures that would never close a cycle are refused — one that only
+reads a vector of handlers. The remedy is to pass the vector as an argument. The rule is stated
+by type so that a reader can apply it without running the program.
+
+**The compiler written in Nazm** refuses the same capture with the same code and span
+(`compiler/analyse.nz`, `holds_functions`). Its type arguments are never function types, so in
+its subset the container is a `Vec` of records with a function field; that form is in
+`compiler/conformance/refused/` and `crates/nazm-cli/tests/refusals/`.
+
+**Identity.** The semantic epoch moved 29 → 30: programs accepted before are refused. `Type::ALL`,
+hashed into the checker's identity, gained the five capability types it lacked since before they
+existed (so completion offers all seven); it moved in the same epoch. The interface schema and the
+runtime ABI are unchanged.
+
+**Evidence.** `crates/nazm-cli/tests/closures.rs`: every shape refused once, with nothing else
+(direct, alias, mutual, nested closure, a record, a `Vec` of records, an enum, an `Option`, a `Vec`
+of `Vec`s, a closure made in a helper); an acyclic program — named functions, closures capturing
+`Int`, `Str`, `Vec[Int]` and another closure, a record with a function field, a closure through a
+generic function and one stored by a function that cannot know what it captured — agreeing under
+the interpreter, LLVM at `-O0` and `-O2` and Cranelift with every count `live=0`; and a closure made
+in another module. `tests/compat/v1/`: five refusals and one run case. Catalogue entries `g1c1-*`.

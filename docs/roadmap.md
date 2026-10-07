@@ -444,6 +444,12 @@ closure stored into a `Vec` it captures forms a reference cycle that is never re
 against `spec.md`'s *Cycles*, reported for decision (area 4 is PARTIAL). Nothing tagged, pushed or
 published.
 
+**Gate 1-C1** — the reviewer chose cycle prevention, extended to closure environments, over a
+collector or a narrowed claim. A closure may not capture a value that can hold a function value
+behind a counted handle (`N0616`), decided by the captured type where the closure is written, in
+both compilers; storing a function value is never refused. Semantic epoch 29 → 30. `Type::ALL`
+holds all seven capability types, so completion offers them. `architecture.md` §7.111.
+
 ### R1 — public release readiness — **complete, 2026-10-07; candidate `7a16a40`**
 
 `releases/7a16a40.md` the record. No language or runtime semantics changed intentionally. The

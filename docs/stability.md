@@ -58,13 +58,14 @@ is append-only, and an edited expectation is one of the four cases above or a 2.
 A release carries several version identities. They answer different questions and move
 independently: a toolchain release does **not** imply a new semantic epoch, interface schema or
 runtime ABI, and none of those implies a new toolchain release. Gate 1 moved the two that name the
-release and nothing else, because nothing else changed its contract.
+release; Gate 1-C1 then moved the semantic epoch, because the checker began refusing programs it
+had accepted. Nothing else changed its contract.
 
 | Identity | Before (R1, `7a16a40`) | 1.0 | Why it moved, or did not | Where it is reported |
 | --- | --- | --- | --- | --- |
 | **Language version** | v0.3 | **1.0** | the settled semantics are frozen as the 1.x contract | `docs/spec.md`'s status line; `nazm --help` |
 | **Toolchain version** | 0.3.0 | **1.0.0** | the release | `nazm --version`; `toolchain.compiler` in `nazm inspect`; the release manifest |
-| **Semantic epoch** | 29 | **29** | no checking rule changed: what the checker accepts and refuses is the same set. (One refusal's code is now `N0101`, by name, where it was `N0100`; the crate version is in the checker's identity, so every cache written by 0.3.0 is recomputed anyway) | `toolchain.semantic_epoch` in `nazm inspect`; build provenance |
+| **Semantic epoch** | 29 | **30** | Gate 1-C1: a closure capturing a value that can hold a function value behind a counted handle moved from accepted to refused (`N0616`), and `Type::ALL`, in the checker's identity, gained five capability types. (Gate 1 alone moved nothing: `1.5`'s refusal changed code, `N0100` → `N0101`, not acceptance) | `toolchain.semantic_epoch` in `nazm inspect`; build provenance |
 | **Interface schema** | `nazm.interface/11` | **`nazm.interface/11`** | no module's published facts changed shape | `toolchain.interface` in `nazm inspect` |
 | **Runtime ABI** | 14 | **14** | no runtime symbol, layout or calling rule changed | `toolchain.runtime_abi` in `nazm inspect`; `nazm.runtime/1` manifests |
 | **Package and lock schemas** | `nazm.package/1`, `nazm.lock/1`, `nazm.registry-index/1` | **unchanged** | no shape changed | the `schema` field of each file |
@@ -122,16 +123,17 @@ Frozen as `docs/spec.md`, *The memory constitution*, states it, and observable o
   never before; an expression abandoned by a trap, `return`, `break` or `continue` releases what
   it had produced. There are no destructors and no user-observable destruction order.
 - **Closures** capture by copy when they are created: a value is copied, a handle is the same
-  storage. A function value is a handle to its closure.
+  storage. A function value is a handle to its closure, and its environment is a node of the
+  ownership graph that never changes after it is made.
 - **Tasks.** `Int`, `Bool`, `Str` and channels cross into a task, and a record or enum crosses
   when every field of it (of every variant) does — derived, not declared; a sequence, a `Vec`, a
   function value and an opaque C handle do not (`N0321`, `N0390`).
-- **Cycles.** Inline containment cycles (`N0336`) and ownership cycles through `Vec` in type
-  definitions (`N0359`) are refused. **Not promised:** leak freedom for every program. A closure
-  that captures a `Vec` able to hold function values, stored into that `Vec`, forms a reference
-  cycle the checker accepts and counting does not reclaim (Gate 1 found this; it is a recorded
-  defect against the memory section's *Cycles*, `docs/limitations.md`). Leak freedom is claimed
-  for programs without such a cycle, and for nothing wider.
+- **Cycles.** Inline containment cycles (`N0336`) and ownership cycles through `Vec` or a
+  channel in type definitions (`N0359`) are refused, and so, since Gate 1-C1, is a closure
+  capturing a value that can hold a function value behind a counted handle (`N0616`) — the one
+  way a closure environment could come to own itself. With the three, every value of every type
+  a program can write is reclaimed by counting, environments included; no collector exists or is
+  needed (`docs/spec.md`, *Cycles*). Gate 1 found the closure route open and Gate 1-C1 closed it.
 - **Not frozen.** Heap layouts, reference-count placement, string sharing versus copying, the
   `--layout` choice, and what an optimisation removes. These are the compiler's.
 

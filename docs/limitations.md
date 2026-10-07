@@ -9,12 +9,13 @@ found only by reading all of it.
 
 ## Language
 
-- **A closure stored into a `Vec` it captures is never reclaimed** (Gate 1, 2026-10-07). A
-  closure holds the handles it captured, so `let fs = vec_new[fn() -> Int](); let f = fn() -> Int
-  { vec_len(fs) }; vec_push(fs, f);` builds a value that owns itself; the checker accepts it, and
-  reference counting reclaims neither the vector nor the closure. This is a recorded defect against
-  `docs/spec.md`'s *Cycles*, not a design choice: until it is resolved, deterministic reclamation
-  and leak freedom hold for programs that form no such cycle through a closure (area 4).
+- A closure may not capture a value that can hold a function value behind a counted handle — a
+  `Vec[fn(…) -> R]`, a `Vec` of records or enums with a function field, or a record or enum holding
+  one (`N0616`, Gate 1-C1). It is decided by type where the closure is written, so it also refuses
+  a closure that would never have closed a cycle, such as one that only reads a vector of
+  handlers; pass the vector as an argument instead (area 4). *Narrowed from a defect:* Gate 1
+  found that such a closure, stored into the `Vec` it captured, was never reclaimed; the refusal
+  closes that route and no collector was added.
 - Floating point, integers other than the 64-bit `Int`, `for`, `loop`, loop labels, valueless
   `return` and mutable parameters are not in 1.0, each refused by name (`N0101`, `N0311`); `1.5`
   is refused as floating point since Gate 1, where it was a field-read error before.
