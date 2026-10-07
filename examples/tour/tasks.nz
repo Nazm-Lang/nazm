@@ -1,0 +1,35 @@
+// Structured concurrency: every task starts inside a `scope`, and the scope does not end until
+// each has finished. Starting one is an effect, `spawn`, and needs a `SpawnCap` — authority that
+// `main` receives and hands down; nothing else can make one.
+
+// Add the squares of `from` up to `to` and send the total. Sending on a channel is not an
+// effect, so this function declares none.
+fn squares(from: Int, to: Int, out: Chan) -> Int ! {} {
+    let mut sum = 0;
+    let mut i = from;
+    while i <= to {
+        sum = sum + i * i;
+        i = i + 1;
+    }
+    chan_send(out, sum);
+    0
+}
+
+fn main(tasks: SpawnCap) -> Int ! { spawn } {
+    let results = chan_new(2);
+    scope {
+        spawn squares(1, 5, results);
+        spawn squares(6, 10, results);
+    }
+    // Both tasks have finished here; their two totals are waiting in the channel.
+    let buf = ints_new();
+    let mut total = 0;
+    let mut n = 0;
+    while n < 2 {
+        if chan_recv(results, buf) {
+            total = total + ints_pop(buf);
+        }
+        n = n + 1;
+    }
+    total
+}

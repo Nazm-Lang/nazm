@@ -28,6 +28,7 @@ const TOUR: &[(&str, &str)] = &[
     ("generics.nz", "131\n"),
     ("closures.nz", "47\n"),
     ("traits.nz", "62\n"),
+    ("tasks.nz", "385\n"),
 ];
 
 fn repo_root() -> PathBuf {
