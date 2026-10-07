@@ -14433,3 +14433,11 @@ file = "crates/nazm-core/src/effects.rs"
 find = "            .or_else(|| impl_method_contract(res, id).map(Some))"
 replace = "            .or(None)"
 killers = [{ package = "nazm-cli", test = "traits", name = "an_imported_impls_method_is_checked_against_its_traits_effects" }]
+
+[[mutation]]
+name = "m1-a-linux-link-omits-libm"
+why = "a Linux link names no libm, so every build calling a float built-in the C library supplies (`round`, `sin`, `pow`, …) fails to link"
+file = "crates/nazm-cli/src/backend.rs"
+find = "        vec![\"-lm\".to_owned()]"
+replace = "        Vec::new()"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::a_linux_link_names_the_c_librarys_mathematics_and_no_other_does" }]
