@@ -7165,6 +7165,31 @@ find = "            (Some(x), Some(y)) => y.total_cmp(&x).then(a.cmp(&b)),"
 replace = "            (Some(x), Some(y)) => x.total_cmp(&y).then(a.cmp(&b)),"
 killers = [{ package = "xtask", bin = "xtask", name = "suite::tests::the_longest_start_first_and_the_unknown_before_the_known" }]
 
+# R1: what CI leaves out, and what the release's build-input digest covers.
+[[mutation]]
+name = "r1-a-guarded-target-runs-on-the-host"
+why = "the host-safe subset no longer recognises a target that calls the containment guard, so CI runs a compiler stage uncontained (or fails on the guard)"
+file = "xtask/src/suite.rs"
+find = '            !l.starts_with("//") && l.contains("require_containment(")'
+replace = '            false && !l.starts_with("//") && l.contains("require_containment(")'
+killers = [{ package = "xtask", bin = "xtask", name = "suite::tests::a_target_that_calls_the_containment_guard_is_the_one_excluded" }]
+
+[[mutation]]
+name = "r1-the-digest-forgets-the-lockfile"
+why = "the build-input digest leaves out `Cargo.lock`, so a changed dependency pin leaves a release's provenance unchanged"
+file = "scripts/source-digest.sh"
+find = "entries='.cargo .dockerignore .github .gitignore CONTRIBUTING.md Cargo.lock Cargo.toml LICENSE"
+replace = "entries='.cargo .dockerignore .github .gitignore CONTRIBUTING.md Cargo.toml LICENSE"
+killers = [{ package = "xtask", test = "release", name = "every_build_input_moves_the_digest_and_nothing_git_ignores_does" }]
+
+[[mutation]]
+name = "r1-the-digest-is-of-names-only"
+why = "the build-input digest hashes the list of paths and not their contents, so an edited file leaves it unchanged"
+file = "scripts/source-digest.sh"
+find = "files | tr '\\n' '\\0' | xargs -0 $tool | $tool | cut -d' ' -f1"
+replace = "files | $tool | cut -d' ' -f1"
+killers = [{ package = "xtask", test = "release", name = "every_build_input_moves_the_digest_and_nothing_git_ignores_does" }]
+
 [[mutation]]
 name = "n32h3-execution-ignores-the-owning-package"
 why = "mutants are ordered without their owning package, so one package's are not run together"
