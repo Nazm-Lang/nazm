@@ -14026,8 +14026,10 @@ name = "g1-the-human-types-line-is-the-checkers-vocabulary"
 why = "`nazm capabilities` prints the checker's fixed vocabulary as the type list, which stops at `IoCap, SpawnCap`"
 file = "crates/nazm-cli/src/capabilities.rs"
 find = "println!(\"types: {}\", Type::every_builtin_name().join(\", \"));"
-replace = "println!(\"types: {}\", i.types.join(\", \"));"
+replace = "println!(\"types: {}\", i.types.iter().filter(|t| !t.ends_with(\"Cap\") || **t == \"IoCap\" || **t == \"SpawnCap\").copied().collect::<Vec<_>>().join(\", \"));"
 killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_human_types_line_names_every_capability_type_once" }]
+# Retargeted by Gate 1-C1: the JSON `types` and the human line now share `Type::every_builtin_name()`,
+# so printing `i.types` became an equivalent mutant; this injects the historical defect instead.
 
 [[mutation]]
 name = "g1-a-help-names-a-schema-a-major-behind"
