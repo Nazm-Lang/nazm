@@ -95,6 +95,7 @@ fn exec(container: &str, argv: &[&str]) -> (String, i32) {
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn a_candidate_container_and_its_database_come_up_and_tear_down_verified() {
     let Some(cli) = docker_or_skip() else { return };
     let _guard = serial()
@@ -131,6 +132,7 @@ fn a_candidate_container_and_its_database_come_up_and_tear_down_verified() {
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn the_candidate_cannot_reach_the_host_or_another_attempts_files() {
     let Some(cli) = docker_or_skip() else { return };
     let _guard = serial()
@@ -167,6 +169,7 @@ fn the_candidate_cannot_reach_the_host_or_another_attempts_files() {
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn killing_the_candidate_reaps_a_detached_grandchild() {
     let Some(cli) = docker_or_skip() else { return };
     let _guard = serial()
@@ -215,6 +218,7 @@ fn killing_the_candidate_reaps_a_detached_grandchild() {
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn a_new_process_recovers_resources_a_killed_harness_left_behind() {
     // The genuinely cross-process case. The in-memory fake cannot host it: two processes
     // need shared state to recover *through*, and the daemon is that state.
@@ -303,6 +307,7 @@ fn wait_ready(network: &str, creds: &nazm_bench::sandbox::postgres::Credentials)
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn the_restricted_role_can_work_and_cannot_escalate() {
     let Some(cli) = docker_or_skip() else { return };
     let _guard = serial()
@@ -361,6 +366,7 @@ fn the_restricted_role_can_work_and_cannot_escalate() {
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn each_attempt_gets_fresh_database_state() {
     let Some(cli) = docker_or_skip() else { return };
     let _guard = serial()
@@ -400,6 +406,7 @@ fn each_attempt_gets_fresh_database_state() {
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn the_candidate_cannot_read_another_attempts_workspace_or_the_acceptance_corpus() {
     let Some(cli) = docker_or_skip() else { return };
     let _guard = serial()
@@ -507,6 +514,7 @@ fn the_candidate_cannot_read_another_attempts_workspace_or_the_acceptance_corpus
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn a_harness_killed_between_creating_and_recording_is_still_recoverable() {
     // The window the ledger exists for, and the only one nothing else reaches: the
     // resource exists and its creation was never recorded, so only the `Intended` entry
@@ -599,6 +607,7 @@ fn psql_admin(
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn development_state_cannot_carry_into_acceptance_within_one_attempt() {
     // Distinct from freshness *between* attempts. Inside one attempt the candidate spends
     // its whole run writing to this database; grading against that state would let a
@@ -797,6 +806,7 @@ fn duration_ms(cli: &DockerCli, name: &str) -> Option<u64> {
 }
 
 #[test]
+#[ignore = "integration-external: Docker and PostgreSQL (docs/integration-testing.md)"]
 fn the_complete_path_grades_accepted_wrong_answer_and_timeout() {
     let Some(cli) = docker_or_skip() else { return };
     let _guard = serial()

@@ -45,9 +45,10 @@ fi
 
 # Every top-level entry the repository tracks. A file here that is absent is skipped, so a
 # fixture tree may hold a subset.
-entries='.cargo .dockerignore .github .gitignore CONTRIBUTING.md Cargo.lock Cargo.toml LICENSE
-README.md SECURITY.md _typos.toml bench compiler corpus crates deny.toml docker docs editors
-examples fuzz library review rust-toolchain.toml rustfmt.toml schema scripts tools xtask'
+entries='.agent .cargo .dockerignore .github .gitignore AGENTS.md CLAUDE.md CONTRIBUTING.md
+Cargo.lock Cargo.toml LICENSE README.md SECURITY.md _typos.toml bench compiler corpus crates
+deny.toml docker docs editors examples fuzz library openspec review rust-toolchain.toml
+rustfmt.toml schema scripts tests tools xtask'
 
 files() {
     for e in $entries; do
@@ -57,6 +58,8 @@ files() {
             ! -name '*.rs.bk' \
             ! -path '*/.nazm/*' \
             ! -path 'bench/record.json' \
+            ! -path '.agent/state.md' \
+            ! -path '.agent/plans/*' \
             ! -path 'fuzz/Cargo.lock' \
             ! -path 'fuzz/target/*' \
             ! -path 'review/m1d/*' \
