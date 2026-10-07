@@ -4,6 +4,42 @@
 before writing the compiler, and the reasoning that would otherwise be lost. Where a
 decision rests on a claim that has not been checked, it says so.
 
+## Current state — Nazm 1.0 (Gate 1, 2026-10-07)
+
+*Read this first. Everything after it is the design record: §1–§6 are the design written before
+the compiler, and each §7.n is the dated record of one milestone's decisions. They are kept, not
+rewritten, and a later section or a marked correction governs an earlier one. Where they disagree
+with this overview or with [`capability-matrix.md`](capability-matrix.md) about what exists
+today, the matrix decides.*
+
+**The pipeline.** One front end, two ways to run what it accepts:
+
+| Stage | Crate | What it owns |
+| --- | --- | --- |
+| Source | `nazm-span` | files, `FileId`-carrying spans, the source map |
+| Syntax | `nazm-syntax` | lexer, error-tolerant parser, the lossless CST and the AST |
+| Meaning | `nazm-sema`, `nazm-core` | one resolution, types, generics, traits, effects, capabilities, provenance, contracts — the checker, and the interpreter `nazm run` uses |
+| Modules and reuse | `nazm-iface`, `nazm-cache`, `nazm-package` | persisted interfaces (`nazm.interface/11`), keyed semantic and object caches, packages, locks and local registries |
+| Core IR | `nazm-cir` | what each position of a checked program means, decided once (`nazm.core-ir/2`) |
+| MIR | `nazm-mir` | every copy, move and drop explicit and validated; monomorphisation for the native path |
+| LIR | `nazm-lir` | the instruction-level IR both native backends translate (`nazm.lir/2`) |
+| Code generation | `nazm-lir` (LLVM text, compiled by `clang`), `nazm-codegen-clif` (Cranelift, in process) | machine code; neither backend falls back to the other |
+| Runtime | `nazm-runtime` | LLVM IR for the task scheduler, channels, reclamation and the outside-world built-ins, generated into every native program (runtime ABI 14) |
+| Tooling | `nazm-service`, `nazm-cli`, `nazm-mcp`, `nazm-docs`, `nazm-repo`, `nazm-formal` | the language service, the command line, the MCP server, documentation and repository maps, bounded formal checks |
+| Measurement | `nazm-bench`, `nazm-agent-bench`, `nazm-tokens`, `xtask` | benchmarks, the agent benchmark, token-cost counting, the repository's gates, contained runner and release tooling |
+
+`nazm run` interprets the checked program's Core IR; `nazm build` lowers it through MIR and LIR to
+native code, and the two are held to the same results by differential tests. `compiler/*.nz` is a
+second compiler, written in Nazm for a declared subset of the language (`bootstrap.md`).
+
+**What is stable.** The language surface `spec.md` classifies STABLE 1.0, the schemas, commands
+and package formats `stability.md` classifies STABLE 1.x, and nothing else. The crates' Rust APIs
+are not a public interface; `publish = false` holds every one.
+
+**What remains design, not code.** §2's HIR level, §4's automatic layout selection (one opt-in
+layout exists, N68), §5's parameter conventions beyond `let` and its region calculus, effect
+handlers and user-defined effects. `limitations.md` is the current list.
+
 **Corrected 2026-09-21.** This line read "Nothing below §7 exists in code", and that was
 the single most-copied false sentence in the repository — the workspace router and three
 other documents paraphrased it. What is now implemented: one IR crate (§2 level 7 by name,

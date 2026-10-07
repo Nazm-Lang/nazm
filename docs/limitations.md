@@ -1,12 +1,23 @@
 # Known limitations
 
 One list, kept current, of what Nazm does **not** do or does only partly — the v1 foundation and
-everything N49–N74 added to it, as audited in N75. Each line names the
+everything N49–N74 added to it, as audited in N75, and kept current through Nazm 1.0 (Gate 1,
+2026-10-07). What 1.x promises about what is here is `stability.md`. Each line names the
 capability-matrix area that owns it (`capability-matrix.md`), where the evidence and the status
 live; this file adds nothing a reader could not find there, and exists so nothing material is
 found only by reading all of it.
 
 ## Language
+
+- **A closure stored into a `Vec` it captures is never reclaimed** (Gate 1, 2026-10-07). A
+  closure holds the handles it captured, so `let fs = vec_new[fn() -> Int](); let f = fn() -> Int
+  { vec_len(fs) }; vec_push(fs, f);` builds a value that owns itself; the checker accepts it, and
+  reference counting reclaims neither the vector nor the closure. This is a recorded defect against
+  `docs/spec.md`'s *Cycles*, not a design choice: until it is resolved, deterministic reclamation
+  and leak freedom hold for programs that form no such cycle through a closure (area 4).
+- Floating point, integers other than the 64-bit `Int`, `for`, `loop`, loop labels, valueless
+  `return` and mutable parameters are not in 1.0, each refused by name (`N0101`, `N0311`); `1.5`
+  is refused as floating point since Gate 1, where it was a field-read error before.
 
 - Traits and methods (N78) are nominal and static: no trait objects or dynamic dispatch, no default
   methods, associated items, generic traits or methods, supertraits, impls with bounds or for
