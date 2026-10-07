@@ -1,0 +1,9 @@
+// expect: N0412
+// A shift by the width or more traps rather than being masked (spec: numbers).
+fn shift(x: UInt32, n: Int) -> UInt32 {
+    x << n
+}
+
+fn main() -> Int {
+    Int(shift(UInt32(1), 32))
+}

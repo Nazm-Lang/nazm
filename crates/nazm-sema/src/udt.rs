@@ -273,7 +273,7 @@ impl UserTypes {
     #[must_use]
     pub fn needs_cleanup(&self, t: Type) -> bool {
         let Some(root) = TypeNode::of(t) else {
-            return !matches!(t, Type::Int | Type::Bool);
+            return !matches!(t, Type::Int | Type::Bool | Type::Num(_));
         };
         let mut seen = vec![false; self.nodes()];
         let mut work = vec![root];
@@ -287,7 +287,7 @@ impl UserTypes {
             }
             for (_, _, ty) in self.contained(node) {
                 match ty {
-                    Type::Int | Type::Bool => {}
+                    Type::Int | Type::Bool | Type::Num(_) => {}
                     Type::Record(_) | Type::Enum(_) => {
                         if let Some(inner) = TypeNode::of(ty) {
                             work.push(inner);
@@ -466,7 +466,8 @@ impl UserTypes {
         // the definition is used. One rule, so `T`, `Box[T]` and `Result[T, E]` all answer
         // from it and nothing about bounds is written anywhere else.
         let leaf = |t: Type| match t {
-            Type::Int | Type::Bool | Type::Str => true,
+            // Every numeric type has equality (Gate 2); a float's is IEEE 754's.
+            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,
             Type::Param(p) => self.requires_equality(p),
             _ => false,
         };

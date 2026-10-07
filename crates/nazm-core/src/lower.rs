@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use nazm_cir as cir;
 use nazm_diag::{codes, Diagnostic};
 use nazm_sema::resolve::{Callee, FnDef, FnId, Resolution};
-use nazm_sema::Type;
+use nazm_sema::{ConvertMode, NumKind, NumericFact, Type};
 use nazm_span::Span;
 use nazm_syntax::{
     BinOp, Block as AstBlock, Expr as AstExpr, Function as AstFn, MatchArm as AstArm, Program,
@@ -631,11 +631,21 @@ impl<'a> Lower<'a> {
     fn expr(&mut self, e: &AstExpr) -> Lowered<Expr> {
         let node = |kind: ExprKind, ty: Option<Type>, at: Span| Expr { kind, ty, at };
         Ok(match e {
-            AstExpr::Int { value, span } => node(
-                ExprKind::Const(self.constant(Const::Int(*value))),
-                Some(Type::Int),
-                *span,
-            ),
+            AstExpr::Int { value, span } => self.integer(i128::from(*value), *span)?,
+            AstExpr::WideInt { value, span } => self.integer(i128::from(*value), *span)?,
+            // Rounded once, from the decimal text, in the literal's own type (Gate 2).
+            AstExpr::Float { text, span } => {
+                let kind = match self.res.numeric(*span) {
+                    Some(NumericFact::Literal(t)) => t.num().unwrap_or(NumKind::F64),
+                    _ => NumKind::F64,
+                };
+                let v = nazm_sema::numeric::literal(kind, text);
+                node(
+                    ExprKind::Const(self.constant(Const::Num { kind, bits: v.bits })),
+                    Some(Type::of_num(kind)),
+                    *span,
+                )
+            }
             AstExpr::Bool { value, span } => node(
                 ExprKind::Const(self.constant(Const::Bool(*value))),
                 Some(Type::Bool),
@@ -676,13 +686,30 @@ impl<'a> Lower<'a> {
                     .collect();
                 node(ExprKind::Closure { func, captures }, Some(info.ty), *span)
             }
+            // `-128` written as an `Int8` is one literal (Gate 2): the checker judged it whole.
+            AstExpr::Neg { operand, .. }
+                if matches!(&**operand, AstExpr::Int { span, .. }
+                    if matches!(self.res.numeric(*span), Some(NumericFact::Literal(_)))) =>
+            {
+                let AstExpr::Int { value, span } = &**operand else {
+                    return defect(operand.span(), "a negated literal that is not one");
+                };
+                self.integer(-i128::from(*value), *span)?
+            }
             AstExpr::Neg {
                 operand, op_span, ..
-            } => node(
-                ExprKind::Neg(Box::new(self.expr(operand)?)),
-                Some(Type::Int),
-                *op_span,
-            ),
+            } => {
+                let operand = self.expr(operand)?;
+                let ty = operand.ty.or(Some(Type::Int));
+                node(ExprKind::Neg(Box::new(operand)), ty, *op_span)
+            }
+            AstExpr::BitNot {
+                operand, op_span, ..
+            } => {
+                let operand = self.expr(operand)?;
+                let ty = operand.ty.or(Some(Type::Int));
+                node(ExprKind::Complement(Box::new(operand)), ty, *op_span)
+            }
             // `!e`, `a && b` and `a || b` are `if`s (`docs/spec.md`, *Logical operators*, N49):
             // lowered here, so short-circuiting is control flow every later layer already has.
             AstExpr::Not {
@@ -716,6 +743,20 @@ impl<'a> Lower<'a> {
                 ..
             } => {
                 let (lhs, rhs) = (self.expr(lhs)?, self.expr(rhs)?);
+                // An operator's result is its operands' type (Gate 2); checking made them one,
+                // and for a shift the left operand's.
+                let operand_ty = lhs.ty.or(rhs.ty).or(Some(Type::Int));
+                if let Some(bop) = bitwise(*op) {
+                    return Ok(node(
+                        ExprKind::Bits {
+                            op: bop,
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        },
+                        operand_ty,
+                        *op_span,
+                    ));
+                }
                 match arithmetic(*op) {
                     Some(op) => node(
                         ExprKind::Arith {
@@ -723,7 +764,7 @@ impl<'a> Lower<'a> {
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
                         },
-                        Some(Type::Int),
+                        operand_ty,
                         *op_span,
                     ),
                     None => {
@@ -956,6 +997,12 @@ impl<'a> Lower<'a> {
     /// A call: to a built-in or to a function of this compilation, as the checker resolved it,
     /// with the result type the checker settled for this call.
     fn call(&mut self, callee_at: Span, args: &[AstExpr], at: Span) -> Lowered<Expr> {
+        if let Some(NumericFact::Convert {
+            to, mode, result, ..
+        }) = self.res.numeric(callee_at)
+        {
+            return self.conversion(to, mode, result, args, at);
+        }
         let args = self.exprs(args)?;
         let Some(checked) = self.res.checked_call(callee_at) else {
             return defect(callee_at, "a call the checker did not record");
@@ -1216,6 +1263,149 @@ impl<'a> Lower<'a> {
                     at,
                 }
             }
+        })
+    }
+
+    /// An integer literal of the type the checker gave it (Gate 2): an `Int` constant, or a
+    /// numeric one by its canonical bits.
+    fn integer(&mut self, v: i128, span: Span) -> Lowered<Expr> {
+        let ty = match self.res.numeric(span) {
+            Some(NumericFact::Literal(t)) => t,
+            _ => Type::Int,
+        };
+        let kind = ty.num().unwrap_or(NumKind::I64);
+        let Some(value) = nazm_sema::numeric::NumVal::int(kind, v) else {
+            return defect(
+                span,
+                "a literal outside the range the checker accepted it in",
+            );
+        };
+        let c = if kind == NumKind::I64 {
+            #[allow(clippy::cast_possible_wrap)]
+            Const::Int(value.bits as i64)
+        } else {
+            Const::Num {
+                kind,
+                bits: value.bits,
+            }
+        };
+        Ok(Expr {
+            kind: ExprKind::Const(self.constant(c)),
+            ty: Some(ty),
+            at: span,
+        })
+    }
+
+    /// A numeric conversion (Gate 2). `try_convert[T](x)` is `{ let c = x; if fits(c) {
+    /// Some(T(c)) } else { None } }`, so every later stage sees only exact conversions.
+    fn conversion(
+        &mut self,
+        to: Type,
+        mode: ConvertMode,
+        result: Type,
+        args: &[AstExpr],
+        at: Span,
+    ) -> Lowered<Expr> {
+        let Some(arg) = args.first() else {
+            return defect(at, "a conversion with no argument");
+        };
+        let operand = self.expr(arg)?;
+        if mode != ConvertMode::Try {
+            return Ok(Expr {
+                kind: ExprKind::Convert {
+                    mode,
+                    operand: Box::new(operand),
+                },
+                ty: Some(to),
+                at,
+            });
+        }
+        let Some(from) = operand.ty else {
+            return Ok(operand);
+        };
+        let Type::Enum(e) = result else {
+            return defect(at, "a `try_convert` the checker gave no `Option`");
+        };
+        let ty = Type::Enum(e);
+        let variant = |name: &str| {
+            self.res
+                .enums()
+                .get(e)
+                .and_then(|d| d.variants.iter().position(|v| v.name == name))
+                .and_then(|i| u32::try_from(i).ok())
+        };
+        let (Some(none), Some(some)) = (variant("None"), variant("Some")) else {
+            return defect(at, "an `Option` without `None` and `Some`");
+        };
+        let local = self.temp(Temp::Convert, from, at);
+        let read = Expr {
+            kind: ExprKind::Local(local),
+            ty: Some(from),
+            at,
+        };
+        let test = Expr {
+            kind: ExprKind::Fits {
+                to,
+                operand: Box::new(read.clone()),
+            },
+            ty: Some(Type::Bool),
+            at,
+        };
+        let converted = Expr {
+            kind: ExprKind::Convert {
+                mode: ConvertMode::Exact,
+                operand: Box::new(read),
+            },
+            ty: Some(to),
+            at,
+        };
+        let variant_of = |variant: u32, fields: Vec<Init>| Expr {
+            kind: ExprKind::Variant {
+                enumeration: e,
+                variant,
+                arity: u32::try_from(fields.len()).unwrap_or(u32::MAX),
+                fields,
+            },
+            ty: Some(ty),
+            at,
+        };
+        let region = |tail: Expr| Block {
+            stmts: Vec::new(),
+            tail: Some(Box::new(tail)),
+            ends: Ends::FallsThrough,
+            owns: Vec::new(),
+            at,
+        };
+        let some_value = variant_of(
+            some,
+            vec![Init {
+                field: 0,
+                value: converted,
+                at,
+            }],
+        );
+        let none_value = variant_of(none, Vec::new());
+        Ok(Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![Stmt::Let {
+                    local,
+                    value: operand,
+                }],
+                tail: Some(Box::new(Expr {
+                    kind: ExprKind::If {
+                        cond: Box::new(test),
+                        then: region(some_value),
+                        otherwise: region(none_value),
+                    },
+                    ty: Some(ty),
+                    at,
+                })),
+                ends: Ends::FallsThrough,
+                owns: vec![local],
+                at,
+            }),
+            ty: Some(ty),
+            at,
         })
     }
 
@@ -1585,7 +1775,24 @@ fn arithmetic(op: BinOp) -> Option<cir::ArithOp> {
         | BinOp::Gt
         | BinOp::GtEq
         | BinOp::And
-        | BinOp::Or => None,
+        | BinOp::Or
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::Shl
+        | BinOp::Shr => None,
+    }
+}
+
+/// The bit operator a binary operator is (Gate 2), if it is one.
+fn bitwise(op: BinOp) -> Option<cir::BitOp> {
+    match op {
+        BinOp::BitAnd => Some(cir::BitOp::And),
+        BinOp::BitOr => Some(cir::BitOp::Or),
+        BinOp::BitXor => Some(cir::BitOp::Xor),
+        BinOp::Shl => Some(cir::BitOp::Shl),
+        BinOp::Shr => Some(cir::BitOp::Shr),
+        _ => None,
     }
 }
 
@@ -1605,7 +1812,12 @@ fn comparison(op: BinOp) -> cir::CmpOp {
         | BinOp::Div
         | BinOp::Rem
         | BinOp::And
-        | BinOp::Or => cir::CmpOp::GtEq,
+        | BinOp::Or
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::Shl
+        | BinOp::Shr => cir::CmpOp::GtEq,
     }
 }
 

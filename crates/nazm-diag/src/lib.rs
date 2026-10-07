@@ -161,6 +161,10 @@ pub mod codes {
     /// evaluated `false` with `result` the value being returned.
     pub const POSTCONDITION_FAILED: Code = Code::new("N0411");
 
+    /// A shift or rotation by a negative amount, or a shift by the operand's width or more
+    /// (Gate 2): refused rather than masked or left to the machine.
+    pub const SHIFT_OUT_OF_RANGE: Code = Code::new("N0412");
+
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");
     /// A value that may not cross into a task: an `Ints` or a `Strs`, which are handles
@@ -462,6 +466,11 @@ pub mod codes {
     /// The only way a closure's environment could come to own itself, and so a value no count
     /// could reclaim; decided by the captured type, where the closure is written.
     pub const CAPTURE_CYCLE: Code = Code::new("N0616");
+
+    // Gate 2: the general-purpose foundation (`docs/general-purpose.md`).
+    /// A shift whose amount is a constant outside `0..width` (Gate 2): it would stop the
+    /// program every time it ran (`N0412`), so it is refused where it is written.
+    pub const SHIFT_AMOUNT_REFUSED: Code = Code::new("N0617");
 
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no

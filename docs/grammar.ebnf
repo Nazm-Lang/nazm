@@ -316,7 +316,23 @@ conjunction = comparison , { "&&" , comparison } ;
 (* @example fn main() -> Int { if 1 <= 2 { 1 } else { 0 } } *)
 (* @example fn main() -> Int { if 2 > 1 { 1 } else { 0 } } *)
 (* @example fn main() -> Int { if 2 >= 2 { 1 } else { 0 } } *)
-comparison = sum , { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) , sum } ;
+comparison = bit_or , { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) , bit_or } ;
+
+(* The bit operators (Gate 2): two integers of one type, or for a shift an integer and an
+ * `Int` amount. They bind tighter than comparison — `a & m == 0` is `(a & m) == 0`, not C's
+ * reading — and looser than arithmetic. See `docs/general-purpose.md` §3.
+ *)
+(* @example fn main() -> Int { 6 | 1 } *)
+bit_or = bit_xor , { "|" , bit_xor } ;
+
+(* @example fn main() -> Int { 6 ^ 3 } *)
+bit_xor = bit_and , { "^" , bit_and } ;
+
+(* @example fn main() -> Int { 6 & 3 } *)
+bit_and = shift , { "&" , shift } ;
+
+(* @example fn main() -> Int { 1 << 4 >> 2 } *)
+shift = sum , { ( "<<" | ">>" ) , sum } ;
 
 (* @example fn main() -> Int { 1 + 2 - 3 } *)
 sum = product , { ( "+" | "-" ) , product } ;
@@ -327,9 +343,11 @@ product = unary , { ( "*" | "/" | "%" ) , unary } ;
 (* `!` is logical negation, as tight as `-`: `!a && b` is `(!a) && b`. It is never the `!` of
  * an effect set, which follows a result type, where no expression is.
  *)
+(* `~` is the bit complement of an integer (Gate 2). *)
 (* @example fn main() -> Int { -1 } *)
 (* @example fn main() -> Int { if !false { 1 } else { 0 } } *)
-unary = [ "-" | "!" ] , primary ;
+(* @example fn main() -> Int { ~0 } *)
+unary = [ "-" | "!" | "~" ] , primary ;
 
 (* @example fn main() -> Int { (1 + 2) * 3 } *)
 (* @example fn main() -> Int { if true { 1 } else { 0 } } *)
@@ -349,8 +367,13 @@ unary = [ "-" | "!" ] , primary ;
 (* @example trait Size { fn size(self: Self) -> Int; } fn f[T: Size](x: T) -> Int { x.size() + Size.size(x) } fn main() -> Int { 0 } *)
 primary = atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] | "?" } ;
 
+(* A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
+ * `INTEGER` may be written `0x`, `0o` or `0b`, with `_` between digits.
+ *)
 (* @example fn main() -> Int { 1 } *)
+(* @example fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 } *)
 atom = INTEGER
+     | FLOAT
      | STRING
      | "true"
      | "false"

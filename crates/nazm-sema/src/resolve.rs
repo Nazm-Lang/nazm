@@ -346,6 +346,23 @@ pub struct PayloadRef {
     pub field: u32,
 }
 
+/// A numeric decision the checker made (Gate 2), for Core IR lowering to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericFact {
+    /// A literal's type where it is not the default — `Int` for an integer, `Float64` for a
+    /// floating-point literal — because a type was expected (`docs/general-purpose.md` §2).
+    Literal(Type),
+    /// A conversion call, by its callee's span: `T(x)`, `try_convert[T](x)`,
+    /// `wrap_convert[T](x)` or `saturate_convert[T](x)`.
+    Convert {
+        to: Type,
+        from: Type,
+        mode: crate::types::ConvertMode,
+        /// What the call produces: `to`, or `Option[to]` for `try_convert`.
+        result: Type,
+    },
+}
+
 /// Everything resolution decided about one compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolution {
@@ -408,6 +425,9 @@ pub struct Resolution {
     unresolved_members: HashMap<Span, Type>,
     /// Each closure expression's definition, by the expression's span (N50).
     closures: HashMap<Span, FnId>,
+    /// What the checker decided about each numeric literal whose type is not the default, and
+    /// each conversion, by the literal's or the callee's span (Gate 2).
+    numeric: HashMap<Span, NumericFact>,
     /// Traits, impls, bounds and calls through a bound (N78).
     traits: crate::traits::Traits,
     /// Each named function written as a value, by the name's span (N50).
@@ -933,6 +953,16 @@ impl Resolution {
         let mut out: Vec<FnValueUse> = self.fn_values.values().copied().collect();
         out.sort_by_key(|u| (u.at.file, u.at.start));
         out
+    }
+
+    /// What the checker decided about the literal or conversion at `span` (Gate 2).
+    #[must_use]
+    pub fn numeric(&self, span: Span) -> Option<NumericFact> {
+        self.numeric.get(&span).copied()
+    }
+
+    pub fn record_numeric(&mut self, span: Span, fact: NumericFact) {
+        self.numeric.insert(span, fact);
     }
 
     pub fn record_call(&mut self, span: Span, callee: Callee) {

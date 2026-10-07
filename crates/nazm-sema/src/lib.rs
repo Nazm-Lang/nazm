@@ -46,6 +46,7 @@ pub mod interface;
 pub mod intrinsic;
 pub mod key;
 pub mod module;
+pub mod numeric;
 pub mod prelude;
 pub mod provenance;
 pub mod record;
@@ -61,7 +62,7 @@ pub use capability::{CapabilityKind, CapabilitySet};
 pub use effect::{Effect, EffectReason, EffectSet, EffectSource};
 pub use enums::{EnumDef, EnumId, Enums, VariantDef};
 pub use interface::{reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility};
-pub use intrinsic::{Intrinsic, Shape};
+pub use intrinsic::{Intrinsic, NumClass, Shape};
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId, ReexportItem, ReexportSpec};
 pub use provenance::{
@@ -73,11 +74,13 @@ pub use record::{CRepr, FieldDef, RecordDef, RecordId, Records, TaskUnsafe, OPAQ
 pub use references::{Coverage, ReferenceIndex, ReferenceTarget};
 pub use resolve::{
     CallSite, Callee, Capture, CheckedCall, ClosureInfo, FieldRef, FnDef, FnId, FnValueUse,
-    Instantiation, LocalDef, LocalRef, PayloadRef, Propagation, Resolution, VariantRef,
-    WrittenType,
+    Instantiation, LocalDef, LocalRef, NumericFact, PayloadRef, Propagation, Resolution,
+    VariantRef, WrittenType,
 };
 pub use scope::{Candidate, Named, ScopeTrace, Unavailable, Visible};
-pub use types::{ChanId, FnSignature, FnTypeId, ParamOwner, Type, TypeParam, VecId};
+pub use types::{
+    ChanId, ConvertMode, FnSignature, FnTypeId, NumKind, ParamOwner, Type, TypeParam, VecId,
+};
 pub use udt::{
     CycleEdge, LayoutCycle, NoEquality, OwnershipCycle, Reach, TypeNode, UserTypes, MAX_TYPE_DEPTH,
 };

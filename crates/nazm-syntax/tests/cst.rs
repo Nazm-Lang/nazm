@@ -606,12 +606,19 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                 }
             }
             Node::Expr(e) => match e {
-                Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } => {}
+                Expr::Int { .. }
+                | Expr::WideInt { .. }
+                | Expr::Float { .. }
+                | Expr::Bool { .. }
+                | Expr::Str { .. } => {}
                 Expr::Var { span, .. } => spans.push((SyntaxKind::NameRef, *span)),
                 Expr::Neg {
                     operand, op_span, ..
                 }
                 | Expr::Not {
+                    operand, op_span, ..
+                }
+                | Expr::BitNot {
                     operand, op_span, ..
                 } => {
                     operators.push(*op_span);

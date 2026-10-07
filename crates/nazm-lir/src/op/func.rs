@@ -522,6 +522,7 @@ impl<'l, 'a> Fx<'l, 'a> {
         match o {
             mir::Operand::Local(l) => self.get(*l),
             mir::Operand::Const(mir::Const::Int(v)) => self.iconst(*v),
+            mir::Operand::Const(mir::Const::Num { kind, bits }) => self.num_const(*kind, *bits),
             mir::Operand::Const(mir::Const::Bool(v)) => self.bit(*v),
             mir::Operand::Const(mir::Const::Str(_)) => {
                 let at = self.at;
@@ -961,16 +962,67 @@ impl<'l, 'a> Fx<'l, 'a> {
                     self.set(dst, v);
                 }
             }
+            mir::Rvalue::Neg(o) if dt != Ty::Int => {
+                let x = self.value(o);
+                let k = super::numeric::kind_of(dt).unwrap_or(nazm_sema::NumKind::I64);
+                let r = self.num_neg(k, x);
+                self.set(dst, r);
+            }
             mir::Rvalue::Neg(o) => {
                 let x = self.value(o);
                 let z = self.iconst(0);
                 let r = self.checked(super::ir::OvfOp::Sub, z, x, "this negation overflows `Int`");
                 self.set(dst, r);
             }
+            mir::Rvalue::Arith(op, a, b) if dt != Ty::Int => {
+                let x = self.value(a);
+                let y = self.value(b);
+                let k = super::numeric::kind_of(dt).unwrap_or(nazm_sema::NumKind::I64);
+                let r = self.num_arith(*op, k, x, y);
+                self.set(dst, r);
+            }
             mir::Rvalue::Arith(op, a, b) => {
                 let x = self.value(a);
                 let y = self.value(b);
                 let r = self.arith(*op, x, y);
+                self.set(dst, r);
+            }
+            // Gate 2's numeric forms (`super::numeric`).
+            mir::Rvalue::Bits(op, a, b) => {
+                let x = self.value(a);
+                let y = self.value(b);
+                let k = super::numeric::kind_of(dt).unwrap_or(nazm_sema::NumKind::I64);
+                let r = self.num_bits(*op, k, x, y);
+                self.set(dst, r);
+            }
+            mir::Rvalue::Complement(a) => {
+                let x = self.value(a);
+                let k = super::numeric::kind_of(dt).unwrap_or(nazm_sema::NumKind::I64);
+                let r = self.num_complement(k, x);
+                self.set(dst, r);
+            }
+            mir::Rvalue::Convert { mode, to, operand } => {
+                let from = super::numeric::kind_of(self.operand_ty(operand));
+                let to = super::numeric::kind_of(Ty::of(*to));
+                let x = self.value(operand);
+                let r = match (from, to) {
+                    (Some(f), Some(t)) => self.num_convert(*mode, f, t, x),
+                    _ => {
+                        let at = self.at;
+                        self.lw.defect(at, "a conversion between non-numbers");
+                        x
+                    }
+                };
+                self.set(dst, r);
+            }
+            mir::Rvalue::Fits { to, operand } => {
+                let from = super::numeric::kind_of(self.operand_ty(operand));
+                let to = super::numeric::kind_of(Ty::of(*to));
+                let x = self.value(operand);
+                let r = match (from, to) {
+                    (Some(f), Some(t)) => self.num_fits(f, t, x),
+                    _ => self.bit(false),
+                };
                 self.set(dst, r);
             }
             mir::Rvalue::Compare {
@@ -997,6 +1049,11 @@ impl<'l, 'a> Fx<'l, 'a> {
                             None => self.bit(false),
                         };
                         self.negate_if(eq, *op == mir::CmpOp::NotEq)
+                    }
+                    Ty::Num(k) => {
+                        let a = self.value(lhs);
+                        let b = self.value(rhs);
+                        self.num_compare(*op, k, a, b)
                     }
                     _ => {
                         let a = self.value(lhs);

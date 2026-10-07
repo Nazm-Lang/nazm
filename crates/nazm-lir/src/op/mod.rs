@@ -11,6 +11,7 @@ pub mod interp;
 pub mod ir;
 pub mod llvm;
 mod lower;
+mod numeric;
 mod prims;
 pub mod print;
 mod soa;

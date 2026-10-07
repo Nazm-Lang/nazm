@@ -1120,6 +1120,8 @@ impl Shift for Expr {
     fn shift(&mut self, file: FileId, by: i64) {
         match self {
             Self::Int { value: _, span }
+            | Self::WideInt { value: _, span }
+            | Self::Float { text: _, span }
             | Self::Bool { value: _, span }
             | Self::Str { value: _, span }
             | Self::Var { name: _, span } => span.shift(file, by),
@@ -1129,6 +1131,11 @@ impl Shift for Expr {
                 span,
             }
             | Self::Not {
+                operand,
+                op_span,
+                span,
+            }
+            | Self::BitNot {
                 operand,
                 op_span,
                 span,

@@ -446,9 +446,15 @@ impl Block {
                     }
                     blocks.push(body);
                 }
-                Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } | Expr::Var { .. } => {}
+                Expr::Int { .. }
+                | Expr::WideInt { .. }
+                | Expr::Float { .. }
+                | Expr::Bool { .. }
+                | Expr::Str { .. }
+                | Expr::Var { .. } => {}
                 Expr::Neg { operand, .. }
                 | Expr::Not { operand, .. }
+                | Expr::BitNot { operand, .. }
                 | Expr::Propagate { operand, .. } => exprs.push(operand),
                 Expr::Field { base, .. } => exprs.push(base),
                 Expr::Binary { lhs, rhs, .. } => {
@@ -663,6 +669,18 @@ pub enum Expr {
         value: i64,
         span: Span,
     },
+    /// An integer literal above `Int`'s range and within `UInt64`'s (Gate 2): valid only where a
+    /// `UInt64` is expected, and refused as too large for `Int` everywhere else.
+    WideInt {
+        value: u64,
+        span: Span,
+    },
+    /// A floating-point literal (Gate 2), as written with any `_` removed. Its type — `Float64`,
+    /// or `Float32` where one is expected — decides how it rounds.
+    Float {
+        text: String,
+        span: Span,
+    },
     Bool {
         value: bool,
         span: Span,
@@ -697,6 +715,12 @@ pub enum Expr {
     /// `!operand` — logical negation of a `Bool` (N49). Core IR lowers it to
     /// `if operand { false } else { true }`; nothing below the checker sees it.
     Not {
+        operand: Box<Expr>,
+        op_span: Span,
+        span: Span,
+    },
+    /// `~operand` — the bit complement of an integer (Gate 2).
+    BitNot {
         operand: Box<Expr>,
         op_span: Span,
         span: Span,
@@ -822,11 +846,14 @@ impl Expr {
     pub fn span_ref(&self) -> &Span {
         match self {
             Self::Int { span, .. }
+            | Self::WideInt { span, .. }
+            | Self::Float { span, .. }
             | Self::Bool { span, .. }
             | Self::Str { span, .. }
             | Self::Var { span, .. }
             | Self::Neg { span, .. }
             | Self::Not { span, .. }
+            | Self::BitNot { span, .. }
             | Self::Closure { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
@@ -845,11 +872,14 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Self::Int { span, .. }
+            | Self::WideInt { span, .. }
+            | Self::Float { span, .. }
             | Self::Bool { span, .. }
             | Self::Str { span, .. }
             | Self::Var { span, .. }
             | Self::Neg { span, .. }
             | Self::Not { span, .. }
+            | Self::BitNot { span, .. }
             | Self::Closure { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
@@ -881,6 +911,13 @@ pub enum BinOp {
     /// `&&` and `||` (N49): `Bool` operands, short-circuit, lowered by Core IR to `if`.
     And,
     Or,
+    /// `&`, `|`, `^`, `<<`, `>>` (Gate 2): two operands of one integer type; a shift's amount
+    /// is an `Int`.
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 impl BinOp {
@@ -900,6 +937,11 @@ impl BinOp {
             Self::GtEq => ">=",
             Self::And => "&&",
             Self::Or => "||",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "^",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
         }
     }
 

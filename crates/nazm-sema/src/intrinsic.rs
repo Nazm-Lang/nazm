@@ -21,7 +21,7 @@
 //! a call whose meaning depends on whether a definition happens to be in scope is the
 //! thing this language is trying not to have.
 
-use crate::types::Type;
+use crate::types::{NumKind, Type};
 
 /// How one position of a built-in's signature is typed, in the table's own vocabulary.
 ///
@@ -46,6 +46,46 @@ pub enum Shape {
     ChanT,
     /// `Vec[Chan[T]]`: the channels a select waits on (N54).
     ChansT,
+    /// `Float64`, `Float32`, `UInt64` and `UInt32` (Gate 2): the monomorphic numeric shapes the
+    /// bit-level float conversions name.
+    F64,
+    F32,
+    U64,
+    U32,
+}
+
+/// Which numeric types a generic numeric built-in's `T` ranges over (Gate 2). Checked where
+/// the call settles `T`, as `Equality` is for a bounded parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NumClass {
+    /// Every integer type, `Int` included.
+    Integer,
+    /// `Float32` and `Float64`.
+    Float,
+    /// Every numeric type.
+    Numeric,
+}
+
+impl NumClass {
+    /// Whether `t` is in the class.
+    #[must_use]
+    pub const fn admits(self, t: Type) -> bool {
+        match self {
+            Self::Integer => t.is_integer(),
+            Self::Float => t.is_float(),
+            Self::Numeric => t.num().is_some(),
+        }
+    }
+
+    /// The class, as a diagnostic names it.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::Integer => "an integer type",
+            Self::Float => "`Float32` or `Float64`",
+            Self::Numeric => "a numeric type",
+        }
+    }
 }
 
 impl Shape {
@@ -59,6 +99,10 @@ impl Shape {
             Self::Ints => Some(Type::Ints),
             Self::Strs => Some(Type::Strs),
             Self::Chan => Some(Type::Chan),
+            Self::F64 => Some(Type::Num(NumKind::F64)),
+            Self::F32 => Some(Type::Num(NumKind::F32)),
+            Self::U64 => Some(Type::Num(NumKind::U64)),
+            Self::U32 => Some(Type::Num(NumKind::U32)),
             Self::T | Self::VecT | Self::ChanT | Self::ChansT => None,
         }
     }
@@ -77,6 +121,10 @@ impl Shape {
             Self::VecT => "Vec[T]",
             Self::ChanT => "Chan[T]",
             Self::ChansT => "Vec[Chan[T]]",
+            Self::F64 => "Float64",
+            Self::F32 => "Float32",
+            Self::U64 => "UInt64",
+            Self::U32 => "UInt32",
         }
     }
 }
@@ -278,11 +326,78 @@ pub enum Intrinsic {
     /// `vec_pop[T](xs: Vec[T]) -> T` — removes the last element and transfers it out.
     /// Fails with `N0405` on an empty vector.
     VecPop,
+
+    // --- numbers, Gate 2 (`docs/general-purpose.md` §1–§3) -------------------------------
+    //
+    // Generic over a class of numeric types ([`Intrinsic::requires`]), so one name serves
+    // every width; `T` is inferred from the arguments.
+    /// `wrapping_add[T: integer](a: T, b: T) -> T` — modulo `2^n`, never trapping.
+    WrappingAdd,
+    WrappingSub,
+    WrappingMul,
+    /// `saturating_add[T: integer](a: T, b: T) -> T` — clamped to `T`'s range.
+    SaturatingAdd,
+    SaturatingSub,
+    SaturatingMul,
+    /// `count_ones[T: integer](x: T) -> Int` — the number of set bits.
+    CountOnes,
+    LeadingZeros,
+    TrailingZeros,
+    /// `rotate_left[T: integer](x: T, n: Int) -> T` — `n` taken modulo the width; a negative
+    /// `n` fails with `N0408`.
+    RotateLeft,
+    RotateRight,
+    /// `swap_bytes[T: integer](x: T) -> T` — the bytes in reverse order.
+    SwapBytes,
+    /// `to_big_endian[T: integer](x: T) -> T` — `x` with its bytes in big-endian order, as
+    /// an integer; and the inverses and little-endian forms. On a little-endian host
+    /// `to_big_endian` is `swap_bytes` and `to_little_endian` is the identity.
+    ToBigEndian,
+    FromBigEndian,
+    ToLittleEndian,
+    FromLittleEndian,
+    /// `float_sqrt[T: float](x: T) -> T` — correctly rounded.
+    FloatSqrt,
+    FloatAbs,
+    FloatFloor,
+    FloatCeil,
+    FloatTrunc,
+    /// Half away from zero.
+    FloatRound,
+    /// The C library's; not promised bit-identical across hosts.
+    FloatSin,
+    FloatCos,
+    FloatTan,
+    FloatExp,
+    FloatLn,
+    FloatLog2,
+    FloatLog10,
+    FloatPow,
+    FloatAtan2,
+    /// `float_min[T: float](a: T, b: T) -> T` — a NaN loses to a number.
+    FloatMin,
+    FloatMax,
+    FloatIsNan,
+    FloatIsInfinite,
+    FloatIsFinite,
+    /// `num_to_str[T: numeric](x: T) -> Str` — decimal; for a float, the shortest `%g`-style
+    /// text that reads back to the same value.
+    NumToStr,
+    /// `float64_to_bits(x: Float64) -> UInt64`, and the inverse and `Float32` forms.
+    Float64ToBits,
+    Float64FromBits,
+    Float32ToBits,
+    Float32FromBits,
+    /// `float_parses(s: Str) -> Bool` — whether `s` is a decimal floating-point number, or
+    /// `inf`, `-inf` or `nan`; `@std/num`'s `num_parse_float` is the `Option` form.
+    FloatParses,
+    /// `float_parse_raw(s: Str) -> Float64` — the value `s` writes, or NaN when it is not one.
+    FloatParseRaw,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 53] = [
+    pub const ALL: [Self; 96] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -336,6 +451,49 @@ impl Intrinsic {
         Self::MmioWrite8,
         Self::MmioRead16,
         Self::MmioWrite16,
+        Self::WrappingAdd,
+        Self::WrappingSub,
+        Self::WrappingMul,
+        Self::SaturatingAdd,
+        Self::SaturatingSub,
+        Self::SaturatingMul,
+        Self::CountOnes,
+        Self::LeadingZeros,
+        Self::TrailingZeros,
+        Self::RotateLeft,
+        Self::RotateRight,
+        Self::SwapBytes,
+        Self::ToBigEndian,
+        Self::FromBigEndian,
+        Self::ToLittleEndian,
+        Self::FromLittleEndian,
+        Self::FloatSqrt,
+        Self::FloatAbs,
+        Self::FloatFloor,
+        Self::FloatCeil,
+        Self::FloatTrunc,
+        Self::FloatRound,
+        Self::FloatSin,
+        Self::FloatCos,
+        Self::FloatTan,
+        Self::FloatExp,
+        Self::FloatLn,
+        Self::FloatLog2,
+        Self::FloatLog10,
+        Self::FloatPow,
+        Self::FloatAtan2,
+        Self::FloatMin,
+        Self::FloatMax,
+        Self::FloatIsNan,
+        Self::FloatIsInfinite,
+        Self::FloatIsFinite,
+        Self::NumToStr,
+        Self::Float64ToBits,
+        Self::Float64FromBits,
+        Self::Float32ToBits,
+        Self::Float32FromBits,
+        Self::FloatParses,
+        Self::FloatParseRaw,
     ];
 
     #[must_use]
@@ -398,6 +556,49 @@ impl Intrinsic {
             Self::CStrCopy => "cstr_copy",
             Self::CallbackAddress => "callback_address",
             Self::ContractCheck => "contract_check",
+            Self::WrappingAdd => "wrapping_add",
+            Self::WrappingSub => "wrapping_sub",
+            Self::WrappingMul => "wrapping_mul",
+            Self::SaturatingAdd => "saturating_add",
+            Self::SaturatingSub => "saturating_sub",
+            Self::SaturatingMul => "saturating_mul",
+            Self::CountOnes => "count_ones",
+            Self::LeadingZeros => "leading_zeros",
+            Self::TrailingZeros => "trailing_zeros",
+            Self::RotateLeft => "rotate_left",
+            Self::RotateRight => "rotate_right",
+            Self::SwapBytes => "swap_bytes",
+            Self::ToBigEndian => "to_big_endian",
+            Self::FromBigEndian => "from_big_endian",
+            Self::ToLittleEndian => "to_little_endian",
+            Self::FromLittleEndian => "from_little_endian",
+            Self::FloatSqrt => "float_sqrt",
+            Self::FloatAbs => "float_abs",
+            Self::FloatFloor => "float_floor",
+            Self::FloatCeil => "float_ceil",
+            Self::FloatTrunc => "float_trunc",
+            Self::FloatRound => "float_round",
+            Self::FloatSin => "float_sin",
+            Self::FloatCos => "float_cos",
+            Self::FloatTan => "float_tan",
+            Self::FloatExp => "float_exp",
+            Self::FloatLn => "float_ln",
+            Self::FloatLog2 => "float_log2",
+            Self::FloatLog10 => "float_log10",
+            Self::FloatPow => "float_pow",
+            Self::FloatAtan2 => "float_atan2",
+            Self::FloatMin => "float_min",
+            Self::FloatMax => "float_max",
+            Self::FloatIsNan => "float_is_nan",
+            Self::FloatIsInfinite => "float_is_infinite",
+            Self::FloatIsFinite => "float_is_finite",
+            Self::NumToStr => "num_to_str",
+            Self::Float64ToBits => "float64_to_bits",
+            Self::Float64FromBits => "float64_from_bits",
+            Self::Float32ToBits => "float32_to_bits",
+            Self::Float32FromBits => "float32_from_bits",
+            Self::FloatParses => "float_parses",
+            Self::FloatParseRaw => "float_parse_raw",
         }
     }
 
@@ -418,7 +619,54 @@ impl Intrinsic {
             | Self::ChanCloseOf
             | Self::ChanSelectOf
             | Self::ChanSelectUntil => 1,
+            other if other.requires().is_some() => 1,
             _ => 0,
+        }
+    }
+
+    /// The class a generic numeric built-in's `T` must be in (Gate 2), or `None` for every
+    /// other built-in.
+    #[must_use]
+    pub const fn requires(self) -> Option<NumClass> {
+        match self {
+            Self::WrappingAdd
+            | Self::WrappingSub
+            | Self::WrappingMul
+            | Self::SaturatingAdd
+            | Self::SaturatingSub
+            | Self::SaturatingMul
+            | Self::CountOnes
+            | Self::LeadingZeros
+            | Self::TrailingZeros
+            | Self::RotateLeft
+            | Self::RotateRight
+            | Self::SwapBytes
+            | Self::ToBigEndian
+            | Self::FromBigEndian
+            | Self::ToLittleEndian
+            | Self::FromLittleEndian => Some(NumClass::Integer),
+            Self::FloatSqrt
+            | Self::FloatAbs
+            | Self::FloatFloor
+            | Self::FloatCeil
+            | Self::FloatTrunc
+            | Self::FloatRound
+            | Self::FloatSin
+            | Self::FloatCos
+            | Self::FloatTan
+            | Self::FloatExp
+            | Self::FloatLn
+            | Self::FloatLog2
+            | Self::FloatLog10
+            | Self::FloatPow
+            | Self::FloatAtan2
+            | Self::FloatMin
+            | Self::FloatMax
+            | Self::FloatIsNan
+            | Self::FloatIsInfinite
+            | Self::FloatIsFinite => Some(NumClass::Float),
+            Self::NumToStr => Some(NumClass::Numeric),
+            _ => None,
         }
     }
 
@@ -467,6 +715,47 @@ impl Intrinsic {
             Self::ForeignNonNull | Self::CStrCopy => &[Shape::Int],
             Self::CallbackAddress => &[Shape::Str],
             Self::ContractCheck => &[Shape::Bool, Shape::Int],
+            Self::WrappingAdd
+            | Self::WrappingSub
+            | Self::WrappingMul
+            | Self::SaturatingAdd
+            | Self::SaturatingSub
+            | Self::SaturatingMul
+            | Self::FloatPow
+            | Self::FloatAtan2
+            | Self::FloatMin
+            | Self::FloatMax => &[Shape::T, Shape::T],
+            Self::RotateLeft | Self::RotateRight => &[Shape::T, Shape::Int],
+            Self::CountOnes
+            | Self::LeadingZeros
+            | Self::TrailingZeros
+            | Self::SwapBytes
+            | Self::ToBigEndian
+            | Self::FromBigEndian
+            | Self::ToLittleEndian
+            | Self::FromLittleEndian
+            | Self::FloatSqrt
+            | Self::FloatAbs
+            | Self::FloatFloor
+            | Self::FloatCeil
+            | Self::FloatTrunc
+            | Self::FloatRound
+            | Self::FloatSin
+            | Self::FloatCos
+            | Self::FloatTan
+            | Self::FloatExp
+            | Self::FloatLn
+            | Self::FloatLog2
+            | Self::FloatLog10
+            | Self::FloatIsNan
+            | Self::FloatIsInfinite
+            | Self::FloatIsFinite
+            | Self::NumToStr => &[Shape::T],
+            Self::Float64ToBits => &[Shape::F64],
+            Self::Float64FromBits => &[Shape::U64],
+            Self::Float32ToBits => &[Shape::F32],
+            Self::Float32FromBits => &[Shape::U32],
+            Self::FloatParses | Self::FloatParseRaw => &[Shape::Str],
         }
     }
 
@@ -519,6 +808,45 @@ impl Intrinsic {
             | Self::CallbackAddress
             | Self::ContractCheck => Shape::Int,
             Self::CStrCopy => Shape::Str,
+            Self::WrappingAdd
+            | Self::WrappingSub
+            | Self::WrappingMul
+            | Self::SaturatingAdd
+            | Self::SaturatingSub
+            | Self::SaturatingMul
+            | Self::RotateLeft
+            | Self::RotateRight
+            | Self::SwapBytes
+            | Self::ToBigEndian
+            | Self::FromBigEndian
+            | Self::ToLittleEndian
+            | Self::FromLittleEndian
+            | Self::FloatSqrt
+            | Self::FloatAbs
+            | Self::FloatFloor
+            | Self::FloatCeil
+            | Self::FloatTrunc
+            | Self::FloatRound
+            | Self::FloatSin
+            | Self::FloatCos
+            | Self::FloatTan
+            | Self::FloatExp
+            | Self::FloatLn
+            | Self::FloatLog2
+            | Self::FloatLog10
+            | Self::FloatPow
+            | Self::FloatAtan2
+            | Self::FloatMin
+            | Self::FloatMax => Shape::T,
+            Self::CountOnes | Self::LeadingZeros | Self::TrailingZeros => Shape::Int,
+            Self::FloatIsNan | Self::FloatIsInfinite | Self::FloatIsFinite | Self::FloatParses => {
+                Shape::Bool
+            }
+            Self::NumToStr => Shape::Str,
+            Self::Float64ToBits => Shape::U64,
+            Self::Float64FromBits | Self::FloatParseRaw => Shape::F64,
+            Self::Float32ToBits => Shape::U32,
+            Self::Float32FromBits => Shape::F32,
         }
     }
 

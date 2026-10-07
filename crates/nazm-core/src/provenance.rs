@@ -664,9 +664,15 @@ impl<'b> Walk<'_, 'b> {
                 }
                 Shaped::default()
             }
-            Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } => Shaped::default(),
+            Expr::Int { .. }
+            | Expr::WideInt { .. }
+            | Expr::Float { .. }
+            | Expr::Bool { .. }
+            | Expr::Str { .. } => Shaped::default(),
             Expr::Var { span, .. } => self.expr_var(*span),
-            Expr::Neg { operand, .. } => Shaped::whole(self.expr(operand)),
+            Expr::Neg { operand, .. } | Expr::BitNot { operand, .. } => {
+                Shaped::whole(self.expr(operand))
+            }
             // The logical operators are the `if`s they lower to (N49): the deciding operand is a
             // condition — walked, contributing no provenance — and the value is the other
             // operand's or a constant's.

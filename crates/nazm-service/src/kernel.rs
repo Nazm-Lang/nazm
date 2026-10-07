@@ -434,7 +434,26 @@ impl Gen {
         depth: usize,
     ) -> Result<String, Ineligible> {
         let pad = "  ".repeat(depth);
+        // Kernels compute in `Int` and `Bool` only (Gate 2 added other numbers to the
+        // language, not to accelerator kernels yet).
+        let other_number =
+            e.ty.is_some_and(|t| matches!(t, nazm_core::sema::Type::Num(_)))
+                || matches!(&e.kind, ExprKind::Compare { operand, .. }
+                if matches!(operand, nazm_core::sema::Type::Num(_)));
+        if other_number {
+            return Err(Self::refuse(f, e.at, "it uses a number other than `Int`"));
+        }
         Ok(match &e.kind {
+            ExprKind::Bits { .. }
+            | ExprKind::Complement(_)
+            | ExprKind::Convert { .. }
+            | ExprKind::Fits { .. } => {
+                return Err(Self::refuse(
+                    f,
+                    e.at,
+                    "it uses a bit operation or a conversion",
+                ))
+            }
             ExprKind::Const(k) => match f.constant(*k) {
                 Some(Const::Int(n)) if *n == i64::MIN => "(-9223372036854775807L - 1L)".to_owned(),
                 Some(Const::Int(n)) => format!("{n}L"),

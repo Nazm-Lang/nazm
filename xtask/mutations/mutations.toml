@@ -3713,24 +3713,24 @@ targets = [
 name = "n13-a-vec-has-equality"
 why = "`Vec[T]` is given `==`, which would have to mean the same storage or the same contents — the choice the language has not made"
 file = "crates/nazm-sema/src/udt.rs"
-find = "            Type::Int | Type::Bool | Type::Str => true,"
-replace = "            Type::Int | Type::Bool | Type::Str | Type::Vec(_) => true,"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) | Type::Vec(_) => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
 name = "n13-a-sequence-has-equality"
 why = "`Ints` and `Strs` are given `==`, for the same unmade choice"
 file = "crates/nazm-sema/src/udt.rs"
-find = "            Type::Int | Type::Bool | Type::Str => true,"
-replace = "            Type::Int | Type::Bool | Type::Str | Type::Ints | Type::Strs => true,"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) | Type::Ints | Type::Strs => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
 name = "n13-a-chan-has-equality"
 why = "`Chan` is given `==`, exposing a channel's identity as a value"
 file = "crates/nazm-sema/src/udt.rs"
-find = "            Type::Int | Type::Bool | Type::Str => true,"
-replace = "            Type::Int | Type::Bool | Type::Str | Type::Chan => true,"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) | Type::Chan => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
@@ -7730,11 +7730,19 @@ killers = [{ package = "nazm-sema", lib = true, name = "effect::tests::a_set_is_
 name = "n36-print-is-pure"
 why = "`print` is classified with the built-ins that compute, so a pure function may write to standard output"
 file = "crates/nazm-sema/src/effect.rs"
-find = """        match i {
-            Intrinsic::ArgsCount"""
-replace = """        match i {
-            Intrinsic::Print => None,
-            Intrinsic::ArgsCount"""
+find = """            Intrinsic::ArgsCount
+            | Intrinsic::Arg
+            | Intrinsic::ReadFile
+            | Intrinsic::WriteFile
+            | Intrinsic::FileExists
+            | Intrinsic::Print"""
+replace = """            Intrinsic::Print => None,
+            Intrinsic::ArgsCount
+            | Intrinsic::Arg
+            | Intrinsic::ReadFile
+            | Intrinsic::WriteFile
+            | Intrinsic::FileExists
+            | Intrinsic::Print"""
 killers = [{ package = "nazm-core", test = "effects", name = "every_outside_world_built_in_requires_io_and_a_pure_function_may_call_none_of_them" }]
 
 [[mutation]]
@@ -7987,8 +7995,8 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "main_is_the_r
 name = "n37-a-capability-has-equality"
 why = "a capability is given equality, and a record holding one derives it, so authority values can be compared as data"
 file = "crates/nazm-sema/src/udt.rs"
-find = "            Type::Int | Type::Bool | Type::Str => true,"
-replace = "            Type::Int | Type::Bool | Type::Str | Type::Cap(_) => true,"
+find = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Num(_) | Type::Cap(_) => true,"
 killers = [{ package = "nazm-core", test = "capabilities", name = "nothing_a_program_writes_constructs_a_capability" }]
 
 [[mutation]]
@@ -8051,10 +8059,8 @@ killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_the
 name = "n38-output-is-input"
 why = "`print` is classed as a source, so writing a value is mistaken for reading one"
 file = "crates/nazm-sema/src/provenance.rs"
-find = """        match i {
-            Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),"""
-replace = """        match i {
-            Intrinsic::Print => BuiltinFlow::Source(Self::File),
+find = """            Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),"""
+replace = """            Intrinsic::Print => BuiltinFlow::Source(Self::File),
             Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),"""
 killers = [{ package = "nazm-core", test = "provenance", name = "the_sources_are_the_built_ins_that_bring_data_in_and_nothing_else" }]
 
@@ -8272,10 +8278,11 @@ Repointed by N86, which moved it to 26 for device registers by width: an entry t
 Repointed by N87, which moved it to 27 for contracts: an entry that refused a `requires` must not be reused.
 Repointed by N103, which moved it to 28 for re-exports: an entry that refused `pub use` must not be reused.
 Repointed by N104, which moved it to 29 for authority without inheritance: an entry that accepted a printing `fn main()` must not be reused.
-Repointed by Gate 1-C1, which moved it to 30 for closure environments in the ownership graph: an entry that accepted a closure capturing a `Vec[fn() -> Int]` must not be reused."""
+Repointed by Gate 1-C1, which moved it to 30 for closure environments in the ownership graph: an entry that accepted a closure capturing a `Vec[fn() -> Int]` must not be reused.
+Repointed by Gate 2, which moved it to 31 for numbers: an entry that refused `1.5` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 30;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 29;"
+find = "pub const SEMANTIC_EPOCH: u32 = 31;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 30;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -9648,8 +9655,8 @@ killers = [{ package = "nazm-cli", test = "usability", name = "a_logical_operand
 name = "n49-logical-negation-is-spaced-from-its-operand"
 why = "the formatter prints `! a` for `!a`, a layout that is not the canonical one"
 file = "crates/nazm-syntax/src/format.rs"
-find = "        if matches!(previous, TokenKind::Minus | TokenKind::Bang)"
-replace = "        if matches!(previous, TokenKind::Minus)"
+find = "            TokenKind::Minus | TokenKind::Bang | TokenKind::Tilde"
+replace = "            TokenKind::Minus | TokenKind::Tilde"
 killers = [{ package = "nazm-cli", test = "usability", name = "the_formatter_spaces_the_logical_operators_and_keeps_the_effect_marker" }]
 
 [[mutation]]
@@ -10468,11 +10475,12 @@ Repointed by N66, which moved it to 9 for the ordered sum.
 Repointed by N68, which moved it to 10 for the field-by-field layout.
 Repointed by N83, which moved it to 11 for the task pool.
 Repointed by N85, which moved it to 12 for the errno capture and C strings returned.
-Repointed by N86, which moved it to 13 for device registers by width."""
+Repointed by N86, which moved it to 13 for device registers by width.
+Repointed by Gate 2, which moved it to 15 for floats across runtime entries and the numbers part."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 14;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 13;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_fourteen_and_its_digest_covers_the_pool_and_errno" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 15;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 14;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_fifteen_and_its_digest_covers_the_pool_errno_and_numbers" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -11930,10 +11938,11 @@ killers = [{ package = "nazm-cli", test = "accounts", name = "the_account_metada
 [[mutation]]
 name = "n73-the-fuzzer-finds-an-unsigned-llvm-ordering"
 why = """the LLVM backend's `<` is unsigned; no test names it — the differential fuzzer's generated programs disagree with the interpreter
-Repointed by N105: the rule is LIR's, made once for both backends."""
+Repointed by N105: the rule is LIR's, made once for both backends.
+Repointed by Gate 2, whose emitter writes each comparison with its instruction."""
 file = "crates/nazm-lir/src/op/llvm.rs"
-find = '                Cmp::Lt => "slt",'
-replace = '                Cmp::Lt => "ult",'
+find = '                Cmp::Lt => ("icmp", "slt"),'
+replace = '                Cmp::Lt => ("icmp", "ult"),'
 killers = [{ package = "nazm-cli", test = "fuzz_diff", name = "every_tier_gives_a_generated_program_the_same_answer" }]
 
 # `n73-the-fuzzer-finds-an-unsigned-cranelift-ordering` is retired by N105: its rule is LIR's, decided once for both backends, and `n41-an-ordering-is-unsigned` attacks it there.
@@ -13878,10 +13887,11 @@ killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_the
 
 [[mutation]]
 name = "n105-the-oracle-checks-addition-as-unsigned"
-why = "the oracle computes a checked addition's overflow as unsigned, so it reports an overflow where Nazm has none and misses the one it has"
+why = """the oracle computes a checked addition's overflow as unsigned, so it reports an overflow where Nazm has none and misses the one it has
+Repointed by Gate 2, whose oracle checks every width's operation in one function."""
 file = "crates/nazm-lir/src/op/interp.rs"
-find = '                            OvfOp::Add => x.overflowing_add(z),'
-replace = '                            OvfOp::Add => { let (r, _) = x.overflowing_add(z); (r, (x as u64).overflowing_add(z as u64).1) }'
+find = '        OvfOp::Add => (sa + sb, (lo..=hi).contains(&(sa + sb))),'
+replace = '        OvfOp::Add => (sa + sb, ua + ub <= umax),'
 killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_their_failures_agree_with_the_oracle" }]
 
 [[mutation]]
@@ -14005,13 +14015,15 @@ find = "\"Nazm 1.0 has functions and `let`/`let mut`, `while` with `break` and `
 replace = "\"the supported subset is functions, `let` and `let mut`, assignment, `while` with \","
 killers = [{ package = "nazm-syntax", test = "recovery", name = "a_refused_construct_points_at_the_current_language" }]
 
+# `g1-a-float-literal-is-a-field-read` is retired by Gate 2: `1.5` is a floating-point literal, lexed as one, so the refusal it attacked no longer exists. `g2-a-float-literal-lexes-as-an-integer` attacks the rule that replaced it.
+
 [[mutation]]
-name = "g1-a-float-literal-is-a-field-read"
-why = "`1.5` is reported as a field read whose name is a number, not refused by name as floating point"
-file = "crates/nazm-syntax/src/parser.rs"
-find = "if span.end == dot_span.start && dot_span.end == name_span.start) =>"
-replace = "if span.end == dot_span.start && dot_span.end == name_span.start && false) =>"
-killers = [{ package = "nazm-syntax", test = "recovery", name = "a_floating_point_literal_is_refused_by_name" }, { package = "nazm-cli", test = "compat_v1", name = "every_refusal_case_is_refused_with_its_code_and_not_built" }]
+name = "g2-a-float-literal-lexes-as-an-integer"
+why = "`1.5` lexes as an integer, a `.` and an integer — the field read it was before Gate 1 — rather than one floating-point literal"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "if byte(i) == Some(b'.') && byte(i + 1).is_some_and(|b| b.is_ascii_digit()) {"
+replace = "if byte(i) == Some(b'.') && byte(i + 1).is_some_and(|b| b.is_ascii_digit()) && false {"
+killers = [{ package = "nazm-syntax", test = "recovery", name = "a_floating_point_literal_is_one_literal" }, { package = "nazm-cli", test = "compat_v1", name = "a_superseded_refusal_is_kept_and_now_checks" }]
 
 [[mutation]]
 name = "g1-the-type-list-stops-at-spawncap"
@@ -14089,3 +14101,119 @@ file = "compiler/analyse.nz"
 find = "                if holds_functions(tb, ints_get(ntypes, i)) {"
 replace = "                if false {"
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
+
+# --- Gate 2: numbers — integer widths, floats, bits, conversions -------------------------------
+
+[[mutation]]
+name = "g2-unsigned-addition-is-checked-as-signed"
+why = "a native unsigned addition is overflow-checked as a signed one, so `UInt8(255) + UInt8(1)` wraps to 0 instead of trapping"
+file = "crates/nazm-lir/src/op/numeric.rs"
+find = "                ovf(OvfOp::Add, OvfOp::UAdd),"
+replace = "                ovf(OvfOp::Add, OvfOp::Add),"
+killers = [{ package = "nazm-cli", test = "numbers", name = "every_integer_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "g2-a-native-shift-amount-is-not-checked"
+why = "a native shift's amount is never compared with the width, so `UInt8(1) << 8` reaches the machine's own rule instead of trapping (`N0412`)"
+file = "crates/nazm-lir/src/op/numeric.rs"
+find = "            self.cmp_imm(Cmp::UGe, n, Class::I64, i64::from(w))"
+replace = "            self.cmp_imm(Cmp::UGe, n, Class::I64, i64::MAX)"
+killers = [{ package = "nazm-cli", test = "numbers", name = "every_integer_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "g2-the-interpreter-masks-a-shift"
+why = "the interpreter shifts by any amount, so a shift the native code traps on gives a value under `nazm run`"
+file = "crates/nazm-sema/src/numeric.rs"
+find = "            if n < 0 || n >= i128::from(w) {"
+replace = "            if n < 0 || n >= i128::from(w) + 64 {"
+killers = [{ package = "nazm-cli", test = "numbers", name = "every_integer_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "g2-a-nan-equals-itself-under-llvm"
+why = "LLVM's `!=` on floats is ordered, so `nan != nan` is false under LLVM and true everywhere else"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '                Cmp::FNe => ("fcmp", "une"),'
+replace = '                Cmp::FNe => ("fcmp", "one"),'
+killers = [{ package = "nazm-cli", test = "numbers", name = "float_comparison_is_ieee_754_a_nan_equals_nothing" }]
+
+[[mutation]]
+name = "g2-a-literal-is-always-an-int"
+why = "an integer literal ignores the type expected where it is written, so `m & 0xFF` with `m: UInt32` mixes two types and `UInt8(256)` is converted at run time instead of refused"
+file = "crates/nazm-core/src/check.rs"
+find = "            Some(k) if k.is_integer() => Type::of_num(k),"
+replace = "            Some(k) if k.is_integer() && false => Type::of_num(k),"
+killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_refused_before_anything_runs" }, { package = "nazm-cli", test = "numbers", name = "bit_operations_shifts_rotations_and_counts" }]
+
+[[mutation]]
+name = "g2-numbers-of-two-types-combine"
+why = "arithmetic accepts two different numeric types, the implicit conversion the language does not have"
+file = "crates/nazm-core/src/check.rs"
+find = """                lt == rt && lt.num().is_some()
+            }"""
+replace = """                lt.num().is_some() && rt.num().is_some()
+            }"""
+killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_refused_before_anything_runs" }]
+
+[[mutation]]
+name = "g2-an-exact-float-conversion-saturates"
+why = "a native float-to-integer conversion is never range-checked, so `Int(1e20)` saturates instead of trapping"
+file = "crates/nazm-lir/src/op/numeric.rs"
+find = "                if mode != ConvertMode::Saturate {"
+replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "numbers", name = "every_integer_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "g2-the-shortest-digits-are-not-shortest"
+why = "the runtime writes every float with 17 significant digits, so `0.1` prints as `0.10000000000000001` natively and `0.1` under `nazm run`"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %stop = or i1 %ok, %last"
+replace = "  %stop = and i1 %ok, %last"
+killers = [{ package = "nazm-cli", test = "numbers", name = "floats_are_ieee_754_and_written_by_their_shortest_digits" }]
+
+[[mutation]]
+name = "g2-cranelift-divides-unsigned-as-signed"
+why = "Cranelift divides an unsigned integer as signed, so `UInt16(65535) / UInt16(256)` is 0 there and 255 everywhere else"
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = "                BinOp::UDiv => fx.b.ins().udiv(x, y),"
+replace = "                BinOp::UDiv => fx.b.ins().sdiv(x, y),"
+killers = [{ package = "nazm-cli", test = "numbers", name = "every_integer_width_has_its_own_range_and_signedness" }]
+
+[[mutation]]
+name = "g2-unsigned-saturating-subtraction-saturates-up"
+why = "a native unsigned saturating subtraction clamps to the maximum, so `saturating_sub(UInt8(3), UInt8(10))` is 255 instead of 0"
+file = "crates/nazm-lir/src/op/numeric.rs"
+find = "        } else if op == Intrinsic::SaturatingSub {"
+replace = "        } else if op == Intrinsic::SaturatingSub && false {"
+killers = [{ package = "nazm-cli", test = "numbers", name = "wrapping_and_saturating_arithmetic_never_trap" }]
+
+[[mutation]]
+name = "g2-a-constant-shift-is-accepted"
+why = "a shift by a constant outside `0..width` is accepted, a program that fails every time it runs"
+file = "crates/nazm-core/src/check.rs"
+find = "        if n < 0 || n >= i128::from(k.bits()) {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_refused_before_anything_runs" }]
+
+[[mutation]]
+name = "g2-the-interpreter-compares-floats-by-bits"
+why = "the interpreter compares two floats by their bits, so a record holding a NaN equals itself under `nazm run` and not natively"
+file = "crates/nazm-core/src/eval.rs"
+find = "        (Value::Num(x), Value::Num(y)) => Some(numeric::compare(numeric::Cmp::Eq, *x, *y)),"
+replace = "        (Value::Num(x), Value::Num(y)) => Some(x.bits == y.bits),"
+killers = [{ package = "nazm-cli", test = "compat_v1", name = "every_run_case_prints_what_it_says_interpreted_and_compiled_by_both_backends" }]
+
+[[mutation]]
+name = "g2-a-zero-divisor-is-not-checked"
+why = "the interpreter divides an integer of any width by zero without its check, and stops by a host panic instead of `N0401`"
+file = "crates/nazm-sema/src/numeric.rs"
+find = "        Arith::Div | Arith::Rem if y == 0 => return Err(NumError::DivideByZero),"
+replace = "        Arith::Div | Arith::Rem if y == 0 && false => return Err(NumError::DivideByZero),"
+killers = [{ package = "nazm-cli", test = "numbers", name = "every_integer_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "g2-a-built-in-ignores-its-class"
+why = "a generic numeric built-in accepts a type outside its class, so `count_ones(1.5)` checks"
+file = "crates/nazm-core/src/check.rs"
+find = "                if !class.admits(t) {"
+replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_refused_before_anything_runs" }]

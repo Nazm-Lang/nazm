@@ -349,6 +349,13 @@ impl Sets<'_> {
                 self.reads = None;
             }
             ExprKind::Const(_) | ExprKind::Local(_) | ExprKind::FnValue(_) => {}
+            ExprKind::Complement(x)
+            | ExprKind::Convert { operand: x, .. }
+            | ExprKind::Fits { operand: x, .. } => self.expr(x, false),
+            ExprKind::Bits { lhs, rhs, .. } => {
+                self.expr(lhs, false);
+                self.expr(rhs, false);
+            }
         }
     }
 }

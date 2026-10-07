@@ -244,6 +244,9 @@ impl ByteLayouts {
         let p = self.data.pointer;
         match t {
             Ty::Int => Some(Lay::new(8, 8)),
+            // Its own width and C's alignment for it (Gate 2): bits over eight, exactly.
+            #[allow(clippy::integer_division)]
+            Ty::Num(k) => Some(Lay::new(k.bits() / 8, k.bits() / 8)),
             Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) | Ty::ChanOf(_) => {
                 Some(Lay::new(p, p))
             }
@@ -258,7 +261,7 @@ impl ByteLayouts {
     #[must_use]
     pub fn owns(&self, t: Ty) -> bool {
         match t {
-            Ty::Int | Ty::Bool => false,
+            Ty::Int | Ty::Bool | Ty::Num(_) => false,
             Ty::Str | Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) | Ty::ChanOf(_) => {
                 true
             }

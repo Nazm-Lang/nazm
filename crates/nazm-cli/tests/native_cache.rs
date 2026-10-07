@@ -853,6 +853,8 @@ fn every_unit_declares_the_runtime_it_calls_as_the_registry_states_it() {
         nazm_lir::runtime::Word::I32 => "i32",
         nazm_lir::runtime::Word::Ptr => "ptr",
         nazm_lir::runtime::Word::Bit => "i1",
+        nazm_lir::runtime::Word::F32 => "float",
+        nazm_lir::runtime::Word::F64 => "double",
     };
     for d in &declared {
         let name = d

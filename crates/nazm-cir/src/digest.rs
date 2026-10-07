@@ -330,6 +330,10 @@ impl<'a> Canon<'a> {
                         self.tag("str");
                         self.bytes(s);
                     }
+                    Some(Const::Num { kind, bits }) => {
+                        self.tag(kind.name());
+                        self.h.update(&bits.to_le_bytes());
+                    }
                     None => self.tag("?"),
                 }
             }
@@ -345,6 +349,26 @@ impl<'a> Canon<'a> {
                 self.tag(op.symbol());
                 self.expr(lhs);
                 self.expr(rhs);
+            }
+            ExprKind::Bits { op, lhs, rhs } => {
+                self.tag("bits");
+                self.tag(op.symbol());
+                self.expr(lhs);
+                self.expr(rhs);
+            }
+            ExprKind::Complement(x) => {
+                self.tag("complement");
+                self.expr(x);
+            }
+            ExprKind::Convert { mode, operand } => {
+                self.tag("convert");
+                self.tag(convert_name(*mode));
+                self.expr(operand);
+            }
+            ExprKind::Fits { to, operand } => {
+                self.tag("fits");
+                self.ty(*to);
+                self.expr(operand);
             }
             ExprKind::Compare {
                 op,
@@ -480,5 +504,16 @@ impl<'a> Canon<'a> {
                 self.exprs(args);
             }
         }
+    }
+}
+
+/// A conversion mode's name, as the digest and the printed IR write it.
+#[must_use]
+pub const fn convert_name(mode: nazm_sema::ConvertMode) -> &'static str {
+    match mode {
+        nazm_sema::ConvertMode::Exact => "exact",
+        nazm_sema::ConvertMode::Try => "try",
+        nazm_sema::ConvertMode::Wrap => "wrap",
+        nazm_sema::ConvertMode::Saturate => "saturate",
     }
 }

@@ -341,15 +341,58 @@ impl Verifier<'_> {
             }
             ExprKind::Neg(x) => {
                 self.expr(x);
-                if !fits(x, Type::Int) || e.ty != Some(Type::Int) {
-                    self.bad("negation of something that is not `Int`");
+                let numeric = e.ty.is_some_and(|t| t.num().is_some());
+                if !numeric || e.ty.is_some_and(|t| !fits(x, t)) {
+                    self.bad("negation of something that is not a number of its own type");
                 }
             }
             ExprKind::Arith { lhs, rhs, .. } => {
                 self.expr(lhs);
                 self.expr(rhs);
-                if !fits(lhs, Type::Int) || !fits(rhs, Type::Int) || e.ty != Some(Type::Int) {
-                    self.bad("arithmetic on something that is not `Int`");
+                let numeric = e.ty.is_some_and(|t| t.num().is_some());
+                if !numeric || e.ty.is_some_and(|t| !fits(lhs, t) || !fits(rhs, t)) {
+                    self.bad("arithmetic on operands that are not numbers of its own type");
+                }
+            }
+            ExprKind::Bits { op, lhs, rhs } => {
+                self.expr(lhs);
+                self.expr(rhs);
+                let integer = e.ty.is_some_and(Type::is_integer);
+                let amount = matches!(op, crate::ir::BitOp::Shl | crate::ir::BitOp::Shr);
+                let rhs_ok = if amount {
+                    fits(rhs, Type::Int)
+                } else {
+                    e.ty.is_some_and(|t| fits(rhs, t))
+                };
+                if !integer || e.ty.is_some_and(|t| !fits(lhs, t)) || !rhs_ok {
+                    self.bad("a bit operation on operands that are not integers of its type");
+                }
+            }
+            ExprKind::Complement(x) => {
+                self.expr(x);
+                if !e.ty.is_some_and(Type::is_integer) || e.ty.is_some_and(|t| !fits(x, t)) {
+                    self.bad("a complement of something that is not an integer of its type");
+                }
+            }
+            ExprKind::Convert { mode, operand } => {
+                self.expr(operand);
+                let from_numeric = operand.ty.is_none_or(|t| t.num().is_some());
+                let to_numeric = e.ty.is_some_and(|t| t.num().is_some());
+                let wrap_ok = *mode != nazm_sema::ConvertMode::Wrap
+                    || (e.ty.is_some_and(Type::is_integer)
+                        && operand.ty.is_none_or(Type::is_integer));
+                if !from_numeric || !to_numeric || !wrap_ok || *mode == nazm_sema::ConvertMode::Try
+                {
+                    self.bad("a conversion between types it cannot convert");
+                }
+            }
+            ExprKind::Fits { to, operand } => {
+                self.expr(operand);
+                if to.num().is_none()
+                    || !operand.ty.is_none_or(|t| t.num().is_some())
+                    || e.ty != Some(Type::Bool)
+                {
+                    self.bad("a conversion test between types it cannot convert");
                 }
             }
             ExprKind::Compare {

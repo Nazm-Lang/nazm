@@ -14,16 +14,21 @@
 //! # Classes
 //!
 //! A value's machine class: [`Class::Bit`] a truth value (a `Bool`, a comparison, a runtime
-//! entry's bit), stored as one byte; [`Class::I8`] and [`Class::I32`] narrow integers;
-//! [`Class::I64`] an `Int`; [`Class::Ptr`] an address, as wide as the target's pointer.
+//! entry's bit), stored as one byte; [`Class::I8`], [`Class::I16`] and [`Class::I32`] narrow
+//! integers; [`Class::I64`] an `Int` or a `UInt64`; [`Class::F32`] and [`Class::F64`] IEEE 754
+//! floats (Gate 2); [`Class::Ptr`] an address, as wide as the target's pointer. An integer class
+//! has no signedness: the operation says how its bits are read.
 
 /// A value's machine class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Class {
     Bit,
     I8,
+    I16,
     I32,
     I64,
+    F32,
+    F64,
     Ptr,
 }
 
@@ -34,8 +39,11 @@ impl Class {
         match self {
             Self::Bit => "bit",
             Self::I8 => "i8",
+            Self::I16 => "i16",
             Self::I32 => "i32",
             Self::I64 => "i64",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
             Self::Ptr => "ptr",
         }
     }
@@ -43,7 +51,24 @@ impl Class {
     /// Whether this is an integer class arithmetic applies to.
     #[must_use]
     pub const fn integer(self) -> bool {
-        matches!(self, Self::I8 | Self::I32 | Self::I64)
+        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
+    }
+
+    /// Whether this is a float class (Gate 2).
+    #[must_use]
+    pub const fn float(self) -> bool {
+        matches!(self, Self::F32 | Self::F64)
+    }
+
+    /// Its width in bits, for an integer or float class.
+    #[must_use]
+    pub const fn bits(self) -> u32 {
+        match self {
+            Self::Bit | Self::I8 => 8,
+            Self::I16 => 16,
+            Self::I32 | Self::F32 => 32,
+            Self::I64 | Self::F64 | Self::Ptr => 64,
+        }
     }
 }
 
@@ -169,17 +194,77 @@ pub enum BinOp {
     And,
     Or,
     Xor,
+    /// Unsigned (Gate 2); the lowering has already refused a zero divisor.
+    UDiv,
+    URem,
+    /// Shifts by an amount of the same class, which the lowering has already checked is in
+    /// `0..width`; `LShr` fills with zeros, `AShr` with the sign.
+    Shl,
+    LShr,
+    AShr,
+    /// Rotations by an amount of the same class, taken modulo the width.
+    Rotl,
+    Rotr,
+    /// IEEE 754, round to nearest, ties to even; never failing.
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
 }
 
-/// The overflow-checked operations: a result and whether it overflowed.
+/// The overflow-checked operations: a result and whether it overflowed, on any integer class;
+/// the `U` forms read the operands as unsigned (Gate 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OvfOp {
     Add,
     Sub,
     Mul,
+    UAdd,
+    USub,
+    UMul,
 }
 
-/// Comparisons. Integers compare signed; a pointer only for equality.
+/// Operations of one operand (Gate 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnOp {
+    /// IEEE 754 negation: the sign flips, a NaN's included.
+    FNeg,
+    FSqrt,
+    FAbs,
+    FFloor,
+    FCeil,
+    FTrunc,
+    /// Bit counts, in the operand's class.
+    Popcnt,
+    Clz,
+    Ctz,
+    /// The bytes reversed.
+    Bswap,
+}
+
+/// Conversions between classes (Gate 2). The integer to float ones round to nearest, ties to
+/// even; the float to integer ones truncate toward zero and are only made where the lowering
+/// has already checked the value fits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConvOp {
+    /// A signed integer to a float.
+    SToF,
+    /// An unsigned integer to a float.
+    UToF,
+    /// A float to a signed integer.
+    FToS,
+    /// A float to an unsigned integer.
+    FToU,
+    /// `Float32` to `Float64`, exactly, or `Float64` to `Float32`, rounded.
+    FExt,
+    FTrunc,
+    /// The same bits as another class of the same width: a float and its integer bits.
+    Bits,
+}
+
+/// Comparisons. Integers compare signed by `Lt` to `Ge`, unsigned by `ULt` to `UGe`; a pointer
+/// only for equality. Floats compare by the `F` forms, IEEE 754's: ordered — false with a NaN —
+/// except `FNe`, which is true with one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Cmp {
     Eq,
@@ -188,6 +273,16 @@ pub enum Cmp {
     Le,
     Gt,
     Ge,
+    ULt,
+    ULe,
+    UGt,
+    UGe,
+    FEq,
+    FNe,
+    FLt,
+    FLe,
+    FGt,
+    FGe,
 }
 
 /// Where a debugger should say the instructions that follow come from (N48, N91).
@@ -237,7 +332,7 @@ pub enum Inst {
         a: V,
         b: V,
     },
-    /// `dst` and whether it overflowed, a [`Class::Bit`]. On [`Class::I64`].
+    /// `dst` and whether it overflowed, a [`Class::Bit`]. On any integer class.
     Ovf {
         dst: V,
         ovf: V,
@@ -257,6 +352,20 @@ pub enum Inst {
         cond: V,
         a: V,
         b: V,
+    },
+    /// One operand (Gate 2): its result is the operand's class, except a bit count's, which
+    /// is too.
+    Un {
+        dst: V,
+        op: UnOp,
+        a: V,
+    },
+    /// A conversion to `to` (Gate 2).
+    Conv {
+        dst: V,
+        op: ConvOp,
+        to: Class,
+        src: V,
     },
     /// Widen to `to`: zero-extended unless `signed`.
     Ext {

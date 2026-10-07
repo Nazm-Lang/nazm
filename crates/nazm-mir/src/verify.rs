@@ -323,12 +323,28 @@ fn rvalue(cx: &Ctx<'_>, value: &Rvalue, want: Type, arm: Option<(LocalId, u32)>)
         Rvalue::Copy(l) | Rvalue::Move(l) => {
             (!is(cx.value(*l))).then(|| "a copy or move of a value of another type".to_owned())
         }
-        Rvalue::Neg(a) => (cx.operand(a) != Some(Type::Int) || want != Type::Int)
-            .then(|| "a negation that is not of `Int`".to_owned()),
-        Rvalue::Arith(_, a, b) => (cx.operand(a) != Some(Type::Int)
-            || cx.operand(b) != Some(Type::Int)
-            || want != Type::Int)
-            .then(|| "arithmetic that is not on `Int`".to_owned()),
+        Rvalue::Neg(a) => (cx.operand(a) != Some(want) || want.num().is_none())
+            .then(|| "a negation that is not of a number of its own type".to_owned()),
+        Rvalue::Arith(_, a, b) => {
+            (cx.operand(a) != Some(want) || cx.operand(b) != Some(want) || want.num().is_none())
+                .then(|| "arithmetic that is not on numbers of its own type".to_owned())
+        }
+        Rvalue::Bits(op, a, b) => {
+            let shift = matches!(op, nazm_cir::BitOp::Shl | nazm_cir::BitOp::Shr);
+            let rhs = if shift { Type::Int } else { want };
+            (cx.operand(a) != Some(want) || cx.operand(b) != Some(rhs) || !want.is_integer())
+                .then(|| "a bit operation that is not on integers of its own type".to_owned())
+        }
+        Rvalue::Complement(a) => (cx.operand(a) != Some(want) || !want.is_integer())
+            .then(|| "a complement that is not of an integer of its own type".to_owned()),
+        Rvalue::Convert { to, operand, .. } => {
+            (*to != want || to.num().is_none() || cx.operand(operand).and_then(Type::num).is_none())
+                .then(|| "a conversion that is not between numbers".to_owned())
+        }
+        Rvalue::Fits { to, operand } => (want != Type::Bool
+            || to.num().is_none()
+            || cx.operand(operand).and_then(Type::num).is_none())
+        .then(|| "a conversion test that is not between numbers".to_owned()),
         Rvalue::Compare {
             op,
             law,
@@ -839,8 +855,12 @@ fn ownership(types: &Types, f: &Function, out: &mut Vec<String>) {
 /// The locals an rvalue reads through operands (borrowed), not those it moves or copies.
 fn rvalue_reads(v: &Rvalue) -> Vec<LocalId> {
     let ops: Vec<&Operand> = match v {
-        Rvalue::Use(o) | Rvalue::Neg(o) => vec![o],
-        Rvalue::Arith(_, a, b) => vec![a, b],
+        Rvalue::Use(o)
+        | Rvalue::Neg(o)
+        | Rvalue::Complement(o)
+        | Rvalue::Convert { operand: o, .. }
+        | Rvalue::Fits { operand: o, .. } => vec![o],
+        Rvalue::Arith(_, a, b) | Rvalue::Bits(_, a, b) => vec![a, b],
         Rvalue::Compare { lhs, rhs, .. } => vec![lhs, rhs],
         Rvalue::Call { args, .. } | Rvalue::Primitive { args, .. } => args.iter().collect(),
         Rvalue::CallIndirect { callee, args } => std::iter::once(callee).chain(args).collect(),

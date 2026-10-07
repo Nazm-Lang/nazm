@@ -293,8 +293,14 @@ fn expr_blocks<'a>(e: &'a Expr, visit: &mut dyn FnMut(&'a Block)) {
         | ExprKind::Local(_)
         | ExprKind::Closure { .. }
         | ExprKind::FnValue(_) => {}
-        ExprKind::Neg(x) | ExprKind::Field { base: x, .. } => expr_blocks(x, visit),
-        ExprKind::Arith { lhs, rhs, .. } | ExprKind::Compare { lhs, rhs, .. } => {
+        ExprKind::Neg(x)
+        | ExprKind::Complement(x)
+        | ExprKind::Convert { operand: x, .. }
+        | ExprKind::Fits { operand: x, .. }
+        | ExprKind::Field { base: x, .. } => expr_blocks(x, visit),
+        ExprKind::Arith { lhs, rhs, .. }
+        | ExprKind::Bits { lhs, rhs, .. }
+        | ExprKind::Compare { lhs, rhs, .. } => {
             expr_blocks(lhs, visit);
             expr_blocks(rhs, visit);
         }

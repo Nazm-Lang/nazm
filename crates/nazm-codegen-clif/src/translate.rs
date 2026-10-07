@@ -7,7 +7,8 @@
 
 use std::collections::BTreeMap;
 
-use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::immediates::{Ieee32, Ieee64};
 use cranelift_codegen::ir::{
     types, AbiParam, Block, FuncRef, InstBuilder, MemFlagsData, Signature, StackSlotData,
     StackSlotKind, TrapCode, Type, Value,
@@ -18,7 +19,9 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variab
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use nazm_diag::{codes, Diagnostic};
-use nazm_lir::op::ir::{self as lir, BinOp, Class, Cmp, Conv, Inst, OvfOp, Sig, SymKind, Term};
+use nazm_lir::op::ir::{
+    self as lir, BinOp, Class, Cmp, Conv, ConvOp, Inst, OvfOp, Sig, SymKind, Term, UnOp,
+};
 use nazm_lir::SourceNames;
 use nazm_span::Span;
 
@@ -57,8 +60,11 @@ impl Tr {
     fn ty(&self, c: Class) -> Type {
         match c {
             Class::Bit | Class::I8 => types::I8,
+            Class::I16 => types::I16,
             Class::I32 => types::I32,
             Class::I64 => types::I64,
+            Class::F32 => types::F32,
+            Class::F64 => types::F64,
             Class::Ptr => self.ptr,
         }
     }
@@ -411,6 +417,25 @@ fn inst(
                 .unwrap_or(Class::I64);
             fx.def(*dst, x, class);
         }
+        // A float constant is its bits (Gate 2).
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        Inst::Const {
+            dst,
+            class: Class::F32,
+            value,
+        } => {
+            let x = fx.b.ins().f32const(Ieee32::with_bits(*value as u32));
+            fx.def(*dst, x, Class::F32);
+        }
+        #[allow(clippy::cast_sign_loss)]
+        Inst::Const {
+            dst,
+            class: Class::F64,
+            value,
+        } => {
+            let x = fx.b.ins().f64const(Ieee64::with_bits(*value as u64));
+            fx.def(*dst, x, Class::F64);
+        }
         Inst::Const { dst, class, value } => {
             let ty = fx.t.ty(*class);
             let x = fx.b.ins().iconst(ty, *value);
@@ -474,21 +499,84 @@ fn inst(
                 BinOp::And => fx.b.ins().band(x, y),
                 BinOp::Or => fx.b.ins().bor(x, y),
                 BinOp::Xor => fx.b.ins().bxor(x, y),
+                BinOp::UDiv => fx.b.ins().udiv(x, y),
+                BinOp::URem => fx.b.ins().urem(x, y),
+                BinOp::Shl => fx.b.ins().ishl(x, y),
+                BinOp::LShr => fx.b.ins().ushr(x, y),
+                BinOp::AShr => fx.b.ins().sshr(x, y),
+                BinOp::Rotl => fx.b.ins().rotl(x, y),
+                BinOp::Rotr => fx.b.ins().rotr(x, y),
+                BinOp::FAdd => fx.b.ins().fadd(x, y),
+                BinOp::FSub => fx.b.ins().fsub(x, y),
+                BinOp::FMul => fx.b.ins().fmul(x, y),
+                BinOp::FDiv => fx.b.ins().fdiv(x, y),
             };
             fx.def(*dst, r, c);
         }
         Inst::Ovf { dst, ovf, op, a, b } => {
             let (x, y) = (fx.v(*a), fx.v(*b));
+            let c = fx.class(*a);
             let (r, o) = match op {
                 OvfOp::Add => fx.b.ins().sadd_overflow(x, y),
                 OvfOp::Sub => fx.b.ins().ssub_overflow(x, y),
                 OvfOp::Mul => fx.b.ins().smul_overflow(x, y),
+                OvfOp::UAdd => fx.b.ins().uadd_overflow(x, y),
+                OvfOp::USub => fx.b.ins().usub_overflow(x, y),
+                OvfOp::UMul => fx.b.ins().umul_overflow(x, y),
             };
-            fx.def(*dst, r, Class::I64);
+            fx.def(*dst, r, c);
             fx.def(*ovf, o, Class::Bit);
+        }
+        Inst::Un { dst, op, a } => {
+            let x = fx.v(*a);
+            let c = fx.class(*a);
+            let r = match op {
+                UnOp::FNeg => fx.b.ins().fneg(x),
+                UnOp::FSqrt => fx.b.ins().sqrt(x),
+                UnOp::FAbs => fx.b.ins().fabs(x),
+                UnOp::FFloor => fx.b.ins().floor(x),
+                UnOp::FCeil => fx.b.ins().ceil(x),
+                UnOp::FTrunc => fx.b.ins().trunc(x),
+                UnOp::Popcnt => fx.b.ins().popcnt(x),
+                UnOp::Clz => fx.b.ins().clz(x),
+                UnOp::Ctz => fx.b.ins().ctz(x),
+                UnOp::Bswap if c == Class::I8 => x,
+                UnOp::Bswap => fx.b.ins().bswap(x),
+            };
+            fx.def(*dst, r, c);
+        }
+        Inst::Conv { dst, op, to, src } => {
+            let x = fx.v(*src);
+            let ty = fx.t.ty(*to);
+            let r = match op {
+                ConvOp::SToF => fx.b.ins().fcvt_from_sint(ty, x),
+                ConvOp::UToF => fx.b.ins().fcvt_from_uint(ty, x),
+                // Saturating, as LLVM's is: the lowering has range-checked or wants saturation,
+                // and nothing traps.
+                ConvOp::FToS => fx.b.ins().fcvt_to_sint_sat(ty, x),
+                ConvOp::FToU => fx.b.ins().fcvt_to_uint_sat(ty, x),
+                ConvOp::FExt => fx.b.ins().fpromote(ty, x),
+                ConvOp::FTrunc => fx.b.ins().fdemote(ty, x),
+                ConvOp::Bits => fx.b.ins().bitcast(ty, MemFlagsData::new(), x),
+            };
+            fx.def(*dst, r, *to);
         }
         Inst::Cmp { dst, op, a, b } => {
             let (x, y) = (fx.v(*a), fx.v(*b));
+            let float = match op {
+                Cmp::FEq => Some(FloatCC::Equal),
+                Cmp::FNe => Some(FloatCC::NotEqual),
+                Cmp::FLt => Some(FloatCC::LessThan),
+                Cmp::FLe => Some(FloatCC::LessThanOrEqual),
+                Cmp::FGt => Some(FloatCC::GreaterThan),
+                Cmp::FGe => Some(FloatCC::GreaterThanOrEqual),
+                _ => None,
+            };
+            if let Some(cc) = float {
+                let r = fx.b.ins().fcmp(cc, x, y);
+                fx.def(*dst, r, Class::Bit);
+                return;
+            }
             let cc = match op {
                 Cmp::Eq => IntCC::Equal,
                 Cmp::Ne => IntCC::NotEqual,
@@ -496,6 +584,10 @@ fn inst(
                 Cmp::Le => IntCC::SignedLessThanOrEqual,
                 Cmp::Gt => IntCC::SignedGreaterThan,
                 Cmp::Ge => IntCC::SignedGreaterThanOrEqual,
+                Cmp::ULt => IntCC::UnsignedLessThan,
+                Cmp::ULe => IntCC::UnsignedLessThanOrEqual,
+                Cmp::UGt => IntCC::UnsignedGreaterThan,
+                _ => IntCC::UnsignedGreaterThanOrEqual,
             };
             let r = fx.b.ins().icmp(cc, x, y);
             fx.def(*dst, r, Class::Bit);

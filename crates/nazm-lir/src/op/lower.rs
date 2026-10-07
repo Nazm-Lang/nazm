@@ -78,7 +78,22 @@ pub const fn class(t: Ty) -> Class {
     match t {
         Ty::Int => Class::I64,
         Ty::Bool => Class::Bit,
+        Ty::Num(k) => num_class(k),
         _ => Class::Ptr,
+    }
+}
+
+/// The class a numeric kind is held in (Gate 2).
+#[must_use]
+pub(crate) const fn num_class(k: nazm_sema::NumKind) -> Class {
+    use nazm_sema::NumKind;
+    match k {
+        NumKind::I8 | NumKind::U8 => Class::I8,
+        NumKind::I16 | NumKind::U16 => Class::I16,
+        NumKind::I32 | NumKind::U32 => Class::I32,
+        NumKind::I64 | NumKind::U64 => Class::I64,
+        NumKind::F32 => Class::F32,
+        NumKind::F64 => Class::F64,
     }
 }
 
@@ -89,6 +104,8 @@ const fn word(w: Word) -> Class {
         Word::I32 => Class::I32,
         Word::Ptr => Class::Ptr,
         Word::Bit => Class::Bit,
+        Word::F32 => Class::F32,
+        Word::F64 => Class::F64,
     }
 }
 
@@ -358,6 +375,7 @@ impl<'a> Lw<'a> {
             Part::Channels => self.needs.channels = true,
             Part::Closures => self.needs.closures = true,
             Part::Foreign => self.needs.foreign = true,
+            Part::Numbers => self.needs.numbers = true,
             Part::Base | Part::Libc => {}
         }
         // The word-level entries this lowering calls are the second compiler's shims (N41).

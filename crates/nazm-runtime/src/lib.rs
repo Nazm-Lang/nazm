@@ -60,6 +60,8 @@ pub struct Needs {
     /// `errno` captured after each foreign call and read by `c_errno()` (N85), with the
     /// per-target `errno` unit beside the runtime.
     pub foreign: bool,
+    /// Formatting and parsing floats and `UInt64`s (Gate 2).
+    pub numbers: bool,
 }
 
 impl Needs {
@@ -77,6 +79,7 @@ impl Needs {
             stack: self.stack || other.stack,
             closures: self.closures || other.closures,
             foreign: self.foreign || other.foreign,
+            numbers: self.numbers || other.numbers,
         }
     }
 
@@ -95,6 +98,7 @@ impl Needs {
             (self.stack, "stack"),
             (self.closures, "closures"),
             (self.foreign, "foreign"),
+            (self.numbers, "numbers"),
         ]
         .into_iter()
         .filter_map(|(on, n)| on.then_some(n))
@@ -117,6 +121,7 @@ impl Needs {
                 "stack" => n.stack = true,
                 "closures" => n.closures = true,
                 "foreign" => n.foreign = true,
+                "numbers" => n.numbers = true,
                 _ => return None,
             }
         }
@@ -202,7 +207,10 @@ pub fn escape(s: &str) -> String {
 /// and a board's runtime generated from its description. 14 is N106's: the pool is the default —
 /// `NAZM_SCHEDULER` unset runs it, `threads` asks for a thread per task, any other value starts
 /// no task — and `nz.pool_policy`, which the platform entry defines (1 for a program that calls C).
-pub const RUNTIME_ABI_REVISION: u32 = 14;
+/// 15 is Gate 2's: floats and fixed-width integers cross runtime entries as `float`, `double`
+/// and the narrow words, and the numbers part — `nz.format_float`, `nz.format_u64`,
+/// `nz.float_parses`, `nz.float_parse` — joins the runtime, with the C library's mathematics.
+pub const RUNTIME_ABI_REVISION: u32 = 15;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -218,6 +226,7 @@ pub const EVERYTHING: Needs = Needs {
     stack: true,
     closures: true,
     foreign: true,
+    numbers: true,
 };
 
 /// The runtime's identity as text: blake3 over the whole runtime, the platform entry and the
@@ -254,6 +263,9 @@ pub enum Word {
     Ptr,
     /// A truth value in the low bit of a byte; the other bits are not promised.
     Bit,
+    /// IEEE 754 binary32 and binary64, as C's `float` and `double` (Gate 2).
+    F32,
+    F64,
 }
 
 /// Which part of the runtime defines an entry, so a build that calls it links that part.
@@ -271,6 +283,8 @@ pub enum Part {
     Closures,
     /// `errno` across foreign calls (N85).
     Foreign,
+    /// Formatting and parsing numbers (Gate 2).
+    Numbers,
     /// The C library the runtime itself links against.
     Libc,
 }
@@ -361,6 +375,36 @@ pub const IMPORTS: &[Import] = &[
     import!("free", [Ptr], None, Libc, "takes the memory"),
     import!("memcpy", [Ptr, Ptr, I64], Some(Word::Ptr), Libc, "borrows both"),
     import!("memcmp", [Ptr, Ptr, I64], Some(Word::I32), Libc, "borrows both"),
+    import!("nz.format_float", [Ptr, F64, Bit], Some(Word::I64), Numbers, "writes a float's shortest round-trip text, as a Float32 when the flag is set, into 40 bytes the caller owns and returns how many (Gate 2)"),
+    import!("nz.format_u64", [Ptr, I64], Some(Word::I64), Numbers, "writes a UInt64's decimal digits into 21 bytes the caller owns and returns how many (Gate 2)"),
+    import!("nz.float_parses", [Ptr, I64], Some(Word::Bit), Numbers, "borrows the bytes; whether they are a floating-point number as `float_parses` reads one (Gate 2)"),
+    import!("nz.float_parse", [Ptr, I64], Some(Word::F64), Numbers, "borrows the bytes; the Float64 they write, or NaN (Gate 2)"),
+    import!("fmod", [F64, F64], Some(Word::F64), Libc, "the remainder of truncated division"),
+    import!("fmodf", [F32, F32], Some(Word::F32), Libc, "the remainder of truncated division"),
+    import!("round", [F64], Some(Word::F64), Libc, "half away from zero"),
+    import!("roundf", [F32], Some(Word::F32), Libc, "half away from zero"),
+    import!("fmin", [F64, F64], Some(Word::F64), Libc, "a NaN loses"),
+    import!("fminf", [F32, F32], Some(Word::F32), Libc, "a NaN loses"),
+    import!("fmax", [F64, F64], Some(Word::F64), Libc, "a NaN loses"),
+    import!("fmaxf", [F32, F32], Some(Word::F32), Libc, "a NaN loses"),
+    import!("sin", [F64], Some(Word::F64), Libc, "the host's"),
+    import!("sinf", [F32], Some(Word::F32), Libc, "the host's"),
+    import!("cos", [F64], Some(Word::F64), Libc, "the host's"),
+    import!("cosf", [F32], Some(Word::F32), Libc, "the host's"),
+    import!("tan", [F64], Some(Word::F64), Libc, "the host's"),
+    import!("tanf", [F32], Some(Word::F32), Libc, "the host's"),
+    import!("exp", [F64], Some(Word::F64), Libc, "the host's"),
+    import!("expf", [F32], Some(Word::F32), Libc, "the host's"),
+    import!("log", [F64], Some(Word::F64), Libc, "the host's"),
+    import!("logf", [F32], Some(Word::F32), Libc, "the host's"),
+    import!("log2", [F64], Some(Word::F64), Libc, "the host's"),
+    import!("log2f", [F32], Some(Word::F32), Libc, "the host's"),
+    import!("log10", [F64], Some(Word::F64), Libc, "the host's"),
+    import!("log10f", [F32], Some(Word::F32), Libc, "the host's"),
+    import!("pow", [F64, F64], Some(Word::F64), Libc, "the host's"),
+    import!("powf", [F32, F32], Some(Word::F32), Libc, "the host's"),
+    import!("atan2", [F64, F64], Some(Word::F64), Libc, "the host's"),
+    import!("atan2f", [F32, F32], Some(Word::F32), Libc, "the host's"),
 ];
 
 /// The runtime's data symbols a backend may read.
@@ -535,6 +579,12 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.scope_join_to", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Any, "`nz.scope_join`, written through a pointer", "as `nz.scope_join`"),
     rt!("nz.task_publish", "void" ("ptr") "", false, Tasks, "", Never, Any, "copy this thread's failure into its task block", "borrows the block"),
     rt!("nz.cstr", "ptr" ("ptr", "i64") "", false, Io, "", Null, Any, "a NUL-terminated copy of a path, for the C library", "the copy is owned by the caller, who frees it"),
+    rt!("nz.format_float", "i64" ("ptr", "double", "i1") "", false, Numbers, "", Never, Any, "a float's shortest round-trip text, by ECMAScript's layout (Gate 2)", "writes into the caller's buffer"),
+    rt!("nz.fmt_layout", "i64" ("ptr", "ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "lay out a float's digits and exponent by ECMAScript's rule (Gate 2)", "writes into the caller's buffer"),
+    rt!("nz.format_u64", "i64" ("ptr", "i64") "", false, Numbers, "", Never, Any, "a UInt64's decimal digits into a 21-byte buffer (Gate 2)", "writes into the caller's buffer"),
+    rt!("nz.float_parses", "i1" ("ptr", "i64") "", false, Numbers, "", Never, Any, "whether bytes are a floating-point number as `float_parses` reads one (Gate 2)", "borrows the bytes"),
+    rt!("nz.digits_from", "i64" ("ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "the index after a run of decimal digits (Gate 2)", "borrows the bytes"),
+    rt!("nz.float_parse", "double" ("ptr", "i64") "", false, Numbers, "", Null, Any, "the Float64 bytes write, or NaN (Gate 2)", "borrows the bytes"),
 ];
 
 /// One global the runtime defines.
@@ -769,6 +819,7 @@ mod tests {
             stack: true,
             closures: true,
             foreign: true,
+            numbers: true,
         }
     }
 
@@ -853,6 +904,8 @@ mod tests {
             Word::I32 => "i32",
             Word::Ptr => "ptr",
             Word::Bit => "i1",
+            Word::F32 => "float",
+            Word::F64 => "double",
         };
         for i in IMPORTS.iter().filter(|i| i.part != Part::Libc) {
             let f = defined(i.symbol)
@@ -921,9 +974,13 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_fourteen_and_its_digest_covers_the_pool_and_errno() {
-        // N106's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 14);
+    fn the_runtime_is_revision_fifteen_and_its_digest_covers_the_pool_errno_and_numbers() {
+        // Gate 2's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 15);
+        // The numbers part (Gate 2), present only where a program reaches it.
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.format_float("));
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.float_parse("));
+        assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.format_float("));
         // The pool is the default, and a program's policy is the entry's (N106).
         assert!(crate::emit_runtime(crate::EVERYTHING)
             .contains("@nz.pool_policy = hidden global i64 2"));

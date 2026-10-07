@@ -12,7 +12,7 @@
 
 use nazm_cir as cir;
 use nazm_sema::resolve::Resolution;
-use nazm_sema::Intrinsic;
+use nazm_sema::{Intrinsic, Type};
 use nazm_span::Span;
 
 use cir::{ArithOp, Block, Const, ConstId, Expr, ExprKind, Stmt};
@@ -29,6 +29,9 @@ pub enum Kind {
     Allocation,
     IndirectCall,
     ForeignCall,
+    /// A shift or rotation's amount (Gate 2), and a conversion that must be exact.
+    Shift,
+    Conversion,
 }
 
 impl Kind {
@@ -44,6 +47,8 @@ impl Kind {
             Self::Allocation => "allocation",
             Self::IndirectCall => "indirect-call",
             Self::ForeignCall => "foreign-call",
+            Self::Shift => "shift",
+            Self::Conversion => "conversion",
         }
     }
 }
@@ -184,6 +189,35 @@ impl Census<'_> {
     fn expr(&mut self, e: &Expr) {
         match &e.kind {
             ExprKind::Const(_) | ExprKind::Local(_) | ExprKind::FnValue(_) => {}
+            // A float's negation, arithmetic and conversion to another float never fail (Gate 2).
+            ExprKind::Neg(x) | ExprKind::Complement(x) if e.ty.is_some_and(Type::is_float) => {
+                self.expr(x);
+            }
+            ExprKind::Arith { lhs, rhs, .. } if e.ty.is_some_and(Type::is_float) => {
+                self.expr(lhs);
+                self.expr(rhs);
+            }
+            ExprKind::Complement(x) => self.expr(x),
+            ExprKind::Neg(x) if e.ty != Some(Type::Int) => {
+                self.push(Kind::Overflow, Status::Checked, e.at, None);
+                self.expr(x);
+            }
+            ExprKind::Bits { op, lhs, rhs } => {
+                if matches!(op, nazm_cir::BitOp::Shl | nazm_cir::BitOp::Shr) {
+                    self.push(Kind::Shift, Status::Checked, e.at, None);
+                }
+                self.expr(lhs);
+                self.expr(rhs);
+            }
+            ExprKind::Convert { mode, operand } => {
+                let exact =
+                    *mode == nazm_sema::ConvertMode::Exact && !e.ty.is_some_and(Type::is_float);
+                if exact {
+                    self.push(Kind::Conversion, Status::Checked, e.at, None);
+                }
+                self.expr(operand);
+            }
+            ExprKind::Fits { operand, .. } => self.expr(operand),
             ExprKind::Neg(x) => {
                 // Only `Int`'s minimum cannot be negated.
                 match self.int(x) {

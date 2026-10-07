@@ -4,7 +4,8 @@
 use std::fmt::Write as _;
 
 use super::ir::{
-    BinOp, Class, Cmp, Conv, Inst, Linkage, Module, OvfOp, Sig, Storage, SymId, SymKind, Term,
+    BinOp, Class, Cmp, Conv, ConvOp, Inst, Linkage, Module, OvfOp, Sig, Storage, SymId, SymKind,
+    Term, UnOp,
 };
 
 fn sym(m: &Module, s: SymId) -> String {
@@ -48,6 +49,44 @@ const fn bin(op: BinOp) -> &'static str {
         BinOp::And => "and",
         BinOp::Or => "or",
         BinOp::Xor => "xor",
+        BinOp::UDiv => "udiv",
+        BinOp::URem => "urem",
+        BinOp::Shl => "shl",
+        BinOp::LShr => "lshr",
+        BinOp::AShr => "ashr",
+        BinOp::Rotl => "rotl",
+        BinOp::Rotr => "rotr",
+        BinOp::FAdd => "fadd",
+        BinOp::FSub => "fsub",
+        BinOp::FMul => "fmul",
+        BinOp::FDiv => "fdiv",
+    }
+}
+
+const fn un(op: UnOp) -> &'static str {
+    match op {
+        UnOp::FNeg => "fneg",
+        UnOp::FSqrt => "fsqrt",
+        UnOp::FAbs => "fabs",
+        UnOp::FFloor => "ffloor",
+        UnOp::FCeil => "fceil",
+        UnOp::FTrunc => "ftrunc",
+        UnOp::Popcnt => "popcnt",
+        UnOp::Clz => "clz",
+        UnOp::Ctz => "ctz",
+        UnOp::Bswap => "bswap",
+    }
+}
+
+const fn conv(op: ConvOp) -> &'static str {
+    match op {
+        ConvOp::SToF => "stof",
+        ConvOp::UToF => "utof",
+        ConvOp::FToS => "ftos",
+        ConvOp::FToU => "ftou",
+        ConvOp::FExt => "fext",
+        ConvOp::FTrunc => "ftrunc",
+        ConvOp::Bits => "bits",
     }
 }
 
@@ -56,6 +95,9 @@ const fn ovf(op: OvfOp) -> &'static str {
         OvfOp::Add => "add.ovf",
         OvfOp::Sub => "sub.ovf",
         OvfOp::Mul => "mul.ovf",
+        OvfOp::UAdd => "uadd.ovf",
+        OvfOp::USub => "usub.ovf",
+        OvfOp::UMul => "umul.ovf",
     }
 }
 
@@ -67,6 +109,16 @@ const fn cmp(op: Cmp) -> &'static str {
         Cmp::Le => "le",
         Cmp::Gt => "gt",
         Cmp::Ge => "ge",
+        Cmp::ULt => "ult",
+        Cmp::ULe => "ule",
+        Cmp::UGt => "ugt",
+        Cmp::UGe => "uge",
+        Cmp::FEq => "feq",
+        Cmp::FNe => "fne",
+        Cmp::FLt => "flt",
+        Cmp::FLe => "fle",
+        Cmp::FGt => "fgt",
+        Cmp::FGe => "fge",
     }
 }
 
@@ -105,6 +157,10 @@ pub fn inst(m: &Module, i: &Inst) -> String {
             b,
         } => format!("v{}, v{} = {} v{}, v{}", dst.0, o.0, ovf(*op), a.0, b.0),
         Inst::Cmp { dst, op, a, b } => format!("v{} = cmp {} v{}, v{}", dst.0, cmp(*op), a.0, b.0),
+        Inst::Un { dst, op, a } => format!("v{} = {} v{}", dst.0, un(*op), a.0),
+        Inst::Conv { dst, op, to, src } => {
+            format!("v{} = {} {} v{}", dst.0, conv(*op), to.name(), src.0)
+        }
         Inst::Select { dst, cond, a, b } => {
             format!("v{} = select v{}, v{}, v{}", dst.0, cond.0, a.0, b.0)
         }

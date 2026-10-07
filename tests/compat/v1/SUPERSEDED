@@ -1,0 +1,1 @@
+refuse/float-literal.nz  Gate 2 added floating point (docs/general-purpose.md section 1); docs/stability.md makes adding a construct 1.0 refused by name a 1.x minor addition, since no valid program changes meaning

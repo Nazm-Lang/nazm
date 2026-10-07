@@ -76,7 +76,8 @@ const RESERVED: &[(&str, &str)] = &[
 /// the constructs it names.
 const SUPPORTED: &str = concat!(
     "Nazm 1.0 has functions and `let`/`let mut`, `while` with `break` and `continue`, ",
-    "`return`, `if`/`else`, `Int`, `Bool` and `Str`, `struct` records, `enum` and `match`, ",
+    "`return`, `if`/`else`, `Int`, `Bool` and `Str`, fixed-width integers, `Float32` and ",
+    "`Float64` with bit operators, `struct` records, `enum` and `match`, ",
     "generics and `Vec[T]`, `Result`, `Option` and `?`, function values and closures, ",
     "`trait`, `impl` and methods, declared effects, capabilities and provenance, ",
     "`scope`/`spawn` with channels, selection and deadlines, `extern \"C\"`, and modules ",
@@ -2932,8 +2933,8 @@ impl<'a> Parser<'a> {
         self.binary(0)
     }
 
-    /// Pratt loop. `||` binds loosest, then `&&` (N49), then comparison, then `+`/`-`, then
-    /// `*`/`/`/`%`.
+    /// Pratt loop. `||` binds loosest, then `&&` (N49), then comparison, then `|`, `^`, `&`
+    /// and the shifts (Gate 2), then `+`/`-`, then `*`/`/`/`%`.
     ///
     /// The loop does not recurse, but the tree it builds does: `1 + 1 + 1` is
     /// `((1 + 1) + 1)`, one level of left spine per operator. So a chain costs nothing
@@ -2959,11 +2960,18 @@ impl<'a> Parser<'a> {
                 TokenKind::LtEq => (BinOp::LtEq, 3),
                 TokenKind::Gt => (BinOp::Gt, 3),
                 TokenKind::GtEq => (BinOp::GtEq, 3),
-                TokenKind::Plus => (BinOp::Add, 4),
-                TokenKind::Minus => (BinOp::Sub, 4),
-                TokenKind::Star => (BinOp::Mul, 5),
-                TokenKind::Slash => (BinOp::Div, 5),
-                TokenKind::Percent => (BinOp::Rem, 5),
+                // The bit operators (Gate 2) bind tighter than comparison, so `a & MASK == 0`
+                // is `(a & MASK) == 0` — not C's reading — and looser than arithmetic.
+                TokenKind::Pipe => (BinOp::BitOr, 4),
+                TokenKind::Caret => (BinOp::BitXor, 5),
+                TokenKind::Amp => (BinOp::BitAnd, 6),
+                TokenKind::Shl => (BinOp::Shl, 7),
+                TokenKind::Shr => (BinOp::Shr, 7),
+                TokenKind::Plus => (BinOp::Add, 8),
+                TokenKind::Minus => (BinOp::Sub, 8),
+                TokenKind::Star => (BinOp::Mul, 9),
+                TokenKind::Slash => (BinOp::Div, 9),
+                TokenKind::Percent => (BinOp::Rem, 9),
                 _ => break,
             };
             if bp < min_bp {
@@ -2974,8 +2982,8 @@ impl<'a> Parser<'a> {
             // `bp + 1`: all these operators are left-associative, so `a - b - c` is
             // `(a - b) - c`. Getting this wrong is silent for `+` and wrong for `-`.
             //
-            // This recursion needs no budget of its own: `bp` is at most 5, and a call at
-            // min_bp 6 matches no operator and returns immediately, so the binary-to-
+            // This recursion needs no budget of its own: `bp` is at most 9, and a call at
+            // min_bp 10 matches no operator and returns immediately, so the binary-to-
             // binary chain is at most three frames however long the expression. The
             // unbounded path into an operand goes through `primary`, which `enter`
             // counts.
@@ -3048,33 +3056,10 @@ impl<'a> Parser<'a> {
                 out = self.member_hole(at, out, depth)?;
                 continue;
             }
-            let dot_span = self.peek_span();
             self.advance();
             let name_span = self.peek_span();
             let name = match self.advance() {
                 TokenKind::Ident(n) => n,
-                // `1.5`: an integer, a `.` and an integer, written with nothing between them.
-                // Floating point is not in the language, and it is refused by name (spec:
-                // *Not in v0.3*) rather than reported as a field read with a number for a
-                // name, which is what this was until 1.0.
-                TokenKind::Int(_)
-                    if matches!(out, Expr::Int { span, .. }
-                        if span.end == dot_span.start && dot_span.end == name_span.start) =>
-                {
-                    self.report(
-                        Diagnostic::error(
-                            codes::UNSUPPORTED_CONSTRUCT,
-                            out.span().join(name_span),
-                            "floating point is not supported",
-                        )
-                        .primary_label("a floating-point literal")
-                        .help(format!(
-                            "Nazm 1.0 has `Int`, a 64-bit signed integer, and no floating point; \
-                             scale to an integer unit instead. In general, {SUPPORTED}"
-                        )),
-                    );
-                    return None;
-                }
                 other => {
                     self.report(
                         Diagnostic::error(
@@ -3332,6 +3317,41 @@ impl<'a> Parser<'a> {
 
     /// `at` is the checkpoint taken before the operand's first token, which every form
     /// below wraps its node at.
+    /// `~operand` (Gate 2). Its own function, out of [`Self::primary_inner`]: that one recurses
+    /// once per nesting level, and its frame is what bounds how deep a program may nest before
+    /// the parser's stack runs out.
+    #[inline(never)]
+    fn complement(&mut self, at: Checkpoint) -> Option<Expr> {
+        let op_span = self.peek_span();
+        self.advance();
+        let operand = self.primary()?;
+        self.built(self.child() + 1)?;
+        self.wrap(at, SyntaxKind::BitNotExpr);
+        let full = op_span.join(operand.span());
+        Some(Expr::BitNot {
+            operand: Box::new(operand),
+            op_span,
+            span: full,
+        })
+    }
+
+    /// A wide integer or a floating-point literal (Gate 2), out of [`Self::primary_inner`] for
+    /// the reason [`Self::complement`] is.
+    #[inline(never)]
+    fn number(&mut self, at: Checkpoint, span: Span) -> Option<Expr> {
+        let e = match self.advance() {
+            TokenKind::IntTooLarge(digits) => Expr::WideInt {
+                value: digits.parse::<u64>().unwrap_or(u64::MAX),
+                span,
+            },
+            TokenKind::Float(text) => Expr::Float { text, span },
+            _ => return None,
+        };
+        self.built(1)?;
+        self.wrap(at, SyntaxKind::Literal);
+        Some(e)
+    }
+
     fn primary_inner(&mut self, at: Checkpoint) -> Option<Expr> {
         let span = self.peek_span();
 
@@ -3349,6 +3369,11 @@ impl<'a> Parser<'a> {
                 op_span,
                 span: full,
             });
+        }
+
+        // Prefix bit complement (Gate 2). Binds as tightly as `-` and `!`.
+        if self.at(&TokenKind::Tilde) {
+            return self.complement(at);
         }
 
         // Prefix negation, before anything else can claim the `-`.
@@ -3406,6 +3431,12 @@ impl<'a> Parser<'a> {
                 self.wrap(at, SyntaxKind::Literal);
                 Some(Expr::Int { value, span })
             }
+            // Above `Int` and within `UInt64`, and floating point (Gate 2): the checker decides
+            // each one's type by the type expected.
+            TokenKind::IntTooLarge(digits) if digits.parse::<u64>().is_ok() => {
+                self.number(at, span)
+            }
+            TokenKind::Float(_) => self.number(at, span),
             TokenKind::IntTooLarge(digits) => {
                 self.advance();
                 self.report(
@@ -3803,8 +3834,15 @@ mod ast_depth_tests {
                     }
                 }
                 Node::Expr(e) => match e {
-                    Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } | Expr::Var { .. } => {}
-                    Expr::Neg { operand, .. } | Expr::Not { operand, .. } => {
+                    Expr::Int { .. }
+                    | Expr::WideInt { .. }
+                    | Expr::Float { .. }
+                    | Expr::Bool { .. }
+                    | Expr::Str { .. }
+                    | Expr::Var { .. } => {}
+                    Expr::Neg { operand, .. }
+                    | Expr::Not { operand, .. }
+                    | Expr::BitNot { operand, .. } => {
                         stack.push((Node::Expr(operand), d + 1));
                     }
                     Expr::Binary { lhs, rhs, .. } => {

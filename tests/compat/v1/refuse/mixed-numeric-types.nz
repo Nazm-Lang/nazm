@@ -1,0 +1,7 @@
+// expect: N0304
+// Nothing converts implicitly between numeric types (spec: numbers).
+fn main() -> Int {
+    let a = UInt8(1);
+    let b = a + 1.5;
+    0
+}

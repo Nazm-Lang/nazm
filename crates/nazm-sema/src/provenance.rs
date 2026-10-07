@@ -110,6 +110,50 @@ impl Origin {
     #[must_use]
     pub const fn of_intrinsic(i: Intrinsic) -> BuiltinFlow {
         match i {
+            // Numbers (Gate 2): computed from their arguments, and from nothing else.
+            Intrinsic::WrappingAdd
+            | Intrinsic::WrappingSub
+            | Intrinsic::WrappingMul
+            | Intrinsic::SaturatingAdd
+            | Intrinsic::SaturatingSub
+            | Intrinsic::SaturatingMul
+            | Intrinsic::CountOnes
+            | Intrinsic::LeadingZeros
+            | Intrinsic::TrailingZeros
+            | Intrinsic::RotateLeft
+            | Intrinsic::RotateRight
+            | Intrinsic::SwapBytes
+            | Intrinsic::ToBigEndian
+            | Intrinsic::FromBigEndian
+            | Intrinsic::ToLittleEndian
+            | Intrinsic::FromLittleEndian
+            | Intrinsic::FloatSqrt
+            | Intrinsic::FloatAbs
+            | Intrinsic::FloatFloor
+            | Intrinsic::FloatCeil
+            | Intrinsic::FloatTrunc
+            | Intrinsic::FloatRound
+            | Intrinsic::FloatSin
+            | Intrinsic::FloatCos
+            | Intrinsic::FloatTan
+            | Intrinsic::FloatExp
+            | Intrinsic::FloatLn
+            | Intrinsic::FloatLog2
+            | Intrinsic::FloatLog10
+            | Intrinsic::FloatPow
+            | Intrinsic::FloatAtan2
+            | Intrinsic::FloatMin
+            | Intrinsic::FloatMax
+            | Intrinsic::FloatIsNan
+            | Intrinsic::FloatIsInfinite
+            | Intrinsic::FloatIsFinite
+            | Intrinsic::NumToStr
+            | Intrinsic::Float64ToBits
+            | Intrinsic::Float64FromBits
+            | Intrinsic::Float32ToBits
+            | Intrinsic::Float32FromBits
+            | Intrinsic::FloatParses
+            | Intrinsic::FloatParseRaw => BuiltinFlow::Derive,
             Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),
             Intrinsic::ReadFile | Intrinsic::FileExists => BuiltinFlow::Source(Self::File),
             // Where a file is written is the one restricted sink v1 has.
@@ -186,6 +230,50 @@ impl Origin {
     #[must_use]
     pub const fn container(i: Intrinsic) -> ContainerUse {
         match i {
+            // Numbers (Gate 2): computed from their arguments, and from nothing else.
+            Intrinsic::WrappingAdd
+            | Intrinsic::WrappingSub
+            | Intrinsic::WrappingMul
+            | Intrinsic::SaturatingAdd
+            | Intrinsic::SaturatingSub
+            | Intrinsic::SaturatingMul
+            | Intrinsic::CountOnes
+            | Intrinsic::LeadingZeros
+            | Intrinsic::TrailingZeros
+            | Intrinsic::RotateLeft
+            | Intrinsic::RotateRight
+            | Intrinsic::SwapBytes
+            | Intrinsic::ToBigEndian
+            | Intrinsic::FromBigEndian
+            | Intrinsic::ToLittleEndian
+            | Intrinsic::FromLittleEndian
+            | Intrinsic::FloatSqrt
+            | Intrinsic::FloatAbs
+            | Intrinsic::FloatFloor
+            | Intrinsic::FloatCeil
+            | Intrinsic::FloatTrunc
+            | Intrinsic::FloatRound
+            | Intrinsic::FloatSin
+            | Intrinsic::FloatCos
+            | Intrinsic::FloatTan
+            | Intrinsic::FloatExp
+            | Intrinsic::FloatLn
+            | Intrinsic::FloatLog2
+            | Intrinsic::FloatLog10
+            | Intrinsic::FloatPow
+            | Intrinsic::FloatAtan2
+            | Intrinsic::FloatMin
+            | Intrinsic::FloatMax
+            | Intrinsic::FloatIsNan
+            | Intrinsic::FloatIsInfinite
+            | Intrinsic::FloatIsFinite
+            | Intrinsic::NumToStr
+            | Intrinsic::Float64ToBits
+            | Intrinsic::Float64FromBits
+            | Intrinsic::Float32ToBits
+            | Intrinsic::Float32FromBits
+            | Intrinsic::FloatParses
+            | Intrinsic::FloatParseRaw => ContainerUse::None,
             Intrinsic::IntsLen
             | Intrinsic::IntsGet
             | Intrinsic::IntsPop

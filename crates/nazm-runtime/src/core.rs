@@ -206,6 +206,9 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.foreign {
         out.push_str(ERRNO_RUNTIME);
     }
+    if needs.numbers {
+        out.push_str(NUMBER_RUNTIME);
+    }
     if needs.closures {
         out.push_str(CLOSURE_RUNTIME);
     }
@@ -2870,3 +2873,317 @@ entry:
   ret void
 }
 ";
+
+/// Gate 2's numbers: a float's text and a decimal float's value, the same in every build as
+/// `nazm_sema::numeric` is in the interpreter. A float is written by ECMAScript's
+/// `Number::toString` layout over the shortest digits that read back to the same value in its
+/// own precision: the shortest is found as the first `%.*e` precision whose text `strtod` (or
+/// `strtof`, for a `Float32`) reads back exactly — the correctly rounded digits at that length,
+/// which is what the interpreter's shortest digits are too.
+const NUMBER_RUNTIME: &str = r#"
+@.fmt.e = private unnamed_addr constant [5 x i8] c"%.*e\00"
+@.fmt.lld = private unnamed_addr constant [5 x i8] c"%lld\00"
+@.fmt.llu = private unnamed_addr constant [5 x i8] c"%llu\00"
+
+define hidden i64 @nz.format_u64(ptr %buf, i64 %v) {
+entry:
+  %w = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 21, ptr @.fmt.llu, i64 %v)
+  %n = sext i32 %w to i64
+  ret i64 %n
+}
+
+define hidden i64 @nz.format_float(ptr %buf, double %x, i1 %single) {
+entry:
+  %tmp = alloca [48 x i8]
+  %dig = alloca [32 x i8]
+  %isnan = fcmp uno double %x, %x
+  br i1 %isnan, label %nan, label %number
+nan:
+  store i8 110, ptr %buf
+  %n1 = getelementptr i8, ptr %buf, i64 1
+  store i8 97, ptr %n1
+  %n2 = getelementptr i8, ptr %buf, i64 2
+  store i8 110, ptr %n2
+  ret i64 3
+number:
+  %bits = bitcast double %x to i64
+  %neg = icmp slt i64 %bits, 0
+  %signlen = zext i1 %neg to i64
+  br i1 %neg, label %minus, label %magnitude
+minus:
+  store i8 45, ptr %buf
+  br label %magnitude
+magnitude:
+  %out = getelementptr i8, ptr %buf, i64 %signlen
+  %ax = call double @llvm.fabs.f64(double %x)
+  %isinf = fcmp oeq double %ax, 0x7FF0000000000000
+  br i1 %isinf, label %inf, label %finite
+inf:
+  store i8 105, ptr %out
+  %i1 = getelementptr i8, ptr %out, i64 1
+  store i8 110, ptr %i1
+  %i2 = getelementptr i8, ptr %out, i64 2
+  store i8 102, ptr %i2
+  %li = add i64 %signlen, 3
+  ret i64 %li
+finite:
+  %iszero = fcmp oeq double %ax, 0.0
+  br i1 %iszero, label %zero, label %try
+zero:
+  store i8 48, ptr %out
+  %lz = add i64 %signlen, 1
+  ret i64 %lz
+try:
+  %p = phi i32 [ 0, %finite ], [ %p1, %try.next ]
+  %w = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %tmp, i64 48, ptr @.fmt.e, i32 %p, double %ax)
+  br i1 %single, label %try.f, label %try.d
+try.f:
+  %vf = call float @strtof(ptr %tmp, ptr null)
+  %xf = fptrunc double %ax to float
+  %okf = fcmp oeq float %vf, %xf
+  br label %try.check
+try.d:
+  %vd = call double @strtod(ptr %tmp, ptr null)
+  %okd = fcmp oeq double %vd, %ax
+  br label %try.check
+try.check:
+  %ok = phi i1 [ %okf, %try.f ], [ %okd, %try.d ]
+  %last = icmp sge i32 %p, 17
+  %stop = or i1 %ok, %last
+  %p1 = add i32 %p, 1
+  br i1 %stop, label %scan, label %try.next
+try.next:
+  br label %try
+scan:
+  %i = phi i64 [ 0, %try.check ], [ %i.next, %scan.keep ]
+  %k = phi i64 [ 0, %try.check ], [ %k.next, %scan.keep ]
+  %cp = getelementptr i8, ptr %tmp, i64 %i
+  %c = load i8, ptr %cp
+  %ise = icmp eq i8 %c, 101
+  br i1 %ise, label %exponent, label %scan.keep
+scan.keep:
+  %isdot = icmp eq i8 %c, 46
+  %dp = getelementptr i8, ptr %dig, i64 %k
+  store i8 %c, ptr %dp
+  %step = select i1 %isdot, i64 0, i64 1
+  %k.next = add i64 %k, %step
+  %i.next = add i64 %i, 1
+  br label %scan
+exponent:
+  %ep = getelementptr i8, ptr %tmp, i64 %i
+  %ep1 = getelementptr i8, ptr %ep, i64 1
+  %e = call i64 @atoll(ptr %ep1)
+  %n = add i64 %e, 1
+  %len = call i64 @nz.fmt_layout(ptr %out, ptr %dig, i64 %k, i64 %n)
+  %total = add i64 %len, %signlen
+  ret i64 %total
+}
+
+define hidden i64 @nz.fmt_layout(ptr %out, ptr %dig, i64 %k, i64 %n) {
+entry:
+  %le21 = icmp sle i64 %n, 21
+  %kle = icmp sle i64 %k, %n
+  %whole = and i1 %kle, %le21
+  br i1 %whole, label %int, label %t2
+int:
+  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %dig, i64 %k, i1 false)
+  %zeros = sub i64 %n, %k
+  %zp = getelementptr i8, ptr %out, i64 %k
+  call void @llvm.memset.p0.i64(ptr %zp, i8 48, i64 %zeros, i1 false)
+  ret i64 %n
+t2:
+  %pos = icmp sgt i64 %n, 0
+  %mid = and i1 %pos, %le21
+  br i1 %mid, label %frac, label %t3
+frac:
+  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %dig, i64 %n, i1 false)
+  %dot = getelementptr i8, ptr %out, i64 %n
+  store i8 46, ptr %dot
+  %rest = getelementptr i8, ptr %dig, i64 %n
+  %rl = sub i64 %k, %n
+  %after = getelementptr i8, ptr %dot, i64 1
+  call void @llvm.memcpy.p0.p0.i64(ptr %after, ptr %rest, i64 %rl, i1 false)
+  %lf = add i64 %k, 1
+  ret i64 %lf
+t3:
+  %gtm6 = icmp sgt i64 %n, -6
+  %le0 = icmp sle i64 %n, 0
+  %small = and i1 %gtm6, %le0
+  br i1 %small, label %tiny, label %sci
+tiny:
+  store i8 48, ptr %out
+  %o1 = getelementptr i8, ptr %out, i64 1
+  store i8 46, ptr %o1
+  %nz = sub i64 0, %n
+  %o2 = getelementptr i8, ptr %out, i64 2
+  call void @llvm.memset.p0.i64(ptr %o2, i8 48, i64 %nz, i1 false)
+  %o3 = getelementptr i8, ptr %o2, i64 %nz
+  call void @llvm.memcpy.p0.p0.i64(ptr %o3, ptr %dig, i64 %k, i1 false)
+  %lt0 = add i64 %nz, 2
+  %lt = add i64 %lt0, %k
+  ret i64 %lt
+sci:
+  %d0 = load i8, ptr %dig
+  store i8 %d0, ptr %out
+  %one = icmp eq i64 %k, 1
+  br i1 %one, label %sci.e, label %sci.frac
+sci.frac:
+  %s1 = getelementptr i8, ptr %out, i64 1
+  store i8 46, ptr %s1
+  %s2 = getelementptr i8, ptr %out, i64 2
+  %d1 = getelementptr i8, ptr %dig, i64 1
+  %km1 = sub i64 %k, 1
+  call void @llvm.memcpy.p0.p0.i64(ptr %s2, ptr %d1, i64 %km1, i1 false)
+  %kp1 = add i64 %k, 1
+  br label %sci.e
+sci.e:
+  %at = phi i64 [ 1, %sci ], [ %kp1, %sci.frac ]
+  %ech = getelementptr i8, ptr %out, i64 %at
+  store i8 101, ptr %ech
+  %e1 = sub i64 %n, 1
+  %eneg = icmp slt i64 %e1, 0
+  %sign = select i1 %eneg, i8 45, i8 43
+  %sch = getelementptr i8, ptr %ech, i64 1
+  store i8 %sign, ptr %sch
+  %eabs.n = sub i64 0, %e1
+  %eabs = select i1 %eneg, i64 %eabs.n, i64 %e1
+  %edig = getelementptr i8, ptr %sch, i64 1
+  %ew = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %edig, i64 8, ptr @.fmt.lld, i64 %eabs)
+  %ewl = sext i32 %ew to i64
+  %ls0 = add i64 %at, 2
+  %ls = add i64 %ls0, %ewl
+  ret i64 %ls
+}
+
+define hidden i64 @nz.digits_from(ptr %p, i64 %i, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %j = phi i64 [ %i, %entry ], [ %j1, %more ]
+  %inside = icmp slt i64 %j, %n
+  br i1 %inside, label %look, label %done
+look:
+  %cp = getelementptr i8, ptr %p, i64 %j
+  %c = load i8, ptr %cp
+  %ge0 = icmp uge i8 %c, 48
+  %le9 = icmp ule i8 %c, 57
+  %d = and i1 %ge0, %le9
+  br i1 %d, label %more, label %done
+more:
+  %j1 = add i64 %j, 1
+  br label %loop
+done:
+  ret i64 %j
+}
+
+define hidden i1 @nz.float_parses(ptr %p, i64 %n) {
+entry:
+  %has = icmp sgt i64 %n, 0
+  br i1 %has, label %first, label %no
+first:
+  %c0 = load i8, ptr %p
+  %plus = icmp eq i8 %c0, 43
+  %minus = icmp eq i8 %c0, 45
+  %signed = or i1 %plus, %minus
+  %start = zext i1 %signed to i64
+  %left = sub i64 %n, %start
+  %three = icmp eq i64 %left, 3
+  br i1 %three, label %word, label %digits
+word:
+  %wp = getelementptr i8, ptr %p, i64 %start
+  %w0 = load i8, ptr %wp
+  %wp1 = getelementptr i8, ptr %wp, i64 1
+  %w1 = load i8, ptr %wp1
+  %wp2 = getelementptr i8, ptr %wp, i64 2
+  %w2 = load i8, ptr %wp2
+  %i0 = icmp eq i8 %w0, 105
+  %i1 = icmp eq i8 %w1, 110
+  %i2 = icmp eq i8 %w2, 102
+  %ia = and i1 %i0, %i1
+  %inf = and i1 %ia, %i2
+  %a0 = icmp eq i8 %w0, 110
+  %a1 = icmp eq i8 %w1, 97
+  %a2 = icmp eq i8 %w2, 110
+  %aa = and i1 %a0, %a1
+  %nan = and i1 %aa, %a2
+  %named = or i1 %inf, %nan
+  br i1 %named, label %yes, label %digits
+digits:
+  %w.end = call i64 @nz.digits_from(ptr %p, i64 %start, i64 %n)
+  %whole = sub i64 %w.end, %start
+  %in1 = icmp slt i64 %w.end, %n
+  br i1 %in1, label %dot.look, label %after.frac
+dot.look:
+  %dcp = getelementptr i8, ptr %p, i64 %w.end
+  %dc = load i8, ptr %dcp
+  %isdot = icmp eq i8 %dc, 46
+  br i1 %isdot, label %fraction, label %after.frac
+fraction:
+  %f.start = add i64 %w.end, 1
+  %f.end = call i64 @nz.digits_from(ptr %p, i64 %f.start, i64 %n)
+  %frac.n = sub i64 %f.end, %f.start
+  br label %after.frac
+after.frac:
+  %at = phi i64 [ %w.end, %digits ], [ %w.end, %dot.look ], [ %f.end, %fraction ]
+  %fr = phi i64 [ 0, %digits ], [ 0, %dot.look ], [ %frac.n, %fraction ]
+  %mant = add i64 %whole, %fr
+  %some = icmp sgt i64 %mant, 0
+  br i1 %some, label %exp.look, label %no
+exp.look:
+  %in2 = icmp slt i64 %at, %n
+  br i1 %in2, label %exp.char, label %end
+exp.char:
+  %ecp = getelementptr i8, ptr %p, i64 %at
+  %ec = load i8, ptr %ecp
+  %e.lo = icmp eq i8 %ec, 101
+  %e.up = icmp eq i8 %ec, 69
+  %ise = or i1 %e.lo, %e.up
+  br i1 %ise, label %exp.sign, label %end
+exp.sign:
+  %e1 = add i64 %at, 1
+  %in3 = icmp slt i64 %e1, %n
+  br i1 %in3, label %exp.sign.look, label %no
+exp.sign.look:
+  %scp = getelementptr i8, ptr %p, i64 %e1
+  %sc = load i8, ptr %scp
+  %sp = icmp eq i8 %sc, 43
+  %sm = icmp eq i8 %sc, 45
+  %ss = or i1 %sp, %sm
+  %skip = zext i1 %ss to i64
+  %e.start = add i64 %e1, %skip
+  %e.end = call i64 @nz.digits_from(ptr %p, i64 %e.start, i64 %n)
+  %e.n = sub i64 %e.end, %e.start
+  %e.some = icmp sgt i64 %e.n, 0
+  br i1 %e.some, label %end.exp, label %no
+end.exp:
+  %all.e = icmp eq i64 %e.end, %n
+  ret i1 %all.e
+end:
+  %all = icmp eq i64 %at, %n
+  ret i1 %all
+yes:
+  ret i1 true
+no:
+  ret i1 false
+}
+
+define hidden double @nz.float_parse(ptr %p, i64 %n) {
+entry:
+  %ok = call i1 @nz.float_parses(ptr %p, i64 %n)
+  br i1 %ok, label %copy, label %nan
+copy:
+  %room = add i64 %n, 1
+  %c = call ptr @malloc(i64 %room)
+  %none = icmp eq ptr %c, null
+  br i1 %none, label %nan, label %read
+read:
+  call void @llvm.memcpy.p0.p0.i64(ptr %c, ptr %p, i64 %n, i1 false)
+  %end = getelementptr i8, ptr %c, i64 %n
+  store i8 0, ptr %end
+  %v = call double @strtod(ptr %c, ptr null)
+  call void @free(ptr %c)
+  ret double %v
+nan:
+  ret double 0x7FF8000000000000
+}
+"#;

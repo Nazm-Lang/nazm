@@ -9,7 +9,8 @@ use nazm_sema::key::DefKey;
 use nazm_sema::{EffectSet, EnumId, FnId, Intrinsic, ModuleId, RecordId, Type};
 use nazm_span::Span;
 
-pub use nazm_cir::{ArithOp, CmpOp, Law};
+pub use nazm_cir::{ArithOp, BitOp, CmpOp, Law};
+pub use nazm_sema::{ConvertMode, NumKind};
 
 /// A native program: every concrete function it contains, the concrete types they use, and
 /// where it starts.
@@ -303,9 +304,13 @@ impl Rvalue {
     pub fn reads(&self) -> Vec<LocalId> {
         let mut out = Vec::new();
         match self {
-            Self::Use(o) | Self::Neg(o) => operand_locals(o, &mut out),
+            Self::Use(o)
+            | Self::Neg(o)
+            | Self::Complement(o)
+            | Self::Convert { operand: o, .. }
+            | Self::Fits { operand: o, .. } => operand_locals(o, &mut out),
             Self::Copy(l) | Self::Move(l) | Self::Capture { env: l, .. } => out.push(*l),
-            Self::Arith(_, a, b) | Self::Compare { lhs: a, rhs: b, .. } => {
+            Self::Arith(_, a, b) | Self::Bits(_, a, b) | Self::Compare { lhs: a, rhs: b, .. } => {
                 operand_locals(a, &mut out);
                 operand_locals(b, &mut out);
             }
@@ -423,6 +428,11 @@ pub enum Const {
     Int(i64),
     Bool(bool),
     Str(Vec<u8>),
+    /// A number of any numeric type but `Int` (Gate 2), by its canonical bits.
+    Num {
+        kind: NumKind,
+        bits: u64,
+    },
 }
 
 impl Const {
@@ -432,6 +442,7 @@ impl Const {
             Self::Int(_) => Type::Int,
             Self::Bool(_) => Type::Bool,
             Self::Str(_) => Type::Str,
+            Self::Num { kind, .. } => Type::of_num(*kind),
         }
     }
 }
@@ -446,10 +457,25 @@ pub enum Rvalue {
     Copy(LocalId),
     /// The reference `local` holds; `local` is left empty.
     Move(LocalId),
-    /// `0 - x`, checked.
+    /// `0 - x`, checked, in the operand's type; a float's sign flips.
     Neg(Operand),
-    /// Checked; `/` and `%` also refuse a zero divisor.
+    /// In the operands' one type: checked for integers, and `/` and `%` also refuse a zero
+    /// divisor; IEEE 754 for floats, which never fail.
     Arith(ArithOp, Operand, Operand),
+    /// A bit operation on the left operand's integer type (Gate 2); a shift's amount is an
+    /// `Int`, and one outside `0..width` fails.
+    Bits(BitOp, Operand, Operand),
+    /// `~x` (Gate 2). Total.
+    Complement(Operand),
+    /// A numeric conversion to `to` (Gate 2). An exact one to an integer type fails when the
+    /// value does not fit.
+    Convert {
+        mode: ConvertMode,
+        to: Type,
+        operand: Operand,
+    },
+    /// Whether the operand converts to `to` exactly (Gate 2). Total.
+    Fits { to: Type, operand: Operand },
     /// Total. Both operands borrowed and of type `operand`, compared under `law`.
     Compare {
         op: CmpOp,
@@ -509,6 +535,8 @@ impl Rvalue {
             self,
             Self::Neg(_)
                 | Self::Arith(..)
+                | Self::Bits(..)
+                | Self::Convert { .. }
                 | Self::Call { .. }
                 | Self::CallIndirect { .. }
                 | Self::Closure { .. }
@@ -693,7 +721,7 @@ impl Types {
             | Type::ChanOf(_)
             | Type::Vec(_)
             | Type::Fn(_) => true,
-            Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) => false,
+            Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) | Type::Num(_) => false,
             Type::Record(id) => self.record(id).is_some_and(|r| {
                 r.fields
                     .iter()
