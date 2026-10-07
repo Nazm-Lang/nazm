@@ -41,13 +41,19 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 2,505 passed, 0 failed, 47 ignored** across 180 test binaries, run contained and
-offline at `07e44a6` (Gate 1 of the v1 programme, 2026-10-07; toolchain 1.0.0, not yet a release
-candidate), with selfhost 43 of 43 and the bootstrap's fixpoint, C2 = C3 = `18481f2a…`, 34
-conformance cases and 29 refusals agreeing. The thirteen tests added by Gate 1 include the
-compatibility corpus (`tests/compat/v1/`). The catalogue holds 1,279 entries: Gate 1's six were
-caught in their own campaign (`b05c9651bed81041`, 6 of 6 at tier 1, 8 of 8 killers verified).
-Area 4 is PARTIAL since Gate 1 — a recorded cycle defect, open for decision.
+**Current suite: 2,509 passed, 0 failed, 47 ignored** across 180 test binaries, run contained and
+offline at `ea4741f` (Gate 1-C1 of the v1 programme, 2026-10-07; toolchain 1.0.0, semantic epoch
+30, not yet a release candidate), with selfhost 43 of 43 and the bootstrap's fixpoint, C2 = C3 =
+`178a799c…`, 34 conformance cases and 30 refusals agreeing. The catalogue holds 1,285 entries:
+Gate 1-C1's six and the fifty responsibility-mapped entries beside them (closures, the ownership
+graph, `Vec` retain and release, the cycle refusal, the epoch, Gate 1's two) were caught in
+campaign `ee2ea936f8cb26ad`, 55 of 56 at tier 1 with every killer verified (pristine passes, mutant
+fails, restored passes); the 56th, made equivalent by Gate 1-C1's shared type list, was retargeted
+and caught in `9f505c6cde2715d7`. Area 4 is VERIFIED again since Gate 1-C1.
+
+*Historical, not current:* 2,505 passed, 0 failed, 47 ignored at `07e44a6` (Gate 1), selfhost 43
+of 43, C2 = C3 = `18481f2a…`, 29 refusals; the catalogue held 1,279 entries and Gate 1's six were
+caught in `b05c9651bed81041`. Area 4 was PARTIAL — a recorded cycle defect, open for decision.
 
 *Historical, not current:* 2,492 passed, 0 failed, 47 ignored, run contained and offline at the v0.3.0
 candidate `7a16a40` inside both release assemblies (2026-10-07), with selfhost 43 of 43, the
@@ -83,7 +89,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 2 | Name resolution and modules | VERIFIED — durable identities, interfaces and resolved units, a declared root, packages, re-exports with one identity (N103, N107); check reuse for builds is area 26's |
 | 2a | Incremental semantic checking | VERIFIED |
 | 3 | Type system | VERIFIED as scoped (N107) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); trait objects, generic traits and default methods refused by name |
-| 4 | Memory model and reclamation | VERIFIED for the current type universe |
+| 4 | Memory model and reclamation | VERIFIED for the current type universe — closure environments are ownership-graph nodes; the capture that could close a cycle is refused (`N0616`, Gate 1-C1) |
 | 5 | Effects | VERIFIED as scoped (N107) — inferred, checked compiler-owned effects with subsumption (N79); no handlers or user effects; pure is not total |
 | 6 | Capabilities (language) | VERIFIED as scoped (N107) — static, coarse, shareable: no inherited authority (N104), `OutCap` attenuation (N79) |
 | 7 | Provenance and information flow (language) | VERIFIED as scoped (N107) — explicit data flow by cell, target and field (N80); implicit flow RESEARCH (R6), not claimed |
@@ -643,9 +649,36 @@ blocks as values in the native backends.*
 
 ## Semantic core
 
-### 4. Memory model and reclamation — PARTIAL: verified for the current type universe, one recorded cycle defect (Gate 1)
+### 4. Memory model and reclamation — VERIFIED for the current type universe, closure environments included (Gate 1-C1)
 
-**Gate 1 (2026-10-07)** · *Status moved from VERIFIED to PARTIAL by a defect, not by a goal.* A
+**Gate 1-C1 (2026-10-07)** · *Status restored from PARTIAL to VERIFIED by a rule and its evidence,
+not by a narrower claim.* A closure's environment is a node of the ownership graph
+(`docs/architecture.md` §7.111, `docs/spec.md` *Cycles*): a closure may not capture a value whose
+type can hold a function value behind a counted handle (`N0616`), decided from the type alone, so
+an alias, a record field, a `Vec` of records, an enum or `Option` payload, nested vectors and a
+container made in another function are covered without alias analysis. An environment is
+immutable and points only at older values, the only edges into an existing value are stores into
+counted handles, and a handle that cannot hold a function value holds no environment — so storing
+a function value anywhere, through any parameter, is never refused, and no accepted program forms
+a cycle. Evidence:
+`a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape` (direct, alias,
+mutual, nested, record, records in a vector, enum, `Option`, `Vec[Vec[fn]]`, made in a helper —
+each `N0616`, and `nazm run` refuses);
+`acyclic_closures_in_containers_are_accepted_and_reclaimed_everywhere` (named functions and
+closures capturing values, vectors and other closures, stored in vectors, records and through an
+opaque parameter and a generic function: the same output and `live=0` for sequences, strings,
+channels and closures in the interpreter, LLVM `-O0` and `-O2` and Cranelift);
+`the_rule_holds_where_a_closure_is_written_in_any_module`; five refusal cases and one run case in
+the compatibility corpus; the compiler written in Nazm refuses the same programs at the same span
+(bootstrap: 30 refusal cases). Semantic epoch 30; `nazm.interface/11` and runtime ABI 14 unchanged.
+There is no collector, and none is needed for a program the checker accepts. The rule is
+conservative: a closure that only reads a vector of handlers is refused too, and is written by
+passing the vector as an argument. The Gate 1 entry below is the historical record of the defect.
+
+*Gate 1 → Gate 1-C1, historical:* the heading read "PARTIAL: verified for the current type
+universe, one recorded cycle defect (Gate 1)".
+
+**Gate 1 (2026-10-07), historical — closed by Gate 1-C1 above** · *Status moved from VERIFIED to PARTIAL by a defect, not by a goal.* A
 closure that captures a `Vec` able to hold function values and is then stored into that `Vec` is
 a value that owns itself. The checker accepts it, and counting does not reclaim it: built natively,
 `let fs = vec_new[fn() -> Int](); let f = fn() -> Int { vec_len(fs) }; vec_push(fs, f);` ends
