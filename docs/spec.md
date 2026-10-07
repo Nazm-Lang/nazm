@@ -2911,7 +2911,7 @@ capabilities**.
 | `Foreign` | `ForeignCap` | a call to a foreign function: running C (N42) | `foreign` |
 | `Vouch` | `VouchCap` | `str_vouch`: declassifying a string (N52), in every function | none |
 | `Time` | `TimeCap` | `time_now_ms` and `chan_select_until`: reading a clock (N54), in every function | none |
-| `Mmio` | `MmioCap` | `mmio_read32` and `mmio_write32`: a device register (N62), in every function | none |
+| `Mmio` | `MmioCap` | `mmio_read32` and `mmio_write32` (N62), and `mmio_read8`, `mmio_write8`, `mmio_read16`, `mmio_write16` (N86): a device register, in every function | none |
 
 A kind is identified by the compiler, never by how its type is spelled. `IoCap`, `OutCap`,
 `SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap` and `MmioCap` are **built-in type names**, like
@@ -3617,7 +3617,7 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **What builds** | As on the board: `Int` and `Bool`, records and enums of them, functions — recursion under a stack check against the module's own 64 KiB stack (`N0408`) — loops, static strings, `print` and `eprint` of them. Allocation, sequences, strings built at run time, channels, tasks, closures and every other outside built-in are refused, naming the part and its symbols |
 | **Imports** | From `nazm_host` only: `write(fd, ptr, len)` where the program writes (an `IoCap`), and `report(ptr, len)`, always. No `IoCap` used, no `write` import |
 | **Exports** | `memory` and `nazm_main() -> i64`: `main`'s result, or `0` after `report` |
-| **Device registers** | None: `mmio_read32` and `mmio_write32` are refused (`N0392`) |
+| **Device registers** | None: `mmio_read32`, `mmio_write32` and their 8- and 16-bit forms are refused (`N0392`) |
 | **The reference host** | `node host.mjs module.wasm` grants exactly `write` and `report`, refuses a module asking for anything else, prints the result and exits 0, or 2 after a failure — the interpreter's output and status |
 
 ### The interactive tier: `repl`, `comptime`, `reload-check` — N65
