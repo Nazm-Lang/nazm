@@ -231,7 +231,10 @@ use crate::digest::{self, Framed};
 /// from a program's own to the language's (`N0331`, `N0203`), as did the C symbols the
 /// numbers part calls (`strtod`, `sin`, …) for a foreign declaration. A cached check from epoch
 /// 32 refused programs this one accepts, and accepted some it refuses.
-pub const SEMANTIC_EPOCH: u32 = 33;
+/// `34` — M1, 2026-10-08. A direct or UFCS call of a method whose impl is in another module is
+/// checked against its trait method's declared effects; it was checked as an undeclared
+/// function's, every effect assumed, so programs accepted now were refused (`N0366`).
+pub const SEMANTIC_EPOCH: u32 = 34;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
