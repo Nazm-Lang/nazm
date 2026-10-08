@@ -1106,109 +1106,57 @@ fn command() -> ExitCode {
         Ok(c) => c,
         Err(code) => return code,
     };
-    // A package (N46): its directory stands for its `main`, and `--locked` holds the build to
-    // its lockfile — both settled before any command sees the file.
-    if let Command::Lock { dir } = &cli.command {
-        return package::lock(dir);
+    if let Some(done) = prepare(&mut cli.command) {
+        return done;
     }
-    if let Command::Attest { operation } = &cli.command {
-        return match operation {
-            AttestOperation::Sign {
-                key,
-                out,
-                provenance,
-                artefacts,
-            } => attest::sign(key, out.as_deref(), provenance, artefacts),
-            AttestOperation::Verify {
-                allowed_signers,
-                identity,
-                statement,
-                artefacts,
-            } => attest::verify(allowed_signers, identity, statement, artefacts),
-        };
-    }
-    if let Command::Update { dir, names } = &cli.command {
-        return package::update(dir, names);
-    }
-    if let Command::Publish {
-        dir,
-        registry,
-        dry_run,
-    } = &cli.command
-    {
-        if *dry_run {
-            return package::publish_dry_run(dir, registry);
-        }
-        return package::publish(dir, registry);
-    }
-    if let Command::Yank {
-        package: which,
-        registry,
-        undo,
-    } = &cli.command
-    {
-        return package::yank(which, registry, *undo);
-    }
+    dispatch(cli.command)
+}
 
+/// What a command needs settled before it sees its file: a library package is checked as its
+/// modules, a package directory stands for its `main` (N46), and the restriction profiles in
+/// force are held (N47). `Some` when that alone decides the outcome.
+fn prepare(command: &mut Command) -> Option<ExitCode> {
     // A library package — no `main` — is checked as its modules (N74, §7.76).
-    if let Command::Check { file, json, .. } = &cli.command {
+    if let Command::Check { file, json, .. } = command {
         if let Some(modules) = package::library_modules(file) {
-            return checking::library(&modules, *json);
+            return Some(checking::library(&modules, *json));
         }
     }
     // What the user named, before a package directory becomes its entry file: profiles are
     // held to that package's manifests (Q1-C-04).
-    let named_path = match &cli.command {
+    let named_path = match command {
         Command::Run { file, .. } | Command::Check { file, .. } | Command::Build { file, .. } => {
             file.clone()
         }
         _ => PathBuf::new(),
     };
-    match &mut cli.command {
+    match command {
         Command::Run { file, locked, .. }
         | Command::Check { file, locked, .. }
         | Command::Build { file, locked, .. } => match package::entry(file, *locked) {
             Ok(Some(main)) => *file = main,
             Ok(None) => {}
-            Err(code) => return code,
+            Err(code) => return Some(code),
         },
         Command::Inspect { file, .. }
         | Command::ExplainCost { file, .. }
         | Command::ExplainFlow { file, .. } => match package::entry(file, false) {
             Ok(Some(main)) => *file = main,
             Ok(None) => {}
-            Err(code) => return code,
+            Err(code) => return Some(code),
         },
         _ => {}
-    }
-    if let Command::Inspect { file, def } = &cli.command {
-        return inspect::run(file, def.as_deref());
-    }
-    if let Command::Profile {
-        file,
-        backend,
-        sample,
-        interval_ms,
-    } = &cli.command
-    {
-        return run_profile::run(file, backend, sample.then_some(*interval_ms));
-    }
-    if let Command::ExplainCost { file, json } = &cli.command {
-        return explain::cost(file, *json);
-    }
-    if let Command::ExplainFlow { file, json } = &cli.command {
-        return explain::flow(file, *json);
     }
     // Restriction profiles (N47): held before the command does its own work, from the facts a
     // full check settles.
     let wants_report = matches!(
-        &cli.command,
+        command,
         Command::Check {
             profile_report: true,
             ..
         }
     );
-    match &cli.command {
+    match command {
         Command::Run {
             file,
             locked,
@@ -1224,7 +1172,7 @@ fn command() -> ExitCode {
             if let Err(code) =
                 profile::enforce(file, &named_path, profile.as_deref(), *locked, false)
             {
-                return code;
+                return Some(code);
             }
         }
         Command::Check {
@@ -1236,88 +1184,132 @@ fn command() -> ExitCode {
             if let Err(code) =
                 profile::enforce(file, &named_path, profile.as_deref(), *locked, wants_report)
             {
-                return code;
+                return Some(code);
             }
         }
         _ => {}
     }
-    if let Command::Build {
-        file,
-        out,
-        json,
-        emit_ir,
-        opt_level,
-        no_cache,
-        build_report,
-        summary_json,
-        backend,
-        target,
-        link,
-        lib,
-        shared,
-        objects,
-        stack_watermark,
-        layout,
-        timings,
-        debug,
-        runtime,
-        locked: _,
-        profile,
-        provenance,
-        attest_with,
-        sbom,
-    } = cli.command
-    {
-        let built = build::run(
-            &file,
-            out.as_deref(),
+    None
+}
+
+/// Each command, to the module that carries it out.
+fn dispatch(command: Command) -> ExitCode {
+    match command {
+        Command::Lock { dir } => package::lock(&dir),
+        Command::Attest { operation } => match operation {
+            AttestOperation::Sign {
+                key,
+                out,
+                provenance,
+                artefacts,
+            } => attest::sign(&key, out.as_deref(), &provenance, &artefacts),
+            AttestOperation::Verify {
+                allowed_signers,
+                identity,
+                statement,
+                artefacts,
+            } => attest::verify(&allowed_signers, &identity, &statement, &artefacts),
+        },
+        Command::Update { dir, names } => package::update(&dir, &names),
+        Command::Publish {
+            dir,
+            registry,
+            dry_run,
+        } => {
+            if dry_run {
+                return package::publish_dry_run(&dir, &registry);
+            }
+            package::publish(&dir, &registry)
+        }
+        Command::Yank {
+            package: which,
+            registry,
+            undo,
+        } => package::yank(&which, &registry, undo),
+        Command::Inspect { file, def } => inspect::run(&file, def.as_deref()),
+        Command::Profile {
+            file,
+            backend,
+            sample,
+            interval_ms,
+        } => run_profile::run(&file, &backend, sample.then_some(interval_ms)),
+        Command::ExplainCost { file, json } => explain::cost(&file, json),
+        Command::ExplainFlow { file, json } => explain::flow(&file, json),
+        Command::Build {
+            file,
+            out,
             json,
             emit_ir,
             opt_level,
-            !no_cache,
+            no_cache,
             build_report,
             summary_json,
-            build::Choice {
-                backend: nazm_lir::backend::BackendId::by_name(&backend)
-                    .unwrap_or(nazm_lir::backend::BackendId::Llvm),
-                target: target.as_deref(),
-                link: &link,
-                library: lib,
-                shared,
-                objects: objects.as_deref(),
-                stack_watermark,
-                layout: &layout,
-                adapter: None,
-                timings,
-                debug,
-                runtime: runtime.as_deref(),
-            },
-        );
-        if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {
-            return built;
-        }
-        return provenance::write(
-            &provenance::Request {
-                source: &file,
-                out: out.as_deref(),
+            backend,
+            target,
+            link,
+            lib,
+            shared,
+            objects,
+            stack_watermark,
+            layout,
+            timings,
+            debug,
+            runtime,
+            locked: _,
+            profile,
+            provenance,
+            attest_with,
+            sbom,
+        } => {
+            let built = build::run(
+                &file,
+                out.as_deref(),
+                json,
+                emit_ir,
                 opt_level,
-                backend: &backend,
-                target: target.as_deref(),
-                layout: &layout,
-                debug,
-                library: lib,
-                objects: objects.as_deref(),
-                stack_watermark,
-                link: &link,
-                profile: profile.as_deref(),
-                runtime: runtime.as_deref(),
-            },
-            provenance.as_deref(),
-            sbom.as_deref(),
-            attest_with.as_deref(),
-        );
-    }
-    match cli.command {
+                !no_cache,
+                build_report,
+                summary_json,
+                build::Choice {
+                    backend: nazm_lir::backend::BackendId::by_name(&backend)
+                        .unwrap_or(nazm_lir::backend::BackendId::Llvm),
+                    target: target.as_deref(),
+                    link: &link,
+                    library: lib,
+                    shared,
+                    objects: objects.as_deref(),
+                    stack_watermark,
+                    layout: &layout,
+                    adapter: None,
+                    timings,
+                    debug,
+                    runtime: runtime.as_deref(),
+                },
+            );
+            if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {
+                return built;
+            }
+            provenance::write(
+                &provenance::Request {
+                    source: &file,
+                    out: out.as_deref(),
+                    opt_level,
+                    backend: &backend,
+                    target: target.as_deref(),
+                    layout: &layout,
+                    debug,
+                    library: lib,
+                    objects: objects.as_deref(),
+                    stack_watermark,
+                    link: &link,
+                    profile: profile.as_deref(),
+                    runtime: runtime.as_deref(),
+                },
+                provenance.as_deref(),
+                sbom.as_deref(),
+                attest_with.as_deref(),
+            )
+        }
         Command::Check {
             file,
             json,
@@ -1328,34 +1320,30 @@ fn command() -> ExitCode {
             locked: _,
             profile: _,
             profile_report: _,
-        } => {
-            return checking::run(
-                &file,
-                json,
-                source_root.as_deref(),
-                !no_cache,
-                cache_report,
-                summary_json,
-            )
-        }
-        Command::Fix { file, apply, json } => return fix::run(&file, apply, json),
+        } => checking::run(
+            &file,
+            json,
+            source_root.as_deref(),
+            !no_cache,
+            cache_report,
+            summary_json,
+        ),
+        Command::Fix { file, apply, json } => fix::run(&file, apply, json),
         Command::Interface {
             file,
             hash,
             source_root,
-        } => return interface::run(&file, hash, source_root.as_deref()),
-        Command::Resolve { file, source_root } => {
-            return resolved::resolve(&file, source_root.as_deref())
-        }
+        } => interface::run(&file, hash, source_root.as_deref()),
+        Command::Resolve { file, source_root } => resolved::resolve(&file, source_root.as_deref()),
         Command::References {
             def,
             file,
             source_root,
-        } => return resolved::references(&def, &file, source_root.as_deref()),
-        Command::Repl => return live::repl(),
-        Command::Init { dir, template } => return init::run(&dir, &template),
-        Command::Doc { path, out } => return apidoc::run(&path, out.as_deref()),
-        Command::Bindgen { header, out } => return bindgen::run(&header, out.as_deref()),
+        } => resolved::references(&def, &file, source_root.as_deref()),
+        Command::Repl => live::repl(),
+        Command::Init { dir, template } => init::run(&dir, &template),
+        Command::Doc { path, out } => apidoc::run(&path, out.as_deref()),
+        Command::Bindgen { header, out } => bindgen::run(&header, out.as_deref()),
         Command::Contract {
             file,
             interface,
@@ -1368,14 +1356,14 @@ fn command() -> ExitCode {
             if let Some(old) = upgrade_check {
                 return contract::upgrade_check(&file, &old);
             }
-            return contract::run(
+            contract::run(
                 &file,
                 interface,
                 txs.as_deref(),
                 evm.as_deref(),
                 wasm.as_deref(),
                 accounts.as_deref(),
-            );
+            )
         }
         Command::Accel {
             file,
@@ -1384,50 +1372,46 @@ fn command() -> ExitCode {
             reduce,
             no_check,
             print_kernel,
-        } => {
-            return accel::run(
-                &file,
-                &kernel,
-                &input,
-                reduce.as_deref().and_then(accel::Reduce::by_name),
-                !no_check,
-                print_kernel,
-            )
-        }
+        } => accel::run(
+            &file,
+            &kernel,
+            &input,
+            reduce.as_deref().and_then(accel::Reduce::by_name),
+            !no_check,
+            print_kernel,
+        ),
         Command::Comptime {
             file,
             function,
             max_iterations,
             max_depth,
-        } => {
-            return live::comptime(
-                &file,
-                &function,
-                nazm_core::eval::Limits {
-                    max_iterations,
-                    max_depth,
-                },
-            )
-        }
-        Command::ReloadCheck { old, new } => return live::reload_check(&old, &new),
-        Command::Capabilities { json } => return capabilities::run(json),
+        } => live::comptime(
+            &file,
+            &function,
+            nazm_core::eval::Limits {
+                max_iterations,
+                max_depth,
+            },
+        ),
+        Command::ReloadCheck { old, new } => live::reload_check(&old, &new),
+        Command::Capabilities { json } => capabilities::run(json),
         Command::CoreIr {
             file,
             json,
             no_spans,
             source_root,
-        } => return core_ir::run(&file, json, !no_spans, source_root.as_deref()),
+        } => core_ir::run(&file, json, !no_spans, source_root.as_deref()),
         Command::Mir {
             file,
             json,
             spans,
             source_root,
-        } => return mir::run(&file, json, spans, source_root.as_deref()),
+        } => mir::run(&file, json, spans, source_root.as_deref()),
         Command::Obligations {
             file,
             json,
             source_root,
-        } => return obligations::run(&file, json, source_root.as_deref()),
+        } => obligations::run(&file, json, source_root.as_deref()),
         Command::Lir {
             file,
             target,
@@ -1440,94 +1424,86 @@ fn command() -> ExitCode {
             if run {
                 return lir::oracle(&file, source_root.as_deref(), &args);
             }
-            return lir::run(&file, target.as_deref(), source_root.as_deref(), ops, soa);
+            lir::run(&file, target.as_deref(), source_root.as_deref(), ops, soa)
         }
-        Command::Runtime { action } => {
-            return match action {
-                RuntimeAction::Build {
-                    target,
-                    profile,
-                    opt_level,
-                    out,
-                } => {
-                    runtime_artifact::build(target.as_deref(), profile.as_deref(), opt_level, &out)
-                }
-                RuntimeAction::Verify { dir, target } => {
-                    runtime_artifact::verify(&dir, target.as_deref())
-                }
+        Command::Runtime { action } => match action {
+            RuntimeAction::Build {
+                target,
+                profile,
+                opt_level,
+                out,
+            } => runtime_artifact::build(target.as_deref(), profile.as_deref(), opt_level, &out),
+            RuntimeAction::Verify { dir, target } => {
+                runtime_artifact::verify(&dir, target.as_deref())
             }
-        }
-        Command::Lsp { source_root } => return lsp::run(source_root.as_deref()),
+        },
+        Command::Lsp { source_root } => lsp::run(source_root.as_deref()),
         Command::Context {
             root,
             file,
             byte,
             json,
             source_root,
-        } => return context::run(&root, &file, byte, json, source_root.as_deref()),
+        } => context::run(&root, &file, byte, json, source_root.as_deref()),
         Command::Snapshot {
             root,
             json,
             source_root,
-        } => return snapshot::snapshot(&root, json, source_root.as_deref()),
+        } => snapshot::snapshot(&root, json, source_root.as_deref()),
         Command::Delta {
             root,
             baseline,
             json,
             source_root,
-        } => return snapshot::delta(&root, &baseline, json, source_root.as_deref()),
+        } => snapshot::delta(&root, &baseline, json, source_root.as_deref()),
         Command::Diagnostics {
             root,
             detail,
             state,
             json,
             source_root,
-        } => {
-            return diagnostics::run(
+        } => diagnostics::run(
+            &root,
+            detail.zip(state).as_ref(),
+            json,
+            source_root.as_deref(),
+        ),
+        Command::Patch { operation } => match operation {
+            PatchOperation::Rename {
+                root,
+                file,
+                byte,
+                new_name,
+                json,
+                source_root,
+            } => patch::run(
                 &root,
-                detail.zip(state).as_ref(),
+                &file,
+                byte,
+                &patch::Ask::Rename(new_name),
                 json,
                 source_root.as_deref(),
-            )
-        }
-        Command::Patch { operation } => {
-            return match operation {
-                PatchOperation::Rename {
-                    root,
-                    file,
-                    byte,
-                    new_name,
-                    json,
-                    source_root,
-                } => patch::run(
-                    &root,
-                    &file,
-                    byte,
-                    &patch::Ask::Rename(new_name),
-                    json,
-                    source_root.as_deref(),
-                ),
-                PatchOperation::Fix {
-                    root,
-                    file,
-                    byte,
-                    fix,
-                    json,
-                    source_root,
-                } => patch::run(
-                    &root,
-                    &file,
-                    byte,
-                    &patch::Ask::Fix(fix),
-                    json,
-                    source_root.as_deref(),
-                ),
-                PatchOperation::Apply { plan, base } => {
-                    patch::apply(&plan, base.as_deref().unwrap_or(std::path::Path::new(".")))
-                }
+            ),
+            PatchOperation::Fix {
+                root,
+                file,
+                byte,
+                fix,
+                json,
+                source_root,
+            } => patch::run(
+                &root,
+                &file,
+                byte,
+                &patch::Ask::Fix(fix),
+                json,
+                source_root.as_deref(),
+            ),
+            PatchOperation::Apply { plan, base } => {
+                patch::apply(&plan, base.as_deref().unwrap_or(std::path::Path::new(".")))
             }
-        }
-        Command::Fmt { files, check } => return fmt::run(&files, check),
+        },
+        Command::Fmt { files, check } => fmt::run(&files, check),
         Command::Docs {
             index,
             document,
@@ -1537,11 +1513,11 @@ fn command() -> ExitCode {
             root,
         } => {
             let root = root.unwrap_or_else(nazm_docs::default_root);
-            return match (index, section) {
+            match (index, section) {
                 (true, _) => docs::index(&root, document.as_deref(), json),
                 (false, Some(id)) => docs::section(&root, &id, state.as_deref(), json),
                 (false, None) => unreachable!("clap requires one"),
-            };
+            }
         }
         Command::Repo {
             map,
@@ -1571,17 +1547,14 @@ fn command() -> ExitCode {
                     max_doc_bytes,
                 },
             };
-            return repo::task(&root, &request, json);
+            repo::task(&root, &request, json)
         }
         Command::Test {
             paths,
             json,
             interpret_only,
             summary_json,
-        } => return test::run(&paths, json, interpret_only, summary_json),
-        _ => {}
-    }
-    let (path, json, limits) = match cli.command {
+        } => test::run(&paths, json, interpret_only, summary_json),
         Command::Run {
             file,
             args,
@@ -1590,67 +1563,30 @@ fn command() -> ExitCode {
             max_depth,
             locked: _,
             profile: _,
-        } => (
-            file,
+        } => run(
+            &file,
             json,
-            (
-                nazm_core::eval::Limits {
-                    max_iterations,
-                    max_depth,
-                },
-                args,
-            ),
+            nazm_core::eval::Limits {
+                max_iterations,
+                max_depth,
+            },
+            args,
         ),
-        // Handled above; `main` keeps its original shape for the commands whose
-        // behaviour these increments must not change.
-        Command::Build { .. }
-        | Command::Init { .. }
-        | Command::Doc { .. }
-        | Command::Bindgen { .. }
-        | Command::Check { .. }
-        | Command::Fix { .. }
-        | Command::Context { .. }
-        | Command::Snapshot { .. }
-        | Command::Delta { .. }
-        | Command::Patch { .. }
-        | Command::Diagnostics { .. }
-        | Command::Docs { .. }
-        | Command::Repo { .. }
-        | Command::Fmt { .. }
-        | Command::Test { .. }
-        | Command::Interface { .. }
-        | Command::Resolve { .. }
-        | Command::References { .. }
-        | Command::Repl
-        | Command::Accel { .. }
-        | Command::Contract { .. }
-        | Command::Comptime { .. }
-        | Command::ReloadCheck { .. }
-        | Command::Lsp { .. }
-        | Command::CoreIr { .. }
-        | Command::Obligations { .. }
-        | Command::Mir { .. }
-        | Command::Lir { .. }
-        | Command::Runtime { .. }
-        | Command::Capabilities { .. }
-        | Command::Lock { .. }
-        | Command::Update { .. }
-        | Command::Attest { .. }
-        | Command::Publish { .. }
-        | Command::Yank { .. }
-        | Command::ExplainCost { .. }
-        | Command::ExplainFlow { .. }
-        | Command::Profile { .. }
-        | Command::Inspect { .. } => {
-            unreachable!("handled above")
-        }
-    };
+    }
+}
 
+/// `nazm run`: check the program and, when it passes, evaluate it.
+fn run(
+    path: &std::path::Path,
+    json: bool,
+    limits: nazm_core::eval::Limits,
+    args: Vec<String>,
+) -> ExitCode {
     // `nazm run` evaluates; it persists nothing and reuses nothing, so where the project
     // begins is not its question. The root is discovered rather than given because the
     // loader computes a durable key for every module whether or not this command has a
     // use for one.
-    let source_root = match root::decide(&path, None) {
+    let source_root = match root::decide(path, None) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm: {e}");
@@ -1660,7 +1596,7 @@ fn command() -> ExitCode {
 
     // The root file and everything it imports, and how they relate. A program with no
     // `use` takes the same path and produces a graph of one module.
-    let loaded = match load::load(&path, source_root.path()) {
+    let loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         // What was loaded comes back with the errors, so the caret lands on the `use`
         // that could not be resolved rather than on nothing.
@@ -1673,7 +1609,6 @@ fn command() -> ExitCode {
 
     // Checking always runs; evaluation only when it passed. Running a program known to be
     // ill-typed produces a second, less useful error about the same mistake.
-    let (limits, args) = limits;
     let outcome = nazm_core::run_map(map, &loaded.graph, limits, args);
 
     // After evaluation, so every environment frame and every value it held has been
