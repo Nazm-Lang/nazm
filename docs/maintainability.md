@@ -78,7 +78,7 @@ lowering (`mir`, `lir`) knows the runtime's inventory; the CLI composes. Finding
 | Responsibility | Owner |
 | --- | --- |
 | What a construct means | `docs/spec.md`, enforced by `nazm-core` (`check.rs`, `effects.rs`, `provenance.rs`, `constants.rs`) |
-| Number semantics (every implementation) | `nazm_sema::numeric` — the interpreter and the LIR oracle call it; backends are tested against it |
+| Number semantics (every implementation) | `nazm_sema::numeric` — the interpreter calls it; backends are tested against it. *Corrected in Q1:* this row said the LIR oracle calls it too; it does not — `nazm-lir/src/op/interp.rs` re-implements the rules on raw `u64`, which is why Q1-B-03 had to be fixed in both. Whether the oracle should share one set of rules or keep an independent one is an M2 decision |
 | Built-in inventory, signatures, effects, authority, provenance | `nazm_sema::Intrinsic` and its per-concern tables (`intrinsic.rs`, `effect.rs`, `capability.rs`, `provenance.rs`) — exhaustive |
 | Type vocabulary | `nazm_sema::Type::ALL` / `from_name` |
 | Core IR, its verification and digest | `nazm-cir` |
@@ -268,7 +268,9 @@ About 1,500 tests in `nazm-cli`'s ~100 files, plus per-crate suites; categories 
 - **Fixed in M1 — a hang disguised as a timeout.** Ten suites carried a byte-identical
   `run_bounded` that read a child's pipes only after it exited, so a child writing more than a pipe
   holds blocked and was reported as not terminating. One draining `run_bounded` now lives in
-  `tests/common/mod.rs`; the ten copies are gone.
+  `tests/common/mod.rs`. *Corrected in Q1:* "the ten copies are gone" was not so — two more,
+  in `tests/build.rs` and `tests/concurrent.rs`, still read after exit; they now call
+  `common::run_within`, the same draining run with a caller's limit.
 - **Fixed in M1 — silent green.** The Docker-backed tests in `nazm-bench` and `resource_regression`
   passed by skipping; they are now `#[ignore = "integration-external: …"]`
   (`docs/integration-testing.md`).

@@ -28,8 +28,8 @@
 
 mod common;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
@@ -89,36 +89,15 @@ fn build_at(body: &str, opt: u8) -> Result<Built, Ran> {
 /// no output"; it has not finished, and the two want different words in a failure message.
 ///
 /// The child is killed *and reaped* on that path, so no test leaves a process behind for
-/// the next one to trip over. Output is piped and read once the child is gone; every
-/// program here prints at most one short line, well inside a pipe buffer, so there is no
-/// deadlock to arrange around.
+/// the next one to trip over. Both streams are drained as the child runs (`common::run_within`),
+/// so a program that writes more than a pipe holds is not mistaken for one that never ends.
 fn run_bounded(cmd: &mut Command, limit: Duration) -> Option<Ran> {
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn");
-
-    let start = Instant::now();
-    loop {
-        match child.try_wait().expect("try_wait") {
-            Some(status) => {
-                let out = child.wait_with_output().expect("collect output");
-                return Some(Ran {
-                    code: status.code(),
-                    stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-                });
-            }
-            None if start.elapsed() >= limit => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            None => std::thread::sleep(Duration::from_millis(5)),
-        }
-    }
+    // `common`'s draining run (Q1): this copy read the pipes only after the child exited.
+    common::run_within(cmd, limit).map(|r| Ran {
+        code: r.code,
+        stdout: r.stdout,
+        stderr: r.stderr,
+    })
 }
 
 /// Run a built executable, failing the test if it outlives [`DEADLINE`].
