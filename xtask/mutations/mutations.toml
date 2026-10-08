@@ -14601,11 +14601,11 @@ killers = [{ package = "nazm-sema", lib = true, name = "numeric::tests::a_tie_be
 
 [[mutation]]
 name = "q1-a-far-deadline-wraps"
-why = "a pool task's deadline past i64's nanoseconds wraps into the past, so its select times out at once and its worker spins"
+why = "a pool task's deadline past i64's nanoseconds wraps into the past, so its worker spins re-queuing it (the answer stays right: the killer measures CPU)"
 file = "crates/nazm-runtime/src/core.rs"
 find = '  %far = icmp sgt i64 %s, 9223372035'
 replace = '  %far = icmp sgt i64 %s, 9223372036854775807'
-killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_deadline_past_the_nanosecond_range_waits_for_the_value" }]
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_deadline_past_the_nanosecond_range_parks_without_spinning" }]
 
 [[mutation]]
 name = "q1-a-scratch-directory-is-adopted"

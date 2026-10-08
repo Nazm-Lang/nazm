@@ -305,41 +305,58 @@ fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
     }
 }
 
-/// Q1-M-11: a deadline too far to count in nanoseconds is "never", not a wrapped time in the past.
-/// The waiter parks with one, and is woken by the value, not by its deadline: before the fix the
-/// deadline had already passed, so the select timed out (and a worker spun re-queuing it). Ten
-/// trillion milliseconds is ~1.2e10 s from now, whose nanoseconds pass 2^63 and wrap negative —
-/// into the past — on any clock before the year 2260; `i64::MAX`'s wrap lands wherever the clock
-/// puts it: the past on one host, the future on another (found by the Q1 campaign). Main waits
-/// 200 ms before sending, so the waiter has parked: the answer does not depend on that wait — with
-/// the fix it is 42 either way — but a wrapped deadline is seen only by a waiter that parked.
+/// Q1-M-11: a deadline too far to count in nanoseconds is "never" — a parked task waits without
+/// using a CPU. Before the fix the wrapped deadline was already past: the task was woken, found
+/// its own (second-resolution) deadline not yet reached, parked again, and its worker spun. The
+/// answer was right; the core was not idle — which is what this measures. Main waits four seconds
+/// on the main thread; three seconds in, the process has used next to no CPU time (`ps`). The Q1
+/// campaign showed the earlier, output-only versions of this test could not see the spin.
 #[test]
-fn a_deadline_past_the_nanosecond_range_waits_for_the_value() {
+fn a_deadline_past_the_nanosecond_range_parks_without_spinning() {
     let d = tempfile::tempdir().unwrap();
-    let src = "fn waiter(io: IoCap, tm: TimeCap, ready: Chan[Int], c: Chan[Int], res: Chan[Int]) -> Int ! { io } {\n\
+    let src = "fn waiter(io: IoCap, tm: TimeCap, c: Chan[Int], res: Chan[Int]) -> Int ! { io } {\n\
                    let cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\n\
-                   chan_send_of(ready, 1);\n\
-                   let r = chan_select_until(cs, out, 10000000000000);\n\
-                   chan_send_of(res, r * 1000 + vec_pop(out)); 0 }\n\
+                   chan_send_of(res, chan_select_until(cs, out, 10000000000000)); 0 }\n\
                fn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\n\
-                   let ready = chan_new_of[Int](1); let c = chan_new_of[Int](1); let res = chan_new_of[Int](1);\n\
-                   let got = vec_new[Int]();\n\
-                   scope { spawn waiter(io, tm, ready, c, res);\n\
-                       let r0 = chan_recv_of(ready, got);\n\
-                       let t0 = time_now_ms(); while time_now_ms() - t0 < 200 { }\n\
-                       chan_send_of(c, 42); let r1 = chan_recv_of(res, got); }\n\
-                   print(int_to_str(vec_get(got, 1))); 0 }\n";
+                   let c = chan_new_of[Int](1); let res = chan_new_of[Int](1); let got = vec_new[Int]();\n\
+                   let idle = chan_new_of[Int](1); let ics = vec_new[Chan[Int]](); vec_push(ics, idle);\n\
+                   let none = vec_new[Int]();\n\
+                   scope { spawn waiter(io, tm, c, res);\n\
+                       let w = chan_select_until(ics, none, 4000);\n\
+                       chan_send_of(c, 42); let r = chan_recv_of(res, got); }\n\
+                   print(int_to_str(vec_get(got, 0))); 0 }\n";
     built(d.path(), "far", src, "llvm");
-    for _ in 0..5 {
-        let (out, err, code) = run(
-            d.path(),
-            "far",
-            &[],
-            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")],
-        );
-        assert_eq!(code, Some(0), "{err}");
-        assert_eq!(out, "420\n", "{err}");
-    }
+    let child = Command::new(d.path().join("far"))
+        .env("NAZM_SCHEDULER", "pool")
+        .env("NAZM_WORKERS", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let cpu = Command::new("ps")
+        .args(["-o", "time=", "-p", &child.id().to_string()])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&cpu.stdout).trim().to_owned();
+    // `00:00:01` (procps) or `0:01.49` (BSD): seconds, minutes, hours from the right.
+    let seconds: f64 = text
+        .rsplit(':')
+        .zip([1.0, 60.0, 3600.0])
+        .map(|(part, unit)| part.trim().parse::<f64>().unwrap_or(f64::MAX) * unit)
+        .sum();
+    let o = child.wait_with_output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "00\n");
+    assert!(
+        seconds < 1.0,
+        "a parked task with a far deadline used {text} of CPU in three seconds"
+    );
 }
 
 #[test]
