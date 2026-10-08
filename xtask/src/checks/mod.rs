@@ -4,6 +4,7 @@
 pub(crate) mod architecture;
 pub(crate) mod cache;
 pub(crate) mod docs;
+pub(crate) mod modules;
 pub(crate) mod mutations;
 pub(crate) mod reach;
 pub(crate) mod runtime_parity;
@@ -15,6 +16,7 @@ use crate::checks::architecture::{
 };
 use crate::checks::cache::{check_cache_soundness, check_native_identity, check_object_cache};
 use crate::checks::docs::{check_capability_matrix, check_doc_claims, check_docs_corpus};
+use crate::checks::modules::check_module_boundaries;
 use crate::checks::mutations::check_mutations_apply;
 use crate::checks::reach::{
     check_codegen_reach, check_emission_reach, check_layering, check_network_reach,
@@ -47,6 +49,7 @@ pub(crate) fn run_checks() -> ExitCode {
         ("performance claims", claims::check(&guide::root())),
         ("agent governance", governance::check(&guide::root())),
         ("dependency sources", supply::check(&guide::root())),
+        ("module boundaries", check_module_boundaries(&guide::root())),
     ])
 }
 
