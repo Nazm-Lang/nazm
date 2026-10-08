@@ -77,8 +77,8 @@ lowering (`mir`, `lir`) knows the runtime's inventory; the CLI composes. Finding
 
 | Responsibility | Owner |
 | --- | --- |
-| What a construct means | `docs/spec.md`, enforced by `nazm-core` (`check.rs`, `effects.rs`, `provenance.rs`, `constants.rs`) |
-| Number semantics (every implementation) | `nazm_sema::numeric` — the interpreter calls it; backends are tested against it. *Corrected in Q1:* this row said the LIR oracle calls it too; it does not — `nazm-lir/src/op/interp.rs` re-implements the rules on raw `u64`, which is why Q1-B-03 had to be fixed in both. Whether the oracle should share one set of rules or keep an independent one is an M2 decision |
+| What a construct means | `docs/spec.md`, enforced by `nazm-core` (`check/`, `effects.rs`, `provenance.rs`, `constants.rs`) |
+| Number semantics (every implementation) | `nazm_sema::numeric` — the interpreter calls it; backends are tested against it. The LIR oracle (`nazm-lir/src/op/interp.rs`) keeps **an independent implementation on raw `u64`, deliberately** (decided in M2): it is the cross-check of `numeric`, and sharing one set of rules would make a rule's defect invisible to both. What the two share is the type inventory, the edge corpus and the test vectors; a fix to a rule is made in both, as Q1-B-03's was (§6) |
 | Built-in inventory, signatures, effects, authority, provenance | `nazm_sema::Intrinsic` and its per-concern tables (`intrinsic.rs`, `effect.rs`, `capability.rs`, `provenance.rs`) — exhaustive |
 | Type vocabulary | `nazm_sema::Type::ALL` / `from_name` |
 | Core IR, its verification and digest | `nazm-cir` |
@@ -96,9 +96,11 @@ Collected from the sections that justify them; each keeps a WATCH area from gett
 
 1. A new vocabulary item goes into its canonical source; any copy it needs is derived or guarded in
    the same commit (§5).
-2. A new Gate 2 concern in the checker is a sibling module of `nazm-core`, not more of `check.rs`;
-   a new build phase is a function, a new `xtask` gate a module, a new built-in family a sibling
-   in `eval.rs` and in `nazm-lir/src/op/` (§14).
+2. A new Gate 2 concern goes in a module of its own: in the checker a file of `check/`, in the
+   interpreter a file of `eval/`, a new build phase a file of `build/` called from `run`, a new
+   `xtask` gate a module of `xtask/src/checks/`, a new built-in family a sibling function in
+   `eval/intrinsic.rs` and a sibling module in `nazm-lir/src/op/`. The **module boundaries** gate
+   holds the split modules' entries to their façade, context and orchestration (§14, §20).
 3. A new runtime service is a `Part` with its own text constant, outside the parity-checked texts
    unless the self-hosted compiler needs it, calling the OS only through `os.rs` (§8).
 4. A new machine output ships with its schema file and its stability class (§11).
@@ -131,11 +133,15 @@ either derived or guarded in the same commit.** No new hand-written list is adde
 
 The flow is semantic decision → Core IR → MIR → LIR → backend. Findings:
 
-- **Numbers have one semantics** (`nazm_sema::numeric`), called by the interpreter and the LIR
-  oracle; the backends are differential-tested against it (`tests/numbers.rs`). Acceptable.
+- **Numbers have one semantics** (`nazm_sema::numeric`), called by the interpreter; the backends
+  are differential-tested against it (`tests/numbers.rs`). The LIR oracle re-implements the rules
+  on raw `u64` **as a deliberate second opinion** (M2): two independent implementations that must
+  agree catch a rule written wrong in either, which one shared implementation cannot. The cost is
+  that a rule's fix is made twice (Q1-B-03 was); the shared parts are the type inventory, the edge
+  corpus and the vectors both are tested with. Acceptable, and decided.
 - **The interpreter evaluates Core IR directly** — a second implementation by design (it is the
   reference), not duplication.
-- **The interpreter's built-in dispatch ends in a wildcard** (`eval.rs`, `intrinsic`), so a missing
+- **The interpreter's built-in dispatch ends in a wildcard** (`eval/intrinsic.rs`, `intrinsic`), so a missing
   built-in fails at run time, not at compile time. Rewriting it as an exhaustive match over
   `(Intrinsic, args)` is not practical; **M1 added a guard instead**:
   `every_front_end_builtin_is_evaluated_by_the_interpreter` (`tests/build.rs`) runs every built-in
@@ -274,9 +280,17 @@ About 1,500 tests in `nazm-cli`'s ~100 files, plus per-crate suites; categories 
 - **Fixed in M1 — silent green.** The Docker-backed tests in `nazm-bench` and `resource_regression`
   passed by skipping; they are now `#[ignore = "integration-external: …"]`
   (`docs/integration-testing.md`).
-- **Remaining duplication:** `everywhere` (13 copies), `agrees` (15), `refused` (13), `nazm(…)` (54,
-  three signatures), deadlines from 20 s to 600 s. Rule for Gate 2: new suites use `common`'s
-  harness; old ones migrate when touched.
+- **Deduplicated in M2:** the language-service tests share `nazm-service/tests/common/` (the
+  service's stack, a scratch project, the repository's `.nz` files — one copy instead of 20); the
+  closure-style differential suites share `nazm-cli/tests/differential/` (`everywhere`,
+  `agrees_on`, `agrees`, `check_codes`, `codes`); the memory-report suites share
+  `nazm-cli/tests/memory_report/` (`counts`). Only byte-identical copies were merged.
+- **Remaining duplication:** the differential *variants* — `arrays`/`bytes_text`/`numbers`,
+  `traits`/`usability`, `select`, `contracts`, `simd`, `layout` — each assert something different
+  (whether the interpreter's memory is compared, the scheduler line, which classes must reach
+  `live=0`), so merging them would change what a test proves; `refused` and `nazm(…)` have several
+  signatures. Rule for Gate 2: new suites use `common`'s and `differential`'s harnesses; old ones
+  migrate when touched.
 - **Remaining environment sensitivity:** a few suites write `.nazm/` caches into the tree
   (`schemas.rs`, `workflow.rs`, `release_examples.rs`); most children inherit `NAZM_*` variables;
   some tests skip silently without `clang` or `lldb` (`platform_matrix.rs`, `debugging.rs`). WATCH.
@@ -297,9 +311,11 @@ constants, bytes, text) and repointed the ones whose lines moved, with a note ea
 
 | Hotspot | One responsibility? | Gate 2 worsens it? | Split first? |
 | --- | --- | --- | --- |
-| `nazm-core/src/check.rs` (8,776 lines, ~15 concerns) | no | yes — attributes, FFI, serialization, test/bench would land here | **no, with a rule:** each new Gate 2 concern goes in a sibling module of `core` (as `constants.rs` did); existing concerns move out when next substantially edited. A wholesale split in M1 would be the cleanup spree M1 forbids |
-| `nazm-cli/src/build.rs::run` (~746 lines, ten phases) | no | yes | **no, with a rule:** a new build phase is a function called from `run`, not inline |
-| `xtask/src/main.rs` (21 gates, two runners) | no | yes | **no, with a rule:** a new gate is its own module (`governance.rs` is the pattern) |
+| `nazm-core/src/check/` (was `check.rs`, 8,776 lines, ~18 concerns) | **split in M2:** 17 modules by concern; `mod.rs` holds the checker's context and driver | yes — attributes, FFI, serialization | done; the module boundaries gate keeps new concerns out of `mod.rs` |
+| `nazm-core/src/eval/` (was `eval.rs`, 3,108 lines) | **split in M2:** value, channel, counters, exec, task, intrinsic, arith | yes | done |
+| `nazm-cli/src/build/` (was `build.rs`, `run` 772 lines) | **split in M2:** `run` is a sequence of phases — preflight, lower, objects, link, timing | yes | done; a new phase is a function in its module, called from `run` |
+| `nazm-cli/src/main.rs` (was 1,811 lines, `command` 624) | **split in M2:** `cli.rs` the grammar, `exit.rs` the contract, `prepare.rs`, `interpret.rs`; `command` is parse → prepare → one exhaustive `dispatch` | yes — every command | done |
+| `xtask/src/main.rs` (was 3,500 lines, 22 gates, two runners) | **split in M2:** `checks/` one module per family of gates, `commands/` the subcommands | yes | done; a new gate is a module of `checks/` |
 | `nazm-runtime/src/core.rs` (25 text constants) | yes per constant | yes | no — new parts as their own constants; a file per part when one is next added |
 | `nazm-core/src/eval/intrinsic.rs::intrinsic` (~513 lines, wildcard) | yes | yes | no — guarded (§6); new families in sibling functions (`bytes_text_intrinsic`, `numeric_intrinsic`) |
 | `nazm-lir/src/op/prims.rs::primitive` (~562 lines) | yes | yes | no — new families in sibling modules (`op/numeric.rs`, `op/bytes.rs`, `op/arrays.rs`) |

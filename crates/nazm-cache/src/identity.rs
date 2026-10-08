@@ -241,7 +241,7 @@ pub const SEMANTIC_EPOCH: u32 = 34;
 ///
 /// Held here rather than in `nazm-core` because it is an input to an identity, and an
 /// identity is this crate's subject. It is kept true by `cargo xtask check`, which reads
-/// `crates/nazm-core/src/check.rs` and fails if the two sets differ — so this cannot
+/// `crates/nazm-core/src/check/` and fails if the two sets differ — so this cannot
 /// silently fall behind the checker it describes.
 pub const CHECKER_CODES: &[&str] = &[
     "ALIAS_COLLIDES",
