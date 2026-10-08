@@ -1200,7 +1200,7 @@ reuse away: a change anywhere invalidates everything, and the precision N5 measu
 dependency's body and its unused exports do not reach a caller's object — is gone
 Repointed by N41: an artefact's code is a `Code` now, and the LLVM text is its `Llvm` arm.
 """
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = "            .map(|s| ObjectKey::of(LlvmInput::of(ir.as_bytes()), s.identity, s.config));"
 replace = """            .map(|s| {
                 let whole: String = artefacts
@@ -6857,7 +6857,7 @@ killers = [{ package = "nazm-cli", test = "summary", name = "a_test_run_with_now
 [[mutation]]
 name = "n31-a-failed-link-is-a-success"
 why = "a build whose link failed, which has no diagnostic, is summarized as a success"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/link.rs"
 find = """            let code = report_clang(other, work, cleanup);
             if summary {
                 return Err(summarized(
@@ -6871,7 +6871,7 @@ killers = [{ package = "nazm-cli", test = "summary", name = "a_build_whose_toolc
 [[mutation]]
 name = "n31-a-refused-compile-is-a-rejection"
 why = "a build whose clang refused the IR is summarized as the program rejected, as if a diagnostic said why"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = """                let code = report_clang(other, &ll, cleanup);
                 if summary {
                     return Err(summarized(
@@ -6885,7 +6885,7 @@ killers = [{ package = "nazm-cli", test = "summary", name = "a_build_whose_toolc
 [[mutation]]
 name = "n31-an-unwritable-output-is-a-success"
 why = "a build that could not create its working directory is summarized as a success"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/mod.rs"
 find = """        eprintln!("nazm: cannot create {}: {e}", work.display());
         if summary {
             return summarized(
@@ -8809,7 +8809,7 @@ killers = [{ package = "nazm-cli", test = "cranelift", name = "a_cache_key_moves
 [[mutation]]
 name = "n41-cranelift-quietly-becomes-llvm"
 why = "asking for the Cranelift backend builds with the LLVM backend instead: a silent fallback, the one thing §7.43 forbids"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/mod.rs"
 find = "        nazm_lir::backend::BackendId::Cranelift => &cranelift,"
 replace = "        nazm_lir::backend::BackendId::Cranelift => &llvm,"
 killers = [{ package = "nazm-cli", test = "cranelift", name = "choosing_cranelift_writes_no_llvm_text_for_any_unit" }]
@@ -8958,7 +8958,7 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_
 [[mutation]]
 name = "n42-link-is-not-handed-to-the-linker"
 why = "`--link` is accepted and checked, and then not passed, so every foreign call is unresolved"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/mod.rs"
 find = "    objects.extend(choice.link.iter().cloned());"
 replace = "    objects.extend(choice.link.iter().take(0).cloned());"
 killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
@@ -8966,7 +8966,7 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_
 [[mutation]]
 name = "n42-a-missing-link-file-reaches-the-linker"
 why = "a `--link` file that does not exist is found only after the whole program is compiled, by the linker, in its words"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/preflight.rs"
 find = "    if let Some(missing) = choice.link.iter().find(|p| !p.is_file()) {"
 replace = "    if let Some(missing) = choice.link.iter().find(|p| !p.is_file() && p.is_file()) {"
 killers = [{ package = "nazm-cli", test = "ffi", name = "the_linker_is_handed_exactly_what_link_names" }]
@@ -8974,7 +8974,7 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "the_linker_is_handed_ex
 [[mutation]]
 name = "n42-an-unresolved-foreign-symbol-is-a-compiler-bug"
 why = "a link that fails for want of a `--link` is reported as a bug in `nazm build`, sending the user to report the compiler rather than to supply their object"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/link.rs"
 find = "        Outcome::Ran(o) if !foreign.is_empty() => {"
 replace = "        Outcome::Ran(o) if foreign.is_empty() && false => {"
 killers = [{ package = "nazm-cli", test = "ffi", name = "the_linker_is_handed_exactly_what_link_names" }]
@@ -9347,10 +9347,10 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::the_lin
 [[mutation]]
 name = "n46-a-temporary-name-reaches-the-executable"
 why = "the executable is linked under a temporary name with the process id in it, which the linker writes into its signature"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/link.rs"
 find = "    work.join(output.file_name().unwrap_or_default())"
 replace = """    sibling(output, &format!(".nazm-{}.out", std::process::id()))"""
-killers = [{ package = "nazm-cli", bin = "nazm", name = "build::tests::the_executable_is_linked_under_its_own_name_inside_the_working_directory" }, { package = "nazm-cli", test = "packages", name = "two_copies_built_from_empty_caches_are_byte_identical" }]
+killers = [{ package = "nazm-cli", bin = "nazm", name = "build::link::tests::the_executable_is_linked_under_its_own_name_inside_the_working_directory" }, { package = "nazm-cli", test = "packages", name = "two_copies_built_from_empty_caches_are_byte_identical" }]
 
 [[mutation]]
 name = "n46-the-lockfile-records-an-absolute-path"
@@ -9544,18 +9544,18 @@ killers = [{ package = "nazm-lir", lib = true, name = "debug::tests::markers_bec
 [[mutation]]
 name = "n48-the-debug-information-is-left-behind"
 why = "a macOS debug build does not gather its debug information before the objects holding it are removed, so the debugger finds none"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/link.rs"
 find = """    debug && os == "macos"
 }"""
 replace = """    debug && os == "macos" && false
 }"""
-killers = [{ package = "nazm-cli", bin = "nazm", name = "build::tests::only_a_debug_build_on_macos_gathers_its_debug_information" }, { package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+killers = [{ package = "nazm-cli", bin = "nazm", name = "build::link::tests::only_a_debug_build_on_macos_gathers_its_debug_information" }, { package = "nazm-cli", test = "debugging", name = "a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
 
 [[mutation]]
 name = "n48-cranelift-debug-is-silently-plain"
 why = """`--debug` with Cranelift builds without debug information (repointed in N91: Cranelift writes DWARF since, and the rule is that it is not dropped)
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/mod.rs"
 find = '''    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
         .with_debug(choice.debug)'''
 replace = '''    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
@@ -9565,7 +9565,7 @@ killers = [{ package = "nazm-cli", test = "debugger_v3", name = "a_cranelift_bui
 [[mutation]]
 name = "n48-a-phase-is-not-timed"
 why = "the MIR phase is not marked, so its time is reported as LIR's and the phases do not account for the build"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = """            clock.mark("mir");
 """
 replace = ""
@@ -10727,7 +10727,7 @@ killers = [{ package = "nazm-cli", test = "ffi_v2", name = "an_export_symbol_is_
 [[mutation]]
 name = "n55-the-header-has-no-bool"
 why = "the header declares a Bool export as int64_t, an ABI mismatch C cannot see"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/link.rs"
 find = """
         if *t == nazm_lir::Ty::Bool {
             "bool"
@@ -10741,7 +10741,7 @@ killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_and_its_he
 [[mutation]]
 name = "n55-a-library-needs-a-main"
 why = "a library build still requires main"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = """
         if choice.library {
             nazm_core::Entry::Absent
@@ -10914,7 +10914,7 @@ killers = [{ package = "nazm-cli", test = "cross", name = "objects_for_two_targe
 [[mutation]]
 name = "n57-objects-lose-their-order"
 why = "the written objects keep their names, so link.txt's order is lost"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = """
         let to = format!("{i:02}-{name}");"""
 replace = "        let to = name.clone();"
@@ -10924,7 +10924,7 @@ killers = [{ package = "nazm-cli", test = "cross", name = "every_target_is_built
 name = "n57-linux-needs-no-threads"
 why = """link.txt omits -lpthread for a Linux target
 Repointed by M1, whose Linux line names libm beside it."""
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = """
         nazm_lir::backend::Os::Linux => "-lpthread -lm".to_owned(),"""
 replace = """
@@ -11159,7 +11159,7 @@ killers = [{ package = "nazm-formal", test = "exhaustive", name = "p5_the_checke
 [[mutation]]
 name = "n62-a-hosted-build-performs-a-register"
 why = "a build for a hosted target lowers `mmio_write32` instead of refusing it with N0392, so a program writes to an address the operating system owns"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = '            if !target.is_board() {'
 replace = '            if false {'
 killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_register_is_refused_where_there_is_none" }]
@@ -11200,7 +11200,7 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runt
 [[mutation]]
 name = "n62-the-board-gets-the-hosted-runtime"
 why = "a build for the board links the hosted runtime and entry, which call the C library and use thread-local storage"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = '                freestanding.then_some(Freestanding {'
 replace = '                (freestanding && false).then_some(Freestanding {'
 killers = [{ package = "nazm-cli", test = "freestanding", name = "a_unit_for_the_board_refers_to_no_thread_local_storage" }]
@@ -11208,7 +11208,7 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "a_unit_for_the
 [[mutation]]
 name = "n62-a-board-may-call-the-c-library"
 why = "a board program that reaches libc's `write` is built anyway and fails at the link with an undefined symbol"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = '    .filter(|(part, _)| missing.iter().any(|s| part_of(s) == *part))'
 replace = '    .filter(|(part, _)| *part != Part::Libc && missing.iter().any(|s| part_of(s) == *part))'
 killers = [{ package = "nazm-cli", test = "freestanding", name = "what_a_board_cannot_have_is_refused_by_name" }]
@@ -11235,7 +11235,7 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runt
 [[mutation]]
 name = "n62-cranelift-tries-the-board"
 why = "Cranelift is handed the board and fails with its own unknown binary format instead of a refusal by name"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/preflight.rs"
 find = '        && target.os == nazm_lir::backend::Os::None'
 replace = '        && false'
 killers = [{ package = "nazm-cli", test = "freestanding", name = "cranelift_builds_no_board" }]
@@ -11243,7 +11243,7 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "cranelift_buil
 [[mutation]]
 name = "n62-no-linker-script"
 why = "objects for the board are written without `link.ld`, so nothing says where the image is loaded or where its stack is"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = '    if target.is_board() {'
 replace = '    if !target.is_board() {'
 killers = [
@@ -11353,7 +11353,7 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "stack::tests::a_cycle_a
 [[mutation]]
 name = "n63-the-board-reuses-objects"
 why = "a board build reads cached objects, which report no frame sizes, so its stack bound is computed from nothing"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = '        .filter(|_| !freestanding)'
 replace = '        .filter(|_| true)'
 killers = [{ package = "nazm-cli", test = "realtime", name = "a_board_build_states_its_stack_bound_with_the_path" }]
@@ -11388,7 +11388,7 @@ killers = [{ package = "nazm-cli", test = "wasm", name = "what_a_module_cannot_h
 [[mutation]]
 name = "n64-a-module-gets-the-board-runtime"
 why = "a module links the board's runtime, which writes to a UART address and stops by semihosting instead of asking its host"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = '        let runtime = if wasm {'
 replace = '        let runtime = if false {'
 killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
@@ -11412,7 +11412,7 @@ killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_we
 [[mutation]]
 name = "n64-a-host-import-is-missing"
 why = "the host's imports are counted as symbols the module lacks, so every module is refused"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = '                && !s.starts_with("nz.host_")'
 replace = '                && !s.starts_with("nz.host_never")'
 killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
@@ -11428,7 +11428,7 @@ killers = [{ package = "nazm-cli", test = "wasm", name = "a_module_s_bound_is_ro
 [[mutation]]
 name = "n64-a-module-has-no-host"
 why = "objects for WebAssembly are written without the reference host, so nothing says which imports may be granted"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = '    if target.is_wasm() {'
 replace = '    if !target.is_wasm() {'
 killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
@@ -11436,7 +11436,7 @@ killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_we
 [[mutation]]
 name = "n64-a-module-is-linked-as-the-board"
 why = "link.txt tells a module's toolchain to link it with the board's linker script"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = '        nazm_lir::backend::Os::None if target.is_wasm() => {'
 replace = '        nazm_lir::backend::Os::None if false => {'
 killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
@@ -11444,7 +11444,7 @@ killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_we
 [[mutation]]
 name = "n64-the-bound-is-rooted-at-the-board"
 why = "a module's stack bound is searched from the board's entry, which a module does not have"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/objects.rs"
 find = '                ("nazm_main", nazm_lir::runtime::wasm::STACK)'
 replace = '                ("nz_board_main", nazm_lir::runtime::wasm::STACK)'
 killers = [{ package = "nazm-cli", test = "wasm", name = "a_module_s_bound_is_rooted_at_its_export" }]
@@ -11589,7 +11589,7 @@ killers = [{ package = "nazm-cli", test = "simd", name = "a_native_build_replace
 [[mutation]]
 name = "n66-a-native-build-keeps-the-loop"
 why = "a native build is not rewritten, so the summation idiom stays scalar"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = '            nazm_service::vectorize::rewrite(&mut core);'
 replace = '            let _ = &mut core;'
 killers = [{ package = "nazm-cli", test = "simd", name = "a_native_build_replaces_the_summation_loop_and_reports_its_failure_at_the_addition" }]
@@ -11717,7 +11717,7 @@ killers = [{ package = "nazm-cli", test = "layout", name = "an_ineligible_elemen
 [[mutation]]
 name = "n105-cranelift-ignores-the-layout"
 why = "`--layout soa` reaches the LLVM backend and not Cranelift, which silently keeps every element whole: the refusal N68 had is gone, so nothing would say so"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/mod.rs"
 find = '''        .with_debug(choice.debug)
         .with_soa(soa);
     let chosen'''
@@ -11893,7 +11893,7 @@ killers = [{ package = "nazm-cli", test = "wasm_contract", name = "the_contract_
 [[mutation]]
 name = "n71-the-adapter-is-not-appended"
 why = "the contract's unit is built without its adapter, so the module exports no entrypoint"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = '                        Ok(text) => ir.push_str(&text),'
 replace = '                        Ok(text) => drop(text),'
 killers = [{ package = "nazm-cli", test = "wasm_contract", name = "the_adapter_leaves_the_ordinary_build_alone" }]
@@ -12911,7 +12911,7 @@ killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "a_targets_
 [[mutation]]
 name = "n82-the-artifact-is-not-linked"
 why = "the build checks the artifact and then links neither it nor a generated runtime"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/mod.rs"
 find = "    objects.extend(prebuilt);"
 replace = "    let _ = prebuilt;"
 killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "a_program_reaching_every_service_behaves_the_same_with_the_artifact_on_both_backends" }]
@@ -12919,7 +12919,7 @@ killers = [{ package = "nazm-cli", test = "runtime_artifact", name = "a_program_
 [[mutation]]
 name = "n82-a-runtime-is-generated-beside-the-artifact"
 why = "the build generates its runtime as well as linking the artifact, and every runtime symbol is defined twice"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = """
     if !prebuilt {
         out.push(Artefact {
@@ -13201,7 +13201,7 @@ killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_c_struct_s_field_o
 [[mutation]]
 name = "n85-a-shared-library-is-an-archive"
 why = "`--lib --shared` writes a static archive under the shared library's name"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/link.rs"
 find = "    let linked = if choice.library && choice.shared {"
 replace = "    let linked = if choice.library && choice.shared && false {"
 killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_shared_library_links_into_a_c_program_and_shows_only_its_exports" }]
@@ -13262,7 +13262,7 @@ killers = [{ package = "nazm-cli", test = "boards", name = "a_device_register_of
 [[mutation]]
 name = "n86-clang-is-not-asked"
 why = "a host without a RISC-V code generator compiles anyway, and its failure is reported as the compiler's bug"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/preflight.rs"
 find = '    if target.arch == nazm_lir::backend::Arch::Riscv64 && !crate::backend::generates("riscv64") {'
 replace = '    if target.arch == nazm_lir::backend::Arch::Riscv64 && false {'
 killers = [{ package = "nazm-cli", test = "boards", name = "a_riscv_board_is_built_where_clang_can_and_refused_by_name_where_it_cannot" }]
@@ -13976,7 +13976,7 @@ killers = [{ package = "nazm-cli", test = "scheduler_default", name = "a_program
 [[mutation]]
 name = "n106-the-policy-is-the-linked-runtimes"
 why = "the policy reads which runtime parts are linked rather than whether the program calls C, and Cranelift — which links every part — runs every program on threads"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/lower.rs"
 find = '''        foreign: calls_c,'''
 replace = '''        foreign: needs.foreign || calls_c,'''
 killers = [{ package = "nazm-cli", test = "scheduler_default", name = "with_no_variable_a_programs_tasks_run_on_the_pool_on_both_backends" }]
@@ -14626,7 +14626,7 @@ killers = [{ package = "nazm-cli", test = "build", name = "every_generated_funct
 [[mutation]]
 name = "q1-an-output-may-overwrite-a-module"
 why = "only the entry file is protected from `-o`, so a build can write its executable over another module's source"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/preflight.rs"
 find = '            .any(|n| same_file(Path::new(n), &output));'
 replace = '            .any(|_| false);'
 killers = [{ package = "nazm-cli", test = "build", name = "an_output_over_any_module_of_the_program_is_refused" }]
@@ -14634,7 +14634,7 @@ killers = [{ package = "nazm-cli", test = "build", name = "an_output_over_any_mo
 [[mutation]]
 name = "q1-a-comma-in-a-shared-name"
 why = "a comma in a shared library's file name reaches `-Wl,\u2026`, where the linker reads what follows as another argument"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/preflight.rs"
 find = "            .is_some_and(|n| n.to_string_lossy().contains(','))"
 replace = "            .is_some_and(|n| n.to_string_lossy().contains(',') && false)"
 killers = [{ package = "nazm-cli", test = "build", name = "a_shared_library_name_with_a_comma_is_refused" }]
@@ -14667,7 +14667,7 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "exit::tests::a_load_is_
 [[mutation]]
 name = "q1c1-a-missing-link-is-the-toolchains"
 why = "a `--link` file that does not exist is reported as a toolchain failure (4), the status it had before the contract was frozen"
-file = "crates/nazm-cli/src/build.rs"
+file = "crates/nazm-cli/src/build/preflight.rs"
 find = "defines foreign functions\",\n            missing.display()\n        );\n        return Err(ExitCode::from(exit::NO_SUCH_FILE));"
 replace = "defines foreign functions\",\n            missing.display()\n        );\n        return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));"
 killers = [{ package = "nazm-cli", test = "exit_contract", name = "status_3_is_a_file_that_could_not_be_found_or_read" }]

@@ -1453,7 +1453,7 @@ its own, and the objects are linked. `crates/nazm-lir/src/lower.rs` splits into 
 `plan` — signature admissibility and, until N49, the recursion refusal, both of which span modules —
 and `lower_module`, which reads one module's bodies and every function's *signature*;
 `crates/nazm-lir/src/op/lower.rs` has `lower_unit` (N105; `emit_unit` wraps it), and `crates/nazm-runtime/src/` `emit_runtime` and `emit_entry` (moved by N43, its own crate since N53);
-`crates/nazm-cli/src/build.rs` runs `clang -c` per artefact and links.
+`crates/nazm-cli/src/build/objects.rs` runs `clang -c` per artefact and `build/link.rs` links.
 
 A symbol is a spelling of the definition's `DefKey` (`crates/nazm-lir/src/symbol.rs`), not
 a position: `@nz.m.lib_2Futil_2Enz.parse`. The encoding escapes every byte outside
@@ -1552,7 +1552,7 @@ claimed anywhere.
 
 ### 11. LLVM backend — VERIFIED
 
-**Evidence** · `crates/nazm-lir/src/op/llvm.rs` prints the LIR as LLVM IR text (N105); `crates/nazm-cli/src/build.rs`
+**Evidence** · `crates/nazm-lir/src/op/llvm.rs` prints the LIR as LLVM IR text (N105); `crates/nazm-cli/src/build/`
 hands it to `clang`. No LLVM is linked, so there is no build-time LLVM dependency. 127
 end-to-end tests in `crates/nazm-cli/tests/build.rs`, each at `-O0` **and** `-O2`, against
 a written expectation and against the interpreter.
@@ -2001,7 +2001,7 @@ that is computed; no I/O except through declared capabilities; a freestanding ta
 no libc.
 
 **Evidence of absence** · No cross-compilation, no target triple handling, no freestanding
-target, no `no_std` equivalent, no control over allocation. `crates/nazm-cli/src/build.rs`
+target, no `no_std` equivalent, no control over allocation. `crates/nazm-cli/src/build/`
 emits a module with no triple and lets `clang` supply the host's. The emitted runtime
 declares 18 libc and pthread symbols and cannot currently be built without them.
 
