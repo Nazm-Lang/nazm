@@ -9,6 +9,11 @@
 # (each target's minimised corpus) and `/work/fuzzout/report.txt` (one `nazm.fuzz/1` line per
 # target, and every crash). Exit 1 if any target found a crash.
 set -eu
+# Only inside the contained runner: its cgroup caps memory, so `memory.max` is a number. On a
+# host it is absent or `max`, and fuzzing there is refused (Q1-A2-02).
+case $(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo none) in
+    ''|*[!0-9]*|0) echo "fuzz: refusing to run with no memory ceiling; use \`cargo xtask contained fuzz\`" >&2; exit 2 ;;
+esac
 secs=${1:-300}
 [ $# -gt 0 ] && shift
 targets=${*:-front lower run lir manifest}

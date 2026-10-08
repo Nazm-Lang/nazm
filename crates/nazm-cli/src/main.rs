@@ -66,6 +66,7 @@ mod repo;
 mod resolved;
 mod run_profile;
 mod runtime_artifact;
+mod scratch;
 mod snapshot;
 mod stack;
 mod summary;
@@ -124,11 +125,12 @@ enum RuntimeAction {
     long_about = "Nazm language 1.0, toolchain 1.0.0 — the first stable release. Records, \
                   enums and `match`, first-order generics, traits and methods, `Result`, \
                   `Option` and `?`, closures, modules and packages, declared effects, \
-                  capabilities and provenance, and structured concurrency (scope, spawn, \
-                  channels). `nazm run` interprets a program; `nazm build` compiles it \
-                  natively through LLVM or Cranelift, and the two are held to the same \
-                  results. Floating point, trait objects and effect handlers are not in \
-                  the language; a program using an absent construct is refused by name \
+                  capabilities and provenance, structured concurrency (scope, spawn, \
+                  channels), integers of every width, floats, fixed arrays, constants, \
+                  `Bytes` and UTF-8 `Text`. `nazm run` interprets a program; `nazm build` \
+                  compiles it natively through LLVM or Cranelift, and the two are held to \
+                  the same results. Trait objects and effect handlers are not in the \
+                  language; a program using an absent construct is refused by name \
                   rather than misparsed. Run `nazm capabilities` for this build's own \
                   answer. See docs/spec.md and docs/stability.md.",
     version
@@ -1088,6 +1090,14 @@ fn command() -> ExitCode {
             return checking::library(&modules, *json);
         }
     }
+    // What the user named, before a package directory becomes its entry file: profiles are
+    // held to that package's manifests (Q1-C-04).
+    let named_path = match &cli.command {
+        Command::Run { file, .. } | Command::Check { file, .. } | Command::Build { file, .. } => {
+            file.clone()
+        }
+        _ => PathBuf::new(),
+    };
     match &mut cli.command {
         Command::Run { file, locked, .. }
         | Command::Check { file, locked, .. }
@@ -1145,7 +1155,9 @@ fn command() -> ExitCode {
             profile,
             ..
         } => {
-            if let Err(code) = profile::enforce(file, profile.as_deref(), *locked, false) {
+            if let Err(code) =
+                profile::enforce(file, &named_path, profile.as_deref(), *locked, false)
+            {
                 return code;
             }
         }
@@ -1155,7 +1167,9 @@ fn command() -> ExitCode {
             profile,
             ..
         } => {
-            if let Err(code) = profile::enforce(file, profile.as_deref(), *locked, wants_report) {
+            if let Err(code) =
+                profile::enforce(file, &named_path, profile.as_deref(), *locked, wants_report)
+            {
                 return code;
             }
         }

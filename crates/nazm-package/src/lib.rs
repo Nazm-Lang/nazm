@@ -803,8 +803,13 @@ pub(crate) fn sources(root: &Path) -> Vec<(String, PathBuf)> {
                 format!("{prefix}/{name}")
             };
             let path = e.path();
-            if path.is_dir() {
+            // The entry's own type, not its target's: a symlinked directory is not walked, so
+            // two links back to the root cannot make the walk exponential (Q1-A2-03). Imports
+            // are held inside the canonical source root on their own.
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
                 stack.push((path, rel));
+            } else if path.is_dir() {
+                continue;
             } else if name.ends_with(".nz") {
                 out.push((rel, path));
             }
@@ -1050,7 +1055,14 @@ impl Graph {
         let mut errors = Vec::new();
         let mut recorded: BTreeMap<&str, &RawLocked> = BTreeMap::new();
         for l in &raw.package {
-            recorded.insert(&l.name, l);
+            // A name recorded twice is two answers to one question; reading either one would
+            // let the lockfile a reviewer reads differ from the one enforced (Q1-A2-05).
+            if recorded.insert(&l.name, l).is_some() {
+                errors.push(error(
+                    codes::LOCK_MISMATCH,
+                    format!("`{}` is recorded more than once in `{LOCKFILE}`", l.name),
+                ));
+            }
         }
         for p in &self.packages {
             let Some(l) = recorded.remove(p.name.as_str()) else {
@@ -1185,6 +1197,28 @@ mod tests {
             let e = Manifest::parse(bad, "m").unwrap_err();
             assert_eq!(e.code, codes::MANIFEST_INVALID, "{bad}");
         }
+    }
+
+    /// No arbitrary package scripts (Q1-A2-06): a manifest has no construct that names a
+    /// program, and every spelling another ecosystem uses for one is refused, not ignored.
+    #[test]
+    fn a_manifest_cannot_name_a_program_to_run() {
+        let head = "schema = \"nazm.package/1\"\n[package]\nname = \"a\"\nversion = \"1.0.0\"\n";
+        for script in [
+            "build = \"build.sh\"\n",
+            "links = \"z\"\n",
+            "[scripts]\npostinstall = \"sh x\"\n",
+            "[build-dependencies]\nb = { path = \"../b\", version = \"1.0.0\" }\n",
+            "[hooks]\npre = \"x\"\n",
+        ] {
+            let e = Manifest::parse(&format!("{head}{script}"), "m").unwrap_err();
+            assert_eq!(e.code, codes::MANIFEST_INVALID, "{script}");
+        }
+        let top = "schema = \"nazm.package/1\"\nbuild = \"x\"\n[package]\nname = \"a\"\nversion = \"1.0.0\"\n";
+        assert_eq!(
+            Manifest::parse(top, "m").unwrap_err().code,
+            codes::MANIFEST_INVALID
+        );
     }
 
     #[test]

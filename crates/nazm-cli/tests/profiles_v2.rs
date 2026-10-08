@@ -99,6 +99,97 @@ fn embedded_refuses_a_call_cycle_and_names_each_function_in_it() {
     assert_eq!(verdict_of(&rules, "no-recursion"), "pass");
 }
 
+/// Q1-C-01: an allocation in a loop is refused however it is reached — a helper, a trait method,
+/// a generic — because a call of a function that may allocate is an allocation site of its own.
+/// Allocating once outside a loop, or taking a view in one, stays accepted.
+#[test]
+fn bounded_allocation_sees_an_allocation_behind_a_call() {
+    let lp = "fn main() -> Int ! {} { let mut i = 0; let mut t = 0; while i < 3 { t = t + CALL; i = i + 1; } t }\n";
+    for (what, defs, call) in [
+        ("a helper", "fn mk(i: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, i); ints_len(xs) }\n", "mk(i)"),
+        ("a helper's helper", "fn mk2(i: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, i); ints_len(xs) }\nfn mk(i: Int) -> Int ! {} { mk2(i) }\n", "mk(i)"),
+        ("a trait method", "trait A { fn mk(self: Self) -> Int ! {}; }\nimpl A for Int { fn mk(self: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, self); ints_len(xs) } }\n", "i.mk()"),
+        ("a generic", "fn mk[X](x: X) -> Int ! {} { let v = vec_new[X](); vec_push(v, x); vec_len(v) }\n", "mk(i)"),
+    ] {
+        let src = format!("{defs}{}", lp.replace("CALL", call));
+        let (ok, rules, err) = verdicts(&src, "embedded");
+        assert!(!ok, "{what}: {rules:?}");
+        assert_eq!(verdict_of(&rules, "bounded-allocation"), "fail", "{what}: {rules:?}");
+        assert!(err.contains("call of `"), "{what}: {err}");
+    }
+    let once =
+        "fn mk(i: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, i); ints_len(xs) }\n\
+                fn main() -> Int ! {} { mk(1) }\n";
+    let (ok, rules, _) = verdicts(once, "embedded");
+    assert!(ok, "{rules:?}");
+    assert_eq!(verdict_of(&rules, "bounded-allocation"), "pass");
+}
+
+/// Q1-C-02: every built-in that makes storage is an allocation site, Gate 2's included. A view
+/// (`bytes_slice`, `text_slice`) shares an owner and is not.
+#[test]
+fn bounded_allocation_counts_every_built_in_that_allocates() {
+    let lp = |body: &str| {
+        format!(
+            "fn main() -> Int ! {{}} {{ let b = bytes_new(4); let s = \"ab\"; let mut i = 0; let mut t = 0; \
+             while i < 3 {{ t = t + {body}; i = i + 1; }} t }}\n"
+        )
+    };
+    for body in [
+        "bytes_len(bytes_new(8))",
+        "bytes_len(bytes_from_str(s))",
+        "str_len(bytes_to_str(b))",
+        "str_len(num_to_str(i))",
+        "text_len(text_concat(Text(s), Text(s)))",
+        "text_len(scalar_text(97))",
+    ] {
+        let (ok, rules, _) = verdicts(&lp(body), "embedded");
+        assert!(!ok, "{body}: {rules:?}");
+        assert_eq!(verdict_of(&rules, "bounded-allocation"), "fail", "{body}");
+    }
+    for body in [
+        "bytes_len(bytes_slice(b, 0, 2))",
+        "text_len(text_slice(Text(s), 0, 1))",
+    ] {
+        let (ok, rules, _) = verdicts(&lp(body), "embedded");
+        assert!(ok, "{body}: {rules:?}");
+    }
+}
+
+/// Q1-C-04: a `nazm.root` marker beside a package's entry does not take the package out from
+/// under its manifest. The manifest's profile holds for `check DIR`, `run DIR`, `build DIR` and
+/// for the entry file named directly.
+#[test]
+fn a_root_marker_inside_a_package_does_not_drop_its_profile() {
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "pkg/nazm.toml",
+        "schema = \"nazm.package/1\"\n\n[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\nprofile = \"embedded\"\n",
+    );
+    write(
+        d.path(),
+        "pkg/src/main.nz",
+        "fn main(o: OutCap) -> Int ! { io } { print(\"io\\n\"); 0 }\n",
+    );
+    write(d.path(), "pkg/src/nazm.root", "");
+    for args in [
+        vec!["check", "pkg"],
+        vec!["run", "pkg"],
+        vec!["build", "pkg", "-o", "out"],
+        vec!["check", "pkg/src/main.nz"],
+    ] {
+        let o = nazm(d.path(), &args);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success(), "{args:?}: {err}");
+        assert!(
+            err.contains("N0510") && err.contains("no-io"),
+            "{args:?}: {err}"
+        );
+    }
+    assert!(!d.path().join("out").exists());
+}
+
 #[test]
 fn a_call_through_a_function_value_is_unknown_and_unknown_refuses() {
     let src = "fn apply(f: fn(Int) -> Int ! {}, x: Int) -> Int ! {} { f(x) }\n\

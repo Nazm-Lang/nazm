@@ -281,9 +281,13 @@ fn function(out: &mut String, m: &Module, f: &Function) {
         .map(|(i, c)| format!("{} %p{i}", sig_ty(*c, sig.conv, false)))
         .collect::<Vec<_>>()
         .join(", ");
+    // Stack probes on every generated function (Q1-A1-01): a frame larger than the one guard
+    // page below a task's stack touches each page on its way down, so an overrun faults on the
+    // guard instead of landing in another task's stack or the heap. A backend that has no probe
+    // for its target ignores the attribute.
     let _ = writeln!(
         out,
-        "define {}{} {}({params}) {{   ; {}",
+        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\" {{   ; {}",
         linkage(sym.linkage),
         ret_ty(sig),
         name(m, f.sym),

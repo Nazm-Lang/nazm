@@ -532,3 +532,24 @@ fn the_formatter_glues_a_qualified_name() {
     assert!(out.contains("use \"geometry.nz\" as g;"), "{out}");
     assert!(out.contains("g::area(g::Shape.Square(side: 1))"), "{out}");
 }
+
+/// Q1-A1-09: a record whose two fields are the record one level down, 31 levels deep — 2^30 paths
+/// through the type, 31 definitions. Its depth is found once per definition, not once per path:
+/// before the fix 22 levels took seconds and 33 never finished. At 33 it is refused by its depth.
+#[test]
+fn nesting_depth_is_linear_in_the_definitions_not_the_paths() {
+    let program = |levels: usize| {
+        let mut s = String::from("struct L0 { x: Int }\n");
+        for i in 1..levels {
+            s.push_str(&format!("struct L{i} {{ a: L{}, b: L{} }}\n", i - 1, i - 1));
+        }
+        s.push_str("fn main() -> Int { 0 }\n");
+        s
+    };
+    let started = std::time::Instant::now();
+    assert!(check_codes(&[("deep.nz", &program(31))]).is_empty());
+    assert!(check_codes(&[("deep.nz", &program(33))])
+        .iter()
+        .any(|c| c == "N0338"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
