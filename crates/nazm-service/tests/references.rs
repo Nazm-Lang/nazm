@@ -15,39 +15,10 @@
 
 use std::path::{Path, PathBuf};
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_service::{LanguageService, Location, References, Target};
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
-
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (name, text) in files {
-            std::fs::write(dir.path().join(name), text).unwrap();
-        }
-        Self { dir }
-    }
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
-    }
-    fn disk(&self, name: &str) -> String {
-        std::fs::read_to_string(self.path(name)).unwrap()
-    }
-}
+mod common;
+use common::{on_the_service_stack, walk, workspace, Project};
 
 /// The byte offset of the `n`th occurrence of `needle` in `text`, plus `into` bytes.
 fn at(text: &str, needle: &str, n: usize, into: usize) -> u32 {
@@ -583,8 +554,8 @@ fn references_are_for_the_current_unsaved_program() {
             vec![want("main.nz", at(main, "helper", 0, 0), "helper")]
         );
         // Nothing was written.
-        assert_eq!(p.disk("lib.nz"), lib);
-        assert_eq!(p.disk("main.nz"), main);
+        assert_eq!(p.read("lib.nz"), lib);
+        assert_eq!(p.read("main.nz"), main);
     });
 }
 
@@ -843,31 +814,6 @@ fn a_function_written_as_a_value_is_a_use_of_it_in_every_position_the_language_a
 // ---------------------------------------------------------------------------------------
 // The repository's own source: the index against the resolution it was read from.
 // ---------------------------------------------------------------------------------------
-
-fn workspace() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .to_path_buf()
-}
-
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            out.extend(walk(&p));
-        } else if p.extension().is_some_and(|x| x == "nz") {
-            out.push(p);
-        }
-    }
-    out.sort();
-    out
-}
 
 /// Every compilation root the audit reads: the compiler written in Nazm (its emitter
 /// imports every other module of it), each multi-module conformance program, and each

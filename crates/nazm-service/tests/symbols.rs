@@ -14,39 +14,13 @@
 )]
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_core::sema::ReferenceTarget;
 use nazm_service::{LanguageService, NoSymbols, Symbol, SymbolKind, Target, WorkspaceSymbol};
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
-
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (name, text) in files {
-            std::fs::write(dir.path().join(name), text).unwrap();
-        }
-        Self { dir }
-    }
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
-    }
-}
+mod common;
+use common::{on_the_service_stack, walk, workspace, Project};
 
 /// The byte range of the `n`th occurrence of `needle` in `text`.
 fn span(text: &str, needle: &str, n: usize) -> (u32, u32) {
@@ -968,31 +942,6 @@ fn a_thousand_edits_leave_one_current_outline() {
 // ---------------------------------------------------------------------------------------
 // The repository's own source.
 // ---------------------------------------------------------------------------------------
-
-fn workspace() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .to_path_buf()
-}
-
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    let mut entries: Vec<PathBuf> = entries.map(|e| e.unwrap().path()).collect();
-    entries.sort();
-    for e in entries {
-        if e.is_dir() {
-            out.extend(walk(&e));
-        } else if e.extension().is_some_and(|x| x == "nz") {
-            out.push(e);
-        }
-    }
-    out
-}
 
 /// Every declaration the concrete tree of `text` holds, independently of the service:
 /// `(kind, name span, declaration span, parent's name span)`, read from the item nodes and

@@ -14,44 +14,14 @@
 
 use std::path::{Path, PathBuf};
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_core::sema::{Candidate, ReferenceTarget};
 use nazm_service::{
     Completion, Constructor, Context, Help, LanguageService, NoCall, NoCompletion, NoStructure,
     StructureSite,
 };
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
-
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (name, text) in files {
-            let p = dir.path().join(name);
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(p, text).unwrap();
-        }
-        Self { dir }
-    }
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
-    }
-}
+mod common;
+use common::{on_the_service_stack, walk, workspace, Project};
 
 /// The byte offset of the `n`th occurrence of `needle` in `text`, plus `into` bytes.
 fn at(text: &str, needle: &str, n: usize, into: usize) -> u32 {
@@ -806,31 +776,6 @@ fn a_field_and_a_method_of_one_name_are_told_apart_by_the_checker_not_the_tree()
         assert_eq!(kind(concrete), "function");
         assert_eq!(kind(bound), "trait method");
     });
-}
-
-fn workspace() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .to_path_buf()
-}
-
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    let mut entries: Vec<PathBuf> = entries.map(|e| e.unwrap().path()).collect();
-    entries.sort();
-    for e in entries {
-        if e.is_dir() {
-            out.extend(walk(&e));
-        } else if e.extension().is_some_and(|x| x == "nz") {
-            out.push(e);
-        }
-    }
-    out
 }
 
 #[test]
