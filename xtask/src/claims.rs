@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn a_command_must_be_a_measurement_test_or_an_xtask_command() {
-        let root = crate::bench::root();
+        let root = crate::guide::root();
         assert_eq!(
             command_problem(
                 &root,
