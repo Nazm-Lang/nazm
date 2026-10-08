@@ -917,7 +917,8 @@ fn check_core_ir_boundary() -> Result<(), Vec<String>> {
         "res.looked_up_on(",
         "res.scopes(",
     ];
-    const INTERPRETER: &str = "crates/nazm-core/src/eval.rs";
+    // The interpreter is a module: `eval.rs`, or every file of `eval/` once it is split.
+    const INTERPRETER: &str = "crates/nazm-core/src/eval";
     const INTERPRETER_MAY_NOT_NAME: &[&str] = &["Resolution", "nazm_syntax", "res."];
     // N40: the native backend reads validated MIR and nothing of the checker or of Core IR —
     // no `Resolution`, no Core IR, no question to the checker at all.
@@ -941,7 +942,13 @@ fn check_core_ir_boundary() -> Result<(), Vec<String>> {
         }
     }
     files.sort();
-    files.push(INTERPRETER.to_owned());
+    let interpreter = module_files(&root, INTERPRETER);
+    if interpreter.is_empty() {
+        return Err(vec![format!(
+            "{INTERPRETER}: neither a file nor a module directory"
+        )]);
+    }
+    files.extend(interpreter.iter().cloned());
     let mut problems = Vec::new();
     for rel in &files {
         let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
@@ -982,7 +989,7 @@ fn check_core_ir_boundary() -> Result<(), Vec<String>> {
                 }
             }
         }
-        if rel == INTERPRETER {
+        if interpreter.contains(rel) {
             for word in INTERPRETER_MAY_NOT_NAME {
                 for (i, _) in flat.match_indices(word) {
                     problems.push(format!(
@@ -1017,7 +1024,8 @@ fn cross_module_readers(root: &std::path::Path) -> Vec<String> {
     const METHOD: &str = "defined_anywhere";
     // Where the method is declared, and the one place it may be called.
     const DECLARED_IN: &str = "crates/nazm-sema/src/resolve.rs";
-    const CALLER: &str = "crates/nazm-core/src/check.rs";
+    // A module: `check.rs`, or any file of `check/` once it is split.
+    const CALLER: &str = "crates/nazm-core/src/check";
 
     let mut found = Vec::new();
     let mut problems = Vec::new();
@@ -1040,7 +1048,7 @@ fn cross_module_readers(root: &std::path::Path) -> Vec<String> {
     }
 
     for (file, line) in &found {
-        if file != CALLER {
+        if !module_files(root, CALLER).contains(file) {
             problems.push(format!(
                 "{file}:{line} calls `{METHOD}`, which sees every module's definitions. \
                  Only {CALLER} may, and only to explain a resolution that already failed. \
@@ -1060,6 +1068,27 @@ fn cross_module_readers(root: &std::path::Path) -> Vec<String> {
         ));
     }
     problems
+}
+
+/// The files of the Rust module at `base` (repository-relative, without `.rs`): `base.rs` when
+/// it is one file, else every `.rs` file under the directory `base/`, sorted. Empty when it is
+/// neither. A gate that names a module by path reads it through this, so that splitting the
+/// file into a directory never narrows what the gate inspects.
+fn module_files(root: &std::path::Path, base: &str) -> Vec<String> {
+    let file = format!("{base}.rs");
+    if root.join(&file).is_file() {
+        return vec![file];
+    }
+    let Ok(found) = collect_rs(&root.join(base)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = found
+        .iter()
+        .filter_map(|p| p.strip_prefix(root).ok())
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    out.sort();
+    out
 }
 
 /// Every `.rs` file under `crates/`, as a repository-relative path.
@@ -1373,15 +1402,28 @@ fn check_cache_soundness() -> Result<(), Vec<String>> {
     let mut problems = Vec::new();
 
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
+    // A module's text: `name.rs`, or every file of `name/` once it is split; `None` if
+    // neither exists or a file of it cannot be read.
+    let read_module = |base: &str| {
+        let files = module_files(&root, base);
+        if files.is_empty() {
+            return None;
+        }
+        files
+            .iter()
+            .map(|f| read(f))
+            .collect::<Option<Vec<String>>>()
+            .map(|texts| texts.join("\n"))
+    };
 
     // 1. The codes the checker can raise, against the list the identity is built from.
     // The checker is `check.rs` and, since N36, the effect checker beside it — and since
     // N38 the provenance solver, and since Gate 2 the constant evaluator.
     let checker = match (
-        read("crates/nazm-core/src/check.rs"),
-        read("crates/nazm-core/src/effects.rs"),
-        read("crates/nazm-core/src/provenance.rs"),
-        read("crates/nazm-core/src/constants.rs"),
+        read_module("crates/nazm-core/src/check"),
+        read_module("crates/nazm-core/src/effects"),
+        read_module("crates/nazm-core/src/provenance"),
+        read_module("crates/nazm-core/src/constants"),
     ) {
         (Some(check), Some(effects), Some(provenance), Some(constants)) => {
             Some(format!("{check}\n{effects}\n{provenance}\n{constants}"))
@@ -3312,6 +3354,33 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_module_is_its_file_or_every_file_of_its_directory() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::fs::create_dir_all(root.join("a/split/deeper")).unwrap();
+        std::fs::write(root.join("a/one.rs"), "").unwrap();
+        for f in [
+            "a/split/mod.rs",
+            "a/split/part.rs",
+            "a/split/deeper/leaf.rs",
+        ] {
+            std::fs::write(root.join(f), "").unwrap();
+        }
+        std::fs::write(root.join("a/split/notes.md"), "").unwrap();
+        assert_eq!(super::module_files(root, "a/one"), ["a/one.rs"]);
+        assert_eq!(
+            super::module_files(root, "a/split"),
+            [
+                "a/split/deeper/leaf.rs",
+                "a/split/mod.rs",
+                "a/split/part.rs"
+            ]
+        );
+        assert!(super::module_files(root, "a/absent").is_empty());
+    }
+
     use super::{
         absence_claims, cargo_test, check_core_ir_boundary, cited_paths,
         contained::ExecutionProfile, default_profile, mutate_parallelism, serde_in_manifest,
