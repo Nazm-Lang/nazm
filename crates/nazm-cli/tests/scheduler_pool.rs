@@ -310,7 +310,9 @@ fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
 /// deadline had already passed, so the select timed out (and a worker spun re-queuing it). Ten
 /// trillion milliseconds is ~1.2e10 s from now, whose nanoseconds pass 2^63 and wrap negative —
 /// into the past — on any clock before the year 2260; `i64::MAX`'s wrap lands wherever the clock
-/// puts it: the past on one host, the future on another (found by the Q1 campaign).
+/// puts it: the past on one host, the future on another (found by the Q1 campaign). Main waits
+/// 200 ms before sending, so the waiter has parked: the answer does not depend on that wait — with
+/// the fix it is 42 either way — but a wrapped deadline is seen only by a waiter that parked.
 #[test]
 fn a_deadline_past_the_nanosecond_range_waits_for_the_value() {
     let d = tempfile::tempdir().unwrap();
@@ -323,7 +325,9 @@ fn a_deadline_past_the_nanosecond_range_waits_for_the_value() {
                    let ready = chan_new_of[Int](1); let c = chan_new_of[Int](1); let res = chan_new_of[Int](1);\n\
                    let got = vec_new[Int]();\n\
                    scope { spawn waiter(io, tm, ready, c, res);\n\
-                       let r0 = chan_recv_of(ready, got); chan_send_of(c, 42); let r1 = chan_recv_of(res, got); }\n\
+                       let r0 = chan_recv_of(ready, got);\n\
+                       let t0 = time_now_ms(); while time_now_ms() - t0 < 200 { }\n\
+                       chan_send_of(c, 42); let r1 = chan_recv_of(res, got); }\n\
                    print(int_to_str(vec_get(got, 1))); 0 }\n";
     built(d.path(), "far", src, "llvm");
     for _ in 0..5 {

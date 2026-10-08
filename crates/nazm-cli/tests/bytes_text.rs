@@ -420,6 +420,11 @@ fn main() -> Int {
         assert_eq!(b.code, Some(0), "{backend}: {}", b.stderr);
         let mut c = common::bounded_exe(&exe);
         c.env("NAZM_MEMORY_REPORT", "1");
+        // Freed memory scribbled, by glibc and by macOS's allocator: a view whose buffer was freed
+        // under it reads the scribble, not the 7 it wrote. Without this a use after free read the
+        // old byte and passed — on Linux the Q1 campaign found the Gate 2 mutant that drops the
+        // view's count deferred.
+        c.env("MALLOC_PERTURB_", "165").env("MallocScribble", "1");
         let r = run_bounded(&mut c, backend);
         assert_eq!(r.stdout, "7\n", "{backend}: {r:?}");
         assert!(r.stderr.contains(report), "{backend}: {}", r.stderr);
