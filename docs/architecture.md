@@ -675,7 +675,7 @@ identically, and every such decision is somewhere the compiler and the normalise
 to disagree.
 
 **What is deliberately excluded**, each checked against the implementation rather than
-assumed: the target triple, CPU features and ABI (no rule in `crates/nazm-core/src/check.rs`
+assumed: the target triple, CPU features and ABI (no rule in `crates/nazm-core/src/check/`
 consults any of them, and `Int` is 64-bit in every configuration); the optimisation level
 and backend (`nazm build`'s subset refusals live after checking); the interpreter's
 iteration and depth budgets; the checkout directory and the working directory; the cache's
@@ -3034,7 +3034,7 @@ matching; signature help. Nothing is persisted: the trace lives and dies with it
 
 ```text
 CST              which call's argument list holds the position, which argument   (the tree's nesting)
-Checker          which callee the call resolved to, the signature its arguments   (nazm-core/src/check.rs)
+Checker          which callee the call resolved to, the signature its arguments   (nazm-core/src/check/)
                  were checked against, what a generic call settled
 CheckedCall      records those as the checker decides them                         (nazm-sema/src/resolve.rs)
 LanguageService  joins the two, for the current document only                     (nazm-service/src/signature.rs)
@@ -3111,7 +3111,7 @@ their analysis.
 ```text
 CST              which structured site the position is in:                (the node around the name)
                  a field after `.`, a variant after `E.`, a label
-Checker          which record, enum or variant that site belongs to,      (nazm-core/src/check.rs)
+Checker          which record, enum or variant that site belongs to,      (nazm-core/src/check/)
                  and every field's and variant's identity
 StructureSite    joins the two, for the current document                  (nazm-service/src/structure.rs)
 Completion       enumerates that record's fields, enum's variants or
@@ -3294,7 +3294,7 @@ call hierarchy and any agent-facing export. Nothing is persisted.
 > highlighting.**
 
 ```text
-Checker / Resolution  what each name at each span is                    (nazm-core/src/check.rs)
+Checker / Resolution  what each name at each span is                    (nazm-core/src/check/)
 ReferenceIndex        entity occurrences, declarations apart (N17)      (nazm-sema/src/references.rs)
 Resolution            built-in calls; written built-in and type-
                       parameter names (new, N23)                        (nazm-sema/src/resolve.rs)
@@ -7579,7 +7579,7 @@ arguments, Nazm is exported to C with scalars, and a static library is built. A 
 designed four of the shapes; this milestone settles them, builds a practical subset of the C ABI,
 and names everything outside it as refused.
 
-**The sole owner.** The checker (`nazm-core/src/check.rs`) owns *which* types may cross and in which
+**The sole owner.** The checker (`nazm-core/src/check/foreign.rs`) owns *which* types may cross and in which
 position, by one table: the FFI position rule. Core IR lowering (`nazm-core/src/lower.rs`) owns
 *how* a crossing value changes representation, and writes it as ordinary Core IR — a field read, a
 record or variant built, a test against zero — so MIR, LIR and both backends see a foreign function

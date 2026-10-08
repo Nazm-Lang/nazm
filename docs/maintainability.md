@@ -63,7 +63,7 @@ lowering (`mir`, `lir`) knows the runtime's inventory; the CLI composes. Finding
 
 - **No semantic crate depends on tooling, UI or a backend** — enforced (`layering`, `sema purity`,
   `core ir boundary`, `codegen reach`, `emission reach`).
-- **One platform fact lives in the checker:** `RESERVED_C_SYMBOLS` (`crates/nazm-core/src/check.rs`)
+- **One platform fact lives in the checker:** `RESERVED_C_SYMBOLS` (`crates/nazm-core/src/check/foreign.rs`)
   lists the POSIX runtime's C symbols, because a foreign declaration may not redeclare them. It is
   held to the runtime's inventory by `tests/ffi.rs` (which caught the Gate 2C omission in M1). A
   Windows runtime would add symbols; the list becomes the union over targets (§7).
@@ -161,7 +161,7 @@ The flow is semantic decision → Core IR → MIR → LIR → backend. Findings:
 | Object format and DWARF for Cranelift | `nazm-codegen-clif/src/dwarf.rs` (Mach-O, ELF) | yes |
 | Process control in the harness | `xtask/src/procs.rs`, `contained.rs`, `bench.rs` — Unix, unguarded | **no** |
 | Paths and URIs | `lsp.rs` (POSIX-only), `nazm-repo` (string joins); `nazm-sema/src/key.rs` normalises both separators | **no** |
-| Reserved C symbols | `nazm-core/src/check.rs` | no (§2) |
+| Reserved C symbols | `nazm-core/src/check/foreign.rs` | no (§2) |
 
 The semantic crates (`syntax`, `sema`, `cir`, `mir`) contain no platform code; `core` holds only the
 reserved-symbol list and a diagnostic naming board triples. There is no `unsafe`, no Rust FFI and no

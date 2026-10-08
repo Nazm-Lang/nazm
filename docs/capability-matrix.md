@@ -342,7 +342,7 @@ The compiler written in Nazm's loader, `compiler/module.nz`, refuses `@std/` and
 name (`selfhost.rs`), where it used to report a missing file; it resolves relative paths only.
 
 **Evidence** · Lexical scoping with shadowing rules and a separate function namespace,
-`crates/nazm-core/src/check.rs`. `use "relative/path.nz";` resolved by the driver,
+`crates/nazm-core/src/check/`. `use "relative/path.nz";` resolved by the driver,
 `crates/nazm-service/src/load.rs` — canonical-path keyed, read-once, depth-first, cycles
 terminate rather than erroring. A second resolver written in Nazm, `compiler/module.nz`,
 serves the bootstrap stages. Codes `N0200`–`N0210` in `crates/nazm-diag/src/lib.rs`.
@@ -375,7 +375,7 @@ an offset, are gone.
 `crates/nazm-sema/src/module.rs` holds `ModuleId` and the `ModuleGraph` the driver builds
 while loading; `crates/nazm-sema/src/interface.rs` holds the `UnitInterface` a module
 offers. Checking is two stages, `declare_unit` then `check_unit`
-(`crates/nazm-core/src/check.rs`), and the second takes its dependencies as **interfaces**.
+(`crates/nazm-core/src/check/`), and the second takes its dependencies as **interfaces**.
 `crates/nazm-core/tests/unit_checking.rs` checks a module against an interface for a module
 whose source does not exist, and refuses the same module when that interface is empty.
 
@@ -437,7 +437,7 @@ are unchanged, as of N4 (2026-09-22). `crates/nazm-cache/` computes what those i
 tables plus an explicit `SEMANTIC_EPOCH`, and `CheckKey` over both plus each direct
 import's `(ModuleKey, InterfaceHash)` — and stores a `nazm.check/1` entry per module in
 `.nazm/check/`, published by `rename` and validated on read.
-`crates/nazm-core/src/check.rs` gained one hook, `Reuse`; `check_unit` is still the only
+`crates/nazm-core/src/check/` gained one hook, `Reuse`; `check_unit` is still the only
 thing that decides what a body means.
 
 Twenty-nine tests in `crates/nazm-cli/tests/incremental.rs`, each running the binary
@@ -1030,7 +1030,7 @@ and both backends; `N0388`, `N0389`.
 with or returned, one whose effects are a subset of the expected type's is accepted; parameters and
 results stay invariant, an effect parameter matches only by binding, and nothing converts inside
 another type (`architecture.md` §7.80, `spec.md` *Function values*). The checker's one relation is
-`assignable` (`crates/nazm-core/src/check.rs`); below it, Core IR's verifier compares results up to
+`assignable` (`crates/nazm-core/src/check/call.rs`); below it, Core IR's verifier compares results up to
 effects as it already compared arguments, so the interpreter and both native backends run a
 subsumed value unchanged. Evidence: `crates/nazm-cli/tests/authority.rs` —
 `a_function_value_with_fewer_effects_is_accepted_passed_or_returned` (interpreter and Cranelift),

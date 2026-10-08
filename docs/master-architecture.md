@@ -234,7 +234,7 @@ monomorphisation — and the last of those is not a gap, because nothing is poly
 
 Two consequences worth naming, because both are dependencies rather than complaints:
 
-- **Name resolution happens twice**, independently — once in `crates/nazm-core/src/check.rs`
+- **Name resolution happens twice**, independently — once in `crates/nazm-core/src/check/`
   and again in `crates/nazm-lir/src/lower.rs`, against two separately transcribed built-in
   tables of 31 entries each (`crates/nazm-core/src/intrinsic.rs`,
   `crates/nazm-lir/src/ir.rs`) kept in agreement by a test rather than by construction.
@@ -248,7 +248,7 @@ Two consequences worth naming, because both are dependencies rather than complai
 > **Both bullets were closed between 2026-09-21 and 2026-09-22, and are kept above because
 > the argument they make is the reason the work happened.**
 >
-> N1 ended the double resolution: `crates/nazm-core/src/check.rs` produces one
+> N1 ended the double resolution: `crates/nazm-core/src/check/` produces one
 > `nazm_sema::Resolution` and both the evaluator and `crates/nazm-lir/src/lower.rs` read
 > it, with a `cargo xtask check` rule failing if the backend declares a name-keyed table.
 > N1 also gave `nazm_span::Span` a `FileId` and replaced the merged buffer with a

@@ -1,0 +1,476 @@
+//! Expressions: the dispatch over every expression form.
+
+use super::layout::opaque_refused;
+use super::unit::{unknown_qualified, written_key};
+use super::written::not_generic;
+use super::*;
+
+impl Checker<'_> {
+    /// Check an expression, returning how it completes.
+    ///
+    /// `expected` is used only for recovery: when an error makes the real type
+    /// unknowable, it is returned so the caller does not then report a second, invented
+    /// mismatch.
+    pub(super) fn check_expr(&mut self, e: &Expr, expected: Option<Type>) -> Completion {
+        match e {
+            Expr::Int { value, span } => {
+                Completion::Value(self.integer_literal(i128::from(*value), *span, expected))
+            }
+            Expr::WideInt { value, span } => {
+                Completion::Value(self.integer_literal(i128::from(*value), *span, expected))
+            }
+            // `Float32` where one is expected, `Float64` everywhere else (Gate 2).
+            Expr::Float { span, .. } => Completion::Value(self.float_literal(*span, expected)),
+            Expr::Bool { .. } => Completion::Value(Type::Bool),
+            // A literal is UTF-8 by construction, so it is a `Text` where one is expected (Gate 2).
+            Expr::Str { span, .. } if expected == Some(Type::Text) => {
+                self.res
+                    .record_numeric(*span, NumericFact::Literal(Type::Text));
+                Completion::Value(Type::Text)
+            }
+            Expr::Str { .. } => Completion::Value(Type::Str),
+
+            Expr::Var { name, span } => match self.lookup_var(name, *span) {
+                Some(b) => {
+                    // Which binding this mention refers to, recorded where the question
+                    // was answered. The backend reads this instead of walking scopes again.
+                    self.record_var(*span, b.slot);
+                    Completion::Value(b.ty)
+                }
+                // A constant (Gate 2): its type, and its value for Core IR to write.
+                None if self.types.consts.values.contains_key(name) => {
+                    Completion::Value(self.const_value(name, *span))
+                }
+                None if self.env.contains(name) => {
+                    Completion::Value(self.function_value(name, *span, expected))
+                }
+                None => {
+                    self.errors.push(Diagnostic::error(
+                        codes::UNDEFINED_VARIABLE,
+                        *span,
+                        format!("`{name}` is not defined"),
+                    ));
+                    Completion::Value(expected.unwrap_or(Type::Int))
+                }
+            },
+
+            Expr::Closure {
+                params,
+                return_type,
+                effects,
+                body,
+                fn_span,
+                span,
+            } => Completion::Value(self.check_closure(
+                params,
+                return_type,
+                effects.as_ref(),
+                body,
+                *fn_span,
+                *span,
+                expected,
+            )),
+
+            Expr::Neg {
+                operand, op_span, ..
+            } => Completion::Value(self.check_negation(operand, *op_span, expected)),
+
+            // `~x` (Gate 2): the complement of an integer of any width.
+            Expr::BitNot {
+                operand, op_span, ..
+            } => Completion::Value(self.check_complement(operand, *op_span, expected)),
+
+            // Arrays (Gate 2).
+            Expr::Array { elems, span } => {
+                Completion::Value(self.check_array_literal(elems, *span, expected))
+            }
+            Expr::ArrayRepeat { value, count, span } => {
+                Completion::Value(self.check_array_repeat(value, count, *span, expected))
+            }
+            Expr::Index {
+                base,
+                index,
+                bracket_span,
+                ..
+            } => Completion::Value(self.check_index(base, index, *bracket_span, expected)),
+
+            Expr::Not {
+                operand, op_span, ..
+            } => {
+                let t = self.value_type(operand, Some(Type::Bool));
+                if t != Type::Bool {
+                    self.errors.push(Diagnostic::error(
+                        codes::INVALID_OPERANDS,
+                        *op_span,
+                        format!("`!` applies to `Bool`, but this is `{}`", self.show(t)),
+                    ));
+                }
+                Completion::Value(Type::Bool)
+            }
+
+            Expr::Binary {
+                op,
+                lhs,
+                rhs,
+                op_span,
+                ..
+            } => Completion::Value(self.check_binary_expr(*op, lhs, rhs, *op_span, expected)),
+
+            Expr::Call {
+                qualifier,
+                callee,
+                callee_span,
+                type_args,
+                args,
+                span,
+            } => {
+                // A binding of function type of that name hides a function of it (N50):
+                // the call is through the value.
+                if qualifier.is_none()
+                    && type_args.is_none()
+                    && matches!(self.scopes.lookup(callee).map(|b| b.ty), Some(Type::Fn(_)))
+                {
+                    return Completion::Value(self.check_indirect_call(
+                        callee,
+                        *callee_span,
+                        args,
+                        *span,
+                        expected,
+                    ));
+                }
+                // `UInt8(x)`, `try_convert[T](x)` and its kin (Gate 2): a numeric conversion,
+                // where no function of the name is in scope.
+                if qualifier.is_none() {
+                    if let Some(t) = self.maybe_conversion(
+                        callee,
+                        *callee_span,
+                        type_args.as_deref(),
+                        args,
+                        *span,
+                    ) {
+                        return Completion::Value(t);
+                    }
+                }
+                // `m::f` is looked up as one key (N49); everything below names it as written.
+                let key = written_key(qualifier.as_ref(), callee);
+                let callee = &key;
+                let Some(sig) = self.resolve_callee(callee, *callee_span) else {
+                    let qualified = qualifier.is_some().then(|| {
+                        unknown_qualified(callee, &self.alias_names(), *callee_span, "function")
+                    });
+                    let d = qualified
+                        .or_else(|| self.why_invisible(callee, *callee_span))
+                        .unwrap_or_else(|| {
+                            // `IoCap()`: the question is where authority comes from (N37).
+                            if let Some(Type::Cap(k)) = Type::from_name(callee) {
+                                return forged(k, *callee_span);
+                            }
+                            Diagnostic::error(
+                                codes::UNDEFINED_FUNCTION,
+                                *callee_span,
+                                format!("`{callee}` is not a function"),
+                            )
+                        });
+                    self.errors.push(d);
+                    // A completion probe's `Name(` with no function `Name` (N26): which
+                    // record the module's types name by it, read and applied exactly as a
+                    // construction's head is — so a generic record with no type arguments
+                    // written names no instance, and nothing is recorded. Never in an
+                    // ordinary program, whose `completion_call` is `None`.
+                    if self.res.completion_call() == Some(*callee_span) {
+                        self.called_record(callee, *callee_span, type_args.as_deref());
+                    }
+                    for a in args {
+                        self.check_expr(a, None);
+                    }
+                    return Completion::Value(expected.unwrap_or(Type::Int));
+                };
+
+                if args.len() != sig.params.len() {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::WRONG_ARGUMENT_COUNT,
+                            *span,
+                            format!(
+                                "`{callee}` takes {} argument{}, but {} {} given",
+                                sig.params.len(),
+                                if sig.params.len() == 1 { "" } else { "s" },
+                                args.len(),
+                                if args.len() == 1 { "was" } else { "were" }
+                            ),
+                        )
+                        .secondary(sig.name_span, "defined here"),
+                    );
+                }
+
+                if sig.generics > 0 || sig.effect_param {
+                    let ret = self.check_generic_call(
+                        callee,
+                        *callee_span,
+                        type_args.as_deref(),
+                        args,
+                        *span,
+                        &sig,
+                    );
+                    return Completion::Value(ret);
+                }
+                if type_args.is_some() {
+                    self.errors
+                        .push(not_generic(callee, "not generic", *callee_span));
+                }
+                self.record_site(*callee_span, Vec::new(), false);
+
+                // Left to right, matching the evaluation order the spec fixes.
+                for (i, a) in args.iter().enumerate() {
+                    let want = sig.params.get(i).copied();
+                    let got = self.value_type(a, want);
+                    if let Some(want) = want {
+                        if !self.assignable(got, want) {
+                            self.errors.push(Diagnostic::error(
+                                codes::TYPE_MISMATCH,
+                                a.span(),
+                                format!(
+                                    "argument {} of `{callee}` is `{}`, but this is `{}`",
+                                    i + 1,
+                                    self.show(want),
+                                    self.show(got)
+                                ),
+                            ));
+                        }
+                    }
+                }
+                self.record_checked_call(*callee_span, *span, args, &sig, None, false);
+                self.check_callbacks(*callee_span, args, &sig);
+                self.prove_preconditions(*callee_span, args);
+                Completion::Value(sig.ret)
+            }
+
+            Expr::Construct {
+                qualifier,
+                ty,
+                ty_span,
+                type_args,
+                fields,
+                span,
+            } => match self.check_construction(
+                &written_key(qualifier.as_ref(), ty),
+                *ty_span,
+                type_args.as_deref(),
+                fields,
+                *span,
+            ) {
+                Some(t) => Completion::Value(t),
+                // The type did not resolve, and that is already reported. `Int` is what
+                // every unresolved type continues as, so no second error is raised here.
+                None => Completion::Value(Type::Int),
+            },
+
+            // `x.m()` and `Show.m()` with nothing to tell them from a variant by (N78): a
+            // call when the name before the `.` is a value or a trait rather than an enum.
+            Expr::Variant {
+                qualifier,
+                ty,
+                ty_span,
+                type_args: None,
+                variant,
+                variant_span,
+                fields,
+                span,
+            } if fields.is_empty() && self.names_a_receiver(qualifier.as_ref(), ty) => {
+                let receiver = Expr::Var {
+                    name: ty.clone(),
+                    span: *ty_span,
+                };
+                Completion::Value(self.check_method_call(
+                    qualifier.as_ref(),
+                    &receiver,
+                    variant,
+                    *variant_span,
+                    &[],
+                    *span,
+                    expected,
+                ))
+            }
+
+            Expr::MethodCall {
+                qualifier,
+                receiver,
+                method,
+                method_span,
+                args,
+                span,
+            } => Completion::Value(self.check_method_call(
+                qualifier.as_ref(),
+                receiver,
+                method,
+                *method_span,
+                args,
+                *span,
+                expected,
+            )),
+
+            Expr::Variant {
+                qualifier,
+                ty,
+                ty_span,
+                type_args,
+                variant,
+                variant_span,
+                fields,
+                span,
+            } => match self.check_variant(
+                &written_key(qualifier.as_ref(), ty),
+                *ty_span,
+                type_args.as_deref(),
+                variant,
+                *variant_span,
+                fields,
+                *span,
+            ) {
+                Some(t) => Completion::Value(t),
+                None => Completion::Value(expected.unwrap_or(Type::Int)),
+            },
+
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => self.check_match(scrutinee, arms, *span, expected),
+
+            Expr::Field {
+                base,
+                name,
+                name_span,
+                ..
+            } => {
+                // `State.Rea` while `State.Ready(…)` is being written: `State` is no value,
+                // so this is a projection that fails — but the module's types name `State`
+                // as an enum, and a tool completing the name after `.` needs which (N21).
+                // Recorded, not acted on: the diagnostics below are unchanged. A generic
+                // enum is not recorded, since which instance is meant is not written.
+                if let Expr::Var {
+                    name: qualifier, ..
+                } = &**base
+                {
+                    let is_value = self.scopes.lookup(qualifier).is_some();
+                    let is_param = self.type_scope.iter().any(|(n, _)| n == qualifier);
+                    if let (false, false, false, Some(Type::Enum(id))) = (
+                        is_value,
+                        is_param,
+                        self.refused(qualifier),
+                        self.types.names.get(qualifier).copied(),
+                    ) {
+                        if self.res.types().arity(ParamOwner::Enum(id)) == 0 {
+                            self.res
+                                .record_unresolved_member(*name_span, Type::Enum(id));
+                        }
+                    }
+                }
+                // The base is checked with no expectation: what a projection wants of its
+                // base is "a record with this field", which is not a `Type` and so cannot
+                // be passed as one.
+                let base_ty = self.value_type(base, None);
+                if let Type::Record(id) = base_ty {
+                    if self
+                        .res
+                        .records()
+                        .get(id)
+                        .is_some_and(|d| d.repr == CRepr::Opaque)
+                    {
+                        let shown = self.show(base_ty);
+                        self.errors
+                            .push(opaque_refused(*name_span, &shown, "taken apart"));
+                        return Completion::Value(Type::Int);
+                    }
+                }
+                match self.check_projection(base_ty, name, *name_span) {
+                    Some(t) => Completion::Value(t),
+                    None => Completion::Value(Type::Int),
+                }
+            }
+
+            Expr::Propagate {
+                operand, op_span, ..
+            } => self.check_propagate(operand, *op_span, expected),
+
+            Expr::If {
+                cond,
+                then_block,
+                else_block,
+                ..
+            } => {
+                let ct = self.value_type(cond, Some(Type::Bool));
+                if ct != Type::Bool {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::CONDITION_NOT_BOOL,
+                            cond.span(),
+                            format!(
+                                "an `if` condition must be `Bool`, but this is `{}`",
+                                self.show(ct)
+                            ),
+                        )
+                        .help("Nazm has no truthiness: use a comparison such as `x != 0`"),
+                    );
+                }
+
+                let then_c = self.check_block(then_block, expected);
+                let Some(else_block) = else_block else {
+                    // No `else`. Unit whatever the branch does — even when it returns on
+                    // every path, the condition may be false, so the `if` itself always
+                    // completes. Usable as a statement; the caller reports if it wanted a
+                    // value, which is where the context to say so lives.
+                    return Completion::Unit;
+                };
+                let else_c = self.check_block(else_block, expected.or(then_c.ty()));
+
+                match (then_c, else_c) {
+                    // One branch leaving means the other decides. Without this,
+                    // `if c { return 0; } else { 1 }` would be an error for having
+                    // "different" branches, which is exactly the shape `return` is for.
+                    (Completion::Diverges, other) | (other, Completion::Diverges) => other,
+                    (Completion::Value(a), Completion::Value(b)) if a == b => Completion::Value(a),
+                    (Completion::Value(a), Completion::Value(b)) => {
+                        let (sa, sb) = (self.show(a), self.show(b));
+                        self.errors.push(
+                            Diagnostic::error(
+                                codes::BRANCH_TYPES_DIFFER,
+                                else_block
+                                    .tail
+                                    .as_ref()
+                                    .map_or(else_block.span, |t| t.span()),
+                                format!("this branch is `{sb}`, but the other is `{sa}`"),
+                            )
+                            .secondary(
+                                then_block
+                                    .tail
+                                    .as_ref()
+                                    .map_or(then_block.span, |t| t.span()),
+                                format!("this one is `{sa}`"),
+                            )
+                            .help("both branches of an `if` must have the same type"),
+                        );
+                        Completion::Value(a)
+                    }
+                    // One branch produces a value and the other does not.
+                    (Completion::Value(a), Completion::Unit)
+                    | (Completion::Unit, Completion::Value(a)) => {
+                        let sa = self.show(a);
+                        self.errors.push(
+                            Diagnostic::error(
+                                codes::BRANCH_TYPES_DIFFER,
+                                *e.span_ref(),
+                                format!("one branch produces `{sa}` and the other produces nothing"),
+                            )
+                            .help("both branches of an `if` must agree, or neither may produce a value"),
+                        );
+                        Completion::Value(a)
+                    }
+                    (Completion::Unit, Completion::Unit) => Completion::Unit,
+                }
+            }
+
+            Expr::Block(b) => self.check_block(b, expected),
+        }
+    }
+}
