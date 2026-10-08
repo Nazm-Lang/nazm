@@ -1274,7 +1274,7 @@ exist.
 (`verify.rs`), its printed form `nazm.core-ir/2` since N78, `/1` before (`print.rs`, `nazm core-ir`) and each
 function's digests (`digest.rs`); `crates/nazm-core/src/lower.rs` is **the one lowering** from a
 checked program, private to `nazm-core` and reached only after checking succeeded;
-`crates/nazm-core/src/eval.rs` runs Core IR and nothing else; `crates/nazm-lir/src/lower.rs`
+`crates/nazm-core/src/eval/` runs Core IR and nothing else; `crates/nazm-lir/src/lower.rs`
 lowers Core IR, and `nazm-lir` no longer depends on `nazm-syntax`. `architecture.md` §7.41 is the
 constitution, written before the code.
 
@@ -1701,7 +1701,7 @@ policy stated.
 ### 14. Structured concurrency — VERIFIED
 
 **Evidence** · Specified in `docs/spec.md` before implementation, then interpreted
-(`crates/nazm-core/src/eval.rs`, 18 tests in `crates/nazm-core/tests/concurrency.rs`), then
+(`crates/nazm-core/src/eval/`, 18 tests in `crates/nazm-core/tests/concurrency.rs`), then
 compiled (17 tests in `crates/nazm-cli/tests/concurrent.rs` at `-O0` and `-O2`, each
 against a written expectation *and* the interpreter), **then compiled by the compiler
 written in Nazm** — `compiler/emit.nz` carries the task and channel runtime. Every test
