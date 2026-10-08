@@ -116,27 +116,24 @@ pub fn allocate(block: &SubnetBlock, in_use: &[String]) -> Result<Subnet, Alloca
     })
 }
 
-/// Whether two CIDRs share any address.
-///
-/// Deliberately simple: both sides are compared as prefixes over the first three octets,
-/// which is exact for the /24s this allocates and conservative — it reports overlap for a
-/// containing /16 — for the wider networks Docker hands out by default. Being
-/// conservative here costs a slot; being wrong costs a broken network.
+/// Whether two CIDRs share any address: they do exactly when they agree on the bits of the
+/// shorter prefix. Exact for every prefix length — a /15 or /20 included, which an octet-wise
+/// comparison got wrong (Q1-A2-08). An IPv6 subnet shares nothing with an IPv4 candidate; any
+/// other existing subnet that does not parse counts as overlapping: being conservative costs a
+/// slot; being wrong costs a broken network.
 fn overlaps(existing: &str, candidate: &str) -> bool {
+    if existing.contains(':') {
+        return false;
+    }
     let Some((e_addr, e_bits)) = split_cidr(existing) else {
-        return false;
+        return true;
     };
-    let Some((c_addr, _)) = split_cidr(candidate) else {
-        return false;
+    let Some((c_addr, c_bits)) = split_cidr(candidate) else {
+        return true;
     };
-
-    // Compare over the coarser of the two prefixes.
-    let octets = match e_bits {
-        0..=8 => 1,
-        9..=16 => 2,
-        _ => 3,
-    };
-    e_addr.iter().take(octets).eq(c_addr.iter().take(octets))
+    let bits = u32::from(e_bits.min(c_bits).min(32));
+    let mask = u32::MAX.checked_shl(32 - bits).unwrap_or(0);
+    (u32::from_be_bytes(e_addr) & mask) == (u32::from_be_bytes(c_addr) & mask)
 }
 
 fn split_cidr(s: &str) -> Option<([u8; 4], u8)> {

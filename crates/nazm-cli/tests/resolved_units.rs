@@ -306,7 +306,7 @@ fn a_stored_unit_of_other_text_is_never_read() {
         if e.extension().is_some_and(|x| x == "json") {
             let text = std::fs::read_to_string(&e).unwrap();
             let mut v: Value = serde_json::from_str(&text).unwrap();
-            if v["schema"] == "nazm.check/4" {
+            if v["schema"] == "nazm.check/5" {
                 v["resolved"]["source"] = Value::String("0".repeat(64));
                 std::fs::write(&e, v.to_string()).unwrap();
                 forged += 1;

@@ -1025,7 +1025,11 @@ fn ovf_op(op: OvfOp, class: Class, x: u64, y: u64) -> (u64, bool) {
         OvfOp::Mul => (sa * sb, (lo..=hi).contains(&(sa * sb))),
         OvfOp::UAdd => (ua + ub, ua + ub <= umax),
         OvfOp::USub => (ua - ub, ua >= ub),
-        OvfOp::UMul => (ua * ub, ua * ub <= umax),
+        // `u64` by `u64` can pass `i128` (Q1-B-03): the low bits are the wrapped result either way.
+        OvfOp::UMul => (
+            ua.wrapping_mul(ub),
+            ua.checked_mul(ub).is_some_and(|p| p <= umax),
+        ),
     };
     (norm(class, r as u64), !ok)
 }

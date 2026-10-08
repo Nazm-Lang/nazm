@@ -70,6 +70,13 @@ if [ "${NAZM_CONTAINED:-}" != "1" ] && [ "${NAZM_ALLOW_UNCONTAINED:-}" != "1" ];
 
   To override deliberately and accept the risk, set NAZM_ALLOW_UNCONTAINED=1."
 fi
+# The declaration is checked: inside the contained runner the cgroup caps memory, so
+# `memory.max` is a number. On a host it is absent or `max` (Q1-A2-02).
+if [ "${NAZM_CONTAINED:-}" = "1" ]; then
+    case $(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo none) in
+        ''|*[!0-9]*|0) fail "NAZM_CONTAINED=1 is set, but no memory ceiling applies here. Run this through \`cargo xtask contained bootstrap\`; never set NAZM_CONTAINED on a host." ;;
+    esac
+fi
 if [ "${NAZM_ALLOW_UNCONTAINED:-}" = "1" ]; then
     printf 'bootstrap: warning: NAZM_ALLOW_UNCONTAINED=1 — no memory ceiling. This is the configuration that panicked the machine on 2026-09-21.\n' >&2
 fi

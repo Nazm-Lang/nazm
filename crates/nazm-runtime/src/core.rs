@@ -2216,8 +2216,15 @@ finish:
   %base = getelementptr i8, ptr %h, i64 8
   %stk = load ptr, ptr %base
   %pg = load i64, ptr @nz.pool_page
+  ; A guard page that cannot be made writable again is never handed back to `malloc`, which
+  ; would give it out unreadable: the stack is leaked instead (Q1-A1-10).
   %rw = call i32 @mprotect(ptr %stk, i64 %pg, i32 3)
+  %rwok = icmp eq i32 %rw, 0
+  br i1 %rwok, label %freestack, label %keptstack
+freestack:
   call void @free(ptr %stk)
+  br label %keptstack
+keptstack:
   %js = load ptr, ptr @nz.pool_join
   %jl = call i32 @pthread_mutex_lock(ptr %js)
   %donep = getelementptr i8, ptr %h, i64 72
@@ -2253,7 +2260,16 @@ nostack:
   ret i32 1
 guard:
   %base = load ptr, ptr %slot
+  ; No guard, no task: a stack without its guard page would overflow into whatever lies below
+  ; it (Q1-A1-10). Reported as "no stack could be had".
   %g = call i32 @mprotect(ptr %base, i64 %pg, i32 0)
+  %gok = icmp eq i32 %g, 0
+  br i1 %gok, label %guarded, label %noguard
+noguard:
+  call void @free(ptr %base)
+  call void @free(ptr %t)
+  ret i32 1
+guarded:
   %bp = getelementptr i8, ptr %t, i64 8
   store ptr %base, ptr %bp
   %tot = getelementptr i8, ptr %t, i64 16
@@ -2422,10 +2438,14 @@ task:
   %s = load i64, ptr %ts
   %np = getelementptr i8, ptr %ts, i64 8
   %n = load i64, ptr %np
+  ; Past i64's nanoseconds the deadline is "never", not a wrapped time in the past that wakes
+  ; the task at once and forever (Q1-M-11): seconds above 9223372035 saturate.
   %sn = mul i64 %s, 1000000000
   %d0 = add i64 %sn, %n
-  %zero = icmp eq i64 %d0, 0
-  %d = select i1 %zero, i64 1, i64 %d0
+  %far = icmp sgt i64 %s, 9223372035
+  %d1 = select i1 %far, i64 9223372036854775807, i64 %d0
+  %zero = icmp eq i64 %d1, 0
+  %d = select i1 %zero, i64 1, i64 %d1
   call void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %d)
   ret i32 0
 }

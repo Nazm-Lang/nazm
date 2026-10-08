@@ -254,7 +254,13 @@ pub(crate) fn run(
         None => PathBuf::from(input.file_stem().unwrap_or_default()),
     };
 
-    if same_file(input, &output) {
+    // The entry's source, or any module's the program loads (Q1-A1-07).
+    let clobbers = same_file(input, &output)
+        || map
+            .file_names()
+            .iter()
+            .any(|n| same_file(Path::new(n), &output));
+    if clobbers {
         if summary {
             return summarized(
                 Status::Refused,
@@ -267,6 +273,30 @@ pub(crate) fn run(
         eprintln!(
             "nazm: refusing to write the executable over its own source ({}). \
              Pass -o with a different path.",
+            output.display()
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
+    // A shared library names itself to the linker as `-Wl,…,NAME`, and the linker splits that
+    // argument at every comma: a comma in the name would be an argument of its own (Q1-A1-06).
+    if choice.library
+        && choice.shared
+        && output
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().contains(','))
+    {
+        if summary {
+            return summarized(
+                Status::Refused,
+                exit::TOOLCHAIN_FAILED,
+                &[],
+                Some(map),
+                None,
+            );
+        }
+        eprintln!(
+            "nazm: a shared library's file name may not contain a comma ({}): the linker would \
+             read what follows it as another argument",
             output.display()
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
@@ -445,13 +475,22 @@ pub(crate) fn run(
     // rather than a copy that can half-succeed. One directory for all of them, because
     // there is one per module now and a program with forty modules should not put forty
     // pairs of files beside somebody's binary.
-    let stamp = std::process::id();
-    let work = sibling(&output, &format!(".nazm-{stamp}"));
+    // Made exclusively, mode 0700: a directory or symlink already at the name is never built
+    // in (Q1-A1-03).
+    let stem = format!(
+        "{}.nazm-",
+        output.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let parent = output.parent().unwrap_or_else(|| Path::new(""));
+    let made = crate::scratch::exclusive(parent, &stem);
+    let work = made
+        .as_ref()
+        .map_or_else(|_| sibling(&output, ".nazm"), Clone::clone);
     // Linked inside the working directory under the output's own file name (N46): the
     // Mach-O linker writes that name into the executable's code signature and derives its
     // UUID from it, so a temporary name would make two builds of one program differ.
     let tmp_exe = link_name(&work, &output);
-    if let Err(e) = std::fs::create_dir_all(&work) {
+    if let Err(e) = made {
         eprintln!("nazm: cannot create {}: {e}", work.display());
         if summary {
             return summarized(

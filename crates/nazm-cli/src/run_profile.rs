@@ -211,11 +211,11 @@ pub(crate) fn run(file: &Path, backend: &str, sample: Option<u64>) -> ExitCode {
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
     // A directory of this process's own, removed on every path out.
-    let work = std::env::temp_dir().join(format!("nazm-profile-{}", std::process::id()));
-    if std::fs::create_dir_all(&work).is_err() {
+    // Exclusive and private (Q1-A1-02): the profiled executable is built here and run.
+    let Ok(work) = crate::scratch::temporary("nazm-profile-") else {
         eprintln!("nazm: cannot make a working directory");
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
-    }
+    };
     let code = profile(file, backend, &work, sample);
     let _ = std::fs::remove_dir_all(&work);
     code

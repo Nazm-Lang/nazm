@@ -322,6 +322,74 @@ fn a_published_version_never_changes() {
     );
 }
 
+/// Q1-A2-04: a version directory the index does not list is refused, not published over — its
+/// stray files would be sealed into the version — and a publish records the digest its dry run
+/// promised.
+#[test]
+fn a_publish_never_merges_into_a_directory_already_there() {
+    let w = World::new();
+    let src = w.path("work/shapes");
+    package(&src, "shapes", "1.0.0", &[], None);
+    write(
+        &w.path("reg/packages/shapes/1.0.0/src/stale.nz"),
+        "pub fn evil() -> Int { 666 }\n",
+    );
+    let e = publish(&src, &w.path("reg")).unwrap_err();
+    assert_eq!(e.code, codes::REGISTRY_INVALID);
+    assert!(e.message.contains("does not list"), "{}", e.message);
+    std::fs::remove_dir_all(w.path("reg/packages/shapes/1.0.0")).unwrap();
+    let (_, promised, _) = nazm_package::publish_dry_run(&src, &w.path("reg")).unwrap();
+    let (_, recorded) = publish(&src, &w.path("reg")).unwrap();
+    assert_eq!(promised, recorded);
+    // Nothing of the staging is left beside the version.
+    let left: Vec<_> = std::fs::read_dir(w.path("reg/packages/shapes"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(left, ["1.0.0"]);
+}
+
+/// Q1-A2-05: a lockfile naming one package twice is refused, whichever entry comes first.
+#[test]
+fn a_lockfile_recording_a_package_twice_is_refused() {
+    let w = World::new();
+    w.publish("reg", "shapes", "1.0.0", &[]);
+    let app = w.app(&["shapes = { version = \"^1.0.0\" }"], "reg");
+    let g = resolve(&app).unwrap();
+    let lock = g.lock_text();
+    g.verify(&lock).unwrap();
+    let at = lock
+        .find("[[package]]\nname = \"shapes\"")
+        .expect("shapes is locked");
+    let bogus = "[[package]]\nname = \"shapes\"\nversion = \"9.9.9\"\nsource = \"path+/evil\"\ndigest = \"blake3:00\"\ndependencies = []\n\n";
+    for doubled in [
+        format!("{}{bogus}{}", &lock[..at], &lock[at..]),
+        format!("{lock}\n{bogus}"),
+    ] {
+        let e = g.verify(&doubled).unwrap_err();
+        assert!(
+            e.iter()
+                .any(|d| d.code == codes::LOCK_MISMATCH && d.message.contains("more than once")),
+            "{e:?}"
+        );
+    }
+}
+
+/// Q1-A2-03: a path package whose source root links back to itself twice is walked once, not
+/// 2^32 times — the links are not followed.
+#[cfg(unix)]
+#[test]
+fn a_symlink_loop_in_a_path_package_ends() {
+    let w = World::new();
+    let app = w.path("app");
+    package(&app, "app", "1.0.0", &[], None);
+    std::os::unix::fs::symlink(".", app.join("src/loop")).unwrap();
+    std::os::unix::fs::symlink(".", app.join("src/loop2")).unwrap();
+    let started = std::time::Instant::now();
+    resolve(&app).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
 #[test]
 fn a_tampered_package_is_refused_by_its_digest() {
     let w = World::new();

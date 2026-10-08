@@ -253,6 +253,25 @@ impl Sets<'_> {
 
     /// `result` is whether `e` is (part of) what the entrypoint returns.
     fn expr(&mut self, e: &Expr, result: bool) {
+        // Returned as the new state, anything but the state itself, a `State(…)` literal, an
+        // `Ok(…)`/`Err(…)` around one, or a branch, block or match whose arms are those, is a
+        // value the analysis does not see into — a helper's result, a trait method's, a field of
+        // a wrapper, an element of an array — so it may write every field. Until Q1 only a
+        // returned local said so, and the rest read as writing nothing (Q1-C-03).
+        if result {
+            let seen = match &e.kind {
+                ExprKind::Local(_)
+                | ExprKind::Variant { .. }
+                | ExprKind::If { .. }
+                | ExprKind::Block(_)
+                | ExprKind::Match(_) => true,
+                ExprKind::Record { record, .. } => *record == self.state_record,
+                _ => false,
+            };
+            if !seen {
+                self.writes = None;
+            }
+        }
         match &e.kind {
             // A projection of the state parameter: one field read.
             ExprKind::Field { base, field, .. } if matches!(base.kind, ExprKind::Local(l) if l == self.state) =>

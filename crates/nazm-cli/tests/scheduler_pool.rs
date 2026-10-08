@@ -305,6 +305,36 @@ fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
     }
 }
 
+/// Q1-M-11: a deadline too far to count in nanoseconds is "never", not a wrapped time in the past.
+/// The waiter parks with one, and is woken by the value, not by its deadline: before the fix the
+/// deadline had already passed, so the select timed out (and a worker spun re-queuing it).
+#[test]
+fn a_deadline_past_the_nanosecond_range_waits_for_the_value() {
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn waiter(io: IoCap, tm: TimeCap, ready: Chan[Int], c: Chan[Int], res: Chan[Int]) -> Int ! { io } {\n\
+                   let cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\n\
+                   chan_send_of(ready, 1);\n\
+                   let r = chan_select_until(cs, out, 9223372036854775807);\n\
+                   chan_send_of(res, r * 1000 + vec_pop(out)); 0 }\n\
+               fn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\n\
+                   let ready = chan_new_of[Int](1); let c = chan_new_of[Int](1); let res = chan_new_of[Int](1);\n\
+                   let got = vec_new[Int]();\n\
+                   scope { spawn waiter(io, tm, ready, c, res);\n\
+                       let r0 = chan_recv_of(ready, got); chan_send_of(c, 42); let r1 = chan_recv_of(res, got); }\n\
+                   print(int_to_str(vec_get(got, 1))); 0 }\n";
+    built(d.path(), "far", src, "llvm");
+    for _ in 0..5 {
+        let (out, err, code) = run(
+            d.path(),
+            "far",
+            &[],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")],
+        );
+        assert_eq!(code, Some(0), "{err}");
+        assert_eq!(out, "420\n", "{err}");
+    }
+}
+
 #[test]
 fn a_parked_tasks_deadline_fires_on_the_pool() {
     let d = tempfile::tempdir().unwrap();

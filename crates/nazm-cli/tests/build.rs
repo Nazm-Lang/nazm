@@ -4317,3 +4317,91 @@ fn a_payload_returned_from_an_arm_is_valid_at_both_levels() {
                str_len(held) * 100 + str_byte(held, 0)\n}\n";
     expect_program(src, "1097");
 }
+
+/// Q1-A1-07: `-o` naming any module of the program — not only the entry — is refused, and the
+/// module is left as it was.
+#[test]
+fn an_output_over_any_module_of_the_program_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("nazm.root"), "").unwrap();
+    std::fs::write(d.path().join("util.nz"), "pub fn two() -> Int { 2 }\n").unwrap();
+    std::fs::write(
+        d.path().join("main.nz"),
+        "use \"util.nz\";\nfn main() -> Int { two() }\n",
+    )
+    .unwrap();
+    let o = Command::new(NAZM)
+        .current_dir(d.path())
+        .args(["build", "main.nz", "-o", "util.nz"])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("over its own source"));
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("util.nz")).unwrap(),
+        "pub fn two() -> Int { 2 }\n"
+    );
+}
+
+/// Q1-A1-06: a shared library names itself to the linker in a comma-separated `-Wl,` argument, so
+/// a comma in its file name is refused rather than read as another linker argument.
+#[test]
+fn a_shared_library_name_with_a_comma_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("lib.nz"),
+        "extern \"C\" pub fn twice(n: Int) -> Int ! {} { n * 2 }\n",
+    )
+    .unwrap();
+    let o = Command::new(NAZM)
+        .current_dir(d.path())
+        .args([
+            "build",
+            "--lib",
+            "--shared",
+            "lib.nz",
+            "-o",
+            "libx,-Wl,-sectcreate.dylib",
+        ])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("may not contain a comma"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(!d.path().join("libx,-Wl,-sectcreate.dylib").exists());
+}
+
+/// Q1-A1-01: every generated function asks for stack probes, so a frame larger than a task stack's
+/// one guard page faults on the guard instead of stepping over it.
+#[test]
+fn every_generated_function_asks_for_stack_probes() {
+    let (d, src) = write_program("fn inc(n: Int) -> Int { n + 1 }\nfn main() -> Int { inc(1) }\n");
+    let o = Command::new(NAZM)
+        .current_dir(d.path())
+        .args(["build", "--emit-ir"])
+        .arg(&src)
+        .args(["-o", "p"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let mut defines = 0;
+    for e in std::fs::read_dir(d.path()).unwrap() {
+        let p = e.unwrap().path();
+        // The program's own units (`p.m0.ll`, …); the runtime, the entry stub and the context
+        // switch are hand-written and not what this asks about.
+        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+        let unit = name.split('.').nth(1).is_some_and(|m| m.starts_with('m'));
+        if p.extension().is_some_and(|x| x == "ll") && unit {
+            for line in std::fs::read_to_string(&p).unwrap().lines() {
+                if line.starts_with("define ") {
+                    defines += 1;
+                    assert!(line.contains("\"probe-stack\"=\"inline-asm\""), "{line}");
+                }
+            }
+        }
+    }
+    assert!(defines > 0);
+}

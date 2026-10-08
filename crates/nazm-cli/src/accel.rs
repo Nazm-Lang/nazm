@@ -73,8 +73,8 @@ impl Reduce {
     }
 }
 
-fn work_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("nazm-accel-{}", std::process::id()))
+fn work_dir() -> std::io::Result<PathBuf> {
+    crate::scratch::temporary("nazm-accel-")
 }
 
 pub(crate) fn run(
@@ -223,13 +223,20 @@ pub(crate) fn run(
         );
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
-    let dir = work_dir();
+    // Exclusive and private (Q1-A1-02): `host` is compiled here and run. Only a directory this
+    // process made is ever removed.
+    let dir = match work_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("nazm: cannot make a working directory: {e}");
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
+    };
     let cleanup = || {
         let _ = std::fs::remove_dir_all(&dir);
     };
     let bytes = |c: &[i64]| -> Vec<u8> { c.iter().flat_map(|x| x.to_le_bytes()).collect() };
-    let mut written = std::fs::create_dir_all(&dir)
-        .and_then(|()| std::fs::write(dir.join("kernel.cl"), &k.source))
+    let mut written = std::fs::write(dir.join("kernel.cl"), &k.source)
         .and_then(|()| std::fs::write(dir.join("host.c"), HOST));
     for (i, c) in columns.iter().enumerate() {
         written =

@@ -228,8 +228,9 @@ pub fn arith(op: Arith, a: NumVal, b: NumVal) -> Result<NumVal, NumError> {
     let v = match op {
         Arith::Add => x + y,
         Arith::Sub => x - y,
-        // 64 by 64 bits fits in 128.
-        Arith::Mul => x * y,
+        // A signed 64-by-64-bit product fits in `i128`; an unsigned one may not — `UInt64::MAX`
+        // squared is near 2^128 — and is out of every range when it does not (Q1-B-03).
+        Arith::Mul => x.checked_mul(y).ok_or(NumError::Overflow)?,
         Arith::Div | Arith::Rem if y == 0 => return Err(NumError::DivideByZero),
         // Truncating, as Rust's `/` and `%` on `i128` are; `MIN / -1` is out of range and so
         // is reported as overflow, and `MIN % -1` is 0.
@@ -414,7 +415,10 @@ pub fn saturating(op: Arith, a: NumVal, b: NumVal) -> NumVal {
     let v = match op {
         Arith::Add => x + y,
         Arith::Sub => x - y,
-        _ => x * y,
+        // Past `i128` the product is past either bound, on the side its sign says (Q1-B-03).
+        _ => x
+            .checked_mul(y)
+            .unwrap_or(if (x < 0) == (y < 0) { hi } else { lo }),
     };
     NumVal::int(a.kind, v.clamp(lo, hi)).unwrap_or(a)
 }
@@ -607,12 +611,22 @@ pub fn to_str(a: NumVal) -> String {
     if x == 0.0 {
         return if x.is_sign_negative() { "-0" } else { "0" }.to_owned();
     }
-    // Rust's `{:e}` writes the shortest digits that round-trip in the value's own type.
-    let sci = if a.kind == NumKind::F32 {
-        format!("{:e}", a.as_f32())
-    } else {
-        format!("{x:e}")
-    };
+    // The shortest digits that read back to the same value in its own type, found as the native
+    // runtime finds them (`nz.format_float`): the first precision whose correctly rounded
+    // `{:.p$e}` — ties to even, as C's `%.*e` and ECMAScript's rule — parses back exactly. Rust's
+    // own shortest `{:e}` breaks a tie between two equally short candidates the other way, so
+    // `Float32(3135501.25)` printed `3135501.3` here and `3135501.2` natively (Q1-B-02).
+    let single = a.kind == NumKind::F32;
+    let sci = (0..17)
+        .map(|p| format!("{x:.p$e}"))
+        .find(|t| {
+            if single {
+                t.parse::<f32>().is_ok_and(|r| r == a.as_f32())
+            } else {
+                t.parse::<f64>().is_ok_and(|r| r == x)
+            }
+        })
+        .unwrap_or_else(|| format!("{x:.16e}"));
     let (negative, sci) = match sci.strip_prefix('-') {
         Some(rest) => (true, rest.to_owned()),
         None => (false, sci),
@@ -717,6 +731,41 @@ mod tests {
 
     fn i(k: NumKind, v: i128) -> NumVal {
         NumVal::int(k, v).unwrap()
+    }
+
+    /// Q1-B-02: of two equally short digit strings that both read back, the one ECMAScript and
+    /// C's `%.*e` choose — the even one at an exact tie — as the native runtime writes it.
+    #[test]
+    fn a_tie_between_equally_short_digits_goes_to_even() {
+        let f32v = |v: f32| NumVal::f32(v);
+        // 3135501 and a quarter, and three quarters: exact in `f32`, and ties at eight digits.
+        assert_eq!(to_str(f32v(3_135_501.0 + 0.25)), "3135501.2");
+        assert_eq!(to_str(f32v(3_135_501.0 + 0.75)), "3135501.8");
+        assert_eq!(to_str(NumVal::f64(0.1)), "0.1");
+        assert_eq!(to_str(NumVal::f64(1e21)), "1e+21");
+        assert_eq!(to_str(NumVal::f64(-1.5e-7)), "-1.5e-7");
+        assert_eq!(to_str(NumVal::f64(f64::MAX)), "1.7976931348623157e+308");
+        assert_eq!(to_str(NumVal::f64(5e-324)), "5e-324");
+    }
+
+    /// Q1-B-03: a `UInt64` product can pass `i128`; it is an overflow, and saturates to the
+    /// top, never a panic.
+    #[test]
+    fn the_largest_unsigned_products_overflow_rather_than_panic() {
+        let max = i(NumKind::U64, i128::from(u64::MAX));
+        let big = i(NumKind::U64, 13_043_817_825_332_782_213);
+        for (a, b) in [(max, max), (big, big), (max, i(NumKind::U64, 2))] {
+            assert_eq!(arith(Arith::Mul, a, b), Err(NumError::Overflow));
+            assert_eq!(saturating(Arith::Mul, a, b), max);
+        }
+        assert_eq!(
+            arith(
+                Arith::Mul,
+                i(NumKind::I64, i128::from(i64::MIN)),
+                i(NumKind::I64, i128::from(i64::MIN))
+            ),
+            Err(NumError::Overflow)
+        );
     }
 
     #[test]

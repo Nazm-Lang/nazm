@@ -38,6 +38,27 @@ pub(crate) fn graph_for(path: &Path) -> Option<Result<nazm_package::Graph, Vec<D
     nazm_service::load::package_context(root.path())
 }
 
+/// The package whose profiles hold for `path` (Q1-C-04): [`graph_for`]'s, or — when that finds
+/// none because a `nazm.root` marker is nearer than a manifest — the nearest package upward whose
+/// source root holds `path`. A marker decides where a compilation's module names begin; it does
+/// not take a package's file out from under the package's manifest.
+pub(crate) fn profile_graph(path: &Path) -> Option<nazm_package::Graph> {
+    if let Some(found) = graph_for(path) {
+        return found.ok();
+    }
+    let file = std::fs::canonicalize(path).ok()?;
+    let mut dir = file.parent();
+    while let Some(d) = dir {
+        if nazm_package::is_package(d) {
+            let graph = nazm_package::resolve(d).ok()?;
+            let root = std::fs::canonicalize(&graph.root_package()?.source_root).ok()?;
+            return file.starts_with(&root).then_some(graph);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 /// Every module of a library package — one with no `main` — for `nazm check DIR` (N74,
 /// `docs/architecture.md` §7.76): the `.nz` files under its source root, sorted. `None` for
 /// anything else, which takes the ordinary route and its ordinary refusals.
@@ -55,8 +76,11 @@ pub(crate) fn library_modules(path: &Path) -> Option<Vec<PathBuf>> {
     while let Some(dir) = stack.pop() {
         for e in std::fs::read_dir(&dir).ok()?.flatten() {
             let p = e.path();
-            if p.is_dir() {
+            // Not through a symlinked directory: the walk must end (Q1-A2-03).
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
                 stack.push(p);
+            } else if p.is_dir() {
+                continue;
             } else if p.extension().is_some_and(|x| x == "nz") {
                 out.push(p);
             }

@@ -736,28 +736,46 @@ impl UserTypes {
     /// declaration stages are written in.
     #[must_use]
     pub fn depth(&self, t: Type) -> Option<usize> {
+        // Each definition's depth once, from its contents' (Q1-A1-09): the containment graph is
+        // a DAG here, and walking every path of it instead was exponential — two fields of the
+        // same record at each of 33 levels never finished. An explicit stack, so a deep chain
+        // costs heap and not this thread's stack.
         let Some(root) = TypeNode::of(t) else {
             return Some(0);
         };
-        let mut stack: Vec<(TypeNode, usize)> = vec![(root, 0)];
-        let mut deepest = 1;
-        while let Some((node, at)) = stack.pop() {
-            let edges = self.contained(node);
-            let next = edges
+        let mut memo: std::collections::HashMap<TypeNode, usize> = std::collections::HashMap::new();
+        let mut stack: Vec<(TypeNode, bool)> = vec![(root, false)];
+        while let Some((node, expanded)) = stack.pop() {
+            if memo.contains_key(&node) {
+                continue;
+            }
+            let inner: Vec<TypeNode> = self
+                .contained(node)
                 .iter()
-                .enumerate()
-                .skip(at)
-                .find_map(|(i, (_, _, ty))| TypeNode::of(*ty).map(|n| (i, n)));
-            if let Some((i, inner)) = next {
-                stack.push((node, i + 1));
-                stack.push((inner, 0));
-                deepest = deepest.max(stack.len());
-                if deepest > MAX_TYPE_DEPTH {
+                .filter_map(|(_, _, ty)| TypeNode::of(*ty))
+                .collect();
+            if expanded {
+                let d = 1 + inner
+                    .iter()
+                    .filter_map(|n| memo.get(n))
+                    .max()
+                    .copied()
+                    .unwrap_or(0);
+                if d > MAX_TYPE_DEPTH {
                     return None;
                 }
+                memo.insert(node, d);
+            } else {
+                stack.push((node, true));
+                stack.extend(
+                    inner
+                        .into_iter()
+                        .filter(|n| !memo.contains_key(n))
+                        .map(|n| (n, false)),
+                );
             }
         }
-        Some(deepest)
+        memo.get(&root).copied()
     }
 }
 

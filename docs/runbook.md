@@ -321,8 +321,12 @@ Stop the supervisor — the `cargo xtask contained …` process. Signalling it, 
 group, does **not** reliably stop the container: on 2026-09-29 the Docker client took SIGINT
 and the container ran on. The checkout is read-only, so a stranded container holds a disposable
 copy and nothing of the host's, and it stops itself at its own deadline. Every contained run
-starts by removing, by exact name, any `nazm-<workload>-<pid>` container whose supervisor pid
-is no longer a process, and nothing else; to free it at once, `docker rm -f` that exact name.
+labels its container `nazm.owner=nazm-contained-runner` with its supervisor's pid and host, and
+starts by removing, by exact name, a container carrying that label whose name is
+`nazm-<workload>-<pid>` with the same pid, whose host is this one, and whose pid `ps` reports as no
+process — and nothing else. A name alone is never ownership: Compose's `nazm-postgres-1` is not
+the runner's (Q1-A2-01). A container from before the label existed is never removed
+automatically; to free one at once, `docker rm -f` that exact name.
 
 ### Verification gates — v2
 

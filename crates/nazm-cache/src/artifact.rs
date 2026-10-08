@@ -56,7 +56,7 @@ use crate::source::SourceFingerprint;
 /// `/4` since N80: the provenance facts gain container cells, indirect calls and the
 /// function values a module makes. A `/3` entry has none, so it would read as a module that
 /// writes no container and makes no value — wrong, not merely incomplete — and is a miss.
-pub const SCHEMA: &str = "nazm.check/4";
+pub const SCHEMA: &str = "nazm.check/5";
 
 /// One dependency, as the artefact records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +95,12 @@ pub struct CheckArtifact {
     /// What checking the module decided about its names (N77): a function of exactly the
     /// inputs the key covers, so it is filed under the same key.
     pub resolved: Option<ResolvedUnit>,
+    /// BLAKE3 over the provenance facts and the resolved unit, as written. The key and the
+    /// interface are re-derived on read; these two cannot be, so a parseable edit to either —
+    /// a sink list emptied — would otherwise be believed and turn a refusal into `ok`
+    /// (Q1-M-07). Filled by [`Self::to_json`]; `/5` since Q1.
+    #[serde(default)]
+    pub facts_digest: String,
 }
 
 /// Why a stored check result could not be used.
@@ -125,6 +131,8 @@ pub enum Invalid {
     WrongKey,
     /// The resolved unit is missing, unreadable, or of another module or source text.
     ForeignResolution,
+    /// The provenance facts or the resolved unit differ from the digest filed beside them.
+    FactsMoved,
 }
 
 impl std::fmt::Display for Invalid {
@@ -146,6 +154,9 @@ impl std::fmt::Display for Invalid {
             Self::ForeignResolution => {
                 f.write_str("its resolved unit is not this module's, of this source")
             }
+            Self::FactsMoved => f.write_str(
+                "its provenance facts or resolved unit do not match the digest beside them",
+            ),
         }
     }
 }
@@ -201,6 +212,7 @@ impl CheckArtifact {
             interface_hash: interface_hash.to_string(),
             provenance: PersistentFacts::default(),
             resolved: None,
+            facts_digest: String::new(),
         })
     }
 
@@ -224,7 +236,19 @@ impl CheckArtifact {
     ///
     /// Only if serialisation itself fails, which for this shape it does not.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
+        let mut sealed = self.clone();
+        sealed.facts_digest = self.facts_of()?;
+        serde_json::to_string(&sealed)
+    }
+
+    /// The digest [`Self::facts_digest`] records: the two payloads' canonical JSON.
+    fn facts_of(&self) -> Result<String, serde_json::Error> {
+        let mut h = blake3::Hasher::new();
+        h.update(b"nazm.check-facts/1\0");
+        h.update(serde_json::to_string(&self.provenance)?.as_bytes());
+        h.update(b"\0");
+        h.update(serde_json::to_string(&self.resolved)?.as_bytes());
+        Ok(format!("blake3:{}", h.finalize().to_hex()))
     }
 
     /// Read one back and establish that it is the entry that was asked for.
@@ -310,6 +334,9 @@ impl CheckArtifact {
             .ok_or(Invalid::ForeignResolution)?;
         if unit.module != self.module || unit.source != self.source {
             return Err(Invalid::ForeignResolution);
+        }
+        if self.facts_of().ok().as_deref() != Some(self.facts_digest.as_str()) {
+            return Err(Invalid::FactsMoved);
         }
 
         Ok(Reusable {

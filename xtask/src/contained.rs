@@ -507,59 +507,152 @@ fn drain<R: Read + Send + 'static>(mut r: R, cap: usize) -> mpsc::Receiver<(Vec<
     rx
 }
 
-/// Containers a supervisor named for itself and then left behind by dying: `nazm-<name>-<pid>`
-/// whose `pid` is no longer a process. Exactly those — a name of any other shape, and one
-/// whose supervisor is alive, is not this runner's to remove. N32-H.
+/// Is this process under a memory ceiling it cannot exceed? `NAZM_CONTAINED=1` *and* a cgroup
+/// v2 `memory.max` that is a number. The variable alone is a declaration, and on macOS — no
+/// cgroup, and the contained image is Linux — it is never true (Q1-A2-02).
+pub(crate) fn under_ceiling() -> bool {
+    std::env::var("NAZM_CONTAINED").as_deref() == Ok("1")
+        && ceiling_value(
+            std::fs::read_to_string("/sys/fs/cgroup/memory.max")
+                .ok()
+                .as_deref(),
+        )
+}
+
+/// `memory.max`'s text is a byte count, not `max` and not absent.
+pub(crate) fn ceiling_value(memory_max: Option<&str>) -> bool {
+    memory_max.is_some_and(|t| t.trim().parse::<u64>().is_ok_and(|n| n > 0))
+}
+
+/// Why a heavy workload refuses to start here, or `None` under a ceiling.
+pub(crate) fn refuse_uncontained(what: &str) -> Option<String> {
+    if under_ceiling() {
+        return None;
+    }
+    Some(format!(
+        "refusing to run `{what}` with no resource ceiling: it runs only inside the contained \
+         runner (`cargo xtask contained …`), where `NAZM_CONTAINED=1` is set and the cgroup caps \
+         memory. Setting the variable on a host does not make a ceiling (docs/runbook.md)."
+    ))
+}
+
+/// The supervisor runs on the host, so either variable in its own environment is the forbidden
+/// host configuration, not a waiver it should pass on (`AGENTS.md`, *Always / never*).
+pub(crate) fn host_env_refusal(get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    ["NAZM_CONTAINED", "NAZM_ALLOW_UNCONTAINED"]
+        .into_iter()
+        .find(|v| get(v).is_some())
+        .map(|v| {
+            format!(
+                "contained: `{v}` is set in the host's environment; unset it. The runner sets \
+                 `NAZM_CONTAINED=1` inside the container itself, and nothing sets either on a host."
+            )
+        })
+}
+
+/// The label every contained run's container carries from creation, with its supervisor's
+/// pid and host beside it. Ownership is the label, never the name: a container named like
+/// one of this runner's — a Compose service `nazm-postgres-1`, another user's run, a run on a
+/// shared daemon from another machine — is not this runner's to remove (Q1-A2-01).
+pub(crate) const RUN_OWNER: &str = "nazm.owner=nazm-contained-runner";
+const SUPERVISOR_PID: &str = "nazm.supervisor-pid";
+const SUPERVISOR_HOST: &str = "nazm.supervisor-host";
+
+/// A container `docker ps` listed under [`RUN_OWNER`]: its name and its two supervisor labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Listed {
+    pub(crate) name: String,
+    pub(crate) pid: String,
+    pub(crate) host: String,
+}
+
+/// Containers a supervisor on this host labelled as its own and then left behind by dying:
+/// labelled [`RUN_OWNER`], named `nazm-<name>-<pid>` with the same `pid` in its label, the
+/// label's host this one, and that `pid` certainly not a process (`alive` answers `true`
+/// whenever it cannot tell). Exactly those. N32-H; Q1-A2-01.
 ///
 /// Every contained run starts by removing them. The mounted checkout is read-only, so a
 /// stranded container never holds the host's tree mutated; what it holds is a disposable
 /// copy, a CPU and memory reservation, and a deadline still running.
-pub(crate) fn stale(names: &[String], alive: impl Fn(u32) -> bool) -> Vec<String> {
-    names
+pub(crate) fn stale(listed: &[Listed], host: &str, alive: impl Fn(u32) -> bool) -> Vec<String> {
+    if host.is_empty() {
+        return Vec::new();
+    }
+    listed
         .iter()
-        .filter(|n| {
-            let Some(rest) = n.strip_prefix("nazm-") else {
+        .filter(|c| {
+            let Some(rest) = c.name.strip_prefix("nazm-") else {
                 return false;
             };
             let Some((workload, pid)) = rest.rsplit_once('-') else {
                 return false;
             };
             let named = !workload.is_empty()
-                && workload.chars().all(|c| c.is_ascii_lowercase() || c == '-');
-            let pid = pid.parse::<u32>().ok().filter(|p| pid == p.to_string());
-            named && pid.is_some_and(|p| p != std::process::id() && !alive(p))
+                && workload
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch == '-');
+            let pid = pid
+                .parse::<u32>()
+                .ok()
+                .filter(|p| pid == p.to_string() && c.pid == pid);
+            named && c.host == host && pid.is_some_and(|p| p != std::process::id() && !alive(p))
         })
-        .cloned()
+        .map(|c| c.name.clone())
         .collect()
+}
+
+/// This machine's name, as the supervisor labels record it; empty when it cannot be read, and
+/// then nothing is reaped.
+fn host_name() -> String {
+    Command::new("hostname")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// Is `pid` a process? `ps -p`, not `kill -0`: `kill -0` also fails for a live process that
+/// belongs to someone else (pid 1, another user's run), which would read as dead. When `ps`
+/// itself cannot run, the answer is "alive" — an unknown is never a licence to remove.
+fn process_alive(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "pid="])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_or(true, |s| s.success())
 }
 
 /// Remove the containers [`stale`] names, by exact name.
 fn reap_stale() -> Vec<String> {
-    let names: Vec<String> = Command::new("docker")
+    let listed: Vec<Listed> = Command::new("docker")
         .args([
             "ps",
             "-a",
             "--filter",
-            "name=^nazm-",
+            &format!("label={RUN_OWNER}"),
             "--format",
-            "{{.Names}}",
+            &format!(
+                "{{{{.Names}}}}\t{{{{.Label \"{SUPERVISOR_PID}\"}}}}\t{{{{.Label \"{SUPERVISOR_HOST}\"}}}}"
+            ),
         ])
         .output()
         .map(|o| {
             String::from_utf8_lossy(&o.stdout)
                 .lines()
-                .map(str::to_owned)
+                .filter_map(|l| {
+                    let mut f = l.split('\t');
+                    Some(Listed {
+                        name: f.next()?.to_owned(),
+                        pid: f.next()?.to_owned(),
+                        host: f.next()?.to_owned(),
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default();
-    let alive = |pid: u32| {
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    };
-    let gone = stale(&names, alive);
+    let gone = stale(&listed, &host_name(), process_alive);
     for n in &gone {
         let _ = Command::new("docker").args(["rm", "-f", n]).output();
     }
@@ -600,6 +693,12 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         elapsed: Duration::ZERO,
         oom_killed: false,
     };
+    if let Some(why) = host_env_refusal(|v| std::env::var(v).ok()) {
+        return Report {
+            outcome: Outcome::Unavailable(why),
+            ..empty
+        };
+    }
     if let Err(why) = docker_available() {
         return Report {
             outcome: Outcome::Unavailable(why),
@@ -627,6 +726,12 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         cmd.arg("run");
     }
     cmd.args(["--name", &container])
+        .args(["--label", RUN_OWNER])
+        .args([
+            "--label",
+            &format!("{SUPERVISOR_PID}={}", std::process::id()),
+        ])
+        .args(["--label", &format!("{SUPERVISOR_HOST}={}", host_name())])
         .args(["--memory", &format!("{}m", b.memory_mb)])
         // Equal to --memory: a cap that can be exceeded by swapping is not a cap.
         .args(["--memory-swap", &format!("{}m", b.memory_mb)])
@@ -1190,27 +1295,80 @@ mod tests {
 
     #[test]
     fn only_a_dead_supervisors_own_containers_are_stale() {
-        let names: Vec<String> = [
-            "nazm-mutate-100",
-            "nazm-tests-200",
-            "nazm-mutate-300",
-            "nazm-run-0100",
-            "nazm-mutate-",
-            "nazm--400",
-            "nazm-Mutate-500",
-            "other-mutate-600",
-            "nazm-mutate-700x",
-            "postgres",
-        ]
-        .map(str::to_owned)
-        .to_vec();
-        // 100 and 200 are dead; 300 is alive; the rest are not this runner's shape.
+        let c = |name: &str, pid: &str, host: &str| Listed {
+            name: name.to_owned(),
+            pid: pid.to_owned(),
+            host: host.to_owned(),
+        };
+        let listed = [
+            c("nazm-mutate-100", "100", "here"),
+            c("nazm-tests-200", "200", "here"),
+            c("nazm-mutate-300", "300", "here"),
+            c("nazm-run-0100", "0100", "here"),
+            c("nazm-mutate-", "", "here"),
+            c("nazm--400", "400", "here"),
+            c("nazm-Mutate-500", "500", "here"),
+            c("other-mutate-600", "600", "here"),
+            c("nazm-mutate-700x", "700x", "here"),
+            // Another machine's supervisor, on a shared daemon: its pid means nothing here.
+            c("nazm-tests-800", "800", "elsewhere"),
+            // A label whose pid disagrees with the name.
+            c("nazm-tests-900", "901", "here"),
+        ];
+        // 300 is alive; every other pid is dead.
         let alive = |p: u32| p == 300;
-        assert_eq!(stale(&names, alive), ["nazm-mutate-100", "nazm-tests-200"]);
+        assert_eq!(
+            stale(&listed, "here", alive),
+            ["nazm-mutate-100", "nazm-tests-200"]
+        );
         // This supervisor's own container is never stale, whatever liveness says.
-        let own = vec![format!("nazm-mutate-{}", std::process::id())];
-        assert!(stale(&own, |_| false).is_empty());
+        let own = [c(
+            &format!("nazm-mutate-{}", std::process::id()),
+            &std::process::id().to_string(),
+            "here",
+        )];
+        assert!(stale(&own, "here", |_| false).is_empty());
+        // No host name, no reaping.
+        assert!(stale(&listed, "", |_| false).is_empty());
     }
+
+    /// Q1-A2-02: a ceiling is a number in `memory.max`, and the supervisor refuses either
+    /// variable in its own environment.
+    #[test]
+    fn a_declaration_is_not_a_ceiling() {
+        assert!(ceiling_value(Some("4294967296\n")));
+        assert!(!ceiling_value(Some("max\n")));
+        assert!(!ceiling_value(Some("0")));
+        assert!(!ceiling_value(None));
+        if cfg!(target_os = "macos") {
+            assert!(!under_ceiling());
+            assert!(refuse_uncontained("mutate").is_some());
+        }
+        assert!(host_env_refusal(|_| None).is_none());
+        for set in ["NAZM_CONTAINED", "NAZM_ALLOW_UNCONTAINED"] {
+            let why = host_env_refusal(|v| (v == set).then(|| "1".to_owned())).unwrap();
+            assert!(why.contains(set), "{why}");
+        }
+    }
+
+    /// Q1-A2-01: ownership is the label, and liveness is `ps`. A container shaped like this
+    /// runner's — Compose's `nazm-postgres-1` — is not listed under the label, so it is never
+    /// a candidate; and pid 1, which `kill -0` reports as dead to an unprivileged user, is a
+    /// live process.
+    #[test]
+    fn a_foreign_container_named_like_ours_is_never_reaped() {
+        let compose = Listed {
+            name: "nazm-postgres-1".to_owned(),
+            pid: "1".to_owned(),
+            host: "here".to_owned(),
+        };
+        // Even listed with labels that match, pid 1 is alive.
+        assert!(stale(std::slice::from_ref(&compose), "here", process_alive).is_empty());
+        assert!(process_alive(1));
+        // The listing asks Docker for the label, not the name.
+        assert!(RUN_OWNER.starts_with("nazm.owner=") && RUN_OWNER != CACHE_OWNER);
+    }
+
     use std::path::PathBuf;
 
     /// Small fixture image: anything with a shell. The export path never runs a workload,

@@ -7072,10 +7072,10 @@ killers = [{ package = "xtask", bin = "xtask", name = "mutate::tests::a_killer_i
 
 [[mutation]]
 name = "n32h-a-live-supervisors-container-is-reaped"
-why = "the stale-container reaper removes a container whose supervisor is still running"
+why = "the stale-container reaper removes a container whose supervisor is still running. Repointed by Q1, which made ownership the label and the host"
 file = "xtask/src/contained.rs"
-find = "            named && pid.is_some_and(|p| p != std::process::id() && !alive(p))"
-replace = "            named && pid.is_some_and(|p| p != std::process::id() && (alive(p) || !alive(p)))"
+find = "            named && c.host == host && pid.is_some_and(|p| p != std::process::id() && !alive(p))"
+replace = "            named && c.host == host && pid.is_some_and(|p| p != std::process::id() && (alive(p) || !alive(p)))"
 killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::only_a_dead_supervisors_own_containers_are_stale" }]
 
 # --- N32-H2: the mutation baseline, shared observations, the persistent target ---------
@@ -8231,10 +8231,10 @@ killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_keeps_
 
 [[mutation]]
 name = "n38-the-entry-schema-stays"
-why = "the check entry keeps the `/1` name for a shape that now carries facts, so an entry without them is read as one with none. Repointed by N77, which moved the entry to `/3` for its resolved unit: an entry without one must not be read under the new name. Repointed by N80, which moved it to `/4` for cells and indirect calls."
+why = "the check entry keeps the `/1` name for a shape that now carries facts, so an entry without them is read as one with none. Repointed by N77, which moved the entry to `/3` for its resolved unit: an entry without one must not be read under the new name. Repointed by N80, which moved it to `/4` for cells and indirect calls, and by Q1, which moved it to `/5` for the facts digest."
 file = "crates/nazm-cache/src/artifact.rs"
-find = """pub const SCHEMA: &str = "nazm.check/4";"""
-replace = """pub const SCHEMA: &str = "nazm.check/3";"""
+find = """pub const SCHEMA: &str = "nazm.check/5";"""
+replace = """pub const SCHEMA: &str = "nazm.check/4";"""
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_keeps_the_modules_provenance_facts" }]
 
 [[mutation]]
@@ -10172,19 +10172,32 @@ killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_pol
 name = "n52-a-site-in-a-loop-counts-once"
 why = "every site is at-most-once per call, so an allocation in a loop reads as bounded"
 file = "crates/nazm-mir/src/cost.rs"
-find = "        let count = if cyclic.get(i).copied().unwrap_or(true) {"
-replace = "        let count = if false {"
+find = """
+    for (i, b) in f.blocks.iter().enumerate() {
+        let count = if cyclic.get(i).copied().unwrap_or(true) {
+            Count::Unknown
+        } else {
+            Count::AtMostOnce
+        };
+        let on_failure = !matches!(b.origin, crate::ir::BlockOrigin::Source);
+        for s in &b.stmts {"""
+replace = """
+    for (i, b) in f.blocks.iter().enumerate() {
+        let count = if false {
+            Count::Unknown
+        } else {
+            Count::AtMostOnce
+        };
+        let on_failure = !matches!(b.origin, crate::ir::BlockOrigin::Source);
+        for s in &b.stmts {"""
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "explain_cost_reports_each_site_with_a_count_per_call" }]
 
 [[mutation]]
 name = "n52-a-push-is-no-allocation"
-why = "a push that may grow its sequence is not counted, so the commonest allocation in a loop is invisible"
+why = "a push that may grow its sequence is not counted, so the commonest allocation in a loop is invisible. Repointed by Q1, which made the table exhaustive"
 file = "crates/nazm-mir/src/cost.rs"
-find = """
-            | Intrinsic::IntsPush
-"""
-replace = """
-"""
+find = "        Intrinsic::IntsPush | Intrinsic::StrsPush | Intrinsic::VecPush => true,"
+replace = "        Intrinsic::IntsPush | Intrinsic::StrsPush | Intrinsic::VecPush => false,"
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "explain_cost_reports_each_site_with_a_count_per_call" }]
 
 [[mutation]]
@@ -11549,7 +11562,7 @@ killers = [{ package = "nazm-cli", test = "simd", name = "a_running_sum_that_ove
 name = "n66-the-counter-may-start-anywhere"
 why = "a loop whose counter starts past 0 is replaced by the whole sum, adding elements it skipped"
 file = "crates/nazm-service/src/vectorize.rs"
-find = '    if start != Some(Some(0)) {'
+find = '    if start != Some(0) {'
 replace = '    if start.is_none() {'
 killers = [{ package = "nazm-cli", test = "simd", name = "explain_cost_says_what_became_of_every_loop" }]
 
@@ -14443,3 +14456,194 @@ file = "crates/nazm-cli/src/backend.rs"
 find = "        vec![\"-lm\".to_owned()]"
 replace = "        Vec::new()"
 killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::a_linux_link_names_the_c_librarys_mathematics_and_no_other_does" }]
+
+# --- Q1: security, correctness, reliability qualification ---------------------------------------
+
+[[mutation]]
+name = "q1-a-container-named-like-ours-is-reaped"
+why = "the reaper's liveness probe is `kill -0`, which fails for a live process the user does not own, so pid 1 \u2014 Compose's `nazm-postgres-1` \u2014 and another user's run read as dead and are removed"
+file = "xtask/src/contained.rs"
+find = '''
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "pid="])'''
+replace = '''
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])'''
+killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::a_foreign_container_named_like_ours_is_never_reaped" }]
+
+[[mutation]]
+name = "q1-another-hosts-container-is-reaped"
+why = "the reaper ignores the supervisor-host label, so a container another machine started on a shared daemon is judged by a pid that means nothing here"
+file = "xtask/src/contained.rs"
+find = '            named && c.host == host && pid.is_some_and(|p| p != std::process::id() && !alive(p))'
+replace = '            named && pid.is_some_and(|p| p != std::process::id() && !alive(p))'
+killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::only_a_dead_supervisors_own_containers_are_stale" }]
+
+[[mutation]]
+name = "q1-a-declaration-is-a-ceiling"
+why = "`memory.max` reading `max`, or absent, counts as a ceiling, so `NAZM_CONTAINED=1` on a host is believed"
+file = "xtask/src/contained.rs"
+find = '    memory_max.is_some_and(|t| t.trim().parse::<u64>().is_ok_and(|n| n > 0))'
+replace = '    memory_max.is_some() || memory_max.is_none()'
+killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::a_declaration_is_not_a_ceiling" }]
+
+[[mutation]]
+name = "q1-a-git-dependency-is-allowed"
+why = "the dependency-source policy accepts a source other than crates.io"
+file = "xtask/src/supply.rs"
+find = '            Some(other) => problems.push(format!('
+replace = '            Some(other) => drop(format!('
+killers = [{ package = "xtask", bin = "xtask", name = "supply::tests::a_git_dependency_is_refused" }]
+
+[[mutation]]
+name = "q1-subnet-overlap-by-octets"
+why = "overlap is compared over whole octets again, so a /15 or /20 holding the candidate is missed and a colliding network is handed out"
+file = "crates/nazm-bench/src/sandbox/network.rs"
+find = '    let bits = u32::from(e_bits.min(c_bits).min(32));'
+replace = '    let bits = 8 * (u32::from(e_bits.min(c_bits).min(32)) / 8);'
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "a_supernet_of_any_prefix_length_counts_as_a_collision" }]
+
+[[mutation]]
+name = "q1-a-lockfile-may-record-a-package-twice"
+why = "a lockfile naming one package twice is read as its last entry, so the lock a reviewer reads is not the lock enforced"
+file = "crates/nazm-package/src/lib.rs"
+find = '            if recorded.insert(&l.name, l).is_some() {'
+replace = '            if recorded.insert(&l.name, l).is_some() && false {'
+killers = [{ package = "nazm-package", test = "registry", name = "a_lockfile_recording_a_package_twice_is_refused" }]
+
+[[mutation]]
+name = "q1-publish-merges-into-debris"
+why = "publish copies into a version directory the index does not list, sealing its stray files into the version"
+file = "crates/nazm-package/src/registry.rs"
+find = '    if target.symlink_metadata().is_ok() {'
+replace = '    if false {'
+killers = [{ package = "nazm-package", test = "registry", name = "a_publish_never_merges_into_a_directory_already_there" }]
+
+[[mutation]]
+name = "q1-a-manifest-may-name-a-script"
+why = "a manifest accepts keys it does not know, so `build = \u2026` or `[scripts]` is silently ignored instead of refused"
+file = "crates/nazm-package/src/lib.rs"
+find = '''
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawManifest {'''
+replace = '''
+#[derive(Debug, Deserialize)]
+struct RawManifest {'''
+killers = [{ package = "nazm-package", lib = true, name = "tests::a_manifest_cannot_name_a_program_to_run" }]
+
+[[mutation]]
+name = "q1-an-entry-s-facts-are-believed"
+why = "a check entry's provenance facts are used without their digest, so an edited sink list turns a refused flow into `ok`"
+file = "crates/nazm-cache/src/artifact.rs"
+find = '        if self.facts_of().ok().as_deref() != Some(self.facts_digest.as_str()) {'
+replace = '        if false {'
+killers = [{ package = "nazm-cache", test = "store", name = "an_entry_whose_facts_moved_is_refused" }, { package = "nazm-cli", test = "incremental", name = "an_edited_provenance_fact_cannot_hide_a_flow" }]
+
+[[mutation]]
+name = "q1-a-closure-module-files-an-entry"
+why = "a module that makes a closure files a check entry it cannot be read back from, so the next run solves the program's flow as incomplete and refuses what a cold check accepts"
+file = "crates/nazm-cli/src/checking.rs"
+find = '            .any(|f| closure(f.function) || f.makes.iter().any(|m| closure(m.function)))'
+replace = '            .any(|_| false)'
+killers = [{ package = "nazm-cli", test = "incremental", name = "a_module_that_makes_a_closure_gives_the_same_verdict_warm_as_cold" }]
+
+[[mutation]]
+name = "q1-an-allocation-behind-a-call-is-unseen"
+why = "`bounded-allocation` reads only a function's own sites, so an allocation moved into a helper, trait method or generic called in a loop is accepted"
+file = "crates/nazm-cli/src/profile.rs"
+find = '        .chain(nazm_mir::cost::allocating_calls(program))'
+replace = '        .chain(Vec::new())'
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "bounded_allocation_sees_an_allocation_behind_a_call" }]
+
+[[mutation]]
+name = "q1-gate-2-built-ins-do-not-allocate"
+why = "the built-ins that make storage are not allocation sites, so `bytes_new`, `text_concat` and the rest in a loop pass `bounded-allocation`"
+file = "crates/nazm-mir/src/cost.rs"
+find = '        | Intrinsic::ScalarText => true,'
+replace = '        | Intrinsic::ScalarText => false,'
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "bounded_allocation_counts_every_built_in_that_allocates" }]
+
+[[mutation]]
+name = "q1-a-root-marker-drops-the-profile"
+why = "profiles are read from the package found from the entry file, so a `nazm.root` beside it hides the manifest's `profile`"
+file = "crates/nazm-cli/src/profile.rs"
+find = '    let graph = crate::package::profile_graph(named_path);'
+replace = '    let graph = crate::package::graph_for(file).and_then(Result::ok);'
+killers = [{ package = "nazm-cli", test = "profiles_v2", name = "a_root_marker_inside_a_package_does_not_drop_its_profile" }]
+
+[[mutation]]
+name = "q1-a-state-out-of-sight-writes-nothing"
+why = "a new state returned from a helper, field, array or trait method reads as writing nothing, so `signed-writes` accepts an entrypoint any caller can use to change the state"
+file = "crates/nazm-service/src/contract.rs"
+find = '''
+            if !seen {
+                self.writes = None;'''
+replace = '''
+            if false {
+                self.writes = None;'''
+killers = [{ package = "nazm-cli", test = "accounts", name = "a_state_built_out_of_sight_is_a_write" }]
+
+[[mutation]]
+name = "q1-the-counter-may-be-written-before-the-loop"
+why = "the summation rewrite ignores what lies between the counter's `= 0` and the loop, so a write in an `if` or a loop is lost and the native sum starts from 0"
+file = "crates/nazm-service/src/vectorize.rs"
+find = '        .all(plain)'
+replace = '        .all(|_| true)'
+killers = [{ package = "nazm-cli", test = "simd", name = "a_counter_written_after_its_zero_is_not_summed_from_zero" }]
+
+[[mutation]]
+name = "q1-an-unsigned-product-may-pass-i128"
+why = "the 64-by-64-bit product is taken in `i128` unchecked, so `UInt64::MAX * UInt64::MAX` panics the compiler"
+file = "crates/nazm-sema/src/numeric.rs"
+find = '        Arith::Mul => x.checked_mul(y).ok_or(NumError::Overflow)?,'
+replace = '        Arith::Mul => x.wrapping_mul(y),'
+killers = [{ package = "nazm-sema", lib = true, name = "numeric::tests::the_largest_unsigned_products_overflow_rather_than_panic" }]
+
+[[mutation]]
+name = "q1-a-float-tie-goes-the-other-way"
+why = "the interpreter writes Rust's shortest digits, which break a tie between two equally short candidates away from even, unlike the native runtime"
+file = "crates/nazm-sema/src/numeric.rs"
+find = '        .map(|p| format!("{x:.p$e}"))'
+replace = '        .map(|_| format!("{x:e}"))'
+killers = [{ package = "nazm-sema", lib = true, name = "numeric::tests::a_tie_between_equally_short_digits_goes_to_even" }]
+
+[[mutation]]
+name = "q1-a-far-deadline-wraps"
+why = "a pool task's deadline past i64's nanoseconds wraps into the past, so its select times out at once and its worker spins"
+file = "crates/nazm-runtime/src/core.rs"
+find = '  %far = icmp sgt i64 %s, 9223372035'
+replace = '  %far = icmp sgt i64 %s, 9223372036854775807'
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_deadline_past_the_nanosecond_range_waits_for_the_value" }]
+
+[[mutation]]
+name = "q1-a-scratch-directory-is-adopted"
+why = "a scratch directory already at the name \u2014 another user's, or a symlink to one \u2014 is built in and run from"
+file = "crates/nazm-cli/src/scratch.rs"
+find = '    std::fs::DirBuilder::new().mode(0o700).create(dir)'
+replace = '    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)'
+killers = [{ package = "nazm-cli", bin = "nazm", name = "scratch::tests::a_name_already_taken_is_never_adopted" }]
+
+[[mutation]]
+name = "q1-no-stack-probes"
+why = "generated functions ask for no stack probes, so a frame larger than a task stack's guard page steps over it"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\" {{   ; {}",'
+replace = '        "define {}{} {}({params}) {{   ; {}",'
+killers = [{ package = "nazm-cli", test = "build", name = "every_generated_function_asks_for_stack_probes" }]
+
+[[mutation]]
+name = "q1-an-output-may-overwrite-a-module"
+why = "only the entry file is protected from `-o`, so a build can write its executable over another module's source"
+file = "crates/nazm-cli/src/build.rs"
+find = '            .any(|n| same_file(Path::new(n), &output));'
+replace = '            .any(|_| false);'
+killers = [{ package = "nazm-cli", test = "build", name = "an_output_over_any_module_of_the_program_is_refused" }]
+
+[[mutation]]
+name = "q1-a-comma-in-a-shared-name"
+why = "a comma in a shared library's file name reaches `-Wl,\u2026`, where the linker reads what follows as another argument"
+file = "crates/nazm-cli/src/build.rs"
+find = "            .is_some_and(|n| n.to_string_lossy().contains(','))"
+replace = "            .is_some_and(|n| n.to_string_lossy().contains(',') && false)"
+killers = [{ package = "nazm-cli", test = "build", name = "a_shared_library_name_with_a_comma_is_refused" }]

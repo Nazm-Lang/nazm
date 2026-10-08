@@ -248,6 +248,34 @@ fn a_native_build_replaces_the_summation_loop_and_reports_its_failure_at_the_add
     }
 }
 
+/// Q1-B-01: the rewrite reads the counter's start from its last top-level `= 0`; a write of the
+/// counter after it — in an `if`, a loop, a block — is not that, so the loop is kept and every
+/// implementation sums from where the program left the counter.
+#[test]
+fn a_counter_written_after_its_zero_is_not_summed_from_zero() {
+    for (what, between, sum) in [
+        ("an if", "if ints_len(v) > 10 { i = 95; }", "490"),
+        ("a loop", "while i < 50 { i = i + 1; }", "3775"),
+        ("a block", "{ i = 90; }", "955"),
+    ] {
+        let src = format!(
+            "fn main() -> Int {{\n\
+             let v = ints_new();\n\
+             let mut k = 0;\n\
+             while k < 100 {{ ints_push(v, k + 1); k = k + 1; }}\n\
+             let mut i = 0;\n\
+             let mut s = 0;\n\
+             {between}\n\
+             while i < ints_len(v) {{ s = s + ints_get(v, i); i = i + 1; }}\n\
+             s\n\
+             }}\n"
+        );
+        for (engine, out, status) in everywhere(&src) {
+            assert_eq!((out.trim(), status), (sum, Some(0)), "{what}, {engine}");
+        }
+    }
+}
+
 #[test]
 fn the_interpreter_keeps_the_loop() {
     // Its iteration budget still counts every turn of the loop a native build replaced.

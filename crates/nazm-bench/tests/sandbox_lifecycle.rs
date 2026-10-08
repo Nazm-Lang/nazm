@@ -313,6 +313,41 @@ fn a_containing_supernet_counts_as_a_collision() {
     ));
 }
 
+/// Q1-A2-08: overlap is decided on the bits of the shorter prefix, so supernets whose length is
+/// not a whole number of octets are seen; an IPv6 network is not an IPv4 collision; and a
+/// subnet that does not parse counts as occupied.
+#[test]
+fn a_supernet_of_any_prefix_length_counts_as_a_collision() {
+    let block = SubnetBlock {
+        prefix: [10, 201],
+        slots: vec![7],
+    };
+    for occupied in [
+        "10.200.0.0/15",
+        "10.201.0.0/20",
+        "10.0.0.0/8",
+        "0.0.0.0/0",
+        "garbage",
+    ] {
+        assert!(
+            matches!(
+                network::allocate(&block, &[occupied.to_owned()]),
+                Err(AllocationError::BlockExhausted { .. })
+            ),
+            "{occupied} contains 10.201.7.0/24"
+        );
+    }
+    for free in ["10.202.0.0/15", "10.201.16.0/20", "fd00::/64"] {
+        assert_eq!(
+            network::allocate(&block, &[free.to_owned()])
+                .unwrap()
+                .cidr(),
+            "10.201.7.0/24",
+            "{free} does not contain 10.201.7.0/24"
+        );
+    }
+}
+
 #[test]
 fn teardown_removes_containers_before_networks_and_volumes() {
     // The rule that makes ordering load-bearing: a network with attached endpoints and a

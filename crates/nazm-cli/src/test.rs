@@ -290,10 +290,8 @@ fn gather(
 /// **created fresh**: a directory left by a previous run with the same id would hand
 /// this one a stale executable for a case that failed to build.
 fn tempdir() -> Result<PathBuf, String> {
-    let dir = std::env::temp_dir().join(format!("nazm-test-{}", std::process::id()));
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    Ok(dir)
+    // Exclusive and private (Q1-A1-02): an executable is built here and then run.
+    crate::scratch::temporary("nazm-test-").map_err(|e| format!("a scratch directory: {e}"))
 }
 
 /// Combined output, trimmed — the same comparison `compiler/bootstrap.sh` makes.

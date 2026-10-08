@@ -77,6 +77,35 @@ fn a_write_no_signer_decides_on_is_refused_by_name() {
         .success());
 }
 
+/// Q1-C-03: a new state the analysis cannot see into — made by a helper, read out of a wrapper's
+/// field or an array, returned by a trait method — may write every field, so an entrypoint
+/// returning one without deciding on its caller is refused, as one building it in place is.
+#[test]
+fn a_state_built_out_of_sight_is_a_write() {
+    let new = "State(owner: s.owner, alice: s.alice, bob: s.bob + n, paused: s.paused)";
+    for (what, defs, value) in [
+        ("a helper", format!("fn give(s: State, n: Int) -> State ! {{}} {{ {new} }}\n"), "give(s, n)".to_owned()),
+        ("a wrapper's field", "struct W { st: State }\n".to_owned(), format!("W(st: {new}).st")),
+        ("an array element", String::new(), format!("[{new}][0]")),
+        (
+            "a trait method",
+            format!("trait G {{ fn give(self: Self, n: Int) -> State ! {{}}; }}\nimpl G for State {{ fn give(self: State, n: Int) -> State ! {{}} {{ let s = self; {new} }} }}\n"),
+            "s.give(n)".to_owned(),
+        ),
+    ] {
+        let d = contract(&format!(
+            "{defs}pub fn airdrop(s: State, caller: Int, n: Int) -> Result[State, Int] ! {{}} {{ Result[State, Int].Ok(value: {value}) }}\n"
+        ));
+        let o = nazm(d.path(), &["check", "--profile", "accounts", "c.nz"]);
+        let e = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success(), "{what}: {e}");
+        assert!(
+            e.contains("`airdrop` writes the state and never decides on its caller"),
+            "{what}: {e}"
+        );
+    }
+}
+
 #[test]
 fn a_check_made_only_in_a_helper_is_not_trusted() {
     let d = contract(
