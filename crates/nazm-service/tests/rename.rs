@@ -11,41 +11,10 @@
     clippy::indexing_slicing
 )]
 
-use std::path::PathBuf;
-
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_service::{LanguageService, Refusal, RenamePlan, Target};
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
-
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (name, text) in files {
-            std::fs::write(dir.path().join(name), text).unwrap();
-        }
-        Self { dir }
-    }
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
-    }
-    fn disk(&self, name: &str) -> String {
-        std::fs::read_to_string(self.path(name)).unwrap()
-    }
-}
+mod common;
+use common::{on_the_service_stack, Project};
 
 /// The byte offset of the `n`th occurrence of `needle` in `text`, plus `into` bytes.
 fn at(text: &str, needle: &str, n: usize, into: usize) -> u32 {
@@ -651,8 +620,8 @@ fn a_private_definition_is_renamed_in_its_module_and_an_exported_one_is_refused(
             );
         }
         // Nothing was written.
-        assert_eq!(p.disk("lib.nz"), LIB);
-        assert_eq!(p.disk("main.nz"), MAIN);
+        assert_eq!(p.read("lib.nz"), LIB);
+        assert_eq!(p.read("main.nz"), MAIN);
     });
 }
 

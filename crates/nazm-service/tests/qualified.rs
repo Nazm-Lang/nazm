@@ -11,19 +11,10 @@
     clippy::indexing_slicing
 )]
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_service::{LanguageService, Target};
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
+mod common;
+use common::on_the_service_stack;
 
 const GEOMETRY: &str =
     "pub struct Point { x: Int, y: Int, }\npub fn area(p: Point) -> Int { p.x * p.y }\n";

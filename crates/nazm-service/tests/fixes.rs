@@ -12,39 +12,11 @@
     clippy::indexing_slicing
 )]
 
-use std::path::PathBuf;
-
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_diag::Applicability;
 use nazm_service::{FixPlan, LanguageService, NoFixes};
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
-
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (name, text) in files {
-            std::fs::write(dir.path().join(name), text).unwrap();
-        }
-        Self { dir }
-    }
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
-    }
-}
+mod common;
+use common::{on_the_service_stack, Project};
 
 fn offset(text: &str, needle: &str, n: usize) -> u32 {
     let mut from = 0;
