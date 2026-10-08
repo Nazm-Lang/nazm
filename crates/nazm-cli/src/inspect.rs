@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use serde_json::{json, Map, Value};
 
-use crate::{exit, load};
+use crate::exit;
 
 /// Every target `--target` accepts, in the order a reader should meet them; `nazm capabilities`
 /// lists the same (N74).
@@ -61,19 +61,9 @@ pub(crate) fn effects(set: Option<nazm_core::sema::EffectSet>) -> Value {
 }
 
 pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
-    let source_root = match crate::root::decide(path, None) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("nazm: {e}");
-            return ExitCode::from(crate::exit::root_status(&e));
-        }
-    };
-    let loaded = match load::load(path, source_root.path()) {
-        Ok(f) => f,
-        Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(crate::exit::load_status(&diagnostics));
-        }
+    let loaded = match crate::opened::opened(path, None, false) {
+        Ok(l) => l,
+        Err(code) => return ExitCode::from(code),
     };
     let map = &loaded.map;
     let graph = &loaded.graph;

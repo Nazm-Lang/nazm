@@ -24,22 +24,12 @@ use std::process::ExitCode;
 use nazm_core::sema::ModuleId;
 use nazm_iface::{InterfaceHash, PersistentUnitInterface};
 
-use crate::{exit, load};
+use crate::exit;
 
 pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> ExitCode {
-    let source_root = match crate::root::decide(path, declared) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("nazm: {e}");
-            return ExitCode::from(crate::exit::root_status(&e));
-        }
-    };
-    let loaded = match load::load(path, source_root.path()) {
-        Ok(f) => f,
-        Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(crate::exit::load_status(&diagnostics));
-        }
+    let loaded = match crate::opened::opened(path, declared, false) {
+        Ok(l) => l,
+        Err(code) => return ExitCode::from(code),
     };
 
     // Checked first, always. An interface published from source that does not check would

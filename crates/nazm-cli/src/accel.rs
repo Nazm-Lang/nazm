@@ -85,19 +85,9 @@ pub(crate) fn run(
     check: bool,
     print: bool,
 ) -> ExitCode {
-    let source_root = match crate::root::decide(file, None) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("nazm: {e}");
-            return ExitCode::from(crate::exit::root_status(&e));
-        }
-    };
-    let loaded = match crate::load::load(file, source_root.path()) {
-        Ok(f) => f,
-        Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(crate::exit::load_status(&diagnostics));
-        }
+    let loaded = match crate::opened::opened(file, None, false) {
+        Ok(l) => l,
+        Err(code) => return ExitCode::from(code),
     };
     let mut columns: Vec<Vec<i64>> = Vec::with_capacity(inputs.len());
     for input in inputs {

@@ -15,14 +15,7 @@ use serde_json::{json, Value};
 use crate::{exit, load};
 
 fn loaded(path: &Path) -> Result<load::Loaded, ExitCode> {
-    let source_root = crate::root::decide(path, None).map_err(|e| {
-        eprintln!("nazm: {e}");
-        ExitCode::from(exit::root_status(&e))
-    })?;
-    load::load(path, source_root.path()).map_err(|(partial, diagnostics)| {
-        crate::emit(&diagnostics, &partial.map, false);
-        ExitCode::from(exit::load_status(&diagnostics))
-    })
+    crate::opened::opened(path, None, false).map_err(ExitCode::from)
 }
 
 fn failed(diagnostics: &[nazm_diag::Diagnostic], map: &nazm_span::SourceMap) -> ExitCode {
