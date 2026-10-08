@@ -14458,18 +14458,9 @@ replace = "        Vec::new()"
 killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::a_linux_link_names_the_c_librarys_mathematics_and_no_other_does" }]
 
 # --- Q1: security, correctness, reliability qualification ---------------------------------------
-
-[[mutation]]
-name = "q1-a-container-named-like-ours-is-reaped"
-why = "the reaper's liveness probe is `kill -0`, which fails for a live process the user does not own, so pid 1 \u2014 Compose's `nazm-postgres-1` \u2014 and another user's run read as dead and are removed"
-file = "xtask/src/contained.rs"
-find = '''
-    Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "pid="])'''
-replace = '''
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])'''
-killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::a_foreign_container_named_like_ours_is_never_reaped" }]
+# The reaper's `ps` liveness (Q1-A2-01) has no mutant: the contained runner is root, for whom the
+# `kill -0` it replaced also answers "alive" for pid 1. `contained::tests::a_foreign_container_named_
+# like_ours_is_never_reaped` holds it on a host, where it was found.
 
 [[mutation]]
 name = "q1-another-hosts-container-is-reaped"
