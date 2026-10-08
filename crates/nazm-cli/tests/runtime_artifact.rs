@@ -180,13 +180,15 @@ fn every_artifact_that_does_not_fit_is_refused_by_name_and_nothing_is_written() 
     let manifest = d.path().join("rt/nazm-runtime.json");
     let original = std::fs::read_to_string(&manifest).unwrap();
     let refused = |why: &str| {
+        // An artifact that cannot be read is 3, one that does not fit 1 (Q1-C1).
+        let status = if why.contains("no readable") { 3 } else { 1 };
         let o = nazm(d.path(), &["build", "p.nz", "-o", "out", "--runtime", "rt"]);
-        assert_eq!(o.status.code(), Some(4), "{why}: {}", text(&o));
+        assert_eq!(o.status.code(), Some(status), "{why}: {}", text(&o));
         assert!(text(&o).contains(why), "{why}: {}", text(&o));
         assert!(!d.path().join("out").exists(), "{why}: nothing is written");
         let v = nazm(d.path(), &["runtime", "verify", "rt"]);
         if !why.contains("reaches") {
-            assert_eq!(v.status.code(), Some(4), "verify, {why}");
+            assert_eq!(v.status.code(), Some(status), "verify, {why}");
         }
     };
     let edit = |from: &str, to: &str| {
@@ -236,7 +238,7 @@ fn a_targets_profile_is_its_own_and_a_board_links_its_archive() {
             "x",
         ],
     );
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(5));
     assert!(
         text(&o).contains("links the `board` runtime, not `hosted`"),
         "{}",
@@ -247,7 +249,7 @@ fn a_targets_profile_is_its_own_and_a_board_links_its_archive() {
         d.path(),
         &["build", "p.nz", "-o", "h", "--runtime", "board"],
     );
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(1));
     assert!(
         text(&o).contains("the runtime is for aarch64-unknown-none"),
         "{}",

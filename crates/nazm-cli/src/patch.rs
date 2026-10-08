@@ -51,7 +51,7 @@ pub(crate) fn run(
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm patch: {e}");
-            return ExitCode::from(2);
+            return ExitCode::from(crate::exit::TOOLCHAIN_FAILED);
         }
     };
     let text = if json {
@@ -76,21 +76,21 @@ pub(crate) fn apply(plan: &Path, base: &Path) -> ExitCode {
         Ok(t) => t,
         Err(e) => {
             eprintln!("nazm patch apply: cannot read {}: {e}", plan.display());
-            return ExitCode::from(2);
+            return ExitCode::from(crate::exit::NO_SUCH_FILE);
         }
     };
     let v: serde_json::Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("nazm patch apply: {} is not JSON: {e}", plan.display());
-            return ExitCode::from(2);
+            return ExitCode::from(crate::exit::CHECK_FAILED);
         }
     };
     if v.get("schema").and_then(serde_json::Value::as_str) != Some("nazm.patch/1")
         || v.get("status").and_then(serde_json::Value::as_str) != Some("available")
     {
         eprintln!("nazm patch apply: not an available `nazm.patch/1` plan");
-        return ExitCode::from(2);
+        return ExitCode::from(crate::exit::CHECK_FAILED);
     }
     let files = v
         .get("files")
@@ -177,7 +177,7 @@ pub(crate) fn apply(plan: &Path, base: &Path) -> ExitCode {
         if let Err(e) = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path)) {
             let _ = std::fs::remove_file(&tmp);
             eprintln!("nazm patch apply: writing {} failed: {e}", path.display());
-            return ExitCode::from(2);
+            return ExitCode::from(crate::exit::TOOLCHAIN_FAILED);
         }
     }
     println!(

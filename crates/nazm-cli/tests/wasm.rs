@@ -219,7 +219,7 @@ fn what_a_module_cannot_have_is_refused_by_name() {
     // No heap.
     let d = program("fn main() -> Int { str_len(int_to_str(42)) }\n");
     let o = objects(d.path(), &[]);
-    assert_eq!(o.status.code(), Some(4), "{}", err(&o));
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
     assert!(
         err(&o).contains("`wasm32-unknown-unknown` has no operating system"),
         "{}",
@@ -241,9 +241,9 @@ fn what_a_module_cannot_have_is_refused_by_name() {
             "prog.nz",
         ],
     );
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(5));
     let o = objects(d.path(), &["--stack-watermark"]);
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(5));
     assert!(
         err(&o).contains("`--stack-watermark` measures a board's stack"),
         "{}",

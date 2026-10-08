@@ -143,6 +143,24 @@ A wall-clock timeout was already in place when the machine went down.
 
 ---
 
+## A second incident, recorded — Q1, 2026-10-08
+
+**What happened.** To confirm that `compiler/bootstrap.sh` refuses a host, an agent ran it once in
+its own shell with `NAZM_CONTAINED=1` set for that command. The script refused at once — its new
+check found no numeric `memory.max` — and nothing was built or run. No ceiling was bypassed. Setting
+the variable on a host is nonetheless forbidden by this runbook (*What must never run uncontained*,
+and `AGENTS.md`), whatever the command is expected to do: a check that was wrong, or a different
+script, would have run uncontained on the agent's word.
+
+**What changed.** Nothing in these rules — they were right, and are not weakened. The refusal is now
+tested the way it may be: `xtask/tests/host_refusal.rs` starts each guarded entry point as a **child
+process** whose environment the test builds, so the variable exists only in that child, never in an
+agent's or a developer's shell. Recorded in `.agent/handoffs/q1.md` and the Q1-C1 report.
+
+**The rule, restated.** Exercising a refusal means a test-constructed child environment or an
+injected one (`contained::host_env_refusal`), never `NAZM_CONTAINED=1` or
+`NAZM_ALLOW_UNCONTAINED=1` typed or exported on a host.
+
 ## Docker address pool — the most imminent failure, and it is not disk
 
 Docker's built-in default pool is `172.17.0.0/12` carved into /16s, giving fifteen usable

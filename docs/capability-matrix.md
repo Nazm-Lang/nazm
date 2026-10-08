@@ -1377,7 +1377,7 @@ MIR without positions until N105 and reused an object reporting a moved failure 
 is now the unit's LIR digest, which carries every position, with the translator's revision.
 
 **Limitation** · The oracle runs the sequential subset only: a program with tasks, channels, a
-foreign call or the clock is refused (status 4), and those are held by backend agreement and the
+foreign call or the clock is refused (status 1 since Q1-C1; 4 before), and those are held by backend agreement and the
 memory and concurrency suites as before. The runtime itself is LLVM text both backends link (area 13),
 not LIR. No optimisation happens in LIR; clang's and Cranelift's do.
 

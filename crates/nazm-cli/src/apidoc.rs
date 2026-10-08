@@ -57,25 +57,36 @@ fn slug(identity: &str) -> String {
 }
 
 /// The modules to start from: a package's every module, or the file itself.
-fn roots(path: &Path) -> Result<(Vec<PathBuf>, PathBuf), String> {
+/// A package's modules, or the one file named, with the directory links are relative to; or the
+/// refusal with its status — a package that does not resolve is 1, a directory that cannot be
+/// read 3 (Q1-C1).
+fn roots(path: &Path) -> Result<(Vec<PathBuf>, PathBuf), (u8, String)> {
     if path.is_dir() {
         let graph = nazm_package::resolve(path).map_err(|d| {
-            d.first().map_or_else(
-                || "the package does not resolve".to_owned(),
-                |x| x.message.clone(),
+            (
+                exit::CHECK_FAILED,
+                d.first().map_or_else(
+                    || "the package does not resolve".to_owned(),
+                    |x| x.message.clone(),
+                ),
             )
         })?;
-        let root = graph.root_package().ok_or("no root package")?;
+        let root = graph
+            .root_package()
+            .ok_or((exit::CHECK_FAILED, "no root package".to_owned()))?;
         let mut out = Vec::new();
         let mut stack = vec![root.source_root.clone()];
         while let Some(dir) = stack.pop() {
             for e in std::fs::read_dir(&dir)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| (exit::NO_SUCH_FILE, e.to_string()))?
                 .flatten()
             {
                 let p = e.path();
-                if p.is_dir() {
+                // Not through a symlinked directory: the walk must end (Q1-A2-03's rule).
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
                     stack.push(p);
+                } else if p.is_dir() {
+                    continue;
                 } else if p.extension().is_some_and(|x| x == "nz") {
                     out.push(p);
                 }
@@ -415,9 +426,9 @@ fn markdown(doc: &Value) -> String {
 pub(crate) fn run(path: &Path, out: Option<&Path>) -> ExitCode {
     let (modules, base) = match roots(path) {
         Ok(r) => r,
-        Err(e) => {
+        Err((code, e)) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(code);
         }
     };
     let mut by_module: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
@@ -451,7 +462,7 @@ pub(crate) fn run(path: &Path, out: Option<&Path>) -> ExitCode {
         .and_then(|()| std::fs::write(dir.join("api.md"), markdown(&doc)));
     if let Err(e) = wrote {
         eprintln!("nazm: cannot write {}: {e}", dir.display());
-        return ExitCode::from(exit::NO_SUCH_FILE);
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
     eprintln!("nazm: wrote {0}/api.json and {0}/api.md", dir.display());
     ExitCode::from(exit::OK)

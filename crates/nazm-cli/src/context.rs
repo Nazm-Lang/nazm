@@ -39,8 +39,9 @@ pub(crate) fn run(
     let result = match answered {
         Ok(r) => r,
         Err(e) => {
+            // The analysis could not be run — a thread, a stopped analysis: the machine's (Q1-C1).
             eprintln!("nazm context: {e}");
-            return ExitCode::from(2);
+            return ExitCode::from(crate::exit::TOOLCHAIN_FAILED);
         }
     };
     let text = if json {

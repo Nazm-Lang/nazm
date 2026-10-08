@@ -479,7 +479,7 @@ fn the_linker_is_handed_exactly_what_link_names() {
     let d = Dir::new(&[("prog.nz", &src)]);
     // A file that is not there is refused before anything is compiled.
     let o = d.nazm(&["build", "--link", "missing.o", "prog.nz", "-o", "x"]);
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(3));
     assert!(
         stderr(&o).contains("`--link missing.o`: no such file"),
         "refused by nazm, not by the linker: {}",

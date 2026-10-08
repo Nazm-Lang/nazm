@@ -185,7 +185,10 @@ final release gate must, before anything is published:
 3. make the repository public, enable private vulnerability reporting and confirm the fallback
    address (`SECURITY.md`, `docs/vulnerability-process.md`);
 4. settle licensing (`docs/licensing.md`) — a publication blocker until the human decision is made;
-5. decide the exit statuses of usage errors and user errors (Q1-D-06, -07).
+5. ~~decide the exit statuses of usage errors and user errors (Q1-D-06, -07)~~ — decided and
+   frozen in Q1-C1: 0 success, 1 invalid source/program/request, 2 run-time failure, 3 input not
+   found or unreadable, 4 compiler/toolchain/environment failure, 5 command-line usage
+   (`docs/stability.md`).
 
 ## Accepted limitations
 
@@ -222,9 +225,9 @@ disposition), **corrected** (documentation).
 | Q1-A1-05 | wasm32 handle width in C structs | MEDIUM | FIX-BEFORE-V1 | carried |
 | Q1-B-05 | `exit_with` outside 0..255 differs by engine | MEDIUM | FIX-BEFORE-V1 | carried |
 | Q1-D-04 | VERIFIED sub-claims resting on ignored tests | MEDIUM | FIX-BEFORE-V1 | carried (experimental surfaces) |
-| Q1-D-06 | usage errors exit 2 | MEDIUM | FIX-BEFORE-V1 | carried: a 1.0 decision |
-| Q1-D-07 | user errors exit 4 | MEDIUM | FIX-BEFORE-V1 | carried: a 1.0 decision |
-| Q1-D-08 | `nazm doc` drops the loader's diagnostic | MEDIUM | FIX-BEFORE-V1 | fixed (message); status carried with D-06 |
+| Q1-D-06 | usage errors exit 2 | MEDIUM | FIX-BEFORE-V1 | fixed in Q1-C1: usage is 5 |
+| Q1-D-07 | user errors exit 4 | MEDIUM | FIX-BEFORE-V1 | fixed in Q1-C1: 1 or 3 by kind |
+| Q1-D-08 | `nazm doc` drops the loader's diagnostic | MEDIUM | FIX-BEFORE-V1 | fixed (message, and status by kind in Q1-C1) |
 | Q1-D-10 | published schemas closed against additive fields | MEDIUM | FIX-BEFORE-V1 | carried |
 | Q1-D-18 | stability omits `Bytes` and `Text` | MEDIUM | FIX-BEFORE-V1 | carried to Gate 2's close |
 | Q1-D-19 | Gate 2 untested in the formatter, provenance, validators | MEDIUM | FIX-BEFORE-V1 | carried to Gate 2's close |
@@ -268,6 +271,7 @@ disposition), **corrected** (documentation).
 | Q1-E-01 | supply-chain policy failing and unenforced | MEDIUM | FIX-BEFORE-V1 | fixed |
 | Q1-E-02 | `SECURITY.md` status stale; private repository has no private reporting | LOW | RELEASE-BLOCKER for publication | corrected; publication blocker carried |
 | Q1-T-01 | the sampler test needs CPU it can be starved of | LOW | POST-V1 | carried |
+| Q1-G-01 | governance incident: `NAZM_CONTAINED=1` set on a host for one refusal probe (it refused; nothing ran) | — | — | recorded (`docs/runbook.md`, *A second incident, recorded*); refusals now tested through child processes (`xtask/tests/host_refusal.rs`) |
 
 ## Mutation
 

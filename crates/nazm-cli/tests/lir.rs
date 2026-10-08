@@ -217,7 +217,7 @@ fn an_unknown_target_and_a_program_that_does_not_check_are_refused() {
         d.path(),
         &["lir", "--target", "riscv64-unknown-linux-gnu", "p.nz"],
     );
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(5));
     assert!(String::from_utf8_lossy(&o.stderr)
         .contains("is not a target this compiler generates code for"));
     std::fs::write(d.path().join("bad.nz"), "fn main() -> Int { \"x\" }\n").unwrap();

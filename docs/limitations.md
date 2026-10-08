@@ -337,11 +337,9 @@ holds the subset it does carry (Q1-D-20).
 **Profiles**: `signed-writes` is syntactic — a condition on the caller that is always true,
 `caller == caller || true`, satisfies it (Q1-C, informational).
 
-**Command line**: a usage error (an unknown option, a missing argument) exits 2, which the exit
-table gives to a program that failed at run time, and some user errors — an unwritable `-o`, a
-missing `--link` file — exit 4, the toolchain's status. Which status each should have is a 1.0
-decision. *Fix before v1* (Q1-D-06, Q1-D-07). `nazm fmt` lays out a file that lexes but does not
-parse, as its documented guarantee allows (Q1-D-22).
+**Command line**: the exit statuses were frozen in Q1-C1 (`docs/stability.md`): a usage error is
+5, no longer 2, and user errors are 1 or 3, no longer 4 (Q1-D-06, Q1-D-07 — closed). `nazm fmt`
+lays out a file that lexes but does not parse, as its documented guarantee allows (Q1-D-22).
 
 **Fuzzing**: the `run` target counts an input still running after two seconds as a hang and does
 not keep it; such inputs are programs that block, which Nazm does not promise against, but they are

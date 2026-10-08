@@ -211,11 +211,19 @@ may appear in any release. Message, label and help text are prose and may change
 
 | Status | Meaning |
 | --- | --- |
-| 0 | nothing to report |
-| 1 | the program has errors; also a command's own refusal — `fmt --check` with a file to change, `bindgen` with a declaration refused |
-| 2 | the program ran and failed at run time |
-| 3 | a file named on the command line, or in a `use`, could not be read |
-| 4 | the build toolchain was missing or rejected what this compiler produced |
+| 0 | success — nothing to report |
+| 1 | the source, the program, a package or what was asked is invalid: a diagnostic, a refusal of the request (an executable over its own source, a freestanding program reaching a hosted service, a signature that does not verify), a command's own "no" (`fmt --check` with a file to change, `bindgen` with a declaration refused) |
+| 2 | the program ran and failed at run time (or ran past the LIR oracle's budget) |
+| 3 | a file or resource the command needs — named on the command line, in a `use`, by `--link` or `--runtime` — could not be found or read |
+| 4 | the compiler, a tool it runs, or the machine failed: no `clang`, a linker or assembler that failed, an output the filesystem would not take, a target this host cannot build or link, a compiler defect (a panic is 4, not Rust's 101) |
+| 5 | the command line itself is wrong: an unknown command or option, a missing or unparseable argument, an option value or combination the command cannot take (`--layout sideways`, `--target` naming no target, `--stack-watermark` for a hosted target) |
+
+*Frozen in Q1-C1, 2026-10-08, before the first public release.* Until then a usage error exited 2
+— clap's status, colliding with "the program failed at run time" — and several user errors exited
+4. Each status now means one thing, and a command returns the one its failure is. The
+`--summary-json` summary's `exit_code` is always the process's status. Every exit path, before and
+after, is in the Q1-C1 inventory (`target/gates/q1c1/exit-inventory.md`); `tests/exit_contract.rs`
+holds each status.
 
 ### Machine-readable output
 

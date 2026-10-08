@@ -47,11 +47,11 @@ fn fields_of(v: &nazm_core::Value, n: usize) -> Vec<String> {
 fn layout_of(file: &Path) -> Result<Vec<(String, String)>, ExitCode> {
     let source_root = crate::root::decide(file, None).map_err(|e| {
         eprintln!("nazm: {e}");
-        ExitCode::from(exit::NO_SUCH_FILE)
+        ExitCode::from(exit::root_status(&e))
     })?;
     let loaded = crate::load::load(file, source_root.path()).map_err(|(partial, d)| {
         crate::emit(&d, &partial.map, false);
-        ExitCode::from(exit::NO_SUCH_FILE)
+        ExitCode::from(exit::load_status(&d))
     })?;
     let root = loaded.graph.module_of(nazm_span::FileId::ROOT);
     nazm_core::on_lowered(
@@ -158,14 +158,14 @@ pub(crate) fn run(
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::root_status(&e));
         }
     };
     let loaded = match crate::load::load(file, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::load_status(&diagnostics));
         }
     };
     let transactions: Vec<(usize, String)> = match txs {

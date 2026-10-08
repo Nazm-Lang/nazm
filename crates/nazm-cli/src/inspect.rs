@@ -65,14 +65,14 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::root_status(&e));
         }
     };
     let loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::load_status(&diagnostics));
         }
     };
     let map = &loaded.map;

@@ -185,8 +185,8 @@ build beside `link.ld`; `nazm-stack:` is a UART line under `--stack-watermark`, 
 `mmio_write32` reached by `nazm run` or a hosted build, which have no device registers). A register
 access without an `MmioCap` held is the existing `N0369`; a board program's overflow and stack
 exhaustion are the existing `N0400` and `N0408`, written to the UART. What a board cannot have is a
-build refusal by name with exit status 4, not a code: it is a fact of the target, as a host without
-a linker is (§7.59). No schema moved; `nazm inspect` lists one more target, a new value of an
+build refusal by name, not a code: it is a fact of the target, as a host without a linker is
+(§7.59) — exit 1 since Q1-C1 (the program asks for what the target lacks), 4 before. No schema moved; `nazm inspect` lists one more target, a new value of an
 existing field.
 
 **Applied to N55, FFI v2.** One code appeared, compatible: `N0391` (an `extern "C"` export that is
@@ -329,9 +329,9 @@ captures, callers and exports. `checked-paths` refuses with the existing `N0510`
 not hold is the existing `N0900`, a compiler defect, raised before any code is generated.
 `nazm.lir/1` is new (`nazm lir`), with `schema/nazm.lir-1.json` checked against real output.
 
-**Applied to N82, the runtime as an artifact.** No code appeared: an artifact that does not fit is an
-environment failure, not a program error — exit 4 and one sentence naming the mismatch, as a missing
-toolchain is. `nazm.runtime/1` is new, with `schema/nazm.runtime-1.json` checked against real
+**Applied to N82, the runtime as an artifact.** No code appeared: an artifact that does not fit is
+refused with one sentence naming the mismatch, not a code — exit 1 since Q1-C1 (the artifact named
+does not fit the request), 3 when it cannot be read; it was 4, a missing toolchain's status. `nazm.runtime/1` is new, with `schema/nazm.runtime-1.json` checked against real
 manifests of every profile; `nazm.provenance/1` gains an optional `runtime.archive`.
 
 **Applied to N83, the task pool.** No code appeared: a task past its stack is the existing
@@ -402,8 +402,8 @@ task, otherwise `default` (`pool` or `threads`), `why`, `workers`, `task_stack_b
 is still `N0900`, a compiler defect, and its message names the function and the broken rule. One
 schema moved: `nazm.lir/1` → `nazm.lir/2`, additive — each unit carries `lir`, its instruction-level
 LIR as text (what `nazm lir --ops` prints) and that text's BLAKE3 `digest`, validated before it is
-shown. `nazm lir --run` (LIR's interpreter) writes the program's own output and status, and exits 4,
-naming what it does not run, for a program outside its subset.
+shown. `nazm lir --run` (LIR's interpreter) writes the program's own output and status, and exits 1,
+naming what it does not run, for a program outside its subset (4 until Q1-C1); a spent budget is 2.
 
 **Applied to Gate 1 and Gate 1-C1, Nazm 1.0.** One code appeared, compatible: `N0616`, a closure
 capturing a value that can hold a function value behind a counted handle — the one way a closure's
@@ -547,11 +547,14 @@ assert on the code rather than the rendering.
 
 | | |
 | --- | --- |
-| 0 | Nothing to report |
-| 1 | The program has errors |
+| 0 | Success — nothing to report |
+| 1 | The source, program, package or request is invalid |
 | 2 | The program ran and failed at run time |
-| 3 | A file named on the command line, or in a `use`, could not be read |
-| 4 | The build toolchain was missing or rejected IR this compiler produced |
+| 3 | A file or resource the command needs could not be found or read |
+| 4 | The compiler, a tool it runs, or the machine failed |
+| 5 | The command line itself is wrong |
 
-4 is separate from 1 on purpose: one means the program is wrong, the other means the
-machine could not build a program that is fine.
+4 is separate from 1 on purpose: one means the request is wrong, the other means the
+machine could not carry out one that is fine. 5 is separate from 2: a mistyped option is not a
+program that failed. The full definitions, and what moved when the contract was frozen (Q1-C1),
+are `docs/stability.md`, *Diagnostics and exit statuses*.

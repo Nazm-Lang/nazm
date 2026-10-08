@@ -30,9 +30,21 @@ fn name_of(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn refuse(what: &str) -> ExitCode {
+/// A refusal with its v1 status (Q1-C1): a file that cannot be read is 3, a statement or
+/// signature that does not hold is 1, `ssh-keygen` that cannot run or sign, or an output that
+/// cannot be written, is 4, and a command line naming no artefact is 5.
+fn refuse(code: u8, what: &str) -> ExitCode {
     eprintln!("nazm: {what}");
-    ExitCode::from(exit::TOOLCHAIN_FAILED)
+    ExitCode::from(code)
+}
+
+/// An artefact's or record's problem: unreadable (3), or not what it should be (1).
+fn read_or_invalid(e: &str) -> u8 {
+    if e.starts_with("cannot read") {
+        exit::NO_SUCH_FILE
+    } else {
+        exit::CHECK_FAILED
+    }
 }
 
 /// The statement for `artefacts`, each checked against the digests `record` names.
@@ -83,19 +95,27 @@ pub(crate) fn sign(
         .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
     {
         Ok(v) => v,
-        Err(e) => return refuse(&format!("cannot read {}: {e}", provenance.display())),
+        Err(e) => {
+            return refuse(
+                exit::NO_SUCH_FILE,
+                &format!("cannot read {}: {e}", provenance.display()),
+            )
+        }
     };
     // Every artefact is checked before any key is used.
     let doc = match statement(&record, artefacts) {
         Ok(d) => d,
-        Err(e) => return refuse(&e),
+        Err(e) => return refuse(read_or_invalid(&e), &e),
     };
     let file = out.map_or_else(
         || PathBuf::from(format!("{}.intoto.json", provenance.display())),
         Path::to_path_buf,
     );
     if let Err(e) = std::fs::write(&file, format!("{doc:#}\n")) {
-        return refuse(&format!("cannot write {}: {e}", file.display()));
+        return refuse(
+            exit::TOOLCHAIN_FAILED,
+            &format!("cannot write {}: {e}", file.display()),
+        );
     }
     let sig = PathBuf::from(format!("{}.sig", file.display()));
     let _ = std::fs::remove_file(&sig);
@@ -110,11 +130,17 @@ pub(crate) fn sign(
             eprintln!("nazm: signed {} ({})", file.display(), sig.display());
             ExitCode::from(exit::OK)
         }
-        Ok(o) => refuse(&format!(
-            "ssh-keygen could not sign: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
-        )),
-        Err(e) => refuse(&format!("cannot run ssh-keygen: {e}")),
+        Ok(o) => refuse(
+            exit::TOOLCHAIN_FAILED,
+            &format!(
+                "ssh-keygen could not sign: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+        ),
+        Err(e) => refuse(
+            exit::TOOLCHAIN_FAILED,
+            &format!("cannot run ssh-keygen: {e}"),
+        ),
     }
 }
 
@@ -129,7 +155,10 @@ pub(crate) fn verify(
 ) -> ExitCode {
     let sig = PathBuf::from(format!("{}.sig", statement_file.display()));
     let Ok(text) = std::fs::read(statement_file) else {
-        return refuse(&format!("cannot read {}", statement_file.display()));
+        return refuse(
+            exit::NO_SUCH_FILE,
+            &format!("cannot read {}", statement_file.display()),
+        );
     };
     let child = Command::new("ssh-keygen")
         .args(["-Y", "verify", "-n", NAMESPACE, "-I", identity, "-f"])
@@ -150,18 +179,29 @@ pub(crate) fn verify(
     match verified {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
-            return refuse(&format!(
-                "the signature does not verify for `{identity}`: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            ))
+            return refuse(
+                exit::CHECK_FAILED,
+                &format!(
+                    "the signature does not verify for `{identity}`: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ),
+            )
         }
-        Err(e) => return refuse(&format!("cannot run ssh-keygen: {e}")),
+        Err(e) => {
+            return refuse(
+                exit::TOOLCHAIN_FAILED,
+                &format!("cannot run ssh-keygen: {e}"),
+            )
+        }
     }
     let Ok(doc) = serde_json::from_slice::<Value>(&text) else {
-        return refuse("the statement is not JSON");
+        return refuse(exit::CHECK_FAILED, "the statement is not JSON");
     };
     if doc["_type"] != STATEMENT || doc["predicateType"] != PREDICATE {
-        return refuse("the statement is not an in-toto Statement v1 of a Nazm provenance record");
+        return refuse(
+            exit::CHECK_FAILED,
+            "the statement is not an in-toto Statement v1 of a Nazm provenance record",
+        );
     }
     let subjects: Vec<&str> = doc["subject"]
         .as_array()
@@ -170,18 +210,21 @@ pub(crate) fn verify(
         .filter_map(|s| s["digest"]["blake3"].as_str())
         .collect();
     if artefacts.is_empty() {
-        return refuse("no artefact to verify");
+        return refuse(exit::USAGE, "no artefact to verify");
     }
     for a in artefacts {
         match blake3_of(a) {
             Ok(d) if subjects.contains(&d.as_str()) => {}
             Ok(d) => {
-                return refuse(&format!(
-                    "{} (blake3:{d}) is not a subject of the statement",
-                    a.display()
-                ))
+                return refuse(
+                    exit::CHECK_FAILED,
+                    &format!(
+                        "{} (blake3:{d}) is not a subject of the statement",
+                        a.display()
+                    ),
+                )
             }
-            Err(e) => return refuse(&e),
+            Err(e) => return refuse(read_or_invalid(&e), &e),
         }
     }
     println!(

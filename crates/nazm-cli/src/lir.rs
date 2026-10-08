@@ -206,21 +206,21 @@ pub(crate) fn run(
         Ok(t) => t,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+            return ExitCode::from(exit::target_refused(target.is_some()));
         }
     };
     let source_root = match crate::root::decide(path, declared) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::root_status(&e));
         }
     };
     let loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::load_status(&diagnostics));
         }
     };
     let map = &loaded.map;
@@ -265,14 +265,14 @@ pub(crate) fn oracle(path: &Path, declared: Option<&Path>, args: &[String]) -> E
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::root_status(&e));
         }
     };
     let loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::load_status(&diagnostics));
         }
     };
     let map = &loaded.map;
@@ -340,12 +340,14 @@ pub(crate) fn oracle(path: &Path, declared: Option<&Path>, args: &[String]) -> E
             ExitCode::from(u8::try_from(o.code).unwrap_or(1))
         }
         Ok(Err(nazm_lir::op::interp::Stop::Refused(why))) => {
+            // A program the oracle does not cover: the request's, not the machine's (Q1-C1).
             eprintln!("nazm: the LIR interpreter does not run this: {why}");
-            ExitCode::from(4)
+            ExitCode::from(exit::CHECK_FAILED)
         }
         Ok(Err(nazm_lir::op::interp::Stop::Budget)) => {
+            // The program ran past its budget: a run-time stop, as the interpreter's is.
             eprintln!("nazm: the LIR interpreter's budget is spent");
-            ExitCode::from(4)
+            ExitCode::from(exit::RUNTIME_FAILED)
         }
         Ok(Err(nazm_lir::op::interp::Stop::Defect(why))) | Err(why) => {
             eprintln!("nazm: error[N0900]: the LIR interpreter found a defect: {why}");

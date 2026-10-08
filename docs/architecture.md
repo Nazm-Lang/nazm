@@ -3945,7 +3945,8 @@ and writes nothing; `nazm build` finds `clang` on the process's own PATH, so a t
 process a `clang` that refuses, one that will not link, or none. Nothing machine-wide is changed.
 
 **Flags and channels.** `--summary-json` conflicts with `--json`, and with `--cache-report` and
-`--build-report`: an ambiguous combination is refused by the argument parser (exit 2). Human output,
+`--build-report`: an ambiguous combination is refused by the argument parser (exit 2; 5 since Q1-C1 froze the exit
+contract). Human output,
 `--json`, `nazm.test/1`, `nazm.check-report/1` and `nazm.build-report/1` are unchanged. A build's
 toolchain failure may still write its own message to stderr.
 
@@ -6233,7 +6234,7 @@ its own `nz.stack_check`, against the linker script's `__stack_bottom` with a qu
 in reserve, so a call cycle is checked rather than refused and exhaustion is `N0408` on the UART.
 *The refusal reads symbols, not `Needs`*: `Needs` is coarse — `print` of a static string sets no
 flag yet calls the C library's `write` — so the build refuses what the generated units name and
-nothing defines, by runtime part, with exit status 4 rather than `N0101`. *`_start` enables
+nothing defines, by runtime part, with exit status 4 (1 since Q1-C1) rather than `N0101`. *`_start` enables
 floating point and SIMD* (`CPACR_EL1`), trapped at reset, since code generation may use them.
 *Cranelift is refused for the board by name*: its object writer has no format for it.
 
@@ -7378,7 +7379,7 @@ this section keeps it.
   of the archive. The profile is the target's: `hosted` on the four operating-system targets, `board`
   on `aarch64-unknown-none`, `wasm` on `wasm32-unknown-unknown`; another is refused.
 - **Linking it.** `nazm build --runtime DIR` links that archive and generates no runtime. The
-  platform entry is still the program's own. Before anything is linked, the build refuses — exit 4,
+  platform entry is still the program's own. Before anything is linked, the build refuses — exit 4 (3 or 1 since Q1-C1),
   the reason named, nothing produced, never a silent fallback to generating the runtime — a missing or
   unreadable manifest; another schema; another ABI revision or runtime digest (a compiler whose
   runtime differs); another target or profile; a service the program reaches that the archive does
@@ -7414,7 +7415,7 @@ a generated runtime and the artifact; a mismatched or altered artifact that link
 WebAssembly's manifests list only `stack`, since what those runtimes lack is refused by the
 freestanding build itself (N62), and the service check applies to the hosted profile; the archive is
 written with `ZERO_AR_DATE`, so the same runtime archives to the same bytes; an unknown target is
-exit 4, as a missing toolchain is. The falsifier ran: every program in the repository built with a
+exit 4, as a missing toolchain is (5 since Q1-C1, a usage error). The falsifier ran: every program in the repository built with a
 generated runtime and with the artifact, on both backends — 228 builds — printed, ended and reported
 memory identically.
 

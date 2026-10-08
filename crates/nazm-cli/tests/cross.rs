@@ -284,7 +284,7 @@ fn a_triple_outside_the_matrix_is_refused_by_name() {
             d.path(),
             &["build", "--target", triple, "--objects", "o", "prog.nz"],
         );
-        assert_eq!(o.status.code(), Some(4), "{triple}");
+        assert_eq!(o.status.code(), Some(5), "{triple}");
         assert!(
             err(&o).contains("not a target this compiler generates code for"),
             "{}",

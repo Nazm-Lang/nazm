@@ -89,14 +89,14 @@ pub(crate) fn run(
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::root_status(&e));
         }
     };
     let loaded = match crate::load::load(file, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::load_status(&diagnostics));
         }
     };
     let mut columns: Vec<Vec<i64>> = Vec::with_capacity(inputs.len());
@@ -111,7 +111,7 @@ pub(crate) fn run(
                             "nazm: `{}` is not whitespace-separated `Int`s: {e}",
                             input.display()
                         );
-                        return ExitCode::from(exit::NO_SUCH_FILE);
+                        return ExitCode::from(exit::CHECK_FAILED);
                     }
                 }
             }
@@ -124,7 +124,7 @@ pub(crate) fn run(
     let elements: Vec<i64> = columns.first().cloned().unwrap_or_default();
     if elements.len() > MAX_ELEMENTS {
         eprintln!("nazm: `nazm accel` maps at most {MAX_ELEMENTS} elements in one launch");
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        return ExitCode::from(exit::CHECK_FAILED);
     }
     let root = loaded.graph.module_of(nazm_span::FileId::ROOT);
     // The kernel, generated and checked eligible, and the interpreter's answer for every
@@ -384,7 +384,7 @@ pub(crate) fn run(
     }
     if let Some(Err(index)) = reduced {
         eprintln!("nazm: error[N0400]: this addition overflows `Int` — the running sum, at element {index}");
-        return ExitCode::from(2);
+        return ExitCode::from(exit::RUNTIME_FAILED);
     }
     if let Some((index, Some(site))) = failure {
         let d = Diagnostic::error(
@@ -393,7 +393,7 @@ pub(crate) fn run(
             format!("{} at element {index}", site.message),
         );
         crate::emit(&[d], &loaded.map, false);
-        return ExitCode::from(2);
+        return ExitCode::from(exit::RUNTIME_FAILED);
     }
     ExitCode::SUCCESS
 }

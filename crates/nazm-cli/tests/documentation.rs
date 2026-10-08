@@ -236,6 +236,6 @@ fn an_ambiguous_request_is_refused_by_the_parser() {
         vec!["docs", "--section", "spec", "--document", "spec"],
         vec!["docs", "--section", "spec", "--path", "docs/spec.md"],
     ] {
-        assert_eq!(nazm(&args).code, Some(2), "{args:?}");
+        assert_eq!(nazm(&args).code, Some(5), "{args:?}");
     }
 }

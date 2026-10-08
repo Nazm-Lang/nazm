@@ -114,7 +114,7 @@ pub(crate) fn entry(path: &Path, locked: bool) -> Result<Option<PathBuf>, ExitCo
                  package",
                 path.display()
             );
-            return Err(ExitCode::from(exit::NO_SUCH_FILE));
+            return Err(ExitCode::from(exit::USAGE));
         }
         return Ok(None);
     };

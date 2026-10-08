@@ -39,7 +39,7 @@ pub(crate) fn run(files: &[PathBuf], check: bool) -> ExitCode {
         if !check {
             if let Err(e) = std::fs::write(path, &formatted) {
                 eprintln!("nazm: cannot write {}: {e}", path.display());
-                return ExitCode::from(exit::NO_SUCH_FILE);
+                return ExitCode::from(exit::TOOLCHAIN_FAILED);
             }
         }
     }

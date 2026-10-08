@@ -57,8 +57,9 @@ struct Edit {
 }
 
 pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
-    let Some(first) = loaded(path, json) else {
-        return ExitCode::from(exit::NO_SUCH_FILE);
+    let first = match loaded(path, json) {
+        Ok(l) => l,
+        Err(code) => return ExitCode::from(code),
     };
 
     let diagnostics = nazm_core::check_map(&first.map, &first.graph);
@@ -75,8 +76,8 @@ pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
     // number of edits made would be a guess about what the checker will say next.
     let remaining = match apply {
         true => match loaded(path, json) {
-            Some(again) => nazm_core::check_map(&again.map, &again.graph),
-            None => return ExitCode::from(exit::NO_SUCH_FILE),
+            Ok(again) => nazm_core::check_map(&again.map, &again.graph),
+            Err(code) => return ExitCode::from(code),
         },
         false => diagnostics,
     };
@@ -92,7 +93,8 @@ pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
     }
 }
 
-fn loaded(path: &Path, json: bool) -> Option<load::Loaded> {
+/// The program, or the status its loading failed with (Q1-C1).
+fn loaded(path: &Path, json: bool) -> Result<load::Loaded, u8> {
     // Discovered, never given: `nazm fix` edits source and persists nothing, so the only
     // reason it asks at all is that the loader computes a durable key for every module
     // whether or not this command has a use for one.
@@ -100,14 +102,14 @@ fn loaded(path: &Path, json: bool) -> Option<load::Loaded> {
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return None;
+            return Err(crate::exit::root_status(&e));
         }
     };
     match load::load(path, source_root.path()) {
-        Ok(f) => Some(f),
+        Ok(f) => Ok(f),
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, json);
-            None
+            Err(crate::exit::load_status(&diagnostics))
         }
     }
 }

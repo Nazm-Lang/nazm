@@ -101,11 +101,17 @@ pub(crate) fn run(
     let source_root = match crate::root::decide(input, None) {
         Ok(r) => r,
         Err(e) => {
+            let code = exit::root_status(&e);
             if summary {
-                return summarized(Status::Unreadable, exit::NO_SUCH_FILE, &[], None, None);
+                let status = if code == exit::NO_SUCH_FILE {
+                    Status::Unreadable
+                } else {
+                    Status::Refused
+                };
+                return summarized(status, code, &[], None, None);
             }
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(code);
         }
     };
     // The target and the backend, settled before anything is compiled (N41). A target that
@@ -114,25 +120,28 @@ pub(crate) fn run(
     let target = match nazm_lir::backend::Target::requested(choice.target) {
         Ok(t) => t,
         Err(e) => {
+            // A `--target` that names nothing this compiler builds is the command line's fault
+            // (5); a host it cannot build for is the machine's (4) (Q1-C1).
+            let code = crate::exit::target_refused(choice.target.is_some());
             if summary {
-                return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+                return summarized(Status::Refused, code, &[], None, None);
             }
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+            return ExitCode::from(code);
         }
     };
     // A foreign object that is not there is refused before anything is compiled, by name,
     // rather than reported by the linker as an undefined symbol after the whole build (N42).
     if let Some(missing) = choice.link.iter().find(|p| !p.is_file()) {
         if summary {
-            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+            return summarized(Status::Refused, exit::NO_SUCH_FILE, &[], None, None);
         }
         eprintln!(
             "nazm: `--link {}`: no such file; `--link` names an object or library that \
              defines foreign functions",
             missing.display()
         );
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        return ExitCode::from(exit::NO_SUCH_FILE);
     }
     // A freestanding image is the LLVM backend's (N62): Cranelift's object writer knows no
     // binary format for a target without an operating system, so it is refused by name here
@@ -141,14 +150,14 @@ pub(crate) fn run(
         && target.os == nazm_lir::backend::Os::None
     {
         if summary {
-            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+            return summarized(Status::Refused, exit::USAGE, &[], None, None);
         }
         eprintln!(
             "nazm: `--backend cranelift` builds no freestanding target; `{}` is the LLVM \
              backend's",
             target.triple
         );
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        return ExitCode::from(exit::USAGE);
     }
     // RISC-V (N86) is code generation the host's `clang` may not have — Apple's has none. Asked
     // before anything is compiled, so a missing code generator is named rather than reported as
@@ -172,22 +181,22 @@ pub(crate) fn run(
         "soa" => true,
         other => {
             if summary {
-                return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+                return summarized(Status::Refused, exit::USAGE, &[], None, None);
             }
             eprintln!("nazm: `--layout {other}` is not a layout; the layouts are `aos` and `soa`");
-            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+            return ExitCode::from(exit::USAGE);
         }
     };
     // The watermark is the board's (N63): a hosted program has an operating system's stack.
     if choice.stack_watermark && !target.is_board() {
         if summary {
-            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+            return summarized(Status::Refused, exit::USAGE, &[], None, None);
         }
         eprintln!(
             "nazm: `--stack-watermark` measures a board's stack; it needs \
              `--target aarch64-unknown-none` or `--target riscv64gc-unknown-none-elf`"
         );
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        return ExitCode::from(exit::USAGE);
     }
     // A target other than the host (N57): clang is told it, and where the host cannot link it
     // the build writes objects instead, or is refused by name before compiling anything.
@@ -232,17 +241,17 @@ pub(crate) fn run(
     let loaded = match crate::load::load(input, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
+            let code = exit::load_status(&diagnostics);
             if summary {
-                return summarized(
-                    Status::Unreadable,
-                    exit::NO_SUCH_FILE,
-                    &diagnostics,
-                    Some(&partial.map),
-                    None,
-                );
+                let status = if code == exit::NO_SUCH_FILE {
+                    Status::Unreadable
+                } else {
+                    Status::Rejected
+                };
+                return summarized(status, code, &diagnostics, Some(&partial.map), None);
             }
             emit(&diagnostics, &partial.map, json);
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(code);
         }
     };
     let map = &loaded.map;
@@ -262,20 +271,14 @@ pub(crate) fn run(
             .any(|n| same_file(Path::new(n), &output));
     if clobbers {
         if summary {
-            return summarized(
-                Status::Refused,
-                exit::TOOLCHAIN_FAILED,
-                &[],
-                Some(map),
-                None,
-            );
+            return summarized(Status::Refused, exit::CHECK_FAILED, &[], Some(map), None);
         }
         eprintln!(
             "nazm: refusing to write the executable over its own source ({}). \
              Pass -o with a different path.",
             output.display()
         );
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        return ExitCode::from(exit::CHECK_FAILED);
     }
     // A shared library names itself to the linker as `-Wl,…,NAME`, and the linker splits that
     // argument at every comma: a comma in the name would be an argument of its own (Q1-A1-06).
@@ -286,20 +289,14 @@ pub(crate) fn run(
             .is_some_and(|n| n.to_string_lossy().contains(','))
     {
         if summary {
-            return summarized(
-                Status::Refused,
-                exit::TOOLCHAIN_FAILED,
-                &[],
-                Some(map),
-                None,
-            );
+            return summarized(Status::Refused, exit::CHECK_FAILED, &[], Some(map), None);
         }
         eprintln!(
             "nazm: a shared library's file name may not contain a comma ({}): the linker would \
              read what follows it as another argument",
             output.display()
         );
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        return ExitCode::from(exit::CHECK_FAILED);
     }
 
     // Ordinary validation, lowering and emission, all on the interpreter's own stack —
@@ -398,13 +395,7 @@ pub(crate) fn run(
     ) {
         Ok(_) if !unhosted.is_empty() => {
             if summary {
-                return summarized(
-                    Status::Refused,
-                    exit::TOOLCHAIN_FAILED,
-                    &[],
-                    Some(map),
-                    None,
-                );
+                return summarized(Status::Refused, exit::CHECK_FAILED, &[], Some(map), None);
             }
             eprintln!(
                 "nazm: `{}` has no operating system, and this program reaches what only a hosted \
@@ -414,7 +405,7 @@ pub(crate) fn run(
                 target.triple,
                 unhosted.join(", ")
             );
-            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+            return ExitCode::from(exit::CHECK_FAILED);
         }
         Ok(a) => a,
         Err(diagnostics) => {
@@ -455,18 +446,12 @@ pub(crate) fn run(
         None => None,
         Some(dir) => match crate::runtime_artifact::fits(dir, &target, Some(reached)) {
             Ok(f) => Some(f.archive),
-            Err(why) => {
+            Err((code, why)) => {
                 if summary {
-                    return summarized(
-                        Status::ToolchainFailed,
-                        exit::TOOLCHAIN_FAILED,
-                        &[],
-                        Some(map),
-                        None,
-                    );
+                    return summarized(Status::Refused, code, &[], Some(map), None);
                 }
                 eprintln!("nazm: {why}");
-                return ExitCode::from(exit::TOOLCHAIN_FAILED);
+                return ExitCode::from(code);
             }
         },
     };

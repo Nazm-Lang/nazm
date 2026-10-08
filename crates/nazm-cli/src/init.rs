@@ -230,25 +230,25 @@ pub(crate) fn run(dir: &Path, template: &str) -> ExitCode {
             "nazm: no template `{template}`; there are {}",
             names.join(", ")
         );
-        return ExitCode::from(exit::NO_SUCH_FILE);
+        return ExitCode::from(exit::USAGE);
     }
     let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
         eprintln!("nazm: `{}` names no directory to create", dir.display());
-        return ExitCode::from(exit::NO_SUCH_FILE);
+        return ExitCode::from(exit::USAGE);
     };
     if !nazm_package::valid_name(name) {
         eprintln!(
             "nazm: `{name}` is not a package name: lowercase ASCII letters, digits and `-`, \
              starting with a letter — the directory's name is the package's"
         );
-        return ExitCode::from(exit::NO_SUCH_FILE);
+        return ExitCode::from(exit::CHECK_FAILED);
     }
     if std::fs::read_dir(dir).is_ok_and(|mut e| e.next().is_some()) {
         eprintln!(
             "nazm: `{}` exists and is not empty; nothing was written",
             dir.display()
         );
-        return ExitCode::from(exit::NO_SUCH_FILE);
+        return ExitCode::from(exit::CHECK_FAILED);
     }
     let mut written = 0;
     for (_, path, text) in FILES.iter().filter(|(t, _, _)| *t == template) {
@@ -259,7 +259,7 @@ pub(crate) fn run(dir: &Path, template: &str) -> ExitCode {
             .and_then(|()| std::fs::write(&to, text.replace("{{name}}", name)));
         if let Err(e) = made {
             eprintln!("nazm: cannot write {}: {e}", to.display());
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
         written += 1;
     }

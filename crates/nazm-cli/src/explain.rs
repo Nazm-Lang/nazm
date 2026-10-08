@@ -17,11 +17,11 @@ use crate::{exit, load};
 fn loaded(path: &Path) -> Result<load::Loaded, ExitCode> {
     let source_root = crate::root::decide(path, None).map_err(|e| {
         eprintln!("nazm: {e}");
-        ExitCode::from(exit::NO_SUCH_FILE)
+        ExitCode::from(exit::root_status(&e))
     })?;
     load::load(path, source_root.path()).map_err(|(partial, diagnostics)| {
         crate::emit(&diagnostics, &partial.map, false);
-        ExitCode::from(exit::NO_SUCH_FILE)
+        ExitCode::from(exit::load_status(&diagnostics))
     })
 }
 

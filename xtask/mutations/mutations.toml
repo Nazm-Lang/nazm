@@ -14638,3 +14638,36 @@ file = "crates/nazm-cli/src/build.rs"
 find = "            .is_some_and(|n| n.to_string_lossy().contains(','))"
 replace = "            .is_some_and(|n| n.to_string_lossy().contains(',') && false)"
 killers = [{ package = "nazm-cli", test = "build", name = "a_shared_library_name_with_a_comma_is_refused" }]
+
+# --- Q1-C1: the v1 exit contract ------------------------------------------------------------
+
+[[mutation]]
+name = "q1c1-a-usage-error-is-a-runtime-failure"
+why = "clap's rejection of the command line exits 2 again, the contract's runtime failure, so a script cannot tell a mistyped option from a program that failed"
+file = "crates/nazm-cli/src/main.rs"
+find = "        if e.use_stderr() {\n            ExitCode::from(exit::USAGE)"
+replace = "        if e.use_stderr() {\n            ExitCode::from(exit::RUNTIME_FAILED)"
+killers = [{ package = "nazm-cli", test = "exit_contract", name = "status_5_is_a_wrong_command_line" }]
+
+[[mutation]]
+name = "q1c1-an-unreadable-root-is-an-invalid-one"
+why = "every source-root refusal reads as an invalid layout (1), so a root that cannot be read is no longer 3"
+file = "crates/nazm-cli/src/main.rs"
+find = "        if why.starts_with(\"could not read\") || why.ends_with(\"is not a directory\") {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "exit_status_tests::a_root_that_cannot_be_read_is_3_and_an_invalid_one_1" }]
+
+[[mutation]]
+name = "q1c1-any-load-failure-is-unreadable"
+why = "every load failure reads as an unreadable file (3), so an unknown dependency or an escaping import is no longer the program's 1"
+file = "crates/nazm-cli/src/main.rs"
+find = "                .all(|d| d.code == nazm_diag::codes::MODULE_NOT_FOUND)"
+replace = "                .all(|_| true)"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "exit_status_tests::a_load_is_3_only_when_every_failure_is_a_module_not_found" }]
+[[mutation]]
+name = "q1c1-a-missing-link-is-the-toolchains"
+why = "a `--link` file that does not exist is reported as a toolchain failure (4), the status it had before the contract was frozen"
+file = "crates/nazm-cli/src/build.rs"
+find = "defines foreign functions\",\n            missing.display()\n        );\n        return ExitCode::from(exit::NO_SUCH_FILE);"
+replace = "defines foreign functions\",\n            missing.display()\n        );\n        return ExitCode::from(exit::TOOLCHAIN_FAILED);"
+killers = [{ package = "nazm-cli", test = "exit_contract", name = "status_3_is_a_file_that_could_not_be_found_or_read" }]

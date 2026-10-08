@@ -103,7 +103,15 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
     };
     let target = match target_of(triple) {
         Ok(t) => t,
-        Err(e) => return refuse(e),
+        Err(e) => {
+            eprintln!("nazm: {e}");
+            return ExitCode::from(exit::target_refused(triple.is_some()));
+        }
+    };
+    // A `--profile` that is not this target's, or not a profile: the command line's (5).
+    let usage = |why: String| {
+        eprintln!("nazm: {why}");
+        ExitCode::from(exit::USAGE)
     };
     let own = Profile::of(&target);
     let profile = match profile {
@@ -111,7 +119,7 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
         Some(p) => match Profile::by_name(p) {
             Some(p) if p == own => p,
             Some(p) => {
-                return refuse(format!(
+                return usage(format!(
                     "`{}` links the `{}` runtime, not `{}`",
                     target.triple,
                     own.name(),
@@ -119,7 +127,7 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
                 ))
             }
             None => {
-                return refuse(format!(
+                return usage(format!(
                     "`{p}` is not a runtime profile; the profiles are hosted, board and wasm"
                 ))
             }
@@ -254,52 +262,66 @@ pub(crate) struct Fitting {
 
 /// Whether the artifact in `dir` fits this compiler, `target`, and a program needing `needs` —
 /// every check `nazm build --runtime` makes before linking. `Err` names the first that fails.
-pub(crate) fn fits(dir: &Path, target: &Target, needs: Option<Needs>) -> Result<Fitting, String> {
+pub(crate) fn fits(
+    dir: &Path,
+    target: &Target,
+    needs: Option<Needs>,
+) -> Result<Fitting, (u8, String)> {
+    // A file that cannot be read is status 3; an artifact that does not fit the request, 1
+    // (Q1-C1).
+    let unfit = |why: String| (exit::CHECK_FAILED, why);
     let path = dir.join(MANIFEST);
     let text = std::fs::read_to_string(&path).map_err(|e| {
-        format!(
-            "the runtime at {} has no readable manifest: {e}",
-            dir.display()
+        (
+            exit::NO_SUCH_FILE,
+            format!(
+                "the runtime at {} has no readable manifest: {e}",
+                dir.display()
+            ),
         )
     })?;
-    let m: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("the runtime manifest {} is not JSON: {e}", path.display()))?;
+    let m: Value = serde_json::from_str(&text).map_err(|e| {
+        unfit(format!(
+            "the runtime manifest {} is not JSON: {e}",
+            path.display()
+        ))
+    })?;
     let field = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
     if field("schema") != SCHEMA {
-        return Err(format!(
+        return Err(unfit(format!(
             "the runtime manifest is `{}`, and this compiler reads `{SCHEMA}`",
             field("schema")
-        ));
+        )));
     }
     let abi = m.get("abi").and_then(Value::as_u64);
     if abi != Some(u64::from(RUNTIME_ABI_REVISION)) {
-        return Err(format!(
+        return Err(unfit(format!(
             "the runtime is ABI revision {}, and this compiler's is {RUNTIME_ABI_REVISION}",
             abi.map_or_else(|| "?".to_owned(), |a| a.to_string())
-        ));
+        )));
     }
     let ours = nazm_lir::runtime::digest();
     if field("runtime") != ours {
-        return Err(format!(
+        return Err(unfit(format!(
             "the runtime was built from runtime {}, and this compiler's is {ours}",
             field("runtime")
-        ));
+        )));
     }
     if field("target") != target.triple {
-        return Err(format!(
+        return Err(unfit(format!(
             "the runtime is for {}, and this build is for {}",
             field("target"),
             target.triple
-        ));
+        )));
     }
     let profile = Profile::of(target);
     if field("profile") != profile.name() {
-        return Err(format!(
+        return Err(unfit(format!(
             "the runtime is the `{}` profile, and {} links `{}`",
             field("profile"),
             target.triple,
             profile.name()
-        ));
+        )));
     }
     let services: Vec<&str> = m
         .get("services")
@@ -307,27 +329,31 @@ pub(crate) fn fits(dir: &Path, target: &Target, needs: Option<Needs>) -> Result<
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
     let have = Needs::by_names(services.iter().copied()).ok_or_else(|| {
-        "the runtime manifest names a service this compiler does not know".to_owned()
+        unfit("the runtime manifest names a service this compiler does not know".to_owned())
     })?;
     if let Some(needs) = needs.filter(|_| profile == Profile::Hosted) {
         let missing = needs.missing_from(have);
         if !missing.is_empty() {
-            return Err(format!(
+            return Err(unfit(format!(
                 "the program reaches {} of the runtime, which this artifact does not provide",
                 missing.join(", ")
-            ));
+            )));
         }
     }
     let archive = dir.join(ARCHIVE);
-    let bytes = std::fs::read(&archive)
-        .map_err(|e| format!("cannot read the runtime archive {}: {e}", archive.display()))?;
+    let bytes = std::fs::read(&archive).map_err(|e| {
+        (
+            exit::NO_SUCH_FILE,
+            format!("cannot read the runtime archive {}: {e}", archive.display()),
+        )
+    })?;
     let actual = digest(&bytes);
     if field("archive") != actual {
-        return Err(format!(
+        return Err(unfit(format!(
             "the runtime archive's bytes are {actual}, and its manifest says {}: it is not the \
              archive that was built",
             field("archive")
-        ));
+        )));
     }
     Ok(Fitting {
         archive,
@@ -341,7 +367,7 @@ pub(crate) fn verify(dir: &Path, triple: Option<&str>) -> ExitCode {
         Ok(t) => t,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+            return ExitCode::from(exit::target_refused(triple.is_some()));
         }
     };
     match fits(dir, &target, None) {
@@ -354,9 +380,9 @@ pub(crate) fn verify(dir: &Path, triple: Option<&str>) -> ExitCode {
             );
             ExitCode::from(exit::OK)
         }
-        Err(why) => {
+        Err((code, why)) => {
             eprintln!("nazm: {why}");
-            ExitCode::from(exit::TOOLCHAIN_FAILED)
+            ExitCode::from(code)
         }
     }
 }
