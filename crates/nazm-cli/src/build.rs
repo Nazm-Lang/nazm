@@ -82,7 +82,11 @@ pub(crate) fn run(
     // `--summary-json` (N31): at every exit below, the outcome reported as one
     // `nazm.command-summary/1` on stdout in place of the rendering and the path. The exit
     // status is the same, and so is everything the build writes.
-    let summarized = |status, code, diagnostics: &[nazm_diag::Diagnostic], map, artifact| {
+    let summarized = |status: Status,
+                      code: u8,
+                      diagnostics: &[nazm_diag::Diagnostic],
+                      map: Option<&nazm_span::SourceMap>,
+                      artifact: Option<String>| {
         crate::summary::finish(
             nazm_service::summary::Command::Build,
             status,
@@ -94,126 +98,15 @@ pub(crate) fn run(
             None,
         )
     };
-    // Discovered, never given: `nazm build` takes no `--source-root`, and the marker is
-    // how a project declares one. It decides every module's durable identity, which is
-    // the name the generated code carries and therefore part of what an object is keyed
-    // on.
-    let source_root = match crate::root::decide(input, None) {
-        Ok(r) => r,
-        Err(e) => {
-            let code = exit::root_status(&e);
-            if summary {
-                let status = if code == exit::NO_SUCH_FILE {
-                    Status::Unreadable
-                } else {
-                    Status::Refused
-                };
-                return summarized(status, code, &[], None, None);
-            }
-            eprintln!("nazm: {e}");
-            return ExitCode::from(code);
-        }
+    let Settled {
+        source_root,
+        target,
+        soa,
+        cross,
+    } = match preflight(input, choice, summary, &summarized) {
+        Ok(s) => s,
+        Err(code) => return code,
     };
-    // The target and the backend, settled before anything is compiled (N41). A target that
-    // is not this host is refused: an object for it would need a linker and a runtime v1
-    // does not have, and building for the host instead would be a silent lie.
-    let target = match nazm_lir::backend::Target::requested(choice.target) {
-        Ok(t) => t,
-        Err(e) => {
-            // A `--target` that names nothing this compiler builds is the command line's fault
-            // (5); a host it cannot build for is the machine's (4) (Q1-C1).
-            let code = crate::exit::target_refused(choice.target.is_some());
-            if summary {
-                return summarized(Status::Refused, code, &[], None, None);
-            }
-            eprintln!("nazm: {e}");
-            return ExitCode::from(code);
-        }
-    };
-    // A foreign object that is not there is refused before anything is compiled, by name,
-    // rather than reported by the linker as an undefined symbol after the whole build (N42).
-    if let Some(missing) = choice.link.iter().find(|p| !p.is_file()) {
-        if summary {
-            return summarized(Status::Refused, exit::NO_SUCH_FILE, &[], None, None);
-        }
-        eprintln!(
-            "nazm: `--link {}`: no such file; `--link` names an object or library that \
-             defines foreign functions",
-            missing.display()
-        );
-        return ExitCode::from(exit::NO_SUCH_FILE);
-    }
-    // A freestanding image is the LLVM backend's (N62): Cranelift's object writer knows no
-    // binary format for a target without an operating system, so it is refused by name here
-    // rather than by Cranelift after the program is lowered.
-    if choice.backend == nazm_lir::backend::BackendId::Cranelift
-        && target.os == nazm_lir::backend::Os::None
-    {
-        if summary {
-            return summarized(Status::Refused, exit::USAGE, &[], None, None);
-        }
-        eprintln!(
-            "nazm: `--backend cranelift` builds no freestanding target; `{}` is the LLVM \
-             backend's",
-            target.triple
-        );
-        return ExitCode::from(exit::USAGE);
-    }
-    // RISC-V (N86) is code generation the host's `clang` may not have — Apple's has none. Asked
-    // before anything is compiled, so a missing code generator is named rather than reported as
-    // the compiler's own fault.
-    if target.arch == nazm_lir::backend::Arch::Riscv64 && !crate::backend::generates("riscv64") {
-        if summary {
-            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
-        }
-        eprintln!(
-            "nazm: this host's `{}` has no RISC-V code generator, so it cannot build `{}`; build \
-             where one does — the `nazm-qemu:n86` image's",
-            crate::backend::DRIVER,
-            target.triple
-        );
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
-    }
-    // The field-by-field layout (N68, §7.70), asked for by name. LIR's since N105, so both
-    // backends take it.
-    let soa = match choice.layout {
-        "aos" => false,
-        "soa" => true,
-        other => {
-            if summary {
-                return summarized(Status::Refused, exit::USAGE, &[], None, None);
-            }
-            eprintln!("nazm: `--layout {other}` is not a layout; the layouts are `aos` and `soa`");
-            return ExitCode::from(exit::USAGE);
-        }
-    };
-    // The watermark is the board's (N63): a hosted program has an operating system's stack.
-    if choice.stack_watermark && !target.is_board() {
-        if summary {
-            return summarized(Status::Refused, exit::USAGE, &[], None, None);
-        }
-        eprintln!(
-            "nazm: `--stack-watermark` measures a board's stack; it needs \
-             `--target aarch64-unknown-none` or `--target riscv64gc-unknown-none-elf`"
-        );
-        return ExitCode::from(exit::USAGE);
-    }
-    // A target other than the host (N57): clang is told it, and where the host cannot link it
-    // the build writes objects instead, or is refused by name before compiling anything.
-    let host = nazm_lir::backend::Target::host().ok();
-    let cross = (host.as_ref() != Some(&target)).then(|| target.triple.clone());
-    let links_here = host.as_ref().is_some_and(|h| target.links_on(h));
-    if !links_here && choice.objects.is_none() && !choice.library {
-        if summary {
-            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
-        }
-        eprintln!(
-            "nazm: this host has no linker for `{}`; build it with `--objects DIR`, which writes \
-             every object and `DIR/link.txt` for that target's own toolchain to link",
-            target.triple
-        );
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
-    }
     let llvm = nazm_lir::backend::LlvmText::new(target.clone())
         .with_debug(choice.debug)
         .with_soa(soa);
@@ -238,6 +131,365 @@ pub(crate) fn run(
         )
     };
     let clock = Clock::start();
+    let (loaded, output) =
+        match admitted(input, out, json, choice, &source_root, summary, &summarized) {
+            Ok(a) => a,
+            Err(code) => return code,
+        };
+    let map = &loaded.map;
+    // A freestanding target (N62) has no operating system under it: the runtime parts a
+    // program reaches beyond the board's, named, refuse the build after code generation.
+    let freestanding = target.os == nazm_lir::backend::Os::None;
+    let Lowered {
+        artefacts,
+        foreign,
+        exported,
+        reached,
+    } = match lowered(
+        &loaded,
+        json,
+        choice,
+        &target,
+        freestanding,
+        chosen,
+        &clif_store,
+        &clif_key,
+        &clock,
+        summary,
+        &summarized,
+    ) {
+        Ok(l) => l,
+        Err(code) => return code,
+    };
+
+    // A runtime artifact (N82, §7.83): checked against this compiler, the target and everything
+    // the program reached before any file is written; refused by name, never replaced by a
+    // generated runtime.
+    let prebuilt = match choice.runtime {
+        None => None,
+        Some(dir) => match crate::runtime_artifact::fits(dir, &target, Some(reached)) {
+            Ok(f) => Some(f.archive),
+            Err((code, why)) => {
+                if summary {
+                    return summarized(Status::Refused, code, &[], Some(map), None);
+                }
+                eprintln!("nazm: {why}");
+                return ExitCode::from(code);
+            }
+        },
+    };
+
+    // Temporaries beside the output, so the final move is a rename within one filesystem
+    // rather than a copy that can half-succeed. One directory for all of them, because
+    // there is one per module now and a program with forty modules should not put forty
+    // pairs of files beside somebody's binary.
+    // Made exclusively, mode 0700: a directory or symlink already at the name is never built
+    // in (Q1-A1-03).
+    let stem = format!(
+        "{}.nazm-",
+        output.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let parent = output.parent().unwrap_or_else(|| Path::new(""));
+    let made = crate::scratch::exclusive(parent, &stem);
+    let work = made
+        .as_ref()
+        .map_or_else(|_| sibling(&output, ".nazm"), Clone::clone);
+    // Linked inside the working directory under the output's own file name (N46): the
+    // Mach-O linker writes that name into the executable's code signature and derives its
+    // UUID from it, so a temporary name would make two builds of one program differ.
+    let tmp_exe = link_name(&work, &output);
+    if let Err(e) = made {
+        eprintln!("nazm: cannot create {}: {e}", work.display());
+        if summary {
+            return summarized(
+                Status::ToolchainFailed,
+                exit::TOOLCHAIN_FAILED,
+                &[],
+                Some(map),
+                None,
+            );
+        }
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
+
+    // Removes what this build made, and only that: the working directory it created and
+    // the executable it was assembling. Nothing else is scanned and nothing else is
+    // touched.
+    let cleanup = |keep: bool| {
+        if !keep {
+            let _ = std::fs::remove_dir_all(&work);
+        }
+        let _ = std::fs::remove_file(&tmp_exe);
+    };
+
+    let Compiled {
+        backend,
+        mut objects,
+        tally,
+        frames,
+    } = match compiled(
+        &artefacts,
+        &work,
+        opt_level,
+        cache,
+        cross.as_deref(),
+        freestanding,
+        &source_root,
+        chosen,
+        &clif_store,
+        &clif_key,
+        &cleanup,
+        map,
+        summary,
+        &summarized,
+    ) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+
+    // Deterministic: the units are in load order and the support artefacts last, so the
+    // command line does not depend on anything the filesystem decided.
+    // The runtime artifact after every object that calls it, and before the foreign inputs.
+    objects.extend(prebuilt);
+    objects.extend(choice.link.iter().cloned());
+    clock.mark("native_compile");
+    if let Some(code) = objects_for_target(
+        choice,
+        &objects,
+        &artefacts,
+        &frames,
+        &target,
+        freestanding,
+        &cleanup,
+        with_report,
+        &source_root,
+        map,
+        tally,
+        summary,
+    ) {
+        return code;
+    }
+    if let Err(code) = linked(
+        choice,
+        &backend,
+        &tmp_exe,
+        &objects,
+        &foreign,
+        &cleanup,
+        &work,
+        map,
+        summary,
+        &summarized,
+    ) {
+        return code;
+    }
+    published(
+        choice,
+        emit_ir,
+        with_report,
+        &artefacts,
+        &output,
+        &exported,
+        &backend,
+        &tmp_exe,
+        &work,
+        &cleanup,
+        &clock,
+        &source_root,
+        map,
+        tally,
+        summary,
+        &summarized,
+    )
+}
+
+/// How a phase reports a failure as the summary (N31): the status, the exit code, the
+/// diagnostics, the sources they point into, and the artefact when there is one.
+type Summarize<'a> = dyn Fn(
+        Status,
+        u8,
+        &[nazm_diag::Diagnostic],
+        Option<&nazm_span::SourceMap>,
+        Option<String>,
+    ) -> ExitCode
+    + 'a;
+
+/// What is settled before anything is compiled, and every refusal that needs nothing more: the
+/// source root, the target and its backend, the foreign objects, the layout, the watermark, and
+/// whether this host can link the target.
+fn preflight(
+    input: &Path,
+    choice: Choice<'_>,
+    summary: bool,
+    summarized: &Summarize<'_>,
+) -> Result<Settled, ExitCode> {
+    // Discovered, never given: `nazm build` takes no `--source-root`, and the marker is
+    // how a project declares one. It decides every module's durable identity, which is
+    // the name the generated code carries and therefore part of what an object is keyed
+    // on.
+    let source_root = match crate::root::decide(input, None) {
+        Ok(r) => r,
+        Err(e) => {
+            let code = exit::root_status(&e);
+            if summary {
+                let status = if code == exit::NO_SUCH_FILE {
+                    Status::Unreadable
+                } else {
+                    Status::Refused
+                };
+                return Err(summarized(status, code, &[], None, None));
+            }
+            eprintln!("nazm: {e}");
+            return Err(ExitCode::from(code));
+        }
+    };
+    // The target and the backend, settled before anything is compiled (N41). A target that
+    // is not this host is refused: an object for it would need a linker and a runtime v1
+    // does not have, and building for the host instead would be a silent lie.
+    let target = match nazm_lir::backend::Target::requested(choice.target) {
+        Ok(t) => t,
+        Err(e) => {
+            // A `--target` that names nothing this compiler builds is the command line's fault
+            // (5); a host it cannot build for is the machine's (4) (Q1-C1).
+            let code = crate::exit::target_refused(choice.target.is_some());
+            if summary {
+                return Err(summarized(Status::Refused, code, &[], None, None));
+            }
+            eprintln!("nazm: {e}");
+            return Err(ExitCode::from(code));
+        }
+    };
+    // A foreign object that is not there is refused before anything is compiled, by name,
+    // rather than reported by the linker as an undefined symbol after the whole build (N42).
+    if let Some(missing) = choice.link.iter().find(|p| !p.is_file()) {
+        if summary {
+            return Err(summarized(
+                Status::Refused,
+                exit::NO_SUCH_FILE,
+                &[],
+                None,
+                None,
+            ));
+        }
+        eprintln!(
+            "nazm: `--link {}`: no such file; `--link` names an object or library that \
+             defines foreign functions",
+            missing.display()
+        );
+        return Err(ExitCode::from(exit::NO_SUCH_FILE));
+    }
+    // A freestanding image is the LLVM backend's (N62): Cranelift's object writer knows no
+    // binary format for a target without an operating system, so it is refused by name here
+    // rather than by Cranelift after the program is lowered.
+    if choice.backend == nazm_lir::backend::BackendId::Cranelift
+        && target.os == nazm_lir::backend::Os::None
+    {
+        if summary {
+            return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+        }
+        eprintln!(
+            "nazm: `--backend cranelift` builds no freestanding target; `{}` is the LLVM \
+             backend's",
+            target.triple
+        );
+        return Err(ExitCode::from(exit::USAGE));
+    }
+    // RISC-V (N86) is code generation the host's `clang` may not have — Apple's has none. Asked
+    // before anything is compiled, so a missing code generator is named rather than reported as
+    // the compiler's own fault.
+    if target.arch == nazm_lir::backend::Arch::Riscv64 && !crate::backend::generates("riscv64") {
+        if summary {
+            return Err(summarized(
+                Status::Refused,
+                exit::TOOLCHAIN_FAILED,
+                &[],
+                None,
+                None,
+            ));
+        }
+        eprintln!(
+            "nazm: this host's `{}` has no RISC-V code generator, so it cannot build `{}`; build \
+             where one does — the `nazm-qemu:n86` image's",
+            crate::backend::DRIVER,
+            target.triple
+        );
+        return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
+    }
+    // The field-by-field layout (N68, §7.70), asked for by name. LIR's since N105, so both
+    // backends take it.
+    let soa = match choice.layout {
+        "aos" => false,
+        "soa" => true,
+        other => {
+            if summary {
+                return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+            }
+            eprintln!("nazm: `--layout {other}` is not a layout; the layouts are `aos` and `soa`");
+            return Err(ExitCode::from(exit::USAGE));
+        }
+    };
+    // The watermark is the board's (N63): a hosted program has an operating system's stack.
+    if choice.stack_watermark && !target.is_board() {
+        if summary {
+            return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+        }
+        eprintln!(
+            "nazm: `--stack-watermark` measures a board's stack; it needs \
+             `--target aarch64-unknown-none` or `--target riscv64gc-unknown-none-elf`"
+        );
+        return Err(ExitCode::from(exit::USAGE));
+    }
+    // A target other than the host (N57): clang is told it, and where the host cannot link it
+    // the build writes objects instead, or is refused by name before compiling anything.
+    let host = nazm_lir::backend::Target::host().ok();
+    let cross = (host.as_ref() != Some(&target)).then(|| target.triple.clone());
+    let links_here = host.as_ref().is_some_and(|h| target.links_on(h));
+    if !links_here && choice.objects.is_none() && !choice.library {
+        if summary {
+            return Err(summarized(
+                Status::Refused,
+                exit::TOOLCHAIN_FAILED,
+                &[],
+                None,
+                None,
+            ));
+        }
+        eprintln!(
+            "nazm: this host has no linker for `{}`; build it with `--objects DIR`, which writes \
+             every object and `DIR/link.txt` for that target's own toolchain to link",
+            target.triple
+        );
+        return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
+    }
+    Ok(Settled {
+        source_root,
+        target,
+        soa,
+        cross,
+    })
+}
+
+/// What [`preflight`] settled.
+struct Settled {
+    source_root: nazm_service::root::SourceRoot,
+    target: nazm_lir::backend::Target,
+    /// The field-by-field layout (N68).
+    soa: bool,
+    /// The target's triple, when it is not the host's.
+    cross: Option<String>,
+}
+
+/// The program loaded, and the output path it may be written to: never over its own source or
+/// any module it loads, and a shared library's name without a comma.
+fn admitted(
+    input: &Path,
+    out: Option<&Path>,
+    json: bool,
+    choice: Choice<'_>,
+    source_root: &nazm_service::root::SourceRoot,
+    summary: bool,
+    summarized: &Summarize<'_>,
+) -> Result<(nazm_service::load::Loaded, PathBuf), ExitCode> {
     let loaded = match crate::load::load(input, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
@@ -248,14 +500,19 @@ pub(crate) fn run(
                 } else {
                     Status::Rejected
                 };
-                return summarized(status, code, &diagnostics, Some(&partial.map), None);
+                return Err(summarized(
+                    status,
+                    code,
+                    &diagnostics,
+                    Some(&partial.map),
+                    None,
+                ));
             }
             emit(&diagnostics, &partial.map, json);
-            return ExitCode::from(code);
+            return Err(ExitCode::from(code));
         }
     };
     let map = &loaded.map;
-
     let output = match out {
         Some(p) => p.to_path_buf(),
         // `prog.nz` → `prog`. A stem with no extension would collide with its source, and
@@ -271,14 +528,20 @@ pub(crate) fn run(
             .any(|n| same_file(Path::new(n), &output));
     if clobbers {
         if summary {
-            return summarized(Status::Refused, exit::CHECK_FAILED, &[], Some(map), None);
+            return Err(summarized(
+                Status::Refused,
+                exit::CHECK_FAILED,
+                &[],
+                Some(map),
+                None,
+            ));
         }
         eprintln!(
             "nazm: refusing to write the executable over its own source ({}). \
              Pass -o with a different path.",
             output.display()
         );
-        return ExitCode::from(exit::CHECK_FAILED);
+        return Err(ExitCode::from(exit::CHECK_FAILED));
     }
     // A shared library names itself to the linker as `-Wl,…,NAME`, and the linker splits that
     // argument at every comma: a comma in the name would be an argument of its own (Q1-A1-06).
@@ -289,16 +552,41 @@ pub(crate) fn run(
             .is_some_and(|n| n.to_string_lossy().contains(','))
     {
         if summary {
-            return summarized(Status::Refused, exit::CHECK_FAILED, &[], Some(map), None);
+            return Err(summarized(
+                Status::Refused,
+                exit::CHECK_FAILED,
+                &[],
+                Some(map),
+                None,
+            ));
         }
         eprintln!(
             "nazm: a shared library's file name may not contain a comma ({}): the linker would \
              read what follows it as another argument",
             output.display()
         );
-        return ExitCode::from(exit::CHECK_FAILED);
+        return Err(ExitCode::from(exit::CHECK_FAILED));
     }
+    Ok((loaded, output))
+}
 
+/// Validation, lowering and code generation: the program's artefacts, the foreign symbols it
+/// calls, what it exports, and which runtime services it reached.
+#[allow(clippy::too_many_arguments)]
+fn lowered(
+    loaded: &nazm_service::load::Loaded,
+    json: bool,
+    choice: Choice<'_>,
+    target: &nazm_lir::backend::Target,
+    freestanding: bool,
+    chosen: &(dyn nazm_lir::backend::Backend + Sync),
+    clif_store: &Option<ObjectStore>,
+    clif_key: &(dyn Fn(&str) -> ObjectKey + Sync),
+    clock: &Clock,
+    summary: bool,
+    summarized: &Summarize<'_>,
+) -> Result<Lowered, ExitCode> {
+    let map = &loaded.map;
     // Ordinary validation, lowering and emission, all on the interpreter's own stack —
     // `nazm_core::on_checked` never lets the tree out. Every one of those passes recurses
     // with the shape of the syntax tree, and so does dropping it and dropping the IR, so
@@ -318,9 +606,6 @@ pub(crate) fn run(
     let mut foreign: Vec<String> = Vec::new();
     // Each export's symbol and C signature, for a library's header (N55).
     let mut exported: Vec<(String, Vec<nazm_lir::Ty>, nazm_lir::Ty)> = Vec::new();
-    // A freestanding target (N62) has no operating system under it: the runtime parts a
-    // program reaches beyond the board's, named, refuse the build after code generation.
-    let freestanding = target.os == nazm_lir::backend::Os::None;
     let mut unhosted: Vec<String> = Vec::new();
     let mut reached = nazm_lir::Needs::default();
     clock.mark("load");
@@ -395,7 +680,13 @@ pub(crate) fn run(
     ) {
         Ok(_) if !unhosted.is_empty() => {
             if summary {
-                return summarized(Status::Refused, exit::CHECK_FAILED, &[], Some(map), None);
+                return Err(summarized(
+                    Status::Refused,
+                    exit::CHECK_FAILED,
+                    &[],
+                    Some(map),
+                    None,
+                ));
             }
             eprintln!(
                 "nazm: `{}` has no operating system, and this program reaches what only a hosted \
@@ -405,7 +696,7 @@ pub(crate) fn run(
                 target.triple,
                 unhosted.join(", ")
             );
-            return ExitCode::from(exit::CHECK_FAILED);
+            return Err(ExitCode::from(exit::CHECK_FAILED));
         }
         Ok(a) => a,
         Err(diagnostics) => {
@@ -413,13 +704,13 @@ pub(crate) fn run(
             // program being wrong. Distinguished for the summary line only; both are a
             // check failure and neither produces output.
             if summary {
-                return summarized(
+                return Err(summarized(
                     Status::Rejected,
                     exit::CHECK_FAILED,
                     &diagnostics,
                     Some(map),
                     None,
-                );
+                ));
             }
             let unsupported = diagnostics
                 .iter()
@@ -435,77 +726,54 @@ pub(crate) fn run(
             } else {
                 eprintln!("nazm: {n} error{}", if n == 1 { "" } else { "s" });
             }
-            return ExitCode::from(exit::CHECK_FAILED);
+            return Err(ExitCode::from(exit::CHECK_FAILED));
         }
     };
+    Ok(Lowered {
+        artefacts,
+        foreign,
+        exported,
+        reached,
+    })
+}
 
-    // A runtime artifact (N82, §7.83): checked against this compiler, the target and everything
-    // the program reached before any file is written; refused by name, never replaced by a
-    // generated runtime.
-    let prebuilt = match choice.runtime {
-        None => None,
-        Some(dir) => match crate::runtime_artifact::fits(dir, &target, Some(reached)) {
-            Ok(f) => Some(f.archive),
-            Err((code, why)) => {
-                if summary {
-                    return summarized(Status::Refused, code, &[], Some(map), None);
-                }
-                eprintln!("nazm: {why}");
-                return ExitCode::from(code);
-            }
-        },
-    };
+/// What [`lowered`] produced.
+struct Lowered {
+    artefacts: Vec<Artefact>,
+    /// The foreign symbols the program calls (N42).
+    foreign: Vec<String>,
+    /// Each export's symbol and C signature (N55).
+    exported: Vec<(String, Vec<nazm_lir::Ty>, nazm_lir::Ty)>,
+    /// The runtime services the program reached (N82).
+    reached: nazm_lir::Needs,
+}
 
-    // Temporaries beside the output, so the final move is a rename within one filesystem
-    // rather than a copy that can half-succeed. One directory for all of them, because
-    // there is one per module now and a program with forty modules should not put forty
-    // pairs of files beside somebody's binary.
-    // Made exclusively, mode 0700: a directory or symlink already at the name is never built
-    // in (Q1-A1-03).
-    let stem = format!(
-        "{}.nazm-",
-        output.file_name().unwrap_or_default().to_string_lossy()
-    );
-    let parent = output.parent().unwrap_or_else(|| Path::new(""));
-    let made = crate::scratch::exclusive(parent, &stem);
-    let work = made
-        .as_ref()
-        .map_or_else(|_| sibling(&output, ".nazm"), Clone::clone);
-    // Linked inside the working directory under the output's own file name (N46): the
-    // Mach-O linker writes that name into the executable's code signature and derives its
-    // UUID from it, so a temporary name would make two builds of one program differ.
-    let tmp_exe = link_name(&work, &output);
-    if let Err(e) = made {
-        eprintln!("nazm: cannot create {}: {e}", work.display());
-        if summary {
-            return summarized(
-                Status::ToolchainFailed,
-                exit::TOOLCHAIN_FAILED,
-                &[],
-                Some(map),
-                None,
-            );
-        }
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
-    }
-
-    // Removes what this build made, and only that: the working directory it created and
-    // the executable it was assembling. Nothing else is scanned and nothing else is
-    // touched.
-    let cleanup = |keep: bool| {
-        if !keep {
-            let _ = std::fs::remove_dir_all(&work);
-        }
-        let _ = std::fs::remove_file(&tmp_exe);
-    };
-
+/// Every artefact made an object: reused from the store when the exact input, configuration and
+/// compiler were filed before, otherwise compiled and filed.
+#[allow(clippy::too_many_arguments)]
+fn compiled(
+    artefacts: &[Artefact],
+    work: &Path,
+    opt_level: u8,
+    cache: bool,
+    cross: Option<&str>,
+    freestanding: bool,
+    source_root: &nazm_service::root::SourceRoot,
+    chosen: &(dyn nazm_lir::backend::Backend + Sync),
+    clif_store: &Option<ObjectStore>,
+    clif_key: &(dyn Fn(&str) -> ObjectKey + Sync),
+    cleanup: &dyn Fn(bool),
+    map: &nazm_span::SourceMap,
+    summary: bool,
+    summarized: &Summarize<'_>,
+) -> Result<Compiled, ExitCode> {
     // Asked once, before anything is compiled: what this backend is, and what it would
     // do. `crate::backend` says why the answer comes from the compiler rather than from
     // the three arguments this one passes.
     let backend = if cache {
-        Backend::discover(opt_level, &work, cross.as_deref())
+        Backend::discover(opt_level, work, cross)
     } else {
-        Backend::unidentified(opt_level, cross.as_deref())
+        Backend::unidentified(opt_level, cross)
     };
     // A backend that would not say what it is gets no cache. Guessing a configuration is
     // how one target's objects end up in another's build.
@@ -524,7 +792,7 @@ pub(crate) fn run(
         ..Native::default()
     };
     let mut objects: Vec<PathBuf> = Vec::new();
-    for artefact in &artefacts {
+    for artefact in artefacts {
         let ll = work.join(format!("{}.ll", artefact.name));
         let obj = work.join(format!("{}.o", artefact.name));
 
@@ -537,15 +805,15 @@ pub(crate) fn run(
                     cleanup(false);
                     eprintln!("nazm: cannot write {}: {e}", obj.display());
                     if summary {
-                        return summarized(
+                        return Err(summarized(
                             Status::ToolchainFailed,
                             exit::TOOLCHAIN_FAILED,
                             &[],
                             Some(map),
                             None,
-                        );
+                        ));
                     }
-                    return ExitCode::from(exit::TOOLCHAIN_FAILED);
+                    return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
                 }
                 if artefact.reused {
                     tally.reused += 1;
@@ -603,15 +871,15 @@ pub(crate) fn run(
             cleanup(false);
             eprintln!("nazm: cannot write {}: {e}", ll.display());
             if summary {
-                return summarized(
+                return Err(summarized(
                     Status::ToolchainFailed,
                     exit::TOOLCHAIN_FAILED,
                     &[],
                     Some(map),
                     None,
-                );
+                ));
             }
-            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+            return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
         }
         let compiled = if freestanding {
             backend.compile_reporting_frames(&ll, &obj)
@@ -629,15 +897,15 @@ pub(crate) fn run(
             other => {
                 let code = report_clang(other, &ll, cleanup);
                 if summary {
-                    return summarized(
+                    return Err(summarized(
                         Status::ToolchainFailed,
                         exit::TOOLCHAIN_FAILED,
                         &[],
                         Some(map),
                         None,
-                    );
+                    ));
                 }
-                return code;
+                return Err(code);
             }
         }
 
@@ -660,17 +928,45 @@ pub(crate) fn run(
         }
         objects.push(obj);
     }
+    Ok(Compiled {
+        backend,
+        objects,
+        tally,
+        frames,
+    })
+}
 
-    // Deterministic: the units are in load order and the support artefacts last, so the
-    // command line does not depend on anything the filesystem decided.
-    // The runtime artifact after every object that calls it, and before the foreign inputs.
-    objects.extend(prebuilt);
-    objects.extend(choice.link.iter().cloned());
-    clock.mark("native_compile");
+/// What [`compiled`] made.
+struct Compiled {
+    backend: Backend,
+    /// The objects, in link order.
+    objects: Vec<PathBuf>,
+    tally: Native,
+    /// Each function's frame size, as the compiler reported it (N63).
+    frames: std::collections::BTreeMap<String, u64>,
+}
+
+/// `--objects DIR` (N57): every object in link order, and `link.txt`, for the target's own
+/// toolchain; for a freestanding image, its stack bound too. `None` when the build links here.
+#[allow(clippy::too_many_arguments)]
+fn objects_for_target(
+    choice: Choice<'_>,
+    objects: &[PathBuf],
+    artefacts: &[Artefact],
+    frames: &std::collections::BTreeMap<String, u64>,
+    target: &nazm_lir::backend::Target,
+    freestanding: bool,
+    cleanup: &dyn Fn(bool),
+    with_report: bool,
+    source_root: &nazm_service::root::SourceRoot,
+    map: &nazm_span::SourceMap,
+    tally: Native,
+    summary: bool,
+) -> Option<ExitCode> {
     // Objects for the target's own toolchain (N57): every object in link order, renamed by its
     // position so the order survives, and `link.txt` saying what to link them with.
     if let Some(dir) = choice.objects {
-        let mut written = write_objects(dir, &objects, &target);
+        let mut written = write_objects(dir, objects, target);
         if freestanding && written.is_ok() {
             let texts: Vec<&str> = artefacts
                 .iter()
@@ -686,14 +982,14 @@ pub(crate) fn run(
             } else {
                 ("nz_board_main", nazm_lir::runtime::board::STACK)
             };
-            let bound = crate::stack::bound(root, &frames, &calls);
+            let bound = crate::stack::bound(root, frames, &calls);
             written = std::fs::write(
                 dir.join("bounds.json"),
-                crate::stack::report(&target.triple, &bound, &frames, reserved),
+                crate::stack::report(&target.triple, &bound, frames, reserved),
             );
         }
         cleanup(false);
-        return match written {
+        return Some(match written {
             Ok(()) => {
                 if with_report {
                     println!(
@@ -719,14 +1015,31 @@ pub(crate) fn run(
                 eprintln!("nazm: cannot write {}: {e}", dir.display());
                 ExitCode::from(exit::TOOLCHAIN_FAILED)
             }
-        };
+        });
     }
+    None
+}
+
+/// The link: an executable, a static archive or a shared library, from the objects in order.
+#[allow(clippy::too_many_arguments)]
+fn linked(
+    choice: Choice<'_>,
+    backend: &Backend,
+    tmp_exe: &Path,
+    objects: &[PathBuf],
+    foreign: &[String],
+    cleanup: &dyn Fn(bool),
+    work: &Path,
+    map: &nazm_span::SourceMap,
+    summary: bool,
+    summarized: &Summarize<'_>,
+) -> Result<(), ExitCode> {
     let linked = if choice.library && choice.shared {
-        backend.link_shared(&tmp_exe, &objects)
+        backend.link_shared(tmp_exe, objects)
     } else if choice.library {
-        archive(&tmp_exe, &objects)
+        archive(tmp_exe, objects)
     } else {
-        backend.link(&tmp_exe, &objects)
+        backend.link(tmp_exe, objects)
     };
     match linked {
         Outcome::Ran(o) if o.status.success() => {}
@@ -746,38 +1059,62 @@ pub(crate) fn run(
                     .join(", ")
             );
             if summary {
-                return summarized(
+                return Err(summarized(
                     Status::ToolchainFailed,
                     exit::TOOLCHAIN_FAILED,
                     &[],
                     Some(map),
                     None,
-                );
+                ));
             }
-            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+            return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
         }
         other => {
-            let code = report_clang(other, &work, cleanup);
+            let code = report_clang(other, work, cleanup);
             if summary {
-                return summarized(
+                return Err(summarized(
                     Status::ToolchainFailed,
                     exit::TOOLCHAIN_FAILED,
                     &[],
                     Some(map),
                     None,
-                );
+                ));
             }
-            return code;
+            return Err(code);
         }
     }
+    Ok(())
+}
 
+/// The finished build: IR beside the output when asked, the debug information, a library's
+/// header, then the output published by rename, last, so an existing one survives every
+/// failure before it.
+#[allow(clippy::too_many_arguments)]
+fn published(
+    choice: Choice<'_>,
+    emit_ir: bool,
+    with_report: bool,
+    artefacts: &[Artefact],
+    output: &Path,
+    exported: &[(String, Vec<nazm_lir::Ty>, nazm_lir::Ty)],
+    backend: &Backend,
+    tmp_exe: &Path,
+    work: &Path,
+    cleanup: &dyn Fn(bool),
+    clock: &Clock,
+    source_root: &nazm_service::root::SourceRoot,
+    map: &nazm_span::SourceMap,
+    tally: Native,
+    summary: bool,
+    summarized: &Summarize<'_>,
+) -> ExitCode {
     if emit_ir {
         // Beside the output, one file per unit, named as the artefacts are.
-        for artefact in &artefacts {
+        for artefact in artefacts {
             let nazm_lir::backend::Code::Llvm(ir) = &artefact.code else {
                 continue;
             };
-            let beside = with_suffix(&output, &format!("{}.ll", artefact.name));
+            let beside = with_suffix(output, &format!("{}.ll", artefact.name));
             if let Err(e) = std::fs::write(&beside, ir) {
                 eprintln!("nazm: cannot write {}: {e}", beside.display());
             }
@@ -787,8 +1124,8 @@ pub(crate) fn run(
     // to go, so a debug build gathers it into `OUTPUT.dSYM` first (N48). Elsewhere it is in
     // the executable already.
     if gathers_debug_information(choice.debug, std::env::consts::OS) {
-        let dsym = with_suffix(&output, "dSYM");
-        if let Err(e) = backend.gather_debug_info(&tmp_exe, &dsym) {
+        let dsym = with_suffix(output, "dSYM");
+        if let Err(e) = backend.gather_debug_info(tmp_exe, &dsym) {
             eprintln!("nazm: the debug information was not gathered: {e}");
         }
     }
@@ -796,7 +1133,7 @@ pub(crate) fn run(
     // published archive always has its header.
     if choice.library {
         let header = output.with_extension("h");
-        if let Err(e) = std::fs::write(&header, c_header(&output, &exported)) {
+        if let Err(e) = std::fs::write(&header, c_header(output, exported)) {
             cleanup(false);
             eprintln!("nazm: cannot write {}: {e}", header.display());
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
@@ -804,8 +1141,8 @@ pub(crate) fn run(
     }
     // Published last, so an existing executable survives every failure above — and then the
     // intermediates go, the working directory the executable was linked in included.
-    let published = std::fs::rename(&tmp_exe, &output);
-    let _ = std::fs::remove_dir_all(&work);
+    let published = std::fs::rename(tmp_exe, output);
+    let _ = std::fs::remove_dir_all(work);
     if let Err(e) = published {
         eprintln!("nazm: cannot write {}: {e}", output.display());
         if summary {

@@ -6858,13 +6858,13 @@ killers = [{ package = "nazm-cli", test = "summary", name = "a_test_run_with_now
 name = "n31-a-failed-link-is-a-success"
 why = "a build whose link failed, which has no diagnostic, is summarized as a success"
 file = "crates/nazm-cli/src/build.rs"
-find = """            let code = report_clang(other, &work, cleanup);
+find = """            let code = report_clang(other, work, cleanup);
             if summary {
-                return summarized(
+                return Err(summarized(
                     Status::ToolchainFailed,"""
-replace = """            let code = report_clang(other, &work, cleanup);
+replace = """            let code = report_clang(other, work, cleanup);
             if summary {
-                return summarized(
+                return Err(summarized(
                     Status::Success,"""
 killers = [{ package = "nazm-cli", test = "summary", name = "a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic" }]
 
@@ -6874,11 +6874,11 @@ why = "a build whose clang refused the IR is summarized as the program rejected,
 file = "crates/nazm-cli/src/build.rs"
 find = """                let code = report_clang(other, &ll, cleanup);
                 if summary {
-                    return summarized(
+                    return Err(summarized(
                         Status::ToolchainFailed,"""
 replace = """                let code = report_clang(other, &ll, cleanup);
                 if summary {
-                    return summarized(
+                    return Err(summarized(
                         Status::Rejected,"""
 killers = [{ package = "nazm-cli", test = "summary", name = "a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic" }]
 
@@ -14668,6 +14668,6 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "exit::tests::a_load_is_
 name = "q1c1-a-missing-link-is-the-toolchains"
 why = "a `--link` file that does not exist is reported as a toolchain failure (4), the status it had before the contract was frozen"
 file = "crates/nazm-cli/src/build.rs"
-find = "defines foreign functions\",\n            missing.display()\n        );\n        return ExitCode::from(exit::NO_SUCH_FILE);"
-replace = "defines foreign functions\",\n            missing.display()\n        );\n        return ExitCode::from(exit::TOOLCHAIN_FAILED);"
+find = "defines foreign functions\",\n            missing.display()\n        );\n        return Err(ExitCode::from(exit::NO_SUCH_FILE));"
+replace = "defines foreign functions\",\n            missing.display()\n        );\n        return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));"
 killers = [{ package = "nazm-cli", test = "exit_contract", name = "status_3_is_a_file_that_could_not_be_found_or_read" }]
