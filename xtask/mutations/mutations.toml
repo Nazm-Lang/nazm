@@ -243,7 +243,7 @@ why = """
 removes the recursion guard, so runaway recursion exhausts the host stack and kills the
 process with no diagnostic — the one failure a tool cannot explain to anyone
 """
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = "                if self.depth > self.max_depth {"
 replace = "                if false {"
 killers = [{ package = "nazm-core", test = "language", name = "a_smaller_depth_budget_is_honoured" }]
@@ -257,7 +257,7 @@ Repointed by N39: the interpreter walks Core IR, and a call is `ExprKind::Call` 
 Repointed by N50: a direct call and a call through a function value share the frame-building
 code, so the call is made with the frame it built.
 """
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = """                let out = self.call_body(g, fr);
                 self.depth -= 1;"""
 replace = "                let out = self.call_body(g, fr);"
@@ -270,7 +270,7 @@ drops the arm that turns a Flow::Return into the call's value, so every `return`
 that the function finished without producing anything
 Repointed by N39: the call body is a Core IR function's, and its failure is built by `fail`.
 """
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/mod.rs"
 find = "            Flow::Return(v) | Flow::Fell(Some(v)) => Ok(v),"
 replace = """            Flow::Fell(Some(v)) => Ok(v),
             Flow::Return(_) => Err(fail(
@@ -287,7 +287,7 @@ stops only for `break` and `continue`, so a `return` runs the rest of the block 
 statements after it decide the function's value
 Repointed by N39: the region walk over Core IR, where a transfer names its loop.
 """
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/mod.rs"
 find = """            let flow = self.stmt(f, stmt, env)?;
             if !flow.is_fall_through() {"""
 replace = """            let flow = self.stmt(f, stmt, env)?;
@@ -312,7 +312,7 @@ makes `smallest % -1` an overflow error, although its result is 0 and 0 is repre
 the exception the spec exists to remove
 Repointed by N39: checked arithmetic moved from `binary` to `arith`, over Core IR's `ArithOp`.
 """
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/arith.rs"
 find = "        (Rem, Int(a), Int(b)) => Ok(Int(a.wrapping_rem(*b))),"
 replace = """        (Rem, Int(a), Int(b)) => a
             .checked_rem(*b)
@@ -475,7 +475,7 @@ treats a `return` raised inside an expression as a failure instead of propagatin
 `let x = if c { return 1; } else { 2 };` type-checks and then fails at run time
 Repointed by N39: `take!` evaluates a Core IR expression, and `no_value` is a free function.
 """
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/mod.rs"
 find = "            left => return Ok(left),"
 replace = "            left => return Err(no_value($e)),"
 killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
@@ -486,7 +486,7 @@ why = """
 reserves a fixed stack however large the depth budget is, so `--max-depth` above the
 default promises a bound the stack cannot back and the program aborts instead of reporting
 """
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/mod.rs"
 find = "    STACK_BASE_BYTES.saturating_add(max_depth.saturating_mul(STACK_BYTES_PER_CALL))"
 replace = "    STACK_BASE_BYTES"
 killers = [{ package = "nazm-cli", test = "cli", name = "deep_trees_and_deep_recursion_report_rather_than_abort" }]
@@ -3790,7 +3790,7 @@ killers = [{ package = "nazm-core", test = "equality", name = "a_refusal_names_t
 [[mutation]]
 name = "n13-interpreted-records-compare-their-first-field-only"
 why = "the interpreter compares a record's first field and stops, so `Point(x: 1, y: 2) == Point(x: 1, y: 9)`"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/arith.rs"
 find = """        for (x, y) in xs.iter().zip(ys) {
             if !equal(x, y)? {
                 return Some(false);
@@ -3806,7 +3806,7 @@ killers = [{ package = "nazm-core", test = "equality", name = "a_record_is_equal
 [[mutation]]
 name = "n13-interpreted-variants-are-not-compared"
 why = "the interpreter compares payloads without first comparing variants, so `Left(n: 1) == Right(n: 1)`"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/arith.rs"
 find = """            if x.variant != y.variant {
                 return Some(false);
             }"""
@@ -3819,7 +3819,7 @@ why = """
 `!=` answers what `==` answers — a second relation that drifted from the first
 Repointed by N39: the interpreter compares by Core IR's `CmpOp`.
 """
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/arith.rs"
 find = "        (NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(false))),"
 replace = "        (NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(true))),"
 killers = [{ package = "nazm-core", test = "equality", name = "a_record_is_equal_when_every_field_is" }]
@@ -3827,7 +3827,7 @@ killers = [{ package = "nazm-core", test = "equality", name = "a_record_is_equal
 [[mutation]]
 name = "n13-interpreted-strings-compare-by-length"
 why = "the primitive `Str` law changes: two strings of one length are equal whatever their bytes"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/arith.rs"
 find = "        (Value::Str(x), Value::Str(y)) => Some(x.bytes() == y.bytes()),"
 replace = "        (Value::Str(x), Value::Str(y)) => Some(x.len() == y.len()),"
 killers = [{ package = "nazm-core", test = "equality", name = "primitive_equality_is_what_it_was" }]
@@ -8346,7 +8346,7 @@ killers = [{ package = "nazm-core", test = "core_ir", name = "value_if_return_an
 [[mutation]]
 name = "n39-a-loop-body-runs-once"
 why = "the interpreter's loop leaves after one turn of a body that fell through — the back edge removed"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = """                Flow::Fell(_) => {}
                 Flow::Continue(t) if t == id => {}"""
 replace = """                Flow::Fell(_) => return Ok(Flow::Fell(None)),
@@ -8499,7 +8499,7 @@ killers = [{ package = "nazm-core", test = "generics", name = "the_milestone_exa
 [[mutation]]
 name = "n39-a-match-runs-its-first-arm"
 why = "the interpreter runs a match's first arm whatever the scrutinee's variant is"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = "        let Some(arm) = m.arms.iter().find(|a| a.variant == subject.variant) else {"
 replace = "        let Some(arm) = m.arms.first() else {"
 killers = [{ package = "nazm-core", test = "enums", name = "a_variant_is_built_by_naming_its_enum_and_eliminated_by_match" }]
@@ -9940,7 +9940,7 @@ killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_c
 [[mutation]]
 name = "n50-the-interpreter-forgets-captures"
 why = "the interpreter calls a closure's body without the copies it captured"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = "                    for (l, v) in slots.iter().zip(&fv.carried) {"
 replace = "                    for (l, v) in slots.iter().zip(&fv.carried).take(0) {"
 killers = [{ package = "nazm-cli", test = "closures", name = "closures_named_functions_and_indirect_calls_agree_everywhere" }]
@@ -10578,7 +10578,7 @@ killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_l
 [[mutation]]
 name = "n54-the-interpreter-takes-the-last-ready"
 why = "the interpreter's select breaks ties by highest index, so it disagrees with the native one"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/channel.rs"
 find = "        for (i, c) in chans.iter().enumerate() {"
 replace = "        for (i, c) in chans.iter().enumerate().rev() {"
 killers = [{ package = "nazm-cli", test = "select", name = "a_select_takes_the_lowest_ready_channel_everywhere" }]
@@ -10626,7 +10626,7 @@ killers = [{ package = "nazm-cli", test = "select", name = "the_scheduler_s_coun
 [[mutation]]
 name = "n54-the-interpreter-counts-no-timeout"
 why = "the interpreter's select times out without counting it"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/channel.rs"
 find = """
             SCHED_TIMEOUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);"""
 replace = ""
@@ -11811,7 +11811,7 @@ killers = [{ package = "nazm-cli", test = "contract", name = "a_state_the_analys
 [[mutation]]
 name = "n69-the-meter-counts-no-call"
 why = "the interpreter counts no call, so the meter reports a transaction that calls a helper as calling nothing"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = '                self.calls += 1;'
 replace = '                self.calls += 0;'
 killers = [{ package = "nazm-cli", test = "contract", name = "transactions_run_deterministically_and_a_revert_changes_nothing" }]
@@ -12479,7 +12479,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "a_call_through_a_bou
 [[mutation]]
 name = "n78-the-interpreter-dispatches-on-int"
 why = "the interpreter resolves a call through a bound at `Int`, ignoring the receiver"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = '                        .and_then(Value::runtime_type)'
 replace = '                        .map(|_| nazm_sema::Type::Int)'
 killers = [{ package = "nazm-cli", test = "traits", name = "a_call_through_a_bound_runs_the_instances_impl_through_two_generic_levels" }]
@@ -14219,7 +14219,7 @@ killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_r
 [[mutation]]
 name = "g2-the-interpreter-compares-floats-by-bits"
 why = "the interpreter compares two floats by their bits, so a record holding a NaN equals itself under `nazm run` and not natively"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/arith.rs"
 find = "        (Value::Num(x), Value::Num(y)) => Some(numeric::compare(numeric::Cmp::Eq, *x, *y)),"
 replace = "        (Value::Num(x), Value::Num(y)) => Some(x.bits == y.bits),"
 killers = [{ package = "nazm-cli", test = "compat_v1", name = "every_run_case_prints_what_it_says_interpreted_and_compiled_by_both_backends" }]
@@ -14250,7 +14250,7 @@ killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_r
 [[mutation]]
 name = "g2-the-interpreter-reads-past-an-array"
 why = "the interpreter answers an index outside an array with its first element rather than stopping with `N0405`"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = "                    None => return Err(index_outside(e.at, *i, items.len())),"
 replace = "                    None => items[0].clone(),"
 killers = [{ package = "nazm-cli", test = "arrays", name = "every_index_is_checked_against_the_length_everywhere" }]
@@ -14258,7 +14258,7 @@ killers = [{ package = "nazm-cli", test = "arrays", name = "every_index_is_check
 [[mutation]]
 name = "g2-the-interpreter-writes-past-an-array"
 why = "the interpreter writes an element outside an array into its last one rather than stopping with `N0405`"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/exec.rs"
 find = "                    let Some(next) = usize::try_from(i).ok().and_then(|i| items.get_mut(i)) else {"
 replace = "                    let Some(next) = usize::try_from(i).ok().and_then(|i| items.get_mut(i.min(n - 1))) else {"
 killers = [{ package = "nazm-cli", test = "arrays", name = "every_index_is_checked_against_the_length_everywhere" }]
@@ -14338,7 +14338,7 @@ killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_m
 [[mutation]]
 name = "g2-the-interpreter-reads-a-byte-past-a-view"
 why = "the interpreter's range check for a `Bytes` lets one byte past the end through, so a read or write lands outside the view"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/intrinsic.rs"
 find = "        usize::try_from(i).is_ok_and(|i| i.checked_add(width).is_some_and(|end| end <= len))"
 replace = "        usize::try_from(i).is_ok_and(|i| i.checked_add(width).is_some_and(|end| end <= len + 1))"
 killers = [{ package = "nazm-cli", test = "bytes_text", name = "every_bytes_and_text_failure_traps_with_its_code_everywhere" }]
@@ -14370,7 +14370,7 @@ killers = [{ package = "nazm-cli", test = "bytes_text", name = "utf8_validation_
 [[mutation]]
 name = "g2-a-continuation-byte-is-a-boundary"
 why = "the interpreter takes a UTF-8 continuation byte for the start of a scalar value, so a `Text` can be cut inside one"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/intrinsic.rs"
 find = "        Ok(i) => s.get(i).is_some_and(|b| b & 0xC0 != 0x80),"
 replace = "        Ok(i) => s.get(i).is_some(),"
 killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by_scalar_value_and_cuts_only_at_boundaries" }]
@@ -14402,7 +14402,7 @@ killers = [{ package = "nazm-cli", test = "bytes_text", name = "every_buffer_is_
 [[mutation]]
 name = "g2-text-is-made-without-validation"
 why = "the interpreter's `Text(s)` accepts bytes that are not UTF-8"
-file = "crates/nazm-core/src/eval.rs"
+file = "crates/nazm-core/src/eval/intrinsic.rs"
 find = "            if std::str::from_utf8(s.bytes()).is_ok() {\n                Ok(Value::Str(s.clone()))"
 replace = "            if true {\n                Ok(Value::Str(s.clone()))"
 killers = [{ package = "nazm-cli", test = "bytes_text", name = "every_bytes_and_text_failure_traps_with_its_code_everywhere" }]
