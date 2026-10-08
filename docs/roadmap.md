@@ -1159,7 +1159,7 @@ N36's wording was corrected so that `fn f() -> Int` and `fn f() -> Int ! {}` can
 | Settled | Where |
 | --- | --- |
 | capability kinds, sets and the built-in table | `crates/nazm-sema/src/capability.rs`, `types.rs` |
-| possession, forging, `main`'s parameters | `crates/nazm-core/src/check.rs` |
+| possession, forging, `main`'s parameters | `crates/nazm-core/src/check/` |
 | the authority check and its witness | `crates/nazm-core/src/effects.rs` |
 | the root at runtime | `crates/nazm-core/src/eval/`, `crates/nazm-runtime/src/entry.rs` |
 | the law | `spec.md` *Capabilities: what allows a function to act*, `architecture.md` §7.39 |
@@ -1648,7 +1648,7 @@ schema, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, f
 | Settled | Where |
 | --- | --- |
 | a probe parse with a hole at the cursor; ordinary parses unchanged | `crates/nazm-syntax/src/parser.rs`, `crates/nazm-syntax/src/lib.rs`, `architecture.md` §7.28 |
-| `nazm_core::probe`; a bare `Name(`'s record, recorded only in a probe | `crates/nazm-core/src/lib.rs`, `crates/nazm-core/src/check.rs` |
+| `nazm_core::probe`; a bare `Name(`'s record, recorded only in a probe | `crates/nazm-core/src/lib.rs`, `crates/nazm-core/src/check/` |
 | completion at a hole from `structure::candidates`, shared with N21 | `crates/nazm-service/src/incomplete.rs`, `crates/nazm-service/src/structure.rs` |
 | `.` the one completion trigger | `crates/nazm-cli/src/lsp.rs` |
 | what it costs: a hole's probe is one parse and check of the compilation; no ordinary-path delta once the hole code was moved out of line | `performance.md` |
@@ -1766,7 +1766,7 @@ fixpoint `0e1a40e6…`.
 
 | Settled | Where |
 | --- | --- |
-| `Resolution::written_type`, written where the checker resolves a built-in or type-parameter name | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check.rs`, `architecture.md` §7.25 |
+| `Resolution::written_type`, written where the checker resolves a built-in or type-parameter name | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check/`, `architecture.md` §7.25 |
 | `semantic_identifiers`, `SemanticIdentifier`, `SemanticClass`, `Role`, `SemanticTarget` | `crates/nazm-service/src/semantic.rs` |
 | `textDocument/semanticTokens/full` under a fixed legend, relative and in UTF-16; no range, no delta | `crates/nazm-cli/src/lsp.rs` |
 | what it costs: +~180 kB resident with the compiler open (1,989 recorded names); no detected warm-edit delta; a possible sub-millisecond analyse cost not resolved by the measurement; a whole compiler file in 3 ms, 9 ms over the protocol; no binary growth | `performance.md` |
@@ -1838,7 +1838,7 @@ that answer. No language, interface, cache-key or bootstrap change: `SEMANTIC_EP
 
 | Settled | Where |
 | --- | --- |
-| `Resolution::looked_up_on`, written where a field or variant lookup fails | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check.rs`, `architecture.md` §7.23 |
+| `Resolution::looked_up_on`, written where a field or variant lookup fails | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check/`, `architecture.md` §7.23 |
 | `structure_at`, structure completion, `constructor_help`, `help_at` | `crates/nazm-service/src/structure.rs`, `crates/nazm-service/src/signature.rs` |
 | fields as Field, variants as EnumMember, constructor help over `textDocument/signatureHelp` | `crates/nazm-cli/src/lsp.rs` |
 | what it costs: no detected analyse/edit/RSS delta in the contended interleaved comparison; no persistent clean-code structure table; structure queries measured separately (microseconds, whole-compiler queries dominated by finding the token) | `performance.md` |
@@ -1874,7 +1874,7 @@ and completion also use. No language, interface, cache-key or bootstrap change:
 
 | Settled | Where |
 | --- | --- |
-| `CheckedCall` and `Instantiation`, written by the checker | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check.rs`, `architecture.md` §7.22 |
+| `CheckedCall` and `Instantiation`, written by the checker | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check/`, `architecture.md` §7.22 |
 | `call_at`, `signature_help`, the structured `Signature` and its one renderer | `crates/nazm-service/src/signature.rs` |
 | `textDocument/signatureHelp`, triggered by `(` and `,`, UTF-16 label offsets | `crates/nazm-cli/src/lsp.rs` |
 | what it costs: 6 µs a query on the compiler; 2–5 ms more `analyse`, 3–5 ms more per warm edit, 9 MB more resident | `performance.md` |
@@ -1912,7 +1912,7 @@ fixpoint `0e1a40e6…`.
 
 | Settled | Where |
 | --- | --- |
-| the scope trace, written by the checker; `visible_at` | `crates/nazm-sema/src/scope.rs`, `crates/nazm-core/src/check.rs`, `architecture.md` §7.21 |
+| the scope trace, written by the checker; `visible_at` | `crates/nazm-sema/src/scope.rs`, `crates/nazm-core/src/check/`, `architecture.md` §7.21 |
 | which files needed recovery | `Analysis::syntax_errors` in `crates/nazm-core/src/lib.rs` |
 | `scope_at`, `completion`, contexts, completeness | `crates/nazm-service/src/completion.rs` |
 | `textDocument/completion`, invoked, whole-identifier replacement in UTF-16 | `crates/nazm-cli/src/lsp.rs` |
@@ -1952,7 +1952,7 @@ bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`
 
 | Settled | Where |
 | --- | --- |
-| the checker records every written type name and qualifier; `Enum` is an entity | `crates/nazm-core/src/check.rs`, `crates/nazm-sema/src/{resolve,references}.rs`, `architecture.md` §7.20 |
+| the checker records every written type name and qualifier; `Enum` is an entity | `crates/nazm-core/src/check/`, `crates/nazm-sema/src/{resolve,references}.rs`, `architecture.md` §7.20 |
 | coverage per kind, exhaustive; a corpus gate for new positions | `ReferenceTarget::rename_coverage`, `crates/nazm-service/tests/references.rs` |
 | the plan, its scope rule, its validation and its preconditions | `crates/nazm-service/src/rename.rs` |
 | `prepareRename`, `rename`, versioned `documentChanges` only | `crates/nazm-cli/src/lsp.rs` |
@@ -1990,7 +1990,7 @@ cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint 
 | Settled | Where |
 | --- | --- |
 | what a reference is, and the index that reads the resolution backwards | `crates/nazm-sema/src/references.rs`, `architecture.md` §7.19 |
-| a variable use records which function's slot it is; a construction label, which field | `LocalRef` in `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check.rs` |
+| a variable use records which function's slot it is; a construction label, which field | `LocalRef` in `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check/` |
 | definition and references as one lookup; the query over every open compilation | `crates/nazm-service/src/service.rs` |
 | `textDocument/references`, `includeDeclaration`, UTF-16 at the boundary only | `crates/nazm-cli/src/lsp.rs` |
 | what it costs: 3.8 ms of index per compiler analysis, 1.8 ms a query | `performance.md` |
@@ -2124,7 +2124,7 @@ checked against the requirement by N13's one derivation, so `Box[T]`, `Option[T]
 | --- | --- |
 | the rule, one built-in capability, functions only, statically checked | `docs/spec.md`, *A type parameter may require equality* |
 | one set of required parameters, read by N13's derivation and nowhere else | `crates/nazm-sema/src/udt.rs`, `generic.rs`, `architecture.md` §7.16 |
-| call satisfaction, forwarding, `N0364`/`N0365` | `crates/nazm-core/src/check.rs` |
+| call satisfaction, forwarding, `N0364`/`N0365` | `crates/nazm-core/src/check/` |
 | `nazm.interface/5`, requirements persisted by position; `SEMANTIC_EPOCH` 6 → 7 | `crates/nazm-iface/src/wire.rs`, `crates/nazm-cache/src/identity.rs` |
 | nothing at run time | `crates/nazm-cli/tests/constraints.rs` |
 | the same rule in the compiler written in Nazm; a new fixpoint, `0e1a40e6…` | `compiler/`, `bootstrap.md` |
