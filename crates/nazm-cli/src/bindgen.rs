@@ -1,4 +1,4 @@
-//! `nazm bindgen HEADER [-o FILE]` (N74, `docs/architecture.md` §7.76): the safe subset of a C
+//! `nazm bindgen HEADER [-o FILE]` (N74, `docs/architecture.md` §7.76): the supported subset of a C
 //! header as `extern "C"` declarations.
 //!
 //! Only what crosses the boundary by `docs/spec.md`'s rules is translated: a parameter of `int64_t`

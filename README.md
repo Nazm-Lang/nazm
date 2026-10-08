@@ -176,8 +176,7 @@ reproducibility and provenance, the platform matrix, and smart contracts — and
 something outside this repository**: an in-process JIT (it needs `unsafe`, which the workspace
 forbids), theorem proving (no proof assistant; formal evidence is bounded model checking),
 sBPF/Solana execution (no toolchain or validator), and a second GPU provider (no Metal or SPIR-V
-toolchain). Among the language's own boundaries: no floating point, no trait objects, no effect
-handlers, no networking in the standard library, and **a compiled program has no iteration
+toolchain). Among the language's own boundaries: no trait objects, no effect handlers, no networking in the standard library, and **a compiled program has no iteration
 budget** — `nazm run` stops a runaway loop after `--max-iterations`, a native executable does not.
 
 [`docs/limitations.md`](docs/limitations.md) is the full list;
@@ -296,7 +295,7 @@ tokenizers; and `nazm-bench` and `nazm-agent-bench`, the agent-cost evaluation h
 | `nazm publish DIR --registry REG` | Copy the package in `DIR` into the local registry `REG` and record its version and digest in `REG/index/NAME.toml`, `nazm.registry-index/1`; a published version never changes (N56) |
 | `nazm publish … --dry-run` | Every check a publish makes, and what it would record — `nazm.publish-plan/1`: name, version, digest and files — writing nothing (N74) |
 | `nazm doc PATH [-o DIR]` | A program's or package's public API from its semantic definitions, `nazm.api-doc/2`: each exported function, record and enum with its signature, effects, capabilities, foreign symbol or export and a link to its source line; `-o` also writes `api.md`, anchored by identity (N74) |
-| `nazm bindgen HEADER [-o FILE]` | The safe subset of a C header — `int64_t`, `bool` and `const char *` arguments — as `extern "C"` declarations the checker has held; everything else refused with the reason, never widened; `nazm.bindgen/1` with `-o` (N74) |
+| `nazm bindgen HEADER [-o FILE]` | The supported subset of a C header — `int64_t`, `bool` and `const char *` arguments — as `extern "C"` declarations the checker has held; everything else refused with the reason, never widened; `nazm.bindgen/1` with `-o` (N74) |
 | `nazm build … --provenance FILE` | After a successful build, `nazm.provenance/1`: sources, packages, toolchain, runtime, backend options, profiles and output digests; `--attest-with CMD` keeps a local signer's output beside it (N73) |
 | `nazm yank NAME@VERSION --registry REG` | Withdraw a published version: never chosen anew, still used where a lockfile names it; `--undo` restores it (N56) |
 | `nazm runtime build -o DIR` | Compile the whole runtime for a target and profile once, into `DIR/libnazmrt.a` with a `nazm.runtime/1` manifest; `nazm build --runtime DIR` links it instead of generating one, and refuses one that does not fit; `nazm runtime verify DIR` checks it (N82) |

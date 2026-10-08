@@ -770,7 +770,7 @@ enum Command {
         #[arg(short, long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
-    /// Declare the safe subset of a C header as `extern "C"` functions (N74): prototypes of
+    /// Declare the supported subset of a C header as `extern "C"` functions (N74): prototypes of
     /// `int64_t` and `bool` (and `const char *` arguments). Everything else is refused with the
     /// reason, never widened. With `-o FILE`, the module is written there and one `nazm.bindgen/1`
     /// line is printed; exits 1 when anything was refused.

@@ -5,7 +5,7 @@
 | Release | Supported |
 | --- | --- |
 | the latest 1.x release | yes — a fix lands in the next patch release of the latest 1.x minor |
-| an older 1.x minor | no — upgrade to the latest 1.x, which the 1.x compatibility promise keeps safe for programs on stable surfaces (`docs/stability.md`) |
+| an older 1.x minor | no — upgrade to the latest 1.x, which the 1.x compatibility promise keeps compatible for programs on stable surfaces (`docs/stability.md`) |
 | 0.3.x, and anything before 1.0.0 | no |
 
 No maintenance branch is kept for an older minor release, and none is promised. A security fix
@@ -24,10 +24,13 @@ maintainer have agreed a disclosure date.
 - **Otherwise:** email the maintainer at the address in the workspace manifest's `authors`
   (`Cargo.toml`), with "Nazm security" in the subject.
 
-*Status, Gate 1 (2026-10-07):* this checkout has no git remote, and the GitHub API reports the
-repository `mdferdousalam/nazm` as not found, so private vulnerability reporting **could not be
-verified as enabled**. It must be enabled, and the fallback address confirmed, before any public
-release (`docs/releases/7a16a40.md`, step 7). The fallback address is present in `Cargo.toml`.
+*Status, Q1 (2026-10-08):* the repository `mdferdousalam/nazm` exists and is **private**, and
+GitHub offers private vulnerability reporting only for public repositories (its API answers 404
+for this one), so the preferred channel **is not available yet** and the email fallback is the
+only one. Making the repository public, enabling private vulnerability reporting and confirming
+the fallback address receives mail are required before any public release
+(`docs/releases/7a16a40.md`, step 7; `docs/vulnerability-process.md`, *Intake*). The fallback
+address is present in `Cargo.toml`.
 
 Include the toolchain version (`nazm --version`), the host and target, a minimal program or
 input that shows the problem, and what you expected. You will get an acknowledgement, and the

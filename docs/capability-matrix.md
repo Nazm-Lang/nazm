@@ -128,8 +128,8 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 27 | Debugger and profiler | PARTIAL — lexical scopes, Cranelift line tables and a sampling profiler on macOS (N91); no Cranelift variables, no DAP |
 | 28 | Performance measurement | PARTIAL — every measured claim filed in a gated register (N92): 10 reproducible, 53 dated, 8 current claims unreproduced |
 | 29 | Differential testing | VERIFIED |
-| 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of five targets with a replayed corpus (N93; `lir`, N105); no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
-| 31 | Bootstrap | VERIFIED |
+| 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of five targets with a replayed corpus (N93; `lir`, N105), re-run in Q1: 3.4 million executions, no crash; no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
+| 31 | Bootstrap | VERIFIED as scoped — the declared subset the Nazm-written compiler carries; not Gate 2 (Q1-D-25) |
 | 32 | Reproducibility and provenance | PARTIAL — a stated five-part model, signed in-toto statements and a CycloneDX SBOM (N94); one host and one image, no transparency log |
 | 33 | Platform and target matrix | PARTIAL — every cell run-verified, compile-only or unsupported (N95): 9 run, 2 compile-only, 3 unsupported; x86_64 Linux not run |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72); both VMs held to the simulator on generated sequences (N96) |
@@ -3217,6 +3217,12 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — PARTIAL (N73; MISSING until then)
 
+*Q1, 2026-10-08: the fuzz campaign re-run contained over all five targets, 300 s each* —
+`front` 271,640 executions, `lower` 280,060, `run` 190,551, `lir` 272,626, `manifest` 2,388,876:
+no crash; 36 `run` inputs blocked past two seconds and were counted, not kept (Q1-F-01,
+`docs/limitations.md`). Log: `target/gates/q1/fuzz-contained.log`. Q1's mutation campaign is
+recorded below its fixes (`docs/security-qualification.md`, *Mutation*).
+
 *N108, 2026-10-06: the whole catalogue at the release gate — 1,268 of 1,268 caught.* Contained,
 targeted with every killer verified (`releases/82936f6.md`). Thirty-four entries were first undecidable
 on Linux — killers verified on macOS only, and nine whose code N90, N104 and N105 had moved — and were
@@ -4046,7 +4052,7 @@ for the catalogue as it stands.
 **Accepted when** · A full catalogue run completes with every verdict accounted for. **Met on
 2026-09-25**: 233 of 233, as above. Fuzzing's status is separate and unchanged.
 
-### 31. Bootstrap — VERIFIED
+### 31. Bootstrap — VERIFIED as scoped
 
 *N102, 2026-10-05: parity on every probe — 21 of 21.* `architecture.md` §7.103 first. The eight
 refusals N98 measured are gone: effects and capabilities, recursion (the reference's stack check,

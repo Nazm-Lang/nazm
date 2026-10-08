@@ -160,13 +160,13 @@ fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_in
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "drives lldb on macOS")]
 fn a_debugger_finds_nazm_functions_and_lines() {
-    let Ok(probe) = Command::new("lldb").arg("--version").output() else {
-        eprintln!("SKIP: no lldb on this machine");
-        return;
-    };
-    if !probe.status.success() {
-        eprintln!("SKIP: lldb does not run here");
+    let runs = Command::new("lldb")
+        .arg("--version")
+        .output()
+        .is_ok_and(|p| p.status.success());
+    if common::skip_without(runs, "no lldb that runs on this machine") {
         return;
     }
     let d = setup();

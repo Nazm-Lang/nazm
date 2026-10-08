@@ -4802,7 +4802,7 @@ nothing managed is still owned (no leak) and every task list has been joined. It
 MIR, and running it twice gives the same answer.
 
 **Generics.** MIR is post-instantiation. The planner is the one `nazm-lir` used since N11, moved,
-with its bounds (`N0703`, `N0704`); an instance is identified by its definition and its type
+with its bounds (`N0357`, `N0358`); an instance is identified by its definition and its type
 arguments' canonical keys, which is also what its backend symbol is derived from. There is no
 second generic system.
 
@@ -6388,7 +6388,7 @@ is the body of a `main` holding an `IoCap`, evaluated by the interpreter as an `
 
 **Comptime.** `nazm comptime FILE FUNCTION` evaluates a function of no parameters that is pure —
 declared `! {}` or inferred so — under the interpreter's iteration and depth budgets. That is the
-whole sandbox, and it is the language's own: authority is a value (§7.39), so a function of no
+whole of its isolation — not an operating-system sandbox — and it is the language's own: authority is a value (§7.39), so a function of no
 parameters holds none, and a pure one cannot exercise its caller's through the ambient bridge, so
 files, the clock, the network, tasks and C are unreachable without any check of their own. Anything
 else is refused, by name, with `N0393`; a runaway evaluation stops at its budget with `N0402`.
@@ -6739,7 +6739,7 @@ shown as its description (a convention of the tool; the language has no doc comm
 `nazm.api-doc/1` JSON document, and with `-o` that and `api.md`, whose anchors are the definitions'
 identities, so a link survives a rebuild and moves only when the definition does.
 
-**`nazm bindgen HEADER`** turns the safe subset of a C header into `extern "C"` declarations: a
+**`nazm bindgen HEADER`** turns the supported subset of a C header into `extern "C"` declarations: a
 prototype whose parameters are `int64_t` or `bool` (or `const char *`, as N55's borrowed `Str`) and
 whose result is `int64_t` or `bool`. Anything else — `int`, `long`, `void`, a pointer to anything
 else, a struct, a variadic, a function pointer, a macro — is refused by name with the reason, never
@@ -8355,8 +8355,8 @@ on another input: probes are single programs, and equality is of those programs 
 
 ## 7.100 The interactive tier v2: the JIT question answered, and the tiers held to one answer — N99, 2026-10-04
 
-Written before the code. N65 verified the REPL, `nazm comptime` (sandboxed: no ambient files,
-network or clock, explicit budgets) and the reload rule, and left the JIT BLOCKED on the workspace's
+Written before the code. N65 verified the REPL, `nazm comptime` (isolated by the authority model and
+the interpreter's budgets — no ambient files, network or clock — not an operating-system sandbox) and the reload rule, and left the JIT BLOCKED on the workspace's
 `unsafe_code = "forbid"`.
 
 **Whether safe abstractions suffice: they do not.** Running generated machine code in process needs

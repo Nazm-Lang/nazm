@@ -13,6 +13,8 @@
     clippy::indexing_slicing
 )]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -118,19 +120,24 @@ fn the_capability_matrix_states_exactly_what_the_compiler_does() {
     assert!(!text.contains("| supported |"));
 }
 
+// The table records Apple clang's choices: elsewhere ignored, not a pass (Q1-D-02).
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "Apple clang only")]
 fn each_llvm_cpu_is_the_one_the_driver_resolves() {
-    let Ok(probe) = Command::new("clang").arg("--version").output() else {
-        eprintln!("SKIP: no clang");
+    let probe = Command::new("clang").arg("--version").output();
+    if common::skip_without(probe.is_ok(), "no clang") {
         return;
-    };
+    }
+    let Ok(probe) = probe else { return };
     assert!(probe.status.success());
     // The CPU is the driver's choice, and the table records Apple clang's, the host's. Another
     // clang chooses otherwise — clang 19, in the Linux image, resolves `core2` for
     // `x86_64-apple-darwin` where Apple clang 21 resolves `penryn` (found by N100's gate) — so
     // the check is made against the driver the table describes, and nowhere else.
-    if !String::from_utf8_lossy(&probe.stdout).contains("Apple clang") {
-        eprintln!("SKIP: the recorded CPUs are Apple clang's; this driver is another");
+    if common::skip_without(
+        String::from_utf8_lossy(&probe.stdout).contains("Apple clang"),
+        "Apple clang only; this driver is another",
+    ) {
         return;
     }
     let (cells, _) = support();
