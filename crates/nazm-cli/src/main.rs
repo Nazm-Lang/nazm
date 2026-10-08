@@ -1,9 +1,10 @@
 //! `nazm` — run, check, or natively compile a Nazm program.
 //!
-//! Exit status is part of the interface, not an afterthought: `0` ran, `1` did not
-//! type-check, `2` failed at runtime, `3` could not read the file, `4` the build
-//! toolchain was missing or failed. A caller that has to parse stderr to find out which
-//! happened is doing work the process could have told it.
+//! Exit status is part of the interface, not an afterthought: `0` success, `1` an invalid
+//! program or request, `2` a program that failed at run time, `3` a file or resource that
+//! could not be found or read, `4` the compiler, its tools or the machine failed, `5` a wrong
+//! command line (the v1 contract, `exit.rs`). A caller that has to parse stderr to find out
+//! which happened is doing work the process could have told it.
 //!
 //! # The contract a compiled program keeps
 //!
