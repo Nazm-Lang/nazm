@@ -407,8 +407,10 @@ fn a_function_type_crosses_a_module_boundary_and_its_interface() {
                 fn main(out: OutCap) -> Int { print(int_to_str(apply_twice(scaler(3), 2))); 0 }\n";
     agrees_on(&[("main.nz", main), ("lib.nz", lib)], "180", 0);
 
-    // The interface publishes the function type, so a second check reuses both modules
-    // rather than declining to file the library.
+    // The interface publishes the function type, so `main` is reused on a second check. The
+    // library makes a closure, so it files no entry and is checked again every time (Q1-B-C1: a
+    // reused module has no closures, and facts naming one made the next run refuse what a cold
+    // check accepts) — declined, in the report's words.
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("nazm.root"), "").unwrap();
     std::fs::write(d.path().join("main.nz"), main).unwrap();
@@ -422,11 +424,12 @@ fn a_function_type_crosses_a_module_boundary_and_its_interface() {
     };
     let first = nazm(d.path(), &["check", "main.nz", "--cache-report", "--json"]);
     assert_eq!(first.code, Some(0), "{first:?}");
-    assert_eq!(report(&first)["declined"].as_u64(), Some(0), "{first:?}");
+    assert_eq!(report(&first)["declined"].as_u64(), Some(1), "{first:?}");
     let again = nazm(d.path(), &["check", "main.nz", "--cache-report", "--json"]);
     assert_eq!(again.code, Some(0), "{again:?}");
     let r = report(&again);
-    assert_eq!(r["checked"].as_u64(), Some(0), "{r}");
+    assert_eq!(r["checked"].as_u64(), Some(1), "{r}");
+    assert_eq!(r["declined"].as_u64(), Some(1), "{r}");
     assert!(r["reused"].as_u64().unwrap() >= 2, "{r}");
 }
 
