@@ -301,7 +301,7 @@ constants, bytes, text) and repointed the ones whose lines moved, with a note ea
 | `nazm-cli/src/build.rs::run` (~746 lines, ten phases) | no | yes | **no, with a rule:** a new build phase is a function called from `run`, not inline |
 | `xtask/src/main.rs` (21 gates, two runners) | no | yes | **no, with a rule:** a new gate is its own module (`governance.rs` is the pattern) |
 | `nazm-runtime/src/core.rs` (25 text constants) | yes per constant | yes | no — new parts as their own constants; a file per part when one is next added |
-| `nazm-core/src/eval.rs::intrinsic` (~513 lines, wildcard) | yes | yes | no — guarded (§6); new families in sibling functions (`bytes_text_intrinsic`, `numeric_intrinsic`) |
+| `nazm-core/src/eval/intrinsic.rs::intrinsic` (~513 lines, wildcard) | yes | yes | no — guarded (§6); new families in sibling functions (`bytes_text_intrinsic`, `numeric_intrinsic`) |
 | `nazm-lir/src/op/prims.rs::primitive` (~562 lines) | yes | yes | no — new families in sibling modules (`op/numeric.rs`, `op/bytes.rs`, `op/arrays.rs`) |
 | Parser recursive path | yes | yes | no — new constructs in `#[inline(never)]` helpers; `nazm` runs every command on `PARSE_STACK_BYTES` since Gate 2E |
 

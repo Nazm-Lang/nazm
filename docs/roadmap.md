@@ -1074,7 +1074,7 @@ stays 10, `nazm.interface/6` and every tooling schema unchanged.
 | the constitution | `architecture.md` §7.41 |
 | the representation, verifier, printer, digests | `crates/nazm-cir/` |
 | the one lowering | `crates/nazm-core/src/lower.rs` |
-| the interpreter over Core IR | `crates/nazm-core/src/eval.rs` |
+| the interpreter over Core IR | `crates/nazm-core/src/eval/` |
 | native lowering from Core IR | `crates/nazm-lir/src/lower.rs` |
 | the boundary | `cargo xtask check` *core ir boundary*, `xtask/src/rules.rs` |
 
@@ -1161,7 +1161,7 @@ N36's wording was corrected so that `fn f() -> Int` and `fn f() -> Int ! {}` can
 | capability kinds, sets and the built-in table | `crates/nazm-sema/src/capability.rs`, `types.rs` |
 | possession, forging, `main`'s parameters | `crates/nazm-core/src/check.rs` |
 | the authority check and its witness | `crates/nazm-core/src/effects.rs` |
-| the root at runtime | `crates/nazm-core/src/eval.rs`, `crates/nazm-runtime/src/entry.rs` |
+| the root at runtime | `crates/nazm-core/src/eval/`, `crates/nazm-runtime/src/entry.rs` |
 | the law | `spec.md` *Capabilities: what allows a function to act*, `architecture.md` §7.39 |
 
 Mutation evidence, under the new responsibility law: twenty new mutations and one retired; 33
@@ -2162,7 +2162,7 @@ neither does anything that contains one.
 | --- | --- |
 | the rule, nominal and static over every variant | `docs/spec.md`, *Equality is derived* |
 | one derivation beside cleanup and task safety, independent of both | `crates/nazm-sema/src/udt.rs`, `architecture.md` §7.15 |
-| the interpreter's relation, and a native helper per compared type — tags first, then the active slot alone | `crates/nazm-core/src/eval.rs`, `crates/nazm-lir/src/emit.rs` |
+| the interpreter's relation, and a native helper per compared type — tags first, then the active slot alone | `crates/nazm-core/src/eval/`, `crates/nazm-lir/src/emit.rs` |
 | the same derivation and helpers in the compiler written in Nazm | `compiler/analyse.nz`, `compiler/emit.nz` |
 | `SEMANTIC_EPOCH` 5 → 6; interface schema unchanged at `nazm.interface/4` | `crates/nazm-cache/src/identity.rs` |
 | the compiler's completion states an enum, compared with `==` | `compiler/analyse.nz`, `performance.md` |
