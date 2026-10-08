@@ -15,6 +15,8 @@
     clippy::indexing_slicing
 )]
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -166,17 +168,17 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
 }
 
 #[test]
+#[cfg_attr(
+    not(all(target_os = "macos", target_arch = "aarch64")),
+    ignore = "Rosetta 2 only"
+)]
 fn a_program_for_the_other_macos_architecture_runs_where_rosetta_does() {
-    let host = Target::host().unwrap();
-    if host.triple != "aarch64-apple-darwin" {
-        return;
-    }
     // Rosetta is an optional part of the host, not of the build; without it this is compile-only.
     let rosetta = Command::new("arch")
         .args(["-x86_64", "/usr/bin/true"])
         .status()
         .is_ok_and(|s| s.success());
-    if !rosetta {
+    if common::skip_without(rosetta, "no Rosetta 2 on this machine") {
         return;
     }
     let d = tempfile::tempdir().unwrap();

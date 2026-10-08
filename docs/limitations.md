@@ -105,7 +105,9 @@ found only by reading all of it.
   native CPU loop once transfers are counted (area 21). *Narrowed in N88:* until then, maps of one
   sequence only; *in N67:* no GPU path.
 - Vectorisation is one idiom: the counted `Ints` summation loop, replaced by `ints_sum_from` in native
-  builds at `--opt-level 2` and above; no element-wise maps, no vector types, baseline target
+  builds at every `--opt-level`, on both backends (until Q1 this line said `2` and above, which the
+  code never did), and only when nothing between the counter's `= 0` and the loop can write the
+  counter (Q1-B-01); no element-wise maps, no vector types, baseline target
   features only, and a fallback 1.33× slower than the scalar loop when elements exceed 2^56
   (area 28). *Narrowed in N66:* until then, checked arithmetic kept every loop scalar.
 - No JIT: an in-process JIT needs `unsafe` code, which the workspace forbids; the interactive tier
@@ -286,3 +288,61 @@ found only by reading all of it.
   rule, and a loop is bounded only in its counted form; `critical` stays a restriction set, not a
   certification; a profile costs one extra check, `embedded` a MIR lowering (+13 % on the compiler's
   source) (areas 18–20).
+
+## Carried from Q1 (2026-10-08)
+
+Each was found by Q1's qualification and is stated here so that no claim contradicts it; the
+classification and evidence of each is in `docs/security-qualification.md`, and those marked
+*fix before v1* must be closed or re-decided at the final release gate.
+
+**Native code and runtime**
+
+- A task frame larger than the stack left to it faults on the task's guard page (SIGSEGV or
+  SIGBUS) rather than failing with `N0408`: the stack check runs only on entry to a function in a
+  call cycle. Stack probes (Q1) make the fault deterministic — the frame can no longer step over
+  the guard into memory below it — but a frame of hundreds of KiB, such as a record of large
+  arrays, needs `NAZM_TASK_STACK` raised or `NAZM_SCHEDULER=threads`. *Fix before v1* (Q1-A1-01).
+- An export called from a C thread on a small stack faults instead of failing with `N0408`: the
+  stack check budgets from `RLIMIT_STACK`, not that thread's stack. *Fix before v1* (Q1-A1-04).
+- On `wasm32-unknown-unknown` a handle crosses the C boundary as `i64`, not the target's pointer
+  width, and a C struct holding one is laid out wrongly. *Fix before v1* (Q1-A1-05).
+- `exit_with` with a status outside 0..255 ends with a different status in the interpreter, a
+  native build and the LIR oracle; the specification does not define it. *Fix before v1* (Q1-B-05).
+- A generic instantiated through many levels of nesting gets a symbol name that grows
+  exponentially; sixteen levels can exceed the linker's limits. *Fix before v1* (Q1-B-06).
+- Native select deadlines are measured on the wall clock, the interpreter's and `time_now_ms`'s
+  on a monotonic one (Q1-M-12); a blocking built-in (`read_file`, …) holds a pool worker while it
+  blocks, as a C call does (Q1-M-13).
+- A `nazm build` stopped by a signal leaves its scratch directory beside the output (Q1-FI-01).
+
+**FFI**: `RESERVED_C_SYMBOLS` lists what the runtime imports, not the runtime's own definitions
+(`nazm_main`, `nazm_init`, …) (Q1-A1-11); with the opt-in pool scheduler and C, `errno` is per
+thread rather than per task and C runs on a task's 256 KiB stack (Q1-A1-12).
+
+**Checker and caches**: a warm check names a parameter of a module the cache reused by position
+(`#1`) where a cold check names it (`path`) — the verdict, code and spans are the same. *Fix before
+v1* (Q1-M-08). Checking very wide records and many impls is quadratic, and a huge identifier gives
+a diagnostic of that size, with no cap on their number (Q1-B-09, Q1-B-10).
+
+**Packages**: a path dependency may name any directory, and a symlinked `root` or `main` is
+followed (imports are still held inside the canonical source root) (Q1-A2-12); lockfile digests
+are enforced under `--locked` only and are not signatures (Q1-A2-13); writes to a local registry's
+index are not locked against a concurrent publish (Q1-A2-14).
+
+**Self-hosted compiler**: the compiler written in Nazm does not carry Gate 2 — integer widths,
+floats, arrays, constants, `Bytes`, `Text` and their built-ins are refused by it, as its table of
+built-ins not carried records (`crates/nazm-cli/tests/selfhost.rs`, `NOT_CARRIED`); the bootstrap
+holds the subset it does carry (Q1-D-20).
+
+**Profiles**: `signed-writes` is syntactic — a condition on the caller that is always true,
+`caller == caller || true`, satisfies it (Q1-C, informational).
+
+**Command line**: a usage error (an unknown option, a missing argument) exits 2, which the exit
+table gives to a program that failed at run time, and some user errors — an unwritable `-o`, a
+missing `--link` file — exit 4, the toolchain's status. Which status each should have is a 1.0
+decision. *Fix before v1* (Q1-D-06, Q1-D-07). `nazm fmt` lays out a file that lexes but does not
+parse, as its documented guarantee allows (Q1-D-22).
+
+**Fuzzing**: the `run` target counts an input still running after two seconds as a hang and does
+not keep it; such inputs are programs that block, which Nazm does not promise against, but they are
+not preserved for triage (Q1-F-01).

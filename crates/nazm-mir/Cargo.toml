@@ -13,7 +13,7 @@ docs = ["architecture:7.42"]
 
 [dependencies]
 nazm-span = { workspace = true }
-# Diagnostics for the instance planner's bounds (`N0703`, `N0704`) and for a compiler defect.
+# Diagnostics for the instance planner's bounds (`N0357`, `N0358`) and for a compiler defect.
 nazm-diag = { workspace = true }
 # The vocabulary MIR is written in: types, definitions, built-ins, durable keys.
 nazm-sema = { workspace = true }

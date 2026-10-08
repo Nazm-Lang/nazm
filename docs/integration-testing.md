@@ -10,9 +10,9 @@ runtime semantics are tested without any external service, and stay so.
 | | A — host-side owned orchestrator | B — isolated Docker-in-Docker | C — the existing harness, no Testcontainers |
 | --- | --- | --- | --- |
 | Isolation | owned containers on the host daemon, on an `--internal` network | a separate daemon inside a privileged container | as A |
-| Ownership | per-run token and labels | the inner daemon is disposable | **per-run random token, labels, write-ahead ledger** (`crates/nazm-bench/src/sandbox/`) |
+| Ownership | per-run token and labels | the inner daemon is disposable | **an owner token on every resource, labels, write-ahead ledger** (`crates/nazm-bench/src/sandbox/`); the token is the caller's — Q1 found no generator, so a caller must make it unique |
 | Lifecycle and recovery | Testcontainers: drop guards and the Ryuk reaper | daemon teardown | intend → created → removed, recorded before each step; recovery acts only on ledger-claimed resources |
-| Cleanup | Ryuk mounts the host Docker socket and removes by session label | the inner daemon, all at once | exact identities from the ledger; never by name, never prune |
+| Cleanup | Ryuk mounts the host Docker socket and removes by session label | the inner daemon, all at once | exact identities from the ledger: by engine id when the ledger has one, otherwise by name after its owner label is checked (a narrow window between that check and the removal); never by name alone, never prune |
 | Disk and resources | image cache shared with the host | a second image store, privileged | as the host, bounded per attempt |
 | CI portability | needs Docker | needs privileged Docker | needs Docker |
 | Readability | familiar API | heavy | Rust, in-repository, reviewed against the runbook |
@@ -23,8 +23,8 @@ host orchestrates owned dependency containers on an internal network. Reasons, a
 containment law rather than popularity:
 
 1. **It already meets every ownership guarantee M1 requires**, with tests
-   (`crates/nazm-bench/tests/{sandbox_lifecycle,docker_boundary,execution_boundary}.rs`): a unique
-   run token, ownership labels, exact container / network / volume identity, a write-ahead record
+   (`crates/nazm-bench/tests/{sandbox_lifecycle,docker_boundary,execution_boundary}.rs`): a run
+   token the caller supplies (unique only if the caller makes it so — corrected in Q1), ownership labels, exact container / network / volume identity, a write-ahead record
    before any resource exists, interruption recovery, no foreign-resource deletion, no prune, no
    name-only cleanup.
 2. **Testcontainers' cleanup model conflicts with the law.** Its default reaper mounts the host's
@@ -62,7 +62,7 @@ all-or-nothing.
 | Resource budget | per attempt, from the engine's `Limits`: memory and swap equal, CPUs, pids, a wall-clock deadline |
 | Readiness | polled against real state with a deadline (`wait_ready` in `docker_boundary.rs`), never a fixed sleep |
 | Teardown | the ledger's removal of exactly what it created; a failed teardown is reported, not retried by name |
-| Evidence | the test output, plus the ledger file, kept with the run under `target/gates/<run>/` |
+| Evidence | the test output, plus the ledger file, kept with the run under `target/gates/<run>/`. Today's two tests open their ledger in a temporary directory that is deleted (Q1-A2-09); a new test keeps it |
 
 Today the category holds `crates/nazm-bench/tests/docker_boundary.rs` (PostgreSQL) and
 `crates/nazm-cli/tests/resource_regression.rs`. Both predate this rule and carried only the guard, so a default run printed "skipping" and counted

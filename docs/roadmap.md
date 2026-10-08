@@ -822,7 +822,7 @@ Next: N67, GPU/HPC.
 
 `architecture.md` §7.67 first. A REPL that checks its session as one program on every edit and
 refuses a redefinition that breaks a caller, by name; comptime for parameterless pure functions,
-sandboxed by the authority model itself; a reload check naming what a running image could take. The
+isolated by the authority model itself (not an OS sandbox); a reload check naming what a running image could take. The
 JIT is blocked by the workspace's `unsafe_code = "forbid"`, which is the project's to lift, and is
 designed. Next: N66, SIMD and vectorisation.
 

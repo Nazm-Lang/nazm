@@ -48,7 +48,7 @@ use crate::names::{owner, type_key};
 ///
 /// # Errors
 ///
-/// The instance planner's refusals (`N0703`, `N0704`), and a compiler defect (`N0900`) for any
+/// The instance planner's refusals (`N0357`, `N0358`), and a compiler defect (`N0900`) for any
 /// place the lowering and Core IR disagree.
 pub fn lower(
     core: &cir::Program,

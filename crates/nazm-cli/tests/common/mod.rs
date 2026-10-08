@@ -219,3 +219,22 @@ pub(crate) fn run_bounded(cmd: &mut std::process::Command, what: &str) -> Ran {
         stderr: text(err),
     }
 }
+
+/// Whether a test that needs a host tool must stop here, having found it absent (Q1-D-02).
+///
+/// A test that returns early passes, and a pass on no evidence is a defect (`docs/runbook.md`,
+/// *Status vocabulary*). So a test bound to a platform is `#[ignore]`d elsewhere by `cfg_attr`,
+/// and counted as ignored there; on its own platform a missing tool still skips — printing `SKIP`
+/// — unless `NAZM_REQUIRE_HOST_TOOLS=1`, which the named host pass sets, turns the skip into a
+/// failure.
+pub(crate) fn skip_without(present: bool, what: &str) -> bool {
+    if present {
+        return false;
+    }
+    assert!(
+        std::env::var("NAZM_REQUIRE_HOST_TOOLS").as_deref() != Ok("1"),
+        "NAZM_REQUIRE_HOST_TOOLS=1, and {what}"
+    );
+    eprintln!("SKIP: {what}");
+    true
+}

@@ -110,8 +110,12 @@ fn document(
     into: &mut BTreeMap<String, BTreeMap<String, Value>>,
 ) -> Result<(), String> {
     let source_root = crate::root::decide(path, None).map_err(|e| e.to_string())?;
-    let loaded = load::load(path, source_root.path())
-        .map_err(|_| format!("cannot load {}", path.display()))?;
+    // The loader's own diagnostics, not a bare "cannot load": the reason is the user's to see
+    // (Q1-D-08).
+    let loaded = load::load(path, source_root.path()).map_err(|(_, diagnostics)| {
+        let why: Vec<String> = diagnostics.iter().map(|d| d.message.clone()).collect();
+        format!("cannot load {}: {}", path.display(), why.join("; "))
+    })?;
     let (map, graph) = (&loaded.map, &loaded.graph);
     let found = nazm_core::on_module_map(map, graph, |program, res| {
         let names = nazm_core::cir::Names::new(res, graph);

@@ -157,9 +157,9 @@ fn a_cranelift_build_carries_debug_information_only_when_asked() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "drives lldb on macOS")]
 fn a_debugger_finds_a_cranelift_build_s_functions_and_lines() {
-    if !lldb() {
-        eprintln!("SKIP: no lldb on this machine");
+    if common::skip_without(lldb(), "no lldb on this machine") {
         return;
     }
     let d = with("s.nz", SCOPES);
@@ -241,9 +241,12 @@ fn a_debugger_finds_a_cranelift_build_s_functions_and_lines() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "macOS's `sample` is the sampler")]
 fn a_sampled_run_is_attributed_to_nazm_functions_and_lines() {
-    if !Path::new("/usr/bin/sample").is_file() {
-        eprintln!("SKIP: no sampler on this machine");
+    if common::skip_without(
+        Path::new("/usr/bin/sample").is_file(),
+        "no sampler on this machine",
+    ) {
         return;
     }
     let d = with("spin.nz", SPIN);
