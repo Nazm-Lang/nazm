@@ -155,9 +155,9 @@ The flow is semantic decision → Core IR → MIR → LIR → backend. Findings:
 | The OS API the runtime calls | `nazm-runtime/src/os.rs` (one POSIX list) | yes |
 | POSIX constants and sizes in runtime text | `nazm-runtime/src/core.rs` (`getrlimit(3)`, `clock_gettime(0/4)`, pthread sizes, 128-byte mutex buffers, `mprotect`) | **no** |
 | Context switch, errno location | `nazm-runtime/src/switch.rs` (SysV and AArch64; Mach-O and ELF) | yes |
-| Target → runtime pieces | `nazm-cli/src/build.rs`, `runtime_artifact.rs` | partly |
+| Target → runtime pieces | `nazm-cli/src/build/lower.rs`, `runtime_artifact.rs` | partly |
 | Compile and link driver | `nazm-cli/src/backend.rs` (clang only, hermetic environment) | yes |
-| Executable naming, archives, `.dSYM`, link libraries | `nazm-cli/src/build.rs` | partly |
+| Executable naming, archives, `.dSYM`, link libraries | `nazm-cli/src/build/link.rs` | partly |
 | Object format and DWARF for Cranelift | `nazm-codegen-clif/src/dwarf.rs` (Mach-O, ELF) | yes |
 | Process control in the harness | `xtask/src/procs.rs`, `contained.rs`, `bench.rs` — Unix, unguarded | **no** |
 | Paths and URIs | `lsp.rs` (POSIX-only), `nazm-repo` (string joins); `nazm-sema/src/key.rs` normalises both separators | **no** |
@@ -178,7 +178,7 @@ implemented — Windows is Gate 3):
    runtime text then names facts, not numbers.
 3. **`switch.rs` gains Win64 and COFF** as one more `SwitchTarget`.
 4. **The CLI's artefact naming** (`.exe`, archive tool, import libraries, debug-info packaging) moves
-   behind one `Artefacts` function of the target in `nazm-cli/src/build.rs`.
+   behind one `Artefacts` function of the target in `nazm-cli/src/build/lower.rs`.
 5. **The reserved C symbols** become the union of every target's runtime symbols, still tested
    against the runtime inventory.
 6. **Harness process control** (`xtask/src/procs.rs`) gets a `cfg(unix)` boundary and an explicit
