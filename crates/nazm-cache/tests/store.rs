@@ -116,6 +116,25 @@ fn rejected(store: &Store, k: &CheckKey) -> Invalid {
     }
 }
 
+/// Q1-M-07: the provenance facts and resolved unit are sealed by the digest beside them, so an
+/// edit to either, or to the digest, or an entry without one, is refused.
+#[test]
+fn an_entry_whose_facts_moved_is_refused() {
+    let f = fixture();
+    let text = f.artifact.to_json().expect("json");
+    let mut v: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert!(v["facts_digest"]
+        .as_str()
+        .is_some_and(|d| d.starts_with("blake3:")));
+    v["facts_digest"] = serde_json::Value::String("blake3:00".to_owned());
+    tamper(&f.store, &f.key, &v.to_string());
+    assert_eq!(rejected(&f.store, &f.key), Invalid::FactsMoved);
+    let mut v: serde_json::Value = serde_json::from_str(&text).expect("json");
+    v.as_object_mut().expect("object").remove("facts_digest");
+    tamper(&f.store, &f.key, &v.to_string());
+    assert_eq!(rejected(&f.store, &f.key), Invalid::FactsMoved);
+}
+
 #[test]
 fn an_untouched_entry_is_found() {
     let f = fixture();
@@ -169,11 +188,11 @@ fn a_schema_this_build_does_not_implement_is_refused_rather_than_reinterpreted()
         .artifact
         .to_json()
         .expect("json")
-        .replace("nazm.check/4", "nazm.check/5");
+        .replace("nazm.check/5", "nazm.check/6");
     tamper(&f.store, &f.key, &text);
     assert_eq!(
         rejected(&f.store, &f.key),
-        Invalid::UnknownSchema("nazm.check/5".to_owned())
+        Invalid::UnknownSchema("nazm.check/6".to_owned())
     );
 }
 

@@ -25,7 +25,8 @@ pub const CRANELIFT_VERSION: &str = "0.136.1";
 
 /// This translator's revision: bumped with any change to how an instruction becomes Cranelift
 /// IR, since an object is a function of the translator as well as of its LIR (N105).
-pub const TRANSLATOR_REVISION: u32 = 1;
+/// 2 in Q1: stack probes (Q1-A1-01).
+pub const TRANSLATOR_REVISION: u32 = 2;
 
 /// The Cranelift backend.
 #[derive(Debug, Clone)]
@@ -72,6 +73,12 @@ impl Cranelift {
         let opt = if self.opt_level == 0 { "none" } else { "speed" };
         b.set("opt_level", opt).map_err(|e| e.to_string())?;
         b.set("is_pic", "true").map_err(|e| e.to_string())?;
+        // Stack probes, inline, as the LLVM backend's (Q1-A1-01): a frame larger than a task
+        // stack's one guard page faults on the guard rather than skipping it.
+        b.set("enable_probestack", "true")
+            .map_err(|e| e.to_string())?;
+        b.set("probestack_strategy", "inline")
+            .map_err(|e| e.to_string())?;
         b.set(
             "enable_verifier",
             if self.verify { "true" } else { "false" },
@@ -119,6 +126,11 @@ impl Cranelift {
         let mut h = blake3::Hasher::new();
         h.update(self.version().as_bytes());
         h.update(&TRANSLATOR_REVISION.to_le_bytes());
+        // Every Cranelift setting, as Cranelift prints them: a changed setting is a new object
+        // without anyone remembering to bump the revision (Q1-M-10).
+        if let Ok(flags) = self.settings() {
+            h.update(flags.to_string().as_bytes());
+        }
         h.update(self.target.triple.as_bytes());
         h.update(&RUNTIME_ABI_REVISION.to_le_bytes());
         h.update(nazm_lir::runtime::digest().as_bytes());

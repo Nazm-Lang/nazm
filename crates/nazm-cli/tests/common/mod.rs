@@ -34,6 +34,16 @@ const WAIVER: &str = "NAZM_ALLOW_UNCONTAINED";
 /// bypass it by construction.
 pub(crate) fn require_containment(stage: &str) {
     if std::env::var(CONTAINED).as_deref() == Ok("1") {
+        // A declaration, checked: the contained runner's cgroup caps memory, so `memory.max`
+        // is a number there. On a host — macOS has no cgroup at all — it is not, and the
+        // variable is the forbidden host configuration rather than a ceiling (Q1-A2-02).
+        let max = std::fs::read_to_string("/sys/fs/cgroup/memory.max").unwrap_or_default();
+        assert!(
+            max.trim().parse::<u64>().is_ok_and(|n| n > 0),
+            "{CONTAINED}=1 is set, but no memory ceiling applies here (`/sys/fs/cgroup/memory.max` \
+             is {:?}). Run `{stage}` through `cargo xtask contained`; never set {CONTAINED} on a host.",
+            max.trim()
+        );
         return;
     }
     if std::env::var(WAIVER).as_deref() == Ok("1") {

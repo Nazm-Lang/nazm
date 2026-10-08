@@ -151,7 +151,7 @@ pub(crate) fn run(
     } else {
         "web3"
     };
-    if let Err(code) = crate::profile::enforce(file, Some(profile), false, false) {
+    if let Err(code) = crate::profile::enforce(file, file, Some(profile), false, false) {
         return code;
     }
     let source_root = match crate::root::decide(file, None) {

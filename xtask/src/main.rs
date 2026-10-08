@@ -18,6 +18,7 @@ mod plan;
 mod procs;
 mod rules;
 mod suite;
+mod supply;
 
 use std::process::{Command, ExitCode};
 
@@ -94,6 +95,10 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("bench") => {
+            if let Some(why) = contained::refuse_uncontained("cargo xtask bench") {
+                eprintln!("{why}");
+                return ExitCode::FAILURE;
+            }
             let rest: Vec<String> = args.collect();
             let mode = if rest.iter().any(|a| a == "--save") {
                 bench::Mode::Save
@@ -122,6 +127,14 @@ fn main() -> ExitCode {
         },
         Some("mutate") => {
             let rest: Vec<String> = args.collect();
+            // Planning reads the catalogue and runs nothing; everything else is the heavy work
+            // the contained runner exists for.
+            if !rest.iter().any(|a| a == "--plan") {
+                if let Some(why) = contained::refuse_uncontained("cargo xtask mutate") {
+                    eprintln!("{why}");
+                    return ExitCode::FAILURE;
+                }
+            }
             mutate_cli(&rest)
         }
         // Documented, because it is now the *only* way to recover an interrupted run:
@@ -226,6 +239,7 @@ fn run_checks() -> ExitCode {
         ("docs corpus", check_docs_corpus()),
         ("performance claims", claims::check(&bench::root())),
         ("agent governance", governance::check(&guide::root())),
+        ("dependency sources", supply::check(&guide::root())),
     ])
 }
 

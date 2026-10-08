@@ -141,8 +141,11 @@ fn depth(f: usize, edges: &[Vec<usize>], memo: &mut Vec<Option<usize>>) -> usize
 }
 
 fn unbounded_allocations(program: &nazm_mir::ir::Program) -> Vec<profile::Witness> {
+    // A function's own sites, and its calls that may allocate through any chain of calls: an
+    // allocation moved into a helper, a trait method or a generic is still one (Q1-C-01).
     nazm_mir::cost::of(program)
         .into_iter()
+        .chain(nazm_mir::cost::allocating_calls(program))
         .flat_map(|fc| {
             let name = program
                 .function(fc.func)
@@ -170,6 +173,7 @@ fn unbounded_allocations(program: &nazm_mir::ir::Program) -> Vec<profile::Witnes
 /// refuses (`N0510`, one per rule).
 pub(crate) fn enforce(
     file: &Path,
+    named_path: &Path,
     named: Option<&str>,
     locked_flag: bool,
     report: bool,
@@ -178,7 +182,10 @@ pub(crate) fn enforce(
     if let Some(n) = named {
         profiles.push(Profile::by_name(n).ok_or_else(|| unknown(n, "`--profile`"))?);
     }
-    let graph = crate::package::graph_for(file).and_then(Result::ok);
+    // The package graph of the path the command was given — the one it resolved and builds —
+    // not one re-derived from the entry file: a `nazm.root` beside the entry is nearer than the
+    // manifest, and re-deriving from it dropped the manifest's profile (Q1-C-04).
+    let graph = crate::package::profile_graph(named_path);
     if let Some(g) = &graph {
         for p in &g.packages {
             if let Some(n) = &p.profile {

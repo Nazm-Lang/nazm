@@ -354,6 +354,25 @@ fn prepare(dir: &Path, registry: &Path) -> Result<(Manifest, String, Vec<Entry>)
             ),
         )));
     }
+    // A version directory the index does not list is debris — a publish that died, or a hand
+    // edit — and copying over it would seal its extra files, or follow its links, into the
+    // version (Q1-A2-04). Refused, never merged.
+    let target = registry
+        .join("packages")
+        .join(&manifest.name)
+        .join(manifest.version.to_string());
+    if target.symlink_metadata().is_ok() {
+        return Err(Box::new(error(
+            codes::REGISTRY_INVALID,
+            format!(
+                "the registry already holds `{}` for `{}` {}, which its index does not list; \
+                 remove it before publishing",
+                target.display(),
+                manifest.name,
+                manifest.version
+            ),
+        )));
+    }
     Ok((manifest, text, entries))
 }
 
@@ -365,18 +384,32 @@ pub fn publish(dir: &Path, registry: &Path) -> Result<(Version, String), Box<Dia
             format!("the registry at `{}`: {e}", registry.display()),
         ))
     };
-    let target = registry
-        .join("packages")
-        .join(&manifest.name)
-        .join(manifest.version.to_string());
-    for rel in published_files(dir, &manifest) {
-        let to = target.join(&rel);
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(io)?;
-        }
-        std::fs::copy(dir.join(&rel), &to).map_err(io)?;
+    let name_dir = registry.join("packages").join(&manifest.name);
+    let target = name_dir.join(manifest.version.to_string());
+    // Staged in a directory this publish creates — `create_dir` fails on anything already
+    // there — digested there, then renamed into place: the version holds exactly the package's
+    // files, and a publish that dies leaves no version directory behind.
+    std::fs::create_dir_all(&name_dir).map_err(io)?;
+    let staged = name_dir.join(format!(
+        ".publish-{}-{}",
+        manifest.version,
+        std::process::id()
+    ));
+    std::fs::create_dir(&staged).map_err(io)?;
+    let copied = published_files(dir, &manifest)
+        .into_iter()
+        .try_for_each(|rel| {
+            let to = staged.join(&rel);
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(dir.join(&rel), &to).map(|_| ())
+        });
+    let d = digest(text.as_bytes(), &staged.join(&manifest.root));
+    if let Err(e) = copied.and_then(|()| std::fs::rename(&staged, &target)) {
+        let _ = std::fs::remove_dir_all(&staged);
+        return Err(io(e));
     }
-    let d = digest(text.as_bytes(), &target.join(&manifest.root));
     entries.push(Entry {
         version: manifest.version,
         digest: d.clone(),

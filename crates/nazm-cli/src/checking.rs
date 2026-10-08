@@ -237,6 +237,19 @@ impl nazm_core::Reuse for Cache<'_> {
         facts: &nazm_core::sema::ModuleFacts,
         res: &nazm_core::sema::resolve::Resolution,
     ) {
+        // A closure exists only while its maker's body is checked: a module reused from the
+        // store has none, so facts naming one cannot be read back, and the whole program's
+        // flow would be solved as incomplete — a program accepted cold refused warm (Q1-B-C1).
+        // Such a module files no entry and is checked every time.
+        let closure =
+            |g: nazm_core::sema::FnId| res.function(g).is_some_and(|d| d.closure.is_some());
+        if facts
+            .functions
+            .iter()
+            .any(|f| closure(f.function) || f.makes.iter().any(|m| closure(m.function)))
+        {
+            return;
+        }
         let Some(persisted) = nazm_iface::PersistentFacts::of(facts, res, &self.graph) else {
             return;
         };

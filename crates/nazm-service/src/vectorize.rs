@@ -164,15 +164,35 @@ fn idiom(
         return Err(NOT);
     };
     let v = args.first().and_then(local).ok_or(NOT)?;
-    // The counter starts at 0: its last write before the loop, in this block.
-    let start = before.iter().rev().find_map(|s| match s {
-        Stmt::Let { local, value } | Stmt::Assign { local, value, .. } if *local == i => {
-            Some(int(consts, value))
-        }
+    // The counter starts at 0: its last write before the loop, in this block — and nothing
+    // between that write and the loop can write it again. Only a plain binding or assignment of
+    // another local to a constant or a local may stand between them: an `if`, a loop, a block or
+    // a call's argument could hold a write of the counter at any depth, and until Q1 one in a
+    // nested `if` was missed, so the loop was summed from 0 instead of from where the program
+    // left the counter (Q1-B-01).
+    let at = before.iter().rposition(
+        |s| matches!(s, Stmt::Let { local, .. } | Stmt::Assign { local, .. } if *local == i),
+    );
+    let start = at.and_then(|k| match before.get(k)? {
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => int(consts, value),
         _ => None,
     });
-    if start != Some(Some(0)) {
+    if start != Some(0) {
         return Err("its counter does not start at 0 in the loop's block");
+    }
+    let plain = |s: &Stmt| match s {
+        Stmt::Let { local, value } | Stmt::Assign { local, value, .. } => {
+            *local != i && matches!(value.kind, ExprKind::Const(_) | ExprKind::Local(_))
+        }
+        _ => false,
+    };
+    if !before
+        .get(at.map_or(0, |k| k + 1)..)
+        .unwrap_or_default()
+        .iter()
+        .all(plain)
+    {
+        return Err("something between its counter's `= 0` and the loop may write the counter");
     }
     let [Stmt::Assign {
         local: s,

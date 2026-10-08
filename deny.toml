@@ -6,6 +6,13 @@
 [advisories]
 version = 2
 yanked = "deny"
+# Each exception names the advisory, the path it reaches the build by, and why it stays.
+ignore = [
+    # `paste` is unmaintained, not vulnerable. It is a proc-macro of `tokenizers`, reached only
+    # through `nazm-tokens` → `nazm-agent-bench`, the agent-cost harness; the shipped `nazm`
+    # binary does not contain it (`cargo tree -p nazm-cli -i paste` finds nothing). Q1, 2026-10-08.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro reached only by the agent-cost harness, not the shipped compiler" },
+]
 
 [licenses]
 version = 2
@@ -26,6 +33,9 @@ confidence-threshold = 0.93
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# A workspace member's `path = …` dependency has no version, which cargo-deny otherwise reads as
+# a wildcard. Every member is `publish = false`, so no published manifest ever carries one.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
