@@ -31,58 +31,15 @@
     clippy::indexing_slicing
 )]
 
+mod memory_report;
+
+use memory_report::{counts, Ran};
+
 use std::process::Command;
 
 use nazm_lir::MEMORY_VARIABLE;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Class {
-    allocated: u64,
-    reclaimed: u64,
-    live: u64,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct Ran {
-    value: String,
-    sequences: Class,
-    strings: Class,
-    channels: Class,
-}
-
-fn counts(stderr: &str, value: String) -> Ran {
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with("nazm-memory:"))
-        .unwrap_or_else(|| panic!("no memory report in: {stderr}"));
-    let words: Vec<&str> = line.split_whitespace().collect();
-    let class = |name: &str| {
-        let at = words
-            .iter()
-            .position(|w| *w == name)
-            .unwrap_or_else(|| panic!("no `{name}` in: {line}"));
-        let field = |offset: usize, prefix: &str| {
-            words
-                .get(at + offset)
-                .and_then(|w| w.strip_prefix(prefix))
-                .and_then(|n| n.parse::<u64>().ok())
-                .unwrap_or_else(|| panic!("no `{prefix}` after `{name}` in: {line}"))
-        };
-        Class {
-            allocated: field(1, "allocated="),
-            reclaimed: field(2, "reclaimed="),
-            live: field(3, "live="),
-        }
-    };
-    Ran {
-        value,
-        sequences: class("sequences"),
-        strings: class("strings"),
-        channels: class("channels"),
-    }
-}
 
 /// Interpret it, compile and run it, and require the two to agree about everything.
 /// `code` is the exit status both must have: `0`, or `2` for a runtime failure.
