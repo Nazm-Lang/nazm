@@ -19,7 +19,7 @@
 //!
 //! | Left out | Why it cannot affect checking this module |
 //! | --- | --- |
-//! | target triple, CPU features, ABI | `crates/nazm-core/src/check.rs` mentions none of them. `Int` is 64-bit in every configuration and no rule consults the host. **A codegen key is a different key and will need all of them** |
+//! | target triple, CPU features, ABI | `crates/nazm-core/src/check/` mentions none of them. `Int` is 64-bit in every configuration and no rule consults the host. **A codegen key is a different key and will need all of them** |
 //! | optimisation level, backend | `nazm build`'s subset refusals live in `nazm-lir`, after checking, and are not cached |
 //! | `--max-iterations`, `--max-depth` | interpreter budgets. `docs/spec.md` places them in the interpreter rather than in the language |
 //! | the source root, the checkout directory, the working directory | they decide what a [`ModuleKey`] *is*; once it exists they are gone, which is what lets two checkouts share an entry |
