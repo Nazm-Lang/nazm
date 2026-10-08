@@ -41,16 +41,20 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 2,538 passed, 0 failed, 58 ignored** across 203 test binaries, run contained at
-`531769a` (M1 of the v4 programme, 2026-10-08; toolchain 1.0.0, semantic epoch 34, runtime ABI 15,
-not yet a release candidate; `target/gates/m1/contained-tests-3.log`), selfhost 43 of 43 with the
-bootstrap chain's fixpoint test passing. Over Gate 1-C1: Gate 2's numbers, arrays and constants,
-bytes and text (areas 3 and 16), and M1's fixes — an imported impl method's effects
-(`f0023cd`), libm on a Linux link (`7a74cd6`), and the self-hosted checker's not-carried list
-(`531769a`) — the last two found only by this contained run. The catalogue holds 1,324 entries;
-M1's two new ones were caught at tier 1 in campaigns `341a6c89cbacc724` and `9c22557773af4909`.
-Gate 2's 38 entries have not yet been run in a campaign; Gate 2's contained gate is still owed.
-The eleven more ignored tests are the Docker-backed ones M1 marked `integration-external`.
+**Current suite: 2,560 passed, 0 failed, 65 ignored** across 203 test binaries, run contained at
+`f043087` (Q1 of the v4 programme, 2026-10-08; toolchain 1.0.0, semantic epoch 34, runtime ABI 15,
+check entries `nazm.check/5`, not yet a release candidate; `target/gates/q1/contained-tests.log`),
+selfhost 43 of 43 with the bootstrap chain's fixpoint test passing. Over M1: Q1's fixes and their
+tests (`docs/security-qualification.md`); the seven more ignored tests are platform-bound ones Q1
+stopped counting as passes off their platform (Q1-D-02). The catalogue holds 1,345 entries. Q1's
+campaign — the 21 `q1-*` entries, Gate 2's 38 and the 15 entries Gate 2 and Q1 repointed, 74 in all,
+every killer verified — caught 73 at tier 1 (campaigns `a7eac5bb685e1822`, `3e9515c5f7f07b9e`,
+`1290489029d48800`); `g2-a-view-does-not-keep-its-buffer` was not caught, and a contained probe of
+it showed no observable difference in output or memory counts — Gate 2's contained gate owes its
+verdict (`target/gates/q1/probe-mutants-2.log`).
+
+*Historical, not current:* 2,538 passed, 0 failed, 58 ignored across 203 test binaries, run contained at
+`531769a` (M1, 2026-10-08), selfhost 43 of 43 with the fixpoint; M1's two new mutants caught at tier 1.
 
 *Historical, not current:* 2,509 passed, 0 failed, 47 ignored across 180 test binaries, run contained and
 offline at `ea4741f` (Gate 1-C1 of the v1 programme, 2026-10-07; toolchain 1.0.0, semantic epoch
