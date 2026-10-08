@@ -14585,10 +14585,10 @@ killers = [{ package = "nazm-cli", test = "simd", name = "a_counter_written_afte
 
 [[mutation]]
 name = "q1-an-unsigned-product-may-pass-i128"
-why = "the 64-by-64-bit product is taken in `i128` unchecked, so `UInt64::MAX * UInt64::MAX` panics the compiler"
+why = "the 64-by-64-bit product is taken in `i128` unchecked, so `UInt64::MAX * UInt64::MAX` panics the compiler. (`wrapping_mul` is not this mutant: a wrapped unsigned product is always negative, so still an overflow — an equivalent mutant, found by the Q1 campaign)"
 file = "crates/nazm-sema/src/numeric.rs"
 find = '        Arith::Mul => x.checked_mul(y).ok_or(NumError::Overflow)?,'
-replace = '        Arith::Mul => x.wrapping_mul(y),'
+replace = '        Arith::Mul => x * y,'
 killers = [{ package = "nazm-sema", lib = true, name = "numeric::tests::the_largest_unsigned_products_overflow_rather_than_panic" }]
 
 [[mutation]]

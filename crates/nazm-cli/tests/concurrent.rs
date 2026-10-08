@@ -19,8 +19,8 @@
 
 mod common;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
@@ -34,34 +34,15 @@ struct Ran {
     stderr: String,
 }
 
-/// Its own copy rather than one shared with `tests/build.rs`: each integration test is a
-/// separate binary, and a hung compiled program must fail this suite rather than hang it.
+/// A hung compiled program must fail this suite rather than hang it: `common::run_within`, which
+/// drains both streams as the child runs, with this suite's own "did not terminate" wording.
 fn run_bounded(cmd: &mut Command) -> Option<Ran> {
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn");
-    let start = Instant::now();
-    loop {
-        match child.try_wait().expect("try_wait") {
-            Some(status) => {
-                let out = child.wait_with_output().expect("collect output");
-                return Some(Ran {
-                    code: status.code(),
-                    stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-                });
-            }
-            None if start.elapsed() >= DEADLINE => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            None => std::thread::sleep(Duration::from_millis(5)),
-        }
-    }
+    // `common`'s draining run (Q1): this copy read the pipes only after the child exited.
+    common::run_within(cmd, DEADLINE).map(|r| Ran {
+        code: r.code,
+        stdout: r.stdout,
+        stderr: r.stderr,
+    })
 }
 
 fn write_program(body: &str) -> (tempfile::TempDir, PathBuf) {
