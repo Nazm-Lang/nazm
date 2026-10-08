@@ -10,22 +10,12 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::{exit, load};
+use crate::exit;
 
 pub(crate) fn run(path: &Path, compact: bool, spans: bool, declared: Option<&Path>) -> ExitCode {
-    let source_root = match crate::root::decide(path, declared) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("nazm: {e}");
-            return ExitCode::from(crate::exit::root_status(&e));
-        }
-    };
-    let loaded = match load::load(path, source_root.path()) {
-        Ok(f) => f,
-        Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(crate::exit::load_status(&diagnostics));
-        }
+    let loaded = match crate::opened::opened(path, declared, false) {
+        Ok(l) => l,
+        Err(code) => return ExitCode::from(code),
     };
     // As a module: a library with no `main` has Core IR too, and prints with no entry.
     let printed = nazm_core::on_lowered(

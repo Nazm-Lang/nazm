@@ -14,7 +14,7 @@ use nazm_lir::backend::Target;
 use nazm_lir::{Ty, Unit};
 use serde_json::{json, Value};
 
-use crate::{exit, load};
+use crate::exit;
 
 /// The schema this prints.
 pub(crate) const SCHEMA: &str = "nazm.lir/2";
@@ -209,19 +209,9 @@ pub(crate) fn run(
             return ExitCode::from(exit::target_refused(target.is_some()));
         }
     };
-    let source_root = match crate::root::decide(path, declared) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("nazm: {e}");
-            return ExitCode::from(crate::exit::root_status(&e));
-        }
-    };
-    let loaded = match load::load(path, source_root.path()) {
-        Ok(f) => f,
-        Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(crate::exit::load_status(&diagnostics));
-        }
+    let loaded = match crate::opened::opened(path, declared, false) {
+        Ok(l) => l,
+        Err(code) => return ExitCode::from(code),
     };
     let map = &loaded.map;
     let names = nazm_lir::SourceNames::of(map, &loaded.graph);
@@ -261,19 +251,9 @@ pub(crate) fn run(
 /// Outside the interpreter's subset (tasks, channels, the clock, C) it says so and exits 4.
 pub(crate) fn oracle(path: &Path, declared: Option<&Path>, args: &[String]) -> ExitCode {
     use std::io::Write as _;
-    let source_root = match crate::root::decide(path, declared) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("nazm: {e}");
-            return ExitCode::from(crate::exit::root_status(&e));
-        }
-    };
-    let loaded = match load::load(path, source_root.path()) {
-        Ok(f) => f,
-        Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(crate::exit::load_status(&diagnostics));
-        }
+    let loaded = match crate::opened::opened(path, declared, false) {
+        Ok(l) => l,
+        Err(code) => return ExitCode::from(code),
     };
     let map = &loaded.map;
     let names = nazm_lir::SourceNames::of(map, &loaded.graph);

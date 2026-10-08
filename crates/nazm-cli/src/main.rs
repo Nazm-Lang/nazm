@@ -58,6 +58,7 @@ mod live;
 mod lsp;
 mod mir;
 mod obligations;
+mod opened;
 mod package;
 mod patch;
 mod profile;

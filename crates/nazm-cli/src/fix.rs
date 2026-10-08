@@ -98,20 +98,7 @@ fn loaded(path: &Path, json: bool) -> Result<load::Loaded, u8> {
     // Discovered, never given: `nazm fix` edits source and persists nothing, so the only
     // reason it asks at all is that the loader computes a durable key for every module
     // whether or not this command has a use for one.
-    let source_root = match crate::root::decide(path, None) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("nazm: {e}");
-            return Err(crate::exit::root_status(&e));
-        }
-    };
-    match load::load(path, source_root.path()) {
-        Ok(f) => Ok(f),
-        Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial.map, json);
-            Err(crate::exit::load_status(&diagnostics))
-        }
-    }
+    crate::opened::opened(path, None, json)
 }
 
 /// Every fix in every diagnostic, resolved to the file it edits.
