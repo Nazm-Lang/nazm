@@ -300,7 +300,7 @@ why = """
 drops the rule that a branch which returns takes the other branch's type, so
 `if c { return 0; } else { 1 }` produces nothing instead of an Int
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/expr.rs"
 find = "                    (Completion::Diverges, other) | (other, Completion::Diverges) => other,"
 replace = """                    (Completion::Diverges, _) | (_, Completion::Diverges) => Completion::Unit,"""
 killers = [{ package = "nazm-core", test = "core_ir", name = "every_break_and_continue_names_the_loop_it_leaves" }]
@@ -823,7 +823,7 @@ colliding through an import.
 Repointed by N78, whose impl methods are always private: an ordinary function's `pub` is the
 `else` arm.
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = """
         } else {
             Visibility::from_keyword(f.pub_span)
@@ -841,7 +841,7 @@ brings in what a dependency imported as well as what it exports, so a module can
 anything reachable from it. The rule with the largest effect on how much context reading
 one module requires, and its absence is invisible in any single-module test
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 # Repointed in N19, which records the names an environment refuses: its pattern gained the
 # line that starts that list. Repointed in N49, which added the aliases and made a
 # dependency no longer `Copy`. The defect is unchanged.
@@ -949,7 +949,7 @@ implementation becomes part of what it offers. Adding or removing a private help
 then invalidate every dependent, and a persisted interface would publish names the module
 deliberately kept
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = """        if visibility.is_exported() {
             // A public signature naming a private record would publish a type the"""
 replace = """        if true {
@@ -1066,7 +1066,7 @@ publishes an entry for a module that produced diagnostics, so a refusal becomes 
 acceptance. The next run finds it, skips the module, and reports nothing — a compiler that
 accepts a program it has already refused
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/mod.rs"
 find = "        if !unparsed && errors.len() == before && declared_cleanly.get(n) == Some(&true) {"
 replace = "        if true {"
 killers = [{ package = "nazm-cli", test = "ffi", name = "an_imported_foreign_function_needs_a_foreign_cap_too" }]
@@ -1703,7 +1703,7 @@ reaches the backend — where LLVM reports a recursive type, after the compiler 
 decided the program is fine. Replaces `a-record-that-contains-itself-is-accepted`, whose
 target has been dead code since N11
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/layout.rs"
 find = "    let cycles = res.types().ownership_cycles();"
 replace = """    let cycles: Vec<_> = res
         .types()
@@ -1719,7 +1719,7 @@ stops refusing a public item that names a private record, so a module publishes 
 interface referring to a type its importer cannot resolve. Without opaque types there is
 no reading of that which works
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = """    let Some((private_name, declared_at)) = found else {
         return;
     };"""
@@ -1762,7 +1762,7 @@ open one: a program compiles with a variant it has no arm for, and reaches a `sw
 default was only ever a structural requirement. `docs/spec.md` gives the checker the
 language's meaning precisely so that this cannot be deferred to the backend
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = "        if !missing.is_empty() && !unresolved {"
 replace = "        if false {"
 killers = [{ package = "nazm-core", test = "enums", name = "a_match_that_misses_a_variant_is_refused_and_names_it" }]
@@ -1774,7 +1774,7 @@ accepts a second arm for a variant the `match` already covers. The discriminant 
 exactly one, so the later arm can never run — and coverage now counts an arm that is dead
 towards a variant that is uncovered, which is how a non-exhaustive match passes the check
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = """            if let Some(Some(first)) = covered.get(at as usize).copied() {"""
 replace = """            if let Some(None) = covered.get(at as usize).copied() {
                 let _ = arm.variant_span;
@@ -1790,7 +1790,7 @@ whenever both happen to have a `Ready`. Nominality is the whole of what makes tw
 identically shaped enums two types, and structural matching would undo it silently — the
 arm would bind payload fields of a variant the value does not have
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = "            if self.res.types().definition_of(sty) != Some(TypeNode::Enum(named)) {"
 replace = "            if false {"
 killers = [{ package = "nazm-core", test = "enums", name = "a_pattern_naming_another_enums_variant_is_refused" }]
@@ -1802,7 +1802,7 @@ lets a pattern leave a payload field out. The rule exists for evolution: adding 
 must break the patterns that did not know about it rather than letting them ignore new
 state, and this is exactly the silence it was written to prevent
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = """        let missing = self.missing_payload_fields(id, at, &named);
         if !missing.is_empty() {"""
 replace = """        let missing = self.missing_payload_fields(id, at, &named);
@@ -1818,7 +1818,7 @@ kinds; this removes the enum half and leaves the record half in place, which is 
 version that looks like it works
 
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = """        let payloads: Vec<(Type, Span)> = def
             .variants
             .iter()
@@ -2501,7 +2501,7 @@ name = "the-wrong-number-of-type-arguments-is-accepted"
 why = """
 a generic definition written with too many or too few arguments is padded or truncated silently instead of refused with `N0353`
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = """        (Some(mut args), n) => {
             if args.len() != n {
                 errors.push(wrong_arity("""
@@ -2515,7 +2515,7 @@ name = "inference-keeps-the-first-conflicting-type"
 why = """
 a parameter two arguments settle differently keeps the first one's type, so `same(1, "x")` is a mismatch of the second argument rather than the conflict `N0355` names
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = """                    Some((t, from)) => Err(Unify::Conflict {
                         param: p,
                         earlier: t,
@@ -2539,7 +2539,7 @@ name = "two-generic-definitions-of-one-shape-unify"
 why = """
 an argument of one generic definition settles a parameter written against another with the same arity — nominal typing forgotten inside inference
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = """                if types.definition_of(formal) != types.definition_of(actual)
                     || std::mem::discriminant(&formal) != std::mem::discriminant(&actual)"""
 replace = "                if std::mem::discriminant(&formal) != std::mem::discriminant(&actual)"
@@ -2806,7 +2806,7 @@ name = "question-mark-recognises-result-by-name"
 why = """
 `?` accepts any enum whose definition is called `Result` — the name test the spec forbids. Caught where a persisted interface claims a project `Result` of the same shape
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = """        if self.res.types().definition_of(t) != Some(TypeNode::Enum(def)) {
             return None;
         }"""
@@ -2821,7 +2821,7 @@ name = "question-mark-recognises-result-by-shape"
 why = """
 `?` accepts any enum with an `Ok` and an `Err` variant — structural recognition of a nominal type
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = """        if self.res.types().definition_of(t) != Some(TypeNode::Enum(def)) {
             return None;
         }"""
@@ -2836,7 +2836,7 @@ name = "the-canonical-result-is-the-first-one-named-result"
 why = """
 the `Result` `?` propagates is the first definition of that name anywhere in the compilation rather than the prelude module's — a project `Result`, loaded first, would take its place
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = """        .and_then(|m| res.enums().declared(m, nazm_sema::prelude::RESULT));"""
 replace = """        .and(res.enums().declared_anywhere(nazm_sema::prelude::RESULT).next());"""
 killers = [{ package = "nazm-core", test = "results", name = "a_project_result_is_refused_and_is_not_what_question_mark_propagates" }]
@@ -2846,7 +2846,7 @@ name = "checker-question-mark-is-allowed-outside-a-result-function"
 why = """
 `?` in a function that does not return `Result` is accepted silently, so an error has nowhere to go — `N0361` never fires
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = """            if let Some(span) = self.return_span {
                 d = d.secondary(span, format!("declared `{shown}` here"));
             }
@@ -2864,7 +2864,7 @@ name = "checker-question-mark-ignores-the-error-type"
 why = """
 the operand's error type is never compared with the function's, so a `Result[Int, ErrorA]` propagates out of a `Result[Int, ErrorB]` function — an implicit conversion
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = "        if err != into_err {"
 replace = "        if err != into_err && false {"
 killers = [{ package = "nazm-core", test = "results", name = "propagation_needs_exactly_the_same_error_type" }]
@@ -2874,7 +2874,7 @@ name = "question-mark-requires-the-same-success-type"
 why = """
 `?` also demands that the operand's success type equal the function's, refusing the ordinary case where only the error crosses
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = "        if err != into_err {"
 replace = "        if err != into_err || Some(ok) != declared.and_then(|t| self.result_parts(t)).map(|p| p.1) {"
 killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
@@ -2884,7 +2884,7 @@ name = "checker-a-project-type-may-take-a-prelude-name"
 why = """
 a project `Result` is reported as an ordinary import collision at an import line that does not exist, instead of `N0363` at its declaration
 """
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = """                if Some(d.on) == unit.prelude {
                     if collisions == Collisions::Report {"""
 replace = """                if Some(d.on) == unit.prelude && false {
@@ -3774,7 +3774,7 @@ killers = [{ package = "nazm-core", test = "equality", name = "a_type_without_eq
 [[mutation]]
 name = "n13-two-types-of-one-shape-compare"
 why = "the same-type requirement is dropped: `A(x: 1) == B(x: 1)` is accepted for two records of one shape — structural cross-nominal equality"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/operators.rs"
 find = "            BinOp::Eq | BinOp::NotEq => lt == rt && self.res.types().equality(lt).is_ok(),"
 replace = "            BinOp::Eq | BinOp::NotEq => self.res.types().equality(lt).is_ok(),"
 killers = [{ package = "nazm-core", test = "equality", name = "two_types_of_one_shape_are_never_compared" }]
@@ -3782,7 +3782,7 @@ killers = [{ package = "nazm-core", test = "equality", name = "two_types_of_one_
 [[mutation]]
 name = "n13-a-refusal-names-no-component"
 why = "the refusal stops naming the field path that blocks equality, so `Outer` is refused without saying `inner.values` is why"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/operators.rs"
 find = "            let detail = if let Some(why) = blocked.filter(|w| !w.path.is_empty()) {"
 replace = "            let detail = if let Some(why) = blocked.filter(|w| w.path.is_empty()) {"
 killers = [{ package = "nazm-core", test = "equality", name = "a_refusal_names_the_component_that_has_no_equality" }]
@@ -4051,7 +4051,7 @@ killers = [{ package = "nazm-core", test = "constraints", name = "a_required_par
 [[mutation]]
 name = "n14-a-requirement-is-never-recorded"
 why = "the checker reads a requirement and does not record it, so the body it guards is refused"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/declare.rs"
 find = """        res.types_mut().require_equality(TypeParam {
             owner,
             index: u32::try_from(i).unwrap_or(u32::MAX),
@@ -4070,7 +4070,7 @@ killers = [{ package = "nazm-core", test = "constraints", name = "a_requirement_
 [[mutation]]
 name = "n14-any-name-is-a-capability"
 why = "the requirement's name is not checked, so `T: Ord` means `T: Equality`"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/declare.rs"
 find = "        if req.name != EQUALITY {"
 replace = "        if false {"
 killers = [{ package = "nazm-core", test = "constraints", name = "equality_is_the_only_capability_and_only_a_function_may_require_it" }]
@@ -4078,7 +4078,7 @@ killers = [{ package = "nazm-core", test = "constraints", name = "equality_is_th
 [[mutation]]
 name = "n14-a-record-may-require-equality"
 why = "a requirement on a record's or an enum's parameter is accepted and then enforced nowhere"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/declare.rs"
 find = "        if !matches!(owner, ParamOwner::Function(_)) {"
 replace = "        if false {"
 killers = [{ package = "nazm-core", test = "constraints", name = "equality_is_the_only_capability_and_only_a_function_may_require_it" }]
@@ -4086,7 +4086,7 @@ killers = [{ package = "nazm-core", test = "constraints", name = "equality_is_th
 [[mutation]]
 name = "n14-arguments-are-not-checked"
 why = "a call's type arguments are never checked against the requirements, so `same(v, v)` for a `Vec` is accepted"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "            if !self.res.types().requires_equality(param) {"
 replace = "            if true {"
 killers = [{ package = "nazm-core", test = "constraints", name = "a_concrete_argument_without_equality_is_refused_where_it_was_given" }]
@@ -4094,7 +4094,7 @@ killers = [{ package = "nazm-core", test = "constraints", name = "a_concrete_arg
 [[mutation]]
 name = "n14-only-the-first-parameter-is-checked"
 why = "only a call's first type argument is checked against its requirement"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "        for (i, s) in solved.iter().enumerate() {"
 replace = "        for (i, s) in solved.iter().enumerate().take(1) {"
 killers = [{ package = "nazm-core", test = "constraints", name = "every_required_parameter_is_checked_not_only_the_first" }]
@@ -4102,7 +4102,7 @@ killers = [{ package = "nazm-core", test = "constraints", name = "every_required
 [[mutation]]
 name = "n14-a-caller-s-parameter-always-satisfies"
 why = "a generic caller's own parameter is taken to satisfy any requirement, so an unconstrained wrapper forwards to a bounded callee"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = """            let Err(why) = self.res.types().equality(t) else {
                 continue;
             };
@@ -4117,7 +4117,7 @@ killers = [{ package = "nazm-core", test = "constraints", name = "a_generic_call
 [[mutation]]
 name = "n14-written-arguments-bypass-the-requirement"
 why = "a type argument written at the call is not checked, so `same[Box[Vec[Int]]](a, a)` is accepted"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = """            let Some((t, from)) = *s else {
                 continue;
             };"""
@@ -4132,7 +4132,7 @@ killers = [{ package = "nazm-core", test = "constraints", name = "a_written_argu
 [[mutation]]
 name = "n14-inferred-arguments-bypass-the-requirement"
 why = "a type argument inferred from the arguments is not checked — inference bypasses the requirement"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = """            let Some((t, from)) = *s else {
                 continue;
             };"""
@@ -4610,7 +4610,7 @@ killers = [{ package = "nazm-service", test = "references", name = "every_resolv
 [[mutation]]
 name = "n17-a-construction-label-is-no-field-use"
 why = "the checker does not record which field a construction's initialiser names, so a field's references miss every construction that sets it"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/construct.rs"
 find = """            self.res.record_field(
                 f.name_span,
                 FieldRef {
@@ -4691,7 +4691,7 @@ killers = [{ package = "nazm-service", test = "references", name = "the_declarat
 [[mutation]]
 name = "n18-a-written-type-is-not-recorded"
 why = "a record or enum named in a parameter, return, field or type argument is resolved and not recorded, so a type rename misses every annotation"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = """    if let Some(node) = TypeNode::of(t) {
         res.record_type_name(written.name_span, node);
     }"""
@@ -4701,7 +4701,7 @@ killers = [{ package = "nazm-service", test = "rename", name = "a_type_rename_ch
 [[mutation]]
 name = "n18-an-enum-qualifier-is-not-recorded"
 why = "the enum before a variant's `.`, and a construction's head, are resolved and not recorded, so an enum rename misses every qualifier"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = """            if let Some(node) = TypeNode::of(t) {
                 self.res.record_type_name(span, node);
             }"""
@@ -4828,7 +4828,7 @@ killers = [{ package = "nazm-cli", test = "lsp", name = "a_client_that_cannot_ta
 [[mutation]]
 name = "n19-a-let-is-visible-in-its-own-initializer"
 why = "a `let` is recorded as visible from its name, so its own initializer is offered the binding being written instead of the one it reads"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/stmt.rs"
 find = "                self.define(&l.name, ty, l.mutable, Some(l.name_span), slot, l.span.end);"
 replace = "                self.define(&l.name, ty, l.mutable, Some(l.name_span), slot, l.name_span.end);"
 killers = [{ package = "nazm-service", test = "completion", name = "a_binding_is_visible_from_where_the_checker_introduces_it_and_no_earlier" }]
@@ -4888,7 +4888,7 @@ killers = [{ package = "nazm-service", test = "completion", name = "a_type_param
 [[mutation]]
 name = "n19-a-refused-name-is-offered"
 why = "a name the checker refused as an ambiguous import is offered, silently ranking one import over the other"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = "        .filter(|(n, _)| !env.refused.contains(n))"
 replace = "        .filter(|(n, _)| !n.is_empty())"
 killers = [{ package = "nazm-service", test = "completion", name = "an_ambiguous_import_offers_neither_meaning" }]
@@ -4988,7 +4988,7 @@ killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_p
 [[mutation]]
 name = "n20-a-rejected-call-is-not-recorded"
 why = "a call is recorded only when its argument count fits, so a call being written — too few arguments so far — has no signature, though the checker resolved its callee"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/expr.rs"
 find = "                self.record_checked_call(*callee_span, *span, args, &sig, None, false);"
 replace = """                if args.len() == sig.params.len() {
                     self.record_checked_call(*callee_span, *span, args, &sig, None, false);
@@ -4998,7 +4998,7 @@ killers = [{ package = "nazm-service", test = "signature", name = "a_call_the_ch
 [[mutation]]
 name = "n20-written-type-arguments-are-recorded-as-inferred"
 why = "the record of a generic call forgets that its type arguments were written"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "            written: explicit,"
 replace = "            written: false,"
 killers = [{ package = "nazm-service", test = "signature", name = "signature_help_follows_the_resolved_call_not_the_spelling" }]
@@ -5006,7 +5006,7 @@ killers = [{ package = "nazm-service", test = "signature", name = "signature_hel
 [[mutation]]
 name = "n20-inferred-type-arguments-are-discarded"
 why = "the record of a generic call keeps none of the type arguments the checker settled, so its signature is shown uninstantiated"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "            args: solved.iter().map(|s| s.map(|(t, _)| t)).collect(),"
 replace = "            args: solved.iter().map(|_| None).collect(),"
 killers = [{ package = "nazm-service", test = "signature", name = "signature_help_follows_the_resolved_call_not_the_spelling" }]
@@ -5014,7 +5014,7 @@ killers = [{ package = "nazm-service", test = "signature", name = "signature_hel
 [[mutation]]
 name = "n20-the-instantiated-parameters-are-the-declared-ones"
 why = "a generic call's parameters are recorded as declared, so the call shows `x: T` where the checker checked `x: Int`"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "                .map(|p| self.res.types().substituted(*p, owner, &partial))"
 replace = "                .map(|p| Some(*p))"
 killers = [{ package = "nazm-service", test = "signature", name = "signature_help_follows_the_resolved_call_not_the_spelling" }]
@@ -5121,7 +5121,7 @@ killers = [{ package = "nazm-cli", test = "lsp", name = "signature_help_crosses_
 [[mutation]]
 name = "n21-an-unknown-field-is-not-recorded"
 why = "a projection whose field the record lacks records nothing, so completing the name being written has no receiver"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = "            self.res.record_unresolved_member(name_span, base_ty);"
 replace = "            let _ = base_ty;"
 killers = [{ package = "nazm-service", test = "structure", name = "what_does_not_resolve_is_offered_what_its_anchor_has_or_nothing" }]
@@ -5129,7 +5129,7 @@ killers = [{ package = "nazm-service", test = "structure", name = "what_does_not
 [[mutation]]
 name = "n21-an-unknown-variant-is-not-recorded"
 why = "a variant the enum lacks records nothing, so completing the variant being written has no enum"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = "        self.res.record_unresolved_member(at, Type::Enum(id));"
 replace = "        let _ = id;"
 killers = [{ package = "nazm-service", test = "structure", name = "what_does_not_resolve_is_offered_what_its_anchor_has_or_nothing" }]
@@ -5489,7 +5489,7 @@ killers = [{ package = "nazm-service", test = "semantic", name = "a_thousand_edi
 [[mutation]]
 name = "n23-a-built-in-type-is-not-recorded"
 why = "the checker resolves a written built-in type and records nothing, so `Int` and `Str` are never classified"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = "        res.record_written_type(written.name_span, WrittenType::Builtin(t));"
 replace = "        let _ = t;"
 killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
@@ -5497,7 +5497,7 @@ killers = [{ package = "nazm-service", test = "semantic", name = "every_identifi
 [[mutation]]
 name = "n23-a-type-parameter-use-is-not-recorded"
 why = "the checker resolves a written type parameter and records nothing, so its uses are never classified"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = "            res.record_written_type(written.name_span, WrittenType::Param(p));"
 replace = "            let _ = p;"
 killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
@@ -5505,7 +5505,7 @@ killers = [{ package = "nazm-service", test = "semantic", name = "every_identifi
 [[mutation]]
 name = "n23-a-refused-signature-keeps-its-type-parameters"
 why = "a function refused for redefining a built-in keeps the type-parameter uses resolved under the id the next function receives, so they are classified as that function's"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = """            res.forget_type_params_of(ParamOwner::Function(id));
 """
 replace = ""
@@ -5893,7 +5893,7 @@ killers = [{ package = "nazm-service", test = "incomplete", name = "a_bare_paren
 [[mutation]]
 name = "n26-an-ambiguous-name-anchors"
 why = "a probe anchors through a type name the module refused as ambiguous, picking one of two imports' records"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = "        self.res.probing() && self.types.refused.iter().any(|n| n == name)"
 replace = "        self.res.probing() && self.types.refused.iter().any(|n| n == name) && false"
 killers = [{ package = "nazm-service", test = "incomplete", name = "private_and_ambiguous_imports_are_never_anchors" }]
@@ -7962,7 +7962,7 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "authority_pas
 [[mutation]]
 name = "n37-authority-is-a-spelling"
 why = "a binding named `io` is authority whatever its type, so a spelling grants what only a capability value may"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/mod.rs"
 find = "                let Type::Cap(k) = b.ty else { continue };"
 replace = "                let Type::Cap(k) = (if name == \"io\" { Type::Cap(nazm_sema::CapabilityKind::Io) } else { b.ty }) else { continue };"
 killers = [{ package = "nazm-core", test = "capabilities", name = "authority_is_the_bindings_a_name_reaches_and_nothing_else" }]
@@ -7970,7 +7970,7 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "authority_is_
 [[mutation]]
 name = "n37-a-shadowed-capability-is-held"
 why = "a capability hidden by a later binding of its name still counts, so authority no expression can reach is held"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/mod.rs"
 find = "                if !inner.iter().any(|f| f.contains_key(name)) {"
 replace = "                if !inner.is_empty() || inner.is_empty() {"
 killers = [{ package = "nazm-core", test = "capabilities", name = "authority_is_the_bindings_a_name_reaches_and_nothing_else" }]
@@ -7978,7 +7978,7 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "authority_is_
 [[mutation]]
 name = "n37-a-capability-can-be-built"
 why = "building a capability with the record form is not refused, so authority is forged from nothing"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = "                self.errors.push(forged(k, span));"
 replace = "                let _ = forged(k, span);"
 killers = [{ package = "nazm-core", test = "capabilities", name = "nothing_a_program_writes_constructs_a_capability" }]
@@ -7986,7 +7986,7 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "nothing_a_pro
 [[mutation]]
 name = "n37-main-takes-anything"
 why = "a `main` parameter that is not a capability is accepted, so the root of authority takes values the runtime cannot supply"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/mod.rs"
 find = """            if t.is_capability() {
                 continue;
             }"""
@@ -8832,7 +8832,7 @@ killers = [{ package = "nazm-lir", lib = true, name = "backend::tests::a_foreign
 [[mutation]]
 name = "n42-any-abi-is-c"
 why = "an ABI string other than `\"C\"` is accepted, so a declaration promising a calling convention the backends do not implement is called with C's"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/foreign.rs"
 find = '    if d.abi != "C" {'
 replace = '    if d.abi.is_empty() {'
 killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
@@ -8840,7 +8840,7 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outsi
 [[mutation]]
 name = "n42-every-type-is-ffi-safe"
 why = "a `Str`, record, sequence or capability crosses the C boundary, where its layout and ownership mean nothing"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/foreign.rs"
 find = """            (sig.params.iter().all(scalar) && scalar(&sig.ret)).then_some(CrossIn::Callback)
         }
         _ => None,"""
@@ -8852,7 +8852,7 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outsi
 [[mutation]]
 name = "n42-a-symbol-may-start-with-a-digit"
 why = "a symbol no C compiler can define is handed to the linker"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/foreign.rs"
 find = "        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_');"
 replace = "        .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_');"
 killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
@@ -8860,7 +8860,7 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outsi
 [[mutation]]
 name = "n42-a-runtime-symbol-may-be-redeclared"
 why = "a foreign `malloc` or `main` is declared beside the runtime's own, with a signature that may disagree with it"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/foreign.rs"
 find = "    if RESERVED_C_SYMBOLS.contains(&d.symbol.as_str()) {"
 replace = "    if RESERVED_C_SYMBOLS.is_empty() {"
 killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
@@ -8868,7 +8868,7 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outsi
 [[mutation]]
 name = "n42-one-module-may-disagree-with-itself"
 why = "two declarations of one C symbol in a module with different signatures are both accepted, so one of the two calls uses the wrong ABI"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = "                Some((p, r, at)) if (p.as_slice(), *r) != (params.as_slice(), ret) => {"
 replace = "                Some((p, r, at)) if (p.as_slice(), *r) != (p.as_slice(), *r) => {"
 killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
@@ -8884,7 +8884,7 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "two_modules_that_disagr
 [[mutation]]
 name = "n42-a-foreign-function-may-be-generic"
 why = "a generic foreign declaration is accepted, though a C function has one signature and nothing could instantiate it"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/foreign.rs"
 find = """    if let (Some(first), Some(last)) = (f.type_params.first(), f.type_params.last()) {
         errors.push(
             Diagnostic::error(
@@ -9654,7 +9654,7 @@ killers = [{ package = "nazm-cli", test = "usability", name = "logical_operators
 [[mutation]]
 name = "n49-a-logical-operand-may-be-an-int"
 why = "the checker accepts any operands for `&&` and `||`, so `1 && true` reaches Core IR as a branch on an `Int`"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/operators.rs"
 find = "            BinOp::And | BinOp::Or => lt == Type::Bool && rt == Type::Bool,"
 replace = "            BinOp::And | BinOp::Or => true,"
 killers = [{ package = "nazm-cli", test = "usability", name = "a_logical_operand_that_is_not_bool_is_refused" }]
@@ -9732,7 +9732,7 @@ killers = [{ package = "nazm-cli", test = "usability", name = "direct_mutual_gen
 [[mutation]]
 name = "n49-an-import-under-a-name-brings-its-functions-in-anyway"
 why = "an aliased import's exports enter the unqualified namespace too, so `use \"m.nz\" as m;` collides like a plain import and `m::` buys nothing"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = """        if !d.plain {
             continue;
         }
@@ -9743,7 +9743,7 @@ killers = [{ package = "nazm-cli", test = "usability", name = "an_import_under_a
 [[mutation]]
 name = "n49-an-aliased-function-is-held-unqualified"
 why = "an aliased module's functions are held under their bare names, so `m::f` resolves to nothing"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = "                    qualified_key(alias, &e.name),"
 replace = "                    e.name.clone(),"
 killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_resolve_to_the_definitions_an_import_would_and_agree_everywhere" }]
@@ -9751,7 +9751,7 @@ killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_r
 [[mutation]]
 name = "n49-an-aliased-type-is-unreachable"
 why = "an aliased module's records and enums are never held under `alias::Name`, so `g::Point` is no type"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = "                names.insert(qualified_key(alias, &name), offer);"
 replace = "                let _ = (alias, &name, offer);"
 killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_resolve_to_the_definitions_an_import_would_and_agree_everywhere" }]
@@ -9759,7 +9759,7 @@ killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_r
 [[mutation]]
 name = "n49-two-imports-may-share-a-name"
 why = "a second import under an alias already taken is accepted, and which module `g::` means depends on import order"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/unit.rs"
 find = """            let clash = if let Some(first) = alias_at.get(alias) {"""
 replace = """            let clash = if let Some(first) = alias_at.get(alias).filter(|_| false) {"""
 killers = [{ package = "nazm-cli", test = "usability", name = "an_alias_that_already_means_something_is_refused" }]
@@ -9794,7 +9794,7 @@ killers = [{ package = "nazm-cli", test = "usability", name = "the_formatter_glu
 [[mutation]]
 name = "n50-a-mutable-binding-may-be-captured"
 why = "a closure copies a `let mut` binding, which then silently stops tracking it"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/scope.rs"
 find = "        if b.mutable {\n            self.errors.push("
 replace = "        if false {\n            self.errors.push("
 killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_may_not_capture_a_mutable_binding" }]
@@ -9802,7 +9802,7 @@ killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_may_not_
 [[mutation]]
 name = "n50-a-generic-function-is-a-value"
 why = "a generic function is taken as a value, with a type that names its parameters"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/scope.rs"
 find = "        if v.sig.generics > 0 {"
 replace = "        if v.sig.generics > 99 {"
 killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic_nazm_function_is_a_value" }]
@@ -9810,7 +9810,7 @@ killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic
 [[mutation]]
 name = "n50-a-function-value-may-be-named-in-a-generic-body"
 why = "a generic body names a function as a value, whose thunk its instances cannot reach"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/scope.rs"
 find = """
         // own, which could not reach it (N50).
         if !self.type_scope.is_empty() {"""
@@ -9822,7 +9822,7 @@ killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic
 [[mutation]]
 name = "n50-a-closure-may-be-written-in-a-generic-body"
 why = "a closure is accepted inside a generic function, which N50 does not instantiate"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = """
             return expected.unwrap_or(Type::Int);
         };
@@ -10033,7 +10033,7 @@ killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_c
 [[mutation]]
 name = "n50-a-function-types-result-does-not-unify"
 why = "a generic call infers nothing from a function value's result, so `vec_map` cannot learn `U`"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "                    .chain(std::iter::once((fs.ret, asig.ret)))"
 replace = "                    .chain(std::iter::empty())"
 killers = [{ package = "nazm-cli", test = "closures", name = "map_filter_and_fold_work_over_records_and_enums" }]
@@ -10043,7 +10043,7 @@ killers = [{ package = "nazm-cli", test = "closures", name = "map_filter_and_fol
 [[mutation]]
 name = "n51-an-effect-parameter-is-never-bound"
 why = "a call binds nothing to its callee's effect parameter, so a caller is never held to what the function it passes does"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "                        None => *bound = Some((binding, arg)),"
 replace = "                        None => {}"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "a_caller_is_held_to_what_the_function_it_passes_does" }]
@@ -10051,7 +10051,7 @@ killers = [{ package = "nazm-cli", test = "effect_params", name = "a_caller_is_h
 [[mutation]]
 name = "n51-a-second-binding-is-not-compared"
 why = "one effect parameter bound to two different sets in one call is accepted, as the first"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = """
                         Some((earlier, from)) => {
                             return Err(Unify::EffectConflict { earlier, from });
@@ -10063,7 +10063,7 @@ killers = [{ package = "nazm-cli", test = "effect_params", name = "one_parameter
 [[mutation]]
 name = "n51-a-parameters-named-effects-are-no-floor"
 why = "an argument lacking the effects a parameter names beside its effect parameter fits anyway"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "                    if !named.is_within(asig.effects)"
 replace = "                    if false"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "one_parameter_is_one_set_of_effects" }]
@@ -10071,7 +10071,7 @@ killers = [{ package = "nazm-cli", test = "effect_params", name = "one_parameter
 [[mutation]]
 name = "n51-a-result-type-keeps-the-callees-parameter"
 why = "a function type in a call's result still names the callee's effect parameter, so the caller performs a parameter that is not its own"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "                .bind_effects(ret, owner, binding, caller);\n            instance.ret = Some(ret);"
 replace = "                .bind_effects(ret, ParamOwner::Builtin(Intrinsic::StrLen), binding, caller);\n            instance.ret = Some(ret);"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "a_result_type_carries_the_binding" }]
@@ -10079,7 +10079,7 @@ killers = [{ package = "nazm-cli", test = "effect_params", name = "a_result_type
 [[mutation]]
 name = "n51-a-closure-holds-no-captured-authority"
 why = "a closure holds only its own capability parameters, so a captured capability authorises nothing"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/scope.rs"
 find = "        self.scopes.held_from(0)"
 replace = "        self.scopes.held_from(self.closures.last().map_or(0, |c| c.boundary))"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "a_closure_holds_the_capabilities_it_captures" }]
@@ -10087,7 +10087,7 @@ killers = [{ package = "nazm-cli", test = "effect_params", name = "a_closure_hol
 [[mutation]]
 name = "n51-main-may-have-an-effect-parameter"
 why = "the process entry declares an effect parameter nothing can bind"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/mod.rs"
 find = "        .filter(|d| polymorphic(d.declared_effects))"
 replace = "        .filter(|_| false)"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_parameter_is_allowed_only_where_it_means_something" }]
@@ -10095,7 +10095,7 @@ killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_par
 [[mutation]]
 name = "n51-a-second-effect-parameter-is-allowed"
 why = "a function declares two effect parameters, and every set it writes may name either"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/foreign.rs"
 find = "    for extra in f.effect_params.iter().skip(1) {"
 replace = "    for extra in f.effect_params.iter().skip(99) {"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_parameter_is_allowed_only_where_it_means_something" }]
@@ -10103,7 +10103,7 @@ killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_par
 [[mutation]]
 name = "n51-an-effect-parameter-hides-in-a-type-argument"
 why = "an effect parameter named inside a Vec's element makes types that differ only in effects"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = "            .any(|a| res.types().names_effect_param(*a, owner))"
 replace = "            .any(|_| false)"
 killers = [{ package = "nazm-cli", test = "effect_params", name = "an_effect_parameter_is_allowed_only_where_it_means_something" }]
@@ -10324,7 +10324,7 @@ killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_chang
 [[mutation]]
 name = "n53-any-element-may-cross"
 why = "a channel of storage shared with its maker is accepted, so a task holds what another frees"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "    let why = types.task_safety(elem).err()?;"
 replace = "    let why = types.task_safety(elem).err().filter(|_| false)?;"
 killers = [{ package = "nazm-cli", test = "generic_channels", name = "an_element_that_cannot_cross_into_a_task_is_refused" }]
@@ -10332,7 +10332,7 @@ killers = [{ package = "nazm-cli", test = "generic_channels", name = "an_element
 [[mutation]]
 name = "n53-a-made-channel-is-not-checked"
 why = "`chan_new_of[Ints]` makes a channel nothing written ever checked"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "        if owner == ParamOwner::Builtin(Intrinsic::ChanNewOf) {"
 replace = "        if owner == ParamOwner::Builtin(Intrinsic::ChanCloseOf) {"
 killers = [{ package = "nazm-cli", test = "generic_channels", name = "an_element_that_cannot_cross_into_a_task_is_refused" }]
@@ -10340,7 +10340,7 @@ killers = [{ package = "nazm-cli", test = "generic_channels", name = "an_element
 [[mutation]]
 name = "n53-a-channel-type-unifies-with-a-vec"
 why = "a generic call accepts a `Vec[T]` where a `Chan[T]` is formal"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "                let (Type::ChanOf(_), Some(fe), Some(ae)) = ("
 replace = "                let (Type::ChanOf(_) | Type::Vec(_), Some(fe), Some(ae)) = ("
 killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_typed_channel_carries_only_its_element" }]
@@ -10687,7 +10687,7 @@ killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_str_crosses_into_c
 [[mutation]]
 name = "n55-an-export-may-be-private"
 why = "an export need not be pub, so a module's private function becomes a C symbol"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/foreign.rs"
 find = """
     if f.pub_span.is_none() {
         errors.push(shape("""
@@ -10699,7 +10699,7 @@ killers = [{ package = "nazm-cli", test = "ffi_v2", name = "an_export_is_public_
 [[mutation]]
 name = "n55-an-export-may-perform-effects"
 why = "an export may declare io, an authority C has no way to give it"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/foreign.rs"
 find = "        Some(e) if e.names.is_empty() => {}"
 replace = "        Some(_) => {}"
 killers = [{ package = "nazm-cli", test = "ffi_v2", name = "an_export_is_public_effect_free_scalar_and_not_generic" }]
@@ -12405,7 +12405,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "two_impls_of_one_tra
 [[mutation]]
 name = "n78-orphans-are-welcome"
 why = "an impl may live in a module declaring neither the trait nor the type, so two unrelated modules can each supply one"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/traits.rs"
 find = '    if tr.module != unit.module && home != Some(unit.module) {'
 replace = '    if false && tr.module != unit.module && home != Some(unit.module) {'
 killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_in_a_third_module_is_an_orphan" }]
@@ -12413,7 +12413,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_in_a_third_m
 [[mutation]]
 name = "n78-an-impl-may-skip-a-method"
 why = "an impl that leaves out a trait method is accepted, so a call through a bound reaches nothing"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/traits.rs"
 find = """
         .map(|(m, _)| m.name.as_str())
         .collect();
@@ -12427,7 +12427,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_must_define_
 [[mutation]]
 name = "n78-an-impl-signature-is-unchecked"
 why = "an impl method's parameters, result and effects are not held to the trait's, so a call through a bound passes the wrong values"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/traits.rs"
 find = """
         if def.params != params
             || def.ret != ret
@@ -12443,7 +12443,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_must_define_
 [[mutation]]
 name = "n78-an-impl-for-any-type"
 why = "an impl is accepted for a `Vec`, a channel or a capability, whose values carry no type a call could dispatch on"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/traits.rs"
 find = '        _ => Err("a built-in type other than `Int`, `Bool` or `Str`"),'
 replace = '        _ => Ok(None),'
 killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_for_a_type_that_cannot_have_one_is_refused" }]
@@ -12451,7 +12451,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_for_a_type_t
 [[mutation]]
 name = "n78-ambiguity-picks-the-first"
 why = "a method two traits in scope provide is resolved to whichever the table yields first"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = '            [one] => Ok(*one),'
 replace = '            [one, ..] => Ok(*one),'
 killers = [{ package = "nazm-cli", test = "traits", name = "a_method_no_trait_in_scope_gives_is_refused_and_two_are_ambiguous" }]
@@ -12459,7 +12459,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "a_method_no_trait_in
 [[mutation]]
 name = "n78-an-impl-is-used-from-anywhere"
 why = "an impl in a module the caller does not import resolves its calls, so a cached check depends on a module outside its key"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = """
                 .is_some_and(|d| self.impl_modules.contains(&d.module));
             if in_scope && usable {"""
@@ -12495,7 +12495,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "a_call_through_a_bou
 [[mutation]]
 name = "n78-a-bound-gives-no-methods"
 why = "a type parameter's bound is not consulted, so a generic body cannot call its trait's methods"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = '            let bound = self.res.traits().bound_of(p);'
 replace = '            let bound = { let _ = p; None::<TraitId> };'
 killers = [{ package = "nazm-cli", test = "traits", name = "a_method_takes_arguments_and_returns_any_type" }]
@@ -12503,7 +12503,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "a_method_takes_argum
 [[mutation]]
 name = "n78-a-bound-is-never-checked"
 why = "a generic call's type argument is not held to its trait bound, so a type with no impl reaches a call through it"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = '                if !satisfied {'
 replace = '                if false && !satisfied {'
 killers = [{ package = "nazm-cli", test = "traits", name = "a_bound_is_satisfied_by_an_impl_in_scope_or_by_the_same_bound_and_nothing_else" }]
@@ -12535,7 +12535,7 @@ killers = [{ package = "nazm-core", test = "core_ir", name = "the_printed_form_i
 [[mutation]]
 name = "n78-a-trait-is-a-type"
 why = "a trait written where a type is expected is reported as an unknown type, hiding that there are no trait objects"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/written.rs"
 find = '    if let Some((_, t)) = res.traits().iter().find(|(_, t)| t.name == bare) {'
 replace = '    if let Some((_, t)) = res.traits().iter().find(|(_, t)| t.name == bare && false) {'
 killers = [{ package = "nazm-cli", test = "traits", name = "a_trait_is_not_a_type_and_a_method_is_not_a_value" }]
@@ -12543,7 +12543,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "a_trait_is_not_a_typ
 [[mutation]]
 name = "n78-a-method-is-a-field"
 why = "`x.show` without a call is reported as a missing field, hiding that methods are not values"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/pattern.rs"
 find = '        if !is_field && a_method {'
 replace = '        if false && !is_field && a_method {'
 killers = [{ package = "nazm-cli", test = "traits", name = "a_trait_is_not_a_type_and_a_method_is_not_a_value" }]
@@ -12551,7 +12551,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "a_trait_is_not_a_typ
 [[mutation]]
 name = "n78-a-variant-call-becomes-a-method"
 why = "`E.A()` is read as a method call when a trait in scope has a method `A`, changing a program that checked before"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = '        let enum_visible = matches!(self.types.names.get(&key), Some(Type::Enum(_)));'
 replace = '        let enum_visible = { let _ = &key; false };'
 killers = [{ package = "nazm-cli", test = "traits", name = "an_enum_keeps_its_variant_calls_beside_an_imported_trait_of_its_name" }]
@@ -12592,7 +12592,7 @@ killers = [{ package = "nazm-cli", test = "authority", name = "main_may_hold_onl
 [[mutation]]
 name = "n79-an-out-cap-widens"
 why = "any capability is accepted for any other, so an `OutCap` stands in for an `IoCap` and reaches files"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = "            (Type::Cap(g), Type::Cap(w)) => nazm_sema::CapabilitySet::of(g).implied().contains(w),"
 replace = "            (Type::Cap(_g), Type::Cap(_w)) => true,"
 killers = [{ package = "nazm-cli", test = "authority", name = "an_io_cap_is_accepted_for_an_out_cap_and_never_the_reverse" }]
@@ -12600,7 +12600,7 @@ killers = [{ package = "nazm-cli", test = "authority", name = "an_io_cap_is_acce
 [[mutation]]
 name = "n79-no-attenuation-by-passing"
 why = "an `IoCap` is refused where an `OutCap` is expected, so the only way to make an `OutCap` is gone"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = "            (Type::Cap(g), Type::Cap(w)) => nazm_sema::CapabilitySet::of(g).implied().contains(w),"
 replace = "            (Type::Cap(_g), Type::Cap(_w)) => false,"
 killers = [{ package = "nazm-cli", test = "authority", name = "an_out_cap_prints_and_authorises_nothing_else" }]
@@ -12608,7 +12608,7 @@ killers = [{ package = "nazm-cli", test = "authority", name = "an_out_cap_prints
 [[mutation]]
 name = "n79-more-effects-subsume"
 why = "a function value with more effects than expected is accepted, so a call through it performs an effect its type does not allow"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = "                    && gs.effects.without(ws.effects).is_empty()"
 replace = "                    && true"
 killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_with_more_effects_is_refused" }]
@@ -12616,7 +12616,7 @@ killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_
 [[mutation]]
 name = "n79-no-effect-subsumption"
 why = "a function value with fewer effects is refused where more are allowed, as before N79"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = "                    && gs.effects.without(ws.effects).is_empty()"
 replace = "                    && gs.effects == ws.effects"
 killers = [{ package = "nazm-cli", test = "authority", name = "a_function_value_with_fewer_effects_is_accepted_passed_or_returned" }]
@@ -13097,7 +13097,7 @@ killers = [{ package = "nazm-cli", test = "stdlib_1_0", name = "every_public_sta
 [[mutation]]
 name = "n85-a-handle-is-built"
 why = "a program builds an opaque handle out of an `Int`, a pointer C never gave it"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/construct.rs"
 find = """            .is_some_and(|d| d.repr == CRepr::Opaque)
         {
             for f in fields {
@@ -13185,7 +13185,7 @@ killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_struct_passed_to_c
 [[mutation]]
 name = "n85-any-function-is-a-callback"
 why = "a function that is not an export is accepted as a callback, though it has no C entry for C to call"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = "                .is_some_and(|d| d.export.is_some());"
 replace = "                .is_some();"
 killers = [{ package = "nazm-cli", test = "ffi_v3", name = "every_misuse_of_a_handle_a_c_struct_or_a_callback_is_refused_by_its_code" }]
@@ -13301,7 +13301,7 @@ killers = [{ package = "nazm-cli", test = "contracts", name = "a_clause_that_its
 [[mutation]]
 name = "n87-a-refuted-call-is-accepted"
 why = "a call of literals that breaks its callee's precondition compiles, and fails every time it runs"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/call.rs"
 find = "                Some(Lit::Bool(false)) => {"
 replace = "                Some(Lit::Bool(false)) if false => {"
 killers = [{ package = "nazm-cli", test = "contracts", name = "a_call_of_literals_is_proved_or_refused_at_compile_time" }]
@@ -13317,7 +13317,7 @@ killers = [{ package = "nazm-cli", test = "contracts", name = "a_call_of_literal
 [[mutation]]
 name = "n87-any-call-is-pure"
 why = "a contract clause may call any function, so evaluating it may perform an effect or allocate"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/function.rs"
 find = "                    .is_some_and(|v| v.sig.pure);"
 replace = "                    .is_some();"
 killers = [{ package = "nazm-cli", test = "contracts", name = "a_clause_is_only_what_cannot_fail_for_want_of_authority_or_memory" }]
@@ -13735,7 +13735,7 @@ killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_c
 [[mutation]]
 name = "n103-a-reexport-is-a-second-identity"
 why = "a re-exported function's identity is the re-exporting module's, so one definition answers under two identities — in a reference, a rename, a persisted interface"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/reexport.rs"
 find = "                    offered.origin = Some((from, e.name.clone()));"
 replace = "                    offered.origin = Some((module, c.offered.clone()));"
 killers = [{ package = "nazm-cli", test = "reexports", name = "the_persisted_interface_names_the_defining_identity_and_suffices_alone" }]
@@ -13743,7 +13743,7 @@ killers = [{ package = "nazm-cli", test = "reexports", name = "the_persisted_int
 [[mutation]]
 name = "n103-an-unknown-reexport-is-accepted"
 why = "a re-export of a name the module does not offer is silently dropped instead of refused (`N0211`)"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/reexport.rs"
 find = """        if function.is_none() && ty.is_none() && tr.is_none() {
             if full {"""
 replace = """        if function.is_none() && ty.is_none() && tr.is_none() {
@@ -13753,7 +13753,7 @@ killers = [{ package = "nazm-cli", test = "reexports", name = "what_a_reexport_m
 [[mutation]]
 name = "n103-a-reexported-name-may-collide"
 why = "a re-exported function whose name the module already offers is not refused (`N0212`), so which definition the name means depends on order"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/reexport.rs"
 find = """                if taken_fn {
                     errors.push(taken(&c.offered, c.at));"""
 replace = """                if false {
@@ -13763,7 +13763,7 @@ killers = [{ package = "nazm-cli", test = "reexports", name = "what_a_reexport_m
 [[mutation]]
 name = "n103-a-reexport-cycle-is-silent"
 why = "modules re-exporting from each other in a cycle are not refused (`N0213`): what they offer is simply missing"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/reexport.rs"
 find = """    if full {
         for (n, u) in units.iter().enumerate() {
             if done.get(n).copied().unwrap_or(true) {"""
@@ -13775,7 +13775,7 @@ killers = [{ package = "nazm-cli", test = "reexports", name = "what_a_reexport_m
 [[mutation]]
 name = "n103-impls-do-not-follow-reexports"
 why = "an impl in a module re-exported from is not in scope where the re-exporting module is imported, so a method call through the facade fails"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/traits.rs"
 find = "        work.extend(res.traits().reexport_sources(m));"
 replace = "        let _ = res.traits().reexport_sources(m);"
 killers = [{ package = "nazm-cli", test = "reexports", name = "a_reexport_offers_the_same_definition_under_its_names" }]
@@ -13872,7 +13872,7 @@ killers = [{ package = "nazm-cli", test = "authority", name = "an_io_cap_given_f
 [[mutation]]
 name = "n104-a-generic-call-takes-no-attenuation"
 why = "a generic call compares a concrete parameter exactly, so a generic function cannot be handed an `IoCap` for its `OutCap`"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = """                // As a monomorphic call's argument is (N79, N104): an attenuation is accepted.
                 if !self.assignable(got, want) {"""
 replace = """                // As a monomorphic call's argument is (N79, N104): an attenuation is accepted.
@@ -14079,7 +14079,7 @@ killers = [{ package = "nazm-cli", test = "ecosystem", name = "every_command_has
 [[mutation]]
 name = "g1c1-a-capture-is-not-checked"
 why = "a closure may capture a `Vec[fn() -> Int]`, so a closure stored into the vector it captured owns itself and is never reclaimed"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/scope.rs"
 find = "        if first_capture {\n            if let Some(holder) = self.res.types().function_holder(b.ty) {"
 replace = "        if false && first_capture {\n            if let Some(holder) = self.res.types().function_holder(b.ty) {"
 killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape" }, { package = "nazm-cli", test = "compat_v1", name = "every_refusal_case_is_refused_with_its_code_and_not_built" }]
@@ -14087,7 +14087,7 @@ killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_capturin
 [[mutation]]
 name = "g1c1-only-a-later-use-is-checked"
 why = "the check runs where a captured name is used again rather than where it is first captured, so a closure naming the container once escapes it"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/scope.rs"
 find = ".is_some_and(|c| !c.captured.contains_key(&b.slot));"
 replace = ".is_some_and(|c| c.captured.contains_key(&b.slot));"
 killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape" }]
@@ -14161,7 +14161,7 @@ killers = [{ package = "nazm-cli", test = "numbers", name = "float_comparison_is
 [[mutation]]
 name = "g2-a-literal-is-always-an-int"
 why = "an integer literal ignores the type expected where it is written, so `m & 0xFF` with `m: UInt32` mixes two types and `UInt8(256)` is converted at run time instead of refused"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/operators.rs"
 find = "            Some(k) if k.is_integer() => Type::of_num(k),"
 replace = "            Some(k) if k.is_integer() && false => Type::of_num(k),"
 killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_refused_before_anything_runs" }, { package = "nazm-cli", test = "numbers", name = "bit_operations_shifts_rotations_and_counts" }]
@@ -14169,7 +14169,7 @@ killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_r
 [[mutation]]
 name = "g2-numbers-of-two-types-combine"
 why = "arithmetic accepts two different numeric types, the implicit conversion the language does not have"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/operators.rs"
 find = """                lt == rt && lt.num().is_some()
             }"""
 replace = """                lt.num().is_some() && rt.num().is_some()
@@ -14211,7 +14211,7 @@ killers = [{ package = "nazm-cli", test = "numbers", name = "wrapping_and_satura
 [[mutation]]
 name = "g2-a-constant-shift-is-accepted"
 why = "a shift by a constant outside `0..width` is accepted, a program that fails every time it runs"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/operators.rs"
 find = "        if n < 0 || n >= i128::from(k.bits()) {"
 replace = "        if false {"
 killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_refused_before_anything_runs" }]
@@ -14235,7 +14235,7 @@ killers = [{ package = "nazm-cli", test = "numbers", name = "every_integer_failu
 [[mutation]]
 name = "g2-a-built-in-ignores-its-class"
 why = "a generic numeric built-in accepts a type outside its class, so `count_ones(1.5)` checks"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/generic.rs"
 find = "                if !class.admits(t) {"
 replace = "                if false {"
 killers = [{ package = "nazm-cli", test = "numbers", name = "numeric_misuse_is_refused_before_anything_runs" }]
@@ -14322,7 +14322,7 @@ killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_m
 [[mutation]]
 name = "g2-a-constant-index-at-the-length-is-accepted"
 why = "a constant index equal to the length checks, and is left to trap at run time"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/operators.rs"
 find = "            if i < 0 || i >= i128::from(n) {"
 replace = "            if i < 0 || i > i128::from(n) {"
 killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]
@@ -14434,7 +14434,7 @@ killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by
 [[mutation]]
 name = "g2-a-literal-is-never-text"
 why = "a string literal stays a `Str` where a `Text` is expected"
-file = "crates/nazm-core/src/check.rs"
+file = "crates/nazm-core/src/check/expr.rs"
 find = "            Expr::Str { span, .. } if expected == Some(Type::Text) => {"
 replace = "            Expr::Str { span, .. } if false && expected == Some(Type::Text) => {"
 killers = [{ package = "nazm-cli", test = "bytes_text", name = "text_iterates_by_scalar_value_and_cuts_only_at_boundaries" }]
