@@ -273,5 +273,16 @@ disposition), **corrected** (documentation).
 
 Each fix has a focused mutant (`xtask/mutations/mutations.toml`, `q1-*`, 21) and four older
 mutants were repointed; the reaper's `ps` probe has none because the contained runner is root, for
-whom the `kill -0` it replaced also answers "alive" (the host test holds it). The campaign over the
-Q1 mutants, Gate 2's 38 and the entries Gate 2 and Q1 repointed is recorded in the Q1 report.
+whom the `kill -0` it replaced also answers "alive" (the host test holds it).
+
+The contained campaign over the 21 `q1-*` entries, Gate 2's 38 never campaigned (Q1-D-03) and the
+15 Gate 2 and Q1 repointed — 74, every killer verified pristine-passes, mutant-fails,
+restored-passes — caught **73 at tier 1**; none survived. On the way it found three faults in its
+own evidence, each fixed: `q1-an-unsigned-product-may-pass-i128` was an equivalent mutant (a wrapped
+unsigned product in `i128` is always negative, so still an overflow) — it now restores the
+panicking `x * y`; the far-deadline test was clock- and race-dependent, and the defect's only
+symptom on Linux is a spinning worker with a right answer — the test now measures CPU; Gate 2's
+view-reclamation test read freed memory that still held its byte — it now scribbles freed memory.
+`g2-a-view-does-not-keep-its-buffer` stays uncaught: a contained probe found no difference in output
+or memory counts with the retain removed, so either another path holds the buffer (an equivalent
+mutant) or the counters cannot see it. It is Gate 2's, and Gate 2's contained gate owes its verdict.
