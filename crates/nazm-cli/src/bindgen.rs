@@ -423,7 +423,7 @@ pub(crate) fn run(header: &Path, out: Option<&Path>) -> ExitCode {
         Some(path) => {
             if let Err(e) = std::fs::write(path, &module) {
                 eprintln!("nazm: cannot write {}: {e}", path.display());
-                return ExitCode::from(exit::NO_SUCH_FILE);
+                return ExitCode::from(exit::TOOLCHAIN_FAILED);
             }
             println!("{report}");
         }

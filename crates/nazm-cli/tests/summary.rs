@@ -258,7 +258,7 @@ fn a_build_summary_is_the_builds_outcome_and_absence_of_diagnostics_is_not_succe
         &["build", "--summary-json", "main.nz", "-o", "main.nz"],
     );
     assert_eq!(code, plain.code);
-    assert_eq!(code, Some(4));
+    assert_eq!(code, Some(1));
     assert_eq!(s["status"], "refused");
     assert_eq!(s["diagnostics"], serde_json::json!([]));
     assert_eq!(
@@ -278,7 +278,7 @@ fn ambiguous_flags_are_refused_and_the_existing_outputs_are_unchanged() {
         &["test", "--summary-json", "--json", "main.nz"],
     ] {
         let r = nazm(dir.path(), args);
-        assert_eq!(r.code, Some(2), "{args:?}: {}", r.stderr);
+        assert_eq!(r.code, Some(5), "{args:?}: {}", r.stderr);
         assert_eq!(r.stdout, "", "{args:?}");
     }
     // `--json` is what it was: nazm.diagnostic/1 on stderr, one per line, nothing on stdout.

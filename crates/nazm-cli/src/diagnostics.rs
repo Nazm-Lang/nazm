@@ -52,7 +52,7 @@ pub(crate) fn run(
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm diagnostics: {e}");
-            return ExitCode::from(2);
+            return ExitCode::from(crate::exit::TOOLCHAIN_FAILED);
         }
     };
     let text = if json {

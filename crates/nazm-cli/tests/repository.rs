@@ -160,7 +160,7 @@ fn an_ambiguous_request_is_refused_by_the_parser() {
         ],
     ] {
         let r = nazm(&args);
-        assert_eq!(r.code, Some(2), "{args:?}");
+        assert_eq!(r.code, Some(5), "{args:?}");
         assert_eq!(r.stdout, "", "{args:?}");
     }
 }

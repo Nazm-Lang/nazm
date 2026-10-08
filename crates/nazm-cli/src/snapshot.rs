@@ -28,7 +28,7 @@ pub(crate) fn snapshot(root: &Path, json: bool, source_root: Option<&Path>) -> E
         }
         Err(e) => {
             eprintln!("nazm snapshot: {e}");
-            ExitCode::from(2)
+            ExitCode::from(crate::exit::TOOLCHAIN_FAILED)
         }
     }
 }
@@ -46,7 +46,7 @@ pub(crate) fn delta(
         Ok(t) => t,
         Err(e) => {
             eprintln!("nazm delta: {}: {e}", baseline.display());
-            return ExitCode::from(2);
+            return ExitCode::from(crate::exit::NO_SUCH_FILE);
         }
     };
     let answered = match serde_json::from_str::<serde_json::Value>(&text) {
@@ -65,7 +65,7 @@ pub(crate) fn delta(
         }
         Err(e) => {
             eprintln!("nazm delta: {e}");
-            ExitCode::from(2)
+            ExitCode::from(crate::exit::TOOLCHAIN_FAILED)
         }
     }
 }

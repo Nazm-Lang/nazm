@@ -186,7 +186,7 @@ fn a_riscv_board_is_built_where_clang_can_and_refused_by_name_where_it_cannot() 
             "prog.nz",
         ],
     );
-    assert_eq!(c.status.code(), Some(4));
+    assert_eq!(c.status.code(), Some(5));
     assert!(
         err(&c).contains("`--backend cranelift` builds no freestanding target"),
         "{}",

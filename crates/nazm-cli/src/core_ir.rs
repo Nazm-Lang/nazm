@@ -17,14 +17,14 @@ pub(crate) fn run(path: &Path, compact: bool, spans: bool, declared: Option<&Pat
         Ok(r) => r,
         Err(e) => {
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::root_status(&e));
         }
     };
     let loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(crate::exit::load_status(&diagnostics));
         }
     };
     // As a module: a library with no `main` has Core IR too, and prints with no entry.

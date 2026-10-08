@@ -23,13 +23,13 @@ fn units(
 ) -> Result<(Vec<ResolvedUnit>, usize, usize), ExitCode> {
     let source_root = root::decide(file, declared).map_err(|e| {
         eprintln!("nazm: {e}");
-        ExitCode::from(exit::NO_SUCH_FILE)
+        ExitCode::from(exit::root_status(&e))
     })?;
     let loaded = match load::load(file, source_root.path()) {
         Ok(l) => l,
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, json);
-            return Err(ExitCode::from(exit::NO_SUCH_FILE));
+            return Err(ExitCode::from(exit::load_status(&diagnostics)));
         }
     };
     let map = &loaded.map;
