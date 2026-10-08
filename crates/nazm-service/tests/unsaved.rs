@@ -11,19 +11,11 @@
 
 use std::path::PathBuf;
 
-use nazm_core::__syntax::{EditError, TextEdit, PARSE_STACK_BYTES};
+use nazm_core::__syntax::{EditError, TextEdit};
 use nazm_service::{LanguageService, Published};
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
+mod common;
+use common::on_the_service_stack;
 
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();

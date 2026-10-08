@@ -13,49 +13,14 @@
     clippy::cast_possible_truncation
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_service::patch::digest;
 use nazm_service::LanguageService;
 use serde_json::{json, Value};
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
-
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (name, text) in files {
-            std::fs::write(dir.path().join(name), text).unwrap();
-        }
-        Self { dir }
-    }
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
-    }
-    fn root(&self) -> PathBuf {
-        self.path("main.nz")
-    }
-    fn read(&self, name: &str) -> String {
-        std::fs::read_to_string(self.path(name)).unwrap()
-    }
-    fn write(&self, name: &str, text: &str) {
-        std::fs::write(self.path(name), text).unwrap();
-    }
-}
+mod common;
+use common::{on_the_service_stack, Project};
 
 enum Ask<'a> {
     Rename(&'a str),

@@ -12,19 +12,10 @@
     clippy::indexing_slicing
 )]
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_service::LanguageService;
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
+mod common;
+use common::on_the_service_stack;
 
 const SRC: &str = "fn main() -> Int {\n    let step = 3;\n    \
                    let f = fn(x: Int) -> Int { x + step };\n    \

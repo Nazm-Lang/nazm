@@ -14,46 +14,13 @@
 
 use std::path::{Path, PathBuf};
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_diag::codes;
 use nazm_service::{Definition, LanguageService, Published, Target};
 
+mod common;
+use common::{on_the_service_stack, walk, workspace, Project};
+
 /// Run `f` on the stack the service documents as its requirement.
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
-
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (name, text) in files {
-            let p = dir.path().join(name);
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(p, text).unwrap();
-        }
-        Self { dir }
-    }
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
-    }
-    fn disk(&self, name: &str) -> String {
-        std::fs::read_to_string(self.path(name)).unwrap()
-    }
-}
-
 fn same_file(a: &Path, b: &Path) -> bool {
     a.canonicalize().ok() == b.canonicalize().ok()
 }
@@ -119,7 +86,7 @@ fn an_open_buffer_is_read_instead_of_the_file_on_disk() {
 fn an_unsaved_dependency_is_what_its_importer_sees() {
     let p = Project::new(&[("lib.nz", LIB), ("main.nz", MAIN)]);
     let (lib, main) = (p.path("lib.nz"), p.path("main.nz"));
-    let disk_lib = p.disk("lib.nz");
+    let disk_lib = p.read("lib.nz");
     on_the_service_stack(move || {
         let mut s = LanguageService::new();
         let out = s.open(&main, 1, MAIN.into());
@@ -229,7 +196,7 @@ fn an_import_that_names_nothing_is_reported_and_an_unsaved_one_resolves() {
     let (main, fresh) = (p.path("main.nz"), p.path("new.nz"));
     on_the_service_stack(move || {
         let mut s = LanguageService::new();
-        let text = p.disk("main.nz");
+        let text = p.read("main.nz");
         let out = s.open(&main, 1, text.clone());
         assert!(
             codes_of(for_path(&out, &main)).contains(&codes::MODULE_NOT_FOUND.to_string()),
@@ -540,14 +507,6 @@ fn a_name_inside_a_malformed_region_has_no_definition() {
 // The compiler's answers, not the service's.
 // ---------------------------------------------------------------------------------------
 
-fn workspace() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .to_path_buf()
-}
-
 #[test]
 fn the_services_diagnostics_are_the_command_lines() {
     // For every multi-module conformance program and every example, the service opened
@@ -589,23 +548,6 @@ fn the_services_diagnostics_are_the_command_lines() {
             assert_eq!(service, cli, "{}", path.display());
         }
     });
-}
-
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            out.extend(walk(&p));
-        } else if p.extension().is_some_and(|x| x == "nz") {
-            out.push(p);
-        }
-    }
-    out.sort();
-    out
 }
 
 // ---------------------------------------------------------------------------------------

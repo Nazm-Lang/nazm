@@ -13,33 +13,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_core::sema::EffectSet;
 
-fn workspace() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .to_path_buf()
-}
-
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    let mut entries: Vec<PathBuf> = entries.map(|e| e.unwrap().path()).collect();
-    entries.sort();
-    for e in entries {
-        if e.is_dir() {
-            out.extend(walk(&e));
-        } else if e.extension().is_some_and(|x| x == "nz") {
-            out.push(e);
-        }
-    }
-    out
-}
+mod common;
+use common::{on_the_service_stack, walk, workspace};
 
 /// Every root the tree compiles: the compiler's, each multi-module conformance program's,
 /// each example and each benchmark program.
@@ -116,17 +93,6 @@ fn census(path: &Path) -> Option<Census> {
         holding,
         effect_diagnostics,
         micros,
-    })
-}
-
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
     })
 }
 

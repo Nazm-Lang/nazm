@@ -11,49 +11,13 @@
     clippy::indexing_slicing
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use nazm_core::__syntax::PARSE_STACK_BYTES;
 use nazm_service::LanguageService;
 use serde_json::{json, Value};
 
-fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(PARSE_STACK_BYTES)
-            .spawn_scoped(scope, f)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    })
-}
-
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (name, text) in files {
-            let path = dir.path().join(name);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(path, text).unwrap();
-        }
-        Self { dir }
-    }
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
-    }
-    fn write(&self, name: &str, text: &str) {
-        std::fs::write(self.path(name), text).unwrap();
-    }
-    fn root(&self) -> PathBuf {
-        self.path("main.nz")
-    }
-}
+mod common;
+use common::{on_the_service_stack, Project};
 
 fn snapshot_json(root: &Path) -> String {
     let root = root.to_path_buf();
