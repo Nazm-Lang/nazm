@@ -41,7 +41,11 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 2,560 passed, 0 failed, 65 ignored** across 203 test binaries, run contained at
+**Current suite: 2,570 passed, 0 failed, 69 ignored** across 205 test binaries, run contained at
+`869ddcd` (Q1-C1, 2026-10-08: the v1 exit contract frozen — 0–5, `docs/stability.md`; the four new
+ignored tests are the macOS-only host-refusal tests; `target/gates/q1c1/contained-tests.log`),
+selfhost 43 of 43 with the bootstrap fixpoint. *Before Q1-C1:* 2,560 passed, 0 failed, 65 ignored
+across 203 test binaries, run contained at
 `f043087` (Q1 of the v4 programme, 2026-10-08; toolchain 1.0.0, semantic epoch 34, runtime ABI 15,
 check entries `nazm.check/5`, not yet a release candidate; `target/gates/q1/contained-tests.log`),
 selfhost 43 of 43 with the bootstrap chain's fixpoint test passing. Over M1: Q1's fixes and their
