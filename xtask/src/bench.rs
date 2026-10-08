@@ -48,12 +48,6 @@ const TOLERANCE: f64 = 0.25;
 /// that does not pay process start-up per sample, which this is not.
 const FLOOR_MS: f64 = 5.0;
 
-pub(crate) fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
-}
-
 /// Where cargo actually put its artefacts.
 ///
 /// `$root/target` is only right when nobody redirected it. The contained runner mounts
@@ -73,7 +67,7 @@ pub(crate) fn bench_dir(root: &Path) -> PathBuf {
 }
 
 pub(crate) fn target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), PathBuf::from)
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| crate::guide::root().join("target"), PathBuf::from)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,7 +283,7 @@ fn measure(
 }
 
 pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
-    let root = root();
+    let root = crate::guide::root();
     let nazm = target_dir().join("release/nazm");
     if !nazm.exists() {
         eprintln!(

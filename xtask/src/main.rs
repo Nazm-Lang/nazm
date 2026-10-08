@@ -47,7 +47,7 @@ fn main() -> ExitCode {
         Some("check-mutations") => report(&[("mutations apply", check_mutations_apply())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("check-corpus") => report(&[("docs corpus", check_docs_corpus())]),
-        Some("check-claims") => report(&[("performance claims", claims::check(&bench::root()))]),
+        Some("check-claims") => report(&[("performance claims", claims::check(&guide::root()))]),
         // N32-H3: the workspace suite, built by Cargo and scheduled longest first.
         Some("workspace-tests") => {
             let rest: Vec<String> = args.collect();
@@ -237,7 +237,7 @@ fn run_checks() -> ExitCode {
         ("mutations apply", check_mutations_apply()),
         ("guide from grammar", guide::check()),
         ("docs corpus", check_docs_corpus()),
-        ("performance claims", claims::check(&bench::root())),
+        ("performance claims", claims::check(&guide::root())),
         ("agent governance", governance::check(&guide::root())),
         ("dependency sources", supply::check(&guide::root())),
     ])
