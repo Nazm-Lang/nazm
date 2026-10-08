@@ -344,3 +344,20 @@ lays out a file that lexes but does not parse, as its documented guarantee allow
 **Fuzzing**: the `run` target counts an input still running after two seconds as a hang and does
 not keep it; such inputs are programs that block, which Nazm does not promise against, but they are
 not preserved for triage (Q1-F-01).
+
+## Carried from M2-Core (2026-10-09)
+
+M2-Core moved code without changing it; its mutation campaign over the moved entries found three
+catalogue entries the contained runner cannot decide. Each predates M2 and is carried, counted
+neither caught nor survived:
+
+- `n85-a-shared-library-is-an-archive`: its one killer is ignored off macOS (`tests/ffi_v3.rs`,
+  since N85), so the Linux runner refuses the entry. Needs a Linux killer.
+- `n86-clang-is-not-asked`: the mutation only matters on a host whose `clang` has no RISC-V code
+  generator; the runner's has one, so there the mutant is equivalent. A host probe on macOS catches
+  it (`target/gates/m2/probe-n86-host.txt`). Needs a killer that makes the refusal observable
+  wherever it runs.
+- `an-inline-containment-cycle-is-not-refused`: its killer (`tests/enums.rs`) does not fail on the
+  mutant, it runs without end — 300 s on the host, an exit with no result at about 140 s in the
+  runner — so the verdict is a runner error, not a catch (`target/gates/m2/probe-inline-cycle-host.txt`).
+  Before M2 a tier-2 test caught it. Needs a killer with its own bound.

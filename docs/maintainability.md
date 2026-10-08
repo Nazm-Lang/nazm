@@ -410,3 +410,32 @@ Validation, at `531769a`:
 | OpenSpec pilot | `openspec validate --strict` valid; archived; `validate --all --strict` 1 passed (`target/gates/m1/openspec-*.txt`) |
 | Full mutation catalogue | not run — M1's rule: not for audit and documentation work; Gate 2's 38 entries await Gate 2's contained gate |
 | Lifecycle suite | not run — harness and container ownership code unchanged |
+
+## 20. M2-Core: separation of concerns (2026-10-08/09)
+
+After Q1 the human inserted M2 before Gate 2; the reviewer reduced it to the core. The survey that
+motivated it is in `target/gates/m2-survey/`; the change is OpenSpec `m2-core-separation-of-concerns`.
+
+**What moved.** `check.rs` → `check/` (18 modules), `eval.rs` → `eval/` (8), `build.rs` → `build/`
+(6; `run` first made a sequence of named phases), the CLI's `main.rs` → `cli.rs`, `exit.rs`,
+`prepare.rs`, `interpret.rs` (`command` first made parse → prepare → one exhaustive `dispatch`), and
+`xtask/src/main.rs` → `checks/` and `commands/`. A commit moved code or changed it, never both; each
+move was proved by a statement-level comparison — **0 statements changed** — and its mutants were
+repointed in the same commit.
+
+**What was merged.** Byte-identical test helpers only: `nazm-service/tests/common/`,
+`nazm-cli/tests/differential/`, `nazm-cli/tests/memory_report/`; one CLI command prologue
+(`opened.rs`) and one xtask root finder. Similar-looking but different helpers were left apart, each
+with its reason (`target/gates/m2/dedup.md`).
+
+**What guards it.** Gates that read source by path read whole modules (a split cannot narrow them);
+the **module boundaries** gate holds each split module's entry to the façade, context and
+orchestration its register names, and every file of a split directory to a `//!` responsibility
+line. A new concern goes in its own module (§4, rule 2).
+
+**What was decided.** The LIR oracle keeps an independent implementation of the number rules
+(§3, §6).
+
+**What was deferred.** `parser.rs` and `mir/lower.rs` (until Gate 2 needs them), the other survey
+splits and extracts, and test-file splits. Modules with no mutant yet: `check/clauses.rs`,
+`eval/{value,counters,task}.rs`, `build/timing.rs`.
