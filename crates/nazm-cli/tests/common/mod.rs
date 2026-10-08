@@ -171,6 +171,18 @@ const KEEP: usize = 16 << 20;
 /// discarded rather than buffered. On the deadline the child is killed and reaped and the test
 /// fails, naming `what`.
 pub(crate) fn run_bounded(cmd: &mut std::process::Command, what: &str) -> Ran {
+    run_within(cmd, DEADLINE)
+        .unwrap_or_else(|| panic!("{what} did not terminate within {DEADLINE:?}"))
+}
+
+/// [`run_bounded`]'s run with its own `limit`, `None` when the child outlived it (killed and
+/// reaped): for a suite that reports "did not terminate" in its own words. Q1 found two suites,
+/// `build.rs` and `concurrent.rs`, still carrying the copy M1 meant to remove — the one that reads
+/// the pipes only after the child exits.
+pub(crate) fn run_within(
+    cmd: &mut std::process::Command,
+    limit: std::time::Duration,
+) -> Option<Ran> {
     use std::io::Read;
     use std::process::Stdio;
 
@@ -202,22 +214,22 @@ pub(crate) fn run_bounded(cmd: &mut std::process::Command, what: &str) -> Ran {
         if let Some(s) = child.try_wait().expect("try_wait") {
             break s;
         }
-        if start.elapsed() >= DEADLINE {
+        if start.elapsed() >= limit {
             let _ = child.kill();
             let _ = child.wait();
             let _ = (out.join(), err.join());
-            panic!("{what} did not terminate within {DEADLINE:?}");
+            return None;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     let text = |h: std::thread::JoinHandle<Vec<u8>>| {
         String::from_utf8_lossy(&h.join().unwrap_or_default()).into_owned()
     };
-    Ran {
+    Some(Ran {
         code: status.code(),
         stdout: text(out),
         stderr: text(err),
-    }
+    })
 }
 
 /// Whether a test that needs a host tool must stop here, having found it absent (Q1-D-02).

@@ -307,14 +307,17 @@ fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
 
 /// Q1-M-11: a deadline too far to count in nanoseconds is "never", not a wrapped time in the past.
 /// The waiter parks with one, and is woken by the value, not by its deadline: before the fix the
-/// deadline had already passed, so the select timed out (and a worker spun re-queuing it).
+/// deadline had already passed, so the select timed out (and a worker spun re-queuing it). Ten
+/// trillion milliseconds is ~1.2e10 s from now, whose nanoseconds pass 2^63 and wrap negative —
+/// into the past — on any clock before the year 2260; `i64::MAX`'s wrap lands wherever the clock
+/// puts it: the past on one host, the future on another (found by the Q1 campaign).
 #[test]
 fn a_deadline_past_the_nanosecond_range_waits_for_the_value() {
     let d = tempfile::tempdir().unwrap();
     let src = "fn waiter(io: IoCap, tm: TimeCap, ready: Chan[Int], c: Chan[Int], res: Chan[Int]) -> Int ! { io } {\n\
                    let cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\n\
                    chan_send_of(ready, 1);\n\
-                   let r = chan_select_until(cs, out, 9223372036854775807);\n\
+                   let r = chan_select_until(cs, out, 10000000000000);\n\
                    chan_send_of(res, r * 1000 + vec_pop(out)); 0 }\n\
                fn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\n\
                    let ready = chan_new_of[Int](1); let c = chan_new_of[Int](1); let res = chan_new_of[Int](1);\n\
