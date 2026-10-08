@@ -69,18 +69,51 @@ fn all_tests() -> String {
     // files, which contain the `Code::new("N0404")` declarations and every `codes::X`
     // emission site, so every code looked asserted and the check proved nothing. Take
     // the text from `mod tests {` onward and no more.
-    for file in [
-        "crates/nazm-syntax/src/lexer.rs",
-        "crates/nazm-syntax/src/parser.rs",
-        "crates/nazm-diag/src/lib.rs",
-        "crates/nazm-core/src/check.rs",
-        "crates/nazm-core/src/lower.rs",
+    // A module split into a directory is read file by file: a `tests.rs` whole, any other
+    // file from its own `mod tests {`.
+    for module in [
+        "crates/nazm-syntax/src/lexer",
+        "crates/nazm-syntax/src/parser",
+        "crates/nazm-diag/src/lib",
+        "crates/nazm-core/src/check",
+        "crates/nazm-core/src/lower",
     ] {
-        let text = read(file);
-        if let Some(i) = text.find("\nmod tests {") {
-            out.push_str(text.get(i..).unwrap_or_default());
+        for file in module_files(module) {
+            let text = read(&file);
+            if file.ends_with("/tests.rs") {
+                out.push_str(&text);
+            } else if let Some(i) = text.find("\nmod tests {") {
+                out.push_str(text.get(i..).unwrap_or_default());
+            }
         }
     }
+    out
+}
+
+/// The files of the module at `base`: `base.rs`, or every `.rs` file under `base/`.
+fn module_files(base: &str) -> Vec<String> {
+    let file = format!("{base}.rs");
+    if repo_root().join(&file).is_file() {
+        return vec![file];
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![repo_root().join(base)];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|e| e == "rs") {
+                let rel = p.strip_prefix(repo_root()).unwrap_or(&p);
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    assert!(
+        !out.is_empty(),
+        "{base}: neither a file nor a module directory"
+    );
+    out.sort();
     out
 }
 
