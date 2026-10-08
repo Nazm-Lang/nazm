@@ -14024,7 +14024,7 @@ killers = [{ package = "nazm-cli", test = "debugging", name = "the_prologue_carr
 [[mutation]]
 name = "g1-the-help-names-the-pre-1-0-release"
 why = "`nazm --help` goes on calling the release language v0.3, toolchain 0.3.0, an experimental release"
-file = "crates/nazm-cli/src/main.rs"
+file = "crates/nazm-cli/src/cli.rs"
 find = "long_about = \"Nazm language 1.0, toolchain 1.0.0 — the first stable release. Records, \\"
 replace = "long_about = \"Nazm language v0.3, toolchain 0.3.0 — an experimental release. Records, \\"
 killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_help_and_version_name_the_release" }]
@@ -14068,7 +14068,7 @@ killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_human_types_l
 [[mutation]]
 name = "g1-a-help-names-a-schema-a-major-behind"
 why = "`nazm explain-cost --help` names `nazm.cost/1` while the command prints `nazm.cost/2`"
-file = "crates/nazm-cli/src/main.rs"
+file = "crates/nazm-cli/src/cli.rs"
 find = "`--json` prints `nazm.cost/2`, which since N106 also says which"
 replace = "`--json` prints `nazm.cost/1`, which since N106 also says which"
 killers = [{ package = "nazm-cli", test = "ecosystem", name = "every_command_has_its_own_help_naming_the_schema_it_prints" }]
@@ -14652,18 +14652,18 @@ killers = [{ package = "nazm-cli", test = "exit_contract", name = "status_5_is_a
 [[mutation]]
 name = "q1c1-an-unreadable-root-is-an-invalid-one"
 why = "every source-root refusal reads as an invalid layout (1), so a root that cannot be read is no longer 3"
-file = "crates/nazm-cli/src/main.rs"
-find = "        if why.starts_with(\"could not read\") || why.ends_with(\"is not a directory\") {"
-replace = "        if false {"
-killers = [{ package = "nazm-cli", bin = "nazm", name = "exit_status_tests::a_root_that_cannot_be_read_is_3_and_an_invalid_one_1" }]
+file = "crates/nazm-cli/src/exit.rs"
+find = "    if why.starts_with(\"could not read\") || why.ends_with(\"is not a directory\") {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "exit::tests::a_root_that_cannot_be_read_is_3_and_an_invalid_one_1" }]
 
 [[mutation]]
 name = "q1c1-any-load-failure-is-unreadable"
 why = "every load failure reads as an unreadable file (3), so an unknown dependency or an escaping import is no longer the program's 1"
-file = "crates/nazm-cli/src/main.rs"
-find = "                .all(|d| d.code == nazm_diag::codes::MODULE_NOT_FOUND)"
-replace = "                .all(|_| true)"
-killers = [{ package = "nazm-cli", bin = "nazm", name = "exit_status_tests::a_load_is_3_only_when_every_failure_is_a_module_not_found" }]
+file = "crates/nazm-cli/src/exit.rs"
+find = "            .all(|d| d.code == nazm_diag::codes::MODULE_NOT_FOUND)"
+replace = "            .all(|_| true)"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "exit::tests::a_load_is_3_only_when_every_failure_is_a_module_not_found" }]
 [[mutation]]
 name = "q1c1-a-missing-link-is-the-toolchains"
 why = "a `--link` file that does not exist is reported as a toolchain failure (4), the status it had before the contract was frozen"
