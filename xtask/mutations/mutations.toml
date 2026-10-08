@@ -12023,8 +12023,8 @@ killers = [{ package = "nazm-cli", test = "build_provenance", name = "an_attesta
 name = "n73-a-failed-build-has-a-record"
 why = "a record is written for a build that produced nothing"
 file = "crates/nazm-cli/src/main.rs"
-find = "        if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {"
-replace = "        if provenance.is_none() && sbom.is_none() {"
+find = "            if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {"
+replace = "            if provenance.is_none() && sbom.is_none() {"
 killers = [{ package = "nazm-cli", test = "build_provenance", name = "a_failed_build_writes_no_record" }]
 
 # --- N73: the evidence bundle and the compiler's bill of materials ---------------------------------
@@ -12155,8 +12155,8 @@ killers = [{ package = "nazm-cli", test = "ecosystem", name = "bindgen_translate
 name = "n74-a-dry-run-publishes"
 why = "`--dry-run` publishes, so a look at what would be recorded changes the registry"
 file = "crates/nazm-cli/src/main.rs"
-find = "        if *dry_run {"
-replace = "        if !*dry_run {"
+find = "            if dry_run {"
+replace = "            if !dry_run {"
 killers = [{ package = "nazm-cli", test = "ecosystem", name = "a_dry_run_publish_writes_nothing_and_records_what_the_publish_does" }]
 
 [[mutation]]
