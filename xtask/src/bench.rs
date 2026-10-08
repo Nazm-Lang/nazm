@@ -67,7 +67,8 @@ pub(crate) fn bench_dir(root: &Path) -> PathBuf {
 }
 
 pub(crate) fn target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| crate::guide::root().join("target"), PathBuf::from)
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| crate::guide::root().join("target"), PathBuf::from)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
