@@ -15,25 +15,12 @@
 )]
 
 mod common;
+mod differential;
 
 use common::{run_bounded, Ran};
+use differential::{codes, memory_line, nazm, NAZM};
 
-use std::path::Path;
 use std::process::Command;
-
-const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
-
-fn nazm(dir: &Path, args: &[&str]) -> Ran {
-    run_bounded(Command::new(NAZM).current_dir(dir).args(args), "nazm")
-}
-
-fn memory_line(r: &Ran) -> String {
-    r.stderr
-        .lines()
-        .find(|l| l.starts_with("nazm-memory:"))
-        .unwrap_or_else(|| panic!("no memory report: {}", r.stderr))
-        .to_owned()
-}
 
 fn sched_line(r: &Ran) -> String {
     r.stderr
@@ -119,35 +106,6 @@ fn agrees_on(files: &[(&str, &str)], expected: &str, code: i32) -> String {
 
 fn agrees(src: &str, expected: &str) -> String {
     agrees_on(&[("prog.nz", src)], expected, 0)
-}
-
-fn check_codes(files: &[(&str, &str)]) -> Vec<String> {
-    let d = tempfile::tempdir().unwrap();
-    for (name, text) in files {
-        std::fs::write(d.path().join(name), text).unwrap();
-    }
-    let r = nazm(d.path(), &["check", "--json", files[0].0]);
-    let mut codes: Vec<String> = Vec::new();
-    for line in r.stdout.lines().chain(r.stderr.lines()) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if let Some(c) = v["code"].as_str() {
-            codes.push(c.to_owned());
-        }
-        if let Some(ds) = v["diagnostics"].as_array() {
-            for d in ds {
-                if let Some(c) = d["code"].as_str() {
-                    codes.push(c.to_owned());
-                }
-            }
-        }
-    }
-    codes
-}
-
-fn codes(src: &str) -> Vec<String> {
-    check_codes(&[("prog.nz", src)])
 }
 
 // --- choosing ------------------------------------------------------------------------------
