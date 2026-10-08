@@ -508,6 +508,13 @@ fn collect_rs(dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>>
     Ok(out)
 }
 
+/// The workspace root: this crate's manifest directory, one level up.
+fn workspace_root() -> Option<std::path::PathBuf> {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(std::path::Path::to_path_buf)
+}
+
 /// Documented claims that must stay true — **about the benchmark harness only**.
 ///
 /// Named "doc claims", which over-promises: both checks below concern whether the
@@ -520,13 +527,6 @@ fn collect_rs(dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>>
 /// `xtask` may do, since it depends on no compiler crate (its one internal dependency is
 /// `nazm-docs`, for the corpus gate). It is a test rather than a gate for that reason, and
 /// `cargo test --workspace` runs it.
-/// The workspace root: this crate's manifest directory, one level up.
-fn workspace_root() -> Option<std::path::PathBuf> {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(std::path::Path::to_path_buf)
-}
-
 fn check_doc_claims() -> Result<(), Vec<String>> {
     let Some(root) = workspace_root() else {
         return Err(vec!["could not locate workspace root".to_owned()]);
