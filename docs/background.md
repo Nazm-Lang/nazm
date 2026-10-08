@@ -63,10 +63,10 @@ than just "generated programs pass tests".
 ## The design it is being built toward
 
 Documented in [`docs/architecture.md`](docs/architecture.md), and staged in
-[`docs/roadmap.md`](docs/roadmap.md). In brief: memory safety with no lifetime annotations
-and no garbage collector; effect rows, capabilities, and position-sensitive taint so
-untrusted data cannot reach a code-construction site; structured concurrency where data
-races are a compile error; and a four-tier compilation strategy where `nazm check` — no
+[`docs/roadmap.md`](docs/roadmap.md). In brief (the aim, as first written; what holds today is `docs/capability-matrix.md`): memory
+safety, outside foreign calls, with no lifetime annotations and no garbage collector; effect rows,
+capabilities, and taint by explicit data flow so untrusted data cannot reach a code-construction
+site; structured concurrency where a data race between tasks is a compile error; and a four-tier compilation strategy where `nazm check` — no
 codegen at all — is the loop agents actually live in.
 
 *That first clause read "mutable value semantics so memory safety needs no lifetime

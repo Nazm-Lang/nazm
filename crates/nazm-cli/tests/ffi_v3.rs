@@ -492,13 +492,11 @@ int main(int argc, char **argv) {
 }
 "#;
 
+// Linked and run on macOS here; Linux's is built by the same link with `-shared` and is exercised
+// in the Linux container by hand (`docs/performance.md`, N85). Elsewhere it is ignored, not a pass.
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "links a macOS shared library")]
 fn a_shared_library_links_into_a_c_program_and_shows_only_its_exports() {
-    if std::env::consts::OS != "macos" {
-        // Linked and run on macOS here; Linux's is built by the same link with `-shared` and is
-        // exercised in the Linux container by hand (`docs/performance.md`, N85).
-        return;
-    }
     for backend in ["llvm", "cranelift"] {
         let d = Dir::new(&[("lib.nz", LIB), ("main.c", HOST)]);
         let b = d.nazm(&[

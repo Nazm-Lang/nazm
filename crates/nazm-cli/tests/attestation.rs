@@ -12,6 +12,8 @@
     clippy::indexing_slicing
 )]
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -182,10 +184,14 @@ fn the_sbom_lists_every_package_source_and_the_runtime_with_their_digests() {
     );
 }
 
+// The contained Linux image has no ssh-keygen: there it is ignored, not a pass (Q1-D-02).
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "signs with the host's ssh-keygen")]
 fn a_signed_statement_verifies_for_its_signer_and_its_artefacts_only() {
-    if Command::new("ssh-keygen").arg("-?").output().is_err() {
-        eprintln!("SKIP: no ssh-keygen on this machine");
+    if common::skip_without(
+        Command::new("ssh-keygen").arg("-?").output().is_ok(),
+        "no ssh-keygen on this machine",
+    ) {
         return;
     }
     let d = tempfile::tempdir().unwrap();

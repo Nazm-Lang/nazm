@@ -262,7 +262,14 @@ refuses and never changes what an accepted program does is stable). `nazm-mcp` i
 
 Stable means run-verified evidence for the whole language, not a triple in a list: in 1.0 that
 is `aarch64-apple-darwin`, `x86_64-apple-darwin` and `aarch64-unknown-linux-gnu`, run-verified
-under both backends (`docs/support.md`). Every other target `nazm capabilities` lists is
+under both backends (`docs/support.md`). The evidence is not the same for the three:
+`aarch64-apple-darwin` runs the whole suite on every gate, and `aarch64-unknown-linux-gnu` runs it
+in the contained runner; `x86_64-apple-darwin` has one automated program (`tests/cross.rs`, under
+Rosetta 2, skipped where Rosetta is absent) and a recorded run — Q1, 2026-10-08 — of the v1
+compatibility corpus's run and trap cases and the examples, 62 programs, each built by both
+backends for `x86_64-apple-darwin`, run under Rosetta 2 and agreeing byte for byte, exit status
+included, with `aarch64-apple-darwin` (`target/gates/q1/rosetta/results.txt`). The final release gate
+re-runs that set; until it has, the claim rests on the Q1 record. Every other target `nazm capabilities` lists is
 experimental in 1.0: `x86_64-unknown-linux-gnu` is compile-only, the two freestanding boards are
 emulator-verified for a restricted subset, and `wasm32-unknown-unknown` is run-verified on a
 reference host for a subset. A target is promoted by evidence, in a minor release.
