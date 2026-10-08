@@ -45,14 +45,7 @@ fn fields_of(v: &nazm_core::Value, n: usize) -> Vec<String> {
 
 /// The storage layout of `file`'s contract, by field name, for an upgrade check.
 fn layout_of(file: &Path) -> Result<Vec<(String, String)>, ExitCode> {
-    let source_root = crate::root::decide(file, None).map_err(|e| {
-        eprintln!("nazm: {e}");
-        ExitCode::from(exit::root_status(&e))
-    })?;
-    let loaded = crate::load::load(file, source_root.path()).map_err(|(partial, d)| {
-        crate::emit(&d, &partial.map, false);
-        ExitCode::from(exit::load_status(&d))
-    })?;
+    let loaded = crate::opened::opened(file, None, false).map_err(ExitCode::from)?;
     let root = loaded.graph.module_of(nazm_span::FileId::ROOT);
     nazm_core::on_lowered(
         &loaded.map,
@@ -154,19 +147,9 @@ pub(crate) fn run(
     if let Err(code) = crate::profile::enforce(file, file, Some(profile), false, false) {
         return code;
     }
-    let source_root = match crate::root::decide(file, None) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("nazm: {e}");
-            return ExitCode::from(crate::exit::root_status(&e));
-        }
-    };
-    let loaded = match crate::load::load(file, source_root.path()) {
-        Ok(f) => f,
-        Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial.map, false);
-            return ExitCode::from(crate::exit::load_status(&diagnostics));
-        }
+    let loaded = match crate::opened::opened(file, None, false) {
+        Ok(l) => l,
+        Err(code) => return ExitCode::from(code),
     };
     let transactions: Vec<(usize, String)> = match txs {
         None => Vec::new(),

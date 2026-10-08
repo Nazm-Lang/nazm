@@ -442,19 +442,9 @@ pub(crate) fn library(modules: &[std::path::PathBuf], json: bool) -> ExitCode {
     let mut seen = std::collections::BTreeSet::new();
     let mut errors = 0usize;
     for path in modules {
-        let source_root = match crate::root::decide(path, None) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("nazm: {e}");
-                return ExitCode::from(crate::exit::root_status(&e));
-            }
-        };
-        let loaded = match crate::load::load(path, source_root.path()) {
+        let loaded = match crate::opened::opened(path, None, json) {
             Ok(l) => l,
-            Err((partial, diagnostics)) => {
-                crate::emit(&diagnostics, &partial.map, json);
-                return ExitCode::from(crate::exit::load_status(&diagnostics));
-            }
+            Err(code) => return ExitCode::from(code),
         };
         let map = &loaded.map;
         let Err(diagnostics) = nazm_core::on_module_map(map, &loaded.graph, |_, _| Ok(())) else {
