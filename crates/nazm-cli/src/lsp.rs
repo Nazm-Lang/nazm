@@ -101,13 +101,14 @@ pub(crate) fn run(source_root: Option<&Path>) -> ExitCode {
     let joined = io.join();
     match (served, joined) {
         (Ok(()), Ok(())) => ExitCode::SUCCESS,
+        // The connection to the editor failed: the machine's, not a request's (Q1-C1).
         (Err(e), _) => {
             eprintln!("nazm lsp: {e}");
-            ExitCode::FAILURE
+            ExitCode::from(crate::exit::TOOLCHAIN_FAILED)
         }
         (_, Err(e)) => {
             eprintln!("nazm lsp: {e}");
-            ExitCode::FAILURE
+            ExitCode::from(crate::exit::TOOLCHAIN_FAILED)
         }
     }
 }

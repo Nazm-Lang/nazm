@@ -335,7 +335,7 @@ pub(crate) fn write(
     let mut words = cmd.split_whitespace();
     let Some(program) = words.next() else {
         eprintln!("nazm: --attest-with names no command");
-        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        return ExitCode::from(exit::USAGE);
     };
     let ran = Command::new(program).args(words).arg(file).output();
     let sig = PathBuf::from(format!("{}.sig", file.display()));

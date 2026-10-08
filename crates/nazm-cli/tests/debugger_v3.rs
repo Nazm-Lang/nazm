@@ -303,7 +303,7 @@ fn a_sampled_run_is_attributed_to_nazm_functions_and_lines() {
 fn an_interval_without_sampling_is_refused() {
     let d = with("spin.nz", SPIN);
     let o = nazm(d.path(), &["profile", "--interval-ms", "5", "spin.nz"]);
-    assert_eq!(o.status.code(), Some(2), "{}", err(&o));
+    assert_eq!(o.status.code(), Some(5), "{}", err(&o));
     assert!(err(&o).contains("--sample"), "{}", err(&o));
 }
 

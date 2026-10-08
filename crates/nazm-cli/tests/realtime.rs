@@ -340,7 +340,7 @@ fn the_watermark_is_the_board_s() {
         d.path(),
         &["build", "--stack-watermark", "prog.nz", "-o", "prog"],
     );
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(5));
     assert!(
         err(&o).contains("`--stack-watermark` measures a board's stack"),
         "{}",

@@ -278,7 +278,7 @@ fn the_layout_is_asked_for_by_name_and_both_backends_take_it() {
         d.path(),
         &["build", "--layout", "columns", "prog.nz", "-o", "p"],
     );
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(5));
     assert!(
         err(&o).contains("`--layout columns` is not a layout"),
         "{}",

@@ -362,27 +362,34 @@ pub(crate) fn run(
     let source_root = match root::decide(path, declared) {
         Ok(r) => r,
         Err(e) => {
+            let code = exit::root_status(&e);
             if summary {
-                return summarized(Status::Unreadable, exit::NO_SUCH_FILE, &[], None);
+                let status = if code == exit::NO_SUCH_FILE {
+                    Status::Unreadable
+                } else {
+                    Status::Refused
+                };
+                return summarized(status, code, &[], None);
             }
             eprintln!("nazm: {e}");
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(code);
         }
     };
 
     let loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
+            let code = exit::load_status(&diagnostics);
             if summary {
-                return summarized(
-                    Status::Unreadable,
-                    exit::NO_SUCH_FILE,
-                    &diagnostics,
-                    Some(&partial.map),
-                );
+                let status = if code == exit::NO_SUCH_FILE {
+                    Status::Unreadable
+                } else {
+                    Status::Rejected
+                };
+                return summarized(status, code, &diagnostics, Some(&partial.map));
             }
             crate::emit(&diagnostics, &partial.map, json);
-            return ExitCode::from(exit::NO_SUCH_FILE);
+            return ExitCode::from(code);
         }
     };
     let map = &loaded.map;
@@ -439,14 +446,14 @@ pub(crate) fn library(modules: &[std::path::PathBuf], json: bool) -> ExitCode {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("nazm: {e}");
-                return ExitCode::from(exit::NO_SUCH_FILE);
+                return ExitCode::from(crate::exit::root_status(&e));
             }
         };
         let loaded = match crate::load::load(path, source_root.path()) {
             Ok(l) => l,
             Err((partial, diagnostics)) => {
                 crate::emit(&diagnostics, &partial.map, json);
-                return ExitCode::from(exit::NO_SUCH_FILE);
+                return ExitCode::from(crate::exit::load_status(&diagnostics));
             }
         };
         let map = &loaded.map;

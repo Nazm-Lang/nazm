@@ -314,9 +314,11 @@ fn a_target_the_host_cannot_link_is_refused_without_objects_and_nothing_is_writt
     };
     let dir = tempfile::tempdir().expect("tempdir");
     let exe = dir.path().join("prog");
-    for (triple, says) in [
-        (foreign, "has no linker for"),
-        ("riscv64gc-unknown-linux-gnu", "not a target"),
+    // A host with no linker for the target is the machine's (4); a triple that is no target is
+    // the command line's (5) — the v1 exit contract (Q1-C1).
+    for (triple, says, status) in [
+        (foreign, "has no linker for", 4),
+        ("riscv64gc-unknown-linux-gnu", "not a target", 5),
     ] {
         for backend in ["llvm", "cranelift"] {
             let b = build(
@@ -325,7 +327,7 @@ fn a_target_the_host_cannot_link_is_refused_without_objects_and_nothing_is_writt
                 &exe,
                 &["--target", triple],
             );
-            assert_eq!(b.status.code(), Some(4), "{triple} {backend}");
+            assert_eq!(b.status.code(), Some(status), "{triple} {backend}");
             let stderr = String::from_utf8_lossy(&b.stderr);
             assert!(stderr.contains(says), "{stderr}");
             assert!(!exe.exists());

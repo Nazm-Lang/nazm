@@ -182,7 +182,7 @@ fn what_a_board_cannot_have_is_refused_by_name() {
         d.path(),
         &["build", "--target", BOARD, "--objects", "out", "prog.nz"],
     );
-    assert_eq!(o.status.code(), Some(4), "{}", err(&o));
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
     let e = err(&o);
     assert!(
         e.contains("`aarch64-unknown-none` has no operating system"),
@@ -201,7 +201,7 @@ fn what_a_board_cannot_have_is_refused_by_name() {
         d.path(),
         &["build", "--target", BOARD, "--objects", "out", "prog.nz"],
     );
-    assert_eq!(o.status.code(), Some(4), "{}", err(&o));
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
     // `print` of a static string is a C library call: nothing allocates, but `write` is libc's.
     assert!(
         err(&o).contains("only a hosted runtime has: C library (`write`)"),
@@ -290,7 +290,7 @@ fn cranelift_builds_no_board() {
             "prog.nz",
         ],
     );
-    assert_eq!(o.status.code(), Some(4));
+    assert_eq!(o.status.code(), Some(5));
     assert!(
         err(&o).contains("`--backend cranelift` builds no freestanding target"),
         "{}",

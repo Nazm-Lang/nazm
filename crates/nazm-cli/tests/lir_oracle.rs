@@ -240,7 +240,7 @@ fn a_program_with_tasks_is_refused_and_not_answered() {
     )
     .unwrap();
     let (said, stderr) = oracle(d.path(), &[]);
-    assert_eq!(said.1, Some(4), "{said:?} {stderr}");
+    assert_eq!(said.1, Some(1), "{said:?} {stderr}");
     assert!(
         stderr.contains("the LIR interpreter does not run this"),
         "{stderr}"
