@@ -273,6 +273,16 @@ pub fn emit_os(target: SwitchTarget) -> String {
     );
     // And the network's facts (Gate 2): a program reaching the files part may reach sockets.
     out.push_str(&net_part(target));
+    // And where the environment is: macOS's `_NSGetEnviron`, which a library can call where
+    // `environ` is the executable's own, and glibc's `environ`.
+    out.push_str(if matches!(
+        target,
+        SwitchTarget::Aarch64Darwin | SwitchTarget::X86_64Darwin
+    ) {
+        "\ndeclare ptr @_NSGetEnviron()\n\ndefine hidden ptr @nz_os_environ() {\nentry:\n  %p = call ptr @_NSGetEnviron()\n  %e = load ptr, ptr %p\n  ret ptr %e\n}\n"
+    } else {
+        "\n@environ = external global ptr\n\ndefine hidden ptr @nz_os_environ() {\nentry:\n  %e = load ptr, ptr @environ\n  ret ptr %e\n}\n"
+    });
     out
 }
 

@@ -150,6 +150,18 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "nz_net_poller",
     "nz_net_arm",
     "nz_net_poll",
+    // And process and environment (Gate 2).
+    "pipe",
+    "posix_spawnp",
+    "posix_spawn_file_actions_init",
+    "posix_spawn_file_actions_adddup2",
+    "posix_spawn_file_actions_destroy",
+    "waitpid",
+    "kill",
+    "signal",
+    "environ",
+    "_NSGetEnviron",
+    "nz_os_environ",
 ];
 
 /// The rules a foreign declaration must meet (N42, `docs/architecture.md` §7.44).

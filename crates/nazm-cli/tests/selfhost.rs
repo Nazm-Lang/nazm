@@ -2910,6 +2910,16 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("time_now_ns", "Gate 2 time"),
         ("time_wall_ns", "Gate 2 time"),
         ("time_sleep_ms", "Gate 2 time"),
+        // Gate 2 (process and environment): neither `OsHandle` nor `ProcessCap` is in the Nazm
+        // checker's table.
+        ("os_env_get", "Gate 2 process and environment"),
+        ("os_env_has", "Gate 2 process and environment"),
+        ("os_env_count", "Gate 2 process and environment"),
+        ("os_env_at", "Gate 2 process and environment"),
+        ("os_spawn", "Gate 2 process and environment"),
+        ("os_child_pipe", "Gate 2 process and environment"),
+        ("os_wait", "Gate 2 process and environment"),
+        ("os_kill", "Gate 2 process and environment"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {

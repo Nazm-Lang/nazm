@@ -1,7 +1,12 @@
-// `@std/process`: the process's arguments as one sequence.
+// `@std/process`: the process's arguments as one sequence, and (Gate 2) other programs.
 //
 // Imported with `use "@std/process";`. `exit_with` is a built-in and is not wrapped: a second
-// name for it would be a second way to say one thing.
+// name for it would be a second way to say one thing. Running another program is every authority
+// that program has, so it takes a `ProcessCap`; a child already started is its own handle's, and
+// its pipes are `@std/file` `File`s. `docs/general-purpose.md` §12.
+
+use "@std/ioerror";
+use "@std/file";
 
 /// Every argument the process was started with, in order, without the program's own name.
 pub fn process_args(io: IoCap) -> Strs ! { io } {
@@ -9,4 +14,95 @@ pub fn process_args(io: IoCap) -> Strs ! { io } {
     let mut i = 0;
     while i < args_count() { strs_push(out, arg(i)); i = i + 1; }
     out
+}
+
+/// A program started by `process_spawn`.
+pub struct Child {
+    handle: OsHandle,
+}
+
+/// What `process_run` collected: the exit status (the code, or 256 and the signal that ended
+/// the program), and everything it wrote to its output and its errors.
+pub struct ProcessOutput {
+    status: Int,
+    stdout: Str,
+    stderr: Str,
+}
+
+/// Start `program`, found on `PATH` as a shell would find it, with `args`; its standard input,
+/// output and errors are pipes.
+pub fn process_spawn(p: ProcessCap, program: Str, args: Strs) -> Result[Child, IoError] ! { io } {
+    let h = os_spawn(program, args);
+    let s = os_status(h);
+    if s < 0 { Result[Child, IoError].Err(error: io_context(io_error_from(s), program)) } else { Result[Child, IoError].Ok(value: Child(handle: h)) }
+}
+
+/// The pipe to `c`'s standard input.
+pub fn process_stdin(c: Child) -> File ! { io } {
+    File(handle: os_child_pipe(c.handle, 0))
+}
+
+/// The pipe from `c`'s standard output.
+pub fn process_stdout(c: Child) -> File ! { io } {
+    File(handle: os_child_pipe(c.handle, 1))
+}
+
+/// The pipe from `c`'s standard error.
+pub fn process_stderr(c: Child) -> File ! { io } {
+    File(handle: os_child_pipe(c.handle, 2))
+}
+
+/// Wait for `c` to end: its exit code, or 256 and the signal that ended it. The wait holds the
+/// task's worker until the program ends.
+pub fn process_wait(c: Child) -> Result[Int, IoError] ! { io } {
+    io_result(os_wait(c.handle))
+}
+
+/// End `c` now (`SIGKILL`); nothing for a child already waited for.
+pub fn process_kill(c: Child) -> Result[Int, IoError] ! { io } {
+    io_result(os_kill(c.handle))
+}
+
+fn feed(input: OsHandle, text: Str) -> Int ! { io } {
+    file_write(File(handle: input), bytes_from_str(text));
+    os_close(input);
+    0
+}
+
+fn collect(from: OsHandle, into: Chan[Str]) -> Int ! { io } {
+    let all = match file_read_rest(File(handle: from)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    };
+    chan_send_of(into, all);
+    0
+}
+
+/// Run `program` with `args`, `input` on its standard input, to its end: its status, output and
+/// errors. The input and the errors move in tasks of their own, so a program writing a great deal
+/// to both streams never waits on a pipe nobody reads.
+pub fn process_run(p: ProcessCap, sp: SpawnCap, program: Str, args: Strs, input: Bytes) -> Result[ProcessOutput, IoError] ! { io, spawn } {
+    let c = process_spawn(p, program, args)?;
+    let errors = chan_new_of[Str](1);
+    let text = bytes_to_str(input);
+    let out = os_child_pipe(c.handle, 1);
+    let err = os_child_pipe(c.handle, 2);
+    let inp = os_child_pipe(c.handle, 0);
+    let mut stdout = "";
+    let got = vec_new[Str]();
+    scope {
+        spawn feed(inp, text);
+        spawn collect(err, errors);
+        stdout = match file_read_rest(File(handle: out)) {
+            Result.Ok(value: b) => bytes_to_str(b),
+            Result.Err(error: e) => "",
+        };
+        chan_recv_of(errors, got);
+    }
+    os_close(out);
+    os_close(err);
+    let status = process_wait(c)?;
+    os_close(c.handle);
+    let stderr = if vec_len(got) > 0 { vec_get(got, 0) } else { "" };
+    Result[ProcessOutput, IoError].Ok(value: ProcessOutput(status: status, stdout: stdout, stderr: stderr))
 }

@@ -52,6 +52,10 @@ pub(super) enum Object {
     Tcp(super::net::Stream),
     Listener(super::net::Listener),
     Udp(super::net::Datagrams),
+    /// A child process and its three pipes (Gate 2, `eval::process`).
+    Child(super::process::Child),
+    PipeIn(std::process::ChildStdin),
+    PipeOut(Mutex<super::process::Output>),
 }
 
 /// One descriptor's slot: its current generation, its object while open, and the deadline in
@@ -178,6 +182,9 @@ pub(super) fn os_intrinsic(
     args: &[Value],
     at: nazm_span::Span,
 ) -> Option<Result<Value, super::RuntimeError>> {
+    if let Some(r) = super::process::env_at_failure(op, args, at) {
+        return Some(Err(r));
+    }
     if let (Intrinsic::OsStat, [_, Value::Bytes(out)]) = (op, args) {
         if out.len < 32 {
             return Some(Err(super::RuntimeError {
@@ -257,7 +264,10 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                     Object::Stdin => std::io::stdin().lock().read(&mut got),
                     Object::Dir { .. } => return int(-EISDIR),
                     Object::Tcp(s) => return int(super::net::tcp_read(*h, s, buf)),
-                    Object::Listener(_) | Object::Udp(_) => return int(-EINVAL),
+                    Object::PipeOut(p) => super::process::pipe_read(p, &mut got),
+                    Object::Listener(_) | Object::Udp(_) | Object::Child(_) | Object::PipeIn(_) => {
+                        return int(-EINVAL)
+                    }
                 };
                 match r {
                     Ok(n) => {
@@ -275,7 +285,10 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 Object::Stdin => -EBADF,
                 Object::Dir { .. } => -EISDIR,
                 Object::Tcp(s) => super::net::tcp_write(*h, s, data),
-                Object::Listener(_) | Object::Udp(_) => -EINVAL,
+                Object::PipeIn(p) => counted((&*p).write(&data.read())),
+                Object::Listener(_) | Object::Udp(_) | Object::Child(_) | Object::PipeOut(_) => {
+                    -EINVAL
+                }
             },
         }),
         (Intrinsic::OsSeek, [Value::OsHandle(h), Value::Int(offset), Value::Int(whence)]) => {
@@ -295,9 +308,13 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                             Err(e) => status(&e),
                         }
                     }
-                    Object::Stdin | Object::Tcp(_) | Object::Listener(_) | Object::Udp(_) => {
-                        -ESPIPE
-                    }
+                    Object::Stdin
+                    | Object::Tcp(_)
+                    | Object::Listener(_)
+                    | Object::Udp(_)
+                    | Object::Child(_)
+                    | Object::PipeIn(_)
+                    | Object::PipeOut(_) => -ESPIPE,
                     Object::Dir { .. } => -EISDIR,
                 },
             })
@@ -306,7 +323,13 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             Err(s) => s,
             Ok(o) => match &*o {
                 Object::File(f) => done(f.sync_all()),
-                Object::Stdin | Object::Tcp(_) | Object::Listener(_) | Object::Udp(_) => -EINVAL,
+                Object::Stdin
+                | Object::Tcp(_)
+                | Object::Listener(_)
+                | Object::Udp(_)
+                | Object::Child(_)
+                | Object::PipeIn(_)
+                | Object::PipeOut(_) => -EINVAL,
                 Object::Dir { .. } => -EISDIR,
             },
         }),
@@ -360,7 +383,10 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 | Object::Stdin
                 | Object::Tcp(_)
                 | Object::Listener(_)
-                | Object::Udp(_) => -ENOTDIR,
+                | Object::Udp(_)
+                | Object::Child(_)
+                | Object::PipeIn(_)
+                | Object::PipeOut(_) => -ENOTDIR,
             },
         }),
         (Intrinsic::OsStat, [Value::Str(p), Value::Bytes(out)]) => {
@@ -409,7 +435,7 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             };
             Some(Value::Str(Str::heap(text.into_bytes())))
         }
-        _ => super::net::net_value(op, args),
+        _ => super::net::net_value(op, args).or_else(|| super::process::process_value(op, args)),
     }
 }
 

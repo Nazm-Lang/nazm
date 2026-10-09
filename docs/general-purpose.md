@@ -462,6 +462,20 @@ may ask for `SIGINT`/`SIGTERM` to be delivered as a value it can poll or wait on
 `signal_wait`), behind `ProcessCap`; handlers that run arbitrary code are not offered. `exit_with`
 and arguments are unchanged.
 
+**As built (2026-10-09).** `spec.md`, *Process and environment*, is the rule; settlements:
+
+- **Built-ins over the handle table**: `os_env_*`, `os_spawn`, `os_child_pipe`, `os_wait` and
+  `os_kill`, and `@std/env`, `@std/io`'s `io_stdin_*` and `@std/process`'s `process_spawn`,
+  `process_wait`, `process_kill` and `process_run` over them. A child's pipes are handles that wait
+  as sockets do, so reading a child's output parks on the pool; `process_run` moves the input and
+  the errors in tasks of its own and so takes a `SpawnCap` beside the `ProcessCap`.
+- **`ProcessCap` is id 9**, as the table below records; `RandomCap`'s 8 is §21's.
+- **Waiting for a child's exit holds the worker** (`waitpid`); its pipes do not.
+- **Signals are not offered.** Watching for `SIGINT` or `SIGTERM` needs a handler installed in
+  the process, which the interpreter cannot do without `unsafe` code the workspace forbids, and a
+  native-only mechanism would be one program meaning two things. A native program that has
+  started a child ignores `SIGPIPE`, as the interpreter's host always does.
+
 ## 13. Errors
 
 `Result`/`Option`/`?` unchanged; no exceptions. `IoError` (§8) is the one error record for the

@@ -522,6 +522,7 @@ mod exec;
 mod intrinsic;
 mod net;
 mod os;
+mod process;
 mod task;
 mod value;
 

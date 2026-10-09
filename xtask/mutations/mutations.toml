@@ -8291,10 +8291,11 @@ Repointed by M1, which moved it to 34: an entry that refused a pure call of an i
 Repointed by Gate 2's collections, which moved it to 35: an entry that refused an impl for `UInt8` must not be reused.
 Repointed by Gate 2's files, which moved it to 36: an entry that accepted a function named `os_read` must not be reused.
 Repointed by Gate 2's networking, which moved it to 37: an entry that refused an `os_read` without an `IoCap` must not be reused.
-Repointed by Gate 2's time, which moved it to 38: an entry that accepted a function named `time_sleep_ms` must not be reused."""
+Repointed by Gate 2's time, which moved it to 38: an entry that accepted a function named `time_sleep_ms` must not be reused.
+Repointed by Gate 2's process and environment, which moved it to 39: an entry that accepted a record named `ProcessCap` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 38;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 37;"
+find = "pub const SEMANTIC_EPOCH: u32 = 39;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 38;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10504,11 +10505,12 @@ Repointed by N86, which moved it to 13 for device registers by width.
 Repointed by Gate 2, which moved it to 15 for floats across runtime entries and the numbers part.
 Repointed by Gate 2's files, which moved it to 16 for the handle table and the per-target `os` unit.
 Repointed by Gate 2's networking, which moved it to 17 for the socket entries and the reactor.
-Repointed by Gate 2's time, which moved it to 18 for the nanosecond clocks and the sleep."""
+Repointed by Gate 2's time, which moved it to 18 for the nanosecond clocks and the sleep.
+Repointed by Gate 2's process and environment, which moved it to 19 for the environment and child processes."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 18;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 17;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_eighteen_and_covers_the_pool_errno_numbers_files_net_and_time" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 19;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 18;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_nineteen_and_covers_files_net_time_and_processes" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -14561,10 +14563,14 @@ file = "crates/nazm-mir/src/cost.rs"
 find = '''        | Intrinsic::ScalarText
         | Intrinsic::OsErrorText
         | Intrinsic::OsLocalAddr
-        | Intrinsic::OsPeerAddr => true,'''
+        | Intrinsic::OsPeerAddr
+        | Intrinsic::OsEnvGet
+        | Intrinsic::OsEnvAt => true,'''
 replace = '''        | Intrinsic::OsErrorText
         | Intrinsic::OsLocalAddr
-        | Intrinsic::OsPeerAddr => true,
+        | Intrinsic::OsPeerAddr
+        | Intrinsic::OsEnvGet
+        | Intrinsic::OsEnvAt => true,
         Intrinsic::ScalarText => false,'''
 killers = [{ package = "nazm-cli", test = "profiles_v2", name = "bounded_allocation_counts_every_built_in_that_allocates" }]
 
@@ -14866,3 +14872,43 @@ entry:
   %tp = alloca [2 x i64], align 8
   %r = call i32 @clock_gettime(i32 4, ptr %tp)"""
 killers = [{ package = "nazm-cli", test = "time", name = "the_clocks_and_a_sleep_agree_everywhere" }]
+
+[[mutation]]
+name = "g2-no-environment-entry-has-a-name"
+why = "the native runtime looks for a NUL rather than `=` to end an entry's name, so it finds no entry and no variable"
+file = "crates/nazm-runtime/src/files.rs"
+find = "  %eq = icmp eq i8 %c, 61"
+replace = "  %eq = icmp eq i8 %c, 0"
+killers = [{ package = "nazm-cli", test = "process", name = "the_environment_and_standard_input_read_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-a-signal-ending-is-an-exit-code"
+why = "the native runtime reports a child ended by a signal as exiting with the signal's number, indistinguishable from a program that chose that code"
+file = "crates/nazm-runtime/src/net.rs"
+find = "  %bysig = add i64 %sigw, 256"
+replace = "  %bysig = add i64 %sigw, 0"
+killers = [{ package = "nazm-cli", test = "process", name = "a_program_runs_with_input_and_its_output_errors_and_status_come_back_everywhere" }]
+
+[[mutation]]
+name = "g2-the-interpreter-reports-a-signal-as-a-code"
+why = "the interpreter reports a child ended by a signal as exiting with the signal's number, where every native build says 256 and the signal"
+file = "crates/nazm-core/src/eval/process.rs"
+find = "                .or_else(|| st.signal().map(|g| 256 + i64::from(g)))"
+replace = "                .or_else(|| st.signal().map(i64::from))"
+killers = [{ package = "nazm-cli", test = "process", name = "a_program_runs_with_input_and_its_output_errors_and_status_come_back_everywhere" }]
+
+[[mutation]]
+name = "g2-a-child-pipe-read-does-not-wait"
+why = "a read of a child's pipe is a plain read of a non-blocking descriptor, so it answers WouldBlock at once instead of parking until the child writes"
+file = "crates/nazm-runtime/src/files.rs"
+find = "    i64 7, label %socket"
+replace = "    i64 7, label %read"
+killers = [{ package = "nazm-cli", test = "process", name = "a_task_reading_a_childs_pipe_does_not_hold_its_worker" }]
+
+[[mutation]]
+name = "g2-running-a-program-needs-no-authority"
+why = "`os_spawn` needs no ProcessCap, so any function may run any program with every authority that program has"
+file = "crates/nazm-sema/src/capability.rs"
+find = "            Intrinsic::OsSpawn => CapabilitySet::of(Self::Process),"
+replace = "            Intrinsic::OsSpawn => CapabilitySet::EMPTY,"
+killers = [{ package = "nazm-cli", test = "process", name = "running_a_program_needs_its_own_authority_and_a_file_does_not_choose_it" }]
