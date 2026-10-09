@@ -240,6 +240,8 @@ found only by reading all of it.
   `SIGTERM` — and a native program that has started a child ignores `SIGPIPE` from then on.
   Waiting for a child's exit holds the task's worker; a child cannot be given another directory,
   environment or standard stream than the parent's pipes. The environment is read, never set.
+- Logging (Gate 2): `@std/log` writes records to standard error only; there is no `task_id()` or
+  `runtime_stats()` built-in, and no trace context carried between tasks.
 - The runtime is its own crate (`nazm-runtime`, N53) but still LLVM text both backends link,
   tested through a C harness; no Rust implementation, no runtime shared across programs as a
   library (area 13).

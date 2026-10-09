@@ -1195,8 +1195,8 @@ would need a propagation protocol, and traits do not exist.
 <!-- id: std -->
 
 A **standard module** is a toolchain-owned Nazm module a program imports by name. There are
-twenty-eight (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror`,
-`file`, `net`, `env`, `error`, `binary` and `random`),
+twenty-nine (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror`,
+`file`, `net`, `env`, `error`, `binary`, `random` and `log`),
 each ordinary source checked like any module, and none is visible unless a module writes its `use`:
 
 ```nazm
@@ -1244,6 +1244,7 @@ that exists but cannot be read is `N0407`.
 | `@std/show` | the `Show` trait and `show_all[T: Show](v, sep) -> Str` (N78) |
 | `@std/fmt` | (N84) `fmt_int_zero(n, width)`, `fmt_int_width(n, width)`, `fmt_hex(n)` (two's complement for a negative), `fmt_bool(b)`, `fmt_list(items, sep, open, close)`, `fmt_ints(xs, sep)` |
 | `@std/num` | (N84) `num_abs(n)`, `num_sign(n)`, `num_min(a, b)`, `num_max(a, b)`, `num_clamp(n, lo, hi)`, `num_pow(base, exp) -> Option[Int]` (`None` past `Int`'s magnitude), `num_gcd(a, b)` |
+| `@std/log` | (Gate 2) `LogLevel` (`Debug`, `Info`, `Warn`, `Error`), `Logger`, `LogSpan`: `log_new(min)`, `log_with(l, fields)`, `log_str`, `log_int`, `log_bool` (one field each), `log_fields()`, `log_line`, `log_at`, `log_debug`, `log_info`, `log_warn`, `log_error` — one JSON object a line on standard error, needing an `OutCap`; `log_level_name`; `log_span_begin(t, name)`, `log_span_end(out, t, l, s, fields)` — a span's name and nanoseconds, under a `TimeCap` |
 | `@std/map` | (N84) `StrMap[T]` and `Entry[T]`: `map_new[T]()`, `map_len`, `map_get -> Option[T]`, `map_has`, `map_set -> Bool` (whether it replaced), `map_remove -> Option[T]`, `map_keys -> Strs`, `map_values -> Vec[T]` — ordered by key, found by binary search, shared like any handle |
 | `@std/path` | (N84) `path_join(base, rest)`, `path_base(p)`, `path_dir(p)`, `path_ext(p)`, `path_stem(p)`, `path_normalize(p)` — pure, lexical, `/`-separated |
 | `@std/fs` | (N84) `fs_exists(io, path) -> Bool`, `fs_read(io, path) -> Result[Str, Str]`, `fs_read_lines(io, path) -> Result[Strs, Str]`, `fs_write(io, path, text) -> Result[Int, Str]`, `fs_write_lines(io, path, lines) -> Result[Int, Str]` — each `! { io }` |

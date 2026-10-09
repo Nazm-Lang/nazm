@@ -132,8 +132,8 @@ fn codes(files: &[(&str, &str)]) -> Vec<String> {
 
 const MODULES: &[&str] = &[
     "binary", "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap", "hashset",
-    "io", "ioerror", "json", "map", "net", "num", "option", "path", "process", "random", "result",
-    "seq", "show", "sort", "test", "text", "time",
+    "io", "ioerror", "json", "log", "map", "net", "num", "option", "path", "process", "random",
+    "result", "seq", "show", "sort", "test", "text", "time",
 ];
 
 #[test]
@@ -506,6 +506,56 @@ fn entropy_needs_a_random_cap_and_a_seeded_generator_needs_none() {
         "use \"@std/random\";\nfn main() -> Int ! {} { Int(random_u64(random_new(UInt64(1))) % UInt64(10)) }\n"
     )])
     .is_empty());
+}
+
+/// Gate 2 §20: structured records as one JSON object a line on standard error — the logger's own
+/// fields, quoting, a level below the logger's dropped, a span's name and duration.
+const LOG: &str = r#"use "@std/log";
+fn main(out: OutCap, t: TimeCap) -> Int {
+    let base = log_new(LogLevel.Info());
+    let l = log_with(base, log_fields());
+    let svc = strs_new();
+    strs_push(svc, log_str("service", "kvd"));
+    let lk = log_with(l, svc);
+    let f = strs_new();
+    strs_push(f, log_int("port", 8080));
+    strs_push(f, log_bool("tls", false));
+    strs_push(f, log_str("note", "quote \" and newline \n"));
+    log_info(out, lk, "listening", f);
+    log_debug(out, lk, "dropped", log_fields());
+    log_error(out, lk, "failed", log_fields());
+    let s = log_span_begin(t, "load");
+    let n = log_span_end(out, t, lk, s, log_fields());
+    print(if n > 0 { "span written\n" } else { "no span\n" });
+    0
+}
+"#;
+
+#[test]
+fn log_records_are_one_json_object_a_line_alike_everywhere() {
+    for (label, r) in four(&[("prog.nz", LOG)], &[]) {
+        assert_eq!(r.code, Some(0), "{label}: {}", r.stderr);
+        assert_eq!(r.stdout, "span written\n0\n", "{label}");
+        // A span's duration is the clock's; everything else is the program's.
+        let records: Vec<String> = r
+            .stderr
+            .lines()
+            .filter(|l| l.starts_with('{'))
+            .map(|l| match l.find("\"ns\":") {
+                Some(at) => format!("{}\"ns\":N}}", &l[..at]),
+                None => l.to_owned(),
+            })
+            .collect();
+        assert_eq!(
+            records,
+            [
+                r#"{"level":"info","msg":"listening","service":"kvd","port":8080,"tls":false,"note":"quote \" and newline \n"}"#,
+                r#"{"level":"error","msg":"failed","service":"kvd"}"#,
+                r#"{"level":"info","msg":"span","service":"kvd","span":"load","ns":N}"#,
+            ],
+            "{label}"
+        );
+    }
 }
 
 #[test]

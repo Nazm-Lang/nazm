@@ -170,6 +170,24 @@
 @std/json pub fn json_encode_pretty(doc: JsonDoc) -> Str ! {}
 @std/json pub fn json_parse(text: Str) -> Result[JsonDoc, Str] ! {}
 @std/json pub fn json_parse_floats(text: Str) -> Result[JsonDoc, Str] ! {}
+@std/log pub enum LogLevel
+@std/log pub struct Logger
+@std/log pub struct LogSpan
+@std/log pub fn log_level_name(l: LogLevel) -> Str ! {}
+@std/log pub fn log_new(min: LogLevel) -> Logger ! {}
+@std/log pub fn log_with(l: Logger, fields: Strs) -> Logger ! {}
+@std/log pub fn log_str(key: Str, value: Str) -> Str ! {}
+@std/log pub fn log_int(key: Str, value: Int) -> Str ! {}
+@std/log pub fn log_bool(key: Str, value: Bool) -> Str ! {}
+@std/log pub fn log_fields() -> Strs ! {}
+@std/log pub fn log_line(l: Logger, level: LogLevel, message: Str, fields: Strs) -> Str ! {}
+@std/log pub fn log_at(out: OutCap, l: Logger, level: LogLevel, message: Str, fields: Strs) -> Int ! { io }
+@std/log pub fn log_debug(out: OutCap, l: Logger, message: Str, fields: Strs) -> Int ! { io }
+@std/log pub fn log_info(out: OutCap, l: Logger, message: Str, fields: Strs) -> Int ! { io }
+@std/log pub fn log_warn(out: OutCap, l: Logger, message: Str, fields: Strs) -> Int ! { io }
+@std/log pub fn log_error(out: OutCap, l: Logger, message: Str, fields: Strs) -> Int ! { io }
+@std/log pub fn log_span_begin(t: TimeCap, name: Str) -> LogSpan ! {}
+@std/log pub fn log_span_end(out: OutCap, t: TimeCap, l: Logger, s: LogSpan, fields: Strs) -> Int ! { io }
 @std/map pub struct Entry[T]
 @std/map pub struct StrMap[T]
 @std/map pub fn map_new[T]() -> StrMap[T] ! {}

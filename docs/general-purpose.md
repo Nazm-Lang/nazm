@@ -574,6 +574,13 @@ number, 0 for `main`); `runtime_stats()` (tasks spawned, live, channel waits, fr
 existing counters); and `span_begin`/`span_end` records with timings. Transport-neutral: lines on
 standard error, for any collector.
 
+**As built (2026-10-09).** `@std/log` as designed, with a `Logger` carrying a level and fields of
+its own, and spans under a `TimeCap`. **`task_id()` and `runtime_stats()` are not built**: both
+need the task runtime to number tasks and expose its counters, and that runtime's text is held line
+for line to the self-hosted compiler's (`runtime parity`), so they wait for a change that carries
+both; a program numbers its own tasks by passing an id to `spawn`. The scheduler's counters remain
+`NAZM_SCHEDULER_REPORT`'s.
+
 ## 21. Randomness
 
 Two things that must never be confused: `@std/random`'s **seeded generator** — `Rng` (xoshiro256**
