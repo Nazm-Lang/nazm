@@ -484,17 +484,15 @@ done:
 const STACK_RUNTIME: &str = r"
 define hidden i32 @nz.stack_check() {
 entry:
-  %rl = alloca [2 x i64], align 8
   %fp = call ptr @llvm.frameaddress.p0(i32 0)
   %sp = ptrtoint ptr %fp to i64
   %lim = load i64, ptr @nz.stack_limit
   %unset = icmp eq i64 %lim, 0
   br i1 %unset, label %init, label %compare
 init:
-  ; RLIMIT_STACK is 3 on every v1 target, and struct rlimit is two 64-bit words there.
-  %rc = call i32 @getrlimit(i32 3, ptr %rl)
-  %cur = load i64, ptr %rl
-  %ok = icmp eq i32 %rc, 0
+  ; The main thread's stack, as the platform's stack unit reports it (Gate 3); 0 is unknown.
+  %cur = call i64 @nz_os_stack_size()
+  %ok = icmp ne i64 %cur, 0
   %cap = select i1 %ok, i64 %cur, i64 8388608
   %small = icmp ult i64 %cap, 8388608
   %size = select i1 %small, i64 %cap, i64 8388608
@@ -1999,8 +1997,7 @@ init:
 define hidden i1 @nz.pool_start() {
 entry:
   %attr = alloca [128 x i8], align 16
-  %pg32 = call i32 @getpagesize()
-  %pg = sext i32 %pg32 to i64
+  %pg = call i64 @nz_os_page_size()
   store i64 %pg, ptr @nz.pool_page
   %wanted = call i64 @nz.pool_env(ptr @.pool.env.workers, i64 4)
   %big = icmp sgt i64 %wanted, 64
@@ -2304,13 +2301,11 @@ finish:
   %base = getelementptr i8, ptr %h, i64 8
   %stk = load ptr, ptr %base
   %pg = load i64, ptr @nz.pool_page
-  ; A guard page that cannot be made writable again is never handed back to `malloc`, which
-  ; would give it out unreadable: the stack is leaked instead (Q1-A1-10).
-  %rw = call i32 @mprotect(ptr %stk, i64 %pg, i32 3)
-  %rwok = icmp eq i32 %rw, 0
-  br i1 %rwok, label %freestack, label %keptstack
-freestack:
-  call void @free(ptr %stk)
+  %stotp = getelementptr i8, ptr %h, i64 16
+  %stot = load i64, ptr %stotp
+  ; The platform's stack unit lifts the guard and releases the stack, or leaks it rather than
+  ; hand back a page that would be given out unreadable (Q1-A1-10).
+  call void @nz_os_stack_free(ptr %stk, i64 %stot, i64 %pg)
   br label %keptstack
 keptstack:
   %js = load ptr, ptr @nz.pool_join
@@ -2329,7 +2324,6 @@ keptstack:
 ; stack could be had.
 define hidden i32 @nz.task_start(ptr %fn, ptr %blk) {
 entry:
-  %slot = alloca ptr, align 8
   %t = call ptr @malloc(i64 192)
   %tnull = icmp eq ptr %t, null
   br i1 %tnull, label %nothread, label %zero
@@ -2340,21 +2334,13 @@ zero:
   %pg = load i64, ptr @nz.pool_page
   %size = load i64, ptr @nz.pool_stack
   %total = add i64 %size, %pg
-  %rc = call i32 @posix_memalign(ptr %slot, i64 %pg, i64 %total)
-  %bad = icmp ne i32 %rc, 0
-  br i1 %bad, label %nostack, label %guard
+  ; The platform's stack unit (Gate 3): page-aligned, its lowest page a guard. No guard, no
+  ; task: a stack without one would overflow into whatever lies below it (Q1-A1-10), so null
+  ; is reported as "no stack could be had".
+  %base = call ptr @nz_os_stack_alloc(i64 %total, i64 %pg)
+  %bad = icmp eq ptr %base, null
+  br i1 %bad, label %nostack, label %guarded
 nostack:
-  call void @free(ptr %t)
-  ret i32 1
-guard:
-  %base = load ptr, ptr %slot
-  ; No guard, no task: a stack without its guard page would overflow into whatever lies below
-  ; it (Q1-A1-10). Reported as "no stack could be had".
-  %g = call i32 @mprotect(ptr %base, i64 %pg, i32 0)
-  %gok = icmp eq i32 %g, 0
-  br i1 %gok, label %guarded, label %noguard
-noguard:
-  call void @free(ptr %base)
   call void @free(ptr %t)
   ret i32 1
 guarded:

@@ -299,6 +299,9 @@ fn write_objects(
     let libs = match target.os {
         nazm_lir::backend::Os::Linux => "-lpthread -lm".to_owned(),
         nazm_lir::backend::Os::Macos => String::new(),
+        // MinGW-w64 (Gate 3): Winsock and BCrypt, and the C runtime's own libraries linked in
+        // statically, so the executable needs no MinGW DLL beside it.
+        nazm_lir::backend::Os::Windows => "-static -pthread -lws2_32 -lbcrypt".to_owned(),
         // A WebAssembly module links nothing but itself, by `wasm-ld` (N64).
         nazm_lir::backend::Os::None if target.is_wasm() => {
             format!("none; {}", nazm_lir::runtime::wasm::LINK)
