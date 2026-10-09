@@ -1,0 +1,6 @@
+// expect: N0619
+// A test answers Result[Int, Str], what its entry can judge (spec: tests-and-benchmarks).
+@test
+fn checks() -> Int { 0 }
+
+fn main() -> Int { 0 }

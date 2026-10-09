@@ -22,5 +22,5 @@
 
 - [x] 4.1 Reference applications (§24)
 - [x] 4.2 Competitor map (§25)
-- [ ] 4.3 Migration document, matrix, limitations
-- [ ] 4.4 Contained gate: workspace, selfhost, bootstrap, benchmarks, mutation campaign
+- [x] 4.3 Migration document, matrix, limitations
+- [x] 4.4 Contained gate: workspace, selfhost, bootstrap, benchmarks, mutation campaign

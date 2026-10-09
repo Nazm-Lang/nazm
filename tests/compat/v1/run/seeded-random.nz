@@ -1,0 +1,18 @@
+// A seeded generator: one seed, one sequence, everywhere — xoshiro256** seeded by SplitMix64 (spec: randomness).
+use "@std/random";
+
+fn main(out: OutCap) -> Int {
+    let r = random_new(UInt64(42));
+    print(str_concat(num_to_str(random_u64(r)), "\n"));
+    print(str_concat(num_to_str(random_u64(r)), "\n"));
+    print(str_concat(num_to_str(random_u64(r)), "\n"));
+    let mut i = 0;
+    while i < 5 {
+        print(str_concat(int_to_str(random_int(r, 0, 100)), " "));
+        i = i + 1;
+    }
+    print("\n");
+    let again = random_new(UInt64(42));
+    print(str_concat(num_to_str(random_u64(again)), "\n"));
+    0
+}
