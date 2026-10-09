@@ -1,0 +1,84 @@
+use "@std/ioerror";
+use "@std/file";
+use "@std/random";
+
+fn show(out: OutCap, s: Str) -> Int ! {io} {
+    print(str_concat(s, "\n"))
+}
+
+fn kind(e: IoError) -> Str {
+    io_kind_name(e.kind)
+}
+
+fn main(io: IoCap, out: OutCap, rc: RandomCap) -> Int {
+    match file_create(io, "a.txt") {
+        Result.Ok(value: f) => {
+            file_write_str(f, "hello\n");
+            file_close(f);
+            0
+        },
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match file_append(io, "a.txt") {
+        Result.Ok(value: f) => {
+            file_write_str(f, "world\n");
+            file_close(f);
+            0
+        },
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match file_read_all(io, "a.txt") {
+        Result.Ok(value: b) => show(out, str_concat("read: ", bytes_to_str(b))),
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match file_metadata(io, "a.txt") {
+        Result.Ok(value: m) => show(out, str_concat("size ", int_to_str(m.size))),
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match dir_create(io, "d") {
+        Result.Ok(value: n) => show(out, "made d"),
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match file_create(io, "d/x.txt") {
+        Result.Ok(value: f) => { file_close(f); 0 },
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match file_create(io, "d/y.txt") {
+        Result.Ok(value: f) => { file_close(f); 0 },
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match dir_list(io, "d") {
+        Result.Ok(value: names) => show(out, str_join(names, ",")),
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match file_rename(io, "d/x.txt", "d/y.txt") {
+        Result.Ok(value: n) => show(out, "renamed over"),
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match dir_list(io, "d") {
+        Result.Ok(value: names) => show(out, str_join(names, ",")),
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match dir_remove(io, "d") {
+        Result.Ok(value: n) => show(out, "removed a full directory?"),
+        Result.Err(error: e) => show(out, str_concat("full: ", kind(e))),
+    };
+    match file_remove(io, "d/y.txt") {
+        Result.Ok(value: n) => show(out, "removed y"),
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match dir_remove(io, "d") {
+        Result.Ok(value: n) => show(out, "removed d"),
+        Result.Err(error: e) => show(out, kind(e)),
+    };
+    match file_open(io, "missing.txt") {
+        Result.Ok(value: f) => show(out, "opened a missing file?"),
+        Result.Err(error: e) => show(out, str_concat("missing: ", kind(e))),
+    };
+    let buf = bytes_new(16);
+    match random_bytes(rc, buf) {
+        Result.Ok(value: n) => show(out, str_concat("entropy ", int_to_str(n))),
+        Result.Err(error: e) => show(out, e),
+    };
+    0
+}

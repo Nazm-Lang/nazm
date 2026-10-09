@@ -24,11 +24,12 @@ use nazm_lir::backend::Target;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
-const TARGETS: [&str; 4] = [
+const TARGETS: [&str; 5] = [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
     "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-gnu",
 ];
 
 const PROGRAM: &str = "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\n\
@@ -57,6 +58,14 @@ fn header(path: &Path) -> (&'static str, &'static str) {
             _ => "other",
         };
         ("mach-o", arch)
+    } else if b.starts_with(&[0x64, 0x86]) {
+        // A COFF object's machine word: IMAGE_FILE_MACHINE_AMD64.
+        ("coff", "x86_64")
+    } else if b.starts_with(b"MZ") {
+        // A PE executable: the COFF header follows the `PE\0\0` signature `e_lfanew` points to.
+        let at = u32::from_le_bytes([b[60], b[61], b[62], b[63]]) as usize;
+        let machine = u16::from_le_bytes([b[at + 4], b[at + 5]]);
+        ("coff", if machine == 0x8664 { "x86_64" } else { "other" })
     } else if b.starts_with(b"\x7fELF") {
         let machine = u16::from_le_bytes([b[18], b[19]]);
         let arch = match machine {
@@ -73,6 +82,8 @@ fn header(path: &Path) -> (&'static str, &'static str) {
 fn expected(triple: &str) -> (&'static str, &'static str) {
     let format = if triple.contains("apple") {
         "mach-o"
+    } else if triple.contains("windows") {
+        "coff"
     } else {
         "elf"
     };
@@ -113,15 +124,25 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
             // The task pool's switch (N83) follows the runtime where the runtime has tasks or
             // channels, the target's `errno` (N85) where C is called or a file used, and its `os`
             // unit (Gate 2) where a file is used — all three always under Cranelift, whose
-            // runtime is its whole baseline.
-            let want = if backend == "cranelift" {
-                "objects 00-m0.o 01-runtime.o 02-switch.o 03-errno.o 04-os.o 05-entry.o\n"
-            } else {
-                "objects 00-m0.o 01-runtime.o 02-entry.o\n"
+            // runtime is its whole baseline. The `stack` unit (Gate 3) wherever the stack is
+            // checked, and Windows' `init` unit always.
+            let windows = triple.contains("windows");
+            let want = match (backend, windows) {
+                ("cranelift", false) => {
+                    "objects 00-m0.o 01-runtime.o 02-switch.o 03-stack.o 04-errno.o 05-os.o 06-entry.o\n"
+                }
+                ("cranelift", true) => {
+                    "objects 00-m0.o 01-runtime.o 02-switch.o 03-init.o 04-stack.o 05-errno.o 06-os.o \
+                     07-entry.o\n"
+                }
+                (_, false) => "objects 00-m0.o 01-runtime.o 02-stack.o 03-entry.o\n",
+                (_, true) => "objects 00-m0.o 01-runtime.o 02-init.o 03-stack.o 04-entry.o\n",
             };
             assert!(listed.contains(want), "{listed}");
             let libs = if triple.contains("linux") {
                 "-lpthread -lm"
+            } else if windows {
+                "-static -pthread -lws2_32 -lbcrypt"
             } else {
                 ""
             };
@@ -208,9 +229,12 @@ fn a_program_for_the_other_macos_architecture_runs_where_rosetta_does() {
 
 #[test]
 fn objects_for_two_targets_are_never_one_cache_entry() {
-    let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("nazm.root"), "").unwrap();
-    std::fs::write(d.path().join("prog.nz"), PROGRAM).unwrap();
+    let fresh = || {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("nazm.root"), "").unwrap();
+        std::fs::write(d.path().join("prog.nz"), PROGRAM).unwrap();
+        d
+    };
     let report = |o: &Output| -> serde_json::Value {
         String::from_utf8_lossy(&o.stdout)
             .lines()
@@ -218,7 +242,10 @@ fn objects_for_two_targets_are_never_one_cache_entry() {
             .map(|l| serde_json::from_str(l).unwrap())
             .unwrap_or_else(|| panic!("no build report: {}", err(o)))
     };
+    // A project of its own per backend: a unit both backends hand to clang (the `stack` unit,
+    // Gate 3) is rightly one object for one target, whichever backend asked for it first.
     for backend in ["llvm", "cranelift"] {
+        let d = fresh();
         let mut stored = Vec::new();
         for (i, triple) in ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
             .iter()
@@ -304,9 +331,9 @@ fn inspect_names_every_target_and_what_this_host_makes_of_it() {
     assert!(o.status.success(), "{}", err(&o));
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     let listed = v["toolchain"]["targets"].as_array().unwrap();
-    // The four hosted triples and, since N62, the board, since N64, WebAssembly, and since N86 the
-    // RISC-V board.
-    assert_eq!(listed.len(), 7);
+    // The four hosted triples and, since N62, the board, since N64, WebAssembly, since N86 the
+    // RISC-V board, and since Gate 3 Windows x86_64.
+    assert_eq!(listed.len(), 8);
     for t in listed {
         let target = Target::parse(t["triple"].as_str().unwrap()).unwrap();
         let want = if target.links_on(&host) {
