@@ -211,6 +211,8 @@ impl Effect {
             | Intrinsic::OsKill => Some(Self::Io),
             // A handle's own state and a status's meaning are values the program holds.
             Intrinsic::OsStatus | Intrinsic::OsFamily | Intrinsic::OsErrorText => None,
+            // Entropy changes nothing outside the program; its authority is a `RandomCap`, held.
+            Intrinsic::OsRandomBytes => None,
             // Reading what C left is part of calling C (N85).
             Intrinsic::CErrno => Some(Self::Foreign),
             // Strings and sequences compute over values the caller holds; channels are

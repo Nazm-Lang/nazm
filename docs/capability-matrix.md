@@ -110,7 +110,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 3 | Type system | VERIFIED as scoped (N107, Gate 2) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); fixed-width integers, `Float32`/`Float64`, bit operators and conversions, fixed arrays of plain data and module constants, `Bytes` buffers and views, and `Text` (Gate 2); trait objects, generic traits and default methods refused by name |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe — closure environments are ownership-graph nodes; the capture that could close a cycle is refused (`N0616`, Gate 1-C1) |
 | 5 | Effects | VERIFIED as scoped (N107) — inferred, checked compiler-owned effects with subsumption (N79); no handlers or user effects; pure is not total |
-| 6 | Capabilities (language) | VERIFIED as scoped (N107) — static, coarse, shareable: no inherited authority (N104), `OutCap` attenuation (N79); `NetCap`, `ProcessCap`, and an open handle as its own authority (Gate 2) |
+| 6 | Capabilities (language) | VERIFIED as scoped (N107) — static, coarse, shareable: no inherited authority (N104), `OutCap` attenuation (N79); `NetCap`, `RandomCap`, `ProcessCap`, and an open handle as its own authority (Gate 2) |
 | 7 | Provenance and information flow (language) | VERIFIED as scoped (N107) — explicit data flow by cell, target and field (N80); implicit flow RESEARCH (R6), not claimed |
 | 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | VERIFIED (v1) |
@@ -122,7 +122,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 13 | Runtime | VERIFIED (v1 contract; a built, versioned, verified artifact, N82; M:N tasks on bounded workers by default, N106) — no allocator of its own, runtime still text |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
-| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles, I/O errors, networking, environment, processes, errors and binary encoding (twenty-seven modules); no cryptography; numbers are the language's since Gate 2 (area 3) |
+| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles, I/O errors, networking, environment, processes, errors, binary encoding and randomness (twenty-eight modules); no cryptography; numbers are the language's since Gate 2 (area 3) |
 | 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
 | 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
@@ -1835,6 +1835,12 @@ module checking cleanly, documented and listed. Measured (`performance.md`): sor
 19.6 ms; 10,000 map insertions 391 ms (an insertion moves the entries after it); parsing and
 re-encoding 128 KB of JSON about 14 ms. **Scope**: no networking, cryptography or floating point, by
 decision; the map's insertion is linear; the compiler written in Nazm cannot import any of it.
+
+**Gate 2 (2026-10-09)** · *Randomness* (`general-purpose.md` §21; `spec.md`, *Randomness*).
+`RandomCap` (id 8) and `os_random_bytes` from the system's entropy; `@std/random`'s seeded
+xoshiro256** generator, pure. Runtime ABI 20; semantic epoch 40. Evidence:
+`a_seeded_generator_repeats_everywhere_and_entropy_does_not` (the sequence an independent Python
+implementation gives, every implementation), `entropy_needs_a_random_cap_and_a_seeded_generator_needs_none`.
 
 **Gate 2 (2026-10-09)** · *Serialization* (`general-purpose.md` §14). `@std/json` reads and writes
 floats beside its frozen integer parser, and pretty-prints; `@std/binary` encodes fixed-width

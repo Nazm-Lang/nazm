@@ -582,6 +582,11 @@ capability **`RandomCap`**: `random_bytes(r, buf)` and `random_u64(r)` from the 
 (`getentropy`), suitable for keys and seeds. A seed from entropy makes a generator unpredictable;
 reproducibility is the default and is explicit.
 
+**As built (2026-10-09).** As designed, with one built-in rather than two:
+`os_random_bytes(buf)` behind `RandomCap` (id 8), `getentropy` natively and the random device in
+the interpreter; `@std/random`'s `random_bytes` and `random_seed` over it, and its `Rng`
+(`random_new`, `random_u64`, `random_int`, `random_float`, `random_shuffle`) ordinary pure code.
+
 ## 22. Package features
 
 `[features]` in `nazm.toml`: `name = ["other-feature", "dep/feature"]`, `default = [...]`, and a

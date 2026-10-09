@@ -232,6 +232,14 @@
 @std/process pub fn process_wait(c: Child) -> Result[Int, IoError] ! { io }
 @std/process pub fn process_kill(c: Child) -> Result[Int, IoError] ! { io }
 @std/process pub fn process_run(p: ProcessCap, sp: SpawnCap, program: Str, args: Strs, input: Bytes) -> Result[ProcessOutput, IoError] ! { io, spawn }
+@std/random pub struct Rng
+@std/random pub fn random_new(seed: UInt64) -> Rng ! {}
+@std/random pub fn random_u64(r: Rng) -> UInt64 ! {}
+@std/random pub fn random_int(r: Rng, lo: Int, hi: Int) -> Int ! {}
+@std/random pub fn random_float(r: Rng) -> Float64 ! {}
+@std/random pub fn random_shuffle[T](r: Rng, xs: Vec[T]) -> Int ! {}
+@std/random pub fn random_bytes(rc: RandomCap, buf: Bytes) -> Result[Int, Str] ! {}
+@std/random pub fn random_seed(rc: RandomCap) -> UInt64 ! {}
 @std/result pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {}
 @std/result pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {}
 @std/result pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {}

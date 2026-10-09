@@ -1,0 +1,97 @@
+// `@std/random`: a seeded generator, and the system's entropy (Gate 2).
+//
+// Imported with `use "@std/random";`. Two things that must never be confused. An `Rng` is a
+// **seeded** generator — xoshiro256**, its state filled from the seed by SplitMix64 — pure and
+// reproducible: one seed, one sequence, in every implementation and run, needing no authority.
+// **Entropy** is the operating system's, behind a `RandomCap`: `random_bytes` and `random_seed`,
+// for keys and for seeding a generator that should not be predicted. Reproducibility is the default
+// and unpredictability is asked for by name. `docs/general-purpose.md` §21.
+
+/// A seeded generator: its four words of state, shared like any handle.
+pub struct Rng {
+    state: Vec[UInt64],
+}
+
+fn splitmix(x: UInt64) -> UInt64 ! {} {
+    let a = wrapping_mul(x ^ (x >> 30), UInt64(0xBF58476D1CE4E5B9));
+    let b = wrapping_mul(a ^ (a >> 27), UInt64(0x94D049BB133111EB));
+    b ^ (b >> 31)
+}
+
+/// A generator seeded with `seed`: the same seed gives the same sequence everywhere.
+pub fn random_new(seed: UInt64) -> Rng ! {} {
+    let state = vec_new[UInt64]();
+    let mut s = seed;
+    let mut i = 0;
+    while i < 4 {
+        s = wrapping_add(s, UInt64(0x9E3779B97F4A7C15));
+        vec_push(state, splitmix(s));
+        i = i + 1;
+    }
+    Rng(state: state)
+}
+
+/// The next 64 bits.
+pub fn random_u64(r: Rng) -> UInt64 ! {} {
+    let s0 = vec_get(r.state, 0);
+    let s1 = vec_get(r.state, 1);
+    let s2 = vec_get(r.state, 2);
+    let s3 = vec_get(r.state, 3);
+    let result = wrapping_mul(rotate_left(wrapping_mul(s1, UInt64(5)), 7), UInt64(9));
+    let t = s1 << 17;
+    let n2 = s2 ^ s0;
+    let n3 = s3 ^ s1;
+    let n1 = s1 ^ n2;
+    let n0 = s0 ^ n3;
+    vec_set(r.state, 0, n0);
+    vec_set(r.state, 1, n1);
+    vec_set(r.state, 2, n2 ^ t);
+    vec_set(r.state, 3, rotate_left(n3, 45));
+    result
+}
+
+/// A whole number in `lo..hi`, every one equally likely (rejection, no modulo bias); `lo` when
+/// the range is empty.
+pub fn random_int(r: Rng, lo: Int, hi: Int) -> Int ! {} {
+    if hi <= lo {
+        return lo;
+    }
+    let span = wrap_convert[UInt64](hi - lo);
+    let zone = UInt64(18446744073709551615) - (UInt64(18446744073709551615) % span + UInt64(1)) % span;
+    let mut x = random_u64(r);
+    while x > zone {
+        x = random_u64(r);
+    }
+    lo + wrap_convert[Int](x % span)
+}
+
+/// A float in `[0, 1)`: the top 53 bits, scaled.
+pub fn random_float(r: Rng) -> Float64 ! {} {
+    Float64(random_u64(r) >> 11) / 9007199254740992.0
+}
+
+/// `xs` shuffled in place, every order equally likely (Fisher–Yates).
+pub fn random_shuffle[T](r: Rng, xs: Vec[T]) -> Int ! {} {
+    let mut i = vec_len(xs) - 1;
+    while i > 0 {
+        let j = random_int(r, 0, i + 1);
+        let a = vec_get(xs, i);
+        vec_set(xs, i, vec_get(xs, j));
+        vec_set(xs, j, a);
+        i = i - 1;
+    }
+    0
+}
+
+/// `buf` filled from the operating system's entropy: its length, or the error.
+pub fn random_bytes(rc: RandomCap, buf: Bytes) -> Result[Int, Str] ! {} {
+    let n = os_random_bytes(buf);
+    if n < 0 { Result[Int, Str].Err(error: os_error_text(n)) } else { Result[Int, Str].Ok(value: n) }
+}
+
+/// 64 bits of the operating system's entropy, for a seed nobody can predict.
+pub fn random_seed(rc: RandomCap) -> UInt64 ! {} {
+    let b = bytes_new(8);
+    let n = os_random_bytes(b);
+    bytes_read_le[UInt64](b, 0)
+}
