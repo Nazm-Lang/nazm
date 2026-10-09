@@ -496,6 +496,11 @@ deterministic binary encoding over `Bytes`: fixed-width little- and big-endian i
 unsigned and zig-zag varints, length-prefixed strings and bytes, with a `Writer`/`Reader` pair whose
 reads return `Result`.
 
+**As built (2026-10-09).** Library only. `@std/json`'s 1.0 `json_parse` keeps refusing a fraction
+— its documented behaviour is frozen — and `json_parse_floats` reads one, beside `json_add_float`,
+`json_float` and `json_encode_pretty`; JSON has no infinity or NaN, so those are written `null`.
+`@std/binary`'s `Writer` and `Reader` are as designed, the reads `Result[_, Str]`.
+
 ## 15. Compile-time evaluation — constants
 
 **Problem.** Array sizes, table sizes, masks and configuration need named compile-time values; the

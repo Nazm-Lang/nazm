@@ -1,0 +1,326 @@
+// `@std/binary`: a deterministic binary encoding over `Bytes` (Gate 2).
+//
+// Imported with `use "@std/binary";`. A `Writer` gathers fixed-width integers and floats in either
+// byte order, unsigned and zig-zag varints (LEB128), and length-prefixed bytes and strings, and
+// `binary_finish` gives them as one `Bytes`; a `Reader` reads them back in the same order, every
+// read a `Result` whose error names what was short or wrong and where. The same values encode to
+// the same bytes in every implementation and on every platform. `docs/general-purpose.md` §14.
+
+/// Bytes being written: the pieces so far, and their total length.
+pub struct Writer {
+    parts: Vec[Bytes],
+    len: Ints,
+}
+
+/// Bytes being read, and where the next read starts.
+pub struct Reader {
+    data: Bytes,
+    pos: Ints,
+}
+
+/// An empty writer.
+pub fn binary_writer() -> Writer ! {} {
+    let len = ints_new();
+    ints_push(len, 0);
+    Writer(parts: vec_new[Bytes](), len: len)
+}
+
+fn push(w: Writer, b: Bytes) -> Int ! {} {
+    vec_push(w.parts, b);
+    ints_set(w.len, 0, ints_get(w.len, 0) + bytes_len(b));
+    0
+}
+
+/// How many bytes `w` holds.
+pub fn binary_len(w: Writer) -> Int ! {} {
+    ints_get(w.len, 0)
+}
+
+/// Everything written, as one buffer.
+pub fn binary_finish(w: Writer) -> Bytes ! {} {
+    let all = bytes_new(ints_get(w.len, 0));
+    let mut at = 0;
+    let mut i = 0;
+    while i < vec_len(w.parts) {
+        let part = vec_get(w.parts, i);
+        bytes_copy(bytes_slice(all, at, at + bytes_len(part)), part);
+        at = at + bytes_len(part);
+        i = i + 1;
+    }
+    all
+}
+
+/// One byte.
+pub fn binary_put_u8(w: Writer, v: UInt8) -> Int ! {} {
+    let b = bytes_new(1);
+    bytes_set(b, 0, v);
+    push(w, b)
+}
+
+/// A `UInt16`, least significant byte first.
+pub fn binary_put_u16_le(w: Writer, v: UInt16) -> Int ! {} {
+    let b = bytes_new(2);
+    bytes_write_le(b, 0, v);
+    push(w, b)
+}
+
+/// A `UInt16`, most significant byte first.
+pub fn binary_put_u16_be(w: Writer, v: UInt16) -> Int ! {} {
+    let b = bytes_new(2);
+    bytes_write_be(b, 0, v);
+    push(w, b)
+}
+
+/// A `UInt32`, least significant byte first.
+pub fn binary_put_u32_le(w: Writer, v: UInt32) -> Int ! {} {
+    let b = bytes_new(4);
+    bytes_write_le(b, 0, v);
+    push(w, b)
+}
+
+/// A `UInt32`, most significant byte first.
+pub fn binary_put_u32_be(w: Writer, v: UInt32) -> Int ! {} {
+    let b = bytes_new(4);
+    bytes_write_be(b, 0, v);
+    push(w, b)
+}
+
+/// A `UInt64`, least significant byte first.
+pub fn binary_put_u64_le(w: Writer, v: UInt64) -> Int ! {} {
+    let b = bytes_new(8);
+    bytes_write_le(b, 0, v);
+    push(w, b)
+}
+
+/// A `UInt64`, most significant byte first.
+pub fn binary_put_u64_be(w: Writer, v: UInt64) -> Int ! {} {
+    let b = bytes_new(8);
+    bytes_write_be(b, 0, v);
+    push(w, b)
+}
+
+/// An `Int`, two's complement, least significant byte first.
+pub fn binary_put_i64_le(w: Writer, v: Int) -> Int ! {} {
+    let b = bytes_new(8);
+    bytes_write_le(b, 0, v);
+    push(w, b)
+}
+
+/// An `Int`, two's complement, most significant byte first.
+pub fn binary_put_i64_be(w: Writer, v: Int) -> Int ! {} {
+    let b = bytes_new(8);
+    bytes_write_be(b, 0, v);
+    push(w, b)
+}
+
+/// A `Float64`'s IEEE 754 bits, least significant byte first.
+pub fn binary_put_f64_le(w: Writer, v: Float64) -> Int ! {} {
+    let b = bytes_new(8);
+    bytes_write_le(b, 0, v);
+    push(w, b)
+}
+
+/// A `Float64`'s IEEE 754 bits, most significant byte first.
+pub fn binary_put_f64_be(w: Writer, v: Float64) -> Int ! {} {
+    let b = bytes_new(8);
+    bytes_write_be(b, 0, v);
+    push(w, b)
+}
+
+/// An unsigned varint (LEB128): seven bits a byte, least significant first, the top bit set on
+/// every byte but the last.
+pub fn binary_put_varint(w: Writer, v: UInt64) -> Int ! {} {
+    let mut x = v;
+    let mut n = 1;
+    while x >= UInt64(128) {
+        x = x >> 7;
+        n = n + 1;
+    }
+    let b = bytes_new(n);
+    let mut y = v;
+    let mut i = 0;
+    while i < n {
+        let low = UInt8(y & UInt64(127));
+        if i + 1 < n {
+            bytes_set(b, i, low | UInt8(128));
+        } else {
+            bytes_set(b, i, low);
+        }
+        y = y >> 7;
+        i = i + 1;
+    }
+    push(w, b)
+}
+
+/// A signed varint: zig-zag (0, -1, 1, -2 … as 0, 1, 2, 3 …), then as `binary_put_varint`.
+pub fn binary_put_zigzag(w: Writer, v: Int) -> Int ! {} {
+    let u = wrap_convert[UInt64](v);
+    let z = (u << 1) ^ wrap_convert[UInt64](v >> 63);
+    binary_put_varint(w, z)
+}
+
+/// `data` as it is, with no length.
+pub fn binary_put_raw(w: Writer, data: Bytes) -> Int ! {} {
+    let b = bytes_new(bytes_len(data));
+    bytes_copy(b, data);
+    push(w, b)
+}
+
+/// `data`, preceded by its length as a varint.
+pub fn binary_put_bytes(w: Writer, data: Bytes) -> Int ! {} {
+    binary_put_varint(w, UInt64(bytes_len(data)));
+    binary_put_raw(w, data)
+}
+
+/// `s`'s bytes, preceded by their length as a varint.
+pub fn binary_put_str(w: Writer, s: Str) -> Int ! {} {
+    binary_put_bytes(w, bytes_from_str(s))
+}
+
+/// A reader at the start of `data`.
+pub fn binary_reader(data: Bytes) -> Reader ! {} {
+    let pos = ints_new();
+    ints_push(pos, 0);
+    Reader(data: data, pos: pos)
+}
+
+/// Where the next read starts.
+pub fn binary_position(r: Reader) -> Int ! {} {
+    ints_get(r.pos, 0)
+}
+
+/// How many bytes are left.
+pub fn binary_remaining(r: Reader) -> Int ! {} {
+    bytes_len(r.data) - ints_get(r.pos, 0)
+}
+
+// The next `n` bytes' start, moving past them, or an `Err` naming what was short.
+fn take(r: Reader, n: Int, what: Str) -> Result[Int, Str] ! {} {
+    let at = ints_get(r.pos, 0);
+    if n < 0 || at + n > bytes_len(r.data) {
+        return Result[Int, Str].Err(error: str_concat(str_concat(what, " needs more bytes than are left at byte "), int_to_str(at)));
+    }
+    ints_set(r.pos, 0, at + n);
+    Result[Int, Str].Ok(value: at)
+}
+
+/// One byte.
+pub fn binary_get_u8(r: Reader) -> Result[UInt8, Str] ! {} {
+    let at = take(r, 1, "a byte")?;
+    Result[UInt8, Str].Ok(value: bytes_get(r.data, at))
+}
+
+/// A `UInt16`, least significant byte first.
+pub fn binary_get_u16_le(r: Reader) -> Result[UInt16, Str] ! {} {
+    let at = take(r, 2, "a UInt16")?;
+    Result[UInt16, Str].Ok(value: bytes_read_le[UInt16](r.data, at))
+}
+
+/// A `UInt16`, most significant byte first.
+pub fn binary_get_u16_be(r: Reader) -> Result[UInt16, Str] ! {} {
+    let at = take(r, 2, "a UInt16")?;
+    Result[UInt16, Str].Ok(value: bytes_read_be[UInt16](r.data, at))
+}
+
+/// A `UInt32`, least significant byte first.
+pub fn binary_get_u32_le(r: Reader) -> Result[UInt32, Str] ! {} {
+    let at = take(r, 4, "a UInt32")?;
+    Result[UInt32, Str].Ok(value: bytes_read_le[UInt32](r.data, at))
+}
+
+/// A `UInt32`, most significant byte first.
+pub fn binary_get_u32_be(r: Reader) -> Result[UInt32, Str] ! {} {
+    let at = take(r, 4, "a UInt32")?;
+    Result[UInt32, Str].Ok(value: bytes_read_be[UInt32](r.data, at))
+}
+
+/// A `UInt64`, least significant byte first.
+pub fn binary_get_u64_le(r: Reader) -> Result[UInt64, Str] ! {} {
+    let at = take(r, 8, "a UInt64")?;
+    Result[UInt64, Str].Ok(value: bytes_read_le[UInt64](r.data, at))
+}
+
+/// A `UInt64`, most significant byte first.
+pub fn binary_get_u64_be(r: Reader) -> Result[UInt64, Str] ! {} {
+    let at = take(r, 8, "a UInt64")?;
+    Result[UInt64, Str].Ok(value: bytes_read_be[UInt64](r.data, at))
+}
+
+/// An `Int`, least significant byte first.
+pub fn binary_get_i64_le(r: Reader) -> Result[Int, Str] ! {} {
+    let at = take(r, 8, "an Int")?;
+    Result[Int, Str].Ok(value: bytes_read_le[Int](r.data, at))
+}
+
+/// An `Int`, most significant byte first.
+pub fn binary_get_i64_be(r: Reader) -> Result[Int, Str] ! {} {
+    let at = take(r, 8, "an Int")?;
+    Result[Int, Str].Ok(value: bytes_read_be[Int](r.data, at))
+}
+
+/// A `Float64`, least significant byte first.
+pub fn binary_get_f64_le(r: Reader) -> Result[Float64, Str] ! {} {
+    let at = take(r, 8, "a Float64")?;
+    Result[Float64, Str].Ok(value: bytes_read_le[Float64](r.data, at))
+}
+
+/// A `Float64`, most significant byte first.
+pub fn binary_get_f64_be(r: Reader) -> Result[Float64, Str] ! {} {
+    let at = take(r, 8, "a Float64")?;
+    Result[Float64, Str].Ok(value: bytes_read_be[Float64](r.data, at))
+}
+
+/// An unsigned varint: an `Err` for one that runs past the end, or past 64 bits.
+pub fn binary_get_varint(r: Reader) -> Result[UInt64, Str] ! {} {
+    let start = ints_get(r.pos, 0);
+    let mut v = UInt64(0);
+    let mut shift = 0;
+    let mut more = true;
+    while more {
+        let at = take(r, 1, "a varint")?;
+        let b = bytes_get(r.data, at);
+        let low = UInt64(b & UInt8(127));
+        if shift == 63 && low > UInt64(1) {
+            return Result[UInt64, Str].Err(error: str_concat("a varint past 64 bits at byte ", int_to_str(start)));
+        }
+        v = v | (low << shift);
+        if b < UInt8(128) {
+            more = false;
+        } else {
+            shift = shift + 7;
+            if shift > 63 {
+                return Result[UInt64, Str].Err(error: str_concat("a varint past 64 bits at byte ", int_to_str(start)));
+            }
+        }
+    }
+    Result[UInt64, Str].Ok(value: v)
+}
+
+/// A zig-zag varint.
+pub fn binary_get_zigzag(r: Reader) -> Result[Int, Str] ! {} {
+    let z = binary_get_varint(r)?;
+    let half = wrap_convert[Int](z >> 1);
+    let sign = 0 - wrap_convert[Int](z & UInt64(1));
+    Result[Int, Str].Ok(value: half ^ sign)
+}
+
+/// The next `n` bytes, as they are, sharing `r`'s buffer.
+pub fn binary_get_raw(r: Reader, n: Int) -> Result[Bytes, Str] ! {} {
+    let at = take(r, n, "a run of bytes")?;
+    Result[Bytes, Str].Ok(value: bytes_slice(r.data, at, at + n))
+}
+
+/// Bytes preceded by their length as a varint.
+pub fn binary_get_bytes(r: Reader) -> Result[Bytes, Str] ! {} {
+    let n = binary_get_varint(r)?;
+    if n > UInt64(bytes_len(r.data)) {
+        return Result[Bytes, Str].Err(error: str_concat("a length longer than the data at byte ", int_to_str(ints_get(r.pos, 0))));
+    }
+    binary_get_raw(r, Int(n))
+}
+
+/// A string preceded by its length as a varint.
+pub fn binary_get_str(r: Reader) -> Result[Str, Str] ! {} {
+    let b = binary_get_bytes(r)?;
+    Result[Str, Str].Ok(value: bytes_to_str(b))
+}
