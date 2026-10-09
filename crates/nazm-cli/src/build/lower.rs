@@ -372,6 +372,18 @@ fn emit_artefacts(
                 });
             }
         }
+        // What the target does before `main` (Gate 3): on Windows, binary standard streams.
+        if let Some(t) = switch_target(backend.target()) {
+            if let Some(text) = nazm_lir::runtime::platform::emit_init(t) {
+                out.push(Artefact {
+                    name: "init".to_owned(),
+                    code: nazm_lir::backend::Code::Llvm(text),
+                    instance: false,
+                    key: None,
+                    reused: false,
+                });
+            }
+        }
         // The task stacks and the stack budget, the platform's (Gate 3): wherever the runtime
         // checks the stack or runs the pool.
         if settled.stack || settled.tasks || settled.channels {
