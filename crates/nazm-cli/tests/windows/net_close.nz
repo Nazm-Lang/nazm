@@ -1,0 +1,32 @@
+use "@std/ioerror";
+use "@std/net";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn wait_for_data(c: TcpStream, ready: Chan, answer: Chan[Str]) -> Int ! { io } {
+chan_send(ready, 1);
+let buf = bytes_new(8);
+chan_send_of(answer, match tcp_read(c, buf) { Result.Ok(value: n) => int_to_str(n), Result.Err(error: e) => io_kind_name(e.kind), });
+0
+}
+fn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {
+match tcp_listen(net, "127.0.0.1:0") {
+Result.Ok(value: l) => {
+match tcp_connect(net, tcp_listener_addr(l), 2000) {
+Result.Ok(value: c) => {
+let ready = chan_new(1);
+let answer = chan_new_of[Str](1);
+let r = ints_new();
+let v = vec_new[Str]();
+scope {
+spawn wait_for_data(c, ready, answer);
+chan_recv(ready, r);
+tcp_close(c);
+if chan_recv_of(answer, v) { line(out, vec_get(v, 0)); } else { line(out, "no answer"); };
+}
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+0
+}

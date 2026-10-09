@@ -36,6 +36,14 @@ pub const fn policy(needs: Needs) -> i64 {
 /// authority was checked when the program was, and the word is all that is left of it.
 #[must_use]
 pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
+    emit_entry_for(entry, roots, needs, None)
+}
+
+/// [`emit_entry`] for a target whose arguments are not `main`'s as they stand (Gate 3): `args`,
+/// when given, is the platform function (`platform::args_hook`) that `main` hands `argc` and
+/// `argv` to, with where `@nz.argc` and `@nz.argv` are, and that stores them itself.
+#[must_use]
+pub fn emit_entry_for(entry: &str, roots: usize, needs: Needs, args: Option<&str>) -> String {
     let needs = needs.settled();
     let mut out = String::new();
     preamble(&mut out, "<nazm entry>");
@@ -92,6 +100,9 @@ pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
     if needs.tasks || needs.channels {
         let _ = writeln!(out, "declare void @nz.pool_report()");
     }
+    if let (true, Some(hook)) = (needs.io, args) {
+        let _ = writeln!(out, "declare void {hook}(i32, ptr, ptr, ptr)");
+    }
     let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
     let _ = writeln!(out, "entry:");
     // The scheduler's default for this program (N106, §7.107): the runtime's is the pool; a
@@ -100,7 +111,12 @@ pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
     if (needs.tasks || needs.channels) && policy(needs) == 1 {
         let _ = writeln!(out, "  store i64 1, ptr @nz.pool_policy");
     }
-    if needs.io {
+    if let (true, Some(hook)) = (needs.io, args) {
+        let _ = writeln!(
+            out,
+            "  call void {hook}(i32 %argc, ptr %argv, ptr @nz.argc, ptr @nz.argv)"
+        );
+    } else if needs.io {
         // One fewer than `argc`, because `argv[0]` is the program's own name and is
         // deliberately not visible.
         let _ = writeln!(out, "  %argc64 = sext i32 %argc to i64");

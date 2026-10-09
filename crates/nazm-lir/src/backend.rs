@@ -73,8 +73,9 @@ pub struct Target {
 }
 
 impl Target {
-    /// The v1 matrix: 64-bit ARM and x86 on macOS and Linux, and nothing else. A triple
-    /// outside it is refused by name rather than guessed at.
+    /// The v1 matrix: 64-bit ARM and x86 on macOS and Linux, x86 on Windows with MinGW-w64's
+    /// toolchain (Gate 3), and the freestanding targets. A triple outside it is refused by name
+    /// rather than guessed at.
     ///
     /// # Errors
     ///
@@ -440,12 +441,16 @@ mod tests {
 }
 
 /// What this compiler has shown of a target under one backend (N95, `docs/architecture.md` §7.96).
-/// There is no fourth answer: a cell is run, compiled only, or refused.
+/// A cell is run, run under Wine, compiled only, or refused; there is no fifth answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Support {
     /// Programs built for it ran — on the host, under Rosetta, in a container or an emulator —
     /// and agreed with the interpreter. The evidence: a test, or a contained command.
     Run(&'static str),
+    /// Programs built for Windows ran under Wine in a Linux container and agreed with the
+    /// interpreter (Gate 3, `docs/systems-domains.md` Part A-W). Never evidence from a Windows
+    /// host, and never reported as plain run-verified.
+    Wine(&'static str),
     /// Its objects are built and read from their headers; nothing built for it has run here.
     /// The reason, and the test that reads the objects.
     Compile(&'static str),
@@ -458,6 +463,7 @@ impl Support {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Run(_) => "run-verified",
+            Self::Wine(_) => "run-verified under Wine",
             Self::Compile(_) => "compile-only",
             Self::Unsupported(_) => "unsupported",
         }
@@ -466,7 +472,7 @@ impl Support {
     #[must_use]
     pub const fn evidence(self) -> &'static str {
         match self {
-            Self::Run(e) | Self::Compile(e) | Self::Unsupported(e) => e,
+            Self::Run(e) | Self::Wine(e) | Self::Compile(e) | Self::Unsupported(e) => e,
         }
     }
 }
@@ -533,6 +539,14 @@ pub const SUPPORT: &[Cell] = &[
         debugger: "not exercised",
     },
     Cell {
+        triple: "x86_64-pc-windows-gnu",
+        llvm_cpu: "x86-64",
+        cranelift_cpu: "x86-64 baseline (SSE2)",
+        llvm: Support::Wine("the_programs_run_under_wine_as_they_do_natively"),
+        cranelift: Support::Wine("the_programs_run_under_wine_as_they_do_natively"),
+        debugger: "not exercised",
+    },
+    Cell {
         triple: "aarch64-unknown-none",
         llvm_cpu: "generic",
         cranelift_cpu: "none",
@@ -561,8 +575,10 @@ pub const SUPPORT: &[Cell] = &[
 /// What is refused by decision rather than by what this machine lacks, and why.
 pub const NON_GOALS: &[(&str, &str)] = &[
     (
-        "Windows",
-        "unsupported: no Windows linker, SDK or machine here, and the runtime has no Windows port",
+        "Windows with Microsoft's toolchain, and Windows ARM64",
+        "unsupported: `x86_64-pc-windows-msvc` needs Microsoft's SDK and C runtime, which are not \
+         downloaded or accepted here, and no Windows ARM64 machine or emulator is here; Windows \
+         x86_64 is `x86_64-pc-windows-gnu`, with MinGW-w64's",
     ),
     (
         "32-bit hosted targets",

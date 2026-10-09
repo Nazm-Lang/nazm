@@ -8296,10 +8296,11 @@ Repointed by Gate 2's process and environment, which moved it to 39: an entry th
 Repointed by Gate 2's randomness, which moved it to 40: an entry that accepted a record named `RandomCap` must not be reused.
 Repointed by Gate 2's C foundation, which moved it to 41: an entry that refused an export of a `Float64` must not be reused.
 Repointed by Gate 2's attributes, which moved it to 42: an entry that refused an `@` must not be reused.
-Repointed by G2-C1, which moved it to 43: an entry that accepted `@deprecated` on a private function must not be reused."""
+Repointed by G2-C1, which moved it to 43: an entry that accepted `@deprecated` on a private function must not be reused.
+Repointed by Gate 3, which moved it to 44: an entry that accepted a foreign `nz_os_clock` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 43;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 42;"
+find = "pub const SEMANTIC_EPOCH: u32 = 44;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 43;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10509,11 +10510,12 @@ Repointed by Gate 2's files, which moved it to 16 for the handle table and the p
 Repointed by Gate 2's networking, which moved it to 17 for the socket entries and the reactor.
 Repointed by Gate 2's time, which moved it to 18 for the nanosecond clocks and the sleep.
 Repointed by Gate 2's process and environment, which moved it to 19 for the environment and child processes.
-Repointed by Gate 2's randomness, which moved it to 20 for the system's entropy."""
+Repointed by Gate 2's randomness, which moved it to 20 for the system's entropy.
+Repointed by Gate 3's platform layer, which moved it to 21 for the per-target system calls."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 20;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 19;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_and_covers_files_net_time_processes_and_entropy" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 21;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 20;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_one_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -13621,7 +13623,7 @@ why = "nazm inspect prints no support matrix, so the documented one is held to n
 file = "crates/nazm-cli/src/inspect.rs"
 find = "            \"support\": nazm_lir::backend::SUPPORT.iter().map(|c| serde_json::json!({"
 replace = "            \"support\": nazm_lir::backend::SUPPORT.iter().take(0).map(|c| serde_json::json!({"
-killers = [{ package = "nazm-cli", test = "platform_matrix", name = "every_accepted_target_has_a_row_and_every_cell_one_of_three_answers" }]
+killers = [{ package = "nazm-cli", test = "platform_matrix", name = "every_accepted_target_has_a_row_and_every_cell_one_of_four_answers" }]
 
 [[mutation]]
 name = "n97-the-model-ignores-return"
@@ -14865,11 +14867,11 @@ file = "crates/nazm-runtime/src/core.rs"
 find = """define hidden i64 @nz.time_wall_ns() {
 entry:
   %tp = alloca [2 x i64], align 8
-  %r = call i32 @clock_gettime(i32 0, ptr %tp)"""
+  %r = call i32 @nz_os_clock(i32 0, ptr %tp)"""
 replace = """define hidden i64 @nz.time_wall_ns() {
 entry:
   %tp = alloca [2 x i64], align 8
-  %r = call i32 @clock_gettime(i32 4, ptr %tp)"""
+  %r = call i32 @nz_os_clock(i32 4, ptr %tp)"""
 killers = [{ package = "nazm-cli", test = "time", name = "the_clocks_and_a_sleep_agree_everywhere" }]
 
 [[mutation]]
@@ -14883,7 +14885,7 @@ killers = [{ package = "nazm-cli", test = "process", name = "the_environment_and
 [[mutation]]
 name = "g2-a-signal-ending-is-an-exit-code"
 why = "the native runtime reports a child ended by a signal as exiting with the signal's number, indistinguishable from a program that chose that code"
-file = "crates/nazm-runtime/src/net.rs"
+file = "crates/nazm-runtime/src/platform.rs"
 find = "  %bysig = add i64 %sigw, 256"
 replace = "  %bysig = add i64 %sigw, 0"
 killers = [{ package = "nazm-cli", test = "process", name = "a_program_runs_with_input_and_its_output_errors_and_status_come_back_everywhere" }]
@@ -15214,3 +15216,37 @@ file = "crates/nazm-cli/src/build/link.rs"
 find = "            if toolchain_failure(&said) {"
 replace = "            if false {"
 killers = [{ package = "nazm-cli", test = "build", name = "a_toolchain_environment_failure_is_not_blamed_on_the_ir" }]
+
+# --- Gate 3: the Windows port and the platform layer ----------------------------------------------
+
+[[mutation]]
+name = "g3-windows-has-no-clock"
+why = "the Windows stack unit defines no `nz_os_clock`, so every time function, sleep and timed wait is an unresolved symbol at a Windows link"
+file = "crates/nazm-runtime/src/platform.rs"
+find = "define hidden i32 @nz_os_clock(i32 %which, ptr %ts) {\nentry:\n  %v = alloca i64, align 8"
+replace = "define hidden i32 @nz_os_clock_unused(i32 %which, ptr %ts) {\nentry:\n  %v = alloca i64, align 8"
+killers = [{ package = "nazm-runtime", lib = true, name = "platform::tests::every_target_defines_the_same_platform_functions_and_windows_names_no_posix_call" }]
+
+[[mutation]]
+name = "g3-windows-arguments-stay-ansi"
+why = "Windows has no argument hook, so the program sees the C runtime's ANSI arguments and a non-ASCII argument is mangled rather than UTF-8"
+file = "crates/nazm-runtime/src/platform.rs"
+find = "(target == SwitchTarget::X86_64Windows).then_some(\"@nz_os_args\")"
+replace = "None"
+killers = [{ package = "nazm-runtime", lib = true, name = "platform::tests::every_target_defines_the_same_platform_functions_and_windows_names_no_posix_call" }]
+
+[[mutation]]
+name = "g3-a-dll-is-written-as-plain-objects"
+why = "`--shared` for Windows writes objects whose link.txt makes no DLL and exports everything, instead of being refused by name"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "    if choice.shared && target.os == nazm_lir::backend::Os::Windows {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "windows", name = "a_dll_is_refused_by_name_and_a_static_library_is_built" }]
+
+[[mutation]]
+name = "g3-a-peer-address-is-the-sockets-own"
+why = "the POSIX forward behind `tcp_peer_addr` asks for the socket's own address, so a client sees itself as its peer"
+file = "crates/nazm-runtime/src/platform.rs"
+find = "entry:\n  %want = icmp ne i32 %peer, 0"
+replace = "entry:\n  %want = icmp eq i32 %peer, 0"
+killers = [{ package = "nazm-cli", test = "net", name = "an_echo_server_answers_clients_alike_everywhere" }]

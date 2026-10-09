@@ -28,7 +28,7 @@ pub use self::core::{
     emit_runtime, runtime_declarations, MEMORY_FORMAT, MEMORY_VARIABLE, SCHED_FORMAT,
     SCHED_VARIABLE,
 };
-pub use self::entry::{emit_entry, policy as scheduler_policy};
+pub use self::entry::{emit_entry, emit_entry_for, policy as scheduler_policy};
 pub use self::os::declarations;
 
 /// What this runtime has been verified against, recorded so a reader does not have to
@@ -237,8 +237,13 @@ pub fn escape(s: &str) -> String {
 /// time: `nz.time_now_ns`, `nz.time_wall_ns` and `nz.time_sleep_ms`, which parks on the pool. 19
 /// is Gate 2's process and environment: `nz.os_env_*`, `nz.os_spawn`, `nz.os_child_pipe`,
 /// `nz.os_wait`, `nz.os_kill`, a pipe's write, and the `os` unit's `nz_os_environ`. 20 is Gate 2's
-/// randomness: `nz.os_random_bytes`, from `getentropy`.
-pub const RUNTIME_ABI_REVISION: u32 = 20;
+/// randomness: `nz.os_random_bytes`, from `getentropy`. 21 is Gate 3's platform layer: every
+/// system call the runtime makes goes through a per-target function — the `os` unit's file,
+/// socket, reactor and process functions (`nz_os_close` … `nz_os_spawn`, `nz_os_reap`,
+/// `nz_os_terminate`, `nz_os_key`, `nz_net_read` … `nz_net_name`), the `stack` unit's task stacks,
+/// stack budget and clocks (`nz_os_stack_*`, `nz_os_page_size`, `nz_os_clock`), and on Windows
+/// the `init` unit and the entry's `nz_os_args` — so the runtime's own text names no system.
+pub const RUNTIME_ABI_REVISION: u32 = 21;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -798,13 +803,13 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
         symbol: "nz.argc",
         ty: "i64",
         thread_local: false,
-        writers: "the entry, once, before any task exists",
+        writers: "the entry, or the platform's `nz_os_args` it calls (Gate 3), once, before any task exists",
     },
     RuntimeGlobal {
         symbol: "nz.argv",
         ty: "ptr",
         thread_local: false,
-        writers: "the entry, once, before any task exists",
+        writers: "the entry, or the platform's `nz_os_args` it calls (Gate 3), once, before any task exists",
     },
     RuntimeGlobal {
         symbol: "nz.seq_allocated",
@@ -1140,9 +1145,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_and_covers_files_net_time_processes_and_entropy() {
-        // Gate 2's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 20);
+    fn the_runtime_is_revision_twenty_one_and_reaches_the_system_only_through_its_platform_layer() {
+        // Gate 3's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 21);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));

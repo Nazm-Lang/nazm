@@ -69,6 +69,17 @@ pub use nazm_runtime::emit_runtime;
 pub fn emit_entry(entry: &NativeSymbol, roots: usize, needs: Needs) -> String {
     nazm_runtime::emit_entry(&entry.to_string(), roots, needs)
 }
+
+/// [`emit_entry`] with the target's argument hook, if it has one (Gate 3).
+#[must_use]
+pub fn emit_entry_for(
+    entry: &NativeSymbol,
+    roots: usize,
+    needs: Needs,
+    args: Option<&str>,
+) -> String {
+    nazm_runtime::emit_entry_for(&entry.to_string(), roots, needs, args)
+}
 pub use symbol::{Linkage, NativeSymbol};
 
 /// Every `Vec` type of a program, by its source spelling, and whether `--layout soa` lays it out

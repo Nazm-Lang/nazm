@@ -1,0 +1,25 @@
+use "@std/ioerror";
+use "@std/net";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn main(net: NetCap, out: OutCap) -> Int {
+match udp_bind(net, "127.0.0.1:0") {
+Result.Ok(value: u) => {
+let me = udp_local_addr(u);
+line(out, match udp_send_to(net, u, bytes_from_str("ping!"), me) { Result.Ok(value: n) => int_to_str(n), Result.Err(error: e) => io_kind_name(e.kind), });
+let buf = bytes_new(4);
+match udp_recv_from(u, buf) {
+Result.Ok(value: d) => {
+line(out, int_to_str(d.size));
+line(out, bytes_to_str(buf));
+line(out, if d.from == me { "from itself" } else { d.from });
+},
+Result.Err(error: e) => { line(out, io_kind_name(e.kind)); },
+};
+udp_set_timeout(u, 50);
+line(out, match udp_recv_from(u, buf) { Result.Ok(value: d) => "got one", Result.Err(error: e) => io_kind_name(e.kind), });
+udp_close(u);
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+0
+}

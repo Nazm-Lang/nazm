@@ -1389,8 +1389,8 @@ counted:
   %istimed = icmp ne i64 %timed, 0
   br i1 %istimed, label %deadline, label %look
 deadline:
-  ; CLOCK_REALTIME is 0 on every v1 target, and it is what pthread_cond_timedwait measures.
-  %r0 = call i32 @clock_gettime(i32 0, ptr %ts)
+  ; `nz_os_clock` 0 is the wall clock, which pthread_cond_timedwait measures (Gate 3).
+  %r0 = call i32 @nz_os_clock(i32 0, ptr %ts)
   %sec0 = load i64, ptr %ts
   %tsn = getelementptr i8, ptr %ts, i64 8
   %nsec0 = load i64, ptr %tsn
@@ -1441,7 +1441,7 @@ ended:
 idle:
   br i1 %istimed, label %check, label %wait
 check:
-  %r1 = call i32 @clock_gettime(i32 0, ptr %now)
+  %r1 = call i32 @nz_os_clock(i32 0, ptr %now)
   %nsec = load i64, ptr %now
   %nwn = getelementptr i8, ptr %now, i64 8
   %nnsec = load i64, ptr %nwn
@@ -1480,11 +1480,11 @@ woke:
   br label %look
 }
 
-; A monotonic clock in milliseconds. Clock 4 is CLOCK_MONOTONIC_RAW on both Linux and macOS.
+; A monotonic clock in milliseconds: `nz_os_clock` 4, the platform's monotonic clock (Gate 3).
 define hidden i64 @nz.time_now_ms() {
 entry:
   %tp = alloca [2 x i64], align 8
-  %r = call i32 @clock_gettime(i32 4, ptr %tp)
+  %r = call i32 @nz_os_clock(i32 4, ptr %tp)
   %sec = load i64, ptr %tp
   %tpn = getelementptr i8, ptr %tp, i64 8
   %nsec = load i64, ptr %tpn
@@ -1498,7 +1498,7 @@ entry:
 define hidden i64 @nz.time_now_ns() {
 entry:
   %tp = alloca [2 x i64], align 8
-  %r = call i32 @clock_gettime(i32 4, ptr %tp)
+  %r = call i32 @nz_os_clock(i32 4, ptr %tp)
   %sec = load i64, ptr %tp
   %tpn = getelementptr i8, ptr %tp, i64 8
   %nsec = load i64, ptr %tpn
@@ -1510,7 +1510,7 @@ entry:
 define hidden i64 @nz.time_wall_ns() {
 entry:
   %tp = alloca [2 x i64], align 8
-  %r = call i32 @clock_gettime(i32 0, ptr %tp)
+  %r = call i32 @nz_os_clock(i32 0, ptr %tp)
   %sec = load i64, ptr %tp
   %tpn = getelementptr i8, ptr %tp, i64 8
   %nsec = load i64, ptr %tpn
@@ -1534,7 +1534,7 @@ start:
   %t = alloca [2 x i64], align 8
   %mi = call i32 @pthread_mutex_init(ptr %m, ptr null)
   %ci = call i32 @pthread_cond_init(ptr %cv, ptr null)
-  %r0 = call i32 @clock_gettime(i32 0, ptr %ts)
+  %r0 = call i32 @nz_os_clock(i32 0, ptr %ts)
   %s0 = load i64, ptr %ts
   %np = getelementptr i8, ptr %ts, i64 8
   %n0 = load i64, ptr %np
@@ -1550,7 +1550,7 @@ start:
   br label %loop
 loop:
   %c = call i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts)
-  %r1 = call i32 @clock_gettime(i32 0, ptr %t)
+  %r1 = call i32 @nz_os_clock(i32 0, ptr %t)
   %s1 = load i64, ptr %t
   %tn = getelementptr i8, ptr %t, i64 8
   %n1 = load i64, ptr %tn
@@ -2106,7 +2106,7 @@ linked:
 define hidden i64 @nz.pool_now() {
 entry:
   %ts = alloca [2 x i64], align 8
-  %r = call i32 @clock_gettime(i32 0, ptr %ts)
+  %r = call i32 @nz_os_clock(i32 0, ptr %ts)
   %s = load i64, ptr %ts
   %np = getelementptr i8, ptr %ts, i64 8
   %n = load i64, ptr %np

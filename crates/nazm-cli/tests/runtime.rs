@@ -323,7 +323,7 @@ fn all() -> nazm_lir::Needs {
 fn build(dir: &Path) -> std::path::PathBuf {
     std::fs::write(dir.join("runtime.ll"), nazm_lir::emit_runtime(all())).unwrap();
     // The task pool's switch for this host (N83), which the runtime's pool calls.
-    use nazm_lir::runtime::platform::emit_os;
+    use nazm_lir::runtime::platform::{emit_os, emit_stack};
     use nazm_lir::runtime::switch::{emit_errno, emit_switch, SwitchTarget};
     let host = match (std::env::consts::ARCH, std::env::consts::OS) {
         ("aarch64", "macos") => SwitchTarget::Aarch64Darwin,
@@ -336,6 +336,8 @@ fn build(dir: &Path) -> std::path::PathBuf {
     std::fs::write(dir.join("errno.ll"), emit_errno(host)).unwrap();
     // And what its C library says about files (Gate 2).
     std::fs::write(dir.join("os.ll"), emit_os(host)).unwrap();
+    // And its task stacks, stack budget and clocks (Gate 3).
+    std::fs::write(dir.join("stack.ll"), emit_stack(host)).unwrap();
     std::fs::write(dir.join("harness.c"), HARNESS).unwrap();
     let exe = dir.join("harness");
     let o = Command::new("clang")
@@ -344,6 +346,7 @@ fn build(dir: &Path) -> std::path::PathBuf {
         .arg(dir.join("switch.ll"))
         .arg(dir.join("errno.ll"))
         .arg(dir.join("os.ll"))
+        .arg(dir.join("stack.ll"))
         .arg(dir.join("harness.c"))
         .arg("-o")
         .arg(&exe)
@@ -559,7 +562,8 @@ fn root_capabilities_come_from_the_entry_alone() {
 fn every_targets_os_unit_is_llvm_its_toolchain_compiles() {
     // Gate 2: the files and network facts differ by target (`platform::emit_os`); each target's
     // unit must at least be well-formed LLVM for that target, or a cross build fails at link time.
-    use nazm_lir::runtime::platform::emit_os;
+    // Gate 3: and so must its stack and clock unit, and Windows' `init` unit.
+    use nazm_lir::runtime::platform::{emit_init, emit_os, emit_stack};
     use nazm_lir::runtime::switch::SwitchTarget;
     let dir = tempfile::tempdir().unwrap();
     for (t, triple) in [
@@ -567,20 +571,29 @@ fn every_targets_os_unit_is_llvm_its_toolchain_compiles() {
         (SwitchTarget::X86_64Darwin, "x86_64-apple-macos"),
         (SwitchTarget::Aarch64Linux, "aarch64-linux-gnu"),
         (SwitchTarget::X86_64Linux, "x86_64-linux-gnu"),
+        (SwitchTarget::X86_64Windows, "x86_64-pc-windows-gnu"),
     ] {
-        let ll = dir.path().join(format!("{triple}.ll"));
-        std::fs::write(&ll, emit_os(t)).unwrap();
-        let o = Command::new("clang")
-            .args(["-c", "-Wno-override-module", &format!("--target={triple}")])
-            .arg(&ll)
-            .arg("-o")
-            .arg(dir.path().join(format!("{triple}.o")))
-            .output()
-            .expect("clang");
-        assert!(
-            o.status.success(),
-            "{triple}: {}",
-            String::from_utf8_lossy(&o.stderr)
-        );
+        let units = [
+            ("os", Some(emit_os(t))),
+            ("stack", Some(emit_stack(t))),
+            ("init", emit_init(t)),
+        ];
+        for (unit, text) in units {
+            let Some(text) = text else { continue };
+            let ll = dir.path().join(format!("{triple}-{unit}.ll"));
+            std::fs::write(&ll, text).unwrap();
+            let o = Command::new("clang")
+                .args(["-c", "-Wno-override-module", &format!("--target={triple}")])
+                .arg(&ll)
+                .arg("-o")
+                .arg(dir.path().join(format!("{triple}-{unit}.o")))
+                .output()
+                .expect("clang");
+            assert!(
+                o.status.success(),
+                "{triple} {unit}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
     }
 }

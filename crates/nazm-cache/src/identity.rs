@@ -266,7 +266,11 @@ use crate::digest::{self, Framed};
 /// `43` — G2-C1, 2026-10-09. `@deprecated` became metadata `nazm doc` publishes, and so is refused
 /// (`N0619`) where it would be inert: before anything but a `pub` function, `struct` or `enum`. A
 /// cached check from epoch 42 accepted programs this one refuses.
-pub const SEMANTIC_EPOCH: u32 = 43;
+/// `44` — Gate 3, 2026-10-10. The platform layer's functions (`nz_os_clock`, `nz_os_spawn`,
+/// `nz_net_read` and the rest, `check::RESERVED_C_SYMBOLS`) are the runtime's, so a foreign
+/// declaration or export of one is refused (`N0383`). A cached check from epoch 43
+/// accepted programs this one refuses.
+pub const SEMANTIC_EPOCH: u32 = 44;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

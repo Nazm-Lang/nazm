@@ -168,7 +168,12 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
     // And its task stacks and stack budget are the platform's (Gate 3): a fifth.
     let stack = per_target.map(nazm_lir::runtime::platform::emit_stack);
     let mut members = vec![obj.clone()];
-    for (name, text) in [("switch", &switch), ("errno", &errno), ("os", &os), ("stack", &stack)] {
+    for (name, text) in [
+        ("switch", &switch),
+        ("errno", &errno),
+        ("os", &os),
+        ("stack", &stack),
+    ] {
         let Some(text) = text else { continue };
         let sll = work.join(format!("{name}.ll"));
         let sobj = work.join(format!("{name}.o"));

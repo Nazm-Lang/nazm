@@ -19,7 +19,7 @@ work, and is updated by the step that changes it.*
 | macOS x86_64 | `x86_64-apple-darwin` | run-verified **under Rosetta**, both backends; prebuilt archive, clean install passed under Rosetta (3B) | PARTIAL — Rosetta, not an Intel host | native Intel execution, if final Tier-1 policy requires it | not "verified on Intel hardware" |
 | Linux ARM64 | `aarch64-unknown-linux-gnu` | run-verified in a container, both backends; prebuilt archive, clean install in a clean container passed (3B) | VERIFIED | — | — |
 | Linux x86_64 | `x86_64-unknown-linux-gnu` | compile-only | PLANNED (3B) | execution | — |
-| Windows x86_64 | `x86_64-pc-windows-gnu` (MinGW-w64), under Wine | none | PLANNED (3C) | real Windows host execution — a final-v1 item; the MSVC environment | Wine evidence is not Windows-host evidence |
+| Windows x86_64 | `x86_64-pc-windows-gnu` (MinGW-w64) | run-verified **under Wine**, both backends (`windows.rs`, 3C): conformance, files, sockets and the reactor, processes and pipes, clocks, UTF-8 arguments, traps and `N0408` | PARTIAL — Wine, not a Windows host | real Windows host execution — a final-v1 item; a DLL; a prebuilt toolchain for a Windows host; the MSVC environment | Wine evidence is not Windows-host evidence |
 | Windows ARM64 | — | none | Tier 2 / preview at most | — | — |
 
 ## Domains

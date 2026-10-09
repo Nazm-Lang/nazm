@@ -1,0 +1,32 @@
+use "@std/ioerror";
+use "@std/net";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn hang_up(l: TcpListener) -> Int ! { io } {
+match tcp_accept(l) { Result.Ok(value: c) => { tcp_close(c); }, Result.Err(error: e) => {}, };
+0
+}
+fn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {
+match tcp_listen(net, "127.0.0.1:0") {
+Result.Ok(value: l) => {
+match tcp_connect(net, tcp_listener_addr(l), 2000) {
+Result.Ok(value: c) => {
+scope { spawn hang_up(l); }
+let data = bytes_from_str("0123456789abcdef");
+let buf = bytes_new(1);
+tcp_set_timeout(c, 5);
+let mut tries = 0;
+let mut failed = false;
+while tries < 400 && !failed {
+match tcp_write(c, data) { Result.Ok(value: n) => {}, Result.Err(error: e) => { failed = true; }, };
+tcp_read(c, buf);
+tries = tries + 1;
+}
+line(out, if failed { "the write failed, and the program goes on" } else { "every write went" });
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+0
+}

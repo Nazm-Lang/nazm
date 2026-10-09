@@ -118,6 +118,19 @@ pub(super) fn preflight(
             return Err(ExitCode::from(exit::USAGE));
         }
     };
+    // A DLL is not built for Windows (Gate 3): its exports would need marking, and nothing of
+    // one has run. Refused by name rather than written as objects that link to something else.
+    if choice.shared && target.os == nazm_lir::backend::Os::Windows {
+        if summary {
+            return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+        }
+        eprintln!(
+            "nazm: `--shared` builds no DLL for `{}`: a static library (`--lib`) is what Windows \
+             has from this compiler",
+            target.triple
+        );
+        return Err(ExitCode::from(exit::USAGE));
+    }
     // The watermark is the board's (N63): a hosted program has an operating system's stack.
     if choice.stack_watermark && !target.is_board() {
         if summary {

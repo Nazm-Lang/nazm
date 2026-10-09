@@ -1,5 +1,6 @@
-//! N95: the support matrix — every target, under each backend, run-verified, compile-only or
-//! unsupported, and nothing in between.
+//! N95: the support matrix — every target, under each backend, run-verified, run-verified under
+//! Wine (Gate 3, Windows only and never a Windows host's evidence), compile-only or unsupported,
+//! and nothing in between.
 //!
 //! `docs/architecture.md` §7.96. The matrix is one table in `nazm-lir`, printed by `nazm inspect`;
 //! this holds the capability matrix's table to it cell for cell, every run-verified or
@@ -62,7 +63,7 @@ fn defined(name: &str) -> bool {
 }
 
 #[test]
-fn every_accepted_target_has_a_row_and_every_cell_one_of_three_answers() {
+fn every_accepted_target_has_a_row_and_every_cell_one_of_four_answers() {
     let (cells, targets) = support();
     let triples: Vec<&str> = cells
         .iter()
@@ -79,7 +80,13 @@ fn every_accepted_target_has_a_row_and_every_cell_one_of_three_answers() {
         for backend in ["llvm", "cranelift"] {
             let status = c[backend]["status"].as_str().unwrap();
             assert!(
-                ["run-verified", "compile-only", "unsupported"].contains(&status),
+                [
+                    "run-verified",
+                    "run-verified under Wine",
+                    "compile-only",
+                    "unsupported"
+                ]
+                .contains(&status),
                 "{c}"
             );
             let evidence = c[backend]["evidence"].as_str().unwrap();

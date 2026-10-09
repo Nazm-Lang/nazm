@@ -1,0 +1,40 @@
+use "@std/ioerror";
+use "@std/process";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn one(a: Str) -> Strs { let x = strs_new(); strs_push(x, a); x }
+fn run(p: ProcessCap, s: SpawnCap, out: OutCap, prog: Str, args: Strs, input: Str) -> Int ! { io, spawn } {
+    match process_run(p, s, prog, args, bytes_from_str(input)) {
+        Result.Ok(value: r) => {
+            line(out, int_to_str(r.status));
+            line(out, if str_len(r.stdout) > 40 { int_to_str(str_len(r.stdout)) } else { r.stdout });
+            line(out, if str_len(r.stderr) > 40 { int_to_str(str_len(r.stderr)) } else { r.stderr });
+        },
+        Result.Err(error: e) => { line(out, io_kind_name(e.kind)); },
+    };
+    0
+}
+fn main(p: ProcessCap, s: SpawnCap, out: OutCap, io: IoCap) -> Int {
+    let prog = arg(0);
+    run(p, s, out, prog, one("echo"), "hello child|");
+    run(p, s, out, prog, one("big"), "");
+    run(p, s, out, prog, one("sleep"), "");
+    let q = strs_new();
+    strs_push(q, "list"); strs_push(q, "a b"); strs_push(q, "say \"hi\""); strs_push(q, "back\\slash\\"); strs_push(q, ""); strs_push(q, "x\\\"y"); strs_push(q, "tab\there");
+    match process_run(p, s, prog, q, bytes_new(0)) {
+        Result.Ok(value: r) => { print(r.stdout); },
+        Result.Err(error: e) => { line(out, io_kind_name(e.kind)); },
+    };
+    match process_spawn(p, prog, one("hang")) {
+        Result.Ok(value: c) => {
+            line(out, match process_kill(c) { Result.Ok(value: n) => "killed", Result.Err(error: e) => io_kind_name(e.kind), });
+            line(out, match process_wait(c) { Result.Ok(value: n) => int_to_str(n), Result.Err(error: e) => io_kind_name(e.kind), });
+            line(out, match process_kill(c) { Result.Ok(value: n) => "killed again", Result.Err(error: e) => io_kind_name(e.kind), });
+        },
+        Result.Err(error: e) => { line(out, io_kind_name(e.kind)); },
+    };
+    match process_spawn(p, "no-such-program-nazm", strs_new()) {
+        Result.Ok(value: c) => { line(out, "started"); },
+        Result.Err(error: e) => { line(out, io_kind_name(e.kind)); },
+    };
+    0
+}

@@ -1,0 +1,27 @@
+use "@std/ioerror";
+use "@std/io";
+use "@std/time";
+fn repeat(c: Str, n: Int) -> Str { let mut s = c; while str_len(s) * 2 <= n { s = str_concat(s, s); } str_concat(s, str_slice(s, 0, n - str_len(s))) }
+fn main(io: IoCap, t: TimeCap) -> Int {
+    let mode = if args_count() > 0 { arg(0) } else { "echo" };
+    if mode == "echo" {
+        match io_stdin_read_all(io) { Result.Ok(value: b) => { print(bytes_to_str(b)); }, Result.Err(error: e) => { print(io_kind_name(e.kind)); }, };
+        io_eprintln(io, "oops");
+        3
+    } else { if mode == "big" {
+        print(repeat("x", 300000));
+        io_eprintln(io, repeat("y", 199999));
+        0
+    } else { if mode == "sleep" {
+        time_sleep(t, time_duration_ms(300));
+        print("done\n");
+        0
+    } else { if mode == "hang" {
+        time_sleep(t, time_duration_ms(20000));
+        0
+    } else {
+        let mut i = 0;
+        while i < args_count() { print(str_concat(str_concat("<", arg(i)), ">\n")); i = i + 1; }
+        0
+    } } } }
+}

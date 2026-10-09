@@ -4031,10 +4031,12 @@ may ask for features: `shapes = { path = "../shapes", version = "0.1.0", feature
 <!-- id: windows-x86-64 -->
 
 Settled by Gate 3, 2026-10-10 (`docs/systems-domains.md`, Part A-W), before the code. The target is
-`x86_64-pc-windows-gnu`: PE/COFF executables and DLLs, the Windows x64 calling convention at every
-C-ABI crossing, MinGW-w64's C runtime and import libraries, linked by `lld`. The language is the one
-language: nothing below changes what a program means, only how the runtime reaches the operating
-system, and a program that runs on Linux prints the same and exits the same here.
+`x86_64-pc-windows-gnu`: PE/COFF executables and static libraries (a DLL is refused by name:
+`--shared` is not built for Windows), the Windows x64 calling convention at every C-ABI crossing,
+MinGW-w64's C runtime and import libraries, linked by MinGW-w64's `gcc` driver (`-static`, its own
+libgcc; `nazm build --objects` writes the command in `link.txt`). The language is the one language:
+nothing below changes what a program means, only how the runtime reaches the operating system, and a
+program that runs on Linux prints the same and exits the same here.
 
 | | |
 | --- | --- |
@@ -4042,10 +4044,10 @@ system, and a program that runs on Linux prints the same and exits the same here
 | **Files** | As *Files and handles*: `os_rename` and `file_replace_atomic` replace an existing destination (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`), as POSIX `rename` does; removing an open file or a non-empty directory is an error with the kind the table below gives; `dir_list` is sorted, as everywhere |
 | **Errors** | Windows error codes map to the same `IoErrorKind`s: not found, permission denied (including sharing violations), already exists, would block, timed out, broken pipe, connection refused/reset/aborted, address in use, invalid input; anything else is `Other` with its code |
 | **Processes** | `os_spawn` starts the program with `CreateProcessW` and a command line quoted by the C runtime's rules; `os_wait` answers the exit code; there are no signals, so `os_kill` ends the child with `TerminateProcess` and exit code 1, and `256 + signal` never occurs |
-| **Environment, arguments** | UTF-16 from the system, UTF-8 to the program; an entry not valid UTF-16 is skipped rather than mangled |
+| **Environment, arguments** | UTF-16 from the system, UTF-8 to the program; an entry not valid UTF-16 is skipped rather than mangled. The arguments are the C runtime's own splitting of the command line (`__wgetmainargs`), and a child's command line is quoted so that it splits back into the arguments given |
 | **Network** | Winsock 2, started once by the runtime; the reactor waits with `WSAPoll` — the same reactor model as kqueue and epoll, a third binding of it |
 | **Time, entropy** | the monotonic clock from `QueryPerformanceCounter`, the wall clock from `GetSystemTimePreciseAsFileTime` (nanoseconds since the Unix epoch, as everywhere); entropy from `BCryptGenRandom` |
-| **Failure** | a trap is exit status 2 with its diagnostic on standard error, as everywhere; an exhausted stack is `N0408`, reported by a vectored exception handler over each task's guard page |
+| **Failure** | a trap is exit status 2 with its diagnostic on standard error, as everywhere; an exhausted stack is `N0408` by the same stack check as everywhere — a thread's budget from `GetCurrentThreadStackLimits`, a task's a quarter of the way up its own stack — and a task stack's guard page (`VirtualProtect`) is the backstop it is on POSIX |
 | **Evidence** | Programs are executed **under Wine** in a Linux container (`run-verified under Wine`), never presented as evidence from a Windows host; execution on a real Windows x86_64 host is a final-v1 qualification item. Microsoft's CRT (`x86_64-pc-windows-msvc`) is not built in Gate 3 |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present

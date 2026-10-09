@@ -789,7 +789,7 @@ pub(crate) enum Command {
         /// compile is refused by name.
         #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
         backend: String,
-        /// The target triple: one of the seven `nazm capabilities` lists (N57). A target this
+        /// The target triple: one of the eight `nazm capabilities` lists (N57). A target this
         /// host links is built to an executable; any other needs `--objects`. An unknown
         /// triple is refused rather than silently built for this machine.
         #[arg(long, value_name = "TRIPLE")]

@@ -22,6 +22,8 @@ pub(crate) const TARGETS: &[&str] = &[
     "x86_64-apple-darwin",
     "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
+    // Windows x86_64 with MinGW-w64's toolchain (Gate 3): objects and `link.txt` for its `gcc`.
+    "x86_64-pc-windows-gnu",
     // The boards, with no operating system (N62, §7.64; N86, §7.87): always objects and
     // `link.ld`.
     "aarch64-unknown-none",

@@ -437,10 +437,11 @@ fn emit_artefacts(
     };
     out.push(Artefact {
         name: "entry".to_owned(),
-        code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_entry(
+        code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_entry_for(
             &native.entry,
             native.entry_roots,
             entry_needs,
+            switch_target(backend.target()).and_then(nazm_lir::runtime::platform::args_hook),
         )),
         instance: false,
         key: None,

@@ -1,0 +1,35 @@
+fn reader(l: OsHandle, done: Chan) -> Int {
+let c = os_tcp_accept(l);
+let buf = bytes_new(8);
+let n = os_read(c, buf);
+os_close(c);
+chan_send(done, n);
+0
+}
+fn busy(result: Chan) -> Int {
+let mut i = 0;
+let mut s = 0;
+while i < 100000 { s = s + i % 7; i = i + 1; }
+chan_send(result, s);
+0
+}
+fn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {
+let l = os_tcp_listen("127.0.0.1:0");
+let addr = os_local_addr(l);
+let done = chan_new(16);
+let result = chan_new(1);
+let got = ints_new();
+let one = ints_new();
+scope {
+let mut k = 0;
+while k < 8 { spawn reader(l, done); k = k + 1; }
+spawn busy(result);
+chan_recv(result, got);
+let mut j = 0;
+while j < 8 { let c = os_tcp_connect(addr, 2000); os_write(c, bytes_from_str("x")); j = j + 1; }
+let mut m = 0;
+while m < 8 { chan_recv(done, one); m = m + 1; }
+}
+print(str_concat(int_to_str(ints_get(got, 0)), str_concat(" ", int_to_str(ints_len(one)))));
+0
+}
