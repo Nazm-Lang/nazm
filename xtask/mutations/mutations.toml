@@ -8292,10 +8292,11 @@ Repointed by Gate 2's collections, which moved it to 35: an entry that refused a
 Repointed by Gate 2's files, which moved it to 36: an entry that accepted a function named `os_read` must not be reused.
 Repointed by Gate 2's networking, which moved it to 37: an entry that refused an `os_read` without an `IoCap` must not be reused.
 Repointed by Gate 2's time, which moved it to 38: an entry that accepted a function named `time_sleep_ms` must not be reused.
-Repointed by Gate 2's process and environment, which moved it to 39: an entry that accepted a record named `ProcessCap` must not be reused."""
+Repointed by Gate 2's process and environment, which moved it to 39: an entry that accepted a record named `ProcessCap` must not be reused.
+Repointed by Gate 2's randomness, which moved it to 40: an entry that accepted a record named `RandomCap` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 39;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 38;"
+find = "pub const SEMANTIC_EPOCH: u32 = 40;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 39;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10506,11 +10507,12 @@ Repointed by Gate 2, which moved it to 15 for floats across runtime entries and 
 Repointed by Gate 2's files, which moved it to 16 for the handle table and the per-target `os` unit.
 Repointed by Gate 2's networking, which moved it to 17 for the socket entries and the reactor.
 Repointed by Gate 2's time, which moved it to 18 for the nanosecond clocks and the sleep.
-Repointed by Gate 2's process and environment, which moved it to 19 for the environment and child processes."""
+Repointed by Gate 2's process and environment, which moved it to 19 for the environment and child processes.
+Repointed by Gate 2's randomness, which moved it to 20 for the system's entropy."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 19;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 18;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_nineteen_and_covers_files_net_time_and_processes" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 20;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 19;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_and_covers_files_net_time_processes_and_entropy" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -14936,3 +14938,19 @@ file = "library/std/json.nz"
 find = "    parse_document(text, true)"
 replace = "    parse_document(text, false)"
 killers = [{ package = "nazm-cli", test = "stdlib", name = "json_reads_and_writes_floats_beside_its_frozen_integers_everywhere" }]
+
+[[mutation]]
+name = "g2-the-generator-rotates-by-the-wrong-amount"
+why = "xoshiro256**'s last rotation is by 44 rather than 45, so the sequence a seed gives is no longer the published generator's"
+file = "library/std/random.nz"
+find = "    vec_set(r.state, 3, rotate_left(n3, 45));"
+replace = "    vec_set(r.state, 3, rotate_left(n3, 44));"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "a_seeded_generator_repeats_everywhere_and_entropy_does_not" }]
+
+[[mutation]]
+name = "g2-entropy-needs-no-authority"
+why = "`os_random_bytes` needs no RandomCap, so any function reads the system's entropy and a reproducible profile cannot see it"
+file = "crates/nazm-sema/src/capability.rs"
+find = "            Intrinsic::OsRandomBytes => CapabilitySet::of(Self::Random),"
+replace = "            Intrinsic::OsRandomBytes => CapabilitySet::EMPTY,"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "entropy_needs_a_random_cap_and_a_seeded_generator_needs_none" }]

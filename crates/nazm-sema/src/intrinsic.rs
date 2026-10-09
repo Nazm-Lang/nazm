@@ -494,11 +494,14 @@ pub enum Intrinsic {
     OsChildPipe,
     OsWait,
     OsKill,
+    /// `os_random_bytes(buf: Bytes) -> Int` (Gate 2, §21): `buf` filled from the operating system's
+    /// entropy; its length. Behind `RandomCap`, with no effect.
+    OsRandomBytes,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 159] = [
+    pub const ALL: [Self; 160] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -658,6 +661,7 @@ impl Intrinsic {
         Self::OsChildPipe,
         Self::OsWait,
         Self::OsKill,
+        Self::OsRandomBytes,
     ];
 
     #[must_use]
@@ -826,6 +830,7 @@ impl Intrinsic {
             Self::OsChildPipe => "os_child_pipe",
             Self::OsWait => "os_wait",
             Self::OsKill => "os_kill",
+            Self::OsRandomBytes => "os_random_bytes",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -1052,6 +1057,7 @@ impl Intrinsic {
             Self::OsChildPipe => &[Shape::OsHandle, Shape::Int],
             Self::OsWait => &[Shape::OsHandle],
             Self::OsKill => &[Shape::OsHandle],
+            Self::OsRandomBytes => &[Shape::Bytes],
             Self::TextFromStr => &[Shape::Str],
             Self::TextAssume => &[Shape::Str],
         }
@@ -1208,6 +1214,7 @@ impl Intrinsic {
             Self::OsChildPipe => Shape::OsHandle,
             Self::OsWait => Shape::Int,
             Self::OsKill => Shape::Int,
+            Self::OsRandomBytes => Shape::Int,
             Self::TextFromStr => Shape::Text,
             Self::TextAssume => Shape::Text,
         }

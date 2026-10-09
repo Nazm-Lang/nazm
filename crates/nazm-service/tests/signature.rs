@@ -558,6 +558,15 @@ fn signature_help_never_reinterprets_a_call() {
                         .find(|l| l.kind == SyntaxKind::Ident)
                         .unwrap()
                         .span;
+                    // A conversion (Gate 2) is the language's, not a call: it has no callee and
+                    // no signature to reinterpret.
+                    if matches!(
+                        res.numeric(callee),
+                        Some(nazm_core::sema::NumericFact::Convert { .. })
+                    ) {
+                        assert_eq!(res.callee(callee), None);
+                        continue;
+                    }
                     let call = res
                         .checked_call(callee)
                         .unwrap_or_else(|| panic!("an unrecorded call at {callee:?}"));

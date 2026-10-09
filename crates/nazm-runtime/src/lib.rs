@@ -236,8 +236,9 @@ pub fn escape(s: &str) -> String {
 /// record and a deadline, the reactor thread, and the `os` unit's `nz_net_*`. 18 is Gate 2's
 /// time: `nz.time_now_ns`, `nz.time_wall_ns` and `nz.time_sleep_ms`, which parks on the pool. 19
 /// is Gate 2's process and environment: `nz.os_env_*`, `nz.os_spawn`, `nz.os_child_pipe`,
-/// `nz.os_wait`, `nz.os_kill`, a pipe's write, and the `os` unit's `nz_os_environ`.
-pub const RUNTIME_ABI_REVISION: u32 = 19;
+/// `nz.os_wait`, `nz.os_kill`, a pipe's write, and the `os` unit's `nz_os_environ`. 20 is Gate 2's
+/// randomness: `nz.os_random_bytes`, from `getentropy`.
+pub const RUNTIME_ABI_REVISION: u32 = 20;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -440,6 +441,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.os_resolve", [Ptr, I64, I64, Ptr, I64], Some(Word::I64), Net, "borrows the name; the addresses into the caller's buffer; a length, or a status (Gate 2)"),
     import!("nz.os_env_find", [Ptr, I64, Ptr], Some(Word::Ptr), Files, "borrows the name; the value inside the environment and its length through the pointer, or an empty string and -1 (Gate 2)"),
     import!("nz.os_env_count", [], Some(Word::I64), Files, "how many entries the environment has (Gate 2)"),
+    import!("nz.os_random_bytes", [Ptr, I64], Some(Word::I64), Files, "fills the caller's buffer from the system's entropy; its length, or -errno (Gate 2)"),
     import!("nz.os_env_at", [I64, Ptr], Some(Word::Ptr), Files, "the entry inside the environment, its length through the pointer (Gate 2)"),
     import!("nz.os_spawn", [Ptr, I64, Ptr], Some(Word::I64), Net, "borrows the program and the arguments; the child's handle, or -errno (Gate 2)"),
     import!("nz.os_child_pipe", [I64, I64], Some(Word::I64), Net, "a child's pipe's handle, or a status (Gate 2)"),
@@ -710,6 +712,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_env_split", "i64" ("ptr") "", false, Files, "", Never, Any, "where an environment entry's name ends, or -1 (Gate 2)", "borrows the entry"),
     rt!("nz.os_env_nth", "ptr" ("i64", "ptr") "", false, Files, "", Never, Any, "the nth entry of the environment, or the count (Gate 2)", "none"),
     rt!("nz.os_env_count", "i64" () "", false, Files, "io", Never, Any, "how many entries the environment has (Gate 2)", "none"),
+    rt!("nz.os_random_bytes", "i64" ("ptr", "i64") "", false, Files, "", Status, Any, "the system's entropy into a buffer (Gate 2)", "writes the caller's buffer"),
     rt!("nz.os_env_at", "ptr" ("i64", "ptr") "", false, Files, "io", Never, Any, "an entry of the environment (Gate 2)", "returns a pointer into the environment"),
     rt!("nz.os_env_find", "ptr" ("ptr", "i64", "ptr") "", false, Files, "io", Never, Any, "a variable's value (Gate 2)", "returns a pointer into the environment"),
     rt!("nz.net_pipe_write", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a write to a pipe, waiting at most its deadline (Gate 2)", "borrows the bytes"),
@@ -1128,9 +1131,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_nineteen_and_covers_files_net_time_and_processes() {
+    fn the_runtime_is_revision_twenty_and_covers_files_net_time_processes_and_entropy() {
         // Gate 2's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 19);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 20);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));
         // The network part (Gate 2), present only where a program reaches it; a program with files

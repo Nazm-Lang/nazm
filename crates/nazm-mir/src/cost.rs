@@ -334,7 +334,8 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::OsSpawn
         | Intrinsic::OsChildPipe
         | Intrinsic::OsWait
-        | Intrinsic::OsKill => false,
+        | Intrinsic::OsKill
+        | Intrinsic::OsRandomBytes => false,
         // Networking (Gate 2): the system's storage, and words; a receive fills a buffer the
         // program already made.
         Intrinsic::OsTcpListen

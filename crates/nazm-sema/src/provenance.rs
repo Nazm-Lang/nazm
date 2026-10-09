@@ -218,6 +218,7 @@ impl Origin {
             // Which program runs is the restricted sink a written file's path is.
             Intrinsic::OsSpawn => BuiltinFlow::WritePath,
             Intrinsic::OsChildPipe | Intrinsic::OsWait | Intrinsic::OsKill => BuiltinFlow::Derive,
+            Intrinsic::OsRandomBytes => BuiltinFlow::Derive,
             Intrinsic::OsOpenWrite
             | Intrinsic::OsMkdir
             | Intrinsic::OsRmdir
@@ -318,7 +319,8 @@ impl Origin {
             | Intrinsic::OsSpawn
             | Intrinsic::OsChildPipe
             | Intrinsic::OsWait
-            | Intrinsic::OsKill => ContainerUse::None,
+            | Intrinsic::OsKill
+            | Intrinsic::OsRandomBytes => ContainerUse::None,
             Intrinsic::OsResolve => ContainerUse::Fill { into: &[2] },
             Intrinsic::OsTcpListen
             | Intrinsic::OsTcpAccept

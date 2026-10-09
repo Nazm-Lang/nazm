@@ -113,6 +113,16 @@ pub(super) fn process_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 .nth(usize::try_from(*i).ok()?)
                 .unwrap_or_default(),
         ),
+        // Entropy (Gate 2, §21): the system's, from its random device.
+        (Intrinsic::OsRandomBytes, [Value::Bytes(buf)]) => {
+            let mut got = vec![0; buf.len];
+            let ok = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut got));
+            if ok.is_err() {
+                return int(-EINVAL);
+            }
+            buf.write(0, &got);
+            int(i64::try_from(buf.len).unwrap_or(-EINVAL))
+        }
         (Intrinsic::OsSpawn, [Value::Str(program), Value::Strs(list)]) => {
             let argv: Vec<String> = list.lock().ok()?.iter().map(text).collect();
             handle(spawn(&text(program), &argv))

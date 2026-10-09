@@ -253,7 +253,10 @@ use crate::digest::{self, Framed};
 /// `os_spawn`, `os_child_pipe`, `os_wait` and `os_kill` built-ins moved from refused to accepted,
 /// their names from a program's own to the language's (`N0331`, `N0203`); `os_spawn`'s program is
 /// the restricted sink (`N0372`); `Type::ALL` gained `ProcessCap`.
-pub const SEMANTIC_EPOCH: u32 = 39;
+/// `40` — Gate 2, 2026-10-09. Randomness: `RandomCap` and `os_random_bytes` moved from refused
+/// to accepted, the names from a program's own to the language's (`N0331`, `N0203`); `Type::ALL`
+/// gained `RandomCap`.
+pub const SEMANTIC_EPOCH: u32 = 40;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

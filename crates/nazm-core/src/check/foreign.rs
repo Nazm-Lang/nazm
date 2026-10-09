@@ -162,6 +162,7 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "environ",
     "_NSGetEnviron",
     "nz_os_environ",
+    "getentropy",
 ];
 
 /// The rules a foreign declaration must meet (N42, `docs/architecture.md` §7.44).

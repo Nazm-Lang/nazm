@@ -757,6 +757,32 @@ entry:
   ret ptr %p
 }
 
+; `n` bytes of the system's entropy into `buf`, 256 at a time as `getentropy` allows: `n`, or -errno.
+define hidden i64 @nz.os_random_bytes(ptr %buf, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %at = phi i64 [ 0, %entry ], [ %at1, %got ]
+  %left = sub i64 %n, %at
+  %done = icmp sle i64 %left, 0
+  br i1 %done, label %finish, label %chunk
+chunk:
+  %big = icmp sgt i64 %left, 256
+  %take = select i1 %big, i64 256, i64 %left
+  %p = getelementptr i8, ptr %buf, i64 %at
+  %r = call i32 @getentropy(ptr %p, i64 %take)
+  %bad = icmp ne i32 %r, 0
+  br i1 %bad, label %fail, label %got
+got:
+  %at1 = add i64 %at, %take
+  br label %loop
+fail:
+  %e = call i64 @nz.os_errno()
+  ret i64 %e
+finish:
+  ret i64 %n
+}
+
 ; The value of the first entry named `name` (`n` bytes), its length through `lenp`; when there is
 ; none, an empty string and -1.
 define hidden ptr @nz.os_env_find(ptr %name, i64 %n, ptr %lenp) {

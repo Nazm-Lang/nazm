@@ -15,7 +15,7 @@
 - [x] 3.1 Serialization (§14)
 - [ ] 3.2 Attributes and conditional compilation (§16, §17)
 - [ ] 3.3 User tests and benchmarks (§18, §19)
-- [ ] 3.4 Logging (§20), randomness (§21)
+- [ ] 3.4 Logging (§20); randomness (§21) done
 - [ ] 3.5 Package features (§22), the C foundation (§23)
 
 ## 4. Evidence

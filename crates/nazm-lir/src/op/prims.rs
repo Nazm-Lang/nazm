@@ -89,7 +89,8 @@ impl Fx<'_, '_> {
             | Intrinsic::OsSpawn
             | Intrinsic::OsChildPipe
             | Intrinsic::OsWait
-            | Intrinsic::OsKill => {
+            | Intrinsic::OsKill
+            | Intrinsic::OsRandomBytes => {
                 let at = self.at;
                 self.lw
                     .defect(at, "a files built-in its lowering did not take");

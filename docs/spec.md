@@ -106,6 +106,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `files` | STABLE 1.0 | Gate 2: a handle is closed by `os_close` or at exit; a status's number is the platform's, its kind (`@std/ioerror`) is not |
 | `time` | STABLE 1.0 | Gate 2: nanosecond clocks and a sleep that parks; no timers beyond a sleep in a task or a select's deadline |
 | `process` | STABLE 1.0 | Gate 2: the environment, and a program run with three pipes; no signal handling |
+| `randomness` | STABLE 1.0 | Gate 2: entropy behind `RandomCap`; the seeded generator is a library's |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -1194,8 +1195,8 @@ would need a propagation protocol, and traits do not exist.
 <!-- id: std -->
 
 A **standard module** is a toolchain-owned Nazm module a program imports by name. There are
-twenty-seven (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror`,
-`file`, `net`, `env`, `error` and `binary`),
+twenty-eight (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror`,
+`file`, `net`, `env`, `error`, `binary` and `random`),
 each ordinary source checked like any module, and none is visible unless a module writes its `use`:
 
 ```nazm
@@ -1237,6 +1238,7 @@ that exists but cannot be read is `N0407`.
 | `@std/seq` | `ints_index_of(xs, x) -> Option[Int]`, `ints_contains(xs, x) -> Bool`, `ints_sum(xs) -> Int`, `ints_max(xs) -> Option[Int]`, `ints_min(xs) -> Option[Int]`, `strs_index_of(xs, x) -> Option[Int]`, `strs_contains(xs, x) -> Bool`, `vec_index_of[T: Equality](xs, x) -> Option[Int]`, and (N50) `vec_map[T, U](xs, f: fn(T) -> U) -> Vec[U]`, `vec_filter[T](xs, keep: fn(T) -> Bool) -> Vec[T]`, `vec_fold[T, A](xs, init: A, f: fn(A, T) -> A) -> A` — each, since N51, polymorphic in the effects of the function it takes (`effects E`), and doing exactly what that function does; and (N84) `vec_reverse[T](xs)`, `vec_slice[T](xs, from, to)` (clamped), `vec_concat[T](a, b)`, `vec_any[T](xs, test)`, `vec_all[T](xs, test)` |
 | `@std/sort` | (N84) `vec_sort_by[T](xs, less: fn(T, T) -> Bool) -> Vec[T]` (stable, effect-polymorphic), `ints_sort(xs) -> Ints`, `strs_sort(xs) -> Strs` — a module of its own because a sort allocates in a loop and calls through a function value, and a restriction profile refusing either refuses every function of a module it imports |
 | `@std/io` | `io_println(io, s) -> Int`, `io_eprintln(io, s) -> Int`, `io_read(io, path) -> Result[Str, Str]` — each `! { io }`; and (Gate 2) `io_stdin_read_all(io) -> Result[Bytes, IoError]`, `io_stdin_lines(io) -> Result[Strs, IoError]` |
+| `@std/random` | (Gate 2) `Rng`, xoshiro256** seeded through SplitMix64: `random_new(seed)`, `random_u64`, `random_int(r, lo, hi)` (every value of `lo..hi` equally likely), `random_float` (`[0, 1)`, 53 bits), `random_shuffle[T]` — pure; and `random_bytes(rc, buf)`, `random_seed(rc)` from the operating system's entropy, each taking the `RandomCap` that allows it |
 | `@std/process` | `process_args(io) -> Strs` — `! { io }`; and (Gate 2) `Child`, `ProcessOutput { status, stdout, stderr }`, `process_spawn(p, program, args)`, `process_stdin`, `process_stdout`, `process_stderr` (pipes as `@std/file` `File`s), `process_wait`, `process_kill`, `process_run(p, sp, program, args, input)` — the input and the errors moved in tasks of their own, so neither pipe fills unread |
 | `@std/chan` | `chan_take(c) -> Option[Int]`: the next value, or `None` once closed and drained; and (N84) `chan_send_all_ints(c, xs) -> Int`, `chan_collect_ints(c, n) -> Vec[Int]`, `chan_drain_ints(c) -> Vec[Int]`, `chan_send_all_strs(c, xs) -> Int`, `chan_collect_strs(c, n) -> Vec[Str]`, `chan_drain_strs(c) -> Vec[Str]` — for `Int` and `Str` because a channel cannot carry a type parameter (`N0390`) |
 | `@std/show` | the `Show` trait and `show_all[T: Show](v, sep) -> Str` (N78) |
@@ -2915,7 +2917,7 @@ fn main(io: IoCap) -> Int ! { io } {
 
 #### The capabilities
 
-There are exactly nine, and they are the compiler's. There are **no user-defined
+There are exactly ten, and they are the compiler's. There are **no user-defined
 capabilities**.
 
 | Kind | Type | Authorises | Effect it authorises |
@@ -2928,10 +2930,11 @@ capabilities**.
 | `Time` | `TimeCap` | `time_now_ms` and `chan_select_until`: reading a clock (N54), in every function | none |
 | `Mmio` | `MmioCap` | `mmio_read32` and `mmio_write32` (N62), and `mmio_read8`, `mmio_write8`, `mmio_read16`, `mmio_write16` (N86): a device register, in every function | none |
 | `Net` | `NetCap` | the built-ins that name an address — `os_tcp_listen`, `os_tcp_connect`, `os_udp_bind`, `os_udp_send_to`, `os_resolve` (Gate 2, *Networking*); implies nothing, and nothing implies it | `io` |
+| `Random` | `RandomCap` | `os_random_bytes`: the operating system's entropy (Gate 2, *Randomness*), in every function | none |
 | `Process` | `ProcessCap` | `os_spawn`: running another program, which is every authority that program has (Gate 2, *Process and environment*); implies nothing, and nothing implies it | `io` |
 
 A kind is identified by the compiler, never by how its type is spelled. `IoCap`, `OutCap`,
-`SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap`, `NetCap` and `ProcessCap` are **built-in type names**, like
+`SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap`, `NetCap`, `RandomCap` and `ProcessCap` are **built-in type names**, like
 `Chan`: they mean the same in every module, and a module may not declare a type of any of those
 names (`N0331`). Which authority a built-in needs is a
 property of the built-in's identity, decided by an exhaustive table the checker reads — a
@@ -3939,6 +3942,15 @@ Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §12). The arguments (`
 | **Running a program** | `os_spawn(program, args: Strs) -> OsHandle`: `program` found on `PATH` as a shell finds it, started with `args` and the process's environment, its standard input, output and errors three pipes. It needs a `ProcessCap` — every authority the program has, granted explicitly (id 9) — and has the `io` effect; which program runs is the restricted sink a written file's path is (`N0372`). A failure to start is a status (`NotFound` for no such program) |
 | **A child** | `os_child_pipe(h, which) -> OsHandle`: its standard input (`0`), output (`1`) or errors (`2`), read and written with `os_read` and `os_write`, waiting as a socket does (*Networking*) — a task reading a child's output parks on the pool. `os_wait(h) -> Int`: its exit code, or `256` and the signal that ended it; the same answer every time; the wait holds the task's worker until the program ends. `os_kill(h) -> Int`: `SIGKILL`, nothing for a child already waited for. Each needs only the child's handle |
 | **Signals** | A native program that has started a child ignores `SIGPIPE` from then on, as the interpreter's host always does, so writing to a child that has gone is `BrokenPipe`. No program watches for signals in 1.0 (*As built*, `general-purpose.md` §12) |
+
+### Randomness — Gate 2
+<!-- id: randomness -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §21). `os_random_bytes(buf: Bytes) ->
+Int` fills `buf` from the operating system's entropy and answers its length, or a status; it needs a
+`RandomCap` held (id 8) and performs no effect, as a clock does. A **seeded** generator needs no
+authority at all: `@std/random`'s `Rng` is ordinary code, the same sequence for the same seed in
+every implementation and run. Reproducibility is the default; unpredictability is asked for by name.
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

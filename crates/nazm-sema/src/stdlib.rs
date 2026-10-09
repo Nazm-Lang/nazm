@@ -41,6 +41,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("option", include_str!("../../../library/std/option.nz")),
     ("path", include_str!("../../../library/std/path.nz")),
     ("process", include_str!("../../../library/std/process.nz")),
+    ("random", include_str!("../../../library/std/random.nz")),
     ("result", include_str!("../../../library/std/result.nz")),
     ("seq", include_str!("../../../library/std/seq.nz")),
     ("show", include_str!("../../../library/std/show.nz")),

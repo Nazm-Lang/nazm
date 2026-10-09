@@ -1139,6 +1139,12 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                                 && (nazm_core::sema::Effect::by_name(leaf.text).is_some()
                                     || a_type_parameter(span, leaf.text)))
                             || matches!(a.resolution.callee(span), Some(Callee::Builtin(_)))
+                            // A conversion (`Float64(x)`, `wrap_convert[T](x)`, Gate 2) is the
+                            // language's, recorded as a numeric fact rather than a call.
+                            || matches!(
+                                a.resolution.numeric(span),
+                                Some(nazm_core::sema::NumericFact::Convert { .. })
+                            )
                             // `impl Trait for Type`: `for` is its syntax (N78).
                             || (node.kind() == K::ImplItem && leaf.text == "for")
                             // A trait method's parameter, and `Self`, inside a trait (N78).
