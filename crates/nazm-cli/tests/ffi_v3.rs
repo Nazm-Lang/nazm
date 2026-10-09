@@ -555,6 +555,74 @@ fn a_shared_library_links_into_a_c_program_and_shows_only_its_exports() {
         .success());
 }
 
+/// What kind of object file `bytes` is, by its header: a shared library (ELF `ET_DYN`, Mach-O
+/// `MH_DYLIB`), a static archive, or something else.
+fn object_kind(bytes: &[u8]) -> &'static str {
+    let half = |at: usize| {
+        bytes
+            .get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let word = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    if bytes.starts_with(b"!<arch>\n") {
+        "archive"
+    } else if (bytes.starts_with(b"\x7fELF") && half(16) == Some(3))
+        || (word(0) == Some(0xfeed_facf) && word(12) == Some(6))
+    {
+        "shared library"
+    } else {
+        "other"
+    }
+}
+
+/// N85 on every host the runner uses: `--lib --shared` writes a shared library — an ELF `ET_DYN`
+/// on Linux, a Mach-O dylib on macOS — and never a static archive under a shared library's name.
+/// (Linking it into a C program is the macOS test above; this one is the format, which needs no
+/// platform's loader.)
+#[test]
+fn a_shared_library_build_writes_a_shared_object_not_an_archive() {
+    let name = if cfg!(target_os = "macos") {
+        "libnz.dylib"
+    } else {
+        "libnz.so"
+    };
+    for backend in ["llvm", "cranelift"] {
+        let d = Dir::new(&[("lib.nz", LIB)]);
+        let b = d.nazm(&[
+            "build",
+            "--lib",
+            "--shared",
+            "--no-cache",
+            "--backend",
+            backend,
+            "lib.nz",
+            "-o",
+            name,
+        ]);
+        assert!(b.status.success(), "{backend}: {}", stderr(&b));
+        let bytes = std::fs::read(d.path(name)).unwrap();
+        assert_eq!(object_kind(&bytes), "shared library", "{backend}");
+        // And `--lib` alone is the archive: the two are told apart by the flag, not by the name.
+        let s = d.nazm(&[
+            "build",
+            "--lib",
+            "--no-cache",
+            "--backend",
+            backend,
+            "lib.nz",
+            "-o",
+            "libnz.a",
+        ]);
+        assert!(s.status.success(), "{backend}: {}", stderr(&s));
+        let bytes = std::fs::read(d.path("libnz.a")).unwrap();
+        assert_eq!(object_kind(&bytes), "archive", "{backend}");
+    }
+}
+
 // --- bindings ---------------------------------------------------------------------------------
 
 #[test]

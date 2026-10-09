@@ -194,6 +194,63 @@ fn a_riscv_board_is_built_where_clang_can_and_refused_by_name_where_it_cannot() 
     );
 }
 
+/// A driver on `PATH` whose `-print-targets` lists RISC-V only when `riscv` is true, and which
+/// refuses every other request — so the question N86 asks has the same answer on every host.
+fn fake_clang(riscv: bool) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let extra = if riscv {
+        "    riscv64    - 64-bit RISC-V\n"
+    } else {
+        ""
+    };
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = -print-targets ]; then\n\
+         printf '  Registered Targets:\\n    aarch64    - AArch64 (little endian)\\n{extra}    x86-64     - 64-bit X86: EM64T and AMD64\\n'\n\
+         exit 0\n\
+         fi\n\
+         echo 'fake clang: refused' >&2\n\
+         exit 1\n"
+    );
+    let path = d.path().join("clang");
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    d
+}
+
+/// N86, decided by the driver's answer rather than by which `clang` the host happens to have: a
+/// driver without a RISC-V code generator is refused by name before anything is compiled; one that
+/// has it is not refused for it (here it then fails to compile, being a fake — a different failure).
+#[test]
+fn a_riscv_board_is_refused_by_name_exactly_when_the_driver_has_no_riscv_generator() {
+    let d = program(
+        "fn put(m: MmioCap, c: Int) -> Int ! {} { mmio_write8(268435456, c) }\n\
+         fn main(m: MmioCap) -> Int ! {} { put(m, 72); 0 }\n",
+    );
+    for riscv in [false, true] {
+        let fake = fake_clang(riscv);
+        let path = format!(
+            "{}:{}",
+            fake.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let out = format!("out-{riscv}");
+        let o = Command::new(NAZM)
+            .current_dir(d.path())
+            .env("PATH", path)
+            .args(["build", "--target", RISCV, "--objects", &out, "prog.nz"])
+            .output()
+            .unwrap();
+        let named = err(&o).contains("has no RISC-V code generator");
+        assert_eq!(o.status.code(), Some(4), "riscv={riscv}: {}", err(&o));
+        assert_eq!(named, !riscv, "riscv={riscv}: {}", err(&o));
+        if !riscv {
+            assert!(!d.path().join(&out).exists(), "nothing is written");
+        }
+    }
+}
+
 #[test]
 fn a_device_register_of_any_width_is_a_board_s_and_needs_an_mmio_cap() {
     for (call, width) in [

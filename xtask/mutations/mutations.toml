@@ -1711,7 +1711,7 @@ replace = """    let cycles: Vec<_> = res
         .into_iter()
         .filter(|c| !matches!(c.reach, nazm_sema::Reach::Inline))
         .collect();"""
-killers = [{ package = "nazm-core", test = "enums", name = "a_cycle_through_a_record_and_an_enum_is_refused_too" }]
+killers = [{ package = "nazm-cli", test = "ownership_cycles", name = "every_inline_cycle_is_refused_within_a_bound" }]
 [[mutation]]
 name = "a-private-type-leaks-through-a-public-signature"
 why = """
@@ -13204,7 +13204,7 @@ why = "`--lib --shared` writes a static archive under the shared library's name"
 file = "crates/nazm-cli/src/build/link.rs"
 find = "    let linked = if choice.library && choice.shared {"
 replace = "    let linked = if choice.library && choice.shared && false {"
-killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_shared_library_links_into_a_c_program_and_shows_only_its_exports" }]
+killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_shared_library_build_writes_a_shared_object_not_an_archive" }]
 
 
 # --- N86: boards as data, a second architecture, device registers by width ----------------------
@@ -13265,7 +13265,7 @@ why = "a host without a RISC-V code generator compiles anyway, and its failure i
 file = "crates/nazm-cli/src/build/preflight.rs"
 find = '    if target.arch == nazm_lir::backend::Arch::Riscv64 && !crate::backend::generates("riscv64") {'
 replace = '    if target.arch == nazm_lir::backend::Arch::Riscv64 && false {'
-killers = [{ package = "nazm-cli", test = "boards", name = "a_riscv_board_is_built_where_clang_can_and_refused_by_name_where_it_cannot" }]
+killers = [{ package = "nazm-cli", test = "boards", name = "a_riscv_board_is_refused_by_name_exactly_when_the_driver_has_no_riscv_generator" }]
 
 
 # --- N87: contracts and the obligation census ---------------------------------------------------
