@@ -247,7 +247,9 @@ use crate::digest::{self, Framed};
 /// `N0203`); `Type::ALL`, in the checker's identity, gained `NetCap`. Using an open handle stopped
 /// needing an `IoCap`, so programs refused under 36 (`N0369`) are accepted. A cached check from
 /// epoch 36 refused programs this one accepts, and accepted some it refuses.
-pub const SEMANTIC_EPOCH: u32 = 37;
+/// `38` — Gate 2, 2026-10-09. Time: `time_now_ns`, `time_wall_ns` and `time_sleep_ms` moved
+/// from refused to accepted, and their names from a program's own to the language's (`N0203`).
+pub const SEMANTIC_EPOCH: u32 = 38;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

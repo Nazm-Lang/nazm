@@ -626,6 +626,25 @@ impl Interpreter {
                     i64::try_from(base.elapsed().as_millis()).unwrap_or(i64::MAX),
                 ))
             }
+            // Gate 2 (§11): nanoseconds on the same monotonic clock, the wall clock, and a wait.
+            (Intrinsic::TimeNowNs, []) => {
+                static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+                let base = BASE.get_or_init(std::time::Instant::now);
+                Ok(Value::Int(
+                    i64::try_from(base.elapsed().as_nanos()).unwrap_or(i64::MAX),
+                ))
+            }
+            (Intrinsic::TimeWallNs, []) => Ok(Value::Int(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX)),
+            )),
+            (Intrinsic::TimeSleepMs, [Value::Int(ms)]) => {
+                if *ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(ms.unsigned_abs()));
+                }
+                Ok(Value::Int(0))
+            }
             (Intrinsic::ChanClose | Intrinsic::ChanCloseOf, [Value::Chan(c)]) => {
                 c.close().map_or_else(
                     || Err(bug("a channel that could not be locked")),

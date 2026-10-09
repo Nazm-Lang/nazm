@@ -255,7 +255,11 @@ impl CapabilityKind {
             // Declassification is authority of its own (N52).
             Intrinsic::StrVouch => CapabilitySet::of(Self::Vouch),
             // A clock is authority of its own too (N54).
-            Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => CapabilitySet::of(Self::Time),
+            Intrinsic::TimeNowMs
+            | Intrinsic::TimeNowNs
+            | Intrinsic::TimeWallNs
+            | Intrinsic::TimeSleepMs
+            | Intrinsic::ChanSelectUntil => CapabilitySet::of(Self::Time),
             // And a device register (N62).
             Intrinsic::MmioRead32
             | Intrinsic::MmioWrite32
@@ -314,7 +318,11 @@ impl CapabilityKind {
     pub const fn held_for(i: Intrinsic) -> Option<Self> {
         match i {
             Intrinsic::StrVouch => Some(Self::Vouch),
-            Intrinsic::TimeNowMs | Intrinsic::ChanSelectUntil => Some(Self::Time),
+            Intrinsic::TimeNowMs
+            | Intrinsic::TimeNowNs
+            | Intrinsic::TimeWallNs
+            | Intrinsic::TimeSleepMs
+            | Intrinsic::ChanSelectUntil => Some(Self::Time),
             Intrinsic::MmioRead32
             | Intrinsic::MmioWrite32
             | Intrinsic::MmioRead8

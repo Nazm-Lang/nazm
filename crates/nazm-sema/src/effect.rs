@@ -218,6 +218,9 @@ impl Effect {
             // Reading a clock changes nothing outside the program; its authority is a
             // `TimeCap`, held (N54). A select waits as a receive does.
             | Intrinsic::TimeNowMs
+            | Intrinsic::TimeNowNs
+            | Intrinsic::TimeWallNs
+            | Intrinsic::TimeSleepMs
             // A device register is the board's, not the operating system's — there is none
             // (N62). Its authority is an `MmioCap`, held, as a clock's is a `TimeCap`.
             | Intrinsic::MmioRead32

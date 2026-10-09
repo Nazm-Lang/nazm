@@ -378,6 +378,9 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::ChanSendOf
         | Intrinsic::ChanCloseOf
         | Intrinsic::TimeNowMs
+        | Intrinsic::TimeNowNs
+        | Intrinsic::TimeWallNs
+        | Intrinsic::TimeSleepMs
         | Intrinsic::MmioRead32
         | Intrinsic::MmioWrite32
         | Intrinsic::MmioRead8

@@ -2906,6 +2906,10 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("os_local_addr", "Gate 2 networking"),
         ("os_peer_addr", "Gate 2 networking"),
         ("os_resolve", "Gate 2 networking"),
+        // Gate 2 (time): the self-hosted checker carries `time_now_ms` and no other clock.
+        ("time_now_ns", "Gate 2 time"),
+        ("time_wall_ns", "Gate 2 time"),
+        ("time_sleep_ms", "Gate 2 time"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {

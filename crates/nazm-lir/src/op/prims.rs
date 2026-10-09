@@ -583,6 +583,21 @@ impl Fx<'_, '_> {
                 let t = self.rt_v("nz.time_now_ms", &[], Class::I64);
                 self.set(dst, t);
             }
+            // Gate 2 (§11).
+            Intrinsic::TimeNowNs | Intrinsic::TimeWallNs => {
+                let name = if op == Intrinsic::TimeNowNs {
+                    "nz.time_now_ns"
+                } else {
+                    "nz.time_wall_ns"
+                };
+                let t = self.rt_v(name, &[], Class::I64);
+                self.set(dst, t);
+            }
+            Intrinsic::TimeSleepMs => {
+                let ms = self.arg(args, 0);
+                let z = self.rt_v("nz.time_sleep_ms", &[ms], Class::I64);
+                self.set(dst, z);
+            }
             // The ordered checked sum (N66), through the runtime, its flag in a slot.
             Intrinsic::IntsSum => {
                 let start = self.arg(args, 0);

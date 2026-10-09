@@ -211,6 +211,9 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.foreign {
         out.push_str(ERRNO_RUNTIME);
     }
+    if needs.tasks {
+        out.push_str(SLEEP_RUNTIME);
+    }
     if needs.files {
         out.push_str(super::files::FILES_RUNTIME);
         // The network, or the three entries the files part calls for a socket.
@@ -1490,6 +1493,79 @@ entry:
   %frac = sdiv i64 %nsec, 1000000
   %t = add i64 %msec, %frac
   ret i64 %t
+}
+
+; Gate 2 (§11): the same monotonic clock, and the wall clock, in nanoseconds.
+define hidden i64 @nz.time_now_ns() {
+entry:
+  %tp = alloca [2 x i64], align 8
+  %r = call i32 @clock_gettime(i32 4, ptr %tp)
+  %sec = load i64, ptr %tp
+  %tpn = getelementptr i8, ptr %tp, i64 8
+  %nsec = load i64, ptr %tpn
+  %ns = mul i64 %sec, 1000000000
+  %t = add i64 %ns, %nsec
+  ret i64 %t
+}
+
+define hidden i64 @nz.time_wall_ns() {
+entry:
+  %tp = alloca [2 x i64], align 8
+  %r = call i32 @clock_gettime(i32 0, ptr %tp)
+  %sec = load i64, ptr %tp
+  %tpn = getelementptr i8, ptr %tp, i64 8
+  %nsec = load i64, ptr %tpn
+  %ns = mul i64 %sec, 1000000000
+  %t = add i64 %ns, %nsec
+  ret i64 %t
+}
+";
+
+/// A wait of `ms` milliseconds (Gate 2, §11), through the hooked timed wait, so on the task pool it
+/// parks the task and its worker runs others. Its own text: it needs the task part's waits.
+const SLEEP_RUNTIME: &str = r"
+define hidden i64 @nz.time_sleep_ms(i64 %ms) {
+entry:
+  %some = icmp sgt i64 %ms, 0
+  br i1 %some, label %start, label %done
+start:
+  %m = alloca [64 x i8], align 16
+  %cv = alloca [64 x i8], align 16
+  %ts = alloca [2 x i64], align 8
+  %t = alloca [2 x i64], align 8
+  %mi = call i32 @pthread_mutex_init(ptr %m, ptr null)
+  %ci = call i32 @pthread_cond_init(ptr %cv, ptr null)
+  %r0 = call i32 @clock_gettime(i32 0, ptr %ts)
+  %s0 = load i64, ptr %ts
+  %np = getelementptr i8, ptr %ts, i64 8
+  %n0 = load i64, ptr %np
+  %sn = mul i64 %s0, 1000000000
+  %now = add i64 %sn, %n0
+  %wait = mul i64 %ms, 1000000
+  %deadline = add i64 %now, %wait
+  %sec = sdiv i64 %deadline, 1000000000
+  %nsec = srem i64 %deadline, 1000000000
+  store i64 %sec, ptr %ts
+  store i64 %nsec, ptr %np
+  %l = call i32 @pthread_mutex_lock(ptr %m)
+  br label %loop
+loop:
+  %c = call i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts)
+  %r1 = call i32 @clock_gettime(i32 0, ptr %t)
+  %s1 = load i64, ptr %t
+  %tn = getelementptr i8, ptr %t, i64 8
+  %n1 = load i64, ptr %tn
+  %sn1 = mul i64 %s1, 1000000000
+  %now1 = add i64 %sn1, %n1
+  %early = icmp slt i64 %now1, %deadline
+  br i1 %early, label %loop, label %woke
+woke:
+  %u = call i32 @pthread_mutex_unlock(ptr %m)
+  %md = call i32 @pthread_mutex_destroy(ptr %m)
+  %cd = call i32 @pthread_cond_destroy(ptr %cv)
+  br label %done
+done:
+  ret i64 0
 }
 ";
 

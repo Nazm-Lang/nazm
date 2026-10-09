@@ -5,7 +5,7 @@
 ## 2. The outside world
 
 - [x] 2.1 Handles and files (§8)
-- [ ] 2.2 Time (§11)
+- [x] 2.2 Time (§11)
 - [ ] 2.3 Process and environment (§12)
 - [ ] 2.4 Errors (§13)
 - [x] 2.5 Networking and scheduler-aware I/O (§9, §10)

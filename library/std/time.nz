@@ -23,3 +23,77 @@ pub fn time_deadline(t: TimeCap, ms: Int) -> Int ! {} {
 pub fn time_passed(t: TimeCap, deadline: Int) -> Bool ! {} {
     time_now_ms() >= deadline
 }
+
+// Gate 2 (`docs/general-purpose.md` §11): nanoseconds, typed. A `Duration` is a span, an `Instant`
+// a reading of the monotonic clock — comparable only with another reading in the same run — and a
+// `WallTime` the wall clock, which may jump.
+
+/// A span of time, in nanoseconds.
+pub struct Duration {
+    nanos: Int,
+}
+
+/// A reading of the monotonic clock, in nanoseconds since an unspecified start.
+pub struct Instant {
+    nanos: Int,
+}
+
+/// A reading of the wall clock, in nanoseconds since the Unix epoch.
+pub struct WallTime {
+    unix_nanos: Int,
+}
+
+/// `ms` milliseconds.
+pub fn time_duration_ms(ms: Int) -> Duration ! {} {
+    Duration(nanos: ms * 1000000)
+}
+
+/// `ns` nanoseconds.
+pub fn time_duration_ns(ns: Int) -> Duration ! {} {
+    Duration(nanos: ns)
+}
+
+/// `d` in whole milliseconds, rounded toward zero.
+pub fn time_duration_to_ms(d: Duration) -> Int ! {} {
+    d.nanos / 1000000
+}
+
+/// The two spans, one after the other.
+pub fn time_duration_add(a: Duration, b: Duration) -> Duration ! {} {
+    Duration(nanos: a.nanos + b.nanos)
+}
+
+/// The monotonic clock now.
+pub fn time_now(t: TimeCap) -> Instant ! {} {
+    Instant(nanos: time_now_ns())
+}
+
+/// The span from `since`, a reading of `time_now`, to now.
+pub fn time_elapsed(t: TimeCap, since: Instant) -> Duration ! {} {
+    Duration(nanos: time_now_ns() - since.nanos)
+}
+
+/// The reading `d` from now: a deadline.
+pub fn time_after(t: TimeCap, d: Duration) -> Instant ! {} {
+    Instant(nanos: time_now_ns() + d.nanos)
+}
+
+/// Whether the clock has reached `at`.
+pub fn time_reached(t: TimeCap, at: Instant) -> Bool ! {} {
+    time_now_ns() >= at.nanos
+}
+
+/// The span from `a` to `b`, two readings of the monotonic clock.
+pub fn time_between(a: Instant, b: Instant) -> Duration ! {} {
+    Duration(nanos: b.nanos - a.nanos)
+}
+
+/// The wall clock now.
+pub fn time_wall(t: TimeCap) -> WallTime ! {} {
+    WallTime(unix_nanos: time_wall_ns())
+}
+
+/// Wait `d`: on the task pool the task parks and its worker runs others.
+pub fn time_sleep(t: TimeCap, d: Duration) -> Int ! {} {
+    time_sleep_ms(d.nanos / 1000000)
+}

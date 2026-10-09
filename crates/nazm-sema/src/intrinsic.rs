@@ -249,6 +249,12 @@ pub enum Intrinsic {
     ChanSelectUntil,
     /// `time_now_ms() -> Int` (N54) — a monotonic clock in milliseconds. Needs a `TimeCap`.
     TimeNowMs,
+    /// `time_now_ns() -> Int`, `time_wall_ns() -> Int`, `time_sleep_ms(ms) -> Int` (Gate 2,
+    /// `docs/general-purpose.md` §11): a monotonic clock in nanoseconds, the wall clock in
+    /// nanoseconds since the Unix epoch, and a wait that parks on the pool. Behind `TimeCap`.
+    TimeNowNs,
+    TimeWallNs,
+    TimeSleepMs,
     /// `mmio_read32(addr: Int) -> Int` (N62) — one volatile 32-bit load from a device
     /// register, zero-extended. Needs an `MmioCap`, and exists only in a freestanding build.
     MmioRead32,
@@ -481,7 +487,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 148] = [
+    pub const ALL: [Self; 151] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -513,6 +519,9 @@ impl Intrinsic {
         Self::ChanSelectOf,
         Self::ChanSelectUntil,
         Self::TimeNowMs,
+        Self::TimeNowNs,
+        Self::TimeWallNs,
+        Self::TimeSleepMs,
         Self::MmioRead32,
         Self::MmioWrite32,
         Self::IntsSum,
@@ -680,6 +689,9 @@ impl Intrinsic {
             Self::ChanSelectOf => "chan_select_of",
             Self::ChanSelectUntil => "chan_select_until",
             Self::TimeNowMs => "time_now_ms",
+            Self::TimeNowNs => "time_now_ns",
+            Self::TimeWallNs => "time_wall_ns",
+            Self::TimeSleepMs => "time_sleep_ms",
             Self::MmioRead32 => "mmio_read32",
             Self::MmioWrite32 => "mmio_write32",
             Self::MmioRead8 => "mmio_read8",
@@ -902,6 +914,9 @@ impl Intrinsic {
             Self::ChanSelectOf => &[Shape::ChansT, Shape::VecT],
             Self::ChanSelectUntil => &[Shape::ChansT, Shape::VecT, Shape::Int],
             Self::TimeNowMs => &[],
+            Self::TimeNowNs => &[],
+            Self::TimeWallNs => &[],
+            Self::TimeSleepMs => &[Shape::Int],
             Self::MmioRead32 | Self::MmioRead8 | Self::MmioRead16 => &[Shape::Int],
             Self::MmioWrite32 | Self::MmioWrite8 | Self::MmioWrite16 => &[Shape::Int, Shape::Int],
             Self::IntsSum => &[Shape::Int, Shape::Ints],
@@ -1044,6 +1059,9 @@ impl Intrinsic {
             | Self::ChanSelectOf
             | Self::ChanSelectUntil
             | Self::TimeNowMs
+            | Self::TimeNowNs
+            | Self::TimeWallNs
+            | Self::TimeSleepMs
             | Self::MmioRead32
             | Self::MmioWrite32
             | Self::MmioRead8
