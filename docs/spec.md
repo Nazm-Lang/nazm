@@ -104,6 +104,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `bytes` | STABLE 1.0 | |
 | `text` | STABLE 1.0 | graphemes and normalisation are not the language's |
 | `files` | STABLE 1.0 | Gate 2: a handle is closed by `os_close` or at exit; a status's number is the platform's, its kind (`@std/ioerror`) is not |
+| `time` | STABLE 1.0 | Gate 2: nanosecond clocks and a sleep that parks; no timers beyond a sleep in a task or a select's deadline |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -1243,7 +1244,7 @@ that exists but cannot be read is `N0407`.
 | `@std/map` | (N84) `StrMap[T]` and `Entry[T]`: `map_new[T]()`, `map_len`, `map_get -> Option[T]`, `map_has`, `map_set -> Bool` (whether it replaced), `map_remove -> Option[T]`, `map_keys -> Strs`, `map_values -> Vec[T]` — ordered by key, found by binary search, shared like any handle |
 | `@std/path` | (N84) `path_join(base, rest)`, `path_base(p)`, `path_dir(p)`, `path_ext(p)`, `path_stem(p)`, `path_normalize(p)` — pure, lexical, `/`-separated |
 | `@std/fs` | (N84) `fs_exists(io, path) -> Bool`, `fs_read(io, path) -> Result[Str, Str]`, `fs_read_lines(io, path) -> Result[Strs, Str]`, `fs_write(io, path, text) -> Result[Int, Str]`, `fs_write_lines(io, path, lines) -> Result[Int, Str]` — each `! { io }` |
-| `@std/time` | (N84) `time_ms(t)`, `time_since(t, start)`, `time_deadline(t, ms)`, `time_passed(t, deadline) -> Bool` — each taking the `TimeCap` that allows it, and no effect |
+| `@std/time` | (N84) `time_ms(t)`, `time_since(t, start)`, `time_deadline(t, ms)`, `time_passed(t, deadline) -> Bool` — each taking the `TimeCap` that allows it, and no effect; and (Gate 2) `Duration { nanos }`, `Instant { nanos }`, `WallTime { unix_nanos }`, `time_duration_ms(ms)`, `time_duration_ns(ns)`, `time_duration_to_ms(d)`, `time_duration_add(a, b)`, `time_now(t)`, `time_elapsed(t, since)`, `time_after(t, d)`, `time_reached(t, at)`, `time_between(a, b)`, `time_wall(t)`, `time_sleep(t, d)` |
 | `@std/json` | (N84) `JsonDoc` and `JsonNode`, an arena document: `json_parse(text) -> Result[JsonDoc, Str]` (an `Err` names the byte offset; integers only), `json_encode(doc)`, `json_encode_node(doc, node)`, `json_quote(s)`, `json_root`, `json_kind`, `json_len`, `json_at`, `json_get`, `json_key_at`, `json_value_at`, `json_int`, `json_str`, `json_bool`, and the builders `json_new`, `json_with_root`, `json_add_null`, `json_add_bool`, `json_add_int`, `json_add_str`, `json_add_array`, `json_add_object` |
 | `@std/test` | (N84) `test_int(what, actual, expected) -> Result[Int, Str]`, `test_str(what, actual, expected) -> Result[Str, Str]`, `test_true(what, cond) -> Result[Bool, Str]` |
 | `@std/hash` | (Gate 2) the `Hash` trait — `hash(self) -> UInt64` and `same(self, other) -> Bool`, two keys that are `same` hashing alike — implemented for every integer type, `Bool` and `Str`; `hash_bytes(s)` (64-bit FNV-1a over the bytes, then SplitMix64's finaliser), `hash_u64(x)` (the same over a word's eight bytes, least significant first), `hash_combine(a, b)`, `hash_finish(x)`. A fixed function: the same in every implementation and every run. Floats are not keys (a NaN is not equal to itself) |
@@ -3908,6 +3909,18 @@ fn main(net: NetCap) -> Int ! { io } {
 | **Waiting** | A socket wait does **not** hold a worker. On the task pool the task parks at the language's existing wait, its worker runs other tasks, and one runtime thread — `kqueue` on macOS, `epoll` on Linux — wakes it when the socket is ready, its deadline passes, or its handle is closed; with a thread per task, the thread waits; in the interpreter every task is a thread. Nothing is written `async` or `await` |
 | **Closing** | `os_close` of a socket another task is waiting on wakes that task, whose operation answers `Closed`; the close itself takes effect when the wait ends |
 | **Not here** | TLS, HTTP and every protocol above TCP and UDP (the ecosystem's); Unix-domain sockets; socket options beyond the deadline and address reuse; multicast and broadcast; non-blocking polling of many sockets by one task (a task per socket is the shape) |
+
+### Time — Gate 2
+<!-- id: time -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §11). `time_now_ms` (N54) is unchanged.
+
+| | |
+| --- | --- |
+| **Clocks** | `time_now_ns() -> Int`: the monotonic clock `time_now_ms` reads, in nanoseconds since an unspecified start — readings compare only within one run. `time_wall_ns() -> Int`: the wall clock, in nanoseconds since the Unix epoch; it may jump |
+| **Waiting** | `time_sleep_ms(ms) -> Int`: `0` after at least `ms` milliseconds; nothing for `ms <= 0`. On the task pool the task parks at the language's existing timed wait and its worker runs others; with a thread per task, and in the interpreter, the thread waits |
+| **Authority** | Each needs a `TimeCap` held and performs no effect, as `time_now_ms` does; `critical`'s `no-ambient-time` refuses them |
+| **Library** | `@std/time` gains `Duration`, `Instant` and `WallTime` over them (*The standard library*) |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

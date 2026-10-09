@@ -222,3 +222,17 @@
 @std/time pub fn time_since(t: TimeCap, start: Int) -> Int ! {}
 @std/time pub fn time_deadline(t: TimeCap, ms: Int) -> Int ! {}
 @std/time pub fn time_passed(t: TimeCap, deadline: Int) -> Bool ! {}
+@std/time pub struct Duration
+@std/time pub struct Instant
+@std/time pub struct WallTime
+@std/time pub fn time_duration_ms(ms: Int) -> Duration ! {}
+@std/time pub fn time_duration_ns(ns: Int) -> Duration ! {}
+@std/time pub fn time_duration_to_ms(d: Duration) -> Int ! {}
+@std/time pub fn time_duration_add(a: Duration, b: Duration) -> Duration ! {}
+@std/time pub fn time_now(t: TimeCap) -> Instant ! {}
+@std/time pub fn time_elapsed(t: TimeCap, since: Instant) -> Duration ! {}
+@std/time pub fn time_after(t: TimeCap, d: Duration) -> Instant ! {}
+@std/time pub fn time_reached(t: TimeCap, at: Instant) -> Bool ! {}
+@std/time pub fn time_between(a: Instant, b: Instant) -> Duration ! {}
+@std/time pub fn time_wall(t: TimeCap) -> WallTime ! {}
+@std/time pub fn time_sleep(t: TimeCap, d: Duration) -> Int ! {}

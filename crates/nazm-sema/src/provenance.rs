@@ -282,6 +282,9 @@ impl Origin {
             | Intrinsic::ChanNew
             | Intrinsic::ChanNewOf
             | Intrinsic::TimeNowMs
+            | Intrinsic::TimeNowNs
+            | Intrinsic::TimeWallNs
+            | Intrinsic::TimeSleepMs
             | Intrinsic::ExitWith => BuiltinFlow::Fresh,
             // Declassification (N52): no origin, and the clearing recorded.
             Intrinsic::StrVouch => BuiltinFlow::Vouch,
@@ -455,6 +458,9 @@ impl Origin {
             | Intrinsic::ChanNew
             | Intrinsic::ChanNewOf
             | Intrinsic::TimeNowMs
+            | Intrinsic::TimeNowNs
+            | Intrinsic::TimeWallNs
+            | Intrinsic::TimeSleepMs
             | Intrinsic::ExitWith
             | Intrinsic::StrVouch
             | Intrinsic::ArgsCount
