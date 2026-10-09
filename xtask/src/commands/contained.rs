@@ -21,6 +21,25 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
     };
     let mut bounds = Bounds::default();
 
+    // `--platform amd64` (Gate 3): the workload runs in the `linux/amd64` image, emulated on an
+    // Apple-silicon host. Before `--profile`, so either order of the two is not needed.
+    let args = match args.first().map(String::as_str) {
+        Some("--platform") => {
+            if args.get(1).map(String::as_str) != Some("amd64") {
+                eprintln!(
+                    "contained: --platform takes `amd64`; without it the host's own image runs"
+                );
+                return ExitCode::FAILURE;
+            }
+            contained::use_amd64(true);
+            args.get(2..).unwrap_or_default()
+        }
+        _ => {
+            contained::use_amd64(false);
+            args
+        }
+    };
+
     // `--profile NAME` before the workload chooses its internal parallelism (N14.1).
     // Without one, each workload takes the profile its calibration adopted.
     let (chosen, args) = match args.first().map(String::as_str) {
@@ -380,6 +399,51 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
                 )),
             )
         }
+        // A prebuilt toolchain for the image's own host (Gate 3, `docs/systems-domains.md` Part
+        // A): the release binary packaged by `scripts/host-archive.sh` and exported by name into
+        // `target/archives/`. The name is the supervisor's, from the platform it measures.
+        Some("archive") => {
+            bounds.deadline = Duration::from_secs(3600);
+            let slug = match contained::image_platform_slug() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("contained: cannot establish the image's platform: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let triple = match slug.as_str() {
+                "linux-aarch64" => "aarch64-unknown-linux-gnu",
+                "linux-x86-64" => "x86_64-unknown-linux-gnu",
+                other => {
+                    eprintln!(
+                        "contained: no host archive is defined for the image's platform `{other}`"
+                    );
+                    return ExitCode::FAILURE;
+                }
+            };
+            let dest = repo.join("target/archives");
+            if let Err(e) = std::fs::create_dir_all(&dest) {
+                eprintln!("contained: cannot make {}: {e}", dest.display());
+                return ExitCode::FAILURE;
+            }
+            let name = format!("nazm-{triple}.tar.gz");
+            bounds.export = Some(contained::ExportPolicy {
+                manifest: "/work/archiveout/EXPORTS".to_owned(),
+                dest,
+                allowed: vec![name.clone()],
+                // A release binary with everything inside it, compressed: tens of megabytes.
+                max_bytes: 128 * 1024 * 1024,
+            });
+            (
+                "archive",
+                shell(&format!(
+                    "mkdir -p /work/archiveout \
+                     && cargo build --release --locked -p nazm-cli --jobs {j} \
+                     && sh /src/scripts/host-archive.sh {triple} /work/target/release/nazm /work/archiveout \
+                     && echo \"{name} $(wc -c < /work/archiveout/{name})\" > /work/archiveout/EXPORTS"
+                )),
+            )
+        }
         Some("run") => {
             let cmd = args.get(1..).unwrap_or_default().join(" ");
             if cmd.trim().is_empty() {
@@ -390,7 +454,7 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         }
         other => {
             eprintln!(
-                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | bench | mutate | fuzz [SECONDS] [TARGET...] | run <command>",
+                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | bench | mutate | fuzz [SECONDS] [TARGET...] | archive | run <command>",
                 other.unwrap_or("<none>")
             );
             return ExitCode::FAILURE;
