@@ -217,11 +217,12 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.files {
         out.push_str(super::files::FILES_RUNTIME);
         // The network, or the three entries the files part calls for a socket.
-        out.push_str(if needs.net {
-            super::net::NET_RUNTIME
+        if needs.net {
+            out.push_str(super::net::NET_RUNTIME);
+            out.push_str(super::net::PROCESS_RUNTIME);
         } else {
-            super::files::NET_STUBS
-        });
+            out.push_str(super::files::NET_STUBS);
+        }
     }
     if needs.numbers {
         out.push_str(NUMBER_RUNTIME);

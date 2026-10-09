@@ -165,6 +165,55 @@ impl Fx<'_, '_> {
                 self.write_str(dst, buf, n, owner);
                 return true;
             }
+            // Process and environment (Gate 2). A value or an entry is copied out of the
+            // environment into a string the program owns.
+            Intrinsic::OsEnvGet | Intrinsic::OsEnvHas => {
+                let name = self.arg_place(args, 0);
+                let (np, nn) = self.str_parts(name);
+                let lenp = self.scratch(8);
+                let p = self.rt_v("nz.os_env_find", &[np, nn, lenp], Class::Ptr);
+                let len = self.load(Class::I64, lenp, 0);
+                if op == Intrinsic::OsEnvHas {
+                    self.cmp_imm(Cmp::Ge, len, Class::I64, 0)
+                } else {
+                    let zero = self.iconst(0);
+                    let absent = self.cmp_imm(Cmp::Lt, len, Class::I64, 0);
+                    let n = self.select(absent, zero, len);
+                    self.fresh_copy(dst, p, n);
+                    return true;
+                }
+            }
+            Intrinsic::OsEnvCount => self.rt_v("nz.os_env_count", &[], Class::I64),
+            Intrinsic::OsEnvAt => {
+                let i = self.arg(args, 0);
+                let count = self.rt_v("nz.os_env_count", &[], Class::I64);
+                self.within(i, 1, count, "this index is outside the environment");
+                let lenp = self.scratch(8);
+                let p = self.rt_v("nz.os_env_at", &[i, lenp], Class::Ptr);
+                let len = self.load(Class::I64, lenp, 0);
+                self.fresh_copy(dst, p, len);
+                return true;
+            }
+            Intrinsic::OsSpawn => {
+                let prog = self.arg_place(args, 0);
+                let list = self.arg(args, 1);
+                let (pp, pn) = self.str_parts(prog);
+                self.rt_v("nz.os_spawn", &[pp, pn, list], Class::I64)
+            }
+            Intrinsic::OsChildPipe => {
+                let h = self.arg(args, 0);
+                let which = self.arg(args, 1);
+                self.rt_v("nz.os_child_pipe", &[h, which], Class::I64)
+            }
+            Intrinsic::OsWait | Intrinsic::OsKill => {
+                let h = self.arg(args, 0);
+                let name = if op == Intrinsic::OsWait {
+                    "nz.os_wait"
+                } else {
+                    "nz.os_kill"
+                };
+                self.rt_v(name, &[h], Class::I64)
+            }
             _ => return false,
         };
         self.set(dst, v);

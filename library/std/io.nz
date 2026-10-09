@@ -1,9 +1,11 @@
-// `@std/io`: output with a newline, and reading a file as a `Result`.
+// `@std/io`: output with a newline, reading a file as a `Result`, and (Gate 2) standard input.
 //
 // Imported with `use "@std/io";`. Every function here needs an `IoCap` and says so: it takes
 // one, and its effect set is `{ io }`, so a caller's authority is as visible as it would be
 // calling the built-ins directly. What a function here reads carries the built-ins' origins —
 // a file's contents are `file` — because they are ordinary calls the checker follows.
+
+use "@std/ioerror";
 
 /// `s` and a newline on standard output; the byte count.
 pub fn io_println(io: IoCap, s: Str) -> Int ! { io } {
@@ -24,4 +26,54 @@ pub fn io_read(io: IoCap, path: Str) -> Result[Str, Str] ! { io } {
     } else {
         Result[Str, Str].Err(error: str_concat("no such file: ", path))
     }
+}
+
+/// Everything on standard input, to its end (Gate 2). On the task pool the read holds the task's
+/// worker until the system answers.
+pub fn io_stdin_read_all(io: IoCap) -> Result[Bytes, IoError] ! { io } {
+    let h = os_stdin();
+    let chunk = bytes_new(65536);
+    let parts = vec_new[Bytes]();
+    let mut total = 0;
+    let mut n = os_read(h, chunk);
+    while n > 0 {
+        let part = bytes_new(n);
+        bytes_copy(part, bytes_slice(chunk, 0, n));
+        vec_push(parts, part);
+        total = total + n;
+        n = os_read(h, chunk);
+    }
+    if n < 0 {
+        return Result[Bytes, IoError].Err(error: io_context(io_error_from(n), "standard input"));
+    }
+    let all = bytes_new(total);
+    let mut at = 0;
+    let mut i = 0;
+    while i < vec_len(parts) {
+        let part = vec_get(parts, i);
+        bytes_copy(bytes_slice(all, at, at + bytes_len(part)), part);
+        at = at + bytes_len(part);
+        i = i + 1;
+    }
+    Result[Bytes, IoError].Ok(value: all)
+}
+
+/// Standard input's lines, without their newlines; a last line without one is still a line.
+pub fn io_stdin_lines(io: IoCap) -> Result[Strs, IoError] ! { io } {
+    let all = io_stdin_read_all(io)?;
+    let text = bytes_to_str(all);
+    let out = strs_new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < str_len(text) {
+        if str_byte(text, i) == 10 {
+            strs_push(out, str_slice(text, start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < str_len(text) {
+        strs_push(out, str_slice(text, start, str_len(text)));
+    }
+    Result[Strs, IoError].Ok(value: out)
 }

@@ -105,6 +105,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `text` | STABLE 1.0 | graphemes and normalisation are not the language's |
 | `files` | STABLE 1.0 | Gate 2: a handle is closed by `os_close` or at exit; a status's number is the platform's, its kind (`@std/ioerror`) is not |
 | `time` | STABLE 1.0 | Gate 2: nanosecond clocks and a sleep that parks; no timers beyond a sleep in a task or a select's deadline |
+| `process` | STABLE 1.0 | Gate 2: the environment, and a program run with three pipes; no signal handling |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -1193,8 +1194,8 @@ would need a propagation protocol, and traits do not exist.
 <!-- id: std -->
 
 A **standard module** is a toolchain-owned Nazm module a program imports by name. There are
-twenty-four (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror`,
-`file` and `net`),
+twenty-five (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror`,
+`file`, `net` and `env`),
 each ordinary source checked like any module, and none is visible unless a module writes its `use`:
 
 ```nazm
@@ -1235,8 +1236,8 @@ that exists but cannot be read is `N0407`.
 | `@std/result` | `result_is_ok[T, E](r) -> Bool`, `result_is_err[T, E](r) -> Bool`, `result_unwrap_or[T, E](r, fallback) -> T`, `result_ok[T, E](r) -> Option[T]`, `result_err[T, E](r) -> Option[E]` |
 | `@std/seq` | `ints_index_of(xs, x) -> Option[Int]`, `ints_contains(xs, x) -> Bool`, `ints_sum(xs) -> Int`, `ints_max(xs) -> Option[Int]`, `ints_min(xs) -> Option[Int]`, `strs_index_of(xs, x) -> Option[Int]`, `strs_contains(xs, x) -> Bool`, `vec_index_of[T: Equality](xs, x) -> Option[Int]`, and (N50) `vec_map[T, U](xs, f: fn(T) -> U) -> Vec[U]`, `vec_filter[T](xs, keep: fn(T) -> Bool) -> Vec[T]`, `vec_fold[T, A](xs, init: A, f: fn(A, T) -> A) -> A` — each, since N51, polymorphic in the effects of the function it takes (`effects E`), and doing exactly what that function does; and (N84) `vec_reverse[T](xs)`, `vec_slice[T](xs, from, to)` (clamped), `vec_concat[T](a, b)`, `vec_any[T](xs, test)`, `vec_all[T](xs, test)` |
 | `@std/sort` | (N84) `vec_sort_by[T](xs, less: fn(T, T) -> Bool) -> Vec[T]` (stable, effect-polymorphic), `ints_sort(xs) -> Ints`, `strs_sort(xs) -> Strs` — a module of its own because a sort allocates in a loop and calls through a function value, and a restriction profile refusing either refuses every function of a module it imports |
-| `@std/io` | `io_println(io, s) -> Int`, `io_eprintln(io, s) -> Int`, `io_read(io, path) -> Result[Str, Str]` — each `! { io }` |
-| `@std/process` | `process_args(io) -> Strs` — `! { io }` |
+| `@std/io` | `io_println(io, s) -> Int`, `io_eprintln(io, s) -> Int`, `io_read(io, path) -> Result[Str, Str]` — each `! { io }`; and (Gate 2) `io_stdin_read_all(io) -> Result[Bytes, IoError]`, `io_stdin_lines(io) -> Result[Strs, IoError]` |
+| `@std/process` | `process_args(io) -> Strs` — `! { io }`; and (Gate 2) `Child`, `ProcessOutput { status, stdout, stderr }`, `process_spawn(p, program, args)`, `process_stdin`, `process_stdout`, `process_stderr` (pipes as `@std/file` `File`s), `process_wait`, `process_kill`, `process_run(p, sp, program, args, input)` — the input and the errors moved in tasks of their own, so neither pipe fills unread |
 | `@std/chan` | `chan_take(c) -> Option[Int]`: the next value, or `None` once closed and drained; and (N84) `chan_send_all_ints(c, xs) -> Int`, `chan_collect_ints(c, n) -> Vec[Int]`, `chan_drain_ints(c) -> Vec[Int]`, `chan_send_all_strs(c, xs) -> Int`, `chan_collect_strs(c, n) -> Vec[Str]`, `chan_drain_strs(c) -> Vec[Str]` — for `Int` and `Str` because a channel cannot carry a type parameter (`N0390`) |
 | `@std/show` | the `Show` trait and `show_all[T: Show](v, sep) -> Str` (N78) |
 | `@std/fmt` | (N84) `fmt_int_zero(n, width)`, `fmt_int_width(n, width)`, `fmt_hex(n)` (two's complement for a negative), `fmt_bool(b)`, `fmt_list(items, sep, open, close)`, `fmt_ints(xs, sep)` |
@@ -1254,6 +1255,7 @@ that exists but cannot be read is `N0407`.
 | `@std/ioerror` | (Gate 2) `IoErrorKind` (`NotFound`, `PermissionDenied`, `AlreadyExists`, `WouldBlock`, `InvalidInput`, `TimedOut`, `Interrupted`, `UnexpectedEof`, `ConnectionRefused`, `ConnectionReset`, `AddressInUse`, `AddressNotAvailable`, `BrokenPipe`, `NotConnected`, `IsADirectory`, `NotADirectory`, `DirectoryNotEmpty`, `Closed`, `Cancelled`, `Other`) and `IoError { kind, code, message, context }`: `io_kind_of(status)` — each platform family's table from error number to kind, here and nowhere else — `io_error_from(status)`, `io_error_new(kind, message)`, `io_context(e, doing)` (contexts read outermost first), `io_result(status) -> Result[Int, IoError]`, `io_kind_name(k)`, `io_error_show(e)` |
 | `@std/file` | (Gate 2) `File`, `FileKind` (`Regular`, `Directory`, `Other`) and `Metadata { size, kind, modified_ns, permissions }`; each `! { io }` and answering `Result[_, IoError]`; what names a path takes the `IoCap` that allows it, and what uses a `File` takes only the file: `file_open`, `file_create`, `file_append`, `file_create_new`, `file_open_rw`, `file_read(f, buf)`, `file_read_rest`, `file_read_all(io, path) -> Bytes`, `file_write` (every byte, however many writes it takes), `file_write_str`, `file_seek`, `file_seek_end`, `file_position`, `file_sync`, `file_close`, `file_metadata`, `file_exists_at -> Bool`, `dir_list` (sorted by bytes), `dir_create`, `dir_create_all`, `dir_remove`, `file_remove`, `file_rename`, `file_replace_atomic(io, path, data)` (a new file beside it, written, put on storage, renamed over it) |
 | `@std/net` | (Gate 2) `TcpListener`, `TcpStream`, `UdpSocket`, `Datagram { size, from }`; each `! { io }`; what names an address takes the `NetCap` that allows it, and what uses a socket takes only the socket: `tcp_listen(net, addr)`, `tcp_accept`, `tcp_connect(net, addr, timeout_ms)`, `tcp_read`, `tcp_read_exact` (`UnexpectedEof` if the peer shuts first), `tcp_write` (every byte), `tcp_write_str`, `tcp_set_timeout`, `tcp_listener_set_timeout`, `tcp_shutdown`, `tcp_close`, `tcp_listener_close`, `tcp_local_addr`, `tcp_peer_addr`, `tcp_listener_addr`, `udp_bind(net, addr)`, `udp_send_to(net, u, data, addr)`, `udp_recv_from`, `udp_set_timeout`, `udp_local_addr`, `udp_close`, `net_resolve(net, name, port) -> Strs` |
+| `@std/env` | (Gate 2) `env_get(io, name) -> Option[Str]`, `env_vars(io) -> Strs` (`NAME=value`, the environment's order) — each `! { io }` |
 
 **Stability: 1.0 (N84).** `library/std/API-1.0` lists every public item of every standard module
 with its declaration; a test regenerates it and requires equality. Within 1.x an item may be
@@ -2911,12 +2913,12 @@ fn main(io: IoCap) -> Int ! { io } {
 
 #### The capabilities
 
-There are exactly eight, and they are the compiler's. There are **no user-defined
+There are exactly nine, and they are the compiler's. There are **no user-defined
 capabilities**.
 
 | Kind | Type | Authorises | Effect it authorises |
 | --- | --- | --- | --- |
-| `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` — and the `os_` built-ins that name a path or standard input (Gate 2, *Files and handles*); implies `OutCap` | `io` |
+| `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` — and the `os_` built-ins that name a path or standard input (Gate 2, *Files and handles*) or read the environment (*Process and environment*); implies `OutCap` | `io` |
 | `Out` | `OutCap` | the standard streams only: `print` and `eprint` (N79) | `io` |
 | `Spawn` | `SpawnCap` | a `spawn` statement: starting a task | `spawn` |
 | `Foreign` | `ForeignCap` | a call to a foreign function: running C (N42) | `foreign` |
@@ -2924,9 +2926,10 @@ capabilities**.
 | `Time` | `TimeCap` | `time_now_ms` and `chan_select_until`: reading a clock (N54), in every function | none |
 | `Mmio` | `MmioCap` | `mmio_read32` and `mmio_write32` (N62), and `mmio_read8`, `mmio_write8`, `mmio_read16`, `mmio_write16` (N86): a device register, in every function | none |
 | `Net` | `NetCap` | the built-ins that name an address — `os_tcp_listen`, `os_tcp_connect`, `os_udp_bind`, `os_udp_send_to`, `os_resolve` (Gate 2, *Networking*); implies nothing, and nothing implies it | `io` |
+| `Process` | `ProcessCap` | `os_spawn`: running another program, which is every authority that program has (Gate 2, *Process and environment*); implies nothing, and nothing implies it | `io` |
 
 A kind is identified by the compiler, never by how its type is spelled. `IoCap`, `OutCap`,
-`SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap` and `NetCap` are **built-in type names**, like
+`SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap`, `NetCap` and `ProcessCap` are **built-in type names**, like
 `Chan`: they mean the same in every module, and a module may not declare a type of any of those
 names (`N0331`). Which authority a built-in needs is a
 property of the built-in's identity, decided by an exhaustive table the checker reads — a
@@ -3921,6 +3924,19 @@ Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §11). `time_now_ms` (N
 | **Waiting** | `time_sleep_ms(ms) -> Int`: `0` after at least `ms` milliseconds; nothing for `ms <= 0`. On the task pool the task parks at the language's existing timed wait and its worker runs others; with a thread per task, and in the interpreter, the thread waits |
 | **Authority** | Each needs a `TimeCap` held and performs no effect, as `time_now_ms` does; `critical`'s `no-ambient-time` refuses them |
 | **Library** | `@std/time` gains `Duration`, `Instant` and `WallTime` over them (*The standard library*) |
+
+### Process and environment — Gate 2
+<!-- id: process -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §12). The arguments (`args_count`,
+`arg`) and `exit_with` are unchanged; standard input is `os_stdin()` (*Files and handles*).
+
+| | |
+| --- | --- |
+| **Environment** | `os_env_get(name) -> Str` (empty when unset), `os_env_has(name) -> Bool`, `os_env_count() -> Int`, `os_env_at(i) -> Str` — the `i`th entry, `NAME=value`, in the order the process holds them; `N0405` outside `0..os_env_count()`. An entry with no `=` after its first byte is not one. Each needs an `IoCap` held and has the `io` effect; what they answer is `argument`-origin, as the arguments are |
+| **Running a program** | `os_spawn(program, args: Strs) -> OsHandle`: `program` found on `PATH` as a shell finds it, started with `args` and the process's environment, its standard input, output and errors three pipes. It needs a `ProcessCap` — every authority the program has, granted explicitly (id 9) — and has the `io` effect; which program runs is the restricted sink a written file's path is (`N0372`). A failure to start is a status (`NotFound` for no such program) |
+| **A child** | `os_child_pipe(h, which) -> OsHandle`: its standard input (`0`), output (`1`) or errors (`2`), read and written with `os_read` and `os_write`, waiting as a socket does (*Networking*) — a task reading a child's output parks on the pool. `os_wait(h) -> Int`: its exit code, or `256` and the signal that ended it; the same answer every time; the wait holds the task's worker until the program ends. `os_kill(h) -> Int`: `SIGKILL`, nothing for a child already waited for. Each needs only the child's handle |
+| **Signals** | A native program that has started a child ignores `SIGPIPE` from then on, as the interpreter's host always does, so writing to a child that has gone is `BrokenPipe`. No program watches for signals in 1.0 (*As built*, `general-purpose.md` §12) |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

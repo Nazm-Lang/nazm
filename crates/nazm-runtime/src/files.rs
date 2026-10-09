@@ -406,6 +406,9 @@ pinned:
     i64 4, label %socket
     i64 5, label %einval
     i64 6, label %einval
+    i64 7, label %socket
+    i64 8, label %einval
+    i64 9, label %einval
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -441,6 +444,9 @@ pinned:
     i64 4, label %socket
     i64 5, label %einval
     i64 6, label %einval
+    i64 7, label %einval
+    i64 8, label %einval
+    i64 9, label %pipe
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -455,6 +461,10 @@ socket:
   %sw = call i64 @nz.net_send(i64 %h, ptr %buf, i64 %n)
   call void @nz.os_unpin(i64 %h)
   ret i64 %sw
+pipe:
+  %pw = call i64 @nz.net_pipe_write(i64 %h, ptr %buf, i64 %n)
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %pw
 write:
   %fd = trunc i64 %h to i32
   %r = call i64 @write(i32 %fd, ptr %buf, i64 %n)
@@ -479,6 +489,9 @@ pinned:
     i64 4, label %isstdin
     i64 5, label %isstdin
     i64 6, label %isstdin
+    i64 7, label %isstdin
+    i64 8, label %isstdin
+    i64 9, label %isstdin
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -521,6 +534,9 @@ pinned:
     i64 4, label %isstdin
     i64 5, label %isstdin
     i64 6, label %isstdin
+    i64 7, label %isstdin
+    i64 8, label %isstdin
+    i64 9, label %isstdin
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -665,10 +681,121 @@ system:
   %n = call i64 @nz_os_error_text(i64 %status, ptr %buf, i64 %cap)
   ret i64 %n
 }
+
+declare ptr @nz_os_environ()
+
+; Whether entry `e` is one: an `=` after its first byte. Its name's length then, or -1.
+define hidden i64 @nz.os_env_split(ptr %e) {
+entry:
+  %n = call i64 @strlen(ptr %e)
+  br label %scan
+scan:
+  %i = phi i64 [ 1, %entry ], [ %i1, %next ]
+  %end = icmp sge i64 %i, %n
+  br i1 %end, label %none, label %look
+look:
+  %cp = getelementptr i8, ptr %e, i64 %i
+  %c = load i8, ptr %cp
+  %eq = icmp eq i8 %c, 61
+  br i1 %eq, label %found, label %next
+next:
+  %i1 = add i64 %i, 1
+  br label %scan
+found:
+  ret i64 %i
+none:
+  ret i64 -1
+}
+
+; The `i`th entry of the environment that is one, `NAME=value`, its length through `lenp`; null
+; past the last. `i` -1 counts them instead, returning null and the count through `lenp`.
+define hidden ptr @nz.os_env_nth(i64 %want, ptr %lenp) {
+entry:
+  %env = call ptr @nz_os_environ()
+  br label %walk
+walk:
+  %k = phi i64 [ 0, %entry ], [ %k1, %skip ], [ %k2, %counted ]
+  %seen = phi i64 [ 0, %entry ], [ %seen, %skip ], [ %seen1, %counted ]
+  %ep = getelementptr ptr, ptr %env, i64 %k
+  %e = load ptr, ptr %ep
+  %end = icmp eq ptr %e, null
+  br i1 %end, label %done, label %test
+test:
+  %at = call i64 @nz.os_env_split(ptr %e)
+  %is = icmp sgt i64 %at, 0
+  %k1 = add i64 %k, 1
+  br i1 %is, label %valid, label %skip
+skip:
+  br label %walk
+valid:
+  %this = icmp eq i64 %seen, %want
+  br i1 %this, label %hit, label %counted
+counted:
+  %seen1 = add i64 %seen, 1
+  %k2 = add i64 %k, 1
+  br label %walk
+hit:
+  %len = call i64 @strlen(ptr %e)
+  store i64 %len, ptr %lenp
+  ret ptr %e
+done:
+  store i64 %seen, ptr %lenp
+  ret ptr null
+}
+
+define hidden i64 @nz.os_env_count() {
+entry:
+  %n = alloca i64, align 8
+  %p = call ptr @nz.os_env_nth(i64 -1, ptr %n)
+  %c = load i64, ptr %n
+  ret i64 %c
+}
+
+define hidden ptr @nz.os_env_at(i64 %i, ptr %lenp) {
+entry:
+  %p = call ptr @nz.os_env_nth(i64 %i, ptr %lenp)
+  ret ptr %p
+}
+
+; The value of the first entry named `name` (`n` bytes), its length through `lenp`; when there is
+; none, an empty string and -1.
+define hidden ptr @nz.os_env_find(ptr %name, i64 %n, ptr %lenp) {
+entry:
+  %env = call ptr @nz_os_environ()
+  br label %walk
+walk:
+  %k = phi i64 [ 0, %entry ], [ %k1, %next ]
+  %ep = getelementptr ptr, ptr %env, i64 %k
+  %e = load ptr, ptr %ep
+  %end = icmp eq ptr %e, null
+  br i1 %end, label %none, label %test
+test:
+  %k1 = add i64 %k, 1
+  %at = call i64 @nz.os_env_split(ptr %e)
+  %same = icmp eq i64 %at, %n
+  br i1 %same, label %compare, label %next
+compare:
+  %d = call i32 @memcmp(ptr %e, ptr %name, i64 %n)
+  %eq = icmp eq i32 %d, 0
+  br i1 %eq, label %hit, label %next
+next:
+  br label %walk
+hit:
+  %start = add i64 %n, 1
+  %v = getelementptr i8, ptr %e, i64 %start
+  %len = call i64 @strlen(ptr %v)
+  store i64 %len, ptr %lenp
+  ret ptr %v
+none:
+  store i64 -1, ptr %lenp
+  ret ptr @.nz.empty
+}
+
+@.nz.empty = private unnamed_addr constant [1 x i8] c"\00"
 "#;
 
-/// Where a program reaches files and not the network, the three entries the files part calls for a
-/// socket, which no handle of such a program can be.
+/// Where a program reaches files and not the network, the four entries the files part calls for a
+/// socket or a pipe, which no handle of such a program can be.
 pub(crate) const NET_STUBS: &str = r"
 define hidden i64 @nz.net_recv(i64 %h, ptr %buf, i64 %n) {
 entry:
@@ -683,5 +810,10 @@ entry:
 define hidden void @nz.net_wake(ptr %w) {
 entry:
   ret void
+}
+
+define hidden i64 @nz.net_pipe_write(i64 %h, ptr %buf, i64 %n) {
+entry:
+  ret i64 -22
 }
 ";
