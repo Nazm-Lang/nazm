@@ -33,6 +33,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("ioerror", include_str!("../../../library/std/ioerror.nz")),
     ("json", include_str!("../../../library/std/json.nz")),
     ("map", include_str!("../../../library/std/map.nz")),
+    ("net", include_str!("../../../library/std/net.nz")),
     ("num", include_str!("../../../library/std/num.nz")),
     ("option", include_str!("../../../library/std/option.nz")),
     ("path", include_str!("../../../library/std/path.nz")),

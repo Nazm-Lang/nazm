@@ -75,6 +75,13 @@ pub fn declarations(out: &mut String) {
         "declare i32 @rename(ptr, ptr)",
         "declare i32 @dirfd(ptr)",
         "declare i32 @closedir(ptr)",
+        "declare i32 @bind(i32, ptr, i32)",
+        "declare i32 @listen(i32, i32)",
+        "declare i32 @accept(i32, ptr, ptr)",
+        "declare i64 @recvfrom(i32, ptr, i64, i32, ptr, ptr)",
+        "declare i32 @getsockname(i32, ptr, ptr)",
+        "declare i32 @getpeername(i32, ptr, ptr)",
+        "declare i32 @shutdown(i32, i32)",
     ] {
         let _ = writeln!(out, "{d}");
     }

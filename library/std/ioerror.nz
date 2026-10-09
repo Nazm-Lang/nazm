@@ -92,6 +92,10 @@ pub fn io_kind_of(status: Int) -> IoErrorKind ! {} {
     if status == 0 - 65536 {
         return IoErrorKind.Closed();
     }
+    // A name the resolver did not answer: the runtime's status too.
+    if status == 0 - 65537 {
+        return IoErrorKind.NotFound();
+    }
     if os_family() == 0 { darwin_kind(0 - status) } else { linux_kind(0 - status) }
 }
 

@@ -8,7 +8,7 @@
 - [ ] 2.2 Time (§11)
 - [ ] 2.3 Process and environment (§12)
 - [ ] 2.4 Errors (§13)
-- [ ] 2.5 Networking and scheduler-aware I/O (§9, §10)
+- [x] 2.5 Networking and scheduler-aware I/O (§9, §10)
 
 ## 3. Libraries and tooling
 

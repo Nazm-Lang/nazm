@@ -412,6 +412,28 @@ storage or the resolver; neither waits on a peer. Windows (IOCP) is later host-p
 still make progress (one worker, many parked readers, a busy task completing); reactor tests in the
 contained Linux run (epoll) and on the macOS host (kqueue).
 
+**As built (2026-10-09), §9 and §10.** `spec.md`, *Networking*, is the rule; settlements:
+
+- **Built-ins over the files part's handles**, not a module of their own: a socket is an
+  `OsHandle` in the same table, with the same generations and the same `os_close`, read and
+  written with `os_read` and `os_write`. `@std/net` gives the `Result` APIs the record names
+  (`tcp_listen`, `tcp_accept`, `tcp_connect`, `tcp_read`, `tcp_write`, …, `net_resolve`), and
+  addresses are `HOST:PORT` text rather than a `SocketAddr` record.
+- **A deadline belongs to the handle** (`os_set_timeout`), so a read is `os_read` and not a
+  second `tcp_read_timeout`; a connect takes its own.
+- **Using a socket needs only the socket** — as using a file does (§8) — and naming an address
+  needs a `NetCap` held.
+- **The reactor's wake is a sequence number** in a wait record kept per descriptor: a waiter
+  arms the descriptor once and waits with the existing hooked wait until the number moves, its
+  deadline passes or its handle is closing. On Linux a descriptor's registration carries every
+  direction its waiters have asked for, since `epoll` keeps one per descriptor; `kqueue` keeps
+  one per direction.
+- **Name resolution** is the system's resolver and holds the task's worker while it answers,
+  as the record says; a name it does not answer is `-65537`, `NotFound`, in both
+  implementations, since the interpreter cannot see the resolver's own code.
+- **Signals for a peer that has gone are never raised**: `MSG_NOSIGNAL` on Linux, `SO_NOSIGPIPE`
+  on macOS, and the interpreter's host ignores `SIGPIPE`.
+
 ## 11. Time
 
 **Existing mechanism considered.** `time_now_ms` (monotonic, `TimeCap`), `chan_select_until`,

@@ -316,6 +316,7 @@ fn all() -> nazm_lir::Needs {
         foreign: true,
         numbers: true,
         files: true,
+        net: true,
     }
 }
 
@@ -550,6 +551,36 @@ fn root_capabilities_come_from_the_entry_alone() {
             f.effect.is_empty() || ["io", "spawn"].contains(&f.effect),
             "{}",
             f.symbol
+        );
+    }
+}
+
+#[test]
+fn every_targets_os_unit_is_llvm_its_toolchain_compiles() {
+    // Gate 2: the files and network facts differ by target (`platform::emit_os`); each target's
+    // unit must at least be well-formed LLVM for that target, or a cross build fails at link time.
+    use nazm_lir::runtime::platform::emit_os;
+    use nazm_lir::runtime::switch::SwitchTarget;
+    let dir = tempfile::tempdir().unwrap();
+    for (t, triple) in [
+        (SwitchTarget::Aarch64Darwin, "arm64-apple-macos"),
+        (SwitchTarget::X86_64Darwin, "x86_64-apple-macos"),
+        (SwitchTarget::Aarch64Linux, "aarch64-linux-gnu"),
+        (SwitchTarget::X86_64Linux, "x86_64-linux-gnu"),
+    ] {
+        let ll = dir.path().join(format!("{triple}.ll"));
+        std::fs::write(&ll, emit_os(t)).unwrap();
+        let o = Command::new("clang")
+            .args(["-c", "-Wno-override-module", &format!("--target={triple}")])
+            .arg(&ll)
+            .arg("-o")
+            .arg(dir.path().join(format!("{triple}.o")))
+            .output()
+            .expect("clang");
+        assert!(
+            o.status.success(),
+            "{triple}: {}",
+            String::from_utf8_lossy(&o.stderr)
         );
     }
 }
