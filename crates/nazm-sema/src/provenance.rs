@@ -196,7 +196,20 @@ impl Origin {
             | Intrinsic::OsStdin
             | Intrinsic::OsRead
             | Intrinsic::OsDirNext
-            | Intrinsic::OsStat => BuiltinFlow::Source(Self::File),
+            | Intrinsic::OsStat
+            // A socket is a descriptor: what arrives through one is the outside world's, as
+            // standard input's is, and so is the peer's address and a name's addresses.
+            | Intrinsic::OsUdpRecvFrom
+            | Intrinsic::OsPeerAddr
+            | Intrinsic::OsResolve => BuiltinFlow::Source(Self::File),
+            Intrinsic::OsTcpListen
+            | Intrinsic::OsTcpAccept
+            | Intrinsic::OsTcpConnect
+            | Intrinsic::OsUdpBind
+            | Intrinsic::OsUdpSendTo
+            | Intrinsic::OsSetTimeout
+            | Intrinsic::OsShutdown
+            | Intrinsic::OsLocalAddr => BuiltinFlow::Derive,
             Intrinsic::OsOpenWrite
             | Intrinsic::OsMkdir
             | Intrinsic::OsRmdir
@@ -285,6 +298,18 @@ impl Origin {
             Intrinsic::OsRead | Intrinsic::OsDirNext | Intrinsic::OsStat => {
                 ContainerUse::Fill { into: &[1] }
             }
+            // Networking (Gate 2): a datagram and its sender's address, and a name's addresses.
+            Intrinsic::OsUdpRecvFrom => ContainerUse::Fill { into: &[1, 2] },
+            Intrinsic::OsResolve => ContainerUse::Fill { into: &[2] },
+            Intrinsic::OsTcpListen
+            | Intrinsic::OsTcpAccept
+            | Intrinsic::OsTcpConnect
+            | Intrinsic::OsUdpBind
+            | Intrinsic::OsUdpSendTo
+            | Intrinsic::OsSetTimeout
+            | Intrinsic::OsShutdown
+            | Intrinsic::OsLocalAddr
+            | Intrinsic::OsPeerAddr => ContainerUse::None,
             Intrinsic::OsOpenRead
             | Intrinsic::OsOpenWrite
             | Intrinsic::OsDirOpen
@@ -561,6 +586,7 @@ impl SinkClass {
             | Intrinsic::OsUnlink => &[(0, Self::Path)],
             Intrinsic::OsRename => &[(0, Self::Path), (1, Self::Path)],
             Intrinsic::OsWrite => &[(1, Self::FileData)],
+            Intrinsic::OsUdpSendTo => &[(1, Self::FileData)],
             Intrinsic::Print | Intrinsic::EPrint => &[(0, Self::Output)],
             Intrinsic::StrVouch => &[(0, Self::Vouch)],
             _ => &[],
@@ -985,7 +1011,11 @@ mod tests {
                 ("os_stdin", Origin::File),
                 ("os_read", Origin::File),
                 ("os_dir_next", Origin::File),
-                ("os_stat", Origin::File)
+                ("os_stat", Origin::File),
+                // A socket's data, its peer and a name's addresses (Gate 2).
+                ("os_udp_recv_from", Origin::File),
+                ("os_peer_addr", Origin::File),
+                ("os_resolve", Origin::File)
             ]
         );
         // Every container built-in names its handle, and no other built-in claims one (N80).

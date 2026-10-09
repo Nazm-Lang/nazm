@@ -104,6 +104,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `bytes` | STABLE 1.0 | |
 | `text` | STABLE 1.0 | graphemes and normalisation are not the language's |
 | `files` | STABLE 1.0 | Gate 2: a handle is closed by `os_close` or at exit; a status's number is the platform's, its kind (`@std/ioerror`) is not |
+| `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
 | `numbers` | STABLE 1.0 | Gate 2: fixed-width integers, `Float32`, `Float64`, bit operators and conversions; the C library's transcendental functions are promised to the host library's accuracy, not bit for bit |
@@ -1191,8 +1192,8 @@ would need a propagation protocol, and traits do not exist.
 <!-- id: std -->
 
 A **standard module** is a toolchain-owned Nazm module a program imports by name. There are
-twenty-three (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror` and
-`file`),
+twenty-four (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror`,
+`file` and `net`),
 each ordinary source checked like any module, and none is visible unless a module writes its `use`:
 
 ```nazm
@@ -1251,6 +1252,7 @@ that exists but cannot be read is `N0407`.
 | `@std/deque` | (Gate 2) `Deque[T]`, a ring buffer, shared like any handle: `deque_new[T]()`, `deque_len`, `deque_push_back`, `deque_push_front` (amortised constant time), `deque_pop_front -> Option[T]`, `deque_pop_back -> Option[T]`, `deque_get(d, i) -> Option[T]` (constant time, from the front) |
 | `@std/ioerror` | (Gate 2) `IoErrorKind` (`NotFound`, `PermissionDenied`, `AlreadyExists`, `WouldBlock`, `InvalidInput`, `TimedOut`, `Interrupted`, `UnexpectedEof`, `ConnectionRefused`, `ConnectionReset`, `AddressInUse`, `AddressNotAvailable`, `BrokenPipe`, `NotConnected`, `IsADirectory`, `NotADirectory`, `DirectoryNotEmpty`, `Closed`, `Cancelled`, `Other`) and `IoError { kind, code, message, context }`: `io_kind_of(status)` — each platform family's table from error number to kind, here and nowhere else — `io_error_from(status)`, `io_error_new(kind, message)`, `io_context(e, doing)` (contexts read outermost first), `io_result(status) -> Result[Int, IoError]`, `io_kind_name(k)`, `io_error_show(e)` |
 | `@std/file` | (Gate 2) `File`, `FileKind` (`Regular`, `Directory`, `Other`) and `Metadata { size, kind, modified_ns, permissions }`; each `! { io }` and answering `Result[_, IoError]`; what names a path takes the `IoCap` that allows it, and what uses a `File` takes only the file: `file_open`, `file_create`, `file_append`, `file_create_new`, `file_open_rw`, `file_read(f, buf)`, `file_read_rest`, `file_read_all(io, path) -> Bytes`, `file_write` (every byte, however many writes it takes), `file_write_str`, `file_seek`, `file_seek_end`, `file_position`, `file_sync`, `file_close`, `file_metadata`, `file_exists_at -> Bool`, `dir_list` (sorted by bytes), `dir_create`, `dir_create_all`, `dir_remove`, `file_remove`, `file_rename`, `file_replace_atomic(io, path, data)` (a new file beside it, written, put on storage, renamed over it) |
+| `@std/net` | (Gate 2) `TcpListener`, `TcpStream`, `UdpSocket`, `Datagram { size, from }`; each `! { io }`; what names an address takes the `NetCap` that allows it, and what uses a socket takes only the socket: `tcp_listen(net, addr)`, `tcp_accept`, `tcp_connect(net, addr, timeout_ms)`, `tcp_read`, `tcp_read_exact` (`UnexpectedEof` if the peer shuts first), `tcp_write` (every byte), `tcp_write_str`, `tcp_set_timeout`, `tcp_listener_set_timeout`, `tcp_shutdown`, `tcp_close`, `tcp_listener_close`, `tcp_local_addr`, `tcp_peer_addr`, `tcp_listener_addr`, `udp_bind(net, addr)`, `udp_send_to(net, u, data, addr)`, `udp_recv_from`, `udp_set_timeout`, `udp_local_addr`, `udp_close`, `net_resolve(net, name, port) -> Strs` |
 
 **Stability: 1.0 (N84).** `library/std/API-1.0` lists every public item of every standard module
 with its declaration; a test regenerates it and requires equality. Within 1.x an item may be
@@ -2908,21 +2910,22 @@ fn main(io: IoCap) -> Int ! { io } {
 
 #### The capabilities
 
-There are exactly seven, and they are the compiler's. There are **no user-defined
+There are exactly eight, and they are the compiler's. There are **no user-defined
 capabilities**.
 
 | Kind | Type | Authorises | Effect it authorises |
 | --- | --- | --- | --- |
-| `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` — and implies `OutCap` | `io` |
+| `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` — and the `os_` built-ins that name a path or standard input (Gate 2, *Files and handles*); implies `OutCap` | `io` |
 | `Out` | `OutCap` | the standard streams only: `print` and `eprint` (N79) | `io` |
 | `Spawn` | `SpawnCap` | a `spawn` statement: starting a task | `spawn` |
 | `Foreign` | `ForeignCap` | a call to a foreign function: running C (N42) | `foreign` |
 | `Vouch` | `VouchCap` | `str_vouch`: declassifying a string (N52), in every function | none |
 | `Time` | `TimeCap` | `time_now_ms` and `chan_select_until`: reading a clock (N54), in every function | none |
 | `Mmio` | `MmioCap` | `mmio_read32` and `mmio_write32` (N62), and `mmio_read8`, `mmio_write8`, `mmio_read16`, `mmio_write16` (N86): a device register, in every function | none |
+| `Net` | `NetCap` | the built-ins that name an address — `os_tcp_listen`, `os_tcp_connect`, `os_udp_bind`, `os_udp_send_to`, `os_resolve` (Gate 2, *Networking*); implies nothing, and nothing implies it | `io` |
 
 A kind is identified by the compiler, never by how its type is spelled. `IoCap`, `OutCap`,
-`SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap` and `MmioCap` are **built-in type names**, like
+`SpawnCap`, `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap` and `NetCap` are **built-in type names**, like
 `Chan`: they mean the same in every module, and a module may not declare a type of any of those
 names (`N0331`). Which authority a built-in needs is a
 property of the built-in's identity, decided by an exhaustive table the checker reads — a
@@ -3874,6 +3877,37 @@ fn main(io: IoCap) -> Int ! { io } {
 | **Authority** | Every built-in here except `os_status`, `os_family` and `os_error_text` has the `io` effect. Those that **name a path** — `os_open_read`, `os_open_write`, `os_dir_open`, `os_stat`, `os_mkdir`, `os_rmdir`, `os_unlink`, `os_rename` — and `os_stdin` need an `IoCap` held (*Capabilities*). Those that **use a handle** — `os_read`, `os_write`, `os_seek`, `os_sync`, `os_dir_next`, `os_close` — need only the handle: it reaches nothing but what it names, so a function handed one file can use that file and open nothing else |
 | **Provenance** | What `os_read`, `os_dir_next` and `os_stat` put into a buffer is `file`-origin, joined into the buffer's cell. Where a file is written is the restricted sink `write_file`'s path is: `os_open_write`'s path, and the paths of `os_mkdir`, `os_rmdir`, `os_unlink` and `os_rename` |
 | **Blocking** | A read of standard input or of a file holds the task's worker on the pool until the system answers (`general-purpose.md` §10 states what does not) |
+
+### Networking — Gate 2
+<!-- id: networking -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §9 and §10). Sockets are `OsHandle`s
+(*Files and handles*): the same statuses, the same generations, the same `os_close`.
+
+```nazm
+use "@std/ioerror";
+use "@std/net";
+
+fn main(net: NetCap) -> Int ! { io } {
+    match tcp_connect(net, "127.0.0.1:7", 1000) {
+        Result.Ok(value: s) => { tcp_close(s); 0 },
+        Result.Err(error: e) => 1,
+    }
+}
+```
+
+| | |
+| --- | --- |
+| **Authority** | `NetCap`, a capability of its own (id 7), separate from `IoCap` so a program can be given files without the network or the network without files; `main` may take one. Every network built-in has the `io` effect. Those that **name an address** — `os_tcp_listen`, `os_tcp_connect`, `os_udp_bind`, `os_udp_send_to`, `os_resolve` — need a `NetCap` held; those that **use a socket** — `os_tcp_accept`, `os_udp_recv_from`, `os_set_timeout`, `os_shutdown`, `os_local_addr`, `os_peer_addr`, and `os_read`, `os_write` and `os_close` on one — need only its handle |
+| **Provenance** | What arrives through a socket, its sender's and peer's addresses and a name's addresses are `file`-origin, as standard input's are, so none of them may name where a file is written (`N0372`); what `os_udp_send_to` sends is the `file-data` sink `os_write`'s data is |
+| **Addresses** | Written `HOST:PORT` with a literal IPv4 host (`127.0.0.1:8080`) or a bracketed IPv6 one (`[::1]:8080`); anything else is `InvalidInput`. A socket's own and its peer's address are written the same way, IPv6 in RFC 5952's shortest form. `os_resolve(name, port, out: Bytes) -> Int` asks the system's resolver: the addresses it answers, in its order, one per line, into `out` — the length written, or a status: `-65537` (`NotFound`, `the name was not found`) for any name the resolver did not answer, `-EINVAL` when `out` is too short |
+| **TCP** | `os_tcp_listen(addr) -> OsHandle` (the address reused, so a restarted server binds at once; a backlog of 128); `os_tcp_accept(listener) -> OsHandle`; `os_tcp_connect(addr, timeout_ms) -> OsHandle` (`timeout_ms <= 0` waits as long as the system does). A connected socket is read and written with `os_read` and `os_write`: a read answers what has arrived, at most the buffer, `0` once the peer has shut its side; a write answers how many bytes the system took. Writing to a peer that has gone is `BrokenPipe`, never a signal. `os_shutdown(h, how)` shuts reading (`0`), writing (`1`) or both (`2`) |
+| **UDP** | `os_udp_bind(addr) -> OsHandle`; `os_udp_send_to(h, data, addr) -> Int`; `os_udp_recv_from(h, buf, from: Bytes) -> Int` — how many of the datagram's bytes were kept in `buf` (a longer one is cut to it), and its sender's address in `from`, followed by zero bytes |
+| **Addresses of a socket** | `os_local_addr(h) -> Str` and `os_peer_addr(h) -> Str`; empty for a handle that has none |
+| **Deadlines** | `os_set_timeout(h, ms) -> Int` bounds every later wait on `h` — accept, read, write, receive, send — to `ms` milliseconds (`0`: no bound); a wait that runs out answers `TimedOut` and changes nothing. A connect is bounded by its own argument |
+| **Waiting** | A socket wait does **not** hold a worker. On the task pool the task parks at the language's existing wait, its worker runs other tasks, and one runtime thread — `kqueue` on macOS, `epoll` on Linux — wakes it when the socket is ready, its deadline passes, or its handle is closed; with a thread per task, the thread waits; in the interpreter every task is a thread. Nothing is written `async` or `await` |
+| **Closing** | `os_close` of a socket another task is waiting on wakes that task, whose operation answers `Closed`; the close itself takes effect when the wait ends |
+| **Not here** | TLS, HTTP and every protocol above TCP and UDP (the ecosystem's); Unix-domain sockets; socket options beyond the deadline and address reuse; multicast and broadcast; non-blocking polling of many sockets by one task (a task per socket is the shape) |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

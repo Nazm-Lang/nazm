@@ -156,7 +156,13 @@ pub(crate) fn check_emission_reach() -> Result<(), Vec<String>> {
 /// Only the agent benchmark reaches a network (N35): no other crate's source mentions the
 /// transport it uses or a model provider's API. A source-level check, like emission reach: it
 /// catches the realistic regression — a request added somewhere convenient — not a call graph.
+///
+/// One file is the exception, and only for the transport: the interpreter's network module, which
+/// opens a socket only when the program it runs holds a `NetCap` and asks (Gate 2, `docs/spec.md`,
+/// *Networking*). No provider's API is allowed even there, and nothing else of the compiler, the
+/// checker or the tools may name the transport.
 pub(crate) fn check_network_reach() -> Result<(), Vec<String>> {
+    const PROGRAM_NETWORK: &str = "crates/nazm-core/src/eval/net.rs";
     const MARKS: &[&str] = &[
         "\"curl\"",
         "\"claude\"",
@@ -185,11 +191,19 @@ pub(crate) fn check_network_reach() -> Result<(), Vec<String>> {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
+            let rel = file
+                .strip_prefix(root)
+                .unwrap_or(&file)
+                .to_string_lossy()
+                .replace('\\', "/");
             for mark in MARKS {
+                if *mark == "TcpStream" && rel == PROGRAM_NETWORK {
+                    continue;
+                }
                 if text.contains(mark) {
                     problems.push(format!(
-                        "{} mentions `{mark}`: only an evaluator may reach a network",
-                        file.strip_prefix(root).unwrap_or(&file).display()
+                        "{rel} mentions `{mark}`: only an evaluator may reach a network, and \
+                         only {PROGRAM_NETWORK} a program's own sockets"
                     ));
                 }
             }

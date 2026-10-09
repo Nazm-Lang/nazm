@@ -132,8 +132,8 @@ fn codes(files: &[(&str, &str)]) -> Vec<String> {
 
 const MODULES: &[&str] = &[
     "chan", "deque", "file", "fmt", "fs", "hash", "hashmap", "hashset", "io", "ioerror", "json",
-    "map", "num", "option", "path", "process", "result", "seq", "show", "sort", "test", "text",
-    "time",
+    "map", "net", "num", "option", "path", "process", "result", "seq", "show", "sort", "test",
+    "text", "time",
 ];
 
 #[test]

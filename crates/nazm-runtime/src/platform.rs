@@ -110,7 +110,7 @@ const fn facts(target: SwitchTarget) -> Facts {
 }
 
 /// The unit for `target`: `nz_os_open`, `nz_os_mkdir`, `nz_os_stat`, `nz_os_opendir`,
-/// `nz_os_readdir`, `nz_os_family` and `nz_os_error_text`.
+/// `nz_os_readdir`, `nz_os_family` and `nz_os_error_text`; and the network's `nz_net_*`.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn emit_os(target: SwitchTarget) -> String {
@@ -271,7 +271,457 @@ pub fn emit_os(target: SwitchTarget) -> String {
         name_at = f.name_at,
         family = family,
     );
+    // And the network's facts (Gate 2): a program reaching the files part may reach sockets.
+    out.push_str(&net_part(target));
     out
+}
+
+/// The network's per-target facts (Gate 2, `docs/spec.md`, *Networking*), as text with holes the
+/// target fills: socket address layouts, flags, error numbers and the poller.
+const NET_COMMON: &str = r#"
+declare i32 @inet_pton(i32, ptr, ptr)
+declare ptr @inet_ntop(i32, ptr, ptr, i32)
+declare i32 @snprintf(ptr, i64, ptr, ...)
+declare i32 @fcntl(i32, i32, ...)
+declare i32 @socket(i32, i32, i32)
+declare i32 @setsockopt(i32, i32, i32, ptr, i32)
+declare i32 @getsockopt(i32, i32, i32, ptr, ptr)
+declare i32 @connect(i32, ptr, i32)
+declare i64 @send(i32, ptr, i64, i32)
+declare i64 @sendto(i32, ptr, i64, i32, ptr, i32)
+declare i32 @getaddrinfo(ptr, ptr, ptr, ptr)
+declare void @freeaddrinfo(ptr)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+declare i16 @llvm.bswap.i16(i16)
+
+@.nzf4 = private unnamed_addr constant [6 x i8] c"%s:%u\00"
+@.nzf6 = private unnamed_addr constant [8 x i8] c"[%s]:%u\00"
+
+; A socket address for `host` (a C string) and `port` in the caller's 128 bytes: its length, or
+; -1 when `host` is not a literal address of the family asked for (`v6` nonzero for IPv6).
+define hidden i64 @nz_net_fill(ptr %host, i64 %port, i64 %v6, ptr %out) {
+entry:
+  call void @llvm.memset.p0.i64(ptr %out, i8 0, i64 128, i1 false)
+  %p16 = trunc i64 %port to i16
+  %pbe = call i16 @llvm.bswap.i16(i16 %p16)
+  %pp = getelementptr i8, ptr %out, i64 2
+  store i16 %pbe, ptr %pp
+  %isv6 = icmp ne i64 %v6, 0
+  br i1 %isv6, label %six, label %four
+four:
+  %a4 = getelementptr i8, ptr %out, i64 4
+  %r4 = call i32 @inet_pton(i32 2, ptr %host, ptr %a4)
+  %ok4 = icmp eq i32 %r4, 1
+  br i1 %ok4, label %fam4, label %bad
+fam4:
+{SETFAM4}
+  ret i64 16
+six:
+  %a6 = getelementptr i8, ptr %out, i64 8
+  %r6 = call i32 @inet_pton(i32 {AF6}, ptr %host, ptr %a6)
+  %ok6 = icmp eq i32 %r6, 1
+  br i1 %ok6, label %fam6, label %bad
+fam6:
+{SETFAM6}
+  ret i64 28
+bad:
+  ret i64 -1
+}
+
+; `HOST:PORT`, IPv6 bracketed, into `out`: its length; 0 for an address of no family it knows.
+define hidden i64 @nz_net_format(ptr %sa, ptr %out, i64 %cap) {
+entry:
+  %ip = alloca [64 x i8], align 8
+{GETFAM}
+  %pp = getelementptr i8, ptr %sa, i64 2
+  %pbe = load i16, ptr %pp
+  %p = call i16 @llvm.bswap.i16(i16 %pbe)
+  %port = zext i16 %p to i32
+  %is4 = icmp eq i32 %fam, 2
+  br i1 %is4, label %four, label %other
+four:
+  %a4 = getelementptr i8, ptr %sa, i64 4
+  %t4 = call ptr @inet_ntop(i32 2, ptr %a4, ptr %ip, i32 64)
+  %n4 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %out, i64 %cap, ptr @.nzf4, ptr %ip, i32 %port)
+  br label %done
+other:
+  %is6 = icmp eq i32 %fam, {AF6}
+  br i1 %is6, label %six, label %none
+six:
+  %a6 = getelementptr i8, ptr %sa, i64 8
+  %t6 = call ptr @inet_ntop(i32 {AF6}, ptr %a6, ptr %ip, i32 64)
+  %n6 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %out, i64 %cap, ptr @.nzf6, ptr %ip, i32 %port)
+  br label %done
+none:
+  ret i64 0
+done:
+  %n = phi i32 [ %n4, %four ], [ %n6, %six ]
+  %w = sext i32 %n to i64
+  %room = sub i64 %cap, 1
+  %over = icmp sgt i64 %w, %room
+  %len = select i1 %over, i64 %room, i64 %w
+  ret i64 %len
+}
+
+; Close on exec, non-blocking, and never a signal for a peer that has gone.
+define hidden i32 @nz_net_prepare(i32 %fd) {
+entry:
+  %one = alloca i32, align 4
+  store i32 1, ptr %one
+  %c = call i32 (i32, i32, ...) @fcntl(i32 %fd, i32 2, i32 1)
+  %fl = call i32 (i32, i32, ...) @fcntl(i32 %fd, i32 3)
+  %nb = or i32 %fl, {NONBLOCK}
+  %s = call i32 (i32, i32, ...) @fcntl(i32 %fd, i32 4, i32 %nb)
+{NOSIGPIPE}
+  ret i32 0
+}
+
+; A socket of `type` (1 a stream, 2 datagrams) for the address at `sa`, prepared, its address
+; reused when `reuse` is nonzero; or -1 with errno set.
+define hidden i32 @nz_net_open(ptr %sa, i64 %type, i64 %reuse) {
+entry:
+  %one = alloca i32, align 4
+  store i32 1, ptr %one
+{GETFAM}
+  %t = trunc i64 %type to i32
+  %fd = call i32 @socket(i32 %fam, i32 %t, i32 0)
+  %bad = icmp slt i32 %fd, 0
+  br i1 %bad, label %fail, label %ok
+fail:
+  ret i32 -1
+ok:
+  %p = call i32 @nz_net_prepare(i32 %fd)
+  %r = icmp ne i64 %reuse, 0
+  br i1 %r, label %reused, label %done
+reused:
+  %s = call i32 @setsockopt(i32 %fd, i32 {SOLSOCKET}, i32 {REUSE}, ptr %one, i32 4)
+  br label %done
+done:
+  ret i32 %fd
+}
+
+; 0 connected, 1 under way, or -errno.
+define hidden i64 @nz_net_connect(i32 %fd, ptr %sa, i64 %len) {
+entry:
+  %l = trunc i64 %len to i32
+  %r = call i32 @connect(i32 %fd, ptr %sa, i32 %l)
+  %ok = icmp eq i32 %r, 0
+  br i1 %ok, label %done, label %failed
+done:
+  ret i64 0
+failed:
+  %ep = call ptr @nz_errno_location()
+  %e = load i32, ptr %ep
+  %busy = icmp eq i32 %e, {EINPROGRESS}
+  br i1 %busy, label %under, label %error
+under:
+  ret i64 1
+error:
+  %w = sext i32 %e to i64
+  %neg = sub i64 0, %w
+  ret i64 %neg
+}
+
+; The error a socket holds (`SO_ERROR`): 0, or its errno.
+define hidden i64 @nz_net_error(i32 %fd) {
+entry:
+  %v = alloca i32, align 4
+  %l = alloca i32, align 4
+  store i32 0, ptr %v
+  store i32 4, ptr %l
+  %r = call i32 @getsockopt(i32 %fd, i32 {SOLSOCKET}, i32 {SOERROR}, ptr %v, ptr %l)
+  %e = load i32, ptr %v
+  %w = sext i32 %e to i64
+  ret i64 %w
+}
+
+define hidden i64 @nz_net_send(i32 %fd, ptr %p, i64 %n) {
+entry:
+  %r = call i64 @send(i32 %fd, ptr %p, i64 %n, i32 {SENDFLAGS})
+  ret i64 %r
+}
+
+define hidden i64 @nz_net_sendto(i32 %fd, ptr %p, i64 %n, ptr %sa, i64 %len) {
+entry:
+  %l = trunc i64 %len to i32
+  %r = call i64 @sendto(i32 %fd, ptr %p, i64 %n, i32 {SENDFLAGS}, ptr %sa, i32 %l)
+  ret i64 %r
+}
+
+define hidden i64 @nz_net_eagain() {
+entry:
+  ret i64 {EAGAIN}
+}
+
+define hidden i64 @nz_net_etimedout() {
+entry:
+  ret i64 {ETIMEDOUT}
+}
+
+; The addresses the resolver answers for `host` (a C string), each with `port`, one per line, into
+; `out`: the length; -65537 for a name it did not answer; -22 when `out` is too short.
+define hidden i64 @nz_net_resolve(ptr %host, i64 %port, ptr %out, i64 %cap) {
+entry:
+  %hints = alloca [64 x i8], align 8
+  %res = alloca ptr, align 8
+  %tmp = alloca [128 x i8], align 8
+  %txt = alloca [80 x i8], align 8
+  call void @llvm.memset.p0.i64(ptr %hints, i8 0, i64 64, i1 false)
+  %st = getelementptr i8, ptr %hints, i64 8
+  store i32 1, ptr %st
+  %r = call i32 @getaddrinfo(ptr %host, ptr null, ptr %hints, ptr %res)
+  %bad = icmp ne i32 %r, 0
+  br i1 %bad, label %unknown, label %start
+unknown:
+  ret i64 -65537
+start:
+  %first = load ptr, ptr %res
+  %p16 = trunc i64 %port to i16
+  %pbe = call i16 @llvm.bswap.i16(i16 %p16)
+  br label %walk
+walk:
+  %cur = phi ptr [ %first, %start ], [ %next, %copied ]
+  %used = phi i64 [ 0, %start ], [ %used2, %copied ]
+  %end = icmp eq ptr %cur, null
+  br i1 %end, label %done, label %one
+one:
+  %lenp = getelementptr i8, ptr %cur, i64 16
+  %len32 = load i32, ptr %lenp
+  %len = zext i32 %len32 to i64
+  %small = icmp ult i64 %len, 128
+  %clen = select i1 %small, i64 %len, i64 128
+  %sap = getelementptr i8, ptr %cur, i64 {AIADDR}
+  %sa = load ptr, ptr %sap
+  call void @llvm.memset.p0.i64(ptr %tmp, i8 0, i64 128, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr %tmp, ptr %sa, i64 %clen, i1 false)
+  %tp = getelementptr i8, ptr %tmp, i64 2
+  store i16 %pbe, ptr %tp
+  %n = call i64 @nz_net_format(ptr %tmp, ptr %txt, i64 80)
+  %some = icmp sgt i64 %used, 0
+  %sep = zext i1 %some to i64
+  %need0 = add i64 %used, %sep
+  %need = add i64 %need0, %n
+  %over = icmp sgt i64 %need, %cap
+  br i1 %over, label %short, label %copy
+short:
+  call void @freeaddrinfo(ptr %first)
+  ret i64 -22
+copy:
+  br i1 %some, label %newline, label %text
+newline:
+  %nlp = getelementptr i8, ptr %out, i64 %used
+  store i8 10, ptr %nlp
+  br label %text
+text:
+  %at = getelementptr i8, ptr %out, i64 %need0
+  call void @llvm.memcpy.p0.p0.i64(ptr %at, ptr %txt, i64 %n, i1 false)
+  br label %copied
+copied:
+  %used2 = add i64 %need0, %n
+  %nextp = getelementptr i8, ptr %cur, i64 40
+  %next = load ptr, ptr %nextp
+  br label %walk
+done:
+  call void @freeaddrinfo(ptr %first)
+  ret i64 %used
+}
+"#;
+
+/// macOS: `kqueue`, one filter per direction, each armed for one event.
+const KQUEUE: &str = r#"
+declare i32 @kqueue()
+declare i32 @kevent(i32, ptr, i32, ptr, i32, ptr)
+
+define hidden i32 @nz_net_poller() {
+entry:
+  %q = call i32 @kqueue()
+  %c = call i32 (i32, i32, ...) @fcntl(i32 %q, i32 2, i32 1)
+  ret i32 %q
+}
+
+; Arm `fd` once for reading (mask bit 1) and writing (bit 2), the event carrying `udata`.
+define hidden i32 @nz_net_arm(i32 %q, i32 %fd, i64 %mask, i64 %udata) {
+entry:
+  %ev = alloca [32 x i8], align 8
+  %id = sext i32 %fd to i64
+  %rd = and i64 %mask, 1
+  %wantr = icmp ne i64 %rd, 0
+  br i1 %wantr, label %armr, label %checkw
+armr:
+  call void @llvm.memset.p0.i64(ptr %ev, i8 0, i64 32, i1 false)
+  store i64 %id, ptr %ev
+  %fr = getelementptr i8, ptr %ev, i64 8
+  store i16 -1, ptr %fr
+  %flr = getelementptr i8, ptr %ev, i64 10
+  store i16 17, ptr %flr
+  %ur = getelementptr i8, ptr %ev, i64 24
+  store i64 %udata, ptr %ur
+  %rr = call i32 @kevent(i32 %q, ptr %ev, i32 1, ptr null, i32 0, ptr null)
+  br label %checkw
+checkw:
+  %wr = and i64 %mask, 2
+  %wantw = icmp ne i64 %wr, 0
+  br i1 %wantw, label %armw, label %done
+armw:
+  call void @llvm.memset.p0.i64(ptr %ev, i8 0, i64 32, i1 false)
+  store i64 %id, ptr %ev
+  %fw = getelementptr i8, ptr %ev, i64 8
+  store i16 -2, ptr %fw
+  %flw = getelementptr i8, ptr %ev, i64 10
+  store i16 17, ptr %flw
+  %uw = getelementptr i8, ptr %ev, i64 24
+  store i64 %udata, ptr %uw
+  %rw = call i32 @kevent(i32 %q, ptr %ev, i32 1, ptr null, i32 0, ptr null)
+  br label %done
+done:
+  ret i32 0
+}
+
+; Wait for events: each one's `udata` into `out`, at most 64; how many.
+define hidden i64 @nz_net_poll(i32 %q, ptr %out) {
+entry:
+  %evs = alloca [2048 x i8], align 8
+  %n = call i32 @kevent(i32 %q, ptr null, i32 0, ptr %evs, i32 64, ptr null)
+  %none = icmp slt i32 %n, 1
+  br i1 %none, label %zero, label %start
+zero:
+  ret i64 0
+start:
+  %count = sext i32 %n to i64
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %start ], [ %i1, %loop ]
+  %off = mul i64 %i, 32
+  %off2 = add i64 %off, 24
+  %up = getelementptr i8, ptr %evs, i64 %off2
+  %u = load i64, ptr %up
+  %op = getelementptr i64, ptr %out, i64 %i
+  store i64 %u, ptr %op
+  %i1 = add i64 %i, 1
+  %more = icmp slt i64 %i1, %count
+  br i1 %more, label %loop, label %done
+done:
+  ret i64 %count
+}
+"#;
+
+/// Linux: `epoll`, one registration per descriptor, armed for one event at a time with every
+/// direction a waiter has asked for.
+const EPOLL: &str = r#"
+declare i32 @epoll_create1(i32)
+declare i32 @epoll_ctl(i32, i32, i32, ptr)
+declare i32 @epoll_wait(i32, ptr, i32, i32)
+
+define hidden i32 @nz_net_poller() {
+entry:
+  %e = call i32 @epoll_create1(i32 524288)
+  ret i32 %e
+}
+
+define hidden i32 @nz_net_arm(i32 %ep, i32 %fd, i64 %mask, i64 %udata) {
+entry:
+  %ev = alloca [16 x i8], align 8
+  call void @llvm.memset.p0.i64(ptr %ev, i8 0, i64 16, i1 false)
+  %rd = and i64 %mask, 1
+  %wr = and i64 %mask, 2
+  %wantr = icmp ne i64 %rd, 0
+  %wantw = icmp ne i64 %wr, 0
+  %er = select i1 %wantr, i32 8193, i32 0
+  %ew = select i1 %wantw, i32 4, i32 0
+  %e0 = or i32 %er, %ew
+  %events = or i32 %e0, 1073741824
+  store i32 %events, ptr %ev
+  %dp = getelementptr i8, ptr %ev, i64 {EPDATA}
+  store i64 %udata, ptr %dp, align 4
+  %m = call i32 @epoll_ctl(i32 %ep, i32 3, i32 %fd, ptr %ev)
+  %ok = icmp eq i32 %m, 0
+  br i1 %ok, label %done, label %add
+add:
+  %a = call i32 @epoll_ctl(i32 %ep, i32 1, i32 %fd, ptr %ev)
+  br label %done
+done:
+  ret i32 0
+}
+
+define hidden i64 @nz_net_poll(i32 %ep, ptr %out) {
+entry:
+  %evs = alloca [1024 x i8], align 8
+  %n = call i32 @epoll_wait(i32 %ep, ptr %evs, i32 64, i32 -1)
+  %none = icmp slt i32 %n, 1
+  br i1 %none, label %zero, label %start
+zero:
+  ret i64 0
+start:
+  %count = sext i32 %n to i64
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %start ], [ %i1, %loop ]
+  %off = mul i64 %i, {EPSIZE}
+  %off2 = add i64 %off, {EPDATA}
+  %up = getelementptr i8, ptr %evs, i64 %off2
+  %u = load i64, ptr %up, align 4
+  %op = getelementptr i64, ptr %out, i64 %i
+  store i64 %u, ptr %op
+  %i1 = add i64 %i, 1
+  %more = icmp slt i64 %i1, %count
+  br i1 %more, label %loop, label %done
+done:
+  ret i64 %count
+}
+"#;
+
+/// The network part of `target`'s unit.
+fn net_part(target: SwitchTarget) -> String {
+    let darwin = matches!(
+        target,
+        SwitchTarget::Aarch64Darwin | SwitchTarget::X86_64Darwin
+    );
+    let get_family = if darwin {
+        "  %fp = getelementptr i8, ptr %sa, i64 1\n  %fb = load i8, ptr %fp\n  %fam = zext i8 %fb to i32"
+    } else {
+        "  %fh = load i16, ptr %sa\n  %fam = zext i16 %fh to i32"
+    };
+    let (set4, set6) = if darwin {
+        (
+            "  store i8 16, ptr %out\n  %f4 = getelementptr i8, ptr %out, i64 1\n  store i8 2, ptr %f4",
+            "  store i8 28, ptr %out\n  %f6 = getelementptr i8, ptr %out, i64 1\n  store i8 30, ptr %f6",
+        )
+    } else {
+        ("  store i16 2, ptr %out", "  store i16 10, ptr %out")
+    };
+    let nosigpipe = if darwin {
+        "  %ns = call i32 @setsockopt(i32 %fd, i32 65535, i32 4130, ptr %one, i32 4)"
+    } else {
+        ""
+    };
+    // epoll's event is packed on x86-64 (12 bytes, data at 4) and natural on aarch64.
+    let (ep_data, ep_size) = match target {
+        SwitchTarget::X86_64Linux => (4, 12),
+        _ => (8, 16),
+    };
+    let common = NET_COMMON
+        .replace("{SETFAM4}", set4)
+        .replace("{SETFAM6}", set6)
+        .replace("{GETFAM}", get_family)
+        .replace("{NOSIGPIPE}", nosigpipe)
+        .replace("{AF6}", if darwin { "30" } else { "10" })
+        .replace("{NONBLOCK}", if darwin { "4" } else { "2048" })
+        .replace("{SOLSOCKET}", if darwin { "65535" } else { "1" })
+        .replace("{REUSE}", if darwin { "4" } else { "2" })
+        .replace("{SOERROR}", if darwin { "4103" } else { "4" })
+        .replace("{SENDFLAGS}", if darwin { "0" } else { "16384" })
+        .replace("{EAGAIN}", if darwin { "35" } else { "11" })
+        .replace("{ETIMEDOUT}", if darwin { "60" } else { "110" })
+        .replace("{EINPROGRESS}", if darwin { "36" } else { "115" })
+        .replace("{AIADDR}", if darwin { "32" } else { "24" });
+    let poller = if darwin {
+        KQUEUE.to_owned()
+    } else {
+        EPOLL
+            .replace("{EPDATA}", &ep_data.to_string())
+            .replace("{EPSIZE}", &ep_size.to_string())
+    };
+    format!("{common}{poller}")
 }
 
 #[cfg(test)]

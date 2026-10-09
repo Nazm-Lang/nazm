@@ -9,7 +9,7 @@
 //! when the read lets go of it, as natively.
 //!
 //! A failed open answers its status as the handle, `-errno`, which is negative and so never a
-//! live handle's word.
+//! live handle's word. Sockets (`eval::net`) are handles in the same table.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions, ReadDir};
@@ -33,10 +33,13 @@ const EINVAL: i64 = 22;
 const EISDIR: i64 = 21;
 const ENOTDIR: i64 = 20;
 const ESPIPE: i64 = 29;
+/// The status of a name the resolver did not answer: no system's error number either, so
+/// `@std/ioerror` gives it the kind `NotFound` on every platform.
+pub(super) const NAME_NOT_FOUND: i64 = -65_537;
 
 /// What a live handle names.
 #[derive(Debug)]
-enum Object {
+pub(super) enum Object {
     File(File),
     /// The directory's own descriptor, which the table is keyed by, and its listing.
     Dir {
@@ -44,12 +47,21 @@ enum Object {
         list: Mutex<ReadDir>,
     },
     Stdin,
+    /// A connected TCP socket, a listening one, and a UDP one (Gate 2, `eval::net`, the one
+    /// module of the interpreter that reaches a network).
+    Tcp(super::net::Stream),
+    Listener(super::net::Listener),
+    Udp(super::net::Datagrams),
 }
+
+/// One descriptor's slot: its current generation, its object while open, and the deadline in
+/// milliseconds every wait on it has (`0`: none).
+type Slot = (i64, Option<Arc<Object>>, i64);
 
 #[derive(Debug, Default)]
 struct Table {
-    /// Each descriptor's current generation, and its object while it is open.
-    slots: HashMap<i64, (i64, Option<Arc<Object>>)>,
+    /// Each descriptor's slot.
+    slots: HashMap<i64, Slot>,
     /// Standard input's handle, once a program has asked for it.
     stdin: Option<i64>,
 }
@@ -73,27 +85,62 @@ fn status(e: &std::io::Error) -> i64 {
     -i64::from(e.raw_os_error().unwrap_or(22))
 }
 
-/// A new handle for `object` on descriptor `fd`: the descriptor's next generation.
-fn register(fd: i64, object: Object) -> i64 {
+/// A new handle for `object` on descriptor `fd`: the descriptor's next generation, with no
+/// deadline.
+pub(super) fn register(fd: i64, object: Object) -> i64 {
     let Ok(mut t) = table().lock() else {
         return CLOSED;
     };
-    let slot = t.slots.entry(fd).or_insert((0, None));
+    let slot = t.slots.entry(fd).or_insert((0, None, 0));
     slot.0 += 1;
     slot.1 = Some(Arc::new(object));
+    slot.2 = 0;
     (slot.0 << 32) | fd
 }
 
 /// The object a live handle names, or its status.
-fn object(h: i64) -> Result<Arc<Object>, i64> {
+pub(super) fn object(h: i64) -> Result<Arc<Object>, i64> {
     if h < 0 {
         return Err(h);
     }
     let (fd, generation) = (h & 0xFFFF_FFFF, h >> 32);
     let t = table().lock().map_err(|_| CLOSED)?;
     match t.slots.get(&fd) {
-        Some((g, Some(o))) if *g == generation => Ok(Arc::clone(o)),
+        Some((g, Some(o), _)) if *g == generation => Ok(Arc::clone(o)),
         _ => Err(CLOSED),
+    }
+}
+
+/// The deadline every wait on a live handle has, if it has one.
+pub(super) fn timeout_of(h: i64) -> Option<std::time::Duration> {
+    let (fd, generation) = (h & 0xFFFF_FFFF, h >> 32);
+    let t = table().lock().ok()?;
+    match t.slots.get(&fd) {
+        Some((g, Some(_), ms)) if *g == generation && *ms > 0 => {
+            Some(std::time::Duration::from_millis(ms.unsigned_abs()))
+        }
+        _ => None,
+    }
+}
+
+/// Give a live handle a deadline of `ms` milliseconds (`0`: none): `0`, or its status.
+pub(super) fn set_timeout(h: i64, ms: i64) -> i64 {
+    if h < 0 {
+        return h;
+    }
+    if ms < 0 {
+        return -EINVAL;
+    }
+    let (fd, generation) = (h & 0xFFFF_FFFF, h >> 32);
+    let Ok(mut t) = table().lock() else {
+        return CLOSED;
+    };
+    match t.slots.get_mut(&fd) {
+        Some((g, Some(_), deadline)) if *g == generation => {
+            *deadline = ms;
+            0
+        }
+        _ => CLOSED,
     }
 }
 
@@ -192,9 +239,10 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             if let Some(h) = t.stdin {
                 return handle(h);
             }
-            let slot = t.slots.entry(0).or_insert((0, None));
+            let slot = t.slots.entry(0).or_insert((0, None, 0));
             slot.0 += 1;
             slot.1 = Some(Arc::new(Object::Stdin));
+            slot.2 = 0;
             let h = slot.0 << 32;
             t.stdin = Some(h);
             handle(h)
@@ -208,6 +256,8 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                     Object::File(f) => (&*f).read(&mut got),
                     Object::Stdin => std::io::stdin().lock().read(&mut got),
                     Object::Dir { .. } => return int(-EISDIR),
+                    Object::Tcp(s) => return int(super::net::tcp_read(*h, s, buf)),
+                    Object::Listener(_) | Object::Udp(_) => return int(-EINVAL),
                 };
                 match r {
                     Ok(n) => {
@@ -224,6 +274,8 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 Object::File(f) => counted((&*f).write(&data.read())),
                 Object::Stdin => -EBADF,
                 Object::Dir { .. } => -EISDIR,
+                Object::Tcp(s) => super::net::tcp_write(*h, s, data),
+                Object::Listener(_) | Object::Udp(_) => -EINVAL,
             },
         }),
         (Intrinsic::OsSeek, [Value::OsHandle(h), Value::Int(offset), Value::Int(whence)]) => {
@@ -243,7 +295,9 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                             Err(e) => status(&e),
                         }
                     }
-                    Object::Stdin => -ESPIPE,
+                    Object::Stdin | Object::Tcp(_) | Object::Listener(_) | Object::Udp(_) => {
+                        -ESPIPE
+                    }
                     Object::Dir { .. } => -EISDIR,
                 },
             })
@@ -252,7 +306,7 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             Err(s) => s,
             Ok(o) => match &*o {
                 Object::File(f) => done(f.sync_all()),
-                Object::Stdin => -EINVAL,
+                Object::Stdin | Object::Tcp(_) | Object::Listener(_) | Object::Udp(_) => -EINVAL,
                 Object::Dir { .. } => -EISDIR,
             },
         }),
@@ -265,10 +319,15 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 return int(CLOSED);
             };
             match t.slots.get_mut(&fd) {
-                Some((g, o @ Some(_))) if *g == generation => {
-                    // Out of the table, and released when the last use in progress lets go.
+                Some((g, o @ Some(_), _)) if *g == generation => {
+                    // Out of the table, and released when the last use in progress lets go. A
+                    // connected socket is shut first, so a task waiting on it wakes — and, finding
+                    // the handle closed, answers `Closed`, as natively.
                     let closing = o.take();
                     drop(t);
+                    if let Some(Object::Tcp(s)) = closing.as_deref() {
+                        super::net::shut(s);
+                    }
                     drop(closing);
                     int(0)
                 }
@@ -297,7 +356,11 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                         }
                     }
                 }
-                Object::File(_) | Object::Stdin => -ENOTDIR,
+                Object::File(_)
+                | Object::Stdin
+                | Object::Tcp(_)
+                | Object::Listener(_)
+                | Object::Udp(_) => -ENOTDIR,
             },
         }),
         (Intrinsic::OsStat, [Value::Str(p), Value::Bytes(out)]) => {
@@ -336,6 +399,7 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
         (Intrinsic::OsErrorText, [Value::Int(s)]) => {
             let text = match s.checked_neg().and_then(|e| i32::try_from(e).ok()) {
                 _ if *s == CLOSED => "the handle is closed".to_owned(),
+                _ if *s == NAME_NOT_FOUND => "the name was not found".to_owned(),
                 Some(e) if e > 0 => {
                     let full = std::io::Error::from_raw_os_error(e).to_string();
                     let suffix = format!(" (os error {e})");
@@ -345,7 +409,7 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             };
             Some(Value::Str(Str::heap(text.into_bytes())))
         }
-        _ => None,
+        _ => super::net::net_value(op, args),
     }
 }
 

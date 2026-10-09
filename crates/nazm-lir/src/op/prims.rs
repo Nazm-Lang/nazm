@@ -70,7 +70,18 @@ impl Fx<'_, '_> {
             | Intrinsic::OsUnlink
             | Intrinsic::OsRename
             | Intrinsic::OsFamily
-            | Intrinsic::OsErrorText => {
+            | Intrinsic::OsErrorText
+            | Intrinsic::OsTcpListen
+            | Intrinsic::OsTcpAccept
+            | Intrinsic::OsTcpConnect
+            | Intrinsic::OsUdpBind
+            | Intrinsic::OsUdpSendTo
+            | Intrinsic::OsUdpRecvFrom
+            | Intrinsic::OsSetTimeout
+            | Intrinsic::OsShutdown
+            | Intrinsic::OsLocalAddr
+            | Intrinsic::OsPeerAddr
+            | Intrinsic::OsResolve => {
                 let at = self.at;
                 self.lw
                     .defect(at, "a files built-in its lowering did not take");

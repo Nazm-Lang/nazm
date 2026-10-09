@@ -110,7 +110,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 3 | Type system | VERIFIED as scoped (N107, Gate 2) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); fixed-width integers, `Float32`/`Float64`, bit operators and conversions, fixed arrays of plain data and module constants, `Bytes` buffers and views, and `Text` (Gate 2); trait objects, generic traits and default methods refused by name |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe — closure environments are ownership-graph nodes; the capture that could close a cycle is refused (`N0616`, Gate 1-C1) |
 | 5 | Effects | VERIFIED as scoped (N107) — inferred, checked compiler-owned effects with subsumption (N79); no handlers or user effects; pure is not total |
-| 6 | Capabilities (language) | VERIFIED as scoped (N107) — static, coarse, shareable: no inherited authority (N104), `OutCap` attenuation (N79) |
+| 6 | Capabilities (language) | VERIFIED as scoped (N107) — static, coarse, shareable: no inherited authority (N104), `OutCap` attenuation (N79); `NetCap`, and an open handle as its own authority (Gate 2) |
 | 7 | Provenance and information flow (language) | VERIFIED as scoped (N107) — explicit data flow by cell, target and field (N80); implicit flow RESEARCH (R6), not claimed |
 | 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | VERIFIED (v1) |
@@ -122,7 +122,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 13 | Runtime | VERIFIED (v1 contract; a built, versioned, verified artifact, N82; M:N tasks on bounded workers by default, N106) — no allocator of its own, runtime still text |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
-| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles and I/O errors (twenty-three modules); no networking or cryptography; numbers are the language's since Gate 2 (area 3) |
+| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles, I/O errors and networking (twenty-four modules); no cryptography; numbers are the language's since Gate 2 (area 3) |
 | 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
 | 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
@@ -1835,6 +1835,21 @@ module checking cleanly, documented and listed. Measured (`performance.md`): sor
 19.6 ms; 10,000 map insertions 391 ms (an insertion moves the entries after it); parsing and
 re-encoding 128 KB of JSON about 14 ms. **Scope**: no networking, cryptography or floating point, by
 decision; the map's insertion is linear; the compiler written in Nazm cannot import any of it.
+
+**Gate 2 (2026-10-09)** · *Networking* (`general-purpose.md` §9–§10; `spec.md`, *Networking*).
+`NetCap` (id 7) and the network `os_` built-ins over the same handle table: TCP listen, accept,
+connect with a deadline, read, write, shutdown; UDP bind, send, receive with the sender; local
+and peer addresses; name resolution; a deadline per handle. Every wait parks: one reactor thread
+(`kqueue` on macOS, `epoll` on Linux) wakes a waiting task through the pool's existing wait, and a
+close wakes it with `Closed`. `@std/net` gives `Result` APIs. Runtime ABI 17; semantic epoch 37.
+Evidence: `crates/nazm-cli/tests/net.rs` — an echo server answering clients, a datagram's round
+trip with its sender, eight failure kinds (`AddressInUse`, `TimedOut` on accept and receive,
+`ConnectionRefused`, `Closed`, four `InvalidInput` addresses) and resolution, a close waking a
+waiting task, a peer that has gone being an error and never a signal — interpreter, LLVM −O0/−O2,
+Cranelift — and `a_task_waiting_on_a_socket_does_not_hold_its_worker` (eight tasks parked on
+**one** pool worker while a ninth computes, both backends); the authority, handle and sink
+refusals; `every_targets_os_unit_is_llvm_its_toolchain_compiles`. **Scope**: no TLS or
+Unix-domain sockets; resolution holds the worker (`limitations.md`).
 
 **Gate 2 (2026-10-09)** · *Files and handles* (`general-purpose.md` §8; `spec.md`, *Files and
 handles*). The `os_` built-ins over an `OsHandle` — a descriptor and its generation in a handle

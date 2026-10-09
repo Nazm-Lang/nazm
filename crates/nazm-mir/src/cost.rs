@@ -323,7 +323,20 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::BytesToStr
         | Intrinsic::TextConcat
         | Intrinsic::ScalarText
-        | Intrinsic::OsErrorText => true,
+        | Intrinsic::OsErrorText
+        | Intrinsic::OsLocalAddr
+        | Intrinsic::OsPeerAddr => true,
+        // Networking (Gate 2): the system's storage, and words; a receive fills a buffer the
+        // program already made.
+        Intrinsic::OsTcpListen
+        | Intrinsic::OsTcpAccept
+        | Intrinsic::OsTcpConnect
+        | Intrinsic::OsUdpBind
+        | Intrinsic::OsUdpSendTo
+        | Intrinsic::OsUdpRecvFrom
+        | Intrinsic::OsSetTimeout
+        | Intrinsic::OsShutdown
+        | Intrinsic::OsResolve => false,
         // Files and handles (Gate 2): the system's storage, and words; a read fills a buffer
         // the program already made.
         Intrinsic::OsOpenRead

@@ -464,11 +464,24 @@ pub enum Intrinsic {
     OsRename,
     OsFamily,
     OsErrorText,
+
+    // --- networking, Gate 2 (`docs/general-purpose.md` §9–§10; `docs/spec.md`, *Networking*) ---
+    OsTcpListen,
+    OsTcpAccept,
+    OsTcpConnect,
+    OsUdpBind,
+    OsUdpSendTo,
+    OsUdpRecvFrom,
+    OsSetTimeout,
+    OsShutdown,
+    OsLocalAddr,
+    OsPeerAddr,
+    OsResolve,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 137] = [
+    pub const ALL: [Self; 148] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -606,6 +619,17 @@ impl Intrinsic {
         Self::OsRename,
         Self::OsFamily,
         Self::OsErrorText,
+        Self::OsTcpListen,
+        Self::OsTcpAccept,
+        Self::OsTcpConnect,
+        Self::OsUdpBind,
+        Self::OsUdpSendTo,
+        Self::OsUdpRecvFrom,
+        Self::OsSetTimeout,
+        Self::OsShutdown,
+        Self::OsLocalAddr,
+        Self::OsPeerAddr,
+        Self::OsResolve,
     ];
 
     #[must_use]
@@ -752,6 +776,17 @@ impl Intrinsic {
             Self::OsRename => "os_rename",
             Self::OsFamily => "os_family",
             Self::OsErrorText => "os_error_text",
+            Self::OsTcpListen => "os_tcp_listen",
+            Self::OsTcpAccept => "os_tcp_accept",
+            Self::OsTcpConnect => "os_tcp_connect",
+            Self::OsUdpBind => "os_udp_bind",
+            Self::OsUdpSendTo => "os_udp_send_to",
+            Self::OsUdpRecvFrom => "os_udp_recv_from",
+            Self::OsSetTimeout => "os_set_timeout",
+            Self::OsShutdown => "os_shutdown",
+            Self::OsLocalAddr => "os_local_addr",
+            Self::OsPeerAddr => "os_peer_addr",
+            Self::OsResolve => "os_resolve",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -956,6 +991,17 @@ impl Intrinsic {
             Self::OsRename => &[Shape::Str, Shape::Str],
             Self::OsFamily => &[],
             Self::OsErrorText => &[Shape::Int],
+            Self::OsTcpListen => &[Shape::Str],
+            Self::OsTcpAccept => &[Shape::OsHandle],
+            Self::OsTcpConnect => &[Shape::Str, Shape::Int],
+            Self::OsUdpBind => &[Shape::Str],
+            Self::OsUdpSendTo => &[Shape::OsHandle, Shape::Bytes, Shape::Str],
+            Self::OsUdpRecvFrom => &[Shape::OsHandle, Shape::Bytes, Shape::Bytes],
+            Self::OsSetTimeout => &[Shape::OsHandle, Shape::Int],
+            Self::OsShutdown => &[Shape::OsHandle, Shape::Int],
+            Self::OsLocalAddr => &[Shape::OsHandle],
+            Self::OsPeerAddr => &[Shape::OsHandle],
+            Self::OsResolve => &[Shape::Str, Shape::Int, Shape::Bytes],
             Self::TextFromStr => &[Shape::Str],
             Self::TextAssume => &[Shape::Str],
         }
@@ -1090,6 +1136,17 @@ impl Intrinsic {
             Self::OsRename => Shape::Int,
             Self::OsFamily => Shape::Int,
             Self::OsErrorText => Shape::Str,
+            Self::OsTcpListen => Shape::OsHandle,
+            Self::OsTcpAccept => Shape::OsHandle,
+            Self::OsTcpConnect => Shape::OsHandle,
+            Self::OsUdpBind => Shape::OsHandle,
+            Self::OsUdpSendTo => Shape::Int,
+            Self::OsUdpRecvFrom => Shape::Int,
+            Self::OsSetTimeout => Shape::Int,
+            Self::OsShutdown => Shape::Int,
+            Self::OsLocalAddr => Shape::Str,
+            Self::OsPeerAddr => Shape::Str,
+            Self::OsResolve => Shape::Int,
             Self::TextFromStr => Shape::Text,
             Self::TextAssume => Shape::Text,
         }

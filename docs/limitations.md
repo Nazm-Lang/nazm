@@ -228,6 +228,14 @@ found only by reading all of it.
   are written but unverified. No file locking, memory mapping, symbolic-link creation,
   permission changes or file times other than the modification time; `dir_list` reads a whole
   directory into memory.
+- Networking (Gate 2): TCP and UDP over literal IPv4 and bracketed IPv6 addresses; no TLS, no
+  Unix-domain sockets, no multicast or broadcast, no socket options beyond the deadline and
+  address reuse, and no polling of many sockets from one task (a task per socket is the shape).
+  Name resolution holds the worker while the resolver answers, and every resolver failure is
+  `NotFound`. The interpreter notices a close of a socket a task is receiving datagrams on within
+  20 ms rather than at once. The reactor is verified on macOS (kqueue) on the host and on Linux
+  (epoll) in the contained run; x86-64 Linux's packed `epoll_event` is written but runs only where
+  the contained run is x86-64.
 - The runtime is its own crate (`nazm-runtime`, N53) but still LLVM text both backends link,
   tested through a C harness; no Rust implementation, no runtime shared across programs as a
   library (area 13).

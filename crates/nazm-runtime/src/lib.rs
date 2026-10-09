@@ -16,6 +16,7 @@ pub mod board;
 pub(crate) mod core;
 pub(crate) mod entry;
 pub(crate) mod files;
+pub(crate) mod net;
 pub(crate) mod os;
 pub mod platform;
 pub mod switch;
@@ -67,6 +68,9 @@ pub struct Needs {
     /// Files and handles (Gate 2), with the per-target `os` and `errno` units beside the
     /// runtime.
     pub files: bool,
+    /// Sockets and the reactor (Gate 2), over the files part's handle table and the task part's
+    /// waits.
+    pub net: bool,
 }
 
 impl Needs {
@@ -86,6 +90,7 @@ impl Needs {
             foreign: self.foreign || other.foreign,
             numbers: self.numbers || other.numbers,
             files: self.files || other.files,
+            net: self.net || other.net,
         }
     }
 
@@ -106,6 +111,7 @@ impl Needs {
             (self.foreign, "foreign"),
             (self.numbers, "numbers"),
             (self.files, "files"),
+            (self.net, "net"),
         ]
         .into_iter()
         .filter_map(|(on, n)| on.then_some(n))
@@ -130,6 +136,7 @@ impl Needs {
                 "foreign" => n.foreign = true,
                 "numbers" => n.numbers = true,
                 "files" => n.files = true,
+                "net" => n.net = true,
                 _ => return None,
             }
         }
@@ -155,15 +162,18 @@ impl Needs {
     #[must_use]
     pub fn settled(self) -> Self {
         Self {
-            sequences: self.sequences || self.tasks || self.channels,
             // `str_join` builds a string and the I/O helpers return one, so either of
             // them reaching means the string helpers are reached too. A `Strs` needs them
             // as well, and says so at the site that retains or releases an element rather
             // than by implication from the sequence flag — an `Ints`-only program carries
             // no string runtime at all.
-            strings: self.strings || self.join || self.io || self.files,
+            strings: self.strings || self.join || self.io || self.files || self.net,
             // The files part copies its paths with the I/O part's `nz.cstr`.
-            io: self.io || self.files,
+            io: self.io || self.files || self.net,
+            // A socket is a handle in the files part's table, and its waits are the tasks'.
+            files: self.files || self.net,
+            tasks: self.tasks || self.net,
+            sequences: self.sequences || self.tasks || self.channels || self.net,
             ..self
         }
     }
@@ -221,8 +231,10 @@ pub fn escape(s: &str) -> String {
 /// and the narrow words, and the numbers part — `nz.format_float`, `nz.format_u64`,
 /// `nz.float_parses`, `nz.float_parse` — joins the runtime, with the C library's mathematics.
 /// 16 is Gate 2's files and handles: the `nz.os_*` entries, the handle table, and the per-target
-/// `os` unit (`platform::emit_os`) that a build reaching them links beside the `errno` unit.
-pub const RUNTIME_ABI_REVISION: u32 = 16;
+/// `os` unit (`platform::emit_os`) that a build reaching them links beside the `errno` unit. 17 is
+/// Gate 2's networking: the `nz.os_*` socket entries, a handle-table slot of 64 bytes with a wait
+/// record and a deadline, the reactor thread, and the `os` unit's `nz_net_*`.
+pub const RUNTIME_ABI_REVISION: u32 = 17;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -240,6 +252,7 @@ pub const EVERYTHING: Needs = Needs {
     foreign: true,
     numbers: true,
     files: true,
+    net: true,
 };
 
 /// The runtime's identity as text: blake3 over the whole runtime, the platform entry and the
@@ -301,6 +314,8 @@ pub enum Part {
     Numbers,
     /// Files and handles (Gate 2).
     Files,
+    /// Sockets and the reactor (Gate 2).
+    Net,
     /// The C library the runtime itself links against.
     Libc,
 }
@@ -407,6 +422,16 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.os_rename", [Ptr, I64, Ptr, I64], Some(Word::I64), Files, "borrows both paths; 0 or -errno (Gate 2)"),
     import!("nz.os_family", [], Some(Word::I64), Files, "0 on macOS, 1 on Linux (Gate 2)"),
     import!("nz.os_error_text", [I64, Ptr, I64], Some(Word::I64), Files, "the system's message for a status into the caller's buffer; its length (Gate 2)"),
+    import!("nz.os_tcp_listen", [Ptr, I64], Some(Word::I64), Net, "borrows the address; a handle, or -errno (Gate 2)"),
+    import!("nz.os_tcp_accept", [I64], Some(Word::I64), Net, "a handle, or -errno; waits at most the listener's deadline (Gate 2)"),
+    import!("nz.os_tcp_connect", [Ptr, I64, I64], Some(Word::I64), Net, "borrows the address; a handle, or -errno (Gate 2)"),
+    import!("nz.os_udp_bind", [Ptr, I64], Some(Word::I64), Net, "borrows the address; a handle, or -errno (Gate 2)"),
+    import!("nz.os_udp_send_to", [I64, Ptr, I64, Ptr, I64], Some(Word::I64), Net, "borrows the bytes and the address; a count, or -errno (Gate 2)"),
+    import!("nz.os_udp_recv_from", [I64, Ptr, I64, Ptr, I64], Some(Word::I64), Net, "fills the caller's two buffers; a count, or -errno (Gate 2)"),
+    import!("nz.os_set_timeout", [I64, I64], Some(Word::I64), Net, "0, or a status (Gate 2)"),
+    import!("nz.os_shutdown", [I64, I64], Some(Word::I64), Net, "0, or -errno (Gate 2)"),
+    import!("nz.os_net_addr", [I64, I64, Ptr, I64], Some(Word::I64), Net, "a socket's own or peer's address into the caller's buffer; its length (Gate 2)"),
+    import!("nz.os_resolve", [Ptr, I64, I64, Ptr, I64], Some(Word::I64), Net, "borrows the name; the addresses into the caller's buffer; a length, or a status (Gate 2)"),
     import!("nz.format_float", [Ptr, F64, Bit], Some(Word::I64), Numbers, "writes a float's shortest round-trip text, as a Float32 when the flag is set, into 40 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.format_u64", [Ptr, I64], Some(Word::I64), Numbers, "writes a UInt64's decimal digits into 21 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.float_parses", [Ptr, I64], Some(Word::Bit), Numbers, "borrows the bytes; whether they are a floating-point number as `float_parses` reads one (Gate 2)"),
@@ -643,6 +668,29 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_rename", "i64" ("ptr", "i64", "ptr", "i64") "", false, Files, "io", Status, Any, "rename a path (Gate 2)", "borrows both paths"),
     rt!("nz.os_family", "i64" () "", false, Files, "", Never, Any, "the target's family of error numbers (Gate 2)", "none"),
     rt!("nz.os_error_text", "i64" ("i64", "ptr", "i64") "", false, Files, "", Never, Any, "the system's message for a status (Gate 2)", "writes the caller's buffer"),
+    rt!("nz.net_recv", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a read from a connected socket, waiting at most its deadline (Gate 2)", "writes the caller's buffer"),
+    rt!("nz.net_send", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a write to a connected socket, waiting at most its deadline (Gate 2)", "borrows the bytes"),
+    rt!("nz.net_wake", "void" ("ptr") "", false, Net, "", Never, Any, "wake every task waiting on a wait record (Gate 2)", "takes the record's lock"),
+    rt!("nz.net_now", "i64" () "", false, Net, "", Never, Any, "the wall clock in nanoseconds (Gate 2)", "none"),
+    rt!("nz.net_start", "void" () "", false, Net, "", Never, Any, "start the reactor, once (Gate 2)", "none"),
+    rt!("nz.net_reactor", "ptr" ("ptr") "", false, Net, "", Never, Entry, "the reactor thread: wait for events and wake their handles (Gate 2)", "none"),
+    rt!("nz.net_event", "void" ("i64") "", false, Net, "", Never, Any, "wake an event's handle if it is still that generation's (Gate 2)", "takes the table's lock, then the record's"),
+    rt!("nz.net_waitrec", "ptr" ("i64") "", false, Net, "", Null, Any, "a live handle's wait record, made the first time (Gate 2)", "takes the table's lock"),
+    rt!("nz.net_closing", "i1" ("i64") "", false, Net, "", Never, Any, "whether a handle is no longer live (Gate 2)", "takes the table's lock"),
+    rt!("nz.net_deadline", "i64" ("i64") "", false, Net, "", Never, Any, "when a wait on a handle gives up (Gate 2)", "takes the table's lock"),
+    rt!("nz.net_wait", "i64" ("i64", "i64", "i64") "", false, Net, "", Status, Any, "wait until a socket may be ready, its deadline passes or it closes (Gate 2)", "takes the record's lock"),
+    rt!("nz.net_would_block", "i1" () "", false, Net, "", Never, Any, "whether the failure just reported would block (Gate 2)", "none"),
+    rt!("nz.net_parse", "i64" ("ptr", "i64", "ptr") "", false, Net, "", Status, Any, "HOST:PORT into a socket address (Gate 2)", "borrows the text; writes the caller's 128 bytes"),
+    rt!("nz.os_tcp_listen", "i64" ("ptr", "i64") "", false, Net, "io", Status, Any, "listen on an address (Gate 2)", "borrows the address"),
+    rt!("nz.os_tcp_accept", "i64" ("i64") "", false, Net, "io", Status, Any, "accept a connection (Gate 2)", "none"),
+    rt!("nz.os_tcp_connect", "i64" ("ptr", "i64", "i64") "", false, Net, "io", Status, Any, "connect to an address (Gate 2)", "borrows the address"),
+    rt!("nz.os_udp_bind", "i64" ("ptr", "i64") "", false, Net, "io", Status, Any, "bind a datagram socket (Gate 2)", "borrows the address"),
+    rt!("nz.os_udp_send_to", "i64" ("i64", "ptr", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "send a datagram (Gate 2)", "borrows the bytes and the address"),
+    rt!("nz.os_udp_recv_from", "i64" ("i64", "ptr", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "receive a datagram and its sender (Gate 2)", "writes the caller's buffers"),
+    rt!("nz.os_set_timeout", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "a handle's deadline (Gate 2)", "none"),
+    rt!("nz.os_shutdown", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "shut a connection's reading or writing (Gate 2)", "none"),
+    rt!("nz.os_net_addr", "i64" ("i64", "i64", "ptr", "i64") "", false, Net, "io", Never, Any, "a socket's own or peer's address (Gate 2)", "writes the caller's buffer"),
+    rt!("nz.os_resolve", "i64" ("ptr", "i64", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "resolve a name (Gate 2)", "borrows the name; writes the caller's buffer"),
     rt!("nz.format_float", "i64" ("ptr", "double", "i1") "", false, Numbers, "", Never, Any, "a float's shortest round-trip text, by ECMAScript's layout (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.fmt_layout", "i64" ("ptr", "ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "lay out a float's digits and exponent by ECMAScript's rule (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.format_u64", "i64" ("ptr", "i64") "", false, Numbers, "", Never, Any, "a UInt64's decimal digits into a 21-byte buffer (Gate 2)", "writes into the caller's buffer"),
@@ -687,6 +735,9 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.os_slots", ty: "ptr", thread_local: false, writers: "`nz.os_slot`, under the handle table's lock (Gate 2)" },
     RuntimeGlobal { symbol: "nz.os_cap", ty: "i64", thread_local: false, writers: "`nz.os_slot`, under the handle table's lock (Gate 2)" },
     RuntimeGlobal { symbol: "nz.os_stdin_h", ty: "i64", thread_local: false, writers: "`nz.os_stdin`, once, under the handle table's lock (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.net_state", ty: "i64", thread_local: false, writers: "`nz.net_start`, atomically, once (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.net_poller", ty: "i64", thread_local: false, writers: "`nz.net_start`, once, before the reactor runs (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.net_thread", ty: "i64", thread_local: false, writers: "`pthread_create`, once (Gate 2)" },
     RuntimeGlobal {
         symbol: "nz.failed",
         ty: "i1",
@@ -895,6 +946,7 @@ mod tests {
             foreign: true,
             numbers: true,
             files: true,
+            net: true,
         }
     }
 
@@ -1049,9 +1101,19 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_sixteen_and_its_digest_covers_the_pool_errno_numbers_and_files() {
+    fn the_runtime_is_revision_seventeen_and_its_digest_covers_the_pool_errno_numbers_files_and_net(
+    ) {
         // Gate 2's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 16);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 17);
+        // The network part (Gate 2), present only where a program reaches it; a program with files
+        // and no sockets carries the three stubs the files part calls instead.
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.net_reactor("));
+        let files_only = crate::Needs {
+            files: true,
+            ..crate::Needs::default()
+        };
+        assert!(!crate::emit_runtime(files_only).contains("@nz.net_reactor("));
+        assert!(crate::emit_runtime(files_only).contains("@nz.net_wake("));
         // The files part (Gate 2), present only where a program reaches it.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_read("));
         assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.os_read("));

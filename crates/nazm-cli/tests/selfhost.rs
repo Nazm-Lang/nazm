@@ -2894,6 +2894,18 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("os_rename", "Gate 2 files and handles"),
         ("os_family", "Gate 2 files and handles"),
         ("os_error_text", "Gate 2 files and handles"),
+        // Gate 2 (networking): neither `OsHandle` nor `NetCap` is in the Nazm checker's table.
+        ("os_tcp_listen", "Gate 2 networking"),
+        ("os_tcp_accept", "Gate 2 networking"),
+        ("os_tcp_connect", "Gate 2 networking"),
+        ("os_udp_bind", "Gate 2 networking"),
+        ("os_udp_send_to", "Gate 2 networking"),
+        ("os_udp_recv_from", "Gate 2 networking"),
+        ("os_set_timeout", "Gate 2 networking"),
+        ("os_shutdown", "Gate 2 networking"),
+        ("os_local_addr", "Gate 2 networking"),
+        ("os_peer_addr", "Gate 2 networking"),
+        ("os_resolve", "Gate 2 networking"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {
