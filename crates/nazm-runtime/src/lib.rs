@@ -15,7 +15,9 @@
 pub mod board;
 pub(crate) mod core;
 pub(crate) mod entry;
+pub(crate) mod files;
 pub(crate) mod os;
+pub mod platform;
 pub mod switch;
 pub mod wasm;
 
@@ -62,6 +64,9 @@ pub struct Needs {
     pub foreign: bool,
     /// Formatting and parsing floats and `UInt64`s (Gate 2).
     pub numbers: bool,
+    /// Files and handles (Gate 2), with the per-target `os` and `errno` units beside the
+    /// runtime.
+    pub files: bool,
 }
 
 impl Needs {
@@ -80,6 +85,7 @@ impl Needs {
             closures: self.closures || other.closures,
             foreign: self.foreign || other.foreign,
             numbers: self.numbers || other.numbers,
+            files: self.files || other.files,
         }
     }
 
@@ -99,6 +105,7 @@ impl Needs {
             (self.closures, "closures"),
             (self.foreign, "foreign"),
             (self.numbers, "numbers"),
+            (self.files, "files"),
         ]
         .into_iter()
         .filter_map(|(on, n)| on.then_some(n))
@@ -122,6 +129,7 @@ impl Needs {
                 "closures" => n.closures = true,
                 "foreign" => n.foreign = true,
                 "numbers" => n.numbers = true,
+                "files" => n.files = true,
                 _ => return None,
             }
         }
@@ -153,7 +161,9 @@ impl Needs {
             // as well, and says so at the site that retains or releases an element rather
             // than by implication from the sequence flag — an `Ints`-only program carries
             // no string runtime at all.
-            strings: self.strings || self.join || self.io,
+            strings: self.strings || self.join || self.io || self.files,
+            // The files part copies its paths with the I/O part's `nz.cstr`.
+            io: self.io || self.files,
             ..self
         }
     }
@@ -210,7 +220,9 @@ pub fn escape(s: &str) -> String {
 /// 15 is Gate 2's: floats and fixed-width integers cross runtime entries as `float`, `double`
 /// and the narrow words, and the numbers part — `nz.format_float`, `nz.format_u64`,
 /// `nz.float_parses`, `nz.float_parse` — joins the runtime, with the C library's mathematics.
-pub const RUNTIME_ABI_REVISION: u32 = 15;
+/// 16 is Gate 2's files and handles: the `nz.os_*` entries, the handle table, and the per-target
+/// `os` unit (`platform::emit_os`) that a build reaching them links beside the `errno` unit.
+pub const RUNTIME_ABI_REVISION: u32 = 16;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -227,6 +239,7 @@ pub const EVERYTHING: Needs = Needs {
     closures: true,
     foreign: true,
     numbers: true,
+    files: true,
 };
 
 /// The runtime's identity as text: blake3 over the whole runtime, the platform entry and the
@@ -244,6 +257,7 @@ pub fn digest() -> &'static str {
         for t in switch::SwitchTarget::ALL {
             h.update(switch::emit_switch(t).as_bytes());
             h.update(switch::emit_errno(t).as_bytes());
+            h.update(platform::emit_os(t).as_bytes());
         }
         for i in INVENTORY {
             h.update(format!("{i:?}").as_bytes());
@@ -285,6 +299,8 @@ pub enum Part {
     Foreign,
     /// Formatting and parsing numbers (Gate 2).
     Numbers,
+    /// Files and handles (Gate 2).
+    Files,
     /// The C library the runtime itself links against.
     Libc,
 }
@@ -375,6 +391,22 @@ pub const IMPORTS: &[Import] = &[
     import!("free", [Ptr], None, Libc, "takes the memory"),
     import!("memcpy", [Ptr, Ptr, I64], Some(Word::Ptr), Libc, "borrows both"),
     import!("memcmp", [Ptr, Ptr, I64], Some(Word::I32), Libc, "borrows both"),
+    import!("nz.os_open_read", [Ptr, I64], Some(Word::I64), Files, "borrows the path; a handle, or -errno (Gate 2)"),
+    import!("nz.os_open_write", [Ptr, I64, I64], Some(Word::I64), Files, "borrows the path; a handle, or -errno (Gate 2)"),
+    import!("nz.os_dir_open", [Ptr, I64], Some(Word::I64), Files, "borrows the path; a handle, or -errno (Gate 2)"),
+    import!("nz.os_stdin", [], Some(Word::I64), Files, "standard input's handle (Gate 2)"),
+    import!("nz.os_status", [I64], Some(Word::I64), Files, "0 for a live handle, its status otherwise (Gate 2)"),
+    import!("nz.os_read", [I64, Ptr, I64], Some(Word::I64), Files, "fills the caller's buffer; a count or -errno (Gate 2)"),
+    import!("nz.os_write", [I64, Ptr, I64], Some(Word::I64), Files, "borrows the bytes; a count or -errno (Gate 2)"),
+    import!("nz.os_seek", [I64, I64, I64], Some(Word::I64), Files, "a position or -errno (Gate 2)"),
+    import!("nz.os_sync", [I64], Some(Word::I64), Files, "0 or -errno (Gate 2)"),
+    import!("nz.os_close", [I64], Some(Word::I64), Files, "0 or -errno; a close of a handle in use takes effect when the use ends (Gate 2)"),
+    import!("nz.os_dir_next", [I64, Ptr, I64], Some(Word::I64), Files, "the next name into the caller's buffer; its length, 0 at the end, or -errno (Gate 2)"),
+    import!("nz.os_stat", [Ptr, I64, Ptr], Some(Word::I64), Files, "borrows the path; four words into the caller's 32 bytes; 0 or -errno (Gate 2)"),
+    import!("nz.os_path_op", [Ptr, I64, I64], Some(Word::I64), Files, "borrows the path; makes a directory (0), removes one (1) or a file (2); 0 or -errno (Gate 2)"),
+    import!("nz.os_rename", [Ptr, I64, Ptr, I64], Some(Word::I64), Files, "borrows both paths; 0 or -errno (Gate 2)"),
+    import!("nz.os_family", [], Some(Word::I64), Files, "0 on macOS, 1 on Linux (Gate 2)"),
+    import!("nz.os_error_text", [I64, Ptr, I64], Some(Word::I64), Files, "the system's message for a status into the caller's buffer; its length (Gate 2)"),
     import!("nz.format_float", [Ptr, F64, Bit], Some(Word::I64), Numbers, "writes a float's shortest round-trip text, as a Float32 when the flag is set, into 40 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.format_u64", [Ptr, I64], Some(Word::I64), Numbers, "writes a UInt64's decimal digits into 21 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.float_parses", [Ptr, I64], Some(Word::Bit), Numbers, "borrows the bytes; whether they are a floating-point number as `float_parses` reads one (Gate 2)"),
@@ -585,6 +617,32 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.scope_join_to", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Any, "`nz.scope_join`, written through a pointer", "as `nz.scope_join`"),
     rt!("nz.task_publish", "void" ("ptr") "", false, Tasks, "", Never, Any, "copy this thread's failure into its task block", "borrows the block"),
     rt!("nz.cstr", "ptr" ("ptr", "i64") "", false, Io, "", Null, Any, "a NUL-terminated copy of a path, for the C library", "the copy is owned by the caller, who frees it"),
+    rt!("nz.os_acquire", "void" () "", false, Files, "", Never, Any, "take the handle table's spin lock (Gate 2)", "none"),
+    rt!("nz.os_release", "void" () "", false, Files, "", Never, Any, "give the handle table's spin lock back", "none"),
+    rt!("nz.os_errno", "i64" () "", false, Files, "", Never, Any, "-errno, read after a failed system call", "none"),
+    rt!("nz.os_slot", "ptr" ("i64") "", false, Files, "", Null, Locked, "a descriptor's slot, the table grown to hold it", "the lock is held"),
+    rt!("nz.os_register", "i64" ("i64", "i64", "ptr") "", false, Files, "", Status, Locked, "a new generation's handle for a descriptor", "the lock is held"),
+    rt!("nz.os_live", "ptr" ("i64") "", false, Files, "", Null, Locked, "the live slot a handle names", "the lock is held"),
+    rt!("nz.os_pin", "i64" ("i64") "", false, Files, "", Status, Any, "pin a live handle: its kind, or its status", "takes the lock"),
+    rt!("nz.os_unpin", "void" ("i64") "", false, Files, "", Never, Any, "unpin a handle; the last unpin of one closed meanwhile closes it", "takes the lock"),
+    rt!("nz.os_shut", "i64" ("i64", "i64", "ptr") "", false, Files, "", Status, Any, "close a descriptor or a directory", "owns what it closes"),
+    rt!("nz.os_adopt", "i64" ("i32", "i64", "ptr") "", false, Files, "", Status, Any, "a handle for a descriptor just opened, closing it if the table cannot grow", "takes the descriptor"),
+    rt!("nz.os_open_read", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "open a file to read (Gate 2)", "borrows the path"),
+    rt!("nz.os_open_write", "i64" ("ptr", "i64", "i64") "", false, Files, "io", Status, Any, "open a file to write, by mode (Gate 2)", "borrows the path"),
+    rt!("nz.os_dir_open", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "open a directory to list (Gate 2)", "borrows the path"),
+    rt!("nz.os_stdin", "i64" () "", false, Files, "io", Status, Any, "standard input's handle (Gate 2)", "none"),
+    rt!("nz.os_status", "i64" ("i64") "", false, Files, "", Status, Any, "whether a handle is live (Gate 2)", "none"),
+    rt!("nz.os_read", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "read into a buffer (Gate 2)", "writes the caller's buffer"),
+    rt!("nz.os_write", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "write bytes (Gate 2)", "borrows the bytes"),
+    rt!("nz.os_seek", "i64" ("i64", "i64", "i64") "", false, Files, "io", Status, Any, "move a file's position (Gate 2)", "none"),
+    rt!("nz.os_sync", "i64" ("i64") "", false, Files, "io", Status, Any, "a file's data on storage (Gate 2)", "none"),
+    rt!("nz.os_close", "i64" ("i64") "", false, Files, "io", Status, Any, "close a handle (Gate 2)", "none"),
+    rt!("nz.os_dir_next", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "a directory's next entry (Gate 2)", "writes the caller's buffer"),
+    rt!("nz.os_stat", "i64" ("ptr", "i64", "ptr") "", false, Files, "io", Status, Any, "a path's size, kind, time and permissions (Gate 2)", "borrows the path; writes the caller's 32 bytes"),
+    rt!("nz.os_path_op", "i64" ("ptr", "i64", "i64") "", false, Files, "io", Status, Any, "make or remove a directory, or remove a file (Gate 2)", "borrows the path"),
+    rt!("nz.os_rename", "i64" ("ptr", "i64", "ptr", "i64") "", false, Files, "io", Status, Any, "rename a path (Gate 2)", "borrows both paths"),
+    rt!("nz.os_family", "i64" () "", false, Files, "", Never, Any, "the target's family of error numbers (Gate 2)", "none"),
+    rt!("nz.os_error_text", "i64" ("i64", "ptr", "i64") "", false, Files, "", Never, Any, "the system's message for a status (Gate 2)", "writes the caller's buffer"),
     rt!("nz.format_float", "i64" ("ptr", "double", "i1") "", false, Numbers, "", Never, Any, "a float's shortest round-trip text, by ECMAScript's layout (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.fmt_layout", "i64" ("ptr", "ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "lay out a float's digits and exponent by ECMAScript's rule (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.format_u64", "i64" ("ptr", "i64") "", false, Numbers, "", Never, Any, "a UInt64's decimal digits into a 21-byte buffer (Gate 2)", "writes into the caller's buffer"),
@@ -625,6 +683,10 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.pool_join", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.cur_task", ty: "ptr", thread_local: true, writers: "`nz.task_enter` and `nz.task_leave`, on its own worker only (N83)" },
     RuntimeGlobal { symbol: "nz.errno_saved", ty: "i64", thread_local: true, writers: "`nz.errno_save`, on its own thread only (N85)" },
+    RuntimeGlobal { symbol: "nz.os_lock", ty: "i32", thread_local: false, writers: "`nz.os_acquire` and `nz.os_release`, atomically (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.os_slots", ty: "ptr", thread_local: false, writers: "`nz.os_slot`, under the handle table's lock (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.os_cap", ty: "i64", thread_local: false, writers: "`nz.os_slot`, under the handle table's lock (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.os_stdin_h", ty: "i64", thread_local: false, writers: "`nz.os_stdin`, once, under the handle table's lock (Gate 2)" },
     RuntimeGlobal {
         symbol: "nz.failed",
         ty: "i1",
@@ -832,6 +894,7 @@ mod tests {
             closures: true,
             foreign: true,
             numbers: true,
+            files: true,
         }
     }
 
@@ -986,9 +1049,12 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_fifteen_and_its_digest_covers_the_pool_errno_and_numbers() {
+    fn the_runtime_is_revision_sixteen_and_its_digest_covers_the_pool_errno_numbers_and_files() {
         // Gate 2's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 15);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 16);
+        // The files part (Gate 2), present only where a program reaches it.
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_read("));
+        assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.os_read("));
         // The numbers part (Gate 2), present only where a program reaches it.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.format_float("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.float_parse("));

@@ -62,8 +62,10 @@ pub(crate) fn everywhere(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
             ],
         );
         assert_eq!(b.code, Some(0), "{label}: {}", b.stderr);
+        // In the program's directory, as the interpreter ran: a program that touches files
+        // must find the same tree in every implementation (Gate 2).
         let mut c = common::bounded_exe(&exe);
-        c.env(nazm_lir::MEMORY_VARIABLE, "1");
+        c.current_dir(d.path()).env(nazm_lir::MEMORY_VARIABLE, "1");
         out.push((label.to_owned(), run_bounded(&mut c, label)));
     }
     out

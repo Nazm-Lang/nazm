@@ -66,6 +66,15 @@ pub fn declarations(out: &mut String) {
         "declare double @strtod(ptr, ptr)",
         "declare float @strtof(ptr, ptr)",
         "declare double @llvm.fabs.f64(double)",
+        "declare i64 @read(i32, ptr, i64)",
+        "declare i32 @close(i32)",
+        "declare i64 @lseek(i32, i64, i32)",
+        "declare i32 @fsync(i32)",
+        "declare i32 @rmdir(ptr)",
+        "declare i32 @unlink(ptr)",
+        "declare i32 @rename(ptr, ptr)",
+        "declare i32 @dirfd(ptr)",
+        "declare i32 @closedir(ptr)",
     ] {
         let _ = writeln!(out, "{d}");
     }

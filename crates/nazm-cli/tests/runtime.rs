@@ -315,12 +315,14 @@ fn all() -> nazm_lir::Needs {
         closures: true,
         foreign: true,
         numbers: true,
+        files: true,
     }
 }
 
 fn build(dir: &Path) -> std::path::PathBuf {
     std::fs::write(dir.join("runtime.ll"), nazm_lir::emit_runtime(all())).unwrap();
     // The task pool's switch for this host (N83), which the runtime's pool calls.
+    use nazm_lir::runtime::platform::emit_os;
     use nazm_lir::runtime::switch::{emit_errno, emit_switch, SwitchTarget};
     let host = match (std::env::consts::ARCH, std::env::consts::OS) {
         ("aarch64", "macos") => SwitchTarget::Aarch64Darwin,
@@ -331,6 +333,8 @@ fn build(dir: &Path) -> std::path::PathBuf {
     std::fs::write(dir.join("switch.ll"), emit_switch(host)).unwrap();
     // And where it keeps `errno` (N85), which the runtime's capture asks.
     std::fs::write(dir.join("errno.ll"), emit_errno(host)).unwrap();
+    // And what its C library says about files (Gate 2).
+    std::fs::write(dir.join("os.ll"), emit_os(host)).unwrap();
     std::fs::write(dir.join("harness.c"), HARNESS).unwrap();
     let exe = dir.join("harness");
     let o = Command::new("clang")
@@ -338,6 +342,7 @@ fn build(dir: &Path) -> std::path::PathBuf {
         .arg(dir.join("runtime.ll"))
         .arg(dir.join("switch.ll"))
         .arg(dir.join("errno.ll"))
+        .arg(dir.join("os.ll"))
         .arg(dir.join("harness.c"))
         .arg("-o")
         .arg(&exe)

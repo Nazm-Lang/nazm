@@ -111,10 +111,11 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
             let listed = std::fs::read_to_string(d.path().join(&dir).join("link.txt")).unwrap();
             assert!(listed.contains(&format!("target {triple}\n")), "{listed}");
             // The task pool's switch (N83) follows the runtime where the runtime has tasks or
-            // channels, and the target's `errno` (N85) where C is called — both always under
-            // Cranelift, whose runtime is its whole baseline.
+            // channels, the target's `errno` (N85) where C is called or a file used, and its `os`
+            // unit (Gate 2) where a file is used — all three always under Cranelift, whose
+            // runtime is its whole baseline.
             let want = if backend == "cranelift" {
-                "objects 00-m0.o 01-runtime.o 02-switch.o 03-errno.o 04-entry.o\n"
+                "objects 00-m0.o 01-runtime.o 02-switch.o 03-errno.o 04-os.o 05-entry.o\n"
             } else {
                 "objects 00-m0.o 01-runtime.o 02-entry.o\n"
             };

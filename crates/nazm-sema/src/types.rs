@@ -337,6 +337,10 @@ pub enum Type {
     /// Text that is valid UTF-8 by construction (Gate 2): `Str`'s representation, an
     /// immutable value like `Str`, made only by validating.
     Text,
+    /// An open file, directory or standard input (Gate 2, `docs/spec.md`, *Files and
+    /// handles*): a word naming a descriptor and its generation, freely copied, crossing into
+    /// a task, with no equality, that only the `os_` built-ins make.
+    OsHandle,
 }
 
 impl Type {
@@ -379,6 +383,7 @@ impl Type {
         Self::Num(NumKind::F64),
         Self::Bytes,
         Self::Text,
+        Self::OsHandle,
     ];
 
     /// The written name of a **built-in** type, which is also how it is spelled in
@@ -401,6 +406,7 @@ impl Type {
             Self::Num(k) => Some(k.name()),
             Self::Bytes => Some("Bytes"),
             Self::Text => Some("Text"),
+            Self::OsHandle => Some("OsHandle"),
             Self::Record(_)
             | Self::Enum(_)
             | Self::Vec(_)
@@ -517,6 +523,7 @@ impl Type {
             "Chan" => Some(Self::Chan),
             "Bytes" => Some(Self::Bytes),
             "Text" => Some(Self::Text),
+            "OsHandle" => Some(Self::OsHandle),
             other => CapabilityKind::by_type_name(other)
                 .map(Self::Cap)
                 .or_else(|| NumKind::by_name(other).map(Self::of_num)),

@@ -322,7 +322,27 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::BytesFromStr
         | Intrinsic::BytesToStr
         | Intrinsic::TextConcat
-        | Intrinsic::ScalarText => true,
+        | Intrinsic::ScalarText
+        | Intrinsic::OsErrorText => true,
+        // Files and handles (Gate 2): the system's storage, and words; a read fills a buffer
+        // the program already made.
+        Intrinsic::OsOpenRead
+        | Intrinsic::OsOpenWrite
+        | Intrinsic::OsDirOpen
+        | Intrinsic::OsStdin
+        | Intrinsic::OsStatus
+        | Intrinsic::OsRead
+        | Intrinsic::OsWrite
+        | Intrinsic::OsSeek
+        | Intrinsic::OsSync
+        | Intrinsic::OsClose
+        | Intrinsic::OsDirNext
+        | Intrinsic::OsStat
+        | Intrinsic::OsMkdir
+        | Intrinsic::OsRmdir
+        | Intrinsic::OsUnlink
+        | Intrinsic::OsRename
+        | Intrinsic::OsFamily => false,
         // A push may grow its sequence.
         Intrinsic::IntsPush | Intrinsic::StrsPush | Intrinsic::VecPush => true,
         // A view of storage that already exists (counted as a retain where it shares an owner),

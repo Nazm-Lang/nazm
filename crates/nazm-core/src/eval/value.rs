@@ -44,6 +44,9 @@ pub enum Value {
     /// write through one view is seen through every view of the buffer. A `Text` needs no
     /// variant: it is a [`Value::Str`] the checker knows is UTF-8.
     Bytes(BytesView),
+    /// An `OsHandle` (Gate 2): `generation << 32 | descriptor`, or a failed open's status.
+    /// The object it names is in the process's handle table (`eval::os`).
+    OsHandle(i64),
     /// A growable sequence of `Int`, **by reference**.
     ///
     /// `Rc<RefCell<…>>` is the reference semantics, stated rather than incidental: two
@@ -490,6 +493,7 @@ impl std::fmt::Display for Value {
             },
             Self::Chan(_) => f.write_str("Chan"),
             Self::Bytes(b) => write!(f, "Bytes({} bytes)", b.len),
+            Self::OsHandle(_) => f.write_str("OsHandle"),
             Self::Cap(k) => f.write_str(k.type_name()),
             Self::Vec(v) => match v.lock() {
                 Ok(v) => write!(f, "Vec({} items)", v.len()),

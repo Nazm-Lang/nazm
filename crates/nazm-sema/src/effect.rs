@@ -172,7 +172,25 @@ impl Effect {
             | Intrinsic::FileExists
             | Intrinsic::Print
             | Intrinsic::EPrint
-            | Intrinsic::ExitWith => Some(Self::Io),
+            | Intrinsic::ExitWith
+            // Files and handles (Gate 2): the operating system's.
+            | Intrinsic::OsOpenRead
+            | Intrinsic::OsOpenWrite
+            | Intrinsic::OsDirOpen
+            | Intrinsic::OsStdin
+            | Intrinsic::OsRead
+            | Intrinsic::OsWrite
+            | Intrinsic::OsSeek
+            | Intrinsic::OsSync
+            | Intrinsic::OsClose
+            | Intrinsic::OsDirNext
+            | Intrinsic::OsStat
+            | Intrinsic::OsMkdir
+            | Intrinsic::OsRmdir
+            | Intrinsic::OsUnlink
+            | Intrinsic::OsRename => Some(Self::Io),
+            // A handle's own state and a status's meaning are values the program holds.
+            Intrinsic::OsStatus | Intrinsic::OsFamily | Intrinsic::OsErrorText => None,
             // Reading what C left is part of calling C (N85).
             Intrinsic::CErrno => Some(Self::Foreign),
             // Strings and sequences compute over values the caller holds; channels are
@@ -470,7 +488,22 @@ mod tests {
                 "file_exists",
                 "print",
                 "eprint",
-                "exit_with"
+                "exit_with",
+                "os_open_read",
+                "os_open_write",
+                "os_dir_open",
+                "os_stdin",
+                "os_read",
+                "os_write",
+                "os_seek",
+                "os_sync",
+                "os_close",
+                "os_dir_next",
+                "os_stat",
+                "os_mkdir",
+                "os_rmdir",
+                "os_unlink",
+                "os_rename",
             ]
         );
         assert!(Intrinsic::ALL
