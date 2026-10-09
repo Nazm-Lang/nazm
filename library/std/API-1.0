@@ -19,6 +19,12 @@
 @std/deque pub fn deque_get[T](d: Deque[T], i: Int) -> Option[T] ! {}
 @std/env pub fn env_get(io: IoCap, name: Str) -> Option[Str] ! { io }
 @std/env pub fn env_vars(io: IoCap) -> Strs ! { io }
+@std/error pub struct Error
+@std/error pub fn error_new(message: Str) -> Error ! {}
+@std/error pub fn error_context(e: Error, doing: Str) -> Error ! {}
+@std/error pub fn error_from_io(e: IoError) -> Error ! {}
+@std/error pub fn error_show(e: Error) -> Str ! {}
+@std/error pub fn error_io_result[T](r: Result[T, IoError]) -> Result[T, Error] ! {}
 @std/file pub struct File
 @std/file pub enum FileKind
 @std/file pub struct Metadata
@@ -95,6 +101,7 @@
 @std/ioerror pub fn io_result(status: Int) -> Result[Int, IoError] ! {}
 @std/ioerror pub fn io_kind_name(k: IoErrorKind) -> Str ! {}
 @std/ioerror pub fn io_error_show(e: IoError) -> Str ! {}
+@std/ioerror pub fn io_error_from_errno(errno: Int) -> IoError ! {}
 @std/json pub struct JsonNode
 @std/json pub struct JsonDoc
 @std/json pub fn json_new() -> JsonDoc ! {}

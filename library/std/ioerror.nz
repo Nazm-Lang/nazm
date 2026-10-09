@@ -151,3 +151,9 @@ pub fn io_error_show(e: IoError) -> Str ! {} {
     let what = str_concat(e.message, str_concat(" (", str_concat(io_kind_name(e.kind), ")")));
     if str_len(e.context) == 0 { what } else { str_concat(e.context, str_concat(": ", what)) }
 }
+
+/// The error a C library left in `errno` (read with `c_errno()`): its kind on this platform, its
+/// number and the system's message (Gate 2, §13).
+pub fn io_error_from_errno(errno: Int) -> IoError ! {} {
+    io_error_from(0 - errno)
+}

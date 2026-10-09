@@ -1,0 +1,57 @@
+// `@std/error`: one error type an application propagates with `?` (Gate 2).
+//
+// Imported with `use "@std/error";` beside `use "@std/ioerror";`. An `Error` is a message and what
+// the program was doing when it happened, innermost first: a function that cannot go on returns
+// `Err(error_new(…))`, and each caller that knows more adds it with `error_context`. An `IoError`
+// becomes one with `error_from_io`. No exceptions: failure is a value. `docs/general-purpose.md`
+// §13.
+
+use "@std/ioerror";
+
+/// A failure: what went wrong, and what the program was doing, innermost first.
+pub struct Error {
+    message: Str,
+    context: Vec[Str],
+}
+
+/// A failure with this message and no context yet.
+pub fn error_new(message: Str) -> Error ! {} {
+    Error(message: message, context: vec_new[Str]())
+}
+
+/// `e`, saying what the program was doing when it happened.
+pub fn error_context(e: Error, doing: Str) -> Error ! {} {
+    let context = vec_new[Str]();
+    let mut i = 0;
+    while i < vec_len(e.context) {
+        vec_push(context, vec_get(e.context, i));
+        i = i + 1;
+    }
+    vec_push(context, doing);
+    Error(message: e.message, context: context)
+}
+
+/// An `IoError` as an `Error`: its message and kind, and its context if it has one.
+pub fn error_from_io(e: IoError) -> Error ! {} {
+    let base = error_new(str_concat(e.message, str_concat(" (", str_concat(io_kind_name(e.kind), ")"))));
+    if str_len(e.context) == 0 { base } else { error_context(base, e.context) }
+}
+
+/// `e` as one line: what the program was doing, outermost first, then what went wrong.
+pub fn error_show(e: Error) -> Str ! {} {
+    let mut out = "";
+    let mut i = vec_len(e.context);
+    while i > 0 {
+        i = i - 1;
+        out = str_concat(out, str_concat(vec_get(e.context, i), ": "));
+    }
+    str_concat(out, e.message)
+}
+
+/// `r`'s error as an `Error`, so a function returning `Result[T, Error]` can `?` an I/O result.
+pub fn error_io_result[T](r: Result[T, IoError]) -> Result[T, Error] ! {} {
+    match r {
+        Result.Ok(value: v) => Result[T, Error].Ok(value: v),
+        Result.Err(error: e) => Result[T, Error].Err(error: error_from_io(e)),
+    }
+}
