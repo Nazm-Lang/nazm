@@ -122,7 +122,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 13 | Runtime | VERIFIED (v1 contract; a built, versioned, verified artifact, N82; M:N tasks on bounded workers by default, N106) — no allocator of its own, runtime still text |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
-| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles, I/O errors, networking, environment, processes, errors, binary encoding and randomness (twenty-eight modules); no cryptography; numbers are the language's since Gate 2 (area 3) |
+| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles, I/O errors, networking, environment, processes, errors, binary encoding, randomness and logging (twenty-nine modules); no cryptography; numbers are the language's since Gate 2 (area 3) |
 | 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
 | 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
@@ -1835,6 +1835,11 @@ module checking cleanly, documented and listed. Measured (`performance.md`): sor
 19.6 ms; 10,000 map insertions 391 ms (an insertion moves the entries after it); parsing and
 re-encoding 128 KB of JSON about 14 ms. **Scope**: no networking, cryptography or floating point, by
 decision; the map's insertion is linear; the compiler written in Nazm cannot import any of it.
+
+**Gate 2 (2026-10-09)** · *Logging* (`general-purpose.md` §20). `@std/log`: levelled records with
+fields, one JSON object a line on standard error under an `OutCap`, and timed spans. Evidence:
+`log_records_are_one_json_object_a_line_alike_everywhere`. **Scope**: no `task_id()` or
+`runtime_stats()` (`limitations.md`).
 
 **Gate 2 (2026-10-09)** · *Randomness* (`general-purpose.md` §21; `spec.md`, *Randomness*).
 `RandomCap` (id 8) and `os_random_bytes` from the system's entropy; `@std/random`'s seeded

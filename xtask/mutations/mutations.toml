@@ -14954,3 +14954,11 @@ file = "crates/nazm-sema/src/capability.rs"
 find = "            Intrinsic::OsRandomBytes => CapabilitySet::of(Self::Random),"
 replace = "            Intrinsic::OsRandomBytes => CapabilitySet::EMPTY,"
 killers = [{ package = "nazm-cli", test = "stdlib", name = "entropy_needs_a_random_cap_and_a_seeded_generator_needs_none" }]
+
+[[mutation]]
+name = "g2-a-logger-drops-its-own-level"
+why = "a logger drops records at its own level as well as below it, so a logger at Info writes no info record"
+file = "library/std/log.nz"
+find = "    if rank(level) < l.min { 0 } else {"
+replace = "    if rank(level) <= l.min { 0 } else {"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "log_records_are_one_json_object_a_line_alike_everywhere" }]
