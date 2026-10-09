@@ -1,0 +1,136 @@
+// `@std/log`: structured, levelled records, one JSON object a line on standard error (Gate 2).
+//
+// Imported with `use "@std/log";`. A record is a level, a message and fields — `log_str`,
+// `log_int`, `log_bool` make one each — written as one line of JSON to standard error, so any
+// collector can read it; writing needs only an `OutCap`. A span measures a piece of work: begun and
+// ended under a `TimeCap`, it writes its name and the nanoseconds between. Nothing here reads a
+// clock or a task unless asked, so a program's log is the same in every run. Records below a
+// logger's level are dropped. `docs/general-purpose.md` §20.
+
+use "@std/json";
+
+/// The levels, least to most severe.
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// Where records go and which are kept: those at `min` or above, each carrying `fields`.
+pub struct Logger {
+    min: Int,
+    fields: Strs,
+}
+
+/// A piece of work being measured.
+pub struct LogSpan {
+    name: Str,
+    start: Int,
+}
+
+fn rank(l: LogLevel) -> Int ! {} {
+    match l {
+        LogLevel.Debug() => 0,
+        LogLevel.Info() => 1,
+        LogLevel.Warn() => 2,
+        LogLevel.Error() => 3,
+    }
+}
+
+/// A level's name, as records write it.
+pub fn log_level_name(l: LogLevel) -> Str ! {} {
+    match l {
+        LogLevel.Debug() => "debug",
+        LogLevel.Info() => "info",
+        LogLevel.Warn() => "warn",
+        LogLevel.Error() => "error",
+    }
+}
+
+/// A logger keeping records at `min` or above, with no fields of its own.
+pub fn log_new(min: LogLevel) -> Logger ! {} {
+    Logger(min: rank(min), fields: strs_new())
+}
+
+/// `l`, every record of which also carries `fields`.
+pub fn log_with(l: Logger, fields: Strs) -> Logger ! {} {
+    let all = strs_new();
+    let mut i = 0;
+    while i < strs_len(l.fields) { strs_push(all, strs_get(l.fields, i)); i = i + 1; }
+    let mut j = 0;
+    while j < strs_len(fields) { strs_push(all, strs_get(fields, j)); j = j + 1; }
+    Logger(min: l.min, fields: all)
+}
+
+/// A field whose value is text.
+pub fn log_str(key: Str, value: Str) -> Str ! {} {
+    str_concat(str_concat(json_quote(key), ":"), json_quote(value))
+}
+
+/// A field whose value is a number.
+pub fn log_int(key: Str, value: Int) -> Str ! {} {
+    str_concat(str_concat(json_quote(key), ":"), int_to_str(value))
+}
+
+/// A field whose value is true or false.
+pub fn log_bool(key: Str, value: Bool) -> Str ! {} {
+    str_concat(str_concat(json_quote(key), ":"), if value { "true" } else { "false" })
+}
+
+/// No fields.
+pub fn log_fields() -> Strs ! {} {
+    strs_new()
+}
+
+/// The record's line, without its newline: level, message, the logger's fields, then these.
+pub fn log_line(l: Logger, level: LogLevel, message: Str, fields: Strs) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, log_str("level", log_level_name(level)));
+    strs_push(parts, log_str("msg", message));
+    let mut i = 0;
+    while i < strs_len(l.fields) { strs_push(parts, strs_get(l.fields, i)); i = i + 1; }
+    let mut j = 0;
+    while j < strs_len(fields) { strs_push(parts, strs_get(fields, j)); j = j + 1; }
+    str_concat(str_concat("{", str_join(parts, ",")), "}")
+}
+
+/// Write a record at `level`, if `l` keeps that level: the bytes written, `0` when dropped.
+pub fn log_at(out: OutCap, l: Logger, level: LogLevel, message: Str, fields: Strs) -> Int ! { io } {
+    if rank(level) < l.min { 0 } else { eprint(str_concat(log_line(l, level, message, fields), "\n")) }
+}
+
+/// A debug record.
+pub fn log_debug(out: OutCap, l: Logger, message: Str, fields: Strs) -> Int ! { io } {
+    log_at(out, l, LogLevel.Debug(), message, fields)
+}
+
+/// An info record.
+pub fn log_info(out: OutCap, l: Logger, message: Str, fields: Strs) -> Int ! { io } {
+    log_at(out, l, LogLevel.Info(), message, fields)
+}
+
+/// A warning.
+pub fn log_warn(out: OutCap, l: Logger, message: Str, fields: Strs) -> Int ! { io } {
+    log_at(out, l, LogLevel.Warn(), message, fields)
+}
+
+/// An error record.
+pub fn log_error(out: OutCap, l: Logger, message: Str, fields: Strs) -> Int ! { io } {
+    log_at(out, l, LogLevel.Error(), message, fields)
+}
+
+/// Begin measuring `name`.
+pub fn log_span_begin(t: TimeCap, name: Str) -> LogSpan ! {} {
+    LogSpan(name: name, start: time_now_ns())
+}
+
+/// End `s`: an info record with its name and the nanoseconds since it began, and `fields`.
+pub fn log_span_end(out: OutCap, t: TimeCap, l: Logger, s: LogSpan, fields: Strs) -> Int ! { io } {
+    let all = strs_new();
+    strs_push(all, log_str("span", s.name));
+    strs_push(all, log_int("ns", time_now_ns() - s.start));
+    let mut i = 0;
+    while i < strs_len(fields) { strs_push(all, strs_get(fields, i)); i = i + 1; }
+    log_at(out, l, LogLevel.Info(), "span", all)
+}
