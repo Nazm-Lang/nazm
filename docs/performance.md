@@ -2824,9 +2824,10 @@ little or nothing to build, and nothing to run.
 **What flagged it.** `cargo xtask contained bench` (one CPU, Linux aarch64) against the baseline
 re-saved at N106: `arith`, `channels` and `sequences` built 25–39 % slower at `-O0` or `-O2`, in two
 runs. **Attributed** by building the tree before Gate 2 (`3ba27ee`, Gate 1-C1D) and running the same
-contained bench on it, and on `a9dc706`, both in one session, min of the bench's runs:
+contained bench on it, and on `ec5b958` (measured as `a9dc706`, its id before G2-C1 rewrote the
+unpushed Gate 2 history; the tree is the same), both in one session, min of the bench's runs:
 
-| | before Gate 2 | after (`a9dc706`) | N106's baseline |
+| | before Gate 2 | after (`ec5b958`) | N106's baseline |
 | --- | ---: | ---: | ---: |
 | `arith` build `-O0` | 102.7 ms | 109.1 ms | 87.5 ms |
 | `calls` build `-O0` | 105.2 | 110.8 | — |
