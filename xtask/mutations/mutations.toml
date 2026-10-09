@@ -14912,3 +14912,11 @@ file = "crates/nazm-sema/src/capability.rs"
 find = "            Intrinsic::OsSpawn => CapabilitySet::of(Self::Process),"
 replace = "            Intrinsic::OsSpawn => CapabilitySet::EMPTY,"
 killers = [{ package = "nazm-cli", test = "process", name = "running_a_program_needs_its_own_authority_and_a_file_does_not_choose_it" }]
+
+[[mutation]]
+name = "g2-an-error-reads-innermost-first"
+why = "`error_show` writes what the program was doing innermost first, so a reader meets the detail before the task it belongs to"
+file = "library/std/error.nz"
+find = "        out = str_concat(out, str_concat(vec_get(e.context, i), \": \"));"
+replace = "        out = str_concat(str_concat(vec_get(e.context, i), \": \"), out);"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "an_error_gathers_context_and_reads_outermost_first_everywhere" }]
