@@ -1,6 +1,6 @@
 ## 1. Collections (§7)
 
-- [ ] 1.1 `@std/hash`, `@std/hashmap`, `@std/hashset`, `@std/deque`; impls for numeric types
+- [x] 1.1 `@std/hash`, `@std/hashmap`, `@std/hashset`, `@std/deque`; impls for numeric types
 
 ## 2. The outside world
 

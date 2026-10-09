@@ -1,0 +1,103 @@
+// `@std/hash`: what makes a value a key — a hash and a way to compare two (Gate 2).
+//
+// Imported with `use "@std/hash";`. `Hash` is an ordinary trait: the library implements it for
+// every integer type, `Bool` and `Str`, and a program implements it for its own key types, two
+// methods each. `hash` is a fixed function — 64-bit FNV-1a over a value's bytes, mixed by
+// SplitMix64's finaliser — so it is the same in every implementation and every run, and a map's
+// order is reproducible. A map facing keys an adversary chooses takes a seed. Floats are not
+// keys: NaN is not equal to itself. `docs/general-purpose.md` §7 is the design record.
+
+/// A key: a hash, and whether two are the same key. Two keys that are `same` must hash alike.
+pub trait Hash {
+    fn hash(self: Self) -> UInt64 ! {};
+    fn same(self: Self, other: Self) -> Bool ! {};
+}
+
+const FNV_OFFSET: UInt64 = 14695981039346656037;
+const FNV_PRIME: UInt64 = 1099511628211;
+
+/// SplitMix64's finaliser: every input bit reaches every output bit.
+pub fn hash_finish(x: UInt64) -> UInt64 ! {} {
+    let a = wrapping_mul(x ^ (x >> 30), UInt64(0xBF58476D1CE4E5B9));
+    let b = wrapping_mul(a ^ (a >> 27), UInt64(0x94D049BB133111EB));
+    b ^ (b >> 31)
+}
+
+/// The hash of a string's bytes.
+pub fn hash_bytes(s: Str) -> UInt64 ! {} {
+    let mut h = FNV_OFFSET;
+    let mut i = 0;
+    while i < str_len(s) {
+        h = wrapping_mul(h ^ UInt64(str_byte(s, i)), FNV_PRIME);
+        i = i + 1;
+    }
+    hash_finish(h)
+}
+
+/// The hash of a 64-bit word's bytes, least significant first.
+pub fn hash_u64(x: UInt64) -> UInt64 ! {} {
+    let mut h = FNV_OFFSET;
+    let mut w = x;
+    let mut i = 0;
+    while i < 8 {
+        h = wrapping_mul(h ^ (w & UInt64(255)), FNV_PRIME);
+        w = w >> 8;
+        i = i + 1;
+    }
+    hash_finish(h)
+}
+
+/// Two hashes as one, in order: for a key made of parts.
+pub fn hash_combine(a: UInt64, b: UInt64) -> UInt64 ! {} {
+    hash_finish(wrapping_add(wrapping_mul(a, FNV_PRIME), b))
+}
+
+impl Hash for Int {
+    fn hash(self: Int) -> UInt64 ! {} { hash_u64(wrap_convert[UInt64](self)) }
+    fn same(self: Int, other: Int) -> Bool ! {} { self == other }
+}
+
+impl Hash for Int8 {
+    fn hash(self: Int8) -> UInt64 ! {} { hash_u64(wrap_convert[UInt64](self)) }
+    fn same(self: Int8, other: Int8) -> Bool ! {} { self == other }
+}
+
+impl Hash for Int16 {
+    fn hash(self: Int16) -> UInt64 ! {} { hash_u64(wrap_convert[UInt64](self)) }
+    fn same(self: Int16, other: Int16) -> Bool ! {} { self == other }
+}
+
+impl Hash for Int32 {
+    fn hash(self: Int32) -> UInt64 ! {} { hash_u64(wrap_convert[UInt64](self)) }
+    fn same(self: Int32, other: Int32) -> Bool ! {} { self == other }
+}
+
+impl Hash for UInt8 {
+    fn hash(self: UInt8) -> UInt64 ! {} { hash_u64(UInt64(self)) }
+    fn same(self: UInt8, other: UInt8) -> Bool ! {} { self == other }
+}
+
+impl Hash for UInt16 {
+    fn hash(self: UInt16) -> UInt64 ! {} { hash_u64(UInt64(self)) }
+    fn same(self: UInt16, other: UInt16) -> Bool ! {} { self == other }
+}
+
+impl Hash for UInt32 {
+    fn hash(self: UInt32) -> UInt64 ! {} { hash_u64(UInt64(self)) }
+    fn same(self: UInt32, other: UInt32) -> Bool ! {} { self == other }
+}
+
+impl Hash for UInt64 {
+    fn hash(self: UInt64) -> UInt64 ! {} { hash_u64(self) }
+    fn same(self: UInt64, other: UInt64) -> Bool ! {} { self == other }
+}
+
+impl Hash for Bool {
+    fn hash(self: Bool) -> UInt64 ! {} { hash_u64(if self { UInt64(1) } else { UInt64(0) }) }
+    fn same(self: Bool, other: Bool) -> Bool ! {} { self == other }
+}
+
+impl Hash for Str {
+    fn hash(self: Str) -> UInt64 ! {} { hash_bytes(self) }
+    fn same(self: Str, other: Str) -> Bool ! {} { self == other }
+}

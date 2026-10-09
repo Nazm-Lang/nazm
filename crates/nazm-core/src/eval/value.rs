@@ -157,6 +157,7 @@ impl Value {
     pub(super) fn runtime_type(&self) -> Option<nazm_sema::Type> {
         Some(match self {
             Self::Int(_) => nazm_sema::Type::Int,
+            Self::Num(n) => nazm_sema::Type::of_num(n.kind),
             Self::Bool(_) => nazm_sema::Type::Bool,
             Self::Str(_) => nazm_sema::Type::Str,
             Self::Record(r) => nazm_sema::Type::Record(r.def),

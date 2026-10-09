@@ -6991,7 +6991,7 @@ method is its trait's key and its name. An impl is identified by its trait and i
 method an impl defines is an ordinary function of the impl's module, keyed
 `module::fn Trait/Type/m`: `/` is in no identifier, so the key can never be an ordinary function's.
 
-**What an impl is for.** An impl's type is a non-generic record or enum, or `Int`, `Bool` or `Str`.
+**What an impl is for.** An impl's type is a non-generic record or enum, a numeric type, `Bool` or `Str`.
 A generic type, a `Vec`, a channel, a function type, a capability or a type parameter is refused
 (`N0604`). That keeps overlap decidable by equality: there are no impls over a pattern of types.
 An impl defines every method of its trait exactly once, with the trait's signature with `Self`

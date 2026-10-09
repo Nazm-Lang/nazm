@@ -234,7 +234,10 @@ use crate::digest::{self, Framed};
 /// `34` — M1, 2026-10-08. A direct or UFCS call of a method whose impl is in another module is
 /// checked against its trait method's declared effects; it was checked as an undeclared
 /// function's, every effect assumed, so programs accepted now were refused (`N0366`).
-pub const SEMANTIC_EPOCH: u32 = 34;
+/// `35` — Gate 2, 2026-10-09. An impl may be for any numeric type, not only `Int`: impls for
+/// `UInt8` … `Float64` moved from refused (`N0604`) to accepted, so `@std/hash` can make every
+/// integer a key. A cached check from epoch 34 refused programs this one accepts.
+pub const SEMANTIC_EPOCH: u32 = 35;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

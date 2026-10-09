@@ -291,6 +291,26 @@ fn an_impl_for_a_type_that_cannot_have_one_is_refused() {
 }
 
 #[test]
+fn a_number_of_any_width_has_impls_and_its_methods_run_everywhere() {
+    // Gate 2 §7: `@std/hash` implements `Hash` for every integer type, so an impl is for any
+    // number, as one was for `Int` — called directly, by UFCS and through a bound.
+    let src = format!(
+        "{SHOW}impl Show for UInt8 {{ fn show(self: UInt8) -> Str {{ str_concat(\"u8:\", num_to_str(self)) }} }}\n\
+         impl Show for Int32 {{ fn show(self: Int32) -> Str {{ str_concat(\"i32:\", num_to_str(self)) }} }}\n\
+         impl Show for Float64 {{ fn show(self: Float64) -> Str {{ str_concat(\"f64:\", num_to_str(self)) }} }}\n\
+         fn twice[T: Show](x: T) -> Str {{ str_concat(x.show(), x.show()) }}\n\
+         fn main(out: OutCap) -> Int {{\n\
+             let b = UInt8(200);\n\
+             print(str_concat(b.show(), \"\\n\"));\n\
+             print(str_concat(Show.show(Int32(0 - 5)), \"\\n\"));\n\
+             print(str_concat(twice(1.5), \"\\n\"));\n\
+             0\n\
+         }}\n"
+    );
+    agrees(&src, "u8:200\ni32:-5\nf64:1.5f64:1.5\n0");
+}
+
+#[test]
 fn a_method_no_trait_in_scope_gives_is_refused_and_two_are_ambiguous() {
     let src =
         format!("{SHOW}struct P {{ x: Int, }}\nfn main() -> Int {{ str_len(P(x: 1).show()) }}\n");

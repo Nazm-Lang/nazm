@@ -8287,10 +8287,11 @@ Repointed by Gate 1-C1, which moved it to 30 for closure environments in the own
 Repointed by Gate 2, which moved it to 31 for numbers: an entry that refused `1.5` must not be reused.
 Repointed by Gate 2 again, which moved it to 32 for arrays and constants: an entry that refused `[1, 2]` must not be reused.
 Repointed by Gate 2's bytes and text, which moved it to 33: an entry that accepted a record named `Text` must not be reused.
-Repointed by M1, which moved it to 34: an entry that refused a pure call of an imported impl's method must not be reused."""
+Repointed by M1, which moved it to 34: an entry that refused a pure call of an imported impl's method must not be reused.
+Repointed by Gate 2's collections, which moved it to 35: an entry that refused an impl for `UInt8` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 34;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 33;"
+find = "pub const SEMANTIC_EPOCH: u32 = 35;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 34;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -12444,7 +12445,7 @@ killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_must_define_
 name = "n78-an-impl-for-any-type"
 why = "an impl is accepted for a `Vec`, a channel or a capability, whose values carry no type a call could dispatch on"
 file = "crates/nazm-core/src/check/traits.rs"
-find = '        _ => Err("a built-in type other than `Int`, `Bool` or `Str`"),'
+find = '        _ => Err("a built-in type other than a number, `Bool` or `Str`"),'
 replace = '        _ => Ok(None),'
 killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_for_a_type_that_cannot_have_one_is_refused" }]
 
@@ -14671,3 +14672,43 @@ file = "crates/nazm-cli/src/build/preflight.rs"
 find = "defines foreign functions\",\n            missing.display()\n        );\n        return Err(ExitCode::from(exit::NO_SUCH_FILE));"
 replace = "defines foreign functions\",\n            missing.display()\n        );\n        return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));"
 killers = [{ package = "nazm-cli", test = "exit_contract", name = "status_3_is_a_file_that_could_not_be_found_or_read" }]
+
+[[mutation]]
+name = "g2-an-impl-for-a-number-is-refused"
+why = "an impl for a numeric type other than `Int` is refused (N0604) again, so `@std/hash` cannot make an integer of any other width a key"
+file = "crates/nazm-core/src/check/traits.rs"
+find = "        Type::Int | Type::Num(_) | Type::Bool | Type::Str => Ok(None),"
+replace = "        Type::Int | Type::Bool | Type::Str => Ok(None),"
+killers = [{ package = "nazm-cli", test = "traits", name = "a_number_of_any_width_has_impls_and_its_methods_run_everywhere" }]
+
+[[mutation]]
+name = "g2-the-hash-finaliser-drops-a-shift"
+why = "SplitMix64's last step shifts by 30, not 31: every hash changes, so the documented function and the cross-implementation vectors no longer hold"
+file = "library/std/hash.nz"
+find = "    b ^ (b >> 31)"
+replace = "    b ^ (b >> 30)"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "hash_maps_sets_and_deques_behave_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-a-removal-breaks-the-probe-chain"
+why = "a removed entry leaves an empty slot rather than a marker, so a key placed past it by probing is no longer found"
+file = "library/std/hashmap.nz"
+find = "        vec_set(m.slots, at, Slot[K, V].Gone());"
+replace = "        vec_set(m.slots, at, Slot[K, V].Empty());"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "hash_maps_sets_and_deques_behave_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-a-deque-front-push-overwrites-the-head"
+why = "pushing at the front writes over the current head instead of the slot before it, losing an element"
+file = "library/std/deque.nz"
+find = "    let head = (vec_get(d.meta, 0) + vec_len(d.ring) - 1) % vec_len(d.ring);"
+replace = "    let head = vec_get(d.meta, 0) % vec_len(d.ring);"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "hash_maps_sets_and_deques_behave_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-the-interpreter-finds-no-impl-for-a-number"
+why = "the interpreter gives a number of a width other than `Int` no run-time type, so a method call on it finds no impl"
+file = "crates/nazm-core/src/eval/value.rs"
+find = "            Self::Num(n) => nazm_sema::Type::of_num(n.kind),\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "traits", name = "a_number_of_any_width_has_impls_and_its_methods_run_everywhere" }]
