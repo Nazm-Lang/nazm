@@ -11,6 +11,7 @@ that table disagree. The evidence behind every cell is in `capability-matrix.md`
 | --- | --- |
 | **run-verified** | Programs built for the target ran — on the host, under Rosetta 2, in a Linux container or on a WebAssembly engine — and agreed with the interpreter |
 | **emulator-verified** | Run-verified where the run was a full-system emulator (QEMU): no hardware has run it |
+| **run-verified under Wine** | Windows executables ran under Wine in a Linux container and agreed with the interpreter: **not** evidence from a Windows host |
 | **compile-only** | Objects are built and read back from their headers; nothing built for it has run |
 | **unsupported** | Refused by name, with the reason |
 | **non-goal** | Refused by decision, not for want of a machine |
@@ -26,6 +27,7 @@ No cell says just "supported".
 | `x86_64-apple-darwin` | run-verified | run-verified | under Rosetta 2 on Apple silicon | not exercised |
 | `aarch64-unknown-linux-gnu` | run-verified | run-verified | the contained runner's Linux container | gdb, live, both backends (nazm-debug image) |
 | `x86_64-unknown-linux-gnu` | compile-only | compile-only | nowhere: no x86_64 Linux machine or emulator here | not exercised |
+| `x86_64-pc-windows-gnu` | run-verified under Wine | run-verified under Wine | Wine 8 in a Debian x86_64 container (`docker/wine.Dockerfile`), linked by MinGW-w64's `gcc`; no Windows host | not exercised |
 | `aarch64-unknown-none` | emulator-verified | unsupported | QEMU `virt`, Cortex-A53 | not exercised |
 | `riscv64gc-unknown-none-elf` | emulator-verified | unsupported | QEMU `virt`, RV64GC, machine mode | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | Node.js's engine, the reference host | DWARF sections present; a debugger not exercised |
@@ -41,6 +43,14 @@ objects and a `link.ld` linked by `ld.lld`, and RISC-V needs a `clang` with a RI
 (not Apple's). WebAssembly is the freestanding subset: no heap, so no strings built at run time,
 sequences, channels, tasks or closures; imports `nazm_host.write` and `nazm_host.report` only, no
 WASI. Details: `limitations.md`, *Native code*.
+
+**Windows x86_64.** Built to objects (`--objects`) and linked by MinGW-w64's `gcc` as `link.txt`
+says: `-static`, Winsock (`-lws2_32`) and `BCryptGenRandom` (`-lbcrypt`); nothing of Microsoft's
+SDK or C runtime is used. Files, sockets and the reactor (`WSAPoll`), processes and their pipes,
+the clocks, UTF-8 arguments, a trap and an exhausted stack run under Wine as they do natively,
+with two differences the spec states: `os_family()` is 2, and `os_kill` ends a child with exit
+code 1. Execution on a real Windows x86_64 host is a final-v1 qualification item, not yet done. A
+DLL is refused by name (`--shared`); a static library (`--lib`) is built.
 
 **x86_64 Linux.** Compile-only, because no Nazm-built program has been run on x86_64 Linux. It
 moves to run-verified when one is — the differential corpus built for it and run on such a machine
@@ -69,7 +79,7 @@ Nothing is uploaded or published: the archives are local, under `target/archives
 
 | | |
 | --- | --- |
-| Windows | unsupported: no Windows linker, SDK or machine here, and the runtime has no Windows port |
+| Windows with Microsoft's toolchain, and Windows ARM64 | unsupported: `x86_64-pc-windows-msvc` needs Microsoft's SDK and C runtime, which are not downloaded or accepted here, and no Windows ARM64 machine or emulator is here; Windows x86_64 is `x86_64-pc-windows-gnu`, with MinGW-w64's |
 | 32-bit hosted targets | a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 is the one 32-bit target, freestanding |
 | big-endian targets | a non-goal: no big-endian machine or image is here to run one, and the DWARF writer and layouts assume little-endian |
 

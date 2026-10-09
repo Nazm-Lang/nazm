@@ -375,19 +375,12 @@ entry:
 }
 ";
 
-/// The network's per-target facts (Gate 2, `docs/spec.md`, *Networking*), as text with holes the
-/// target fills: socket address layouts, flags, error numbers and the poller.
-const NET_COMMON: &str = r#"
+/// The network's addresses (Gate 2, `docs/spec.md`, *Networking*), as text with holes the target
+/// fills: socket address layouts and the resolver, the same calls on every target.
+const NET_ADDR: &str = r#"
 declare i32 @inet_pton(i32, ptr, ptr)
 declare ptr @inet_ntop(i32, ptr, ptr, i32)
 declare i32 @snprintf(ptr, i64, ptr, ...)
-declare i32 @fcntl(i32, i32, ...)
-declare i32 @socket(i32, i32, i32)
-declare i32 @setsockopt(i32, i32, i32, ptr, i32)
-declare i32 @getsockopt(i32, i32, i32, ptr, ptr)
-declare i32 @connect(i32, ptr, i32)
-declare i64 @send(i32, ptr, i64, i32)
-declare i64 @sendto(i32, ptr, i64, i32, ptr, i32)
 declare i32 @getaddrinfo(ptr, ptr, ptr, ptr)
 declare void @freeaddrinfo(ptr)
 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
@@ -461,6 +454,85 @@ done:
   %len = select i1 %over, i64 %room, i64 %w
   ret i64 %len
 }
+
+; The addresses the resolver answers for `host` (a C string), each with `port`, one per line, into
+; `out`: the length; -65537 for a name it did not answer; -22 when `out` is too short.
+define hidden i64 @nz_net_resolve(ptr %host, i64 %port, ptr %out, i64 %cap) {
+entry:
+  %hints = alloca [64 x i8], align 8
+  %res = alloca ptr, align 8
+  %tmp = alloca [128 x i8], align 8
+  %txt = alloca [80 x i8], align 8
+  call void @llvm.memset.p0.i64(ptr %hints, i8 0, i64 64, i1 false)
+  %st = getelementptr i8, ptr %hints, i64 8
+  store i32 1, ptr %st
+  %r = call i32 @getaddrinfo(ptr %host, ptr null, ptr %hints, ptr %res)
+  %bad = icmp ne i32 %r, 0
+  br i1 %bad, label %unknown, label %start
+unknown:
+  ret i64 -65537
+start:
+  %first = load ptr, ptr %res
+  %p16 = trunc i64 %port to i16
+  %pbe = call i16 @llvm.bswap.i16(i16 %p16)
+  br label %walk
+walk:
+  %cur = phi ptr [ %first, %start ], [ %next, %copied ]
+  %used = phi i64 [ 0, %start ], [ %used2, %copied ]
+  %end = icmp eq ptr %cur, null
+  br i1 %end, label %done, label %one
+one:
+  %lenp = getelementptr i8, ptr %cur, i64 16
+  %len32 = load i32, ptr %lenp
+  %len = zext i32 %len32 to i64
+  %small = icmp ult i64 %len, 128
+  %clen = select i1 %small, i64 %len, i64 128
+  %sap = getelementptr i8, ptr %cur, i64 {AIADDR}
+  %sa = load ptr, ptr %sap
+  call void @llvm.memset.p0.i64(ptr %tmp, i8 0, i64 128, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr %tmp, ptr %sa, i64 %clen, i1 false)
+  %tp = getelementptr i8, ptr %tmp, i64 2
+  store i16 %pbe, ptr %tp
+  %n = call i64 @nz_net_format(ptr %tmp, ptr %txt, i64 80)
+  %some = icmp sgt i64 %used, 0
+  %sep = zext i1 %some to i64
+  %need0 = add i64 %used, %sep
+  %need = add i64 %need0, %n
+  %over = icmp sgt i64 %need, %cap
+  br i1 %over, label %short, label %copy
+short:
+  call void @freeaddrinfo(ptr %first)
+  ret i64 -22
+copy:
+  br i1 %some, label %newline, label %text
+newline:
+  %nlp = getelementptr i8, ptr %out, i64 %used
+  store i8 10, ptr %nlp
+  br label %text
+text:
+  %at = getelementptr i8, ptr %out, i64 %need0
+  call void @llvm.memcpy.p0.p0.i64(ptr %at, ptr %txt, i64 %n, i1 false)
+  br label %copied
+copied:
+  %used2 = add i64 %need0, %n
+  %nextp = getelementptr i8, ptr %cur, i64 40
+  %next = load ptr, ptr %nextp
+  br label %walk
+done:
+  call void @freeaddrinfo(ptr %first)
+  ret i64 %used
+}
+"#;
+
+/// The POSIX sockets (Gate 2), as text with holes the target fills: flags and error numbers.
+const NET_SOCK: &str = r#"
+declare i32 @fcntl(i32, i32, ...)
+declare i32 @socket(i32, i32, i32)
+declare i32 @setsockopt(i32, i32, i32, ptr, i32)
+declare i32 @getsockopt(i32, i32, i32, ptr, ptr)
+declare i32 @connect(i32, ptr, i32)
+declare i64 @send(i32, ptr, i64, i32)
+declare i64 @sendto(i32, ptr, i64, i32, ptr, i32)
 
 ; Close on exec, non-blocking, and never a signal for a peer that has gone.
 define hidden i32 @nz_net_prepare(i32 %fd) {
@@ -557,72 +629,204 @@ entry:
   ret i64 {ETIMEDOUT}
 }
 
-; The addresses the resolver answers for `host` (a C string), each with `port`, one per line, into
-; `out`: the length; -65537 for a name it did not answer; -22 when `out` is too short.
-define hidden i64 @nz_net_resolve(ptr %host, i64 %port, ptr %out, i64 %cap) {
+"#;
+
+/// The POSIX forwards behind the network part's own system calls (Gate 3): what Windows answers
+/// through Winsock instead. `read`, `write` and `close` are the files part's.
+const POSIX_NET_CALLS: &str = r"
+declare i32 @bind(i32, ptr, i32)
+declare i32 @listen(i32, i32)
+declare i32 @accept(i32, ptr, ptr)
+declare i64 @recvfrom(i32, ptr, i64, i32, ptr, ptr)
+declare i32 @getsockname(i32, ptr, ptr)
+declare i32 @getpeername(i32, ptr, ptr)
+declare i32 @shutdown(i32, i32)
+
+define hidden i64 @nz_net_read(i32 %fd, ptr %buf, i64 %n) {
 entry:
-  %hints = alloca [64 x i8], align 8
-  %res = alloca ptr, align 8
-  %tmp = alloca [128 x i8], align 8
-  %txt = alloca [80 x i8], align 8
-  call void @llvm.memset.p0.i64(ptr %hints, i8 0, i64 64, i1 false)
-  %st = getelementptr i8, ptr %hints, i64 8
-  store i32 1, ptr %st
-  %r = call i32 @getaddrinfo(ptr %host, ptr null, ptr %hints, ptr %res)
-  %bad = icmp ne i32 %r, 0
-  br i1 %bad, label %unknown, label %start
-unknown:
-  ret i64 -65537
-start:
-  %first = load ptr, ptr %res
-  %p16 = trunc i64 %port to i16
-  %pbe = call i16 @llvm.bswap.i16(i16 %p16)
-  br label %walk
-walk:
-  %cur = phi ptr [ %first, %start ], [ %next, %copied ]
-  %used = phi i64 [ 0, %start ], [ %used2, %copied ]
-  %end = icmp eq ptr %cur, null
-  br i1 %end, label %done, label %one
-one:
-  %lenp = getelementptr i8, ptr %cur, i64 16
-  %len32 = load i32, ptr %lenp
-  %len = zext i32 %len32 to i64
-  %small = icmp ult i64 %len, 128
-  %clen = select i1 %small, i64 %len, i64 128
-  %sap = getelementptr i8, ptr %cur, i64 {AIADDR}
-  %sa = load ptr, ptr %sap
-  call void @llvm.memset.p0.i64(ptr %tmp, i8 0, i64 128, i1 false)
-  call void @llvm.memcpy.p0.p0.i64(ptr %tmp, ptr %sa, i64 %clen, i1 false)
-  %tp = getelementptr i8, ptr %tmp, i64 2
-  store i16 %pbe, ptr %tp
-  %n = call i64 @nz_net_format(ptr %tmp, ptr %txt, i64 80)
-  %some = icmp sgt i64 %used, 0
-  %sep = zext i1 %some to i64
-  %need0 = add i64 %used, %sep
-  %need = add i64 %need0, %n
-  %over = icmp sgt i64 %need, %cap
-  br i1 %over, label %short, label %copy
-short:
-  call void @freeaddrinfo(ptr %first)
-  ret i64 -22
-copy:
-  br i1 %some, label %newline, label %text
-newline:
-  %nlp = getelementptr i8, ptr %out, i64 %used
-  store i8 10, ptr %nlp
-  br label %text
-text:
-  %at = getelementptr i8, ptr %out, i64 %need0
-  call void @llvm.memcpy.p0.p0.i64(ptr %at, ptr %txt, i64 %n, i1 false)
-  br label %copied
-copied:
-  %used2 = add i64 %need0, %n
-  %nextp = getelementptr i8, ptr %cur, i64 40
-  %next = load ptr, ptr %nextp
-  br label %walk
-done:
-  call void @freeaddrinfo(ptr %first)
-  ret i64 %used
+  %r = call i64 @read(i32 %fd, ptr %buf, i64 %n)
+  ret i64 %r
+}
+
+define hidden i32 @nz_net_bind(i32 %fd, ptr %sa, i32 %len) {
+entry:
+  %r = call i32 @bind(i32 %fd, ptr %sa, i32 %len)
+  ret i32 %r
+}
+
+define hidden i32 @nz_net_listen(i32 %fd) {
+entry:
+  %r = call i32 @listen(i32 %fd, i32 128)
+  ret i32 %r
+}
+
+define hidden i32 @nz_net_accept(i32 %fd) {
+entry:
+  %r = call i32 @accept(i32 %fd, ptr null, ptr null)
+  ret i32 %r
+}
+
+define hidden i64 @nz_net_recvfrom(i32 %fd, ptr %buf, i64 %n, ptr %sa, ptr %slen) {
+entry:
+  %r = call i64 @recvfrom(i32 %fd, ptr %buf, i64 %n, i32 0, ptr %sa, ptr %slen)
+  ret i64 %r
+}
+
+define hidden i32 @nz_net_shutdown(i32 %fd, i32 %how) {
+entry:
+  %r = call i32 @shutdown(i32 %fd, i32 %how)
+  ret i32 %r
+}
+
+; A socket's own address (`peer` 0) or its peer's (1).
+define hidden i32 @nz_net_name(i32 %fd, i32 %peer, ptr %sa, ptr %slen) {
+entry:
+  %want = icmp ne i32 %peer, 0
+  br i1 %want, label %theirs, label %ours
+theirs:
+  %p = call i32 @getpeername(i32 %fd, ptr %sa, ptr %slen)
+  ret i32 %p
+ours:
+  %o = call i32 @getsockname(i32 %fd, ptr %sa, ptr %slen)
+  ret i32 %o
+}
+";
+
+/// The POSIX forwards behind processes (Gate 3): the pipes, `posix_spawnp`, `waitpid` and `kill`
+/// that Windows answers with `CreateProcessW`, a wait on the process and `TerminateProcess`.
+///
+/// - `nz_os_spawn(pid, program, argv, ends) -> i32`: `program` started with `argv` and this
+///   environment, its standard input, output and errors three new pipes; the parent's ends (to
+///   the child's input, from its output, from its errors) at `ends`, the child at `pid`; 0, or an
+///   errno with nothing left open.
+/// - `nz_os_reap(pid) -> i64`: the child's end, waited for: its code, or 256 and the signal that
+///   ended it; or -errno.
+/// - `nz_os_terminate(pid) -> i32`: the child ended; 0, or -1 with errno set.
+/// - `nz_os_key() -> i32`: a descriptor that refers to nothing, a child's key in the handle table.
+const POSIX_PROC_CALLS: &str = r#"
+declare i32 @pipe(ptr)
+declare i32 @posix_spawnp(ptr, ptr, ptr, ptr, ptr, ptr)
+declare i32 @posix_spawn_file_actions_init(ptr)
+declare i32 @posix_spawn_file_actions_adddup2(ptr, i32, i32)
+declare i32 @posix_spawn_file_actions_destroy(ptr)
+declare i32 @waitpid(i32, ptr, i32)
+declare i32 @kill(i32, i32)
+declare ptr @signal(i32, ptr)
+
+@.nz.devnull = private unnamed_addr constant [10 x i8] c"/dev/null\00"
+
+define hidden i32 @nz_os_spawn(ptr %pid, ptr %prog, ptr %av, ptr %ends) {
+entry:
+  %fa = alloca [256 x i8], align 16
+  %fds = alloca [6 x i32], align 4
+  %cpid = alloca i32, align 4
+  %in = getelementptr i32, ptr %fds, i64 0
+  %out = getelementptr i32, ptr %fds, i64 2
+  %err = getelementptr i32, ptr %fds, i64 4
+  %p0 = call i32 @pipe(ptr %in)
+  %p1 = call i32 @pipe(ptr %out)
+  %p2 = call i32 @pipe(ptr %err)
+  br label %cloexec
+cloexec:
+  %j = phi i64 [ 0, %entry ], [ %j1, %cloexec ]
+  %fp = getelementptr i32, ptr %fds, i64 %j
+  %f = load i32, ptr %fp
+  %ce = call i32 (i32, i32, ...) @fcntl(i32 %f, i32 2, i32 1)
+  %j1 = add i64 %j, 1
+  %again = icmp slt i64 %j1, 6
+  br i1 %again, label %cloexec, label %actions
+actions:
+  %ai = call i32 @posix_spawn_file_actions_init(ptr %fa)
+  %in0p = getelementptr i32, ptr %fds, i64 0
+  %in0 = load i32, ptr %in0p
+  %in1p = getelementptr i32, ptr %fds, i64 1
+  %in1 = load i32, ptr %in1p
+  %out0p = getelementptr i32, ptr %fds, i64 2
+  %out0 = load i32, ptr %out0p
+  %out1p = getelementptr i32, ptr %fds, i64 3
+  %out1 = load i32, ptr %out1p
+  %err0p = getelementptr i32, ptr %fds, i64 4
+  %err0 = load i32, ptr %err0p
+  %err1p = getelementptr i32, ptr %fds, i64 5
+  %err1 = load i32, ptr %err1p
+  %d0 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %in0, i32 0)
+  %d1 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %out1, i32 1)
+  %d2 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %err1, i32 2)
+  %env = call ptr @nz_os_environ()
+  %r = call i32 @posix_spawnp(ptr %cpid, ptr %prog, ptr %fa, ptr null, ptr %av, ptr %env)
+  %ad = call i32 @posix_spawn_file_actions_destroy(ptr %fa)
+  %c0 = call i32 @close(i32 %in0)
+  %c1 = call i32 @close(i32 %out1)
+  %c2 = call i32 @close(i32 %err1)
+  %failed = icmp ne i32 %r, 0
+  br i1 %failed, label %undo, label %started
+undo:
+  %u0 = call i32 @close(i32 %in1)
+  %u1 = call i32 @close(i32 %out0)
+  %u2 = call i32 @close(i32 %err0)
+  ret i32 %r
+started:
+  %ign = inttoptr i64 1 to ptr
+  %old = call ptr @signal(i32 13, ptr %ign)
+  store i32 %in1, ptr %ends
+  %e1 = getelementptr i32, ptr %ends, i64 1
+  store i32 %out0, ptr %e1
+  %e2 = getelementptr i32, ptr %ends, i64 2
+  store i32 %err0, ptr %e2
+  %pidv = load i32, ptr %cpid
+  %pidw = sext i32 %pidv to i64
+  store i64 %pidw, ptr %pid
+  ret i32 0
+}
+
+define hidden i64 @nz_os_reap(i64 %pid) {
+entry:
+  %st = alloca i32, align 4
+  %p = trunc i64 %pid to i32
+  br label %wait
+wait:
+  %r = call i32 @waitpid(i32 %p, ptr %st, i32 0)
+  %bad = icmp slt i32 %r, 0
+  br i1 %bad, label %error, label %decode
+error:
+  %ep = call ptr @nz_errno_location()
+  %e = load i32, ptr %ep
+  %intr = icmp eq i32 %e, 4
+  br i1 %intr, label %wait, label %give
+give:
+  %w = sext i32 %e to i64
+  %neg = sub i64 0, %w
+  ret i64 %neg
+decode:
+  %s = load i32, ptr %st
+  %sig = and i32 %s, 127
+  %exited = icmp eq i32 %sig, 0
+  %hi = lshr i32 %s, 8
+  %code = and i32 %hi, 255
+  %codew = zext i32 %code to i64
+  %sigw = zext i32 %sig to i64
+  %bysig = add i64 %sigw, 256
+  %out = select i1 %exited, i64 %codew, i64 %bysig
+  ret i64 %out
+}
+
+define hidden i32 @nz_os_terminate(i64 %pid) {
+entry:
+  %p = trunc i64 %pid to i32
+  %r = call i32 @kill(i32 %p, i32 9)
+  ret i32 %r
+}
+
+define hidden i32 @nz_os_key() {
+entry:
+  %fd = call i32 (ptr, i32, ...) @open(ptr @.nz.devnull, i32 {RDONLY_CLOEXEC})
+  ret i32 %fd
+}
+
+define hidden i64 @nz_net_write(i32 %fd, ptr %buf, i64 %n) {
+entry:
+  %r = call i64 @write(i32 %fd, ptr %buf, i64 %n)
+  ret i64 %r
 }
 "#;
 
@@ -769,12 +973,14 @@ done:
 }
 "#;
 
-/// The network part of `target`'s unit.
+/// The network part of `target`'s unit: the addresses everywhere, then POSIX sockets and the
+/// target's poller, or Windows' Winsock binding (Gate 3).
 fn net_part(target: SwitchTarget) -> String {
     let darwin = matches!(
         target,
         SwitchTarget::Aarch64Darwin | SwitchTarget::X86_64Darwin
     );
+    let windows = target == SwitchTarget::X86_64Windows;
     let get_family = if darwin {
         "  %fp = getelementptr i8, ptr %sa, i64 1\n  %fb = load i8, ptr %fp\n  %fam = zext i8 %fb to i32"
     } else {
@@ -785,9 +991,28 @@ fn net_part(target: SwitchTarget) -> String {
             "  store i8 16, ptr %out\n  %f4 = getelementptr i8, ptr %out, i64 1\n  store i8 2, ptr %f4",
             "  store i8 28, ptr %out\n  %f6 = getelementptr i8, ptr %out, i64 1\n  store i8 30, ptr %f6",
         )
+    } else if windows {
+        ("  store i16 2, ptr %out", "  store i16 23, ptr %out")
     } else {
         ("  store i16 2, ptr %out", "  store i16 10, ptr %out")
     };
+    let af6 = if darwin {
+        "30"
+    } else if windows {
+        "23"
+    } else {
+        "10"
+    };
+    // `addrinfo`'s address: after the name on macOS and Windows, before it on glibc.
+    let addr = NET_ADDR
+        .replace("{SETFAM4}", set4)
+        .replace("{SETFAM6}", set6)
+        .replace("{GETFAM}", get_family)
+        .replace("{AF6}", af6)
+        .replace("{AIADDR}", if darwin || windows { "32" } else { "24" });
+    if windows {
+        return format!("{addr}{WINDOWS_NET}");
+    }
     let nosigpipe = if darwin {
         "  %ns = call i32 @setsockopt(i32 %fd, i32 65535, i32 4130, ptr %one, i32 4)"
     } else {
@@ -798,12 +1023,9 @@ fn net_part(target: SwitchTarget) -> String {
         SwitchTarget::X86_64Linux => (4, 12),
         _ => (8, 16),
     };
-    let common = NET_COMMON
-        .replace("{SETFAM4}", set4)
-        .replace("{SETFAM6}", set6)
+    let sock = NET_SOCK
         .replace("{GETFAM}", get_family)
         .replace("{NOSIGPIPE}", nosigpipe)
-        .replace("{AF6}", if darwin { "30" } else { "10" })
         .replace("{NONBLOCK}", if darwin { "4" } else { "2048" })
         .replace("{SOLSOCKET}", if darwin { "65535" } else { "1" })
         .replace("{REUSE}", if darwin { "4" } else { "2" })
@@ -811,8 +1033,7 @@ fn net_part(target: SwitchTarget) -> String {
         .replace("{SENDFLAGS}", if darwin { "0" } else { "16384" })
         .replace("{EAGAIN}", if darwin { "35" } else { "11" })
         .replace("{ETIMEDOUT}", if darwin { "60" } else { "110" })
-        .replace("{EINPROGRESS}", if darwin { "36" } else { "115" })
-        .replace("{AIADDR}", if darwin { "32" } else { "24" });
+        .replace("{EINPROGRESS}", if darwin { "36" } else { "115" });
     let poller = if darwin {
         KQUEUE.to_owned()
     } else {
@@ -820,44 +1041,19 @@ fn net_part(target: SwitchTarget) -> String {
             .replace("{EPDATA}", &ep_data.to_string())
             .replace("{EPSIZE}", &ep_size.to_string())
     };
-    format!("{common}{poller}")
+    let procs = POSIX_PROC_CALLS.replace("{RDONLY_CLOEXEC}", &facts(target).cloexec.to_string());
+    format!("{addr}{sock}{POSIX_NET_CALLS}{procs}{poller}")
 }
 
-/// The Windows `os` unit (Gate 3, `docs/spec.md` *Windows x86_64*), in stages: the family, the
-/// environment and the error text now; files, sockets, the reactor and processes as each stage
-/// lands. A status is a negative **Linux** errno number on Windows too — Win32 and Winsock errors
-/// are translated at this boundary — so the library's one mapping from status to `IoErrorKind`
-/// serves every target. A part not yet ported answers `ENOSYS` (38), never a guess.
+/// The Windows `os` unit (Gate 3, `docs/spec.md` *Windows x86_64*): the files part's calls, the
+/// environment and the error text, then the network's. A status is a negative **Linux** errno
+/// number on Windows too — Win32 and Winsock errors are translated at this boundary — so the
+/// library's one mapping from status to `IoErrorKind` serves every target.
 fn windows_os() -> String {
-    const ENOSYS: i64 = 38;
-    let mut out = String::from("; Generated by nazm build. Do not edit.\nsource_filename = \"os\"\n");
+    let mut out =
+        String::from("; Generated by nazm build. Do not edit.\nsource_filename = \"os\"\n");
     out.push_str(WINDOWS_FILES);
-    let unported_i32 = [
-        "nz_net_poller()",
-        "nz_net_arm(i32 %q, i32 %fd, i64 %mask, i64 %udata)",
-        "nz_net_open(ptr %sa, i64 %type, i64 %reuse)",
-        "nz_net_prepare(i32 %fd)",
-    ];
-    for f in unported_i32 {
-        let _ = write!(out, "define hidden i32 @{f} {{\nentry:\n  ret i32 -{ENOSYS}\n}}\n\n");
-    }
-    let unported_i64 = [
-        "nz_net_connect(i32 %fd, ptr %sa, i64 %len)",
-        "nz_net_error(i32 %fd)",
-        "nz_net_fill(ptr %host, i64 %port, i64 %v6, ptr %out)",
-        "nz_net_resolve(ptr %host, i64 %port, ptr %out, i64 %cap)",
-        "nz_net_send(i32 %fd, ptr %p, i64 %n)",
-        "nz_net_sendto(i32 %fd, ptr %p, i64 %n, ptr %sa, i64 %len)",
-    ];
-    for f in unported_i64 {
-        let _ = write!(out, "define hidden i64 @{f} {{\nentry:\n  ret i64 -{ENOSYS}\n}}\n\n");
-    }
-    out.push_str(
-        "define hidden i64 @nz_net_poll(i32 %q, ptr %out) {\nentry:\n  ret i64 0\n}\n\n\
-         define hidden i64 @nz_net_format(ptr %sa, ptr %out, i64 %cap) {\nentry:\n  ret i64 0\n}\n\n\
-         define hidden i64 @nz_net_eagain() {\nentry:\n  ret i64 11\n}\n\n\
-         define hidden i64 @nz_net_etimedout() {\nentry:\n  ret i64 110\n}\n",
-    );
+    out.push_str(&net_part(SwitchTarget::X86_64Windows));
     out
 }
 
@@ -897,7 +1093,7 @@ declare ptr @malloc(i64)
 declare void @free(ptr)
 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
 
-@.nz.win.nul = private unnamed_addr constant [4 x i8] c"NUL "
+@.nz.win.nul = private unnamed_addr constant [4 x i8] c"NUL\00"
 
 define hidden i64 @nz_os_family() {
 entry:
@@ -1233,11 +1429,7 @@ copy:
 
 declare ptr @nz_errno_location()
 
-define hidden i32 @nz_os_close(i32 %fd) {
-entry:
-  %r = call i32 @_close(i32 %fd)
-  ret i32 %r
-}
+; `nz_os_close` is the network part's: a descriptor may be a socket's key.
 
 ; The C runtime counts in `int`: a request is cut to what one call can carry, which a partial
 ; read or write already allows.
@@ -1389,9 +1581,1130 @@ ask2:
 }
 "#;
 
+/// Windows' sockets, reactor and processes (Gate 3), behind the same functions POSIX targets
+/// define: Winsock, its errors in Linux's numbering, a socket keyed by a descriptor of `NUL` as a
+/// directory is; the reactor `WSAPoll` over the armed sockets, with epoll's one-shot meaning, and
+/// `PeekNamedPipe` over the armed pipes; a child by `CreateProcessW`, its pipes `PIPE_NOWAIT`.
+const WINDOWS_NET: &str = r#"
+declare i64 @socket(i32, i32, i32)
+declare i32 @ioctlsocket(i64, i32, ptr)
+declare i32 @getsockopt(i64, i32, i32, ptr, ptr)
+declare i32 @connect(i64, ptr, i32)
+declare i32 @send(i64, ptr, i32, i32)
+declare i32 @sendto(i64, ptr, i32, i32, ptr, i32)
+declare i32 @recv(i64, ptr, i32, i32)
+declare i32 @recvfrom(i64, ptr, i32, i32, ptr, ptr)
+declare i32 @bind(i64, ptr, i32)
+declare i32 @listen(i64, i32)
+declare i64 @accept(i64, ptr, ptr)
+declare i32 @shutdown(i64, i32)
+declare i32 @getsockname(i64, ptr, ptr)
+declare i32 @getpeername(i64, ptr, ptr)
+declare i32 @closesocket(i64)
+declare i32 @WSAGetLastError()
+declare i32 @WSAPoll(ptr, i32, i32)
+declare void @AcquireSRWLockExclusive(ptr)
+declare void @ReleaseSRWLockExclusive(ptr)
+declare void @Sleep(i32)
+declare i64 @_get_osfhandle(i32)
+declare i32 @_open_osfhandle(i64, i32)
+declare i32 @GetFileType(i64)
+declare i32 @SetNamedPipeHandleState(i64, ptr, ptr, ptr)
+declare i32 @PeekNamedPipe(i64, ptr, i32, ptr, ptr, ptr)
+declare i32 @ReadFile(i64, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(i64, ptr, i32, ptr, ptr)
+declare i32 @CreatePipe(ptr, ptr, ptr, i32)
+declare i32 @SetHandleInformation(i64, i32, i32)
+declare i32 @CreateProcessW(ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr)
+declare i32 @CloseHandle(i64)
+declare i32 @WaitForSingleObject(i64, i32)
+declare i32 @GetExitCodeProcess(i64, ptr)
+declare i32 @TerminateProcess(i64, i32)
+
+; A socket descriptor's socket: a descriptor of `NUL` is the key (as a directory's is), this table
+; the socket it stands for, 0 for none. The C runtime holds at most a few thousand descriptors.
+@nz.win.socks = internal global [4096 x i64] zeroinitializer
+; The reactor's interest, one-shot as epoll's: each descriptor's directions (1 read, 2 write), 0
+; once it has fired, and the handle its event wakes; `top` bounds the descriptors ever armed.
+@nz.win.want = internal global [4096 x i64] zeroinitializer
+@nz.win.udata = internal global [4096 x i64] zeroinitializer
+@nz.win.top = internal global i64 0
+@nz.win.lock = internal global ptr null
+; A UDP socket connected to itself: a byte sent to it wakes the reactor out of `WSAPoll` to see a
+; new interest. 0 when it could not be made, and the reactor looks again every 20 ms instead.
+@nz.win.wake = internal global i64 0
+; The reactor's own `WSAPOLLFD`s (16 bytes each) and the descriptor each stands for, -1 the wake.
+@nz.win.fds = internal global [65552 x i8] zeroinitializer, align 8
+@nz.win.idx = internal global [4097 x i32] zeroinitializer
+
+; Winsock's error `w` in Linux's numbering.
+define internal i32 @nz.win.wsa_map(i32 %w) {
+entry:
+  switch i32 %w, label %other [
+    i32 8, label %e12
+    i32 10004, label %e4
+    i32 10009, label %e9
+    i32 10013, label %e13
+    i32 10014, label %e14
+    i32 10022, label %e22
+    i32 10024, label %e24
+    i32 10035, label %e11
+    i32 10036, label %e115
+    i32 10037, label %e114
+    i32 10038, label %e88
+    i32 10039, label %e89
+    i32 10040, label %e90
+    i32 10041, label %e91
+    i32 10042, label %e92
+    i32 10043, label %e93
+    i32 10045, label %e95
+    i32 10047, label %e97
+    i32 10048, label %e98
+    i32 10049, label %e99
+    i32 10050, label %e100
+    i32 10051, label %e101
+    i32 10052, label %e102
+    i32 10053, label %e103
+    i32 10054, label %e104
+    i32 10055, label %e105
+    i32 10056, label %e106
+    i32 10057, label %e107
+    i32 10058, label %e32
+    i32 10060, label %e110
+    i32 10061, label %e111
+    i32 10064, label %e112
+    i32 10065, label %e113
+  ]
+e12:
+  ret i32 12
+e4:
+  ret i32 4
+e9:
+  ret i32 9
+e13:
+  ret i32 13
+e14:
+  ret i32 14
+e22:
+  ret i32 22
+e24:
+  ret i32 24
+e11:
+  ret i32 11
+e115:
+  ret i32 115
+e114:
+  ret i32 114
+e88:
+  ret i32 88
+e89:
+  ret i32 89
+e90:
+  ret i32 90
+e91:
+  ret i32 91
+e92:
+  ret i32 92
+e93:
+  ret i32 93
+e95:
+  ret i32 95
+e97:
+  ret i32 97
+e98:
+  ret i32 98
+e99:
+  ret i32 99
+e100:
+  ret i32 100
+e101:
+  ret i32 101
+e102:
+  ret i32 102
+e103:
+  ret i32 103
+e104:
+  ret i32 104
+e105:
+  ret i32 105
+e106:
+  ret i32 106
+e107:
+  ret i32 107
+e32:
+  ret i32 32
+e110:
+  ret i32 110
+e111:
+  ret i32 111
+e112:
+  ret i32 112
+e113:
+  ret i32 113
+other:
+  ret i32 5
+}
+
+; The last Winsock failure put into `errno` (Linux's numbers pass the translation unchanged): it.
+define internal i32 @nz.win.wsa_errno() {
+entry:
+  %w = call i32 @WSAGetLastError()
+  %e = call i32 @nz.win.wsa_map(i32 %w)
+  call void @nz.win.set_errno(i32 %e)
+  ret i32 %e
+}
+
+; The socket descriptor `fd` stands for, or 0.
+define internal i64 @nz.win.sock(i32 %fd) {
+entry:
+  %in = icmp ult i32 %fd, 4096
+  br i1 %in, label %look, label %none
+look:
+  %i = zext i32 %fd to i64
+  %p = getelementptr [4096 x i64], ptr @nz.win.socks, i64 0, i64 %i
+  %s = load atomic i64, ptr %p acquire, align 8
+  ret i64 %s
+none:
+  ret i64 0
+}
+
+; A descriptor for new socket `s`, which it now owns; -1 with errno set, `s` closed, when none.
+define internal i32 @nz.win.adopt(i64 %s) {
+entry:
+  %fd = call i32 (ptr, i32, ...) @_open(ptr @.nz.win.nul, i32 128)
+  %nofd = icmp slt i32 %fd, 0
+  br i1 %nofd, label %fail, label %check
+check:
+  %in = icmp slt i32 %fd, 4096
+  br i1 %in, label %keep, label %many
+many:
+  %c = call i32 @_close(i32 %fd)
+  call void @nz.win.set_errno(i32 24)
+  br label %fail
+fail:
+  %x = call i32 @closesocket(i64 %s)
+  ret i32 -1
+keep:
+  %i = zext i32 %fd to i64
+  %p = getelementptr [4096 x i64], ptr @nz.win.socks, i64 0, i64 %i
+  store atomic i64 %s, ptr %p release, align 8
+  ret i32 %fd
+}
+
+define internal void @nz.win.poke() {
+entry:
+  %one = alloca i8, align 1
+  %w = load atomic i64, ptr @nz.win.wake acquire, align 8
+  %none = icmp eq i64 %w, 0
+  br i1 %none, label %done, label %send
+send:
+  store i8 1, ptr %one
+  %r = call i32 @send(i64 %w, ptr %one, i32 1, i32 0)
+  br label %done
+done:
+  ret void
+}
+
+; A descriptor closed: a socket's interest dropped, the reactor told, the socket closed, then its
+; key.
+define hidden i32 @nz_os_close(i32 %fd) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %sock = icmp ne i64 %s, 0
+  br i1 %sock, label %forget, label %plain
+plain:
+  %in = icmp ult i32 %fd, 4096
+  br i1 %in, label %unarm, label %shut
+unarm:
+  %pi = zext i32 %fd to i64
+  call void @AcquireSRWLockExclusive(ptr @nz.win.lock)
+  %pwp = getelementptr [4096 x i64], ptr @nz.win.want, i64 0, i64 %pi
+  store i64 0, ptr %pwp
+  call void @ReleaseSRWLockExclusive(ptr @nz.win.lock)
+  br label %shut
+shut:
+  %r = call i32 @_close(i32 %fd)
+  ret i32 %r
+forget:
+  %i = zext i32 %fd to i64
+  call void @AcquireSRWLockExclusive(ptr @nz.win.lock)
+  %sp = getelementptr [4096 x i64], ptr @nz.win.socks, i64 0, i64 %i
+  store atomic i64 0, ptr %sp release, align 8
+  %wp = getelementptr [4096 x i64], ptr @nz.win.want, i64 0, i64 %i
+  store i64 0, ptr %wp
+  call void @ReleaseSRWLockExclusive(ptr @nz.win.lock)
+  call void @nz.win.poke()
+  %c = call i32 @closesocket(i64 %s)
+  %k = call i32 @_close(i32 %fd)
+  %bad = icmp ne i32 %c, 0
+  br i1 %bad, label %failed, label %closed
+failed:
+  %e = call i32 @nz.win.wsa_errno()
+  ret i32 -1
+closed:
+  ret i32 0
+}
+
+define internal void @nz.win.nonblocking(i64 %s) {
+entry:
+  %one = alloca i32, align 4
+  store i32 1, ptr %one
+  %r = call i32 @ioctlsocket(i64 %s, i32 -2147195266, ptr %one)
+  ret void
+}
+
+; Non-blocking: a socket by `FIONBIO`, a pipe by `PIPE_NOWAIT`. Winsock raises no signal for a
+; peer that has gone, and neither is inherited unasked.
+define hidden i32 @nz_net_prepare(i32 %fd) {
+entry:
+  %mode = alloca i32, align 4
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %sock = icmp ne i64 %s, 0
+  br i1 %sock, label %set, label %other
+set:
+  call void @nz.win.nonblocking(i64 %s)
+  br label %done
+other:
+  %h = call i64 @_get_osfhandle(i32 %fd)
+  %t = call i32 @GetFileType(i64 %h)
+  %pipe = icmp eq i32 %t, 3
+  br i1 %pipe, label %nowait, label %done
+nowait:
+  store i32 1, ptr %mode
+  %r = call i32 @SetNamedPipeHandleState(i64 %h, ptr %mode, ptr null, ptr null)
+  br label %done
+done:
+  ret i32 0
+}
+
+; A socket of `type` for the address at `sa`, prepared; or -1 with errno set. `reuse` is not
+; asked of Windows: its `SO_REUSEADDR` lets a second listener take a port in use, and its default
+; already rebinds a port a closed connection lingers on.
+define hidden i32 @nz_net_open(ptr %sa, i64 %type, i64 %reuse) {
+entry:
+  %fh = load i16, ptr %sa
+  %fam = zext i16 %fh to i32
+  %t = trunc i64 %type to i32
+  %s = call i64 @socket(i32 %fam, i32 %t, i32 0)
+  %bad = icmp eq i64 %s, -1
+  br i1 %bad, label %fail, label %ok
+fail:
+  %e = call i32 @nz.win.wsa_errno()
+  ret i32 -1
+ok:
+  call void @nz.win.nonblocking(i64 %s)
+  %fd = call i32 @nz.win.adopt(i64 %s)
+  ret i32 %fd
+}
+
+; 0 connected, 1 under way, or -errno.
+define hidden i64 @nz_net_connect(i32 %fd, ptr %sa, i64 %len) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %l = trunc i64 %len to i32
+  %r = call i32 @connect(i64 %s, ptr %sa, i32 %l)
+  %ok = icmp eq i32 %r, 0
+  br i1 %ok, label %done, label %failed
+done:
+  ret i64 0
+failed:
+  %e = call i32 @nz.win.wsa_errno()
+  %block = icmp eq i32 %e, 11
+  %busy = icmp eq i32 %e, 115
+  %under = or i1 %block, %busy
+  br i1 %under, label %later, label %error
+later:
+  ret i64 1
+error:
+  %w = sext i32 %e to i64
+  %neg = sub i64 0, %w
+  ret i64 %neg
+}
+
+; The error a socket holds (`SO_ERROR`): 0, or its errno.
+define hidden i64 @nz_net_error(i32 %fd) {
+entry:
+  %v = alloca i32, align 4
+  %l = alloca i32, align 4
+  store i32 0, ptr %v
+  store i32 4, ptr %l
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %r = call i32 @getsockopt(i64 %s, i32 65535, i32 4103, ptr %v, ptr %l)
+  %w = load i32, ptr %v
+  %none = icmp eq i32 %w, 0
+  br i1 %none, label %clear, label %held
+clear:
+  ret i64 0
+held:
+  %e = call i32 @nz.win.wsa_map(i32 %w)
+  %x = sext i32 %e to i64
+  ret i64 %x
+}
+
+; Winsock counts in `int`: a request is cut to what one call carries, as a partial one allows.
+define internal i32 @nz.win.count(i64 %n) {
+entry:
+  %big = icmp sgt i64 %n, 1073741824
+  %m = select i1 %big, i64 1073741824, i64 %n
+  %m32 = trunc i64 %m to i32
+  ret i32 %m32
+}
+
+define internal i64 @nz.win.result(i32 %r) {
+entry:
+  %bad = icmp slt i32 %r, 0
+  br i1 %bad, label %failed, label %done
+failed:
+  %e = call i32 @nz.win.wsa_errno()
+  ret i64 -1
+done:
+  %w = sext i32 %r to i64
+  ret i64 %w
+}
+
+define hidden i64 @nz_net_send(i32 %fd, ptr %p, i64 %n) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %m = call i32 @nz.win.count(i64 %n)
+  %r = call i32 @send(i64 %s, ptr %p, i32 %m, i32 0)
+  %w = call i64 @nz.win.result(i32 %r)
+  ret i64 %w
+}
+
+define hidden i64 @nz_net_sendto(i32 %fd, ptr %p, i64 %n, ptr %sa, i64 %len) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %m = call i32 @nz.win.count(i64 %n)
+  %l = trunc i64 %len to i32
+  %r = call i32 @sendto(i64 %s, ptr %p, i32 %m, i32 0, ptr %sa, i32 %l)
+  %w = call i64 @nz.win.result(i32 %r)
+  ret i64 %w
+}
+
+define hidden i64 @nz_net_eagain() {
+entry:
+  ret i64 11
+}
+
+define hidden i64 @nz_net_etimedout() {
+entry:
+  ret i64 110
+}
+
+; A read from a socket, or from a pipe: a pipe with nothing in it would block (EAGAIN) and one
+; whose writer has gone is at its end.
+define hidden i64 @nz_net_read(i32 %fd, ptr %buf, i64 %n) {
+entry:
+  %got = alloca i32, align 4
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %sock = icmp ne i64 %s, 0
+  br i1 %sock, label %recv, label %plain
+plain:
+  %h = call i64 @_get_osfhandle(i32 %fd)
+  %pm = call i32 @nz.win.count(i64 %n)
+  store i32 0, ptr %got
+  %ok = call i32 @ReadFile(i64 %h, ptr %buf, i32 %pm, ptr %got, ptr null)
+  %fine = icmp ne i32 %ok, 0
+  br i1 %fine, label %read, label %failed
+read:
+  %g = load i32, ptr %got
+  %gw = zext i32 %g to i64
+  ret i64 %gw
+failed:
+  %w = call i32 @GetLastError()
+  switch i32 %w, label %other [
+    i32 232, label %empty
+    i32 109, label %ended
+  ]
+empty:
+  call void @nz.win.set_errno(i32 11)
+  ret i64 -1
+ended:
+  ret i64 0
+other:
+  %e = call i32 @nz.win.last_errno()
+  call void @nz.win.set_errno(i32 %e)
+  ret i64 -1
+recv:
+  %m = call i32 @nz.win.count(i64 %n)
+  %r = call i32 @recv(i64 %s, ptr %buf, i32 %m, i32 0)
+  %rw = call i64 @nz.win.result(i32 %r)
+  ret i64 %rw
+}
+
+define hidden i32 @nz_net_bind(i32 %fd, ptr %sa, i32 %len) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %r = call i32 @bind(i64 %s, ptr %sa, i32 %len)
+  %w = call i64 @nz.win.result(i32 %r)
+  %x = trunc i64 %w to i32
+  ret i32 %x
+}
+
+define hidden i32 @nz_net_listen(i32 %fd) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %r = call i32 @listen(i64 %s, i32 128)
+  %w = call i64 @nz.win.result(i32 %r)
+  %x = trunc i64 %w to i32
+  ret i32 %x
+}
+
+define hidden i32 @nz_net_accept(i32 %fd) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %c = call i64 @accept(i64 %s, ptr null, ptr null)
+  %bad = icmp eq i64 %c, -1
+  br i1 %bad, label %fail, label %ok
+fail:
+  %e = call i32 @nz.win.wsa_errno()
+  ret i32 -1
+ok:
+  %nfd = call i32 @nz.win.adopt(i64 %c)
+  ret i32 %nfd
+}
+
+; A datagram, cut to `n` as POSIX cuts it (Winsock fills the buffer and says `WSAEMSGSIZE`); an
+; unreachable port an earlier datagram met is not this socket's failure (Winsock's
+; `WSAECONNRESET` on an unconnected socket), so it is passed over.
+define hidden i64 @nz_net_recvfrom(i32 %fd, ptr %buf, i64 %n, ptr %sa, ptr %slen) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %m = call i32 @nz.win.count(i64 %n)
+  %len0 = load i32, ptr %slen
+  br label %try
+try:
+  store i32 %len0, ptr %slen
+  %r = call i32 @recvfrom(i64 %s, ptr %buf, i32 %m, i32 0, ptr %sa, ptr %slen)
+  %bad = icmp slt i32 %r, 0
+  br i1 %bad, label %failed, label %done
+failed:
+  %w = call i32 @WSAGetLastError()
+  %cut = icmp eq i32 %w, 10040
+  br i1 %cut, label %whole, label %reset
+whole:
+  %mw = sext i32 %m to i64
+  ret i64 %mw
+reset:
+  %gone = icmp eq i32 %w, 10054
+  br i1 %gone, label %try, label %error
+error:
+  %e = call i32 @nz.win.wsa_map(i32 %w)
+  call void @nz.win.set_errno(i32 %e)
+  ret i64 -1
+done:
+  %x = sext i32 %r to i64
+  ret i64 %x
+}
+
+define hidden i32 @nz_net_shutdown(i32 %fd, i32 %how) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %r = call i32 @shutdown(i64 %s, i32 %how)
+  %w = call i64 @nz.win.result(i32 %r)
+  %x = trunc i64 %w to i32
+  ret i32 %x
+}
+
+define hidden i32 @nz_net_name(i32 %fd, i32 %peer, ptr %sa, ptr %slen) {
+entry:
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %want = icmp ne i32 %peer, 0
+  br i1 %want, label %theirs, label %ours
+theirs:
+  %p = call i32 @getpeername(i64 %s, ptr %sa, ptr %slen)
+  br label %done
+ours:
+  %o = call i32 @getsockname(i64 %s, ptr %sa, ptr %slen)
+  br label %done
+done:
+  %r = phi i32 [ %p, %theirs ], [ %o, %ours ]
+  %w = call i64 @nz.win.result(i32 %r)
+  %x = trunc i64 %w to i32
+  ret i32 %x
+}
+
+; The reactor's poller: the wake socket, made once; the queue number itself is not used.
+define hidden i32 @nz_net_poller() {
+entry:
+  %sa = alloca [16 x i8], align 8
+  %len = alloca i32, align 4
+  %w = call i64 @socket(i32 2, i32 2, i32 0)
+  %bad = icmp eq i64 %w, -1
+  br i1 %bad, label %done, label %bind
+bind:
+  call void @llvm.memset.p0.i64(ptr %sa, i8 0, i64 16, i1 false)
+  store i16 2, ptr %sa
+  %ap = getelementptr i8, ptr %sa, i64 4
+  store i32 16777343, ptr %ap
+  %b = call i32 @bind(i64 %w, ptr %sa, i32 16)
+  %bok = icmp eq i32 %b, 0
+  br i1 %bok, label %name, label %drop
+name:
+  store i32 16, ptr %len
+  %g = call i32 @getsockname(i64 %w, ptr %sa, ptr %len)
+  %gok = icmp eq i32 %g, 0
+  br i1 %gok, label %join, label %drop
+join:
+  %c = call i32 @connect(i64 %w, ptr %sa, i32 16)
+  %cok = icmp eq i32 %c, 0
+  br i1 %cok, label %keep, label %drop
+keep:
+  call void @nz.win.nonblocking(i64 %w)
+  store atomic i64 %w, ptr @nz.win.wake release, align 8
+  br label %done
+drop:
+  %x = call i32 @closesocket(i64 %w)
+  br label %done
+done:
+  ret i32 0
+}
+
+; Interest in `fd`'s directions `mask`, for one event, which wakes handle `udata`.
+define hidden i32 @nz_net_arm(i32 %q, i32 %fd, i64 %mask, i64 %udata) {
+entry:
+  %in = icmp ult i32 %fd, 4096
+  br i1 %in, label %arm, label %done
+arm:
+  %i = zext i32 %fd to i64
+  call void @AcquireSRWLockExclusive(ptr @nz.win.lock)
+  %wp = getelementptr [4096 x i64], ptr @nz.win.want, i64 0, i64 %i
+  store i64 %mask, ptr %wp
+  %up = getelementptr [4096 x i64], ptr @nz.win.udata, i64 0, i64 %i
+  store i64 %udata, ptr %up
+  %top = load i64, ptr @nz.win.top
+  %next = add i64 %i, 1
+  %above = icmp ugt i64 %next, %top
+  %top2 = select i1 %above, i64 %next, i64 %top
+  store i64 %top2, ptr @nz.win.top
+  call void @ReleaseSRWLockExclusive(ptr @nz.win.lock)
+  call void @nz.win.poke()
+  br label %done
+done:
+  ret i32 0
+}
+
+; Wait for events; each armed descriptor that has one is disarmed and its handle put in `out`
+; (at most 64): the count. A pipe cannot be waited for with `WSAPoll`: one armed to read is ready
+; when `PeekNamedPipe` sees bytes or a closed writer, one armed to write is ready at once (a full
+; pipe takes nothing and is armed again), and while a pipe waits the reactor looks every 10 ms.
+define hidden i64 @nz_net_poll(i32 %q, ptr %out) {
+entry:
+  %junk = alloca [64 x i8], align 8
+  %avail = alloca i32, align 4
+  %wake = load atomic i64, ptr @nz.win.wake acquire, align 8
+  %haswake = icmp ne i64 %wake, 0
+  call void @AcquireSRWLockExclusive(ptr @nz.win.lock)
+  br i1 %haswake, label %first, label %gather
+first:
+  store i64 %wake, ptr @nz.win.fds
+  %e0 = getelementptr i8, ptr @nz.win.fds, i64 8
+  store i16 256, ptr %e0
+  %r0 = getelementptr i8, ptr @nz.win.fds, i64 10
+  store i16 0, ptr %r0
+  store i32 -1, ptr @nz.win.idx
+  br label %gather
+gather:
+  %n0 = select i1 %haswake, i64 1, i64 0
+  %top = load i64, ptr @nz.win.top
+  br label %scan
+scan:
+  %fd = phi i64 [ 0, %gather ], [ %fd1, %next ]
+  %n = phi i64 [ %n0, %gather ], [ %nn, %next ]
+  %k = phi i64 [ 0, %gather ], [ %kn, %next ]
+  %piped = phi i1 [ false, %gather ], [ %pn, %next ]
+  %more = icmp ult i64 %fd, %top
+  %room = icmp ult i64 %k, 64
+  %go = and i1 %more, %room
+  br i1 %go, label %look, label %wait
+look:
+  %fd1 = add i64 %fd, 1
+  %wp = getelementptr [4096 x i64], ptr @nz.win.want, i64 0, i64 %fd
+  %m = load i64, ptr %wp
+  %armed = icmp ne i64 %m, 0
+  br i1 %armed, label %which, label %next
+which:
+  %sp = getelementptr [4096 x i64], ptr @nz.win.socks, i64 0, i64 %fd
+  %s = load atomic i64, ptr %sp acquire, align 8
+  %live = icmp ne i64 %s, 0
+  br i1 %live, label %add, label %pipe
+pipe:
+  %wr0 = and i64 %m, 2
+  %towrite = icmp ne i64 %wr0, 0
+  br i1 %towrite, label %ready, label %peek
+peek:
+  %fd32p = trunc i64 %fd to i32
+  %ph = call i64 @_get_osfhandle(i32 %fd32p)
+  store i32 0, ptr %avail
+  %pk = call i32 @PeekNamedPipe(i64 %ph, ptr null, i32 0, ptr null, ptr %avail, ptr null)
+  %pfail = icmp eq i32 %pk, 0
+  %av = load i32, ptr %avail
+  %some = icmp ne i32 %av, 0
+  %pready = or i1 %pfail, %some
+  br i1 %pready, label %ready, label %later
+ready:
+  store i64 0, ptr %wp
+  %rup = getelementptr [4096 x i64], ptr @nz.win.udata, i64 0, i64 %fd
+  %ru = load i64, ptr %rup
+  %rop = getelementptr i64, ptr %out, i64 %k
+  store i64 %ru, ptr %rop
+  %k1 = add i64 %k, 1
+  br label %next
+later:
+  br label %next
+add:
+  %rd = and i64 %m, 1
+  %wr = and i64 %m, 2
+  %wantr = icmp ne i64 %rd, 0
+  %wantw = icmp ne i64 %wr, 0
+  %er = select i1 %wantr, i16 256, i16 0
+  %ew = select i1 %wantw, i16 16, i16 0
+  %ev = or i16 %er, %ew
+  %off = mul i64 %n, 16
+  %pf = getelementptr i8, ptr @nz.win.fds, i64 %off
+  store i64 %s, ptr %pf
+  %pe = getelementptr i8, ptr %pf, i64 8
+  store i16 %ev, ptr %pe
+  %pr = getelementptr i8, ptr %pf, i64 10
+  store i16 0, ptr %pr
+  %ip = getelementptr i32, ptr @nz.win.idx, i64 %n
+  %fd32 = trunc i64 %fd to i32
+  store i32 %fd32, ptr %ip
+  %n1 = add i64 %n, 1
+  br label %next
+next:
+  %nn = phi i64 [ %n, %look ], [ %n, %ready ], [ %n, %later ], [ %n1, %add ]
+  %kn = phi i64 [ %k, %look ], [ %k1, %ready ], [ %k, %later ], [ %k, %add ]
+  %pn = phi i1 [ %piped, %look ], [ %piped, %ready ], [ true, %later ], [ %piped, %add ]
+  br label %scan
+wait:
+  call void @ReleaseSRWLockExclusive(ptr @nz.win.lock)
+  %pipes = icmp ne i64 %k, 0
+  br i1 %pipes, label %quick, label %sockets
+quick:
+  ret i64 %k
+sockets:
+  %empty = icmp eq i64 %n, 0
+  br i1 %empty, label %idle, label %poll
+idle:
+  %nap = select i1 %piped, i32 10, i32 20
+  call void @Sleep(i32 %nap)
+  ret i64 0
+poll:
+  %t0 = select i1 %haswake, i32 -1, i32 20
+  %timeout = select i1 %piped, i32 10, i32 %t0
+  %n32 = trunc i64 %n to i32
+  %r = call i32 @WSAPoll(ptr @nz.win.fds, i32 %n32, i32 %timeout)
+  %fired = icmp sgt i32 %r, 0
+  br i1 %fired, label %collect, label %none
+none:
+  %err = icmp slt i32 %r, 0
+  br i1 %err, label %rest, label %quiet
+rest:
+  call void @Sleep(i32 1)
+  br label %quiet
+quiet:
+  ret i64 0
+collect:
+  call void @AcquireSRWLockExclusive(ptr @nz.win.lock)
+  br label %each
+each:
+  %i = phi i64 [ 0, %collect ], [ %i1, %step ]
+  %c = phi i64 [ 0, %collect ], [ %c2, %step ]
+  %left = icmp ult i64 %i, %n
+  %space = icmp ult i64 %c, 64
+  %more2 = and i1 %left, %space
+  br i1 %more2, label %one, label %finish
+one:
+  %i1 = add i64 %i, 1
+  %eoff = mul i64 %i, 16
+  %ef = getelementptr i8, ptr @nz.win.fds, i64 %eoff
+  %erp = getelementptr i8, ptr %ef, i64 10
+  %rev = load i16, ptr %erp
+  %hit = icmp ne i16 %rev, 0
+  br i1 %hit, label %whose, label %step
+whose:
+  %eip = getelementptr i32, ptr @nz.win.idx, i64 %i
+  %f = load i32, ptr %eip
+  %iswake = icmp slt i32 %f, 0
+  br i1 %iswake, label %drain, label %event
+drain:
+  %d = call i32 @recv(i64 %wake, ptr %junk, i32 64, i32 0)
+  %again = icmp sgt i32 %d, 0
+  br i1 %again, label %drain, label %step
+event:
+  %fi = zext i32 %f to i64
+  %ewp = getelementptr [4096 x i64], ptr @nz.win.want, i64 0, i64 %fi
+  %em = load i64, ptr %ewp
+  %esp = getelementptr [4096 x i64], ptr @nz.win.socks, i64 0, i64 %fi
+  %es = load atomic i64, ptr %esp acquire, align 8
+  %polled = load i64, ptr %ef
+  %still = icmp ne i64 %em, 0
+  %same = icmp eq i64 %es, %polled
+  %fire = and i1 %still, %same
+  br i1 %fire, label %report, label %step
+report:
+  store i64 0, ptr %ewp
+  %eup = getelementptr [4096 x i64], ptr @nz.win.udata, i64 0, i64 %fi
+  %u = load i64, ptr %eup
+  %op = getelementptr i64, ptr %out, i64 %c
+  store i64 %u, ptr %op
+  %cr = add i64 %c, 1
+  br label %step
+step:
+  %c2 = phi i64 [ %c, %one ], [ %c, %drain ], [ %c, %event ], [ %cr, %report ]
+  br label %each
+finish:
+  call void @ReleaseSRWLockExclusive(ptr @nz.win.lock)
+  ret i64 %c
+}
+
+; A write to a socket, or to a pipe: a full pipe takes nothing (EAGAIN), and one whose reader has
+; gone is a broken pipe (EPIPE), never a signal.
+define hidden i64 @nz_net_write(i32 %fd, ptr %buf, i64 %n) {
+entry:
+  %put = alloca i32, align 4
+  %s = call i64 @nz.win.sock(i32 %fd)
+  %m = call i32 @nz.win.count(i64 %n)
+  %sock = icmp ne i64 %s, 0
+  br i1 %sock, label %send, label %plain
+send:
+  %r = call i32 @send(i64 %s, ptr %buf, i32 %m, i32 0)
+  %rw = call i64 @nz.win.result(i32 %r)
+  ret i64 %rw
+plain:
+  %h = call i64 @_get_osfhandle(i32 %fd)
+  store i32 0, ptr %put
+  %ok = call i32 @WriteFile(i64 %h, ptr %buf, i32 %m, ptr %put, ptr null)
+  %fine = icmp ne i32 %ok, 0
+  br i1 %fine, label %wrote, label %failed
+wrote:
+  %p = load i32, ptr %put
+  %none = icmp eq i32 %p, 0
+  %asked = icmp ne i32 %m, 0
+  %full = and i1 %none, %asked
+  br i1 %full, label %block, label %done
+block:
+  call void @nz.win.set_errno(i32 11)
+  ret i64 -1
+done:
+  %pw = zext i32 %p to i64
+  ret i64 %pw
+failed:
+  %w = call i32 @GetLastError()
+  %closing = icmp eq i32 %w, 232
+  %broken = icmp eq i32 %w, 109
+  %gone = or i1 %closing, %broken
+  br i1 %gone, label %pipe, label %other
+pipe:
+  call void @nz.win.set_errno(i32 32)
+  ret i64 -1
+other:
+  %e = call i32 @nz.win.last_errno()
+  call void @nz.win.set_errno(i32 %e)
+  ret i64 -1
+}
+
+; Children are started one at a time: between making a child's inheritable pipe ends and closing
+; them, no other child may be started to inherit them too.
+@nz.win.spawning = internal global ptr null
+
+; `arg` (a C string) onto `dst` as the C runtime's command-line parser reads it back: bare when it
+; is not empty and holds no blank or quote, else quoted, a backslash doubled where a quote or the
+; closing quote follows it. At most twice its length and three more; the end.
+define internal ptr @nz.win.quote(ptr %dst, ptr %arg) {
+entry:
+  %c0 = load i8, ptr %arg
+  %empty = icmp eq i8 %c0, 0
+  br i1 %empty, label %quoted, label %scan
+scan:
+  %sp = phi ptr [ %arg, %entry ], [ %sp1, %plainch ]
+  %sc = load i8, ptr %sp
+  switch i8 %sc, label %plainch [
+    i8 0, label %bare
+    i8 32, label %quoted
+    i8 9, label %quoted
+    i8 10, label %quoted
+    i8 11, label %quoted
+    i8 34, label %quoted
+  ]
+plainch:
+  %sp1 = getelementptr i8, ptr %sp, i64 1
+  br label %scan
+bare:
+  %len = call i64 @strlen(ptr %arg)
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %arg, i64 %len, i1 false)
+  %bend = getelementptr i8, ptr %dst, i64 %len
+  ret ptr %bend
+quoted:
+  store i8 34, ptr %dst
+  %d1 = getelementptr i8, ptr %dst, i64 1
+  br label %char
+char:
+  %p = phi ptr [ %arg, %quoted ], [ %pn, %emitted ]
+  %d = phi ptr [ %d1, %quoted ], [ %dn, %emitted ]
+  %slashes = phi i64 [ 0, %quoted ], [ %sl, %emitted ]
+  %c = load i8, ptr %p
+  %pn = getelementptr i8, ptr %p, i64 1
+  switch i8 %c, label %ordinary [
+    i8 0, label %close
+    i8 92, label %slash
+    i8 34, label %quote
+  ]
+slash:
+  store i8 92, ptr %d
+  %ds = getelementptr i8, ptr %d, i64 1
+  %sl1 = add i64 %slashes, 1
+  br label %emitted
+quote:
+  %qn = add i64 %slashes, 1
+  %dq = call ptr @nz.win.slashes(ptr %d, i64 %qn)
+  store i8 34, ptr %dq
+  %dq1 = getelementptr i8, ptr %dq, i64 1
+  br label %emitted
+ordinary:
+  store i8 %c, ptr %d
+  %do = getelementptr i8, ptr %d, i64 1
+  br label %emitted
+emitted:
+  %dn = phi ptr [ %ds, %slash ], [ %dq1, %quote ], [ %do, %ordinary ]
+  %sl = phi i64 [ %sl1, %slash ], [ 0, %quote ], [ 0, %ordinary ]
+  br label %char
+close:
+  %dc = call ptr @nz.win.slashes(ptr %d, i64 %slashes)
+  store i8 34, ptr %dc
+  %dend = getelementptr i8, ptr %dc, i64 1
+  ret ptr %dend
+}
+
+; `n` backslashes onto `dst`: the end.
+define internal ptr @nz.win.slashes(ptr %dst, i64 %n) {
+entry:
+  call void @llvm.memset.p0.i64(ptr %dst, i8 92, i64 %n, i1 false)
+  %end = getelementptr i8, ptr %dst, i64 %n
+  ret ptr %end
+}
+
+; Three pipes and the child (`CreateProcessW`, the command line `argv` quoted, this environment);
+; the parent's ends as descriptors at `ends`, the process handle at `pid`; 0 or an errno.
+define hidden i32 @nz_os_spawn(ptr %pid, ptr %prog, ptr %av, ptr %ends) {
+entry:
+  %sa = alloca [24 x i8], align 8
+  %si = alloca [104 x i8], align 8
+  %pi = alloca [24 x i8], align 8
+  %hs = alloca [6 x i64], align 8
+  br label %measure
+measure:
+  %i = phi i64 [ 0, %entry ], [ %i1, %count ]
+  %total = phi i64 [ 1, %entry ], [ %t1, %count ]
+  %ap = getelementptr ptr, ptr %av, i64 %i
+  %a = load ptr, ptr %ap
+  %end = icmp eq ptr %a, null
+  br i1 %end, label %alloc, label %count
+count:
+  %l = call i64 @strlen(ptr %a)
+  %l2 = mul i64 %l, 2
+  %l3 = add i64 %l2, 4
+  %t1 = add i64 %total, %l3
+  %i1 = add i64 %i, 1
+  br label %measure
+alloc:
+  %line = call ptr @malloc(i64 %total)
+  %noline = icmp eq ptr %line, null
+  br i1 %noline, label %oom, label %write
+oom:
+  ret i32 12
+write:
+  %j = phi i64 [ 0, %alloc ], [ %j1, %wrote ]
+  %d = phi ptr [ %line, %alloc ], [ %dn, %wrote ]
+  %bp = getelementptr ptr, ptr %av, i64 %j
+  %b = load ptr, ptr %bp
+  %last = icmp eq ptr %b, null
+  br i1 %last, label %terminated, label %arg
+arg:
+  %first = icmp eq i64 %j, 0
+  br i1 %first, label %quote, label %space
+space:
+  store i8 32, ptr %d
+  %d2 = getelementptr i8, ptr %d, i64 1
+  br label %quote
+quote:
+  %dd = phi ptr [ %d, %arg ], [ %d2, %space ]
+  %dn = call ptr @nz.win.quote(ptr %dd, ptr %b)
+  br label %wrote
+wrote:
+  %j1 = add i64 %j, 1
+  br label %write
+terminated:
+  store i8 0, ptr %d
+  %cmd = call ptr @nz.win.wide(ptr %line)
+  call void @free(ptr %line)
+  %nocmd = icmp eq ptr %cmd, null
+  br i1 %nocmd, label %badcmd, label %pipes
+badcmd:
+  ret i32 84
+pipes:
+  call void @llvm.memset.p0.i64(ptr %sa, i8 0, i64 24, i1 false)
+  store i32 24, ptr %sa
+  %inh = getelementptr i8, ptr %sa, i64 16
+  store i32 1, ptr %inh
+  call void @AcquireSRWLockExclusive(ptr @nz.win.spawning)
+  %h0 = getelementptr i64, ptr %hs, i64 0
+  %h1 = getelementptr i64, ptr %hs, i64 1
+  %h2 = getelementptr i64, ptr %hs, i64 2
+  %h3 = getelementptr i64, ptr %hs, i64 3
+  %h4 = getelementptr i64, ptr %hs, i64 4
+  %h5 = getelementptr i64, ptr %hs, i64 5
+  call void @llvm.memset.p0.i64(ptr %hs, i8 0, i64 48, i1 false)
+  %c0 = call i32 @CreatePipe(ptr %h0, ptr %h1, ptr %sa, i32 0)
+  %c1 = call i32 @CreatePipe(ptr %h2, ptr %h3, ptr %sa, i32 0)
+  %c2 = call i32 @CreatePipe(ptr %h4, ptr %h5, ptr %sa, i32 0)
+  %ok01 = and i32 %c0, %c1
+  %ok012 = and i32 %ok01, %c2
+  %made = icmp ne i32 %ok012, 0
+  br i1 %made, label %start, label %nopipe
+nopipe:
+  %pe = call i32 @nz.win.last_errno()
+  call void @nz.win.close_all(ptr %hs)
+  call void @ReleaseSRWLockExclusive(ptr @nz.win.spawning)
+  call void @free(ptr %cmd)
+  ret i32 %pe
+start:
+  ; The child's ends: input's read (0), output's write (3), errors' write (5).
+  %in0 = load i64, ptr %h0
+  %in1 = load i64, ptr %h1
+  %out0 = load i64, ptr %h2
+  %out1 = load i64, ptr %h3
+  %err0 = load i64, ptr %h4
+  %err1 = load i64, ptr %h5
+  %x0 = call i32 @SetHandleInformation(i64 %in1, i32 1, i32 0)
+  %x1 = call i32 @SetHandleInformation(i64 %out0, i32 1, i32 0)
+  %x2 = call i32 @SetHandleInformation(i64 %err0, i32 1, i32 0)
+  call void @llvm.memset.p0.i64(ptr %si, i8 0, i64 104, i1 false)
+  store i32 104, ptr %si
+  %flags = getelementptr i8, ptr %si, i64 60
+  store i32 256, ptr %flags
+  %sin = getelementptr i8, ptr %si, i64 80
+  store i64 %in0, ptr %sin
+  %sout = getelementptr i8, ptr %si, i64 88
+  store i64 %out1, ptr %sout
+  %serr = getelementptr i8, ptr %si, i64 96
+  store i64 %err1, ptr %serr
+  call void @llvm.memset.p0.i64(ptr %pi, i8 0, i64 24, i1 false)
+  %r = call i32 @CreateProcessW(ptr null, ptr %cmd, ptr null, ptr null, i32 1, i32 0, ptr null, ptr null, ptr %si, ptr %pi)
+  %re = call i32 @nz.win.last_errno()
+  %k0 = call i32 @CloseHandle(i64 %in0)
+  %k1 = call i32 @CloseHandle(i64 %out1)
+  %k2 = call i32 @CloseHandle(i64 %err1)
+  call void @ReleaseSRWLockExclusive(ptr @nz.win.spawning)
+  call void @free(ptr %cmd)
+  %started = icmp ne i32 %r, 0
+  br i1 %started, label %adopt, label %undo
+undo:
+  %u0 = call i32 @CloseHandle(i64 %in1)
+  %u1 = call i32 @CloseHandle(i64 %out0)
+  %u2 = call i32 @CloseHandle(i64 %err0)
+  ret i32 %re
+adopt:
+  %proc = load i64, ptr %pi
+  %thp = getelementptr i8, ptr %pi, i64 8
+  %th = load i64, ptr %thp
+  %kt = call i32 @CloseHandle(i64 %th)
+  store i64 %proc, ptr %pid
+  %f0 = call i32 @_open_osfhandle(i64 %in1, i32 32769)
+  %f1 = call i32 @_open_osfhandle(i64 %out0, i32 32768)
+  %f2 = call i32 @_open_osfhandle(i64 %err0, i32 32768)
+  store i32 %f0, ptr %ends
+  %e1 = getelementptr i32, ptr %ends, i64 1
+  store i32 %f1, ptr %e1
+  %e2 = getelementptr i32, ptr %ends, i64 2
+  store i32 %f2, ptr %e2
+  ret i32 0
+}
+
+define internal void @nz.win.close_all(ptr %hs) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i1, %next ]
+  %p = getelementptr i64, ptr %hs, i64 %i
+  %h = load i64, ptr %p
+  %some = icmp ne i64 %h, 0
+  br i1 %some, label %close, label %next
+close:
+  %c = call i32 @CloseHandle(i64 %h)
+  br label %next
+next:
+  %i1 = add i64 %i, 1
+  %more = icmp ult i64 %i1, 6
+  br i1 %more, label %loop, label %done
+done:
+  ret void
+}
+
+; The child's exit code, waited for; its process handle closed.
+define hidden i64 @nz_os_reap(i64 %pid) {
+entry:
+  %code = alloca i32, align 4
+  %w = call i32 @WaitForSingleObject(i64 %pid, i32 -1)
+  %waited = icmp eq i32 %w, 0
+  br i1 %waited, label %ended, label %failed
+failed:
+  %e = call i32 @nz.win.last_errno()
+  %ew = zext i32 %e to i64
+  %neg = sub i64 0, %ew
+  ret i64 %neg
+ended:
+  store i32 0, ptr %code
+  %g = call i32 @GetExitCodeProcess(i64 %pid, ptr %code)
+  %c = load i32, ptr %code
+  %k = call i32 @CloseHandle(i64 %pid)
+  %cw = zext i32 %c to i64
+  ret i64 %cw
+}
+
+; `TerminateProcess` with exit code 1 (`docs/spec.md` *Windows x86_64*: there are no signals); a
+; child that has already ended is not an error, as `kill` on one not yet waited for is not.
+define hidden i32 @nz_os_terminate(i64 %pid) {
+entry:
+  %code = alloca i32, align 4
+  %r = call i32 @TerminateProcess(i64 %pid, i32 1)
+  %ok = icmp ne i32 %r, 0
+  br i1 %ok, label %done, label %check
+check:
+  %e = call i32 @nz.win.last_errno()
+  store i32 259, ptr %code
+  %g = call i32 @GetExitCodeProcess(i64 %pid, ptr %code)
+  %c = load i32, ptr %code
+  %gone = icmp ne i32 %c, 259
+  br i1 %gone, label %done, label %fail
+fail:
+  call void @nz.win.set_errno(i32 %e)
+  ret i32 -1
+done:
+  ret i32 0
+}
+
+define hidden i32 @nz_os_key() {
+entry:
+  %fd = call i32 (ptr, i32, ...) @_open(ptr @.nz.win.nul, i32 128)
+  ret i32 %fd
+}
+"#;
+
+/// The function the entry hands `argc` and `argv` to on a target whose `main` does not receive
+/// the arguments as the program sees them (Gate 3): Windows', whose C runtime passes them in the
+/// ANSI code page; it reads them again as UTF-16 and stores them, UTF-8, where the entry says
+/// `@nz.argc` and `@nz.argv` are. It is defined in the target's `init` unit.
+#[must_use]
+pub fn args_hook(target: SwitchTarget) -> Option<&'static str> {
+    (target == SwitchTarget::X86_64Windows).then_some("@nz_os_args")
+}
+
 /// What a target needs done before `main`, as a unit of its own; nothing on POSIX (Gate 3). On
 /// Windows, standard input, output and errors are put in binary mode, which the C runtime does not
-/// start them in: `docs/spec.md` *Windows x86_64* has no line-ending translation.
+/// start them in: `docs/spec.md` *Windows x86_64* has no line-ending translation; and Winsock is
+/// started (version 2.2), which a socket or the resolver needs first.
 #[must_use]
 pub fn emit_init(target: SwitchTarget) -> Option<String> {
     (target == SwitchTarget::X86_64Windows).then(|| WINDOWS_INIT.to_owned())
@@ -1401,20 +2714,99 @@ const WINDOWS_INIT: &str = "; Generated by nazm build. Do not edit.
 source_filename = \"init\"
 
 declare i32 @_setmode(i32, i32)
+declare i32 @WSAStartup(i16, ptr)
+declare i32 @__wgetmainargs(ptr, ptr, ptr, i32, ptr)
+declare i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)
+declare ptr @malloc(i64)
 
 @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 101, ptr @nz.win.init, ptr null }]
 
 define internal void @nz.win.init() {
 entry:
+  %wsa = alloca [408 x i8], align 8
+  %w = call i32 @WSAStartup(i16 514, ptr %wsa)
   %a = call i32 @_setmode(i32 0, i32 32768)
   %b = call i32 @_setmode(i32 1, i32 32768)
   %c = call i32 @_setmode(i32 2, i32 32768)
   ret void
 }
+
+; The arguments again, from the C runtime's wide parse of the command line (the same splitting as
+; its ANSI one), each converted to UTF-8: an argument that is not valid UTF-16 is skipped rather
+; than mangled. `argv[0]`, the program's own name, is never visible and is kept as it is. When the
+; wide parse is refused, the ANSI arguments stand.
+define hidden void @nz_os_args(i32 %argc, ptr %argv, ptr %countp, ptr %vectorp) {
+entry:
+  %wc = alloca i32, align 4
+  %wv = alloca ptr, align 8
+  %we = alloca ptr, align 8
+  %si = alloca i32, align 4
+  store i32 0, ptr %si
+  store ptr null, ptr %wv
+  %r = call i32 @__wgetmainargs(ptr %wc, ptr %wv, ptr %we, i32 0, ptr %si)
+  %wargs = load ptr, ptr %wv
+  %none = icmp eq ptr %wargs, null
+  br i1 %none, label %ansi, label %count
+count:
+  %n32 = load i32, ptr %wc
+  %n = sext i32 %n32 to i64
+  %slots = add i64 %n, 1
+  %bytes = mul i64 %slots, 8
+  %arr = call ptr @malloc(i64 %bytes)
+  %noarr = icmp eq ptr %arr, null
+  br i1 %noarr, label %ansi, label %fill
+ansi:
+  %a64 = sext i32 %argc to i64
+  %an = sub i64 %a64, 1
+  store i64 %an, ptr %countp
+  store ptr %argv, ptr %vectorp
+  ret void
+fill:
+  %name = load ptr, ptr %argv
+  store ptr %name, ptr %arr
+  br label %each
+each:
+  %i = phi i64 [ 1, %fill ], [ %i1, %next ]
+  %k = phi i64 [ 0, %fill ], [ %k1, %next ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %one, label %done
+one:
+  %i1 = add i64 %i, 1
+  %wp = getelementptr ptr, ptr %wargs, i64 %i
+  %w = load ptr, ptr %wp
+  %len = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %w, i32 -1, ptr null, i32 0, ptr null, ptr null)
+  %bad = icmp eq i32 %len, 0
+  br i1 %bad, label %skip, label %convert
+convert:
+  %lw = zext i32 %len to i64
+  %u = call ptr @malloc(i64 %lw)
+  %nou = icmp eq ptr %u, null
+  br i1 %nou, label %skip, label %write
+write:
+  %c = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %w, i32 -1, ptr %u, i32 %len, ptr null, ptr null)
+  %at = add i64 %k, 1
+  %up = getelementptr ptr, ptr %arr, i64 %at
+  store ptr %u, ptr %up
+  %kk = add i64 %k, 1
+  br label %next
+skip:
+  br label %next
+next:
+  %k1 = phi i64 [ %kk, %write ], [ %k, %skip ]
+  br label %each
+done:
+  %endp0 = add i64 %k, 1
+  %endp = getelementptr ptr, ptr %arr, i64 %endp0
+  store ptr null, ptr %endp
+  store i64 %k, ptr %countp
+  store ptr %arr, ptr %vectorp
+  ret void
+}
 ";
 
-/// The task stacks and the stack budget (Gate 3): the one part of the pool and of the stack check
-/// that differs between operating systems, behind four functions the runtime calls.
+/// The task stacks, the stack budget and the clocks (Gate 3): the one part of the pool, the stack
+/// check and the time functions that differs between operating systems, behind five functions
+/// the runtime calls.
 ///
 /// - `nz_os_page_size() -> i64`: the page a guard is made of.
 /// - `nz_os_stack_alloc(total, page) -> ptr`: `total` bytes, page-aligned, the lowest `page` of
@@ -1422,6 +2814,8 @@ entry:
 /// - `nz_os_stack_free(base, total, page)`: the stack back; leaked rather than handed back
 ///   unreadable when its guard cannot be lifted (Q1-A1-10).
 /// - `nz_os_stack_size() -> i64`: the main thread's stack, or 0 when the system will not say.
+/// - `nz_os_clock(which, ts) -> i32`: the wall clock (`which` 0) or the monotonic one (4) at `ts`
+///   as two 64-bit words, seconds and nanoseconds, whatever the system's own `timespec` is.
 #[must_use]
 pub fn emit_stack(target: SwitchTarget) -> String {
     let body = match target {
@@ -1432,11 +2826,20 @@ pub fn emit_stack(target: SwitchTarget) -> String {
 }
 
 const POSIX_STACK: &str = r"
+declare i32 @clock_gettime(i32, ptr)
 declare i32 @getpagesize()
 declare i32 @posix_memalign(ptr, i64, i64)
 declare i32 @mprotect(ptr, i64, i32)
 declare i32 @getrlimit(i32, ptr)
 declare void @free(ptr)
+
+; Clock 4 is CLOCK_MONOTONIC_RAW, and 0 CLOCK_REALTIME, on Linux and macOS; their `timespec` is
+; two 64-bit words.
+define hidden i32 @nz_os_clock(i32 %which, ptr %ts) {
+entry:
+  %r = call i32 @clock_gettime(i32 %which, ptr %ts)
+  ret i32 %r
+}
 
 define hidden i64 @nz_os_page_size() {
 entry:
@@ -1497,6 +2900,42 @@ declare ptr @VirtualAlloc(ptr, i64, i32, i32)
 declare i32 @VirtualProtect(ptr, i64, i32, ptr)
 declare i32 @VirtualFree(ptr, i64, i32)
 declare void @GetCurrentThreadStackLimits(ptr, ptr)
+declare void @GetSystemTimePreciseAsFileTime(ptr)
+declare i32 @QueryPerformanceCounter(ptr)
+declare i32 @QueryPerformanceFrequency(ptr)
+
+; 0 the wall clock (`GetSystemTimePreciseAsFileTime`, 100 ns since 1601), anything else the
+; monotonic one (`QueryPerformanceCounter`), as two 64-bit words, seconds and nanoseconds.
+define hidden i32 @nz_os_clock(i32 %which, ptr %ts) {
+entry:
+  %v = alloca i64, align 8
+  %f = alloca i64, align 8
+  %np = getelementptr i8, ptr %ts, i64 8
+  %wall = icmp eq i32 %which, 0
+  br i1 %wall, label %system, label %counter
+system:
+  call void @GetSystemTimePreciseAsFileTime(ptr %v)
+  %ft = load i64, ptr %v
+  %since = sub i64 %ft, 116444736000000000
+  %ns = mul i64 %since, 100
+  %s = sdiv i64 %ns, 1000000000
+  %n = srem i64 %ns, 1000000000
+  store i64 %s, ptr %ts
+  store i64 %n, ptr %np
+  ret i32 0
+counter:
+  %c0 = call i32 @QueryPerformanceCounter(ptr %v)
+  %q0 = call i32 @QueryPerformanceFrequency(ptr %f)
+  %c = load i64, ptr %v
+  %hz = load i64, ptr %f
+  %cs = udiv i64 %c, %hz
+  %rest = urem i64 %c, %hz
+  %scaled = mul i64 %rest, 1000000000
+  %cn = udiv i64 %scaled, %hz
+  store i64 %cs, ptr %ts
+  store i64 %cn, ptr %np
+  ret i32 0
+}
 
 define hidden i64 @nz_os_page_size() {
 entry:
@@ -1552,7 +2991,7 @@ entry:
 
 #[cfg(test)]
 mod tests {
-    use super::emit_os;
+    use super::{args_hook, emit_init, emit_os, emit_stack};
     use crate::switch::SwitchTarget;
 
     #[test]
@@ -1577,5 +3016,59 @@ mod tests {
         assert!(
             emit_os(SwitchTarget::Aarch64Linux).contains("@nz_os_family() {\nentry:\n  ret i64 1")
         );
+    }
+
+    /// The functions the runtime calls (`nz_os_*`, `nz_net_*`), by what a target's units define.
+    fn defined(t: SwitchTarget) -> std::collections::BTreeSet<String> {
+        let text = format!("{}{}", emit_os(t), emit_stack(t));
+        text.lines()
+            .filter_map(|l| l.strip_prefix("define hidden "))
+            .filter_map(|l| l.split_once('@').map(|(_, rest)| rest))
+            .filter_map(|l| l.split_once('(').map(|(name, _)| name.to_owned()))
+            .filter(|n| n.starts_with("nz_os_") || n.starts_with("nz_net_"))
+            .collect()
+    }
+
+    /// Gate 3: one platform layer, the same functions on every target — Windows answers each
+    /// one, and none is a stub — and the Windows units name nothing of POSIX's.
+    #[test]
+    fn every_target_defines_the_same_platform_functions_and_windows_names_no_posix_call() {
+        let posix = defined(SwitchTarget::Aarch64Darwin);
+        assert!(posix.contains("nz_os_spawn") && posix.contains("nz_os_clock"));
+        for t in SwitchTarget::ALL {
+            assert_eq!(defined(t), posix, "{t:?}");
+        }
+        let w = SwitchTarget::X86_64Windows;
+        let text = format!(
+            "{}{}{}",
+            emit_os(w),
+            emit_stack(w),
+            emit_init(w).unwrap_or_default()
+        );
+        for posix_call in [
+            "@pipe(",
+            "@fcntl(",
+            "@posix_spawnp(",
+            "@waitpid(",
+            "@kill(",
+            "@signal(",
+            "@epoll_wait(",
+            "@kevent(",
+            "@clock_gettime(",
+            "@getpagesize(",
+            "@mprotect(",
+            "@getentropy(",
+            "@read(",
+            "@write(",
+            "@close(",
+        ] {
+            assert!(!text.contains(posix_call), "{posix_call}");
+        }
+        assert!(!text.contains("ret i32 -38\n"), "an unported stub");
+        assert_eq!(args_hook(w), Some("@nz_os_args"));
+        assert!(text.contains("define hidden void @nz_os_args("));
+        for t in SwitchTarget::ALL {
+            assert_eq!(args_hook(t).is_some(), t == w, "{t:?}");
+        }
     }
 }

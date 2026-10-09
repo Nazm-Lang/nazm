@@ -40,12 +40,25 @@ declare i64 @nz_net_sendto(i32, ptr, i64, ptr, i64)
 declare i64 @nz_net_eagain()
 declare i64 @nz_net_etimedout()
 declare i64 @nz_net_resolve(ptr, i64, ptr, i64)
+declare i64 @nz_net_read(i32, ptr, i64)
+declare i32 @nz_net_bind(i32, ptr, i32)
+declare i32 @nz_net_listen(i32)
+declare i32 @nz_net_accept(i32)
+declare i64 @nz_net_recvfrom(i32, ptr, i64, ptr, ptr)
+declare i32 @nz_net_shutdown(i32, i32)
+declare i32 @nz_net_name(i32, i32, ptr, ptr)
+declare i64 @nz_net_write(i32, ptr, i64)
+declare i32 @nz_os_spawn(ptr, ptr, ptr, ptr)
+declare i64 @nz_os_reap(i64)
+declare i32 @nz_os_terminate(i64)
+declare i32 @nz_os_key()
 
 ; The wall clock in nanoseconds: what `nz.ctimedwait`'s deadline is measured against.
 define hidden i64 @nz.net_now() {
 entry:
   %ts = alloca [16 x i8], align 8
-  %r = call i32 @clock_gettime(i32 0, ptr %ts)
+  call void @llvm.memset.p0.i64(ptr %ts, i8 0, i64 16, i1 false)
+  %r = call i32 @nz_os_clock(i32 0, ptr %ts)
   %s = load i64, ptr %ts
   %np = getelementptr i8, ptr %ts, i64 8
   %n = load i64, ptr %np
@@ -299,7 +312,7 @@ entry:
   %fd = trunc i64 %h to i32
   br label %try
 try:
-  %r = call i64 @read(i32 %fd, ptr %buf, i64 %n)
+  %r = call i64 @nz_net_read(i32 %fd, ptr %buf, i64 %n)
   %ok = icmp sge i64 %r, 0
   br i1 %ok, label %done, label %failed
 done:
@@ -444,16 +457,16 @@ fail:
   ret i64 %e
 bind:
   %l = trunc i64 %len to i32
-  %b = call i32 @bind(i32 %fd, ptr %sa, i32 %l)
+  %b = call i32 @nz_net_bind(i32 %fd, ptr %sa, i32 %l)
   %bfail = icmp slt i32 %b, 0
   br i1 %bfail, label %undo, label %listen
 listen:
-  %li = call i32 @listen(i32 %fd, i32 128)
+  %li = call i32 @nz_net_listen(i32 %fd)
   %lfail = icmp slt i32 %li, 0
   br i1 %lfail, label %undo, label %adopt
 undo:
   %ue = call i64 @nz.os_errno()
-  %c = call i32 @close(i32 %fd)
+  %c = call i32 @nz_os_close(i32 %fd)
   ret i64 %ue
 adopt:
   %h = call i64 @nz.os_adopt(i32 %fd, i64 5, ptr null)
@@ -478,7 +491,7 @@ start:
   %fd = trunc i64 %h to i32
   br label %try
 try:
-  %c = call i32 @accept(i32 %fd, ptr null, ptr null)
+  %c = call i32 @nz_net_accept(i32 %fd)
   %got = icmp sge i32 %c, 0
   br i1 %got, label %adopt, label %none
 adopt:
@@ -575,12 +588,12 @@ fail:
   ret i64 %e
 bind:
   %l = trunc i64 %len to i32
-  %b = call i32 @bind(i32 %fd, ptr %sa, i32 %l)
+  %b = call i32 @nz_net_bind(i32 %fd, ptr %sa, i32 %l)
   %bfail = icmp slt i32 %b, 0
   br i1 %bfail, label %undo, label %adopt
 undo:
   %ue = call i64 @nz.os_errno()
-  %c = call i32 @close(i32 %fd)
+  %c = call i32 @nz_os_close(i32 %fd)
   ret i64 %ue
 adopt:
   %h = call i64 @nz.os_adopt(i32 %fd, i64 6, ptr null)
@@ -656,7 +669,7 @@ start:
   br label %try
 try:
   store i32 128, ptr %slen
-  %r = call i64 @recvfrom(i32 %fd, ptr %buf, i64 %n, i32 0, ptr %sa, ptr %slen)
+  %r = call i64 @nz_net_recvfrom(i32 %fd, ptr %buf, i64 %n, ptr %sa, ptr %slen)
   %ok = icmp sge i64 %r, 0
   br i1 %ok, label %got, label %none
 got:
@@ -727,7 +740,7 @@ invalid:
 shut:
   %fd = trunc i64 %h to i32
   %w = trunc i64 %how to i32
-  %r = call i32 @shutdown(i32 %fd, i32 %w)
+  %r = call i32 @nz_net_shutdown(i32 %fd, i32 %w)
   %e = call i64 @nz.os_errno()
   call void @nz.os_unpin(i64 %h)
   %bad = icmp slt i32 %r, 0
@@ -762,10 +775,10 @@ ask:
   %fd = trunc i64 %h to i32
   br i1 %wantpeer, label %peerof, label %own
 peerof:
-  %rp = call i32 @getpeername(i32 %fd, ptr %sa, ptr %slen)
+  %rp = call i32 @nz_net_name(i32 %fd, i32 1, ptr %sa, ptr %slen)
   br label %asked
 own:
-  %ro = call i32 @getsockname(i32 %fd, ptr %sa, ptr %slen)
+  %ro = call i32 @nz_net_name(i32 %fd, i32 0, ptr %sa, ptr %slen)
   br label %asked
 asked:
   %r = phi i32 [ %rp, %peerof ], [ %ro, %own ]
@@ -803,8 +816,6 @@ ask:
 /// runs another ignores `SIGPIPE` from then on, as the interpreter's host always does, so writing to
 /// a child that has gone is `BrokenPipe` and never a signal.
 pub(crate) const PROCESS_RUNTIME: &str = r#"
-@.devnull = private unnamed_addr constant [10 x i8] c"/dev/null\00"
-
 ; A write to a pipe, pinned by the caller: the bytes the system took, waiting at most its deadline.
 define hidden i64 @nz.net_pipe_write(i64 %h, ptr %buf, i64 %n) {
 entry:
@@ -812,7 +823,7 @@ entry:
   %fd = trunc i64 %h to i32
   br label %try
 try:
-  %r = call i64 @write(i32 %fd, ptr %buf, i64 %n)
+  %r = call i64 @nz_net_write(i32 %fd, ptr %buf, i64 %n)
   %ok = icmp sge i64 %r, 0
   br i1 %ok, label %done, label %failed
 done:
@@ -834,9 +845,8 @@ stop:
 ; Run `program` with the arguments in `args` (a `Strs`): the child's handle, or -errno.
 define hidden i64 @nz.os_spawn(ptr %pp, i64 %pn, ptr %args) {
 entry:
-  %fa = alloca [256 x i8], align 16
-  %fds = alloca [6 x i32], align 4
-  %pid = alloca i32, align 4
+  %ends = alloca [3 x i32], align 4
+  %pid = alloca i64, align 8
   %prog = call ptr @nz.cstr(ptr %pp, i64 %pn)
   %noprog = icmp eq ptr %prog, null
   br i1 %noprog, label %oom, label %argv
@@ -872,47 +882,10 @@ terminate:
   %last = add i64 %count, 1
   %endp = getelementptr ptr, ptr %av, i64 %last
   store ptr null, ptr %endp
-  %in = getelementptr i32, ptr %fds, i64 0
-  %out = getelementptr i32, ptr %fds, i64 2
-  %err = getelementptr i32, ptr %fds, i64 4
-  %p0 = call i32 @pipe(ptr %in)
-  %p1 = call i32 @pipe(ptr %out)
-  %p2 = call i32 @pipe(ptr %err)
-  br label %cloexec
-cloexec:
-  %j = phi i64 [ 0, %terminate ], [ %j1, %cloexec ]
-  %fp = getelementptr i32, ptr %fds, i64 %j
-  %f = load i32, ptr %fp
-  %ce = call i32 (i32, i32, ...) @fcntl(i32 %f, i32 2, i32 1)
-  %j1 = add i64 %j, 1
-  %again = icmp slt i64 %j1, 6
-  br i1 %again, label %cloexec, label %actions
-actions:
-  %ai = call i32 @posix_spawn_file_actions_init(ptr %fa)
-  %in0p = getelementptr i32, ptr %fds, i64 0
-  %in0 = load i32, ptr %in0p
-  %in1p = getelementptr i32, ptr %fds, i64 1
-  %in1 = load i32, ptr %in1p
-  %out0p = getelementptr i32, ptr %fds, i64 2
-  %out0 = load i32, ptr %out0p
-  %out1p = getelementptr i32, ptr %fds, i64 3
-  %out1 = load i32, ptr %out1p
-  %err0p = getelementptr i32, ptr %fds, i64 4
-  %err0 = load i32, ptr %err0p
-  %err1p = getelementptr i32, ptr %fds, i64 5
-  %err1 = load i32, ptr %err1p
-  %d0 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %in0, i32 0)
-  %d1 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %out1, i32 1)
-  %d2 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %err1, i32 2)
-  %env = call ptr @nz_os_environ()
-  %r = call i32 @posix_spawnp(ptr %pid, ptr %prog, ptr %fa, ptr null, ptr %av, ptr %env)
-  %ad = call i32 @posix_spawn_file_actions_destroy(ptr %fa)
-  %c0 = call i32 @close(i32 %in0)
-  %c1 = call i32 @close(i32 %out1)
-  %c2 = call i32 @close(i32 %err1)
+  %r = call i32 @nz_os_spawn(ptr %pid, ptr %prog, ptr %av, ptr %ends)
   br label %free
 free:
-  %k = phi i64 [ 0, %actions ], [ %k1, %free ]
+  %k = phi i64 [ 0, %terminate ], [ %k1, %free ]
   %fsp = getelementptr ptr, ptr %av, i64 %k
   %fs = load ptr, ptr %fsp
   call void @free(ptr %fs)
@@ -924,21 +897,21 @@ freed:
   %failed = icmp ne i32 %r, 0
   br i1 %failed, label %undo, label %started
 undo:
-  %u0 = call i32 @close(i32 %in1)
-  %u1 = call i32 @close(i32 %out0)
-  %u2 = call i32 @close(i32 %err0)
   %rw = sext i32 %r to i64
   %neg = sub i64 0, %rw
   ret i64 %neg
 started:
-  %ign = inttoptr i64 1 to ptr
-  %old = call ptr @signal(i32 13, ptr %ign)
+  %in1p = getelementptr i32, ptr %ends, i64 0
+  %in1 = load i32, ptr %in1p
+  %out0p = getelementptr i32, ptr %ends, i64 1
+  %out0 = load i32, ptr %out0p
+  %err0p = getelementptr i32, ptr %ends, i64 2
+  %err0 = load i32, ptr %err0p
   %q0 = call i32 @nz_net_prepare(i32 %in1)
   %q1 = call i32 @nz_net_prepare(i32 %out0)
   %q2 = call i32 @nz_net_prepare(i32 %err0)
   %rec = call ptr @malloc(i64 64)
-  %pidv = load i32, ptr %pid
-  %pidw = sext i32 %pidv to i64
+  %pidw = load i64, ptr %pid
   store i64 %pidw, ptr %rec
   %stp = getelementptr i8, ptr %rec, i64 8
   store i64 -1, ptr %stp
@@ -951,7 +924,7 @@ started:
   store i64 %hout, ptr %houtp
   %herrp = getelementptr i8, ptr %rec, i64 32
   store i64 %herr, ptr %herrp
-  %key = call i32 @nz_os_open(ptr @.devnull, i64 -1)
+  %key = call i32 @nz_os_key()
   %h = call i64 @nz.os_adopt(i32 %key, i64 8, ptr %rec)
   ret i64 %h
 }
@@ -1010,7 +983,6 @@ pick:
 ; The child's exit: its code, or 256 and the signal that ended it; the same every time.
 define hidden i64 @nz.os_wait(i64 %h) {
 entry:
-  %st = alloca i32, align 4
   %live = call i64 @nz.os_status(i64 %h)
   %dead = icmp slt i64 %live, 0
   br i1 %dead, label %failed, label %look
@@ -1031,28 +1003,14 @@ again:
   call void @nz.os_unpin(i64 %h)
   ret i64 %was
 wait:
-  %pidw = load i64, ptr %rec
-  %pid = trunc i64 %pidw to i32
-  %r = call i32 @waitpid(i32 %pid, ptr %st, i32 0)
-  %bad = icmp slt i32 %r, 0
-  br i1 %bad, label %error, label %decode
-error:
-  %e = call i64 @nz.os_errno()
-  %intr = icmp eq i64 %e, -4
-  br i1 %intr, label %wait, label %give
+  %pid = load i64, ptr %rec
+  %out = call i64 @nz_os_reap(i64 %pid)
+  %bad = icmp slt i64 %out, 0
+  br i1 %bad, label %give, label %decode
 give:
   call void @nz.os_unpin(i64 %h)
-  ret i64 %e
+  ret i64 %out
 decode:
-  %s = load i32, ptr %st
-  %sig = and i32 %s, 127
-  %exited = icmp eq i32 %sig, 0
-  %hi = lshr i32 %s, 8
-  %code = and i32 %hi, 255
-  %codew = zext i32 %code to i64
-  %sigw = zext i32 %sig to i64
-  %bysig = add i64 %sigw, 256
-  %out = select i1 %exited, i64 %codew, i64 %bysig
   store i64 %out, ptr %stp
   call void @nz.os_unpin(i64 %h)
   ret i64 %out
@@ -1080,9 +1038,8 @@ already:
   call void @nz.os_unpin(i64 %h)
   ret i64 0
 kill:
-  %pidw = load i64, ptr %rec
-  %pid = trunc i64 %pidw to i32
-  %r = call i32 @kill(i32 %pid, i32 9)
+  %pid = load i64, ptr %rec
+  %r = call i32 @nz_os_terminate(i64 %pid)
   %e = call i64 @nz.os_errno()
   call void @nz.os_unpin(i64 %h)
   %bad = icmp slt i32 %r, 0

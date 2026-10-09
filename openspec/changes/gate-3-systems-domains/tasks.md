@@ -5,7 +5,7 @@
 ## 2. Hosts
 
 - [ ] 2.1 Linux x86_64 execution; prebuilt archives; clean installs (3B)
-- [ ] 2.2 Windows x86_64: constitution, Win32 runtime port, evidence under Wine (3C)
+- [x] 2.2 Windows x86_64: constitution, Win32 runtime port, evidence under Wine (3C); real Windows host execution carried to final v1
 
 ## 3. Systems, embedded, realtime
 

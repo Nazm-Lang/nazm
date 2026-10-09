@@ -1,0 +1,14 @@
+read: hello
+world
+
+size 12
+made d
+x.txt,y.txt
+renamed over
+y.txt
+full: DirectoryNotEmpty
+removed y
+removed d
+missing: NotFound
+entropy 16
+0

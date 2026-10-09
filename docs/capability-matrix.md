@@ -4365,6 +4365,27 @@ new `cargo xtask contained archive`, installed in a clean Debian container with 
 in the link step; it now says the toolchain or its environment failed
 (`a_toolchain_environment_failure_is_not_blamed_on_the_ir`).
 
+**Gate 3C (2026-10-10)** · *Windows x86_64* (`spec.md` *Windows x86_64*; `systems-domains.md` Part
+A-W). `x86_64-pc-windows-gnu`, built to objects and `link.txt` for MinGW-w64's `gcc` (`-static`,
+`-lws2_32`, `-lbcrypt`), by both backends. The runtime reaches the system only through its platform
+layer — the `os`, `stack` and (Windows) `init` units, runtime ABI 21 — so the Windows port is a
+third binding of each function, never a branch in the runtime: the Win64 context switch (the TIB's
+stack bounds, `xmm6`–`xmm15`), task stacks by `VirtualAlloc` with a `VirtualProtect` guard, UTF-16
+files and directories, Winsock with a `WSAPoll` reactor of epoll's one-shot meaning and pipes
+checked by `PeekNamedPipe`, children by `CreateProcessW` with quoted command lines, the clocks by
+`QueryPerformanceCounter` and `GetSystemTimePreciseAsFileTime`, entropy by `BCryptGenRandom`, the
+arguments as UTF-8 through `__wgetmainargs`; Windows' errors are translated to Linux's numbers at
+the boundary, so the library's one mapping serves every target. A DLL is refused by name.
+**Run-verified under Wine** (Wine 8 in a Debian x86_64 container, `docker/wine.Dockerfile`; never a
+Windows host): `windows.rs`'s ignored tests — the 20 conformance programs, and files, TCP and UDP,
+the reactor waking a closed socket's waiter, a peer gone as an error, processes and pipes, the
+clocks, a waiting task releasing the only worker (socket, sleep and pipe), UTF-8 arguments, a trap
+(`N0400`) and an exhausted stack on a thread and in a task (`N0408`), each agreeing with the native
+run, by both backends. Two differences, stated in the spec: `os_family()` is 2, and `os_kill` ends a
+child with exit code 1. Found on the way: an IR string carried a literal NUL byte (now `\00`).
+**Not done**: execution on a real Windows host (a final-v1 qualification item), a DLL, the MSVC
+environment, Windows ARM64, a prebuilt toolchain for a Windows host.
+
 **Evidence** · Two verified targets: `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`
 (the latter inside `docker/contained.Dockerfile`). The emitter states its own scope, and
 `crates/nazm-cli/tests/docs.rs` asserts the documented target and the emitter agree.
@@ -4425,6 +4446,7 @@ to be the one the C compiler driver resolves for the triple.
 | `x86_64-apple-darwin` | run-verified | run-verified | penryn / x86-64 baseline (SSE2) | not exercised |
 | `aarch64-unknown-linux-gnu` | run-verified | run-verified | generic / aarch64 baseline | gdb, live, both backends |
 | `x86_64-unknown-linux-gnu` | compile-only | compile-only | x86-64 / x86-64 baseline (SSE2) | not exercised |
+| `x86_64-pc-windows-gnu` | run-verified under Wine | run-verified under Wine | x86-64 / x86-64 baseline (SSE2) | not exercised |
 | `aarch64-unknown-none` | run-verified | unsupported | generic / none | not exercised |
 | `riscv64gc-unknown-none-elf` | run-verified | unsupported | generic-rv64 / none | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | generic / none | DWARF present, not exercised |
@@ -4433,15 +4455,18 @@ Run-verified means programs built for the target ran and agreed with the interpr
 under Rosetta, in the Linux image, under QEMU, under Node — each cell's test is named in the table in
 code. `x86_64-unknown-linux-gnu` is compile-only: no x86_64 Linux machine or image is here. A
 freestanding target is unsupported by Cranelift, whose object writer has no format for it, and
-WebAssembly by this Cranelift build. **Non-goals, by decision**: Windows (no linker, SDK or machine
-here; no runtime port), 32-bit hosted targets (`Int` is 64-bit and hosted layouts assume 64-bit
+WebAssembly by this Cranelift build. `x86_64-pc-windows-gnu` is run-verified **under Wine**: Gate
+3C's evidence, from Wine in a Linux container, never from a Windows host. **Non-goals, by
+decision**: Windows with Microsoft's toolchain and Windows ARM64 (no Microsoft SDK or C runtime is
+accepted here, and no ARM64 Windows machine is here), 32-bit hosted targets (`Int` is 64-bit and hosted layouts assume 64-bit
 pointers), big-endian targets (nothing here runs one; layouts and the DWARF writer assume
 little-endian). The CPU of an LLVM object is the driver's default for its triple, recorded and
 checked, not pinned by a flag — and the driver's own: the recorded CPUs are Apple clang 21's, and the
 Linux image's clang 19 resolves `core2` for `x86_64-apple-darwin` (found by N100's gate), so the check
 runs against Apple clang only. Cranelift detects nothing of the building host.
 
-**Limitation** · No Windows, 32-bit, big-endian or CPU-feature targets; no bundled linker or
+**Limitation** · No Windows host has run anything (Wine only), no MSVC or Windows ARM64; no 32-bit,
+big-endian or CPU-feature targets; no bundled linker or
 sysroot, so a Linux target from macOS is objects only; cross-host byte reproducibility not
 measured.
 

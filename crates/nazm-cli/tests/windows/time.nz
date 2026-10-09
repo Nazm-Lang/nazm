@@ -1,0 +1,16 @@
+use "@std/time";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn main(t: TimeCap, out: OutCap) -> Int {
+let start = time_now(t);
+time_sleep(t, time_duration_ms(25));
+let d = time_elapsed(t, start);
+line(out, if time_duration_to_ms(d) >= 25 && time_duration_to_ms(d) < 5000 { "slept at least 25 ms" } else { int_to_str(d.nanos) });
+let deadline = time_after(t, time_duration_ms(10));
+line(out, if time_reached(t, deadline) { "too soon" } else { "not yet" });
+time_sleep_ms(15);
+line(out, if time_reached(t, deadline) { "reached" } else { "not reached" });
+line(out, if time_wall(t).unix_nanos > 1700000000000000000 { "after 2023" } else { "before" });
+line(out, int_to_str(time_duration_to_ms(time_duration_add(time_duration_ms(2), time_duration_ns(3000000)))));
+line(out, int_to_str(time_sleep_ms(0 - 5)));
+0
+}

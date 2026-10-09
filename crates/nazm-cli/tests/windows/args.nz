@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int { let mut i = 0; while i < args_count() { print(str_concat(str_concat("<", arg(i)), ">\n")); i = i + 1; } args_count() }
