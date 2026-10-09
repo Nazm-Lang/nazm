@@ -256,7 +256,14 @@ use crate::digest::{self, Framed};
 /// `40` — Gate 2, 2026-10-09. Randomness: `RandomCap` and `os_random_bytes` moved from refused
 /// to accepted, the names from a program's own to the language's (`N0331`, `N0203`); `Type::ALL`
 /// gained `RandomCap`.
-pub const SEMANTIC_EPOCH: u32 = 40;
+/// `41` — Gate 2, 2026-10-09. The C foundation: an export taking or returning a fixed-width
+/// integer or a float moved from refused (`N0391`) to accepted.
+/// `42` — Gate 2, 2026-10-09. Attributes and conditional compilation: `@` and an attribute before
+/// a top-level declaration moved from refused (the lexer's unknown character) to accepted, held to
+/// a closed vocabulary (`N0619`); a declaration whose `@cfg` does not hold for the build is not
+/// there, so two of one name under exclusive conditions are no longer a duplicate. A cached check
+/// from epoch 41 refused programs this one accepts.
+pub const SEMANTIC_EPOCH: u32 = 42;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -274,6 +281,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "ARRAY_INDEX",
     "ARRAY_TOO_LARGE",
     "ASSIGN_TO_IMMUTABLE",
+    "ATTRIBUTE",
     "BRANCH_TYPES_DIFFER",
     "BUILTIN_TYPE_REDEFINED",
     "CALLBACK_NOT_EXPORT",

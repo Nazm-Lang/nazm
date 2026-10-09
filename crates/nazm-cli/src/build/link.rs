@@ -239,12 +239,22 @@ fn archive(output: &Path, objects: &[PathBuf]) -> Outcome {
 
 /// A library's C header (N55): every export, by symbol, in `<stdint.h>` and `<stdbool.h>` types.
 fn c_header(output: &Path, exported: &[(String, Vec<nazm_lir::Ty>, nazm_lir::Ty)]) -> String {
-    let c = |t: &nazm_lir::Ty| {
-        if *t == nazm_lir::Ty::Bool {
-            "bool"
-        } else {
-            "int64_t"
-        }
+    let c = |t: &nazm_lir::Ty| match t {
+        nazm_lir::Ty::Bool => "bool",
+        // Every number's C type (Gate 2, §23).
+        nazm_lir::Ty::Num(k) => match k {
+            nazm_core::sema::NumKind::I8 => "int8_t",
+            nazm_core::sema::NumKind::I16 => "int16_t",
+            nazm_core::sema::NumKind::I32 => "int32_t",
+            nazm_core::sema::NumKind::U8 => "uint8_t",
+            nazm_core::sema::NumKind::U16 => "uint16_t",
+            nazm_core::sema::NumKind::U32 => "uint32_t",
+            nazm_core::sema::NumKind::U64 => "uint64_t",
+            nazm_core::sema::NumKind::F32 => "float",
+            nazm_core::sema::NumKind::F64 => "double",
+            nazm_core::sema::NumKind::I64 => "int64_t",
+        },
+        _ => "int64_t",
     };
     let stem: String = output
         .file_stem()

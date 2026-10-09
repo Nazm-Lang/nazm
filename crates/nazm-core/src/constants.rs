@@ -21,15 +21,25 @@ use nazm_syntax::{BinOp, Const, Expr};
 #[derive(Debug, Default, Clone)]
 pub struct Constants {
     pub values: HashMap<String, (Type, ConstValue)>,
+    /// Where each constant is declared, by its name: the first declaration's name.
+    pub decls: HashMap<String, nazm_span::Span>,
+    /// Every constant named in another's value, by the name's span (Gate 2): references the
+    /// index records, so renaming a constant reaches them.
+    pub refs: Vec<(nazm_span::Span, String)>,
 }
 
 /// Compute every constant of a module, refusing what cannot be computed.
 pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
     let by_name: HashMap<&str, &Const> = decls.iter().map(|c| (c.name.as_str(), *c)).collect();
+    let mut decl_spans: HashMap<String, nazm_span::Span> = HashMap::new();
+    for c in decls {
+        decl_spans.entry(c.name.clone()).or_insert(c.name_span);
+    }
     let mut ev = Evaluator {
         decls: by_name,
         done: HashMap::new(),
         active: Vec::new(),
+        refs: Vec::new(),
         errors,
     };
     for c in decls {
@@ -67,13 +77,21 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
         }
         ev.constant(&c.name);
     }
-    Constants { values: ev.done }
+    let mut refs = ev.refs;
+    refs.sort_by_key(|(s, _)| (s.file, s.start));
+    refs.dedup();
+    Constants {
+        values: ev.done,
+        decls: decl_spans,
+        refs,
+    }
 }
 
 struct Evaluator<'a, 'e> {
     decls: HashMap<&'a str, &'a Const>,
     done: HashMap<String, (Type, ConstValue)>,
     active: Vec<String>,
+    refs: Vec<(nazm_span::Span, String)>,
     errors: &'e mut Vec<Diagnostic>,
 }
 
@@ -178,11 +196,18 @@ impl Evaluator<'_, '_> {
             }
             Expr::Bool { value, .. } => Ok(ConstValue::Bool(*value)),
             Expr::Str { value, .. } => Ok(ConstValue::Str(value.clone().into_bytes())),
-            Expr::Var { name, span } => match self.constant(name) {
-                Some((_, v)) => Ok(v),
-                None if self.decls.contains_key(name.as_str()) => Err(Refused),
-                None => Err(self.refuse(*span, &format!("name `{name}`, which is not a constant"))),
-            },
+            Expr::Var { name, span } => {
+                if self.decls.contains_key(name.as_str()) {
+                    self.refs.push((*span, name.clone()));
+                }
+                match self.constant(name) {
+                    Some((_, v)) => Ok(v),
+                    None if self.decls.contains_key(name.as_str()) => Err(Refused),
+                    None => {
+                        Err(self.refuse(*span, &format!("name `{name}`, which is not a constant")))
+                    }
+                }
+            }
             Expr::Neg { operand, span, .. } => {
                 if let Expr::Int { value, span: lit } = operand.as_ref() {
                     if want.is_some_and(|k| k != NumKind::I64 && k.is_integer()) {

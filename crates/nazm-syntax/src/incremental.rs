@@ -702,9 +702,57 @@ impl Item {
     }
 }
 
+impl Shift for crate::ast::Attribute {
+    fn shift(&mut self, file: FileId, by: i64) {
+        let Self {
+            name: _,
+            name_span,
+            args,
+            span,
+        } = self;
+        name_span.shift(file, by);
+        if let Some(args) = args {
+            for a in args {
+                a.shift(file, by);
+            }
+        }
+        span.shift(file, by);
+    }
+}
+
+impl Shift for crate::ast::AttrArg {
+    fn shift(&mut self, file: FileId, by: i64) {
+        match self {
+            Self::Str { value: _, span } | Self::Word { name: _, span } => span.shift(file, by),
+            Self::Pair {
+                key: _,
+                key_span,
+                value: _,
+                span,
+            } => {
+                key_span.shift(file, by);
+                span.shift(file, by);
+            }
+            Self::Call {
+                name: _,
+                name_span,
+                args,
+                span,
+            } => {
+                name_span.shift(file, by);
+                for a in args {
+                    a.shift(file, by);
+                }
+                span.shift(file, by);
+            }
+        }
+    }
+}
+
 impl Shift for crate::ast::Const {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
+            attrs,
             name: _,
             name_span,
             pub_span,
@@ -712,6 +760,7 @@ impl Shift for crate::ast::Const {
             value,
             span,
         } = self;
+        attrs.shift(file, by);
         name_span.shift(file, by);
         pub_span.shift(file, by);
         ty.shift(file, by);
@@ -723,12 +772,14 @@ impl Shift for crate::ast::Const {
 impl Shift for crate::ast::Trait {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
+            attrs,
             name: _,
             name_span,
             pub_span,
             methods,
             span,
         } = self;
+        attrs.shift(file, by);
         name_span.shift(file, by);
         pub_span.shift(file, by);
         methods.shift(file, by);
@@ -757,11 +808,13 @@ impl Shift for crate::ast::TraitMethod {
 impl Shift for crate::ast::ImplDecl {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
+            attrs,
             trait_name,
             self_ty,
             impl_span,
             span,
         } = self;
+        attrs.shift(file, by);
         trait_name.shift(file, by);
         self_ty.shift(file, by);
         impl_span.shift(file, by);
@@ -816,6 +869,7 @@ impl Shift for Qualifier {
 impl Shift for Record {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
+            attrs,
             name: _,
             name_span,
             pub_span,
@@ -824,6 +878,7 @@ impl Shift for Record {
             foreign,
             span,
         } = self;
+        attrs.shift(file, by);
         name_span.shift(file, by);
         pub_span.shift(file, by);
         type_params.shift(file, by);
@@ -852,6 +907,7 @@ impl Shift for Field {
 impl Shift for Enum {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
+            attrs,
             name: _,
             name_span,
             pub_span,
@@ -859,6 +915,7 @@ impl Shift for Enum {
             variants,
             span,
         } = self;
+        attrs.shift(file, by);
         name_span.shift(file, by);
         pub_span.shift(file, by);
         type_params.shift(file, by);
@@ -884,6 +941,7 @@ impl Shift for Variant {
 impl Shift for Function {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
+            attrs,
             name: _,
             name_span,
             pub_span,
@@ -899,6 +957,7 @@ impl Shift for Function {
             method_of,
             span,
         } = self;
+        attrs.shift(file, by);
         name_span.shift(file, by);
         pub_span.shift(file, by);
         type_params.shift(file, by);

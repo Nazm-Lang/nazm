@@ -517,6 +517,9 @@ fn wasm_build(
             timings: false,
             debug: false,
             runtime: None,
+            profile: Some("web3"),
+            harness: None,
+            features: &[],
         },
     );
     if built != ExitCode::SUCCESS {

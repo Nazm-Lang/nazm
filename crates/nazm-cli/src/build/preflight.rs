@@ -180,7 +180,7 @@ pub(super) fn admitted(
     summary: bool,
     summarized: &Summarize<'_>,
 ) -> Result<(nazm_service::load::Loaded, PathBuf), ExitCode> {
-    let loaded = match crate::load::load(input, source_root.path()) {
+    let mut loaded = match crate::harness::loaded(input, source_root.path(), choice.harness) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             let code = exit::load_status(&diagnostics);
@@ -202,6 +202,11 @@ pub(super) fn admitted(
             return Err(ExitCode::from(code));
         }
     };
+    // `@cfg` is decided for the target built for, under the profiles held (Gate 2, §17), with
+    // each package's features (§22).
+    let config =
+        crate::profile::configuration(input, choice.profile, choice.target, choice.features)?;
+    loaded.graph = std::mem::take(&mut loaded.graph).with_config(config);
     let map = &loaded.map;
     let output = match out {
         Some(p) => p.to_path_buf(),

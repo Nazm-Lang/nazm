@@ -1,0 +1,197 @@
+// jsonpipe: a JSON-lines filter and aggregator over files (Gate 2 reference application, §24).
+//
+//     jsonpipe [--min-status N] FILE...
+//
+// Each line of each file is one JSON object with `"user"` (a string), `"bytes"` and `"status"`
+// (integers). A record whose status is at least N (default 0) is kept, and the kept records are
+// totalled per user. The output is one JSON object per user, sorted by name, then one summary
+// object. A line that is not such a record is rejected — named by file and line on standard error,
+// and counted in the summary — and the rest are still read. A blank line is skipped.
+
+use "@std/json";
+use "@std/hash";
+use "@std/hashmap";
+use "@std/fs";
+use "@std/sort";
+use "@std/io";
+use "@std/text";
+
+struct Tally {
+    requests: Int,
+    bytes: Int,
+}
+
+struct Record {
+    user: Str,
+    bytes: Int,
+    status: Int,
+}
+
+/// `xs` as a `Strs`, for the library's string functions.
+fn strs_of(xs: Vec[Str]) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < vec_len(xs) {
+        strs_push(out, vec_get(xs, i));
+        i = i + 1;
+    }
+    out
+}
+
+fn field_int(doc: JsonDoc, obj: Int, key: Str) -> Option[Int] !{} {
+    match json_get(doc, obj, key) {
+        Option.Some(value: n) => json_int(doc, n),
+        Option.None() => Option[Int].None(),
+    }
+}
+
+fn field_str(doc: JsonDoc, obj: Int, key: Str) -> Option[Str] !{} {
+    match json_get(doc, obj, key) {
+        Option.Some(value: n) => json_str(doc, n),
+        Option.None() => Option[Str].None(),
+    }
+}
+
+/// The record a line holds, or why it holds none.
+fn record(line: Str) -> Result[Record, Str] !{} {
+    let doc = match json_parse(line) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => {
+            return Result[Record, Str].Err(error: e);
+        },
+    };
+    let root = json_root(doc);
+    let user = match field_str(doc, root, "user") {
+        Option.Some(value: u) => u,
+        Option.None() => {
+            return Result[Record, Str].Err(error: "no string \"user\"");
+        },
+    };
+    let bytes = match field_int(doc, root, "bytes") {
+        Option.Some(value: b) => b,
+        Option.None() => {
+            return Result[Record, Str].Err(error: "no integer \"bytes\"");
+        },
+    };
+    let status = match field_int(doc, root, "status") {
+        Option.Some(value: s) => s,
+        Option.None() => {
+            return Result[Record, Str].Err(error: "no integer \"status\"");
+        },
+    };
+    Result[Record, Str].Ok(value: Record(user: user, bytes: bytes, status: status))
+}
+
+fn object(names: Strs, values: Ints, user: Str) -> Str ! {} {
+    let doc = json_new();
+    let nodes = ints_new();
+    if str_len(user) > 0 {
+        ints_push(nodes, json_add_str(doc, user));
+    }
+    let mut i = 0;
+    while i < ints_len(values) {
+        ints_push(nodes, json_add_int(doc, ints_get(values, i)));
+        i = i + 1;
+    }
+    let node = json_add_object(doc, names, nodes);
+    json_encode(json_with_root(doc, node))
+}
+
+fn main(io: IoCap) -> Int {
+    let mut min_status = 0;
+    let files = strs_new();
+    let mut i = 0;
+    while i < args_count() {
+        let a = arg(i);
+        if a == "--min-status" && i + 1 < args_count() {
+            min_status = match text_parse_int(arg(i + 1)) {
+                Result.Ok(value: n) => n,
+                Result.Err(error: e) => {
+                    io_eprintln(io, str_concat("jsonpipe: --min-status: ", e));
+                    return exit_with(2);
+                },
+            };
+            i = i + 2;
+        } else {
+            strs_push(files, a);
+            i = i + 1;
+        }
+    }
+
+    let totals = hashmap_new[Str, Tally]();
+    let mut read = 0;
+    let mut kept = 0;
+    let mut rejected = 0;
+    let mut f = 0;
+    while f < strs_len(files) {
+        let name = strs_get(files, f);
+        match fs_read_lines(io, name) {
+            Result.Ok(value: lines) => {
+                let mut n = 0;
+                while n < strs_len(lines) {
+                    let line = text_trim(strs_get(lines, n));
+                    if str_len(line) > 0 {
+                        read = read + 1;
+                        match record(line) {
+                            Result.Ok(value: r) => {
+                                if r.status >= min_status {
+                                    kept = kept + 1;
+                                    let before = match hashmap_get(totals, r.user) {
+                                        Option.Some(value: t) => t,
+                                        Option.None() => Tally(requests: 0, bytes: 0),
+                                    };
+                                    hashmap_set(totals, r.user, Tally(requests: before.requests + 1, bytes: before.bytes + r.bytes));
+                                }
+                            },
+                            Result.Err(error: e) => {
+                                rejected = rejected + 1;
+                                io_eprintln(io, str_concat(str_concat(str_concat(str_concat(name, ":"), int_to_str(n + 1)), ": "), e));
+                            },
+                        };
+                    }
+                    n = n + 1;
+                }
+            },
+            Result.Err(error: e) => {
+                io_eprintln(io, str_concat("jsonpipe: ", e));
+                return exit_with(1);
+            },
+        };
+        f = f + 1;
+    }
+
+    let users = strs_sort(strs_of(hashmap_keys(totals)));
+    let names = strs_new();
+    strs_push(names, "user");
+    strs_push(names, "requests");
+    strs_push(names, "bytes");
+    let mut total_bytes = 0;
+    let mut u = 0;
+    while u < strs_len(users) {
+        let user = strs_get(users, u);
+        let t = match hashmap_get(totals, user) {
+            Option.Some(value: t) => t,
+            Option.None() => Tally(requests: 0, bytes: 0),
+        };
+        total_bytes = total_bytes + t.bytes;
+        let values = ints_new();
+        ints_push(values, t.requests);
+        ints_push(values, t.bytes);
+        io_println(io, object(names, values, user));
+        u = u + 1;
+    }
+    let summary = strs_new();
+    strs_push(summary, "read");
+    strs_push(summary, "kept");
+    strs_push(summary, "rejected");
+    strs_push(summary, "users");
+    strs_push(summary, "bytes");
+    let values = ints_new();
+    ints_push(values, read);
+    ints_push(values, kept);
+    ints_push(values, rejected);
+    ints_push(values, strs_len(users));
+    ints_push(values, total_bytes);
+    io_println(io, object(summary, values, ""));
+    0
+}

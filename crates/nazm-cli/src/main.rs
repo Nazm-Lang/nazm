@@ -36,6 +36,7 @@ mod accel;
 mod apidoc;
 mod attest;
 mod backend;
+mod bench;
 mod bindgen;
 mod build;
 mod capabilities;
@@ -52,6 +53,7 @@ mod exit;
 mod explain;
 mod fix;
 mod fmt;
+mod harness;
 mod init;
 mod inspect;
 mod interface;
@@ -188,12 +190,18 @@ fn dispatch(command: Command) -> ExitCode {
             timings,
             debug,
             runtime,
+            selection,
             locked: _,
             profile,
             provenance,
             attest_with,
             sbom,
         } => {
+            let harness = match harness::parsed(selection.harness.as_deref()) {
+                Ok(h) => h,
+                Err(code) => return code,
+            };
+            let features = selection.features;
             let built = build::run(
                 &file,
                 out.as_deref(),
@@ -217,6 +225,9 @@ fn dispatch(command: Command) -> ExitCode {
                     timings,
                     debug,
                     runtime: runtime.as_deref(),
+                    profile: profile.as_deref(),
+                    harness: harness.as_ref(),
+                    features: &features,
                 },
             );
             if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {
@@ -251,7 +262,8 @@ fn dispatch(command: Command) -> ExitCode {
             cache_report,
             summary_json,
             locked: _,
-            profile: _,
+            profile,
+            features,
             profile_report: _,
         } => checking::run(
             &file,
@@ -260,6 +272,8 @@ fn dispatch(command: Command) -> ExitCode {
             !no_cache,
             cache_report,
             summary_json,
+            profile.as_deref(),
+            &features,
         ),
         Command::Fix { file, apply, json } => fix::run(&file, apply, json),
         Command::Interface {
@@ -487,7 +501,21 @@ fn dispatch(command: Command) -> ExitCode {
             json,
             interpret_only,
             summary_json,
-        } => test::run(&paths, json, interpret_only, summary_json),
+            filter,
+            fuzz,
+        } => test::run(
+            &paths,
+            json,
+            interpret_only,
+            summary_json,
+            filter.as_deref(),
+            fuzz,
+        ),
+        Command::Bench {
+            paths,
+            iterations,
+            json,
+        } => bench::run(&paths, iterations, json),
         Command::Run {
             file,
             args,
@@ -495,16 +523,27 @@ fn dispatch(command: Command) -> ExitCode {
             max_iterations,
             max_depth,
             locked: _,
-            profile: _,
-        } => run(
-            &file,
-            json,
-            nazm_core::eval::Limits {
-                max_iterations,
-                max_depth,
-            },
-            args,
-        ),
+            profile,
+            harness,
+            features,
+        } => {
+            let harness = match harness::parsed(harness.as_deref()) {
+                Ok(h) => h,
+                Err(code) => return code,
+            };
+            run(
+                &file,
+                json,
+                nazm_core::eval::Limits {
+                    max_iterations,
+                    max_depth,
+                },
+                args,
+                profile.as_deref(),
+                harness.as_ref(),
+                &features,
+            )
+        }
     }
 }
 

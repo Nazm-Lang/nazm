@@ -1,0 +1,173 @@
+// nbody: the Jovian planets around the Sun, integrated with a fixed step (Gate 2 reference
+// application, §24).
+//
+//     nbody [STEPS]
+//
+// The classic benchmark's system and method: five bodies, positions in astronomical units,
+// velocities in AU per year scaled by 365.24, masses in solar masses times 4π², the Sun's momentum
+// offset so the system's is zero, and a symplectic Euler step of 0.01 years. It prints the total
+// energy before and after STEPS steps (default 1000) to nine decimal places. Every operation is
+// `+ - * /` and `float_sqrt`, each correctly rounded, so every implementation prints the same digits.
+
+use "@std/fmt";
+use "@std/text";
+
+struct System {
+    x: Vec[Float64],
+    y: Vec[Float64],
+    z: Vec[Float64],
+    vx: Vec[Float64],
+    vy: Vec[Float64],
+    vz: Vec[Float64],
+    mass: Vec[Float64],
+}
+
+fn solar_mass() -> Float64 ! {} {
+    let pi = Float64(3.141592653589793);
+    Float64(4.0) * pi * pi
+}
+
+fn days_per_year() -> Float64 ! {} {
+    Float64(365.24)
+}
+
+fn add(s: System, x: Float64, y: Float64, z: Float64, vx: Float64, vy: Float64, vz: Float64, mass: Float64) -> Int ! {} {
+    let d = days_per_year();
+    vec_push(s.x, x);
+    vec_push(s.y, y);
+    vec_push(s.z, z);
+    vec_push(s.vx, vx * d);
+    vec_push(s.vy, vy * d);
+    vec_push(s.vz, vz * d);
+    vec_push(s.mass, mass * solar_mass());
+    0
+}
+
+fn system() -> System ! {} {
+    let s = System(
+            x: vec_new[Float64](), y: vec_new[Float64](), z: vec_new[Float64](),
+            vx: vec_new[Float64](), vy: vec_new[Float64](), vz: vec_new[Float64](),
+            mass: vec_new[Float64](),
+            );
+    // The Sun, then Jupiter, Saturn, Uranus and Neptune.
+    add(s, Float64(0.0), Float64(0.0), Float64(0.0), Float64(0.0), Float64(0.0), Float64(0.0), Float64(1.0));
+    add(s, Float64(4.84143144246472090), Float64(-1.16032004402742839), Float64(-0.103622044471123109),
+            Float64(0.00166007664274403694), Float64(0.00769901118419740425), Float64(-0.0000690460016972063023),
+            Float64(0.000954791938424326609));
+    add(s, Float64(8.34336671824457987), Float64(4.12479856412430479), Float64(-0.403523417114321381),
+            Float64(-0.00276742510726862411), Float64(0.00499852801234917238), Float64(0.0000230417297573763929),
+            Float64(0.000285885980666130812));
+    add(s, Float64(12.8943695621391310), Float64(-15.1111514016986312), Float64(-0.223307578892655734),
+            Float64(0.00296460137564761618), Float64(0.00237847173959480950), Float64(-0.0000296589568540237556),
+            Float64(0.0000436624404335156298));
+    add(s, Float64(15.3796971148509165), Float64(-25.9193146099879641), Float64(0.179258772950371181),
+            Float64(0.00268067772490389322), Float64(0.00162824170038242295), Float64(-0.0000951592254519715870),
+            Float64(0.0000515138902046611451));
+    offset_momentum(s);
+    s
+}
+
+/// The Sun's velocity set so the system's momentum is zero.
+fn offset_momentum(s: System) -> Int ! {} {
+    let mut px = Float64(0.0);
+    let mut py = Float64(0.0);
+    let mut pz = Float64(0.0);
+    let mut i = 0;
+    while i < vec_len(s.mass) {
+        let m = vec_get(s.mass, i);
+        px = px + vec_get(s.vx, i) * m;
+        py = py + vec_get(s.vy, i) * m;
+        pz = pz + vec_get(s.vz, i) * m;
+        i = i + 1;
+    }
+    let sun = solar_mass();
+    vec_set(s.vx, 0, Float64(0.0) - px / sun);
+    vec_set(s.vy, 0, Float64(0.0) - py / sun);
+    vec_set(s.vz, 0, Float64(0.0) - pz / sun);
+    0
+}
+
+fn energy(s: System) -> Float64 ! {} {
+    let n = vec_len(s.mass);
+    let mut e = Float64(0.0);
+    let mut i = 0;
+    while i < n {
+        let m = vec_get(s.mass, i);
+        let vx = vec_get(s.vx, i);
+        let vy = vec_get(s.vy, i);
+        let vz = vec_get(s.vz, i);
+        e = e + Float64(0.5) * m * (vx * vx + vy * vy + vz * vz);
+        let mut j = i + 1;
+        while j < n {
+            let dx = vec_get(s.x, i) - vec_get(s.x, j);
+            let dy = vec_get(s.y, i) - vec_get(s.y, j);
+            let dz = vec_get(s.z, i) - vec_get(s.z, j);
+            e = e - m * vec_get(s.mass, j) / float_sqrt(dx * dx + dy * dy + dz * dz);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    e
+}
+
+fn advance(s: System, dt: Float64) -> Int ! {} {
+    let n = vec_len(s.mass);
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n {
+            let dx = vec_get(s.x, i) - vec_get(s.x, j);
+            let dy = vec_get(s.y, i) - vec_get(s.y, j);
+            let dz = vec_get(s.z, i) - vec_get(s.z, j);
+            let d2 = dx * dx + dy * dy + dz * dz;
+            let mag = dt / (d2 * float_sqrt(d2));
+            let mi = vec_get(s.mass, i) * mag;
+            let mj = vec_get(s.mass, j) * mag;
+            vec_set(s.vx, i, vec_get(s.vx, i) - dx * mj);
+            vec_set(s.vy, i, vec_get(s.vy, i) - dy * mj);
+            vec_set(s.vz, i, vec_get(s.vz, i) - dz * mj);
+            vec_set(s.vx, j, vec_get(s.vx, j) + dx * mi);
+            vec_set(s.vy, j, vec_get(s.vy, j) + dy * mi);
+            vec_set(s.vz, j, vec_get(s.vz, j) + dz * mi);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    let mut k = 0;
+    while k < n {
+        vec_set(s.x, k, vec_get(s.x, k) + dt * vec_get(s.vx, k));
+        vec_set(s.y, k, vec_get(s.y, k) + dt * vec_get(s.vy, k));
+        vec_set(s.z, k, vec_get(s.z, k) + dt * vec_get(s.vz, k));
+        k = k + 1;
+    }
+    0
+}
+
+/// `x` to nine decimal places, rounded half away from zero.
+fn fixed9(x: Float64) -> Str ! {} {
+    let scaled = Int(float_round(float_abs(x) * Float64(1000000000.0)));
+    let sign = if x < Float64(0.0) && scaled != 0 { "-" } else { "" };
+    str_concat(str_concat(str_concat(sign, int_to_str(scaled / 1000000000)), "."), fmt_int_zero(scaled % 1000000000, 9))
+}
+
+fn main(io: IoCap, out: OutCap) -> Int {
+    let mut steps = 1000;
+    if args_count() > 0 {
+        steps = match text_parse_int(arg(0)) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => {
+                eprint(str_concat(str_concat("nbody: ", e), "\n"));
+                return exit_with(2);
+            },
+        };
+    }
+    let s = system();
+    print(str_concat(fixed9(energy(s)), "\n"));
+    let mut k = 0;
+    while k < steps {
+        advance(s, Float64(0.01));
+        k = k + 1;
+    }
+    print(str_concat(fixed9(energy(s)), "\n"));
+    0
+}

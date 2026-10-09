@@ -64,7 +64,7 @@ pub use enums::{EnumDef, EnumId, Enums, VariantDef};
 pub use interface::{reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility};
 pub use intrinsic::{Intrinsic, NumClass, Shape};
 pub use key::{DefKey, DefKind, ModuleKey};
-pub use module::{Dependency, ModuleGraph, ModuleId, ReexportItem, ReexportSpec};
+pub use module::{BuildConfig, Dependency, ModuleGraph, ModuleId, ReexportItem, ReexportSpec};
 pub use provenance::{
     BuiltinFlow, CallFact, ContainerUse, Flow, FlowRule, FunctionFacts, IndirectFact, MakeFact,
     ModuleFacts, Origin, OriginSet, RuleScope, SinkClass, SinkFact, SinkReport, Step, StoreFact,

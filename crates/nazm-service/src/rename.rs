@@ -692,7 +692,8 @@ fn exported(res: &Resolution, entity: ReferenceTarget) -> bool {
     let record = |id| res.records().get(id).map(|d| d.visibility.is_exported());
     let enumeration = |id| res.enums().get(id).map(|d| d.visibility.is_exported());
     let answer = match entity {
-        ReferenceTarget::Local(_) => Some(false),
+        // A constant cannot be exported (Gate 2): its uses are all in its own module.
+        ReferenceTarget::Local(_) | ReferenceTarget::Const(_) => Some(false),
         ReferenceTarget::Function(id) => res.function(id).map(|f| f.visibility.is_exported()),
         ReferenceTarget::Record(id) => record(id),
         ReferenceTarget::Field(f) => record(f.record),

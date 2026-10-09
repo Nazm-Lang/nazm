@@ -1,0 +1,4 @@
+stats
+get greeting
+set count 1
+stats

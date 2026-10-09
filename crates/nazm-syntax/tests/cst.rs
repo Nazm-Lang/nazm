@@ -406,7 +406,7 @@ fn text_the_lexer_refuses_is_kept_as_the_bytes_it_was() {
     // Unknown characters, a multi-byte one among them, and a string with no closing
     // quote. Each is a diagnostic *and* an invalid leaf holding exactly its bytes.
     let text =
-        "fn main() -> Int {\n    let a = 1 @ 2;\n    let é = 3;\n    let s = \"open\n    a\n}\n";
+        "fn main() -> Int {\n    let a = 1 $ 2;\n    let é = 3;\n    let s = \"open\n    a\n}\n";
     let (tree, diagnostics) = cst(text);
     assert_lossless(&tree, text, "lexical errors");
     let invalid: Vec<&str> = tree
@@ -415,7 +415,7 @@ fn text_the_lexer_refuses_is_kept_as_the_bytes_it_was() {
         .filter(|l| l.kind == SyntaxKind::Invalid)
         .map(|l| l.text)
         .collect();
-    assert_eq!(invalid, ["@", "é", "\"open"]);
+    assert_eq!(invalid, ["$", "é", "\"open"]);
     assert!(diagnostics
         .iter()
         .any(|d| d.code == codes::UNKNOWN_CHARACTER));

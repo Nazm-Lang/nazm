@@ -118,6 +118,9 @@ impl Checker<'_> {
             return Type::Int;
         };
         self.res.record_const_use(at, value);
+        if let Some(decl) = self.types.consts.decls.get(name) {
+            self.res.record_const_ref(at, *decl);
+        }
         ty
     }
 

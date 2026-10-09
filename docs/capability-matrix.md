@@ -104,7 +104,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 
 | # | Area | Status |
 | --- | --- | --- |
-| 1 | Syntax, parser, CST | VERIFIED — the reference parser: incremental reparse and recovery (N76); the compiler written in Nazm's syntax is N98's |
+| 1 | Syntax, parser, CST | VERIFIED — the reference parser: incremental reparse and recovery (N76); attributes and conditional compilation (Gate 2); the compiler written in Nazm's syntax is N98's |
 | 2 | Name resolution and modules | VERIFIED — durable identities, interfaces and resolved units, a declared root, packages, re-exports with one identity (N103, N107); check reuse for builds is area 26's |
 | 2a | Incremental semantic checking | VERIFIED |
 | 3 | Type system | VERIFIED as scoped (N107, Gate 2) — records, closed enums, generics with bounds, closures, traits with static dispatch (N78); fixed-width integers, `Float32`/`Float64`, bit operators and conversions, fixed arrays of plain data and module constants, `Bytes` buffers and views, and `Text` (Gate 2); trait objects, generic traits and default methods refused by name |
@@ -123,7 +123,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
 | 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles, I/O errors, networking, environment, processes, errors, binary encoding, randomness and logging (twenty-nine modules); no cryptography; numbers are the language's since Gate 2 (area 3) |
-| 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
+| 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; every number across in both directions (Gate 2); no by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
 | 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
 | 20 | Cybersecurity profile | VERIFIED as scoped — profile enforcement (N87): declared authority, no C, a locked build, contents kept in files, checked paths, no unknown calls; constant time RESEARCH; not certification |
@@ -132,7 +132,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | VERIFIED |
 | 25 | LSP and MCP | PARTIAL / PARTIAL — across package boundaries tested; an editor client (N74) |
-| 26 | Package and build tooling | PARTIAL — templates, a library check, API docs and a publish dry run (N74); a backtracking resolver that explains a refusal, and `nazm update` (N90) |
+| 26 | Package and build tooling | PARTIAL — templates, a library check, API docs and a publish dry run (N74); a backtracking resolver that explains a refusal, and `nazm update` (N90); `@test` functions, fuzz targets and `nazm bench`, package features (Gate 2) |
 | 27 | Debugger and profiler | PARTIAL — lexical scopes, Cranelift line tables and a sampling profiler on macOS (N91); no Cranelift variables, no DAP |
 | 28 | Performance measurement | PARTIAL — every measured claim filed in a gated register (N92): 10 reproducible, 53 dated, 8 current claims unreproduced |
 | 29 | Differential testing | VERIFIED |
@@ -199,6 +199,17 @@ current account.
 ## Front end
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
+
+**Gate 2 (2026-10-09)** · *Attributes* and *Conditional compilation* (`general-purpose.md` §16–§17;
+`spec.md`). `@name` and `@name(args)` before a top-level declaration, a closed vocabulary refused
+by name otherwise (`N0619`); a malformed one is one syntax error. A declaration whose `@cfg` does
+not hold is removed before name resolution, an `impl` with its methods, decided by the build's
+target (`nazm build --target`), or the host's, and the profiles held; a module that writes `@cfg`
+is checked under its configuration and never reused under another. The formatter puts each
+attribute on its own line. Semantic epoch 42. Evidence: `crates/nazm-cli/tests/attributes.rs` —
+the kept declaration in the interpreter and both backends, a cross build that reaches code the
+host's check never saw, a check under `--profile` not reusing one without it, fourteen refusals,
+one error for a malformed attribute, and the formatter's layout; `docs/grammar.ebnf`'s examples.
 
 **N76 (2026-10-03)** · *Incremental reparse, finer recovery, `\u{…}`* (`architecture.md` §7.77).
 `nazm_syntax::Revision` is one file's parse kept per top-level item; `Revision::edit` relexes from
@@ -1818,6 +1829,13 @@ implementation.
 
 ### 16. Standard library — VERIFIED as scoped (1.0, N84)
 
+**Gate 2 (2026-10-09)** · *Reference applications* (`general-purpose.md` §24). Five programs in
+`examples/apps/` — `nwc`, `jsonpipe`, `nbody`, `kvstore`, `kvd` — use the standard library for real
+work: files and standard input, JSON and maps, floats, a synced log with atomic compaction, and a
+TCP server with a task per connection and an owner task behind channels. Evidence:
+`crates/nazm-cli/tests/apps.rs`, every app in the interpreter and three native builds, held to its
+recorded output and status; time and memory recorded in `examples/apps/README.md`.
+
 *N84, 2026-10-04: The standard library 1.0 — VERIFIED as scoped.* `architecture.md` §7.85 first.
 Seventeen modules, 126 public items (`library/std/API-1.0`): text grown (case, trimming either end,
 replace, count, padding, lines, comparison, byte classes), seq grown (reverse, slice, concat, any,
@@ -1957,6 +1975,13 @@ helpers take effectful functions, and `@std/sort` sorts by a caller's ordering (
 without reimplementing collections or text handling, with a stability policy past 1.0.
 
 ### 17. FFI and ABI — VERIFIED as scoped (a practical C ABI subset, N85; native builds on the host)
+
+**Gate 2 (2026-10-09)** · *The C foundation* (`general-purpose.md` §23). An export takes and returns
+every fixed-width integer and both floats as their C types, which the header names; with what
+foreign calls already carried, the scalar C ABI every binding generator reads is complete.
+Semantic epoch 41. Evidence: `crates/nazm-cli/tests/c_foundation.rs` — the header's declarations,
+and the same answers at the edges of every width and both floats from a C program linking the
+static archive and the shared library and from Python's `ctypes`, under both backends.
 
 **Evidence** · N42 (2026-10-01). `extern "C" fn name(p: T, …) -> R = "symbol";` declares a C
 function by its signature and its C symbol (`crates/nazm-syntax/src/parser.rs`; `extern` is
@@ -2988,6 +3013,24 @@ tools over the same service, three since N28, four since N29, six since N30, sev
 few of the questions the service can, and none edits.
 
 ### 26. Package and build tooling — PARTIAL
+
+**Gate 2 (2026-10-09)** · *Package features* (`general-purpose.md` §22; `spec.md`). `[features]`
+in `nazm.toml`, a dependency's `features`, `--features`; additive, settled to a fixed point per
+package; each module's `@cfg(feature = …)` reads its own package's set; `nazm.lock/2` records the
+enabled sets, `/1` kept without them. Evidence: `crates/nazm-cli/tests/features.rs` — defaults, a
+dependent's request, a feature enabling a dependency's, isolation between packages, interpreter
+and native build agreeing, three refusals, and the lockfile's schema, contents and staleness.
+
+**Gate 2 (2026-10-09)** · *Tests and benchmarks* (`general-purpose.md` §18–§19; `spec.md`). `nazm
+test` runs every `@test` and `@fuzz` function by name under the interpreter and as an executable,
+each in its own process through a generated entry that moves the file's `main` aside without
+moving an offset; `--filter`, `--fuzz N`; `@test(fails)`; `nazm.test/1` gained `kind`. `nazm bench`
+measures `@bench` functions natively at `-O2` (`nazm.bench/1`, EXPERIMENTAL). `@std/test` gained
+five assertions and `property`. Evidence: `crates/nazm-cli/tests/user_tests.rs` — pass, `Err` with
+its message from both legs, a trap under `@test(fails)`, a wrongly expected failure, a test holding
+authority, a property over 50 cases, a `@cfg`-excluded test not run, the filter, a fuzz target's
+first failing case identical across legs and runs, six shape refusals, a diagnostic at its line,
+and a benchmark's row; `schemas.rs` validates both outputs.
 
 **Evidence** · Multi-file builds work through path-relative `use`, two independent
 implementations: `crates/nazm-service/src/load.rs` and `compiler/module.nz`.

@@ -779,7 +779,8 @@ pub(crate) fn identity_of(s: &Snapshot, t: ReferenceTarget) -> Identity {
                 Some(format!("{v}.{field}"))
             }),
         },
-        ReferenceTarget::Local(_) => Identity {
+        // A constant is its module's own (Gate 2): no durable identity, as a local has none.
+        ReferenceTarget::Local(_) | ReferenceTarget::Const(_) => Identity {
             definition: None,
             member: None,
         },
@@ -816,6 +817,7 @@ fn link_key(s: &Snapshot, paths: &Paths, t: ReferenceTarget) -> LinkKey {
         ReferenceTarget::Local(_) => 6,
         ReferenceTarget::Trait(_) => 7,
         ReferenceTarget::TraitMethod(..) => 8,
+        ReferenceTarget::Const(_) => 9,
     };
     let declaration = s.index.declaration(t).and_then(|d| paths.span(d));
     (rank, declaration, identity_of(s, t))
@@ -844,6 +846,7 @@ fn link(
             ReferenceTarget::Local(_) => "local",
             ReferenceTarget::Trait(_) => "trait",
             ReferenceTarget::TraitMethod(..) => "trait_method",
+            ReferenceTarget::Const(_) => "constant",
         },
         name,
         declaration,

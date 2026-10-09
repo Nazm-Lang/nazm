@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nazm.test-1.json",
   "title": "nazm.test/1",
-  "description": "One test case from `nazm test --json`. A case is `NAME.nz` beside `NAME.expected`; it runs interpreted and compiled, and both must produce the recorded output. One object per line on stdout.",
+  "description": "One test case from `nazm test --json`. A case is `NAME.nz` beside `NAME.expected`, or (Gate 2) a `@test` or `@fuzz` function; it runs interpreted and compiled, and both must produce the recorded output, or end as the function's expectation says. One object per line on stdout.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "name", "file", "expected", "interpreted", "native", "passed"],
@@ -10,7 +10,11 @@
     "schema": { "const": "nazm.test/1" },
     "name": { "type": "string", "description": "The case's file stem." },
     "file": { "type": "string" },
-    "expected": { "type": "string", "description": "The contents of the `.expected` file, trimmed." },
+    "kind": {
+      "enum": ["golden", "test", "fuzz"],
+      "description": "Gate 2, additive: `golden` for a recorded output, `test` or `fuzz` for a marked function, named `STEM::FUNCTION`."
+    },
+    "expected": { "type": "string", "description": "The contents of the `.expected` file, trimmed; `passes` or `fails` for a marked function." },
     "interpreted": { "$ref": "#/$defs/outcome" },
     "native": {
       "description": "The compiled leg. `null` when `--interpret-only` was given.",

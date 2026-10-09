@@ -18,11 +18,44 @@
 //! It is not a test case — a directory may hold a helper — but the number of them is
 //! reported. A silently skipped file is how a renamed test stops running and nobody
 //! notices.
+//!
+//! # Test functions (Gate 2, §18)
+//!
+//! Every `@test` and `@fuzz` function a file marks is a case too, `STEM::NAME`, run through the
+//! generated entry [`crate::harness`] writes: under `nazm run` and as an executable, each in its
+//! own process. It passes when the process ends `0` — the function answered `Ok` — and a
+//! `@test(fails)` passes when it ends `2`, the status of an `Err` or a trap; a program that does
+//! not check passes neither. `--filter` keeps the cases whose name contains it.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use crate::exit;
+use crate::harness::{Harness, Kind};
+
+/// What a case must do to pass.
+#[derive(Debug, Clone)]
+enum Expect {
+    /// Print what its `.expected` file holds.
+    Output(String),
+    /// End `0`: a test function that answered `Ok`.
+    Passes,
+    /// End `2`: a `@test(fails)` that answered `Err` or trapped.
+    Fails,
+}
+
+/// One case, before it runs.
+#[derive(Debug, Clone)]
+struct Planned {
+    name: String,
+    file: PathBuf,
+    expect: Expect,
+    /// The marked function a test case runs through the harness; `None` for a recorded output.
+    harness: Option<Harness>,
+}
+
+/// `nazm test --fuzz`'s default: how many inputs a `@fuzz` target is given.
+pub(crate) const DEFAULT_FUZZ_CASES: u32 = 100;
 
 /// The version every `nazm test --json` object carries. See `docs/diagnostics.md`.
 const SCHEMA: &str = "nazm.test/1";
@@ -32,6 +65,9 @@ struct Case {
     schema: &'static str,
     name: String,
     file: String,
+    /// `golden` for a recorded output, `test` or `fuzz` for a marked function (Gate 2).
+    kind: &'static str,
+    /// The recorded output; `passes` or `fails` for a marked function.
     expected: String,
     /// What `nazm run` produced, and whether it matched.
     interpreted: Outcome,
@@ -105,7 +141,14 @@ struct Failure<'a> {
     native: Leg,
 }
 
-pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool, summary: bool) -> ExitCode {
+pub(crate) fn run(
+    paths: &[PathBuf],
+    json: bool,
+    interpret_only: bool,
+    summary: bool,
+    filter: Option<&str>,
+    fuzz: u32,
+) -> ExitCode {
     // `--summary-json` (N31): at every exit below, the outcome as one `nazm.test-summary/1`
     // on stdout, and nothing on stderr. The exit status is the same.
     let summarized = |status, code: u8, results: &[Case], without: usize| {
@@ -126,7 +169,7 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool, summary: 
     let mut cases = Vec::new();
     let mut without_expectation = Vec::new();
     for path in paths {
-        if let Err(e) = gather(path, &mut cases, &mut without_expectation) {
+        if let Err(e) = gather(path, fuzz, &mut cases, &mut without_expectation) {
             if summary {
                 return summarized(
                     "unreadable",
@@ -139,6 +182,9 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool, summary: 
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
     }
+    if let Some(f) = filter {
+        cases.retain(|c| c.name.contains(f));
+    }
     if cases.is_empty() {
         if summary {
             return summarized(
@@ -148,7 +194,11 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool, summary: 
                 without_expectation.len(),
             );
         }
-        eprintln!("nazm: no test cases. A case is `NAME.nz` beside `NAME.expected`.");
+        eprintln!(
+            "nazm: no test cases. A case is `NAME.nz` beside `NAME.expected`, or a `@test` or \
+             `@fuzz` function{}.",
+            filter.map_or_else(String::new, |f| format!(" whose name contains `{f}`"))
+        );
         return ExitCode::from(exit::NO_SUCH_FILE);
     }
 
@@ -169,8 +219,8 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool, summary: 
     };
 
     let mut results = Vec::new();
-    for (name, file, expected) in cases {
-        results.push(one(&nazm, &dir, &name, &file, &expected, interpret_only));
+    for (i, case) in cases.iter().enumerate() {
+        results.push(one(&nazm, &dir, i, case, interpret_only));
     }
     // The executables were only ever needed for the comparison above. Left behind they
     // accumulate one directory per process id, which is a small mess that becomes a
@@ -251,10 +301,11 @@ fn print_summary(
     }
 }
 
-/// Collect `(name, file, expected)` from a file or a directory.
+/// Collect the cases of a file or a directory: a recorded output, and every marked function.
 fn gather(
     path: &Path,
-    cases: &mut Vec<(String, PathBuf, String)>,
+    fuzz: u32,
+    cases: &mut Vec<Planned>,
     without: &mut Vec<String>,
 ) -> Result<(), String> {
     if path.is_dir() {
@@ -266,7 +317,7 @@ fn gather(
             .collect();
         found.sort();
         for p in found {
-            gather(&p, cases, without)?;
+            gather(&p, fuzz, cases, without)?;
         }
         return Ok(());
     }
@@ -276,10 +327,39 @@ fn gather(
     let name = path
         .file_stem()
         .map_or_else(|| "?".to_owned(), |s| s.to_string_lossy().into_owned());
+    let before = cases.len();
     let expected_path = path.with_extension("expected");
-    match std::fs::read_to_string(&expected_path) {
-        Ok(expected) => cases.push((name, path.to_path_buf(), expected)),
-        Err(_) => without.push(path.display().to_string()),
+    if let Ok(expected) = std::fs::read_to_string(&expected_path) {
+        cases.push(Planned {
+            name: name.clone(),
+            file: path.to_path_buf(),
+            expect: Expect::Output(expected),
+            harness: None,
+        });
+    }
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    for m in crate::harness::marked(path, &text) {
+        let kind = match m.attribute {
+            "test" => Kind::Test,
+            "fuzz" => Kind::Fuzz(fuzz),
+            _ => continue,
+        };
+        cases.push(Planned {
+            name: format!("{name}::{}", m.function),
+            file: path.to_path_buf(),
+            expect: if m.fails {
+                Expect::Fails
+            } else {
+                Expect::Passes
+            },
+            harness: Some(Harness {
+                kind,
+                function: m.function,
+            }),
+        });
+    }
+    if cases.len() == before {
+        without.push(path.display().to_string());
     }
     Ok(())
 }
@@ -299,14 +379,23 @@ fn tempdir() -> Result<PathBuf, String> {
 /// Combined because a program's diagnostic goes to stderr and is as much of its
 /// behaviour as its value; trimmed because a trailing newline is a property of
 /// `printf`, not of the program.
-fn output_of(cmd: &mut Command) -> (String, bool) {
+fn output_of(cmd: &mut Command) -> (String, bool, Option<i32>) {
     match cmd.output() {
         Ok(out) => {
             let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&out.stderr));
-            (text.trim().to_owned(), true)
+            (text.trim().to_owned(), true, out.status.code())
         }
-        Err(e) => (format!("could not run: {e}"), false),
+        Err(e) => (format!("could not run: {e}"), false, None),
+    }
+}
+
+/// Whether a leg that printed `got` and ended with `status` did what `expect` asks.
+fn met(expect: &Expect, got: &str, status: Option<i32>) -> bool {
+    match expect {
+        Expect::Output(want) => got == want.trim(),
+        Expect::Passes => status == Some(0),
+        Expect::Fails => status == Some(i32::from(exit::RUNTIME_FAILED)),
     }
 }
 
@@ -319,19 +408,22 @@ const fn leg(ran: bool, matched: bool) -> Leg {
     }
 }
 
-fn one(
-    nazm: &Path,
-    dir: &Path,
-    name: &str,
-    file: &Path,
-    expected: &str,
-    interpret_only: bool,
-) -> Case {
-    let want = expected.trim().to_owned();
+fn one(nazm: &Path, dir: &Path, index: usize, case: &Planned, interpret_only: bool) -> Case {
+    let file = case.file.as_path();
+    let harness: Vec<String> = case
+        .harness
+        .iter()
+        .flat_map(|h| ["--harness".to_owned(), h.spec()])
+        .collect();
+    let want = match &case.expect {
+        Expect::Output(w) => w.trim().to_owned(),
+        Expect::Passes => "passes".to_owned(),
+        Expect::Fails => "fails".to_owned(),
+    };
 
-    let (got, ran) = output_of(Command::new(nazm).arg("run").arg(file));
+    let (got, ran, status) = output_of(Command::new(nazm).arg("run").args(&harness).arg(file));
     let interpreted = Outcome {
-        matched: got == want,
+        matched: met(&case.expect, &got, status),
         output: got,
     };
     let interpreted_leg = leg(ran, interpreted.matched);
@@ -340,17 +432,19 @@ fn one(
     let native = if interpret_only {
         None
     } else {
-        let exe = dir.join(name);
+        // By position, not name: `a::t` and `a.nz`'s own case must not share an executable.
+        let exe = dir.join(format!("case{index}"));
         let built = Command::new(nazm)
             .arg("build")
+            .args(&harness)
             .arg(file)
             .arg("-o")
             .arg(&exe)
             .output();
         match built {
             Ok(out) if out.status.success() => {
-                let (got, ran) = output_of(&mut Command::new(&exe));
-                let matched = got == want;
+                let (got, ran, status) = output_of(&mut Command::new(&exe));
+                let matched = met(&case.expect, &got, status);
                 native_leg = leg(ran, matched);
                 Some(Outcome {
                     matched,
@@ -380,8 +474,13 @@ fn one(
     let passed = interpreted.matched && native.as_ref().is_none_or(|n| n.matched);
     Case {
         schema: SCHEMA,
-        name: name.to_owned(),
+        name: case.name.clone(),
         file: file.display().to_string(),
+        kind: match case.harness.as_ref().map(|h| h.kind) {
+            None => "golden",
+            Some(Kind::Fuzz(_)) => "fuzz",
+            Some(_) => "test",
+        },
         expected: want,
         interpreted,
         native,

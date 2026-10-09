@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use nazm_core::Outcome;
-use nazm_service::{load, root};
+use nazm_service::root;
 
 use crate::{emit, exit, report_ok};
 
@@ -14,6 +14,9 @@ pub(crate) fn run(
     json: bool,
     limits: nazm_core::eval::Limits,
     args: Vec<String>,
+    profile: Option<&str>,
+    harness: Option<&crate::harness::Harness>,
+    features: &[String],
 ) -> ExitCode {
     // `nazm run` evaluates; it persists nothing and reuses nothing, so where the project
     // begins is not its question. The root is discovered rather than given because the
@@ -29,7 +32,7 @@ pub(crate) fn run(
 
     // The root file and everything it imports, and how they relate. A program with no
     // `use` takes the same path and produces a graph of one module.
-    let loaded = match load::load(path, source_root.path()) {
+    let mut loaded = match crate::harness::loaded(path, source_root.path(), harness) {
         Ok(f) => f,
         // What was loaded comes back with the errors, so the caret lands on the `use`
         // that could not be resolved rather than on nothing.
@@ -38,6 +41,12 @@ pub(crate) fn run(
             return ExitCode::from(crate::exit::load_status(&diagnostics));
         }
     };
+    // The interpreter runs the program on this host (Gate 2, §17).
+    let config = match crate::profile::configuration(path, profile, None, features) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    loaded.graph = std::mem::take(&mut loaded.graph).with_config(config);
     let map = &loaded.map;
 
     // Checking always runs; evaluation only when it passed. Running a program known to be

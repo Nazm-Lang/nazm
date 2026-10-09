@@ -1,0 +1,19 @@
+set colour blue
+set size 42
+set greeting hello, world
+get colour
+set colour green
+del size
+del nothing
+get size
+keys
+stats
+reopen
+get colour
+get greeting
+stats
+compact
+stats
+reopen
+keys
+get colour

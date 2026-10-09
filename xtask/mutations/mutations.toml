@@ -8293,10 +8293,12 @@ Repointed by Gate 2's files, which moved it to 36: an entry that accepted a func
 Repointed by Gate 2's networking, which moved it to 37: an entry that refused an `os_read` without an `IoCap` must not be reused.
 Repointed by Gate 2's time, which moved it to 38: an entry that accepted a function named `time_sleep_ms` must not be reused.
 Repointed by Gate 2's process and environment, which moved it to 39: an entry that accepted a record named `ProcessCap` must not be reused.
-Repointed by Gate 2's randomness, which moved it to 40: an entry that accepted a record named `RandomCap` must not be reused."""
+Repointed by Gate 2's randomness, which moved it to 40: an entry that accepted a record named `RandomCap` must not be reused.
+Repointed by Gate 2's C foundation, which moved it to 41: an entry that refused an export of a `Float64` must not be reused.
+Repointed by Gate 2's attributes, which moved it to 42: an entry that refused an `@` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 40;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 39;"
+find = "pub const SEMANTIC_EPOCH: u32 = 42;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 41;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -9016,11 +9018,9 @@ why = """a foreign `Int` is passed as a 32-bit `int`, as if C's `int` were `int6
 Repointed by N105: the rule is LIR's, made once for both backends."""
 file = "crates/nazm-lir/src/op/lower.rs"
 find = '''            Ty::Int => Class::I64,
-            _ => Class::Ptr,
-        };'''
+            // Every number in its own C type (Gate 2, §23): an export takes and returns them.'''
 replace = '''            Ty::Int => Class::I32,
-            _ => Class::Ptr,
-        };'''
+            // Every number in its own C type (Gate 2, §23): an export takes and returns them.'''
 killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
 
 # `n42-cranelift-passes-a-foreign-int-as-a-c-int` is retired by N105: its rule is LIR's, decided once for both backends, and `n42-a-foreign-int-is-a-c-int` attacks it there.
@@ -10740,13 +10740,9 @@ name = "n55-the-header-has-no-bool"
 why = "the header declares a Bool export as int64_t, an ABI mismatch C cannot see"
 file = "crates/nazm-cli/src/build/link.rs"
 find = """
-        if *t == nazm_lir::Ty::Bool {
-            "bool"
-        } else {"""
+        nazm_lir::Ty::Bool => "bool","""
 replace = """
-        if *t == nazm_lir::Ty::Bool {
-            "int64_t"
-        } else {"""
+        nazm_lir::Ty::Bool => "int64_t","""
 killers = [{ package = "nazm-cli", test = "ffi_v2", name = "a_library_and_its_header_link_into_a_c_program_under_both_backends" }]
 
 [[mutation]]
@@ -14962,3 +14958,230 @@ file = "library/std/log.nz"
 find = "    if rank(level) < l.min { 0 } else {"
 replace = "    if rank(level) <= l.min { 0 } else {"
 killers = [{ package = "nazm-cli", test = "stdlib", name = "log_records_are_one_json_object_a_line_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-an-exports-number-crosses-as-a-pointer"
+why = "an export's C entry declares a number parameter or result as a pointer-sized word, so the C caller's `double` or `int8_t` is read from the wrong register"
+file = "crates/nazm-lir/src/op/lower.rs"
+find = "            Ty::Num(k) => num_class(k),\n            _ => Class::Ptr,"
+replace = "            _ => Class::Ptr,"
+killers = [{ package = "nazm-cli", test = "c_foundation", name = "c_and_python_get_the_same_answers_at_every_width_from_both_backends" }]
+
+[[mutation]]
+name = "g2-the-header-calls-a-double-an-int"
+why = "the generated header declares a `Float64` as `int64_t`, so a C program built against it passes the bits in the wrong register"
+file = "crates/nazm-cli/src/build/link.rs"
+find = "            nazm_core::sema::NumKind::F64 => \"double\","
+replace = "            nazm_core::sema::NumKind::F64 => \"int64_t\","
+killers = [{ package = "nazm-cli", test = "c_foundation", name = "the_header_names_every_numbers_c_type" }]
+
+[[mutation]]
+name = "g2-an-export-may-not-carry-a-number"
+why = "an export of a fixed-width integer or a float is refused again (N0391), so no binding generator can read a float from the header"
+file = "crates/nazm-core/src/check/foreign.rs"
+find = "    let scalar = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Num(_));"
+replace = "    let scalar = |t: Type| matches!(t, Type::Int | Type::Bool);"
+killers = [{ package = "nazm-cli", test = "c_foundation", name = "the_header_names_every_numbers_c_type" }]
+
+# --- Gate 2: attributes and conditional compilation (§16, §17) ---------------------------------
+#
+# Each attacks one law of `docs/spec.md`, *Attributes* and *Conditional compilation*: a false
+# condition removes its declaration, `not` and `any` mean what they say, an impl removed takes its
+# methods, the build's target and profiles decide, a check under one configuration is not reused
+# under another, the vocabulary is closed, and the formatter's layout.
+
+[[mutation]]
+name = "g2-a-false-condition-keeps-its-declaration"
+why = "a declaration whose `@cfg` does not hold stays, so two declarations of one name under exclusive conditions are a duplicate and code for another target is checked here"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "                    Ok(h) => keep &= h,"
+replace = "                    Ok(_) => {}"
+killers = [{ package = "nazm-cli", test = "attributes", name = "the_declaration_whose_condition_holds_is_the_one_every_implementation_runs" }]
+
+[[mutation]]
+name = "g2-not-is-its-condition"
+why = "`not(c)` holds when `c` does, so `@cfg(not(os = \"linux\"))` keeps the Linux code on Linux"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "                [one] => Ok(!holds(one, config, features)?),"
+replace = "                [one] => Ok(holds(one, config, features)?),"
+killers = [{ package = "nazm-cli", test = "attributes", name = "the_declaration_whose_condition_holds_is_the_one_every_implementation_runs" }]
+
+[[mutation]]
+name = "g2-any-is-all"
+why = "`any(…)` holds only when every condition does, so a declaration for either of two targets is on neither"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "                    any |= holds(a, config, features)?;"
+replace = "                    any &= holds(a, config, features)?;"
+killers = [{ package = "nazm-cli", test = "attributes", name = "the_declaration_whose_condition_holds_is_the_one_every_implementation_runs" }]
+
+[[mutation]]
+name = "g2-a-removed-impl-keeps-its-methods"
+why = "an impl whose `@cfg` does not hold leaves its methods behind, each a second definition of the kept impl's"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "            return !dropped_impls.contains(&m.impl_span);"
+replace = "            return true;"
+killers = [{ package = "nazm-cli", test = "attributes", name = "an_impl_left_out_takes_its_methods_and_is_not_a_second_impl" }]
+
+[[mutation]]
+name = "g2-the-build-target-does-not-decide"
+why = "`nazm build --target T` decides `@cfg` for the host, so a cross build compiles the host's code and never checks T's"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "        crate::profile::configuration(input, choice.profile, choice.target, choice.features)?;"
+replace = "        crate::profile::configuration(input, choice.profile, None, choice.features)?;"
+killers = [{ package = "nazm-cli", test = "attributes", name = "code_only_another_target_compiles_is_not_checked_until_built_for_it" }]
+
+[[mutation]]
+name = "g2-the-profile-does-not-decide"
+why = "`--profile` is not seen by `@cfg(profile = …)`, so code for a profile is never the code built under it"
+file = "crates/nazm-cli/src/profile.rs"
+find = "    config.profiles.extend(named.map(str::to_owned));"
+replace = ""
+killers = [{ package = "nazm-cli", test = "attributes", name = "the_profiles_held_decide_and_a_check_is_not_reused_across_them" }]
+
+[[mutation]]
+name = "g2-a-check-is-reused-across-configurations"
+why = "a module that writes `@cfg` is fingerprinted without its configuration, so a check passed under one is reused under another that refuses it"
+file = "crates/nazm-cli/src/checking.rs"
+find = "                    if text.contains(\"@cfg\") {"
+replace = "                    if false {"
+killers = [{ package = "nazm-cli", test = "attributes", name = "the_profiles_held_decide_and_a_check_is_not_reused_across_them" }]
+
+[[mutation]]
+name = "g2-an-attribute-may-be-written-twice"
+why = "`@test @test` is accepted: an attribute that says one thing once is no longer held to it"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "        if name != \"cfg\" && seen.contains(&name) {"
+replace = "        if false && seen.contains(&name) {"
+killers = [{ package = "nazm-cli", test = "attributes", name = "every_attribute_outside_the_vocabulary_or_its_place_is_refused_by_name" }]
+
+[[mutation]]
+name = "g2-an-attribute-shares-its-declarations-line"
+why = "the formatter no longer ends an attribute's line at its `)`, so `@cfg(…) fn f` stays on one line and two formatters disagree"
+file = "crates/nazm-syntax/src/format.rs"
+find = "            (Some((true, 1)), TokenKind::RParen) => {\n                self.attribute = None;\n                self.continuing = false;\n                self.break_line();\n            }"
+replace = "            (Some((true, 1)), TokenKind::RParen) => {\n                self.attribute = None;\n            }"
+killers = [{ package = "nazm-cli", test = "attributes", name = "the_formatter_puts_each_attribute_on_its_own_line" }]
+
+[[mutation]]
+name = "g2-a-malformed-attribute-runs-on"
+why = "a malformed attribute's remaining tokens are read as the declaration, so one mistake is three errors"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                        self.skip_attribute(open);\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "attributes", name = "a_malformed_attribute_is_one_syntax_error_and_an_attribute_before_a_use_is_refused" }]
+
+# --- Gate 2: user tests and benchmarks (§18, §19) ----------------------------------------------
+#
+# Each attacks one law of `docs/spec.md`, *Tests and benchmarks*: a test passes only by ending `0`,
+# an expected failure only by failing — not by not checking —, an `Err` is a failure, a fuzz target
+# gets real inputs, the filter narrows, and a marked function has its shape.
+
+[[mutation]]
+name = "g2-a-test-passes-however-it-ends"
+why = "a test function passes whatever its process ends with, so an `Err` or a trap reports `ok`"
+file = "crates/nazm-cli/src/test.rs"
+find = "        Expect::Passes => status == Some(0),"
+replace = "        Expect::Passes => true,"
+killers = [{ package = "nazm-cli", test = "user_tests", name = "every_test_function_runs_by_name_in_both_implementations" }]
+
+[[mutation]]
+name = "g2-an-expected-failure-is-any-failure"
+why = "`@test(fails)` passes on any status but `0`, so a test that does not even check passes as an expected failure"
+file = "crates/nazm-cli/src/test.rs"
+find = "        Expect::Fails => status == Some(i32::from(exit::RUNTIME_FAILED)),"
+replace = "        Expect::Fails => status != Some(0),"
+killers = [{ package = "nazm-cli", test = "user_tests", name = "a_test_files_diagnostic_lands_where_it_is_written_and_is_no_expected_failure" }]
+
+[[mutation]]
+name = "g2-the-harness-takes-an-err-for-a-pass"
+why = "the generated entry ends `0` after printing a test's `Err`, so every failing assertion passes"
+file = "crates/nazm-cli/src/harness.rs"
+find = "    let failed = \"Result.Err(error: e) => { print(str_concat(e, \\\"\\\\n\\\")); exit_with(2) }\";"
+replace = "    let failed = \"Result.Err(error: e) => { print(str_concat(e, \\\"\\\\n\\\")); 0 }\";"
+killers = [{ package = "nazm-cli", test = "user_tests", name = "every_test_function_runs_by_name_in_both_implementations" }]
+
+[[mutation]]
+name = "g2-a-fuzz-input-is-always-empty"
+why = "every generated input is empty, so a fuzz target never meets the input that breaks it"
+file = "crates/nazm-cli/src/harness.rs"
+find = "             let len = Int(state % UInt64(65));\\n        \\"
+replace = "             let len = 0;\\n        \\"
+killers = [{ package = "nazm-cli", test = "user_tests", name = "a_fuzz_target_gets_the_same_inputs_every_run" }]
+
+[[mutation]]
+name = "g2-the-filter-keeps-everything"
+why = "`--filter` narrows nothing, so a run asked for one test runs every one"
+file = "crates/nazm-cli/src/test.rs"
+find = "        cases.retain(|c| c.name.contains(f));"
+replace = ""
+killers = [{ package = "nazm-cli", test = "user_tests", name = "a_filter_narrows_and_the_human_report_names_each_test" }]
+
+[[mutation]]
+name = "g2-a-marked-function-may-have-any-shape"
+why = "a `@test` answering `Int` or taking an `Int` is accepted, and its entry then fails to check with an error in text the file does not hold"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "        if !(held && answers && ordinary) {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "user_tests", name = "a_test_or_benchmark_of_the_wrong_shape_is_refused_by_name" }]
+
+# --- Gate 2: package features (§22) ------------------------------------------------------------
+#
+# Each attacks one law of `docs/spec.md`, *Package features*: `default` is on, a dependent's request
+# and a feature's own list enable more, each package sees its own set, `--features` reaches the
+# build, and the lockfile holds the sets to what was locked.
+
+[[mutation]]
+name = "g2-a-default-is-off"
+why = "a package's `default` enables nothing, so what it should switch on is off unless something else asks"
+file = "crates/nazm-package/src/lib.rs"
+find = "            if p.feature_table.contains_key(\"default\") {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "features", name = "each_package_sees_its_own_features_in_every_implementation" }]
+
+[[mutation]]
+name = "g2-a-dependents-request-is-ignored"
+why = "the features a dependent asks of a dependency are not enabled, so `features = [...]` in a dependency entry does nothing"
+file = "crates/nazm-package/src/lib.rs"
+find = "                        work.push((j, f.clone(), format!(\"the package `{}`\", p.name)));"
+replace = ""
+killers = [{ package = "nazm-cli", test = "features", name = "each_package_sees_its_own_features_in_every_implementation" }]
+
+[[mutation]]
+name = "g2-a-feature-enables-nothing-of-its-own"
+why = "a feature's list of the package's own features is not followed, so `all = [\"verbose\"]` leaves `verbose` off"
+file = "crates/nazm-package/src/lib.rs"
+find = "                    None => work.push((i, item.clone(), format!(\"the feature `{}/{f}`\", p.name))),"
+replace = "                    None => {}"
+killers = [{ package = "nazm-cli", test = "features", name = "each_package_sees_its_own_features_in_every_implementation" }]
+
+[[mutation]]
+name = "g2-features-are-the-roots-everywhere"
+why = "a dependency's module reads the root package's features, so a feature asked of a dependency is never seen by it"
+file = "crates/nazm-sema/src/module.rs"
+find = "            config\n                .package_features\n                .get(first)\n                .cloned()\n                .unwrap_or_default()"
+replace = "            config.features"
+killers = [{ package = "nazm-cli", test = "features", name = "each_package_sees_its_own_features_in_every_implementation" }]
+
+[[mutation]]
+name = "g2-a-build-ignores-features"
+why = "`nazm build --features` builds without them, so the executable and `nazm run` disagree"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "        crate::profile::configuration(input, choice.profile, choice.target, choice.features)?;"
+replace = "        crate::profile::configuration(input, choice.profile, choice.target, &[])?;"
+killers = [{ package = "nazm-cli", test = "features", name = "each_package_sees_its_own_features_in_every_implementation" }]
+
+[[mutation]]
+name = "g2-the-lock-ignores-features"
+why = "a lockfile whose recorded features no longer match is accepted by `--locked`, so the locked build is not the one checked"
+file = "crates/nazm-package/src/lib.rs"
+find = "                && l.features != p.features\n"
+replace = "                && false\n"
+killers = [{ package = "nazm-cli", test = "features", name = "the_lockfile_records_enabled_features_and_a_featureless_one_stays_version_one" }]
+
+[[mutation]]
+name = "g2-a-constants-use-is-not-indexed"
+why = "a constant's uses are left out of the reference index, so renaming it rewrites the declaration and leaves every use naming nothing"
+file = "crates/nazm-sema/src/references.rs"
+find = "            index.used(at, ReferenceTarget::Const(decl));"
+replace = ""
+killers = [{ package = "nazm-service", test = "rename", name = "a_constant_is_renamed_everywhere_it_is_named" }]

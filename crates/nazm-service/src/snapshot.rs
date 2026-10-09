@@ -479,6 +479,7 @@ fn entity_key(s: &Snapshot, paths: &Paths, t: ReferenceTarget) -> EntityKey {
         ReferenceTarget::Local(_) => 6,
         ReferenceTarget::Trait(_) => 7,
         ReferenceTarget::TraitMethod(..) => 8,
+        ReferenceTarget::Const(_) => 9,
     };
     let identity = identity_of(s, t);
     let file = if identity.definition.is_none() {

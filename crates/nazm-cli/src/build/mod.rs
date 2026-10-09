@@ -355,4 +355,10 @@ pub(crate) struct Choice<'a> {
     pub(crate) debug: bool,
     /// A runtime artifact to link instead of generating one (N82, §7.83).
     pub(crate) runtime: Option<&'a Path>,
+    /// The profile `--profile` names, which `@cfg(profile = …)` sees (Gate 2, §17).
+    pub(crate) profile: Option<&'a str>,
+    /// A marked function to build through the generated entry (Gate 2, §18–§19).
+    pub(crate) harness: Option<&'a crate::harness::Harness>,
+    /// `--features`: asked of the root package beyond its `default` (Gate 2, §22).
+    pub(crate) features: &'a [String],
 }

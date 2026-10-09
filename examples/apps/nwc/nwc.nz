@@ -1,0 +1,137 @@
+// nwc: lines, words and bytes, as `wc` counts them (Gate 2 reference application, §24).
+//
+//     nwc [-l] [-w] [-c] [FILE...]
+//
+// With no flag every count is printed; with flags, only those, in the order lines, words, bytes.
+// With no file, standard input is counted. Several files get a `total` line. A file that cannot
+// be read is reported on standard error, the others are still counted, and the exit status is 1.
+// `main`'s value, printed last as every program's is, is `0`.
+
+use "@std/ioerror";
+use "@std/file";
+use "@std/io";
+use "@std/fmt";
+
+struct Counts {
+    lines: Int,
+    words: Int,
+    bytes: Int,
+}
+
+struct Wanted {
+    lines: Bool,
+    words: Bool,
+    bytes: Bool,
+}
+
+fn is_space(b: Int) -> Bool ! {} {
+    b == 32 || b == 10 || b == 9 || b == 13 || b == 11 || b == 12
+}
+
+/// What `data` holds: a line is a newline, a word a run of non-space bytes.
+fn count(data: Bytes) -> Counts ! {} {
+    let n = bytes_len(data);
+    let mut lines = 0;
+    let mut words = 0;
+    let mut in_word = false;
+    let mut i = 0;
+    while i < n {
+        let b = Int(bytes_get(data, i));
+        if b == 10 {
+            lines = lines + 1;
+        }
+        if is_space(b) {
+            in_word = false;
+        } else {
+            if !in_word {
+                words = words + 1;
+                in_word = true;
+            }
+        }
+        i = i + 1;
+    }
+    Counts(lines: lines, words: words, bytes: n)
+}
+
+fn row(c: Counts, w: Wanted, name: Str) -> Str ! {} {
+    let parts = strs_new();
+    if w.lines {
+        strs_push(parts, fmt_int_width(c.lines, 8));
+    }
+    if w.words {
+        strs_push(parts, fmt_int_width(c.words, 8));
+    }
+    if w.bytes {
+        strs_push(parts, fmt_int_width(c.bytes, 8));
+    }
+    if str_len(name) > 0 {
+        strs_push(parts, str_concat(" ", name));
+    }
+    str_join(parts, "")
+}
+
+fn main(io: IoCap, out: OutCap) -> Int {
+    let mut lines = false;
+    let mut words = false;
+    let mut bytes = false;
+    let files = strs_new();
+    let mut i = 0;
+    while i < args_count() {
+        let a = arg(i);
+        if a == "-l" {
+            lines = true;
+        } else {
+            if a == "-w" {
+                words = true;
+            } else {
+                if a == "-c" {
+                    bytes = true;
+                } else {
+                    strs_push(files, a);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    let all = !lines && !words && !bytes;
+    let w = Wanted(lines: all || lines, words: all || words, bytes: all || bytes);
+
+    if strs_len(files) == 0 {
+        match io_stdin_read_all(io) {
+            Result.Ok(value: data) => {
+                io_println(io, row(count(data), w, ""));
+                return 0;
+            },
+            Result.Err(error: e) => {
+                io_eprintln(io, str_concat("nwc: ", io_error_show(e)));
+                return exit_with(1);
+            },
+        };
+    }
+
+    let mut status = 0;
+    let mut total = Counts(lines: 0, words: 0, bytes: 0);
+    let mut k = 0;
+    while k < strs_len(files) {
+        let name = strs_get(files, k);
+        match file_read_all(io, name) {
+            Result.Ok(value: data) => {
+                let c = count(data);
+                io_println(io, row(c, w, name));
+                total = Counts(lines: total.lines + c.lines, words: total.words + c.words, bytes: total.bytes + c.bytes);
+            },
+            Result.Err(error: e) => {
+                io_eprintln(io, str_concat(str_concat(str_concat("nwc: ", name), ": "), io_error_show(e)));
+                status = 1;
+            },
+        };
+        k = k + 1;
+    }
+    if strs_len(files) > 1 {
+        io_println(io, row(total, w, "total"));
+    }
+    if status != 0 {
+        exit_with(status);
+    }
+    0
+}

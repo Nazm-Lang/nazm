@@ -1,0 +1,6 @@
+{"user": "carol", "bytes": 512, "status": 200}
+{"user": "alice", "bytes": 1024, "status": 200}
+{"user": "bob", "bytes": 64, "status": 404}
+
+{"user": "alice", "bytes": 2048, "status": 500}
+{"user": "dave", "bytes": "many", "status": 200}

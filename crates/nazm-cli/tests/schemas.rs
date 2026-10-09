@@ -1227,3 +1227,37 @@ fn a_runtime_manifest_matches_the_published_schema_for_every_profile() {
     assert_eq!(objects.len(), 3);
     check_against("nazm.runtime-1.json", &objects);
 }
+
+/// Gate 2 (§18–§19): a test function's row, a fuzz target's, and a benchmark's, from real output.
+#[test]
+fn test_function_and_benchmark_rows_match_the_published_schemas() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("t.nz"),
+        "@test\nfn ok() -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }\n\n\
+         @fuzz\nfn f(input: Bytes) -> Result[Int, Str] { Result[Int, Str].Ok(value: bytes_len(input)) }\n\n\
+         @bench\nfn b() -> Int { 1 }\n",
+    )
+    .unwrap();
+    let tested = Command::new(NAZM)
+        .current_dir(d.path())
+        .args(["test", "--json", "--fuzz", "5", "t.nz"])
+        .output()
+        .unwrap();
+    let rows = lines(&String::from_utf8_lossy(&tested.stdout));
+    assert_eq!(rows.len(), 2, "{}", String::from_utf8_lossy(&tested.stderr));
+    check_against("nazm.test-1.json", &rows);
+    let benched = Command::new(NAZM)
+        .current_dir(d.path())
+        .args(["bench", "--json", "--iterations", "3", "t.nz"])
+        .output()
+        .unwrap();
+    let rows = lines(&String::from_utf8_lossy(&benched.stdout));
+    assert_eq!(
+        rows.len(),
+        1,
+        "{}",
+        String::from_utf8_lossy(&benched.stderr)
+    );
+    check_against("nazm.bench-1.json", &rows);
+}

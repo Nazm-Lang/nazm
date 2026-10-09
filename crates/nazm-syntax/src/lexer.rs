@@ -126,6 +126,8 @@ pub enum TokenKind {
     Tilde,
     Shl,
     Shr,
+    /// `@` — the start of a declaration's attribute (Gate 2, `docs/general-purpose.md` §16).
+    At,
 
     Eof,
 }
@@ -199,6 +201,7 @@ impl TokenKind {
         Self::Tilde,
         Self::Shl,
         Self::Shr,
+        Self::At,
     ];
 
     /// How this token is spelled in source, for the ones with a fixed spelling.
@@ -273,6 +276,7 @@ impl TokenKind {
             Self::Tilde => Some("~"),
             Self::Shl => Some("<<"),
             Self::Shr => Some(">>"),
+            Self::At => Some("@"),
         }
     }
 
@@ -340,6 +344,7 @@ impl TokenKind {
             Self::Tilde => "`~`".to_owned(),
             Self::Shl => "`<<`".to_owned(),
             Self::Shr => "`>>`".to_owned(),
+            Self::At => "`@`".to_owned(),
             Self::Eof => "end of file".to_owned(),
         }
     }
@@ -877,6 +882,7 @@ pub(crate) fn scan_one(
         b'|' => Some(TokenKind::Pipe),
         b'^' => Some(TokenKind::Caret),
         b'~' => Some(TokenKind::Tilde),
+        b'@' => Some(TokenKind::At),
         _ => None,
     };
     match single {
@@ -995,7 +1001,7 @@ mod tests {
     #[test]
     fn every_bad_character_is_reported_not_just_the_first() {
         // One error per recompile would cost an agent a turn per character.
-        let (_, e) = lex("a @ b # c $");
+        let (_, e) = lex("a ` b # c $");
         assert_eq!(e.len(), 3, "expected three, got {e:?}");
         assert!(e.iter().all(|d| d.code == codes::UNKNOWN_CHARACTER));
     }

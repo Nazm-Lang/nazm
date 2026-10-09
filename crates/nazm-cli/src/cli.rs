@@ -195,6 +195,15 @@ pub(crate) enum Command {
         /// accepted program does.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
+        /// The `@test`, `@fuzz` or `@bench` function to run through the generated entry, as `nazm
+        /// test` and `nazm bench` ask (Gate 2, §18–§19): `test:NAME`, `fuzz:NAME:CASES` or
+        /// `bench:NAME:ITERATIONS`. Not an interface of its own.
+        #[arg(long, hide = true, value_name = "SPEC")]
+        harness: Option<String>,
+        /// Features of the root package to enable beyond its `default`, comma-separated (Gate 2,
+        /// §22); each package's `@cfg(feature = …)` sees its own.
+        #[arg(long, value_name = "NAMES", value_delimiter = ',')]
+        features: Vec<String>,
     },
     /// Type-check without evaluating.
     Check {
@@ -237,6 +246,10 @@ pub(crate) enum Command {
         /// accepted program does.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
+        /// Features of the root package to enable beyond its `default`, comma-separated (Gate 2,
+        /// §22); each package's `@cfg(feature = …)` sees its own.
+        #[arg(long, value_name = "NAMES", value_delimiter = ',')]
+        features: Vec<String>,
         /// One `nazm.profile-report/1` object on stdout: every rule of the profiles in force,
         /// its verdict and its witnesses.
         #[arg(long)]
@@ -484,6 +497,26 @@ pub(crate) enum Command {
         /// status is unchanged. `--json` still gives every case in full.
         #[arg(long, conflicts_with = "json")]
         summary_json: bool,
+        /// Run only the cases whose name contains this: `STEM` for a recorded output,
+        /// `STEM::FUNCTION` for a `@test` or `@fuzz` function (Gate 2, §18).
+        #[arg(long, value_name = "TEXT")]
+        filter: Option<String>,
+        /// How many generated inputs each `@fuzz` function is given, the same ones every run.
+        #[arg(long, value_name = "N", default_value_t = crate::test::DEFAULT_FUZZ_CASES)]
+        fuzz: u32,
+    },
+    /// Measure every `@bench` function of the files named (Gate 2, §19): each built natively at
+    /// `-O2` and called `--iterations` times between two readings of the monotonic clock.
+    Bench {
+        /// Files or directories; a directory is scanned for `.nz` files.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// How many calls each measurement times together.
+        #[arg(long, value_name = "N", default_value_t = 1000)]
+        iterations: u32,
+        /// One `nazm.bench/1` object per function, on stdout.
+        #[arg(long)]
+        json: bool,
     },
     /// An interactive session (N65): definitions and expressions a line at a time on standard
     /// input, checked as one program on every edit and evaluated by the interpreter. A
@@ -803,6 +836,9 @@ pub(crate) enum Command {
         /// compiler, the target or what the program reaches.
         #[arg(long, value_name = "DIR")]
         runtime: Option<PathBuf>,
+        /// What the build is of (Gate 2): a marked function, and the package's features.
+        #[command(flatten)]
+        selection: Box<Selection>,
         /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
         /// resolves to, with their bytes unchanged (N46).
         #[arg(long)]
@@ -936,4 +972,18 @@ fn max_depth(raw: &str) -> Result<usize, String> {
         ));
     }
     Ok(n)
+}
+
+/// `nazm build`'s Gate 2 options, boxed so the largest command stays near the others in size.
+#[derive(Debug, clap::Args)]
+pub(crate) struct Selection {
+    /// The `@test`, `@fuzz` or `@bench` function to run through the generated entry, as `nazm
+    /// test` and `nazm bench` ask (Gate 2, §18–§19): `test:NAME`, `fuzz:NAME:CASES` or
+    /// `bench:NAME:ITERATIONS`. Not an interface of its own.
+    #[arg(long, hide = true, value_name = "SPEC")]
+    pub(crate) harness: Option<String>,
+    /// Features of the root package to enable beyond its `default`, comma-separated (Gate 2,
+    /// §22); each package's `@cfg(feature = …)` sees its own.
+    #[arg(long, value_name = "NAMES", value_delimiter = ',')]
+    pub(crate) features: Vec<String>,
 }

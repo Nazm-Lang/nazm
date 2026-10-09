@@ -30,6 +30,7 @@ use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
 use nazm_sema::{ConvertMode, NumKind, NumericFact};
 
+pub mod attributes;
 mod call;
 mod clauses;
 mod construct;

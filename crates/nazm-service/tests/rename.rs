@@ -712,3 +712,17 @@ fn a_thousand_rename_plans_leave_no_state_behind() {
         assert_eq!((s.retained(), s.indexed()), before);
     });
 }
+
+/// Gate 2: a constant is renamed at its declaration, every use in a body, every use in another
+/// constant's value and every array length written with it — from any of them.
+#[test]
+fn a_constant_is_renamed_everywhere_it_is_named() {
+    const SRC: &str = "const WIDTH: Int = 4;\nconst AREA: Int = WIDTH * WIDTH;\n\
+fn row() -> [Int; WIDTH] { [0; WIDTH] }\n\
+fn main() -> Int { let r = row(); r[0] + WIDTH + AREA }\n";
+    let expected = SRC.replace("WIDTH", "COLUMNS");
+    for (n, into) in [(0, 0), (1, 2), (3, 0), (5, 1)] {
+        let plan = rename_in(SRC, at(SRC, "WIDTH", n, into), "COLUMNS").unwrap();
+        assert_eq!(applied(&plan), expected, "from occurrence {n}");
+    }
+}

@@ -126,9 +126,140 @@ struct Module {
 #[derive(Debug, Clone, Default)]
 pub struct ModuleGraph {
     modules: Vec<Module>,
+    /// What `@cfg` is decided by for this compilation (Gate 2, `docs/spec.md`, *Conditional
+    /// compilation*). `None` is the host's, the configuration every command without a target
+    /// or a profile checks for.
+    config: Option<Box<BuildConfig>>,
+}
+
+/// The facts an `@cfg` condition reads: the target's operating system and architecture, its
+/// triple, the enabled features of the package a module belongs to, and the build's profiles —
+/// never the environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildConfig {
+    pub os: String,
+    pub arch: String,
+    pub target: String,
+    /// The root package's enabled features — or, outside a package, none.
+    pub features: Vec<String>,
+    /// Each dependency package's enabled features, by its `NAME@VERSION` (§22): a module's
+    /// `@cfg(feature = …)` asks its own package, never another's.
+    pub package_features: std::collections::BTreeMap<String, Vec<String>>,
+    pub profiles: Vec<String>,
+}
+
+impl BuildConfig {
+    /// The host's: what `nazm run` and `nazm check` decide `@cfg` by.
+    #[must_use]
+    pub fn host() -> Self {
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+        let target = match (arch, os) {
+            ("aarch64", "macos") => "aarch64-apple-darwin".to_owned(),
+            ("x86_64", "macos") => "x86_64-apple-darwin".to_owned(),
+            (a, "linux") => format!("{a}-unknown-linux-gnu"),
+            (a, o) => format!("{a}-unknown-{o}"),
+        };
+        Self {
+            os: os.to_owned(),
+            arch: arch.to_owned(),
+            target,
+            features: Vec::new(),
+            package_features: std::collections::BTreeMap::new(),
+            profiles: Vec::new(),
+        }
+    }
+
+    /// The configuration for building to `triple`: its operating system (`macos`, `linux`,
+    /// `wasm` or `none`) and architecture read from it.
+    #[must_use]
+    pub fn for_target(triple: &str) -> Self {
+        let arch = triple.split('-').next().unwrap_or("");
+        let arch = if arch == "arm64" { "aarch64" } else { arch };
+        let os =
+            if triple.contains("apple") || triple.contains("darwin") || triple.contains("macos") {
+                "macos"
+            } else if triple.contains("linux") {
+                "linux"
+            } else if triple.starts_with("wasm") {
+                "wasm"
+            } else {
+                "none"
+            };
+        Self {
+            os: os.to_owned(),
+            arch: arch.to_owned(),
+            target: triple.to_owned(),
+            features: Vec::new(),
+            package_features: std::collections::BTreeMap::new(),
+            profiles: Vec::new(),
+        }
+    }
+
+    /// One line naming every fact, for a key a cached check is filed under.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let packages: Vec<String> = self
+            .package_features
+            .iter()
+            .map(|(p, fs)| format!("{p}:{}", fs.join(",")))
+            .collect();
+        format!(
+            "os={};arch={};target={};features={};packages={};profiles={}",
+            self.os,
+            self.arch,
+            self.target,
+            self.features.join(","),
+            packages.join("|"),
+            self.profiles.join(",")
+        )
+    }
 }
 
 impl ModuleGraph {
+    /// This compilation, deciding `@cfg` by `config` (Gate 2).
+    #[must_use]
+    pub fn with_config(mut self, config: BuildConfig) -> Self {
+        self.config = Some(Box::new(config));
+        self
+    }
+
+    /// What `@cfg` is decided by: the configuration given, or the host's.
+    #[must_use]
+    pub fn config(&self) -> BuildConfig {
+        self.config
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(BuildConfig::host)
+    }
+
+    /// The features enabled for the package the module in `file` belongs to (§22): a
+    /// dependency's by its key's `NAME@VERSION`, none for the toolchain's own modules, and the
+    /// root package's for everything else.
+    #[must_use]
+    pub fn features_of_file(&self, file: FileId) -> Vec<String> {
+        let config = self.config();
+        let key = self
+            .modules
+            .iter()
+            .find(|m| m.file == file)
+            .and_then(|m| m.key.as_ref());
+        let Some(first) = key.and_then(|k| k.as_str().split('/').next()) else {
+            return config.features;
+        };
+        if first.starts_with('@') {
+            Vec::new()
+        } else if first.contains('@') {
+            config
+                .package_features
+                .get(first)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            config.features
+        }
+    }
+
     /// A compilation of one module, with no imports.
     ///
     /// For the `&str` entry points — tests, mostly, and anything with genuinely one file.
@@ -144,6 +275,7 @@ impl ModuleGraph {
                 key: None,
                 imports: Vec::new(),
             }],
+            config: None,
         }
     }
 

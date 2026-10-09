@@ -494,6 +494,7 @@ fn rename_target(
         ReferenceTarget::PayloadField(_) => "payload_field",
         ReferenceTarget::Trait(_) => "trait",
         ReferenceTarget::TraitMethod(..) => "trait_method",
+        ReferenceTarget::Const(_) => "constant",
     };
     Ok(match here {
         ReferenceTarget::Local(l) => RenameTarget {

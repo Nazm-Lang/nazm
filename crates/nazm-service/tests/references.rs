@@ -878,6 +878,10 @@ fn resolved_declaration(
         let t = res.traits().get(c.trait_id)?;
         return Some(("trait method", t.methods.get(c.method as usize)?.name_span));
     }
+    // Gate 2: a constant named in a body, another constant's value or an array's length.
+    if let Some(d) = res.const_refs().get(&span) {
+        return Some(("constant", *d));
+    }
     // N18: a written type name, by the definition the checker resolved it to.
     match res.type_name(span)? {
         nazm_core::sema::TypeNode::Record(id) => Some(("record", res.records().get(id)?.name_span)),
@@ -1147,6 +1151,8 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                             )
                             // `impl Trait for Type`: `for` is its syntax (N78).
                             || (node.kind() == K::ImplItem && leaf.text == "for")
+                            // `const NAME: T = …;`: `const` is its syntax (Gate 2).
+                            || (node.kind() == K::ConstItem && leaf.text == "const")
                             // A trait method's parameter, and `Self`, inside a trait (N78).
                             || (node.kind() == K::Param && in_a_trait(span))
                             || (node.kind() == K::Type && leaf.text == "Self" && in_a_trait(span));

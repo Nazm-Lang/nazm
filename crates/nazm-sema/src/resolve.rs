@@ -431,6 +431,11 @@ pub struct Resolution {
     /// Each use of a constant, by the name's span, with the value the checker computed
     /// (Gate 2): what Core IR writes as a literal.
     const_uses: HashMap<Span, crate::numeric::ConstValue>,
+    /// Every constant's declaration, by its name's span (Gate 2), for the reference index.
+    const_decls: Vec<Span>,
+    /// Every name of a constant — in a body, another constant's value or an array's length —
+    /// with the declaration it names, by the name's span.
+    const_refs: HashMap<Span, Span>,
     /// Each array type where it was first written (Gate 2), for the stage that holds every
     /// array to its element and size rules once every definition is known.
     arrays_written: Vec<(Type, Span)>,
@@ -981,6 +986,28 @@ impl Resolution {
 
     pub fn record_const_use(&mut self, span: Span, value: crate::numeric::ConstValue) {
         self.const_uses.insert(span, value);
+    }
+
+    /// Every constant declared, by its name's span (Gate 2).
+    #[must_use]
+    pub fn const_decls(&self) -> &[Span] {
+        &self.const_decls
+    }
+
+    /// Every name of a constant, with the declaration it names (Gate 2).
+    #[must_use]
+    pub const fn const_refs(&self) -> &HashMap<Span, Span> {
+        &self.const_refs
+    }
+
+    pub fn record_const_decl(&mut self, at: Span) {
+        if !self.const_decls.contains(&at) {
+            self.const_decls.push(at);
+        }
+    }
+
+    pub fn record_const_ref(&mut self, at: Span, decl: Span) {
+        self.const_refs.insert(at, decl);
     }
 
     /// Every array type written, with where it was first (Gate 2).

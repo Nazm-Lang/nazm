@@ -199,6 +199,37 @@ pub(crate) enum Item {
     Const(crate::ast::Const),
 }
 
+/// `item`, given the attributes written before it (Gate 2). An impl's attributes are its header's.
+fn with_attributes(item: Item, attrs: Vec<crate::ast::Attribute>) -> Item {
+    match item {
+        Item::Function(mut f) => {
+            f.attrs = attrs;
+            Item::Function(f)
+        }
+        Item::Record(mut r) => {
+            r.attrs = attrs;
+            Item::Record(r)
+        }
+        Item::Enum(mut e) => {
+            e.attrs = attrs;
+            Item::Enum(e)
+        }
+        Item::Trait(mut t) => {
+            t.attrs = attrs;
+            Item::Trait(t)
+        }
+        Item::Impl(mut d, methods) => {
+            d.attrs = attrs;
+            Item::Impl(d, methods)
+        }
+        Item::Const(mut c) => {
+            c.attrs = attrs;
+            Item::Const(c)
+        }
+        Item::Import(i) => Item::Import(i),
+    }
+}
+
 /// Where a parse of top-level items starts and where it may stop (N76).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Region<'r> {
@@ -358,12 +389,21 @@ pub(crate) fn parse_region(
         p.reported_too_deep = false;
         p.poisoned = false;
         p.drop_item = false;
-        p.item_start = start;
+        // An item's attributes come first (Gate 2): read here, inside the item's chunk, and
+        // given to the item it precedes.
+        let attrs = if p.at(&TokenKind::At) {
+            p.muted = false;
+            p.attributes()
+        } else {
+            Vec::new()
+        };
+        p.item_start = p.pos;
         // A cascade ends where a new item visibly begins. Anything else here is what an
         // item whose braces did not balance left behind, and stays muted.
         if matches!(
             p.peek(),
             TokenKind::Fn
+                | TokenKind::At
                 | TokenKind::Pub
                 | TokenKind::Struct
                 | TokenKind::Enum
@@ -379,7 +419,19 @@ pub(crate) fn parse_region(
                 p.tokens.get(p.pos + 1).map(|t| &t.kind),
                 Some(TokenKind::Use)
             );
-        let item = if p.at(&TokenKind::Use) || pub_use {
+        let item = if (p.at(&TokenKind::Use) || pub_use) && !attrs.is_empty() {
+            let span = attrs.first().map_or(p.peek_span(), |a| a.span);
+            p.report(
+                Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    span,
+                    "an attribute belongs to a declaration, not to an import",
+                )
+                .primary_label("before an import")
+                .help("write it before a `fn`, `struct`, `enum`, `trait`, `impl` or `const`"),
+            );
+            p.import().map(Item::Import)
+        } else if p.at(&TokenKind::Use) || pub_use {
             p.import().map(Item::Import)
         } else if p.at(&TokenKind::Impl) {
             p.impl_decl().map(|(d, m)| Item::Impl(d, m))
@@ -426,7 +478,9 @@ pub(crate) fn parse_region(
         };
         // A declaration that needed recovery is in the concrete tree and not the abstract
         // one: the checker never sees a declaration with a hole in it (N76).
-        let item = item.filter(|_| !p.drop_item);
+        let item = item
+            .filter(|_| !p.drop_item)
+            .map(|i| with_attributes(i, attrs));
         if item.is_none() && !p.drop_item {
             // Skip to the next plausible item so one bad item does not cascade into an
             // error per token for the rest of the file. What was read and what was
@@ -568,7 +622,7 @@ impl<'a> Parser<'a> {
                 && matches!(rest(i).map(|n| &n.kind), Some(TokenKind::Ident(_)));
             let (slot, opens) = match t.kind {
                 TokenKind::Fn if !item_fn => continue,
-                TokenKind::Fn | TokenKind::Pub | TokenKind::Eof => break,
+                TokenKind::Fn | TokenKind::Pub | TokenKind::At | TokenKind::Eof => break,
                 TokenKind::LBrace => (0, true),
                 TokenKind::RBrace => (0, false),
                 TokenKind::LParen => (1, true),
@@ -871,10 +925,171 @@ impl<'a> Parser<'a> {
         parsed
     }
 
+    /// `@name` and `@name(arguments)`, as many as are written (Gate 2): each an `Attribute` node.
+    fn attributes(&mut self) -> Vec<crate::ast::Attribute> {
+        let mut out = Vec::new();
+        while self.at(&TokenKind::At) {
+            let at = self.checkpoint();
+            let start = self.peek_span();
+            self.bump();
+            let name_span = self.peek_span();
+            let TokenKind::Ident(name) = self.peek().clone() else {
+                let found = self.peek().describe();
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        name_span,
+                        format!("expected an attribute's name after `@`, found {found}"),
+                    )
+                    .primary_label("expected a name"),
+                );
+                self.wrap(at, SyntaxKind::Attribute);
+                break;
+            };
+            self.bump();
+            let mut end = name_span;
+            let args = if self.at(&TokenKind::LParen) {
+                self.bump();
+                // One mistake is one error: what follows it, up to the attribute's `)`, is
+                // passed over rather than read as the item.
+                let open = match self.attribute_args(1) {
+                    Ok(args) => {
+                        match self.expect(&TokenKind::RParen, "to end an attribute's arguments") {
+                            Some(s) => {
+                                end = s;
+                                Ok(args)
+                            }
+                            None => Err(1),
+                        }
+                    }
+                    Err(open) => Err(open),
+                };
+                match open {
+                    Ok(args) => Some(args),
+                    // Already an error, so the attribute is not checked again: what it would
+                    // have said is unknown.
+                    Err(open) => {
+                        self.skip_attribute(open);
+                        self.wrap(at, SyntaxKind::Attribute);
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            self.wrap(at, SyntaxKind::Attribute);
+            out.push(crate::ast::Attribute {
+                name,
+                name_span,
+                args,
+                span: start.join(end),
+            });
+        }
+        out
+    }
+
+    /// An attribute's arguments, up to its `)`: strings, words, `key = "value"`, and `name(…)`.
+    ///
+    /// `open` is how many `(` enclose them. A mistake is reported once, and how many are then
+    /// open comes back for [`Self::skip_attribute`].
+    fn attribute_args(&mut self, open: usize) -> Result<Vec<crate::ast::AttrArg>, usize> {
+        let mut args = Vec::new();
+        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+            let span = self.peek_span();
+            match self.peek().clone() {
+                TokenKind::Str(value) => {
+                    self.bump();
+                    args.push(crate::ast::AttrArg::Str { value, span });
+                }
+                TokenKind::Ident(name) => {
+                    self.bump();
+                    if self.at(&TokenKind::Eq) {
+                        self.bump();
+                        let vspan = self.peek_span();
+                        let TokenKind::Str(value) = self.peek().clone() else {
+                            let found = self.peek().describe();
+                            self.report(
+                                Diagnostic::error(
+                                    codes::UNEXPECTED_TOKEN,
+                                    vspan,
+                                    format!("expected a string after `{name} =`, found {found}"),
+                                )
+                                .primary_label("expected a string"),
+                            );
+                            return Err(open);
+                        };
+                        self.bump();
+                        args.push(crate::ast::AttrArg::Pair {
+                            key: name,
+                            key_span: span,
+                            value,
+                            span: span.join(vspan),
+                        });
+                    } else if self.at(&TokenKind::LParen) {
+                        self.bump();
+                        let inner = self.attribute_args(open + 1)?;
+                        let Some(close) =
+                            self.expect(&TokenKind::RParen, &format!("to end `{name}(…)`"))
+                        else {
+                            return Err(open + 1);
+                        };
+                        args.push(crate::ast::AttrArg::Call {
+                            name,
+                            name_span: span,
+                            args: inner,
+                            span: span.join(close),
+                        });
+                    } else {
+                        args.push(crate::ast::AttrArg::Word { name, span });
+                    }
+                }
+                other => {
+                    self.report(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            span,
+                            format!(
+                                "expected a string, a word or `name(…)` in an attribute, found {}",
+                                other.describe()
+                            ),
+                        )
+                        .primary_label("not an attribute argument"),
+                    );
+                    return Err(open);
+                }
+            }
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        Ok(args)
+    }
+
+    /// Pass over a malformed attribute's remaining tokens, through the `)` that closes it, with
+    /// `open` parentheses still open; the span of that `)`, if it was reached. It stops short at
+    /// what can only begin an item, so a missing `)` costs the attribute, not the file.
+    fn skip_attribute(&mut self, mut open: usize) -> Option<Span> {
+        while !self.at(&TokenKind::Eof) && !self.at_item_start() {
+            let span = self.peek_span();
+            if self.at(&TokenKind::LParen) {
+                open += 1;
+            } else if self.at(&TokenKind::RParen) {
+                open -= 1;
+                if open == 0 {
+                    self.bump();
+                    return Some(span);
+                }
+            }
+            self.bump();
+        }
+        None
+    }
+
     /// Whether the next token can only begin a top-level item: `fn NAME`, `pub`, `struct`,
-    /// `enum` or `use`.
+    /// `enum`, `use`, or an attribute's `@` (Gate 2).
     fn at_item_start(&self) -> bool {
         self.at_item_fn()
+            || self.at(&TokenKind::At)
             || self.at(&TokenKind::Pub)
             || self.at(&TokenKind::Struct)
             || self.at(&TokenKind::Enum)
@@ -1118,6 +1333,7 @@ impl<'a> Parser<'a> {
                 self.wrap(at, SyntaxKind::RecordItem);
                 self.drop_item = self.poisoned;
                 return Some(Record {
+                    attrs: Vec::new(),
                     name,
                     name_span,
                     pub_span,
@@ -1152,6 +1368,7 @@ impl<'a> Parser<'a> {
         self.wrap(at, SyntaxKind::RecordItem);
         self.drop_item = self.poisoned;
         Some(Record {
+            attrs: Vec::new(),
             name,
             name_span,
             pub_span,
@@ -1223,6 +1440,7 @@ impl<'a> Parser<'a> {
         self.wrap(at, SyntaxKind::EnumItem);
         self.drop_item = self.poisoned;
         Some(Enum {
+            attrs: Vec::new(),
             name,
             name_span,
             pub_span,
@@ -1273,6 +1491,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&TokenKind::RBrace, "to close the trait")?;
         self.wrap(at, SyntaxKind::TraitItem);
         Some(Trait {
+            attrs: Vec::new(),
             name,
             name_span,
             pub_span,
@@ -1390,6 +1609,7 @@ impl<'a> Parser<'a> {
         self.drop_item = recovered;
         Some((
             ImplDecl {
+                attrs: Vec::new(),
                 trait_name,
                 self_ty,
                 impl_span,
@@ -1681,6 +1901,7 @@ impl<'a> Parser<'a> {
                 self.wrap(at, SyntaxKind::FnItem);
                 self.drop_item = self.poisoned;
                 return Some(Function {
+                    attrs: Vec::new(),
                     name,
                     name_span,
                     pub_span,
@@ -1731,6 +1952,7 @@ impl<'a> Parser<'a> {
         self.wrap(at, SyntaxKind::FnItem);
         self.drop_item = header_recovered;
         Some(Function {
+            attrs: Vec::new(),
             name,
             name_span,
             pub_span,
@@ -2203,6 +2425,7 @@ impl<'a> Parser<'a> {
         self.wrap(at, SyntaxKind::ConstItem);
         self.drop_item = self.poisoned;
         Some(crate::ast::Const {
+            attrs: Vec::new(),
             name,
             name_span,
             pub_span,

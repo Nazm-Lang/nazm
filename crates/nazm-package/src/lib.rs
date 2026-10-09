@@ -26,6 +26,10 @@ pub const LOCKFILE: &str = "nazm.lock";
 pub const MANIFEST_SCHEMA: &str = "nazm.package/1";
 /// The lockfile's schema.
 pub const LOCK_SCHEMA: &str = "nazm.lock/1";
+
+/// The lockfile schema that records each package's enabled features (Gate 2, §22): written only
+/// when a feature is enabled, so a build without features keeps its `nazm.lock/1` byte for byte.
+pub const LOCK_SCHEMA_FEATURES: &str = "nazm.lock/2";
 /// The digest's domain-separation tag: a change to what is hashed is a new tag.
 const DIGEST_TAG: &str = "nazm.package-digest/1";
 /// How deep a chain of dependencies may go before resolution refuses it.
@@ -93,6 +97,9 @@ struct RawManifest {
     dependencies: BTreeMap<String, RawDependency>,
     /// Where registry dependencies come from (N56); read from the root manifest only.
     registry: Option<RawRegistry>,
+    /// Each feature and what enabling it enables (Gate 2, §22).
+    #[serde(default)]
+    features: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,6 +123,9 @@ struct RawPackage {
 struct RawDependency {
     path: Option<String>,
     version: String,
+    /// Features of the dependency this package enables (Gate 2, §22).
+    #[serde(default)]
+    features: Vec<String>,
 }
 
 /// How a manifest names a dependency.
@@ -143,6 +153,11 @@ pub struct Manifest {
     /// The restriction profile this package requires of every program it is part of (N47),
     /// by name; validated by the command line, which knows the profiles.
     pub profile: Option<String>,
+    /// Each feature, and what enabling it enables: another of this package's features, or
+    /// `DEPENDENCY/FEATURE` (Gate 2, §22). `default` is enabled unless nothing asks for it.
+    pub features: BTreeMap<String, Vec<String>>,
+    /// The features each dependency is asked for, by the dependency's name.
+    pub dependency_features: BTreeMap<String, Vec<String>>,
 }
 
 pub(crate) fn error(code: Code, message: String) -> Diagnostic {
@@ -204,7 +219,11 @@ impl Manifest {
             }
         }
         let mut dependencies = BTreeMap::new();
+        let mut dependency_features = BTreeMap::new();
         for (name, d) in raw.dependencies {
+            if !d.features.is_empty() {
+                dependency_features.insert(name.clone(), d.features.clone());
+            }
             if !valid_name(&name) {
                 return Err(bad(format!("`{name}` is not a package name")));
             }
@@ -231,6 +250,34 @@ impl Manifest {
             };
             dependencies.insert(name, dep);
         }
+        // Features are additive names: each a package name's shape, each item another of this
+        // package's features or `DEPENDENCY/FEATURE` of a dependency it declares.
+        for (feature, items) in &raw.features {
+            if !valid_name(feature) {
+                return Err(bad(format!(
+                    "`{feature}` is not a feature name: lowercase ASCII letters, digits and `-`"
+                )));
+            }
+            for item in items {
+                let known = match item.split_once('/') {
+                    Some((dep, f)) => dependencies.contains_key(dep) && valid_name(f),
+                    None => raw.features.contains_key(item),
+                };
+                if !known {
+                    return Err(bad(format!(
+                        "the feature `{feature}` enables `{item}`, which is neither one of this \
+                         package's features nor `DEPENDENCY/FEATURE` of a dependency it declares"
+                    )));
+                }
+            }
+        }
+        for (dep, fs) in &dependency_features {
+            if let Some(f) = fs.iter().find(|f| !valid_name(f)) {
+                return Err(bad(format!(
+                    "the dependency `{dep}` is asked for `{f}`, not a feature name"
+                )));
+            }
+        }
         Ok(Self {
             name: raw.package.name,
             version,
@@ -239,6 +286,8 @@ impl Manifest {
             dependencies,
             registry: raw.registry.map(|r| r.path),
             profile: raw.package.profile,
+            features: raw.features,
+            dependency_features,
         })
     }
 }
@@ -263,6 +312,13 @@ pub struct Package {
     pub digest: String,
     /// The restriction profile its manifest requires, if any (N47).
     pub profile: Option<String>,
+    /// Its features as its manifest declares them (Gate 2, §22).
+    pub feature_table: BTreeMap<String, Vec<String>>,
+    /// The features it asks of each dependency, by the dependency's name.
+    pub requests: BTreeMap<String, Vec<String>>,
+    /// The features enabled for it, sorted: what `default` enables, what its dependents
+    /// ask for, and what the command asks of the root ([`Graph::enable`]).
+    pub features: Vec<String>,
 }
 
 impl Package {
@@ -939,6 +995,9 @@ fn resolve_preferring(dir: &Path, dropping: Option<&[String]>) -> Result<Graph, 
                 format!("path+{}", relative(&root_dir, dir))
             },
             profile: m.profile.clone(),
+            feature_table: m.features.clone(),
+            requests: m.dependency_features.clone(),
+            features: Vec::new(),
             dependencies: r
                 .edges
                 .get(old)
@@ -950,10 +1009,12 @@ fn resolve_preferring(dir: &Path, dropping: Option<&[String]>) -> Result<Graph, 
                 .unwrap_or_default(),
         });
     }
-    Ok(Graph {
+    let mut graph = Graph {
         packages,
         root: position.get(root).copied().unwrap_or(0),
-    })
+    };
+    graph.enable(&[])?;
+    Ok(graph)
 }
 
 #[derive(Debug, Deserialize)]
@@ -973,6 +1034,9 @@ struct RawLocked {
     digest: String,
     #[serde(default)]
     dependencies: Vec<String>,
+    /// `nazm.lock/2` only (Gate 2, §22): the enabled features.
+    #[serde(default)]
+    features: Vec<String>,
 }
 
 /// The registry versions a lockfile records, by name; empty when there is none or it cannot be
@@ -992,6 +1056,77 @@ fn locked_registry_versions(path: &Path) -> BTreeMap<String, Version> {
 }
 
 impl Graph {
+    /// Settle every package's enabled features, with `requested` asked of the root beyond its
+    /// `default` (Gate 2, §22): each package's `default`, what its dependents ask of it, and what
+    /// every enabled feature enables, until nothing more is. Additive: nothing disables a
+    /// feature, so the order things are asked in cannot change the answer.
+    ///
+    /// # Errors
+    ///
+    /// `N0500` for a feature asked of a package that does not declare it.
+    pub fn enable(&mut self, requested: &[String]) -> Result<(), Vec<Diagnostic>> {
+        let mut on: Vec<std::collections::BTreeSet<String>> =
+            vec![std::collections::BTreeSet::new(); self.packages.len()];
+        let mut work: Vec<(usize, String, String)> = Vec::new();
+        for (i, p) in self.packages.iter().enumerate() {
+            if p.feature_table.contains_key("default") {
+                work.push((i, "default".to_owned(), format!("`{}`'s default", p.name)));
+            }
+            for (dep, fs) in &p.requests {
+                if let Some(&j) = p.dependencies.get(dep) {
+                    for f in fs {
+                        work.push((j, f.clone(), format!("the package `{}`", p.name)));
+                    }
+                }
+            }
+        }
+        for f in requested {
+            work.push((self.root, f.clone(), "`--features`".to_owned()));
+        }
+        let mut errors = Vec::new();
+        while let Some((i, f, asker)) = work.pop() {
+            let Some(p) = self.packages.get(i) else {
+                continue;
+            };
+            let Some(items) = p.feature_table.get(&f) else {
+                errors.push(error(
+                    codes::MANIFEST_INVALID,
+                    format!(
+                        "{asker} asks `{}` for the feature `{f}`, which it does not declare",
+                        p.name
+                    ),
+                ));
+                continue;
+            };
+            let Some(set) = on.get_mut(i) else {
+                continue;
+            };
+            if !set.insert(f.clone()) {
+                continue;
+            }
+            for item in items {
+                match item.split_once('/') {
+                    Some((dep, g)) => {
+                        if let Some(&j) = p.dependencies.get(dep) {
+                            work.push((j, g.to_owned(), format!("the feature `{}/{f}`", p.name)));
+                        }
+                    }
+                    None => work.push((i, item.clone(), format!("the feature `{}/{f}`", p.name))),
+                }
+            }
+        }
+        if !errors.is_empty() {
+            errors.sort_by(|a, b| a.message.cmp(&b.message));
+            errors.dedup_by(|a, b| a.message == b.message);
+            return Err(errors);
+        }
+        // `default` names a group, not a feature: what it enables is recorded, not its name.
+        for (p, set) in self.packages.iter_mut().zip(on) {
+            p.features = set.into_iter().filter(|f| f != "default").collect();
+        }
+        Ok(())
+    }
+
     /// The root package: always there, since resolution starts from it.
     #[must_use]
     pub fn root_package(&self) -> Option<&Package> {
@@ -1016,7 +1151,13 @@ impl Graph {
     pub fn lock_text(&self) -> String {
         let mut out = String::new();
         out.push_str("# Written by `nazm lock`. Do not edit: `nazm lock` rewrites it.\n");
-        out.push_str(&format!("schema = \"{LOCK_SCHEMA}\"\n"));
+        let featured = self.packages.iter().any(|p| !p.features.is_empty());
+        let schema = if featured {
+            LOCK_SCHEMA_FEATURES
+        } else {
+            LOCK_SCHEMA
+        };
+        out.push_str(&format!("schema = \"{schema}\"\n"));
         for p in &self.packages {
             out.push_str("\n[[package]]\n");
             out.push_str(&format!("name = \"{}\"\n", p.name));
@@ -1028,6 +1169,10 @@ impl Graph {
             out.push_str(&format!("digest = \"{}\"\n", p.digest));
             let deps: Vec<String> = p.dependencies.keys().map(|d| format!("\"{d}\"")).collect();
             out.push_str(&format!("dependencies = [{}]\n", deps.join(", ")));
+            if featured {
+                let fs: Vec<String> = p.features.iter().map(|f| format!("\"{f}\"")).collect();
+                out.push_str(&format!("features = [{}]\n", fs.join(", ")));
+            }
         }
         out
     }
@@ -1046,10 +1191,13 @@ impl Graph {
                 format!("`{LOCKFILE}` cannot be read: {}", e.message()),
             )]
         })?;
-        if raw.schema != LOCK_SCHEMA {
+        if raw.schema != LOCK_SCHEMA && raw.schema != LOCK_SCHEMA_FEATURES {
             return Err(vec![error(
                 codes::LOCK_MISMATCH,
-                format!("`{LOCKFILE}` is `{}`, not `{LOCK_SCHEMA}`", raw.schema),
+                format!(
+                    "`{LOCKFILE}` is `{}`, not `{LOCK_SCHEMA}` or `{LOCK_SCHEMA_FEATURES}`",
+                    raw.schema
+                ),
             )]);
         }
         let mut errors = Vec::new();
@@ -1073,7 +1221,23 @@ impl Graph {
                 continue;
             };
             let deps: Vec<String> = p.dependencies.keys().cloned().collect();
-            if l.version != p.version.to_string() || l.source != p.source || l.dependencies != deps
+            if l.version == p.version.to_string()
+                && l.source == p.source
+                && l.dependencies == deps
+                && l.features != p.features
+            {
+                errors.push(error(
+                    codes::LOCK_MISMATCH,
+                    format!(
+                        "`{}` resolves with the features [{}], and `{LOCKFILE}` records [{}]",
+                        p.name,
+                        p.features.join(", "),
+                        l.features.join(", ")
+                    ),
+                ));
+            } else if l.version != p.version.to_string()
+                || l.source != p.source
+                || l.dependencies != deps
             {
                 errors.push(error(
                     codes::LOCK_MISMATCH,
