@@ -4,7 +4,9 @@
 // document is an arena: every value is a node in one `Vec`, and an array's or an object's children
 // are a run of node indices in `kids`. A node is named by its index. Numbers are integers, as
 // Nazm's are: a fraction or an exponent is refused, by name. Parsing never traps: malformed text is
-// an `Err` naming the byte offset where it went wrong.
+// an `Err` naming the byte offset where it went wrong. (Gate 2) `json_parse_floats` reads a number
+// with a fraction or an exponent as a `Float64` node, which `json_kind` calls a `number` too; and
+// `json_encode_pretty` writes a document indented.
 
 /// One value: its kind, and what that kind holds. An array's elements, or an object's keys and
 /// values alternately, are `count` entries of `kids` from `first`.
@@ -31,6 +33,8 @@ fn k_num() -> Int ! {} { 3 }
 fn k_str() -> Int ! {} { 4 }
 fn k_arr() -> Int ! {} { 5 }
 fn k_obj() -> Int ! {} { 6 }
+// A number with a fraction or an exponent (Gate 2): its `Float64`'s bits in `num`.
+fn k_float() -> Int ! {} { 7 }
 
 /// An empty document whose root is a `null` node, for building one.
 pub fn json_new() -> JsonDoc ! {} {
@@ -100,7 +104,7 @@ pub fn json_kind(doc: JsonDoc, node: Int) -> Str ! {} {
     if node < 0 || node >= vec_len(doc.nodes) { "" } else {
         let k = vec_get(doc.nodes, node).kind;
         if k == k_null() { "null" } else { if k == k_false() || k == k_true() { "bool" } else {
-            if k == k_num() { "number" } else { if k == k_str() { "string" } else {
+            if k == k_num() || k == k_float() { "number" } else { if k == k_str() { "string" } else {
                 if k == k_arr() { "array" } else { "object" } } } } }
     }
 }
@@ -151,7 +155,21 @@ pub fn json_get(doc: JsonDoc, node: Int, key: Str) -> Option[Int] ! {} {
 
 /// A number node's value, or `None`.
 pub fn json_int(doc: JsonDoc, node: Int) -> Option[Int] ! {} {
-    if json_kind(doc, node) == "number" { Option[Int].Some(value: vec_get(doc.nodes, node).num) } else { Option[Int].None() }
+    if json_kind(doc, node) == "number" && vec_get(doc.nodes, node).kind == k_num() { Option[Int].Some(value: vec_get(doc.nodes, node).num) } else { Option[Int].None() }
+}
+
+/// A float (Gate 2): `x` as a number node.
+pub fn json_add_float(doc: JsonDoc, x: Float64) -> Int ! {} {
+    add(doc, JsonNode(kind: k_float(), num: wrap_convert[Int](float64_to_bits(x)), text: "", first: 0, count: 0))
+}
+
+/// A number node's value as a `Float64` (Gate 2) — an integer node's converted, to the nearest —
+/// or `None`.
+pub fn json_float(doc: JsonDoc, node: Int) -> Option[Float64] ! {} {
+    if json_kind(doc, node) != "number" { Option[Float64].None() } else {
+        let n = vec_get(doc.nodes, node);
+        if n.kind == k_float() { Option[Float64].Some(value: float64_from_bits(wrap_convert[UInt64](n.num))) } else { Option[Float64].Some(value: Float64(n.num)) }
+    }
 }
 
 /// A string node's value, or `None`.
@@ -200,7 +218,7 @@ pub fn json_encode_node(doc: JsonDoc, node: Int) -> Str ! {} {
     let kind = json_kind(doc, node);
     if kind == "null" || kind == "" { "null" } else {
         if kind == "bool" { if vec_get(doc.nodes, node).kind == k_true() { "true" } else { "false" } } else {
-            if kind == "number" { int_to_str(vec_get(doc.nodes, node).num) } else {
+            if kind == "number" { number_text(vec_get(doc.nodes, node)) } else {
                 if kind == "string" { json_quote(vec_get(doc.nodes, node).text) } else {
                     let parts = strs_new();
                     let n = json_len(doc, node);
@@ -230,6 +248,62 @@ pub fn json_encode(doc: JsonDoc) -> Str ! {} {
     json_encode_node(doc, doc.root)
 }
 
+// A number's text: an integer's digits, or a float's shortest text that reads back to it, with a
+// `.0` where that would read as an integer; JSON has no infinity or NaN, so those are `null`.
+fn number_text(n: JsonNode) -> Str ! {} {
+    if n.kind == k_num() { int_to_str(n.num) } else {
+        let x = float64_from_bits(wrap_convert[UInt64](n.num));
+        if !float_is_finite(x) { "null" } else {
+            let t = num_to_str(x);
+            let mut plain = true;
+            let mut i = 0;
+            while i < str_len(t) {
+                let b = str_byte(t, i);
+                if b == 46 || b == 101 || b == 69 { plain = false; }
+                i = i + 1;
+            }
+            if plain { str_concat(t, ".0") } else { t }
+        }
+    }
+}
+
+fn indent(depth: Int) -> Str ! {} {
+    let mut out = "";
+    let mut i = 0;
+    while i < depth { out = str_concat(out, "  "); i = i + 1; }
+    out
+}
+
+fn pretty_node(doc: JsonDoc, node: Int, depth: Int) -> Str ! {} {
+    let kind = json_kind(doc, node);
+    if kind != "array" && kind != "object" { json_encode_node(doc, node) } else {
+        let n = json_len(doc, node);
+        if n == 0 { if kind == "array" { "[]" } else { "{}" } } else {
+            let parts = strs_new();
+            let mut i = 0;
+            while i < n {
+                if kind == "array" {
+                    let e = match json_at(doc, node, i) { Option.Some(value: e) => e, Option.None() => 0 - 1 };
+                    strs_push(parts, str_concat(indent(depth + 1), pretty_node(doc, e, depth + 1)));
+                } else {
+                    let k = match json_key_at(doc, node, i) { Option.Some(value: k) => k, Option.None() => "" };
+                    let v = match json_value_at(doc, node, i) { Option.Some(value: v) => v, Option.None() => 0 - 1 };
+                    strs_push(parts, str_concat(str_concat(indent(depth + 1), str_concat(json_quote(k), ": ")), pretty_node(doc, v, depth + 1)));
+                }
+                i = i + 1;
+            }
+            let open = if kind == "array" { "[\n" } else { "{\n" };
+            let close = if kind == "array" { "]" } else { "}" };
+            str_concat(str_concat(open, str_join(parts, ",\n")), str_concat(str_concat("\n", indent(depth)), close))
+        }
+    }
+}
+
+/// `doc`'s root as JSON text indented two spaces a level, a member's key followed by `: ` (Gate 2).
+pub fn json_encode_pretty(doc: JsonDoc) -> Str ! {} {
+    pretty_node(doc, doc.root, 0)
+}
+
 // --- parsing ----------------------------------------------------------------------------------
 
 // The parser's state: the text, where it is, and the first error, if any. Shared through the
@@ -238,6 +312,7 @@ struct Parser {
     text: Str,
     pos: Ints,
     error: Strs,
+    floats: Bool,
 }
 
 fn at(p: Parser) -> Int ! {} { ints_get(p.pos, 0) }
@@ -368,6 +443,42 @@ fn parse_number(p: Parser) -> Int ! {} {
     }
 }
 
+// A number with or without a fraction and an exponent (Gate 2): RFC 8259's grammar, checked here;
+// an integer that `Int` holds is an integer node, anything else a `Float64` node.
+fn parse_any_number(p: Parser, doc: JsonDoc) -> Int ! {} {
+    let start = at(p);
+    if peek(p) == 45 { let m = advance(p, 1); }
+    let digits = at(p);
+    while peek(p) >= 48 && peek(p) <= 57 { let m = advance(p, 1); }
+    if at(p) == digits { return fail(p, "expected a digit"); }
+    if at(p) - digits > 1 && str_byte(p.text, digits) == 48 { return fail(p, "a number with a leading zero"); }
+    let mut whole = true;
+    if peek(p) == 46 {
+        whole = false;
+        let m = advance(p, 1);
+        let f = at(p);
+        while peek(p) >= 48 && peek(p) <= 57 { let m2 = advance(p, 1); }
+        if at(p) == f { return fail(p, "expected a digit after the point"); }
+    }
+    if peek(p) == 101 || peek(p) == 69 {
+        whole = false;
+        let m = advance(p, 1);
+        if peek(p) == 43 || peek(p) == 45 { let m2 = advance(p, 1); }
+        let e = at(p);
+        while peek(p) >= 48 && peek(p) <= 57 { let m3 = advance(p, 1); }
+        if at(p) == e { return fail(p, "expected a digit in the exponent"); }
+    }
+    let text = str_slice(p.text, start, at(p));
+    if whole {
+        // An integer `Int` holds stays one; a longer one is a float, as JSON means it.
+        let q = Parser(text: text, pos: ints_new(), error: strs_new(), floats: false);
+        ints_push(q.pos, 0);
+        let n = parse_number(q);
+        if !failed(q) { return json_add_int(doc, n); }
+    }
+    json_add_float(doc, float_parse_raw(text))
+}
+
 fn parse_value(p: Parser, doc: JsonDoc, depth: Int) -> Int ! {} {
     let s = skip_space(p);
     if depth > 256 { fail(p, "nesting deeper than 256") } else {
@@ -376,7 +487,7 @@ fn parse_value(p: Parser, doc: JsonDoc, depth: Int) -> Int ! {} {
         if b == 116 { if expect_word(p, "true") { json_add_bool(doc, true) } else { 0 - 1 } } else {
         if b == 102 { if expect_word(p, "false") { json_add_bool(doc, false) } else { 0 - 1 } } else {
         if b == 34 { let s2 = parse_string(p); if failed(p) { 0 - 1 } else { json_add_str(doc, s2) } } else {
-        if b == 45 || (b >= 48 && b <= 57) { let n = parse_number(p); if failed(p) { 0 - 1 } else { json_add_int(doc, n) } } else {
+        if b == 45 || (b >= 48 && b <= 57) { if p.floats { parse_any_number(p, doc) } else { let n = parse_number(p); if failed(p) { 0 - 1 } else { json_add_int(doc, n) } } } else {
         if b == 91 { parse_array(p, doc, depth) } else {
         if b == 123 { parse_object(p, doc, depth) } else {
         if b < 0 { fail(p, "unexpected end") } else { fail(p, "unexpected byte") } } } } } } } }
@@ -435,9 +546,19 @@ fn parse_object(p: Parser, doc: JsonDoc, depth: Int) -> Int ! {} {
 /// The document `text` spells, or an `Err` naming what was wrong and the byte offset where.
 /// Whitespace is allowed around values; anything after the one top-level value is an error.
 pub fn json_parse(text: Str) -> Result[JsonDoc, Str] ! {} {
+    parse_document(text, false)
+}
+
+/// As `json_parse`, reading a number with a fraction or an exponent — or an integer `Int` cannot
+/// hold — as a `Float64` node (Gate 2).
+pub fn json_parse_floats(text: Str) -> Result[JsonDoc, Str] ! {} {
+    parse_document(text, true)
+}
+
+fn parse_document(text: Str, floats: Bool) -> Result[JsonDoc, Str] ! {} {
     let pos = ints_new();
     ints_push(pos, 0);
-    let p = Parser(text: text, pos: pos, error: strs_new());
+    let p = Parser(text: text, pos: pos, error: strs_new(), floats: floats);
     let doc = json_new();
     let root = parse_value(p, doc, 0);
     let s = skip_space(p);

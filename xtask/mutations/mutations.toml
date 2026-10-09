@@ -14920,3 +14920,19 @@ file = "library/std/error.nz"
 find = "        out = str_concat(out, str_concat(vec_get(e.context, i), \": \"));"
 replace = "        out = str_concat(str_concat(vec_get(e.context, i), \": \"), out);"
 killers = [{ package = "nazm-cli", test = "stdlib", name = "an_error_gathers_context_and_reads_outermost_first_everywhere" }]
+
+[[mutation]]
+name = "g2-a-varint-keeps-its-continuation-bit-off"
+why = "a varint's every byte but the last no longer carries the continuation bit, so a value of 128 or more reads back as its low seven bits and the next byte as another value"
+file = "library/std/binary.nz"
+find = "            bytes_set(b, i, low | UInt8(128));"
+replace = "            bytes_set(b, i, low);"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "binary_encodes_byte_for_byte_and_reads_back_everywhere" }]
+
+[[mutation]]
+name = "g2-json-floats-are-read-as-integers"
+why = "`json_parse_floats` refuses a fraction as `json_parse` does, so a document with a float cannot be read at all"
+file = "library/std/json.nz"
+find = "    parse_document(text, true)"
+replace = "    parse_document(text, false)"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "json_reads_and_writes_floats_beside_its_frozen_integers_everywhere" }]
