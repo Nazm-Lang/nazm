@@ -18,7 +18,8 @@
 //! `readdir` is the exception: the lock is held across it, since one `DIR *` is not safe to read
 //! from two threads, and it is a read of a local directory.
 
-/// The runtime text: a slot is 32 bytes — generation, use count, state, `DIR *`.
+/// The runtime text: a slot is 64 bytes — generation (0), use count (8), state (16), `DIR *`
+/// (24), and for a socket its wait record (32) and deadline in milliseconds (40).
 pub(crate) const FILES_RUNTIME: &str = r#"
 @nz.os_lock = hidden global i32 0
 @nz.os_slots = hidden global ptr null
@@ -74,7 +75,7 @@ grow:
   %want = select i1 %more, i64 %need, i64 %twice
   %small = icmp slt i64 %want, 64
   %new = select i1 %small, i64 64, i64 %want
-  %bytes = mul i64 %new, 32
+  %bytes = mul i64 %new, 64
   %old = load ptr, ptr @nz.os_slots
   %p = call ptr @realloc(ptr %old, i64 %bytes)
   %none = icmp eq ptr %p, null
@@ -82,7 +83,7 @@ grow:
 refused:
   ret ptr null
 zero:
-  %from = mul i64 %cap, 32
+  %from = mul i64 %cap, 64
   %start = getelementptr i8, ptr %p, i64 %from
   %rest = sub i64 %bytes, %from
   call void @llvm.memset.p0.i64(ptr %start, i8 0, i64 %rest, i1 false)
@@ -91,7 +92,7 @@ zero:
   br label %at
 at:
   %slots = load ptr, ptr @nz.os_slots
-  %off = mul i64 %fd, 32
+  %off = mul i64 %fd, 64
   %slot = getelementptr i8, ptr %slots, i64 %off
   ret ptr %slot
 }
@@ -115,6 +116,8 @@ fill:
   store i64 %kind, ptr %statep
   %objp = getelementptr i8, ptr %slot, i64 24
   store ptr %obj, ptr %objp
+  %deadlinep = getelementptr i8, ptr %slot, i64 40
+  store i64 0, ptr %deadlinep
   %hi = shl i64 %gen, 32
   %h = or i64 %hi, %fd
   ret i64 %h
@@ -133,7 +136,7 @@ look:
   br i1 %fits, label %slot, label %dead
 slot:
   %slots = load ptr, ptr @nz.os_slots
-  %off = mul i64 %fd, 32
+  %off = mul i64 %fd, 64
   %s = getelementptr i8, ptr %slots, i64 %off
   %g = load i64, ptr %s
   %same = icmp eq i64 %g, %gen
@@ -207,7 +210,7 @@ entry:
   call void @nz.os_acquire()
   %fd = and i64 %h, 4294967295
   %slots = load ptr, ptr @nz.os_slots
-  %off = mul i64 %fd, 32
+  %off = mul i64 %fd, 64
   %s = getelementptr i8, ptr %slots, i64 %off
   %usersp = getelementptr i8, ptr %s, i64 8
   %u = load i64, ptr %usersp
@@ -257,7 +260,12 @@ live:
 later:
   %marked = or i64 %state, 256
   store i64 %marked, ptr %statep
+  ; A socket's waiters wake, find the handle closing, and answer `Closed`; the last of them
+  ; to let go closes the descriptor.
+  %waitp = getelementptr i8, ptr %s, i64 32
+  %wait = load ptr, ptr %waitp
   call void @nz.os_release()
+  call void @nz.net_wake(ptr %wait)
   ret i64 0
 now:
   %objp = getelementptr i8, ptr %s, i64 24
@@ -393,11 +401,22 @@ entry:
 fail:
   ret i64 %k
 pinned:
-  %dir = icmp eq i64 %k, 2
-  br i1 %dir, label %isdir, label %read
+  switch i64 %k, label %read [
+    i64 2, label %isdir
+    i64 4, label %socket
+    i64 5, label %einval
+    i64 6, label %einval
+  ]
 isdir:
   call void @nz.os_unpin(i64 %h)
   ret i64 -21
+einval:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 -22
+socket:
+  %sr = call i64 @nz.net_recv(i64 %h, ptr %buf, i64 %n)
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %sr
 read:
   %fd = trunc i64 %h to i32
   %r = call i64 @read(i32 %fd, ptr %buf, i64 %n)
@@ -419,6 +438,9 @@ pinned:
   switch i64 %k, label %write [
     i64 2, label %isdir
     i64 3, label %isstdin
+    i64 4, label %socket
+    i64 5, label %einval
+    i64 6, label %einval
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -426,6 +448,13 @@ isdir:
 isstdin:
   call void @nz.os_unpin(i64 %h)
   ret i64 -9
+einval:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 -22
+socket:
+  %sw = call i64 @nz.net_send(i64 %h, ptr %buf, i64 %n)
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %sw
 write:
   %fd = trunc i64 %h to i32
   %r = call i64 @write(i32 %fd, ptr %buf, i64 %n)
@@ -447,6 +476,9 @@ pinned:
   switch i64 %k, label %check [
     i64 2, label %isdir
     i64 3, label %isstdin
+    i64 4, label %isstdin
+    i64 5, label %isstdin
+    i64 6, label %isstdin
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -486,6 +518,9 @@ pinned:
   switch i64 %k, label %sync [
     i64 2, label %isdir
     i64 3, label %isstdin
+    i64 4, label %isstdin
+    i64 5, label %isstdin
+    i64 6, label %isstdin
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -611,16 +646,42 @@ entry:
 }
 
 @.closed = private unnamed_addr constant [21 x i8] c"the handle is closed\00"
+@.unnamed = private unnamed_addr constant [23 x i8] c"the name was not found\00"
 
 define hidden i64 @nz.os_error_text(i64 %status, ptr %buf, i64 %cap) {
 entry:
   %closed = icmp eq i64 %status, -65536
-  br i1 %closed, label %ours, label %system
+  br i1 %closed, label %ours, label %name
 ours:
   call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr @.closed, i64 20, i1 false)
   ret i64 20
+name:
+  %unknown = icmp eq i64 %status, -65537
+  br i1 %unknown, label %unnamed, label %system
+unnamed:
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr @.unnamed, i64 22, i1 false)
+  ret i64 22
 system:
   %n = call i64 @nz_os_error_text(i64 %status, ptr %buf, i64 %cap)
   ret i64 %n
 }
 "#;
+
+/// Where a program reaches files and not the network, the three entries the files part calls for a
+/// socket, which no handle of such a program can be.
+pub(crate) const NET_STUBS: &str = r"
+define hidden i64 @nz.net_recv(i64 %h, ptr %buf, i64 %n) {
+entry:
+  ret i64 -22
+}
+
+define hidden i64 @nz.net_send(i64 %h, ptr %buf, i64 %n) {
+entry:
+  ret i64 -22
+}
+
+define hidden void @nz.net_wake(ptr %w) {
+entry:
+  ret void
+}
+";

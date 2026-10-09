@@ -8289,10 +8289,11 @@ Repointed by Gate 2 again, which moved it to 32 for arrays and constants: an ent
 Repointed by Gate 2's bytes and text, which moved it to 33: an entry that accepted a record named `Text` must not be reused.
 Repointed by M1, which moved it to 34: an entry that refused a pure call of an imported impl's method must not be reused.
 Repointed by Gate 2's collections, which moved it to 35: an entry that refused an impl for `UInt8` must not be reused.
-Repointed by Gate 2's files, which moved it to 36: an entry that accepted a function named `os_read` must not be reused."""
+Repointed by Gate 2's files, which moved it to 36: an entry that accepted a function named `os_read` must not be reused.
+Repointed by Gate 2's networking, which moved it to 37: an entry that refused an `os_read` without an `IoCap` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 36;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 35;"
+find = "pub const SEMANTIC_EPOCH: u32 = 37;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 36;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10500,11 +10501,12 @@ Repointed by N83, which moved it to 11 for the task pool.
 Repointed by N85, which moved it to 12 for the errno capture and C strings returned.
 Repointed by N86, which moved it to 13 for device registers by width.
 Repointed by Gate 2, which moved it to 15 for floats across runtime entries and the numbers part.
-Repointed by Gate 2's files, which moved it to 16 for the handle table and the per-target `os` unit."""
+Repointed by Gate 2's files, which moved it to 16 for the handle table and the per-target `os` unit.
+Repointed by Gate 2's networking, which moved it to 17 for the socket entries and the reactor."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 16;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 15;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_sixteen_and_its_digest_covers_the_pool_errno_numbers_and_files" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 17;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 16;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_seventeen_and_its_digest_covers_the_pool_errno_numbers_files_and_net" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -14555,8 +14557,12 @@ name = "q1-gate-2-built-ins-do-not-allocate"
 why = "the built-ins that make storage are not allocation sites, so `bytes_new`, `text_concat` and the rest in a loop pass `bounded-allocation`"
 file = "crates/nazm-mir/src/cost.rs"
 find = '''        | Intrinsic::ScalarText
-        | Intrinsic::OsErrorText => true,'''
-replace = '''        | Intrinsic::OsErrorText => true,
+        | Intrinsic::OsErrorText
+        | Intrinsic::OsLocalAddr
+        | Intrinsic::OsPeerAddr => true,'''
+replace = '''        | Intrinsic::OsErrorText
+        | Intrinsic::OsLocalAddr
+        | Intrinsic::OsPeerAddr => true,
         Intrinsic::ScalarText => false,'''
 killers = [{ package = "nazm-cli", test = "profiles_v2", name = "bounded_allocation_counts_every_built_in_that_allocates" }]
 
@@ -14729,8 +14735,8 @@ killers = [{ package = "nazm-cli", test = "files", name = "a_closed_handle_answe
 name = "g2-the-interpreter-ignores-a-handles-generation"
 why = "the interpreter's handle table ignores a handle's generation, so a closed handle reaches the file later opened on its descriptor"
 file = "crates/nazm-core/src/eval/os.rs"
-find = "        Some((g, Some(o))) if *g == generation => Ok(Arc::clone(o)),"
-replace = "        Some((_, Some(o))) => Ok(Arc::clone(o)),"
+find = "        Some((g, Some(o), _)) if *g == generation => Ok(Arc::clone(o)),"
+replace = "        Some((_, Some(o), _)) => Ok(Arc::clone(o)),"
 killers = [{ package = "nazm-cli", test = "files", name = "a_closed_handle_answers_closed_and_never_reaches_a_reused_descriptor" }]
 
 [[mutation]]
@@ -14780,3 +14786,51 @@ file = "crates/nazm-sema/src/provenance.rs"
 find = "            Intrinsic::OsRename => &[(0, Self::Path), (1, Self::Path)],"
 replace = "            Intrinsic::OsRename => &[(0, Self::Path)],"
 killers = [{ package = "nazm-cli", test = "files", name = "a_handle_needs_authority_has_no_equality_and_a_file_does_not_choose_where_to_write" }]
+
+[[mutation]]
+name = "g2-a-socket-wait-holds-its-worker"
+why = "a socket wait with no deadline blocks its thread in `pthread_cond_wait` instead of the pool's hooked wait, so on the task pool a task waiting on the network holds its worker and every task pinned to it"
+file = "crates/nazm-runtime/src/net.rs"
+find = "  %r0 = call i32 @nz.cwait(ptr %cv, ptr %w)"
+replace = "  %r0 = call i32 @pthread_cond_wait(ptr %cv, ptr %w)"
+killers = [{ package = "nazm-cli", test = "net", name = "a_task_waiting_on_a_socket_does_not_hold_its_worker" }]
+
+[[mutation]]
+name = "g2-a-socket-deadline-is-never-kept"
+why = "a handle's deadline is read as no deadline, so an accept or a receive that should answer TimedOut waits for ever in a native build"
+file = "crates/nazm-runtime/src/net.rs"
+find = "  %some = icmp sgt i64 %ms, 0"
+replace = "  %some = icmp sgt i64 %ms, 9223372036854775807"
+killers = [{ package = "nazm-cli", test = "net", name = "failures_are_values_of_their_kind" }]
+
+[[mutation]]
+name = "g2-the-interpreter-reports-a-receive-deadline-as-invalid"
+why = "a datagram receive whose deadline passes answers EINVAL in the interpreter, so the program sees InvalidInput where every native build says TimedOut"
+file = "crates/nazm-core/src/eval/net.rs"
+find = "            return -etimedout();"
+replace = "            return -EINVAL;"
+killers = [{ package = "nazm-cli", test = "net", name = "a_datagram_goes_and_comes_back_with_its_sender" }]
+
+[[mutation]]
+name = "g2-linux-a-gone-peer-raises-a-signal"
+why = "Linux sends without MSG_NOSIGNAL, so writing to a peer that has gone raises SIGPIPE and ends the program with no word"
+file = "crates/nazm-runtime/src/platform.rs"
+find = '        .replace("{SENDFLAGS}", if darwin { "0" } else { "16384" })'
+replace = '        .replace("{SENDFLAGS}", if darwin { "0" } else { "0" })'
+killers = [{ package = "nazm-cli", test = "net", name = "writing_to_a_peer_that_has_gone_is_an_error_and_never_a_signal" }]
+
+[[mutation]]
+name = "g2-a-datagram-is-not-outside-data"
+why = "what `os_udp_recv_from` puts into its buffers carries no origin, so a datagram may name the file a program writes (a cell is named by its type, so leaving one of the two `Bytes` unmarked would change nothing)"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::OsUdpRecvFrom => ContainerUse::Fill { into: &[1, 2] },"
+replace = "            Intrinsic::OsUdpRecvFrom => ContainerUse::Fill { into: &[] },"
+killers = [{ package = "nazm-cli", test = "net", name = "the_network_is_its_own_authority" }]
+
+[[mutation]]
+name = "g2-naming-an-address-needs-no-authority"
+why = "listening, connecting, binding, sending to an address and resolving a name need no NetCap, so any function reaches the network"
+file = "crates/nazm-sema/src/capability.rs"
+find = "            | Intrinsic::OsResolve => CapabilitySet::of(Self::Net),"
+replace = "            | Intrinsic::OsResolve => CapabilitySet::EMPTY,"
+killers = [{ package = "nazm-cli", test = "net", name = "the_network_is_its_own_authority" }]

@@ -125,6 +125,32 @@
 @std/map pub fn map_remove[T](m: StrMap[T], key: Str) -> Option[T] ! {}
 @std/map pub fn map_keys[T](m: StrMap[T]) -> Strs ! {}
 @std/map pub fn map_values[T](m: StrMap[T]) -> Vec[T] ! {}
+@std/net pub struct TcpListener
+@std/net pub struct TcpStream
+@std/net pub struct UdpSocket
+@std/net pub struct Datagram
+@std/net pub fn tcp_listen(net: NetCap, addr: Str) -> Result[TcpListener, IoError] ! { io }
+@std/net pub fn tcp_accept(l: TcpListener) -> Result[TcpStream, IoError] ! { io }
+@std/net pub fn tcp_connect(net: NetCap, addr: Str, timeout_ms: Int) -> Result[TcpStream, IoError] ! { io }
+@std/net pub fn tcp_read(s: TcpStream, buf: Bytes) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_read_exact(s: TcpStream, buf: Bytes) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_write(s: TcpStream, data: Bytes) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_write_str(s: TcpStream, text: Str) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_set_timeout(s: TcpStream, ms: Int) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_listener_set_timeout(l: TcpListener, ms: Int) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_shutdown(s: TcpStream, how: Int) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_close(s: TcpStream) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_listener_close(l: TcpListener) -> Result[Int, IoError] ! { io }
+@std/net pub fn tcp_local_addr(s: TcpStream) -> Str ! { io }
+@std/net pub fn tcp_peer_addr(s: TcpStream) -> Str ! { io }
+@std/net pub fn tcp_listener_addr(l: TcpListener) -> Str ! { io }
+@std/net pub fn udp_bind(net: NetCap, addr: Str) -> Result[UdpSocket, IoError] ! { io }
+@std/net pub fn udp_send_to(net: NetCap, u: UdpSocket, data: Bytes, addr: Str) -> Result[Int, IoError] ! { io }
+@std/net pub fn udp_recv_from(u: UdpSocket, buf: Bytes) -> Result[Datagram, IoError] ! { io }
+@std/net pub fn udp_set_timeout(u: UdpSocket, ms: Int) -> Result[Int, IoError] ! { io }
+@std/net pub fn udp_local_addr(u: UdpSocket) -> Str ! { io }
+@std/net pub fn udp_close(u: UdpSocket) -> Result[Int, IoError] ! { io }
+@std/net pub fn net_resolve(net: NetCap, name: Str, port: Int) -> Result[Strs, IoError] ! { io }
 @std/num pub fn num_abs(n: Int) -> Int ! {}
 @std/num pub fn num_sign(n: Int) -> Int ! {}
 @std/num pub fn num_min(a: Int, b: Int) -> Int ! {}

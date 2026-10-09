@@ -217,6 +217,7 @@ impl Backend for Cranelift {
             foreign: true,
             numbers: true,
             files: true,
+            net: true,
         }
     }
 }

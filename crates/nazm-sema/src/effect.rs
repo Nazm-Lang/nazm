@@ -188,7 +188,19 @@ impl Effect {
             | Intrinsic::OsMkdir
             | Intrinsic::OsRmdir
             | Intrinsic::OsUnlink
-            | Intrinsic::OsRename => Some(Self::Io),
+            | Intrinsic::OsRename
+            // Networking (Gate 2): the operating system's too.
+            | Intrinsic::OsTcpListen
+            | Intrinsic::OsTcpAccept
+            | Intrinsic::OsTcpConnect
+            | Intrinsic::OsUdpBind
+            | Intrinsic::OsUdpSendTo
+            | Intrinsic::OsUdpRecvFrom
+            | Intrinsic::OsSetTimeout
+            | Intrinsic::OsShutdown
+            | Intrinsic::OsLocalAddr
+            | Intrinsic::OsPeerAddr
+            | Intrinsic::OsResolve => Some(Self::Io),
             // A handle's own state and a status's meaning are values the program holds.
             Intrinsic::OsStatus | Intrinsic::OsFamily | Intrinsic::OsErrorText => None,
             // Reading what C left is part of calling C (N85).
@@ -504,6 +516,17 @@ mod tests {
                 "os_rmdir",
                 "os_unlink",
                 "os_rename",
+                "os_tcp_listen",
+                "os_tcp_accept",
+                "os_tcp_connect",
+                "os_udp_bind",
+                "os_udp_send_to",
+                "os_udp_recv_from",
+                "os_set_timeout",
+                "os_shutdown",
+                "os_local_addr",
+                "os_peer_addr",
+                "os_resolve",
             ]
         );
         assert!(Intrinsic::ALL

@@ -58,11 +58,15 @@ pub enum CapabilityKind {
     /// `IoCap`, which implies it; nothing implies `IoCap`. Never constructed: an `IoCap` is
     /// accepted where an `OutCap` is expected, and `main` may take one as a root.
     Out,
+    /// Sockets and name resolution (Gate 2): what naming an address needs. Separate from `Io`
+    /// — nothing implies it, and it implies nothing — so a program can be given files without
+    /// the network or the network without files. `main` may take one as a root.
+    Net,
 }
 
 impl CapabilityKind {
     /// Every kind, in id order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Io,
         Self::Spawn,
         Self::Foreign,
@@ -70,6 +74,7 @@ impl CapabilityKind {
         Self::Time,
         Self::Mmio,
         Self::Out,
+        Self::Net,
     ];
 
     /// The kind's stable identity. Never reused and never reordered.
@@ -83,6 +88,7 @@ impl CapabilityKind {
             Self::Time => 4,
             Self::Mmio => 5,
             Self::Out => 6,
+            Self::Net => 7,
         }
     }
 
@@ -97,6 +103,7 @@ impl CapabilityKind {
             Self::Time => "TimeCap",
             Self::Mmio => "MmioCap",
             Self::Out => "OutCap",
+            Self::Net => "NetCap",
         }
     }
 
@@ -230,6 +237,19 @@ impl CapabilityKind {
             | Intrinsic::OsStatus
             | Intrinsic::OsFamily
             | Intrinsic::OsErrorText => CapabilitySet::EMPTY,
+            // Networking (Gate 2): naming an address — to listen, connect, bind, send to or
+            // resolve — is the network's authority; a socket already open is its handle's.
+            Intrinsic::OsTcpListen
+            | Intrinsic::OsTcpConnect
+            | Intrinsic::OsUdpBind
+            | Intrinsic::OsUdpSendTo
+            | Intrinsic::OsResolve => CapabilitySet::of(Self::Net),
+            Intrinsic::OsTcpAccept
+            | Intrinsic::OsUdpRecvFrom
+            | Intrinsic::OsSetTimeout
+            | Intrinsic::OsShutdown
+            | Intrinsic::OsLocalAddr
+            | Intrinsic::OsPeerAddr => CapabilitySet::EMPTY,
             // The standard streams need only their attenuation (N79), which `IoCap` implies.
             Intrinsic::Print | Intrinsic::EPrint => CapabilitySet::of(Self::Out),
             // Declassification is authority of its own (N52).
@@ -317,7 +337,7 @@ impl CapabilityKind {
     pub const fn article(self) -> &'static str {
         match self {
             Self::Io => "an",
-            Self::Spawn | Self::Foreign | Self::Vouch | Self::Time => "a",
+            Self::Spawn | Self::Foreign | Self::Vouch | Self::Time | Self::Net => "a",
             Self::Mmio | Self::Out => "an",
         }
     }
@@ -426,10 +446,11 @@ mod tests {
 
     #[test]
     fn every_built_in_needs_exactly_the_authority_for_its_effect() {
-        // Two tables, one question each; they agree built-in by built-in, with three stated
+        // Two tables, one question each; they agree built-in by built-in, with four stated
         // exceptions: declassification needs authority and performs no effect (N52), the
         // standard streams need only an `OutCap`, which the effect's `IoCap` implies (N79), and
-        // a handle already open needs only itself (Gate 2).
+        // a handle already open needs only itself, and naming an address needs a `NetCap`
+        // (Gate 2).
         for i in Intrinsic::ALL {
             let from_effect =
                 Effect::of_intrinsic(i).map_or(CapabilitySet::EMPTY, CapabilityKind::for_effect);
@@ -448,9 +469,32 @@ mod tests {
                     | Intrinsic::OsSync
                     | Intrinsic::OsClose
                     | Intrinsic::OsDirNext
+                    | Intrinsic::OsTcpAccept
+                    | Intrinsic::OsUdpRecvFrom
+                    | Intrinsic::OsSetTimeout
+                    | Intrinsic::OsShutdown
+                    | Intrinsic::OsLocalAddr
+                    | Intrinsic::OsPeerAddr
             ) {
                 assert_eq!(from_effect, CapabilitySet::of(CapabilityKind::Io));
                 assert!(CapabilityKind::of_intrinsic(i).is_empty(), "{}", i.name());
+                continue;
+            }
+            // Naming an address is the network's authority (Gate 2), not the file system's:
+            // `io` performed, a `NetCap` held.
+            if matches!(
+                i,
+                Intrinsic::OsTcpListen
+                    | Intrinsic::OsTcpConnect
+                    | Intrinsic::OsUdpBind
+                    | Intrinsic::OsUdpSendTo
+                    | Intrinsic::OsResolve
+            ) {
+                assert_eq!(from_effect, CapabilitySet::of(CapabilityKind::Io));
+                assert_eq!(
+                    CapabilityKind::of_intrinsic(i),
+                    CapabilitySet::of(CapabilityKind::Net)
+                );
                 continue;
             }
             if matches!(i, Intrinsic::Print | Intrinsic::EPrint) {

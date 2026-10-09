@@ -242,7 +242,12 @@ use crate::digest::{self, Framed};
 /// language's (`N0331`, `N0203`); `os_open_write`'s, `os_mkdir`'s, `os_rmdir`'s, `os_unlink`'s and
 /// `os_rename`'s paths are the restricted sink (`N0372`). A cached check from epoch 35 refused
 /// programs this one accepts, and accepted some it refuses.
-pub const SEMANTIC_EPOCH: u32 = 36;
+/// `37` — Gate 2, 2026-10-09. Networking: `NetCap` and the network `os_` built-ins moved from
+/// refused to accepted, and their names from a program's own to the language's (`N0331`,
+/// `N0203`); `Type::ALL`, in the checker's identity, gained `NetCap`. Using an open handle stopped
+/// needing an `IoCap`, so programs refused under 36 (`N0369`) are accepted. A cached check from
+/// epoch 36 refused programs this one accepts, and accepted some it refuses.
+pub const SEMANTIC_EPOCH: u32 = 37;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

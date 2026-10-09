@@ -1,0 +1,198 @@
+// `@std/net`: TCP and UDP sockets, with every failure a value (Gate 2).
+//
+// Imported with `use "@std/net";` beside `use "@std/ioerror";`. Whatever names an address —
+// listening, connecting, binding, sending to one, resolving a name — takes the `NetCap` that
+// allows it; whatever uses a socket takes only the socket. An address is `HOST:PORT` with a literal
+// IPv4 host or a bracketed IPv6 one (`[::1]:8080`). A wait does not hold a worker: a task waiting
+// on a socket parks, and the runtime's reactor wakes it. `docs/general-purpose.md` §9–§10 is the
+// design record; `docs/spec.md`, *Networking*, the built-ins beneath.
+
+use "@std/ioerror";
+
+/// A socket listening for connections.
+pub struct TcpListener {
+    handle: OsHandle,
+}
+
+/// A connected TCP socket.
+pub struct TcpStream {
+    handle: OsHandle,
+}
+
+/// A UDP socket.
+pub struct UdpSocket {
+    handle: OsHandle,
+}
+
+/// A datagram received: how many bytes were kept, and who sent it.
+pub struct Datagram {
+    size: Int,
+    from: Str,
+}
+
+fn status_of(h: OsHandle) -> Int ! {} {
+    os_status(h)
+}
+
+/// A listener on `addr`; port `0` asks the system for one, which `tcp_listener_addr` reports.
+pub fn tcp_listen(net: NetCap, addr: Str) -> Result[TcpListener, IoError] ! { io } {
+    let h = os_tcp_listen(addr);
+    let s = status_of(h);
+    if s < 0 { Result[TcpListener, IoError].Err(error: io_context(io_error_from(s), addr)) } else { Result[TcpListener, IoError].Ok(value: TcpListener(handle: h)) }
+}
+
+/// The next connection; waits at most the listener's deadline.
+pub fn tcp_accept(l: TcpListener) -> Result[TcpStream, IoError] ! { io } {
+    let h = os_tcp_accept(l.handle);
+    let s = status_of(h);
+    if s < 0 { Result[TcpStream, IoError].Err(error: io_error_from(s)) } else { Result[TcpStream, IoError].Ok(value: TcpStream(handle: h)) }
+}
+
+/// A connection to `addr`, giving up after `timeout_ms` milliseconds (`0`: the system's own).
+pub fn tcp_connect(net: NetCap, addr: Str, timeout_ms: Int) -> Result[TcpStream, IoError] ! { io } {
+    let h = os_tcp_connect(addr, timeout_ms);
+    let s = status_of(h);
+    if s < 0 { Result[TcpStream, IoError].Err(error: io_context(io_error_from(s), addr)) } else { Result[TcpStream, IoError].Ok(value: TcpStream(handle: h)) }
+}
+
+/// What has arrived, at most `bytes_len(buf)`: how many, `0` once the peer has shut its side.
+pub fn tcp_read(s: TcpStream, buf: Bytes) -> Result[Int, IoError] ! { io } {
+    io_result(os_read(s.handle, buf))
+}
+
+/// Exactly `bytes_len(buf)` bytes; `UnexpectedEof` if the peer shuts its side first.
+pub fn tcp_read_exact(s: TcpStream, buf: Bytes) -> Result[Int, IoError] ! { io } {
+    let mut at = 0;
+    while at < bytes_len(buf) {
+        let n = os_read(s.handle, bytes_slice(buf, at, bytes_len(buf)));
+        if n < 0 {
+            return Result[Int, IoError].Err(error: io_error_from(n));
+        }
+        if n == 0 {
+            return Result[Int, IoError].Err(error: io_error_new(IoErrorKind.UnexpectedEof(), "the peer shut its side"));
+        }
+        at = at + n;
+    }
+    Result[Int, IoError].Ok(value: at)
+}
+
+/// Every byte of `data`, however many writes it takes.
+pub fn tcp_write(s: TcpStream, data: Bytes) -> Result[Int, IoError] ! { io } {
+    let mut at = 0;
+    while at < bytes_len(data) {
+        let n = os_write(s.handle, bytes_slice(data, at, bytes_len(data)));
+        if n < 0 {
+            return Result[Int, IoError].Err(error: io_error_from(n));
+        }
+        at = at + n;
+    }
+    Result[Int, IoError].Ok(value: at)
+}
+
+/// `text`'s bytes, as `tcp_write`.
+pub fn tcp_write_str(s: TcpStream, text: Str) -> Result[Int, IoError] ! { io } {
+    tcp_write(s, bytes_from_str(text))
+}
+
+/// Bound every later wait on `s` to `ms` milliseconds (`0`: no bound).
+pub fn tcp_set_timeout(s: TcpStream, ms: Int) -> Result[Int, IoError] ! { io } {
+    io_result(os_set_timeout(s.handle, ms))
+}
+
+/// Bound every later accept on `l` to `ms` milliseconds (`0`: no bound).
+pub fn tcp_listener_set_timeout(l: TcpListener, ms: Int) -> Result[Int, IoError] ! { io } {
+    io_result(os_set_timeout(l.handle, ms))
+}
+
+/// Shut reading (`0`), writing (`1`) or both (`2`).
+pub fn tcp_shutdown(s: TcpStream, how: Int) -> Result[Int, IoError] ! { io } {
+    io_result(os_shutdown(s.handle, how))
+}
+
+/// Close `s`; a task waiting on it wakes with `Closed`.
+pub fn tcp_close(s: TcpStream) -> Result[Int, IoError] ! { io } {
+    io_result(os_close(s.handle))
+}
+
+/// Close `l`.
+pub fn tcp_listener_close(l: TcpListener) -> Result[Int, IoError] ! { io } {
+    io_result(os_close(l.handle))
+}
+
+/// `s`'s own address.
+pub fn tcp_local_addr(s: TcpStream) -> Str ! { io } {
+    os_local_addr(s.handle)
+}
+
+/// The address `s` is connected to.
+pub fn tcp_peer_addr(s: TcpStream) -> Str ! { io } {
+    os_peer_addr(s.handle)
+}
+
+/// The address `l` listens on.
+pub fn tcp_listener_addr(l: TcpListener) -> Str ! { io } {
+    os_local_addr(l.handle)
+}
+
+/// A UDP socket bound to `addr`.
+pub fn udp_bind(net: NetCap, addr: Str) -> Result[UdpSocket, IoError] ! { io } {
+    let h = os_udp_bind(addr);
+    let s = status_of(h);
+    if s < 0 { Result[UdpSocket, IoError].Err(error: io_context(io_error_from(s), addr)) } else { Result[UdpSocket, IoError].Ok(value: UdpSocket(handle: h)) }
+}
+
+/// Send `data` to `addr` as one datagram: how many bytes went.
+pub fn udp_send_to(net: NetCap, u: UdpSocket, data: Bytes, addr: Str) -> Result[Int, IoError] ! { io } {
+    io_result(os_udp_send_to(u.handle, data, addr))
+}
+
+/// The next datagram into `buf` (cut to its length), and its sender.
+pub fn udp_recv_from(u: UdpSocket, buf: Bytes) -> Result[Datagram, IoError] ! { io } {
+    let from = bytes_new(80);
+    let n = os_udp_recv_from(u.handle, buf, from);
+    if n < 0 {
+        return Result[Datagram, IoError].Err(error: io_error_from(n));
+    }
+    let mut end = 0;
+    while end < 80 && bytes_get(from, end) != UInt8(0) {
+        end = end + 1;
+    }
+    Result[Datagram, IoError].Ok(value: Datagram(size: n, from: bytes_to_str(bytes_slice(from, 0, end))))
+}
+
+/// Bound every later wait on `u` to `ms` milliseconds (`0`: no bound).
+pub fn udp_set_timeout(u: UdpSocket, ms: Int) -> Result[Int, IoError] ! { io } {
+    io_result(os_set_timeout(u.handle, ms))
+}
+
+/// `u`'s own address.
+pub fn udp_local_addr(u: UdpSocket) -> Str ! { io } {
+    os_local_addr(u.handle)
+}
+
+/// Close `u`.
+pub fn udp_close(u: UdpSocket) -> Result[Int, IoError] ! { io } {
+    io_result(os_close(u.handle))
+}
+
+/// The addresses the system's resolver gives `name`, each with `port`, in its order.
+pub fn net_resolve(net: NetCap, name: Str, port: Int) -> Result[Strs, IoError] ! { io } {
+    let out = bytes_new(4096);
+    let n = os_resolve(name, port, out);
+    if n < 0 {
+        return Result[Strs, IoError].Err(error: io_context(io_error_from(n), name));
+    }
+    let all = strs_new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n || bytes_get(out, i) == UInt8(10) {
+            if i > start {
+                strs_push(all, bytes_to_str(bytes_slice(out, start, i)));
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    Result[Strs, IoError].Ok(value: all)
+}

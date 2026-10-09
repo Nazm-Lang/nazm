@@ -11,6 +11,8 @@ use super::ir::{Class, Cmp};
 
 /// The room `os_error_text` gives the system's message: more than any message is.
 const MESSAGE_ROOM: i64 = 256;
+/// The room an address gets: `[` an IPv6 address `]:` a port is at most 47 bytes.
+const ADDRESS_ROOM: i64 = 80;
 
 impl Fx<'_, '_> {
     /// `dst = op(args)` for an `os_` built-in; `false` for any other.
@@ -96,6 +98,70 @@ impl Fx<'_, '_> {
                 let room = self.iconst(MESSAGE_ROOM);
                 let (owner, buf) = self.string_backing(room);
                 let n = self.rt_v("nz.os_error_text", &[status, buf, room], Class::I64);
+                self.write_str(dst, buf, n, owner);
+                return true;
+            }
+            // Networking (Gate 2): an address is a `Str`'s pointer and length too.
+            Intrinsic::OsTcpListen | Intrinsic::OsUdpBind => {
+                let a = self.arg_place(args, 0);
+                let (ap, an) = self.str_parts(a);
+                let name = if op == Intrinsic::OsTcpListen {
+                    "nz.os_tcp_listen"
+                } else {
+                    "nz.os_udp_bind"
+                };
+                self.rt_v(name, &[ap, an], Class::I64)
+            }
+            Intrinsic::OsTcpConnect => {
+                let a = self.arg_place(args, 0);
+                let ms = self.arg(args, 1);
+                let (ap, an) = self.str_parts(a);
+                self.rt_v("nz.os_tcp_connect", &[ap, an, ms], Class::I64)
+            }
+            Intrinsic::OsTcpAccept => {
+                let h = self.arg(args, 0);
+                self.rt_v("nz.os_tcp_accept", &[h], Class::I64)
+            }
+            Intrinsic::OsSetTimeout | Intrinsic::OsShutdown => {
+                let h = self.arg(args, 0);
+                let k = self.arg(args, 1);
+                let name = if op == Intrinsic::OsSetTimeout {
+                    "nz.os_set_timeout"
+                } else {
+                    "nz.os_shutdown"
+                };
+                self.rt_v(name, &[h, k], Class::I64)
+            }
+            Intrinsic::OsUdpSendTo => {
+                let h = self.arg(args, 0);
+                let d = self.arg_place(args, 1);
+                let a = self.arg_place(args, 2);
+                let (dp, dn) = self.str_parts(d);
+                let (ap, an) = self.str_parts(a);
+                self.rt_v("nz.os_udp_send_to", &[h, dp, dn, ap, an], Class::I64)
+            }
+            Intrinsic::OsUdpRecvFrom => {
+                let h = self.arg(args, 0);
+                let b = self.arg_place(args, 1);
+                let f = self.arg_place(args, 2);
+                let (bp, bn) = self.str_parts(b);
+                let (fp, fn_) = self.str_parts(f);
+                self.rt_v("nz.os_udp_recv_from", &[h, bp, bn, fp, fn_], Class::I64)
+            }
+            Intrinsic::OsResolve => {
+                let name = self.arg_place(args, 0);
+                let port = self.arg(args, 1);
+                let out = self.arg_place(args, 2);
+                let (np, nn) = self.str_parts(name);
+                let (op_, on) = self.str_parts(out);
+                self.rt_v("nz.os_resolve", &[np, nn, port, op_, on], Class::I64)
+            }
+            Intrinsic::OsLocalAddr | Intrinsic::OsPeerAddr => {
+                let h = self.arg(args, 0);
+                let peer = self.iconst(i64::from(op == Intrinsic::OsPeerAddr));
+                let room = self.iconst(ADDRESS_ROOM);
+                let (owner, buf) = self.string_backing(room);
+                let n = self.rt_v("nz.os_net_addr", &[h, peer, buf, room], Class::I64);
                 self.write_str(dst, buf, n, owner);
                 return true;
             }
