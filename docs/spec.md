@@ -111,6 +111,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `conditional-compilation` | STABLE 1.0 | Gate 2: conditions read only the build's configuration |
 | `tests-and-benchmarks` | STABLE 1.0 | Gate 2: the test and fuzz shapes and outcomes; `nazm bench`'s measurements are EXPERIMENTAL |
 | `package-features` | STABLE 1.0 | Gate 2: additive features per package; `nazm.lock/2` |
+| `windows-x86-64` | EXPERIMENTAL | Gate 3: run under Wine only; STABLE once a real Windows host has run it |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -4025,6 +4026,27 @@ may ask for features: `shapes = { path = "../shapes", version = "0.1.0", feature
 | **Read by** | `@cfg(feature = "NAME")` (*Conditional compilation*), in each module for **its own package's** set; a toolchain module's set is empty. Nothing from the environment enters it |
 | **Refused** | A feature item that is neither the package's own feature nor `DEPENDENCY/FEATURE` of a declared dependency, and a feature asked of a package that does not declare it, are `N0500` before anything is checked; `--features` outside a package is a usage error |
 | **Lockfile** | When any package has an enabled feature, `nazm lock` writes `nazm.lock/2`: `/1`'s fields and each package's `features`, the set its manifests enable (not `--features`'). A build with no feature keeps `nazm.lock/1` byte for byte; both are read. `--locked` refuses a recorded set that differs (`N0506`) |
+
+### Windows x86_64 — Gate 3
+<!-- id: windows-x86-64 -->
+
+Settled by Gate 3, 2026-10-10 (`docs/systems-domains.md`, Part A-W), before the code. The target is
+`x86_64-pc-windows-gnu`: PE/COFF executables and DLLs, the Windows x64 calling convention at every
+C-ABI crossing, MinGW-w64's C runtime and import libraries, linked by `lld`. The language is the one
+language: nothing below changes what a program means, only how the runtime reaches the operating
+system, and a program that runs on Linux prints the same and exits the same here.
+
+| | |
+| --- | --- |
+| **Text and paths** | A `Str` path is UTF-8; it is converted to UTF-16 at the system boundary and back, and a name the system returns that is not valid UTF-16 is an error (`InvalidData`), never a lossy string. `/` and `\` both separate; a drive letter or `\\?\` prefix is part of the path. Files are opened in binary mode: no line-ending translation, on reading or on writing |
+| **Files** | As *Files and handles*: `os_rename` and `file_replace_atomic` replace an existing destination (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`), as POSIX `rename` does; removing an open file or a non-empty directory is an error with the kind the table below gives; `dir_list` is sorted, as everywhere |
+| **Errors** | Windows error codes map to the same `IoErrorKind`s: not found, permission denied (including sharing violations), already exists, would block, timed out, broken pipe, connection refused/reset/aborted, address in use, invalid input; anything else is `Other` with its code |
+| **Processes** | `os_spawn` starts the program with `CreateProcessW` and a command line quoted by the C runtime's rules; `os_wait` answers the exit code; there are no signals, so `os_kill` ends the child with `TerminateProcess` and exit code 1, and `256 + signal` never occurs |
+| **Environment, arguments** | UTF-16 from the system, UTF-8 to the program; an entry not valid UTF-16 is skipped rather than mangled |
+| **Network** | Winsock 2, started once by the runtime; the reactor waits with `WSAPoll` — the same reactor model as kqueue and epoll, a third binding of it |
+| **Time, entropy** | the monotonic clock from `QueryPerformanceCounter`, the wall clock from `GetSystemTimePreciseAsFileTime` (nanoseconds since the Unix epoch, as everywhere); entropy from `BCryptGenRandom` |
+| **Failure** | a trap is exit status 2 with its diagnostic on standard error, as everywhere; an exhausted stack is `N0408`, reported by a vectored exception handler over each task's guard page |
+| **Evidence** | Programs are executed **under Wine** in a Linux container (`run-verified under Wine`), never presented as evidence from a Windows host; execution on a real Windows x86_64 host is a final-v1 qualification item. Microsoft's CRT (`x86_64-pc-windows-msvc`) is not built in Gate 3 |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

@@ -4391,3 +4391,22 @@ fn every_generated_function_asks_for_stack_probes() {
     }
     assert!(defines > 0);
 }
+
+/// Gate 3: when clang fails in the link step because of its environment — here an SDK that does
+/// not exist — the report says so, and does not call it a bug in the generated IR.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_toolchain_environment_failure_is_not_blamed_on_the_ir() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("prog.nz"), "fn main() -> Int { 0 }\n").unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_nazm"))
+        .current_dir(d.path())
+        .env("SDKROOT", "/nonexistent/nazm-sdk")
+        .args(["build", "--no-cache", "prog.nz", "-o", "prog"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{err}");
+    assert!(err.contains("not about the generated IR"), "{err}");
+    assert!(!err.contains("This is a bug in `nazm build`"), "{err}");
+}
