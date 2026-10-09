@@ -3973,7 +3973,7 @@ and no macros.
 | **`@test`, `@test(fails)`** | A function `nazm test` runs; `fails` says it passes by failing (`general-purpose.md` §18) |
 | **`@bench`** | A function `nazm bench` measures (§19) |
 | **`@fuzz`** | A function `nazm test --fuzz` drives with generated input (§18) |
-| **`@deprecated`, `@deprecated("why")`** | Recorded on the declaration for documentation; not on an `impl`, which nothing names. 1.0 reports no warning for a use (*As built*, §16) |
+| **`@deprecated`, `@deprecated("why")`** | **Metadata-only deprecation** (G2-C1). It marks a `pub` function, `struct` or `enum` and nothing else (`N0619` elsewhere): `nazm doc` publishes it, as the item's `deprecated` — the reason, or empty — in `nazm.api-doc/2` and as a line in the Markdown. No diagnostic reports a use, and a use compiles exactly as it would without the mark: 1.0 has one diagnostic severity, and compiler warnings are not part of it |
 | **Refused** | An attribute not in this list, one on a declaration it does not mark, one with arguments it does not take, or one other than `@cfg` written twice is `N0619`. A malformed argument is a syntax error (`N0100`), reported once; the attribute is then not checked again |
 
 Attributes change no expression's meaning. The formatter writes each on its own line, `@` against

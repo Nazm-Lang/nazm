@@ -389,12 +389,25 @@ fn main() -> Int {
         let u = text_slice(text_concat(t, scalar_text(66)), 1, 3);
         i = i + 1;
     }
+    let a = bytes_new(8);
+    bytes_set(a, 1, 9);
+    let b = bytes_new(8);
+    bytes_set(b, 1, 9);
+    let c = bytes_new(8);
+    bytes_set(c, 1, 9);
+    let e = bytes_new(8);
+    bytes_set(e, 1, 9);
     Int(bytes_get(keep, 0))
 }
 "#;
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
-    let report = "strings allocated=16 reclaimed=16 live=0";
+    // Four buffers of the buffer's size, made after the loop, each marked at the byte the view
+    // reads: an allocator that hands out a freed buffer again — glibc's per-thread cache does,
+    // last freed first, and does not perturb what it caches — gives one of them a buffer freed
+    // under a living view, and the view reads its 9. G2-C1: the scribble below did not reach a
+    // cached chunk, so on Linux the mutant dropping the view's count went uncaught.
+    let report = "strings allocated=20 reclaimed=20 live=0";
     let r = run_bounded(
         Command::new(NAZM)
             .current_dir(d.path())

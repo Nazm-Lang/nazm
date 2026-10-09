@@ -106,7 +106,10 @@ fn every_attribute_outside_the_vocabulary_or_its_place_is_refused_by_name() {
             "trait T { fn t(self: Self) -> Int; }\n@deprecated\nimpl T for Int { fn t(self: Int) -> Int { 0 } }\nfn main() -> Int { 0 }\n",
             "deprecated on an impl",
         ),
-        ("@deprecated(why)\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n", "deprecated's argument"),
+        ("@deprecated(why)\npub fn f() -> Int { 0 }\nfn main() -> Int { 0 }\n", "deprecated's argument"),
+        ("@deprecated\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n", "deprecated on a private function"),
+        ("@deprecated\nconst K: Int = 1;\nfn main() -> Int { K }\n", "deprecated on a constant"),
+        ("@deprecated\npub trait T { fn t(self: Self) -> Int; }\nfn main() -> Int { 0 }\n", "deprecated on a trait"),
         ("@cfg\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n", "no condition"),
         ("@cfg(os = \"linux\", arch = \"x86_64\")\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n", "two conditions"),
         ("@cfg(colour = \"red\")\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n", "an unknown key"),
@@ -163,4 +166,50 @@ fn the_formatter_puts_each_attribute_on_its_own_line() {
     );
     let again = nazm(d.path(), &["fmt", "--check", "prog.nz"]);
     assert_eq!(again.code, Some(0), "{}", again.stdout);
+}
+
+/// G2-C1: `@deprecated` is metadata-only — no diagnostic reports a use — and `nazm doc` publishes
+/// it on the `pub` function, `struct` or `enum` it marks, with its reason or none, in the JSON and
+/// the Markdown alike.
+#[test]
+fn deprecation_is_metadata_the_api_documentation_publishes() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("lib.nz"),
+        "@deprecated(\"use `area` instead\")\npub fn size(n: Int) -> Int { n * n }\n\n\
+         pub fn area(n: Int) -> Int { n * n }\n\n\
+         @deprecated\npub struct Old { x: Int, }\n\n\
+         @deprecated(\"one shape now\")\npub enum Shape { Square, }\n\n\
+         fn main() -> Int { size(2) }\n",
+    )
+    .unwrap();
+    let checked = nazm(d.path(), &["check", "lib.nz"]);
+    assert_eq!(checked.code, Some(0), "{}", checked.stderr);
+    // A use of `size` is reported nowhere: no warning severity exists in 1.0.
+    assert!(checked.stderr.is_empty(), "{}", checked.stderr);
+    let r = nazm(d.path(), &["doc", "lib.nz"]);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let doc: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    let items: Vec<&serde_json::Value> = doc["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["items"].as_array().unwrap())
+        .collect();
+    let by = |name: &str| {
+        *items
+            .iter()
+            .find(|i| i["name"] == name)
+            .unwrap_or_else(|| panic!("{name}: {doc}"))
+    };
+    assert_eq!(by("size")["deprecated"], "use `area` instead");
+    assert_eq!(by("Old")["deprecated"], "");
+    assert_eq!(by("Shape")["deprecated"], "one shape now");
+    assert!(by("area").get("deprecated").is_none(), "{doc}");
+    let out = d.path().join("api");
+    let w = nazm(d.path(), &["doc", "lib.nz", "-o", out.to_str().unwrap()]);
+    assert_eq!(w.code, Some(0), "{}", w.stderr);
+    let md = std::fs::read_to_string(out.join("api.md")).unwrap();
+    assert!(md.contains("**Deprecated:** use `area` instead"), "{md}");
+    assert!(md.contains("**Deprecated.**"), "{md}");
 }

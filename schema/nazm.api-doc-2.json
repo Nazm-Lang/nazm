@@ -196,6 +196,10 @@
                     "null"
                   ],
                   "description": "For a re-export (N103): the durable identity of the definition it offers, `every export`, or null when it names nothing resolved."
+                },
+                "deprecated": {
+                  "type": "string",
+                  "description": "G2-C1, additive: present when the declaration is marked `@deprecated` — its reason, or empty when it gives none. Metadata-only: no diagnostic reports a use."
                 }
               }
             }

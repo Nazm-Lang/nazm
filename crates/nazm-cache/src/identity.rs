@@ -263,7 +263,10 @@ use crate::digest::{self, Framed};
 /// a closed vocabulary (`N0619`); a declaration whose `@cfg` does not hold for the build is not
 /// there, so two of one name under exclusive conditions are no longer a duplicate. A cached check
 /// from epoch 41 refused programs this one accepts.
-pub const SEMANTIC_EPOCH: u32 = 42;
+/// `43` — G2-C1, 2026-10-09. `@deprecated` became metadata `nazm doc` publishes, and so is refused
+/// (`N0619`) where it would be inert: before anything but a `pub` function, `struct` or `enum`. A
+/// cached check from epoch 42 accepted programs this one refuses.
+pub const SEMANTIC_EPOCH: u32 = 43;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

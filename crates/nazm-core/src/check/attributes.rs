@@ -3,7 +3,8 @@
 //! the build dropped before anything resolves a name.
 //!
 //! The vocabulary is the compiler's: `@cfg(…)`, `@test`, `@test(fails)`, `@bench`, `@fuzz` and
-//! `@deprecated` or `@deprecated("why")`. Anything else, an attribute on a declaration it does not
+//! `@deprecated` or `@deprecated("why")` — metadata `nazm doc` publishes, on a `pub` function,
+//! `struct` or `enum` only. Anything else, an attribute on a declaration it does not
 //! apply to, or one with arguments it does not take, is `N0619`. A condition reads only the build's
 //! [`BuildConfig`] — its target's operating system, architecture and triple, the enabled features
 //! and the profiles — so the same source and configuration always keep the same declarations.
@@ -45,6 +46,7 @@ fn refuse(at: Span, what: String, help: &str) -> Diagnostic {
 fn admitted(
     attrs: &[Attribute],
     target: Target,
+    public: bool,
     at: Span,
     graph: &ModuleGraph,
     config: &BuildConfig,
@@ -103,13 +105,25 @@ fn admitted(
                     ));
                 }
             }
+            // Metadata-only (G2-C1, `docs/spec.md`, *Attributes*): no diagnostic marks a use,
+            // and `nazm doc` publishes it. So it marks only what `nazm doc` publishes — a `pub`
+            // function, `struct` or `enum` — and anywhere else it would be inert, which is refused.
             "deprecated" => {
-                if matches!(target, Target::Impl) {
+                let published = public && matches!(target, Target::Function | Target::Type);
+                if !published {
+                    let what = if public {
+                        target.named().to_owned()
+                    } else {
+                        format!("{}, and not `pub`", target.named())
+                    };
                     errors.push(refuse(
                         a.span,
-                        "`@deprecated` marks something a program names, and an impl is not named"
-                            .to_owned(),
-                        "write it before the trait, the type or the function",
+                        format!(
+                            "`@deprecated` marks what an importer's API documentation shows — a \
+                             `pub` function, `struct` or `enum` — and this is {what}"
+                        ),
+                        "it is metadata `nazm doc` publishes, and no diagnostic reports a use: \
+                         write it before a `pub` function, `struct` or `enum`",
                     ));
                 }
                 match a.args.as_deref() {
@@ -246,21 +260,53 @@ pub fn configure(
     errors: &mut Vec<Diagnostic>,
 ) -> Program {
     let config = &graph.config();
-    program
-        .records
-        .retain(|r| admitted(&r.attrs, Target::Type, r.span, graph, config, errors));
-    program
-        .enums
-        .retain(|e| admitted(&e.attrs, Target::Type, e.span, graph, config, errors));
-    program
-        .traits
-        .retain(|t| admitted(&t.attrs, Target::Trait, t.span, graph, config, errors));
-    program
-        .consts
-        .retain(|c| admitted(&c.attrs, Target::Const, c.span, graph, config, errors));
+    program.records.retain(|r| {
+        admitted(
+            &r.attrs,
+            Target::Type,
+            r.pub_span.is_some(),
+            r.span,
+            graph,
+            config,
+            errors,
+        )
+    });
+    program.enums.retain(|e| {
+        admitted(
+            &e.attrs,
+            Target::Type,
+            e.pub_span.is_some(),
+            e.span,
+            graph,
+            config,
+            errors,
+        )
+    });
+    program.traits.retain(|t| {
+        admitted(
+            &t.attrs,
+            Target::Trait,
+            t.pub_span.is_some(),
+            t.span,
+            graph,
+            config,
+            errors,
+        )
+    });
+    program.consts.retain(|c| {
+        admitted(
+            &c.attrs,
+            Target::Const,
+            c.pub_span.is_some(),
+            c.span,
+            graph,
+            config,
+            errors,
+        )
+    });
     let mut dropped_impls: Vec<Span> = Vec::new();
     program.impls.retain(|i| {
-        let keep = admitted(&i.attrs, Target::Impl, i.span, graph, config, errors);
+        let keep = admitted(&i.attrs, Target::Impl, false, i.span, graph, config, errors);
         if !keep {
             dropped_impls.push(i.impl_span);
         }
@@ -270,7 +316,15 @@ pub fn configure(
         if let Some(m) = &f.method_of {
             return !dropped_impls.contains(&m.impl_span);
         }
-        let keep = admitted(&f.attrs, Target::Function, f.span, graph, config, errors);
+        let keep = admitted(
+            &f.attrs,
+            Target::Function,
+            f.pub_span.is_some(),
+            f.span,
+            graph,
+            config,
+            errors,
+        );
         if keep {
             shaped(f, errors);
         }
