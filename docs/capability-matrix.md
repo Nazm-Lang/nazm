@@ -1836,6 +1836,14 @@ module checking cleanly, documented and listed. Measured (`performance.md`): sor
 re-encoding 128 KB of JSON about 14 ms. **Scope**: no networking, cryptography or floating point, by
 decision; the map's insertion is linear; the compiler written in Nazm cannot import any of it.
 
+**Gate 2 (2026-10-09)** · *Time* (`general-purpose.md` §11; `spec.md`, *Time*). `time_now_ns`
+(the monotonic clock `time_now_ms` reads), `time_wall_ns` and `time_sleep_ms`, which parks on the
+pool; `@std/time` gains `Duration`, `Instant` and `WallTime`. Runtime ABI 18; semantic epoch 38.
+Evidence: `crates/nazm-cli/tests/time.rs` — the clocks, a sleep, deadlines and the library alike in
+every implementation; `a_sleeping_task_does_not_hold_its_worker` (one worker, a computing task
+finishing before a sleeping one started first, both backends); the `TimeCap` and `critical`
+refusals.
+
 **Gate 2 (2026-10-09)** · *Networking* (`general-purpose.md` §9–§10; `spec.md`, *Networking*).
 `NetCap` (id 7) and the network `os_` built-ins over the same handle table: TCP listen, accept,
 connect with a deadline, read, write, shutdown; UDP bind, send, receive with the sender; local

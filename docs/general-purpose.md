@@ -445,6 +445,12 @@ may jump) and `time_sleep_ms` (parks on the pool), all behind `TimeCap`. `@std/t
 `instant_elapsed`, `deadline_after`, `deadline_passed`, `duration_from_ms` and friends, and
 `wall_now() -> WallTime { unix_nanos: Int }`. A timer is a sleep in a task or a select deadline.
 
+**As built (2026-10-09).** As designed, with `@std/time`'s names prefixed `time_` as the module's
+were (`time_now`, `time_elapsed`, `time_after`, `time_reached`, `time_wall`, `time_sleep`), and
+the clocks and the sleep needing a `TimeCap` held and performing no effect, as `time_now_ms` did.
+`time_sleep_ms` parks on the pool through the hooked timed wait; the monotonic clock is the one
+`time_now_ms` already read.
+
 ## 12. Process and environment
 
 **The mechanism.** `IoCap`: `stdin_read(buf)`, `stdin_read_line()`, `env_get(name) ->

@@ -233,8 +233,9 @@ pub fn escape(s: &str) -> String {
 /// 16 is Gate 2's files and handles: the `nz.os_*` entries, the handle table, and the per-target
 /// `os` unit (`platform::emit_os`) that a build reaching them links beside the `errno` unit. 17 is
 /// Gate 2's networking: the `nz.os_*` socket entries, a handle-table slot of 64 bytes with a wait
-/// record and a deadline, the reactor thread, and the `os` unit's `nz_net_*`.
-pub const RUNTIME_ABI_REVISION: u32 = 17;
+/// record and a deadline, the reactor thread, and the `os` unit's `nz_net_*`. 18 is Gate 2's
+/// time: `nz.time_now_ns`, `nz.time_wall_ns` and `nz.time_sleep_ms`, which parks on the pool.
+pub const RUNTIME_ABI_REVISION: u32 = 18;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -397,6 +398,9 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.chanv_close", [Ptr], None, Channels, "borrows the channel; closes it and wakes every select (N54)"),
     import!("nz.chanv_select", [Ptr, Ptr, I64, I64], Some(Word::I64), Channels, "borrows the channels; copies one slot out to the second pointer, handing over its reference, when it returns an index; -3 - i closed, -1 none, -2 timed out, i64::MIN out of memory"),
     import!("nz.time_now_ms", [], Some(Word::I64), Channels, "takes nothing"),
+    import!("nz.time_now_ns", [], Some(Word::I64), Channels, "takes nothing (Gate 2)"),
+    import!("nz.time_wall_ns", [], Some(Word::I64), Channels, "takes nothing (Gate 2)"),
+    import!("nz.time_sleep_ms", [I64], Some(Word::I64), Tasks, "parks the task on the pool for the milliseconds given; 0 (Gate 2)"),
     import!("nz.sched_note_spawn", [], None, Tasks, "counts a started task; takes nothing"),
     import!("nz.sched_note_join", [Ptr], None, Tasks, "borrows the task list; counts its tasks as joined"),
     import!("write", [I32, Ptr, I64], Some(Word::I64), Libc, "borrows the bytes"),
@@ -606,6 +610,9 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chanv_close", "void" ("ptr") "", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
     rt!("nz.chanv_select", "i64" ("ptr", "ptr", "i64", "i64") "", true, Channels, "", Status, Locked, "wait for the lowest-indexed ready channel, or a deadline (N54)", "borrows the channels; hands one slot's reference to the caller when it returns an index"),
     rt!("nz.time_now_ms", "i64" () "", true, Channels, "", Never, Any, "a monotonic clock in milliseconds (N54)", "none"),
+    rt!("nz.time_now_ns", "i64" () "", false, Channels, "", Never, Any, "the same monotonic clock in nanoseconds (Gate 2)", "none"),
+    rt!("nz.time_wall_ns", "i64" () "", false, Channels, "", Never, Any, "the wall clock in nanoseconds since the Unix epoch (Gate 2)", "none"),
+    rt!("nz.time_sleep_ms", "i64" ("i64") "", false, Tasks, "", Never, Any, "wait, parked on the pool, for milliseconds (Gate 2)", "none"),
     rt!("nz.sched_note_spawn", "void" () "", true, Tasks, "", Never, Any, "count a started task (N54)", "none"),
     rt!("nz.sched_note_join", "void" ("ptr") "", true, Tasks, "", Never, Any, "count a scope's tasks as joined (N54)", "borrows the task list"),
     rt!("nz.sel_sync_get", "ptr" () "", false, Channels, "", Null, Any, "the select lock and condition variable, made on first use", "the process owns it"),
@@ -1101,10 +1108,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_seventeen_and_its_digest_covers_the_pool_errno_numbers_files_and_net(
-    ) {
+    fn the_runtime_is_revision_eighteen_and_covers_the_pool_errno_numbers_files_net_and_time() {
         // Gate 2's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 17);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 18);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));
         // The network part (Gate 2), present only where a program reaches it; a program with files
         // and no sockets carries the three stubs the files part calls instead.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.net_reactor("));
