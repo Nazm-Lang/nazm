@@ -540,12 +540,14 @@ domain, and nothing user-defined.
 **As built (2026-10-09).** The syntax, the closed vocabulary and `N0619` as designed (`spec.md`,
 *Attributes*): an attribute is written before a top-level declaration — not before a `use`, and
 not yet before a method inside an `impl` or a `trait` — and a malformed one is a single syntax
-error, after which it is not checked again. Narrower in one respect: **`@deprecated` warns
-nowhere.** `nazm.diagnostic/1` has one severity, `error`, and a warning is a new severity every
-consumer and exit status would have to learn; 1.0 does not add one for this. `@deprecated` is
-accepted, held to its form (at most one string, not on an `impl`) and carried on the declaration;
-`N0620` is not assigned, and the warning, with `@deprecated` in the interface, comes with a
-warning severity. The attributes are kept out of `compiler/`, the corpus and `library/core`: the
+error, after which it is not checked again. Narrower in one respect: **`@deprecated` is
+metadata-only deprecation, and warns nowhere** (settled by G2-C1). `nazm.diagnostic/1` has one
+severity, `error`, and a warning is a new severity every consumer and exit status would have to
+learn; 1.0 does not add one for one attribute. Instead `@deprecated` is what `nazm doc` publishes:
+the item's `deprecated` in `nazm.api-doc/2` (the reason, or empty) and a line in the Markdown — so
+it marks only what `nazm doc` publishes, a `pub` function, `struct` or `enum`, and is refused
+(`N0619`) anywhere it would be read by nothing. `N0620` is not assigned; a warning at each use
+comes with a warning severity, if one ever does. The attributes are kept out of `compiler/`, the corpus and `library/core`: the
 self-hosted lexer, which 1.0 carries frozen, has no `@`.
 
 ## 17. Conditional compilation

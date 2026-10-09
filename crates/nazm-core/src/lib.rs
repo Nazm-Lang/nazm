@@ -42,6 +42,8 @@ pub use nazm_sema as sema;
 /// Re-exported so the CLI can parse without taking its own dependency on the syntax
 /// crate. The double underscore marks it as plumbing rather than interface.
 pub mod __syntax {
+    /// A declaration's attributes (Gate 2), for a tool that publishes what they say.
+    pub use nazm_syntax::ast::{AttrArg, Attribute};
     /// A completion probe's hole (N26).
     pub use nazm_syntax::HoleSite;
     pub use nazm_syntax::{

@@ -12,7 +12,7 @@ fn also() -> Str { "never built" }
 fn also() -> Str { "also kept" }
 
 @deprecated("recorded, not reported")
-fn old() -> Int { 7 }
+pub fn old() -> Int { 7 }
 
 @test
 fn not_run_by_nazm_run() -> Result[Int, Str] {

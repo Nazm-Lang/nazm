@@ -1261,3 +1261,25 @@ fn test_function_and_benchmark_rows_match_the_published_schemas() {
     );
     check_against("nazm.bench-1.json", &rows);
 }
+
+/// G2-C1: an item's `deprecated`, from real `nazm doc` output.
+#[test]
+fn a_deprecated_items_api_doc_matches_the_published_schema() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("lib.nz"),
+        "@deprecated(\"use g\")\npub fn f() -> Int { 0 }\n@deprecated\npub struct S { x: Int, }\nfn main() -> Int { f() }\n",
+    )
+    .unwrap();
+    let out = Command::new(NAZM)
+        .current_dir(d.path())
+        .args(["doc", "lib.nz"])
+        .output()
+        .unwrap();
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        doc.to_string().contains("\"deprecated\":\"use g\""),
+        "{doc}"
+    );
+    check_against("nazm.api-doc-2.json", &[doc]);
+}
