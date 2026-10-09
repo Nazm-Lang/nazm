@@ -8295,10 +8295,11 @@ Repointed by Gate 2's time, which moved it to 38: an entry that accepted a funct
 Repointed by Gate 2's process and environment, which moved it to 39: an entry that accepted a record named `ProcessCap` must not be reused.
 Repointed by Gate 2's randomness, which moved it to 40: an entry that accepted a record named `RandomCap` must not be reused.
 Repointed by Gate 2's C foundation, which moved it to 41: an entry that refused an export of a `Float64` must not be reused.
-Repointed by Gate 2's attributes, which moved it to 42: an entry that refused an `@` must not be reused."""
+Repointed by Gate 2's attributes, which moved it to 42: an entry that refused an `@` must not be reused.
+Repointed by G2-C1, which moved it to 43: an entry that accepted `@deprecated` on a private function must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 42;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 41;"
+find = "pub const SEMANTIC_EPOCH: u32 = 43;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 42;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -15185,3 +15186,21 @@ file = "crates/nazm-sema/src/references.rs"
 find = "            index.used(at, ReferenceTarget::Const(decl));"
 replace = ""
 killers = [{ package = "nazm-service", test = "rename", name = "a_constant_is_renamed_everywhere_it_is_named" }]
+
+# --- G2-C1: `@deprecated` is metadata `nazm doc` publishes ---------------------------------------
+
+[[mutation]]
+name = "g2c1-a-deprecation-is-not-published"
+why = "`nazm doc` leaves a deprecated function's `deprecated` out, so the attribute is accepted and observable nowhere"
+file = "crates/nazm-cli/src/apidoc.rs"
+find = "            if let (Some(why), Some((_, _, item))) = (deprecation, out.last_mut()) {\n                item[\"deprecated\"] = json!(why);\n            }"
+replace = ""
+killers = [{ package = "nazm-cli", test = "attributes", name = "deprecation_is_metadata_the_api_documentation_publishes" }]
+
+[[mutation]]
+name = "g2c1-deprecated-may-mark-anything"
+why = "`@deprecated` is accepted before a private function, a constant or a trait, where nothing ever reads it"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "                let published = public && matches!(target, Target::Function | Target::Type);"
+replace = "                let published = true;"
+killers = [{ package = "nazm-cli", test = "attributes", name = "every_attribute_outside_the_vocabulary_or_its_place_is_refused_by_name" }]

@@ -38,8 +38,8 @@ found only by reading all of it.
   the language. The EVM and accelerator-kernel targets refuse every number but `Int`.
 - Attributes (Gate 2): a closed vocabulary — `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated` —
   written only before a top-level declaration, not before a method inside an `impl` or a
-  `trait`. `@deprecated` reports nothing: diagnostics have one severity, and a warning at each use
-  waits for a second. `@cfg(feature = …)` holds for nothing until a package can enable a feature.
+  `trait`. `@deprecated` is metadata-only (G2-C1): `nazm doc` publishes it on a `pub` function,
+  `struct` or `enum`, and no diagnostic reports a use — compiler warnings are not part of 1.0. `@cfg(feature = …)` holds for nothing until a package can enable a feature.
 - Package features (Gate 2): additive only — no way to switch a dependency's `default` off;
   `--features` reaches the root package alone; the lockfile records the manifests' sets, not a
   command's `--features`.

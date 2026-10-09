@@ -206,7 +206,10 @@ by name otherwise (`N0619`); a malformed one is one syntax error. A declaration 
 not hold is removed before name resolution, an `impl` with its methods, decided by the build's
 target (`nazm build --target`), or the host's, and the profiles held; a module that writes `@cfg`
 is checked under its configuration and never reused under another. The formatter puts each
-attribute on its own line. Semantic epoch 42. Evidence: `crates/nazm-cli/tests/attributes.rs` —
+attribute on its own line. Semantic epoch 42. *G2-C1:* `@deprecated` is metadata-only deprecation —
+on a `pub` function, `struct` or `enum` only (`N0619` elsewhere), published by `nazm doc` as the
+item's `deprecated` in `nazm.api-doc/2` and in the Markdown, reported by no diagnostic — epoch 43
+(`deprecation_is_metadata_the_api_documentation_publishes`, `schemas.rs`). Evidence: `crates/nazm-cli/tests/attributes.rs` —
 the kept declaration in the interpreter and both backends, a cross build that reaches code the
 host's check never saw, a check under `--profile` not reusing one without it, fourteen refusals,
 one error for a malformed attribute, and the formatter's layout; `docs/grammar.ebnf`'s examples.

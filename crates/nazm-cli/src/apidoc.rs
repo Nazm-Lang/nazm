@@ -21,6 +21,17 @@ use serde_json::{json, Value};
 
 use crate::{exit, load};
 
+/// What `@deprecated` says of a declaration (G2-C1): its reason, `""` when it gives none, or
+/// nothing when the declaration is not deprecated. Metadata-only: published here, and no
+/// diagnostic reports a use.
+fn deprecated(attrs: &[nazm_core::__syntax::Attribute]) -> Option<String> {
+    let a = attrs.iter().find(|a| a.name == "deprecated")?;
+    Some(match a.args.as_deref() {
+        Some([nazm_core::__syntax::AttrArg::Str { value, .. }]) => value.clone(),
+        _ => String::new(),
+    })
+}
+
 /// The comment lines directly above byte `at` of `text`, without their `//`.
 fn description(text: &str, at: usize) -> String {
     let before = text.get(..at).unwrap_or("");
@@ -164,6 +175,7 @@ fn document(
                 .trim_end_matches(';')
                 .to_owned();
             let id = names.function(nazm_core::sema::FnId::from_index(i));
+            let deprecation = deprecated(&f.attrs);
             let capabilities: Vec<String> = def
                 .params
                 .iter()
@@ -193,12 +205,16 @@ fn document(
                     "source": { "path": relative(map.name(file), base), "line": line_of(text, def.name_span.start as usize) },
                 }),
             ));
+            if let (Some(why), Some((_, _, item))) = (deprecation, out.last_mut()) {
+                item["deprecated"] = json!(why);
+            }
         }
         let mut types_of = |kind: &str,
                             name: &str,
                             name_span: nazm_span::Span,
                             pub_span: Option<nazm_span::Span>,
                             span: nazm_span::Span,
+                            attrs: &[nazm_core::__syntax::Attribute],
                             fields: Value| {
             let file = name_span.file;
             if pub_span.is_none() || !own(file) {
@@ -224,6 +240,9 @@ fn document(
                     "source": { "path": relative(map.name(file), base), "line": line_of(text, name_span.start as usize) },
                 }),
             ));
+            if let (Some(why), Some((_, _, item))) = (deprecated(attrs), out.last_mut()) {
+                item["deprecated"] = json!(why);
+            }
         };
         for r in &program.records {
             let fields: Vec<Value> = r.fields.iter().map(|f| json!({ "name": f.name, "type": map.text(f.ty.span.file).get(f.ty.span.start as usize..f.ty.span.end as usize) })).collect();
@@ -233,6 +252,7 @@ fn document(
                 r.name_span,
                 r.pub_span,
                 r.span,
+                &r.attrs,
                 json!(fields),
             );
         }
@@ -244,6 +264,7 @@ fn document(
                 e.name_span,
                 e.pub_span,
                 e.span,
+                &e.attrs,
                 json!(variants),
             );
         }
@@ -383,6 +404,15 @@ fn markdown(doc: &Value) -> String {
                 "```nazm\n{}\n```\n",
                 it["signature"].as_str().unwrap_or("")
             );
+            match it["deprecated"].as_str() {
+                Some("") => {
+                    let _ = writeln!(md, "**Deprecated.**\n");
+                }
+                Some(why) => {
+                    let _ = writeln!(md, "**Deprecated:** {why}\n");
+                }
+                None => {}
+            }
             if let Some(d) = it["description"].as_str().filter(|d| !d.is_empty()) {
                 let _ = writeln!(md, "{d}\n");
             }

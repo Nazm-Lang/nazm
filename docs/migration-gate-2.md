@@ -25,7 +25,8 @@ program that declares one is now refused by name, and the remedy is to rename th
 | a function named as a new built-in | `N0203` | the numbers', bytes', text's and `os_` built-ins, `time_now_ns`, `time_wall_ns`, `time_sleep_ms`, `os_random_bytes`, … — every name in `crates/nazm-sema/src/intrinsic.rs` |
 | a foreign declaration of a C symbol the runtime now calls | `N0383` | `RESERVED_C_SYMBOLS` in `crates/nazm-core/src/check/foreign.rs` (`strtod`, `sin`, `getentropy`, …) |
 
-`@` was an unknown character; a file that never wrote one is unaffected.
+`@` was an unknown character; a file that never wrote one is unaffected. `@deprecated` is
+metadata-only: `nazm doc` publishes it, and no build reports a use (G2-C1).
 
 ## A build
 
