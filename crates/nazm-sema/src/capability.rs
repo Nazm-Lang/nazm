@@ -62,6 +62,9 @@ pub enum CapabilityKind {
     /// — nothing implies it, and it implies nothing — so a program can be given files without
     /// the network or the network without files. `main` may take one as a root.
     Net,
+    /// The operating system's entropy (Gate 2): what `os_random_bytes` needs, as a clock is a
+    /// `TimeCap`'s. No effect is authorised by it; a seeded generator needs none.
+    Random,
     /// Running another program (Gate 2): every authority that program has, so granted
     /// explicitly. Implies nothing, and nothing implies it. `main` may take one as a root.
     Process,
@@ -69,7 +72,7 @@ pub enum CapabilityKind {
 
 impl CapabilityKind {
     /// Every kind, in id order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Io,
         Self::Spawn,
         Self::Foreign,
@@ -78,6 +81,7 @@ impl CapabilityKind {
         Self::Mmio,
         Self::Out,
         Self::Net,
+        Self::Random,
         Self::Process,
     ];
 
@@ -93,6 +97,7 @@ impl CapabilityKind {
             Self::Mmio => 5,
             Self::Out => 6,
             Self::Net => 7,
+            Self::Random => 8,
             Self::Process => 9,
         }
     }
@@ -109,6 +114,7 @@ impl CapabilityKind {
             Self::Mmio => "MmioCap",
             Self::Out => "OutCap",
             Self::Net => "NetCap",
+            Self::Random => "RandomCap",
             Self::Process => "ProcessCap",
         }
     }
@@ -265,6 +271,8 @@ impl CapabilityKind {
             // started is its handle's.
             Intrinsic::OsSpawn => CapabilitySet::of(Self::Process),
             Intrinsic::OsChildPipe | Intrinsic::OsWait | Intrinsic::OsKill => CapabilitySet::EMPTY,
+            // Entropy is authority of its own (Gate 2, §21).
+            Intrinsic::OsRandomBytes => CapabilitySet::of(Self::Random),
             // The standard streams need only their attenuation (N79), which `IoCap` implies.
             Intrinsic::Print | Intrinsic::EPrint => CapabilitySet::of(Self::Out),
             // Declassification is authority of its own (N52).
@@ -344,6 +352,7 @@ impl CapabilityKind {
             | Intrinsic::MmioWrite8
             | Intrinsic::MmioRead16
             | Intrinsic::MmioWrite16 => Some(Self::Mmio),
+            Intrinsic::OsRandomBytes => Some(Self::Random),
             _ => None,
         }
     }
@@ -360,9 +369,13 @@ impl CapabilityKind {
     pub const fn article(self) -> &'static str {
         match self {
             Self::Io => "an",
-            Self::Spawn | Self::Foreign | Self::Vouch | Self::Time | Self::Net | Self::Process => {
-                "a"
-            }
+            Self::Spawn
+            | Self::Foreign
+            | Self::Vouch
+            | Self::Time
+            | Self::Net
+            | Self::Random
+            | Self::Process => "a",
             Self::Mmio | Self::Out => "an",
         }
     }

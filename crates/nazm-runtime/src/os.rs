@@ -83,6 +83,7 @@ pub fn declarations(out: &mut String) {
         "declare i32 @getpeername(i32, ptr, ptr)",
         "declare i32 @shutdown(i32, i32)",
         "declare i32 @pipe(ptr)",
+        "declare i32 @getentropy(ptr, i64)",
         "declare i32 @fcntl(i32, i32, ...)",
         "declare i32 @posix_spawnp(ptr, ptr, ptr, ptr, ptr, ptr)",
         "declare i32 @posix_spawn_file_actions_init(ptr)",

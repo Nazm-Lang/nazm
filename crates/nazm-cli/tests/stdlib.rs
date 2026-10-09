@@ -132,8 +132,8 @@ fn codes(files: &[(&str, &str)]) -> Vec<String> {
 
 const MODULES: &[&str] = &[
     "binary", "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap", "hashset",
-    "io", "ioerror", "json", "map", "net", "num", "option", "path", "process", "result", "seq",
-    "show", "sort", "test", "text", "time",
+    "io", "ioerror", "json", "map", "net", "num", "option", "path", "process", "random", "result",
+    "seq", "show", "sort", "test", "text", "time",
 ];
 
 #[test]
@@ -447,6 +447,65 @@ fn main(out: OutCap) -> Int {
 #[test]
 fn binary_encodes_byte_for_byte_and_reads_back_everywhere() {
     agrees(&[("prog.nz", BINARY)], "ff1234efbeaddefffffffffffffffe000000000000f83fac02ffffffffffffffffff0101ffffffffffffffffff010668c3a96c6c6f\n53\n255\n4660\n3735928559\n-2\n1.5\n300\n18446744073709551615\n-1\n-9223372036854775808\nhéllo\n0\na byte needs more bytes than are left at byte 53\na varint past 64 bits at byte 0\na length longer than the data at byte 1\n0\n");
+}
+
+/// Gate 2 §21: xoshiro256** seeded through SplitMix64 gives the sequence an independent Python
+/// implementation gives, a fair die, a float in `[0, 1)` and a fixed shuffle for a fixed seed;
+/// entropy gives two different seeds and fills a buffer.
+const RANDOM: &str = r#"use "@std/random";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn main(out: OutCap, rc: RandomCap) -> Int {
+    let r = random_new(UInt64(42));
+    line(out, num_to_str(random_u64(r)));
+    line(out, num_to_str(random_u64(r)));
+    line(out, num_to_str(random_u64(r)));
+    let mut counts = ints_new();
+    let mut k = 0;
+    while k < 6 { ints_push(counts, 0); k = k + 1; }
+    let mut i = 0;
+    while i < 6000 { let d = random_int(r, 0, 6); ints_set(counts, d, ints_get(counts, d) + 1); i = i + 1; }
+    let mut fair = true;
+    let mut j = 0;
+    while j < 6 { if ints_get(counts, j) < 850 || ints_get(counts, j) > 1150 { fair = false; } j = j + 1; }
+    line(out, if fair { "fair" } else { "unfair" });
+    let f = random_float(r);
+    line(out, if f >= 0.0 && f < 1.0 { "in [0, 1)" } else { "out of range" });
+    let v = vec_new[Int]();
+    let mut n = 0;
+    while n < 10 { vec_push(v, n); n = n + 1; }
+    random_shuffle(random_new(UInt64(7)), v);
+    let mut s = "";
+    let mut m = 0;
+    while m < 10 { s = str_concat(s, int_to_str(vec_get(v, m))); m = m + 1; }
+    line(out, s);
+    let a = random_seed(rc);
+    let b = random_seed(rc);
+    line(out, if a != b { "two seeds differ" } else { "the same seed twice" });
+    let buf = bytes_new(1000);
+    line(out, match random_bytes(rc, buf) { Result.Ok(value: k2) => int_to_str(k2), Result.Err(error: e) => e });
+    0
+}
+"#;
+
+#[test]
+fn a_seeded_generator_repeats_everywhere_and_entropy_does_not() {
+    agrees(&[("prog.nz", RANDOM)], "1546998764402558742\n6990951692964543102\n12544586762248559009\nfair\nin [0, 1)\n8390721654\ntwo seeds differ\n1000\n0\n");
+}
+
+#[test]
+fn entropy_needs_a_random_cap_and_a_seeded_generator_needs_none() {
+    assert_eq!(
+        codes(&[(
+            "prog.nz",
+            "fn main() -> Int { os_random_bytes(bytes_new(8)) }\n"
+        )]),
+        ["N0369"]
+    );
+    assert!(codes(&[(
+        "prog.nz",
+        "use \"@std/random\";\nfn main() -> Int ! {} { Int(random_u64(random_new(UInt64(1))) % UInt64(10)) }\n"
+    )])
+    .is_empty());
 }
 
 #[test]

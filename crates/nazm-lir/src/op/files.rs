@@ -184,6 +184,11 @@ impl Fx<'_, '_> {
                 }
             }
             Intrinsic::OsEnvCount => self.rt_v("nz.os_env_count", &[], Class::I64),
+            Intrinsic::OsRandomBytes => {
+                let b = self.arg_place(args, 0);
+                let (bp, bn) = self.str_parts(b);
+                self.rt_v("nz.os_random_bytes", &[bp, bn], Class::I64)
+            }
             Intrinsic::OsEnvAt => {
                 let i = self.arg(args, 0);
                 let count = self.rt_v("nz.os_env_count", &[], Class::I64);
