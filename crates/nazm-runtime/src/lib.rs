@@ -275,6 +275,7 @@ pub fn digest() -> &'static str {
             h.update(switch::emit_switch(t).as_bytes());
             h.update(switch::emit_errno(t).as_bytes());
             h.update(platform::emit_os(t).as_bytes());
+            h.update(platform::emit_stack(t).as_bytes());
         }
         for i in INVENTORY {
             h.update(format!("{i:?}").as_bytes());
@@ -1089,6 +1090,9 @@ mod tests {
         let text = crate::emit_runtime(all());
         let entry = crate::emit_entry("@nz_main", 1, all());
         let mut called = Vec::new();
+        // Calls into the platform's own units (`nz_os_*`, Gate 3): the adapter may declare them,
+        // and they count as called; their definitions are each target's.
+        let mut platform_called = Vec::new();
         for t in [&text, &entry] {
             for (i, _) in t.match_indices("call ") {
                 let rest = &t[i..];
@@ -1101,7 +1105,9 @@ mod tests {
                     .chars()
                     .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
                     .collect();
-                if !name.starts_with("nz.") && !name.starts_with("nz_") {
+                if name.starts_with("nz_os_") {
+                    platform_called.push(name);
+                } else if !name.starts_with("nz.") && !name.starts_with("nz_") {
                     called.push(name);
                 }
             }
@@ -1124,7 +1130,9 @@ mod tests {
         // LLVM's intrinsics are declared there too, and are not the operating system.
         for d in declared.iter().filter(|d| !d.starts_with("llvm.")) {
             assert!(
-                called.contains(d) || lowering.contains(&format!("\"{d}\"")),
+                called.contains(d)
+                    || platform_called.contains(d)
+                    || lowering.contains(&format!("\"{d}\"")),
                 "the adapter declares `{d}`, which nothing calls"
             );
         }

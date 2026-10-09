@@ -57,6 +57,9 @@ pub enum Arch {
 pub enum Os {
     Macos,
     Linux,
+    /// Windows, through MinGW-w64's C runtime (Gate 3, `docs/spec.md` *Windows x86_64*): its
+    /// programs are run under Wine here, never claimed as run on a Windows host.
+    Windows,
     /// No operating system and no C library (N62, §7.64): a freestanding image.
     None,
 }
@@ -82,6 +85,7 @@ impl Target {
             "aarch64-unknown-linux-gnu" => (Arch::Aarch64, Os::Linux),
             "x86_64-apple-darwin" => (Arch::X86_64, Os::Macos),
             "x86_64-unknown-linux-gnu" => (Arch::X86_64, Os::Linux),
+            "x86_64-pc-windows-gnu" => (Arch::X86_64, Os::Windows),
             "aarch64-unknown-none" => (Arch::Aarch64, Os::None),
             "wasm32-unknown-unknown" => (Arch::Wasm32, Os::None),
             "riscv64gc-unknown-none-elf" => (Arch::Riscv64, Os::None),
@@ -89,7 +93,8 @@ impl Target {
                 return Err(format!(
                     "`{other}` is not a target this compiler generates code for; the \
                      targets are aarch64-apple-darwin, aarch64-unknown-linux-gnu, \
-                     x86_64-apple-darwin, x86_64-unknown-linux-gnu and, freestanding, \
+                     x86_64-apple-darwin, x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu and, \
+                     freestanding, \
                      aarch64-unknown-none, riscv64gc-unknown-none-elf and \
                      wasm32-unknown-unknown"
                 ))

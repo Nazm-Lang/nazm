@@ -283,6 +283,7 @@ pub(crate) fn switch_target(
         (Arch::Aarch64, Os::Linux) => Some(SwitchTarget::Aarch64Linux),
         (Arch::X86_64, Os::Macos) => Some(SwitchTarget::X86_64Darwin),
         (Arch::X86_64, Os::Linux) => Some(SwitchTarget::X86_64Linux),
+        (Arch::X86_64, Os::Windows) => Some(SwitchTarget::X86_64Windows),
         _ => None,
     }
 }
