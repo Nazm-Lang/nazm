@@ -1,0 +1,50 @@
+// `@std/hashset`: a set of `Hash` keys, over `@std/hashmap` (Gate 2).
+//
+// Imported with `use "@std/hashset";` beside `use "@std/hash";`. A `HashSet[K]` is a
+// `HashMap[K, Bool]` and shares its costs and its order.
+
+use "@std/hash";
+use "@std/hashmap";
+
+/// A set of `K`.
+pub struct HashSet[K] {
+    map: HashMap[K, Bool],
+}
+
+/// An empty set, whose order is the same in every run.
+pub fn hashset_new[K: Hash]() -> HashSet[K] ! {} {
+    HashSet[K](map: hashmap_new[K, Bool]())
+}
+
+/// An empty set hashing under `seed`.
+pub fn hashset_with_seed[K: Hash](seed: UInt64) -> HashSet[K] ! {} {
+    HashSet[K](map: hashmap_with_seed[K, Bool](seed))
+}
+
+/// Put `key` in `s`; whether it was not there already.
+pub fn hashset_add[K: Hash](s: HashSet[K], key: K) -> Bool ! {} {
+    !hashmap_set(s.map, key, true)
+}
+
+/// Whether `s` holds `key`.
+pub fn hashset_has[K: Hash](s: HashSet[K], key: K) -> Bool ! {} {
+    hashmap_has(s.map, key)
+}
+
+/// Take `key` out of `s`; whether it was there.
+pub fn hashset_remove[K: Hash](s: HashSet[K], key: K) -> Bool ! {} {
+    match hashmap_remove(s.map, key) {
+        Option.Some(value: v) => true,
+        Option.None() => false,
+    }
+}
+
+/// How many keys `s` holds.
+pub fn hashset_len[K: Hash](s: HashSet[K]) -> Int ! {} {
+    hashmap_len(s.map)
+}
+
+/// Every key of `s`, in table order.
+pub fn hashset_items[K: Hash](s: HashSet[K]) -> Vec[K] ! {} {
+    hashmap_keys(s.map)
+}

@@ -1,0 +1,208 @@
+// `@std/hashmap`: a map from `Hash` keys to values, by open addressing (Gate 2).
+//
+// Imported with `use "@std/hashmap";` beside `use "@std/hash";`. A `HashMap[K, V]` holds its
+// entries in a table it shares like any handle: copies of a map are the same map. A key's slot is
+// found from its hash by linear probing; a removed entry leaves a marker the probe passes over,
+// and the table doubles before it is three-quarters used, so insert, lookup and removal take
+// expected constant time and growth amortised constant time. Iteration is in table order, which
+// the keys, their order of insertion and the seed decide — the same in every run.
+
+use "@std/hash";
+
+/// One slot of the table: never used, used and emptied, or holding an entry.
+pub enum Slot[K, V] {
+    Empty,
+    Gone,
+    Full(key: K, value: V, hash: UInt64),
+}
+
+/// A map from `K` to `V`. `meta` holds how many entries there are and how many slots are not
+/// `Empty`.
+pub struct HashMap[K, V] {
+    slots: Vec[Slot[K, V]],
+    meta: Vec[Int],
+    seed: UInt64,
+}
+
+/// An empty map, whose order is the same in every run.
+pub fn hashmap_new[K: Hash, V]() -> HashMap[K, V] ! {} {
+    hashmap_with_seed[K, V](UInt64(0))
+}
+
+/// An empty map hashing under `seed`: a seed from a source of randomness makes its order, and
+/// which keys collide, unpredictable to whoever chooses the keys.
+pub fn hashmap_with_seed[K: Hash, V](seed: UInt64) -> HashMap[K, V] ! {} {
+    let slots = vec_new[Slot[K, V]]();
+    let mut i = 0;
+    while i < 8 {
+        vec_push(slots, Slot[K, V].Empty());
+        i = i + 1;
+    }
+    let meta = vec_new[Int]();
+    vec_push(meta, 0);
+    vec_push(meta, 0);
+    HashMap[K, V](slots: slots, meta: meta, seed: seed)
+}
+
+/// How many keys `m` holds.
+pub fn hashmap_len[K: Hash, V](m: HashMap[K, V]) -> Int ! {} {
+    vec_get(m.meta, 0)
+}
+
+fn key_hash[K: Hash](seed: UInt64, key: K) -> UInt64 ! {} {
+    hash_combine(seed, key.hash())
+}
+
+// Where `key` is: its slot when present, and `-(the slot it would take) - 1` when not.
+fn hashmap_find[K: Hash, V](m: HashMap[K, V], key: K, h: UInt64) -> Int ! {} {
+    let cap = vec_len(m.slots);
+    let mut i = Int(h % UInt64(cap));
+    let mut free = 0 - 1;
+    let mut found = 0 - 1;
+    let mut looking = true;
+    while looking {
+        match vec_get(m.slots, i) {
+            Slot.Empty() => {
+                if free < 0 { free = i; }
+                looking = false;
+            },
+            Slot.Gone() => {
+                if free < 0 { free = i; }
+            },
+            Slot.Full(key: k, value: v, hash: kh) => {
+                if kh == h && key.same(k) {
+                    found = i;
+                    looking = false;
+                }
+            },
+        };
+        i = (i + 1) % cap;
+    }
+    if found >= 0 { found } else { 0 - free - 1 }
+}
+
+// Twice the slots, every entry placed again.
+fn hashmap_grow[K: Hash, V](m: HashMap[K, V]) -> Int ! {} {
+    let cap = vec_len(m.slots);
+    let keys = vec_new[K]();
+    let values = vec_new[V]();
+    let hashes = vec_new[UInt64]();
+    let mut i = 0;
+    while i < cap {
+        match vec_get(m.slots, i) {
+            Slot.Full(key: k, value: v, hash: h) => {
+                vec_push(keys, k);
+                vec_push(values, v);
+                vec_push(hashes, h);
+            },
+            Slot.Empty() => {},
+            Slot.Gone() => {},
+        };
+        vec_set(m.slots, i, Slot[K, V].Empty());
+        i = i + 1;
+    }
+    while vec_len(m.slots) < cap * 2 {
+        vec_push(m.slots, Slot[K, V].Empty());
+    }
+    vec_set(m.meta, 0, 0);
+    vec_set(m.meta, 1, 0);
+    let mut j = 0;
+    while j < vec_len(keys) {
+        let h = vec_get(hashes, j);
+        let at = hashmap_find(m, vec_get(keys, j), h);
+        hashmap_place(m, 0 - at - 1, vec_get(keys, j), vec_get(values, j), h);
+        j = j + 1;
+    }
+    0
+}
+
+// A new entry at a free slot.
+fn hashmap_place[K: Hash, V](m: HashMap[K, V], at: Int, key: K, value: V, h: UInt64) -> Int ! {} {
+    let fresh = match vec_get(m.slots, at) {
+        Slot.Empty() => true,
+        Slot.Gone() => false,
+        Slot.Full(key: k, value: v, hash: kh) => false,
+    };
+    vec_set(m.slots, at, Slot[K, V].Full(key: key, value: value, hash: h));
+    vec_set(m.meta, 0, vec_get(m.meta, 0) + 1);
+    if fresh {
+        vec_set(m.meta, 1, vec_get(m.meta, 1) + 1);
+    }
+    0
+}
+
+/// Give `key` the value `value` in `m`, replacing any it had; whether one was replaced.
+pub fn hashmap_set[K: Hash, V](m: HashMap[K, V], key: K, value: V) -> Bool ! {} {
+    if (vec_get(m.meta, 1) + 1) * 4 > vec_len(m.slots) * 3 {
+        hashmap_grow(m);
+    }
+    let h = key_hash(m.seed, key);
+    let at = hashmap_find(m, key, h);
+    if at >= 0 {
+        vec_set(m.slots, at, Slot[K, V].Full(key: key, value: value, hash: h));
+        true
+    } else {
+        hashmap_place(m, 0 - at - 1, key, value, h);
+        false
+    }
+}
+
+/// The value `m` holds for `key`, or `None`.
+pub fn hashmap_get[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {} {
+    let at = hashmap_find(m, key, key_hash(m.seed, key));
+    if at < 0 {
+        Option[V].None()
+    } else {
+        match vec_get(m.slots, at) {
+            Slot.Full(key: k, value: v, hash: h) => Option[V].Some(value: v),
+            Slot.Empty() => Option[V].None(),
+            Slot.Gone() => Option[V].None(),
+        }
+    }
+}
+
+/// Whether `m` holds `key`.
+pub fn hashmap_has[K: Hash, V](m: HashMap[K, V], key: K) -> Bool ! {} {
+    hashmap_find(m, key, key_hash(m.seed, key)) >= 0
+}
+
+/// Take `key` out of `m`, with the value it had, or `None` when it had none.
+pub fn hashmap_remove[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {} {
+    let gone = hashmap_get(m, key);
+    let at = hashmap_find(m, key, key_hash(m.seed, key));
+    if at >= 0 {
+        vec_set(m.slots, at, Slot[K, V].Gone());
+        vec_set(m.meta, 0, vec_get(m.meta, 0) - 1);
+    }
+    gone
+}
+
+/// Every key of `m`, in table order.
+pub fn hashmap_keys[K: Hash, V](m: HashMap[K, V]) -> Vec[K] ! {} {
+    let out = vec_new[K]();
+    let mut i = 0;
+    while i < vec_len(m.slots) {
+        match vec_get(m.slots, i) {
+            Slot.Full(key: k, value: v, hash: h) => { vec_push(out, k); },
+            Slot.Empty() => {},
+            Slot.Gone() => {},
+        };
+        i = i + 1;
+    }
+    out
+}
+
+/// Every value of `m`, in its keys' order.
+pub fn hashmap_values[K: Hash, V](m: HashMap[K, V]) -> Vec[V] ! {} {
+    let out = vec_new[V]();
+    let mut i = 0;
+    while i < vec_len(m.slots) {
+        match vec_get(m.slots, i) {
+            Slot.Full(key: k, value: v, hash: h) => { vec_push(out, v); },
+            Slot.Empty() => {},
+            Slot.Gone() => {},
+        };
+        i = i + 1;
+    }
+    out
+}

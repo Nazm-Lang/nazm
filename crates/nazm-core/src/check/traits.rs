@@ -222,7 +222,7 @@ pub(super) fn named_trait(
 /// declares it — `None` for a built-in.
 pub(super) fn implementable(res: &Resolution, ty: Type) -> Result<Option<ModuleId>, &'static str> {
     match ty {
-        Type::Int | Type::Bool | Type::Str => Ok(None),
+        Type::Int | Type::Num(_) | Type::Bool | Type::Str => Ok(None),
         Type::Record(id) => {
             let def = res.records().get(id).ok_or("an unknown record")?;
             if !def.params.is_empty() || def.instance.is_some() {
@@ -238,7 +238,7 @@ pub(super) fn implementable(res: &Resolution, ty: Type) -> Result<Option<ModuleI
             Ok(Some(def.module))
         }
         Type::Param(_) => Err("a type parameter"),
-        _ => Err("a built-in type other than `Int`, `Bool` or `Str`"),
+        _ => Err("a built-in type other than a number, `Bool` or `Str`"),
     }
 }
 

@@ -131,8 +131,8 @@ fn codes(files: &[(&str, &str)]) -> Vec<String> {
 }
 
 const MODULES: &[&str] = &[
-    "chan", "fmt", "fs", "io", "json", "map", "num", "option", "path", "process", "result", "seq",
-    "show", "sort", "test", "text", "time",
+    "chan", "deque", "fmt", "fs", "hash", "hashmap", "hashset", "io", "json", "map", "num",
+    "option", "path", "process", "result", "seq", "show", "sort", "test", "text", "time",
 ];
 
 #[test]
@@ -227,6 +227,127 @@ fn a_standard_module_is_one_module_however_many_import_it() {
     // Its names are the importer's: defining one of them beside the import is a collision.
     let clash = "use \"@std/text\";\nfn text_trim(s: Str) -> Str { s }\nfn main() -> Int { 0 }\n";
     assert!(codes(&[("prog.nz", clash)]).contains(&"N0208".to_owned()));
+}
+
+/// Gate 2 §7: a map of strings and of integers through a thousand inserts and growth, removal past
+/// the tombstones it leaves, a set of a program's own records keyed by an impl composing the
+/// library's, the hash vectors (FNV-1a then SplitMix64's finaliser, computed independently), and a
+/// deque wrapping both ways — alike interpreted, under LLVM and under Cranelift, all reclaimed.
+const COLLECTIONS: &str = r#"use "@std/hash";
+use "@std/hashmap";
+use "@std/hashset";
+use "@std/deque";
+
+struct Point { x: Int, y: Int, }
+
+impl Hash for Point {
+    fn hash(self: Point) -> UInt64 ! {} { hash_combine(self.x.hash(), self.y.hash()) }
+    fn same(self: Point, other: Point) -> Bool ! {} { self == other }
+}
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+fn get_or(m: HashMap[Str, Int], k: Str) -> Int {
+    match hashmap_get(m, k) {
+        Option.Some(value: v) => v,
+        Option.None() => 0 - 1,
+    }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let m = hashmap_new[Str, Int]();
+    hashmap_set(m, "one", 1);
+    hashmap_set(m, "two", 2);
+    if hashmap_set(m, "one", 11) { show(out, "replaced"); } else { show(out, "new"); };
+    show(out, int_to_str(get_or(m, "one") + get_or(m, "two") + get_or(m, "three")));
+    let big = hashmap_new[Int, Int]();
+    let mut i = 0;
+    while i < 1000 {
+        hashmap_set(big, i, i * i);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 1000 {
+        if j % 3 == 0 { hashmap_remove(big, j); };
+        j = j + 1;
+    }
+    let mut total = 0;
+    let vs = hashmap_values(big);
+    let mut k = 0;
+    while k < vec_len(vs) { total = total + vec_get(vs, k); k = k + 1; }
+    show(out, int_to_str(hashmap_len(big)));
+    show(out, int_to_str(total));
+    hashmap_set(big, 3, 7);
+    show(out, int_to_str(hashmap_len(big)));
+    let pts = hashset_new[Point]();
+    hashset_add(pts, Point(x: 1, y: 2));
+    if hashset_add(pts, Point(x: 1, y: 2)) { show(out, "added twice"); } else { show(out, "already there"); };
+    hashset_add(pts, Point(x: 2, y: 1));
+    show(out, int_to_str(hashset_len(pts)));
+    if hashset_has(pts, Point(x: 2, y: 1)) && !hashset_has(pts, Point(x: 3, y: 3)) { show(out, "set ok"); } else { show(out, "set wrong"); };
+    show(out, num_to_str(hash_bytes("")));
+    show(out, num_to_str(hash_bytes("nazm")));
+    show(out, num_to_str(UInt8(7).hash()));
+    let d = deque_new[Int]();
+    let mut n = 0;
+    while n < 10 {
+        deque_push_back(d, n);
+        deque_push_front(d, 0 - n);
+        n = n + 1;
+    }
+    let mut line = "";
+    let mut p = 0;
+    while p < deque_len(d) {
+        match deque_get(d, p) {
+            Option.Some(value: v) => { line = str_concat(line, str_concat(int_to_str(v), " ")); },
+            Option.None() => {},
+        };
+        p = p + 1;
+    }
+    show(out, line);
+    match deque_pop_front(d) { Option.Some(value: v) => show(out, int_to_str(v)), Option.None() => show(out, "empty"), };
+    match deque_pop_back(d) { Option.Some(value: v) => show(out, int_to_str(v)), Option.None() => show(out, "empty"), };
+    show(out, int_to_str(deque_len(d)));
+    0
+}
+"#;
+
+#[test]
+fn hash_maps_sets_and_deques_behave_alike_everywhere() {
+    agrees(
+        &[("prog.nz", COLLECTIONS)],
+        "replaced\n12\n666\n221555889\n667\nalready there\n2\nset ok\n\
+         17665956581633026203\n10414939609503865103\n12548494866695815710\n\
+         -9 -8 -7 -6 -5 -4 -3 -2 -1 0 0 1 2 3 4 5 6 7 8 9 \n-9\n9\n18\n0\n",
+    );
+}
+
+#[test]
+fn a_seed_changes_a_maps_order_and_nothing_else() {
+    let src = "use \"@std/hash\";\nuse \"@std/hashmap\";\n\
+        fn keys(m: HashMap[Int, Int]) -> Str {\n\
+            let ks = hashmap_keys(m);\n\
+            let mut s = \"\";\n\
+            let mut i = 0;\n\
+            while i < vec_len(ks) { s = str_concat(s, int_to_str(vec_get(ks, i))); i = i + 1; }\n\
+            s\n\
+        }\n\
+        fn fill(m: HashMap[Int, Int]) -> Int { let mut i = 0; while i < 6 { hashmap_set(m, i, i); i = i + 1; } 0 }\n\
+        fn main(out: OutCap) -> Int {\n\
+            let a = hashmap_new[Int, Int]();\n\
+            let b = hashmap_with_seed[Int, Int](UInt64(99));\n\
+            fill(a); fill(b);\n\
+            let c = hashmap_with_seed[Int, Int](UInt64(0));\n\
+            fill(c);\n\
+            print(if keys(a) == keys(b) { \"same order\\n\" } else { \"other order\\n\" });\n\
+            print(if hashmap_len(a) == hashmap_len(b) { \"same length\\n\" } else { \"other length\\n\" });\n\
+            print(if keys(a) == keys(c) { \"reproducible\\n\" } else { \"not reproducible\\n\" });\n\
+            0\n\
+        }\n";
+    agrees(
+        &[("prog.nz", src)],
+        "other order\nsame length\nreproducible\n0\n",
+    );
 }
 
 #[test]

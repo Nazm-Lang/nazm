@@ -1,0 +1,115 @@
+// `@std/deque`: a double-ended queue, as a ring buffer (Gate 2).
+//
+// Imported with `use "@std/deque";`. A `Deque[T]` holds its items in a ring over a `Vec` it
+// shares like any handle: copies of a deque are the same deque. Pushing and popping at either end
+// take amortised constant time — the ring doubles when it is full — and reading an item by its
+// position constant time.
+
+/// A queue of `T`, open at both ends. `meta` holds where the first item is and how many there are.
+pub struct Deque[T] {
+    ring: Vec[Option[T]],
+    meta: Vec[Int],
+}
+
+/// An empty deque.
+pub fn deque_new[T]() -> Deque[T] ! {} {
+    let ring = vec_new[Option[T]]();
+    let mut i = 0;
+    while i < 4 {
+        vec_push(ring, Option[T].None());
+        i = i + 1;
+    }
+    let meta = vec_new[Int]();
+    vec_push(meta, 0);
+    vec_push(meta, 0);
+    Deque[T](ring: ring, meta: meta)
+}
+
+/// How many items `d` holds.
+pub fn deque_len[T](d: Deque[T]) -> Int ! {} {
+    vec_get(d.meta, 1)
+}
+
+// The ring slot of position `i`.
+fn deque_slot[T](d: Deque[T], i: Int) -> Int ! {} {
+    (vec_get(d.meta, 0) + i) % vec_len(d.ring)
+}
+
+// Twice the ring, the items first in order.
+fn deque_grow[T](d: Deque[T]) -> Int ! {} {
+    let cap = vec_len(d.ring);
+    let items = vec_new[Option[T]]();
+    let mut i = 0;
+    while i < cap {
+        vec_push(items, vec_get(d.ring, deque_slot(d, i)));
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < cap {
+        vec_set(d.ring, j, vec_get(items, j));
+        j = j + 1;
+    }
+    while vec_len(d.ring) < cap * 2 {
+        vec_push(d.ring, Option[T].None());
+    }
+    vec_set(d.meta, 0, 0);
+    0
+}
+
+/// Put `x` at the back of `d`.
+pub fn deque_push_back[T](d: Deque[T], x: T) -> Int ! {} {
+    if deque_len(d) == vec_len(d.ring) {
+        deque_grow(d);
+    }
+    vec_set(d.ring, deque_slot(d, deque_len(d)), Option[T].Some(value: x));
+    vec_set(d.meta, 1, deque_len(d) + 1);
+    0
+}
+
+/// Put `x` at the front of `d`.
+pub fn deque_push_front[T](d: Deque[T], x: T) -> Int ! {} {
+    if deque_len(d) == vec_len(d.ring) {
+        deque_grow(d);
+    }
+    let head = (vec_get(d.meta, 0) + vec_len(d.ring) - 1) % vec_len(d.ring);
+    vec_set(d.ring, head, Option[T].Some(value: x));
+    vec_set(d.meta, 0, head);
+    vec_set(d.meta, 1, deque_len(d) + 1);
+    0
+}
+
+/// Take the item at the front of `d`, or `None` when it is empty.
+pub fn deque_pop_front[T](d: Deque[T]) -> Option[T] ! {} {
+    if deque_len(d) == 0 {
+        Option[T].None()
+    } else {
+        let head = vec_get(d.meta, 0);
+        let x = vec_get(d.ring, head);
+        vec_set(d.ring, head, Option[T].None());
+        vec_set(d.meta, 0, (head + 1) % vec_len(d.ring));
+        vec_set(d.meta, 1, deque_len(d) - 1);
+        x
+    }
+}
+
+/// Take the item at the back of `d`, or `None` when it is empty.
+pub fn deque_pop_back[T](d: Deque[T]) -> Option[T] ! {} {
+    if deque_len(d) == 0 {
+        Option[T].None()
+    } else {
+        let at = deque_slot(d, deque_len(d) - 1);
+        let x = vec_get(d.ring, at);
+        vec_set(d.ring, at, Option[T].None());
+        vec_set(d.meta, 1, deque_len(d) - 1);
+        x
+    }
+}
+
+/// The item at position `i` of `d`, front first, or `None` outside `0..deque_len(d)`.
+pub fn deque_get[T](d: Deque[T], i: Int) -> Option[T] ! {} {
+    if i < 0 || i >= deque_len(d) {
+        Option[T].None()
+    } else {
+        vec_get(d.ring, deque_slot(d, i))
+    }
+}

@@ -528,7 +528,7 @@ methods*). `trait Name { fn m(self: Self, …) -> R; }`, `impl Name for Type { �
 `Trait.m(recv, …)`, and a type parameter's bound naming a trait (`[T: Show]`). Coherence holds over
 the whole compilation: at most one impl of a trait for a type (`N0600`), in the trait's module or
 the type's (`N0601`). An impl defines exactly its trait's methods with its signatures and effects
-(`N0602`, `N0603`), for a non-generic record or enum, `Int`, `Bool` or `Str` (`N0604`). Method
+(`N0602`, `N0603`), for a non-generic record or enum, a numeric type, `Bool` or `Str` (`N0604`). Method
 lookup is over the traits in scope and the impls of this module and its direct imports, which keeps
 a cached check sound (`N0605`, `N0606`). There are no trait objects (`N0607`), and methods are not
 values (`N0608`). A concrete call is resolved before Core IR to the impl's ordinary function; a call
@@ -1835,6 +1835,19 @@ module checking cleanly, documented and listed. Measured (`performance.md`): sor
 19.6 ms; 10,000 map insertions 391 ms (an insertion moves the entries after it); parsing and
 re-encoding 128 KB of JSON about 14 ms. **Scope**: no networking, cryptography or floating point, by
 decision; the map's insertion is linear; the compiler written in Nazm cannot import any of it.
+
+**Gate 2 (2026-10-09)** · *Collections* (`general-purpose.md` §7; `spec.md`, *Standard library*).
+`@std/hash` (a `Hash` trait for every integer type, `Bool` and `Str`; FNV-1a then SplitMix64's
+finaliser), `@std/hashmap` (open addressing, linear probing, tombstones, doubling before
+three-quarters full; a seed), `@std/hashset` and `@std/deque` (a ring buffer): twenty-one modules,
+158 public items. An impl may be for any numeric type (epoch 35). Evidence:
+`hash_maps_sets_and_deques_behave_alike_everywhere` (a thousand inserts through growth, removal
+past tombstones, a set of a program's records, the hash vectors computed independently, a deque
+wrapping both ways — interpreter, LLVM −O0/−O2, Cranelift, everything reclaimed),
+`a_seed_changes_a_maps_order_and_nothing_else`,
+`a_number_of_any_width_has_impls_and_its_methods_run_everywhere`. **Scope**: `HashMap` is written in
+Nazm over `Vec`, so its constant factor is the interpreter's and the backends' `Vec` access, not a
+tuned table; no ordered map other than `StrMap`.
 
 **Evidence** · N45 (2026-10-01), `architecture.md` §7.47 first. Seven toolchain-owned Nazm
 modules in `library/std/`, imported by name — `use "@std/text";` — resolved by the loader

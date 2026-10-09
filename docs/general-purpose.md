@@ -289,6 +289,16 @@ explicit, the rule §21 states for randomness.
 **Evidence plan.** Library tests (insert/remove/grow/collide), the `Hash` derivation and refusal
 tests, `hash` agreeing in every implementation, and the KV application (§24).
 
+**As built (2026-10-09).** `Hash` is an ordinary trait in `@std/hash`, not a built-in
+requirement, and there is no built-in `hash`: the traits of N78 already give a bound, static
+dispatch and coherence, so a second derivation mechanism would duplicate them. The library
+implements it for every integer type, `Bool` and `Str`, with two methods — `hash` and `same` (the
+equality a map compares with); a program implements it for its own key types, composing the
+library's (`hash_combine(self.x.hash(), self.y.hash())`). What the language changed is one rule:
+an impl may be for any numeric type, as it was for `Int` (`N0604`, epoch 35). Records, enums and
+arrays are keys by their impl, not by derivation; floats have none. `spec.md`, *Standard library*,
+is the rule.
+
 ## 8. Filesystem
 
 **Problem.** Real programs open files, stream them, seek, inspect metadata, walk directories,
