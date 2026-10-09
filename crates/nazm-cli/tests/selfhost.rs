@@ -2875,6 +2875,25 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("text_scalar_count", "Gate 2 Bytes and Text"),
         ("scalar_valid", "Gate 2 Bytes and Text"),
         ("scalar_text", "Gate 2 Bytes and Text"),
+        // Gate 2 (files and handles): `OsHandle` is not in the Nazm checker's type table.
+        ("os_open_read", "Gate 2 files and handles"),
+        ("os_open_write", "Gate 2 files and handles"),
+        ("os_dir_open", "Gate 2 files and handles"),
+        ("os_stdin", "Gate 2 files and handles"),
+        ("os_status", "Gate 2 files and handles"),
+        ("os_read", "Gate 2 files and handles"),
+        ("os_write", "Gate 2 files and handles"),
+        ("os_seek", "Gate 2 files and handles"),
+        ("os_sync", "Gate 2 files and handles"),
+        ("os_close", "Gate 2 files and handles"),
+        ("os_dir_next", "Gate 2 files and handles"),
+        ("os_stat", "Gate 2 files and handles"),
+        ("os_mkdir", "Gate 2 files and handles"),
+        ("os_rmdir", "Gate 2 files and handles"),
+        ("os_unlink", "Gate 2 files and handles"),
+        ("os_rename", "Gate 2 files and handles"),
+        ("os_family", "Gate 2 files and handles"),
+        ("os_error_text", "Gate 2 files and handles"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {

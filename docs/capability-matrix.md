@@ -122,7 +122,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 13 | Runtime | VERIFIED (v1 contract; a built, versioned, verified artifact, N82; M:N tasks on bounded workers by default, N106) — no allocator of its own, runtime still text |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
-| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; no networking or cryptography; numbers are the language's since Gate 2 (area 3) |
+| 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles and I/O errors (twenty-three modules); no networking or cryptography; numbers are the language's since Gate 2 (area 3) |
 | 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; no floats, by-value structs, variadics or `dlopen` |
 | 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
 | 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
@@ -1835,6 +1835,23 @@ module checking cleanly, documented and listed. Measured (`performance.md`): sor
 19.6 ms; 10,000 map insertions 391 ms (an insertion moves the entries after it); parsing and
 re-encoding 128 KB of JSON about 14 ms. **Scope**: no networking, cryptography or floating point, by
 decision; the map's insertion is linear; the compiler written in Nazm cannot import any of it.
+
+**Gate 2 (2026-10-09)** · *Files and handles* (`general-purpose.md` §8; `spec.md`, *Files and
+handles*). The `os_` built-ins over an `OsHandle` — a descriptor and its generation in a handle
+table the interpreter and the runtime each keep — and `@std/ioerror` and `@std/file` over them:
+open, create, append, create-new, read, write every byte, seek, sync, close, metadata, list,
+make, remove, rename and replace atomically, every failure an `IoError` whose kind each platform
+family's table in `@std/ioerror` decides. Runtime ABI 16: the `nz.os_*` entries and a per-target
+`os` unit (`open` flags, `struct stat` and `struct dirent` layouts, the 64-bit-inode symbols,
+`strerror_r`). Evidence: `crates/nazm-cli/tests/files.rs` —
+`the_library_opens_writes_seeks_lists_renames_and_replaces_alike_everywhere` (forty lines through
+every operation and seven failure kinds, interpreter, LLVM −O0/−O2 and Cranelift, everything
+reclaimed), `a_closed_handle_answers_closed_and_never_reaches_a_reused_descriptor`,
+`standard_input_is_read_alike_everywhere`, `a_buffer_too_short_for_a_stat_stops_the_program_everywhere`,
+`the_platform_family_is_the_hosts`, and the authority (`N0369`), equality (`N0304`) and sink
+(`N0372`) refusals. **Scope**: a handle is closed by `os_close` or at exit, not at its last
+reference; reading a file holds the worker; no locking, mapping or link creation
+(`limitations.md`).
 
 **Gate 2 (2026-10-09)** · *Collections* (`general-purpose.md` §7; `spec.md`, *Standard library*).
 `@std/hash` (a `Hash` trait for every integer type, `Bool` and `Str`; FNV-1a then SplitMix64's

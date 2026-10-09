@@ -8288,10 +8288,11 @@ Repointed by Gate 2, which moved it to 31 for numbers: an entry that refused `1.
 Repointed by Gate 2 again, which moved it to 32 for arrays and constants: an entry that refused `[1, 2]` must not be reused.
 Repointed by Gate 2's bytes and text, which moved it to 33: an entry that accepted a record named `Text` must not be reused.
 Repointed by M1, which moved it to 34: an entry that refused a pure call of an imported impl's method must not be reused.
-Repointed by Gate 2's collections, which moved it to 35: an entry that refused an impl for `UInt8` must not be reused."""
+Repointed by Gate 2's collections, which moved it to 35: an entry that refused an impl for `UInt8` must not be reused.
+Repointed by Gate 2's files, which moved it to 36: an entry that accepted a function named `os_read` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 35;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 34;"
+find = "pub const SEMANTIC_EPOCH: u32 = 36;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 35;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10498,11 +10499,12 @@ Repointed by N68, which moved it to 10 for the field-by-field layout.
 Repointed by N83, which moved it to 11 for the task pool.
 Repointed by N85, which moved it to 12 for the errno capture and C strings returned.
 Repointed by N86, which moved it to 13 for device registers by width.
-Repointed by Gate 2, which moved it to 15 for floats across runtime entries and the numbers part."""
+Repointed by Gate 2, which moved it to 15 for floats across runtime entries and the numbers part.
+Repointed by Gate 2's files, which moved it to 16 for the handle table and the per-target `os` unit."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 15;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 14;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_fifteen_and_its_digest_covers_the_pool_errno_and_numbers" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 16;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 15;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_sixteen_and_its_digest_covers_the_pool_errno_numbers_and_files" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -14552,8 +14554,10 @@ killers = [{ package = "nazm-cli", test = "profiles_v2", name = "bounded_allocat
 name = "q1-gate-2-built-ins-do-not-allocate"
 why = "the built-ins that make storage are not allocation sites, so `bytes_new`, `text_concat` and the rest in a loop pass `bounded-allocation`"
 file = "crates/nazm-mir/src/cost.rs"
-find = '        | Intrinsic::ScalarText => true,'
-replace = '        | Intrinsic::ScalarText => false,'
+find = '''        | Intrinsic::ScalarText
+        | Intrinsic::OsErrorText => true,'''
+replace = '''        | Intrinsic::OsErrorText => true,
+        Intrinsic::ScalarText => false,'''
 killers = [{ package = "nazm-cli", test = "profiles_v2", name = "bounded_allocation_counts_every_built_in_that_allocates" }]
 
 [[mutation]]
@@ -14712,3 +14716,67 @@ file = "crates/nazm-core/src/eval/value.rs"
 find = "            Self::Num(n) => nazm_sema::Type::of_num(n.kind),\n"
 replace = ""
 killers = [{ package = "nazm-cli", test = "traits", name = "a_number_of_any_width_has_impls_and_its_methods_run_everywhere" }]
+
+[[mutation]]
+name = "g2-a-closed-generation-is-still-live"
+why = "the native handle table ignores a handle's generation, so a handle closed before its descriptor was reused writes into whatever the system opened there next"
+file = "crates/nazm-runtime/src/files.rs"
+find = "  %same = icmp eq i64 %g, %gen"
+replace = "  %same = icmp eq i64 %g, %g"
+killers = [{ package = "nazm-cli", test = "files", name = "a_closed_handle_answers_closed_and_never_reaches_a_reused_descriptor" }]
+
+[[mutation]]
+name = "g2-the-interpreter-ignores-a-handles-generation"
+why = "the interpreter's handle table ignores a handle's generation, so a closed handle reaches the file later opened on its descriptor"
+file = "crates/nazm-core/src/eval/os.rs"
+find = "        Some((g, Some(o))) if *g == generation => Ok(Arc::clone(o)),"
+replace = "        Some((_, Some(o))) => Ok(Arc::clone(o)),"
+killers = [{ package = "nazm-cli", test = "files", name = "a_closed_handle_answers_closed_and_never_reaches_a_reused_descriptor" }]
+
+[[mutation]]
+name = "g2-an-unknown-write-mode-opens-to-read"
+why = "the native runtime passes a write mode outside 0..3 to the platform's open, which reads the file instead of answering InvalidInput"
+file = "crates/nazm-runtime/src/files.rs"
+find = "  %valid = icmp ult i64 %mode, 4"
+replace = "  %valid = icmp ult i64 %mode, 8"
+killers = [{ package = "nazm-cli", test = "files", name = "a_closed_handle_answers_closed_and_never_reaches_a_reused_descriptor" }]
+
+[[mutation]]
+name = "g2-a-listing-includes-dot-and-dot-dot"
+why = "the per-target directory reader no longer skips `.` and `..`, so every native listing names the directory and its parent"
+file = "crates/nazm-runtime/src/platform.rs"
+find = "         \\x20 %skip = and i1 %dot, %short\\n\\"
+replace = "         \\x20 %skip = and i1 %dot, false\\n\\"
+killers = [{ package = "nazm-cli", test = "files", name = "the_library_opens_writes_seeks_lists_renames_and_replaces_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-linux-stat-reads-the-x86-mode"
+why = "on aarch64 Linux `struct stat`'s mode is read from x86-64's offset, so a file's kind and permissions are wrong there"
+file = "crates/nazm-runtime/src/platform.rs"
+find = "            mode_at: 16,"
+replace = "            mode_at: 24,"
+killers = [{ package = "nazm-cli", test = "files", name = "the_library_opens_writes_seeks_lists_renames_and_replaces_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-linux-forgets-directory-not-empty"
+why = "Linux's ENOTEMPTY (39) is missing from `@std/ioerror`'s table, so removing a directory that has entries is `Other` there"
+file = "library/std/ioerror.nz"
+find = "    if e == 39 { return IoErrorKind.DirectoryNotEmpty(); }\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "files", name = "the_library_opens_writes_seeks_lists_renames_and_replaces_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-an-atomic-replace-never-renames"
+why = "`file_replace_atomic` writes and syncs its temporary file and reports success without renaming it over the target"
+file = "library/std/file.nz"
+find = "            let r = os_rename(t.name, path);"
+replace = "            let r = 0;"
+killers = [{ package = "nazm-cli", test = "files", name = "the_library_opens_writes_seeks_lists_renames_and_replaces_alike_everywhere" }]
+
+[[mutation]]
+name = "g2-a-rename-target-is-not-a-sink"
+why = "`os_rename`'s second path is no longer the restricted sink, so what a file says may choose the name a program renames onto"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::OsRename => &[(0, Self::Path), (1, Self::Path)],"
+replace = "            Intrinsic::OsRename => &[(0, Self::Path)],"
+killers = [{ package = "nazm-cli", test = "files", name = "a_handle_needs_authority_has_no_equality_and_a_file_does_not_choose_where_to_write" }]

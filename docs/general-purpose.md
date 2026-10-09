@@ -338,6 +338,29 @@ no change to the existing built-ins or to `@std/fs`, whose API is frozen.
 **Evidence plan.** Differential tests over every operation and every error kind reachable on the
 host; atomic replacement observed; reclamation of handles; the KV application (§24).
 
+**As built (2026-10-09).** `spec.md`, *Files and handles*, is the rule; three settlements.
+
+- **Not closed when the last reference goes.** An `OsHandle` is a word — `generation << 32 |
+  descriptor` — not a counted handle: it may cross into a task (a server hands a connection to a
+  task), which a counted handle cannot, and the memory report is unchanged. It is closed by
+  `os_close` or when the process ends. What the counted design was for, a close that can never
+  reach a reused descriptor, is kept by the generation: the table remembers each descriptor's
+  current generation, a closed generation answers `Closed`, and a close while another task is
+  using the handle takes effect when that use ends.
+- **Reading and writing open separately.** `os_open_read` and `os_open_write(path, mode)`, so the
+  restricted sink (`N0372`) is where a file is written — as `write_file`'s path is — and a path to
+  read may come from anywhere.
+- **The number-to-kind table is the library's.** A status is `-errno`, the platform's number;
+  `@std/ioerror` holds each platform family's table, chosen by the pure built-in `os_family()`,
+  so what a number means is decided once, in Nazm, for the interpreter and every target. A closed
+  handle's status is `-65536`, which no system gives, so `Closed` is never confused with the
+  system's `EBADF` (a file written that was opened to read, `Other`).
+
+Naming a path needs an `IoCap` held; using a handle already open needs only the handle — so a
+function handed one `File` can use it and open nothing else, and `@std/file`'s functions on a
+`File` take no `IoCap`. A `File` that carried one would have let whoever is handed a file take
+the authority to open any other.
+
 ## 9. Networking
 
 **Problem.** A server language needs TCP and UDP sockets, addresses, timeouts and name resolution.

@@ -1,0 +1,149 @@
+// `@std/ioerror`: what went wrong outside the program, as a value (Gate 2).
+//
+// Imported with `use "@std/ioerror";`. A built-in that reaches the operating system answers a
+// failure as a status, `-errno`, whose number is the platform's. This module turns one into an
+// `IoError` whose `kind` is the same on every platform — the table from number to kind for each
+// family of platforms is here, in one place — with the system's number and message beside it and
+// what the program was doing, which `io_context` adds. `docs/general-purpose.md` §8 and §13.
+
+/// What kind of failure, the same on every platform.
+pub enum IoErrorKind {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    WouldBlock,
+    InvalidInput,
+    TimedOut,
+    Interrupted,
+    UnexpectedEof,
+    ConnectionRefused,
+    ConnectionReset,
+    AddressInUse,
+    AddressNotAvailable,
+    BrokenPipe,
+    NotConnected,
+    IsADirectory,
+    NotADirectory,
+    DirectoryNotEmpty,
+    Closed,
+    Cancelled,
+    Other,
+}
+
+/// A failure: its kind, the system's number (`0` for one the program decided), the system's
+/// message, and what the program was doing, innermost first, joined by `: `.
+pub struct IoError {
+    kind: IoErrorKind,
+    code: Int,
+    message: Str,
+    context: Str,
+}
+
+// macOS's numbers.
+fn darwin_kind(e: Int) -> IoErrorKind ! {} {
+    if e == 2 { return IoErrorKind.NotFound(); }
+    if e == 1 || e == 13 { return IoErrorKind.PermissionDenied(); }
+    if e == 17 { return IoErrorKind.AlreadyExists(); }
+    if e == 35 { return IoErrorKind.WouldBlock(); }
+    if e == 22 || e == 63 { return IoErrorKind.InvalidInput(); }
+    if e == 60 { return IoErrorKind.TimedOut(); }
+    if e == 4 { return IoErrorKind.Interrupted(); }
+    if e == 61 { return IoErrorKind.ConnectionRefused(); }
+    if e == 54 { return IoErrorKind.ConnectionReset(); }
+    if e == 48 { return IoErrorKind.AddressInUse(); }
+    if e == 49 { return IoErrorKind.AddressNotAvailable(); }
+    if e == 32 { return IoErrorKind.BrokenPipe(); }
+    if e == 57 { return IoErrorKind.NotConnected(); }
+    if e == 21 { return IoErrorKind.IsADirectory(); }
+    if e == 20 { return IoErrorKind.NotADirectory(); }
+    if e == 66 { return IoErrorKind.DirectoryNotEmpty(); }
+    if e == 89 { return IoErrorKind.Cancelled(); }
+    IoErrorKind.Other()
+}
+
+// Linux's numbers.
+fn linux_kind(e: Int) -> IoErrorKind ! {} {
+    if e == 2 { return IoErrorKind.NotFound(); }
+    if e == 1 || e == 13 { return IoErrorKind.PermissionDenied(); }
+    if e == 17 { return IoErrorKind.AlreadyExists(); }
+    if e == 11 { return IoErrorKind.WouldBlock(); }
+    if e == 22 || e == 36 { return IoErrorKind.InvalidInput(); }
+    if e == 110 { return IoErrorKind.TimedOut(); }
+    if e == 4 { return IoErrorKind.Interrupted(); }
+    if e == 111 { return IoErrorKind.ConnectionRefused(); }
+    if e == 104 { return IoErrorKind.ConnectionReset(); }
+    if e == 98 { return IoErrorKind.AddressInUse(); }
+    if e == 99 { return IoErrorKind.AddressNotAvailable(); }
+    if e == 32 { return IoErrorKind.BrokenPipe(); }
+    if e == 107 { return IoErrorKind.NotConnected(); }
+    if e == 21 { return IoErrorKind.IsADirectory(); }
+    if e == 20 { return IoErrorKind.NotADirectory(); }
+    if e == 39 { return IoErrorKind.DirectoryNotEmpty(); }
+    if e == 125 { return IoErrorKind.Cancelled(); }
+    IoErrorKind.Other()
+}
+
+/// The kind of `status` on this platform; `Other` for one that is not negative.
+pub fn io_kind_of(status: Int) -> IoErrorKind ! {} {
+    if status >= 0 {
+        return IoErrorKind.Other();
+    }
+    // A handle that is closed: the runtime's status, no system's number.
+    if status == 0 - 65536 {
+        return IoErrorKind.Closed();
+    }
+    if os_family() == 0 { darwin_kind(0 - status) } else { linux_kind(0 - status) }
+}
+
+/// The error `status` is: its kind, number and the system's message.
+pub fn io_error_from(status: Int) -> IoError ! {} {
+    IoError(kind: io_kind_of(status), code: 0 - status, message: os_error_text(status), context: "")
+}
+
+/// An error the program decided, with no system number: an early end of a file, a deadline.
+pub fn io_error_new(kind: IoErrorKind, message: Str) -> IoError ! {} {
+    IoError(kind: kind, code: 0, message: message, context: "")
+}
+
+/// `e`, saying what the program was doing; contexts read outermost first.
+pub fn io_context(e: IoError, doing: Str) -> IoError ! {} {
+    let context = if str_len(e.context) == 0 { doing } else { str_concat(doing, str_concat(": ", e.context)) };
+    IoError(kind: e.kind, code: e.code, message: e.message, context: context)
+}
+
+/// `Ok(status)` for a status that is not negative, the error it is otherwise.
+pub fn io_result(status: Int) -> Result[Int, IoError] ! {} {
+    if status >= 0 { Result[Int, IoError].Ok(value: status) } else { Result[Int, IoError].Err(error: io_error_from(status)) }
+}
+
+/// A kind's name, as written in `IoErrorKind`.
+pub fn io_kind_name(k: IoErrorKind) -> Str ! {} {
+    match k {
+        IoErrorKind.NotFound() => "NotFound",
+        IoErrorKind.PermissionDenied() => "PermissionDenied",
+        IoErrorKind.AlreadyExists() => "AlreadyExists",
+        IoErrorKind.WouldBlock() => "WouldBlock",
+        IoErrorKind.InvalidInput() => "InvalidInput",
+        IoErrorKind.TimedOut() => "TimedOut",
+        IoErrorKind.Interrupted() => "Interrupted",
+        IoErrorKind.UnexpectedEof() => "UnexpectedEof",
+        IoErrorKind.ConnectionRefused() => "ConnectionRefused",
+        IoErrorKind.ConnectionReset() => "ConnectionReset",
+        IoErrorKind.AddressInUse() => "AddressInUse",
+        IoErrorKind.AddressNotAvailable() => "AddressNotAvailable",
+        IoErrorKind.BrokenPipe() => "BrokenPipe",
+        IoErrorKind.NotConnected() => "NotConnected",
+        IoErrorKind.IsADirectory() => "IsADirectory",
+        IoErrorKind.NotADirectory() => "NotADirectory",
+        IoErrorKind.DirectoryNotEmpty() => "DirectoryNotEmpty",
+        IoErrorKind.Closed() => "Closed",
+        IoErrorKind.Cancelled() => "Cancelled",
+        IoErrorKind.Other() => "Other",
+    }
+}
+
+/// `e` as one line: its context, then its message, then its kind.
+pub fn io_error_show(e: IoError) -> Str ! {} {
+    let what = str_concat(e.message, str_concat(" (", str_concat(io_kind_name(e.kind), ")")));
+    if str_len(e.context) == 0 { what } else { str_concat(e.context, str_concat(": ", what)) }
+}

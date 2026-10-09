@@ -163,8 +163,10 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
         .flatten();
     let switch = per_target.map(nazm_lir::runtime::switch::emit_switch);
     let errno = per_target.map(nazm_lir::runtime::switch::emit_errno);
+    // And it has files (Gate 2), so it carries its target's `os` unit as a fourth.
+    let os = per_target.map(nazm_lir::runtime::platform::emit_os);
     let mut members = vec![obj.clone()];
-    for (name, text) in [("switch", &switch), ("errno", &errno)] {
+    for (name, text) in [("switch", &switch), ("errno", &errno), ("os", &os)] {
         let Some(text) = text else { continue };
         let sll = work.join(format!("{name}.ll"));
         let sobj = work.join(format!("{name}.o"));

@@ -3313,6 +3313,8 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
             Shape::Bytes => "bytes_new(4)",
             // A literal is a `Text` where one is expected (Gate 2).
             Shape::Text => "\"ab\"",
+            // A failed open: a handle that touches nothing (Gate 2).
+            Shape::OsHandle => "os_open_read(\"/nonexistent/nazm\")",
             Shape::VecT => "vec_new[Int]()",
             Shape::ChanT => "chan_new_of[Int](1)",
             Shape::ChansT => "vec_new[Chan[Int]]()",
@@ -3343,6 +3345,7 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         }
         Shape::Bytes => format!("bytes_len({call})"),
         Shape::Text => format!("text_len({call})"),
+        Shape::OsHandle => format!("os_status({call})"),
         Shape::Int | Shape::T => call,
         Shape::Str => format!("str_len({call})"),
         Shape::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),
@@ -3356,6 +3359,10 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         Shape::ChanT => format!("if chan_send_of({call}, 0) {{ 1 }} else {{ 0 }}"),
         Shape::ChansT => format!("vec_len({call})"),
     };
+    // Opening a handle names a path, which needs an `IoCap` (Gate 2).
+    if i.params().contains(&Shape::OsHandle) {
+        return format!("fn main(io: IoCap) -> Int ! {{ io }} {{ {body} }}\n");
+    }
     format!("fn main() -> Int {{ {body} }}\n")
 }
 

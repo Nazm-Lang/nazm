@@ -710,6 +710,7 @@ impl Law {
                 | Type::Vec(_)
                 | Type::Bytes
                 | Type::Cap(_)
+                | Type::OsHandle
                 | Type::Fn(_),
             ) => None,
         }

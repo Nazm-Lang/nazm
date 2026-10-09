@@ -48,7 +48,33 @@ impl Fx<'_, '_> {
         if self.bytes_text(dst, op, elem, args) {
             return;
         }
+        if self.files(dst, op, args) {
+            return;
+        }
         match op {
+            // Gate 2's files and handles, lowered above (`op/files.rs`); reaching here is a defect.
+            Intrinsic::OsOpenRead
+            | Intrinsic::OsOpenWrite
+            | Intrinsic::OsDirOpen
+            | Intrinsic::OsStdin
+            | Intrinsic::OsStatus
+            | Intrinsic::OsRead
+            | Intrinsic::OsWrite
+            | Intrinsic::OsSeek
+            | Intrinsic::OsSync
+            | Intrinsic::OsClose
+            | Intrinsic::OsDirNext
+            | Intrinsic::OsStat
+            | Intrinsic::OsMkdir
+            | Intrinsic::OsRmdir
+            | Intrinsic::OsUnlink
+            | Intrinsic::OsRename
+            | Intrinsic::OsFamily
+            | Intrinsic::OsErrorText => {
+                let at = self.at;
+                self.lw
+                    .defect(at, "a files built-in its lowering did not take");
+            }
             // Gate 2's numbers, lowered above; reaching here is a defect.
             Intrinsic::WrappingAdd
             | Intrinsic::WrappingSub

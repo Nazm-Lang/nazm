@@ -86,6 +86,31 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "snprintf",
     "strlen",
     "write",
+    // Gate 2: files and handles — what the runtime calls, and what each target's `os` unit
+    // defines and calls.
+    "read",
+    "close",
+    "lseek",
+    "fsync",
+    "rmdir",
+    "unlink",
+    "rename",
+    "dirfd",
+    "closedir",
+    "open",
+    "mkdir",
+    "stat",
+    "opendir",
+    "readdir",
+    "strerror_r",
+    "__xpg_strerror_r",
+    "nz_os_open",
+    "nz_os_mkdir",
+    "nz_os_stat",
+    "nz_os_opendir",
+    "nz_os_readdir",
+    "nz_os_family",
+    "nz_os_error_text",
 ];
 
 /// The rules a foreign declaration must meet (N42, `docs/architecture.md` §7.44).

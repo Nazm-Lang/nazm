@@ -237,7 +237,12 @@ use crate::digest::{self, Framed};
 /// `35` — Gate 2, 2026-10-09. An impl may be for any numeric type, not only `Int`: impls for
 /// `UInt8` … `Float64` moved from refused (`N0604`) to accepted, so `@std/hash` can make every
 /// integer a key. A cached check from epoch 34 refused programs this one accepts.
-pub const SEMANTIC_EPOCH: u32 = 35;
+/// `36` — Gate 2, 2026-10-09. Files and handles: `OsHandle` and the `os_` built-ins moved from
+/// refused (an unknown type or function) to accepted, and their names from a program's own to the
+/// language's (`N0331`, `N0203`); `os_open_write`'s, `os_mkdir`'s, `os_rmdir`'s, `os_unlink`'s and
+/// `os_rename`'s paths are the restricted sink (`N0372`). A cached check from epoch 35 refused
+/// programs this one accepts, and accepted some it refuses.
+pub const SEMANTIC_EPOCH: u32 = 36;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

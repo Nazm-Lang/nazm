@@ -523,7 +523,10 @@ impl Interpreter {
                 }
                 match bytes_text_intrinsic(*op, &values, e.ty, e.at) {
                     Some(r) => r?,
-                    None => self.intrinsic(*op, &values, e.at)?,
+                    None => match super::os::os_intrinsic(*op, &values, e.at) {
+                        Some(r) => r?,
+                        None => self.intrinsic(*op, &values, e.at)?,
+                    },
                 }
             }
 

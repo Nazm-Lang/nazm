@@ -790,6 +790,7 @@ impl Types {
             Type::Int
             | Type::Bool
             | Type::Cap(_)
+            | Type::OsHandle
             | Type::Param(_)
             | Type::Num(_)
             | Type::Array(_) => false,

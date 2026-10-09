@@ -188,6 +188,27 @@ impl Origin {
             Intrinsic::ReadFile | Intrinsic::FileExists => BuiltinFlow::Source(Self::File),
             // Where a file is written is the one restricted sink v1 has.
             Intrinsic::WriteFile => BuiltinFlow::WritePath,
+            // Files and handles (Gate 2): a handle opened for reading, and what is read through
+            // one, is the file system's; where one writes, and what it removes or renames, is
+            // the restricted sink `write_file`'s path is.
+            Intrinsic::OsOpenRead
+            | Intrinsic::OsDirOpen
+            | Intrinsic::OsStdin
+            | Intrinsic::OsRead
+            | Intrinsic::OsDirNext
+            | Intrinsic::OsStat => BuiltinFlow::Source(Self::File),
+            Intrinsic::OsOpenWrite
+            | Intrinsic::OsMkdir
+            | Intrinsic::OsRmdir
+            | Intrinsic::OsUnlink
+            | Intrinsic::OsRename => BuiltinFlow::WritePath,
+            Intrinsic::OsStatus
+            | Intrinsic::OsWrite
+            | Intrinsic::OsSeek
+            | Intrinsic::OsSync
+            | Intrinsic::OsClose
+            | Intrinsic::OsFamily
+            | Intrinsic::OsErrorText => BuiltinFlow::Derive,
             // Computed from their arguments, and from nothing else.
             Intrinsic::StrLen
             | Intrinsic::StrByte
@@ -260,6 +281,25 @@ impl Origin {
     #[must_use]
     pub const fn container(i: Intrinsic) -> ContainerUse {
         match i {
+            // Files and handles (Gate 2): what is read lands in the buffer handed in.
+            Intrinsic::OsRead | Intrinsic::OsDirNext | Intrinsic::OsStat => {
+                ContainerUse::Fill { into: &[1] }
+            }
+            Intrinsic::OsOpenRead
+            | Intrinsic::OsOpenWrite
+            | Intrinsic::OsDirOpen
+            | Intrinsic::OsStdin
+            | Intrinsic::OsStatus
+            | Intrinsic::OsWrite
+            | Intrinsic::OsSeek
+            | Intrinsic::OsSync
+            | Intrinsic::OsClose
+            | Intrinsic::OsMkdir
+            | Intrinsic::OsRmdir
+            | Intrinsic::OsUnlink
+            | Intrinsic::OsRename
+            | Intrinsic::OsFamily
+            | Intrinsic::OsErrorText => ContainerUse::None,
             // Numbers (Gate 2): computed from their arguments, and from nothing else.
             Intrinsic::WrappingAdd
             | Intrinsic::WrappingSub
@@ -435,6 +475,11 @@ pub enum ContainerUse {
         from: usize,
         into: usize,
     },
+    /// The built-in's own source origin is written into the cell of each argument in `into`:
+    /// what `os_read` puts into a buffer came from outside (Gate 2).
+    Fill {
+        into: &'static [usize],
+    },
 }
 
 /// The cell every container whose type mentions a type parameter shares (N80): a write to it
@@ -510,6 +555,12 @@ impl SinkClass {
     pub const fn of_intrinsic(i: Intrinsic) -> &'static [(usize, Self)] {
         match i {
             Intrinsic::WriteFile => &[(0, Self::Path), (1, Self::FileData)],
+            Intrinsic::OsOpenWrite
+            | Intrinsic::OsMkdir
+            | Intrinsic::OsRmdir
+            | Intrinsic::OsUnlink => &[(0, Self::Path)],
+            Intrinsic::OsRename => &[(0, Self::Path), (1, Self::Path)],
+            Intrinsic::OsWrite => &[(1, Self::FileData)],
             Intrinsic::Print | Intrinsic::EPrint => &[(0, Self::Output)],
             Intrinsic::StrVouch => &[(0, Self::Vouch)],
             _ => &[],
@@ -926,7 +977,15 @@ mod tests {
                 ("c_errno", Origin::Unknown),
                 // And a device register of another width (N86), as the 32-bit one.
                 ("mmio_read8", Origin::Unknown),
-                ("mmio_read16", Origin::Unknown)
+                ("mmio_read16", Origin::Unknown),
+                // Files and handles (Gate 2): a handle opened for reading, and what is read
+                // through one, are the file system's.
+                ("os_open_read", Origin::File),
+                ("os_dir_open", Origin::File),
+                ("os_stdin", Origin::File),
+                ("os_read", Origin::File),
+                ("os_dir_next", Origin::File),
+                ("os_stat", Origin::File)
             ]
         );
         // Every container built-in names its handle, and no other built-in claims one (N80).

@@ -514,6 +514,9 @@ impl Ty {
             // copies or holds a value in a sequence keeps the representation it already
             // has — a zero-byte element would reach an allocation of zero bytes.
             nazm_sema::Type::Cap(_) => Self::Int,
+            // A handle is a word: `generation << 32 | descriptor`, or a failed open's status
+            // (Gate 2). The runtime's handle table holds what it names.
+            nazm_sema::Type::OsHandle => Self::Int,
             // The id carries across unchanged: both sides index the same session's
             // records, and the backend's table is built from the checker's rather than
             // being a second one. `docs/architecture.md`'s single-resolution rule.

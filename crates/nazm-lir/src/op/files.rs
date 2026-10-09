@@ -1,0 +1,107 @@
+//! Files and handles (Gate 2, `docs/spec.md`, *Files and handles*): each `os_` built-in as the
+//! runtime call it means. A handle is a word, a path a `Str`'s pointer and length, a buffer a
+//! `Bytes`'s; every failure the system reports comes back as a status, so nothing here traps
+//! but `os_stat` handed a buffer too short for its answer (`N0405`).
+
+use nazm_mir as mir;
+use nazm_sema::Intrinsic;
+
+use super::func::Fx;
+use super::ir::{Class, Cmp};
+
+/// The room `os_error_text` gives the system's message: more than any message is.
+const MESSAGE_ROOM: i64 = 256;
+
+impl Fx<'_, '_> {
+    /// `dst = op(args)` for an `os_` built-in; `false` for any other.
+    pub(crate) fn files(
+        &mut self,
+        dst: mir::LocalId,
+        op: Intrinsic,
+        args: &[mir::Operand],
+    ) -> bool {
+        let v = match op {
+            Intrinsic::OsOpenRead | Intrinsic::OsDirOpen => {
+                let p = self.arg_place(args, 0);
+                let (pp, pn) = self.str_parts(p);
+                let name = if op == Intrinsic::OsOpenRead {
+                    "nz.os_open_read"
+                } else {
+                    "nz.os_dir_open"
+                };
+                self.rt_v(name, &[pp, pn], Class::I64)
+            }
+            Intrinsic::OsOpenWrite => {
+                let p = self.arg_place(args, 0);
+                let mode = self.arg(args, 1);
+                let (pp, pn) = self.str_parts(p);
+                self.rt_v("nz.os_open_write", &[pp, pn, mode], Class::I64)
+            }
+            Intrinsic::OsStdin => self.rt_v("nz.os_stdin", &[], Class::I64),
+            Intrinsic::OsFamily => self.rt_v("nz.os_family", &[], Class::I64),
+            Intrinsic::OsStatus | Intrinsic::OsSync | Intrinsic::OsClose => {
+                let h = self.arg(args, 0);
+                let name = match op {
+                    Intrinsic::OsStatus => "nz.os_status",
+                    Intrinsic::OsSync => "nz.os_sync",
+                    _ => "nz.os_close",
+                };
+                self.rt_v(name, &[h], Class::I64)
+            }
+            Intrinsic::OsRead | Intrinsic::OsWrite | Intrinsic::OsDirNext => {
+                let h = self.arg(args, 0);
+                let b = self.arg_place(args, 1);
+                let (bp, bn) = self.str_parts(b);
+                let name = match op {
+                    Intrinsic::OsRead => "nz.os_read",
+                    Intrinsic::OsWrite => "nz.os_write",
+                    _ => "nz.os_dir_next",
+                };
+                self.rt_v(name, &[h, bp, bn], Class::I64)
+            }
+            Intrinsic::OsSeek => {
+                let h = self.arg(args, 0);
+                let offset = self.arg(args, 1);
+                let whence = self.arg(args, 2);
+                self.rt_v("nz.os_seek", &[h, offset, whence], Class::I64)
+            }
+            Intrinsic::OsStat => {
+                let p = self.arg_place(args, 0);
+                let b = self.arg_place(args, 1);
+                let (pp, pn) = self.str_parts(p);
+                let (bp, bn) = self.str_parts(b);
+                let short = self.cmp_imm(Cmp::Lt, bn, Class::I64, 32);
+                self.guard(short, "N0405", "this buffer is too short for the answer");
+                self.rt_v("nz.os_stat", &[pp, pn, bp], Class::I64)
+            }
+            Intrinsic::OsMkdir | Intrinsic::OsRmdir | Intrinsic::OsUnlink => {
+                let p = self.arg_place(args, 0);
+                let (pp, pn) = self.str_parts(p);
+                let which = self.iconst(match op {
+                    Intrinsic::OsMkdir => 0,
+                    Intrinsic::OsRmdir => 1,
+                    _ => 2,
+                });
+                self.rt_v("nz.os_path_op", &[pp, pn, which], Class::I64)
+            }
+            Intrinsic::OsRename => {
+                let a = self.arg_place(args, 0);
+                let b = self.arg_place(args, 1);
+                let (ap, an) = self.str_parts(a);
+                let (bp, bn) = self.str_parts(b);
+                self.rt_v("nz.os_rename", &[ap, an, bp, bn], Class::I64)
+            }
+            Intrinsic::OsErrorText => {
+                let status = self.arg(args, 0);
+                let room = self.iconst(MESSAGE_ROOM);
+                let (owner, buf) = self.string_backing(room);
+                let n = self.rt_v("nz.os_error_text", &[status, buf, room], Class::I64);
+                self.write_str(dst, buf, n, owner);
+                return true;
+            }
+            _ => return false,
+        };
+        self.set(dst, v);
+        true
+    }
+}

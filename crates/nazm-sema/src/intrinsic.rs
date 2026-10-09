@@ -56,6 +56,8 @@ pub enum Shape {
     U8,
     Bytes,
     Text,
+    /// `OsHandle` (Gate 2, `docs/general-purpose.md` §8).
+    OsHandle,
 }
 
 /// Which numeric types a generic numeric built-in's `T` ranges over (Gate 2). Checked where
@@ -110,6 +112,7 @@ impl Shape {
             Self::U8 => Some(Type::Num(NumKind::U8)),
             Self::Bytes => Some(Type::Bytes),
             Self::Text => Some(Type::Text),
+            Self::OsHandle => Some(Type::OsHandle),
             Self::T | Self::VecT | Self::ChanT | Self::ChansT => None,
         }
     }
@@ -135,6 +138,7 @@ impl Shape {
             Self::U8 => "UInt8",
             Self::Bytes => "Bytes",
             Self::Text => "Text",
+            Self::OsHandle => "OsHandle",
         }
     }
 }
@@ -436,11 +440,35 @@ pub enum Intrinsic {
     TextFromStr,
     /// `try_convert[Text](s)`'s `Some`, after `utf8_valid`: `s`, unchecked. Not callable by name.
     TextAssume,
+
+    // --- files and handles, Gate 2 (`docs/general-purpose.md` §8; `docs/spec.md`, *Files and
+    // handles*) --------------------------------------------------------------------------
+    //
+    // Every one that can fail answers a status, `-errno`, which `@std/ioerror` turns into an
+    // `IoError`; none traps on the system's refusal.
+    OsOpenRead,
+    OsOpenWrite,
+    OsDirOpen,
+    OsStdin,
+    OsStatus,
+    OsRead,
+    OsWrite,
+    OsSeek,
+    OsSync,
+    OsClose,
+    OsDirNext,
+    OsStat,
+    OsMkdir,
+    OsRmdir,
+    OsUnlink,
+    OsRename,
+    OsFamily,
+    OsErrorText,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 119] = [
+    pub const ALL: [Self; 137] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -560,6 +588,24 @@ impl Intrinsic {
         Self::TextScalarCount,
         Self::ScalarValid,
         Self::ScalarText,
+        Self::OsOpenRead,
+        Self::OsOpenWrite,
+        Self::OsDirOpen,
+        Self::OsStdin,
+        Self::OsStatus,
+        Self::OsRead,
+        Self::OsWrite,
+        Self::OsSeek,
+        Self::OsSync,
+        Self::OsClose,
+        Self::OsDirNext,
+        Self::OsStat,
+        Self::OsMkdir,
+        Self::OsRmdir,
+        Self::OsUnlink,
+        Self::OsRename,
+        Self::OsFamily,
+        Self::OsErrorText,
     ];
 
     #[must_use]
@@ -688,6 +734,24 @@ impl Intrinsic {
             Self::TextScalarCount => "text_scalar_count",
             Self::ScalarValid => "scalar_valid",
             Self::ScalarText => "scalar_text",
+            Self::OsOpenRead => "os_open_read",
+            Self::OsOpenWrite => "os_open_write",
+            Self::OsDirOpen => "os_dir_open",
+            Self::OsStdin => "os_stdin",
+            Self::OsStatus => "os_status",
+            Self::OsRead => "os_read",
+            Self::OsWrite => "os_write",
+            Self::OsSeek => "os_seek",
+            Self::OsSync => "os_sync",
+            Self::OsClose => "os_close",
+            Self::OsDirNext => "os_dir_next",
+            Self::OsStat => "os_stat",
+            Self::OsMkdir => "os_mkdir",
+            Self::OsRmdir => "os_rmdir",
+            Self::OsUnlink => "os_unlink",
+            Self::OsRename => "os_rename",
+            Self::OsFamily => "os_family",
+            Self::OsErrorText => "os_error_text",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -874,6 +938,24 @@ impl Intrinsic {
             Self::TextScalarCount => &[Shape::Text],
             Self::ScalarValid => &[Shape::Int],
             Self::ScalarText => &[Shape::Int],
+            Self::OsOpenRead => &[Shape::Str],
+            Self::OsOpenWrite => &[Shape::Str, Shape::Int],
+            Self::OsDirOpen => &[Shape::Str],
+            Self::OsStdin => &[],
+            Self::OsStatus => &[Shape::OsHandle],
+            Self::OsRead => &[Shape::OsHandle, Shape::Bytes],
+            Self::OsWrite => &[Shape::OsHandle, Shape::Bytes],
+            Self::OsSeek => &[Shape::OsHandle, Shape::Int, Shape::Int],
+            Self::OsSync => &[Shape::OsHandle],
+            Self::OsClose => &[Shape::OsHandle],
+            Self::OsDirNext => &[Shape::OsHandle, Shape::Bytes],
+            Self::OsStat => &[Shape::Str, Shape::Bytes],
+            Self::OsMkdir => &[Shape::Str],
+            Self::OsRmdir => &[Shape::Str],
+            Self::OsUnlink => &[Shape::Str],
+            Self::OsRename => &[Shape::Str, Shape::Str],
+            Self::OsFamily => &[],
+            Self::OsErrorText => &[Shape::Int],
             Self::TextFromStr => &[Shape::Str],
             Self::TextAssume => &[Shape::Str],
         }
@@ -990,6 +1072,24 @@ impl Intrinsic {
             Self::TextScalarCount => Shape::Int,
             Self::ScalarValid => Shape::Bool,
             Self::ScalarText => Shape::Text,
+            Self::OsOpenRead => Shape::OsHandle,
+            Self::OsOpenWrite => Shape::OsHandle,
+            Self::OsDirOpen => Shape::OsHandle,
+            Self::OsStdin => Shape::OsHandle,
+            Self::OsStatus => Shape::Int,
+            Self::OsRead => Shape::Int,
+            Self::OsWrite => Shape::Int,
+            Self::OsSeek => Shape::Int,
+            Self::OsSync => Shape::Int,
+            Self::OsClose => Shape::Int,
+            Self::OsDirNext => Shape::Int,
+            Self::OsStat => Shape::Int,
+            Self::OsMkdir => Shape::Int,
+            Self::OsRmdir => Shape::Int,
+            Self::OsUnlink => Shape::Int,
+            Self::OsRename => Shape::Int,
+            Self::OsFamily => Shape::Int,
+            Self::OsErrorText => Shape::Str,
             Self::TextFromStr => Shape::Text,
             Self::TextAssume => Shape::Text,
         }

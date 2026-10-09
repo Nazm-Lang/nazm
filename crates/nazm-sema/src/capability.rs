@@ -209,6 +209,27 @@ impl CapabilityKind {
             | Intrinsic::WriteFile
             | Intrinsic::FileExists
             | Intrinsic::ExitWith => CapabilitySet::of(Self::Io),
+            // Files and handles (Gate 2): naming a path is a file's authority, as `read_file`'s
+            // is; using a handle already opened needs only the handle, which reaches nothing but
+            // what it names — so a function can be given one file and nothing else.
+            Intrinsic::OsOpenRead
+            | Intrinsic::OsOpenWrite
+            | Intrinsic::OsDirOpen
+            | Intrinsic::OsStdin
+            | Intrinsic::OsStat
+            | Intrinsic::OsMkdir
+            | Intrinsic::OsRmdir
+            | Intrinsic::OsUnlink
+            | Intrinsic::OsRename => CapabilitySet::of(Self::Io),
+            Intrinsic::OsRead
+            | Intrinsic::OsWrite
+            | Intrinsic::OsSeek
+            | Intrinsic::OsSync
+            | Intrinsic::OsClose
+            | Intrinsic::OsDirNext
+            | Intrinsic::OsStatus
+            | Intrinsic::OsFamily
+            | Intrinsic::OsErrorText => CapabilitySet::EMPTY,
             // The standard streams need only their attenuation (N79), which `IoCap` implies.
             Intrinsic::Print | Intrinsic::EPrint => CapabilitySet::of(Self::Out),
             // Declassification is authority of its own (N52).
@@ -405,15 +426,31 @@ mod tests {
 
     #[test]
     fn every_built_in_needs_exactly_the_authority_for_its_effect() {
-        // Two tables, one question each; they agree built-in by built-in, with two stated
-        // exceptions: declassification needs authority and performs no effect (N52), and the
-        // standard streams need only an `OutCap`, which the effect's `IoCap` implies (N79).
+        // Two tables, one question each; they agree built-in by built-in, with three stated
+        // exceptions: declassification needs authority and performs no effect (N52), the
+        // standard streams need only an `OutCap`, which the effect's `IoCap` implies (N79), and
+        // a handle already open needs only itself (Gate 2).
         for i in Intrinsic::ALL {
             let from_effect =
                 Effect::of_intrinsic(i).map_or(CapabilitySet::EMPTY, CapabilityKind::for_effect);
             if let Some(kind) = CapabilityKind::held_for(i) {
                 assert_eq!(from_effect, CapabilitySet::EMPTY);
                 assert_eq!(CapabilityKind::of_intrinsic(i), CapabilitySet::of(kind));
+                continue;
+            }
+            // A handle already open is its own authority (Gate 2): using one performs `io` and
+            // needs nothing held but the handle.
+            if matches!(
+                i,
+                Intrinsic::OsRead
+                    | Intrinsic::OsWrite
+                    | Intrinsic::OsSeek
+                    | Intrinsic::OsSync
+                    | Intrinsic::OsClose
+                    | Intrinsic::OsDirNext
+            ) {
+                assert_eq!(from_effect, CapabilitySet::of(CapabilityKind::Io));
+                assert!(CapabilityKind::of_intrinsic(i).is_empty(), "{}", i.name());
                 continue;
             }
             if matches!(i, Intrinsic::Print | Intrinsic::EPrint) {

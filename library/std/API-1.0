@@ -17,6 +17,33 @@
 @std/deque pub fn deque_pop_front[T](d: Deque[T]) -> Option[T] ! {}
 @std/deque pub fn deque_pop_back[T](d: Deque[T]) -> Option[T] ! {}
 @std/deque pub fn deque_get[T](d: Deque[T], i: Int) -> Option[T] ! {}
+@std/file pub struct File
+@std/file pub enum FileKind
+@std/file pub struct Metadata
+@std/file pub fn file_open(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
+@std/file pub fn file_create(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
+@std/file pub fn file_append(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
+@std/file pub fn file_create_new(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
+@std/file pub fn file_open_rw(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
+@std/file pub fn file_read(f: File, buf: Bytes) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_read_rest(f: File) -> Result[Bytes, IoError] ! { io }
+@std/file pub fn file_read_all(io: IoCap, path: Str) -> Result[Bytes, IoError] ! { io }
+@std/file pub fn file_write(f: File, data: Bytes) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_write_str(f: File, s: Str) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_seek(f: File, offset: Int) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_seek_end(f: File, offset: Int) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_position(f: File) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_sync(f: File) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_close(f: File) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_metadata(io: IoCap, path: Str) -> Result[Metadata, IoError] ! { io }
+@std/file pub fn file_exists_at(io: IoCap, path: Str) -> Bool ! { io }
+@std/file pub fn dir_list(io: IoCap, path: Str) -> Result[Strs, IoError] ! { io }
+@std/file pub fn dir_create(io: IoCap, path: Str) -> Result[Int, IoError] ! { io }
+@std/file pub fn dir_create_all(io: IoCap, path: Str) -> Result[Int, IoError] ! { io }
+@std/file pub fn dir_remove(io: IoCap, path: Str) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_remove(io: IoCap, path: Str) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_rename(io: IoCap, from: Str, to: Str) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_replace_atomic(io: IoCap, path: Str, data: Bytes) -> Result[Int, IoError] ! { io }
 @std/fmt pub fn fmt_int_zero(n: Int, width: Int) -> Str ! {}
 @std/fmt pub fn fmt_int_width(n: Int, width: Int) -> Str ! {}
 @std/fmt pub fn fmt_hex(n: Int) -> Str ! {}
@@ -55,6 +82,15 @@
 @std/io pub fn io_println(io: IoCap, s: Str) -> Int ! { io }
 @std/io pub fn io_eprintln(io: IoCap, s: Str) -> Int ! { io }
 @std/io pub fn io_read(io: IoCap, path: Str) -> Result[Str, Str] ! { io }
+@std/ioerror pub enum IoErrorKind
+@std/ioerror pub struct IoError
+@std/ioerror pub fn io_kind_of(status: Int) -> IoErrorKind ! {}
+@std/ioerror pub fn io_error_from(status: Int) -> IoError ! {}
+@std/ioerror pub fn io_error_new(kind: IoErrorKind, message: Str) -> IoError ! {}
+@std/ioerror pub fn io_context(e: IoError, doing: Str) -> IoError ! {}
+@std/ioerror pub fn io_result(status: Int) -> Result[Int, IoError] ! {}
+@std/ioerror pub fn io_kind_name(k: IoErrorKind) -> Str ! {}
+@std/ioerror pub fn io_error_show(e: IoError) -> Str ! {}
 @std/json pub struct JsonNode
 @std/json pub struct JsonDoc
 @std/json pub fn json_new() -> JsonDoc ! {}

@@ -1,0 +1,323 @@
+// `@std/file`: files and directories, with every failure a value (Gate 2).
+//
+// Imported with `use "@std/file";` beside `use "@std/ioerror";`. A `File` is an open file the
+// operating system holds; copies of one are the same file. Whatever names a path takes the
+// `IoCap` that allows it; whatever uses a `File` takes only the file, which reaches nothing but
+// itself — so a function can be handed one file and no other authority. Every function returns a
+// `Result` whose error says what kind of failure it was, the same on every platform. A file not closed stays open until the program ends. `docs/general-purpose.md`
+// §8 is the design record; `docs/spec.md`, *Files and handles*, the built-ins beneath.
+
+use "@std/ioerror";
+
+/// An open file.
+pub struct File {
+    handle: OsHandle,
+}
+
+/// What a path names.
+pub enum FileKind {
+    Regular,
+    Directory,
+    Other,
+}
+
+/// What `file_metadata` reports: the size in bytes, the kind, the modification time in
+/// nanoseconds since the Unix epoch, and the permission bits.
+pub struct Metadata {
+    size: Int,
+    kind: FileKind,
+    modified_ns: Int,
+    permissions: Int,
+}
+
+fn opened(h: OsHandle) -> Result[File, IoError] ! {} {
+    let s = os_status(h);
+    if s < 0 { Result[File, IoError].Err(error: io_error_from(s)) } else { Result[File, IoError].Ok(value: File(handle: h)) }
+}
+
+/// The file at `path`, to read.
+pub fn file_open(io: IoCap, path: Str) -> Result[File, IoError] ! { io } {
+    opened(os_open_read(path))
+}
+
+/// A file at `path` to write, made empty: created if there is none.
+pub fn file_create(io: IoCap, path: Str) -> Result[File, IoError] ! { io } {
+    opened(os_open_write(path, 0))
+}
+
+/// The file at `path` to write at its end: created if there is none.
+pub fn file_append(io: IoCap, path: Str) -> Result[File, IoError] ! { io } {
+    opened(os_open_write(path, 1))
+}
+
+/// A new file at `path` to write; `AlreadyExists` if there is one.
+pub fn file_create_new(io: IoCap, path: Str) -> Result[File, IoError] ! { io } {
+    opened(os_open_write(path, 2))
+}
+
+/// The file at `path`, to read and write.
+pub fn file_open_rw(io: IoCap, path: Str) -> Result[File, IoError] ! { io } {
+    opened(os_open_write(path, 3))
+}
+
+/// At most `bytes_len(buf)` bytes into `buf`: how many, `0` at the end.
+pub fn file_read(f: File, buf: Bytes) -> Result[Int, IoError] ! { io } {
+    io_result(os_read(f.handle, buf))
+}
+
+/// Everything from the current position to the end.
+pub fn file_read_rest(f: File) -> Result[Bytes, IoError] ! { io } {
+    let chunk = bytes_new(65536);
+    let parts = vec_new[Bytes]();
+    let mut total = 0;
+    let mut more = true;
+    let mut failed = 0;
+    while more {
+        let n = os_read(f.handle, chunk);
+        if n <= 0 {
+            failed = n;
+            more = false;
+        } else {
+            let part = bytes_new(n);
+            bytes_copy(part, bytes_slice(chunk, 0, n));
+            vec_push(parts, part);
+            total = total + n;
+        }
+    }
+    if failed < 0 {
+        return Result[Bytes, IoError].Err(error: io_error_from(failed));
+    }
+    let all = bytes_new(total);
+    let mut at = 0;
+    let mut i = 0;
+    while i < vec_len(parts) {
+        let part = vec_get(parts, i);
+        bytes_copy(bytes_slice(all, at, at + bytes_len(part)), part);
+        at = at + bytes_len(part);
+        i = i + 1;
+    }
+    Result[Bytes, IoError].Ok(value: all)
+}
+
+/// The whole file at `path`.
+pub fn file_read_all(io: IoCap, path: Str) -> Result[Bytes, IoError] ! { io } {
+    let f = file_open(io, path)?;
+    let all = file_read_rest(f);
+    os_close(f.handle);
+    match all {
+        Result.Ok(value: b) => Result[Bytes, IoError].Ok(value: b),
+        Result.Err(error: e) => Result[Bytes, IoError].Err(error: io_context(e, str_concat("reading ", path))),
+    }
+}
+
+/// Every byte of `data`, however many writes it takes: `bytes_len(data)`.
+pub fn file_write(f: File, data: Bytes) -> Result[Int, IoError] ! { io } {
+    let mut at = 0;
+    while at < bytes_len(data) {
+        let n = os_write(f.handle, bytes_slice(data, at, bytes_len(data)));
+        if n < 0 {
+            return Result[Int, IoError].Err(error: io_error_from(n));
+        }
+        if n == 0 {
+            return Result[Int, IoError].Err(error: io_error_new(IoErrorKind.Other(), "the file took no bytes"));
+        }
+        at = at + n;
+    }
+    Result[Int, IoError].Ok(value: at)
+}
+
+/// `s`'s bytes, as `file_write`.
+pub fn file_write_str(f: File, s: Str) -> Result[Int, IoError] ! { io } {
+    file_write(f, bytes_from_str(s))
+}
+
+/// Move to `offset` bytes from the start; the new position.
+pub fn file_seek(f: File, offset: Int) -> Result[Int, IoError] ! { io } {
+    io_result(os_seek(f.handle, offset, 0))
+}
+
+/// Move to `offset` bytes from the end; the new position.
+pub fn file_seek_end(f: File, offset: Int) -> Result[Int, IoError] ! { io } {
+    io_result(os_seek(f.handle, offset, 2))
+}
+
+/// Where the next read or write is.
+pub fn file_position(f: File) -> Result[Int, IoError] ! { io } {
+    io_result(os_seek(f.handle, 0, 1))
+}
+
+/// The file's data and metadata, on storage.
+pub fn file_sync(f: File) -> Result[Int, IoError] ! { io } {
+    io_result(os_sync(f.handle))
+}
+
+/// Close `f`; every copy of it is closed.
+pub fn file_close(f: File) -> Result[Int, IoError] ! { io } {
+    io_result(os_close(f.handle))
+}
+
+/// What `path` names, following symbolic links.
+pub fn file_metadata(io: IoCap, path: Str) -> Result[Metadata, IoError] ! { io } {
+    let out = bytes_new(32);
+    let s = os_stat(path, out);
+    if s < 0 {
+        return Result[Metadata, IoError].Err(error: io_context(io_error_from(s), path));
+    }
+    let k = bytes_read_le[Int](out, 8);
+    let kind = if k == 0 { FileKind.Regular() } else { if k == 1 { FileKind.Directory() } else { FileKind.Other() } };
+    Result[Metadata, IoError].Ok(value: Metadata(size: bytes_read_le[Int](out, 0), kind: kind, modified_ns: bytes_read_le[Int](out, 16), permissions: bytes_read_le[Int](out, 24)))
+}
+
+/// Whether `path` names anything at all.
+pub fn file_exists_at(io: IoCap, path: Str) -> Bool ! { io } {
+    os_stat(path, bytes_new(32)) == 0
+}
+
+/// The names in the directory at `path`, sorted by their bytes; never `.` or `..`.
+pub fn dir_list(io: IoCap, path: Str) -> Result[Strs, IoError] ! { io } {
+    let d = os_dir_open(path);
+    let s = os_status(d);
+    if s < 0 {
+        return Result[Strs, IoError].Err(error: io_context(io_error_from(s), path));
+    }
+    let names = strs_new();
+    let buf = bytes_new(1024);
+    let mut n = os_dir_next(d, buf);
+    while n > 0 {
+        strs_push(names, bytes_to_str(bytes_slice(buf, 0, n)));
+        n = os_dir_next(d, buf);
+    }
+    os_close(d);
+    if n < 0 {
+        return Result[Strs, IoError].Err(error: io_context(io_error_from(n), path));
+    }
+    Result[Strs, IoError].Ok(value: sorted(names))
+}
+
+// An insertion sort by bytes: a directory is listed once, and `@std/sort` is not imported so
+// this module stays importable where that one is refused.
+fn sorted(xs: Strs) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(xs) {
+        let x = strs_get(xs, i);
+        strs_push(out, x);
+        let mut j = strs_len(out) - 1;
+        while j > 0 && before(x, strs_get(out, j - 1)) {
+            strs_set(out, j, strs_get(out, j - 1));
+            j = j - 1;
+        }
+        strs_set(out, j, x);
+        i = i + 1;
+    }
+    out
+}
+
+fn before(a: Str, b: Str) -> Bool ! {} {
+    let mut i = 0;
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) {
+            return str_byte(a, i) < str_byte(b, i);
+        }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
+}
+
+/// A directory at `path`; its parent must exist.
+pub fn dir_create(io: IoCap, path: Str) -> Result[Int, IoError] ! { io } {
+    io_result(os_mkdir(path))
+}
+
+/// A directory at `path` and every missing parent; nothing if it is already one.
+pub fn dir_create_all(io: IoCap, path: Str) -> Result[Int, IoError] ! { io } {
+    let mut i = 1;
+    while i <= str_len(path) {
+        if i == str_len(path) || str_byte(path, i) == 47 {
+            let prefix = str_slice(path, 0, i);
+            let s = os_mkdir(prefix);
+            if s < 0 && io_kind_of(s) != IoErrorKind.AlreadyExists() {
+                return Result[Int, IoError].Err(error: io_context(io_error_from(s), prefix));
+            }
+        }
+        i = i + 1;
+    }
+    let out = bytes_new(32);
+    let s = os_stat(path, out);
+    if s < 0 {
+        return Result[Int, IoError].Err(error: io_context(io_error_from(s), path));
+    }
+    if bytes_read_le[Int](out, 8) != 1 {
+        return Result[Int, IoError].Err(error: io_context(io_error_new(IoErrorKind.NotADirectory(), "not a directory"), path));
+    }
+    Result[Int, IoError].Ok(value: 0)
+}
+
+/// Remove the empty directory at `path`.
+pub fn dir_remove(io: IoCap, path: Str) -> Result[Int, IoError] ! { io } {
+    io_result(os_rmdir(path))
+}
+
+/// Remove the file at `path`.
+pub fn file_remove(io: IoCap, path: Str) -> Result[Int, IoError] ! { io } {
+    io_result(os_unlink(path))
+}
+
+/// Give `from` the name `to`, replacing what `to` named on the same file system.
+pub fn file_rename(io: IoCap, from: Str, to: Str) -> Result[Int, IoError] ! { io } {
+    io_result(os_rename(from, to))
+}
+
+// A new file beside `path`, under the first name of the form `PATH.nazm-replace-N` that is free.
+struct Temp {
+    file: File,
+    name: Str,
+}
+
+fn create_temp(io: IoCap, path: Str) -> Result[Temp, IoError] ! { io } {
+    let mut attempt = 0;
+    while true {
+        let name = str_concat(path, str_concat(".nazm-replace-", int_to_str(attempt)));
+        let h = os_open_write(name, 2);
+        let s = os_status(h);
+        if s == 0 {
+            return Result[Temp, IoError].Ok(value: Temp(file: File(handle: h), name: name));
+        }
+        if io_kind_of(s) != IoErrorKind.AlreadyExists() {
+            return Result[Temp, IoError].Err(error: io_context(io_error_from(s), name));
+        }
+        attempt = attempt + 1;
+    }
+    Result[Temp, IoError].Err(error: io_error_new(IoErrorKind.Other(), "no temporary name was free"))
+}
+
+/// Replace the file at `path` with `data` so that a reader sees either the old file or the new
+/// one, never part of either: a new file beside it, written, put on storage, then renamed over
+/// it — which POSIX makes atomic on one file system.
+pub fn file_replace_atomic(io: IoCap, path: Str, data: Bytes) -> Result[Int, IoError] ! { io } {
+    let t = create_temp(io, path)?;
+    let written = file_write(t.file, data);
+    let synced = io_result(os_sync(t.file.handle));
+    os_close(t.file.handle);
+    let failed = match written {
+        Result.Err(error: e) => Option[IoError].Some(value: e),
+        Result.Ok(value: n) => match synced {
+            Result.Err(error: e) => Option[IoError].Some(value: e),
+            Result.Ok(value: z) => Option[IoError].None(),
+        },
+    };
+    match failed {
+        Option.Some(value: e) => {
+            os_unlink(t.name);
+            Result[Int, IoError].Err(error: io_context(e, t.name))
+        },
+        Option.None() => {
+            let r = os_rename(t.name, path);
+            if r < 0 {
+                os_unlink(t.name);
+                return Result[Int, IoError].Err(error: io_context(io_error_from(r), path));
+            }
+            Result[Int, IoError].Ok(value: bytes_len(data))
+        },
+    }
+}
