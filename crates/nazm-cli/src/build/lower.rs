@@ -372,6 +372,19 @@ fn emit_artefacts(
                 });
             }
         }
+        // The task stacks and the stack budget, the platform's (Gate 3): wherever the runtime
+        // checks the stack or runs the pool.
+        if settled.stack || settled.tasks || settled.channels {
+            if let Some(t) = switch_target(backend.target()) {
+                out.push(Artefact {
+                    name: "stack".to_owned(),
+                    code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::platform::emit_stack(t)),
+                    instance: false,
+                    key: None,
+                    reused: false,
+                });
+            }
+        }
         // Where this target keeps `errno` (N85, §7.86), wherever C is called or a file is used.
         if settled.foreign || settled.files {
             if let Some(t) = switch_target(backend.target()) {
