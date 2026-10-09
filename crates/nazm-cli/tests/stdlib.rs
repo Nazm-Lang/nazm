@@ -131,9 +131,9 @@ fn codes(files: &[(&str, &str)]) -> Vec<String> {
 }
 
 const MODULES: &[&str] = &[
-    "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap", "hashset", "io",
-    "ioerror", "json", "map", "net", "num", "option", "path", "process", "result", "seq", "show",
-    "sort", "test", "text", "time",
+    "binary", "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap", "hashset",
+    "io", "ioerror", "json", "map", "net", "num", "option", "path", "process", "result", "seq",
+    "show", "sort", "test", "text", "time",
 ];
 
 #[test]
@@ -356,6 +356,97 @@ fn an_error_gathers_context_and_reads_outermost_first_everywhere() {
         "loading the configuration: No such file or directory (NotFound)\n\
          reading the table: line 3: bad digit\nNotFound\n0\n",
     );
+}
+
+/// Gate 2 §14: `json_parse` still refuses a fraction, as 1.0 documented; `json_parse_floats` reads
+/// fractions, exponents and integers past `Int` as floats, writes infinities as `null`, and
+/// `json_encode_pretty` indents.
+const JSON_FLOATS: &str = r#"use "@std/json";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn main(out: OutCap) -> Int {
+    match json_parse("[1, 2.5]") { Result.Ok(value: d) => line(out, "accepted"), Result.Err(error: e) => line(out, e) };
+    match json_parse_floats("{\"a\": [1, 2.5, -0.125e2, 1e400, 12345678901234567890], \"b\": {}, \"c\": []}") {
+        Result.Ok(value: d) => {
+            line(out, json_encode(d));
+            line(out, json_encode_pretty(d));
+            let a = match json_get(d, json_root(d), "a") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+            let x = match json_at(d, a, 1) { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+            line(out, match json_float(d, x) { Option.Some(value: f) => num_to_str(f), Option.None() => "none" });
+            line(out, match json_int(d, x) { Option.Some(value: i) => int_to_str(i), Option.None() => "not an integer" });
+            line(out, json_kind(d, x));
+        },
+        Result.Err(error: e) => line(out, e),
+    };
+    match json_parse_floats("[01.5]") { Result.Ok(value: d) => line(out, "accepted"), Result.Err(error: e) => line(out, e) };
+    match json_parse_floats("[1.]") { Result.Ok(value: d) => line(out, "accepted"), Result.Err(error: e) => line(out, e) };
+    let d = json_new();
+    let n = json_add_float(d, 3.0);
+    line(out, json_encode(json_with_root(d, n)));
+    0
+}
+"#;
+
+#[test]
+fn json_reads_and_writes_floats_beside_its_frozen_integers_everywhere() {
+    agrees(&[("prog.nz", JSON_FLOATS)], "a number with a fraction or exponent is not supported at byte 5\n{\"a\":[1,2.5,-12.5,null,12345678901234567000.0],\"b\":{},\"c\":[]}\n{\n  \"a\": [\n    1,\n    2.5,\n    -12.5,\n    null,\n    12345678901234567000.0\n  ],\n  \"b\": {},\n  \"c\": []\n}\n2.5\nnot an integer\nnumber\na number with a leading zero at byte 3\nexpected a digit after the point at byte 3\n3.0\n0\n");
+}
+
+/// Gate 2 §14: every `@std/binary` encoding, byte for byte as Python's `struct` and an independent
+/// LEB128 and zig-zag give them, read back, and the reader's three failures.
+const BINARY: &str = r#"use "@std/binary";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn hex(b: Bytes) -> Str {
+    let digits = "0123456789abcdef";
+    let mut out = "";
+    let mut i = 0;
+    while i < bytes_len(b) {
+        let v = Int(bytes_get(b, i));
+        out = str_concat(out, str_concat(str_slice(digits, v / 16, v / 16 + 1), str_slice(digits, v % 16, v % 16 + 1)));
+        i = i + 1;
+    }
+    out
+}
+fn main(out: OutCap) -> Int {
+    let w = binary_writer();
+    binary_put_u8(w, UInt8(255));
+    binary_put_u16_be(w, UInt16(0x1234));
+    binary_put_u32_le(w, UInt32(0xDEADBEEF));
+    binary_put_i64_be(w, 0 - 2);
+    binary_put_f64_le(w, 1.5);
+    binary_put_varint(w, UInt64(300));
+    binary_put_varint(w, UInt64(18446744073709551615));
+    binary_put_zigzag(w, 0 - 1);
+    binary_put_zigzag(w, 0 - 9223372036854775807 - 1);
+    binary_put_str(w, "héllo");
+    let b = binary_finish(w);
+    line(out, hex(b));
+    line(out, int_to_str(binary_len(w)));
+    let r = binary_reader(b);
+    line(out, match binary_get_u8(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_u16_be(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_u32_le(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_i64_be(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_f64_le(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_varint(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_varint(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_zigzag(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_zigzag(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_str(r) { Result.Ok(value: v) => v, Result.Err(error: e) => e });
+    line(out, int_to_str(binary_remaining(r)));
+    line(out, match binary_get_u8(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    let bad = binary_reader(bytes_from_str("\x7f"));
+    let over = bytes_new(11);
+    let mut i = 0;
+    while i < 10 { bytes_set(over, i, UInt8(255)); i = i + 1; }
+    line(out, match binary_get_varint(binary_reader(over)) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_bytes(bad) { Result.Ok(value: v) => "bytes", Result.Err(error: e) => e });
+    0
+}
+"#;
+
+#[test]
+fn binary_encodes_byte_for_byte_and_reads_back_everywhere() {
+    agrees(&[("prog.nz", BINARY)], "ff1234efbeaddefffffffffffffffe000000000000f83fac02ffffffffffffffffff0101ffffffffffffffffff010668c3a96c6c6f\n53\n255\n4660\n3735928559\n-2\n1.5\n300\n18446744073709551615\n-1\n-9223372036854775808\nhéllo\n0\na byte needs more bytes than are left at byte 53\na varint past 64 bits at byte 0\na length longer than the data at byte 1\n0\n");
 }
 
 #[test]

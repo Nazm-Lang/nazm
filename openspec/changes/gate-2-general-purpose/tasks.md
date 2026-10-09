@@ -12,7 +12,7 @@
 
 ## 3. Libraries and tooling
 
-- [ ] 3.1 Serialization (§14)
+- [x] 3.1 Serialization (§14)
 - [ ] 3.2 Attributes and conditional compilation (§16, §17)
 - [ ] 3.3 User tests and benchmarks (§18, §19)
 - [ ] 3.4 Logging (§20), randomness (§21)
