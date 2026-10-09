@@ -204,8 +204,15 @@ pub fn emit_runtime(needs: Needs) -> String {
         out.push_str(FOREIGN_STRING_RUNTIME);
         out.push_str(TEXT_RUNTIME);
     }
+    // Where `errno` is, which the per-target `errno` unit answers for both parts that read it.
+    if needs.foreign || needs.files {
+        out.push_str("\ndeclare ptr @nz_errno_location()\n");
+    }
     if needs.foreign {
         out.push_str(ERRNO_RUNTIME);
+    }
+    if needs.files {
+        out.push_str(super::files::FILES_RUNTIME);
     }
     if needs.numbers {
         out.push_str(NUMBER_RUNTIME);
@@ -1767,8 +1774,6 @@ fill:
 /// and this text stays the same on every target.
 const ERRNO_RUNTIME: &str = r"
 @nz.errno_saved = hidden thread_local global i64 0
-
-declare ptr @nz_errno_location()
 
 define hidden void @nz.errno_save() {
 entry:

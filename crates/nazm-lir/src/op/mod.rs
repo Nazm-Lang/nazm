@@ -7,6 +7,7 @@
 
 mod arrays;
 mod bytes;
+mod files;
 mod func;
 mod helpers;
 pub mod interp;

@@ -2007,9 +2007,13 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         | Type::Bytes
         | Type::Text
         | Type::Fn(_) => true,
-        Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) | Type::Num(_) | Type::Array(_) => {
-            false
-        }
+        Type::Int
+        | Type::Bool
+        | Type::Cap(_)
+        | Type::OsHandle
+        | Type::Param(_)
+        | Type::Num(_)
+        | Type::Array(_) => false,
         Type::Record(id) => res
             .records()
             .get(id)

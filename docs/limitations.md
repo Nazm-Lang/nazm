@@ -220,6 +220,14 @@ found only by reading all of it.
   `Str`, channels, and records and enums of those (`N0390`); no unbounded channel, no channel of
   sequences or closures (area 14). *Narrowed in N53:* until then, `Int` only.
   *Narrowed in N54:* `select` exists for `Chan[T]` (lowest ready index; receives only).
+- Files and handles (Gate 2): an `OsHandle` is closed by `os_close` or when the process ends,
+  not when its last copy goes; reading a file or standard input holds the task's worker on the
+  pool until the system answers (only the network will not, §10); listing one directory handle
+  from two tasks at once is serialised by the handle table's lock. The native side is verified on
+  macOS (aarch64) on the host and on Linux in the contained run; x86-64 macOS's `$INODE64` symbols
+  are written but unverified. No file locking, memory mapping, symbolic-link creation,
+  permission changes or file times other than the modification time; `dir_list` reads a whole
+  directory into memory.
 - The runtime is its own crate (`nazm-runtime`, N53) but still LLVM text both backends link,
   tested through a C harness; no Rust implementation, no runtime shared across programs as a
   library (area 13).

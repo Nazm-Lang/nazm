@@ -875,6 +875,15 @@ impl<'b> Walk<'_, 'b> {
                         self.store(target, callee_span, &moved);
                         Some(moved.joined(&all))
                     }
+                    ContainerUse::Fill { into } => {
+                        if let BuiltinFlow::Source(o) = Origin::of_intrinsic(b) {
+                            for &arg in into {
+                                let cell = self.cell(b, callee_span, arg);
+                                self.store(cell, callee_span, &Flow::origin(o, callee_span));
+                            }
+                        }
+                        None
+                    }
                     ContainerUse::Select { from, into } => {
                         let source = self.cell(b, callee_span, from);
                         let target = self.cell(b, callee_span, into);

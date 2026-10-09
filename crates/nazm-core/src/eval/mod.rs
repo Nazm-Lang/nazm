@@ -520,6 +520,7 @@ mod channel;
 mod counters;
 mod exec;
 mod intrinsic;
+mod os;
 mod task;
 mod value;
 

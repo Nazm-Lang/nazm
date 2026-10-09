@@ -4,7 +4,7 @@
 
 ## 2. The outside world
 
-- [ ] 2.1 Handles and files (§8)
+- [x] 2.1 Handles and files (§8)
 - [ ] 2.2 Time (§11)
 - [ ] 2.3 Process and environment (§12)
 - [ ] 2.4 Errors (§13)

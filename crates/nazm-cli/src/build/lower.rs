@@ -372,12 +372,24 @@ fn emit_artefacts(
                 });
             }
         }
-        // Where this target keeps `errno` (N85, §7.86), wherever C is called.
-        if settled.foreign {
+        // Where this target keeps `errno` (N85, §7.86), wherever C is called or a file is used.
+        if settled.foreign || settled.files {
             if let Some(t) = switch_target(backend.target()) {
                 out.push(Artefact {
                     name: "errno".to_owned(),
                     code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::switch::emit_errno(t)),
+                    instance: false,
+                    key: None,
+                    reused: false,
+                });
+            }
+        }
+        // What this target's C library says about files (Gate 2): wherever a file is used.
+        if settled.files {
+            if let Some(t) = switch_target(backend.target()) {
+                out.push(Artefact {
+                    name: "os".to_owned(),
+                    code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::platform::emit_os(t)),
                     instance: false,
                     key: None,
                     reused: false,
@@ -477,6 +489,7 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
         (Part::Join, "task joins"),
         (Part::Closures, "closures"),
         (Part::Numbers, "numbers"),
+        (Part::Files, "files and handles"),
         (
             Part::Foreign,
             "`c_errno()` (N0613: no C library keeps an `errno`)",

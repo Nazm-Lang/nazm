@@ -103,6 +103,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `provenance-record` | STABLE 1.0 | `nazm.provenance/1` |
 | `bytes` | STABLE 1.0 | |
 | `text` | STABLE 1.0 | graphemes and normalisation are not the language's |
+| `files` | STABLE 1.0 | Gate 2: a handle is closed by `os_close` or at exit; a status's number is the platform's, its kind (`@std/ioerror`) is not |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
 | `numbers` | STABLE 1.0 | Gate 2: fixed-width integers, `Float32`, `Float64`, bit operators and conversions; the C library's transcendental functions are promised to the host library's accuracy, not bit for bit |
@@ -1190,7 +1191,8 @@ would need a propagation protocol, and traits do not exist.
 <!-- id: std -->
 
 A **standard module** is a toolchain-owned Nazm module a program imports by name. There are
-twenty-one (N84's seventeen, the 1.0 surface, and Gate 2's four collections),
+twenty-three (N84's seventeen, the 1.0 surface, and Gate 2's four collections, `ioerror` and
+`file`),
 each ordinary source checked like any module, and none is visible unless a module writes its `use`:
 
 ```nazm
@@ -1247,6 +1249,8 @@ that exists but cannot be read is `N0407`.
 | `@std/hashmap` | (Gate 2) `HashMap[K: Hash, V]`, open addressing with linear probing, shared like any handle: `hashmap_new[K, V]()`, `hashmap_with_seed[K, V](seed)`, `hashmap_len`, `hashmap_set -> Bool` (whether it replaced), `hashmap_get -> Option[V]`, `hashmap_has`, `hashmap_remove -> Option[V]`, `hashmap_keys -> Vec[K]`, `hashmap_values -> Vec[V]`. Insert, lookup and removal take expected constant time, growth amortised constant time; iteration is in table order, which the keys, their order of insertion and the seed decide — the same in every run, and unpredictable to whoever chooses the keys only when the seed is (`Slot` is the table's entry) |
 | `@std/hashset` | (Gate 2) `HashSet[K: Hash]` over a `HashMap`: `hashset_new[K]()`, `hashset_with_seed[K](seed)`, `hashset_add -> Bool` (whether it was new), `hashset_has`, `hashset_remove -> Bool`, `hashset_len`, `hashset_items -> Vec[K]` |
 | `@std/deque` | (Gate 2) `Deque[T]`, a ring buffer, shared like any handle: `deque_new[T]()`, `deque_len`, `deque_push_back`, `deque_push_front` (amortised constant time), `deque_pop_front -> Option[T]`, `deque_pop_back -> Option[T]`, `deque_get(d, i) -> Option[T]` (constant time, from the front) |
+| `@std/ioerror` | (Gate 2) `IoErrorKind` (`NotFound`, `PermissionDenied`, `AlreadyExists`, `WouldBlock`, `InvalidInput`, `TimedOut`, `Interrupted`, `UnexpectedEof`, `ConnectionRefused`, `ConnectionReset`, `AddressInUse`, `AddressNotAvailable`, `BrokenPipe`, `NotConnected`, `IsADirectory`, `NotADirectory`, `DirectoryNotEmpty`, `Closed`, `Cancelled`, `Other`) and `IoError { kind, code, message, context }`: `io_kind_of(status)` — each platform family's table from error number to kind, here and nowhere else — `io_error_from(status)`, `io_error_new(kind, message)`, `io_context(e, doing)` (contexts read outermost first), `io_result(status) -> Result[Int, IoError]`, `io_kind_name(k)`, `io_error_show(e)` |
+| `@std/file` | (Gate 2) `File`, `FileKind` (`Regular`, `Directory`, `Other`) and `Metadata { size, kind, modified_ns, permissions }`; each `! { io }` and answering `Result[_, IoError]`; what names a path takes the `IoCap` that allows it, and what uses a `File` takes only the file: `file_open`, `file_create`, `file_append`, `file_create_new`, `file_open_rw`, `file_read(f, buf)`, `file_read_rest`, `file_read_all(io, path) -> Bytes`, `file_write` (every byte, however many writes it takes), `file_write_str`, `file_seek`, `file_seek_end`, `file_position`, `file_sync`, `file_close`, `file_metadata`, `file_exists_at -> Bool`, `dir_list` (sorted by bytes), `dir_create`, `dir_create_all`, `dir_remove`, `file_remove`, `file_rename`, `file_replace_atomic(io, path, data)` (a new file beside it, written, put on storage, renamed over it) |
 
 **Stability: 1.0 (N84).** `library/std/API-1.0` lists every public item of every standard module
 with its declaration; a test regenerates it and requires equality. Within 1.x an item may be
@@ -3839,6 +3843,37 @@ fn scalars(t: Text) -> Int {
 | **Using one** | `text_as_str(t)`, free; `text_len(t)` in bytes; `text_concat(a, b)`; `text_slice(t, lo, hi)`: bytes `lo..hi`, sharing `t`'s storage — `N0405` unless `0 <= lo <= hi <= text_len(t)`, then `N0413` unless both ends are boundaries. `text_is_boundary(t, i)`: whether `i` is `text_len(t)` or the start of a scalar value — `false`, never a failure, for any other `i` |
 | **Scalars** | `text_scalar_at(t, i)`: the scalar value starting at byte `i`; `text_next(t, i)`: the byte index after it; both `N0405` unless `0 <= i < text_len(t)` and `N0413` unless `i` is a boundary. Iteration is a `while` over byte indexes, as above. `text_scalar_count(t)` |
 | **Not** | Graphemes, normalisation, case beyond ASCII, collation and locale: the ecosystem's. `Text` is not a `Str` (`N0300`), nor the reverse — `text_as_str` and `Text(…)` say which way |
+
+### Files and handles — Gate 2
+<!-- id: files -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §8). The whole-file built-ins of
+*What the outside-world built-ins do and do not promise* are unchanged; this adds handles, whose
+every failure is a **status** the standard library turns into a value.
+
+```nazm
+use "@std/ioerror";
+use "@std/file";
+
+fn main(io: IoCap) -> Int ! { io } {
+    match file_read_all(io, "notes.txt") {
+        Result.Ok(value: b) => bytes_len(b),
+        Result.Err(error: e) => 0 - 1,
+    }
+}
+```
+
+| | |
+| --- | --- |
+| **Type** | `OsHandle`: an open file, directory or standard input, as the operating system holds it. A value, freely copied, that crosses into a task, with no `==` (`N0304`), that no expression constructs: only the built-ins below make one. Every copy names the same open object |
+| **Statuses** | A built-in that can fail answers an `Int`: `0` or a count on success, and on failure a **status**, `-errno` — the operating system's error number, negated. A status's number is the platform's: `os_family()` is `0` on macOS and `1` on Linux, and `@std/ioerror` holds each family's table from number to `IoErrorKind`, so a program compares kinds, which are the same everywhere. `os_error_text(status) -> Str` is the system's message, empty for a status that is not negative. Both are pure |
+| **Opening** | `os_open_read(path) -> OsHandle` reads an existing file; `os_open_write(path, mode) -> OsHandle` writes one — mode `0` creates or truncates, `1` creates or appends, `2` creates a new file and fails (`AlreadyExists`) if one exists, `3` reads and writes an existing file; any other mode is `InvalidInput`. A created file has permissions `0o666` less the process's umask. `os_dir_open(path) -> OsHandle` opens a directory; `os_stdin() -> OsHandle` is standard input. A failed open still answers a handle, which holds the failure: `os_status(h)` is `0` for an open handle and its status otherwise |
+| **Using one** | `os_read(h, buf: Bytes) -> Int`: at most `bytes_len(buf)` bytes into `buf` — the count, `0` at the end; `os_write(h, data: Bytes) -> Int`: the count written, which may be fewer than `bytes_len(data)`; `os_seek(h, offset, whence) -> Int`: the new position, from the start (`0`), the current position (`1`) or the end (`2`); `os_sync(h) -> Int`: the file's data and metadata on storage; `os_dir_next(h, name: Bytes) -> Int`: the next entry's name into `name`, its length, `0` after the last — `.` and `..` are never entries, and the order is the system's. Reading, writing, seeking or syncing a directory is `IsADirectory`, and listing a file `NotADirectory`, in every implementation, without asking the system |
+| **Closing** | `os_close(h) -> Int`. Every later use of any copy of `h` answers the status `-65536` — no system's error number, so `@std/ioerror` calls it `Closed` on every platform, with the message `the handle is closed` — and **never reaches a descriptor the system has since reused**: a handle names its descriptor and a generation, and a closed generation is dead. A close while another task is using the handle takes effect when that use ends. A handle not closed stays open until the process ends — it is not closed when its last copy goes (*As built*, `general-purpose.md` §8) |
+| **Paths** | `os_stat(path, out: Bytes) -> Int` writes four little-endian `Int`s into `out` (`N0405` if it is shorter than 32 bytes): the size, the kind (`0` a file, `1` a directory, `2` anything else), the modification time in nanoseconds since the Unix epoch, and the permission bits; it follows symbolic links. `os_mkdir(path)`, `os_rmdir(path)`, `os_unlink(path)`, `os_rename(from, to)` answer `0` or a status; `os_rename` replaces an existing `to` atomically on one file system, as POSIX `rename` does |
+| **Authority** | Every built-in here except `os_status`, `os_family` and `os_error_text` has the `io` effect. Those that **name a path** — `os_open_read`, `os_open_write`, `os_dir_open`, `os_stat`, `os_mkdir`, `os_rmdir`, `os_unlink`, `os_rename` — and `os_stdin` need an `IoCap` held (*Capabilities*). Those that **use a handle** — `os_read`, `os_write`, `os_seek`, `os_sync`, `os_dir_next`, `os_close` — need only the handle: it reaches nothing but what it names, so a function handed one file can use that file and open nothing else |
+| **Provenance** | What `os_read`, `os_dir_next` and `os_stat` put into a buffer is `file`-origin, joined into the buffer's cell. Where a file is written is the restricted sink `write_file`'s path is: `os_open_write`'s path, and the paths of `os_mkdir`, `os_rmdir`, `os_unlink` and `os_rename` |
+| **Blocking** | A read of standard input or of a file holds the task's worker on the pool until the system answers (`general-purpose.md` §10 states what does not) |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
