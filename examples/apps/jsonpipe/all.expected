@@ -1,0 +1,5 @@
+{"user":"alice","requests":3,"bytes":3076}
+{"user":"bob","requests":2,"bytes":364}
+{"user":"carol","requests":2,"bytes":612}
+{"read":10,"kept":7,"rejected":3,"users":3,"bytes":4052}
+0

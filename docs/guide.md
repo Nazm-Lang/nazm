@@ -504,7 +504,9 @@ accepts.
 
 | Rule | Definition |
 | --- | --- |
-| `program` | `{ use_item } , { function \| foreign_function \| record \| foreign_struct \| enumeration \| trait_item \| impl_item \| constant }` |
+| `program` | `{ use_item } , { { attribute } , ( function \| foreign_function \| record \| foreign_struct \| enumeration \| trait_item \| impl_item \| constant ) }` |
+| `attribute` | `"@" , IDENT , [ "(" , [ attribute_arg , { "," , attribute_arg } , [ "," ] ] , ")" ]` |
+| `attribute_arg` | `STRING \| IDENT , [ "=" , STRING \| "(" , [ attribute_arg , { "," , attribute_arg } , [ "," ] ] , ")" ]` |
 | `constant` | `[ visibility ] , "const" , IDENT , ":" , type , "=" , expression , ";"` |
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
 | `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";"` |
@@ -577,7 +579,7 @@ accepts.
 ### `program`
 
 ```ebnf
-program = { use_item } , { function | foreign_function | record | foreign_struct | enumeration | trait_item | impl_item | constant } ;
+program = { use_item } , { { attribute } , ( function | foreign_function | record | foreign_struct | enumeration | trait_item | impl_item | constant ) } ;
 ```
 
 ```nazm
@@ -606,6 +608,43 @@ trait Show { fn show(self: Self) -> Str; } impl Show for Int { fn show(self: Int
 
 ```nazm
 const SIZE: Int = 4; fn main() -> Int { SIZE }
+```
+
+```nazm
+@cfg(os = "linux") fn f() -> Int { 1 } @cfg(not(os = "linux")) fn f() -> Int { 0 } fn main() -> Int { f() }
+```
+
+### `attribute`
+
+```ebnf
+attribute = "@" , IDENT , [ "(" , [ attribute_arg , { "," , attribute_arg } , [ "," ] ] , ")" ] ;
+```
+
+An attribute (Gate 2): `@` and a name from a closed vocabulary — `cfg`, `test`, `bench`,
+`fuzz`, `deprecated` — before a top-level declaration, never before a `use`. Which names
+exist and what each takes is the checker's (`N0619`), not the grammar's. See
+`docs/spec.md`, *Attributes* and *Conditional compilation*.
+
+```nazm
+@test fn checks() -> Int { 0 } fn main() -> Int { 0 }
+```
+
+```nazm
+@cfg(all(os = "macos", any(arch = "aarch64", arch = "x86_64"))) fn f() -> Int { 0 } fn main() -> Int { 0 }
+```
+
+### `attribute_arg`
+
+```ebnf
+attribute_arg = STRING | IDENT , [ "=" , STRING | "(" , [ attribute_arg , { "," , attribute_arg } , [ "," ] ] , ")" ] ;
+```
+
+```nazm
+@deprecated("use g") fn f() -> Int { 0 } fn main() -> Int { 0 }
+```
+
+```nazm
+@test(fails) fn f() -> Int { 0 } fn main() -> Int { 0 }
 ```
 
 ### `constant`

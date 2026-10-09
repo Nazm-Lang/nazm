@@ -128,9 +128,20 @@ impl nazm_core::Reuse for Cache<'_> {
         self.entries = graph
             .ids()
             .map(|m| {
-                let source = graph
-                    .file(m)
-                    .map(|f| SourceFingerprint::of(self.map.text(f).as_bytes()));
+                // A module that writes `@cfg` is checked as its configuration builds it (Gate 2):
+                // the configuration is part of what it is, so a check filed under one is never
+                // reused under another.
+                let source = graph.file(m).map(|f| {
+                    let text = self.map.text(f);
+                    if text.contains("@cfg") {
+                        let mut seen = text.as_bytes().to_vec();
+                        seen.extend_from_slice(b"\0@cfg ");
+                        seen.extend_from_slice(graph.config().describe().as_bytes());
+                        SourceFingerprint::of(&seen)
+                    } else {
+                        SourceFingerprint::of(text.as_bytes())
+                    }
+                });
                 let published = interfaces
                     .get(m.index())
                     .and_then(|i| PersistentUnitInterface::published(i, graph, types).ok());
@@ -337,6 +348,7 @@ fn report(root: How, t: Tally) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     path: &Path,
     json: bool,
@@ -344,6 +356,8 @@ pub(crate) fn run(
     cache: bool,
     with_report: bool,
     summary: bool,
+    profile: Option<&str>,
+    features: &[String],
 ) -> ExitCode {
     // `--summary-json` (N31): the same outcome at every exit below, reported as one
     // `nazm.command-summary/1` in place of the rendering. The exit status is the same.
@@ -376,7 +390,7 @@ pub(crate) fn run(
         }
     };
 
-    let loaded = match load::load(path, source_root.path()) {
+    let mut loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             let code = exit::load_status(&diagnostics);
@@ -392,6 +406,12 @@ pub(crate) fn run(
             return ExitCode::from(code);
         }
     };
+    // `nazm check` checks for this host, under the profiles held (Gate 2, §17).
+    let config = match crate::profile::configuration(path, profile, None, features) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    loaded.graph = std::mem::take(&mut loaded.graph).with_config(config);
     let map = &loaded.map;
 
     let (diagnostics, tally) = if cache {

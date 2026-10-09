@@ -123,6 +123,8 @@ pub enum SyntaxKind {
     Tilde,
     Shl,
     Shr,
+    /// `@`, which begins a declaration's attribute (Gate 2).
+    At,
     // --- trivia, and bytes that are not Nazm ---
     Whitespace,
     Comment,
@@ -203,6 +205,8 @@ pub enum SyntaxKind {
     ArrayExpr,
     /// `base[index]` (Gate 2).
     IndexExpr,
+    /// `@name` or `@name(arguments)` before a declaration (Gate 2).
+    Attribute,
     /// A region that did not parse: the partial construct and the tokens skipped to the
     /// next place the grammar can resume. Its bytes are the author's, unchanged.
     Error,
@@ -273,6 +277,7 @@ impl SyntaxKind {
         Self::Tilde,
         Self::Shl,
         Self::Shr,
+        Self::At,
         Self::Whitespace,
         Self::Comment,
         Self::Invalid,
@@ -337,6 +342,7 @@ impl SyntaxKind {
         Self::ArrayType,
         Self::ArrayExpr,
         Self::IndexExpr,
+        Self::Attribute,
         Self::Error,
     ];
 
@@ -408,6 +414,7 @@ impl SyntaxKind {
             TokenKind::Tilde => Self::Tilde,
             TokenKind::Shl => Self::Shl,
             TokenKind::Shr => Self::Shr,
+            TokenKind::At => Self::At,
             TokenKind::Eof => return None,
         })
     }
@@ -415,7 +422,7 @@ impl SyntaxKind {
     /// A leaf the grammar reads: one of the language's tokens.
     #[must_use]
     pub fn is_token(self) -> bool {
-        self <= Self::Shr
+        self <= Self::At
     }
 
     /// A leaf the grammar skips: whitespace, a comment, or bytes that are not Nazm.

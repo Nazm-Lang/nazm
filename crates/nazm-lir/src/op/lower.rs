@@ -299,6 +299,8 @@ impl<'a> Lw<'a> {
         let c = |t: Ty| match t {
             Ty::Bool => Class::Bit,
             Ty::Int => Class::I64,
+            // Every number in its own C type (Gate 2, §23): an export takes and returns them.
+            Ty::Num(k) => num_class(k),
             _ => Class::Ptr,
         };
         Sig {

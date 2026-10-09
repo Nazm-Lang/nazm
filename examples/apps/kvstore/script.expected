@@ -1,0 +1,20 @@
+set colour blue -> ok
+set size 42 -> ok
+set greeting hello, world -> ok
+get colour -> blue
+set colour green -> ok
+del size -> deleted
+del nothing -> (none)
+get size -> (none)
+keys -> colour greeting
+stats -> keys=2 records=5
+reopened: 2 keys
+get colour -> green
+get greeting -> hello, world
+stats -> keys=2 records=5
+compact -> compacted 5 records to 2
+stats -> keys=2 records=2
+reopened: 2 keys
+keys -> colour greeting
+get colour -> green
+0

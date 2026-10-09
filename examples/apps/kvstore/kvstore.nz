@@ -1,0 +1,243 @@
+// kvstore: a persistent log-structured key-value store with atomic compaction (Gate 2 reference
+// application, §24).
+//
+//     kvstore DIR SCRIPT
+//
+// The store is `DIR/store.log`: one record per line, `S<TAB>key<TAB>value` or `D<TAB>key`, appended
+// and synced before a command answers, and replayed in order when the store is opened. Compaction
+// writes only the live keys, sorted, and replaces the log in one atomic rename, so a crash leaves
+// either the old log or the new one, never half of either. SCRIPT holds one command per line:
+//
+//     set KEY VALUE…   get KEY   del KEY   keys   stats   compact   reopen
+//
+// `reopen` forgets everything in memory and replays the log from disk: what it then answers is
+// what a second process would. Keys are one word; a value is the rest of its line.
+
+use "@std/ioerror";
+use "@std/file";
+use "@std/fs";
+use "@std/hash";
+use "@std/hashmap";
+use "@std/sort";
+use "@std/io";
+use "@std/text";
+
+struct Store {
+    dir: Str,
+    data: HashMap[Str, Str],
+    /// One cell: how many records the log holds.
+    records: Ints,
+}
+
+/// `xs` as a `Strs`, for the library's string functions.
+fn strs_of(xs: Vec[Str]) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < vec_len(xs) {
+        strs_push(out, vec_get(xs, i));
+        i = i + 1;
+    }
+    out
+}
+
+fn log_path(dir: Str) -> Str ! {} {
+    str_concat(dir, "/store.log")
+}
+
+/// The store in `dir`, its log replayed; created, empty, when there is none.
+fn open(io: IoCap, dir: Str) -> Result[Store, Str] !{ io } {
+    match dir_create_all(io, dir) {
+        Result.Ok(value: n) => 0,
+        Result.Err(error: e) => {
+            return Result[Store, Str].Err(error: io_error_show(e));
+        },
+    };
+    let data = hashmap_new[Str, Str]();
+    let records = ints_new();
+    ints_push(records, 0);
+    let path = log_path(dir);
+    if fs_exists(io, path) {
+        let lines = match fs_read_lines(io, path) {
+            Result.Ok(value: l) => l,
+            Result.Err(error: e) => {
+                return Result[Store, Str].Err(error: e);
+            },
+        };
+        let mut i = 0;
+        while i < strs_len(lines) {
+            let fields = text_split(strs_get(lines, i), "\t");
+            let kind = strs_get(fields, 0);
+            if kind == "S" && strs_len(fields) == 3 {
+                hashmap_set(data, strs_get(fields, 1), strs_get(fields, 2));
+            } else {
+                if kind == "D" && strs_len(fields) == 2 {
+                    hashmap_remove(data, strs_get(fields, 1));
+                } else {
+                    if str_len(strs_get(lines, i)) > 0 {
+                        return Result[Store, Str].Err(error: str_concat("a corrupt record at line ", int_to_str(i + 1)));
+                    }
+                }
+            }
+            i = i + 1;
+        }
+        ints_set(records, 0, strs_len(lines));
+    }
+    Result[Store, Str].Ok(value: Store(dir: dir, data: data, records: records))
+}
+
+/// `record` appended to the log and synced: durable before the command answers.
+fn append(io: IoCap, s: Store, record: Str) -> Result[Int, Str] !{ io } {
+    let f = match file_append(io, log_path(s.dir)) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => {
+            return Result[Int, Str].Err(error: io_error_show(e));
+        },
+    };
+    let written = file_write_str(f, str_concat(record, "\n"));
+    let synced = file_sync(f);
+    file_close(f);
+    match written {
+        Result.Ok(value: n) => 0,
+        Result.Err(error: e) => {
+            return Result[Int, Str].Err(error: io_error_show(e));
+        },
+    };
+    match synced {
+        Result.Ok(value: n) => 0,
+        Result.Err(error: e) => {
+            return Result[Int, Str].Err(error: io_error_show(e));
+        },
+    };
+    ints_set(s.records, 0, ints_get(s.records, 0) + 1);
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn sorted_keys(s: Store) -> Strs ! {} {
+    strs_sort(strs_of(hashmap_keys(s.data)))
+}
+
+/// The log rewritten as the live keys alone, replacing the old one atomically.
+fn compact(io: IoCap, s: Store) -> Result[Int, Str] !{ io } {
+    let keys = sorted_keys(s);
+    let lines = strs_new();
+    let mut i = 0;
+    while i < strs_len(keys) {
+        let k = strs_get(keys, i);
+        let v = match hashmap_get(s.data, k) {
+            Option.Some(value: v) => v,
+            Option.None() => "",
+        };
+        strs_push(lines, str_concat(str_concat(str_concat("S\t", k), "\t"), v));
+        i = i + 1;
+    }
+    let text = if strs_len(lines) == 0 { "" } else { str_concat(str_join(lines, "\n"), "\n") };
+    match file_replace_atomic(io, log_path(s.dir), bytes_from_str(text)) {
+        Result.Ok(value: n) => 0,
+        Result.Err(error: e) => {
+            return Result[Int, Str].Err(error: io_error_show(e));
+        },
+    };
+    ints_set(s.records, 0, strs_len(keys));
+    Result[Int, Str].Ok(value: strs_len(keys))
+}
+
+/// What one command answers.
+fn run(io: IoCap, s: Store, line: Str) -> Result[Str, Str] !{ io } {
+    let words = text_split(line, " ");
+    let cmd = strs_get(words, 0);
+    let n = strs_len(words);
+    if cmd == "set" && n >= 3 {
+        let key = strs_get(words, 1);
+        let at = str_len(cmd) + 1 + str_len(key) + 1;
+        let value = str_slice(line, at, str_len(line));
+        if text_contains(key, "\t") || text_contains(value, "\t") {
+            return Result[Str, Str].Err(error: "a key or value may not hold a tab");
+        }
+        append(io, s, str_concat(str_concat(str_concat("S\t", key), "\t"), value))?;
+        hashmap_set(s.data, key, value);
+        Result[Str, Str].Ok(value: "ok")
+    } else {
+        if cmd == "get" && n == 2 {
+            Result[Str, Str].Ok(value: match hashmap_get(s.data, strs_get(words, 1)) {
+                Option.Some(value: v) => v,
+                Option.None() => "(none)",
+            })
+        } else {
+            if cmd == "del" && n == 2 {
+                let key = strs_get(words, 1);
+                if !hashmap_has(s.data, key) {
+                    return Result[Str, Str].Ok(value: "(none)");
+                }
+                append(io, s, str_concat("D\t", key))?;
+                hashmap_remove(s.data, key);
+                Result[Str, Str].Ok(value: "deleted")
+            } else {
+                if cmd == "keys" && n == 1 {
+                    Result[Str, Str].Ok(value: str_join(sorted_keys(s), " "))
+                } else {
+                    if cmd == "stats" && n == 1 {
+                        Result[Str, Str].Ok(value: str_concat(str_concat(str_concat("keys=", int_to_str(hashmap_len(s.data))), " records="), int_to_str(ints_get(s.records, 0))))
+                    } else {
+                        if cmd == "compact" && n == 1 {
+                            let before = ints_get(s.records, 0);
+                            let after = compact(io, s)?;
+                            Result[Str, Str].Ok(value: str_concat(str_concat(str_concat("compacted ", int_to_str(before)), " records to "), int_to_str(after)))
+                        } else {
+                            Result[Str, Str].Err(error: str_concat("not a command: ", line))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main(io: IoCap) -> Int {
+    if args_count() != 2 {
+        io_eprintln(io, "usage: kvstore DIR SCRIPT");
+        return exit_with(2);
+    }
+    let dir = arg(0);
+    let script = match fs_read_lines(io, arg(1)) {
+        Result.Ok(value: l) => l,
+        Result.Err(error: e) => {
+            io_eprintln(io, str_concat("kvstore: ", e));
+            return exit_with(1);
+        },
+    };
+    let mut store = match open(io, dir) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => {
+            io_eprintln(io, str_concat("kvstore: ", e));
+            return exit_with(1);
+        },
+    };
+    let mut i = 0;
+    while i < strs_len(script) {
+        let line = text_trim(strs_get(script, i));
+        if line == "reopen" {
+            store = match open(io, dir) {
+                Result.Ok(value: s) => s,
+                Result.Err(error: e) => {
+                    io_eprintln(io, str_concat("kvstore: ", e));
+                    return exit_with(1);
+                },
+            };
+            io_println(io, str_concat(str_concat("reopened: ", int_to_str(hashmap_len(store.data))), " keys"));
+        } else {
+            if str_len(line) > 0 {
+                match run(io, store, line) {
+                    Result.Ok(value: answer) => {
+                        io_println(io, str_concat(str_concat(line, " -> "), answer));
+                    },
+                    Result.Err(error: e) => {
+                        io_eprintln(io, str_concat("kvstore: ", e));
+                        return exit_with(1);
+                    },
+                };
+            }
+        }
+        i = i + 1;
+    }
+    0
+}

@@ -14,6 +14,57 @@ use nazm_span::Span;
 
 use crate::exit;
 
+/// The configuration `@cfg` is decided under (Gate 2, §17): the target's operating system and
+/// architecture — the host's when no triple is named — and every profile the command is held
+/// to, `--profile`'s and each package manifest's. A name no profile has is [`enforce`]'s to
+/// refuse; here it simply holds nothing.
+///
+/// The features are each package's own (§22): its `default`, what its dependents ask of it, and
+/// `--features` of the root. A feature no package declares is refused here, before anything is
+/// checked; `--features` outside a package is a usage error.
+pub(crate) fn configuration(
+    named_path: &Path,
+    named: Option<&str>,
+    triple: Option<&str>,
+    features: &[String],
+) -> Result<nazm_core::sema::BuildConfig, ExitCode> {
+    let mut config = triple.map_or_else(
+        nazm_core::sema::BuildConfig::host,
+        nazm_core::sema::BuildConfig::for_target,
+    );
+    config.profiles.extend(named.map(str::to_owned));
+    match crate::package::profile_graph(named_path) {
+        Some(mut g) => {
+            config
+                .profiles
+                .extend(g.packages.iter().filter_map(|p| p.profile.clone()));
+            if let Err(ds) = g.enable(features) {
+                for d in &ds {
+                    eprintln!("error[{}]: {}", d.code, d.message);
+                }
+                return Err(ExitCode::from(exit::CHECK_FAILED));
+            }
+            for (i, p) in g.packages.iter().enumerate() {
+                if i == g.root {
+                    config.features.clone_from(&p.features);
+                } else {
+                    config
+                        .package_features
+                        .insert(p.key_prefix(), p.features.clone());
+                }
+            }
+        }
+        None if !features.is_empty() => {
+            eprintln!("nazm: `--features` enables a package's features, and this program is not in a package");
+            return Err(ExitCode::from(exit::USAGE));
+        }
+        None => {}
+    }
+    config.profiles.sort();
+    config.profiles.dedup();
+    Ok(config)
+}
+
 fn unknown(name: &str, whose: &str) -> ExitCode {
     let known: Vec<&str> = Profile::ALL.iter().map(|p| p.name()).collect();
     let d = Diagnostic::error(

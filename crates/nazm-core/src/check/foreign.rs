@@ -392,7 +392,7 @@ pub(super) fn declared_effect_param<'f>(
 
 /// The rules an export meets (N55, `docs/architecture.md` §7.57): the foreign declaration's ABI
 /// and symbol rules, and — since C can hand Nazm no capability and has no cleanup Nazm knows of —
-/// public, `! {}`, not generic, and only `Int` and `Bool` across.
+/// public, `! {}`, not generic, and only numbers and `Bool` across (every number since Gate 2).
 pub(super) fn check_export(
     f: &Function,
     d: &nazm_syntax::ForeignDecl,
@@ -405,7 +405,7 @@ pub(super) fn check_export(
         Diagnostic::error(codes::EXPORT_SHAPE, at, what).help(
             "an export is called by C, which can hand Nazm no capability and has no cleanup \
              Nazm knows of: it is `pub`, declares `! {}`, is not generic, and takes and \
-             returns only `Int` and `Bool`",
+             returns only numbers and `Bool`",
         )
     };
     if f.pub_span.is_none() {
@@ -431,7 +431,9 @@ pub(super) fn check_export(
             format!("`{}` is exported to C, so it cannot be generic", f.name),
         ));
     }
-    let scalar = |t: Type| matches!(t, Type::Int | Type::Bool);
+    // Every number crosses as its C type since Gate 2 (§23): `int8_t` … `uint64_t`, `float`,
+    // `double` — what a binding generator for any other language reads from the header.
+    let scalar = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Num(_));
     for (t, p) in params.iter().zip(&f.params) {
         if !scalar(*t) {
             errors.push(shape(

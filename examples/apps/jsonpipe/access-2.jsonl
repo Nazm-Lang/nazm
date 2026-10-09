@@ -1,0 +1,5 @@
+{"user": "bob", "bytes": 300, "status": 503}
+not json at all
+{"user": "carol", "bytes": 100, "status": 302}
+{"user": "alice", "bytes": 4, "status": 404}
+{"bytes": 7, "status": 200}

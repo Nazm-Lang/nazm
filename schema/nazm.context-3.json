@@ -126,7 +126,7 @@
       "required": ["identity", "kind", "name", "declaration", "occurrences"],
       "properties": {
         "identity": { "$ref": "#/$defs/identity" },
-        "kind": { "enum": ["function", "record", "enum", "field", "variant", "payload_field"] },
+        "kind": { "enum": ["function", "record", "enum", "field", "variant", "payload_field", "constant"] },
         "name": { "type": "string" },
         "declaration": { "$ref": "#/$defs/span", "description": "Where its name is declared, in a file of the compilation. An entity with no such declaration — the core prelude's, a built-in's — is not a link: it may shape checking, and is omitted." },
         "occurrences": { "type": "array", "items": { "$ref": "#/$defs/occurrence" }, "description": "In the target's file." }

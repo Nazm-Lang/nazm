@@ -1,0 +1,275 @@
+// kvd: a concurrent TCP key-value server (Gate 2 reference application, §24).
+//
+//     kvd ADDR CONNECTIONS     serve CONNECTIONS connections on ADDR, then stop
+//     kvd                      the demonstration: a server and five clients in one process
+//
+// One task owns the table; every connection is its own task, and asks the owner over a channel,
+// so nothing mutable is shared between tasks. The protocol is a line each way:
+//
+//     SET KEY VALUE → OK       GET KEY → VALUE V | NONE       DEL KEY → OK | NONE
+//     COUNT → N                QUIT → BYE, and the connection closes
+//
+// The demonstration starts the server on a port the system chooses, runs four clients at once —
+// each setting, reading and deleting its own keys — then a fifth that reads what they left. The
+// four report in whatever order they finish; the report is sorted, so the output is fixed.
+
+use "@std/ioerror";
+use "@std/net";
+use "@std/hash";
+use "@std/hashmap";
+use "@std/sort";
+use "@std/text";
+
+/// One command for the table's owner, and where its answer goes.
+struct Request {
+    op: Str,
+    key: Str,
+    value: Str,
+    reply: Chan[Str],
+}
+
+/// The table's owner: answers every request until the channel closes.
+fn store(requests: Chan[Request]) -> Int ! {} {
+    let table = hashmap_new[Str, Str]();
+    let got = vec_new[Request]();
+    while chan_recv_of(requests, got) {
+        let r = vec_pop(got);
+        let answer = if r.op == "SET" {
+            hashmap_set(table, r.key, r.value);
+            "OK"
+        } else {
+            if r.op == "GET" {
+                match hashmap_get(table, r.key) {
+                    Option.Some(value: v) => str_concat("VALUE ", v),
+                    Option.None() => "NONE",
+                }
+            } else {
+                if r.op == "DEL" {
+                    match hashmap_remove(table, r.key) {
+                        Option.Some(value: v) => "OK",
+                        Option.None() => "NONE",
+                    }
+                } else {
+                    int_to_str(hashmap_len(table))
+                }
+            }
+        };
+        chan_send_of(r.reply, answer);
+    }
+    0
+}
+
+/// The next line from `c`, without its newline; `pending` holds what arrived past the last one.
+fn read_line(c: TcpStream, pending: Strs) -> Option[Str] !{ io } {
+    let buf = bytes_new(512);
+    while true {
+        let have = strs_get(pending, 0);
+        match text_find(have, "\n") {
+            Option.Some(value: at) => {
+                strs_set(pending, 0, str_slice(have, at + 1, str_len(have)));
+                return Option[Str].Some(value: str_slice(have, 0, at));
+            },
+            Option.None() => 0,
+        };
+        let n = match tcp_read(c, buf) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0,
+        };
+        if n == 0 {
+            return Option[Str].None();
+        }
+        strs_set(pending, 0, str_concat(have, bytes_to_str(bytes_slice(buf, 0, n))));
+    }
+    Option[Str].None()
+}
+
+/// One connection: a line in, a line out, until `QUIT` or the peer goes.
+fn connection(c: TcpStream, requests: Chan[Request]) -> Int ! { io } {
+    let pending = strs_new();
+    strs_push(pending, "");
+    let reply = chan_new_of[Str](1);
+    let answers = vec_new[Str]();
+    let mut open = true;
+    while open {
+        match read_line(c, pending) {
+            Option.Some(value: line) => {
+                let words = text_split(text_trim(line), " ");
+                let op = strs_get(words, 0);
+                let n = strs_len(words);
+                let answer = if op == "QUIT" {
+                    open = false;
+                    "BYE"
+                } else {
+                    if (op == "SET" && n >= 3) || ((op == "GET" || op == "DEL") && n == 2) || (op == "COUNT" && n == 1) {
+                        let key = if n >= 2 { strs_get(words, 1) } else { "" };
+                        let value = if op == "SET" { str_slice(line, 5 + str_len(key), str_len(line)) } else { "" };
+                        chan_send_of(requests, Request(op: op, key: key, value: value, reply: reply));
+                        chan_recv_of(reply, answers);
+                        vec_pop(answers)
+                    } else {
+                        "ERROR unknown command"
+                    }
+                };
+                tcp_write_str(c, str_concat(answer, "\n"));
+            },
+            Option.None() => {
+                open = false;
+            },
+        };
+    }
+    tcp_close(c);
+    0
+}
+
+/// Accept `n` connections, each served by its own task; return when all are done.
+fn serve(t: SpawnCap, l: TcpListener, requests: Chan[Request], n: Int) -> Int ! { io, spawn } {
+    scope {
+        let mut k = 0;
+        while k < n {
+            match tcp_accept(l) {
+                Result.Ok(value: c) => {
+                    spawn connection(c, requests);
+                },
+                Result.Err(error: e) => 0,
+            };
+            k = k + 1;
+        }
+    }
+    0
+}
+
+/// Send `line` and read the answer.
+fn ask(c: TcpStream, pending: Strs, line: Str) -> Str ! { io } {
+    tcp_write_str(c, str_concat(line, "\n"));
+    match read_line(c, pending) {
+        Option.Some(value: a) => a,
+        Option.None() => "(closed)",
+    }
+}
+
+/// A demonstration client: ten keys of its own set, one read back, three deleted.
+fn client(net: NetCap, addr: Str, id: Int, report: Chan[Str]) -> Int ! { io } {
+    let c = match tcp_connect(net, addr, 2000) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => {
+            chan_send_of(report, str_concat("client failed: ", io_error_show(e)));
+            return 0;
+        },
+    };
+    let pending = strs_new();
+    strs_push(pending, "");
+    let name = str_concat("c", int_to_str(id));
+    let mut ok = 0;
+    let mut i = 0;
+    while i < 10 {
+        let key = str_concat(str_concat(name, "-"), int_to_str(i));
+        if ask(c, pending, str_concat(str_concat(str_concat("SET ", key), " value of "), key)) == "OK" {
+            ok = ok + 1;
+        }
+        i = i + 1;
+    }
+    let back = ask(c, pending, str_concat(str_concat("GET ", name), "-7"));
+    let mut gone = 0;
+    let mut j = 0;
+    while j < 3 {
+        if ask(c, pending, str_concat(str_concat(str_concat("DEL ", name), "-"), int_to_str(j))) == "OK" {
+            gone = gone + 1;
+        }
+        j = j + 1;
+    }
+    ask(c, pending, "QUIT");
+    tcp_close(c);
+    chan_send_of(report, str_concat(str_concat(str_concat(str_concat(str_concat(str_concat(name, ": "), int_to_str(ok)), " set, "), back), ", deleted "), int_to_str(gone)));
+    0
+}
+
+fn demo(net: NetCap, t: SpawnCap, out: OutCap) -> Int ! { io, spawn } {
+    let l = match tcp_listen(net, "127.0.0.1:0") {
+        Result.Ok(value: l) => l,
+        Result.Err(error: e) => {
+            print(str_concat(io_error_show(e), "\n"));
+            return 1;
+        },
+    };
+    let addr = tcp_listener_addr(l);
+    let requests = chan_new_of[Request](16);
+    let report = chan_new_of[Str](4);
+    scope {
+        spawn store(requests);
+        scope {
+            spawn serve(t, l, requests, 5);
+            scope {
+                let mut id = 0;
+                while id < 4 {
+                    spawn client(net, addr, id, report);
+                    id = id + 1;
+                }
+            }
+            let lines = strs_new();
+            let got = vec_new[Str]();
+            let mut k = 0;
+            while k < 4 {
+                chan_recv_of(report, got);
+                strs_push(lines, vec_pop(got));
+                k = k + 1;
+            }
+            let sorted = strs_sort(lines);
+            let mut s = 0;
+            while s < strs_len(sorted) {
+                print(str_concat(strs_get(sorted, s), "\n"));
+                s = s + 1;
+            }
+            match tcp_connect(net, addr, 2000) {
+                Result.Ok(value: c) => {
+                    let pending = strs_new();
+                    strs_push(pending, "");
+                    print(str_concat(str_concat("COUNT -> ", ask(c, pending, "COUNT")), "\n"));
+                    print(str_concat(str_concat("GET c2-9 -> ", ask(c, pending, "GET c2-9")), "\n"));
+                    print(str_concat(str_concat("GET c3-0 -> ", ask(c, pending, "GET c3-0")), "\n"));
+                    print(str_concat(str_concat("NOPE -> ", ask(c, pending, "NOPE")), "\n"));
+                    ask(c, pending, "QUIT");
+                    tcp_close(c);
+                },
+                Result.Err(error: e) => {
+                    print(str_concat(io_error_show(e), "\n"));
+                },
+            };
+        }
+        chan_close_of(requests);
+    }
+    tcp_listener_close(l);
+    0
+}
+
+fn main(net: NetCap, t: SpawnCap, io: IoCap, out: OutCap) -> Int {
+    if args_count() == 0 {
+        return demo(net, t, out);
+    }
+    if args_count() != 2 {
+        eprint("usage: kvd [ADDR CONNECTIONS]\n");
+        return exit_with(2);
+    }
+    let n = match text_parse_int(arg(1)) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => {
+            eprint(str_concat(str_concat("kvd: ", e), "\n"));
+            return exit_with(2);
+        },
+    };
+    let l = match tcp_listen(net, arg(0)) {
+        Result.Ok(value: l) => l,
+        Result.Err(error: e) => {
+            eprint(str_concat(str_concat("kvd: ", io_error_show(e)), "\n"));
+            return exit_with(1);
+        },
+    };
+    print(str_concat(str_concat("listening on ", tcp_listener_addr(l)), "\n"));
+    let requests = chan_new_of[Request](16);
+    scope {
+        spawn store(requests);
+        serve(t, l, requests, n);
+        chan_close_of(requests);
+    }
+    tcp_listener_close(l);
+    0
+}
