@@ -483,11 +483,22 @@ pub enum Intrinsic {
     OsLocalAddr,
     OsPeerAddr,
     OsResolve,
+
+    // --- process and environment, Gate 2 (`docs/general-purpose.md` §12; `docs/spec.md`,
+    // *Process and environment*) -----------------------------------------------------------
+    OsEnvGet,
+    OsEnvHas,
+    OsEnvCount,
+    OsEnvAt,
+    OsSpawn,
+    OsChildPipe,
+    OsWait,
+    OsKill,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 151] = [
+    pub const ALL: [Self; 159] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -639,6 +650,14 @@ impl Intrinsic {
         Self::OsLocalAddr,
         Self::OsPeerAddr,
         Self::OsResolve,
+        Self::OsEnvGet,
+        Self::OsEnvHas,
+        Self::OsEnvCount,
+        Self::OsEnvAt,
+        Self::OsSpawn,
+        Self::OsChildPipe,
+        Self::OsWait,
+        Self::OsKill,
     ];
 
     #[must_use]
@@ -799,6 +818,14 @@ impl Intrinsic {
             Self::OsLocalAddr => "os_local_addr",
             Self::OsPeerAddr => "os_peer_addr",
             Self::OsResolve => "os_resolve",
+            Self::OsEnvGet => "os_env_get",
+            Self::OsEnvHas => "os_env_has",
+            Self::OsEnvCount => "os_env_count",
+            Self::OsEnvAt => "os_env_at",
+            Self::OsSpawn => "os_spawn",
+            Self::OsChildPipe => "os_child_pipe",
+            Self::OsWait => "os_wait",
+            Self::OsKill => "os_kill",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -1017,6 +1044,14 @@ impl Intrinsic {
             Self::OsLocalAddr => &[Shape::OsHandle],
             Self::OsPeerAddr => &[Shape::OsHandle],
             Self::OsResolve => &[Shape::Str, Shape::Int, Shape::Bytes],
+            Self::OsEnvGet => &[Shape::Str],
+            Self::OsEnvHas => &[Shape::Str],
+            Self::OsEnvCount => &[],
+            Self::OsEnvAt => &[Shape::Int],
+            Self::OsSpawn => &[Shape::Str, Shape::Strs],
+            Self::OsChildPipe => &[Shape::OsHandle, Shape::Int],
+            Self::OsWait => &[Shape::OsHandle],
+            Self::OsKill => &[Shape::OsHandle],
             Self::TextFromStr => &[Shape::Str],
             Self::TextAssume => &[Shape::Str],
         }
@@ -1165,6 +1200,14 @@ impl Intrinsic {
             Self::OsLocalAddr => Shape::Str,
             Self::OsPeerAddr => Shape::Str,
             Self::OsResolve => Shape::Int,
+            Self::OsEnvGet => Shape::Str,
+            Self::OsEnvHas => Shape::Bool,
+            Self::OsEnvCount => Shape::Int,
+            Self::OsEnvAt => Shape::Str,
+            Self::OsSpawn => Shape::OsHandle,
+            Self::OsChildPipe => Shape::OsHandle,
+            Self::OsWait => Shape::Int,
+            Self::OsKill => Shape::Int,
             Self::TextFromStr => Shape::Text,
             Self::TextAssume => Shape::Text,
         }

@@ -373,6 +373,7 @@ impl Type {
         Self::Cap(CapabilityKind::Mmio),
         Self::Cap(CapabilityKind::Out),
         Self::Cap(CapabilityKind::Net),
+        Self::Cap(CapabilityKind::Process),
         Self::Num(NumKind::I8),
         Self::Num(NumKind::I16),
         Self::Num(NumKind::I32),

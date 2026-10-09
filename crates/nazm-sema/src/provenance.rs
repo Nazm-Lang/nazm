@@ -210,6 +210,14 @@ impl Origin {
             | Intrinsic::OsSetTimeout
             | Intrinsic::OsShutdown
             | Intrinsic::OsLocalAddr => BuiltinFlow::Derive,
+            // The environment is the program's surroundings, as its arguments are (Gate 2).
+            Intrinsic::OsEnvGet
+            | Intrinsic::OsEnvHas
+            | Intrinsic::OsEnvCount
+            | Intrinsic::OsEnvAt => BuiltinFlow::Source(Self::Argument),
+            // Which program runs is the restricted sink a written file's path is.
+            Intrinsic::OsSpawn => BuiltinFlow::WritePath,
+            Intrinsic::OsChildPipe | Intrinsic::OsWait | Intrinsic::OsKill => BuiltinFlow::Derive,
             Intrinsic::OsOpenWrite
             | Intrinsic::OsMkdir
             | Intrinsic::OsRmdir
@@ -303,6 +311,14 @@ impl Origin {
             }
             // Networking (Gate 2): a datagram and its sender's address, and a name's addresses.
             Intrinsic::OsUdpRecvFrom => ContainerUse::Fill { into: &[1, 2] },
+            Intrinsic::OsEnvGet
+            | Intrinsic::OsEnvHas
+            | Intrinsic::OsEnvCount
+            | Intrinsic::OsEnvAt
+            | Intrinsic::OsSpawn
+            | Intrinsic::OsChildPipe
+            | Intrinsic::OsWait
+            | Intrinsic::OsKill => ContainerUse::None,
             Intrinsic::OsResolve => ContainerUse::Fill { into: &[2] },
             Intrinsic::OsTcpListen
             | Intrinsic::OsTcpAccept
@@ -593,6 +609,7 @@ impl SinkClass {
             Intrinsic::OsRename => &[(0, Self::Path), (1, Self::Path)],
             Intrinsic::OsWrite => &[(1, Self::FileData)],
             Intrinsic::OsUdpSendTo => &[(1, Self::FileData)],
+            Intrinsic::OsSpawn => &[(0, Self::Path)],
             Intrinsic::Print | Intrinsic::EPrint => &[(0, Self::Output)],
             Intrinsic::StrVouch => &[(0, Self::Vouch)],
             _ => &[],
@@ -1021,7 +1038,12 @@ mod tests {
                 // A socket's data, its peer and a name's addresses (Gate 2).
                 ("os_udp_recv_from", Origin::File),
                 ("os_peer_addr", Origin::File),
-                ("os_resolve", Origin::File)
+                ("os_resolve", Origin::File),
+                // The environment (Gate 2), as the arguments.
+                ("os_env_get", Origin::Argument),
+                ("os_env_has", Origin::Argument),
+                ("os_env_count", Origin::Argument),
+                ("os_env_at", Origin::Argument)
             ]
         );
         // Every container built-in names its handle, and no other built-in claims one (N80).

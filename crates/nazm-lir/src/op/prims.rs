@@ -81,7 +81,15 @@ impl Fx<'_, '_> {
             | Intrinsic::OsShutdown
             | Intrinsic::OsLocalAddr
             | Intrinsic::OsPeerAddr
-            | Intrinsic::OsResolve => {
+            | Intrinsic::OsResolve
+            | Intrinsic::OsEnvGet
+            | Intrinsic::OsEnvHas
+            | Intrinsic::OsEnvCount
+            | Intrinsic::OsEnvAt
+            | Intrinsic::OsSpawn
+            | Intrinsic::OsChildPipe
+            | Intrinsic::OsWait
+            | Intrinsic::OsKill => {
                 let at = self.at;
                 self.lw
                     .defect(at, "a files built-in its lowering did not take");

@@ -249,7 +249,11 @@ use crate::digest::{self, Framed};
 /// epoch 36 refused programs this one accepts, and accepted some it refuses.
 /// `38` — Gate 2, 2026-10-09. Time: `time_now_ns`, `time_wall_ns` and `time_sleep_ms` moved
 /// from refused to accepted, and their names from a program's own to the language's (`N0203`).
-pub const SEMANTIC_EPOCH: u32 = 38;
+/// `39` — Gate 2, 2026-10-09. Process and environment: `ProcessCap` and the `os_env_*`,
+/// `os_spawn`, `os_child_pipe`, `os_wait` and `os_kill` built-ins moved from refused to accepted,
+/// their names from a program's own to the language's (`N0331`, `N0203`); `os_spawn`'s program is
+/// the restricted sink (`N0372`); `Type::ALL` gained `ProcessCap`.
+pub const SEMANTIC_EPOCH: u32 = 39;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

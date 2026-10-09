@@ -325,7 +325,16 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::ScalarText
         | Intrinsic::OsErrorText
         | Intrinsic::OsLocalAddr
-        | Intrinsic::OsPeerAddr => true,
+        | Intrinsic::OsPeerAddr
+        | Intrinsic::OsEnvGet
+        | Intrinsic::OsEnvAt => true,
+        // Process and environment (Gate 2): words and the system's storage.
+        Intrinsic::OsEnvHas
+        | Intrinsic::OsEnvCount
+        | Intrinsic::OsSpawn
+        | Intrinsic::OsChildPipe
+        | Intrinsic::OsWait
+        | Intrinsic::OsKill => false,
         // Networking (Gate 2): the system's storage, and words; a receive fills a buffer the
         // program already made.
         Intrinsic::OsTcpListen

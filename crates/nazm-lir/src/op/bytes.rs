@@ -263,7 +263,7 @@ impl Fx<'_, '_> {
 
     /// Stop with `N0405` unless `0 <= i` and `i + width <= len`, written so a large `i` cannot
     /// wrap past the check.
-    fn within(&mut self, i: V, width: i64, len: V, message: &'static str) {
+    pub(crate) fn within(&mut self, i: V, width: i64, len: V, message: &'static str) {
         let neg = self.cmp_imm(Cmp::Lt, i, Class::I64, 0);
         let last = self.add_imm(len, -width);
         let past = self.cmp(Cmp::Gt, i, last);
@@ -335,7 +335,7 @@ impl Fx<'_, '_> {
     }
 
     /// `dst` = a new buffer holding a copy of `p[..len]`.
-    fn fresh_copy(&mut self, dst: mir::LocalId, p: V, len: V) {
+    pub(crate) fn fresh_copy(&mut self, dst: mir::LocalId, p: V, len: V) {
         // One byte more than needed, so an empty result still owns storage.
         let room = self.add_imm(len, 1);
         let (owner, buf) = self.string_backing(room);

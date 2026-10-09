@@ -795,3 +795,298 @@ ask:
   ret i64 %r
 }
 "#;
+
+/// Child processes (Gate 2, `docs/spec.md`, *Process and environment*): `posix_spawnp` with three
+/// pipes whose parent ends are non-blocking handles that wait as sockets do. A child's handle is
+/// keyed by a descriptor it holds on `/dev/null` and names a record — its process id (0), its
+/// status once waited for (8, -1 before), and its three pipes' handles (16, 24, 32). A program that
+/// runs another ignores `SIGPIPE` from then on, as the interpreter's host always does, so writing to
+/// a child that has gone is `BrokenPipe` and never a signal.
+pub(crate) const PROCESS_RUNTIME: &str = r#"
+@.devnull = private unnamed_addr constant [10 x i8] c"/dev/null\00"
+
+; A write to a pipe, pinned by the caller: the bytes the system took, waiting at most its deadline.
+define hidden i64 @nz.net_pipe_write(i64 %h, ptr %buf, i64 %n) {
+entry:
+  %deadline = call i64 @nz.net_deadline(i64 %h)
+  %fd = trunc i64 %h to i32
+  br label %try
+try:
+  %r = call i64 @write(i32 %fd, ptr %buf, i64 %n)
+  %ok = icmp sge i64 %r, 0
+  br i1 %ok, label %done, label %failed
+done:
+  ret i64 %r
+failed:
+  %e = call i64 @nz.os_errno()
+  %block = call i1 @nz.net_would_block()
+  br i1 %block, label %wait, label %error
+error:
+  ret i64 %e
+wait:
+  %w = call i64 @nz.net_wait(i64 %h, i64 2, i64 %deadline)
+  %go = icmp eq i64 %w, 0
+  br i1 %go, label %try, label %stop
+stop:
+  ret i64 %w
+}
+
+; Run `program` with the arguments in `args` (a `Strs`): the child's handle, or -errno.
+define hidden i64 @nz.os_spawn(ptr %pp, i64 %pn, ptr %args) {
+entry:
+  %fa = alloca [256 x i8], align 16
+  %fds = alloca [6 x i32], align 4
+  %pid = alloca i32, align 4
+  %prog = call ptr @nz.cstr(ptr %pp, i64 %pn)
+  %noprog = icmp eq ptr %prog, null
+  br i1 %noprog, label %oom, label %argv
+oom:
+  ret i64 -12
+argv:
+  %count = load i64, ptr %args
+  %slots = add i64 %count, 2
+  %bytes = mul i64 %slots, 8
+  %av = call ptr @malloc(i64 %bytes)
+  store ptr %prog, ptr %av
+  %data = getelementptr i8, ptr %args, i64 16
+  %elems = load ptr, ptr %data
+  br label %copy
+copy:
+  %i = phi i64 [ 0, %argv ], [ %i1, %copied ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %one, label %terminate
+one:
+  %off = mul i64 %i, 24
+  %ep = getelementptr i8, ptr %elems, i64 %off
+  %sp = load ptr, ptr %ep
+  %lp = getelementptr i8, ptr %ep, i64 8
+  %sl = load i64, ptr %lp
+  %c = call ptr @nz.cstr(ptr %sp, i64 %sl)
+  %i1 = add i64 %i, 1
+  %slot = getelementptr ptr, ptr %av, i64 %i1
+  store ptr %c, ptr %slot
+  br label %copied
+copied:
+  br label %copy
+terminate:
+  %last = add i64 %count, 1
+  %endp = getelementptr ptr, ptr %av, i64 %last
+  store ptr null, ptr %endp
+  %in = getelementptr i32, ptr %fds, i64 0
+  %out = getelementptr i32, ptr %fds, i64 2
+  %err = getelementptr i32, ptr %fds, i64 4
+  %p0 = call i32 @pipe(ptr %in)
+  %p1 = call i32 @pipe(ptr %out)
+  %p2 = call i32 @pipe(ptr %err)
+  br label %cloexec
+cloexec:
+  %j = phi i64 [ 0, %terminate ], [ %j1, %cloexec ]
+  %fp = getelementptr i32, ptr %fds, i64 %j
+  %f = load i32, ptr %fp
+  %ce = call i32 (i32, i32, ...) @fcntl(i32 %f, i32 2, i32 1)
+  %j1 = add i64 %j, 1
+  %again = icmp slt i64 %j1, 6
+  br i1 %again, label %cloexec, label %actions
+actions:
+  %ai = call i32 @posix_spawn_file_actions_init(ptr %fa)
+  %in0p = getelementptr i32, ptr %fds, i64 0
+  %in0 = load i32, ptr %in0p
+  %in1p = getelementptr i32, ptr %fds, i64 1
+  %in1 = load i32, ptr %in1p
+  %out0p = getelementptr i32, ptr %fds, i64 2
+  %out0 = load i32, ptr %out0p
+  %out1p = getelementptr i32, ptr %fds, i64 3
+  %out1 = load i32, ptr %out1p
+  %err0p = getelementptr i32, ptr %fds, i64 4
+  %err0 = load i32, ptr %err0p
+  %err1p = getelementptr i32, ptr %fds, i64 5
+  %err1 = load i32, ptr %err1p
+  %d0 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %in0, i32 0)
+  %d1 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %out1, i32 1)
+  %d2 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %err1, i32 2)
+  %env = call ptr @nz_os_environ()
+  %r = call i32 @posix_spawnp(ptr %pid, ptr %prog, ptr %fa, ptr null, ptr %av, ptr %env)
+  %ad = call i32 @posix_spawn_file_actions_destroy(ptr %fa)
+  %c0 = call i32 @close(i32 %in0)
+  %c1 = call i32 @close(i32 %out1)
+  %c2 = call i32 @close(i32 %err1)
+  br label %free
+free:
+  %k = phi i64 [ 0, %actions ], [ %k1, %free ]
+  %fsp = getelementptr ptr, ptr %av, i64 %k
+  %fs = load ptr, ptr %fsp
+  call void @free(ptr %fs)
+  %k1 = add i64 %k, 1
+  %freemore = icmp sle i64 %k1, %count
+  br i1 %freemore, label %free, label %freed
+freed:
+  call void @free(ptr %av)
+  %failed = icmp ne i32 %r, 0
+  br i1 %failed, label %undo, label %started
+undo:
+  %u0 = call i32 @close(i32 %in1)
+  %u1 = call i32 @close(i32 %out0)
+  %u2 = call i32 @close(i32 %err0)
+  %rw = sext i32 %r to i64
+  %neg = sub i64 0, %rw
+  ret i64 %neg
+started:
+  %ign = inttoptr i64 1 to ptr
+  %old = call ptr @signal(i32 13, ptr %ign)
+  %q0 = call i32 @nz_net_prepare(i32 %in1)
+  %q1 = call i32 @nz_net_prepare(i32 %out0)
+  %q2 = call i32 @nz_net_prepare(i32 %err0)
+  %rec = call ptr @malloc(i64 64)
+  %pidv = load i32, ptr %pid
+  %pidw = sext i32 %pidv to i64
+  store i64 %pidw, ptr %rec
+  %stp = getelementptr i8, ptr %rec, i64 8
+  store i64 -1, ptr %stp
+  %hin = call i64 @nz.os_adopt(i32 %in1, i64 9, ptr null)
+  %hout = call i64 @nz.os_adopt(i32 %out0, i64 7, ptr null)
+  %herr = call i64 @nz.os_adopt(i32 %err0, i64 7, ptr null)
+  %hinp = getelementptr i8, ptr %rec, i64 16
+  store i64 %hin, ptr %hinp
+  %houtp = getelementptr i8, ptr %rec, i64 24
+  store i64 %hout, ptr %houtp
+  %herrp = getelementptr i8, ptr %rec, i64 32
+  store i64 %herr, ptr %herrp
+  %key = call i32 @nz_os_open(ptr @.devnull, i64 -1)
+  %h = call i64 @nz.os_adopt(i32 %key, i64 8, ptr %rec)
+  ret i64 %h
+}
+
+; The record of child `h`, pinned; null (and unpinned) for a handle that is not a child.
+define hidden ptr @nz.os_child(i64 %h) {
+entry:
+  %k = call i64 @nz.os_pin(i64 %h)
+  %child = icmp eq i64 %k, 8
+  br i1 %child, label %find, label %other
+other:
+  %pinned = icmp sgt i64 %k, 0
+  br i1 %pinned, label %unpin, label %none
+unpin:
+  call void @nz.os_unpin(i64 %h)
+  br label %none
+none:
+  ret ptr null
+find:
+  call void @nz.os_acquire()
+  %s = call ptr @nz.os_live(i64 %h)
+  %objp = getelementptr i8, ptr %s, i64 24
+  %rec = load ptr, ptr %objp
+  call void @nz.os_release()
+  ret ptr %rec
+}
+
+define hidden i64 @nz.os_child_pipe(i64 %h, i64 %which) {
+entry:
+  %live = call i64 @nz.os_status(i64 %h)
+  %dead = icmp slt i64 %live, 0
+  br i1 %dead, label %failed, label %look
+failed:
+  ret i64 %live
+look:
+  %rec = call ptr @nz.os_child(i64 %h)
+  %none = icmp eq ptr %rec, null
+  br i1 %none, label %invalid, label %range
+invalid:
+  ret i64 -22
+range:
+  %ok = icmp ult i64 %which, 3
+  br i1 %ok, label %pick, label %wrong
+wrong:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 -22
+pick:
+  %idx = add i64 %which, 2
+  %off = mul i64 %idx, 8
+  %pp = getelementptr i8, ptr %rec, i64 %off
+  %p = load i64, ptr %pp
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %p
+}
+
+; The child's exit: its code, or 256 and the signal that ended it; the same every time.
+define hidden i64 @nz.os_wait(i64 %h) {
+entry:
+  %st = alloca i32, align 4
+  %live = call i64 @nz.os_status(i64 %h)
+  %dead = icmp slt i64 %live, 0
+  br i1 %dead, label %failed, label %look
+failed:
+  ret i64 %live
+look:
+  %rec = call ptr @nz.os_child(i64 %h)
+  %none = icmp eq ptr %rec, null
+  br i1 %none, label %invalid, label %known
+invalid:
+  ret i64 -22
+known:
+  %stp = getelementptr i8, ptr %rec, i64 8
+  %was = load i64, ptr %stp
+  %done = icmp sge i64 %was, 0
+  br i1 %done, label %again, label %wait
+again:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %was
+wait:
+  %pidw = load i64, ptr %rec
+  %pid = trunc i64 %pidw to i32
+  %r = call i32 @waitpid(i32 %pid, ptr %st, i32 0)
+  %bad = icmp slt i32 %r, 0
+  br i1 %bad, label %error, label %decode
+error:
+  %e = call i64 @nz.os_errno()
+  %intr = icmp eq i64 %e, -4
+  br i1 %intr, label %wait, label %give
+give:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %e
+decode:
+  %s = load i32, ptr %st
+  %sig = and i32 %s, 127
+  %exited = icmp eq i32 %sig, 0
+  %hi = lshr i32 %s, 8
+  %code = and i32 %hi, 255
+  %codew = zext i32 %code to i64
+  %sigw = zext i32 %sig to i64
+  %bysig = add i64 %sigw, 256
+  %out = select i1 %exited, i64 %codew, i64 %bysig
+  store i64 %out, ptr %stp
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %out
+}
+
+define hidden i64 @nz.os_kill(i64 %h) {
+entry:
+  %live = call i64 @nz.os_status(i64 %h)
+  %dead = icmp slt i64 %live, 0
+  br i1 %dead, label %failed, label %look
+failed:
+  ret i64 %live
+look:
+  %rec = call ptr @nz.os_child(i64 %h)
+  %none = icmp eq ptr %rec, null
+  br i1 %none, label %invalid, label %known
+invalid:
+  ret i64 -22
+known:
+  %stp = getelementptr i8, ptr %rec, i64 8
+  %was = load i64, ptr %stp
+  %done = icmp sge i64 %was, 0
+  br i1 %done, label %already, label %kill
+already:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 0
+kill:
+  %pidw = load i64, ptr %rec
+  %pid = trunc i64 %pidw to i32
+  %r = call i32 @kill(i32 %pid, i32 9)
+  %e = call i64 @nz.os_errno()
+  call void @nz.os_unpin(i64 %h)
+  %bad = icmp slt i32 %r, 0
+  %out = select i1 %bad, i64 %e, i64 0
+  ret i64 %out
+}
+"#;

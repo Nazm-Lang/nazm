@@ -82,6 +82,15 @@ pub fn declarations(out: &mut String) {
         "declare i32 @getsockname(i32, ptr, ptr)",
         "declare i32 @getpeername(i32, ptr, ptr)",
         "declare i32 @shutdown(i32, i32)",
+        "declare i32 @pipe(ptr)",
+        "declare i32 @fcntl(i32, i32, ...)",
+        "declare i32 @posix_spawnp(ptr, ptr, ptr, ptr, ptr, ptr)",
+        "declare i32 @posix_spawn_file_actions_init(ptr)",
+        "declare i32 @posix_spawn_file_actions_adddup2(ptr, i32, i32)",
+        "declare i32 @posix_spawn_file_actions_destroy(ptr)",
+        "declare i32 @waitpid(i32, ptr, i32)",
+        "declare i32 @kill(i32, i32)",
+        "declare ptr @signal(i32, ptr)",
     ] {
         let _ = writeln!(out, "{d}");
     }

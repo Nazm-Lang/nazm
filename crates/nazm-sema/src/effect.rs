@@ -200,7 +200,15 @@ impl Effect {
             | Intrinsic::OsShutdown
             | Intrinsic::OsLocalAddr
             | Intrinsic::OsPeerAddr
-            | Intrinsic::OsResolve => Some(Self::Io),
+            | Intrinsic::OsResolve
+            | Intrinsic::OsEnvGet
+            | Intrinsic::OsEnvHas
+            | Intrinsic::OsEnvCount
+            | Intrinsic::OsEnvAt
+            | Intrinsic::OsSpawn
+            | Intrinsic::OsChildPipe
+            | Intrinsic::OsWait
+            | Intrinsic::OsKill => Some(Self::Io),
             // A handle's own state and a status's meaning are values the program holds.
             Intrinsic::OsStatus | Intrinsic::OsFamily | Intrinsic::OsErrorText => None,
             // Reading what C left is part of calling C (N85).
@@ -530,6 +538,14 @@ mod tests {
                 "os_local_addr",
                 "os_peer_addr",
                 "os_resolve",
+                "os_env_get",
+                "os_env_has",
+                "os_env_count",
+                "os_env_at",
+                "os_spawn",
+                "os_child_pipe",
+                "os_wait",
+                "os_kill",
             ]
         );
         assert!(Intrinsic::ALL

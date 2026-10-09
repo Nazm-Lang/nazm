@@ -17,6 +17,8 @@
 @std/deque pub fn deque_pop_front[T](d: Deque[T]) -> Option[T] ! {}
 @std/deque pub fn deque_pop_back[T](d: Deque[T]) -> Option[T] ! {}
 @std/deque pub fn deque_get[T](d: Deque[T], i: Int) -> Option[T] ! {}
+@std/env pub fn env_get(io: IoCap, name: Str) -> Option[Str] ! { io }
+@std/env pub fn env_vars(io: IoCap) -> Strs ! { io }
 @std/file pub struct File
 @std/file pub enum FileKind
 @std/file pub struct Metadata
@@ -82,6 +84,8 @@
 @std/io pub fn io_println(io: IoCap, s: Str) -> Int ! { io }
 @std/io pub fn io_eprintln(io: IoCap, s: Str) -> Int ! { io }
 @std/io pub fn io_read(io: IoCap, path: Str) -> Result[Str, Str] ! { io }
+@std/io pub fn io_stdin_read_all(io: IoCap) -> Result[Bytes, IoError] ! { io }
+@std/io pub fn io_stdin_lines(io: IoCap) -> Result[Strs, IoError] ! { io }
 @std/ioerror pub enum IoErrorKind
 @std/ioerror pub struct IoError
 @std/ioerror pub fn io_kind_of(status: Int) -> IoErrorKind ! {}
@@ -168,6 +172,15 @@
 @std/path pub fn path_stem(p: Str) -> Str ! {}
 @std/path pub fn path_normalize(p: Str) -> Str ! {}
 @std/process pub fn process_args(io: IoCap) -> Strs ! { io }
+@std/process pub struct Child
+@std/process pub struct ProcessOutput
+@std/process pub fn process_spawn(p: ProcessCap, program: Str, args: Strs) -> Result[Child, IoError] ! { io }
+@std/process pub fn process_stdin(c: Child) -> File ! { io }
+@std/process pub fn process_stdout(c: Child) -> File ! { io }
+@std/process pub fn process_stderr(c: Child) -> File ! { io }
+@std/process pub fn process_wait(c: Child) -> Result[Int, IoError] ! { io }
+@std/process pub fn process_kill(c: Child) -> Result[Int, IoError] ! { io }
+@std/process pub fn process_run(p: ProcessCap, sp: SpawnCap, program: Str, args: Strs, input: Bytes) -> Result[ProcessOutput, IoError] ! { io, spawn }
 @std/result pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {}
 @std/result pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {}
 @std/result pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {}

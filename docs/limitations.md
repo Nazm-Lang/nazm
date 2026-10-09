@@ -236,6 +236,10 @@ found only by reading all of it.
   20 ms rather than at once. The reactor is verified on macOS (kqueue) on the host and on Linux
   (epoll) in the contained run; x86-64 Linux's packed `epoll_event` is written but runs only where
   the contained run is x86-64.
+- Process and environment (Gate 2): no signal handling — a program cannot watch for `SIGINT` or
+  `SIGTERM` — and a native program that has started a child ignores `SIGPIPE` from then on.
+  Waiting for a child's exit holds the task's worker; a child cannot be given another directory,
+  environment or standard stream than the parent's pipes. The environment is read, never set.
 - The runtime is its own crate (`nazm-runtime`, N53) but still LLVM text both backends link,
   tested through a C harness; no Rust implementation, no runtime shared across programs as a
   library (area 13).

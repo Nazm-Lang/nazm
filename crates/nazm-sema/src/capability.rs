@@ -62,11 +62,14 @@ pub enum CapabilityKind {
     /// — nothing implies it, and it implies nothing — so a program can be given files without
     /// the network or the network without files. `main` may take one as a root.
     Net,
+    /// Running another program (Gate 2): every authority that program has, so granted
+    /// explicitly. Implies nothing, and nothing implies it. `main` may take one as a root.
+    Process,
 }
 
 impl CapabilityKind {
     /// Every kind, in id order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Io,
         Self::Spawn,
         Self::Foreign,
@@ -75,6 +78,7 @@ impl CapabilityKind {
         Self::Mmio,
         Self::Out,
         Self::Net,
+        Self::Process,
     ];
 
     /// The kind's stable identity. Never reused and never reordered.
@@ -89,6 +93,7 @@ impl CapabilityKind {
             Self::Mmio => 5,
             Self::Out => 6,
             Self::Net => 7,
+            Self::Process => 9,
         }
     }
 
@@ -104,6 +109,7 @@ impl CapabilityKind {
             Self::Mmio => "MmioCap",
             Self::Out => "OutCap",
             Self::Net => "NetCap",
+            Self::Process => "ProcessCap",
         }
     }
 
@@ -250,6 +256,15 @@ impl CapabilityKind {
             | Intrinsic::OsShutdown
             | Intrinsic::OsLocalAddr
             | Intrinsic::OsPeerAddr => CapabilitySet::EMPTY,
+            // The environment is the outside world's, as the arguments are (Gate 2).
+            Intrinsic::OsEnvGet
+            | Intrinsic::OsEnvHas
+            | Intrinsic::OsEnvCount
+            | Intrinsic::OsEnvAt => CapabilitySet::of(Self::Io),
+            // Running another program is every authority it has (Gate 2); a child already
+            // started is its handle's.
+            Intrinsic::OsSpawn => CapabilitySet::of(Self::Process),
+            Intrinsic::OsChildPipe | Intrinsic::OsWait | Intrinsic::OsKill => CapabilitySet::EMPTY,
             // The standard streams need only their attenuation (N79), which `IoCap` implies.
             Intrinsic::Print | Intrinsic::EPrint => CapabilitySet::of(Self::Out),
             // Declassification is authority of its own (N52).
@@ -345,12 +360,14 @@ impl CapabilityKind {
     pub const fn article(self) -> &'static str {
         match self {
             Self::Io => "an",
-            Self::Spawn | Self::Foreign | Self::Vouch | Self::Time | Self::Net => "a",
+            Self::Spawn | Self::Foreign | Self::Vouch | Self::Time | Self::Net | Self::Process => {
+                "a"
+            }
             Self::Mmio | Self::Out => "an",
         }
     }
 
-    const fn bit(self) -> u8 {
+    const fn bit(self) -> u16 {
         1 << self.id()
     }
 }
@@ -363,7 +380,7 @@ impl fmt::Display for CapabilityKind {
 
 /// A set of capability kinds, canonical by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct CapabilitySet(u8);
+pub struct CapabilitySet(u16);
 
 impl CapabilitySet {
     pub const EMPTY: Self = Self(0);
@@ -483,6 +500,9 @@ mod tests {
                     | Intrinsic::OsShutdown
                     | Intrinsic::OsLocalAddr
                     | Intrinsic::OsPeerAddr
+                    | Intrinsic::OsChildPipe
+                    | Intrinsic::OsWait
+                    | Intrinsic::OsKill
             ) {
                 assert_eq!(from_effect, CapabilitySet::of(CapabilityKind::Io));
                 assert!(CapabilityKind::of_intrinsic(i).is_empty(), "{}", i.name());
@@ -502,6 +522,15 @@ mod tests {
                 assert_eq!(
                     CapabilityKind::of_intrinsic(i),
                     CapabilitySet::of(CapabilityKind::Net)
+                );
+                continue;
+            }
+            // Running a program is `io` performed and a `ProcessCap` held (Gate 2).
+            if i == Intrinsic::OsSpawn {
+                assert_eq!(from_effect, CapabilitySet::of(CapabilityKind::Io));
+                assert_eq!(
+                    CapabilityKind::of_intrinsic(i),
+                    CapabilitySet::of(CapabilityKind::Process)
                 );
                 continue;
             }

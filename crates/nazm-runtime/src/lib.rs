@@ -234,8 +234,10 @@ pub fn escape(s: &str) -> String {
 /// `os` unit (`platform::emit_os`) that a build reaching them links beside the `errno` unit. 17 is
 /// Gate 2's networking: the `nz.os_*` socket entries, a handle-table slot of 64 bytes with a wait
 /// record and a deadline, the reactor thread, and the `os` unit's `nz_net_*`. 18 is Gate 2's
-/// time: `nz.time_now_ns`, `nz.time_wall_ns` and `nz.time_sleep_ms`, which parks on the pool.
-pub const RUNTIME_ABI_REVISION: u32 = 18;
+/// time: `nz.time_now_ns`, `nz.time_wall_ns` and `nz.time_sleep_ms`, which parks on the pool. 19
+/// is Gate 2's process and environment: `nz.os_env_*`, `nz.os_spawn`, `nz.os_child_pipe`,
+/// `nz.os_wait`, `nz.os_kill`, a pipe's write, and the `os` unit's `nz_os_environ`.
+pub const RUNTIME_ABI_REVISION: u32 = 19;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -436,6 +438,13 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.os_shutdown", [I64, I64], Some(Word::I64), Net, "0, or -errno (Gate 2)"),
     import!("nz.os_net_addr", [I64, I64, Ptr, I64], Some(Word::I64), Net, "a socket's own or peer's address into the caller's buffer; its length (Gate 2)"),
     import!("nz.os_resolve", [Ptr, I64, I64, Ptr, I64], Some(Word::I64), Net, "borrows the name; the addresses into the caller's buffer; a length, or a status (Gate 2)"),
+    import!("nz.os_env_find", [Ptr, I64, Ptr], Some(Word::Ptr), Files, "borrows the name; the value inside the environment and its length through the pointer, or an empty string and -1 (Gate 2)"),
+    import!("nz.os_env_count", [], Some(Word::I64), Files, "how many entries the environment has (Gate 2)"),
+    import!("nz.os_env_at", [I64, Ptr], Some(Word::Ptr), Files, "the entry inside the environment, its length through the pointer (Gate 2)"),
+    import!("nz.os_spawn", [Ptr, I64, Ptr], Some(Word::I64), Net, "borrows the program and the arguments; the child's handle, or -errno (Gate 2)"),
+    import!("nz.os_child_pipe", [I64, I64], Some(Word::I64), Net, "a child's pipe's handle, or a status (Gate 2)"),
+    import!("nz.os_wait", [I64], Some(Word::I64), Net, "a child's exit, or a status (Gate 2)"),
+    import!("nz.os_kill", [I64], Some(Word::I64), Net, "0, or a status (Gate 2)"),
     import!("nz.format_float", [Ptr, F64, Bit], Some(Word::I64), Numbers, "writes a float's shortest round-trip text, as a Float32 when the flag is set, into 40 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.format_u64", [Ptr, I64], Some(Word::I64), Numbers, "writes a UInt64's decimal digits into 21 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.float_parses", [Ptr, I64], Some(Word::Bit), Numbers, "borrows the bytes; whether they are a floating-point number as `float_parses` reads one (Gate 2)"),
@@ -698,6 +707,17 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_shutdown", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "shut a connection's reading or writing (Gate 2)", "none"),
     rt!("nz.os_net_addr", "i64" ("i64", "i64", "ptr", "i64") "", false, Net, "io", Never, Any, "a socket's own or peer's address (Gate 2)", "writes the caller's buffer"),
     rt!("nz.os_resolve", "i64" ("ptr", "i64", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "resolve a name (Gate 2)", "borrows the name; writes the caller's buffer"),
+    rt!("nz.os_env_split", "i64" ("ptr") "", false, Files, "", Never, Any, "where an environment entry's name ends, or -1 (Gate 2)", "borrows the entry"),
+    rt!("nz.os_env_nth", "ptr" ("i64", "ptr") "", false, Files, "", Never, Any, "the nth entry of the environment, or the count (Gate 2)", "none"),
+    rt!("nz.os_env_count", "i64" () "", false, Files, "io", Never, Any, "how many entries the environment has (Gate 2)", "none"),
+    rt!("nz.os_env_at", "ptr" ("i64", "ptr") "", false, Files, "io", Never, Any, "an entry of the environment (Gate 2)", "returns a pointer into the environment"),
+    rt!("nz.os_env_find", "ptr" ("ptr", "i64", "ptr") "", false, Files, "io", Never, Any, "a variable's value (Gate 2)", "returns a pointer into the environment"),
+    rt!("nz.net_pipe_write", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a write to a pipe, waiting at most its deadline (Gate 2)", "borrows the bytes"),
+    rt!("nz.os_spawn", "i64" ("ptr", "i64", "ptr") "", false, Net, "io", Status, Any, "run a program with three pipes (Gate 2)", "borrows the program and the arguments"),
+    rt!("nz.os_child", "ptr" ("i64") "", false, Net, "", Null, Any, "a child's record, pinned (Gate 2)", "pins the handle"),
+    rt!("nz.os_child_pipe", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "a child's pipe (Gate 2)", "none"),
+    rt!("nz.os_wait", "i64" ("i64") "", false, Net, "io", Status, Any, "wait for a child's exit (Gate 2)", "none"),
+    rt!("nz.os_kill", "i64" ("i64") "", false, Net, "io", Status, Any, "kill a child (Gate 2)", "none"),
     rt!("nz.format_float", "i64" ("ptr", "double", "i1") "", false, Numbers, "", Never, Any, "a float's shortest round-trip text, by ECMAScript's layout (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.fmt_layout", "i64" ("ptr", "ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "lay out a float's digits and exponent by ECMAScript's rule (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.format_u64", "i64" ("ptr", "i64") "", false, Numbers, "", Never, Any, "a UInt64's decimal digits into a 21-byte buffer (Gate 2)", "writes into the caller's buffer"),
@@ -1108,9 +1128,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_eighteen_and_covers_the_pool_errno_numbers_files_net_and_time() {
+    fn the_runtime_is_revision_nineteen_and_covers_files_net_time_and_processes() {
         // Gate 2's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 18);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 19);
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));
         // The network part (Gate 2), present only where a program reaches it; a program with files
         // and no sockets carries the three stubs the files part calls instead.
