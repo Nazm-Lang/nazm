@@ -9,6 +9,14 @@
 @std/chan pub fn chan_send_all_strs(c: Chan[Str], xs: Vec[Str]) -> Int ! {}
 @std/chan pub fn chan_collect_strs(c: Chan[Str], n: Int) -> Vec[Str] ! {}
 @std/chan pub fn chan_drain_strs(c: Chan[Str]) -> Vec[Str] ! {}
+@std/deque pub struct Deque[T]
+@std/deque pub fn deque_new[T]() -> Deque[T] ! {}
+@std/deque pub fn deque_len[T](d: Deque[T]) -> Int ! {}
+@std/deque pub fn deque_push_back[T](d: Deque[T], x: T) -> Int ! {}
+@std/deque pub fn deque_push_front[T](d: Deque[T], x: T) -> Int ! {}
+@std/deque pub fn deque_pop_front[T](d: Deque[T]) -> Option[T] ! {}
+@std/deque pub fn deque_pop_back[T](d: Deque[T]) -> Option[T] ! {}
+@std/deque pub fn deque_get[T](d: Deque[T], i: Int) -> Option[T] ! {}
 @std/fmt pub fn fmt_int_zero(n: Int, width: Int) -> Str ! {}
 @std/fmt pub fn fmt_int_width(n: Int, width: Int) -> Str ! {}
 @std/fmt pub fn fmt_hex(n: Int) -> Str ! {}
@@ -20,6 +28,30 @@
 @std/fs pub fn fs_read_lines(io: IoCap, path: Str) -> Result[Strs, Str] ! { io }
 @std/fs pub fn fs_write(io: IoCap, path: Str, text: Str) -> Result[Int, Str] ! { io }
 @std/fs pub fn fs_write_lines(io: IoCap, path: Str, lines: Strs) -> Result[Int, Str] ! { io }
+@std/hash pub trait Hash
+@std/hash pub fn hash_finish(x: UInt64) -> UInt64 ! {}
+@std/hash pub fn hash_bytes(s: Str) -> UInt64 ! {}
+@std/hash pub fn hash_u64(x: UInt64) -> UInt64 ! {}
+@std/hash pub fn hash_combine(a: UInt64, b: UInt64) -> UInt64 ! {}
+@std/hashmap pub enum Slot[K, V]
+@std/hashmap pub struct HashMap[K, V]
+@std/hashmap pub fn hashmap_new[K: Hash, V]() -> HashMap[K, V] ! {}
+@std/hashmap pub fn hashmap_with_seed[K: Hash, V](seed: UInt64) -> HashMap[K, V] ! {}
+@std/hashmap pub fn hashmap_len[K: Hash, V](m: HashMap[K, V]) -> Int ! {}
+@std/hashmap pub fn hashmap_set[K: Hash, V](m: HashMap[K, V], key: K, value: V) -> Bool ! {}
+@std/hashmap pub fn hashmap_get[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {}
+@std/hashmap pub fn hashmap_has[K: Hash, V](m: HashMap[K, V], key: K) -> Bool ! {}
+@std/hashmap pub fn hashmap_remove[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {}
+@std/hashmap pub fn hashmap_keys[K: Hash, V](m: HashMap[K, V]) -> Vec[K] ! {}
+@std/hashmap pub fn hashmap_values[K: Hash, V](m: HashMap[K, V]) -> Vec[V] ! {}
+@std/hashset pub struct HashSet[K]
+@std/hashset pub fn hashset_new[K: Hash]() -> HashSet[K] ! {}
+@std/hashset pub fn hashset_with_seed[K: Hash](seed: UInt64) -> HashSet[K] ! {}
+@std/hashset pub fn hashset_add[K: Hash](s: HashSet[K], key: K) -> Bool ! {}
+@std/hashset pub fn hashset_has[K: Hash](s: HashSet[K], key: K) -> Bool ! {}
+@std/hashset pub fn hashset_remove[K: Hash](s: HashSet[K], key: K) -> Bool ! {}
+@std/hashset pub fn hashset_len[K: Hash](s: HashSet[K]) -> Int ! {}
+@std/hashset pub fn hashset_items[K: Hash](s: HashSet[K]) -> Vec[K] ! {}
 @std/io pub fn io_println(io: IoCap, s: Str) -> Int ! { io }
 @std/io pub fn io_eprintln(io: IoCap, s: Str) -> Int ! { io }
 @std/io pub fn io_read(io: IoCap, path: Str) -> Result[Str, Str] ! { io }

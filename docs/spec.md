@@ -1189,8 +1189,8 @@ would need a propagation protocol, and traits do not exist.
 ### The standard library — `use "@std/…"`
 <!-- id: std -->
 
-A **standard module** is a toolchain-owned Nazm module a program imports by name. There are seventeen
-(N84: the 1.0 surface),
+A **standard module** is a toolchain-owned Nazm module a program imports by name. There are
+twenty-one (N84's seventeen, the 1.0 surface, and Gate 2's four collections),
 each ordinary source checked like any module, and none is visible unless a module writes its `use`:
 
 ```nazm
@@ -1243,6 +1243,10 @@ that exists but cannot be read is `N0407`.
 | `@std/time` | (N84) `time_ms(t)`, `time_since(t, start)`, `time_deadline(t, ms)`, `time_passed(t, deadline) -> Bool` — each taking the `TimeCap` that allows it, and no effect |
 | `@std/json` | (N84) `JsonDoc` and `JsonNode`, an arena document: `json_parse(text) -> Result[JsonDoc, Str]` (an `Err` names the byte offset; integers only), `json_encode(doc)`, `json_encode_node(doc, node)`, `json_quote(s)`, `json_root`, `json_kind`, `json_len`, `json_at`, `json_get`, `json_key_at`, `json_value_at`, `json_int`, `json_str`, `json_bool`, and the builders `json_new`, `json_with_root`, `json_add_null`, `json_add_bool`, `json_add_int`, `json_add_str`, `json_add_array`, `json_add_object` |
 | `@std/test` | (N84) `test_int(what, actual, expected) -> Result[Int, Str]`, `test_str(what, actual, expected) -> Result[Str, Str]`, `test_true(what, cond) -> Result[Bool, Str]` |
+| `@std/hash` | (Gate 2) the `Hash` trait — `hash(self) -> UInt64` and `same(self, other) -> Bool`, two keys that are `same` hashing alike — implemented for every integer type, `Bool` and `Str`; `hash_bytes(s)` (64-bit FNV-1a over the bytes, then SplitMix64's finaliser), `hash_u64(x)` (the same over a word's eight bytes, least significant first), `hash_combine(a, b)`, `hash_finish(x)`. A fixed function: the same in every implementation and every run. Floats are not keys (a NaN is not equal to itself) |
+| `@std/hashmap` | (Gate 2) `HashMap[K: Hash, V]`, open addressing with linear probing, shared like any handle: `hashmap_new[K, V]()`, `hashmap_with_seed[K, V](seed)`, `hashmap_len`, `hashmap_set -> Bool` (whether it replaced), `hashmap_get -> Option[V]`, `hashmap_has`, `hashmap_remove -> Option[V]`, `hashmap_keys -> Vec[K]`, `hashmap_values -> Vec[V]`. Insert, lookup and removal take expected constant time, growth amortised constant time; iteration is in table order, which the keys, their order of insertion and the seed decide — the same in every run, and unpredictable to whoever chooses the keys only when the seed is (`Slot` is the table's entry) |
+| `@std/hashset` | (Gate 2) `HashSet[K: Hash]` over a `HashMap`: `hashset_new[K]()`, `hashset_with_seed[K](seed)`, `hashset_add -> Bool` (whether it was new), `hashset_has`, `hashset_remove -> Bool`, `hashset_len`, `hashset_items -> Vec[K]` |
+| `@std/deque` | (Gate 2) `Deque[T]`, a ring buffer, shared like any handle: `deque_new[T]()`, `deque_len`, `deque_push_back`, `deque_push_front` (amortised constant time), `deque_pop_front -> Option[T]`, `deque_pop_back -> Option[T]`, `deque_get(d, i) -> Option[T]` (constant time, from the front) |
 
 **Stability: 1.0 (N84).** `library/std/API-1.0` lists every public item of every standard module
 with its declaration; a test regenerates it and requires equality. Within 1.x an item may be
@@ -1383,7 +1387,7 @@ fn twice[T: Show](x: T) -> Str { str_concat(x.show(), Show.show(x)) }
 | Rule | |
 | --- | --- |
 | **Declaring** | A trait is a list of signatures, each ended by `;`, whose first parameter is `self: Self` (`N0609`). There are no default bodies: a body in a trait is a syntax error. A trait shares the type namespace with records and enums, and `pub` exports it |
-| **Implementing** | `impl Trait for Type { fn … }` defines every method of the trait exactly once (`N0602`), each with the trait's signature with `Self` replaced by `Type`, effects included, and its first parameter named `self` (`N0603`). `Self` may be written for the type inside the impl. A method that writes no effect set has its trait's. `Type` is a non-generic record or enum, `Int`, `Bool` or `Str` (`N0604`) |
+| **Implementing** | `impl Trait for Type { fn … }` defines every method of the trait exactly once (`N0602`), each with the trait's signature with `Self` replaced by `Type`, effects included, and its first parameter named `self` (`N0603`). `Self` may be written for the type inside the impl. A method that writes no effect set has its trait's. `Type` is a non-generic record or enum, a numeric type, `Bool` or `Str` (`N0604`) |
 | **Coherence** | A compilation has at most one impl of a trait for a type (`N0600`). An impl is in the module declaring the trait or the one declaring the type, and for `Int`, `Bool` and `Str` only the trait's (`N0601`) |
 | **Calling** | `recv.m(args)` finds the traits **in scope** — declared in this module, or exported by a module it imports — that declare `m`, keeps those with an impl for the receiver's type in this module or a module it imports directly, and needs exactly one (`N0605` for none, `N0606` for several). `Trait.m(recv, args)` names the trait (UFCS), and may be qualified, `alias::Trait.m(recv)`. An impl's methods are not in the function namespace: `show(p)` is not a call of one |
 | **Bounds** | `[T: Trait]` lets a generic body call the trait's methods on a `T`, and every call site's argument for `T` must have an impl, as for `Equality`. One requirement per parameter |
