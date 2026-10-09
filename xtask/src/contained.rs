@@ -40,6 +40,36 @@ use std::time::{Duration, Instant};
 
 pub(crate) const IMAGE: &str = "nazm-contained:1.98.1";
 
+/// The same image built for `linux/amd64` (Gate 3, `docs/systems-domains.md` Part A): on an
+/// Apple-silicon host it runs under emulation, and its evidence is labelled *emulated host*.
+pub(crate) const IMAGE_AMD64: &str = "nazm-contained-amd64:1.98.1";
+
+/// Whether this run uses [`IMAGE_AMD64`]; set once, from `cargo xtask contained --platform amd64`.
+static AMD64: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Choose the image for this run (only the first call counts).
+pub(crate) fn use_amd64(on: bool) {
+    let _ = AMD64.set(on);
+}
+
+/// The image this run's workloads execute in.
+pub(crate) fn image() -> &'static str {
+    if AMD64.get().copied().unwrap_or(false) {
+        IMAGE_AMD64
+    } else {
+        IMAGE
+    }
+}
+
+/// `docker run`'s platform for [`image`]: nothing for the host's own.
+fn platform_args() -> &'static [&'static str] {
+    if AMD64.get().copied().unwrap_or(false) {
+        &["--platform", "linux/amd64"]
+    } else {
+        &[]
+    }
+}
+
 /// How much of the machine one contained workload may use. N14.1.
 ///
 /// One owner for the three numbers that have to agree: the CPU quota the container gets,
@@ -241,7 +271,7 @@ pub(crate) fn cache_fields(repo: &Path) -> Result<CacheFields, String> {
         .args([
             "image",
             "inspect",
-            IMAGE,
+            image(),
             "--format",
             "{{.Id}} {{json .Config.Env}}",
         ])
@@ -249,7 +279,7 @@ pub(crate) fn cache_fields(repo: &Path) -> Result<CacheFields, String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-        .ok_or_else(|| format!("cannot inspect the image `{IMAGE}`"))?;
+        .ok_or_else(|| format!("cannot inspect the image `{}`", image()))?;
     let digest = |name: &str| -> Result<String, String> {
         std::fs::read(repo.join(name))
             .map(|b| blake3::hash(&b).to_hex().to_string())
@@ -475,7 +505,7 @@ fn docker_available() -> Result<(), String> {
 
 fn image_present() -> bool {
     Command::new("docker")
-        .args(["image", "inspect", IMAGE])
+        .args(["image", "inspect", image()])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -711,7 +741,9 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
     if !image_present() {
         return Report {
             outcome: Outcome::Unavailable(format!(
-                "image `{IMAGE}` is absent. Build it:\n    docker build -f docker/contained.Dockerfile -t {IMAGE} ."
+                "image `{0}` is absent. Build it:\n    docker build {1}-f docker/contained.Dockerfile -t {0} .",
+                image(),
+                if platform_args().is_empty() { "" } else { "--platform linux/amd64 " }
             )),
             ..empty
         };
@@ -776,7 +808,8 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
             &format!("NAZM_TEST_THREADS={}", b.profile.test_threads),
         ])
         .args(["--env", "CARGO_TARGET_DIR=/work/target"])
-        .arg(IMAGE)
+        .args(platform_args())
+        .arg(image())
         .args(guarded(argv, b.cache.is_some()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1177,7 +1210,9 @@ fn copy_out_bounded(
 /// `bench::baseline_path`, which is what actually writes the file.
 pub(crate) fn image_platform_slug() -> Result<String, String> {
     let out = Command::new("docker")
-        .args(["run", "--rm", "--network", "none", IMAGE, "uname", "-sm"])
+        .args(["run", "--rm", "--network", "none"])
+        .args(platform_args())
+        .args([image(), "uname", "-sm"])
         .output()
         .map_err(|e| format!("could not run docker: {e}"))?;
     if !out.status.success() {

@@ -4354,6 +4354,17 @@ machines.*
 
 ### 33. Platform and target matrix — PARTIAL
 
+**Gate 3 (2026-10-10)** · *Prebuilt toolchains* (`systems-domains.md` Part A; `support.md`). Host
+archives by `scripts/host-archive.sh` — the release binary with the standard library and runtime
+inside it — and `scripts/clean-install-test.sh`, which installs one where no Rust is reachable and
+checks, runs, builds and runs a program: passed for `aarch64-apple-darwin` (native),
+`x86_64-apple-darwin` (cross-built, **under Rosetta**) and `aarch64-unknown-linux-gnu` (built by the
+new `cargo xtask contained archive`, installed in a clean Debian container with only clang,
+`docker/clean-install.Dockerfile`). The contained runner gained `--platform amd64` for the
+`linux/amd64` image. Found on the way: `nazm build` blamed the generated IR for a toolchain failure
+in the link step; it now says the toolchain or its environment failed
+(`a_toolchain_environment_failure_is_not_blamed_on_the_ir`).
+
 **Evidence** · Two verified targets: `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`
 (the latter inside `docker/contained.Dockerfile`). The emitter states its own scope, and
 `crates/nazm-cli/tests/docs.rs` asserts the documented target and the emitter agree.

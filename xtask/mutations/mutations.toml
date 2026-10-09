@@ -15204,3 +15204,13 @@ file = "crates/nazm-core/src/check/attributes.rs"
 find = "                let published = public && matches!(target, Target::Function | Target::Type);"
 replace = "                let published = true;"
 killers = [{ package = "nazm-cli", test = "attributes", name = "every_attribute_outside_the_vocabulary_or_its_place_is_refused_by_name" }]
+
+# --- Gate 3: hosts ------------------------------------------------------------------------------
+
+[[mutation]]
+name = "g3-a-toolchain-failure-is-blamed-on-the-ir"
+why = "a link-step failure of clang's environment is reported as a bug in the generated IR, sending the reader to the wrong place"
+file = "crates/nazm-cli/src/build/link.rs"
+find = "            if toolchain_failure(&said) {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "build", name = "a_toolchain_environment_failure_is_not_blamed_on_the_ir" }]

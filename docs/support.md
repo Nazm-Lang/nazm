@@ -47,6 +47,24 @@ moves to run-verified when one is — the differential corpus built for it and r
 or VM, with the result recorded — not because CI, which runs on x86_64 Linux, compiled the
 compiler.
 
+## Prebuilt toolchains (Gate 3)
+
+A host archive is `nazm-TRIPLE.tar.gz`, made by `scripts/host-archive.sh`: `bin/nazm` with the
+standard library and runtime inside it, the licence, the README, the getting-started and support
+pages, and `INSTALL.txt`. `nazm run`, `check` and `fmt` need nothing else; `nazm build` needs a
+C toolchain (clang) on `PATH`. **Rust is never needed.** `scripts/clean-install-test.sh` unpacks an
+archive where no `cargo` or `rustc` is reachable, then checks, runs, builds and runs a program.
+
+| Host | Archive built | Clean install | Where it ran |
+| --- | --- | --- | --- |
+| macOS ARM64 (`aarch64-apple-darwin`) | on the host | passed | the host, natively |
+| macOS x86_64 (`x86_64-apple-darwin`) | on the host, cross-built | passed | **under Rosetta 2** on Apple silicon |
+| Linux ARM64 (`aarch64-unknown-linux-gnu`) | in the contained runner (`cargo xtask contained archive`) | passed | a clean Debian container with only clang (`docker/clean-install.Dockerfile`) |
+| Linux x86_64 (`x86_64-unknown-linux-gnu`) | not yet | not yet | — |
+| Windows x86_64 | not yet | not yet | — |
+
+Nothing is uploaded or published: the archives are local, under `target/archives/`.
+
 ## Not supported, by decision
 
 | | |

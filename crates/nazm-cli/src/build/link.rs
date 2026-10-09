@@ -183,18 +183,48 @@ pub(super) fn report_clang(outcome: Outcome, kept: &Path, cleanup: impl Fn(bool)
             // Keep the IR: clang's complaint is about a file the user cannot see
             // otherwise, and a compiler bug is much easier to report with it in hand.
             cleanup(true);
-            eprint!("{}", String::from_utf8_lossy(&o.stderr));
-            eprintln!(
-                "nazm: `{}` rejected the generated IR (exit {:?}). This is a bug in \
-                 `nazm build`, not in your program — the IR has been kept at {} to \
-                 report it with.",
-                DRIVER,
-                o.status.code(),
-                kept.display()
-            );
+            let said = String::from_utf8_lossy(&o.stderr);
+            eprint!("{said}");
+            // Gate 3: a failure in the link step or in the toolchain's own setup (a missing
+            // SDK library, `xcrun`) is the environment's, and blaming the IR for it sends the
+            // reader to the wrong place.
+            if toolchain_failure(&said) {
+                eprintln!(
+                    "nazm: `{}` failed while linking or setting up (exit {:?}) — its message \
+                     above is about the toolchain or its environment, not about the generated \
+                     IR. The IR has been kept at {} in case it is needed.",
+                    DRIVER,
+                    o.status.code(),
+                    kept.display()
+                );
+            } else {
+                eprintln!(
+                    "nazm: `{}` rejected the generated IR (exit {:?}). This is a bug in \
+                     `nazm build`, not in your program — the IR has been kept at {} to \
+                     report it with.",
+                    DRIVER,
+                    o.status.code(),
+                    kept.display()
+                );
+            }
             ExitCode::from(exit::TOOLCHAIN_FAILED)
         }
     }
+}
+
+/// Whether clang's own message says the link step or the toolchain's setup failed, rather than
+/// its reading of the IR.
+fn toolchain_failure(said: &str) -> bool {
+    [
+        "linker command failed",
+        "xcrun:",
+        "ld: library",
+        "ld: framework",
+        "unable to find sdk",
+        "cannot find -l",
+    ]
+    .iter()
+    .any(|m| said.contains(m))
 }
 
 /// Whether two paths name the same file, falling back to a textual comparison.
