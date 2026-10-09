@@ -36,6 +36,18 @@ found only by reading all of it.
   in the last place between hosts. There is no `Int64` alias, no 128-bit integer, no decimal
   floating point, no access to floating-point flags or rounding modes, and no SIMD vector type in
   the language. The EVM and accelerator-kernel targets refuse every number but `Int`.
+- Attributes (Gate 2): a closed vocabulary — `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated` —
+  written only before a top-level declaration, not before a method inside an `impl` or a
+  `trait`. `@deprecated` reports nothing: diagnostics have one severity, and a warning at each use
+  waits for a second. `@cfg(feature = …)` holds for nothing until a package can enable a feature.
+- Package features (Gate 2): additive only — no way to switch a dependency's `default` off;
+  `--features` reaches the root package alone; the lockfile records the manifests' sets, not a
+  command's `--features`.
+- Tests (Gate 2): a test or fuzz target answers `Result[Int, Str]` and takes only capabilities
+  (and a fuzz target's `Bytes`); each test is built separately, so a module of many tests builds
+  many times. Fuzzing is a fixed sequence of inputs up to 64 bytes, with no coverage feedback, no
+  corpus and no minimisation. `nazm bench` takes one measurement of a fixed count, with no
+  warm-up or statistics. Tests run for the host's configuration only.
 
 - Traits and methods (N78) are nominal and static: no trait objects or dynamic dispatch, no default
   methods, associated items, generic traits or methods, supertraits, impls with bounds or for
@@ -352,7 +364,7 @@ are enforced under `--locked` only and are not signatures (Q1-A2-13); writes to 
 index are not locked against a concurrent publish (Q1-A2-14).
 
 **Self-hosted compiler**: the compiler written in Nazm does not carry Gate 2 — integer widths,
-floats, arrays, constants, `Bytes`, `Text` and their built-ins are refused by it, as its table of
+floats, arrays, constants, `Bytes`, `Text`, attributes and their built-ins are refused by it, as its table of
 built-ins not carried records (`crates/nazm-cli/tests/selfhost.rs`, `NOT_CARRIED`); the bootstrap
 holds the subset it does carry (Q1-D-20).
 

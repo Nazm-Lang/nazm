@@ -93,6 +93,9 @@ pub enum ReferenceTarget {
     /// A trait's method, by its trait and position: its declaration in the trait, and every
     /// call through a bound. A call on a concrete type is a use of its impl's function.
     TraitMethod(crate::traits::TraitId, u32),
+    /// A module's constant (Gate 2), by its declaration's name: constants are their module's
+    /// own, so the span is the identity.
+    Const(Span),
 }
 
 impl ReferenceTarget {
@@ -109,6 +112,7 @@ impl ReferenceTarget {
             Self::PayloadField(_) => "payload field",
             Self::Trait(_) => "trait",
             Self::TraitMethod(..) => "trait method",
+            Self::Const(_) => "constant",
         }
     }
 }
@@ -155,6 +159,9 @@ impl ReferenceTarget {
             Self::PayloadField(_) => Coverage::Complete,
             // Named in bounds, impl headers and qualified calls, all recorded — but each impl
             // also writes the trait's methods by name, and rename does not edit those yet.
+            // Its declaration, every name of it in a body, in another constant's value and in
+            // an array type's length (Gate 2).
+            Self::Const(_) => Coverage::Complete,
             Self::Trait(_) | Self::TraitMethod(..) => {
                 Coverage::Incomplete("a trait's methods are written again in every impl of it")
             }
@@ -255,6 +262,15 @@ impl ReferenceIndex {
             index.used(at, ReferenceTarget::TraitMethod(c.trait_id, c.method));
         }
         res.each_use(|span, target| index.used(span, definition_of(res, target)));
+        // Constants (Gate 2): each declaration, then every name of one.
+        for &d in res.const_decls() {
+            index.declare(ReferenceTarget::Const(d), d);
+        }
+        let mut refs: Vec<(Span, Span)> = res.const_refs().iter().map(|(a, d)| (*a, *d)).collect();
+        refs.sort_by_key(|(a, _)| (a.file, a.start, a.end));
+        for (at, decl) in refs {
+            index.used(at, ReferenceTarget::Const(decl));
+        }
         for entry in index.entries.values_mut() {
             entry.uses.sort_unstable();
             entry.uses.dedup();
@@ -379,7 +395,8 @@ fn definition_of(res: &Resolution, target: ReferenceTarget) -> ReferenceTarget {
         ReferenceTarget::Local(l) => ReferenceTarget::Local(res.binding_of(l)),
         other @ (ReferenceTarget::Function(_)
         | ReferenceTarget::Trait(_)
-        | ReferenceTarget::TraitMethod(..)) => other,
+        | ReferenceTarget::TraitMethod(..)
+        | ReferenceTarget::Const(_)) => other,
     }
 }
 

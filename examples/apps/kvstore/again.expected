@@ -1,0 +1,5 @@
+stats -> keys=2 records=2
+get greeting -> hello, world
+set count 1 -> ok
+stats -> keys=3 records=3
+0

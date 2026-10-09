@@ -42,9 +42,58 @@ pub struct Program {
     pub hole: Option<HoleSite>,
 }
 
+/// `@name` or `@name(arguments)` written before a declaration (Gate 2, `docs/spec.md`,
+/// *Attributes*). The vocabulary is the compiler's and the checker holds it; here an attribute is
+/// its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute {
+    pub name: String,
+    pub name_span: Span,
+    /// `None` for `@name`; the arguments, in order, for `@name(…)`.
+    pub args: Option<Vec<AttrArg>>,
+    pub span: Span,
+}
+
+/// One argument of an attribute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttrArg {
+    /// `"text"`.
+    Str { value: String, span: Span },
+    /// `word`.
+    Word { name: String, span: Span },
+    /// `key = "value"`.
+    Pair {
+        key: String,
+        key_span: Span,
+        value: String,
+        span: Span,
+    },
+    /// `name(arguments)`: `all(…)`, `any(…)`, `not(…)`.
+    Call {
+        name: String,
+        name_span: Span,
+        args: Vec<AttrArg>,
+        span: Span,
+    },
+}
+
+impl AttrArg {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Str { span, .. }
+            | Self::Word { span, .. }
+            | Self::Pair { span, .. }
+            | Self::Call { span, .. } => *span,
+        }
+    }
+}
+
 /// `[pub] trait Name { fn m(self: Self, …) -> R; … }` (N78, `architecture.md` §7.79).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trait {
+    /// The attributes written before it (Gate 2).
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub name_span: Span,
     pub pub_span: Option<Span>,
@@ -67,6 +116,8 @@ pub struct TraitMethod {
 /// The header of `impl Trait for Type { … }` (N78). The methods are functions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImplDecl {
+    /// The attributes written before it (Gate 2).
+    pub attrs: Vec<Attribute>,
     pub trait_name: TypeName,
     pub self_ty: TypeName,
     /// The `impl` keyword: what the impl is identified by in diagnostics, and what each of
@@ -108,6 +159,8 @@ pub enum HoleSite {
 /// stops being one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Const {
+    /// The attributes written before it (Gate 2).
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub name_span: Span,
     pub pub_span: Option<Span>,
@@ -176,6 +229,8 @@ pub struct Qualifier {
 /// `docs/spec.md` states the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
+    /// The attributes written before it (Gate 2).
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub name_span: Span,
     /// Where `pub` was written, if it was. Syntax, not meaning — exactly as
@@ -222,6 +277,8 @@ pub struct Field {
 /// no second spelling for either.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enum {
+    /// The attributes written before it (Gate 2).
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub name_span: Span,
     /// Where `pub` was written, if it was. Syntax, not meaning.
@@ -253,6 +310,8 @@ pub struct Variant {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
+    /// The attributes written before it (Gate 2); empty for an impl's method.
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub name_span: Span,
     /// Where `pub` was written, if it was.

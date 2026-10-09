@@ -1,0 +1,9 @@
+c0: 10 set, VALUE value of c0-7, deleted 3
+c1: 10 set, VALUE value of c1-7, deleted 3
+c2: 10 set, VALUE value of c2-7, deleted 3
+c3: 10 set, VALUE value of c3-7, deleted 3
+COUNT -> 28
+GET c2-9 -> VALUE value of c2-9
+GET c3-0 -> NONE
+NOPE -> ERROR unknown command
+0

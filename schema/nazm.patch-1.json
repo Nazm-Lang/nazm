@@ -96,7 +96,7 @@
           "additionalProperties": false,
           "required": ["kind", "durable", "identity", "declaration", "within"],
           "properties": {
-            "kind": { "enum": ["function", "local", "record", "enum", "variant", "field", "payload_field"] },
+            "kind": { "enum": ["function", "local", "record", "enum", "variant", "field", "payload_field", "constant"] },
             "durable": { "type": "boolean", "description": "Whether `identity` is a durable definition key. A local's never is." },
             "identity": { "type": ["object", "null"], "$ref": "#/$defs/identity", "description": "Null for a local, which has no durable key and is not given one." },
             "declaration": { "$ref": "#/$defs/span", "description": "Where it is declared now: the source-linked identity every target has." },

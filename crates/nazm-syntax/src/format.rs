@@ -282,6 +282,9 @@ struct Printer<'a> {
     /// level in, and the body's `{` back at the function's own level, so a reader sees the
     /// clauses as the header's and the body as the function's.
     contract: bool,
+    /// Inside a declaration's attribute (Gate 2): whether its name has been printed, and how
+    /// deep in its arguments' parentheses the printer is. An attribute ends its own line.
+    attribute: Option<(bool, usize)>,
 }
 
 fn print<'a>(text: &'a str, pieces: &'a [Piece<'a>], layout: &'a Layout) -> String {
@@ -299,6 +302,7 @@ fn print<'a>(text: &'a str, pieces: &'a [Piece<'a>], layout: &'a Layout) -> Stri
         fresh_line: true,
         continuing: false,
         contract: false,
+        attribute: None,
     };
     for (i, piece) in pieces.iter().enumerate() {
         let next = pieces.get(i + 1).and_then(|n| n.kind);
@@ -462,6 +466,30 @@ impl<'a> Printer<'a> {
             }
             _ => {}
         }
+        // An attribute ends at its name, or at the `)` that closes its arguments, and the
+        // declaration it belongs to starts the next line at the same level (Gate 2).
+        match (self.attribute, kind) {
+            (None, TokenKind::At) if self.indent == 0 => self.attribute = Some((false, 0)),
+            (Some((false, _)), TokenKind::Ident(_)) => {
+                if matches!(next, Some(TokenKind::LParen)) {
+                    self.attribute = Some((true, 0));
+                } else {
+                    self.attribute = None;
+                    self.continuing = false;
+                    self.break_line();
+                }
+            }
+            (Some((true, d)), TokenKind::LParen) => self.attribute = Some((true, d + 1)),
+            (Some((true, 1)), TokenKind::RParen) => {
+                self.attribute = None;
+                self.continuing = false;
+                self.break_line();
+            }
+            (Some((true, d)), TokenKind::RParen) => {
+                self.attribute = Some((true, d.saturating_sub(1)));
+            }
+            _ => {}
+        }
         self.before = self.previous;
         self.previous = Some(kind);
         self.previous_end = piece.end;
@@ -503,6 +531,10 @@ impl<'a> Printer<'a> {
                 | TokenKind::Dot
                 | TokenKind::Question
         ) {
+            return false;
+        }
+        // `@name`: an attribute's `@` is glued to its name (Gate 2).
+        if *previous == TokenKind::At {
             return false;
         }
         // Nothing after an opener, or after a `.` or a `::`; and nothing before a `::`, which

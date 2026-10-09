@@ -537,6 +537,17 @@ and `@cfg(...)`. Attributes are part of a declaration's identity where they chan
 (`@cfg`) and of its interface where importers can observe them (`@deprecated`). No keyword per
 domain, and nothing user-defined.
 
+**As built (2026-10-09).** The syntax, the closed vocabulary and `N0619` as designed (`spec.md`,
+*Attributes*): an attribute is written before a top-level declaration — not before a `use`, and
+not yet before a method inside an `impl` or a `trait` — and a malformed one is a single syntax
+error, after which it is not checked again. Narrower in one respect: **`@deprecated` warns
+nowhere.** `nazm.diagnostic/1` has one severity, `error`, and a warning is a new severity every
+consumer and exit status would have to learn; 1.0 does not add one for this. `@deprecated` is
+accepted, held to its form (at most one string, not on an `impl`) and carried on the declaration;
+`N0620` is not assigned, and the warning, with `@deprecated` in the interface, comes with a
+warning severity. The attributes are kept out of `compiler/`, the corpus and `library/core`: the
+self-hosted lexer, which 1.0 carries frozen, has no `@`.
+
 ## 17. Conditional compilation
 
 `@cfg(os = "macos")`, `@cfg(os = "linux")`, `@cfg(arch = "aarch64")`, `@cfg(arch = "x86_64")`,
@@ -547,6 +558,16 @@ cannot both hold for the build. Conditions are decided by the build's target, it
 and its profiles — never by the environment — and all three are part of the check key and the build
 identity, so a cached result is never reused across configurations. `nazm run` decides them for the
 host.
+
+**As built (2026-10-09).** As designed (`spec.md`, *Conditional compilation*). The configuration
+is a `BuildConfig` on the module graph — the target's operating system, architecture and triple,
+the features and the profiles — and the checker drops every declaration whose `@cfg` does not hold
+before anything resolves a name, an `impl` with its methods. `nazm build --target T` decides for
+`T`; `check`, `run` and a build with no target for the host. The profiles are `--profile`'s and
+every package manifest's. A module whose text writes `@cfg` is fingerprinted with the
+configuration, so its check is filed under it; a module that does not write one is shared across
+configurations, as before. A build's later stages need nothing new: what they see is what the
+check kept. The features are empty until §22 gives a package a way to enable one.
 
 ## 18. User testing
 
@@ -559,12 +580,32 @@ helper, `property(seed, cases, gen, check)`, using `@std/random`'s seeded genera
 f(input: Bytes) -> Result[Int, Str]` registers a fuzz target; `nazm test --fuzz N` drives it with N
 deterministic generated inputs.
 
+**As built (2026-10-09).** As designed, with the outcome carried by the process (`spec.md`, *Tests
+and benchmarks*). A test function runs through a generated entry appended to its file's text as
+the loader serves it — the file's own `main` renamed in place to a name of the same length, so no
+offset moves — under `nazm run` and as an executable, **one build per test** rather than one per
+module: each test is then its own process, and a trap fails one test, not the run. `Ok` ends `0`; an
+`Err` prints its message and ends `2`, a trap's status, so `@test(fails)` is told a failing test from
+a program that does not check (`1`). The shapes are refused otherwise (`N0619`). The assertions are
+`assert_true`, `assert_eq_int`, `assert_eq_str`, `assert_some` and `assert_ok` — typed, as the
+language has no generic equality — and `property(seed, cases, check)`. A fuzz target is given `--fuzz
+N` inputs (100 by default) of 0–64 bytes from a fixed xorshift sequence, the same in every
+implementation; there is no coverage feedback and no corpus. `nazm.test/1` gained `kind`, additive.
+Tests run for the host's configuration only.
+
 ## 19. User benchmarking
 
 `@bench fn name() -> Int` and `nazm bench [PATH] [--json]`: builds the benchmarks natively, runs
 each until a time budget is met, and reports nanoseconds per iteration (`nazm.bench/1`,
 EXPERIMENTAL). The returned `Int` is consumed so the work cannot be optimised away. The repository's
 `xtask bench` is unchanged.
+
+**As built (2026-10-09).** `@bench fn NAME(capabilities…) -> Int`; `nazm bench PATH… [--iterations
+N] [--json]` builds each through the same generated entry at `-O2` and reports one run's
+nanoseconds per iteration (`nazm.bench/1`, EXPERIMENTAL); every answer is folded into one value
+the entry prints, so the work is not optimised away. A fixed count, not a time budget; no warm-up, repetition or statistics:
+one measurement, stated as one. The performance register (`docs/performance.md`) stays the place a
+claim is filed.
 
 ## 20. Logging and observability
 
@@ -603,6 +644,14 @@ enters it. `@cfg(feature = "x")` reads it. This is an additive manifest key, so 
 stays `/1` for manifests without it; the lock file records features as `nazm.lock/2`, and `/1` locks
 still read.
 
+**As built (2026-10-09).** As designed, narrower in three places (`spec.md`, *Package
+features*). Each package's set is its own, and each module's `@cfg(feature = …)` reads its own
+package's: the configuration carries the root's set and each dependency's by `NAME@VERSION`, and a
+module's key says which it is. `--features` (on `check`, `run` and `build`) asks the root only, and
+the lock records what the manifests enable, not what a command asked; there is no way to switch a
+`default` off. `nazm.lock/2` is written only when a feature is enabled, so every lockfile written
+before Gate 2 is still the one written now. `nazm.package/1` stays `/1`: the keys are optional.
+
 ## 23. The C foundation for other languages
 
 Python (`ctypes`/`cffi`), Swift, Kotlin/JNI, Node-API and C# P/Invoke all bind to a C ABI: exported
@@ -610,6 +659,12 @@ functions over scalars, pointers to opaque handles, and C strings. With Gate 2, 
 `--shared` library exports `Int`, `Bool`, every fixed-width integer and both floats. Evidence: a
 shared library built by `nazm build --shared` and called from Python through `ctypes` with integers
 and floats. The ecosystems themselves are later.
+
+**As built (2026-10-09).** As designed: an export's C entry takes and returns each number in its
+own C type, and the header names `int8_t` … `uint64_t`, `float` and `double`. Python's `ctypes`
+calls a shared library built by `nazm build --shared` with every width and both floats, under both
+backends (`c_foundation.rs`). Swift, Kotlin, Node and C# bind the same header; their ecosystems are
+later.
 
 ## 24. Reference applications
 
@@ -619,9 +674,21 @@ floating-point simulation) and `kvstore` (a persistent log-structured store with
 Each has an expected output, runs interpreted and under both backends where its operations allow,
 records its resource use and time, and is held by tests.
 
+**As built (2026-10-09).** As designed, in `examples/apps/`, held by `tests/apps.rs` under the
+interpreter, LLVM `-O0` and `-O2` and Cranelift, with real arguments, files and standard input; each
+directory's `README` table records time and memory of one native run. Writing them found two
+things about the language as it is, recorded rather than worked around in the compiler: there is
+no `else if` (a chain is `else { if … }`), and `Vec[Str]` is not `Strs`, so a map's keys are copied
+before the library sorts them. `kvd` has no shared mutable table — one task owns it and the
+connections ask it over channels — which is the language's rule, not a limitation of the program.
+
 ## 25. Competitor map
 
 `docs/v1-competitor-map.md`, one row per language, with no superiority claim without a measurement.
+
+**As built (2026-10-09).** `docs/v1-competitor-map.md`: fifteen languages, each with why it is
+chosen, the problem underneath, Nazm's mechanism, the 1.0 evidence by test or document, and the gap
+that remains. It claims no superiority: no measurement against another language is filed.
 
 ## Capabilities after Gate 2
 
@@ -644,8 +711,12 @@ The set widens from eight bits to sixteen. Ids never change.
 
 | | Before | After |
 | --- | --- | --- |
-| Semantic epoch | 30 | bumped by each semantic commit of Gate 2 — 31 (numbers), 32 (arrays and constants), 33 (bytes and text) |
+| Semantic epoch | 30 | 42 — bumped by each semantic commit of Gate 2 (and once by M1, 34); `stability.md` lists each step |
 | `nazm.interface` | 11 | 11 so far — numeric types and arrays are new type names and shapes, which a reader from before Gate 2 refuses rather than misreads (`wire.rs`, the `IoCap` precedent); the major moves when the interface carries something an older reader would misread |
-| Runtime ABI | 14 | 15 — new runtime entry points (floats, reactor, handles) |
-| Standard library API | 1.0 | 1.1 — additions only, `API-1.0` unchanged |
+| Runtime ABI | 14 | 20 — floats, handles and files, networking and the reactor, time, processes, entropy; `stability.md` lists each step |
+| Standard library API | 1.0 | 1.1 — additions only, every 1.0 line of `API-1.0` unchanged; twenty-nine modules |
 | Language | 1.0 | 1.0 — Gate 2 lands before the first 1.0.0 release; the compatibility corpus is the check that no 1.0 program changed meaning |
+| Lockfile | `nazm.lock/1` | `nazm.lock/1`, and `nazm.lock/2` when a feature is enabled (§22) |
+| Machine outputs | — | `nazm.test/1` gained `kind`, additive; `nazm.bench/1` new, EXPERIMENTAL |
+
+What a program written before Gate 2 meets is `docs/migration-gate-2.md`.

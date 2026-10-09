@@ -107,6 +107,10 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `time` | STABLE 1.0 | Gate 2: nanosecond clocks and a sleep that parks; no timers beyond a sleep in a task or a select's deadline |
 | `process` | STABLE 1.0 | Gate 2: the environment, and a program run with three pipes; no signal handling |
 | `randomness` | STABLE 1.0 | Gate 2: entropy behind `RandomCap`; the seeded generator is a library's |
+| `attributes` | COMPATIBLE EXTENSION POINT | Gate 2: a closed vocabulary; 1.x may add an attribute, never change one |
+| `conditional-compilation` | STABLE 1.0 | Gate 2: conditions read only the build's configuration |
+| `tests-and-benchmarks` | STABLE 1.0 | Gate 2: the test and fuzz shapes and outcomes; `nazm bench`'s measurements are EXPERIMENTAL |
+| `package-features` | STABLE 1.0 | Gate 2: additive features per package; `nazm.lock/2` |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -1250,7 +1254,7 @@ that exists but cannot be read is `N0407`.
 | `@std/fs` | (N84) `fs_exists(io, path) -> Bool`, `fs_read(io, path) -> Result[Str, Str]`, `fs_read_lines(io, path) -> Result[Strs, Str]`, `fs_write(io, path, text) -> Result[Int, Str]`, `fs_write_lines(io, path, lines) -> Result[Int, Str]` — each `! { io }` |
 | `@std/time` | (N84) `time_ms(t)`, `time_since(t, start)`, `time_deadline(t, ms)`, `time_passed(t, deadline) -> Bool` — each taking the `TimeCap` that allows it, and no effect; and (Gate 2) `Duration { nanos }`, `Instant { nanos }`, `WallTime { unix_nanos }`, `time_duration_ms(ms)`, `time_duration_ns(ns)`, `time_duration_to_ms(d)`, `time_duration_add(a, b)`, `time_now(t)`, `time_elapsed(t, since)`, `time_after(t, d)`, `time_reached(t, at)`, `time_between(a, b)`, `time_wall(t)`, `time_sleep(t, d)` |
 | `@std/json` | (N84) `JsonDoc` and `JsonNode`, an arena document: `json_parse(text) -> Result[JsonDoc, Str]` (an `Err` names the byte offset; integers only), `json_encode(doc)`, `json_encode_node(doc, node)`, `json_quote(s)`, `json_root`, `json_kind`, `json_len`, `json_at`, `json_get`, `json_key_at`, `json_value_at`, `json_int`, `json_str`, `json_bool`, and the builders `json_new`, `json_with_root`, `json_add_null`, `json_add_bool`, `json_add_int`, `json_add_str`, `json_add_array`, `json_add_object`; and (Gate 2) `json_parse_floats(text)` — a number with a fraction or an exponent, or an integer `Int` cannot hold, is a `Float64` node, which `json_kind` calls a `number` and `json_int` does not answer; `json_parse` still refuses them — `json_add_float(doc, x)`, `json_float(doc, node) -> Option[Float64]` (an integer node converted), and `json_encode_pretty(doc)` (two spaces a level); a float is written as the shortest text that reads back to it, with `.0` where it would read as an integer, and an infinity or NaN as `null` |
-| `@std/test` | (N84) `test_int(what, actual, expected) -> Result[Int, Str]`, `test_str(what, actual, expected) -> Result[Str, Str]`, `test_true(what, cond) -> Result[Bool, Str]` |
+| `@std/test` | (N84) `test_int(what, actual, expected) -> Result[Int, Str]`, `test_str(what, actual, expected) -> Result[Str, Str]`, `test_true(what, cond) -> Result[Bool, Str]`; (Gate 2) `assert_true`, `assert_eq_int`, `assert_eq_str`, `assert_some`, `assert_ok`, each answering what a `@test` function returns, and `property(seed, cases, check)` |
 | `@std/hash` | (Gate 2) the `Hash` trait — `hash(self) -> UInt64` and `same(self, other) -> Bool`, two keys that are `same` hashing alike — implemented for every integer type, `Bool` and `Str`; `hash_bytes(s)` (64-bit FNV-1a over the bytes, then SplitMix64's finaliser), `hash_u64(x)` (the same over a word's eight bytes, least significant first), `hash_combine(a, b)`, `hash_finish(x)`. A fixed function: the same in every implementation and every run. Floats are not keys (a NaN is not equal to itself) |
 | `@std/hashmap` | (Gate 2) `HashMap[K: Hash, V]`, open addressing with linear probing, shared like any handle: `hashmap_new[K, V]()`, `hashmap_with_seed[K, V](seed)`, `hashmap_len`, `hashmap_set -> Bool` (whether it replaced), `hashmap_get -> Option[V]`, `hashmap_has`, `hashmap_remove -> Option[V]`, `hashmap_keys -> Vec[K]`, `hashmap_values -> Vec[V]`. Insert, lookup and removal take expected constant time, growth amortised constant time; iteration is in table order, which the keys, their order of insertion and the seed decide — the same in every run, and unpredictable to whoever chooses the keys only when the seed is (`Slot` is the table's entry) |
 | `@std/hashset` | (Gate 2) `HashSet[K: Hash]` over a `HashMap`: `hashset_new[K]()`, `hashset_with_seed[K](seed)`, `hashset_add -> Bool` (whether it was new), `hashset_has`, `hashset_remove -> Bool`, `hashset_len`, `hashset_items -> Vec[K]` |
@@ -2382,7 +2386,7 @@ manifest does not state is `N0502`, two packages of one name `N0503`, a cycle `N
 dependency `N0501`, an invalid manifest — an unknown key included — `N0500`. Every source is a
 path, so nothing is ever downloaded.
 
-`nazm lock DIR` writes `nazm.lock` (`nazm.lock/1`): each package's name, version, source relative
+`nazm lock DIR` writes `nazm.lock` (`nazm.lock/1`; `nazm.lock/2` with enabled features since Gate 2, *Package features*): each package's name, version, source relative
 to the root package, and a BLAKE3 digest of its manifest and sources, in name order — the same
 bytes for the same packages anywhere. `--locked` holds `check`, `build` or `run` to it before
 anything is compiled: no lockfile is `N0505`, other packages than it records `N0506`, and a package
@@ -3526,7 +3530,7 @@ pub extern "C" fn nazm_triple(x: Int) -> Int ! {} = "nazm_triple" { x * 3 }
 | | |
 | --- | --- |
 | **`Str` argument** | A NUL-terminated copy for the call's duration; C borrows it. A `Str` holding a NUL byte fails the call before C runs (`N0405`). A `Str` result was refused (`N0381`) until N85, which copies it (*Foreign functions v3*) |
-| **Export** | `pub extern "C" fn … ! {} = "symbol" { … }`: a C-callable function of `Int`s and `Bool`s, public, effect-free and not generic (`N0391` otherwise) |
+| **Export** | `pub extern "C" fn … ! {} = "symbol" { … }`: a C-callable function of numbers and `Bool`s, public, effect-free and not generic (`N0391` otherwise). Since Gate 2 every number crosses as its C type — `int8_t` … `uint64_t`, `float`, `double` — which the generated header names (`general-purpose.md` §23) |
 | **Failure in an export** | Reported on standard error; the process exits with status 2. Nothing unwinds into C |
 | **Library** | `nazm build --lib FILE -o OUT.a` writes the static archive and `OUT.h`; no `main` needed |
 
@@ -3952,6 +3956,75 @@ Int` fills `buf` from the operating system's entropy and answers its length, or 
 `RandomCap` held (id 8) and performs no effect, as a clock does. A **seeded** generator needs no
 authority at all: `@std/random`'s `Rng` is ordinary code, the same sequence for the same seed in
 every implementation and run. Reproducibility is the default; unpredictability is asked for by name.
+
+### Attributes — Gate 2
+<!-- id: attributes -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §16). An attribute is `@` and a name,
+with arguments in parentheses or none, written on the lines before a top-level declaration —
+a function, `struct`, `enum`, `trait`, `impl` or `const` — never before a `use`, and not, in
+1.0, inside an `impl` or a `trait`. An argument is a string, a word, `key = "value"`, or
+`name(…)` of further arguments. The vocabulary is closed: there are no user-defined attributes
+and no macros.
+
+| | |
+| --- | --- |
+| **`@cfg(condition)`** | The declaration exists only when the condition holds (*Conditional compilation*, below). It may be written more than once; every one must hold |
+| **`@test`, `@test(fails)`** | A function `nazm test` runs; `fails` says it passes by failing (`general-purpose.md` §18) |
+| **`@bench`** | A function `nazm bench` measures (§19) |
+| **`@fuzz`** | A function `nazm test --fuzz` drives with generated input (§18) |
+| **`@deprecated`, `@deprecated("why")`** | Recorded on the declaration for documentation; not on an `impl`, which nothing names. 1.0 reports no warning for a use (*As built*, §16) |
+| **Refused** | An attribute not in this list, one on a declaration it does not mark, one with arguments it does not take, or one other than `@cfg` written twice is `N0619`. A malformed argument is a syntax error (`N0100`), reported once; the attribute is then not checked again |
+
+Attributes change no expression's meaning. The formatter writes each on its own line, `@` against
+its name.
+
+### Conditional compilation — Gate 2
+<!-- id: conditional-compilation -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §17). A declaration whose `@cfg` does not
+hold is removed before any name is resolved or type checked — as if it were not written — so two
+declarations of one name under exclusive conditions are not a duplicate, and code that only one
+target can compile is not checked on another. An `impl` removed takes its methods with it.
+
+| | |
+| --- | --- |
+| **Conditions** | `os = "…"` (`macos`, `linux`, `wasm`, or `none` for a board), `arch = "…"` (`aarch64`, `x86_64`, `wasm32`, `riscv64gc`, …: the triple's first part), `target = "…"` (the whole triple), `feature = "…"` (a package feature enabled, §22), `profile = "…"` (a restriction profile the build is held to); combined with `all(…)`, `any(…)` and `not(…)`. Anything else is `N0619` |
+| **What decides them** | The build's configuration and nothing else: `nazm build --target T` decides for `T`, and with no target, and for `check` and `run`, the host. The profiles are `--profile`'s and every package manifest's. The same source under the same configuration keeps the same declarations |
+| **Reuse** | A module that writes `@cfg` is checked as its configuration builds it; its check is filed under that configuration and never reused under another |
+
+### Tests and benchmarks — Gate 2
+<!-- id: tests-and-benchmarks -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §18–§19). A marked function is run by a
+generated entry: a `main` appended to the file's text as the compiler reads it — never to the file —
+that holds the authority the function's parameters ask for, as `main`'s do, calls it, and ends the
+process. The file's own `main`, if any, is moved aside under a name of the same length, so every
+diagnostic about the file lands where it is written; it is not run.
+
+| | |
+| --- | --- |
+| **`@test`** | `fn NAME(capabilities…) -> Result[Int, Str]`. It passes when it answers `Ok`; an `Err` fails, its message printed, and so does a trap. Both end the process `2`. `@test(fails)` passes only when the process ends `2` — never when the program does not check |
+| **`@fuzz`** | `fn NAME(input: Bytes, capabilities…) -> Result[Int, Str]`, called with `nazm test --fuzz N` inputs (100 by default) of 0 to 64 bytes from a fixed xorshift sequence: the same inputs in every implementation and run. The first `Err` fails, naming its case |
+| **`@bench`** | `fn NAME(capabilities…) -> Int`, built natively at `-O2` and called `--iterations` times between two readings of the monotonic clock; `nazm bench` reports nanoseconds per iteration (`nazm.bench/1`, EXPERIMENTAL) |
+| **Running** | `nazm test` runs every `@test` and `@fuzz` function of each file named, as `STEM::NAME`, under the interpreter and as an executable, each in its own process, beside the recorded-output cases; `--filter TEXT` keeps the cases whose name contains it. A function whose `@cfg` does not hold on this host is not run |
+| **Refused** | A marked function of another shape, a generic one, a foreign one, or `main` marked, is `N0619` |
+| **Library** | `@std/test`'s `assert_…` functions answer `Result[Int, Str]`, written with `?`; `property(seed, cases, check)` checks `cases` cases drawn from one `@std/random` generator |
+
+### Package features — Gate 2
+<!-- id: package-features -->
+
+Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §22). A manifest may declare
+`[features]`: each a name of a package name's shape, listing what enabling it enables — another of
+the package's own features, or `DEPENDENCY/FEATURE` of a dependency it declares. A dependency entry
+may ask for features: `shapes = { path = "../shapes", version = "0.1.0", features = ["fast"] }`.
+
+| | |
+| --- | --- |
+| **Enabled** | Each package's: what its `default` enables, what every dependent asks of it, what `--features` (on `check`, `run` and `build`) asks of the root, and what each enabled feature enables, to a fixed point. Additive: nothing disables a feature, so the order of asking cannot change the set. `default` names a group and is not itself enabled; nothing switches it off |
+| **Read by** | `@cfg(feature = "NAME")` (*Conditional compilation*), in each module for **its own package's** set; a toolchain module's set is empty. Nothing from the environment enters it |
+| **Refused** | A feature item that is neither the package's own feature nor `DEPENDENCY/FEATURE` of a declared dependency, and a feature asked of a package that does not declare it, are `N0500` before anything is checked; `--features` outside a package is a usage error |
+| **Lockfile** | When any package has an enabled feature, `nazm lock` writes `nazm.lock/2`: `/1`'s fields and each package's `features`, the set its manifests enable (not `--features`'). A build with no feature keeps `nazm.lock/1` byte for byte; both are read. `--locked` refuses a recorded set that differs (`N0506`) |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

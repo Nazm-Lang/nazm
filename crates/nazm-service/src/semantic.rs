@@ -60,6 +60,8 @@ pub enum SemanticClass {
     Trait,
     /// A trait's method, at its declaration or a call through a bound (N78).
     TraitMethod,
+    /// A module's constant (Gate 2).
+    Constant,
 }
 
 /// Whether an identifier declares what it names or refers to it.
@@ -159,6 +161,7 @@ fn classify(s: &Snapshot, at: Span) -> Option<SemanticIdentifier> {
             ReferenceTarget::PayloadField(_) => SemanticClass::PayloadField,
             ReferenceTarget::Trait(_) => SemanticClass::Trait,
             ReferenceTarget::TraitMethod(..) => SemanticClass::TraitMethod,
+            ReferenceTarget::Const(_) => SemanticClass::Constant,
         };
         (class, role, SemanticTarget::Entity(entity))
     } else if let Some(Callee::Builtin(i)) = res.callee(at) {

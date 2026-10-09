@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.bench-1.json",
+  "title": "nazm.bench/1",
+  "description": "One `@bench` function's measurement from `nazm bench --json` (Gate 2, §19): built natively at -O2 and called `iterations` times between two readings of the monotonic clock. One object per line on stdout. A measurement on one machine at one moment; EXPERIMENTAL.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "file", "iterations", "total_ns", "ns_per_iteration"],
+  "properties": {
+    "schema": { "const": "nazm.bench/1" },
+    "name": { "type": "string", "description": "`STEM::FUNCTION`." },
+    "file": { "type": "string" },
+    "iterations": { "type": "integer", "minimum": 1 },
+    "total_ns": { "type": "integer", "minimum": 0, "description": "The nanoseconds every iteration took together." },
+    "ns_per_iteration": { "type": "integer", "minimum": 0, "description": "`total_ns` divided by `iterations`, rounded down." }
+  }
+}

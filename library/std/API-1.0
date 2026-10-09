@@ -287,6 +287,12 @@
 @std/test pub fn test_int(what: Str, actual: Int, expected: Int) -> Result[Int, Str] ! {}
 @std/test pub fn test_str(what: Str, actual: Str, expected: Str) -> Result[Str, Str] ! {}
 @std/test pub fn test_true(what: Str, cond: Bool) -> Result[Bool, Str] ! {}
+@std/test pub fn assert_true(what: Str, cond: Bool) -> Result[Int, Str] ! {}
+@std/test pub fn assert_eq_int(what: Str, actual: Int, expected: Int) -> Result[Int, Str] ! {}
+@std/test pub fn assert_eq_str(what: Str, actual: Str, expected: Str) -> Result[Int, Str] ! {}
+@std/test pub fn assert_some[T](what: Str, o: Option[T]) -> Result[T, Str] ! {}
+@std/test pub fn assert_ok[T](what: Str, r: Result[T, Str]) -> Result[T, Str] ! {}
+@std/test pub fn property[effects E](seed: UInt64, cases: Int, check: fn(Rng) -> Result[Int, Str] ! { E }) -> Result[Int, Str] ! { E }
 @std/text pub fn text_starts_with(s: Str, prefix: Str) -> Bool ! {}
 @std/text pub fn text_ends_with(s: Str, suffix: Str) -> Bool ! {}
 @std/text pub fn text_find(s: Str, needle: Str) -> Option[Int] ! {}

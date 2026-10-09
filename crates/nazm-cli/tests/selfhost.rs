@@ -116,6 +116,9 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::Tilde => 64,
                 T::Shl => 65,
                 T::Shr => 66,
+                // `@` (Gate 2), which the Nazm-written lexer refuses as an unknown byte; no source
+                // this test reads writes one.
+                T::At => 67,
                 T::Str(_) => 2,
                 T::Ident(_) => 3,
                 T::Fn => 10,

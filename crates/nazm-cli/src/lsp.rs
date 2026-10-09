@@ -224,7 +224,8 @@ const fn token_type(class: SemanticClass) -> (u32, bool) {
         SemanticClass::Enum => (2, false),
         SemanticClass::TypeParameter => (3, false),
         SemanticClass::Parameter => (4, false),
-        SemanticClass::Variable => (5, false),
+        // A constant is a variable to an editor: the legend has no constant type (Gate 2).
+        SemanticClass::Variable | SemanticClass::Constant => (5, false),
         SemanticClass::Field | SemanticClass::PayloadField => (6, false),
         SemanticClass::Variant => (7, false),
         SemanticClass::Function => (8, false),

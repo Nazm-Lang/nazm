@@ -171,6 +171,7 @@ fn pipeline(
     args: Vec<String>,
 ) -> Outcome {
     let (program, mut diagnostics) = nazm_syntax::parse_map(map);
+    let program = check::attributes::configure(program, graph, &mut diagnostics);
     let parse_failed = !diagnostics.is_empty();
     let (resolution, check_errors) = check(&program, graph);
 
@@ -271,6 +272,7 @@ pub fn check_map_reusing(
 ) -> Vec<nazm_diag::Diagnostic> {
     let run = || {
         let (program, mut diagnostics) = nazm_syntax::parse_map(map);
+        let program = check::attributes::configure(program, graph, &mut diagnostics);
         let parse_failed = !diagnostics.is_empty();
 
         // A module whose file produced a parse diagnostic. Its tree is partial, so its
@@ -436,6 +438,7 @@ pub fn analyse_parsed(
     root: Option<&__syntax::Revision>,
 ) -> (Analysis, bool) {
     let (program, mut diagnostics, reused) = nazm_syntax::parse_map_with_root(map, root);
+    let program = check::attributes::configure(program, graph, &mut diagnostics);
     let parse_failed = !diagnostics.is_empty();
     let mut syntax_errors: Vec<nazm_span::FileId> =
         diagnostics.iter().map(|d| d.primary.span.file).collect();
@@ -483,14 +486,14 @@ pub struct Probe {
 /// [`analyse`] in every other respect, stack included.
 #[must_use]
 pub fn probe(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, offset: u32) -> Probe {
-    let (program, diagnostics, root) = nazm_syntax::parse_map_at(map, Some(offset));
+    let (program, mut diagnostics, root) = nazm_syntax::parse_map_at(map, Some(offset));
+    let program = check::attributes::configure(program, graph, &mut diagnostics);
     let hole = program.hole;
     let mut syntax_errors: Vec<nazm_span::FileId> =
         diagnostics.iter().map(|d| d.primary.span.file).collect();
     syntax_errors.sort_unstable();
     syntax_errors.dedup();
     let (resolution, check_errors) = check(&program, graph);
-    let mut diagnostics = diagnostics;
     diagnostics.extend(check_errors);
     Probe {
         analysis: Analysis {

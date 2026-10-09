@@ -243,6 +243,17 @@ pub(super) fn record_module_names(
     env: &Env,
     types: &Types,
 ) {
+    // Its constants, and every constant named in another's value (Gate 2), for the index.
+    let mut decls: Vec<Span> = types.consts.decls.values().copied().collect();
+    decls.sort_by_key(|s| (s.file, s.start));
+    for d in decls {
+        res.record_const_decl(d);
+    }
+    for (at, name) in &types.consts.refs {
+        if let Some(decl) = types.consts.decls.get(name) {
+            res.record_const_ref(*at, *decl);
+        }
+    }
     use nazm_sema::scope::{defined, Candidate, Named};
     let callables = env
         .names
@@ -471,6 +482,11 @@ fn resolve_written_inner(
             .as_ref()
             .and_then(|a| a.first().copied())
             .unwrap_or(Type::Int);
+        if let Expr::Var { name, span } = len.as_ref() {
+            if let Some(decl) = types.consts.decls.get(name) {
+                res.record_const_ref(*span, *decl);
+            }
+        }
         let n = array_length(types, len, errors).unwrap_or(1);
         let t = res.types_mut().array_of(elem, n);
         res.record_array_written(t, written.span);

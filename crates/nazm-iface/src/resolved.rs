@@ -222,6 +222,9 @@ fn durable(
     };
     Ok(Some(match target {
         ReferenceTarget::Local(_) => return Ok(None),
+        // A constant is its own module's (Gate 2): nothing outside it names one, so it has no
+        // durable identity to publish, as a local has none.
+        ReferenceTarget::Const(_) => return Ok(None),
         // N78: a trait, and a trait's method as its trait's key and its name.
         ReferenceTarget::Trait(t) => DurableTarget {
             item: trait_key(t)?.0,

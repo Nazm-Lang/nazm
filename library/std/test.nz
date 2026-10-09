@@ -3,6 +3,8 @@
 // Imported with `use "@std/test";`. A test written with these returns its first failure as a
 // value with `?`, and says what was expected and what was found; nothing here traps or prints.
 
+use "@std/random";
+
 /// `Ok(actual)` when `actual` is `expected`, or an `Err` naming `what` and both values.
 pub fn test_int(what: Str, actual: Int, expected: Int) -> Result[Int, Str] ! {} {
     if actual == expected { Result[Int, Str].Ok(value: actual) } else {
@@ -26,4 +28,59 @@ pub fn test_str(what: Str, actual: Str, expected: Str) -> Result[Str, Str] ! {} 
 /// `Ok(true)` when `cond` holds, or an `Err` naming `what`.
 pub fn test_true(what: Str, cond: Bool) -> Result[Bool, Str] ! {} {
     if cond { Result[Bool, Str].Ok(value: true) } else { Result[Bool, Str].Err(error: str_concat(what, ": expected true")) }
+}
+
+// Gate 2 (§18): what a `@test` function returns is a `Result[Int, Str]`, so each assertion
+// below answers one, written with `?` — the first failure ends the test and names itself.
+
+/// `Ok(0)` when `cond` holds, or an `Err` naming `what`.
+pub fn assert_true(what: Str, cond: Bool) -> Result[Int, Str] ! {} {
+    if cond { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: str_concat(what, ": expected true")) }
+}
+
+/// `Ok(actual)` when `actual` is `expected`, or an `Err` naming `what` and both values.
+pub fn assert_eq_int(what: Str, actual: Int, expected: Int) -> Result[Int, Str] ! {} {
+    test_int(what, actual, expected)
+}
+
+/// `Ok(0)` when `actual` is `expected`, or an `Err` naming `what` and both values.
+pub fn assert_eq_str(what: Str, actual: Str, expected: Str) -> Result[Int, Str] ! {} {
+    match test_str(what, actual, expected) {
+        Result.Ok(value: v) => Result[Int, Str].Ok(value: 0),
+        Result.Err(error: e) => Result[Int, Str].Err(error: e),
+    }
+}
+
+/// The value inside `o`, or an `Err` naming `what` when there is none.
+pub fn assert_some[T](what: Str, o: Option[T]) -> Result[T, Str] ! {} {
+    match o {
+        Option.Some(value: v) => Result[T, Str].Ok(value: v),
+        Option.None() => Result[T, Str].Err(error: str_concat(what, ": expected a value, found none")),
+    }
+}
+
+/// The value inside `r`, or an `Err` naming `what` and `r`'s own error.
+pub fn assert_ok[T](what: Str, r: Result[T, Str]) -> Result[T, Str] ! {} {
+    match r {
+        Result.Ok(value: v) => Result[T, Str].Ok(value: v),
+        Result.Err(error: e) => Result[T, Str].Err(error: str_concat(str_concat(what, ": "), e)),
+    }
+}
+
+/// `check` on `cases` cases, every one drawing from one generator seeded with `seed`: `Ok(cases)`,
+/// or the first `Err`, naming its case. The same seed checks the same cases in every
+/// implementation and run, so a failure found is a failure kept.
+pub fn property[effects E](seed: UInt64, cases: Int, check: fn(Rng) -> Result[Int, Str] ! { E }) -> Result[Int, Str] ! { E } {
+    let r = random_new(seed);
+    let mut i = 0;
+    while i < cases {
+        match check(r) {
+            Result.Ok(value: v) => 0,
+            Result.Err(error: e) => {
+                return Result[Int, Str].Err(error: str_concat(str_concat(str_concat("case ", int_to_str(i)), ": "), e));
+            },
+        };
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: cases)
 }
