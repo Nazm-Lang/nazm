@@ -276,6 +276,7 @@ pub fn digest() -> &'static str {
             h.update(switch::emit_errno(t).as_bytes());
             h.update(platform::emit_os(t).as_bytes());
             h.update(platform::emit_stack(t).as_bytes());
+            h.update(platform::emit_init(t).unwrap_or_default().as_bytes());
         }
         for i in INVENTORY {
             h.update(format!("{i:?}").as_bytes());

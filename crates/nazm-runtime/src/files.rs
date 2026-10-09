@@ -187,11 +187,11 @@ entry:
   %dir = icmp eq i64 %kind, 2
   br i1 %dir, label %closedir, label %close
 closedir:
-  %rd = call i32 @closedir(ptr %obj)
+  %rd = call i32 @nz_os_closedir(ptr %obj)
   br label %done
 close:
   %d = trunc i64 %fd to i32
-  %rf = call i32 @close(i32 %d)
+  %rf = call i32 @nz_os_close(i32 %d)
   br label %done
 done:
   %r = phi i32 [ %rd, %closedir ], [ %rf, %close ]
@@ -355,7 +355,7 @@ open:
 fail:
   ret i64 %e
 ok:
-  %fd = call i32 @dirfd(ptr %d)
+  %fd = call i32 @nz_os_dirfd(ptr %d)
   %h = call i64 @nz.os_adopt(i32 %fd, i64 2, ptr %d)
   ret i64 %h
 }
@@ -422,7 +422,7 @@ socket:
   ret i64 %sr
 read:
   %fd = trunc i64 %h to i32
-  %r = call i64 @read(i32 %fd, ptr %buf, i64 %n)
+  %r = call i64 @nz_os_read(i32 %fd, ptr %buf, i64 %n)
   %e = call i64 @nz.os_errno()
   call void @nz.os_unpin(i64 %h)
   %failed = icmp slt i64 %r, 0
@@ -467,7 +467,7 @@ pipe:
   ret i64 %pw
 write:
   %fd = trunc i64 %h to i32
-  %r = call i64 @write(i32 %fd, ptr %buf, i64 %n)
+  %r = call i64 @nz_os_write(i32 %fd, ptr %buf, i64 %n)
   %e = call i64 @nz.os_errno()
   call void @nz.os_unpin(i64 %h)
   %failed = icmp slt i64 %r, 0
@@ -512,7 +512,7 @@ einval:
 seek:
   %fd = trunc i64 %h to i32
   %w = trunc i64 %whence to i32
-  %r = call i64 @lseek(i32 %fd, i64 %offset, i32 %w)
+  %r = call i64 @nz_os_lseek(i32 %fd, i64 %offset, i32 %w)
   %e = call i64 @nz.os_errno()
   call void @nz.os_unpin(i64 %h)
   %failed = icmp slt i64 %r, 0
@@ -546,7 +546,7 @@ isstdin:
   ret i64 -22
 sync:
   %fd = trunc i64 %h to i32
-  %r = call i32 @fsync(i32 %fd)
+  %r = call i32 @nz_os_fsync(i32 %fd)
   %e = call i64 @nz.os_errno()
   call void @nz.os_unpin(i64 %h)
   %failed = icmp slt i32 %r, 0
@@ -617,10 +617,10 @@ mkdir:
   %rm = call i32 @nz_os_mkdir(ptr %path)
   br label %done
 rmdir:
-  %rr = call i32 @rmdir(ptr %path)
+  %rr = call i32 @nz_os_rmdir(ptr %path)
   br label %done
 unlink:
-  %ru = call i32 @unlink(ptr %path)
+  %ru = call i32 @nz_os_unlink(ptr %path)
   br label %done
 done:
   %r = phi i32 [ %rm, %mkdir ], [ %rr, %rmdir ], [ %ru, %unlink ]
@@ -646,7 +646,7 @@ oomb:
   call void @free(ptr %a)
   ret i64 -12
 go:
-  %r = call i32 @rename(ptr %a, ptr %b)
+  %r = call i32 @nz_os_rename(ptr %a, ptr %b)
   %e = call i64 @nz.os_errno()
   call void @free(ptr %a)
   call void @free(ptr %b)
@@ -770,7 +770,7 @@ chunk:
   %big = icmp sgt i64 %left, 256
   %take = select i1 %big, i64 256, i64 %left
   %p = getelementptr i8, ptr %buf, i64 %at
-  %r = call i32 @getentropy(ptr %p, i64 %take)
+  %r = call i32 @nz_os_entropy(ptr %p, i64 %take)
   %bad = icmp ne i32 %r, 0
   br i1 %bad, label %fail, label %got
 got:
