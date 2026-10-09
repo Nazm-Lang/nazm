@@ -1,0 +1,27 @@
+// Attributes and conditional compilation: a false condition removes its declaration (spec: attributes, conditional-compilation).
+@cfg(os = "no-such-os")
+fn which() -> Str { "never built" }
+
+@cfg(not(os = "no-such-os"))
+fn which() -> Str { "kept" }
+
+@cfg(all(not(arch = "no-such-arch"), any(feature = "absent", target = "no-such-target")))
+fn also() -> Str { "never built" }
+
+@cfg(not(all(not(arch = "no-such-arch"), any(feature = "absent", target = "no-such-target"))))
+fn also() -> Str { "also kept" }
+
+@deprecated("recorded, not reported")
+fn old() -> Int { 7 }
+
+@test
+fn not_run_by_nazm_run() -> Result[Int, Str] {
+    Result[Int, Str].Err(error: "a test runs only under nazm test")
+}
+
+fn main(out: OutCap) -> Int {
+    print(str_concat(which(), "\n"));
+    print(str_concat(also(), "\n"));
+    print(str_concat(int_to_str(old()), "\n"));
+    0
+}

@@ -1,0 +1,6 @@
+// expect: N0619
+// A condition asks only about the build: os, arch, target, feature or profile (spec: conditional-compilation).
+@cfg(colour = "red")
+fn f() -> Int { 0 }
+
+fn main() -> Int { 0 }

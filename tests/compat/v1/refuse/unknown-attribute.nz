@@ -1,0 +1,6 @@
+// expect: N0619
+// The attribute vocabulary is the compiler's and closed: there are no user-defined attributes (spec: attributes).
+@inline
+fn f() -> Int { 0 }
+
+fn main() -> Int { f() }

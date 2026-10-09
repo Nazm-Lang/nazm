@@ -1,0 +1,61 @@
+// Gate 2's collections and binary encoding: a map, a set, a deque, a round trip (spec: the standard library).
+use "@std/hash";
+use "@std/hashmap";
+use "@std/hashset";
+use "@std/deque";
+use "@std/binary";
+
+fn show(out: OutCap, s: Str) -> Int ! {io} {
+    print(str_concat(s, "\n"))
+}
+
+fn some_int(o: Option[Int]) -> Str {
+    match o {
+        Option.Some(value: v) => int_to_str(v),
+        Option.None() => "none",
+    }
+}
+
+fn main(out: OutCap) -> Int {
+    let m = hashmap_new[Str, Int]();
+    hashmap_set(m, "one", 1);
+    hashmap_set(m, "two", 2);
+    hashmap_set(m, "one", 11);
+    show(out, int_to_str(hashmap_len(m)));
+    show(out, some_int(hashmap_get(m, "one")));
+    show(out, some_int(hashmap_remove(m, "two")));
+    show(out, if hashmap_has(m, "two") { "has two" } else { "two is gone" });
+
+    let s = hashset_new[Int]();
+    hashset_add(s, 3);
+    hashset_add(s, 3);
+    hashset_add(s, 4);
+    show(out, int_to_str(hashset_len(s)));
+
+    let d = deque_new[Int]();
+    deque_push_back(d, 1);
+    deque_push_back(d, 2);
+    deque_push_front(d, 0);
+    show(out, some_int(deque_pop_front(d)));
+    show(out, some_int(deque_pop_back(d)));
+    show(out, int_to_str(deque_len(d)));
+
+    let w = binary_writer();
+    binary_put_u16_be(w, UInt16(258));
+    binary_put_varint(w, UInt64(300));
+    binary_put_zigzag(w, 0 - 3);
+    let b = binary_finish(w);
+    let mut i = 0;
+    let mut text = "";
+    while i < bytes_len(b) {
+        text = str_concat(text, str_concat(num_to_str(bytes_get(b, i)), " "));
+        i = i + 1;
+    }
+    show(out, text);
+    let r = binary_reader(b);
+    let a = match binary_get_u16_be(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e, };
+    let v = match binary_get_varint(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e, };
+    let z = match binary_get_zigzag(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e, };
+    show(out, str_concat(str_concat(str_concat(str_concat(a, " "), v), " "), z));
+    0
+}

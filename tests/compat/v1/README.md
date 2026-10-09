@@ -18,7 +18,9 @@ function values and closures, traits and methods, control flow, strings as bytes
 contract (values, handles, capture by copy), effects, capabilities and attenuation, effect
 parameters, provenance and declassification, structured concurrency with generic channels and
 selection, modules and re-exports, packages, the standard library, the C boundary, and the
-refusals that keep absent constructs absent.
+refusals that keep absent constructs absent. Gate 2 added numbers, arrays and constants, bytes
+and text, the collections and binary encoding, the seeded generator, attributes and conditional
+compilation, the shape of a test, and exports of every number.
 
 ## The rules
 

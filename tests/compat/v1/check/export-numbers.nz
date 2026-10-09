@@ -1,0 +1,8 @@
+// An export takes and returns every number Nazm has, each as its C type (spec: foreign functions, the C foundation).
+pub extern "C" fn nz_scale(x: Float64, k: Int32) -> Float64 ! {} = "nz_scale" { x * Float64(k) }
+
+pub extern "C" fn nz_mask(x: UInt8, y: UInt16) -> UInt32 ! {} = "nz_mask" { UInt32(x) | (UInt32(y) << 8) }
+
+pub extern "C" fn nz_half(x: Float32) -> Float32 ! {} = "nz_half" { x / Float32(2.0) }
+
+fn main() -> Int { 0 }
