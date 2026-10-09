@@ -379,6 +379,12 @@ status = "unreproduced"
 why = "measured once on the host with the debug binary by the method its prose describes, with no command in the tree that regenerates it: a current claim, not yet reproducible"
 
 [[claim]]
+heading = "Build time across Gate 2 — measured 2026-10-09"
+status = "reproducible"
+how = "cargo xtask contained bench"
+metric = "min and median build, check, interpret and run time per benchmark program, against bench/baseline-linux-aarch64.json; the before-Gate-2 column is the same command at 3ba27ee"
+
+[[claim]]
 heading = "The default scheduler and the two regressions — N106, measured 2026-10-05"
 status = "reproducible"
 how = "cargo test --release -p nazm-cli --test scheduler_default -- --ignored --nocapture what_the_default_scheduler_costs"

@@ -2816,6 +2816,42 @@ copy, a release). Not isolated: the capture's own cost against an N84 build of t
 56.6 ms for the scalar loop was measured by another method and is not a comparator. A program that
 calls no C is unchanged: it reaches no `errno` part and links no `errno` unit under LLVM.
 
+### Build time across Gate 2 — measured 2026-10-09
+
+**Hypothesis:** Gate 2's runtime and language additions cost a program that uses none of them
+little or nothing to build, and nothing to run.
+
+**What flagged it.** `cargo xtask contained bench` (one CPU, Linux aarch64) against the baseline
+re-saved at N106: `arith`, `channels` and `sequences` built 25–39 % slower at `-O0` or `-O2`, in two
+runs. **Attributed** by building the tree before Gate 2 (`3ba27ee`, Gate 1-C1D) and running the same
+contained bench on it, and on `a9dc706`, both in one session, min of the bench's runs:
+
+| | before Gate 2 | after (`a9dc706`) | N106's baseline |
+| --- | ---: | ---: | ---: |
+| `arith` build `-O0` | 102.7 ms | 109.1 ms | 87.5 ms |
+| `calls` build `-O0` | 105.2 | 110.8 | — |
+| `floor` build `-O0` | 101.7 | 108.6 | — |
+| `sequences` build `-O0` | 104.8 | 112.0 | 91.2 |
+| `strings` build `-O2` | 143.5 | 160.8 | — |
+| `compiler/check` | 178.6 | 186.5 | — |
+| every `native-O2` run | equal within 0.2 ms | | |
+
+Most of the distance to the baseline — about 17 points of the 25 — was already there before Gate 2:
+the session's machine and image, not a milestone (the tree before Gate 2 is under the threshold
+against the same baseline). Gate 2's own share is a near-constant **6–7 ms per Linux build**: about
+1.4 ms is linking `-lm`, which every Linux link now names for the float built-ins (an empty `main`
+linked 15 times in the same container: 13.2 ms without it, 14.6 with); about 0.8 ms is checking
+(the larger prelude and built-in tables: `arith/check` 2.8 → 3.7 ms); the rest is clang reading the
+larger runtime and entry declarations. `strings` pays more at `-O2` (+12 %): its runtime unit grew by
+a third with the text built-ins it reaches. On the host (Apple M1 Pro, best of seven,
+`--no-cache`) the same two compilers differ by 0.5–1.4 % on five programs and 6.3 % on `strings -O2`.
+Running time is unchanged, and the interpreter is 10–15 % faster on the loops (`arith/interpret`
+2,694 → 2,294 ms). **Accepted** as the cost of numbers, handles and the rest in every build; linking
+`-lm` only when the float built-ins are reached is a possible 1.4 ms, not taken.
+
+**Held from now on:** `bench/baseline-linux-aarch64.json` is re-saved at Gate 2's tree, so the
+contained bench flags any build growing again by more than 25 % and 5 ms.
+
 ### The standard library 1.0 — N84, measured 2026-10-04
 
 **Workloads:** `ints_sort` of 100,000 pseudo-random integers; 10,000 `map_set`s of distinct keys in a
