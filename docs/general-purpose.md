@@ -484,6 +484,10 @@ timeouts are kinds. `@std/error` adds `Error { message: Str, context: Vec[Str] }
 `error_context`, `error_from_io` and `error_show`, so applications have one type to propagate with
 `?`. FFI errors remain `c_errno()`, now mappable with `io_error_from_code`.
 
+**As built (2026-10-09).** As designed, library only. `io_error_from_code` is
+`io_error_from_errno`, and `error_io_result` turns a `Result[T, IoError]` into a
+`Result[T, Error]` so one `?` serves both. No checking rule moved, so no epoch did.
+
 ## 14. Serialization
 
 `@std/json` gains numbers with fractions and exponents (`json_add_float`, `json_float`), and pretty

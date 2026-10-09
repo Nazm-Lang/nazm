@@ -131,9 +131,9 @@ fn codes(files: &[(&str, &str)]) -> Vec<String> {
 }
 
 const MODULES: &[&str] = &[
-    "chan", "deque", "env", "file", "fmt", "fs", "hash", "hashmap", "hashset", "io", "ioerror",
-    "json", "map", "net", "num", "option", "path", "process", "result", "seq", "show", "sort",
-    "test", "text", "time",
+    "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap", "hashset", "io",
+    "ioerror", "json", "map", "net", "num", "option", "path", "process", "result", "seq", "show",
+    "sort", "test", "text", "time",
 ];
 
 #[test]
@@ -320,6 +320,41 @@ fn hash_maps_sets_and_deques_behave_alike_everywhere() {
         "replaced\n12\n666\n221555889\n667\nalready there\n2\nset ok\n\
          17665956581633026203\n10414939609503865103\n12548494866695815710\n\
          -9 -8 -7 -6 -5 -4 -3 -2 -1 0 0 1 2 3 4 5 6 7 8 9 \n-9\n9\n18\n0\n",
+    );
+}
+
+/// Gate 2 §13: an `IoError` becomes an `Error` that propagates with `?`, gathers what each caller
+/// was doing, and reads outermost first; a C `errno` maps to its kind.
+const ERRORS: &str = r#"use "@std/ioerror";
+use "@std/error";
+use "@std/file";
+fn load(io: IoCap, path: Str) -> Result[Int, Error] ! { io } {
+    let b = error_io_result(file_read_all(io, path))?;
+    Result[Int, Error].Ok(value: bytes_len(b))
+}
+fn config(io: IoCap) -> Result[Int, Error] ! { io } {
+    match load(io, "missing.cfg") {
+        Result.Ok(value: n) => Result[Int, Error].Ok(value: n),
+        Result.Err(error: e) => Result[Int, Error].Err(error: error_context(e, "loading the configuration")),
+    }
+}
+fn main(io: IoCap) -> Int {
+    match config(io) {
+        Result.Ok(value: n) => print("loaded\n"),
+        Result.Err(error: e) => print(str_concat(error_show(e), "\n")),
+    };
+    print(str_concat(error_show(error_context(error_context(error_new("bad digit"), "line 3"), "reading the table")), "\n"));
+    print(str_concat(io_kind_name(io_error_from_errno(2).kind), "\n"));
+    0
+}
+"#;
+
+#[test]
+fn an_error_gathers_context_and_reads_outermost_first_everywhere() {
+    agrees(
+        &[("prog.nz", ERRORS)],
+        "loading the configuration: No such file or directory (NotFound)\n\
+         reading the table: line 3: bad digit\nNotFound\n0\n",
     );
 }
 
