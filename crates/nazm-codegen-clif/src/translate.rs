@@ -553,6 +553,23 @@ fn inst(
                 ConvOp::UToF => fx.b.ins().fcvt_from_uint(ty, x),
                 // Saturating, as LLVM's is: the lowering has range-checked or wants saturation,
                 // and nothing traps.
+                // x86-64's Cranelift converts only to 32 and 64 bits (Gate 3): a narrower result
+                // saturates to 32 and is clamped to its own range, which is the same answer.
+                ConvOp::FToS if ty.bits() < 32 => {
+                    let wide = fx.b.ins().fcvt_to_sint_sat(types::I32, x);
+                    let half = 1i64 << (ty.bits() - 1);
+                    let hi = fx.b.ins().iconst(types::I32, half - 1);
+                    let lo = fx.b.ins().iconst(types::I32, -half);
+                    let r = fx.b.ins().smin(wide, hi);
+                    let r = fx.b.ins().smax(r, lo);
+                    fx.b.ins().ireduce(ty, r)
+                }
+                ConvOp::FToU if ty.bits() < 32 => {
+                    let wide = fx.b.ins().fcvt_to_uint_sat(types::I32, x);
+                    let max = fx.b.ins().iconst(types::I32, (1i64 << ty.bits()) - 1);
+                    let r = fx.b.ins().umin(wide, max);
+                    fx.b.ins().ireduce(ty, r)
+                }
                 ConvOp::FToS => fx.b.ins().fcvt_to_sint_sat(ty, x),
                 ConvOp::FToU => fx.b.ins().fcvt_to_uint_sat(ty, x),
                 ConvOp::FExt => fx.b.ins().fpromote(ty, x),
