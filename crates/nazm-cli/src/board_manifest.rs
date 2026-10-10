@@ -8,7 +8,7 @@
 
 use std::borrow::Cow;
 
-use nazm_lir::runtime::board::{Board, Isa, Stop, Uart, STACK};
+use nazm_lir::runtime::board::{Board, Interrupts, Isa, Stop, Uart, STACK, TIMER_INTID};
 
 /// Why a manifest is refused: the key, and what is wrong with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +46,7 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
             "uart",
             "stop",
             "heap",
+            "interrupts",
         ],
     )?;
     let name = string(&doc, "name")?;
@@ -138,6 +139,10 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
             Some(size)
         }
     };
+    let interrupts = match doc.get("interrupts") {
+        None => None,
+        Some(_) => Some(interrupts(table(&doc, "interrupts")?, isa)?),
+    };
     Ok(Board {
         triple: Cow::Owned(triple.to_owned()),
         name: Cow::Owned(name),
@@ -148,11 +153,99 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
         stop,
         stack,
         heap,
+        interrupts,
         emulator: Cow::Borrowed(""),
         hardware: false,
     })
 }
 
+/// `[interrupts]` (Gate 3): a GICv2, the timer's period, and the further lines by name.
+fn interrupts(t: &toml::Table, isa: Isa) -> Result<Interrupts, Refused> {
+    if isa != Isa::Aarch64 {
+        return Err(refuse(
+            "interrupts",
+            "interrupts are an AArch64 board's in 1.0: a RISC-V board's machine-mode interrupts \
+             are not this runtime's",
+        ));
+    }
+    allow(
+        t,
+        "interrupts.",
+        &[
+            "controller",
+            "distributor",
+            "cpu",
+            "timer_period_us",
+            "lines",
+        ],
+    )?;
+    match string(t, "controller")
+        .map_err(|r| prefix("interrupts.", r))?
+        .as_str()
+    {
+        "gicv2" => {}
+        other => {
+            return Err(refuse(
+                "interrupts.controller",
+                format!("`{other}` is not `gicv2`"),
+            ))
+        }
+    }
+    let distributor = address(t, "distributor").map_err(|r| prefix("interrupts.", r))?;
+    let cpu = address(t, "cpu").map_err(|r| prefix("interrupts.", r))?;
+    let timer_period_us = match t.get("timer_period_us") {
+        None => None,
+        Some(_) => {
+            let p = address(t, "timer_period_us").map_err(|r| prefix("interrupts.", r))?;
+            if p == 0 {
+                return Err(refuse(
+                    "interrupts.timer_period_us",
+                    "a period is at least one microsecond",
+                ));
+            }
+            Some(p)
+        }
+    };
+    let mut lines = Vec::new();
+    if t.contains_key("lines") {
+        let l = table(t, "lines").map_err(|r| prefix("interrupts.", r))?;
+        for (name, v) in l {
+            let key = format!("interrupts.lines.{name}");
+            let id = match v {
+                toml::Value::Integer(n) => u32::try_from(*n).ok(),
+                _ => None,
+            };
+            // A software-generated interrupt (0–15) is not a line, the timer is named `timer`,
+            // and a GICv2 numbers at most 1019.
+            match id {
+                Some(id) if (16..=1019).contains(&id) && id != TIMER_INTID => {
+                    if name == "timer" {
+                        return Err(refuse(&key, "`timer` is the board timer's name"));
+                    }
+                    if lines.iter().any(|(_, i)| *i == id) {
+                        return Err(refuse(&key, format!("interrupt {id} is named twice")));
+                    }
+                    lines.push((name.clone(), id));
+                }
+                _ => {
+                    return Err(refuse(
+                        &key,
+                        format!(
+                            "an interrupt number from 16 to 1019, and not {TIMER_INTID}, the \
+                             timer's"
+                        ),
+                    ))
+                }
+            }
+        }
+    }
+    Ok(Interrupts {
+        distributor,
+        cpu,
+        timer_period_us,
+        lines,
+    })
+}
 fn prefix(p: &str, r: Refused) -> Refused {
     Refused {
         key: format!("{p}{}", r.key),

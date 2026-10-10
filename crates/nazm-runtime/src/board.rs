@@ -49,6 +49,32 @@ impl Uart {
     }
 }
 
+/// A board's interrupts (Gate 3, `docs/spec.md`, *Boards*): a GICv2 and what it delivers. AArch64
+/// only in 1.0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Interrupts {
+    /// The GICv2 distributor's registers.
+    pub distributor: u64,
+    /// The GICv2 CPU interface's registers.
+    pub cpu: u64,
+    /// The board timer's period, when the program wants it: its interrupt is named `timer`.
+    pub timer_period_us: Option<u64>,
+    /// Every further interrupt by name, with the number (`INTID`) it is.
+    pub lines: Vec<(String, u32)>,
+}
+
+/// The AArch64 virtual timer's interrupt on a GICv2: private peripheral interrupt 11, `INTID` 27.
+pub const TIMER_INTID: u32 = 27;
+
+/// One interrupt handler the entry dispatches to (Gate 3): its `INTID`, the Nazm function's
+/// symbol, and whether it takes the device's authority (an `MmioCap`, a word that is 0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Handler {
+    pub intid: u32,
+    pub symbol: String,
+    pub takes_cap: bool,
+}
+
 /// One board: everything about it that is not the language's (N86). Since Gate 3 a board is a
 /// manifest (`docs/spec.md`, *Boards*): the built-in ones below print as one ([`Board::manifest`]),
 /// and `nazm build --board FILE` reads one.
@@ -69,6 +95,8 @@ pub struct Board {
     pub stack: u64,
     /// A heap of this many bytes after the image (Gate 3), or none.
     pub heap: Option<u64>,
+    /// Its interrupts (Gate 3), or none: with none, interrupts stay masked.
+    pub interrupts: Option<Interrupts>,
     /// How it is booted: the emulator command line, the image last.
     pub emulator: Cow<'static, str>,
     /// Whether it has been run on hardware. No board has.
@@ -101,6 +129,22 @@ impl Board {
         if let Some(h) = self.heap {
             let _ = write!(out, "\n[heap]\nsize = {h:#x}\n");
         }
+        if let Some(i) = &self.interrupts {
+            let _ = write!(
+                out,
+                "\n[interrupts]\ncontroller = \"gicv2\"\ndistributor = {:#x}\ncpu = {:#x}\n",
+                i.distributor, i.cpu
+            );
+            if let Some(p) = i.timer_period_us {
+                let _ = writeln!(out, "timer_period_us = {p}");
+            }
+            if !i.lines.is_empty() {
+                out.push_str("\n[interrupts.lines]\n");
+                for (name, id) in &i.lines {
+                    let _ = writeln!(out, "{name} = {id}");
+                }
+            }
+        }
         out
     }
 }
@@ -117,6 +161,7 @@ pub const BOARDS: [Board; 2] = [
         stop: Stop::Semihosting,
         stack: STACK,
         heap: None,
+        interrupts: None,
         emulator: Cow::Borrowed(
             "qemu-system-aarch64 -M virt -cpu cortex-a53 -nographic -nic none -semihosting -kernel",
         ),
@@ -132,6 +177,7 @@ pub const BOARDS: [Board; 2] = [
         stop: Stop::SifiveTest { address: 0x10_0000 },
         stack: STACK,
         heap: None,
+        interrupts: None,
         emulator: Cow::Borrowed(
             "qemu-system-riscv64 -M virt -bios none -nographic -nic none -kernel",
         ),
@@ -506,6 +552,23 @@ pub const STACK_PAINT: u64 = 0x5a5a_5a5a_5a5a_5a5a;
 /// the lowest word no longer painted — a measurement of that run, not a bound.
 #[must_use]
 pub fn emit_entry(board: &Board, entry: &str, roots: usize, watermark: bool) -> String {
+    emit_entry_with(board, entry, roots, watermark, &[])
+}
+
+/// [`emit_entry`], with the board's interrupts taken by `handlers` (Gate 3): the vector table,
+/// the GICv2 and the timer set up before `main`, and every interrupt dispatched to its handler.
+#[must_use]
+pub fn emit_entry_with(
+    board: &Board,
+    entry: &str,
+    roots: usize,
+    watermark: bool,
+    handlers: &[Handler],
+) -> String {
+    let irq = board
+        .interrupts
+        .as_ref()
+        .filter(|_| board.isa == Isa::Aarch64);
     let mut out = String::new();
     preamble(&mut out, "<nazm freestanding entry>");
     let (start, paint, call): (&[&str], &[&str], &[&str]) = match board.isa {
@@ -551,6 +614,19 @@ pub fn emit_entry(board: &Board, entry: &str, roots: usize, watermark: bool) -> 
             &["  call nz_board_main", "1: j 1b"],
         ),
     };
+    // With interrupts (Gate 3): the vector table installed and the controller and timer set up
+    // before `main`, then IRQs unmasked.
+    let arm: &[&str] = if irq.is_some() {
+        &[
+            "  adr x0, nz_vectors",
+            "  msr vbar_el1, x0",
+            "  isb",
+            "  bl nz_irq_init",
+            "  msr daifclr, #2",
+        ]
+    } else {
+        &[]
+    };
     for line in [
         ".section .text.start, \\22ax\\22",
         ".global _start",
@@ -559,9 +635,14 @@ pub fn emit_entry(board: &Board, entry: &str, roots: usize, watermark: bool) -> 
     .iter()
     .chain(start)
     .chain(if watermark { paint } else { &[] })
+    .chain(arm)
     .chain(call)
     {
         let _ = writeln!(out, "module asm \"{line}\"");
+    }
+    if let Some(i) = irq {
+        vectors(&mut out);
+        irq_runtime(&mut out, i, handlers);
     }
     let root_types = vec!["i64"; roots].join(", ");
     let root_args = vec!["i64 0"; roots].join(", ");
@@ -629,4 +710,227 @@ found:
         );
     }
     out
+}
+
+/// The AArch64 vector table and the IRQ path (Gate 3): sixteen 128-byte entries, the IRQ from the
+/// current level on `SP_ELx` taken to `nz_irq_entry`, every other exception to
+/// `nz_irq_unexpected`. The IRQ path saves what a call may change — `x0`–`x18`, the frame and link
+/// registers, every SIMD and floating-point register, and the exception's return state — calls
+/// the dispatcher on the board's one stack, restores, and returns from the exception.
+fn vectors(out: &mut String) {
+    let mut asm: Vec<String> = vec![
+        ".section .text.vectors, \\22ax\\22".to_owned(),
+        ".balign 2048".to_owned(),
+        "nz_vectors:".to_owned(),
+    ];
+    for i in 0..16 {
+        asm.push(".balign 128".to_owned());
+        asm.push(if i == 5 {
+            "  b nz_irq_entry".to_owned()
+        } else {
+            "  b nz_irq_trap".to_owned()
+        });
+    }
+    asm.extend(
+        [
+            "nz_irq_trap:",
+            "  bl nz_irq_unexpected",
+            "nz_irq_entry:",
+            "  sub sp, sp, #704",
+            "  stp x0, x1, [sp, #0]",
+            "  stp x2, x3, [sp, #16]",
+            "  stp x4, x5, [sp, #32]",
+            "  stp x6, x7, [sp, #48]",
+            "  stp x8, x9, [sp, #64]",
+            "  stp x10, x11, [sp, #80]",
+            "  stp x12, x13, [sp, #96]",
+            "  stp x14, x15, [sp, #112]",
+            "  stp x16, x17, [sp, #128]",
+            "  stp x18, x29, [sp, #144]",
+            "  str x30, [sp, #160]",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned()),
+    );
+    for q in (0..32).step_by(2) {
+        asm.push(format!("  stp q{q}, q{}, [sp, #{}]", q + 1, 192 + q * 16));
+    }
+    asm.extend(
+        [
+            "  mrs x0, elr_el1",
+            "  mrs x1, spsr_el1",
+            "  stp x0, x1, [sp, #168]",
+            "  bl nz_irq_dispatch",
+            "  ldp x0, x1, [sp, #168]",
+            "  msr elr_el1, x0",
+            "  msr spsr_el1, x1",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned()),
+    );
+    for q in (0..32).step_by(2) {
+        asm.push(format!("  ldp q{q}, q{}, [sp, #{}]", q + 1, 192 + q * 16));
+    }
+    asm.extend(
+        [
+            "  ldr x30, [sp, #160]",
+            "  ldp x18, x29, [sp, #144]",
+            "  ldp x16, x17, [sp, #128]",
+            "  ldp x14, x15, [sp, #112]",
+            "  ldp x12, x13, [sp, #96]",
+            "  ldp x10, x11, [sp, #80]",
+            "  ldp x8, x9, [sp, #64]",
+            "  ldp x6, x7, [sp, #48]",
+            "  ldp x4, x5, [sp, #32]",
+            "  ldp x2, x3, [sp, #16]",
+            "  ldp x0, x1, [sp, #0]",
+            "  add sp, sp, #704",
+            "  eret",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned()),
+    );
+    for line in asm {
+        let _ = writeln!(out, "module asm \"{line}\"");
+    }
+}
+
+/// The GICv2 and timer set-up, and the dispatcher (Gate 3).
+///
+/// `nz_irq_init` enables each handled interrupt at the distributor (its priority 0x80, an SPI
+/// targeted at CPU 0), opens the CPU interface to every priority, and starts the virtual timer
+/// with the period's ticks when the timer is handled. `nz_irq_dispatch` acknowledges the pending
+/// interrupt, re-arms the timer when it is the timer's, calls its handler, reports and stops the
+/// machine if the handler failed, and signals the end of the interrupt. An exception that is not
+/// an IRQ is a failure of the image, reported and stopped as one.
+fn irq_runtime(out: &mut String, i: &Interrupts, handlers: &[Handler]) {
+    let (d, c) = (i.distributor, i.cpu);
+    let _ = write!(
+        out,
+        r#"
+@.nz.unexpected = private constant [48 x i8] c"nazm: an exception the image has no handler for\0A"
+declare void @nz.uart_write(ptr, i64)
+
+define void @nz_irq_unexpected() noreturn {{
+entry:
+  call void @nz.uart_write(ptr @.nz.unexpected, i64 48)
+  call void @nz.board_exit(i64 2)
+  unreachable
+}}
+
+define void @nz_irq_init() {{
+entry:
+  store volatile i32 0, ptr inttoptr (i64 {d} to ptr)
+"#
+    );
+    for h in handlers {
+        let n = u64::from(h.intid);
+        let enable = d + 0x100 + 4 * (n >> 5);
+        let bit = 1u64 << (n % 32);
+        let _ = writeln!(
+            out,
+            "  store volatile i32 {bit}, ptr inttoptr (i64 {enable} to ptr)"
+        );
+        let _ = writeln!(
+            out,
+            "  store volatile i8 -128, ptr inttoptr (i64 {} to ptr)",
+            d + 0x400 + n
+        );
+        if n >= 32 {
+            let _ = writeln!(
+                out,
+                "  store volatile i8 1, ptr inttoptr (i64 {} to ptr)",
+                d + 0x800 + n
+            );
+        }
+    }
+    let _ = writeln!(out, "  store volatile i32 1, ptr inttoptr (i64 {d} to ptr)");
+    let _ = writeln!(
+        out,
+        "  store volatile i32 255, ptr inttoptr (i64 {} to ptr)",
+        c + 4
+    );
+    let _ = writeln!(out, "  store volatile i32 1, ptr inttoptr (i64 {c} to ptr)");
+    let timer = handlers.iter().any(|h| h.intid == TIMER_INTID);
+    if let (true, Some(p)) = (timer, i.timer_period_us) {
+        let _ = writeln!(out, "  call void @nz_timer_arm()");
+        let _ = write!(
+            out,
+            r#"  ret void
+}}
+
+@nz.timer_ticks = internal global i64 0
+
+define internal void @nz_timer_arm() {{
+entry:
+  %ticks = load i64, ptr @nz.timer_ticks
+  %known = icmp ne i64 %ticks, 0
+  br i1 %known, label %set, label %compute
+compute:
+  %f = call i64 asm sideeffect "mrs $0, cntfrq_el0", "=r"()
+  %scaled = mul i64 %f, {p}
+  %t = udiv i64 %scaled, 1000000
+  %one = icmp eq i64 %t, 0
+  %t1 = select i1 %one, i64 1, i64 %t
+  store i64 %t1, ptr @nz.timer_ticks
+  br label %set
+set:
+  %n = load i64, ptr @nz.timer_ticks
+  call void asm sideeffect "msr cntv_tval_el0, $0", "r"(i64 %n)
+  call void asm sideeffect "msr cntv_ctl_el0, $0", "r"(i64 1)
+  call void asm sideeffect "isb", ""()
+  ret void
+}}
+"#
+        );
+    } else {
+        let _ = writeln!(out, "  ret void\n}}");
+    }
+    let _ = write!(
+        out,
+        r#"
+define void @nz_irq_dispatch() {{
+entry:
+  %iar = load volatile i32, ptr inttoptr (i64 {iar} to ptr)
+  %id = and i32 %iar, 1023
+  switch i32 %id, label %done ["#,
+        iar = c + 0xC
+    );
+    for (k, h) in handlers.iter().enumerate() {
+        let _ = write!(out, " i32 {}, label %h{k}", h.intid);
+    }
+    let _ = writeln!(out, " ]");
+    for (k, h) in handlers.iter().enumerate() {
+        let _ = writeln!(out, "h{k}:");
+        if h.intid == TIMER_INTID && i.timer_period_us.is_some() {
+            let _ = writeln!(out, "  call void @nz_timer_arm()");
+        }
+        let arg = if h.takes_cap { "i64 0" } else { "" };
+        let _ = writeln!(out, "  %r{k} = call i64 @{}({arg})", h.symbol);
+        let _ = writeln!(out, "  br label %check");
+    }
+    let _ = write!(
+        out,
+        r#"check:
+  %failed = load i1, ptr @nz.failed
+  br i1 %failed, label %reported, label %done
+reported:
+  call void @nz.report()
+  unreachable
+done:
+  %spurious = icmp eq i32 %id, 1023
+  br i1 %spurious, label %out, label %eoi
+eoi:
+  store volatile i32 %iar, ptr inttoptr (i64 {eoir} to ptr)
+  br label %out
+out:
+  ret void
+}}
+"#,
+        eoir = c + 0x10
+    );
+    for h in handlers {
+        let param = if h.takes_cap { "i64" } else { "" };
+        let _ = writeln!(out, "declare i64 @{}({param})", h.symbol);
+    }
 }

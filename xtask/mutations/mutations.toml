@@ -1126,7 +1126,7 @@ Repointed by N40: linkage is decided from MIR's `exported`, `reached_from_generi
 
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/lower.rs"
-find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n            {"
+find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n                || f.interrupt.is_some()\n            {"
 replace = "            let linkage = if false {"
 killers = [{ package = "nazm-cli", test = "lir_oracle", name = "control_flow_and_recursion_agree_with_the_oracle" }]
 
@@ -8300,10 +8300,11 @@ Repointed by G2-C1, which moved it to 43: an entry that accepted `@deprecated` o
 Repointed by Gate 3, which moved it to 44: an entry that accepted a foreign `nz_os_clock` must not be reused.
 Repointed by Gate 3's atomics, which moved it to 45: an entry that accepted a record named `Atomic` must not be reused.
 Repointed by Gate 3's statics, which moved it to 46: an entry that refused a `static` item must not be reused.
-Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@section` must not be reused."""
+Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@section` must not be reused.
+Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@interrupt` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 47;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 46;"
+find = "pub const SEMANTIC_EPOCH: u32 = 48;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 47;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -15431,4 +15432,49 @@ file = "crates/nazm-cli/src/build/preflight.rs"
 find = "    if choice.board.is_some() && choice.runtime.is_some() {"
 replace = "    if false {"
 killers = [{ package = "nazm-cli", test = "manifests", name = "board_needs_a_boards_target_and_a_file_that_is_there" }]
+
+# --- Gate 3D: interrupts (docs/spec.md, Boards) ---
+# What only a booted image shows — the timer re-armed after each tick, a handler kept for the
+# entry to call — is interrupts.rs's ignored QEMU test, run by hand; no entry here pretends a
+# host test catches it.
+
+[[mutation]]
+name = "g3-a-handler-may-take-anything"
+why = "a function of any shape is accepted as a handler, which the board's interrupt path then calls with nothing it expects"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "    if !(params && plain(&f.return_type, \"Int\") && quiet && ordinary) {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "interrupts", name = "a_handler_is_a_function_the_board_can_call_and_one_for_each_interrupt" }]
+
+[[mutation]]
+name = "g3-an-interrupt-may-have-two-handlers"
+why = "two functions handle one interrupt, and which runs is decided by the order the dispatcher happens to list them"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "            if let Some((_, first)) = handled.iter().find(|(n, _)| *n == name) {"
+replace = "            if let Some((_, first)) = handled.iter().find(|_| false) {"
+killers = [{ package = "nazm-cli", test = "interrupts", name = "a_handler_is_a_function_the_board_can_call_and_one_for_each_interrupt" }]
+
+[[mutation]]
+name = "g3-the-timer-needs-no-period"
+why = "a timer handler is accepted on a board whose manifest gives no period, so the timer is never started and the handler never runs"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "                if i.timer_period_us.is_none() {"
+replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "interrupts", name = "a_handler_names_an_interrupt_the_boards_manifest_has" }]
+
+[[mutation]]
+name = "g3-a-riscv-board-takes-a-gic"
+why = "a RISC-V board's manifest is given a GICv2, which its machine does not have"
+file = "crates/nazm-cli/src/board_manifest.rs"
+find = "    if isa != Isa::Aarch64 {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "interrupts", name = "a_manifests_interrupts_are_a_gicv2_on_an_aarch64_board" }]
+
+[[mutation]]
+name = "g3-a-hosted-build-ignores-a-handler"
+why = "a hosted build or nazm run accepts @interrupt, whose function nothing will ever call"
+file = "crates/nazm-core/src/lib.rs"
+find = "                .find(|f| f.interrupt.is_some())"
+replace = "                .find(|_| false)"
+killers = [{ package = "nazm-cli", test = "interrupts", name = "a_handler_is_a_boards_alone" }]
 

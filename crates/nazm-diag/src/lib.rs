@@ -489,6 +489,12 @@ pub mod codes {
     /// An assignment to a static, which is read-only — changed, if an `Atomic`, only by the
     /// atomic operations (Gate 3, `docs/spec.md`, *Statics*).
     pub const STATIC_ASSIGNED: Code = Code::new("N0625");
+    /// A board's manifest the build cannot honour: a key it does not know, a value of the wrong
+    /// kind or out of range (Gate 3, `docs/spec.md`, *Boards*). Reported by `nazm build`.
+    pub const BOARD_MANIFEST: Code = Code::new("N0626");
+    /// An interrupt handler of a shape the board cannot call, two handlers for one interrupt, or
+    /// one for an interrupt the board does not have (Gate 3, `docs/spec.md`, *Boards*).
+    pub const INTERRUPT_HANDLER: Code = Code::new("N0627");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");

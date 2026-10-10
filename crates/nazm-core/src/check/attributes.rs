@@ -40,6 +40,67 @@ impl Target {
     }
 }
 
+/// Whether `name` is an interrupt's name a manifest can give: a TOML bare key, so letters,
+/// digits, `_` and `-` (Gate 3).
+fn interrupt_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The interrupt `@interrupt` names on `f`, if it has one (Gate 3).
+#[must_use]
+pub fn interrupt_of(f: &Function) -> Option<String> {
+    f.attrs
+        .iter()
+        .find(|a| a.name == "interrupt")
+        .and_then(|a| match a.args.as_deref() {
+            Some([AttrArg::Str { value, .. }]) => Some(value.clone()),
+            _ => None,
+        })
+}
+
+/// A handler's shape (Gate 3): what the board's interrupt path can call — no parameter or one
+/// `MmioCap`, an `Int` back, and a declared effect set that is empty, since nothing but the
+/// device and the program's statics is there to act on. Not generic, not `main`, not foreign.
+fn handler(f: &Function, errors: &mut Vec<Diagnostic>) {
+    if interrupt_of(f).is_none() {
+        return;
+    }
+    let plain =
+        |t: &TypeName, name: &str| t.qualifier.is_none() && t.args.is_none() && t.name == name;
+    let params = match f.params.as_slice() {
+        [] => true,
+        [p] => plain(&p.ty, "MmioCap"),
+        _ => false,
+    };
+    let quiet = f.effects.as_ref().is_some_and(|e| e.names.is_empty());
+    let ordinary = f.type_params.is_empty()
+        && f.effect_params.is_empty()
+        && f.name != "main"
+        && f.foreign.is_none()
+        && f.export.is_none()
+        && f.method_of.is_none();
+    if !(params && plain(&f.return_type, "Int") && quiet && ordinary) {
+        errors.push(
+            Diagnostic::error(
+                codes::INTERRUPT_HANDLER,
+                f.name_span,
+                format!(
+                    "`@interrupt` marks a function of the shape `fn NAME() -> Int ! {{}}` or \
+                     `fn NAME(m: MmioCap) -> Int ! {{}}`, and `{}` is not one",
+                    f.name
+                ),
+            )
+            .help(
+                "the board calls a handler with nothing but the device's authority; it shares \
+                 state through statics and atomics, and declares that it has no effect",
+            ),
+        );
+    }
+}
+
 /// Whether `name` is a section's name a linker script can write: letters, digits, `.` and `_`
 /// (Gate 3).
 pub(crate) fn section_name(name: &str) -> bool {
@@ -147,6 +208,30 @@ fn admitted(
                     )),
                 }
             }
+            // A board's interrupt handler (Gate 3, `docs/spec.md`, *Boards*): a function, by the
+            // name the manifest gives the interrupt. Its shape is `handler`'s to hold.
+            "interrupt" => {
+                if target != Target::Function {
+                    errors.push(refuse(
+                        a.span,
+                        format!(
+                            "`@interrupt` marks a function, and this is {}",
+                            target.named()
+                        ),
+                        "write it before the `fn` that handles the interrupt",
+                    ));
+                }
+                match a.args.as_deref() {
+                    Some([AttrArg::Str { value, .. }]) if interrupt_name(value) => {}
+                    _ => errors.push(refuse(
+                        a.span,
+                        "`@interrupt` takes one string: the interrupt's name in the board's \
+                         manifest"
+                            .to_owned(),
+                        "`@interrupt(\"timer\")`",
+                    )),
+                }
+            }
             // Placement in a board's image (Gate 3, `docs/spec.md`, *Boards*): code or storage
             // only — a constant has no address — under a name a linker script can write.
             "section" => {
@@ -174,8 +259,8 @@ fn admitted(
             other => errors.push(refuse(
                 a.name_span,
                 format!("`@{other}` is not an attribute Nazm has"),
-                "the attributes are `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated` and \
-                 `@section`; there are no user-defined attributes",
+                "the attributes are `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated`, \
+                 `@section` and `@interrupt`; there are no user-defined attributes",
             )),
         }
     }
@@ -367,8 +452,28 @@ pub fn configure(
         );
         if keep {
             shaped(f, errors);
+            handler(f, errors);
         }
         keep
     });
+    // One handler for each interrupt (Gate 3): the second is refused where it is written.
+    let mut handled: Vec<(String, Span)> = Vec::new();
+    for f in &program.functions {
+        if let Some(name) = interrupt_of(f) {
+            if let Some((_, first)) = handled.iter().find(|(n, _)| *n == name) {
+                errors.push(
+                    Diagnostic::error(
+                        codes::INTERRUPT_HANDLER,
+                        f.name_span,
+                        format!("the interrupt `{name}` already has a handler"),
+                    )
+                    .secondary(*first, "its handler")
+                    .help("one handler for each interrupt; call one function from the other"),
+                );
+            } else {
+                handled.push((name, f.name_span));
+            }
+        }
+    }
     program
 }

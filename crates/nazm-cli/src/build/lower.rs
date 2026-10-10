@@ -327,6 +327,8 @@ fn emit_artefacts(
         if !refused.is_empty() {
             return Ok(out);
         }
+        // The interrupt handlers (Gate 3), each matched to an interrupt the board has.
+        let handlers = interrupt_handlers(native, &board)?;
         // A runtime artifact (N82) is linked instead, once it is checked to fit.
         if !prebuilt {
             out.push(Artefact {
@@ -346,11 +348,12 @@ fn emit_artefacts(
                         native.entry_roots,
                     )
                 } else {
-                    nazm_lir::runtime::board::emit_entry(
+                    nazm_lir::runtime::board::emit_entry_with(
                         &board,
                         &native.entry.to_string(),
                         native.entry_roots,
                         watermark,
+                        &handlers,
                     )
                 }),
                 instance: false,
@@ -469,6 +472,71 @@ fn emit_artefacts(
 /// unit and not the board's runtime defines, apart from LLVM's intrinsics and the program's own
 /// foreign functions, which `--link` supplies. Read from the generated text, so it is exactly
 /// what the link would leave unresolved — a static string printed is a C library call there.
+/// Every `@interrupt` handler of the program, matched to the interrupt the board's manifest
+/// names (Gate 3, `docs/spec.md`, *Boards*): `timer` is the board timer's, which needs a period,
+/// and every other name is one of `[interrupts.lines]`. A board without `[interrupts]`, or a name
+/// it does not have, is `N0627` at the handler.
+fn interrupt_handlers(
+    native: &nazm_lir::Native,
+    board: &nazm_lir::runtime::board::Board,
+) -> Result<Vec<nazm_lir::runtime::board::Handler>, Vec<nazm_diag::Diagnostic>> {
+    use nazm_lir::runtime::board::{Handler, TIMER_INTID};
+    let mut out = Vec::new();
+    let mut errors = Vec::new();
+    for f in &native.program.functions {
+        let Some(name) = &f.interrupt else { continue };
+        let refuse = |why: String| {
+            nazm_diag::Diagnostic::error(nazm_diag::codes::INTERRUPT_HANDLER, f.span, why).help(
+                "a board's interrupts are its manifest's `[interrupts]`: `timer` with \
+                 `timer_period_us`, and each name of `[interrupts.lines]`",
+            )
+        };
+        let intid = match &board.interrupts {
+            None => {
+                errors.push(refuse(format!(
+                    "`{}` handles `{name}`, and the board `{}` has no interrupts",
+                    f.name, board.name
+                )));
+                continue;
+            }
+            Some(i) if name == "timer" => {
+                if i.timer_period_us.is_none() {
+                    errors.push(refuse(format!(
+                        "`{}` handles the board's timer, and its manifest gives no \
+                         `timer_period_us`",
+                        f.name
+                    )));
+                    continue;
+                }
+                TIMER_INTID
+            }
+            Some(i) => match i.lines.iter().find(|(n, _)| n == name) {
+                Some((_, id)) => *id,
+                None => {
+                    errors.push(refuse(format!(
+                        "`{}` handles `{name}`, and the board has no interrupt of that name",
+                        f.name
+                    )));
+                    continue;
+                }
+            },
+        };
+        let Some(sig) = native.sigs.get(f.id.index()) else {
+            continue;
+        };
+        out.push(Handler {
+            intid,
+            symbol: sig.symbol.as_str().to_owned(),
+            takes_cap: f.param_types().next().is_some(),
+        });
+    }
+    if errors.is_empty() {
+        Ok(out)
+    } else {
+        Err(errors)
+    }
+}
+
 fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) -> Vec<String> {
     use nazm_lir::runtime::Part;
     let texts: Vec<&str> = units
