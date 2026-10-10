@@ -51,7 +51,7 @@ mod preflight;
 mod timing;
 
 use self::preflight::{preflight, Settled};
-pub(crate) use preflight::{board_of, switch_target};
+pub(crate) use preflight::{board_for, board_of, read_board, switch_target};
 
 use link::{link_name, linked, published, sibling};
 use lower::{lowered, Lowered};
@@ -361,4 +361,6 @@ pub(crate) struct Choice<'a> {
     pub(crate) harness: Option<&'a crate::harness::Harness>,
     /// `--features`: asked of the root package beyond its `default` (Gate 2, §22).
     pub(crate) features: &'a [String],
+    /// The board `--board` read (Gate 3); the target's built-in one when `None`.
+    pub(crate) board: Option<&'a nazm_lir::runtime::board::Board>,
 }

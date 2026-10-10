@@ -817,6 +817,11 @@ pub(crate) enum Command {
         /// A board's target only: `aarch64-unknown-none` or `riscv64gc-unknown-none-elf`.
         #[arg(long)]
         stack_watermark: bool,
+        /// A board's manifest (Gate 3, `docs/spec.md`, *Boards*): load address, stack, UART, how
+        /// the machine stops, a heap. A board's target only; without it, the target's built-in
+        /// board, which `nazm inspect` prints as a manifest.
+        #[arg(long, value_name = "FILE")]
+        board: Option<PathBuf>,
         /// How a `Vec` of records is laid out (N68): `aos`, each element whole, or `soa`, one
         /// array per field for every record of `Int`s and `Bool`s. Unobservable to the program;
         /// part of every object's identity. LLVM backend only.

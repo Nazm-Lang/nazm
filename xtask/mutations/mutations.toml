@@ -15390,3 +15390,45 @@ find = "                || f.section.is_some()\n"
 replace = ""
 killers = [{ package = "nazm-cli", test = "sections", name = "a_placed_definition_reaches_its_section_and_the_linker_script_keeps_it" }]
 
+# --- Gate 3D: board manifests (docs/spec.md, Boards) ---
+
+[[mutation]]
+name = "g3-a-manifest-takes-any-key"
+why = "a key a board does not have is ignored, so a manifest the build half-understood builds an image the author did not describe"
+file = "crates/nazm-cli/src/board_manifest.rs"
+find = "    match t.keys().find(|k| !known.contains(&k.as_str())) {"
+replace = "    match t.keys().find(|_| false) {"
+killers = [{ package = "nazm-cli", test = "manifests", name = "a_manifest_it_cannot_honour_is_refused_naming_the_key" }]
+
+[[mutation]]
+name = "g3-a-manifest-may-name-another-isa"
+why = "a RISC-V board's manifest is accepted for an AArch64 target, so its addresses and its stop are another machine's"
+file = "crates/nazm-cli/src/board_manifest.rs"
+find = "    if written_isa != isa {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "manifests", name = "a_manifest_it_cannot_honour_is_refused_naming_the_key" }]
+
+[[mutation]]
+name = "g3-the-manifests-stack-is-ignored"
+why = "the linker script reserves the built-in 64 KiB whatever stack the manifest gives, so the stack check guards the wrong bound"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    let stack = board.stack;"
+replace = "    let stack = STACK;"
+killers = [{ package = "nazm-cli", test = "manifests", name = "a_manifests_load_address_and_stack_reach_the_script_and_the_bound" }]
+
+[[mutation]]
+name = "g3-the-board-is-always-the-built-in"
+why = "--board is read and then ignored: every image is generated for the target's built-in board"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "    choice.board.cloned().unwrap_or_else(|| board_of(t).clone())"
+replace = "    board_of(t).clone()"
+killers = [{ package = "nazm-cli", test = "manifests", name = "a_manifests_load_address_and_stack_reach_the_script_and_the_bound" }]
+
+[[mutation]]
+name = "g3-a-runtime-artifact-fits-any-board"
+why = "a built-in board's runtime artifact is linked into another board's image, whose stack bound it does not know"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "    if choice.board.is_some() && choice.runtime.is_some() {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "manifests", name = "board_needs_a_boards_target_and_a_file_that_is_there" }]
+
