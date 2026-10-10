@@ -3505,3 +3505,38 @@ nan:
   ret double 0x7FF8000000000000
 }
 "#;
+
+/// The runtime parts a board with a heap admits (Gate 3, `docs/spec.md`, *Boards*): those whose
+/// only outside is `malloc`, `free` and `realloc`, which the board's arena defines — sequences,
+/// strings and text, joining, closures — and their allocation counters. Nothing of files, the
+/// network, tasks, channels, numbers' formatting or C.
+#[must_use]
+pub(crate) fn board_heap_parts(needs: &Needs) -> String {
+    let mut out = String::new();
+    for c in [
+        "@nz.seq_allocated",
+        "@nz.seq_reclaimed",
+        "@nz.str_allocated",
+        "@nz.str_reclaimed",
+        "@nz.clo_allocated",
+        "@nz.clo_reclaimed",
+    ] {
+        let _ = writeln!(out, "{c} = hidden global i64 0");
+    }
+    if needs.sequences {
+        out.push_str(SEQUENCE_RUNTIME);
+        out.push_str(SUM_RUNTIME);
+        out.push_str(SOA_RUNTIME);
+    }
+    if needs.strings || needs.join {
+        out.push_str(STRING_RUNTIME);
+        out.push_str(TEXT_RUNTIME);
+    }
+    if needs.join {
+        out.push_str(JOIN_RUNTIME);
+    }
+    if needs.closures {
+        out.push_str(CLOSURE_RUNTIME);
+    }
+    out
+}

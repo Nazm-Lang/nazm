@@ -2414,6 +2414,7 @@ with `--profile NAME` on `check`, `build` and `run`, or required by a package's 
 | `cyber` | `declared-effects`, `no-foreign`, `locked-build`, `contents-stay-in-files` (N52) |
 | `realtime` (N63) | `no-io`, `no-spawn`, `bounded-allocation`, `no-ambient-time`, `no-recursion`, `no-blocking`, `bounded-loops` |
 | `authority` (N79) | `explicit-authority` |
+| `kernel` (Gate 3) | `no-spawn`, `no-foreign`, `no-blocking`, `no-heap`: no allocation site at all, whatever the board's manifest gives (*Boards*) |
 
 `no-io`, `no-spawn` and `no-foreign` refuse a program whose `main` requires that effect, through
 any call, standard functions included. `declared-effects` refuses any function of the program that

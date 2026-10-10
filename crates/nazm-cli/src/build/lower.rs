@@ -137,7 +137,8 @@ pub(super) fn lowered(
                 "nazm: `{}` has no operating system, and this program reaches what only a hosted \
                  runtime has: {}; \
                  a freestanding program computes with `Int` and `Bool`, functions, loops, static \
-                 strings and, on the board, device registers",
+                 strings and, on the board, device registers — and with a `[heap]` in the \
+                 board's manifest (`--board`), strings, sequences and closures too",
                 target.triple,
                 unhosted.join(", ")
             );
@@ -314,7 +315,7 @@ fn emit_artefacts(
         let runtime = if wasm {
             nazm_lir::runtime::wasm::emit_runtime(needs.stack)
         } else {
-            nazm_lir::runtime::board::emit_runtime(&board, needs.stack)
+            nazm_lir::runtime::board::emit_runtime_for(&board, &needs)
         };
         let foreign: Vec<&str> = native
             .sigs

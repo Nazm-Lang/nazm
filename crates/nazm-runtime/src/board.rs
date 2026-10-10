@@ -261,13 +261,185 @@ pub fn linker_script_placing(board: &Board, placed: &Placed) -> String {
     let keep =
         |names: &[String]| -> String { names.iter().map(|n| format!(" KEEP(*({n}))")).collect() };
     let (code, rodata, data) = (keep(&placed.code), keep(&placed.rodata), keep(&placed.data));
+    // A heap (Gate 3): the arena after the stack, its bounds `__heap_start` and `__heap_end`.
+    let heap = board.heap.map_or_else(String::new, |h| {
+        format!("  . = ALIGN(16);\n  __heap_start = .;\n  . = . + {h:#x};\n  __heap_end = .;\n")
+    });
     format!(
         "/* Written by nazm build for {triple} (N62, N86). */\nENTRY(_start)\nSECTIONS\n{{\n  \
          . = {load:#x};\n  .text : {{ *(.text.start) *(.text*){code} }}\n  .rodata : {{ *(.rodata*) *(.srodata*){rodata} }}\n  \
          .data : {{ *(.data*) *(.sdata*){data} }}\n  .bss : {{ *(.bss*) *(.sbss*) *(COMMON) }}\n  . = ALIGN(16);\n  __stack_bottom = .;\n  . = . + {stack:#x};\n  \
-         __stack_top = .;\n  /DISCARD/ : {{ *(.eh_frame*) }}\n}}\n"
+         __stack_top = .;\n{heap}  /DISCARD/ : {{ *(.eh_frame*) }}\n}}\n"
     )
 }
+
+/// [`emit_runtime`] for a program that reaches `needs` (Gate 3): with a heap in the board's
+/// manifest, its arena and the runtime parts allocation admits.
+#[must_use]
+pub fn emit_runtime_for(board: &Board, needs: &crate::Needs) -> String {
+    let mut out = emit_runtime(board, needs.stack);
+    if board.heap.is_some() {
+        out.push_str(HEAP_RUNTIME);
+        out.push_str(&crate::core::board_heap_parts(needs));
+    }
+    out
+}
+
+/// A board's arena (Gate 3, `docs/spec.md`, *Boards*): a bump allocator over the linker
+/// script's `__heap_start` to `__heap_end`, never returned to — `free` does nothing. Each block
+/// is 16-aligned behind a 16-byte header holding its size, so `realloc` copies what there was.
+/// The bump is a compare-and-swap, so an interrupt handler allocating while `main` does is safe.
+/// Exhausted, `malloc` answers null, which every caller reports as `N0406`. And the C library's
+/// four memory functions, as byte loops LLVM may not turn back into calls to themselves.
+pub const HEAP_RUNTIME: &str = r#"
+@__heap_start = external global i8
+@__heap_end = external global i8
+@nz.heap_next = internal global i64 0
+
+define ptr @malloc(i64 %n) {
+entry:
+  %padded = add i64 %n, 31
+  %need = and i64 %padded, -16
+  %start = ptrtoint ptr @__heap_start to i64
+  %end = ptrtoint ptr @__heap_end to i64
+  %huge = icmp ugt i64 %n, %end
+  br i1 %huge, label %none, label %retry
+retry:
+  %seen = load atomic i64, ptr @nz.heap_next seq_cst, align 8
+  %fresh = icmp eq i64 %seen, 0
+  %cur = select i1 %fresh, i64 %start, i64 %seen
+  %next = add i64 %cur, %need
+  %over = icmp ugt i64 %next, %end
+  br i1 %over, label %none, label %claim
+claim:
+  %r = cmpxchg ptr @nz.heap_next, i64 %seen, i64 %next seq_cst seq_cst
+  %ok = extractvalue { i64, i1 } %r, 1
+  br i1 %ok, label %got, label %retry
+got:
+  %h = inttoptr i64 %cur to ptr
+  store i64 %n, ptr %h
+  %p = getelementptr i8, ptr %h, i64 16
+  ret ptr %p
+none:
+  ret ptr null
+}
+
+define void @free(ptr %p) {
+entry:
+  ret void
+}
+
+define ptr @realloc(ptr %p, i64 %n) {
+entry:
+  %q = call ptr @malloc(i64 %n)
+  %absent = icmp eq ptr %p, null
+  %failed = icmp eq ptr %q, null
+  %skip = or i1 %absent, %failed
+  br i1 %skip, label %done, label %copy
+copy:
+  %h = getelementptr i8, ptr %p, i64 -16
+  %old = load i64, ptr %h
+  %less = icmp ult i64 %old, %n
+  %m = select i1 %less, i64 %old, i64 %n
+  %c = call ptr @memcpy(ptr %q, ptr %p, i64 %m)
+  br label %done
+done:
+  ret ptr %q
+}
+
+define ptr @memcpy(ptr %d, ptr %s, i64 %n) "no-builtins" {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i64 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %sp = getelementptr i8, ptr %s, i64 %i
+  %b = load i8, ptr %sp
+  %dp = getelementptr i8, ptr %d, i64 %i
+  store i8 %b, ptr %dp
+  %j = add i64 %i, 1
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define ptr @memmove(ptr %d, ptr %s, i64 %n) "no-builtins" {
+entry:
+  %di = ptrtoint ptr %d to i64
+  %si = ptrtoint ptr %s to i64
+  %forward = icmp ule i64 %di, %si
+  br i1 %forward, label %fwd, label %back
+fwd:
+  %c = call ptr @memcpy(ptr %d, ptr %s, i64 %n)
+  ret ptr %d
+back:
+  br label %loop
+loop:
+  %i = phi i64 [ %n, %back ], [ %k, %body ]
+  %more = icmp ugt i64 %i, 0
+  br i1 %more, label %body, label %done
+body:
+  %k = sub i64 %i, 1
+  %sp = getelementptr i8, ptr %s, i64 %k
+  %b = load i8, ptr %sp
+  %dp = getelementptr i8, ptr %d, i64 %k
+  store i8 %b, ptr %dp
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define ptr @memset(ptr %d, i32 %v, i64 %n) "no-builtins" {
+entry:
+  %b = trunc i32 %v to i8
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i64 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %dp = getelementptr i8, ptr %d, i64 %i
+  store i8 %b, ptr %dp
+  %j = add i64 %i, 1
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define i32 @memcmp(ptr %a, ptr %b, i64 %n) "no-builtins" {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %j, %same ]
+  %more = icmp ult i64 %i, %n
+  br i1 %more, label %body, label %equal
+body:
+  %ap = getelementptr i8, ptr %a, i64 %i
+  %x = load i8, ptr %ap
+  %bp = getelementptr i8, ptr %b, i64 %i
+  %y = load i8, ptr %bp
+  %eq = icmp eq i8 %x, %y
+  br i1 %eq, label %same, label %differ
+same:
+  %j = add i64 %i, 1
+  br label %loop
+differ:
+  %xw = zext i8 %x to i32
+  %yw = zext i8 %y to i32
+  %d = sub i32 %xw, %yw
+  ret i32 %d
+equal:
+  ret i32 0
+}
+
+define i32 @bcmp(ptr %a, ptr %b, i64 %n) "no-builtins" {
+entry:
+  %r = call i32 @memcmp(ptr %a, ptr %b, i64 %n)
+  ret i32 %r
+}
+"#;
 
 /// The freestanding runtime: the failure state and its helpers, the UART, the semihosting exit,
 /// the MMIO helpers and — where a function in a call cycle checks it — the stack check, against
