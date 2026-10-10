@@ -293,8 +293,8 @@ impl Origin {
             Intrinsic::ForeignNonNull | Intrinsic::CStrCopy => BuiltinFlow::Derive,
             // A code address: no data flows through it.
             Intrinsic::CallbackAddress => BuiltinFlow::Fresh,
-            // A check's result is the constant `0` (N87).
-            Intrinsic::ContractCheck => BuiltinFlow::Fresh,
+            // A check's result is the constant `0` (N87), as a feed's is (Gate 3).
+            Intrinsic::ContractCheck | Intrinsic::WatchdogFeed => BuiltinFlow::Fresh,
             // A new, empty handle, or a call that never returns.
             Intrinsic::IntsNew
             | Intrinsic::StrsNew
@@ -498,6 +498,7 @@ impl Origin {
             | Intrinsic::MmioRead16
             | Intrinsic::MmioWrite64
             | Intrinsic::MmioRead64
+            | Intrinsic::WatchdogFeed
             | Intrinsic::IntsNew
             | Intrinsic::StrsNew
             | Intrinsic::VecNew

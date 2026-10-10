@@ -8304,8 +8304,8 @@ Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@se
 Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@interrupt` must not be reused.
 Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused `@on_failure` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 50;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 49;"
+find = "pub const SEMANTIC_EPOCH: u32 = 51;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 50;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10522,8 +10522,8 @@ Repointed by Gate 3's 64-bit device registers, which moved it to 23.
 Repointed by Gate 3's failure hook, which moved it to 24.
 Repointed by Gate 3's Cortex-M board, which moved it to 25."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 25;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 24;'''
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 26;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 25;'''
 killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_five_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
@@ -10619,13 +10619,8 @@ killers = [{ package = "nazm-cli", test = "select", name = "critical_refuses_a_c
 name = "n54-critical-admits-a-clock"
 why = "the critical profile forgets its no-ambient-time rule"
 file = "crates/nazm-service/src/profile.rs"
-find = '''
-                Rule::NoDeclassification,
-                Rule::NoAmbientTime,
-                Rule::NoSelect,'''
-replace = '''
-                Rule::NoDeclassification,
-                Rule::NoSelect,'''
+find = "                Rule::NoAmbientTime,\n                Rule::NoSelect,\n                Rule::NoUnknownCalls,\n            ],\n            Self::Cyber => &["
+replace = "                Rule::NoSelect,\n                Rule::NoUnknownCalls,\n            ],\n            Self::Cyber => &["
 killers = [{ package = "nazm-cli", test = "select", name = "critical_refuses_a_clock" }]
 
 [[mutation]]
@@ -11196,8 +11191,8 @@ name = "n62-a-register-needs-no-authority"
 why = """a function holding no `MmioCap` may write a device register
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-sema/src/capability.rs"
-find = '            | Intrinsic::MmioWrite64 => Some(Self::Mmio),'
-replace = '            | Intrinsic::MmioWrite64 => None,'
+find = '            | Intrinsic::WatchdogFeed => Some(Self::Mmio),'
+replace = '            | Intrinsic::WatchdogFeed => None,'
 killers = [{ package = "nazm-sema", lib = true, name = "capability::tests::every_built_in_needs_exactly_the_authority_for_its_effect" }]
 
 [[mutation]]
@@ -11277,13 +11272,8 @@ killers = [
 name = "n63-realtime-forgets-bounded-loops"
 why = "`realtime` loses `bounded-loops`, so a loop the compiler cannot bound passes a profile that promises bounds"
 file = "crates/nazm-service/src/profile.rs"
-find = '''
-                Rule::NoBlocking,
-                Rule::BoundedLoops,
-                Rule::NoHeap,'''
-replace = '''
-                Rule::NoBlocking,
-                Rule::NoHeap,'''
+find = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n                Rule::BoundedStack,\n            ],\n            Self::Web3 => &["
+replace = "                Rule::NoHeap,\n                Rule::BoundedStack,\n            ],\n            Self::Web3 => &["
 killers = [{ package = "nazm-cli", test = "realtime", name = "an_unknown_loop_is_refused_with_its_reason" }]
 
 [[mutation]]
@@ -15664,8 +15654,8 @@ killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "a_task_needs
 name = "g3-realtime-leaves-the-stack-unbounded"
 why = "realtime does not hold the image to a static stack bound, though its tasks' frames are the whole of the stack"
 file = "crates/nazm-service/src/profile.rs"
-find = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n                Rule::BoundedStack,\n"
-replace = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n"
+find = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n                Rule::BoundedStack,\n            ],\n            Self::Web3 => &["
+replace = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n            ],\n            Self::Web3 => &["
 killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "realtime_refuses_what_has_no_stack_bound_or_allocates" }]
 
 [[mutation]]
@@ -15680,6 +15670,129 @@ killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "realtime_ref
 name = "g3-realtime-allocates"
 why = "realtime admits allocation sites, though a board's arena is never returned and a periodic task would exhaust it"
 file = "crates/nazm-service/src/profile.rs"
-find = "                Rule::NoHeap,\n                Rule::BoundedStack,\n            ],"
-replace = "                Rule::BoundedStack,\n            ],"
+find = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n                Rule::BoundedStack,\n            ],\n            Self::Web3 => &["
+replace = "                Rule::BoundedLoops,\n                Rule::BoundedStack,\n            ],\n            Self::Web3 => &["
 killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "realtime_refuses_what_has_no_stack_bound_or_allocates" }]
+
+# --- Gate 3G: domain profiles and their workloads (systems-domains.md Parts E–J) ---
+# That each workload runs, converges, faults and stops as its profile's domain asks — and that an
+# AArch64 board makes no unaligned access — is domains.rs's ignored QEMU tests.
+
+[[mutation]]
+name = "g3-the-host-library-is-deterministic"
+why = "no-float-nondeterminism finds no transcendental call, so aerospace admits a result another host's library may not give"
+file = "crates/nazm-service/src/profile.rs"
+find = "nazm_core::sema::Callee::Builtin(i) if host_libm(i)"
+replace = "nazm_core::sema::Callee::Builtin(i) if host_libm(i) && false"
+killers = [{ package = "nazm-cli", test = "domain_profiles", name = "aerospace_refuses_a_float_the_host_library_answers_by_its_site" }]
+
+[[mutation]]
+name = "g3-aerospace-forgets-its-float-rule"
+why = "aerospace is realtime and critical without its domain rule, so a float the host library answers passes"
+file = "crates/nazm-service/src/profile.rs"
+find = "                Rule::BoundedStack,\n                Rule::NoFloatNondeterminism,\n"
+replace = "                Rule::BoundedStack,\n"
+killers = [{ package = "nazm-cli", test = "domain_profiles", name = "each_domain_profile_is_its_composition" }]
+
+[[mutation]]
+name = "g3-assurance-has-no-stack-bound"
+why = "assurance does not bound the stack, so a recursive controller passes a profile that promises bounds"
+file = "crates/nazm-service/src/profile.rs"
+find = "                Rule::BoundedLoops,\n                Rule::BoundedStack,\n                Rule::NoHeap,\n            ],\n        }"
+replace = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n            ],\n        }"
+killers = [{ package = "nazm-cli", test = "domains", name = "the_profiles_tell_the_workloads_apart" }]
+
+[[mutation]]
+name = "g3-a-heapless-board-has-no-memcpy"
+why = "a board without a heap has no memcpy, so an image that copies a large value does not link"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    if board.isa != Isa::Thumbv7m {\n        out.push_str(MEMORY_RUNTIME);"
+replace = "    if false {\n        out.push_str(MEMORY_RUNTIME);"
+killers = [{ package = "nazm-cli", test = "domains", name = "a_heapless_boards_runtime_has_the_memory_functions" }]
+
+[[mutation]]
+name = "g3-there-is-no-linalg"
+why = "@std/linalg is not one of the standard modules, so a controller's vector maths names nothing"
+file = "crates/nazm-sema/src/stdlib.rs"
+find = "    (\"linalg\", include_str!(\"../../../library/std/linalg.nz\")),\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "domains", name = "each_workload_meets_its_domain_profile_and_builds_for_its_boards" }]
+
+# --- Gate 3G: the watchdog and the industrial profile ---
+# That the watchdog bites a hung loop, and that a feed re-arms it, is domains.rs's ignored QEMU test.
+
+[[mutation]]
+name = "g3-a-feed-needs-no-watchdog"
+why = "a program that feeds a watchdog builds for a board without one, and the feed names a symbol nothing defines"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "        (None, true, _) => format!("
+replace = "        (None, true, _) if false => format!("
+killers = [{ package = "nazm-cli", test = "domains", name = "the_watchdog_is_a_boards_fed_from_a_task" }]
+
+[[mutation]]
+name = "g3-a-watchdog-needs-no-task"
+why = "a board's watchdog is accepted with no task to feed it, so it bites a program that never could"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "        (Some(_), _, true) => format!("
+replace = "        (Some(_), _, true) if false => format!("
+killers = [{ package = "nazm-cli", test = "domains", name = "the_watchdog_is_a_boards_fed_from_a_task" }]
+
+[[mutation]]
+name = "g3-a-watchdog-needs-no-timer"
+why = "a manifest's watchdog is accepted on a board without a timer, whose ticks it would never count"
+file = "crates/nazm-cli/src/board_manifest.rs"
+find = "            if !interrupts\n                .as_ref()"
+replace = "            if false && !interrupts\n                .as_ref()"
+killers = [{ package = "nazm-cli", test = "domains", name = "the_watchdog_is_a_boards_fed_from_a_task" }]
+
+[[mutation]]
+name = "g3-industrial-forgets-its-watchdog"
+why = "industrial is realtime and critical without its domain rule, so a controller nothing watches passes"
+file = "crates/nazm-service/src/profile.rs"
+find = "                Rule::Watchdog,\n            ],\n"
+replace = "            ],\n"
+killers = [{ package = "nazm-cli", test = "domain_profiles", name = "each_domain_profile_is_its_composition" }]
+
+[[mutation]]
+name = "g3-every-program-feeds-its-watchdog"
+why = "the watchdog rule passes a program whose tasks never feed it, so industrial admits a controller nothing watches"
+file = "crates/nazm-service/src/profile.rs"
+find = "                    Some(f) if f.feeding_tasks.is_empty() => vec![Witness {"
+replace = "                    Some(f) if f.feeding_tasks.is_empty() && false => vec![Witness {"
+killers = [{ package = "nazm-cli", test = "domains", name = "the_watchdog_is_a_boards_fed_from_a_task" }]
+
+# --- Gate 3G: @std/audit and the medical profile ---
+# That every transition's record is written, in order, on both boards is domains.rs's ignored QEMU
+# test.
+
+[[mutation]]
+name = "g3-a-change-needs-no-record"
+why = "the audit rule finds no unrecorded change, so medical admits a state change nothing records"
+file = "crates/nazm-service/src/profile.rs"
+find = "        .filter(|f| !f.call_sites.iter().any(records))"
+replace = "        .filter(|f| !f.call_sites.iter().any(records) && false)"
+killers = [{ package = "nazm-cli", test = "domains", name = "medical_refuses_a_transition_it_has_no_record_of" }]
+
+[[mutation]]
+name = "g3-any-call-is-a-record"
+why = "the audit rule takes any call for audit_transition, so a function that records nothing passes because it calls something"
+file = "crates/nazm-service/src/profile.rs"
+find = ".is_some_and(|d| d.name == \"audit_transition\" && graph.key(d.module) == Some(&audit)),"
+replace = ".is_some_and(|d| !d.name.is_empty() || graph.key(d.module) == Some(&audit)),"
+killers = [{ package = "nazm-cli", test = "domains", name = "medical_refuses_a_transition_it_has_no_record_of" }]
+
+[[mutation]]
+name = "g3-medical-forgets-its-audit"
+why = "medical is realtime and critical without its domain rule, so a transition with no record passes"
+file = "crates/nazm-service/src/profile.rs"
+find = "                Rule::Audit,\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "domain_profiles", name = "each_domain_profile_is_its_composition" }]
+
+[[mutation]]
+name = "g3-there-is-no-audit"
+why = "@std/audit is not one of the standard modules, so a controller's records name nothing"
+file = "crates/nazm-sema/src/stdlib.rs"
+find = "    (\"audit\", include_str!(\"../../../library/std/audit.nz\")),\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "domains", name = "each_workload_meets_its_domain_profile_and_builds_for_its_boards" }]

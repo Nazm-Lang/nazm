@@ -1,0 +1,64 @@
+// The medical-device-style reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): an
+// infusion pump on both emulated boards, held to the `medical` profile, every state transition
+// recorded by `@std/audit`.
+//
+// Integer-only and simulated. A 10 ms task runs the pump's state machine — `0` idle, `1` priming,
+// `2` infusing, `3` paused, `4` fault — delivering 5 units a tick while infusing. A pause comes at
+// tick 30 and ends at tick 35; at 500 units the pump returns to idle and the run shuts down
+// deterministically, answering what it delivered. A line pressure above its limit is an occlusion:
+// the fault state, the motor stopped, and the run ends answering `4000` and what was delivered.
+// Every change of state is `transition`'s, which writes its audit record before it returns.
+use "@std/audit";
+
+static UART: Int = 150994944;
+static STATE: Atomic = atomic_new(0);
+static DELIVERED: Atomic = atomic_new(0);
+static TICK: Atomic = atomic_new(0);
+
+/// Into `to`, recorded: the pump is machine `1`.
+fn transition(to: Int, m: MmioCap) -> Int ! {} {
+    let from = atomic_swap(STATE, to);
+    audit_transition(UART, m, 1, from, to)
+}
+
+/// The line's pressure, simulated: steady at 40.
+fn pressure(tick: Int) -> Int ! {} {
+    40 + tick - tick
+}
+
+@task(priority = "1", period = "1")
+fn pump(m: MmioCap) -> Int ! {} {
+    let tick = atomic_add(TICK, 1) + 1;
+    let state = atomic_load(STATE);
+    if pressure(tick) > 300 && state != 4 {
+        transition(4, m);
+        return 4000 + atomic_load(DELIVERED);
+    };
+    if state == 2 {
+        atomic_add(DELIVERED, 5);
+    };
+    if state == 0 && tick == 3 {
+        transition(1, m);
+    } else {
+        if state == 1 && tick == 8 {
+            transition(2, m);
+        } else {
+            if state == 2 && tick == 30 {
+                transition(3, m);
+            } else {
+                if state == 3 && tick == 35 {
+                    transition(2, m);
+                } else {
+                    if state == 2 && atomic_load(DELIVERED) >= 500 {
+                        transition(0, m);
+                    };
+                };
+            };
+        };
+    };
+    if atomic_load(STATE) == 0 && atomic_load(DELIVERED) >= 500 { atomic_load(DELIVERED) } else { 0 }
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    transition(0, m)
+}

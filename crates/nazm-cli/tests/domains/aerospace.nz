@@ -1,0 +1,113 @@
+// The aerospace reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): sample, estimate,
+// actuate and report at a fixed rate on QEMU's AArch64 `virt` board, held to the `aerospace`
+// profile — no float whose result is the host library's.
+//
+// The sensors are simulated and deterministic: a rate gyro, biased, and an inclinometer, noisy, both
+// read off the plant's attitude. A complementary filter estimates the attitude; a bounded
+// proportional command slews it to a target; telemetry reports the estimate in thousandths every 50
+// ticks. At tick 300 the gyro fails — its sample leaves its range — and the controller makes the
+// fault transition: the command zeroed, `FAULT` reported, and 20 ticks later a deterministic
+// shutdown answering the mode it ended in.
+static UART: Int = 150994944;
+static ANGLE: Atomic = atomic_new(0);
+static ESTIMATE: Atomic = atomic_new(0);
+static COMMAND: Atomic = atomic_new(0);
+static TICK: Atomic = atomic_new(0);
+static NOISE: Atomic = atomic_new(12345);
+// 0 flying, 1 failed, from the tick in `FAILED_AT`.
+static MODE: Atomic = atomic_new(0);
+static FAILED_AT: Atomic = atomic_new(0);
+
+fn load(a: Atomic) -> Float64 ! {} {
+    float64_from_bits(wrap_convert[UInt64](atomic_load(a)))
+}
+
+fn store(a: Atomic, x: Float64) -> Int ! {} {
+    atomic_store(a, wrap_convert[Int](float64_to_bits(x)))
+}
+
+fn put(c: Int, m: MmioCap) -> Int ! {} {
+    mmio_write8(UART, c)
+}
+
+/// `n` in decimal, a sign first when it is negative.
+fn put_int(n: Int, m: MmioCap) -> Int ! {} {
+    let mut v = n;
+    if v < 0 {
+        put(45, m);
+        v = 0 - v;
+    };
+    let mut p = 1000000000000000000;
+    let mut started = false;
+    let mut i = 0;
+    while i < 19 {
+        let d = v / p % 10;
+        if d != 0 || started || i == 18 {
+            put(48 + d, m);
+            started = true;
+        };
+        p = p / 10;
+        i = i + 1;
+    }
+    0
+}
+
+fn milli(x: Float64) -> Int ! {} {
+    Int(x * 1000.0 + if x < 0.0 { -0.5 } else { 0.5 })
+}
+
+/// `x`, no further from zero than `limit`: the actuator's bound. By comparison, since a board has
+/// no C library's `fmin` and `fmax`.
+fn bounded(x: Float64, limit: Float64) -> Float64 ! {} {
+    if x > limit { limit } else { if x < 0.0 - limit { 0.0 - limit } else { x } }
+}
+
+/// The next of a fixed linear congruential sequence, from -0.01 to 0.01: the inclinometer's noise.
+fn noise() -> Float64 ! {} {
+    let next = wrapping_add(wrapping_mul(atomic_load(NOISE), 6364136223846793005), 1442695040888963407);
+    atomic_store(NOISE, next);
+    Float64((next >> 33) % 2001 - 1000) / 100000.0
+}
+
+/// One tick, 10 ms: the plant moves, both sensors are sampled, the estimate and command follow.
+@task(priority = "1", period = "1")
+fn step(m: MmioCap) -> Int ! {} {
+    let dt = 0.01;
+    let tick = atomic_add(TICK, 1) + 1;
+    let angle = load(ANGLE) + load(COMMAND) * dt;
+    store(ANGLE, angle);
+    let gyro = if tick >= 300 { 1000.0 } else { load(COMMAND) + 0.02 };
+    let incline = angle + noise();
+    if atomic_load(MODE) == 0 && (gyro > 10.0 || gyro < -10.0) {
+        atomic_store(MODE, 1);
+        atomic_store(FAILED_AT, tick);
+        store(COMMAND, 0.0);
+        put(70, m);
+        put(65, m);
+        put(85, m);
+        put(76, m);
+        put(84, m);
+        put(32, m);
+        put_int(tick, m);
+        put(10, m);
+    };
+    if atomic_load(MODE) == 0 {
+        let estimate = 0.98 * (load(ESTIMATE) + gyro * dt) + 0.02 * incline;
+        store(ESTIMATE, estimate);
+        let wanted = 2.0 * (0.75 - estimate);
+        store(COMMAND, bounded(wanted, 0.5));
+    };
+    if tick % 50 == 0 {
+        put(84, m);
+        put(32, m);
+        put_int(tick, m);
+        put(32, m);
+        put_int(milli(load(ESTIMATE)), m);
+        put(10, m);
+    };
+    if atomic_load(MODE) == 1 && tick == atomic_load(FAILED_AT) + 20 { 100 + atomic_load(MODE) } else { 0 }
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    store(COMMAND, 0.0)
+}

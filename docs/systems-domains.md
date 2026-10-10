@@ -189,6 +189,19 @@ reference workload. None adds language semantics.
 No certification, qualification or regulatory approval is claimed for any of them; each matrix row
 says so.
 
+*Settled in 3G (2026-10-11).* The profiles are `robotics`, `automotive`, `industrial`, `medical`,
+`aerospace` and `assurance` (`spec.md`, *Restriction profiles*). Narrowed: *high assurance*'s
+`bounded-memory` is `no-heap`, its `no-unknown-effects` is `declared-effects` with `no-unknown-calls`,
+strict FFI is `no-foreign`, and its reproducible artefact is `locked-build`; *robotics*'s device
+authority is `explicit-authority`. `watchdog` is the runtime's, on the scheduler's ticks — a manifest
+`[watchdog] ticks = N`, `watchdog_feed()`, `N0415` — not a hardware watchdog. `audit` is over the
+only state a board program changes, its static atomics: `atomic_store`, `atomic_swap` and
+`atomic_compare_swap` are transitions, `atomic_add` counts. `no-float-nondeterminism` refuses the
+transcendental built-ins, whose results are the host library's. The automotive frame boundary is a
+library over MMIO, not CAN. Robotics' vector maths is `@std/linalg`, small fixed vectors and
+matrices over `Float64`. The aerospace and robotics workloads run on AArch64 only: a Cortex-M3 has no
+floating point.
+
 ## K. Cybersecurity
 
 The existing `cyber` profile plus a reference **secure service**: a locked, provenance-recorded,

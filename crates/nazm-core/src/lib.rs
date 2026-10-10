@@ -603,7 +603,8 @@ pub fn machine_only_call(
                 | sema::Intrinsic::MmioRead16
                 | sema::Intrinsic::MmioWrite16
                 | sema::Intrinsic::MmioRead64
-                | sema::Intrinsic::MmioWrite64),
+                | sema::Intrinsic::MmioWrite64
+                | sema::Intrinsic::WatchdogFeed),
             ) => Some((site.span, b.name().to_owned())),
             _ => None,
         })

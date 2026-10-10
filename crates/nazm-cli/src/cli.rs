@@ -190,7 +190,8 @@ pub(crate) enum Command {
         #[arg(long)]
         locked: bool,
         /// A restriction profile to hold the program to (N47): `general`, `embedded`,
-        /// `critical`, `cyber`, `realtime`, `web3`, `accounts`, `authority` or `kernel`. Added to any the
+        /// `critical`, `cyber`, `realtime`, `web3`, `accounts`, `authority`, `kernel`, `robotics`,
+        /// `automotive`, `aerospace`, `assurance`, `industrial` or `medical`. Added to any the
         /// packages' manifests require; a profile only refuses, and never changes what an
         /// accepted program does.
         #[arg(long, value_name = "NAME")]
@@ -241,7 +242,8 @@ pub(crate) enum Command {
         #[arg(long)]
         locked: bool,
         /// A restriction profile to hold the program to (N47): `general`, `embedded`,
-        /// `critical`, `cyber`, `realtime`, `web3`, `accounts`, `authority` or `kernel`. Added to any the
+        /// `critical`, `cyber`, `realtime`, `web3`, `accounts`, `authority`, `kernel`, `robotics`,
+        /// `automotive`, `aerospace`, `assurance`, `industrial` or `medical`. Added to any the
         /// packages' manifests require; a profile only refuses, and never changes what an
         /// accepted program does.
         #[arg(long, value_name = "NAME")]
@@ -850,7 +852,8 @@ pub(crate) enum Command {
         #[arg(long)]
         locked: bool,
         /// A restriction profile to hold the program to (N47): `general`, `embedded`,
-        /// `critical`, `cyber`, `realtime`, `web3`, `accounts`, `authority` or `kernel`. Added to any the
+        /// `critical`, `cyber`, `realtime`, `web3`, `accounts`, `authority`, `kernel`, `robotics`,
+        /// `automotive`, `aerospace`, `assurance`, `industrial` or `medical`. Added to any the
         /// packages' manifests require; a profile only refuses, and never changes what an
         /// accepted program does.
         #[arg(long, value_name = "NAME")]

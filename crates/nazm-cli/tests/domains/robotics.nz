@@ -1,0 +1,103 @@
+// The robotics reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): sense, control
+// and actuate at a fixed rate on QEMU's AArch64 `virt` board, held to the `robotics` profile.
+//
+// The sensor is simulated: a task at the board timer's rate integrates the actuator's command into
+// the plant's position, which is what the controller reads. The controller, every second tick, steers
+// the position towards a target with `@std/linalg`, its command bounded in length. A missed deadline
+// stops the machine safely: the failure hook zeroes the command and says so. After 200 control
+// cycles the controller shuts the run down deterministically, answering the position it reached in
+// thousandths. Each component of a vector lives in a static atomic, as a `Float64`'s bits.
+use "@std/linalg";
+
+static UART: Int = 150994944;
+static PX: Atomic = atomic_new(0);
+static PY: Atomic = atomic_new(0);
+static PZ: Atomic = atomic_new(0);
+static CX: Atomic = atomic_new(0);
+static CY: Atomic = atomic_new(0);
+static CZ: Atomic = atomic_new(0);
+static CYCLES: Atomic = atomic_new(0);
+static BUSY: Atomic = atomic_new(0);
+
+fn load(a: Atomic) -> Float64 ! {} {
+    float64_from_bits(wrap_convert[UInt64](atomic_load(a)))
+}
+
+fn store(a: Atomic, x: Float64) -> Int ! {} {
+    atomic_store(a, wrap_convert[Int](float64_to_bits(x)))
+}
+
+fn position() -> Vec3 ! {} {
+    vec3(load(PX), load(PY), load(PZ))
+}
+
+fn command() -> Vec3 ! {} {
+    vec3(load(CX), load(CY), load(CZ))
+}
+
+fn actuate(c: Vec3) -> Int ! {} {
+    store(CX, c.x);
+    store(CY, c.y);
+    store(CZ, c.z)
+}
+
+/// `x` in thousandths, rounded half away from zero: by hand, since a board has no C library's
+/// `round`.
+fn milli(x: Float64) -> Int ! {} {
+    Int(x * 1000.0 + if x < 0.0 { -0.5 } else { 0.5 })
+}
+
+/// The plant, sensed: one tick, 10 ms, of motion at the commanded velocity.
+@task(priority = "1", period = "1")
+fn plant() -> Int ! {} {
+    let p = vec3_add(position(), vec3_scale(command(), 0.01));
+    store(PX, p.x);
+    store(PY, p.y);
+    store(PZ, p.z)
+}
+
+/// The controller: a proportional step towards the target, its command no longer than 1.5.
+@task(priority = "2", period = "2")
+fn control() -> Int ! {} {
+    let spin = 0;
+    let mut i = 0;
+    while i < spin {
+        atomic_add(BUSY, 1);
+        i = i + 1;
+    }
+    let target = vec3(1.0, 2.0, 0.5);
+    let gain = mat3(vec3(4.0, 0.0, 0.0), vec3(0.0, 4.0, 0.0), vec3(0.0, 0.0, 2.0));
+    actuate(vec3_clamp(mat3_apply(gain, vec3_sub(target, position())), 1.5));
+    if atomic_add(CYCLES, 1) == 199 {
+        let p = position();
+        milli(p.x) * 1000000 + milli(p.y) * 1000 + milli(p.z)
+    } else {
+        0
+    }
+}
+
+fn put(m: MmioCap, c: Int) -> Int ! {} {
+    mmio_write8(UART, c)
+}
+
+/// A safe stop: the command zeroed, then `SAFE` for a missed deadline, `HALT` for anything else.
+@on_failure
+fn safe_stop(code: Int, m: MmioCap) -> Int ! {} {
+    actuate(vec3(0.0, 0.0, 0.0));
+    if code == 414 {
+        put(m, 83);
+        put(m, 65);
+        put(m, 70);
+        put(m, 69)
+    } else {
+        put(m, 72);
+        put(m, 65);
+        put(m, 76);
+        put(m, 84)
+    };
+    put(m, 10)
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    actuate(vec3(0.0, 0.0, 0.0))
+}

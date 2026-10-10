@@ -664,6 +664,11 @@ impl Fx<'_, '_> {
                 let t = self.rt_v(symbol, &[a, v], Class::I64);
                 self.set(dst, t);
             }
+            // The board's watchdog (Gate 3), re-armed by its scheduler's entry.
+            Intrinsic::WatchdogFeed => {
+                let t = self.rt_v("nz.watchdog_feed", &[], Class::I64);
+                self.set(dst, t);
+            }
             Intrinsic::ChanCloseOf => {
                 let c = self.arg(args, 0);
                 // The generic close, which also wakes a select (N54).

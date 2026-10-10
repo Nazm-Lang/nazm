@@ -1,0 +1,115 @@
+// The industrial reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): a batch
+// controller on both emulated boards, held to the `industrial` profile, its loop feeding the
+// board's watchdog.
+//
+// Integer-only and simulated: a tank fills, heats and drains, three batches. A 10 ms task runs the
+// state machine — `I`dle, `F`ill, `H`eat, `D`rain — writing each state's letter as it enters it,
+// and feeds the watchdog each run. A level outside its sensor's range sends it to the fail-safe
+// state, `S`: valves shut, heater off, and the run ends answering where it stopped. After three
+// batches it shuts down deterministically, answering the batches done. A loop that hangs stops
+// feeding the watchdog, which then fails the image (`N0415`); the failure hook makes the outputs
+// safe and says `SAFE`.
+static UART: Int = 150994944;
+static STATE: Atomic = atomic_new(0);
+static LEVEL: Atomic = atomic_new(0);
+static TEMP: Atomic = atomic_new(20);
+static BATCHES: Atomic = atomic_new(0);
+static TICK: Atomic = atomic_new(0);
+static SPIN: Atomic = atomic_new(0);
+// The outputs: inlet valve, heater, outlet valve, each 0 or 1.
+static INLET: Atomic = atomic_new(0);
+static HEATER: Atomic = atomic_new(0);
+static OUTLET: Atomic = atomic_new(0);
+
+fn put(c: Int, m: MmioCap) -> Int ! {} {
+    mmio_write8(UART, c)
+}
+
+/// Every output off: the state nothing can be harmed in.
+fn outputs_safe() -> Int ! {} {
+    atomic_store(INLET, 0);
+    atomic_store(HEATER, 0);
+    atomic_store(OUTLET, 0)
+}
+
+/// Into `state`, its outputs set and its letter written.
+fn enter(state: Int, m: MmioCap) -> Int ! {} {
+    atomic_store(STATE, state);
+    atomic_store(INLET, if state == 1 { 1 } else { 0 });
+    atomic_store(HEATER, if state == 2 { 1 } else { 0 });
+    atomic_store(OUTLET, if state == 3 { 1 } else { 0 });
+    put(if state == 0 { 73 } else { if state == 1 { 70 } else { if state == 2 { 72 } else { if state == 3 { 68 } else { 83 } } } }, m)
+}
+
+/// The plant, one tick of its outputs: the level rises through the inlet and falls through the
+/// outlet; the temperature rises under the heater and falls towards 20 — it levels near 52 — without it.
+fn plant() -> Int ! {} {
+    let level = atomic_load(LEVEL) + atomic_load(INLET) * 4 - atomic_load(OUTLET) * 5;
+    atomic_store(LEVEL, if level < 0 { 0 } else { level });
+    let t = atomic_load(TEMP);
+    atomic_store(TEMP, t + atomic_load(HEATER) * 3 - (t - 20) / 10)
+}
+
+@task(priority = "1", period = "1")
+fn control(m: MmioCap) -> Int ! {} {
+    watchdog_feed();
+    let tick = atomic_add(TICK, 1) + 1;
+    // A hang is a count this large; every turn is an atomic addition, so no optimiser may take
+    // the loop away.
+    let hang = 0;
+    let mut i = 0;
+    while i < hang {
+        atomic_add(SPIN, 1);
+        i = i + 1;
+    }
+    plant();
+    let state = atomic_load(STATE);
+    let level = atomic_load(LEVEL);
+    if level > 120 {
+        outputs_safe();
+        enter(9, m);
+        put(10, m);
+        return 9000 + tick;
+    };
+    if state == 0 && tick % 10 == 0 {
+        enter(1, m);
+    } else {
+        if state == 1 && level >= 100 {
+            enter(2, m);
+        } else {
+            if state == 2 && atomic_load(TEMP) >= 45 {
+                enter(3, m);
+            } else {
+                if state == 3 && level == 0 {
+                    atomic_add(BATCHES, 1);
+                    enter(0, m);
+                };
+            };
+        };
+    };
+    if atomic_load(BATCHES) == 3 {
+        put(10, m);
+        atomic_load(BATCHES)
+    } else {
+        0
+    }
+}
+
+@on_failure
+fn halted(code: Int, m: MmioCap) -> Int ! {} {
+    outputs_safe();
+    if code == 415 {
+        put(83, m);
+        put(65, m);
+        put(70, m);
+        put(69, m)
+    } else {
+        put(63, m)
+    };
+    put(10, m)
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    outputs_safe();
+    enter(0, m)
+}

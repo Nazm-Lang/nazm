@@ -15,7 +15,7 @@
 
 ## 4. Domains
 
-- [ ] 4.1 Robotics, industrial, high assurance, aerospace, automotive, medical-style, cyber (3G)
+- [x] 4.1 Robotics, industrial, high assurance, aerospace, automotive, medical-style, cyber (3G): seven profiles, three domain rules, `@std/linalg`, `@std/audit`, the board watchdog; six workloads emulator-verified, the secure service run-verified
 - [ ] 4.2 AI/HPC CPU provider, float kernels, SIMD (3H)
 - [ ] 4.3 Storage engine; distributed foundation (3I)
 - [ ] 4.4 WASI (3J)
