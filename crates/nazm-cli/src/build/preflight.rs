@@ -131,6 +131,18 @@ pub(super) fn preflight(
         );
         return Err(ExitCode::from(exit::USAGE));
     }
+    // A runtime artifact is generated for a target's built-in board (N82); one built for another
+    // board's stack would check against the wrong bound (Gate 3).
+    if choice.board.is_some() && choice.runtime.is_some() {
+        if summary {
+            return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+        }
+        eprintln!(
+            "nazm: `--runtime` is a built-in board's runtime, and `--board` names another; build \
+             with one or the other"
+        );
+        return Err(ExitCode::from(exit::USAGE));
+    }
     // The watermark is the board's (N63): a hosted program has an operating system's stack.
     if choice.stack_watermark && !target.is_board() {
         if summary {
@@ -284,6 +296,49 @@ pub(super) fn admitted(
 /// operating system is one of the table's, and the first is N62's.
 pub(crate) fn board_of(t: &nazm_lir::backend::Target) -> &'static nazm_lir::runtime::board::Board {
     nazm_lir::runtime::board::board(&t.triple).unwrap_or(nazm_lir::runtime::board::AARCH64)
+}
+
+/// The board a build is for (Gate 3): the one `--board` read, or the target's built-in one.
+pub(crate) fn board_for(
+    choice: Choice<'_>,
+    t: &nazm_lir::backend::Target,
+) -> nazm_lir::runtime::board::Board {
+    choice.board.cloned().unwrap_or_else(|| board_of(t).clone())
+}
+
+/// `--board FILE` (Gate 3): the manifest read for the `--target` named, which must be a board's.
+/// Refused before anything is compiled: a target that is not a board's is the command line's
+/// fault (5), a file that is not there 3, and a manifest it cannot honour `N0626` (1).
+pub(crate) fn read_board(
+    path: &Path,
+    target: Option<&str>,
+) -> Result<nazm_lir::runtime::board::Board, ExitCode> {
+    use nazm_lir::backend::Arch;
+    use nazm_lir::runtime::board::Isa;
+    let t = nazm_lir::backend::Target::requested(target).ok();
+    let Some(t) = t.filter(nazm_lir::backend::Target::is_board) else {
+        eprintln!(
+            "nazm: `--board` describes a board: it needs `--target aarch64-unknown-none` or \
+             `--target riscv64gc-unknown-none-elf`"
+        );
+        return Err(ExitCode::from(exit::USAGE));
+    };
+    let isa = if t.arch == Arch::Riscv64 {
+        Isa::Riscv64
+    } else {
+        Isa::Aarch64
+    };
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("nazm: `--board {}`: {e}", path.display());
+            return Err(ExitCode::from(exit::NO_SUCH_FILE));
+        }
+    };
+    crate::board_manifest::read(&text, &t.triple, isa).map_err(|r| {
+        eprintln!("{}: {r}", path.display());
+        ExitCode::from(exit::CHECK_FAILED)
+    })
 }
 
 pub(crate) fn switch_target(

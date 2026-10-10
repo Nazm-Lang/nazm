@@ -53,6 +53,8 @@ fn boards() -> Vec<Value> {
                 "stop": stop,
                 "emulator": b.emulator,
                 "hardware": b.hardware,
+                // What `nazm build --board` reads back as this board (Gate 3).
+                "manifest": b.manifest(),
             })
         })
         .collect()

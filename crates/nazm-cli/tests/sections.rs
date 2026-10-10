@@ -87,15 +87,33 @@ fn a_placed_definition_reaches_its_section_and_the_linker_script_keeps_it() {
         script.contains(".data : { *(.data*) *(.sdata*) KEEP(*(.data.ticks)) }"),
         "{script}"
     );
-    // The section names are in the module's object: its section header string table.
-    let object = std::fs::read(d.path().join("o/00-m0.o")).unwrap();
-    for name in [".boot", ".data.ticks", ".rodata.table"] {
-        assert!(
-            object
-                .windows(name.len() + 1)
-                .any(|w| w[..name.len()] == *name.as_bytes() && w[name.len()] == 0),
-            "{name} is not a section of the object"
+    // The section names are in the module's object — its section header string table — at both
+    // levels: at -O2 `bump` is inlined into `main`, and its section is still there.
+    for o in ["0", "2"] {
+        let dir = format!("o{o}");
+        let r = nazm(
+            d.path(),
+            &[
+                "build",
+                "--opt-level",
+                o,
+                "--target",
+                "aarch64-unknown-none",
+                "--objects",
+                &dir,
+                "prog.nz",
+            ],
         );
+        assert_eq!(r.code, Some(0), "{}", r.stderr);
+        let object = std::fs::read(d.path().join(&dir).join("00-m0.o")).unwrap();
+        for name in [".boot", ".data.ticks", ".rodata.table"] {
+            assert!(
+                object
+                    .windows(name.len() + 1)
+                    .any(|w| w[..name.len()] == *name.as_bytes() && w[name.len()] == 0),
+                "-O{o}: {name} is not a section of the object"
+            );
+        }
     }
     // A program without a section gets the board's script exactly as before.
     std::fs::write(

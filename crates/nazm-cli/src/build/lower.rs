@@ -114,6 +114,7 @@ pub(super) fn lowered(
                     watermark: choice.stack_watermark,
                     wasm: target.is_wasm(),
                     adapter: choice.adapter,
+                    board: super::board_for(choice, target),
                 }),
                 choice.runtime.is_some(),
                 &mut reached,
@@ -200,6 +201,8 @@ struct Freestanding<'a> {
     wasm: bool,
     /// A contract's WebAssembly adapter, appended to the unit that defines its `init` (N71).
     adapter: Option<&'a crate::contract_wasm::Shape>,
+    /// The board the image is for (Gate 3): `--board`'s, or the target's built-in one.
+    board: nazm_lir::runtime::board::Board,
 }
 
 /// One generated native unit, ready to be written down.
@@ -279,6 +282,7 @@ fn emit_artefacts(
         watermark,
         wasm,
         adapter,
+        board,
     }) = freestanding
     {
         // The contract adapter (N71, §7.73): text appended to the contract's own unit, so it can
@@ -310,7 +314,7 @@ fn emit_artefacts(
         let runtime = if wasm {
             nazm_lir::runtime::wasm::emit_runtime(needs.stack)
         } else {
-            nazm_lir::runtime::board::emit_runtime(board_of(backend.target()), needs.stack)
+            nazm_lir::runtime::board::emit_runtime(&board, needs.stack)
         };
         let foreign: Vec<&str> = native
             .sigs
@@ -343,7 +347,7 @@ fn emit_artefacts(
                     )
                 } else {
                     nazm_lir::runtime::board::emit_entry(
-                        board_of(backend.target()),
+                        &board,
                         &native.entry.to_string(),
                         native.entry_roots,
                         watermark,
