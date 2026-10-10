@@ -540,11 +540,53 @@ emit:
 }}
 
 {exit}
+; After the diagnostic, the program's failure hook (Gate 3), handed the failure's number — the
+; four digits after `nazm: error[N` — and then the machine stopped. An image's entry defines the
+; hook's caller, doing nothing without an `@on_failure`; a library has no entry, so it is weak.
+declare extern_weak void @nz_board_on_failure(i64)
+
 define hidden void @nz.report() noreturn {{
 entry:
   %m = load ptr, ptr @nz.errmsg
   %n = load i64, ptr @nz.errlen
   call void @nz.uart_write(ptr %m, i64 %n)
+  %long = icmp uge i64 %n, 17
+  br i1 %long, label %digits, label %hook
+digits:
+  %p0 = getelementptr i8, ptr %m, i64 13
+  %c0 = load i8, ptr %p0
+  %p1 = getelementptr i8, ptr %m, i64 14
+  %c1 = load i8, ptr %p1
+  %p2 = getelementptr i8, ptr %m, i64 15
+  %c2 = load i8, ptr %p2
+  %p3 = getelementptr i8, ptr %m, i64 16
+  %c3 = load i8, ptr %p3
+  %d0 = zext i8 %c0 to i64
+  %d1 = zext i8 %c1 to i64
+  %d2 = zext i8 %c2 to i64
+  %d3 = zext i8 %c3 to i64
+  %v0 = sub i64 %d0, 48
+  %v1 = sub i64 %d1, 48
+  %v2 = sub i64 %d2, 48
+  %v3 = sub i64 %d3, 48
+  %a0 = mul i64 %v0, 1000
+  %a1 = mul i64 %v1, 100
+  %a2 = mul i64 %v2, 10
+  %s0 = add i64 %a0, %a1
+  %s1 = add i64 %s0, %a2
+  %code = add i64 %s1, %v3
+  br label %hook
+hook:
+  %number = phi i64 [ 0, %entry ], [ %code, %digits ]
+  %present = icmp ne ptr @nz_board_on_failure, null
+  br i1 %present, label %call, label %stop
+call:
+  ; The program's failure is reported; the hook runs as code that has not failed, or its own
+  ; first call would look like one. A failure inside it is recorded and the machine stopped.
+  store i1 false, ptr @nz.failed
+  call void @nz_board_on_failure(i64 %number)
+  br label %stop
+stop:
   call void @nz.board_exit(i64 2)
   unreachable
 }}
@@ -724,7 +766,7 @@ pub const STACK_PAINT: u64 = 0x5a5a_5a5a_5a5a_5a5a;
 /// the lowest word no longer painted — a measurement of that run, not a bound.
 #[must_use]
 pub fn emit_entry(board: &Board, entry: &str, roots: usize, watermark: bool) -> String {
-    emit_entry_with(board, entry, roots, watermark, &[])
+    emit_entry_with(board, entry, roots, watermark, &[], None)
 }
 
 /// [`emit_entry`], with the board's interrupts taken by `handlers` (Gate 3): the vector table,
@@ -736,6 +778,7 @@ pub fn emit_entry_with(
     roots: usize,
     watermark: bool,
     handlers: &[Handler],
+    on_failure: Option<(&str, bool)>,
 ) -> String {
     let irq = board
         .interrupts
@@ -815,6 +858,24 @@ pub fn emit_entry_with(
     if let Some(i) = irq {
         vectors(&mut out);
         irq_runtime(&mut out, i, handlers);
+    }
+    // The failure hook's caller (Gate 3), which the runtime's report calls: the program's
+    // `@on_failure`, or nothing.
+    match on_failure {
+        Some((hook, takes_cap)) => {
+            let (param, arg) = if takes_cap {
+                (", i64", ", i64 0")
+            } else {
+                ("", "")
+            };
+            let _ = write!(
+                out,
+                "declare i64 @{hook}(i64{param})\ndefine void @nz_board_on_failure(i64 %code) {{\nentry:\n  %r = call i64 @{hook}(i64 %code{arg})\n  ret void\n}}\n"
+            );
+        }
+        None => {
+            out.push_str("define void @nz_board_on_failure(i64 %code) {\nentry:\n  ret void\n}\n")
+        }
     }
     let root_types = vec!["i64"; roots].join(", ");
     let root_args = vec!["i64 0"; roots].join(", ");

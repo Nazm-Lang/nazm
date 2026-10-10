@@ -330,6 +330,18 @@ fn emit_artefacts(
         }
         // The interrupt handlers (Gate 3), each matched to an interrupt the board has.
         let handlers = interrupt_handlers(native, &board)?;
+        // The failure hook (Gate 3): the one function `@on_failure` marks, by its symbol.
+        let on_failure = native
+            .program
+            .functions
+            .iter()
+            .find(|f| f.on_failure)
+            .and_then(|f| {
+                native
+                    .sigs
+                    .get(f.id.index())
+                    .map(|s| (s.symbol.as_str().to_owned(), f.param_types().count() == 2))
+            });
         // A runtime artifact (N82) is linked instead, once it is checked to fit.
         if !prebuilt {
             out.push(Artefact {
@@ -355,6 +367,7 @@ fn emit_artefacts(
                         native.entry_roots,
                         watermark,
                         &handlers,
+                        on_failure.as_ref().map(|(s, cap)| (s.as_str(), *cap)),
                     )
                 }),
                 instance: false,
@@ -580,6 +593,8 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
                 && !s.starts_with("llvm.")
                 // The host's imports (N64): undefined in the module by design.
                 && !s.starts_with("nz.host_")
+                // The failure hook's caller (Gate 3): the board entry's, written after this.
+                && s.as_str() != "nz_board_on_failure"
                 && !foreign.contains(&s.as_str())
         })
         .collect();

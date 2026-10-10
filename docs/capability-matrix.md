@@ -4613,3 +4613,22 @@ linked against real C and run, the dry run, the inventory, the editor client), `
 not published; no Nazm debug adapter; rename across packages is refused, not performed; `bindgen`
 reads declarations, not the C preprocessor; no network registry; the agent benchmark was not re-run,
 and no efficiency claim is made.
+
+**Gate 3D (2026-10-10)** · *The systems foundation* (`spec.md` *Atomics*, *Statics*, *Boards*;
+`systems-domains.md` Part B). **Atomics:** `Atomic`, one `Int` cell, sequentially consistent, that
+crosses into a task — the interpreter, both backends (four runtime entries; `atomic_add` a checked
+compare-and-swap loop) and the LIR oracle (`atomics.rs`). **Statics:** a number, a `Bool` or an
+atomic, read-only unless an atomic (`N0625`), defined in its module's own unit under a durable
+`nz.s.` symbol and imported by every other — generic instances too (`statics.rs`). **Boards:** a
+manifest (`--board`, `N0626`) that the built-in boards print as; `@section`, kept by the generated
+`link.ld` (`sections.rs`); 64-bit device registers; AArch64 interrupts — a vector table, a GICv2,
+the virtual timer, named lines, handlers held to their shape (`N0627`, `interrupts.rs`); a bump
+arena for a manifest's `[heap]` that admits strings, sequences and closures, and `no-heap` in the
+new `kernel` profile (`heap.rs`); `@on_failure` (`kernel.rs`). **Emulator-verified**, every
+mechanism and the reference kernel-style workload booted under QEMU at `-O0` and `-O2` in the
+`nazm-qemu:n86` image (each file's ignored test, run by hand); RISC-V has no interrupts, and nothing
+has run on hardware. Semantic epoch 49, runtime ABI 24. Found on the way: Cranelift's x86-64
+backend converts a float only to a 32- or 64-bit integer (3B-2, fixed); a placed function was
+inlined away at `-O2` (now hidden linkage); a failure hook's first call looked like a failure while
+the program's flag was set (cleared before the hook).
+

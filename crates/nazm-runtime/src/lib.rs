@@ -246,8 +246,10 @@ pub fn escape(s: &str) -> String {
 /// 22 is Gate 3's atomics: `nz.atomic_load`, `nz.atomic_store`, `nz.atomic_swap` and
 /// `nz.atomic_cas`, sequentially consistent, defined by the hosted runtime and a board's alike;
 /// an atomic's cell is the data of a string backing, so it is `Str`'s triple. 23 is Gate 3's
-/// 64-bit device registers: `nz.mmio_read64` and `nz.mmio_write64`.
-pub const RUNTIME_ABI_REVISION: u32 = 23;
+/// 64-bit device registers: `nz.mmio_read64` and `nz.mmio_write64`. 24 is Gate 3's failure hook:
+/// a board's `nz.report` calls the entry's `nz_board_on_failure` — a weak reference, absent in a
+/// library — with the failure's number before stopping the machine.
+pub const RUNTIME_ABI_REVISION: u32 = 24;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -1161,10 +1163,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_three_and_reaches_the_system_only_through_its_platform_layer()
+    fn the_runtime_is_revision_twenty_four_and_reaches_the_system_only_through_its_platform_layer()
     {
         // Gate 3's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 23);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 24);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));

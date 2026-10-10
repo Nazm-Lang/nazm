@@ -98,6 +98,8 @@ pub struct Function {
     pub section: Option<String>,
     /// The interrupt `@interrupt` makes it the handler of (Gate 3): a board's image only.
     pub interrupt: Option<String>,
+    /// Whether `@on_failure` makes it the board's failure hook (Gate 3).
+    pub on_failure: bool,
     /// The C symbol an exported function is also callable as (N55): a Nazm body with a C entry.
     pub export: Option<String>,
     /// For a closure's body (N50): the locals that hold its captures, in capture order. They
