@@ -30,6 +30,7 @@ No cell says just "supported".
 | `x86_64-pc-windows-gnu` | run-verified under Wine | run-verified under Wine | Wine 8 in a Debian x86_64 container (`docker/wine.Dockerfile`), linked by MinGW-w64's `gcc`; no Windows host | not exercised |
 | `aarch64-unknown-none` | emulator-verified | unsupported | QEMU `virt`, Cortex-A53 | not exercised |
 | `riscv64gc-unknown-none-elf` | emulator-verified | unsupported | QEMU `virt`, RV64GC, machine mode | not exercised |
+| `thumbv7m-none-eabi` | emulator-verified | unsupported | QEMU `mps2-an385`, Cortex-M3 (Gate 3) | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | Node.js's engine, the reference host | DWARF sections present; a debugger not exercised |
 
 Cranelift's two `unsupported` reasons: its object writer has no format for a target without an
@@ -80,7 +81,7 @@ Nothing is uploaded or published: the archives are local, under `target/archives
 | | |
 | --- | --- |
 | Windows with Microsoft's toolchain, and Windows ARM64 | unsupported: `x86_64-pc-windows-msvc` needs Microsoft's SDK and C runtime, which are not downloaded or accepted here, and no Windows ARM64 machine or emulator is here; Windows x86_64 is `x86_64-pc-windows-gnu`, with MinGW-w64's |
-| 32-bit hosted targets | a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 is the one 32-bit target, freestanding |
+| 32-bit hosted targets | a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 and the Cortex-M board (`thumbv7m-none-eabi`) are the 32-bit targets, both freestanding |
 | big-endian targets | a non-goal: no big-endian machine or image is here to run one, and the DWARF writer and layouts assume little-endian |
 
 ## Optional features

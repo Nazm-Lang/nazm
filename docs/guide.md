@@ -28,7 +28,7 @@ has clang compile it; `--backend cranelift` compiles every function in process w
 which builds noticeably faster. They produce programs that behave identically — the same output,
 the same failures, the same memory report — and neither ever stands in for the other: a program
 one cannot compile is refused, never quietly built by the other. `--target` names the target
-triple: one of eight (`docs/support.md`), built to an executable where this host can link it and to
+triple: one of nine (`docs/support.md`), built to an executable where this host can link it and to
 objects with `--objects` elsewhere; an unknown triple is refused rather than built for this one.
 
 A native program can call C. `extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";` declares a

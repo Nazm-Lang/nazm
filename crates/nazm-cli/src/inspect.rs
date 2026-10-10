@@ -28,6 +28,7 @@ pub(crate) const TARGETS: &[&str] = &[
     // `link.ld`.
     "aarch64-unknown-none",
     "riscv64gc-unknown-none-elf",
+    "thumbv7m-none-eabi",
     // WebAssembly (N64, §7.66): objects, `wasm-ld`'s line and a reference host.
     "wasm32-unknown-unknown",
 ];

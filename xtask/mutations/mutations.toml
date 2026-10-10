@@ -10519,11 +10519,12 @@ Repointed by Gate 2's randomness, which moved it to 20 for the system's entropy.
 Repointed by Gate 3's platform layer, which moved it to 21 for the per-target system calls.
 Repointed by Gate 3's atomics, which moved it to 22 for the atomic entries.
 Repointed by Gate 3's 64-bit device registers, which moved it to 23.
-Repointed by Gate 3's failure hook, which moved it to 24."""
+Repointed by Gate 3's failure hook, which moved it to 24.
+Repointed by Gate 3's Cortex-M board, which moved it to 25."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 24;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 23;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_four_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 25;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 24;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_five_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -12818,8 +12819,8 @@ killers = [{ package = "nazm-cli", test = "flow_v3", name = "explain_flow_prints
 name = "n81-wasm32-has-eight-byte-pointers"
 why = "every target is laid out as a 64-bit one, so what `nazm lir` prints for wasm32 is not what LLVM lays out there"
 file = "crates/nazm-lir/src/abi.rs"
-find = "            Arch::Wasm32 => Self::WASM32,"
-replace = "            Arch::Wasm32 => Self::LP64,"
+find = "            Arch::Wasm32 | Arch::Thumbv7m => Self::WASM32,"
+replace = "            Arch::Wasm32 | Arch::Thumbv7m => Self::LP64,"
 killers = [{ package = "nazm-cli", test = "lir", name = "a_pointer_is_four_bytes_on_wasm32_and_nothing_else_moves" }]
 
 [[mutation]]
@@ -15468,7 +15469,7 @@ killers = [{ package = "nazm-cli", test = "interrupts", name = "a_handler_names_
 name = "g3-a-riscv-board-takes-a-gic"
 why = "a RISC-V board's manifest is given a GICv2, which its machine does not have"
 file = "crates/nazm-cli/src/board_manifest.rs"
-find = "    if isa != Isa::Aarch64 {"
+find = "    if isa == Isa::Riscv64 {"
 replace = "    if false {"
 killers = [{ package = "nazm-cli", test = "interrupts", name = "a_manifests_interrupts_are_a_gicv2_on_an_aarch64_board" }]
 
@@ -15549,4 +15550,48 @@ file = "crates/nazm-cli/src/stack.rs"
 find = "            if line.trim_start().starts_with(';') {"
 replace = "            if false {"
 killers = [{ package = "nazm-cli", bin = "nazm", name = "stack::tests::a_comment_that_says_call_is_not_a_call" }]
+
+# --- Gate 3E: the Cortex-M board and its interrupts (docs/spec.md, A freestanding target; Boards) ---
+# That the image boots, its 64-bit arithmetic and atomics agree, the CMSDK UART is enabled and
+# SysTick and an NVIC line are taken is cortex_m.rs's ignored QEMU tests.
+
+[[mutation]]
+name = "g3-a-cortex-m-has-no-64-bit-helpers"
+why = "a Thumb board's runtime leaves out the 64-bit atomics and division ARMv7-M has no instruction for, so the image does not link"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    if board.isa == Isa::Thumbv7m {\n        out.push_str(THUMB_RUNTIME);"
+replace = "    if false {\n        out.push_str(THUMB_RUNTIME);"
+killers = [{ package = "nazm-cli", test = "boards", name = "every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does" }]
+
+[[mutation]]
+name = "g3-a-cortex-m3-takes-floats"
+why = "a Cortex-M3 build accepts floating point and 64-bit device registers, which the core cannot do and the board cannot supply"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "            if target.arch == nazm_lir::backend::Arch::Thumbv7m {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "cortex_m", name = "what_a_cortex_m3_has_no_instruction_for_is_refused_by_name" }]
+
+[[mutation]]
+name = "g3-the-vector-table-is-not-first"
+why = "the Cortex-M linker script does not put the vector table at the load address, so the core boots from whatever is there"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    let vectors = if board.isa == Isa::Thumbv7m {"
+replace = "    let vectors = if false {"
+killers = [{ package = "nazm-cli", test = "cortex_m", name = "a_cortex_m_build_puts_its_vector_table_first" }]
+
+[[mutation]]
+name = "g3-systick-takes-any-period"
+why = "a SysTick period longer than its 24-bit reload is accepted, and the timer runs at a period the manifest did not ask for"
+file = "crates/nazm-cli/src/board_manifest.rs"
+find = "                if ticks == 0 || ticks > 0x0100_0000 {"
+replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "cortex_m", name = "a_cortex_m_boards_interrupts_are_an_nvic_and_systick" }]
+
+[[mutation]]
+name = "g3-an-nvic-line-is-a-gic-intid"
+why = "an NVIC line is held to a GICv2's range, so a number the NVIC does not have is accepted"
+file = "crates/nazm-cli/src/board_manifest.rs"
+find = "        Controller::Nvic { .. } => (0, 239),"
+replace = "        Controller::Nvic { .. } => (0, 1019),"
+killers = [{ package = "nazm-cli", test = "cortex_m", name = "a_cortex_m_boards_interrupts_are_an_nvic_and_systick" }]
 

@@ -74,6 +74,13 @@ pub(super) fn lowered(
                     )]);
                 }
             }
+            // A Cortex-M3 (Gate 3) has no floating point, and a board no library to supply it; and
+            // no access of 64 bits, which a 64-bit device register promises is one.
+            if target.arch == nazm_lir::backend::Arch::Thumbv7m {
+                if let Some(d) = cortex_m3_refusal(resolution, &target.triple) {
+                    return Err(vec![d]);
+                }
+            }
             // The summation idiom, vectorised (N66, §7.68): a native build's rewrite of Core IR,
             // so the interpreter, reading the same program, still runs the loop.
             let mut core = core.clone();
@@ -486,6 +493,52 @@ fn emit_artefacts(
 /// unit and not the board's runtime defines, apart from LLVM's intrinsics and the program's own
 /// foreign functions, which `--link` supplies. Read from the generated text, so it is exactly
 /// what the link would leave unresolved — a static string printed is a C library call there.
+/// What a Cortex-M3 cannot do, at the first place the program asks it (Gate 3, `docs/spec.md`,
+/// *Boards*): a `Float32` or `Float64` anywhere — the M3 has no FPU, and a board no soft-float
+/// library — or a 64-bit device register, which the core splits into two accesses. `N0392`.
+fn cortex_m3_refusal(
+    res: &nazm_core::sema::Resolution,
+    triple: &str,
+) -> Option<nazm_diag::Diagnostic> {
+    use nazm_core::sema::{NumKind, Type};
+    let float = |t: Type| matches!(t, Type::Num(NumKind::F32 | NumKind::F64));
+    let refuse = |at, what: &str| {
+        nazm_diag::Diagnostic::error(
+            nazm_diag::codes::MACHINE_ONLY,
+            at,
+            format!("a build for `{triple}` cannot {what}"),
+        )
+        .help(
+            "a Cortex-M3 has no floating-point unit and no 64-bit access; compute in integers, \
+             and reach a device with the 8-, 16- or 32-bit registers",
+        )
+    };
+    for f in res.functions() {
+        if float(f.ret) || f.params.iter().any(|t| float(*t)) {
+            return Some(refuse(
+                f.name_span,
+                "compute in floating point: it has no FPU",
+            ));
+        }
+        if let Some(l) = f.locals.iter().find(|l| float(l.ty)) {
+            return Some(refuse(l.span, "compute in floating point: it has no FPU"));
+        }
+        for site in &f.call_sites {
+            if let nazm_core::sema::resolve::Callee::Builtin(
+                b @ (nazm_core::sema::Intrinsic::MmioRead64
+                | nazm_core::sema::Intrinsic::MmioWrite64),
+            ) = site.callee
+            {
+                return Some(refuse(
+                    site.span,
+                    &format!("perform `{}`: its accesses are 32 bits wide", b.name()),
+                ));
+            }
+        }
+    }
+    None
+}
+
 /// Every `@interrupt` handler of the program, matched to the interrupt the board's manifest
 /// names (Gate 3, `docs/spec.md`, *Boards*): `timer` is the board timer's, which needs a period,
 /// and every other name is one of `[interrupts.lines]`. A board without `[interrupts]`, or a name
@@ -494,7 +547,7 @@ fn interrupt_handlers(
     native: &nazm_lir::Native,
     board: &nazm_lir::runtime::board::Board,
 ) -> Result<Vec<nazm_lir::runtime::board::Handler>, Vec<nazm_diag::Diagnostic>> {
-    use nazm_lir::runtime::board::{Handler, TIMER_INTID};
+    use nazm_lir::runtime::board::Handler;
     let mut out = Vec::new();
     let mut errors = Vec::new();
     for f in &native.program.functions {
@@ -522,10 +575,10 @@ fn interrupt_handlers(
                     )));
                     continue;
                 }
-                TIMER_INTID
+                i.timer_number()
             }
             Some(i) => match i.lines.iter().find(|(n, _)| n == name) {
-                Some((_, id)) => *id,
+                Some((_, id)) => i.line_number(*id),
                 None => {
                     errors.push(refuse(format!(
                         "`{}` handles `{name}`, and the board has no interrupt of that name",

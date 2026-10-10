@@ -17,6 +17,8 @@ use crate::preamble;
 pub enum Isa {
     Aarch64,
     Riscv64,
+    /// ARMv7-M, Thumb-2 (Gate 3): a Cortex-M microcontroller.
+    Thumbv7m,
 }
 
 /// How a board's machine is stopped with a status.
@@ -36,6 +38,8 @@ pub enum Uart {
     Pl011,
     /// The NS16550A, QEMU `virt`'s on RISC-V.
     Ns16550a,
+    /// Arm's CMSDK APB UART, the MPS2 boards' (Gate 3): enabled for transmission before `main`.
+    Cmsdk,
 }
 
 impl Uart {
@@ -45,26 +49,59 @@ impl Uart {
         match self {
             Self::Pl011 => "pl011",
             Self::Ns16550a => "ns16550a",
+            Self::Cmsdk => "cmsdk",
         }
     }
 }
 
-/// A board's interrupts (Gate 3, `docs/spec.md`, *Boards*): a GICv2 and what it delivers. AArch64
-/// only in 1.0.
+/// A board's interrupt controller (Gate 3, `docs/spec.md`, *Boards*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Controller {
+    /// An AArch64 board's GICv2: its distributor and CPU interface. The timer is the virtual
+    /// timer's private interrupt.
+    Gicv2 { distributor: u64, cpu: u64 },
+    /// A Cortex-M's NVIC, at the architecture's fixed addresses; the timer is the core's SysTick,
+    /// counting at `clock_hz`.
+    Nvic { clock_hz: u64 },
+}
+
+/// A board's interrupts (Gate 3, `docs/spec.md`, *Boards*): a controller and what it delivers.
+/// AArch64's and Cortex-M's in 1.0; a RISC-V board has none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interrupts {
-    /// The GICv2 distributor's registers.
-    pub distributor: u64,
-    /// The GICv2 CPU interface's registers.
-    pub cpu: u64,
+    pub controller: Controller,
     /// The board timer's period, when the program wants it: its interrupt is named `timer`.
     pub timer_period_us: Option<u64>,
-    /// Every further interrupt by name, with the number (`INTID`) it is.
+    /// Every further interrupt by name, with its number — a GICv2's `INTID`, or an NVIC's
+    /// external interrupt, numbered from 0.
     pub lines: Vec<(String, u32)>,
 }
 
 /// The AArch64 virtual timer's interrupt on a GICv2: private peripheral interrupt 11, `INTID` 27.
 pub const TIMER_INTID: u32 = 27;
+
+/// SysTick's exception on an M profile: vector 15. An NVIC line `n` is vector `16 + n`.
+pub const SYSTICK_VECTOR: u32 = 15;
+
+impl Interrupts {
+    /// The number a handler for `timer` is dispatched by: an `INTID`, or an M profile's vector.
+    #[must_use]
+    pub const fn timer_number(&self) -> u32 {
+        match self.controller {
+            Controller::Gicv2 { .. } => TIMER_INTID,
+            Controller::Nvic { .. } => SYSTICK_VECTOR,
+        }
+    }
+
+    /// The number a handler for line `id` is dispatched by.
+    #[must_use]
+    pub const fn line_number(&self, id: u32) -> u32 {
+        match self.controller {
+            Controller::Gicv2 { .. } => id,
+            Controller::Nvic { .. } => 16 + id,
+        }
+    }
+}
 
 /// One interrupt handler the entry dispatches to (Gate 3): its `INTID`, the Nazm function's
 /// symbol, and whether it takes the device's authority (an `MmioCap`, a word that is 0).
@@ -110,6 +147,7 @@ impl Board {
         let isa = match self.isa {
             Isa::Aarch64 => "aarch64",
             Isa::Riscv64 => "riscv64",
+            Isa::Thumbv7m => "thumbv7m",
         };
         // A TOML basic string: only a quote and a backslash need escaping in a board's name.
         let name = self.name.replace('\\', "\\\\").replace('"', "\\\"");
@@ -130,11 +168,20 @@ impl Board {
             let _ = write!(out, "\n[heap]\nsize = {h:#x}\n");
         }
         if let Some(i) = &self.interrupts {
-            let _ = write!(
-                out,
-                "\n[interrupts]\ncontroller = \"gicv2\"\ndistributor = {:#x}\ncpu = {:#x}\n",
-                i.distributor, i.cpu
-            );
+            match i.controller {
+                Controller::Gicv2 { distributor, cpu } => {
+                    let _ = write!(
+                        out,
+                        "\n[interrupts]\ncontroller = \"gicv2\"\ndistributor = {distributor:#x}\ncpu = {cpu:#x}\n"
+                    );
+                }
+                Controller::Nvic { clock_hz } => {
+                    let _ = write!(
+                        out,
+                        "\n[interrupts]\ncontroller = \"nvic\"\nclock_hz = {clock_hz}\n"
+                    );
+                }
+            }
             if let Some(p) = i.timer_period_us {
                 let _ = writeln!(out, "timer_period_us = {p}");
             }
@@ -150,7 +197,7 @@ impl Board {
 }
 
 /// Every board, in a fixed order.
-pub const BOARDS: [Board; 2] = [
+pub const BOARDS: [Board; 3] = [
     Board {
         triple: Cow::Borrowed("aarch64-unknown-none"),
         name: Cow::Borrowed("QEMU virt, AArch64 (Cortex-A53)"),
@@ -180,6 +227,24 @@ pub const BOARDS: [Board; 2] = [
         interrupts: None,
         emulator: Cow::Borrowed(
             "qemu-system-riscv64 -M virt -bios none -nographic -nic none -kernel",
+        ),
+        hardware: false,
+    },
+    // Gate 3: an MCU-class board. The AN385 image's SSRAM1 is at 0, where the vector table must
+    // be; its UART0 is a CMSDK APB UART.
+    Board {
+        triple: Cow::Borrowed("thumbv7m-none-eabi"),
+        name: Cow::Borrowed("QEMU MPS2 AN385, Cortex-M3"),
+        isa: Isa::Thumbv7m,
+        load_address: 0,
+        uart: 0x4000_4000,
+        uart_kind: Uart::Cmsdk,
+        stop: Stop::Semihosting,
+        stack: STACK,
+        heap: None,
+        interrupts: None,
+        emulator: Cow::Borrowed(
+            "qemu-system-arm -M mps2-an385 -cpu cortex-m3 -nographic -nic none -semihosting -kernel",
         ),
         hardware: false,
     },
@@ -261,13 +326,19 @@ pub fn linker_script_placing(board: &Board, placed: &Placed) -> String {
     let keep =
         |names: &[String]| -> String { names.iter().map(|n| format!(" KEEP(*({n}))")).collect() };
     let (code, rodata, data) = (keep(&placed.code), keep(&placed.rodata), keep(&placed.data));
+    // An M profile's vector table first, at the load address (Gate 3).
+    let vectors = if board.isa == Isa::Thumbv7m {
+        "KEEP(*(.vectors)) "
+    } else {
+        ""
+    };
     // A heap (Gate 3): the arena after the stack, its bounds `__heap_start` and `__heap_end`.
     let heap = board.heap.map_or_else(String::new, |h| {
         format!("  . = ALIGN(16);\n  __heap_start = .;\n  . = . + {h:#x};\n  __heap_end = .;\n")
     });
     format!(
         "/* Written by nazm build for {triple} (N62, N86). */\nENTRY(_start)\nSECTIONS\n{{\n  \
-         . = {load:#x};\n  .text : {{ *(.text.start) *(.text*){code} }}\n  .rodata : {{ *(.rodata*) *(.srodata*){rodata} }}\n  \
+         . = {load:#x};\n  .text : {{ {vectors}*(.text.start) *(.text*){code} }}\n  .rodata : {{ *(.rodata*) *(.srodata*){rodata} }}\n  \
          .data : {{ *(.data*) *(.sdata*){data} }}\n  .bss : {{ *(.bss*) *(.sbss*) *(COMMON) }}\n  . = ALIGN(16);\n  __stack_bottom = .;\n  . = . + {stack:#x};\n  \
          __stack_top = .;\n{heap}  /DISCARD/ : {{ *(.eh_frame*) }}\n}}\n"
     )
@@ -448,6 +519,18 @@ entry:
 pub fn emit_runtime(board: &Board, stack: bool) -> String {
     let uart = board.uart;
     let exit = board_exit(board);
+    // A CMSDK UART transmits only once enabled (Gate 3): its control register's TX-enable bit,
+    // and a baud divider of 16, the least it accepts. The PL011 and the NS16550A need nothing.
+    let uart_init = match board.uart_kind {
+        Uart::Cmsdk => format!(
+            "define hidden void @nz.uart_init() {{\nentry:\n  store volatile i32 16, ptr inttoptr (i64 {} to ptr)\n  store volatile i32 1, ptr inttoptr (i64 {} to ptr)\n  ret void\n}}\n",
+            board.uart + 0x10,
+            board.uart + 0x8
+        ),
+        Uart::Pl011 | Uart::Ns16550a => {
+            "define hidden void @nz.uart_init() {\nentry:\n  ret void\n}\n".to_owned()
+        }
+    };
     let mut out = String::new();
     preamble(&mut out, "<nazm freestanding runtime>");
     out.push_str(&format!(
@@ -489,6 +572,8 @@ entry:
   store volatile i8 %c, ptr inttoptr (i64 {uart} to ptr)
   ret void
 }}
+
+{uart_init}
 
 define hidden void @nz.uart_write(ptr %p, i64 %n) {{
 entry:
@@ -594,6 +679,10 @@ stop:
     ));
     out.push_str(MMIO_RUNTIME);
     out.push_str(ATOMIC_RUNTIME);
+    // What an ARMv7-M has no instruction for, and LLVM calls instead (Gate 3).
+    if board.isa == Isa::Thumbv7m {
+        out.push_str(THUMB_RUNTIME);
+    }
     if stack {
         // The quarter of the board's stack kept in reserve below a recursive call (N49's).
         let headroom = board.stack >> 2;
@@ -623,6 +712,22 @@ entry:
 /// (0x20, `{ ADP_Stopped_ApplicationExit, code }`), or SiFive's test device.
 fn board_exit(board: &Board) -> String {
     match board.stop {
+        // AArch32's semihosting (Gate 3): `bkpt 0xab` on an M profile, and a block of words.
+        Stop::Semihosting if board.isa == Isa::Thumbv7m => "; ARM semihosting SYS_EXIT_EXTENDED (0x20) on an M profile: { ADP_Stopped_ApplicationExit, code }.
+define hidden void @nz.board_exit(i64 %code) noreturn {
+entry:
+  %blk = alloca [2 x i32], align 4
+  store i32 131110, ptr %blk
+  %c = getelementptr i32, ptr %blk, i32 1
+  %c32 = trunc i64 %code to i32
+  store i32 %c32, ptr %c
+  call void asm sideeffect \"mov r0, #0x20\\0Amov r1, $0\\0Abkpt 0xab\", \"r,~{r0},~{r1},~{memory}\"(ptr %blk)
+  br label %hang
+hang:
+  br label %hang
+}
+"
+        .to_owned(),
         Stop::Semihosting => "; ARM semihosting SYS_EXIT_EXTENDED (0x20): { ADP_Stopped_ApplicationExit, code }.
 define hidden void @nz.board_exit(i64 %code) noreturn {
 entry:
@@ -724,6 +829,145 @@ entry:
 }
 ";
 
+/// What LLVM calls on an ARMv7-M for what it has no instruction for (Gate 3): 64-bit atomics and
+/// 64-bit division. A board has no C library or compiler runtime, so the board's runtime defines
+/// them. Each atomic is the plain access with interrupts masked — PRIMASK saved, `cpsid i`,
+/// restored — which on one core no interrupt can tear; division is long division by shifts and
+/// subtractions, which ARMv7-M has. The quotient and remainder come back in r0–r3, the AEABI's
+/// convention, as a two-`i64` aggregate does. Nazm never divides by zero: it stops first (`N0401`).
+pub const THUMB_RUNTIME: &str = r#"
+define internal i32 @nz.mask() {
+entry:
+  %m = call i32 asm sideeffect "mrs $0, primask\0Acpsid i", "=r,~{memory}"()
+  ret i32 %m
+}
+
+define internal void @nz.unmask(i32 %m) {
+entry:
+  call void asm sideeffect "msr primask, $0", "r,~{memory}"(i32 %m)
+  ret void
+}
+
+define i64 @__atomic_load_8(ptr %p, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %v = load volatile i64, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %v
+}
+
+define void @__atomic_store_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  store volatile i64 %v, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret void
+}
+
+define i64 @__atomic_exchange_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  store volatile i64 %v, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define zeroext i1 @__atomic_compare_exchange_8(ptr %p, ptr %e, i64 %d, i32 %s, i32 %f) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %want = load i64, ptr %e
+  %same = icmp eq i64 %old, %want
+  br i1 %same, label %swap, label %differ
+swap:
+  store volatile i64 %d, ptr %p
+  br label %done
+differ:
+  store i64 %old, ptr %e
+  br label %done
+done:
+  call void @nz.unmask(i32 %m)
+  ret i1 %same
+}
+
+define i64 @__atomic_fetch_add_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %new = add i64 %old, %v
+  store volatile i64 %new, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define i64 @__atomic_fetch_sub_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %new = sub i64 %old, %v
+  store volatile i64 %new, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define { i64, i64 } @__aeabi_uldivmod(i64 %n, i64 %d) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 64, %entry ], [ %i1, %next ]
+  %q = phi i64 [ 0, %entry ], [ %q2, %next ]
+  %r = phi i64 [ 0, %entry ], [ %r2, %next ]
+  %more = icmp ugt i32 %i, 0
+  br i1 %more, label %step, label %done
+step:
+  %i1 = sub i32 %i, 1
+  %sh = zext i32 %i1 to i64
+  %bit = lshr i64 %n, %sh
+  %b1 = and i64 %bit, 1
+  %rs = shl i64 %r, 1
+  %r1 = or i64 %rs, %b1
+  %qs = shl i64 %q, 1
+  %fits = icmp uge i64 %r1, %d
+  br i1 %fits, label %take, label %keep
+take:
+  %rt = sub i64 %r1, %d
+  %qt = or i64 %qs, 1
+  br label %next
+keep:
+  br label %next
+next:
+  %r2 = phi i64 [ %rt, %take ], [ %r1, %keep ]
+  %q2 = phi i64 [ %qt, %take ], [ %qs, %keep ]
+  br label %loop
+done:
+  %a = insertvalue { i64, i64 } undef, i64 %q, 0
+  %b = insertvalue { i64, i64 } %a, i64 %r, 1
+  ret { i64, i64 } %b
+}
+
+define { i64, i64 } @__aeabi_ldivmod(i64 %n, i64 %d) {
+entry:
+  %nneg = icmp slt i64 %n, 0
+  %dneg = icmp slt i64 %d, 0
+  %nm = sub i64 0, %n
+  %dm = sub i64 0, %d
+  %na = select i1 %nneg, i64 %nm, i64 %n
+  %da = select i1 %dneg, i64 %dm, i64 %d
+  %u = call { i64, i64 } @__aeabi_uldivmod(i64 %na, i64 %da)
+  %uq = extractvalue { i64, i64 } %u, 0
+  %ur = extractvalue { i64, i64 } %u, 1
+  %flip = xor i1 %nneg, %dneg
+  %qn = sub i64 0, %uq
+  %q = select i1 %flip, i64 %qn, i64 %uq
+  %rn = sub i64 0, %ur
+  %r = select i1 %nneg, i64 %rn, i64 %ur
+  %a = insertvalue { i64, i64 } undef, i64 %q, 0
+  %b = insertvalue { i64, i64 } %a, i64 %r, 1
+  ret { i64, i64 } %b
+}
+"#;
+
 /// The atomic built-ins' operations (Gate 3, `docs/spec.md`, *Atomics*): one sequentially
 /// consistent access to an aligned 8-byte cell each. A board's runtime and the hosted one both
 /// define them, as they do the device registers; on a target without threads LLVM makes each
@@ -784,8 +1028,15 @@ pub fn emit_entry_with(
         .interrupts
         .as_ref()
         .filter(|_| board.isa == Isa::Aarch64);
+    // A Cortex-M's interrupts (Gate 3): its vector table and an NVIC.
+    let nvic = board
+        .interrupts
+        .as_ref()
+        .filter(|_| board.isa == Isa::Thumbv7m);
     let mut out = String::new();
     preamble(&mut out, "<nazm freestanding entry>");
+    // The UART, which the interrupt path, a fault and the watermark each write to: one declaration.
+    out.push_str("declare void @nz.uart_write(ptr, i64)\n");
     let (start, paint, call): (&[&str], &[&str], &[&str]) = match board.isa {
         Isa::Aarch64 => (
             &[
@@ -828,6 +1079,22 @@ pub fn emit_entry_with(
             ],
             &["  call nz_board_main", "1: j 1b"],
         ),
+        // ARMv7-M (Gate 3): the core loads the stack pointer from the vector table, so `_start`
+        // sets it again only so that a debugger's restart finds it; there is no FPU on an M3.
+        Isa::Thumbv7m => (
+            &["  ldr r0, =__stack_top", "  mov sp, r0"],
+            &[
+                "  ldr r0, =__stack_bottom",
+                "  ldr r1, =__stack_top",
+                "  ldr r2, =0x5a5a5a5a",
+                "2: cmp r0, r1",
+                "  bhs 3f",
+                "  str r2, [r0], #4",
+                "  b 2b",
+                "3:",
+            ],
+            &["  bl nz_board_main", "1: b 1b", "  .ltorg"],
+        ),
     };
     // With interrupts (Gate 3): the vector table installed and the controller and timer set up
     // before `main`, then IRQs unmasked.
@@ -839,25 +1106,78 @@ pub fn emit_entry_with(
             "  bl nz_irq_init",
             "  msr daifclr, #2",
         ]
+    } else if nvic.is_some() {
+        &["  cpsid i", "  bl nz_irq_init", "  cpsie i"]
     } else {
         &[]
     };
-    for line in [
-        ".section .text.start, \\22ax\\22",
-        ".global _start",
-        "_start:",
-    ]
-    .iter()
-    .chain(start)
-    .chain(if watermark { paint } else { &[] })
-    .chain(arm)
-    .chain(call)
+    // An M profile's vector table (Gate 3), first in the image at its load address: the initial
+    // stack pointer, `_start` as the reset handler, and every other exception a fault — reported
+    // and the machine stopped. The interrupts 3E adds take their own entries.
+    let head: Vec<String> = if board.isa == Isa::Thumbv7m {
+        // Every vector up to the highest one handled: a handled one names its handler's caller.
+        let last = handlers.iter().map(|h| h.intid).max().unwrap_or(0).max(15);
+        let mut v: Vec<String> = [
+            ".syntax unified",
+            ".thumb",
+            ".section .vectors, \\22a\\22",
+            ".p2align 2",
+            ".global nz_vector_table",
+            "nz_vector_table:",
+            "  .word __stack_top",
+            "  .word _start",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        for k in 2..=last {
+            let handled = nvic.is_some() && handlers.iter().any(|h| h.intid == k);
+            v.push(if handled {
+                format!("  .word nz_vec_{k}")
+            } else {
+                "  .word nz_fault".to_owned()
+            });
+        }
+        v.extend(
+            [
+                ".section .text.start, \\22ax\\22",
+                ".thumb_func",
+                "nz_fault:",
+                "  bl nz_fault_report",
+                ".global _start",
+                ".thumb_func",
+                "_start:",
+            ]
+            .iter()
+            .map(|s| (*s).to_owned()),
+        );
+        v
+    } else {
+        [
+            ".section .text.start, \\22ax\\22",
+            ".global _start",
+            "_start:",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect()
+    };
+    for line in head
+        .iter()
+        .map(String::as_str)
+        .chain(start.iter().copied())
+        .chain(if watermark { paint } else { &[] }.iter().copied())
+        .chain(arm.iter().copied())
+        .chain(call.iter().copied())
     {
         let _ = writeln!(out, "module asm \"{line}\"");
     }
     if let Some(i) = irq {
         vectors(&mut out);
         irq_runtime(&mut out, i, handlers);
+    }
+    if let Some(i) = nvic {
+        nvic_runtime(&mut out, i, handlers);
     }
     // The failure hook's caller (Gate 3), which the runtime's report calls: the program's
     // `@on_failure`, or nothing.
@@ -885,8 +1205,17 @@ pub fn emit_entry_with(
     let _ = writeln!(out, "declare void @nz.uart_int(i64)");
     let _ = writeln!(out, "declare void @nz.uart_byte(i8)");
     let _ = writeln!(out, "declare void @nz.board_exit(i64) noreturn");
+    let _ = writeln!(out, "declare void @nz.uart_init()");
+    if board.isa == Isa::Thumbv7m {
+        let _ = write!(
+            out,
+            "@.nz.fault = private constant [27 x i8] c\"nazm: a fault of the image\\0A\"\n\
+             define void @nz_fault_report() noreturn {{\nentry:\n  call void @nz.uart_write(ptr @.nz.fault, i64 27)\n  call void @nz.board_exit(i64 2)\n  unreachable\n}}\n"
+        );
+    }
     let _ = writeln!(out, "define void @nz_board_main() {{");
     let _ = writeln!(out, "entry:");
+    let _ = writeln!(out, "  call void @nz.uart_init()");
     let _ = writeln!(out, "  %result = call i64 {entry}({root_args})");
     let _ = writeln!(out, "  %failed = load i1, ptr @nz.failed");
     let _ = writeln!(out, "  br i1 %failed, label %reported, label %finished");
@@ -915,7 +1244,6 @@ pub fn emit_entry_with(
 @__stack_bottom = external global i8
 @__stack_top = external global i8
 @.nz.stack_label = private constant [17 x i8] c"nazm-stack: used="
-declare void @nz.uart_write(ptr, i64)
 
 ; The bytes between the stack's top and the lowest word no longer painted.
 define internal i64 @nz.stack_used() {{
@@ -1037,12 +1365,17 @@ fn vectors(out: &mut String) {
 /// machine if the handler failed, and signals the end of the interrupt. An exception that is not
 /// an IRQ is a failure of the image, reported and stopped as one.
 fn irq_runtime(out: &mut String, i: &Interrupts, handlers: &[Handler]) {
-    let (d, c) = (i.distributor, i.cpu);
+    let Controller::Gicv2 {
+        distributor: d,
+        cpu: c,
+    } = i.controller
+    else {
+        return;
+    };
     let _ = write!(
         out,
         r#"
 @.nz.unexpected = private constant [48 x i8] c"nazm: an exception the image has no handler for\0A"
-declare void @nz.uart_write(ptr, i64)
 
 define void @nz_irq_unexpected() noreturn {{
 entry:
@@ -1165,5 +1498,57 @@ out:
     for h in handlers {
         let param = if h.takes_cap { "i64" } else { "" };
         let _ = writeln!(out, "declare i64 @{}({param})", h.symbol);
+    }
+}
+
+/// A Cortex-M's interrupts (Gate 3): `nz_irq_init` starts SysTick with the period's ticks of the
+/// core clock — reload, current value cleared, then enabled with its interrupt and the processor's
+/// clock — and enables each handled line in the NVIC's set-enable registers. Each handled vector's
+/// entry, `nz_vec_K`, calls its handler and reports and stops the machine if it failed: an M
+/// profile saves the caller's registers itself and returns on the link register, so the entry is
+/// an ordinary function and nothing acknowledges SysTick.
+fn nvic_runtime(out: &mut String, i: &Interrupts, handlers: &[Handler]) {
+    let Controller::Nvic { clock_hz } = i.controller else {
+        return;
+    };
+    // `@nz.failed` and `@nz.report` are declared by the entry this is part of.
+    out.push_str("define void @nz_irq_init() {\nentry:\n");
+    if let (Some(p), true) = (
+        i.timer_period_us,
+        handlers.iter().any(|h| h.intid == SYSTICK_VECTOR),
+    ) {
+        let ticks = (u128::from(clock_hz) * u128::from(p))
+            .checked_div(1_000_000)
+            .unwrap_or(0);
+        let reload = u32::try_from(ticks.saturating_sub(1)).unwrap_or(0x00FF_FFFF);
+        let _ = writeln!(
+            out,
+            "  store volatile i32 {reload}, ptr inttoptr (i64 3758153748 to ptr)"
+        );
+        out.push_str("  store volatile i32 0, ptr inttoptr (i64 3758153752 to ptr)\n");
+        out.push_str("  store volatile i32 7, ptr inttoptr (i64 3758153744 to ptr)\n");
+    }
+    for h in handlers.iter().filter(|h| h.intid >= 16) {
+        let n = u64::from(h.intid - 16);
+        let _ = writeln!(
+            out,
+            "  store volatile i32 {}, ptr inttoptr (i64 {} to ptr)",
+            1u64 << (n % 32),
+            0xE000_E100 + 4 * (n >> 5)
+        );
+    }
+    out.push_str("  ret void\n}\n");
+    for h in handlers {
+        let (param, arg) = if h.takes_cap {
+            ("i64", "i64 0")
+        } else {
+            ("", "")
+        };
+        let _ = write!(
+            out,
+            "declare i64 @{sym}({param})\ndefine void @nz_vec_{k}() {{\nentry:\n  %r = call i64 @{sym}({arg})\n  %failed = load i1, ptr @nz.failed\n  br i1 %failed, label %reported, label %done\nreported:\n  call void @nz.report()\n  unreachable\ndone:\n  ret void\n}}\n",
+            sym = h.symbol,
+            k = h.intid
+        );
     }
 }
