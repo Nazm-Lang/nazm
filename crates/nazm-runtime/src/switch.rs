@@ -25,16 +25,20 @@ pub enum SwitchTarget {
     X86_64Linux,
     /// Windows x64 (Gate 3): its own calling convention and the thread information block.
     X86_64Windows,
+    /// Android ARM64 (Gate 3): Linux's kernel and AArch64's convention, with Bionic, Android's C
+    /// library, in place of glibc.
+    Aarch64Android,
 }
 
 impl SwitchTarget {
     /// Every target the pool has a switch for.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Aarch64Darwin,
         Self::Aarch64Linux,
         Self::X86_64Darwin,
         Self::X86_64Linux,
         Self::X86_64Windows,
+        Self::Aarch64Android,
     ];
 }
 
@@ -260,7 +264,7 @@ pub fn emit_switch(target: SwitchTarget) -> String {
     }
     let (body, darwin) = match target {
         SwitchTarget::Aarch64Darwin => (AARCH64, true),
-        SwitchTarget::Aarch64Linux => (AARCH64, false),
+        SwitchTarget::Aarch64Linux | SwitchTarget::Aarch64Android => (AARCH64, false),
         SwitchTarget::X86_64Darwin => (X86_64, true),
         SwitchTarget::X86_64Linux => (X86_64, false),
         // Returned above, with its own text; never reaches here.
@@ -306,6 +310,8 @@ pub fn emit_errno(target: SwitchTarget) -> String {
     let location = match target {
         SwitchTarget::Aarch64Darwin | SwitchTarget::X86_64Darwin => "__error",
         SwitchTarget::Aarch64Linux | SwitchTarget::X86_64Linux => "__errno_location",
+        // Bionic (Gate 3).
+        SwitchTarget::Aarch64Android => "__errno",
         // MinGW-w64's C runtime (Gate 3).
         SwitchTarget::X86_64Windows => "_errno",
     };

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.trace-1.json",
+  "title": "nazm.trace/1",
+  "description": "Requirements traced to what verifies them (Gate 3, `docs/systems-domains.md` Part S): each requirement of a `requirements.toml` to the definitions it constrains — by durable identity (`DefKey`) and Core IR semantic digest, with their obligations from the census — and to the `@test` functions it names, run. A link that does not hold is in `broken`, by name, and the command fails. Written by `nazm trace` as one line. Compiler evidence for a reviewer, not certification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "file", "requirements", "status", "broken", "evidence"],
+  "properties": {
+    "schema": { "const": "nazm.trace/1" },
+    "file": { "type": "string" },
+    "status": { "enum": ["traced", "broken"] },
+    "broken": { "type": "array", "items": { "type": "string" } },
+    "evidence": { "type": "string" },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text", "definitions", "tests"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "definitions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "key"],
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": ["string", "null"], "description": "The definition's durable identity, `MODULE::fn NAME`; null where no such definition is." },
+                "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "The Core IR semantic digest: signature, effects and body, span-free." },
+                "broken": { "type": "string" },
+                "obligations": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["proved", "checked", "unknown", "each"],
+                  "properties": {
+                    "proved": { "type": "integer", "minimum": 0 },
+                    "checked": { "type": "integer", "minimum": 0 },
+                    "unknown": { "type": "integer", "minimum": 0 },
+                    "each": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind", "status", "line", "column"],
+                        "properties": {
+                          "kind": { "type": "string" },
+                          "status": { "enum": ["proved", "checked", "unknown"] },
+                          "line": { "type": "integer", "minimum": 1 },
+                          "column": { "type": "integer", "minimum": 1 }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "outcome"],
+              "properties": {
+                "name": { "type": "string" },
+                "outcome": { "enum": ["passed", "failed", "missing"] }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

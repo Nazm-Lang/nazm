@@ -507,7 +507,7 @@ accepts.
 | `program` | `{ use_item } , { { attribute } , ( function \| foreign_function \| record \| foreign_struct \| enumeration \| trait_item \| impl_item \| constant ) }` |
 | `attribute` | `"@" , IDENT , [ "(" , [ attribute_arg , { "," , attribute_arg } , [ "," ] ] , ")" ]` |
 | `attribute_arg` | `STRING \| IDENT , [ "=" , STRING \| "(" , [ attribute_arg , { "," , attribute_arg } , [ "," ] ] , ")" ]` |
-| `constant` | `[ visibility ] , "const" , IDENT , ":" , type , "=" , expression , ";"` |
+| `constant` | `[ visibility ] , ( "const" \| "static" ) , IDENT , ":" , type , "=" , expression , ";"` |
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
 | `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";"` |
 | `impl_item` | `"impl" , type , IDENT , type , "{" , { function } , "}"` |
@@ -650,15 +650,22 @@ attribute_arg = STRING | IDENT , [ "=" , STRING | "(" , [ attribute_arg , { "," 
 ### `constant`
 
 ```ebnf
-constant = [ visibility ] , "const" , IDENT , ":" , type , "=" , expression , ";" ;
+constant = [ visibility ] , ( "const" | "static" ) , IDENT , ":" , type , "=" , expression , ";" ;
 ```
 
 A constant (Gate 2): a value the checker computes from literals, other constants,
 operators and numeric conversions. `const` is a word only here, before a name and a `:`,
 so it remains an ordinary name everywhere else. See `docs/spec.md`, *Constants*.
+A static (Gate 3) is written the same way with `static`: storage with one address, a
+number or a `Bool` read-only, or an `Atomic` started by `atomic_new` of a constant. `static`
+is a word only where `const` is. See `docs/spec.md`, *Statics*.
 
 ```nazm
 const MASK: UInt8 = 0xF0; fn main() -> Int { Int(MASK) }
+```
+
+```nazm
+static TICKS: Atomic = atomic_new(0); fn main() -> Int { atomic_add(TICKS, 1) }
 ```
 
 ### `trait_item`

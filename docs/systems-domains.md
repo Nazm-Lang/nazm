@@ -290,11 +290,46 @@ One example: a native window host (a C program over the platform's windowing API
 host) whose event loop calls a Nazm shared library for its state and logic, through the C ABI and a
 callback. A Nazm GUI framework is ecosystem, not v1.
 
+*Settled in 3K (2026-10-11).* `aarch64-linux-android` and `aarch64-apple-ios` are hosted targets
+on the existing platform layer: Android a switch target of its own — Linux's AArch64 layouts and
+numbers, Bionic's `__errno` and `strerror_r` — and iOS Darwin's. Android evidence is static
+executables, a C host with a Nazm library and a whole program with its pool, linked by the NDK r27c
+in `target/toolchains` and run on an aarch64 Linux kernel in a container: `run-verified on a Linux
+kernel`, a status of its own, never plain run-verified and never an Android device. iOS is linked
+against Xcode 27's iOS SDK — an archive and a program, platform 2 — and not run: no simulator runtime
+is installed, and fetching one is a multi-gigabyte download left to the user. The desktop example is
+`examples/desktop/counter`: a Cocoa window whose button callbacks call a Nazm shared library's state
+machine, driven by synthetic clicks and checked label by label.
+
 ## R. Web3
 
 Qualification of what exists: the contract model, EVM backend, WASM contracts, deterministic step
 and gas metering, storage, transaction simulation and upgrade checks, each with its evidence; gas
 bounds tightened where loops are bounded. sBPF stays blocked while no toolchain is available.
+
+*Settled in 3L (2026-10-11): the qualification.* What exists, each claim with the test that holds it:
+
+| Claim | Evidence |
+| --- | --- |
+| A contract's facts: each entrypoint's reads and writes | `contract.rs` `a_contracts_facts_name_each_entrypoints_reads_and_writes` |
+| Deterministic transactions; a revert changes nothing; a failure reverts with its code | `contract.rs` `transactions_run_deterministically_and_a_revert_changes_nothing`, `a_runtime_failure_reverts_with_its_code` |
+| `web3` refuses nondeterminism and outside authority; a pure function means the same under it | `contract.rs` `the_web3_profile_refuses_nondeterminism_and_outside_authority`, `a_pure_function_means_the_same_under_web3_as_under_no_profile` |
+| `accounts`: a write no signer decides on is refused, through helpers and built-up states | `accounts.rs` (four tests) |
+| Generated sequences run deterministically and keep the conserved quantity | `contract_property.rs` `generated_sequences_run_deterministically_and_keep_the_conserved_quantity` |
+| The EVM backend agrees with the simulator, fixed and generated, and stays inside its gas bounds | `evm.rs` `the_evm_agrees_with_the_simulator_and_stays_inside_its_gas_bounds`; `contract_property.rs` `the_evm_agrees_with_the_simulator_on_generated_sequences` (py-evm, `nazm-evm:n70`) |
+| The WebAssembly contract agrees with the simulator | `wasm_contract.rs` `the_webassembly_contract_agrees_with_the_simulator`; `contract_property.rs` (Node) |
+| Upgrades: an added field allowed, a removed or retyped one refused | `evm.rs` `the_upgrade_check_allows_an_added_field_and_refuses_a_removed_or_retyped_one` |
+| Contract obligations, and their census | `contracts.rs` (eight tests) |
+
+Tightened in 3L: an entrypoint's gas bound now runs through a loop in the counted form (N63), as its
+turns times its condition and body, plus the last condition; any other loop still leaves the bound
+`null`. sBPF stays BLOCKED: no toolchain here.
+
+*Settled in 3L: traceability.* `nazm trace`, `nazm.trace/1`: requirements in `requirements.toml`
+(`nazm.requirements/1`), each definition by `DefKey` and its Core IR semantic digest, obligations
+from the census keyed by definition (the census gained each obligation's `FnId`), tests run through
+`nazm test`. The artefact digest is the definition's semantic digest. A broken link fails the trace
+by name.
 
 ## S. Requirements traceability
 

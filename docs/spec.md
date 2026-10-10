@@ -95,6 +95,8 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `freestanding` | EXPERIMENTAL | emulator-verified boards, a restricted subset |
 | `webassembly` | EXPERIMENTAL | |
 | `wasi` | EXPERIMENTAL | Gate 3: `wasm32-wasip1`, run under Node's WASI only |
+| `trace` | EXPERIMENTAL | Gate 3: `nazm trace`, `nazm.trace/1` |
+| `mobile` | EXPERIMENTAL | Gate 3: Android run on a Linux kernel as static Bionic; iOS link-only |
 | `interactive` | EXPERIMENTAL | `repl`, `comptime`, `reload-check` |
 | `accel` | EXPERIMENTAL | |
 | `contracts` | EXPERIMENTAL | the `web3` profile and `nazm contract` |
@@ -3714,7 +3716,7 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 
 | | |
 | --- | --- |
-| **`nazm contract FILE --evm DIR`** | Compiles a contract to `deploy.hex` and `runtime.hex`, with `abi.json` (`nazm.evm-abi/1`: each entrypoint as `name(int64,…)`, its selector — the first four bytes of its keccak-256 — and a gas bound or `null`), `storage.json` (`nazm.evm-storage/1`: field `f` at slot `keccak256("nazm.state." + f)`) and `evm_run.py`. Anything the backend does not emit is `N0399`, before emission |
+| **`nazm contract FILE --evm DIR`** | Compiles a contract to `deploy.hex` and `runtime.hex`, with `abi.json` (`nazm.evm-abi/1`: each entrypoint as `name(int64,…)`, its selector — the first four bytes of its keccak-256 — and a gas bound or `null`: since Gate 3 a loop in the counted form (N63) contributes its turns times its condition and body, and any other loop leaves the bound `null`), `storage.json` (`nazm.evm-storage/1`: field `f` at slot `keccak256("nazm.state." + f)`) and `evm_run.py`. Anything the backend does not emit is `N0399`, before emission |
 | **Semantics** | Exactly the contract model's: `caller` is the EVM's `CALLER` (a sender address that is not an `Int` reverts, `N0397`); malformed calldata reverts (`N0398`); a runtime failure reverts with its five-byte code, an `Err(code)` with the 32-byte word `code`; a change to `conserved` reverts with `N0396`; every revert discards the transaction's writes |
 | **Upgrades** | `nazm contract NEW --upgrade-check OLD`: `nazm.evm-upgrade/1`; a removed or retyped field is incompatible (`N0399`), an added field compatible, a reordering nothing |
 
@@ -3728,6 +3730,26 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **What it has not** | Tasks, channels and the network: WASI preview 1 has no threads and no sockets, and a program reaching them is refused by name before anything is written. C: a foreign function is an import from outside WASI, which the reference host refuses before the module runs. Listing a directory (`os_dir_open` fails, `Unsupported`), the environment (empty), permission bits (`os_stat` says `0o644`) |
 | **Failure** | Reported to standard error and the module ends with status 2, as a hosted program's; `main`'s result is written to standard output and the status is 0 |
 | **The reference host** | `node wasi.mjs module.wasm DIR [ARGS…]` — `DIR` preopened as `.`, no environment, nothing else granted; an import from any module but `wasi_snapshot_preview1` is refused before the module runs |
+
+### Mobile targets: Android and iOS libraries over the C ABI — Gate 3
+<!-- id: mobile -->
+
+| | |
+| --- | --- |
+| **The targets** | `aarch64-linux-android` (Android ARM64, API level 30, Bionic) and `aarch64-apple-ios` (iOS 17 and later, on the device). Each builds with `--objects DIR` only: the objects, in link order, and `link.txt` — linked by the NDK's `clang` for Android (`-lm`), by `xcrun --sdk iphoneos clang` for iOS. `--lib` builds a library whose `pub extern "C"` functions a host calls: an archive, or with the toolchain's `-shared` a shared library. `--backend cranelift` is refused: the mobile targets are the LLVM backend's |
+| **What runs** | The whole language and the task pool: Android is Linux's kernel and AArch64's convention with Bionic, `errno` from `__errno` and the XSI `strerror_r`; iOS is Darwin's unit, as macOS's |
+| **What is verified** | Android: static executables run on an aarch64 Linux kernel in a container — Android's C library on Linux, **never an Android device or emulator** (`run-verified on a Linux kernel`). iOS: linked against Xcode's iOS SDK, **never run** (`compile-only`): no simulator runtime is installed |
+| **Not here** | A UI framework, Java/Kotlin or Swift bindings, the iOS simulator's own triple, an `.xcframework` |
+
+### Requirements traceability: `nazm trace` — Gate 3
+<!-- id: trace -->
+
+| | |
+| --- | --- |
+| **The requirements** | A project file, `requirements.toml`: `schema = "nazm.requirements/1"`, and each `[[requirement]]` with a stable `id` (written once), its `text`, the `definitions` it constrains — functions of the program's own module, by name — and the `tests`, `@test` functions of the same file, that verify it |
+| **The trace** | `nazm trace FILE --requirements FILE` writes `nazm.trace/1`: each requirement, each definition by its **durable identity** (`MODULE::fn NAME`, the key a rename or an edit elsewhere does not move) and its Core IR semantic digest (signature, effects and body, span-free — an edit to the body moves it, an edit elsewhere does not), its obligations from the census keyed by that definition, proved, checked or unknown, and each test's outcome, run as `nazm test` runs it |
+| **A broken link** | A definition the file does not have, a test it does not have, a test that fails, or a requirement that names no definition or no test: each written to `broken` and to standard error by the requirement's id, never dropped, and the command exits 1 |
+| **What it is not** | Evidence for a reviewer, gathered by the compiler: not a certification, a qualification or a proof that the tests are the right ones |
 
 ### Contracts on WebAssembly — N71
 <!-- id: wasm-contract -->

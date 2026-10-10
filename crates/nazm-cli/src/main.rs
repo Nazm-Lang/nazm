@@ -78,6 +78,7 @@ mod scratch;
 mod snapshot;
 mod stack;
 mod summary;
+mod trace;
 // Moved to `nazm-service` in N16, so `nazm lsp` loads exactly as every command does.
 use nazm_service::{load, root};
 mod test;
@@ -374,6 +375,11 @@ fn dispatch(command: Command) -> ExitCode {
             json,
             source_root,
         } => obligations::run(&file, json, source_root.as_deref()),
+        Command::Trace {
+            file,
+            requirements,
+            source_root,
+        } => trace::run(&file, &requirements, source_root.as_deref()),
         Command::Lir {
             file,
             target,

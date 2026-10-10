@@ -660,6 +660,20 @@ pub(crate) enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
+    /// Trace requirements to what verifies them, `nazm.trace/1` (Gate 3): each requirement of a
+    /// `requirements.toml` to the definitions it constrains — by durable identity and digest, with
+    /// their obligations — and to the `@test` functions it names, run. A definition renamed away, a
+    /// test missing or failing is reported by name and fails the command. Not certification.
+    Trace {
+        file: PathBuf,
+        /// The requirements: `schema = "nazm.requirements/1"`, and each `[[requirement]]` with its
+        /// `id`, `text`, `definitions` and `tests`.
+        #[arg(long, value_name = "FILE")]
+        requirements: PathBuf,
+        /// Where this project begins. As `nazm check --source-root`.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
+    },
     /// Print every obligation of a checked program, `nazm.obligations/1` (N87): each contract
     /// clause, call of a function with a precondition, operation that can overflow or divide
     /// by zero, index, allocation, call through a function value and call into C, each proved,

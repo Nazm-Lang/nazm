@@ -63,7 +63,7 @@ fn defined(name: &str) -> bool {
 }
 
 #[test]
-fn every_accepted_target_has_a_row_and_every_cell_one_of_four_answers() {
+fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers() {
     let (cells, targets) = support();
     let triples: Vec<&str> = cells
         .iter()
@@ -83,6 +83,8 @@ fn every_accepted_target_has_a_row_and_every_cell_one_of_four_answers() {
                 [
                     "run-verified",
                     "run-verified under Wine",
+                    // Gate 3: static Bionic on an aarch64 Linux kernel, never an Android device.
+                    "run-verified on a Linux kernel",
                     "compile-only",
                     "unsupported"
                 ]

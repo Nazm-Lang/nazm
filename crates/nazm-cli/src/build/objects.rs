@@ -313,6 +313,10 @@ fn write_objects(
     let libs = match target.os {
         nazm_lir::backend::Os::Linux => "-lpthread -lm".to_owned(),
         nazm_lir::backend::Os::Macos => String::new(),
+        // Android (Gate 3): the NDK's `clang` for API level 30, with Bionic's mathematics.
+        nazm_lir::backend::Os::Android => "-lm".to_owned(),
+        // iOS (Gate 3): `xcrun --sdk iphoneos clang`; libSystem has everything.
+        nazm_lir::backend::Os::Ios => String::new(),
         // MinGW-w64 (Gate 3): Winsock and BCrypt, and the C runtime's own libraries linked in
         // statically, so the executable needs no MinGW DLL beside it.
         nazm_lir::backend::Os::Windows => "-static -pthread -lws2_32 -lbcrypt".to_owned(),
