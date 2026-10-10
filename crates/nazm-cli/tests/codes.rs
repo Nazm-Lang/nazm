@@ -19,11 +19,11 @@ use std::path::{Path, PathBuf};
 /// Adding to this list is how a code escapes the requirement, so it takes a sentence
 /// that has to be true. Removing something from it is what happens when someone finds a
 /// way to provoke it.
-const UNPROVOKABLE: &[(&str, &str)] = &[(
-    "N0406",
-    "an allocation failed. Reaching it means exhausting memory, and a test that \
-         did would be measuring the machine rather than the compiler",
-)];
+///
+/// Empty since Gate 3: `N0406`, an allocation failed, was here — exhausting a host's memory
+/// measures the machine, not the compiler — until a board's arena made it reachable on purpose:
+/// `heap.rs` runs a program out of a 256-byte heap under QEMU and asserts it.
+const UNPROVOKABLE: &[(&str, &str)] = &[];
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

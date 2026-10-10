@@ -170,6 +170,7 @@ fn mir_facts(program: &nazm_mir::ir::Program) -> profile::MirFacts {
             ..profile::Bounds::default()
         },
         unsigned_writes: Vec::new(),
+        allocations: allocations(program),
     }
 }
 
@@ -189,6 +190,27 @@ fn depth(f: usize, edges: &[Vec<usize>], memo: &mut Vec<Option<usize>>) -> usize
         *m = Some(d);
     }
     d
+}
+
+/// Every allocation site of the program's own functions (Gate 3): what `no-heap` refuses — a
+/// site in a helper the program calls is the helper's, and reported there.
+fn allocations(program: &nazm_mir::ir::Program) -> Vec<profile::Witness> {
+    nazm_mir::cost::of(program)
+        .into_iter()
+        .flat_map(|fc| {
+            let name = program
+                .function(fc.func)
+                .map(|f| f.name.clone())
+                .unwrap_or_default();
+            fc.sites
+                .into_iter()
+                .filter(|s| s.kind == nazm_mir::cost::SiteKind::Allocation)
+                .map(move |s| profile::Witness {
+                    span: s.at,
+                    note: format!("`{}` allocates here, in `{name}`", s.op),
+                })
+        })
+        .collect()
 }
 
 fn unbounded_allocations(program: &nazm_mir::ir::Program) -> Vec<profile::Witness> {
@@ -268,6 +290,7 @@ pub(crate) fn enforce(
         p.rules().contains(&profile::Rule::BoundedAllocation)
             || p.rules().contains(&profile::Rule::NoRecursion)
             || p.rules().contains(&profile::Rule::NoUnknownCalls)
+            || p.rules().contains(&profile::Rule::NoHeap)
             || p.rules().contains(&profile::Rule::BoundedLoops)
             || p.rules().contains(&profile::Rule::SignedWrites)
     });

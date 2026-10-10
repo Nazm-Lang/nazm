@@ -61,11 +61,14 @@ pub enum Rule {
     /// whose callee and so whose contract the compiler does not know — and, with `no-foreign`,
     /// no call into C. Every obligation is then proved or checked as the program runs.
     NoUnknownCalls,
+    /// No allocation site at all (Gate 3, `docs/spec.md`, *Boards*): what the program holds is
+    /// its statics, its stack and its devices, whatever the board's manifest gives it.
+    NoHeap,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -83,6 +86,7 @@ impl Rule {
         Self::ExplicitAuthority,
         Self::CheckedPaths,
         Self::NoUnknownCalls,
+        Self::NoHeap,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -106,6 +110,7 @@ impl Rule {
             Self::ExplicitAuthority => "explicit-authority",
             Self::CheckedPaths => "checked-paths",
             Self::NoUnknownCalls => "no-unknown-calls",
+            Self::NoHeap => "no-heap",
         }
     }
 
@@ -128,7 +133,8 @@ impl Rule {
             | Self::SignedWrites
             | Self::ExplicitAuthority
             | Self::CheckedPaths
-            | Self::NoUnknownCalls => None,
+            | Self::NoUnknownCalls
+            | Self::NoHeap => None,
         }
     }
 }
@@ -151,10 +157,13 @@ pub enum Profile {
     Accounts,
     /// Authority only by holding it (N79, §7.80): no function inherits its caller's.
     Authority,
+    /// A kernel-style image (Gate 3, `docs/spec.md`, *Boards*): no tasks, no heap, no C, nothing
+    /// whose latency is another task's.
+    Kernel,
 }
 
 impl Profile {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::General,
         Self::Embedded,
         Self::Critical,
@@ -163,6 +172,7 @@ impl Profile {
         Self::Web3,
         Self::Accounts,
         Self::Authority,
+        Self::Kernel,
     ];
 
     #[must_use]
@@ -176,6 +186,7 @@ impl Profile {
             Self::Web3 => "web3",
             Self::Accounts => "accounts",
             Self::Authority => "authority",
+            Self::Kernel => "kernel",
         }
     }
 
@@ -242,6 +253,12 @@ impl Profile {
                 Rule::SignedWrites,
             ],
             Self::Authority => &[Rule::ExplicitAuthority],
+            Self::Kernel => &[
+                Rule::NoSpawn,
+                Rule::NoForeign,
+                Rule::NoBlocking,
+                Rule::NoHeap,
+            ],
         }
     }
 }
@@ -278,6 +295,8 @@ pub struct MirFacts {
     pub bounds: Bounds,
     /// Contract entrypoints that write the state without deciding on their caller (N72).
     pub unsigned_writes: Vec<Witness>,
+    /// Every allocation site, bounded or not (Gate 3): what `no-heap` refuses.
+    pub allocations: Vec<Witness>,
 }
 
 /// The static bounds a program's facts establish (N63, §7.65): counts and bounds, never a
@@ -445,6 +464,16 @@ pub fn evaluate(
             } else if rule == Rule::BoundedAllocation {
                 if let Some(f) = facts {
                     f.unbounded.clone()
+                } else {
+                    unknown = true;
+                    vec![Witness {
+                        span: at_main(),
+                        note: "the program's resource facts were not computed".to_owned(),
+                    }]
+                }
+            } else if rule == Rule::NoHeap {
+                if let Some(f) = facts {
+                    f.allocations.clone()
                 } else {
                     unknown = true;
                     vec![Witness {
@@ -726,6 +755,7 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::ExplicitAuthority => "take the capability as a parameter and pass it from `main`: under this profile a function holds only what its scope holds (`nazm inspect` shows each function's `inherits`)".to_owned(),
                 Rule::SignedWrites => "compare `caller` with the state's owner, or another signer it names, before writing; an unguarded write lets anyone change the state".to_owned(),
                 Rule::NoUnknownCalls => "call the function by its name: a call through a function value has a callee, and so a contract, the compiler does not know, and this profile admits no obligation of unknown status (`nazm obligations` lists them)".to_owned(),
+                Rule::NoHeap => "each site allocates; under this profile a program holds its statics, its stack and its devices, so make the value a static, a fixed array or a local (`nazm explain-cost` lists every site)".to_owned(),
                 Rule::BoundedLoops => "write the loop as a counter from a literal, compared with a literal and stepped towards it once per turn by a positive literal (§7.65); `nazm check --profile-report` lists every loop's bound".to_owned(),
             })
         })
