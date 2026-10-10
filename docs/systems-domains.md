@@ -85,6 +85,12 @@ compile-only and one does not exist, and installing Nazm means building it with 
   with no Rust, the archive unpacked, `nazm build` of a sample program, the program run.
 - **Windows ARM64:** Tier 2 / preview at most; not run here.
 
+**Deferred (user, 2026-10-10):** Linux x86_64 execution and the x86_64 archives and clean installs,
+like real Windows host execution, are taken up at the final-v1 qualification rather than in Gate 3,
+where an emulated suite costs hours a run. What 3B-2 found before the deferral is kept: Cranelift's
+x86-64 backend converts a float only to a 32- or 64-bit integer, so a narrower conversion is made
+at 32 and clamped (`cross.rs`). Gate 3 continues with 3D on this host's own architecture.
+
 ### A-W. Windows x86_64
 
 **Decision (user, 2026-10-10):** a real Win32 port of the runtime, built with LLVM (`x86_64-pc-
@@ -261,7 +267,7 @@ evidence, as in Gate 2; the contained gate runs at the end.
 | Step | Parts | Why here |
 | --- | --- | --- |
 | 3A | this record, the domain matrix, the OpenSpec change | constitution first |
-| 3B | A: Linux x86_64 execution, prebuilt archives and clean installs | hosts before domains: every later workload needs them |
+| 3B | A: Linux x86_64 execution, prebuilt archives and clean installs — x86_64 execution deferred to final v1 (see A) | hosts before domains: every later workload needs them |
 | 3C | A-W: the Windows constitution, runtime port, Wine evidence | the largest single port; independent of the rest |
 | 3D | B: atomics, statics, sections, board manifests, interrupts, arena, failure hook; kernel workload | every embedded and realtime domain stands on it |
 | 3E | C: Cortex-M (or its blocker), `@std/hal`, timers; state-machine workload | |

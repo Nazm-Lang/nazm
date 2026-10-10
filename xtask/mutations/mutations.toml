@@ -15250,3 +15250,11 @@ file = "crates/nazm-runtime/src/platform.rs"
 find = "entry:\n  %want = icmp ne i32 %peer, 0"
 replace = "entry:\n  %want = icmp eq i32 %peer, 0"
 killers = [{ package = "nazm-cli", test = "net", name = "an_echo_server_answers_clients_alike_everywhere" }]
+
+[[mutation]]
+name = "g3-a-narrow-float-conversion-is-emitted-as-it-is"
+why = "a float converted to an 8- or 16-bit integer is handed to Cranelift at that width, which its x86-64 backend cannot emit: the build panics for x86-64 targets"
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = "                ConvOp::FToS if ty.bits() < 32 => {"
+replace = "                ConvOp::FToS if false => {"
+killers = [{ package = "nazm-cli", test = "cross", name = "a_float_converted_to_a_narrow_integer_builds_for_every_target" }]

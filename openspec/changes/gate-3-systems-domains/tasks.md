@@ -4,7 +4,7 @@
 
 ## 2. Hosts
 
-- [ ] 2.1 Linux x86_64 execution; prebuilt archives; clean installs (3B)
+- [x] 2.1 Linux x86_64 execution; prebuilt archives; clean installs (3B): the aarch64 archive and clean install (3B-1); the Cranelift x86-64 narrow-conversion fix (3B-2); x86_64 execution, archive and clean install carried to final v1 (user, 2026-10-10)
 - [x] 2.2 Windows x86_64: constitution, Win32 runtime port, evidence under Wine (3C); real Windows host execution carried to final v1
 
 ## 3. Systems, embedded, realtime

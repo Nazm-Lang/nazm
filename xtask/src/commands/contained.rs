@@ -474,6 +474,14 @@ pub(crate) fn run_contained(args: &[String]) -> ExitCode {
         }
     }
     let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
+    // An emulated image runs several times slower than the host's own; its deadline is four
+    // times the native one, so a slow run is not mistaken for a hung one (Gate 3).
+    if contained::image() == contained::IMAGE_AMD64 {
+        bounds.deadline *= 4;
+        eprintln!(
+            "contained: linux/amd64 under emulation; the deadline is four times the native one"
+        );
+    }
     eprintln!(
         "contained: {name} — {} MiB memory (swap equal), {:.1} CPU, {} pids, {} GiB disk, {} s deadline",
         bounds.memory_mb,

@@ -227,6 +227,46 @@ fn a_program_for_the_other_macos_architecture_runs_where_rosetta_does() {
     }
 }
 
+/// A float converted to an 8- or 16-bit integer, saturating or tried, is code Cranelift's x86-64
+/// backend emits only at 32 and 64 bits (Gate 3): it is built for every target by both backends,
+/// on any host. Its answers are `numbers.rs`'s, run on x86-64 Linux by the contained suite.
+#[test]
+fn a_float_converted_to_a_narrow_integer_builds_for_every_target() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "fn main(io: IoCap) -> Int ! { io } {\n\
+         print(num_to_str(saturate_convert[Int8](-300.5)));\n\
+         print(num_to_str(saturate_convert[UInt16](70000.0)));\n\
+         match try_convert[Int8](-128.9) { Option.Some(value: v) => print(num_to_str(v)), \
+         Option.None() => print(\"none\"), };\n\
+         match try_convert[UInt8](200.0) { Option.Some(value: v) => print(num_to_str(v)), \
+         Option.None() => print(\"none\"), };\n\
+         0\n}\n",
+    )
+    .unwrap();
+    for triple in TARGETS {
+        for backend in ["llvm", "cranelift"] {
+            let dir = format!("narrow-{triple}-{backend}");
+            let o = nazm(
+                d.path(),
+                &[
+                    "build",
+                    "--no-cache",
+                    "--backend",
+                    backend,
+                    "--target",
+                    triple,
+                    "--objects",
+                    &dir,
+                    "prog.nz",
+                ],
+            );
+            assert!(o.status.success(), "{triple} {backend}: {}", err(&o));
+        }
+    }
+}
+
 #[test]
 fn objects_for_two_targets_are_never_one_cache_entry() {
     let fresh = || {

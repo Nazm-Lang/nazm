@@ -25,8 +25,9 @@ pub const CRANELIFT_VERSION: &str = "0.136.1";
 
 /// This translator's revision: bumped with any change to how an instruction becomes Cranelift
 /// IR, since an object is a function of the translator as well as of its LIR (N105).
-/// 2 in Q1: stack probes (Q1-A1-01).
-pub const TRANSLATOR_REVISION: u32 = 2;
+/// 2 in Q1: stack probes (Q1-A1-01). 3 in Gate 3: a float converted to an 8- or 16-bit integer is
+/// converted at 32 bits and clamped (3B-2).
+pub const TRANSLATOR_REVISION: u32 = 3;
 
 /// The Cranelift backend.
 #[derive(Debug, Clone)]
