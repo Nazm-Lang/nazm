@@ -244,6 +244,8 @@ pub fn validate_new_arrays(res: &mut Resolution, errors: &mut Vec<Diagnostic>) {
 pub(super) fn array_length(types: &Types, e: &Expr, errors: &mut Vec<Diagnostic>) -> Option<u32> {
     let n = match e {
         Expr::Int { value, .. } => Some(i128::from(*value)),
+        // A static is storage, not a length (Gate 3).
+        Expr::Var { name, .. } if types.consts.statics.contains(name) => None,
         Expr::Var { name, .. } => types.consts.values.get(name).and_then(|(_, v)| v.as_int()),
         _ => None,
     };

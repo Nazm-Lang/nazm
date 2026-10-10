@@ -486,6 +486,9 @@ pub mod codes {
     pub const CONSTANT_FAILS: Code = Code::new("N0623");
     /// An index that is not into an array, or a constant index outside it (Gate 2).
     pub const ARRAY_INDEX: Code = Code::new("N0624");
+    /// An assignment to a static, which is read-only — changed, if an `Atomic`, only by the
+    /// atomic operations (Gate 3, `docs/spec.md`, *Statics*).
+    pub const STATIC_ASSIGNED: Code = Code::new("N0625");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");

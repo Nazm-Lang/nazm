@@ -27,6 +27,9 @@ pub struct Program {
     /// implementing each of the trait's methods. The one table a [`ExprKind::CallTrait`] is
     /// resolved in — per instance by MIR, per frame by the interpreter.
     pub impls: Vec<ImplRow>,
+    /// Every static of the program (Gate 3), as the checker recorded them: storage each
+    /// module's unit defines.
+    pub statics: Vec<nazm_sema::StaticDef>,
 }
 
 /// One impl, as Core IR resolves calls through a bound against it.
@@ -251,6 +254,12 @@ pub enum Const {
         kind: NumKind,
         bits: u64,
     },
+    /// A static `Atomic`'s cell (Gate 3), by its module and name: every use is the one cell
+    /// the module's [`Program::statics`] entry starts.
+    Cell {
+        module: ModuleId,
+        name: String,
+    },
 }
 
 impl Const {
@@ -261,6 +270,7 @@ impl Const {
             Self::Bool(_) => Type::Bool,
             Self::Str(_) => Type::Str,
             Self::Num { kind, .. } => Type::of_num(*kind),
+            Self::Cell { .. } => Type::Atomic,
         }
     }
 }

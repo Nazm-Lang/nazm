@@ -541,6 +541,7 @@ pub fn lower_as(
             module,
             source,
             functions,
+            owns_module,
             externals,
             records: records
                 .iter()

@@ -162,13 +162,16 @@ pub struct Symbol {
     pub kind: SymKind,
 }
 
-/// Bytes the module defines: read-only, at an alignment, with the addresses of other symbols
-/// written into them at offsets.
+/// Bytes the module defines: read-only unless a static atomic's cell, at an alignment, with the
+/// addresses of other symbols written into them at offsets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Data {
     pub sym: SymId,
     pub bytes: Vec<u8>,
     pub align: u32,
+    /// A static `Atomic`'s cell (Gate 3): changed as the program runs. Everything else is
+    /// read-only.
+    pub writable: bool,
     /// `(offset, symbol)`: the symbol's address, written at the offset, pointer-wide.
     pub relocs: Vec<(u32, SymId)>,
 }

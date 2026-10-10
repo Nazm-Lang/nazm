@@ -343,6 +343,11 @@ impl<'a> Canon<'a> {
                         self.tag(kind.name());
                         self.h.update(&bits.to_le_bytes());
                     }
+                    // A static is its own module's (Gate 3): its name says which cell.
+                    Some(Const::Cell { name, .. }) => {
+                        self.tag("cell");
+                        self.bytes(name.as_bytes());
+                    }
                     None => self.tag("?"),
                 }
             }

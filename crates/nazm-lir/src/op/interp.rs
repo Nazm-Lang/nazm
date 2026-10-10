@@ -230,6 +230,12 @@ impl Machine<'_> {
                 let at = self.alloc(d.bytes.len() as u64);
                 let _ = self.put(at, &d.bytes);
                 here.insert(d.sym.0, at);
+                // A static (Gate 3) is reached from every unit by its name.
+                if let Some(s) = m.symbol(d.sym) {
+                    if s.linkage != Linkage::Local {
+                        defined.insert(s.name.clone(), Target::Data(at));
+                    }
+                }
             }
             data_at.push(here);
             for (fi, f) in m.functions.iter().enumerate() {
@@ -265,7 +271,10 @@ impl Machine<'_> {
                             .get(&s.name)
                             .copied()
                             .or_else(|| runtime_name(&s.name).map(Target::Runtime)),
-                        SymKind::Data { .. } => runtime_name(&s.name).map(Target::Runtime),
+                        SymKind::Data { .. } => defined
+                            .get(&s.name)
+                            .copied()
+                            .or_else(|| runtime_name(&s.name).map(Target::Runtime)),
                     },
                     (SymKind::Func { .. }, _) => local_fn,
                     (SymKind::Data { .. }, _) => local_data,

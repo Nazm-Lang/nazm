@@ -274,7 +274,9 @@ use crate::digest::{self, Framed};
 /// `atomic_load`, `atomic_store`, `atomic_add`, `atomic_swap` and `atomic_compare_swap` built-in
 /// names, so a program defining any of them moved from accepted to refused; an `Atomic` crosses
 /// into a task.
-pub const SEMANTIC_EPOCH: u32 = 45;
+/// `46` — Gate 3, 2026-10-10. Statics: `static NAME: T = value;` at an item's start moved from
+/// refused to accepted, assigning one is refused (`N0625`), and a static is no array's length.
+pub const SEMANTIC_EPOCH: u32 = 46;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -361,6 +363,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "RESTRICTED_FLOW",
     "SHIFT_AMOUNT_REFUSED",
     "SPAWN_OUTSIDE_SCOPE",
+    "STATIC_ASSIGNED",
     "TRAIT_METHOD_SELF",
     "TRAIT_NOT_A_TYPE",
     "TYPE_ARGUMENTS_ON_NON_GENERIC",

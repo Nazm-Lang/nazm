@@ -287,7 +287,29 @@ impl Checker<'_> {
 
     fn check_assign(&mut self, a: &Assign) {
         let place = &a.place;
-        let Some(binding) = self.lookup_var(&place.name, place.span) else {
+        let binding = self.lookup_var(&place.name, place.span);
+        // A static is read, never assigned (Gate 3): there are no mutable global variables.
+        if binding.is_none() && self.types.consts.statics.contains(&place.name) {
+            let mut d = Diagnostic::error(
+                codes::STATIC_ASSIGNED,
+                place.name_span,
+                format!(
+                    "`{}` is a static, and a static is never assigned",
+                    place.name
+                ),
+            )
+            .help(
+                "a static is read-only; one shared, changing value is a static `Atomic`, \
+                 changed by `atomic_store` and the other atomic operations",
+            );
+            if let Some(decl) = self.types.consts.decls.get(&place.name) {
+                d = d.secondary(*decl, "declared here");
+            }
+            self.errors.push(d);
+            self.check_expr(&a.value, None);
+            return;
+        }
+        let Some(binding) = binding else {
             self.errors.push(
                 Diagnostic::error(
                     codes::UNDEFINED_VARIABLE,

@@ -41,6 +41,15 @@ impl Checker<'_> {
                 None if self.types.consts.values.contains_key(name) => {
                     Completion::Value(self.const_value(name, *span))
                 }
+                // A static `Atomic` (Gate 3): its one cell.
+                None if self.types.consts.cells.contains_key(name) => {
+                    let module = self.module;
+                    self.res.record_static_cell(*span, module, name.clone());
+                    if let Some(decl) = self.types.consts.decls.get(name) {
+                        self.res.record_const_ref(*span, *decl);
+                    }
+                    Completion::Value(Type::Atomic)
+                }
                 None if self.env.contains(name) => {
                     Completion::Value(self.function_value(name, *span, expected))
                 }

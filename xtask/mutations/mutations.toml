@@ -8298,10 +8298,11 @@ Repointed by Gate 2's C foundation, which moved it to 41: an entry that refused 
 Repointed by Gate 2's attributes, which moved it to 42: an entry that refused an `@` must not be reused.
 Repointed by G2-C1, which moved it to 43: an entry that accepted `@deprecated` on a private function must not be reused.
 Repointed by Gate 3, which moved it to 44: an entry that accepted a foreign `nz_os_clock` must not be reused.
-Repointed by Gate 3's atomics, which moved it to 45: an entry that accepted a record named `Atomic` must not be reused."""
+Repointed by Gate 3's atomics, which moved it to 45: an entry that accepted a record named `Atomic` must not be reused.
+Repointed by Gate 3's statics, which moved it to 46: an entry that refused a `static` item must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 45;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 44;"
+find = "pub const SEMANTIC_EPOCH: u32 = 46;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 45;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -15302,3 +15303,46 @@ file = "crates/nazm-sema/src/types.rs"
 find = "        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_))"
 replace = "        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_) | Self::Atomic)"
 killers = [{ package = "nazm-cli", test = "atomics", name = "every_copy_and_every_task_reaches_one_cell" }]
+
+# --- Gate 3D: statics (docs/spec.md, Statics) ---
+
+[[mutation]]
+name = "g3-a-static-is-assigned-as-an-unknown-name"
+why = "assigning a static is reported as an undefined variable rather than refused as a static (N0625), so the error names the wrong mistake"
+file = "crates/nazm-core/src/check/stmt.rs"
+find = "        if binding.is_none() && self.types.consts.statics.contains(&place.name) {"
+replace = "        if false && self.types.consts.statics.contains(&place.name) {"
+killers = [{ package = "nazm-cli", test = "statics", name = "every_misuse_of_a_static_is_refused" }]
+
+[[mutation]]
+name = "g3-a-static-is-an-arrays-length"
+why = "a numeric static stands for an array's length, which is a constant's place: storage would decide a type"
+file = "crates/nazm-core/src/check/layout.rs"
+find = "        Expr::Var { name, .. } if types.consts.statics.contains(name) => None,\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "statics", name = "every_misuse_of_a_static_is_refused" }]
+
+[[mutation]]
+name = "g3-the-interpreter-copies-a-static-cell"
+why = "the interpreter hands each use of a static atomic a copy of its cell, so a task's additions never reach the others"
+file = "crates/nazm-core/src/eval/exec.rs"
+find = "                        Some(cell) => Value::Atomic(Arc::clone(cell)),"
+replace = "                        Some(cell) => Value::Atomic(Arc::new(std::sync::atomic::AtomicI64::new(cell.load(std::sync::atomic::Ordering::SeqCst)))),"
+killers = [{ package = "nazm-cli", test = "statics", name = "a_static_atomic_is_one_cell_for_every_function_task_and_instance" }]
+
+[[mutation]]
+name = "g3-a-static-cell-is-read-only"
+why = "a static atomic's cell is emitted as read-only data, so the first atomic write faults"
+file = "crates/nazm-lir/src/op/lower.rs"
+find = "                nazm_sema::StaticValue::Cell(init) => (init.to_le_bytes().to_vec(), 8, true),"
+replace = "                nazm_sema::StaticValue::Cell(init) => (init.to_le_bytes().to_vec(), 8, false),"
+killers = [{ package = "nazm-cli", test = "statics", name = "a_static_atomic_is_one_cell_for_every_function_task_and_instance" }]
+
+[[mutation]]
+name = "g3-every-unit-defines-the-static"
+why = "a generic instance's unit defines its module's statics too, so the program links two definitions of one cell"
+file = "crates/nazm-lir/src/op/lower.rs"
+find = "        if !self.unit.owns_module {\n            return;\n        }\n        let statics"
+replace = "        let statics"
+killers = [{ package = "nazm-cli", test = "statics", name = "a_static_atomic_is_one_cell_for_every_function_task_and_instance" }]
+

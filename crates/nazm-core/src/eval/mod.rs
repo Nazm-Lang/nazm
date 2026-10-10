@@ -265,6 +265,9 @@ pub struct Interpreter {
     /// it; neither is needed, so neither is kept, and a run holds one representation of the
     /// program rather than three.
     core: Arc<cir::Program>,
+    /// Every static `Atomic`'s one cell (Gate 3), made when the run starts and shared with every
+    /// task, as the compiled program's cells are its data.
+    cells: Arc<Cells>,
     /// Tasks started by the innermost `scope`, innermost last.
     ///
     /// A stack, because a scope may contain another and the inner one joins first.
@@ -293,6 +296,12 @@ pub struct Interpreter {
     args: Vec<String>,
 }
 
+/// The static atomics' cells (Gate 3), by module and name.
+type Cells = std::collections::HashMap<
+    (nazm_sema::module::ModuleId, String),
+    Arc<std::sync::atomic::AtomicI64>,
+>;
+
 /// A shape the lowering never produces, reported rather than assumed away.
 fn unreachable_flow<T>(at: Span) -> Result<T, RuntimeError> {
     Err(fail(
@@ -315,8 +324,20 @@ impl Interpreter {
     /// An interpreter for a checked program's Core IR, which it takes.
     #[must_use]
     pub fn new(core: cir::Program) -> Self {
+        let cells = core
+            .statics
+            .iter()
+            .filter_map(|s| match s.value {
+                nazm_sema::StaticValue::Cell(init) => Some((
+                    (s.module, s.name.clone()),
+                    Arc::new(std::sync::atomic::AtomicI64::new(init)),
+                )),
+                nazm_sema::StaticValue::Value(_) => None,
+            })
+            .collect();
         Self {
             core: Arc::new(core),
+            cells: Arc::new(cells),
             pending: Vec::new(),
             depth: 0,
             max_depth: DEFAULT_MAX_DEPTH,

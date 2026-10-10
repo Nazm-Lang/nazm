@@ -119,6 +119,7 @@ pub(crate) fn lower(program: &Program, res: &Resolution) -> Result<cir::Program,
         functions,
         entry: res.entry(),
         impls,
+        statics: res.statics().to_vec(),
     };
     let problems = cir::verify(&core, res);
     if problems.is_empty() {
@@ -697,6 +698,17 @@ impl<'a> Lower<'a> {
                 Some(Type::Str),
                 *span,
             ),
+            // A static `Atomic` (Gate 3): its one cell.
+            AstExpr::Var { span, .. } if self.res.static_cell(*span).is_some() => {
+                let Some((module, name)) = self.res.static_cell(*span).cloned() else {
+                    return defect(*span, "a static the checker did not record");
+                };
+                node(
+                    ExprKind::Const(self.constant(Const::Cell { module, name })),
+                    Some(Type::Atomic),
+                    *span,
+                )
+            }
             // A constant (Gate 2): the value the checker computed, written as a literal.
             AstExpr::Var { span, .. } if self.res.const_use(*span).is_some() => {
                 let Some(value) = self.res.const_use(*span).cloned() else {

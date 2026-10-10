@@ -26,6 +26,12 @@ pub struct Constants {
     /// Every constant named in another's value, by the name's span (Gate 2): references the
     /// index records, so renaming a constant reaches them.
     pub refs: Vec<(nazm_span::Span, String)>,
+    /// The names declared `static` (Gate 3), whatever their type: storage, which no array's
+    /// length is.
+    pub statics: std::collections::HashSet<String>,
+    /// Each static `Atomic` (Gate 3): the value its cell starts with. Not in [`Self::values`]:
+    /// a use of one is the cell, never a value written in its place.
+    pub cells: HashMap<String, i64>,
 }
 
 /// Compute every constant of a module, refusing what cannot be computed.
@@ -38,6 +44,7 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
     let mut ev = Evaluator {
         decls: by_name,
         done: HashMap::new(),
+        cells: HashMap::new(),
         active: Vec::new(),
         refs: Vec::new(),
         errors,
@@ -60,12 +67,13 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
             }
         }
         if let Some(p) = c.pub_span {
+            let what = if c.is_static { "static" } else { "constant" };
             ev.errors.push(
                 Diagnostic::error(
                     codes::UNSUPPORTED_CONSTRUCT,
                     p,
                     format!(
-                        "`{}` cannot be exported: a constant is its own module's",
+                        "`{}` cannot be exported: a {what} is its own module's",
                         c.name
                     ),
                 )
@@ -75,7 +83,11 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
                 ),
             );
         }
-        ev.constant(&c.name);
+        if c.is_static && is_atomic(&c.ty) {
+            ev.cell(c);
+        } else {
+            ev.constant(&c.name);
+        }
     }
     let mut refs = ev.refs;
     refs.sort_by_key(|(s, _)| (s.file, s.start));
@@ -84,12 +96,24 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
         values: ev.done,
         decls: decl_spans,
         refs,
+        statics: decls
+            .iter()
+            .filter(|c| c.is_static)
+            .map(|c| c.name.clone())
+            .collect(),
+        cells: ev.cells,
     }
+}
+
+/// Whether a declared type is `Atomic`, written plainly.
+fn is_atomic(t: &nazm_syntax::TypeName) -> bool {
+    t.args.is_none() && t.function.is_none() && t.qualifier.is_none() && t.name == "Atomic"
 }
 
 struct Evaluator<'a, 'e> {
     decls: HashMap<&'a str, &'a Const>,
     done: HashMap<String, (Type, ConstValue)>,
+    cells: HashMap<String, i64>,
     active: Vec<String>,
     refs: Vec<(nazm_span::Span, String)>,
     errors: &'e mut Vec<Diagnostic>,
@@ -99,6 +123,54 @@ struct Evaluator<'a, 'e> {
 struct Refused;
 
 impl Evaluator<'_, '_> {
+    /// A static `Atomic` (Gate 3): its value is `atomic_new(c)` of a constant `Int`, the one call
+    /// a static's value may make.
+    fn cell(&mut self, decl: &Const) {
+        let init = match &decl.value {
+            Expr::Call {
+                qualifier: None,
+                callee,
+                args,
+                type_args: None,
+                ..
+            } if callee == "atomic_new" && args.len() == 1 => args.first().and_then(|a| {
+                self.active.push(decl.name.clone());
+                let v = self.value(a, Type::Int).ok();
+                self.active.pop();
+                match v {
+                    Some(ConstValue::Num(n)) if n.kind == NumKind::I64 =>
+                    {
+                        #[allow(clippy::cast_possible_wrap)]
+                        Some(n.bits as i64)
+                    }
+                    Some(_) => {
+                        self.errors.push(Diagnostic::error(
+                            codes::TYPE_MISMATCH,
+                            a.span(),
+                            "an atomic holds an `Int`",
+                        ));
+                        None
+                    }
+                    None => None,
+                }
+            }),
+            other => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::NOT_A_CONSTANT,
+                        other.span(),
+                        "a static `Atomic` starts as `atomic_new(c)` of a constant `c`",
+                    )
+                    .help("`atomic_new` is the one call a static's value may make"),
+                );
+                None
+            }
+        };
+        // A cell whose start could not be computed is still declared, so a use of it is not a
+        // second error.
+        self.cells.insert(decl.name.clone(), init.unwrap_or(0));
+    }
+
     fn constant(&mut self, name: &str) -> Option<(Type, ConstValue)> {
         if let Some(v) = self.done.get(name) {
             return Some(v.clone());
@@ -112,7 +184,21 @@ impl Evaluator<'_, '_> {
             ));
             return None;
         }
-        let ty = declared(&decl.ty);
+        let ty = declared(&decl.ty).filter(|t| !(decl.is_static && *t == Type::Str));
+        if decl.is_static && ty.is_none() {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::NOT_A_CONSTANT,
+                    decl.ty.span,
+                    format!(
+                        "a static is a number, a `Bool` or an `Atomic`, and `{}` is none",
+                        decl.ty.name
+                    ),
+                )
+                .help("a static is storage with one address; a `Str` is a constant's"),
+            );
+            return None;
+        }
         let Some(ty) = ty else {
             self.errors.push(
                 Diagnostic::error(
@@ -199,6 +285,14 @@ impl Evaluator<'_, '_> {
             Expr::Var { name, span } => {
                 if self.decls.contains_key(name.as_str()) {
                     self.refs.push((*span, name.clone()));
+                }
+                // A static atomic's cell changes as the program runs: no constant is made of it.
+                if self
+                    .decls
+                    .get(name.as_str())
+                    .is_some_and(|d| d.is_static && is_atomic(&d.ty))
+                {
+                    return Err(self.refuse(*span, &format!("read the atomic `{name}`")));
                 }
                 match self.constant(name) {
                     Some((_, v)) => Ok(v),

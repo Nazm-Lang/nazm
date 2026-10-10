@@ -254,6 +254,26 @@ pub(super) fn record_module_names(
             res.record_const_ref(*at, *decl);
         }
     }
+    // Its statics (Gate 3), in declaration order: the storage its unit defines.
+    let mut statics: Vec<(&String, Span)> = types
+        .consts
+        .statics
+        .iter()
+        .filter_map(|n| types.consts.decls.get(n).map(|d| (n, *d)))
+        .collect();
+    statics.sort_by_key(|(_, s)| (s.file, s.start));
+    for (name, _) in statics {
+        let value = match (types.consts.cells.get(name), types.consts.values.get(name)) {
+            (Some(init), _) => nazm_sema::StaticValue::Cell(*init),
+            (None, Some((_, v))) => nazm_sema::StaticValue::Value(v.clone()),
+            (None, None) => continue,
+        };
+        res.record_static(nazm_sema::StaticDef {
+            module,
+            name: name.clone(),
+            value,
+        });
+    }
     use nazm_sema::scope::{defined, Candidate, Named};
     let callables = env
         .names

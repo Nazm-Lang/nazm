@@ -759,6 +759,7 @@ impl Shift for crate::ast::Const {
             ty,
             value,
             span,
+            is_static: _,
         } = self;
         attrs.shift(file, by);
         name_span.shift(file, by);

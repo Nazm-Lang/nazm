@@ -47,9 +47,14 @@ attribute_arg = STRING
 (* A constant (Gate 2): a value the checker computes from literals, other constants,
  * operators and numeric conversions. `const` is a word only here, before a name and a `:`,
  * so it remains an ordinary name everywhere else. See `docs/spec.md`, *Constants*.
+ *
+ * A static (Gate 3) is written the same way with `static`: storage with one address, a
+ * number or a `Bool` read-only, or an `Atomic` started by `atomic_new` of a constant. `static`
+ * is a word only where `const` is. See `docs/spec.md`, *Statics*.
  *)
 (* @example const MASK: UInt8 = 0xF0; fn main() -> Int { Int(MASK) } *)
-constant = [ visibility ] , "const" , IDENT , ":" , type , "=" , expression , ";" ;
+(* @example static TICKS: Atomic = atomic_new(0); fn main() -> Int { atomic_add(TICKS, 1) } *)
+constant = [ visibility ] , ( "const" | "static" ) , IDENT , ":" , type , "=" , expression , ";" ;
 
 (* A trait (N78): a named set of methods a type may implement. Each method is a signature
  * ended by `;` — there are no default bodies — whose first parameter is `self: Self`. A trait

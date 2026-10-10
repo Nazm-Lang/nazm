@@ -564,6 +564,9 @@ pub struct Unit {
     pub source: String,
     /// The MIR functions this unit defines, in MIR order.
     pub functions: Vec<nazm_mir::FuncId>,
+    /// Whether this is its module's own unit, rather than a generic instance's: the one that
+    /// defines the module's statics (Gate 3), which every other unit imports.
+    pub owns_module: bool,
     /// Definitions this unit calls and does not define, so the emitter can declare them.
     ///
     /// Sorted and deduplicated, so two builds of one module produce one text.

@@ -113,7 +113,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `package-features` | STABLE 1.0 | Gate 2: additive features per package; `nazm.lock/2` |
 | `windows-x86-64` | EXPERIMENTAL | Gate 3: run under Wine only; STABLE once a real Windows host has run it |
 | `atomics` | STABLE 1.0 | Gate 3: sequentially consistent only; an ordering parameter would be an extension |
-| `statics` | STABLE 1.0 | Gate 3: read-only, or an atomic; module-private |
+| `statics` | STABLE 1.0 | Gate 3: a number, a `Bool` or an atomic; read-only, or an atomic; module-private. A record, enum or array would be an extension |
 | `boards` | EXPERIMENTAL | Gate 3: manifests, sections, interrupts, the arena and the failure hook, emulator-verified |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
@@ -4089,7 +4089,7 @@ Settled by Gate 3, 2026-10-10 (`docs/systems-domains.md` Part B).
 | | |
 | --- | --- |
 | **Declaration** | `static NAME: T = value;` at a module's top level: storage with **one address** for the whole run, initialised before `main` and never freed |
-| **Type and value** | `T` is plain data — a numeric type, `Bool`, a record, enum or array of plain data — and `value` is a constant expression with the rules of *Constants* (`N0622`, `N0623`); or `T` is `Atomic` and `value` is `atomic_new(c)` with `c` such an expression, the one call a static's value may make |
+| **Type and value** | `T` is a numeric type or `Bool`, and `value` is a constant expression with the rules of *Constants* (`N0622`, `N0623`); or `T` is `Atomic` and `value` is `atomic_new(c)` with `c` such an expression, the one call a static's value may make. A record, enum or array is not a static's type in 1.0 (`N0622`): a constant has no value of one to start it with, and allowing one would be an extension |
 | **Read-only** | A static is read, never assigned (`N0625`): there are no mutable global variables. A static `Atomic` is changed only through the atomic operations, which is how a task and an interrupt handler share state |
 | **Use** | By its name anywhere an expression is; reading it reads the storage. It is its module's own, as a constant is: `pub static` is `N0101` |
 | **Placement** | `@section("NAME")` places it (*Boards*, below); without one it is in the target's read-only data, or its writable data when it holds an atomic |

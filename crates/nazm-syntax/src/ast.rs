@@ -167,6 +167,11 @@ pub struct Const {
     pub ty: TypeName,
     pub value: Expr,
     pub span: Span,
+    /// Written `static` rather than `const` (Gate 3, `docs/spec.md`, *Statics*): storage with
+    /// one address, read-only unless an `Atomic`, whose value the checker computes as a
+    /// constant's — or `atomic_new` of one. Everything a constant's name does, a static's does,
+    /// except stand for an array's length.
+    pub is_static: bool,
 }
 
 /// `use "path";` or `use "path" as name;`
