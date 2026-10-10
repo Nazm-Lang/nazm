@@ -789,7 +789,7 @@ pub(crate) enum Command {
         /// compile is refused by name.
         #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
         backend: String,
-        /// The target triple: one of the eight `nazm capabilities` lists (N57). A target this
+        /// The target triple: one of the nine `nazm capabilities` lists (N57). A target this
         /// host links is built to an executable; any other needs `--objects`. An unknown
         /// triple is refused rather than silently built for this machine.
         #[arg(long, value_name = "TRIPLE")]
@@ -814,7 +814,8 @@ pub(crate) enum Command {
         objects: Option<PathBuf>,
         /// Paint the board's stack in `_start` and write `nazm-stack: used=N` to its UART after
         /// `main` (N63): the deepest byte the run touched, beside `bounds.json`'s static bound.
-        /// A board's target only: `aarch64-unknown-none` or `riscv64gc-unknown-none-elf`.
+        /// A board's target only: `aarch64-unknown-none`, `riscv64gc-unknown-none-elf` or
+        /// `thumbv7m-none-eabi`.
         #[arg(long)]
         stack_watermark: bool,
         /// A board's manifest (Gate 3, `docs/spec.md`, *Boards*): load address, stack, UART, how

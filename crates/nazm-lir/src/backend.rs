@@ -50,6 +50,9 @@ pub enum Arch {
     Wasm32,
     /// RISC-V, RV64GC (N86, §7.87): a board only.
     Riscv64,
+    /// Arm Cortex-M, ARMv7-M Thumb-2 (Gate 3, `docs/spec.md`, *Boards*): a microcontroller board
+    /// only, with 32-bit pointers and a 64-bit `Int`, as wasm32 has.
+    Thumbv7m,
 }
 
 /// An operating system this compiler links for.
@@ -90,13 +93,14 @@ impl Target {
             "aarch64-unknown-none" => (Arch::Aarch64, Os::None),
             "wasm32-unknown-unknown" => (Arch::Wasm32, Os::None),
             "riscv64gc-unknown-none-elf" => (Arch::Riscv64, Os::None),
+            "thumbv7m-none-eabi" => (Arch::Thumbv7m, Os::None),
             other => {
                 return Err(format!(
                     "`{other}` is not a target this compiler generates code for; the \
                      targets are aarch64-apple-darwin, aarch64-unknown-linux-gnu, \
                      x86_64-apple-darwin, x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu and, \
                      freestanding, \
-                     aarch64-unknown-none, riscv64gc-unknown-none-elf and \
+                     aarch64-unknown-none, riscv64gc-unknown-none-elf, thumbv7m-none-eabi and \
                      wasm32-unknown-unknown"
                 ))
             }
@@ -563,6 +567,14 @@ pub const SUPPORT: &[Cell] = &[
         debugger: "not exercised",
     },
     Cell {
+        triple: "thumbv7m-none-eabi",
+        llvm_cpu: "cortex-m3",
+        cranelift_cpu: "none",
+        llvm: Support::Run("an_image_for_the_cortex_m_board_boots_under_qemu"),
+        cranelift: NO_CRANELIFT_BOARD,
+        debugger: "not exercised",
+    },
+    Cell {
         triple: "wasm32-unknown-unknown",
         llvm_cpu: "generic",
         cranelift_cpu: "none",
@@ -582,8 +594,8 @@ pub const NON_GOALS: &[(&str, &str)] = &[
     ),
     (
         "32-bit hosted targets",
-        "a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 is \
-         the one 32-bit target, freestanding",
+        "a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 and \
+         the Cortex-M board (`thumbv7m-none-eabi`) are the 32-bit targets, both freestanding",
     ),
     (
         "big-endian targets",

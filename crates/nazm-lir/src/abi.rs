@@ -43,7 +43,8 @@ impl DataLayout {
     #[must_use]
     pub const fn of(target: &Target) -> Self {
         match target.arch {
-            Arch::Wasm32 => Self::WASM32,
+            // A Cortex-M board's pointers are 4 bytes too (Gate 3): the same layout as wasm32's.
+            Arch::Wasm32 | Arch::Thumbv7m => Self::WASM32,
             Arch::Aarch64 | Arch::X86_64 | Arch::Riscv64 => Self::LP64,
         }
     }

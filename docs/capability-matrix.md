@@ -4449,6 +4449,7 @@ to be the one the C compiler driver resolves for the triple.
 | `x86_64-pc-windows-gnu` | run-verified under Wine | run-verified under Wine | x86-64 / x86-64 baseline (SSE2) | not exercised |
 | `aarch64-unknown-none` | run-verified | unsupported | generic / none | not exercised |
 | `riscv64gc-unknown-none-elf` | run-verified | unsupported | generic-rv64 / none | not exercised |
+| `thumbv7m-none-eabi` | run-verified | unsupported | cortex-m3 / none | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | generic / none | DWARF present, not exercised |
 
 Run-verified means programs built for the target ran and agreed with the interpreter: on the host,

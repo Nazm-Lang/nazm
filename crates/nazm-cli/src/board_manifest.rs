@@ -8,7 +8,9 @@
 
 use std::borrow::Cow;
 
-use nazm_lir::runtime::board::{Board, Interrupts, Isa, Stop, Uart, STACK, TIMER_INTID};
+use nazm_lir::runtime::board::{
+    Board, Controller, Interrupts, Isa, Stop, Uart, STACK, TIMER_INTID,
+};
 
 /// Why a manifest is refused: the key, and what is wrong with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,10 +55,11 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
     let written_isa = match string(&doc, "isa")?.as_str() {
         "aarch64" => Isa::Aarch64,
         "riscv64" => Isa::Riscv64,
+        "thumbv7m" => Isa::Thumbv7m,
         other => {
             return Err(refuse(
                 "isa",
-                format!("`{other}` is not `aarch64` or `riscv64`"),
+                format!("`{other}` is not `aarch64`, `riscv64` or `thumbv7m`"),
             ))
         }
     };
@@ -88,10 +91,11 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
     {
         "pl011" => Uart::Pl011,
         "ns16550a" => Uart::Ns16550a,
+        "cmsdk" => Uart::Cmsdk,
         other => {
             return Err(refuse(
                 "uart.kind",
-                format!("`{other}` is not `pl011` or `ns16550a`"),
+                format!("`{other}` is not `pl011`, `ns16550a` or `cmsdk`"),
             ))
         }
     };
@@ -104,7 +108,7 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
             .as_str()
         {
             // ARM semihosting stops an AArch64 machine; RISC-V's is not this runtime's.
-            "semihosting" if isa == Isa::Aarch64 => {
+            "semihosting" if isa != Isa::Riscv64 => {
                 if stop_t.contains_key("address") {
                     return Err(refuse("stop.address", "semihosting has no address"));
                 }
@@ -159,40 +163,55 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
     })
 }
 
-/// `[interrupts]` (Gate 3): a GICv2, the timer's period, and the further lines by name.
+/// `[interrupts]` (Gate 3): a GICv2 on AArch64 or an NVIC on Cortex-M, the timer's period, and the
+/// further lines by name.
 fn interrupts(t: &toml::Table, isa: Isa) -> Result<Interrupts, Refused> {
-    if isa != Isa::Aarch64 {
+    if isa == Isa::Riscv64 {
         return Err(refuse(
             "interrupts",
-            "interrupts are an AArch64 board's in 1.0: a RISC-V board's machine-mode interrupts \
-             are not this runtime's",
+            "a RISC-V board's machine-mode interrupts are not this runtime's in 1.0; AArch64's \
+             GICv2 and Cortex-M's NVIC are",
         ));
     }
-    allow(
-        t,
-        "interrupts.",
-        &[
-            "controller",
-            "distributor",
-            "cpu",
-            "timer_period_us",
-            "lines",
-        ],
-    )?;
-    match string(t, "controller")
-        .map_err(|r| prefix("interrupts.", r))?
-        .as_str()
-    {
-        "gicv2" => {}
-        other => {
+    let named = string(t, "controller").map_err(|r| prefix("interrupts.", r))?;
+    let controller = match (named.as_str(), isa) {
+        ("gicv2", Isa::Aarch64) => {
+            allow(
+                t,
+                "interrupts.",
+                &[
+                    "controller",
+                    "distributor",
+                    "cpu",
+                    "timer_period_us",
+                    "lines",
+                ],
+            )?;
+            Controller::Gicv2 {
+                distributor: address(t, "distributor").map_err(|r| prefix("interrupts.", r))?,
+                cpu: address(t, "cpu").map_err(|r| prefix("interrupts.", r))?,
+            }
+        }
+        ("nvic", Isa::Thumbv7m) => {
+            allow(
+                t,
+                "interrupts.",
+                &["controller", "clock_hz", "timer_period_us", "lines"],
+            )?;
+            let clock_hz = address(t, "clock_hz").map_err(|r| prefix("interrupts.", r))?;
+            if clock_hz == 0 {
+                return Err(refuse("interrupts.clock_hz", "a clock runs at least 1 Hz"));
+            }
+            Controller::Nvic { clock_hz }
+        }
+        (other, _) => {
+            let want = if isa == Isa::Aarch64 { "gicv2" } else { "nvic" };
             return Err(refuse(
                 "interrupts.controller",
-                format!("`{other}` is not `gicv2`"),
-            ))
+                format!("`{other}` is not this board's: its controller is `{want}`"),
+            ));
         }
-    }
-    let distributor = address(t, "distributor").map_err(|r| prefix("interrupts.", r))?;
-    let cpu = address(t, "cpu").map_err(|r| prefix("interrupts.", r))?;
+    };
     let timer_period_us = match t.get("timer_period_us") {
         None => None,
         Some(_) => {
@@ -203,8 +222,27 @@ fn interrupts(t: &toml::Table, isa: Isa) -> Result<Interrupts, Refused> {
                     "a period is at least one microsecond",
                 ));
             }
+            // SysTick counts down from a 24-bit reload: a period longer than that is not one.
+            if let Controller::Nvic { clock_hz } = controller {
+                let ticks = (u128::from(clock_hz) * u128::from(p))
+                    .checked_div(1_000_000)
+                    .unwrap_or(0);
+                if ticks == 0 || ticks > 0x0100_0000 {
+                    return Err(refuse(
+                        "interrupts.timer_period_us",
+                        "SysTick counts at most 2^24 of the clock's ticks: a shorter period, or \
+                         a period of at least one tick",
+                    ));
+                }
+            }
             Some(p)
         }
+    };
+    // A GICv2's lines are INTIDs from 16 to 1019, the timer's 27 excepted; an NVIC's are its
+    // external interrupts from 0 to 239.
+    let (low, high) = match controller {
+        Controller::Gicv2 { .. } => (16, 1019),
+        Controller::Nvic { .. } => (0, 239),
     };
     let mut lines = Vec::new();
     if t.contains_key("lines") {
@@ -215,10 +253,10 @@ fn interrupts(t: &toml::Table, isa: Isa) -> Result<Interrupts, Refused> {
                 toml::Value::Integer(n) => u32::try_from(*n).ok(),
                 _ => None,
             };
-            // A software-generated interrupt (0–15) is not a line, the timer is named `timer`,
-            // and a GICv2 numbers at most 1019.
+            let gic_timer =
+                matches!(controller, Controller::Gicv2 { .. }) && id == Some(TIMER_INTID);
             match id {
-                Some(id) if (16..=1019).contains(&id) && id != TIMER_INTID => {
+                Some(id) if (low..=high).contains(&id) && !gic_timer => {
                     if name == "timer" {
                         return Err(refuse(&key, "`timer` is the board timer's name"));
                     }
@@ -228,24 +266,26 @@ fn interrupts(t: &toml::Table, isa: Isa) -> Result<Interrupts, Refused> {
                     lines.push((name.clone(), id));
                 }
                 _ => {
+                    let not = if matches!(controller, Controller::Gicv2 { .. }) {
+                        format!(", and not {TIMER_INTID}, the timer's")
+                    } else {
+                        String::new()
+                    };
                     return Err(refuse(
                         &key,
-                        format!(
-                            "an interrupt number from 16 to 1019, and not {TIMER_INTID}, the \
-                             timer's"
-                        ),
-                    ))
+                        format!("an interrupt number from {low} to {high}{not}"),
+                    ));
                 }
             }
         }
     }
     Ok(Interrupts {
-        distributor,
-        cpu,
+        controller,
         timer_period_us,
         lines,
     })
 }
+
 fn prefix(p: &str, r: Refused) -> Refused {
     Refused {
         key: format!("{p}{}", r.key),
