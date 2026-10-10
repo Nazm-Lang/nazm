@@ -134,6 +134,9 @@ found only by reading all of it.
   form (`realtime`'s `bounded-loops`), a stack bound exists only for a board image without a call
   cycle or a call through a value, and no execution time, latency or jitter is bounded — `wcet` is
   always `null` (area 18). *Narrowed in N63:* until then, no loop or stack bound was stated.
+- A board's tasks are run to completion, one at a time, by priority (Gate 3, `@task`): no task
+  preempts another, a missed deadline is detected — a task released again before it ran, `N0414` —
+  never prevented, and no task's execution time is known; verified on emulators only.
 
 ## Effects, authority and information flow
 
@@ -326,7 +329,7 @@ found only by reading all of it.
   and division is checked as the program runs, which is the language's guarantee, not a proof of
   absence; the compiler written in Nazm checks a contract's shape and the clauses at run time, as the
   reference does, and proves nothing (area 30). Not certification (area 19).
-- Seventeen rules: N87 added `no-unknown-calls` (to `critical` and `cyber`), N80 `checked-paths`, N79 `explicit-authority` (the `authority` profile); N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
+- Nineteen rules: Gate 3 added `no-heap` (the `kernel` and `realtime` profiles) and `bounded-stack` (`realtime`); N87 added `no-unknown-calls` (to `critical` and `cyber`), N80 `checked-paths`, N79 `explicit-authority` (the `authority` profile); N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
   `no-blocking` and `bounded-loops` (the `realtime` profile), N72 `signed-writes` (`accounts`); the
   stack rule bounds depth, not bytes, and is `unknown` through a function value; no constant-time
   rule, and a loop is bounded only in its counted form; `critical` stays a restriction set, not a

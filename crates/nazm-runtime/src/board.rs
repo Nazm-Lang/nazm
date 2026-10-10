@@ -110,6 +110,20 @@ pub struct Handler {
     pub intid: u32,
     pub symbol: String,
     pub takes_cap: bool,
+    /// Defined by the entry itself — the scheduler's tick — rather than by the program.
+    pub defined_here: bool,
+}
+
+/// One task of the board's fixed-priority scheduler (Gate 3, `docs/spec.md`, *Boards*): its name,
+/// the Nazm function's symbol, its priority (higher runs first) and period in ticks, and whether it
+/// takes the device's authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Task {
+    pub name: String,
+    pub symbol: String,
+    pub priority: u32,
+    pub period: u64,
+    pub takes_cap: bool,
 }
 
 /// One board: everything about it that is not the language's (N86). Since Gate 3 a board is a
@@ -1133,7 +1147,7 @@ pub const STACK_PAINT: u64 = 0x5a5a_5a5a_5a5a_5a5a;
 /// the lowest word no longer painted — a measurement of that run, not a bound.
 #[must_use]
 pub fn emit_entry(board: &Board, entry: &str, roots: usize, watermark: bool) -> String {
-    emit_entry_with(board, entry, roots, watermark, &[], None)
+    emit_entry_with(board, entry, roots, watermark, &[], None, &[])
 }
 
 /// [`emit_entry`], with the board's interrupts taken by `handlers` (Gate 3): the vector table,
@@ -1146,6 +1160,7 @@ pub fn emit_entry_with(
     watermark: bool,
     handlers: &[Handler],
     on_failure: Option<(&str, bool)>,
+    tasks: &[Task],
 ) -> String {
     let irq = board
         .interrupts
@@ -1302,6 +1317,9 @@ pub fn emit_entry_with(
     if let Some(i) = nvic {
         nvic_runtime(&mut out, i, handlers);
     }
+    if !tasks.is_empty() {
+        scheduler(&mut out, tasks);
+    }
     // The failure hook's caller (Gate 3), which the runtime's report calls: the program's
     // `@on_failure`, or nothing.
     match on_failure {
@@ -1346,7 +1364,18 @@ pub fn emit_entry_with(
     let _ = writeln!(out, "  call void @nz.report()");
     let _ = writeln!(out, "  unreachable");
     let _ = writeln!(out, "finished:");
-    let _ = writeln!(out, "  call void @nz.uart_int(i64 %result)");
+    // With tasks (Gate 3), `main` was the initialisation: the scheduler runs until a task answers
+    // something other than 0, which is the image's result, or one fails.
+    let result = if tasks.is_empty() {
+        "%result"
+    } else {
+        let _ = writeln!(out, "  %scheduled = call i64 @nz_sched_run()");
+        let _ = writeln!(out, "  %fell = load i1, ptr @nz.failed");
+        let _ = writeln!(out, "  br i1 %fell, label %reported, label %ended");
+        let _ = writeln!(out, "ended:");
+        "%scheduled"
+    };
+    let _ = writeln!(out, "  call void @nz.uart_int(i64 {result})");
     let _ = writeln!(out, "  call void @nz.uart_byte(i8 10)");
     if watermark {
         let _ = writeln!(out, "  %used = call i64 @nz.stack_used()");
@@ -1620,7 +1649,9 @@ out:
     );
     for h in handlers {
         let param = if h.takes_cap { "i64" } else { "" };
-        let _ = writeln!(out, "declare i64 @{}({param})", h.symbol);
+        if !h.defined_here {
+            let _ = writeln!(out, "declare i64 @{}({param})", h.symbol);
+        }
     }
 }
 
@@ -1667,11 +1698,77 @@ fn nvic_runtime(out: &mut String, i: &Interrupts, handlers: &[Handler]) {
         } else {
             ("", "")
         };
+        if !h.defined_here {
+            let _ = writeln!(out, "declare i64 @{}({param})", h.symbol);
+        }
         let _ = write!(
             out,
-            "declare i64 @{sym}({param})\ndefine void @nz_vec_{k}() {{\nentry:\n  %r = call i64 @{sym}({arg})\n  %failed = load i1, ptr @nz.failed\n  br i1 %failed, label %reported, label %done\nreported:\n  call void @nz.report()\n  unreachable\ndone:\n  ret void\n}}\n",
+            "define void @nz_vec_{k}() {{\nentry:\n  %r = call i64 @{sym}({arg})\n  %failed = load i1, ptr @nz.failed\n  br i1 %failed, label %reported, label %done\nreported:\n  call void @nz.report()\n  unreachable\ndone:\n  ret void\n}}\n",
             sym = h.symbol,
             k = h.intid
         );
     }
+}
+
+/// The board's fixed-priority scheduler (Gate 3, `docs/spec.md`, *Boards*). `nz_sched_tick` is the
+/// board timer's handler: one more tick. `nz_sched_run` loops over the tasks, highest priority
+/// first, the first written first among equals: a task whose release — its next multiple of its
+/// period — has come runs to completion and is released again a period on; one whose release came
+/// a whole period ago without its running has missed its deadline (`N0414`); a task that answers
+/// anything but 0 ends the loop with that answer; and with nothing released the core waits for an
+/// interrupt. No lock exists, so none can be held across a priority.
+fn scheduler(out: &mut String, tasks: &[Task]) {
+    let mut order: Vec<(usize, &Task)> = tasks.iter().enumerate().collect();
+    order.sort_by(|(i, a), (j, b)| b.priority.cmp(&a.priority).then(i.cmp(j)));
+    let n = tasks.len();
+    let init: Vec<String> = tasks.iter().map(|t| format!("i64 {}", t.period)).collect();
+    let _ = write!(
+        out,
+        "@nz.sched_ticks = internal global i64 0\n@nz.sched_next = internal global [{n} x i64] [{}]\n\
+         declare void @nz.fail(ptr, i64)\n\
+         define i64 @nz_sched_tick() {{\nentry:\n  %old = atomicrmw add ptr @nz.sched_ticks, i64 1 seq_cst\n  ret i64 0\n}}\n",
+        init.join(", ")
+    );
+    for (i, t) in tasks.iter().enumerate() {
+        let msg = format!(
+            "nazm: error[N0414]: the task `{}` missed its deadline\n",
+            t.name
+        );
+        let escaped = msg.replace('\n', "\\0A");
+        let _ = writeln!(
+            out,
+            "@.nz.missed{i} = private constant [{} x i8] c\"{escaped}\"",
+            msg.len()
+        );
+        let param = if t.takes_cap { "i64" } else { "" };
+        let _ = writeln!(out, "declare i64 @{}({param})", t.symbol);
+    }
+    out.push_str("define i64 @nz_sched_run() {\nentry:\n  br label %scan\nscan:\n  %now = load atomic i64, ptr @nz.sched_ticks seq_cst, align 8\n");
+    let _ = writeln!(out, "  br label %t{}", order.first().map_or(0, |(i, _)| *i));
+    for (k, (i, t)) in order.iter().enumerate() {
+        let next_label = order
+            .get(k + 1)
+            .map_or_else(|| "idle".to_owned(), |(j, _)| format!("t{j}"));
+        let arg = if t.takes_cap { "i64 0" } else { "" };
+        let _ = write!(
+            out,
+            "t{i}:\n  %p{i} = getelementptr [{n} x i64], ptr @nz.sched_next, i64 0, i64 {i}\n  \
+             %r{i} = load i64, ptr %p{i}\n  %due{i} = icmp uge i64 %now, %r{i}\n  \
+             br i1 %due{i}, label %c{i}, label %{next_label}\n\
+             c{i}:\n  %late{i} = add i64 %r{i}, {period}\n  %missed{i} = icmp uge i64 %now, %late{i}\n  \
+             br i1 %missed{i}, label %m{i}, label %go{i}\n\
+             m{i}:\n  call void @nz.fail(ptr @.nz.missed{i}, i64 {len})\n  ret i64 0\n\
+             go{i}:\n  store i64 %late{i}, ptr %p{i}\n  %a{i} = call i64 @{sym}({arg})\n  \
+             %f{i} = load i1, ptr @nz.failed\n  br i1 %f{i}, label %out{i}, label %k{i}\n\
+             out{i}:\n  ret i64 0\n\
+             k{i}:\n  %done{i} = icmp ne i64 %a{i}, 0\n  br i1 %done{i}, label %end{i}, label %scan\n\
+             end{i}:\n  ret i64 %a{i}\n",
+            period = t.period,
+            len = format!("nazm: error[N0414]: the task `{}` missed its deadline\n", t.name).len(),
+            sym = t.symbol,
+        );
+    }
+    out.push_str(
+        "idle:\n  call void asm sideeffect \"wfi\", \"~{memory}\"()\n  br label %scan\n}\n",
+    );
 }

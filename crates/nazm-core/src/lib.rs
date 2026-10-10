@@ -631,6 +631,12 @@ pub fn board_only(core: &cir::Program) -> Option<(nazm_span::Span, String)> {
                 .map(|f| (f.name_span, format!("`@on_failure` on `{}`", f.name)))
         })
         .or_else(|| {
+            core.functions
+                .iter()
+                .find(|f| f.task.is_some())
+                .map(|f| (f.name_span, format!("`@task` on `{}`", f.name)))
+        })
+        .or_else(|| {
             core.statics
                 .iter()
                 .find(|s| s.section.is_some())

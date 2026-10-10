@@ -103,6 +103,8 @@ pub struct Function {
     pub interrupt: Option<String>,
     /// Whether `@on_failure` makes it the board's failure hook (Gate 3).
     pub on_failure: bool,
+    /// `@task`'s priority and period (Gate 3): a board's periodic task.
+    pub task: Option<(u32, u64)>,
     /// For the code of a function value — a closure's body, or a named function's thunk
     /// (N50): the types of what the closure object carries, in order. Its local 0, a
     /// parameter, is the closure object; its declared parameters follow. `None` for every

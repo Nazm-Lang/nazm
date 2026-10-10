@@ -1,0 +1,16 @@
+static FAST: Atomic = atomic_new(0);
+static SLOW: Atomic = atomic_new(0);
+
+@task(priority = "2", period = "2")
+fn fast() -> Int ! {} {
+    atomic_add(FAST, 1);
+    0
+}
+
+@task(priority = "1", period = "5")
+fn slow(m: MmioCap) -> Int ! {} {
+    atomic_add(SLOW, 1);
+    if atomic_load(SLOW) == 4 { atomic_load(FAST) * 100 + atomic_load(SLOW) } else { 0 }
+}
+
+fn main(m: MmioCap) -> Int ! {} { 0 }

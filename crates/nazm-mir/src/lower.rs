@@ -292,6 +292,7 @@ fn thunk_of(
         section: None,
         interrupt: None,
         on_failure: false,
+        task: None,
         export: None,
         captures: Vec::new(),
         closure: true,
@@ -543,6 +544,7 @@ fn lower_function(
             section: None,
             interrupt: None,
             on_failure: false,
+            task: None,
             export: None,
             closure: None,
         });
@@ -661,6 +663,7 @@ fn lower_function(
         section: f.section.clone(),
         interrupt: f.interrupt.clone(),
         on_failure: f.on_failure,
+        task: f.task,
         export: f.export.clone(),
         closure,
     })

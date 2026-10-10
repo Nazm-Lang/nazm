@@ -336,7 +336,9 @@ fn emit_artefacts(
             return Ok(out);
         }
         // The interrupt handlers (Gate 3), each matched to an interrupt the board has.
-        let handlers = interrupt_handlers(native, &board)?;
+        let mut handlers = interrupt_handlers(native, &board)?;
+        // The fixed-priority scheduler's tasks (Gate 3), which own the board's timer.
+        let tasks = board_tasks(native, &board, &mut handlers)?;
         // The failure hook (Gate 3): the one function `@on_failure` marks, by its symbol.
         let on_failure = native
             .program
@@ -375,6 +377,7 @@ fn emit_artefacts(
                         watermark,
                         &handlers,
                         on_failure.as_ref().map(|(s, cap)| (s.as_str(), *cap)),
+                        &tasks,
                     )
                 }),
                 instance: false,
@@ -493,6 +496,72 @@ fn emit_artefacts(
 /// unit and not the board's runtime defines, apart from LLVM's intrinsics and the program's own
 /// foreign functions, which `--link` supplies. Read from the generated text, so it is exactly
 /// what the link would leave unresolved — a static string printed is a C library call there.
+/// Every `@task` of the program (Gate 3, `docs/spec.md`, *Boards*), and the board timer handed to
+/// the scheduler's tick: a board whose manifest gives the timer no period has no ticks to schedule
+/// by, and a program that handles the timer itself would take them from it — both `N0627`.
+fn board_tasks(
+    native: &nazm_lir::Native,
+    board: &nazm_lir::runtime::board::Board,
+    handlers: &mut Vec<nazm_lir::runtime::board::Handler>,
+) -> Result<Vec<nazm_lir::runtime::board::Task>, Vec<nazm_diag::Diagnostic>> {
+    use nazm_lir::runtime::board::{Handler, Task};
+    let tasks: Vec<(&nazm_mir::Function, (u32, u64))> = native
+        .program
+        .functions
+        .iter()
+        .filter_map(|f| f.task.map(|t| (f, t)))
+        .collect();
+    let Some((first, _)) = tasks.first() else {
+        return Ok(Vec::new());
+    };
+    let refuse = |at, why: String| {
+        vec![
+            nazm_diag::Diagnostic::error(nazm_diag::codes::INTERRUPT_HANDLER, at, why).help(
+                "a task runs on the board timer's ticks: give the manifest's `[interrupts]` a \
+                   `timer_period_us`, and handle no `timer` interrupt yourself",
+            ),
+        ]
+    };
+    let timer = match &board.interrupts {
+        Some(i) if i.timer_period_us.is_some() => i.timer_number(),
+        _ => {
+            return Err(refuse(
+                first.span,
+                format!(
+                    "`{}` is a task, and the board `{}` has no timer to schedule it by",
+                    first.name, board.name
+                ),
+            ))
+        }
+    };
+    if handlers.iter().any(|h| h.intid == timer) {
+        return Err(refuse(
+            first.span,
+            "a program with tasks handles no `timer` interrupt: the scheduler's ticks are the \
+             timer's"
+                .to_owned(),
+        ));
+    }
+    handlers.push(Handler {
+        intid: timer,
+        symbol: "nz_sched_tick".to_owned(),
+        takes_cap: false,
+        defined_here: true,
+    });
+    Ok(tasks
+        .iter()
+        .filter_map(|(f, (priority, period))| {
+            native.sigs.get(f.id.index()).map(|s| Task {
+                name: f.name.clone(),
+                symbol: s.symbol.as_str().to_owned(),
+                priority: *priority,
+                period: *period,
+                takes_cap: f.param_types().next().is_some(),
+            })
+        })
+        .collect())
+}
+
 /// What a Cortex-M3 cannot do, at the first place the program asks it (Gate 3, `docs/spec.md`,
 /// *Boards*): a `Float32` or `Float64` anywhere — the M3 has no FPU, and a board no soft-float
 /// library — or a 64-bit device register, which the core splits into two accesses. `N0392`.
@@ -595,6 +664,7 @@ fn interrupt_handlers(
             intid,
             symbol: sig.symbol.as_str().to_owned(),
             takes_cap: f.param_types().next().is_some(),
+            defined_here: false,
         });
     }
     if errors.is_empty() {

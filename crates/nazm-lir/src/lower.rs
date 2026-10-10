@@ -326,6 +326,7 @@ pub fn lower_as(
                 || f.section.is_some()
                 || f.interrupt.is_some()
                 || f.on_failure
+                || f.task.is_some()
             {
                 Linkage::Hidden
             } else {

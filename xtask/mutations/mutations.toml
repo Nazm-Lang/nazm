@@ -1126,7 +1126,7 @@ Repointed by N40: linkage is decided from MIR's `exported`, `reached_from_generi
 
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/lower.rs"
-find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n                || f.interrupt.is_some()\n                || f.on_failure\n            {"
+find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n                || f.interrupt.is_some()\n                || f.on_failure\n                || f.task.is_some()\n            {"
 replace = "            let linkage = if false {"
 killers = [{ package = "nazm-cli", test = "lir_oracle", name = "control_flow_and_recursion_agree_with_the_oracle" }]
 
@@ -8304,8 +8304,8 @@ Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@se
 Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@interrupt` must not be reused.
 Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused `@on_failure` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 49;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 48;"
+find = "pub const SEMANTIC_EPOCH: u32 = 50;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 49;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -11280,10 +11280,10 @@ file = "crates/nazm-service/src/profile.rs"
 find = '''
                 Rule::NoBlocking,
                 Rule::BoundedLoops,
-            ],'''
+                Rule::NoHeap,'''
 replace = '''
                 Rule::NoBlocking,
-            ],'''
+                Rule::NoHeap,'''
 killers = [{ package = "nazm-cli", test = "realtime", name = "an_unknown_loop_is_refused_with_its_reason" }]
 
 [[mutation]]
@@ -15623,3 +15623,63 @@ find = "    (\"hal\", include_str!(\"../../../library/std/hal.nz\")),\n"
 replace = ""
 killers = [{ package = "nazm-cli", test = "embedded", name = "one_traffic_light_builds_for_both_boards_through_the_hal" }]
 
+
+# --- Gate 3F: realtime rules and the fixed-priority scheduler (systems-domains.md Part D) ---
+# That the scheduler runs the higher priority first and reports a missed deadline on both boards is
+# realtime_tasks.rs's ignored QEMU test.
+
+[[mutation]]
+name = "g3-a-task-priority-has-no-ceiling"
+why = "a task's priority above 255 is accepted, and the scheduler orders by a number the specification does not have"
+file = "crates/nazm-core/src/constants.rs"
+find = "value.parse::<u32>().ok().filter(|p| *p <= 255)"
+replace = "value.parse::<u32>().ok()"
+killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "a_task_is_a_function_the_scheduler_can_call_with_a_priority_and_a_period" }]
+
+[[mutation]]
+name = "g3-a-task-period-may-be-zero"
+why = "a task with a period of no ticks is accepted, and is released again before it can ever have run"
+file = "crates/nazm-core/src/constants.rs"
+find = "value.parse::<u64>().ok().filter(|p| *p >= 1)"
+replace = "value.parse::<u64>().ok()"
+killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "a_task_is_a_function_the_scheduler_can_call_with_a_priority_and_a_period" }]
+
+[[mutation]]
+name = "g3-a-task-takes-any-shape"
+why = "a task's shape is not checked, so the scheduler calls a function with arguments it has not got"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "    if !(runs && plain(&f.return_type, \"Int\") && quiet && alone && ordinary) {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "a_task_is_a_function_the_scheduler_can_call_with_a_priority_and_a_period" }]
+
+[[mutation]]
+name = "g3-a-task-shares-the-timer"
+why = "a program with tasks may also handle the timer, and two handlers claim one interrupt"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "    if handlers.iter().any(|h| h.intid == timer) {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "a_task_needs_a_boards_timer_to_itself" }]
+
+[[mutation]]
+name = "g3-realtime-leaves-the-stack-unbounded"
+why = "realtime does not hold the image to a static stack bound, though its tasks' frames are the whole of the stack"
+file = "crates/nazm-service/src/profile.rs"
+find = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n                Rule::BoundedStack,\n"
+replace = "                Rule::BoundedLoops,\n                Rule::NoHeap,\n"
+killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "realtime_refuses_what_has_no_stack_bound_or_allocates" }]
+
+[[mutation]]
+name = "g3-bounded-stack-sees-no-cycle"
+why = "bounded-stack finds no call cycle and no call through a value, so an unbounded stack is reported bounded"
+file = "crates/nazm-service/src/profile.rs"
+find = "                    f.recursive.iter().chain(&f.indirect).cloned().collect()"
+replace = "                    Vec::new()"
+killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "realtime_refuses_what_has_no_stack_bound_or_allocates" }]
+
+[[mutation]]
+name = "g3-realtime-allocates"
+why = "realtime admits allocation sites, though a board's arena is never returned and a periodic task would exhaust it"
+file = "crates/nazm-service/src/profile.rs"
+find = "                Rule::NoHeap,\n                Rule::BoundedStack,\n            ],"
+replace = "                Rule::BoundedStack,\n            ],"
+killers = [{ package = "nazm-cli", test = "realtime_tasks", name = "realtime_refuses_what_has_no_stack_bound_or_allocates" }]
