@@ -214,6 +214,7 @@ entry:
 "#
     ));
     out.push_str(MMIO_RUNTIME);
+    out.push_str(ATOMIC_RUNTIME);
     if stack {
         let _ = write!(
             out,
@@ -325,6 +326,37 @@ entry:
   %t = trunc i64 %value to i32
   store volatile i32 %t, ptr %p
   ret i64 0
+}
+";
+
+/// The atomic built-ins' operations (Gate 3, `docs/spec.md`, *Atomics*): one sequentially
+/// consistent access to an aligned 8-byte cell each. A board's runtime and the hosted one both
+/// define them, as they do the device registers; on a target without threads LLVM makes each
+/// the plain access it is with one task.
+pub const ATOMIC_RUNTIME: &str = r"
+define hidden i64 @nz.atomic_load(ptr %cell) {
+entry:
+  %v = load atomic i64, ptr %cell seq_cst, align 8
+  ret i64 %v
+}
+
+define hidden void @nz.atomic_store(ptr %cell, i64 %v) {
+entry:
+  store atomic i64 %v, ptr %cell seq_cst, align 8
+  ret void
+}
+
+define hidden i64 @nz.atomic_swap(ptr %cell, i64 %v) {
+entry:
+  %old = atomicrmw xchg ptr %cell, i64 %v seq_cst, align 8
+  ret i64 %old
+}
+
+define hidden i1 @nz.atomic_cas(ptr %cell, i64 %expected, i64 %new) {
+entry:
+  %r = cmpxchg ptr %cell, i64 %expected, i64 %new seq_cst seq_cst, align 8
+  %ok = extractvalue { i64, i1 } %r, 1
+  ret i1 %ok
 }
 ";
 

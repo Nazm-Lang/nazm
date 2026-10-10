@@ -112,6 +112,9 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `tests-and-benchmarks` | STABLE 1.0 | Gate 2: the test and fuzz shapes and outcomes; `nazm bench`'s measurements are EXPERIMENTAL |
 | `package-features` | STABLE 1.0 | Gate 2: additive features per package; `nazm.lock/2` |
 | `windows-x86-64` | EXPERIMENTAL | Gate 3: run under Wine only; STABLE once a real Windows host has run it |
+| `atomics` | STABLE 1.0 | Gate 3: sequentially consistent only; an ordering parameter would be an extension |
+| `statics` | STABLE 1.0 | Gate 3: read-only, or an atomic; module-private |
+| `boards` | EXPERIMENTAL | Gate 3: manifests, sections, interrupts, the arena and the failure hook, emulator-verified |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -4049,6 +4052,66 @@ program that runs on Linux prints the same and exits the same here.
 | **Time, entropy** | the monotonic clock from `QueryPerformanceCounter`, the wall clock from `GetSystemTimePreciseAsFileTime` (nanoseconds since the Unix epoch, as everywhere); entropy from `BCryptGenRandom` |
 | **Failure** | a trap is exit status 2 with its diagnostic on standard error, as everywhere; an exhausted stack is `N0408` by the same stack check as everywhere — a thread's budget from `GetCurrentThreadStackLimits`, a task's a quarter of the way up its own stack — and a task stack's guard page (`VirtualProtect`) is the backstop it is on POSIX |
 | **Evidence** | Programs are executed **under Wine** in a Linux container (`run-verified under Wine`), never presented as evidence from a Windows host; execution on a real Windows x86_64 host is a final-v1 qualification item. Microsoft's CRT (`x86_64-pc-windows-msvc`) is not built in Gate 3 |
+
+### Atomics — Gate 3
+<!-- id: atomics -->
+
+Settled by Gate 3, 2026-10-10 (`docs/systems-domains.md` Part B).
+
+```nazm
+fn count(hits: Atomic) -> Int { atomic_add(hits, 1); 0 }
+
+fn main(out: OutCap, tasks: SpawnCap) -> Int ! {io, spawn} {
+    let hits = atomic_new(0);
+    scope {
+        spawn count(hits);
+        spawn count(hits);
+    }
+    print(num_to_str(atomic_load(hits)));             // 2: one cell, seen from every task
+    0
+}
+```
+
+| | |
+| --- | --- |
+| **Type** | `Atomic`: a **counted handle** to one `Int` cell, shared like a `Chan`: assignment and passing copy the handle, and every copy reaches the same cell. It **may cross into a task**, as a `Chan` may. It has no `==` (`N0304`) and is not plain data, so no array holds one (`N0621`); a record may, and a `static` may (*Statics*, below) |
+| **Operations** | `atomic_new(v: Int) -> Atomic`; `atomic_load(a) -> Int`; `atomic_store(a, v: Int) -> Int`, answering `0`; `atomic_add(a, d: Int) -> Int`, answering the value before; `atomic_swap(a, v: Int) -> Int`, answering the value before; `atomic_compare_swap(a, expected: Int, new: Int) -> Bool`, storing `new` and answering `true` exactly when the cell held `expected` |
+| **Ordering** | Every operation is **sequentially consistent**: all of them, on every cell, appear in one order every task agrees on. There is no ordering parameter in 1.0; a weaker ordering would be an extension |
+| **Overflow** | `atomic_add` whose sum leaves `Int`'s range stops the program with `N0400`, as `+` does, and leaves the cell unchanged |
+| **Authority** | None: an atomic is the program's own memory. No effect, no capability |
+| **Where** | Every hosted target, `nazm run`, and the boards. On a target with no threads (`wasm32-unknown-unknown`) an operation is the plain load or store it would be with one task. A board has no allocator unless its manifest gives it a heap (*Boards*, below), so there an atomic is a `static`'s |
+
+### Statics — Gate 3
+<!-- id: statics -->
+
+Settled by Gate 3, 2026-10-10 (`docs/systems-domains.md` Part B).
+
+| | |
+| --- | --- |
+| **Declaration** | `static NAME: T = value;` at a module's top level: storage with **one address** for the whole run, initialised before `main` and never freed |
+| **Type and value** | `T` is plain data — a numeric type, `Bool`, a record, enum or array of plain data — and `value` is a constant expression with the rules of *Constants* (`N0622`, `N0623`); or `T` is `Atomic` and `value` is `atomic_new(c)` with `c` such an expression, the one call a static's value may make |
+| **Read-only** | A static is read, never assigned (`N0625`): there are no mutable global variables. A static `Atomic` is changed only through the atomic operations, which is how a task and an interrupt handler share state |
+| **Use** | By its name anywhere an expression is; reading it reads the storage. It is its module's own, as a constant is: `pub static` is `N0101` |
+| **Placement** | `@section("NAME")` places it (*Boards*, below); without one it is in the target's read-only data, or its writable data when it holds an atomic |
+| **Constant or static** | A constant is a value written wherever it is used and has no address; a static is storage. Use a static for a table placed in a section or an atomic cell; a constant everywhere else |
+
+### Boards: manifests, sections, interrupts, a heap and a failure hook — Gate 3
+<!-- id: boards -->
+
+Settled by Gate 3, 2026-10-10 (`docs/systems-domains.md` Part B). Everything here is a freestanding
+target's (*A freestanding target*, above) and LLVM's; a hosted build or `wasm32-unknown-unknown`
+refuses `@section`, `@interrupt` and `@on_failure` by name (`N0392`). Every board is emulated.
+
+| | |
+| --- | --- |
+| **Manifest** | `nazm build --target T --board board.toml --objects DIR` builds for the board the TOML file describes; without `--board`, the target's built-in board, which is itself a manifest (`nazm inspect` prints both). Keys: `name`; `isa` (`aarch64`, `riscv64`, matching `--target`); `load_address`; `stack` (bytes); `[uart]` `kind` (`pl011`, `ns16550a`) and `address`; `[stop]` `kind` (`semihosting`, `sifive-test`) and `address` where it has one; optional `[heap]` `size`; optional `[interrupts]` (below). A key it does not know, or a value out of range, refuses the build naming the key (`N0626`) |
+| **The runtime boundary** | `_start` is the board's, as before: it sets the stack, initialises statics, installs the vector table and enables interrupts when the manifest has one, calls `main`, reports and stops. A program's entry is always `main` |
+| **`mmio_read64`, `mmio_write64`** | The 64-bit forms of the device-register built-ins, with their rules: one volatile access of exactly 64 bits |
+| **`@section("NAME")`** | On a function or a static: placed in the section `NAME` (letters, digits, `.` and `_`), which the generated `link.ld` keeps and places after the board's own sections of the same kind — code with code, data with data. On anything else, `N0619` |
+| **`@interrupt("NAME")`** | On `fn f() -> Int ! {}` or `fn f(m: MmioCap) -> Int ! {}`: the handler for the interrupt the manifest's `[interrupts]` names `NAME`. `[interrupts]` gives the controller (`gicv2` with `distributor` and `cpu` addresses on AArch64) and `timer` (`period_us`) — the board's timer, acknowledged and re-armed by the runtime before its handler runs. A handler shares state with the rest of the program only through statics and atomics; its result is discarded. A handler for a name the manifest does not have, a name with two handlers, or a handler of another shape is `N0627` |
+| **Heap** | A manifest with `[heap] size` gives the board a **bump arena** of that many bytes after the image: allocation takes from it and is never returned. Strings built at run time, sequences, `Bytes` and closures then build on the board; exhausting the arena stops the program with `N0406`. Without a heap, allocation is refused at build time, as before. The `no-heap` rule refuses every allocation site whatever the board, and is the `kernel` profile's, with `no-spawn`, `no-foreign` and `no-blocking` |
+| **`@on_failure`** | On one `fn f(code: Int) -> Int ! {}`: the runtime calls it with the failure's number (`408` for `N0408`) after writing the diagnostic and before stopping the machine. A failure inside it stops at once. A second one is `N0627` |
+| **Not here** | Inline assembly: the C ABI is the low-level escape. A kernel or driver claim: the reference workload is a kernel-*style* image under QEMU, never "OS-ready" |
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

@@ -307,6 +307,7 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::VecNew
         | Intrinsic::ChanNew
         | Intrinsic::ChanNewOf
+        | Intrinsic::AtomicNew
         | Intrinsic::StrConcat
         | Intrinsic::IntToStr
         | Intrinsic::StrFromByte
@@ -387,6 +388,11 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::ChanClose
         | Intrinsic::ChanSendOf
         | Intrinsic::ChanCloseOf
+        | Intrinsic::AtomicLoad
+        | Intrinsic::AtomicStore
+        | Intrinsic::AtomicAdd
+        | Intrinsic::AtomicSwap
+        | Intrinsic::AtomicCompareSwap
         | Intrinsic::TimeNowMs
         | Intrinsic::TimeNowNs
         | Intrinsic::TimeWallNs

@@ -82,6 +82,9 @@ pub enum Value {
     /// synchronisation, which is why `docs/spec.md` lets it cross a `spawn` while a
     /// sequence may not.
     Chan(Arc<Channel>),
+    /// One `Int` cell, by reference (Gate 3): every copy reaches the same cell, and every
+    /// operation on it is sequentially consistent.
+    Atomic(Arc<std::sync::atomic::AtomicI64>),
     /// A user-defined record: an **inline aggregate**, by value.
     ///
     /// Not an `Arc`, and that is the semantic decision rather than a representation
@@ -494,6 +497,7 @@ impl std::fmt::Display for Value {
             Self::Chan(_) => f.write_str("Chan"),
             Self::Bytes(b) => write!(f, "Bytes({} bytes)", b.len),
             Self::OsHandle(_) => f.write_str("OsHandle"),
+            Self::Atomic(_) => f.write_str("Atomic"),
             Self::Cap(k) => f.write_str(k.type_name()),
             Self::Vec(v) => match v.lock() {
                 Ok(v) => write!(f, "Vec({} items)", v.len()),
