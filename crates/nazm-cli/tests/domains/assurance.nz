@@ -1,0 +1,50 @@
+// The high-assurance reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): a heater
+// controller on both emulated boards, held to the `assurance` profile, whose every obligation is
+// `proved` or `checked` (`nazm obligations`).
+//
+// Integer-only, in tenths of a degree. A 10 ms task samples the simulated temperature, commands a
+// heater's power — a proportional step towards 60.0 degrees, its power held from 0 to 100 by
+// contract — and trips to a safe state, the heater off for good, above 80.0 degrees. Every bound is
+// stated as a contract the checker proves where it can and the code checks where it cannot. At tick
+// 200 the controller shuts down deterministically, answering the temperature it holds.
+static TEMP: Atomic = atomic_new(200);
+static TRIPPED: Atomic = atomic_new(0);
+static TICK: Atomic = atomic_new(0);
+
+/// The heater's power for `demand`, from 0 to 100.
+fn power(demand: Int) -> Int ! {}
+    ensures result >= 0 && result <= 100
+{
+    if demand < 0 { 0 } else { if demand > 100 { 100 } else { demand } }
+}
+
+/// The temperature one step after `t` with the heater at `p`: heating by a tenth of the power,
+/// cooling by a fiftieth of the difference from the 20.0-degree room.
+fn plant(t: Int, p: Int) -> Int ! {}
+    requires p >= 0 && p <= 100
+    requires t >= -400 && t <= 2000
+    ensures result >= t - 48 && result <= t + 10
+{
+    t + p / 10 - (t - 200) / 50
+}
+
+/// Whether `t` is past the trip point.
+fn over(t: Int) -> Bool ! {} {
+    t > 800
+}
+
+@task(priority = "1", period = "1")
+fn control() -> Int ! {} {
+    let tick = atomic_add(TICK, 1) + 1;
+    let t = atomic_load(TEMP);
+    if over(t) {
+        atomic_store(TRIPPED, 1);
+    };
+    let p = if atomic_load(TRIPPED) == 1 { power(0) } else { power((600 - t) / 2) };
+    atomic_store(TEMP, plant(t, p));
+    if tick == 200 { atomic_load(TRIPPED) * 10000 + atomic_load(TEMP) } else { 0 }
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    atomic_store(TEMP, 200)
+}

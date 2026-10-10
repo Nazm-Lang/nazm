@@ -170,6 +170,9 @@ pub mod codes {
     /// A board's task released again before it had run: it missed its deadline, its period (Gate
     /// 3, `docs/spec.md`, *Boards*).
     pub const TASK_DEADLINE: Code = Code::new("N0414");
+    /// A board's watchdog expired: no task fed it within its manifest's ticks (Gate 3,
+    /// `docs/spec.md`, *Boards*).
+    pub const WATCHDOG_EXPIRED: Code = Code::new("N0415");
 
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");

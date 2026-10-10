@@ -1,0 +1,80 @@
+// The automotive reference workload (Gate 3, `docs/systems-domains.md` Parts E–J): an ECU-style
+// periodic controller on both emulated boards, held to the `automotive` profile.
+//
+// The engine is simulated and integer-only, so the same program runs on a Cortex-M3. A 10 ms task
+// runs the state machine — `OFF`, `CRANK`, `RUN`, `LIMP` — and an idle-speed controller. At tick
+// 120 the coolant sensor's reading leaves its range: the failure state, `LIMP`, caps the speed. A
+// 50 ms task sends the ECU's status across a CAN-like frame boundary: frame `0x100`, three data
+// bytes — the state and the speed's two bytes — and a checksum, written to the UART as text,
+// `#0100:SS:HH:LL*CC`. At tick 160 the ECU shuts down deterministically, answering its state and its
+// speed. Not CAN: the frame is a library-level boundary over the board's UART.
+static UART: Int = 150994944;
+static TICK: Atomic = atomic_new(0);
+static STATE: Atomic = atomic_new(0);
+static RPM: Atomic = atomic_new(0);
+
+fn put(c: Int, m: MmioCap) -> Int ! {} {
+    mmio_write8(UART, c)
+}
+
+/// `n`'s low byte as two hexadecimal digits.
+fn put_hex(n: Int, m: MmioCap) -> Int ! {} {
+    let hi = n >> 4 & 15;
+    let lo = n & 15;
+    put(if hi < 10 { 48 + hi } else { 55 + hi }, m);
+    put(if lo < 10 { 48 + lo } else { 55 + lo }, m)
+}
+
+/// One frame across the boundary: its 11-bit identifier, three data bytes and their checksum,
+/// the low byte of the sum of the identifier's bytes and the data.
+fn frame_send(id: Int, b0: Int, b1: Int, b2: Int, m: MmioCap) -> Int ! {} {
+    put(35, m);
+    put_hex(id >> 8, m);
+    put_hex(id, m);
+    put(58, m);
+    put_hex(b0, m);
+    put(58, m);
+    put_hex(b1, m);
+    put(58, m);
+    put_hex(b2, m);
+    put(42, m);
+    put_hex((id >> 8) + (id & 255) + (b0 & 255) + (b1 & 255) + (b2 & 255), m);
+    put(10, m)
+}
+
+/// The speed the state asks for: none when off, the starter's when cranking, idle when running,
+/// a cap in the failure state.
+fn wanted(state: Int) -> Int ! {} {
+    if state == 0 { 0 } else { if state == 1 { 300 } else { if state == 2 { 900 } else { 700 } } }
+}
+
+/// The ECU's 10 ms step: the coolant sensor, the state machine, the speed's controller.
+@task(priority = "2", period = "1")
+fn ecu() -> Int ! {} {
+    let tick = atomic_add(TICK, 1) + 1;
+    let coolant = if tick >= 120 { 250 } else { 90 };
+    let state = atomic_load(STATE);
+    let rpm = atomic_load(RPM);
+    let next = if coolant > 130 || coolant < -40 {
+        3
+    } else {
+        if state == 0 && tick >= 5 { 1 } else { if state == 1 && rpm >= 280 { 2 } else { state } }
+    };
+    atomic_store(STATE, next);
+    // A proportional step of a quarter of the difference, by shifting: no division on the M3's
+    // fast path.
+    let step = (wanted(next) - rpm) >> 2;
+    atomic_store(RPM, rpm + if step == 0 && wanted(next) != rpm { if wanted(next) > rpm { 1 } else { -1 } } else { step });
+    if tick == 160 { next * 10000 + atomic_load(RPM) } else { 0 }
+}
+
+/// The 50 ms status frame.
+@task(priority = "1", period = "5")
+fn status(m: MmioCap) -> Int ! {} {
+    let rpm = atomic_load(RPM);
+    frame_send(256, atomic_load(STATE), rpm >> 8, rpm, m)
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    atomic_store(STATE, 0)
+}

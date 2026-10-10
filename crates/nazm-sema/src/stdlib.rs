@@ -21,6 +21,7 @@ pub const PREFIX: &str = "@std/";
 
 /// Every standard module, by name, with its source exactly as the repository holds it.
 pub const MODULES: &[(&str, &str)] = &[
+    ("audit", include_str!("../../../library/std/audit.nz")),
     ("binary", include_str!("../../../library/std/binary.nz")),
     ("chan", include_str!("../../../library/std/chan.nz")),
     ("deque", include_str!("../../../library/std/deque.nz")),
@@ -36,6 +37,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("io", include_str!("../../../library/std/io.nz")),
     ("ioerror", include_str!("../../../library/std/ioerror.nz")),
     ("json", include_str!("../../../library/std/json.nz")),
+    ("linalg", include_str!("../../../library/std/linalg.nz")),
     ("log", include_str!("../../../library/std/log.nz")),
     ("map", include_str!("../../../library/std/map.nz")),
     ("net", include_str!("../../../library/std/net.nz")),

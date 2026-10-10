@@ -171,7 +171,32 @@ fn mir_facts(program: &nazm_mir::ir::Program) -> profile::MirFacts {
         },
         unsigned_writes: Vec::new(),
         allocations: allocations(program),
+        feeding_tasks: feeding_tasks(program),
     }
+}
+
+/// The `@task`s that call `watchdog_feed` themselves (Gate 3): what `watchdog` asks for.
+fn feeding_tasks(program: &nazm_mir::ir::Program) -> Vec<String> {
+    program
+        .functions
+        .iter()
+        .filter(|f| f.task.is_some())
+        .filter(|f| {
+            f.blocks.iter().flat_map(|b| b.stmts.iter()).any(|s| {
+                matches!(
+                    &s.kind,
+                    nazm_mir::ir::StatementKind::Assign {
+                        value: nazm_mir::ir::Rvalue::Primitive {
+                            op: nazm_core::sema::Intrinsic::WatchdogFeed,
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+        .map(|f| f.name.clone())
+        .collect()
 }
 
 /// The longest chain of calls from `f`, counting `f`, over an acyclic graph.
@@ -294,6 +319,7 @@ pub(crate) fn enforce(
             || p.rules().contains(&profile::Rule::BoundedStack)
             || p.rules().contains(&profile::Rule::BoundedLoops)
             || p.rules().contains(&profile::Rule::SignedWrites)
+            || p.rules().contains(&profile::Rule::Watchdog)
     });
     let evaluated = if needs_cost {
         nazm_core::on_lowered(

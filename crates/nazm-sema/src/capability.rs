@@ -291,7 +291,8 @@ impl CapabilityKind {
             | Intrinsic::MmioRead16
             | Intrinsic::MmioWrite16
             | Intrinsic::MmioRead64
-            | Intrinsic::MmioWrite64 => CapabilitySet::of(Self::Mmio),
+            | Intrinsic::MmioWrite64
+            | Intrinsic::WatchdogFeed => CapabilitySet::of(Self::Mmio),
             // Reading `errno` is part of calling C (N85).
             Intrinsic::CErrno => CapabilitySet::of(Self::Foreign),
             Intrinsic::StrLen
@@ -361,7 +362,8 @@ impl CapabilityKind {
             | Intrinsic::MmioRead16
             | Intrinsic::MmioWrite16
             | Intrinsic::MmioRead64
-            | Intrinsic::MmioWrite64 => Some(Self::Mmio),
+            | Intrinsic::MmioWrite64
+            | Intrinsic::WatchdogFeed => Some(Self::Mmio),
             Intrinsic::OsRandomBytes => Some(Self::Random),
             _ => None,
         }
