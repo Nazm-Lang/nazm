@@ -23,6 +23,8 @@ enum Target {
     Trait,
     Impl,
     Const,
+    /// A static (Gate 3): storage, which a section may hold.
+    Static,
 }
 
 impl Target {
@@ -33,8 +35,18 @@ impl Target {
             Self::Trait => "a trait",
             Self::Impl => "an impl",
             Self::Const => "a constant",
+            Self::Static => "a static",
         }
     }
+}
+
+/// Whether `name` is a section's name a linker script can write: letters, digits, `.` and `_`
+/// (Gate 3).
+pub(crate) fn section_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
 }
 
 fn refuse(at: Span, what: String, help: &str) -> Diagnostic {
@@ -135,11 +147,35 @@ fn admitted(
                     )),
                 }
             }
+            // Placement in a board's image (Gate 3, `docs/spec.md`, *Boards*): code or storage
+            // only — a constant has no address — under a name a linker script can write.
+            "section" => {
+                if !matches!(target, Target::Function | Target::Static) {
+                    errors.push(refuse(
+                        a.span,
+                        format!(
+                            "`@section` places a function or a static, and this is {}",
+                            target.named()
+                        ),
+                        "a constant is written where it is used and has no address to place",
+                    ));
+                }
+                match a.args.as_deref() {
+                    Some([AttrArg::Str { value, .. }]) if section_name(value) => {}
+                    _ => errors.push(refuse(
+                        a.span,
+                        "`@section` takes one string: the section's name, of letters, digits, \
+                         `.` and `_`"
+                            .to_owned(),
+                        "`@section(\".text.boot\")`",
+                    )),
+                }
+            }
             other => errors.push(refuse(
                 a.name_span,
                 format!("`@{other}` is not an attribute Nazm has"),
-                "the attributes are `@cfg`, `@test`, `@bench`, `@fuzz` and `@deprecated`; there are \
-                 no user-defined attributes",
+                "the attributes are `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated` and \
+                 `@section`; there are no user-defined attributes",
             )),
         }
     }
@@ -296,7 +332,11 @@ pub fn configure(
     program.consts.retain(|c| {
         admitted(
             &c.attrs,
-            Target::Const,
+            if c.is_static {
+                Target::Static
+            } else {
+                Target::Const
+            },
             c.pub_span.is_some(),
             c.span,
             graph,

@@ -430,6 +430,7 @@ impl<'a> Lw<'a> {
             align,
             relocs,
             writable: false,
+            section: None,
         });
         sym
     }
@@ -467,6 +468,7 @@ impl<'a> Lw<'a> {
                 align,
                 relocs: Vec::new(),
                 writable,
+                section: s.section.clone(),
             });
         }
     }
@@ -773,6 +775,7 @@ impl Fb {
             values: self.values,
             at,
             debug_vars: self.debug_vars,
+            section: None,
         }
     }
 }

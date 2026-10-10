@@ -231,6 +231,10 @@ fn pipeline(
         Ok(core) => core,
         Err(defects) => return Outcome::CheckFailed(defects),
     };
+    // Nor sections (Gate 3): a placement only a board's image has.
+    if let Some((at, what)) = board_only(&core) {
+        return Outcome::CheckFailed(vec![board_only_refused(at, &what, "`nazm run`")]);
+    }
     drop(program);
     drop(resolution);
 
@@ -597,11 +601,44 @@ pub fn machine_only_call(
                 | sema::Intrinsic::MmioRead8
                 | sema::Intrinsic::MmioWrite8
                 | sema::Intrinsic::MmioRead16
-                | sema::Intrinsic::MmioWrite16),
+                | sema::Intrinsic::MmioWrite16
+                | sema::Intrinsic::MmioRead64
+                | sema::Intrinsic::MmioWrite64),
             ) => Some((site.span, b.name().to_owned())),
             _ => None,
         })
     })
+}
+
+/// The first placement only a board's image has (Gate 3, `docs/spec.md`, *Boards*): a function
+/// or static `@section` names, with where and what.
+#[must_use]
+pub fn board_only(core: &cir::Program) -> Option<(nazm_span::Span, String)> {
+    core.functions
+        .iter()
+        .find(|f| f.section.is_some())
+        .map(|f| (f.name_span, format!("`@section` on `{}`", f.name)))
+        .or_else(|| {
+            core.statics
+                .iter()
+                .find(|s| s.section.is_some())
+                .map(|s| (s.at, format!("`@section` on `{}`", s.name)))
+        })
+}
+
+/// `N0392`: a board's placement, `what`, reached by `where_`, which has no board's image.
+#[must_use]
+pub fn board_only_refused(at: nazm_span::Span, what: &str, where_: &str) -> nazm_diag::Diagnostic {
+    nazm_diag::Diagnostic::error(
+        nazm_diag::codes::MACHINE_ONLY,
+        at,
+        format!("{where_} cannot honour {what}: only a board's image has sections it places"),
+    )
+    .primary_label("placed in a section")
+    .help(
+        "sections exist only in a board's build: `nazm build --target aarch64-unknown-none` or \
+         `--target riscv64gc-unknown-none-elf`",
+    )
 }
 
 /// `N0392`: the built-in `name` reached by `what`, which has no device registers.

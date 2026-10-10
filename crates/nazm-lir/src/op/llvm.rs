@@ -183,9 +183,13 @@ pub fn module(m: &Module) -> String {
             "hidden "
         };
         let kind = if d.writable { "global" } else { "constant" };
+        let section = d
+            .section
+            .as_ref()
+            .map_or_else(String::new, |s| format!(", section \"{s}\""));
         let _ = writeln!(
             out,
-            "{} = {place}{kind} {body}, align {}",
+            "{} = {place}{kind} {body}{section}, align {}",
             name(m, d.sym),
             d.align.max(1)
         );
@@ -294,9 +298,14 @@ fn function(out: &mut String, m: &Module, f: &Function) {
     // page below a task's stack touches each page on its way down, so an overrun faults on the
     // guard instead of landing in another task's stack or the heap. A backend that has no probe
     // for its target ignores the attribute.
+    // A function `@section` places (Gate 3) names its section; a linker script keeps it.
+    let section = f
+        .section
+        .as_ref()
+        .map_or_else(String::new, |s| format!(" section \"{s}\""));
     let _ = writeln!(
         out,
-        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\" {{   ; {}",
+        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\"{section} {{   ; {}",
         linkage(sym.linkage),
         ret_ty(sig),
         name(m, f.sym),

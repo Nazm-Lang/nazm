@@ -369,6 +369,10 @@ pub struct StaticDef {
     pub module: ModuleId,
     pub name: String,
     pub value: StaticValue,
+    /// Where it is declared: its name.
+    pub at: Span,
+    /// The section `@section` places it in (Gate 3), if any.
+    pub section: Option<String>,
 }
 
 /// What a static starts as.

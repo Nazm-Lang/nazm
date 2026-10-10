@@ -1126,8 +1126,8 @@ Repointed by N40: linkage is decided from MIR's `exported`, `reached_from_generi
 
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/lower.rs"
-find = "                if f.exported || f.reached_from_generic || instance || Some(f.id) == entry_id {"
-replace = "                if false {"
+find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n            {"
+replace = "            let linkage = if false {"
 killers = [{ package = "nazm-cli", test = "lir_oracle", name = "control_flow_and_recursion_agree_with_the_oracle" }]
 
 [[mutation]]
@@ -8299,10 +8299,11 @@ Repointed by Gate 2's attributes, which moved it to 42: an entry that refused an
 Repointed by G2-C1, which moved it to 43: an entry that accepted `@deprecated` on a private function must not be reused.
 Repointed by Gate 3, which moved it to 44: an entry that accepted a foreign `nz_os_clock` must not be reused.
 Repointed by Gate 3's atomics, which moved it to 45: an entry that accepted a record named `Atomic` must not be reused.
-Repointed by Gate 3's statics, which moved it to 46: an entry that refused a `static` item must not be reused."""
+Repointed by Gate 3's statics, which moved it to 46: an entry that refused a `static` item must not be reused.
+Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@section` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 46;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 45;"
+find = "pub const SEMANTIC_EPOCH: u32 = 47;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 46;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10514,11 +10515,12 @@ Repointed by Gate 2's time, which moved it to 18 for the nanosecond clocks and t
 Repointed by Gate 2's process and environment, which moved it to 19 for the environment and child processes.
 Repointed by Gate 2's randomness, which moved it to 20 for the system's entropy.
 Repointed by Gate 3's platform layer, which moved it to 21 for the per-target system calls.
-Repointed by Gate 3's atomics, which moved it to 22 for the atomic entries."""
+Repointed by Gate 3's atomics, which moved it to 22 for the atomic entries.
+Repointed by Gate 3's 64-bit device registers, which moved it to 23."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 22;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 21;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_two_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 23;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 22;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_three_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -11173,8 +11175,8 @@ killers = [{ package = "nazm-formal", test = "exhaustive", name = "p5_the_checke
 name = "n62-a-hosted-build-performs-a-register"
 why = "a build for a hosted target lowers `mmio_write32` instead of refusing it with N0392, so a program writes to an address the operating system owns"
 file = "crates/nazm-cli/src/build/lower.rs"
-find = '            if !target.is_board() {'
-replace = '            if false {'
+find = "            if !target.is_board() {\n                if let Some((at, name)) = nazm_core::machine_only_call(resolution) {"
+replace = "            if false {\n                if let Some((at, name)) = nazm_core::machine_only_call(resolution) {"
 killers = [{ package = "nazm-cli", test = "freestanding", name = "a_device_register_is_refused_where_there_is_none" }]
 
 [[mutation]]
@@ -11190,8 +11192,8 @@ name = "n62-a-register-needs-no-authority"
 why = """a function holding no `MmioCap` may write a device register
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-sema/src/capability.rs"
-find = '            | Intrinsic::MmioWrite16 => Some(Self::Mmio),'
-replace = '            | Intrinsic::MmioWrite16 => None,'
+find = '            | Intrinsic::MmioWrite64 => Some(Self::Mmio),'
+replace = '            | Intrinsic::MmioWrite64 => None,'
 killers = [{ package = "nazm-sema", lib = true, name = "capability::tests::every_built_in_needs_exactly_the_authority_for_its_effect" }]
 
 [[mutation]]
@@ -14642,8 +14644,8 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "scratch::tests::a_name_
 name = "q1-no-stack-probes"
 why = "generated functions ask for no stack probes, so a frame larger than a task stack's guard page steps over it"
 file = "crates/nazm-lir/src/op/llvm.rs"
-find = '        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\" {{   ; {}",'
-replace = '        "define {}{} {}({params}) {{   ; {}",'
+find = '        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\"{section} {{   ; {}",'
+replace = '        "define {}{} {}({params}){section} {{   ; {}",'
 killers = [{ package = "nazm-cli", test = "build", name = "every_generated_function_asks_for_stack_probes" }]
 
 [[mutation]]
@@ -15345,4 +15347,46 @@ file = "crates/nazm-lir/src/op/lower.rs"
 find = "        if !self.unit.owns_module {\n            return;\n        }\n        let statics"
 replace = "        let statics"
 killers = [{ package = "nazm-cli", test = "statics", name = "a_static_atomic_is_one_cell_for_every_function_task_and_instance" }]
+
+# --- Gate 3D: sections and the 64-bit device registers (docs/spec.md, Boards) ---
+
+[[mutation]]
+name = "g3-a-section-places-anything"
+why = "@section is accepted before a constant or a type, which have no address to place"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "                if !matches!(target, Target::Function | Target::Static) {"
+replace = "                if false {"
+killers = [{ package = "nazm-cli", test = "sections", name = "a_section_marks_a_function_or_a_static_by_one_plain_name" }]
+
+[[mutation]]
+name = "g3-a-section-is-any-string"
+why = "a section's name is not held to letters, digits, . and _, so the generated link.ld can be broken by a name"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "                    Some([AttrArg::Str { value, .. }]) if section_name(value) => {}"
+replace = "                    Some([AttrArg::Str { .. }]) => {}"
+killers = [{ package = "nazm-cli", test = "sections", name = "a_section_marks_a_function_or_a_static_by_one_plain_name" }]
+
+[[mutation]]
+name = "g3-a-hosted-build-ignores-a-section"
+why = "a hosted build compiles a program whose @section it cannot honour instead of refusing it by name (N0392)"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "            if !target.is_board() {\n                if let Some((at, what)) = nazm_core::board_only(core) {"
+replace = "            if false {\n                if let Some((at, what)) = nazm_core::board_only(core) {"
+killers = [{ package = "nazm-cli", test = "sections", name = "a_section_and_a_64_bit_register_are_a_boards_alone" }]
+
+[[mutation]]
+name = "g3-a-placed-section-is-not-kept"
+why = "the board's link.ld names no placed section, so a section the program names is an orphan the linker places where it likes"
+file = "crates/nazm-runtime/src/board.rs"
+find = "names.iter().map(|n| format!(\" KEEP(*({n}))\")).collect()"
+replace = "names.iter().map(|_| String::new()).collect()"
+killers = [{ package = "nazm-cli", test = "sections", name = "a_placed_definition_reaches_its_section_and_the_linker_script_keeps_it" }]
+
+[[mutation]]
+name = "g3-a-placed-function-may-vanish"
+why = "a function @section places keeps internal linkage, so once inlined it is dropped and its section never reaches the image"
+file = "crates/nazm-lir/src/lower.rs"
+find = "                || f.section.is_some()\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "sections", name = "a_placed_definition_reaches_its_section_and_the_linker_script_keeps_it" }]
 
