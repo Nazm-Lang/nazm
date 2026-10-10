@@ -38,6 +38,7 @@ mod attest;
 mod backend;
 mod bench;
 mod bindgen;
+mod board_manifest;
 mod build;
 mod capabilities;
 mod checking;
@@ -186,6 +187,7 @@ fn dispatch(command: Command) -> ExitCode {
             shared,
             objects,
             stack_watermark,
+            board,
             layout,
             timings,
             debug,
@@ -202,6 +204,14 @@ fn dispatch(command: Command) -> ExitCode {
                 Err(code) => return code,
             };
             let features = selection.features;
+            // A board's manifest (Gate 3): read before anything is compiled, for a board's target.
+            let board = match board.as_deref() {
+                None => None,
+                Some(path) => match build::read_board(path, target.as_deref()) {
+                    Ok(b) => Some(b),
+                    Err(code) => return code,
+                },
+            };
             let built = build::run(
                 &file,
                 out.as_deref(),
@@ -228,6 +238,7 @@ fn dispatch(command: Command) -> ExitCode {
                     profile: profile.as_deref(),
                     harness: harness.as_ref(),
                     features: &features,
+                    board: board.as_ref(),
                 },
             );
             if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {

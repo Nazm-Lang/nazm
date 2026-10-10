@@ -234,7 +234,7 @@ pub(super) fn objects_for_target(
                 })
                 .collect::<Vec<_>>(),
         );
-        let mut written = write_objects(dir, objects, target, &placed);
+        let mut written = write_objects(dir, objects, target, &placed, &board_for(choice, target));
         if freestanding && written.is_ok() {
             let texts: Vec<&str> = artefacts
                 .iter()
@@ -248,7 +248,7 @@ pub(super) fn objects_for_target(
             let (root, reserved) = if target.is_wasm() {
                 ("nazm_main", nazm_lir::runtime::wasm::STACK)
             } else {
-                ("nz_board_main", nazm_lir::runtime::board::STACK)
+                ("nz_board_main", board_for(choice, target).stack)
             };
             let bound = crate::stack::bound(root, frames, &calls);
             written = std::fs::write(
@@ -295,6 +295,7 @@ fn write_objects(
     objects: &[PathBuf],
     target: &nazm_lir::backend::Target,
     placed: &nazm_lir::runtime::board::Placed,
+    board: &nazm_lir::runtime::board::Board,
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut listed = Vec::new();
@@ -335,7 +336,7 @@ fn write_objects(
     if target.is_board() {
         std::fs::write(
             dir.join("link.ld"),
-            nazm_lir::runtime::board::linker_script_placing(board_of(target), placed),
+            nazm_lir::runtime::board::linker_script_placing(board, placed),
         )?;
     }
     Ok(())

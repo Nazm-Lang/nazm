@@ -520,6 +520,7 @@ fn wasm_build(
             profile: Some("web3"),
             harness: None,
             features: &[],
+            board: None,
         },
     );
     if built != ExitCode::SUCCESS {

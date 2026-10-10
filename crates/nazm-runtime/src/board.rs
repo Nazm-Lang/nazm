@@ -7,6 +7,7 @@
 //! and the machine stopped with a status. `_start` sets the stack the linker script reserves,
 //! calls `main` and prints its result. Nothing runs before `main` but that.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use crate::preamble;
@@ -27,46 +28,113 @@ pub enum Stop {
     SifiveTest { address: u64 },
 }
 
-/// One board: everything about it that is not the language's (N86).
+/// A board's UART (Gate 3): both are written a byte at a time at their data register, which is
+/// the manifest's address; the kind says which device that is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Uart {
+    /// ARM's PL011, QEMU `virt`'s on AArch64.
+    Pl011,
+    /// The NS16550A, QEMU `virt`'s on RISC-V.
+    Ns16550a,
+}
+
+impl Uart {
+    /// Its name in a manifest.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Pl011 => "pl011",
+            Self::Ns16550a => "ns16550a",
+        }
+    }
+}
+
+/// One board: everything about it that is not the language's (N86). Since Gate 3 a board is a
+/// manifest (`docs/spec.md`, *Boards*): the built-in ones below print as one ([`Board::manifest`]),
+/// and `nazm build --board FILE` reads one.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Board {
     /// The target triple a build names it by.
-    pub triple: &'static str,
+    pub triple: Cow<'static, str>,
     /// What it is, for a person.
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     pub isa: Isa,
     /// Where the emulator loads the image, and so where `link.ld` places `_start`.
     pub load_address: u64,
     /// The UART's data register, written a byte at a time.
     pub uart: u64,
+    pub uart_kind: Uart,
     pub stop: Stop,
+    /// The image's one stack, in bytes: [`STACK`] unless a manifest says otherwise.
+    pub stack: u64,
+    /// A heap of this many bytes after the image (Gate 3), or none.
+    pub heap: Option<u64>,
     /// How it is booted: the emulator command line, the image last.
-    pub emulator: &'static str,
+    pub emulator: Cow<'static, str>,
     /// Whether it has been run on hardware. No board has.
     pub hardware: bool,
+}
+
+impl Board {
+    /// The board as a manifest (Gate 3): the text `nazm build --board` reads back as this board.
+    #[must_use]
+    pub fn manifest(&self) -> String {
+        let isa = match self.isa {
+            Isa::Aarch64 => "aarch64",
+            Isa::Riscv64 => "riscv64",
+        };
+        // A TOML basic string: only a quote and a backslash need escaping in a board's name.
+        let name = self.name.replace('\\', "\\\\").replace('"', "\\\"");
+        let mut out = format!(
+            "name = \"{name}\"\nisa = \"{isa}\"\nload_address = {:#x}\nstack = {:#x}\n\n[uart]\nkind = \"{}\"\naddress = {:#x}\n\n[stop]\n",
+            self.load_address,
+            self.stack,
+            self.uart_kind.name(),
+            self.uart
+        );
+        match self.stop {
+            Stop::Semihosting => out.push_str("kind = \"semihosting\"\n"),
+            Stop::SifiveTest { address } => {
+                let _ = writeln!(out, "kind = \"sifive-test\"\naddress = {address:#x}");
+            }
+        }
+        if let Some(h) = self.heap {
+            let _ = write!(out, "\n[heap]\nsize = {h:#x}\n");
+        }
+        out
+    }
 }
 
 /// Every board, in a fixed order.
 pub const BOARDS: [Board; 2] = [
     Board {
-        triple: "aarch64-unknown-none",
-        name: "QEMU virt, AArch64 (Cortex-A53)",
+        triple: Cow::Borrowed("aarch64-unknown-none"),
+        name: Cow::Borrowed("QEMU virt, AArch64 (Cortex-A53)"),
         isa: Isa::Aarch64,
         load_address: 0x4008_0000,
         uart: 0x0900_0000,
+        uart_kind: Uart::Pl011,
         stop: Stop::Semihosting,
-        emulator:
+        stack: STACK,
+        heap: None,
+        emulator: Cow::Borrowed(
             "qemu-system-aarch64 -M virt -cpu cortex-a53 -nographic -nic none -semihosting -kernel",
+        ),
         hardware: false,
     },
     Board {
-        triple: "riscv64gc-unknown-none-elf",
-        name: "QEMU virt, RISC-V RV64GC, machine mode",
+        triple: Cow::Borrowed("riscv64gc-unknown-none-elf"),
+        name: Cow::Borrowed("QEMU virt, RISC-V RV64GC, machine mode"),
         isa: Isa::Riscv64,
         load_address: 0x8000_0000,
         uart: 0x1000_0000,
+        uart_kind: Uart::Ns16550a,
         stop: Stop::SifiveTest { address: 0x10_0000 },
-        emulator: "qemu-system-riscv64 -M virt -bios none -nographic -nic none -kernel",
+        stack: STACK,
+        heap: None,
+        emulator: Cow::Borrowed(
+            "qemu-system-riscv64 -M virt -bios none -nographic -nic none -kernel",
+        ),
         hardware: false,
     },
 ];
@@ -141,15 +209,16 @@ impl Placed {
 /// [`linker_script`], keeping and placing `placed`'s sections (Gate 3).
 #[must_use]
 pub fn linker_script_placing(board: &Board, placed: &Placed) -> String {
-    let triple = board.triple;
+    let triple = &board.triple;
     let load = board.load_address;
+    let stack = board.stack;
     let keep =
         |names: &[String]| -> String { names.iter().map(|n| format!(" KEEP(*({n}))")).collect() };
     let (code, rodata, data) = (keep(&placed.code), keep(&placed.rodata), keep(&placed.data));
     format!(
         "/* Written by nazm build for {triple} (N62, N86). */\nENTRY(_start)\nSECTIONS\n{{\n  \
          . = {load:#x};\n  .text : {{ *(.text.start) *(.text*){code} }}\n  .rodata : {{ *(.rodata*) *(.srodata*){rodata} }}\n  \
-         .data : {{ *(.data*) *(.sdata*){data} }}\n  .bss : {{ *(.bss*) *(.sbss*) *(COMMON) }}\n  . = ALIGN(16);\n  __stack_bottom = .;\n  . = . + {STACK:#x};\n  \
+         .data : {{ *(.data*) *(.sdata*){data} }}\n  .bss : {{ *(.bss*) *(.sbss*) *(COMMON) }}\n  . = ALIGN(16);\n  __stack_bottom = .;\n  . = . + {stack:#x};\n  \
          __stack_top = .;\n  /DISCARD/ : {{ *(.eh_frame*) }}\n}}\n"
     )
 }
@@ -266,6 +335,8 @@ entry:
     out.push_str(MMIO_RUNTIME);
     out.push_str(ATOMIC_RUNTIME);
     if stack {
+        // The quarter of the board's stack kept in reserve below a recursive call (N49's).
+        let headroom = board.stack >> 2;
         let _ = write!(
             out,
             r"
@@ -277,7 +348,7 @@ entry:
   %fp = call ptr @llvm.frameaddress.p0(i32 0)
   %sp = ptrtoint ptr %fp to i64
   %bottom = ptrtoint ptr @__stack_bottom to i64
-  %limit = add i64 %bottom, {STACK_HEADROOM}
+  %limit = add i64 %bottom, {headroom}
   %past = icmp ult i64 %sp, %limit
   %r = zext i1 %past to i32
   ret i32 %r
