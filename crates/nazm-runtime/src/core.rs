@@ -3511,6 +3511,19 @@ nan:
 /// strings and text, joining, closures — and their allocation counters. Nothing of files, the
 /// network, tasks, channels, numbers' formatting or C.
 #[must_use]
+/// The second compiler's entries for a WASI module's sequences and joins (Gate 3): what generated
+/// code calls for a `Vec[T]`'s release and a join, beside [`board_heap_parts`].
+pub(crate) fn heap_shims(needs: &Needs) -> String {
+    let mut out = String::new();
+    if needs.sequences {
+        out.push_str(SHIM_SEQUENCE_RUNTIME);
+    }
+    if needs.join {
+        out.push_str(SHIM_JOIN_RUNTIME);
+    }
+    out
+}
+
 pub(crate) fn board_heap_parts(needs: &Needs) -> String {
     let mut out = String::new();
     for c in [

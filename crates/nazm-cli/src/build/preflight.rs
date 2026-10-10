@@ -72,7 +72,10 @@ pub(super) fn preflight(
     // binary format for a target without an operating system, so it is refused by name here
     // rather than by Cranelift after the program is lowered.
     if choice.backend == nazm_lir::backend::BackendId::Cranelift
-        && target.os == nazm_lir::backend::Os::None
+        && matches!(
+            target.os,
+            nazm_lir::backend::Os::None | nazm_lir::backend::Os::Wasi
+        )
     {
         if summary {
             return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));

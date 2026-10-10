@@ -263,6 +263,17 @@ streams, arguments, clocks, and files under capability rules (`IoCap` maps to pr
 directories). Reference runtime: one WASI host available in the container (wasmtime if installable,
 otherwise Node's WASI); a package/example.
 
+*Settled in 3J (2026-10-11).* `wasm32-wasip1` is WebAssembly's freestanding path with its own
+runtime, `nazm_runtime::wasi`: a bump arena over linear memory, grown by `memory.grow` and never
+returned, under the parts a board with a heap takes; the C library's few functions the runtime parts
+call (`malloc`, `memcpy`, `memcmp`, `strlen`, `write`, `exit`), defined at the parts' own signatures
+— built with bulk memory, so LLVM's copies are instructions and never a second `memcpy` at wasm32's
+size; the files part over WASI's `path_open` and `fd_*`, its errors Linux's numbers. The reference
+host is Node's `node:wasi`, in `nazm-wasm:n64` beside `wasm-ld`: wasmtime is not installed. Narrowed:
+no directory listing, no environment, an arena that never frees, no tasks, channels or sockets.
+Found on the way: Node's WASI refuses an open asking for the `sock_shutdown` right, so a file is
+opened with every right but it.
+
 ## P. Mobile
 
 Library targets over the stable C ABI, not a UI framework. **Android ARM64**: the NDK (downloaded

@@ -94,6 +94,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `registry` | STABLE 1.0 | local registries; no hosted registry is promised |
 | `freestanding` | EXPERIMENTAL | emulator-verified boards, a restricted subset |
 | `webassembly` | EXPERIMENTAL | |
+| `wasi` | EXPERIMENTAL | Gate 3: `wasm32-wasip1`, run under Node's WASI only |
 | `interactive` | EXPERIMENTAL | `repl`, `comptime`, `reload-check` |
 | `accel` | EXPERIMENTAL | |
 | `contracts` | EXPERIMENTAL | the `web3` profile and `nazm contract` |
@@ -3716,6 +3717,17 @@ fn main(m: MmioCap) -> Int ! {} { put(m, 72); put(m, 105); 0 }
 | **`nazm contract FILE --evm DIR`** | Compiles a contract to `deploy.hex` and `runtime.hex`, with `abi.json` (`nazm.evm-abi/1`: each entrypoint as `name(int64,…)`, its selector — the first four bytes of its keccak-256 — and a gas bound or `null`), `storage.json` (`nazm.evm-storage/1`: field `f` at slot `keccak256("nazm.state." + f)`) and `evm_run.py`. Anything the backend does not emit is `N0399`, before emission |
 | **Semantics** | Exactly the contract model's: `caller` is the EVM's `CALLER` (a sender address that is not an `Int` reverts, `N0397`); malformed calldata reverts (`N0398`); a runtime failure reverts with its five-byte code, an `Err(code)` with the 32-byte word `code`; a change to `conserved` reverts with `N0396`; every revert discards the transaction's writes |
 | **Upgrades** | `nazm contract NEW --upgrade-check OLD`: `nazm.evm-upgrade/1`; a removed or retyped field is incompatible (`N0399`), an added field compatible, a reordering nothing |
+
+### WASI: a module with a heap and WASI's imports — Gate 3
+<!-- id: wasi -->
+
+| | |
+| --- | --- |
+| **The target** | `nazm build --target wasm32-wasip1 --objects DIR`: WebAssembly with WASI preview 1, one thread. Its objects, `DIR/link.txt` with the `wasm-ld` line — the command `_start`, linear memory exported, a 1 MiB shadow stack — and `DIR/wasi.mjs`, Node's WASI host. Never linked by `nazm build`, whose host has no `wasm-ld`; `--backend cranelift` is refused as for any WebAssembly |
+| **What it has** | A heap: a bump arena from the linker's `__heap_base`, grown by `memory.grow`, never returned, so strings built at run time, sequences, `Bytes`, joins and closures run as a board's with a heap do. Standard output and error (`fd_write`). Arguments (`args_get`; the module's own name is not among them). The monotonic and wall clocks and `time_sleep` (`clock_time_get`, `poll_oneoff`). Files and their handles — opened, created, appended, read, written, sought, synced, closed, stat'd, renamed, removed; directories made and removed — beneath the **first preopened directory**, descriptor 3, the only part of a file system a module reaches: a path outside it is refused as WASI refuses it, so `IoCap`'s authority is what the host grants |
+| **What it has not** | Tasks, channels and the network: WASI preview 1 has no threads and no sockets, and a program reaching them is refused by name before anything is written. C: a foreign function is an import from outside WASI, which the reference host refuses before the module runs. Listing a directory (`os_dir_open` fails, `Unsupported`), the environment (empty), permission bits (`os_stat` says `0o644`) |
+| **Failure** | Reported to standard error and the module ends with status 2, as a hosted program's; `main`'s result is written to standard output and the status is 0 |
+| **The reference host** | `node wasi.mjs module.wasm DIR [ARGS…]` — `DIR` preopened as `.`, no environment, nothing else granted; an import from any module but `wasi_snapshot_preview1` is refused before the module runs |
 
 ### Contracts on WebAssembly — N71
 <!-- id: wasm-contract -->

@@ -72,10 +72,44 @@ entry:
   ret i64 %n
 }}
 
+attributes #0 = {{ "wasm-import-module"="{HOST_MODULE}" "wasm-import-name"="write" }}
+"#
+    ));
+    out.push_str(&multi3());
+    if stack {
+        let _ = write!(
+            out,
+            r"
+@__stack_low = external global i8
+declare ptr @llvm.frameaddress.p0(i32)
+
+define hidden i32 @nz.stack_check() {{
+entry:
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %sp = ptrtoint ptr %fp to i64
+  %low = ptrtoint ptr @__stack_low to i64
+  %limit = add i64 %low, {STACK_HEADROOM}
+  %past = icmp ult i64 %sp, %limit
+  %r = zext i1 %past to i32
+  ret i32 %r
+}}
+"
+        );
+    }
+    out
+}
+
+/// `__multi3`, which LLVM's checked `i64` multiply calls on wasm32: here, and in the WASI runtime
+/// (Gate 3), because there is no compiler-rt.
+pub(crate) fn multi3() -> String {
+    MULTI3.to_owned()
+}
+
+const MULTI3: &str = r"
 ; The low 128 bits of a 128-bit product, which LLVM's checked `i64` multiply calls on wasm32
 ; (compiler-rt's `__multi3`, here because there is no compiler-rt): from 64-bit pieces only, so
 ; nothing in it lowers to itself.
-define hidden void @__multi3(ptr %r, i64 %al, i64 %ah, i64 %bl, i64 %bh) {{
+define hidden void @__multi3(ptr %r, i64 %al, i64 %ah, i64 %bl, i64 %bh) {
 entry:
   %all = and i64 %al, 4294967295
   %alh = lshr i64 %al, 32
@@ -107,33 +141,8 @@ entry:
   %hp = getelementptr i8, ptr %r, i32 8
   store i64 %high, ptr %hp
   ret void
-}}
-
-attributes #0 = {{ "wasm-import-module"="{HOST_MODULE}" "wasm-import-name"="write" }}
-"#
-    ));
-    if stack {
-        let _ = write!(
-            out,
-            r"
-@__stack_low = external global i8
-declare ptr @llvm.frameaddress.p0(i32)
-
-define hidden i32 @nz.stack_check() {{
-entry:
-  %fp = call ptr @llvm.frameaddress.p0(i32 0)
-  %sp = ptrtoint ptr %fp to i64
-  %low = ptrtoint ptr @__stack_low to i64
-  %limit = add i64 %low, {STACK_HEADROOM}
-  %past = icmp ult i64 %sp, %limit
-  %r = zext i1 %past to i32
-  ret i32 %r
-}}
-"
-        );
-    }
-    out
 }
+";
 
 /// The entry: `nazm_main`, exported — `main`'s result, or `0` after handing the failure's text to
 /// the host's `report`.

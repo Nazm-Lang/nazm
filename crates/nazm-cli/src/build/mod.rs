@@ -154,7 +154,11 @@ pub(crate) fn run(
     let map = &loaded.map;
     // A freestanding target (N62) has no operating system under it: the runtime parts a
     // program reaches beyond the board's, named, refuse the build after code generation.
-    let freestanding = target.os == nazm_lir::backend::Os::None;
+    // WASI (Gate 3) is WebAssembly's freestanding path with a heap and WASI's imports.
+    let freestanding = matches!(
+        target.os,
+        nazm_lir::backend::Os::None | nazm_lir::backend::Os::Wasi
+    );
     let Lowered {
         artefacts,
         foreign,
