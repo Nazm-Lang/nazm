@@ -10,7 +10,7 @@
 ## 3. Systems, embedded, realtime
 
 - [x] 3.1 Atomics, statics, sections, board manifests, interrupts, arena, failure hook; kernel workload (3D): emulator-verified on AArch64; RISC-V interrupts refused (N0626)
-- [ ] 3.2 Cortex-M or its blocker; `@std/hal`; timers; state-machine workload (3E)
+- [x] 3.2 Cortex-M or its blocker; `@std/hal`; timers; state-machine workload (3E): `thumbv7m-none-eabi`, NVIC and SysTick, `@std/hal`, the traffic light on both boards — emulator-verified
 - [ ] 3.3 Realtime rules; fixed-priority board scheduler (3F)
 
 ## 4. Domains

@@ -1,0 +1,23 @@
+use "@std/hal";
+
+// A traffic light, written once against the HAL: red, green, then yellow (both), each held for
+// two ticks of the board's timer, each announced on the UART and each read back from its pins.
+pub fn light[U: Uart, P: Pin, T: Timer](u: U, red: P, green: P, t: T, m: MmioCap) -> Int ! {} {
+    let mut state = 0;
+    let mut steps = 0;
+    while steps < 6 {
+        let r = state == 0 || state == 2;
+        let g = state == 1 || state == 2;
+        red.set(m, r);
+        green.set(m, g);
+        if red.get(m) != r || green.get(m) != g {
+            u.put(m, 33);
+        }
+        u.put(m, if state == 0 { 82 } else { if state == 1 { 71 } else { 89 } });
+        wait_ticks(t, 2);
+        state = (state + 1) % 3;
+        steps = steps + 1;
+    }
+    u.put(m, 10);
+    steps
+}

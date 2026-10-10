@@ -545,6 +545,11 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
             }
         }
     }
+    // A constant's or a static's value is an expression like any other (Gate 2, Gate 3): a static
+    // atomic's `atomic_new(0)` is a call both trees must see.
+    for c in &program.consts {
+        stack.push(Node::Expr(&c.value));
+    }
     for f in &program.functions {
         // A foreign declaration (N85) is a function item with parameters and no body.
         spans.push((SyntaxKind::FnItem, f.span));

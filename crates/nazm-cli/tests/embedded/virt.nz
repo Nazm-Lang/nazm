@@ -1,0 +1,15 @@
+use "@std/hal";
+use "light.nz";
+
+static TICKS: Atomic = atomic_new(0);
+
+@interrupt("timer")
+fn tick() -> Int ! {} { ticks_advance(Ticks(count: TICKS)) }
+
+fn main(m: MmioCap) -> Int ! {} {
+    let red = Pl061(base: 151191552, line: 0);
+    let green = Pl061(base: 151191552, line: 1);
+    pl061_output(red, m);
+    pl061_output(green, m);
+    light(Pl011(base: 150994944), red, green, Ticks(count: TICKS), m)
+}

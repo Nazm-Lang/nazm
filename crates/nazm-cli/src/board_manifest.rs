@@ -130,6 +130,14 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
         };
     let heap = match doc.get("heap") {
         None => None,
+        // The arena's runtime parts pass sizes as 64-bit words, a Cortex-M's C sizes are 32: not
+        // this board's in 1.0 (Gate 3).
+        Some(_) if isa == Isa::Thumbv7m => {
+            return Err(refuse(
+                "heap",
+                "a Cortex-M board has no heap in 1.0: the arena's runtime is a 64-bit board's",
+            ))
+        }
         Some(_) => {
             let h = table(&doc, "heap")?;
             allow(h, "heap.", &["size"])?;

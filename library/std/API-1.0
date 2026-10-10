@@ -103,6 +103,19 @@
 @std/fs pub fn fs_read_lines(io: IoCap, path: Str) -> Result[Strs, Str] ! { io }
 @std/fs pub fn fs_write(io: IoCap, path: Str, text: Str) -> Result[Int, Str] ! { io }
 @std/fs pub fn fs_write_lines(io: IoCap, path: Str, lines: Strs) -> Result[Int, Str] ! { io }
+@std/hal pub trait Uart
+@std/hal pub trait Pin
+@std/hal pub trait Timer
+@std/hal pub struct Pl011
+@std/hal pub struct Ns16550
+@std/hal pub struct CmsdkUart
+@std/hal pub fn uart_write[U: Uart](u: U, m: MmioCap, s: Str) -> Int ! {}
+@std/hal pub struct Pl061
+@std/hal pub fn pl061_output(p: Pl061, m: MmioCap) -> Int ! {}
+@std/hal pub struct FpgaLed
+@std/hal pub struct Ticks
+@std/hal pub fn ticks_advance(t: Ticks) -> Int ! {}
+@std/hal pub fn wait_ticks[T: Timer](t: T, n: Int) -> Int ! {}
 @std/hash pub trait Hash
 @std/hash pub fn hash_finish(x: UInt64) -> UInt64 ! {}
 @std/hash pub fn hash_bytes(s: Str) -> UInt64 ! {}
