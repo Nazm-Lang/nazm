@@ -3203,6 +3203,27 @@ the four new tests included), selfhost at P4T4 in 45 s, the xtask lifecycle suit
 tier 1, two at tier 2, no timeout, every source restored to its digest), and the bootstrap
 at P1 in 52 s with `0e1a40e6…` unchanged.
 
+## The CPU provider's SIMD path, measured (Gate 3H, 2026-10-11)
+
+`nazm accel --provider cpu`, 8,000,000 elements, `--no-check`, the median `run_ms` of seven runs
+— the pool's work alone, not the build or the files — with LLVM's vectoriser (the default) and
+without it (`--scalar`). Apple M1 Pro, 10 cores, 10 threads; Apple clang 21.0.0; the commit that
+filed this section (Gate 3H). The kernels: `square` (`Int`, `x * x`, checked), `axpy` (`Float32`,
+`2.5 * a + b`, a zip) and `poly` (`Float64`, a square root and a division).
+
+| kernel | element | vectorised | scalar | what LLVM did with the loop |
+| --- | --- | --- | --- | --- |
+| `square` | `Int` | 8.55 ms | 8.96 ms | **not vectorised**: checked arithmetic leaves the element function early on overflow |
+| `axpy` | `Float32` | 5.07 ms | 4.95 ms | vectorised, 4 lanes, interleaved 4 |
+| `poly` | `Float64` | 6.20 ms | 7.13 ms | vectorised, 2 lanes, interleaved 4 |
+
+The two builds are within each other's spread (minimum to maximum over the seven runs: 6.4–12.8,
+4.1–6.8, 5.8–11.8 ms). Ten threads over 64 to 128 MB of elements are bound by memory bandwidth,
+not arithmetic, so the lanes LLVM made have nothing to win here. **No SIMD speed-up is claimed**;
+what is shown is that the path exists — the float loops vectorise and agree with the interpreter
+bit for bit either way (`accel_providers.rs`) — and that this workload does not profit from it.
+A compute-bound kernel, or one thread, would be the next measurement.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release

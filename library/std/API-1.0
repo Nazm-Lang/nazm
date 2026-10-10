@@ -58,6 +58,17 @@
 @std/deque pub fn deque_pop_front[T](d: Deque[T]) -> Option[T] ! {}
 @std/deque pub fn deque_pop_back[T](d: Deque[T]) -> Option[T] ! {}
 @std/deque pub fn deque_get[T](d: Deque[T], i: Int) -> Option[T] ! {}
+@std/dist pub struct NodeId
+@std/dist pub struct Msg
+@std/dist pub fn node_id(name: Str, addr: Str) -> NodeId ! {}
+@std/dist pub fn msg_encode(m: Msg) -> Bytes ! {}
+@std/dist pub fn msg_decode(payload: Bytes) -> Result[Msg, Str] ! {}
+@std/dist pub fn tcp_send_msg(s: TcpStream, m: Msg) -> Result[Int, Str] ! { io }
+@std/dist pub fn tcp_recv_msg(s: TcpStream) -> Result[Msg, Str] ! { io }
+@std/dist pub trait Transport
+@std/dist pub struct Tcp
+@std/dist pub struct Local
+@std/dist pub fn retry[T: Transport](t: T, net: NetCap, time: TimeCap, m: Msg, attempts: Int, base_ms: Int, timeout_ms: Int) -> Result[Msg, Str] ! { io }
 @std/env pub fn env_get(io: IoCap, name: Str) -> Option[Str] ! { io }
 @std/env pub fn env_vars(io: IoCap) -> Strs ! { io }
 @std/error pub struct Error

@@ -110,7 +110,7 @@ fn an_ineligible_function_is_refused_by_name_before_any_device() {
         // A zip of two is a kernel since N88; three are not.
         (
             "three",
-            "its signature must be `(Int) -> Int` or `(Int, Int) -> Int`",
+            "`(T) -> T` or `(T, T) -> T`, `T` being `Int`, `Float32` or `Float64`",
         ),
         (
             "two",
@@ -155,7 +155,7 @@ fn a_kernel_runs_on_the_gpu_and_agrees_with_the_interpreter() {
     let o = accel(d.path(), &["k.nz", "collatz", "--input", "in.txt"]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let v = report(&o);
-    assert_eq!(v["schema"], "nazm.accel/2");
+    assert_eq!(v["schema"], "nazm.accel/3");
     assert_eq!(v["kernel"]["shape"], "map");
     assert_eq!(v["reference"], "agrees with the interpreter");
     assert_eq!(v["device"]["api"], "OpenCL");

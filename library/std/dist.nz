@@ -1,0 +1,172 @@
+// `@std/dist`: the distributed foundation's library contract (Gate 3).
+//
+// Imported with `use "@std/dist";`. Not a concurrency model of its own — tasks, channels and
+// `select` are the language's — but what two processes need to ask each other things and survive
+// one of them failing:
+//
+// - a node's identity, a value a program holds and passes, never ambient (`NodeId`);
+// - a message, `Msg`, framed over `@std/binary`: four bytes of length, then its fields;
+// - a transport, a trait with a TCP implementation (`Tcp`) and an in-process one (`Local`), whose
+//   one method takes the authority it uses and a deadline;
+// - `retry`, which tries again with exponential backoff, the message's idempotency key the same
+//   each time, so a receiver that records what it applied answers a repeat without applying it
+//   twice;
+// - failure as a `Result`, never a crash.
+//
+// `docs/systems-domains.md` Part N.
+
+use "@std/binary";
+use "@std/ioerror";
+use "@std/net";
+use "@std/time";
+
+/// A node: its name, and where it listens.
+pub struct NodeId {
+    name: Str,
+    addr: Str,
+}
+
+/// One message: who sent it, its idempotency key, what kind of request or answer it is, and its
+/// body.
+pub struct Msg {
+    from: Str,
+    key: Int,
+    kind: Int,
+    body: Str,
+}
+
+/// The node `name` at `addr`.
+pub fn node_id(name: Str, addr: Str) -> NodeId ! {} {
+    NodeId(name: name, addr: addr)
+}
+
+/// `m` as one frame: its length as four little-endian bytes, then the sender, the key, the kind
+/// and the body.
+pub fn msg_encode(m: Msg) -> Bytes ! {} {
+    let body = binary_writer();
+    binary_put_str(body, m.from);
+    binary_put_i64_le(body, m.key);
+    binary_put_i64_le(body, m.kind);
+    binary_put_str(body, m.body);
+    let payload = binary_finish(body);
+    let w = binary_writer();
+    binary_put_u32_le(w, UInt32(bytes_len(payload)));
+    binary_put_raw(w, payload);
+    binary_finish(w)
+}
+
+/// The message a frame's payload — the bytes after its length — holds.
+pub fn msg_decode(payload: Bytes) -> Result[Msg, Str] ! {} {
+    let r = binary_reader(payload);
+    let from = binary_get_str(r)?;
+    let key = binary_get_i64_le(r)?;
+    let kind = binary_get_i64_le(r)?;
+    let body = binary_get_str(r)?;
+    if binary_remaining(r) != 0 {
+        return Result[Msg, Str].Err(error: "a frame holds more than its message");
+    }
+    Result[Msg, Str].Ok(value: Msg(from: from, key: key, kind: kind, body: body))
+}
+
+/// One frame written to `s`.
+pub fn tcp_send_msg(s: TcpStream, m: Msg) -> Result[Int, Str] ! { io } {
+    match tcp_write(s, msg_encode(m)) {
+        Result.Ok(value: n) => Result[Int, Str].Ok(value: n),
+        Result.Err(error: e) => Result[Int, Str].Err(error: io_error_show(e)),
+    }
+}
+
+/// One frame read from `s`: at most a mebibyte, refused before it is read when it says it is more.
+pub fn tcp_recv_msg(s: TcpStream) -> Result[Msg, Str] ! { io } {
+    let len = bytes_new(4);
+    match tcp_read_exact(s, len) {
+        Result.Ok(value: n) => {},
+        Result.Err(error: e) => { return Result[Msg, Str].Err(error: io_error_show(e)); },
+    };
+    let n = Int(bytes_read_le[UInt32](len, 0));
+    if n > 1048576 {
+        return Result[Msg, Str].Err(error: "a frame longer than a mebibyte");
+    }
+    let payload = bytes_new(n);
+    match tcp_read_exact(s, payload) {
+        Result.Ok(value: got) => {},
+        Result.Err(error: e) => { return Result[Msg, Str].Err(error: io_error_show(e)); },
+    };
+    msg_decode(payload)
+}
+
+/// A way to ask a node something: `m` there, its answer back, within `timeout_ms`, or why not. The
+/// authority it may use is handed to it: the network's and the clock's.
+pub trait Transport {
+    fn ask(self: Self, net: NetCap, time: TimeCap, m: Msg, timeout_ms: Int) -> Result[Msg, Str] ! { io };
+}
+
+/// Over TCP, to `to`: one connection a request.
+pub struct Tcp {
+    to: NodeId,
+}
+
+impl Transport for Tcp {
+    fn ask(self: Tcp, net: NetCap, time: TimeCap, m: Msg, timeout_ms: Int) -> Result[Msg, Str] ! { io } {
+        let s = match tcp_connect(net, self.to.addr, timeout_ms) {
+            Result.Ok(value: s) => s,
+            Result.Err(error: e) => { return Result[Msg, Str].Err(error: io_error_show(e)); },
+        };
+        tcp_set_timeout(s, timeout_ms);
+        let sent = tcp_send_msg(s, m);
+        let answer = match sent {
+            Result.Ok(value: n) => tcp_recv_msg(s),
+            Result.Err(error: e) => Result[Msg, Str].Err(error: e),
+        };
+        tcp_close(s);
+        answer
+    }
+}
+
+/// In process: requests on one channel, answers on another, to a task that serves them.
+pub struct Local {
+    requests: Chan[Msg],
+    answers: Chan[Msg],
+}
+
+impl Transport for Local {
+    fn ask(self: Local, net: NetCap, time: TimeCap, m: Msg, timeout_ms: Int) -> Result[Msg, Str] ! { io } {
+        if !chan_send_of(self.requests, m) {
+            return Result[Msg, Str].Err(error: "the node has stopped");
+        }
+        let cs = vec_new[Chan[Msg]]();
+        vec_push(cs, self.answers);
+        let got = vec_new[Msg]();
+        let i = chan_select_until(cs, got, timeout_ms);
+        if i == 0 && vec_len(got) > 0 {
+            Result[Msg, Str].Ok(value: vec_pop(got))
+        } else {
+            if i == -2 {
+                Result[Msg, Str].Err(error: "timed out")
+            } else {
+                Result[Msg, Str].Err(error: "the node has stopped")
+            }
+        }
+    }
+}
+
+/// `m` asked through `t` until it is answered, at most `attempts` times, waiting `base_ms`, then
+/// twice that, and so on, between tries. The message — its idempotency key above all — is the
+/// same each time. The last failure, if every try failed.
+pub fn retry[T: Transport](t: T, net: NetCap, time: TimeCap, m: Msg, attempts: Int, base_ms: Int, timeout_ms: Int) -> Result[Msg, Str] ! { io } {
+    let mut last = "no attempt";
+    let mut wait = base_ms;
+    let mut i = 0;
+    while i < attempts {
+        match t.ask(net, time, m, timeout_ms) {
+            Result.Ok(value: a) => { return Result[Msg, Str].Ok(value: a); },
+            Result.Err(error: e) => { last = e; },
+        };
+        i = i + 1;
+        if i < attempts {
+            time_sleep(time, time_duration_ms(wait));
+            wait = wait * 2;
+        }
+    }
+    Result[Msg, Str].Err(error: str_concat(str_concat(str_concat("no answer after ", int_to_str(attempts)), " tries: "), last))
+}

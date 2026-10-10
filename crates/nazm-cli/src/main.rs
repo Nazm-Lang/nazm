@@ -330,6 +330,8 @@ fn dispatch(command: Command) -> ExitCode {
             reduce,
             no_check,
             print_kernel,
+            provider,
+            scalar,
         } => accel::run(
             &file,
             &kernel,
@@ -337,6 +339,8 @@ fn dispatch(command: Command) -> ExitCode {
             reduce.as_deref().and_then(accel::Reduce::by_name),
             !no_check,
             print_kernel,
+            accel::Choice::by_name(&provider),
+            scalar,
         ),
         Command::Comptime {
             file,
