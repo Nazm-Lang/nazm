@@ -68,6 +68,10 @@ pub enum Os {
     /// WASI preview 1 (Gate 3, `docs/spec.md` *WASI*): WebAssembly whose outside is the
     /// `wasi_snapshot_preview1` imports, with a heap and no threads.
     Wasi,
+    /// Android (Gate 3, `docs/spec.md` *Mobile*): Linux's kernel with Bionic, built with the NDK.
+    Android,
+    /// iOS (Gate 3, `docs/spec.md` *Mobile*): Darwin, built against Xcode's iOS SDK.
+    Ios,
 }
 
 /// A target, by its explicit triple.
@@ -96,6 +100,8 @@ impl Target {
             "aarch64-unknown-none" => (Arch::Aarch64, Os::None),
             "wasm32-unknown-unknown" => (Arch::Wasm32, Os::None),
             "wasm32-wasip1" => (Arch::Wasm32, Os::Wasi),
+            "aarch64-linux-android" => (Arch::Aarch64, Os::Android),
+            "aarch64-apple-ios" => (Arch::Aarch64, Os::Ios),
             "riscv64gc-unknown-none-elf" => (Arch::Riscv64, Os::None),
             "thumbv7m-none-eabi" => (Arch::Thumbv7m, Os::None),
             other => {
@@ -105,7 +111,8 @@ impl Target {
                      x86_64-apple-darwin, x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu and, \
                      freestanding, \
                      aarch64-unknown-none, riscv64gc-unknown-none-elf, thumbv7m-none-eabi and \
-                     wasm32-unknown-unknown, and WebAssembly with WASI, wasm32-wasip1"
+                     wasm32-unknown-unknown, WebAssembly with WASI, wasm32-wasip1, and the mobile \
+                     targets aarch64-linux-android and aarch64-apple-ios"
                 ))
             }
         };
@@ -455,7 +462,8 @@ mod tests {
 }
 
 /// What this compiler has shown of a target under one backend (N95, `docs/architecture.md` §7.96).
-/// A cell is run, run under Wine, compiled only, or refused; there is no fifth answer.
+/// A cell is run, run under Wine, run on a Linux kernel as Bionic, compiled only, or refused;
+/// there is no sixth answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Support {
     /// Programs built for it ran — on the host, under Rosetta, in a container or an emulator —
@@ -465,6 +473,11 @@ pub enum Support {
     /// interpreter (Gate 3, `docs/systems-domains.md` Part A-W). Never evidence from a Windows
     /// host, and never reported as plain run-verified.
     Wine(&'static str),
+    /// Programs built for Android ran as static Bionic executables on an aarch64 Linux kernel in a
+    /// container and agreed with what they should print (Gate 3, `docs/spec.md` *Mobile*): Android's
+    /// C library on Linux, never an Android device or emulator, and never reported as plain
+    /// run-verified.
+    Bionic(&'static str),
     /// Its objects are built and read from their headers; nothing built for it has run here.
     /// The reason, and the test that reads the objects.
     Compile(&'static str),
@@ -478,6 +491,7 @@ impl Support {
         match self {
             Self::Run(_) => "run-verified",
             Self::Wine(_) => "run-verified under Wine",
+            Self::Bionic(_) => "run-verified on a Linux kernel",
             Self::Compile(_) => "compile-only",
             Self::Unsupported(_) => "unsupported",
         }
@@ -486,7 +500,11 @@ impl Support {
     #[must_use]
     pub const fn evidence(self) -> &'static str {
         match self {
-            Self::Run(e) | Self::Wine(e) | Self::Compile(e) | Self::Unsupported(e) => e,
+            Self::Run(e)
+            | Self::Wine(e)
+            | Self::Bionic(e)
+            | Self::Compile(e)
+            | Self::Unsupported(e) => e,
         }
     }
 }
@@ -600,7 +618,29 @@ pub const SUPPORT: &[Cell] = &[
         cranelift: Support::Unsupported("this Cranelift is built without a WebAssembly backend"),
         debugger: "DWARF sections present; a debugger not exercised",
     },
+    Cell {
+        triple: "aarch64-linux-android",
+        llvm_cpu: "generic",
+        cranelift_cpu: "none",
+        llvm: Support::Bionic(
+            "a_static_bionic_executable_runs_a_nazm_library_and_a_whole_program_on_linux",
+        ),
+        cranelift: NO_CRANELIFT_MOBILE,
+        debugger: "not exercised",
+    },
+    Cell {
+        triple: "aarch64-apple-ios",
+        llvm_cpu: "apple-a7",
+        cranelift_cpu: "none",
+        llvm: Support::Compile("an_ios_archive_and_program_link_against_the_ios_sdk"),
+        cranelift: NO_CRANELIFT_MOBILE,
+        debugger: "not exercised",
+    },
 ];
+
+const NO_CRANELIFT_MOBILE: Support = Support::Unsupported(
+    "the mobile targets are the LLVM backend's: Cranelift is not exercised for them",
+);
 
 /// What is refused by decision rather than by what this machine lacks, and why.
 pub const NON_GOALS: &[(&str, &str)] = &[

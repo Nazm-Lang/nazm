@@ -108,6 +108,14 @@ const fn facts(target: SwitchTarget) -> Facts {
         },
         // Never read: Windows has its own unit, `windows_os` (Gate 3).
         SwitchTarget::X86_64Windows => LINUX,
+        // Bionic (Gate 3): Linux's AArch64 layouts and numbers, and the XSI `strerror_r` under
+        // its own name, Bionic having no glibc `__xpg_strerror_r`.
+        SwitchTarget::Aarch64Android => Facts {
+            mode_at: 16,
+            stat_size: 128,
+            strerror_r: "strerror_r",
+            ..LINUX
+        },
     }
 }
 

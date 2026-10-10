@@ -324,7 +324,7 @@ pub(crate) fn run(
                         "runtime_bytes": compiled.runtime.len(),
                         "abi": abi_doc,
                         "storage": storage_doc,
-                        "gas": "gas_bound is a static upper bound on an entrypoint's execution gas, intrinsic and calldata costs apart; null where a loop leaves it open",
+                        "gas": "gas_bound is a static upper bound on an entrypoint's execution gas, intrinsic and calldata costs apart, through a loop in the counted form by its turns; null where a loop's turns are not established",
                     }),
                     None,
                 ));

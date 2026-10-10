@@ -47,6 +47,10 @@ pub fn charged(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\
     if caller != 1 || s.alice < amount + f { return Result[State, Int].Err(error: 2); }\n\
     Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount - f, bob: s.bob + amount + f, supply: s.supply, paused: s.paused))\n\
 }\n\
+fn bonus() -> Int ! {} { let mut b = 0; let mut i = 0; while i < 8 { b = b + i; i = i + 1; } b }\n\
+pub fn rebate(s: State, caller: Int) -> Result[State, Int] ! {} {\n\
+    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob + bonus(), supply: s.supply, paused: s.paused))\n\
+}\n\
 pub fn arith(s: State, caller: Int, a: Int, b: Int) -> Result[State, Int] ! {} {\n\
     let q = a / b;\n\
     let r = a % b;\n\
@@ -59,7 +63,7 @@ fn main() -> Int ! {} { 0 }\n";
 /// division by zero, `i64::MIN / -1`, truncating division and the remainder's sign, and bad input.
 const TXS: &str = "1 transfer 30\n2 transfer 50\n2 transfer 10\n2 pause 1\n1 pause 1\n1 transfer 5\n1 pause 0\n\
 1 transfer 9223372036854775807\n2 airdrop 7\n1 transfer -1\n1 charged 25\n1 arith 7 2\n1 arith -7 2\n1 arith 7 -2\n\
-1 arith 5 0\n1 arith -9223372036854775808 -1\n1 arith -9223372036854775808 1\n2 transfer 1000000\n1 nothing 1\n";
+1 arith 5 0\n1 arith -9223372036854775808 -1\n1 arith -9223372036854775808 1\n2 transfer 1000000\n1 nothing 1\n1 rebate\n";
 
 fn setup() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
@@ -115,14 +119,17 @@ fn the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice() {
         .iter()
         .map(|e| e["selector"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(selectors.len(), 5);
+    assert_eq!(selectors.len(), 6);
     // Pinned against `eth_hash`'s keccak in `nazm-evm:n70`.
     assert_eq!(e("transfer")["selector"], "10022b66");
     assert_eq!(e("arith")["selector"], "5faab410");
     assert!(selectors.iter().all(|s| s.len() == 8));
     // Loop-free entrypoints have a bound; one that calls a helper with a loop has none.
     assert!(e("transfer")["gas_bound"].as_u64().unwrap() > 20_000);
+    // A loop whose bound is a parameter leaves the bound open; one in the counted form (Gate 3)
+    // states it: eight turns of its condition and body, and the last condition.
     assert!(e("charged")["gas_bound"].is_null());
+    assert!(e("rebate")["gas_bound"].as_u64().unwrap() > 0);
     let storage: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(d.path().join("out/storage.json")).unwrap())
             .unwrap();

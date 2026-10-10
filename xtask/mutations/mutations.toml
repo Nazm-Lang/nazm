@@ -11858,8 +11858,8 @@ killers = [{ package = "nazm-cli", test = "evm", name = "the_backend_writes_sele
 name = "n70-a-loop-has-a-gas-bound"
 why = "a loop does not open the bound, so an entrypoint whose gas depends on its input states one"
 file = "crates/nazm-service/src/evm.rs"
-find = '                self.bounded = false;'
-replace = '                self.bounded = true;'
+find = "                    None => self.bounded = false,"
+replace = "                    None => self.bounded = true,"
 killers = [{ package = "nazm-cli", test = "evm", name = "the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice" }]
 
 [[mutation]]
@@ -13622,7 +13622,7 @@ why = "nazm inspect prints no support matrix, so the documented one is held to n
 file = "crates/nazm-cli/src/inspect.rs"
 find = "            \"support\": nazm_lir::backend::SUPPORT.iter().map(|c| serde_json::json!({"
 replace = "            \"support\": nazm_lir::backend::SUPPORT.iter().take(0).map(|c| serde_json::json!({"
-killers = [{ package = "nazm-cli", test = "platform_matrix", name = "every_accepted_target_has_a_row_and_every_cell_one_of_four_answers" }]
+killers = [{ package = "nazm-cli", test = "platform_matrix", name = "every_accepted_target_has_a_row_and_every_cell_one_of_five_answers" }]
 
 [[mutation]]
 name = "n97-the-model-ignores-return"
@@ -14767,8 +14767,8 @@ killers = [{ package = "nazm-cli", test = "files", name = "the_library_opens_wri
 name = "g2-linux-stat-reads-the-x86-mode"
 why = "on aarch64 Linux `struct stat`'s mode is read from x86-64's offset, so a file's kind and permissions are wrong there"
 file = "crates/nazm-runtime/src/platform.rs"
-find = "            mode_at: 16,"
-replace = "            mode_at: 24,"
+find = "        SwitchTarget::Aarch64Linux => Facts {\n            mode_at: 16,"
+replace = "        SwitchTarget::Aarch64Linux => Facts {\n            mode_at: 24,"
 killers = [{ package = "nazm-cli", test = "files", name = "the_library_opens_writes_seeks_lists_renames_and_replaces_alike_everywhere" }]
 
 [[mutation]]
@@ -15919,3 +15919,65 @@ file = "crates/nazm-cli/src/build/lower.rs"
 find = "            if target.is_wasi() {\n                eprintln!("
 replace = "            if false {\n                eprintln!("
 killers = [{ package = "nazm-cli", test = "wasi", name = "what_wasi_preview_1_has_not_got_is_refused_by_name" }]
+
+# --- Gate 3K: the mobile targets (systems-domains.md Parts P, Q) ---
+# That an Android program runs as static Bionic on a Linux kernel, that iOS links against its SDK,
+# and that the Cocoa window runs on its Nazm library, is mobile.rs's ignored and gated tests.
+
+[[mutation]]
+name = "g3-there-is-no-android-target"
+why = "aarch64-linux-android is not a target, so no library for an Android host can be built"
+file = "crates/nazm-lir/src/backend.rs"
+find = "            \"aarch64-linux-android\" => (Arch::Aarch64, Os::Android),\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "mobile", name = "both_mobile_targets_build_objects_for_their_toolchains" }]
+
+[[mutation]]
+name = "g3-android-errno-is-glibcs"
+why = "Android's errno is read through glibc's __errno_location, which Bionic has not got, so a file error cannot be told"
+file = "crates/nazm-runtime/src/switch.rs"
+find = "        SwitchTarget::Aarch64Android => \"__errno\","
+replace = "        SwitchTarget::Aarch64Android => \"__errno_location\","
+killers = [{ package = "nazm-cli", test = "mobile", name = "both_mobile_targets_build_objects_for_their_toolchains" }]
+
+[[mutation]]
+name = "g3-android-strerror-is-glibcs"
+why = "Android's error text is asked of glibc's __xpg_strerror_r, which Bionic has not got"
+file = "crates/nazm-runtime/src/platform.rs"
+find = "            strerror_r: \"strerror_r\",\n            ..LINUX"
+replace = "            strerror_r: \"__xpg_strerror_r\",\n            ..LINUX"
+killers = [{ package = "nazm-cli", test = "mobile", name = "both_mobile_targets_build_objects_for_their_toolchains" }]
+
+[[mutation]]
+name = "g3-cranelift-builds-mobile"
+why = "Cranelift is let build a mobile target nothing has exercised it on"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "            nazm_lir::backend::Os::Android | nazm_lir::backend::Os::Ios\n        )\n    {"
+replace = "            nazm_lir::backend::Os::Android | nazm_lir::backend::Os::Ios\n        )\n        && false\n    {"
+killers = [{ package = "nazm-cli", test = "mobile", name = "both_mobile_targets_build_objects_for_their_toolchains" }]
+
+# --- Gate 3L: web3 gas bounds and requirements traceability (systems-domains.md Parts R, S) ---
+
+[[mutation]]
+name = "g3-a-counted-loop-leaves-gas-open"
+why = "a loop in the counted form leaves an entrypoint's gas bound open, though its turns are established"
+file = "crates/nazm-service/src/evm.rs"
+find = "                    .find(|(span, _)| span == at)"
+replace = "                    .find(|(span, _)| span == at && false)"
+killers = [{ package = "nazm-cli", test = "evm", name = "the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice" }]
+
+[[mutation]]
+name = "g3-a-failing-test-traces"
+why = "a requirement whose test fails is traced as if it passed"
+file = "crates/nazm-cli/src/trace.rs"
+find = "                Some(false) => {\n                    broken.push(format!(\"{}: the test `{name}` fails\", r.id));"
+replace = "                Some(false) => {"
+killers = [{ package = "nazm-cli", test = "trace", name = "a_broken_link_is_reported_by_name_and_fails_the_trace" }]
+
+[[mutation]]
+name = "g3-an-obligation-belongs-to-every-function"
+why = "a definition's obligations are every function's, so a trace credits it with what it does not owe"
+file = "crates/nazm-cli/src/trace.rs"
+find = "                    census.iter().filter(|o| o.def == f.def).collect();"
+replace = "                    census.iter().collect();"
+killers = [{ package = "nazm-cli", test = "trace", name = "each_requirement_reaches_its_definition_obligations_and_test" }]
