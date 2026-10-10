@@ -339,6 +339,7 @@ fn emit_artefacts(
         let mut handlers = interrupt_handlers(native, &board)?;
         // The fixed-priority scheduler's tasks (Gate 3), which own the board's timer.
         let tasks = board_tasks(native, &board, &mut handlers)?;
+        board_watchdog(&out, &board, &tasks)?;
         // The failure hook (Gate 3): the one function `@on_failure` marks, by its symbol.
         let on_failure = native
             .program
@@ -560,6 +561,42 @@ fn board_tasks(
             })
         })
         .collect())
+}
+
+/// The board's watchdog and its feeds (Gate 3, `docs/spec.md`, *Boards*): a program that feeds a
+/// watchdog needs a board with one, and a watchdog needs the scheduler, whose ticks it counts and
+/// whose tasks feed it. `N0626`, naming the board.
+fn board_watchdog(
+    units: &[Artefact],
+    board: &nazm_lir::runtime::board::Board,
+    tasks: &[nazm_lir::runtime::board::Task],
+) -> Result<(), Vec<nazm_diag::Diagnostic>> {
+    let feeds = units.iter().any(|a| match &a.code {
+        nazm_lir::backend::Code::Llvm(ir) => ir
+            .lines()
+            .any(|l| !l.starts_with("declare ") && l.contains("@nz.watchdog_feed(")),
+        nazm_lir::backend::Code::Object(_) => false,
+    });
+    let why = match (board.watchdog, feeds, tasks.is_empty()) {
+        (None, true, _) => format!(
+            "this program feeds a watchdog, and the board `{}` has none",
+            board.name
+        ),
+        (Some(_), _, true) => format!(
+            "the board `{}` has a watchdog, and this program no `@task` to feed it",
+            board.name
+        ),
+        _ => return Ok(()),
+    };
+    Err(vec![nazm_diag::Diagnostic::error(
+        nazm_diag::codes::BOARD_MANIFEST,
+        nazm_span::Span::synthetic(),
+        why,
+    )
+    .help(
+        "a watchdog is the manifest's `[watchdog] ticks = N`, counted on the scheduler's ticks: \
+         give the board one, and feed it from a `@task` with `watchdog_feed()`",
+    )])
 }
 
 /// What a Cortex-M3 cannot do, at the first place the program asks it (Gate 3, `docs/spec.md`,

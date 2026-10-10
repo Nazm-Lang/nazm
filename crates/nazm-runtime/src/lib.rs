@@ -250,8 +250,10 @@ pub fn escape(s: &str) -> String {
 /// a board's `nz.report` calls the entry's `nz_board_on_failure` — a weak reference, absent in a
 /// library — with the failure's number before stopping the machine. 25 is Gate 3's Cortex-M
 /// board: every board's entry calls `nz.uart_init` before `main`, and a Thumb board's runtime
-/// defines the 64-bit atomics and division ARMv7-M has no instruction for.
-pub const RUNTIME_ABI_REVISION: u32 = 25;
+/// defines the 64-bit atomics and division ARMv7-M has no instruction for. 26 is Gate 3's
+/// watchdog: `nz.watchdog_feed` and its two counters, which a board's scheduler arms where its
+/// manifest has a `[watchdog]`.
+pub const RUNTIME_ABI_REVISION: u32 = 26;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -414,6 +416,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.mmio_write16", [I64, I64], Some(Word::I64), Base, "writes a 16-bit device register; takes nothing (N86)"),
     import!("nz.mmio_read64", [I64], Some(Word::I64), Base, "reads a 64-bit device register; takes nothing (Gate 3)"),
     import!("nz.mmio_write64", [I64, I64], Some(Word::I64), Base, "writes a 64-bit device register; takes nothing (Gate 3)"),
+    import!("nz.watchdog_feed", [], Some(Word::I64), Base, "re-arms the board's watchdog; takes nothing (Gate 3)"),
     import!("nz.cstr_has_nul", [Ptr, I64], Some(Word::Bit), Strings, "borrows the bytes; whether they hold a NUL (N55)"),
     import!("nz.cstr_borrow", [Ptr, I64], Some(Word::Ptr), Strings, "borrows the bytes; a NUL-terminated copy the caller owns and frees, or null (N55)"),
     import!("nz.cstr_len", [Ptr], Some(Word::I64), Strings, "borrows the C string; its length up to the NUL (N85)"),
@@ -640,6 +643,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.mmio_write16", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 16-bit write of a device register (N86); reached only in a freestanding image", "none"),
     rt!("nz.mmio_read64", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 64-bit read of a device register (Gate 3); reached only in a freestanding image", "none"),
     rt!("nz.mmio_write64", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 64-bit write of a device register (Gate 3); reached only in a freestanding image", "none"),
+    rt!("nz.watchdog_feed", "i64" () "", true, Base, "", Never, Owner, "re-arms the board's watchdog to what its scheduler armed (Gate 3); reached only in a freestanding image whose board has one", "none"),
     rt!("nz.cstr_has_nul", "i1" ("ptr", "i64") "", true, Strings, "", Status, Any, "whether a Str argument to C holds a NUL byte (N55)", "borrows the bytes"),
     rt!("nz.cstr_borrow", "ptr" ("ptr", "i64") "", true, Strings, "", Null, Any, "a Str argument as a C string, for one foreign call (N55)", "borrows the bytes; the copy is the caller's to free"),
     rt!("nz.cstr_len", "i64" ("ptr") "", true, Strings, "", Never, Any, "the length of a C string a foreign function returned (N85)", "borrows the C string"),
@@ -795,6 +799,8 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.net_state", ty: "i64", thread_local: false, writers: "`nz.net_start`, atomically, once (Gate 2)" },
     RuntimeGlobal { symbol: "nz.net_poller", ty: "i64", thread_local: false, writers: "`nz.net_start`, once, before the reactor runs (Gate 2)" },
     RuntimeGlobal { symbol: "nz.net_thread", ty: "i64", thread_local: false, writers: "`pthread_create`, once (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.wd_reload", ty: "i64", thread_local: false, writers: "a board's scheduler, once, as it starts (Gate 3)" },
+    RuntimeGlobal { symbol: "nz.wd_left", ty: "i64", thread_local: false, writers: "`nz.watchdog_feed`, and a board's timer tick, atomically (Gate 3)" },
     RuntimeGlobal {
         symbol: "nz.failed",
         ty: "i1",
@@ -1165,10 +1171,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_five_and_reaches_the_system_only_through_its_platform_layer()
-    {
+    fn the_runtime_is_revision_twenty_six_and_reaches_the_system_only_through_its_platform_layer() {
         // Gate 3's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 25);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 26);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));

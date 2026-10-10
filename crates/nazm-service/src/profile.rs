@@ -67,11 +67,19 @@ pub enum Rule {
     /// The image's stack has a static bound (Gate 3): no call cycle and no call through a
     /// function value, whose callee the bound could not follow.
     BoundedStack,
+    /// No transcendental built-in (Gate 3): `float_sin` and its kin answer what the host's library
+    /// answers, which may differ between hosts.
+    NoFloatNondeterminism,
+    /// A `@task` feeds the board's watchdog (Gate 3): the control loop proves itself alive.
+    Watchdog,
+    /// Every function that changes a state records it (Gate 3): it calls `@std/audit`'s
+    /// `audit_transition` itself.
+    Audit,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 22] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -91,6 +99,9 @@ impl Rule {
         Self::NoUnknownCalls,
         Self::NoHeap,
         Self::BoundedStack,
+        Self::NoFloatNondeterminism,
+        Self::Watchdog,
+        Self::Audit,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -116,6 +127,9 @@ impl Rule {
             Self::NoUnknownCalls => "no-unknown-calls",
             Self::NoHeap => "no-heap",
             Self::BoundedStack => "bounded-stack",
+            Self::NoFloatNondeterminism => "no-float-nondeterminism",
+            Self::Watchdog => "watchdog",
+            Self::Audit => "audit",
         }
     }
 
@@ -140,7 +154,10 @@ impl Rule {
             | Self::CheckedPaths
             | Self::NoUnknownCalls
             | Self::NoHeap
-            | Self::BoundedStack => None,
+            | Self::BoundedStack
+            | Self::NoFloatNondeterminism
+            | Self::Watchdog
+            | Self::Audit => None,
         }
     }
 }
@@ -166,10 +183,24 @@ pub enum Profile {
     /// A kernel-style image (Gate 3, `docs/spec.md`, *Boards*): no tasks, no heap, no C, nothing
     /// whose latency is another task's.
     Kernel,
+    /// A robot's control loop (Gate 3): `realtime`, and its device authority the one it is handed.
+    Robotics,
+    /// An ECU's periodic control (Gate 3): `realtime` and `critical`.
+    Automotive,
+    /// A flight controller (Gate 3): `embedded`, `realtime`, `critical`, and no float result that is
+    /// the host library's.
+    Aerospace,
+    /// High assurance (Gate 3): `critical`, with the stack, the loops and the memory bounded.
+    Assurance,
+    /// An industrial controller (Gate 3): `realtime` and `critical`, its loop feeding a watchdog.
+    Industrial,
+    /// A medical-device-style controller (Gate 3): `realtime` and `critical`, every transition
+    /// recorded.
+    Medical,
 }
 
 impl Profile {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 15] = [
         Self::General,
         Self::Embedded,
         Self::Critical,
@@ -179,6 +210,12 @@ impl Profile {
         Self::Accounts,
         Self::Authority,
         Self::Kernel,
+        Self::Robotics,
+        Self::Automotive,
+        Self::Aerospace,
+        Self::Assurance,
+        Self::Industrial,
+        Self::Medical,
     ];
 
     #[must_use]
@@ -193,6 +230,12 @@ impl Profile {
             Self::Accounts => "accounts",
             Self::Authority => "authority",
             Self::Kernel => "kernel",
+            Self::Robotics => "robotics",
+            Self::Automotive => "automotive",
+            Self::Aerospace => "aerospace",
+            Self::Assurance => "assurance",
+            Self::Industrial => "industrial",
+            Self::Medical => "medical",
         }
     }
 
@@ -267,6 +310,103 @@ impl Profile {
                 Rule::NoBlocking,
                 Rule::NoHeap,
             ],
+            Self::Robotics => &[
+                Rule::NoIo,
+                Rule::NoSpawn,
+                Rule::BoundedAllocation,
+                Rule::NoAmbientTime,
+                Rule::NoRecursion,
+                Rule::NoBlocking,
+                Rule::BoundedLoops,
+                Rule::NoHeap,
+                Rule::BoundedStack,
+                Rule::ExplicitAuthority,
+            ],
+            Self::Automotive => &[
+                Rule::DeclaredEffects,
+                Rule::NoSpawn,
+                Rule::NoForeign,
+                Rule::LockedBuild,
+                Rule::NoDeclassification,
+                Rule::NoAmbientTime,
+                Rule::NoSelect,
+                Rule::NoUnknownCalls,
+                Rule::NoIo,
+                Rule::BoundedAllocation,
+                Rule::NoRecursion,
+                Rule::NoBlocking,
+                Rule::BoundedLoops,
+                Rule::NoHeap,
+                Rule::BoundedStack,
+            ],
+            Self::Aerospace => &[
+                Rule::DeclaredEffects,
+                Rule::NoSpawn,
+                Rule::NoForeign,
+                Rule::LockedBuild,
+                Rule::NoDeclassification,
+                Rule::NoAmbientTime,
+                Rule::NoSelect,
+                Rule::NoUnknownCalls,
+                Rule::NoIo,
+                Rule::BoundedAllocation,
+                Rule::NoRecursion,
+                Rule::NoBlocking,
+                Rule::BoundedLoops,
+                Rule::NoHeap,
+                Rule::BoundedStack,
+                Rule::NoFloatNondeterminism,
+            ],
+            Self::Industrial => &[
+                Rule::DeclaredEffects,
+                Rule::NoSpawn,
+                Rule::NoForeign,
+                Rule::LockedBuild,
+                Rule::NoDeclassification,
+                Rule::NoAmbientTime,
+                Rule::NoSelect,
+                Rule::NoUnknownCalls,
+                Rule::NoIo,
+                Rule::BoundedAllocation,
+                Rule::NoRecursion,
+                Rule::NoBlocking,
+                Rule::BoundedLoops,
+                Rule::NoHeap,
+                Rule::BoundedStack,
+                Rule::Watchdog,
+            ],
+            Self::Medical => &[
+                Rule::DeclaredEffects,
+                Rule::NoSpawn,
+                Rule::NoForeign,
+                Rule::LockedBuild,
+                Rule::NoDeclassification,
+                Rule::NoAmbientTime,
+                Rule::NoSelect,
+                Rule::NoUnknownCalls,
+                Rule::NoIo,
+                Rule::BoundedAllocation,
+                Rule::NoRecursion,
+                Rule::NoBlocking,
+                Rule::BoundedLoops,
+                Rule::NoHeap,
+                Rule::BoundedStack,
+                Rule::Audit,
+            ],
+            Self::Assurance => &[
+                Rule::DeclaredEffects,
+                Rule::NoSpawn,
+                Rule::NoForeign,
+                Rule::LockedBuild,
+                Rule::NoDeclassification,
+                Rule::NoAmbientTime,
+                Rule::NoSelect,
+                Rule::NoUnknownCalls,
+                Rule::NoRecursion,
+                Rule::BoundedLoops,
+                Rule::BoundedStack,
+                Rule::NoHeap,
+            ],
         }
     }
 }
@@ -305,6 +445,8 @@ pub struct MirFacts {
     pub unsigned_writes: Vec<Witness>,
     /// Every allocation site, bounded or not (Gate 3): what `no-heap` refuses.
     pub allocations: Vec<Witness>,
+    /// The `@task`s that feed the board's watchdog themselves (Gate 3): what `watchdog` asks for.
+    pub feeding_tasks: Vec<String>,
 }
 
 /// The static bounds a program's facts establish (N63, §7.65): counts and bounds, never a
@@ -479,6 +621,40 @@ pub fn evaluate(
                         note: "the program's resource facts were not computed".to_owned(),
                     }]
                 }
+            } else if rule == Rule::Watchdog {
+                match facts {
+                    None => {
+                        unknown = true;
+                        vec![Witness {
+                            span: at_main(),
+                            note: "the program's tasks were not computed".to_owned(),
+                        }]
+                    }
+                    Some(f) if f.feeding_tasks.is_empty() => vec![Witness {
+                        span: at_main(),
+                        note: "no `@task` of this program calls `watchdog_feed()`".to_owned(),
+                    }],
+                    Some(_) => Vec::new(),
+                }
+            } else if rule == Rule::Audit {
+                unaudited(graph, res)
+            } else if rule == Rule::NoFloatNondeterminism {
+                res.functions()
+                    .iter()
+                    .flat_map(|f| f.call_sites.iter())
+                    .filter(|s| {
+                        matches!(
+                            s.callee,
+                            nazm_core::sema::Callee::Builtin(i) if host_libm(i)
+                        )
+                    })
+                    .map(|s| Witness {
+                        span: s.span,
+                        note: "this answers what the host's floating-point library answers, which \
+                               another host may not"
+                            .to_owned(),
+                    })
+                    .collect()
             } else if rule == Rule::BoundedStack {
                 if let Some(f) = facts {
                     f.recursive.iter().chain(&f.indirect).cloned().collect()
@@ -718,6 +894,67 @@ const fn blocks(i: nazm_core::sema::Intrinsic) -> bool {
     )
 }
 
+/// Each state change of a function that records none (Gate 3, `audit`): an `atomic_store`,
+/// `atomic_swap` or `atomic_compare_swap` in a function of the program — not the toolchain's —
+/// that calls `@std/audit`'s `audit_transition` nowhere itself.
+fn unaudited(graph: &ModuleGraph, res: &Resolution) -> Vec<Witness> {
+    let audit = nazm_core::sema::ModuleKey::std("audit");
+    let records = |site: &nazm_core::sema::resolve::CallSite| match site.callee {
+        nazm_core::sema::Callee::Function(g) => res
+            .function(g)
+            .is_some_and(|d| d.name == "audit_transition" && graph.key(d.module) == Some(&audit)),
+        _ => false,
+    };
+    res.functions()
+        .iter()
+        .filter(|f| {
+            !graph
+                .key(f.module)
+                .is_some_and(|k| k.is_prelude() || k.is_std())
+        })
+        .filter(|f| !f.call_sites.iter().any(records))
+        .flat_map(|f| {
+            f.call_sites
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.callee,
+                        nazm_core::sema::Callee::Builtin(
+                            nazm_core::sema::Intrinsic::AtomicStore
+                                | nazm_core::sema::Intrinsic::AtomicSwap
+                                | nazm_core::sema::Intrinsic::AtomicCompareSwap
+                        )
+                    )
+                })
+                .map(|s| Witness {
+                    span: s.span,
+                    note: format!(
+                        "`{}` changes a state here and records no transition",
+                        f.name
+                    ),
+                })
+        })
+        .collect()
+}
+
+/// Whether `i` answers what the host's floating-point library answers (Gate 3,
+/// `no-float-nondeterminism`): the transcendental built-ins, which no standard rounds correctly.
+const fn host_libm(i: nazm_core::sema::Intrinsic) -> bool {
+    use nazm_core::sema::Intrinsic as I;
+    matches!(
+        i,
+        I::FloatSin
+            | I::FloatCos
+            | I::FloatTan
+            | I::FloatExp
+            | I::FloatLn
+            | I::FloatLog2
+            | I::FloatLog10
+            | I::FloatPow
+            | I::FloatAtan2
+    )
+}
+
 /// One diagnostic per failed rule: the profiles in force, the rule, and its witnesses.
 #[must_use]
 pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
@@ -773,6 +1010,9 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::ExplicitAuthority => "take the capability as a parameter and pass it from `main`: under this profile a function holds only what its scope holds (`nazm inspect` shows each function's `inherits`)".to_owned(),
                 Rule::SignedWrites => "compare `caller` with the state's owner, or another signer it names, before writing; an unguarded write lets anyone change the state".to_owned(),
                 Rule::NoUnknownCalls => "call the function by its name: a call through a function value has a callee, and so a contract, the compiler does not know, and this profile admits no obligation of unknown status (`nazm obligations` lists them)".to_owned(),
+                Rule::Watchdog => "call `watchdog_feed()` from the `@task` that runs the control loop, and give the board's manifest a `[watchdog] ticks = N`: the watchdog stops the machine when the loop stops".to_owned(),
+                Rule::Audit => "call `audit_transition` (`use \"@std/audit\";`) in the function that changes the state, with the state it leaves and the one it enters, so every transition has its record".to_owned(),
+                Rule::NoFloatNondeterminism => "compute it from `float_sqrt`, the arithmetic operators and a table or series of your own: their results are correctly rounded, the same on every host".to_owned(),
                 Rule::BoundedStack => "a call cycle has no stack bound, and a call through a function value has a callee the bound cannot follow; call each function directly, without a cycle (`bounds.json` states the bound)".to_owned(),
                 Rule::NoHeap => "each site allocates; under this profile a program holds its statics, its stack and its devices, so make the value a static, a fixed array or a local (`nazm explain-cost` lists every site)".to_owned(),
                 Rule::BoundedLoops => "write the loop as a counter from a literal, compared with a literal and stepped towards it once per turn by a positive literal (§7.65); `nazm check --profile-report` lists every loop's bound".to_owned(),

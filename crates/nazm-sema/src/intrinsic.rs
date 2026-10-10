@@ -281,6 +281,9 @@ pub enum Intrinsic {
     /// `mmio_write64(addr: Int, value: Int) -> Int` (Gate 3) — one volatile 64-bit store of
     /// `value`; `0`.
     MmioWrite64,
+    /// `watchdog_feed() -> Int` (Gate 3) — re-arms the board's watchdog for its manifest's ticks;
+    /// `0`. A device's authority, as `mmio_*`; a board's alone.
+    WatchdogFeed,
     /// `ints_sum_from(start: Int, v: Ints) -> Int` (N66) — `start` plus every element of `v`, left to
     /// right, failing exactly where one of those running sums would overflow. Vectorised in
     /// native builds without changing that.
@@ -526,7 +529,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 168] = [
+    pub const ALL: [Self; 169] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -585,6 +588,7 @@ impl Intrinsic {
         Self::MmioWrite16,
         Self::MmioRead64,
         Self::MmioWrite64,
+        Self::WatchdogFeed,
         Self::WrappingAdd,
         Self::WrappingSub,
         Self::WrappingMul,
@@ -756,6 +760,7 @@ impl Intrinsic {
             Self::MmioWrite16 => "mmio_write16",
             Self::MmioRead64 => "mmio_read64",
             Self::MmioWrite64 => "mmio_write64",
+            Self::WatchdogFeed => "watchdog_feed",
             Self::IntsSum => "ints_sum_from",
             Self::CErrno => "c_errno",
             Self::ForeignNonNull => "foreign_nonnull",
@@ -996,6 +1001,7 @@ impl Intrinsic {
             Self::MmioWrite32 | Self::MmioWrite8 | Self::MmioWrite16 | Self::MmioWrite64 => {
                 &[Shape::Int, Shape::Int]
             }
+            Self::WatchdogFeed => &[],
             Self::IntsSum => &[Shape::Int, Shape::Ints],
             Self::CErrno => &[],
             Self::ForeignNonNull | Self::CStrCopy => &[Shape::Int],
@@ -1160,6 +1166,7 @@ impl Intrinsic {
             | Self::MmioWrite16
             | Self::MmioRead64
             | Self::MmioWrite64
+            | Self::WatchdogFeed
             | Self::IntsSum
             | Self::CErrno
             | Self::ForeignNonNull

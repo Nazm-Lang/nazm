@@ -283,7 +283,8 @@ pub(crate) fn system_libraries(cross: Option<&str>) -> Vec<String> {
     }
 }
 
-/// `-target TRIPLE` for a cross build (N57), nothing for the host's. RISC-V's triple is LLVM's
+/// `-target TRIPLE` for a cross build (N57), nothing for the host's; for the AArch64 board,
+/// strict alignment (Gate 3). RISC-V's triple is LLVM's
 /// spelling with the ISA, the ABI and the code model beside it (N86): RV64GC, `lp64d`, and
 /// `medany`, since the board's image is at `0x8000_0000`, past `medlow`'s reach.
 fn target_args(cross: Option<&str>) -> Vec<String> {
@@ -298,6 +299,11 @@ fn target_args(cross: Option<&str>) -> Vec<String> {
         ]
         .map(str::to_owned)
         .to_vec(),
+        // A board runs with its MMU off, where every access is to Device memory and one not
+        // aligned to its size faults (Gate 3): no unaligned access, a SIMD register's included.
+        Some("aarch64-unknown-none") => ["-target", "aarch64-unknown-none", "-mstrict-align"]
+            .map(str::to_owned)
+            .to_vec(),
         Some(t) => vec!["-target".to_owned(), t.to_owned()],
     }
 }

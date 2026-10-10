@@ -49,6 +49,7 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
             "stop",
             "heap",
             "interrupts",
+            "watchdog",
         ],
     )?;
     let name = string(&doc, "name")?;
@@ -155,6 +156,31 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
         None => None,
         Some(_) => Some(interrupts(table(&doc, "interrupts")?, isa)?),
     };
+    // A watchdog on the scheduler's ticks (Gate 3): it counts the timer's, so it needs one.
+    let watchdog = match doc.get("watchdog") {
+        None => None,
+        Some(_) => {
+            let w = table(&doc, "watchdog")?;
+            allow(w, "watchdog.", &["ticks"])?;
+            let ticks = address(w, "ticks").map_err(|r| prefix("watchdog.", r))?;
+            if ticks == 0 {
+                return Err(refuse(
+                    "watchdog.ticks",
+                    "a watchdog waits at least one tick",
+                ));
+            }
+            if !interrupts
+                .as_ref()
+                .is_some_and(|i: &Interrupts| i.timer_period_us.is_some())
+            {
+                return Err(refuse(
+                    "watchdog",
+                    "a watchdog counts the board timer's ticks: give `[interrupts]` a `timer_period_us`",
+                ));
+            }
+            Some(ticks)
+        }
+    };
     Ok(Board {
         triple: Cow::Owned(triple.to_owned()),
         name: Cow::Owned(name),
@@ -165,6 +191,7 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
         stop,
         stack,
         heap,
+        watchdog,
         interrupts,
         emulator: Cow::Borrowed(""),
         hardware: false,

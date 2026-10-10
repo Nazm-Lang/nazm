@@ -405,6 +405,7 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::MmioWrite16
         | Intrinsic::MmioRead64
         | Intrinsic::MmioWrite64
+        | Intrinsic::WatchdogFeed
         | Intrinsic::IntsSum
         | Intrinsic::CErrno
         | Intrinsic::ForeignNonNull

@@ -2812,6 +2812,8 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         // Gate 3: the 64-bit pair, as the narrower ones.
         ("mmio_read64", "MmioCap"),
         ("mmio_write64", "MmioCap"),
+        // Gate 3: a board's watchdog, a device's authority as the registers are.
+        ("watchdog_feed", "MmioCap"),
         // Gate 2 (numbers): the Nazm checker's type table has `Int` alone, so these, generic over
         // the widths and floats, are unknown functions there and refused by name.
         ("wrapping_add", "Gate 2 numbers"),

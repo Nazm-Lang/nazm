@@ -134,6 +134,13 @@ found only by reading all of it.
   form (`realtime`'s `bounded-loops`), a stack bound exists only for a board image without a call
   cycle or a call through a value, and no execution time, latency or jitter is bounded — `wcet` is
   always `null` (area 18). *Narrowed in N63:* until then, no loop or stack bound was stated.
+- On a board, `float_round`, `float_min` and `float_max` call the C library, which a board has not
+  got: a build that reaches them is refused by name; `float_sqrt`, `float_abs`, `float_floor`,
+  `float_ceil` and `float_trunc` are instructions (Gate 3). The domain workloads round and clamp by
+  comparison.
+- The domain profiles (Gate 3) are compositions of rules, and their workloads run on emulators with
+  simulated sensors: no certification, qualification or regulatory approval, no hardware, no CAN
+  — the automotive frame is text over a UART.
 - A board's tasks are run to completion, one at a time, by priority (Gate 3, `@task`): no task
   preempts another, a missed deadline is detected — a task released again before it ran, `N0414` —
   never prevented, and no task's execution time is known; verified on emulators only.
@@ -329,7 +336,7 @@ found only by reading all of it.
   and division is checked as the program runs, which is the language's guarantee, not a proof of
   absence; the compiler written in Nazm checks a contract's shape and the clauses at run time, as the
   reference does, and proves nothing (area 30). Not certification (area 19).
-- Nineteen rules: Gate 3 added `no-heap` (the `kernel` and `realtime` profiles) and `bounded-stack` (`realtime`); N87 added `no-unknown-calls` (to `critical` and `cyber`), N80 `checked-paths`, N79 `explicit-authority` (the `authority` profile); N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
+- Twenty-two rules: Gate 3 added `no-heap` (the `kernel` and `realtime` profiles), `bounded-stack` (`realtime`), `no-float-nondeterminism` (`aerospace`), `watchdog` (`industrial`, a runtime watchdog on the scheduler's ticks, not a hardware one) and `audit` (`medical`, over a static atomic's changes, the one place a board program keeps state, and a call in the same function, not a proof the record precedes the change), and the domain profiles, compositions that certify nothing; N87 added `no-unknown-calls` (to `critical` and `cyber`), N80 `checked-paths`, N79 `explicit-authority` (the `authority` profile); N60 added `no-recursion`, `no-select` and `no-ambient-time` to N52's, N63
   `no-blocking` and `bounded-loops` (the `realtime` profile), N72 `signed-writes` (`accounts`); the
   stack rule bounds depth, not bytes, and is `unknown` through a function value; no constant-time
   rule, and a loop is bounded only in its counted form; `critical` stays a restriction set, not a

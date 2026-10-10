@@ -1,0 +1,85 @@
+// The cybersecurity reference workload (Gate 3, `docs/systems-domains.md` Part K): a TCP service
+// held to the `cyber` profile, as a locked package whose build is recorded, reproduced and attested
+// (`domains.rs`).
+//
+// The protocol is fixed: a request is five capital letters, and its answer those letters reversed;
+// anything else is answered `DENY!` and never echoed. The service takes nothing it is not handed:
+// `main` holds the network's authority and passes the listener on, every function says what it may
+// do, and nothing calls C or a function value. It serves three clients and stops.
+use "@std/ioerror";
+use "@std/net";
+
+/// Whether the five bytes of `b` are each a capital letter.
+fn valid(b: Bytes) -> Bool ! {} {
+    let mut ok = bytes_len(b) == 5;
+    let mut i = 0;
+    while i < 5 {
+        if ok {
+            let c = bytes_get(b, i);
+            ok = c >= 65 && c <= 90;
+        };
+        i = i + 1;
+    }
+    ok
+}
+
+/// The answer to a request: its letters reversed, or `DENY!`.
+fn answer(req: Bytes) -> Bytes ! {} {
+    if valid(req) {
+        let out = bytes_new(5);
+        let mut i = 0;
+        while i < 5 {
+            bytes_set(out, i, bytes_get(req, 4 - i));
+            i = i + 1;
+        }
+        out
+    } else {
+        bytes_from_str("DENY!")
+    }
+}
+
+/// `n` clients, one at a time: a request each, its answer, and the connection closed.
+fn serve(l: TcpListener, n: Int) -> Int ! { io } {
+    let mut k = 0;
+    while k < n {
+        match tcp_accept(l) {
+            Result.Ok(value: c) => {
+                let req = bytes_new(5);
+                match tcp_read_exact(c, req) {
+                    Result.Ok(value: got) => {
+                        tcp_write(c, answer(req));
+                    },
+                    Result.Err(error: e) => {},
+                };
+                tcp_close(c);
+            },
+            Result.Err(error: e) => {},
+        };
+        k = k + 1;
+    }
+    0
+}
+
+fn say(out: OutCap, s: Str) -> Int ! { io } {
+    print(str_concat(s, "\n"))
+}
+
+/// Listening on a port the system chooses, which it says, then serving `clients` and saying how
+/// many it served. What a client sent is a handle's contents, which `cyber` keeps off standard
+/// output: the service never shows it.
+fn main(net: NetCap, out: OutCap) -> Int ! { io } {
+    let clients = 3;
+    match tcp_listen(net, "127.0.0.1:0") {
+        Result.Ok(value: l) => {
+            say(out, str_concat("listening ", tcp_listener_addr(l)));
+            serve(l, clients);
+            tcp_listener_close(l);
+            say(out, str_concat("served ", int_to_str(clients)));
+            0
+        },
+        Result.Err(error: e) => {
+            say(out, io_error_show(e));
+            1
+        },
+    }
+}

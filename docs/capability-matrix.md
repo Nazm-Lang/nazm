@@ -4657,3 +4657,59 @@ ten times by the lower's fourth run (`1004`), an overrun reported. No WCET, no p
 real-time". Semantic epoch 50. Found on the way: `-O2` deletes a busy loop that does nothing visible, so
 an overrun test must do observable work.
 
+**Gate 3G-1 (2026-10-11)** · *Domain profiles* (`spec.md` *Restriction profiles*, *Domain profiles*,
+*Boards*; `systems-domains.md` Parts E–J). The constitution for the six domain profiles and their
+three domain rules (`watchdog`, `audit`, `no-float-nondeterminism`), the runtime watchdog and
+`N0415`. Four are enforced now, each a composition held to its definition (`domain_profiles.rs`):
+`robotics` (`realtime` + `explicit-authority`), `automotive` (`realtime` + `critical`), `aerospace`
+(`embedded` + `realtime` + `critical` + `no-float-nondeterminism`, refusing the nine transcendental
+built-ins by site) and `assurance` (`critical` + `no-recursion`, `bounded-loops`, `bounded-stack`,
+`no-heap`). A board's periodic program, as a locked package, passes and builds under all four. The
+`spec.md` rows for `critical` and `cyber` now name `no-unknown-calls` and `checked-paths`, which they
+had held since N80 and N87. No certification, qualification or approval is claimed.
+
+**Gate 3G-2 (2026-10-11)** · *Domain workloads* (`systems-domains.md` Parts E–J; `domains.rs`).
+`@std/linalg`: `Vec3`, `Mat3` and their sums, products, norm and length bound over `Float64`, nothing
+allocated, every operation correctly rounded. Four reference workloads, each held to its profile as a
+locked package and booted under QEMU at `-O0` and `-O2`: **robotics** (sense, control through
+`@std/linalg`, a bounded command, convergence, a missed deadline stopping safely), **aerospace**
+(simulated sensors, a complementary filter, telemetry, a sensor fault and its transition,
+byte-identical across levels), **automotive** (an ECU state machine and checksummed frames,
+byte-identical on AArch64 and Cortex-M3) and **assurance** (a heater controller whose every obligation
+is `proved` or `checked`, holding and tripping on both boards). Found and fixed on the way: a heapless
+64-bit board had no `memcpy` or `memset`, which code generation calls for a large value's copy — now
+every AArch64 and RISC-V board has the C library's memory functions; and AArch64 board code may now
+make no unaligned access (`-mstrict-align`), since with the MMU off every access is to Device memory
+and a 16-byte SIMD copy at an 8-byte boundary faulted. Found, not fixed: `float_round`, `float_min`
+and `float_max` call the C library and are refused on a board (`limitations.md`). Emulator-verified;
+sensors simulated; no certification.
+
+**Gate 3G-3 (2026-10-11)** · *Industrial and the watchdog* (`spec.md` *Boards*, *Domain profiles*;
+`domains.rs`). A board's manifest may have `[watchdog] ticks = N`, counted on the scheduler's ticks:
+`watchdog_feed()` — a device's authority, as `mmio_*` — re-arms it, and `N` ticks without a feed fail
+the image with `N0415` (new), the failure hook first. Refused by name: a feed for a board without one,
+a watchdog with no `@task`, a watchdog without the timer (`N0626`), a hosted feed (`N0392`). The
+`industrial` profile is `realtime` + `critical` + `watchdog`, the rule that a `@task` feeds it. The
+batch controller runs three batches on both boards at both levels, fails safe on overfill, and a loop
+`bounded-loops` admits — 10^12 turns — is caught by the watchdog: a stated bound is not an execution
+time. Semantic epoch 51, runtime ABI 26. The watchdog is the runtime's, not a hardware one.
+
+**Gate 3G-4 (2026-10-11)** · *Medical-device style* (`spec.md` *Domain profiles*; `domains.rs`).
+`@std/audit`'s `audit_transition` writes a transition's record, a JSON object on its own line, to a
+board's UART, allocating nothing. The `medical` profile is `realtime` + `critical` + `audit`: every
+function of the program that calls `atomic_store`, `atomic_swap` or `atomic_compare_swap` must call
+`audit_transition` itself, each unrecorded change refused by its site; `atomic_add` counts and is not
+a transition. The infusion pump runs on both boards at both levels, its six records in order, a pause
+and resume, and an occlusion's fault state. No regulatory approval is claimed.
+
+**Gate 3G-5 (2026-10-11)** · *Cybersecurity* (`systems-domains.md` Part K; `secure_service.rs`). The
+reference secure service: a TCP service whose protocol answers five capital letters reversed and
+anything else `DENY!`, never echoed, its authority handed down from `main`. Held to `cyber` as a
+locked package and served to three real clients on the loopback. Each of `cyber`'s refusals is shown
+on a variant of it: a source changed after locking, a client's bytes on standard output (and, without
+an `OutCap`, the language's own `N0369` first), a function with no declared contract, a call into C,
+a call through a function value. Built twice in two directories, its executable, provenance record
+and SBOM are byte-identical; its record, signed with `ssh-keygen`, verifies and is refused once the
+executable changes. Run-verified on macOS AArch64; signing is the host's `ssh-keygen`. No sandboxing,
+non-interference or certification claim.
+

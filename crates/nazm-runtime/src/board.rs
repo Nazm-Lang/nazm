@@ -146,6 +146,9 @@ pub struct Board {
     pub stack: u64,
     /// A heap of this many bytes after the image (Gate 3), or none.
     pub heap: Option<u64>,
+    /// A watchdog of this many scheduler ticks (Gate 3), or none: `watchdog_feed()` re-arms it,
+    /// and expiring fails the image (`N0415`).
+    pub watchdog: Option<u64>,
     /// Its interrupts (Gate 3), or none: with none, interrupts stay masked.
     pub interrupts: Option<Interrupts>,
     /// How it is booted: the emulator command line, the image last.
@@ -180,6 +183,9 @@ impl Board {
         }
         if let Some(h) = self.heap {
             let _ = write!(out, "\n[heap]\nsize = {h:#x}\n");
+        }
+        if let Some(t) = self.watchdog {
+            let _ = write!(out, "\n[watchdog]\nticks = {t}\n");
         }
         if let Some(i) = &self.interrupts {
             match i.controller {
@@ -222,6 +228,7 @@ pub const BOARDS: [Board; 3] = [
         stop: Stop::Semihosting,
         stack: STACK,
         heap: None,
+        watchdog: None,
         interrupts: None,
         emulator: Cow::Borrowed(
             "qemu-system-aarch64 -M virt -cpu cortex-a53 -nographic -nic none -semihosting -kernel",
@@ -238,6 +245,7 @@ pub const BOARDS: [Board; 3] = [
         stop: Stop::SifiveTest { address: 0x10_0000 },
         stack: STACK,
         heap: None,
+        watchdog: None,
         interrupts: None,
         emulator: Cow::Borrowed(
             "qemu-system-riscv64 -M virt -bios none -nographic -nic none -kernel",
@@ -256,6 +264,7 @@ pub const BOARDS: [Board; 3] = [
         stop: Stop::Semihosting,
         stack: STACK,
         heap: None,
+        watchdog: None,
         interrupts: None,
         emulator: Cow::Borrowed(
             "qemu-system-arm -M mps2-an385 -cpu cortex-m3 -nographic -nic none -semihosting -kernel",
@@ -358,11 +367,15 @@ pub fn linker_script_placing(board: &Board, placed: &Placed) -> String {
     )
 }
 
-/// [`emit_runtime`] for a program that reaches `needs` (Gate 3): with a heap in the board's
-/// manifest, its arena and the runtime parts allocation admits.
+/// [`emit_runtime`] for a program that reaches `needs` (Gate 3): on a 64-bit board the memory
+/// functions; with a heap in the board's manifest, its arena and the runtime parts allocation
+/// admits.
 #[must_use]
 pub fn emit_runtime_for(board: &Board, needs: &crate::Needs) -> String {
     let mut out = emit_runtime(board, needs.stack);
+    if board.isa != Isa::Thumbv7m {
+        out.push_str(MEMORY_RUNTIME);
+    }
     if board.heap.is_some() {
         out.push_str(HEAP_RUNTIME);
         out.push_str(&crate::core::board_heap_parts(needs));
@@ -381,8 +394,8 @@ pub fn emit_runtime_for(board: &Board, needs: &crate::Needs) -> String {
 /// script's `__heap_start` to `__heap_end`, never returned to — `free` does nothing. Each block
 /// is 16-aligned behind a 16-byte header holding its size, so `realloc` copies what there was.
 /// The bump is a compare-and-swap, so an interrupt handler allocating while `main` does is safe.
-/// Exhausted, `malloc` answers null, which every caller reports as `N0406`. And the C library's
-/// four memory functions, as byte loops LLVM may not turn back into calls to themselves.
+/// Exhausted, `malloc` answers null, which every caller reports as `N0406`. `realloc` copies with
+/// [`MEMORY_RUNTIME`]'s `memcpy`.
 pub const HEAP_RUNTIME: &str = r#"
 @__heap_start = external global i8
 @__heap_end = external global i8
@@ -438,7 +451,13 @@ copy:
 done:
   ret ptr %q
 }
+"#;
 
+/// The C library's memory functions for a 64-bit board, heap or none (Gate 3): code generation
+/// calls `memcpy` and `memset` for a large value's copy or initialisation — a `@std/linalg`
+/// matrix's — whatever allocates. Byte loops, which LLVM may not turn back into calls to
+/// themselves.
+pub const MEMORY_RUNTIME: &str = r#"
 define ptr @memcpy(ptr %d, ptr %s, i64 %n) "no-builtins" {
 entry:
   br label %loop
@@ -783,8 +802,9 @@ hang:
     }
 }
 
-/// The device-register built-ins (N62, N86): a volatile 32-bit load and store at an address. The
-/// hosted runtime defines them too, unreachable there — a hosted build refuses a program using
+/// The device-register built-ins (N62, N86): a volatile 32-bit load and store at an address; and
+/// (Gate 3) the watchdog's feed and its counters, which a board's scheduler arms. The hosted runtime
+/// defines them too, unreachable there — a hosted build refuses a program using
 /// them (`N0392`) — so one inventory describes both.
 pub const MMIO_RUNTIME: &str = r"
 define hidden i64 @nz.mmio_read8(i64 %addr) {
@@ -846,6 +866,16 @@ define hidden i64 @nz.mmio_write64(i64 %addr, i64 %value) {
 entry:
   %p = inttoptr i64 %addr to ptr
   store volatile i64 %value, ptr %p
+  ret i64 0
+}
+
+@nz.wd_reload = hidden global i64 0
+@nz.wd_left = hidden global i64 0
+
+define hidden i64 @nz.watchdog_feed() {
+entry:
+  %n = load atomic i64, ptr @nz.wd_reload seq_cst, align 8
+  store atomic i64 %n, ptr @nz.wd_left seq_cst, align 8
   ret i64 0
 }
 ";
@@ -1318,7 +1348,7 @@ pub fn emit_entry_with(
         nvic_runtime(&mut out, i, handlers);
     }
     if !tasks.is_empty() {
-        scheduler(&mut out, tasks);
+        scheduler(&mut out, tasks, board.watchdog);
     }
     // The failure hook's caller (Gate 3), which the runtime's report calls: the program's
     // `@on_failure`, or nothing.
@@ -1716,8 +1746,10 @@ fn nvic_runtime(out: &mut String, i: &Interrupts, handlers: &[Handler]) {
 /// period — has come runs to completion and is released again a period on; one whose release came
 /// a whole period ago without its running has missed its deadline (`N0414`); a task that answers
 /// anything but 0 ends the loop with that answer; and with nothing released the core waits for an
-/// interrupt. No lock exists, so none can be held across a priority.
-fn scheduler(out: &mut String, tasks: &[Task]) {
+/// interrupt. No lock exists, so none can be held across a priority. With a watchdog, the scheduler
+/// arms it as it starts — `main`, the initialisation, runs unwatched — each tick counts down what
+/// the last `nz.watchdog_feed` set, and the tick that reaches nothing fails the image (`N0415`).
+fn scheduler(out: &mut String, tasks: &[Task], watchdog: Option<u64>) {
     let mut order: Vec<(usize, &Task)> = tasks.iter().enumerate().collect();
     order.sort_by(|(i, a), (j, b)| b.priority.cmp(&a.priority).then(i.cmp(j)));
     let n = tasks.len();
@@ -1726,9 +1758,31 @@ fn scheduler(out: &mut String, tasks: &[Task]) {
         out,
         "@nz.sched_ticks = internal global i64 0\n@nz.sched_next = internal global [{n} x i64] [{}]\n\
          declare void @nz.fail(ptr, i64)\n\
-         define i64 @nz_sched_tick() {{\nentry:\n  %old = atomicrmw add ptr @nz.sched_ticks, i64 1 seq_cst\n  ret i64 0\n}}\n",
+         define i64 @nz_sched_tick() {{\nentry:\n  %old = atomicrmw add ptr @nz.sched_ticks, i64 1 seq_cst\n",
         init.join(", ")
     );
+    // The watchdog (Gate 3): the runtime's count of ticks left, which each feed sets to the reload
+    // the scheduler arms as it starts; a tick counts it down while armed, and the tick that
+    // reaches nothing is a failure the interrupt path reports.
+    let reload = watchdog.unwrap_or(0);
+    if watchdog.is_some() {
+        let msg = "nazm: error[N0415]: the watchdog expired: no task fed it in time\n";
+        let _ = write!(
+            out,
+            "  %armed = load atomic i64, ptr @nz.wd_reload seq_cst, align 8\n  \
+             %on = icmp ne i64 %armed, 0\n  br i1 %on, label %count, label %fed\n\
+             count:\n  %left = atomicrmw sub ptr @nz.wd_left, i64 1 seq_cst\n  \
+             %bit = icmp eq i64 %left, 1\n  br i1 %bit, label %bite, label %fed\n\
+             bite:\n  call void @nz.fail(ptr @.nz.wd_msg, i64 {len})\n  ret i64 0\n\
+             fed:\n  ret i64 0\n}}\n\
+             @nz.wd_reload = external hidden global i64\n@nz.wd_left = external hidden global i64\n\
+             @.nz.wd_msg = private constant [{len} x i8] c\"{escaped}\"\n",
+            len = msg.len(),
+            escaped = msg.replace('\n', "\\0A"),
+        );
+    } else {
+        out.push_str("  ret i64 0\n}\n");
+    }
     for (i, t) in tasks.iter().enumerate() {
         let msg = format!(
             "nazm: error[N0414]: the task `{}` missed its deadline\n",
@@ -1743,7 +1797,17 @@ fn scheduler(out: &mut String, tasks: &[Task]) {
         let param = if t.takes_cap { "i64" } else { "" };
         let _ = writeln!(out, "declare i64 @{}({param})", t.symbol);
     }
-    out.push_str("define i64 @nz_sched_run() {\nentry:\n  br label %scan\nscan:\n  %now = load atomic i64, ptr @nz.sched_ticks seq_cst, align 8\n");
+    out.push_str("define i64 @nz_sched_run() {\nentry:\n");
+    if reload != 0 {
+        let _ = write!(
+            out,
+            "  store atomic i64 {reload}, ptr @nz.wd_left seq_cst, align 8\n  \
+             store atomic i64 {reload}, ptr @nz.wd_reload seq_cst, align 8\n"
+        );
+    }
+    out.push_str(
+        "  br label %scan\nscan:\n  %now = load atomic i64, ptr @nz.sched_ticks seq_cst, align 8\n",
+    );
     let _ = writeln!(out, "  br label %t{}", order.first().map_or(0, |(i, _)| *i));
     for (k, (i, t)) in order.iter().enumerate() {
         let next_label = order

@@ -1,0 +1,56 @@
+// `@std/audit`: a state transition's record, written as it happens (Gate 3).
+//
+// Imported with `use "@std/audit";`. A device controller's state lives in its static atomics; each
+// change of one — an `atomic_store`, `atomic_swap` or `atomic_compare_swap` — is a transition, and
+// the `audit` rule asks the function making it to call `audit_transition`, which writes one
+// structured record, a JSON object on its own line, to the board's UART:
+// `{"audit":MACHINE,"from":FROM,"to":TO}`. Nothing allocates and every loop is counted, so a
+// heapless board, `no-heap` and `bounded-loops` admit it. `docs/systems-domains.md` Parts E–J.
+
+/// The record of `machine` moving from state `from` to `to`, written byte by byte to the UART whose
+/// data register is at `uart`; `0`.
+pub fn audit_transition(uart: Int, m: MmioCap, machine: Int, from: Int, to: Int) -> Int ! {} {
+    audit_text(uart, m, "{\"audit\":");
+    audit_number(uart, m, machine);
+    audit_text(uart, m, ",\"from\":");
+    audit_number(uart, m, from);
+    audit_text(uart, m, ",\"to\":");
+    audit_number(uart, m, to);
+    mmio_write8(uart, 125);
+    mmio_write8(uart, 10)
+}
+
+/// The first 32 bytes of `s`, which is all a record's text is.
+fn audit_text(uart: Int, m: MmioCap, s: Str) -> Int ! {} {
+    let n = str_len(s);
+    let mut i = 0;
+    while i < 32 {
+        if i < n {
+            mmio_write8(uart, str_byte(s, i));
+        };
+        i = i + 1;
+    }
+    0
+}
+
+/// `n` in decimal, a sign first when it is negative.
+fn audit_number(uart: Int, m: MmioCap, n: Int) -> Int ! {} {
+    // The most negative `Int` has no positive: its digits are written from the negated quotient.
+    if n < 0 {
+        mmio_write8(uart, 45);
+    };
+    let mut p = 1000000000000000000;
+    let mut started = false;
+    let mut i = 0;
+    while i < 19 {
+        let q = n / p % 10;
+        let d = if q < 0 { 0 - q } else { q };
+        if d != 0 || started || i == 18 {
+            mmio_write8(uart, 48 + d);
+            started = true;
+        };
+        p = p / 10;
+        i = i + 1;
+    }
+    0
+}
