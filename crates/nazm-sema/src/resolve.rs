@@ -363,6 +363,23 @@ pub enum NumericFact {
     },
 }
 
+/// One static (Gate 3, `docs/spec.md`, *Statics*): storage its module's unit defines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticDef {
+    pub module: ModuleId,
+    pub name: String,
+    pub value: StaticValue,
+}
+
+/// What a static starts as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaticValue {
+    /// A number or a `Bool`, read-only: every use is this value, written in its place.
+    Value(crate::numeric::ConstValue),
+    /// An `Atomic`'s cell, starting at this `Int`.
+    Cell(i64),
+}
+
 /// Everything resolution decided about one compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolution {
@@ -431,6 +448,12 @@ pub struct Resolution {
     /// Each use of a constant, by the name's span, with the value the checker computed
     /// (Gate 2): what Core IR writes as a literal.
     const_uses: HashMap<Span, crate::numeric::ConstValue>,
+    /// Each use of a static `Atomic`, by the name's span (Gate 3): its module and name, which
+    /// is the one cell every use reaches.
+    static_cells: HashMap<Span, (ModuleId, String)>,
+    /// Every static of the compilation, in the order its module declared it (Gate 3): what the
+    /// module's own unit defines.
+    statics: Vec<StaticDef>,
     /// Every constant's declaration, by its name's span (Gate 2), for the reference index.
     const_decls: Vec<Span>,
     /// Every name of a constant — in a body, another constant's value or an array's length —
@@ -986,6 +1009,32 @@ impl Resolution {
 
     pub fn record_const_use(&mut self, span: Span, value: crate::numeric::ConstValue) {
         self.const_uses.insert(span, value);
+    }
+
+    /// The static `Atomic` a name written at `span` is, by its module and name (Gate 3).
+    #[must_use]
+    pub fn static_cell(&self, span: Span) -> Option<&(ModuleId, String)> {
+        self.static_cells.get(&span)
+    }
+
+    pub fn record_static_cell(&mut self, span: Span, module: ModuleId, name: String) {
+        self.static_cells.insert(span, (module, name));
+    }
+
+    /// Every static of the compilation (Gate 3).
+    #[must_use]
+    pub fn statics(&self) -> &[StaticDef] {
+        &self.statics
+    }
+
+    pub fn record_static(&mut self, s: StaticDef) {
+        if !self
+            .statics
+            .iter()
+            .any(|d| d.module == s.module && d.name == s.name)
+        {
+            self.statics.push(s);
+        }
     }
 
     /// Every constant declared, by its name's span (Gate 2).

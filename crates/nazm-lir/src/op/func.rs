@@ -524,9 +524,10 @@ impl<'l, 'a> Fx<'l, 'a> {
             mir::Operand::Const(mir::Const::Int(v)) => self.iconst(*v),
             mir::Operand::Const(mir::Const::Num { kind, bits }) => self.num_const(*kind, *bits),
             mir::Operand::Const(mir::Const::Bool(v)) => self.bit(*v),
-            mir::Operand::Const(mir::Const::Str(_)) => {
+            mir::Operand::Const(mir::Const::Str(_) | mir::Const::Cell { .. }) => {
                 let at = self.at;
-                self.lw.defect(at, "a string literal read into a scalar");
+                self.lw
+                    .defect(at, "a string literal or a static atomic read into a scalar");
                 self.iconst(0)
             }
         }
@@ -539,6 +540,16 @@ impl<'l, 'a> Fx<'l, 'a> {
             mir::Operand::Const(mir::Const::Str(bytes)) => {
                 let d = self.lw.str_value(bytes);
                 self.addr_of(d)
+            }
+            // A static atomic (Gate 3): its cell's triple, as a literal's is.
+            mir::Operand::Const(mir::Const::Cell { module, name }) => {
+                if let Some(d) = self.lw.cell_value(*module, name) {
+                    self.addr_of(d)
+                } else {
+                    let at = self.at;
+                    self.lw.defect(at, "a static the program does not declare");
+                    self.null()
+                }
             }
             mir::Operand::Const(_) => {
                 let at = self.at;

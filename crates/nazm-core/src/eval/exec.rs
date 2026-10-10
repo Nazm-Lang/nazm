@@ -318,6 +318,13 @@ impl Interpreter {
                     kind: *kind,
                     bits: *bits,
                 }),
+                // A static atomic (Gate 3): the run's one cell for it.
+                Some(cir::Const::Cell { module, name }) => {
+                    match self.cells.get(&(*module, name.clone())) {
+                        Some(cell) => Value::Atomic(Arc::clone(cell)),
+                        None => return unreachable_flow(e.at),
+                    }
+                }
                 None => {
                     return Err(fail(
                         codes::TYPE_MISMATCH,

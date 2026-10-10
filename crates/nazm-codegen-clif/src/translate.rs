@@ -122,7 +122,7 @@ pub(crate) fn object(
         errors: Vec::new(),
         debug: debug.then(crate::dwarf::Debug::default),
     };
-    for s in &m.symbols {
+    for (i, s) in m.symbols.iter().enumerate() {
         let d = match &s.kind {
             SymKind::Func { sig } => {
                 let sg = t.signature(sig);
@@ -135,7 +135,10 @@ pub(crate) fn object(
                 }
             }
             SymKind::Data { .. } => {
-                let writable = s.linkage == lir::Linkage::Import;
+                // An import may be written (the runtime's globals), and so is a static atomic's
+                // cell (Gate 3); every other datum is read-only.
+                let writable = s.linkage == lir::Linkage::Import
+                    || m.data.iter().any(|d| d.sym.index() == i && d.writable);
                 match t
                     .module
                     .declare_data(&s.name, linkage(s.linkage), writable, false)

@@ -211,6 +211,9 @@ pub enum DefKind {
     Enum,
     /// A trait (N78). In the type namespace with records and enums, and not a type.
     Trait,
+    /// A static (Gate 3): storage a module declares, named so its cell has one symbol in every
+    /// unit that reaches it.
+    Static,
 }
 
 impl DefKind {
@@ -224,6 +227,7 @@ impl DefKind {
             // keyword and the category are one word, so the identity uses it.
             Self::Enum => "enum",
             Self::Trait => "trait",
+            Self::Static => "static",
         }
     }
 
@@ -234,6 +238,7 @@ impl DefKind {
             "record" => Some(Self::Record),
             "enum" => Some(Self::Enum),
             "trait" => Some(Self::Trait),
+            "static" => Some(Self::Static),
             _ => None,
         }
     }

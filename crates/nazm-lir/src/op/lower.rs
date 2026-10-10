@@ -125,6 +125,7 @@ pub(crate) struct Lw<'a> {
     datas: Vec<Data>,
     blobs: BTreeMap<Vec<u8>, SymId>,
     strvals: BTreeMap<Vec<u8>, SymId>,
+    cellvals: BTreeMap<String, SymId>,
     messages: BTreeMap<String, (SymId, usize)>,
     pub helpers: BTreeMap<Helper, SymId>,
     pub pending: Vec<Helper>,
@@ -175,6 +176,7 @@ pub fn lower_unit(
         datas: Vec::new(),
         blobs: BTreeMap::new(),
         strvals: BTreeMap::new(),
+        cellvals: BTreeMap::new(),
         messages: BTreeMap::new(),
         helpers: BTreeMap::new(),
         pending: Vec::new(),
@@ -184,6 +186,7 @@ pub fn lower_unit(
         anonymous: 0,
     };
     lw.declare_functions();
+    lw.define_statics();
     for id in unit.functions.clone() {
         let (Some(f), Some(sig)) = (native.program.function(id), native.sigs.get(id.index()))
         else {
@@ -426,8 +429,87 @@ impl<'a> Lw<'a> {
             bytes,
             align,
             relocs,
+            writable: false,
         });
         sym
+    }
+
+    /// Every static of this unit's module (Gate 3), defined here and only here — its module's
+    /// own unit — under its owner's symbol: an atomic's cell writable, a value read-only.
+    pub(crate) fn define_statics(&mut self) {
+        if !self.unit.owns_module {
+            return;
+        }
+        let statics: Vec<nazm_mir::Static> = self
+            .native
+            .program
+            .statics
+            .iter()
+            .filter(|s| s.module == self.unit.module)
+            .cloned()
+            .collect();
+        for s in statics {
+            let name = crate::symbol::NativeSymbol::of_static(&s.owner)
+                .as_str()
+                .to_owned();
+            let (bytes, align, writable) = match s.value.clone() {
+                nazm_sema::StaticValue::Cell(init) => (init.to_le_bytes().to_vec(), 8, true),
+                nazm_sema::StaticValue::Value(v) => {
+                    let b = static_bytes(&v);
+                    let a = u32::try_from(b.len()).unwrap_or(1).max(1);
+                    (b, a, false)
+                }
+            };
+            let sym = self.symbol(&name, Linkage::Hidden, SymKind::Data { class: None });
+            self.datas.push(Data {
+                sym,
+                bytes,
+                align,
+                relocs: Vec::new(),
+                writable,
+            });
+        }
+    }
+
+    /// A static atomic's cell (Gate 3): this unit's definition, or an import of its module's.
+    fn cell(&mut self, module: nazm_sema::module::ModuleId, name: &str) -> Option<SymId> {
+        let owner = self
+            .native
+            .program
+            .statics
+            .iter()
+            .find(|s| s.module == module && s.name == name)
+            .map(|s| s.owner.clone())?;
+        let symbol = crate::symbol::NativeSymbol::of_static(&owner);
+        Some(self.symbol(
+            symbol.as_str(),
+            Linkage::Import,
+            SymKind::Data { class: None },
+        ))
+    }
+
+    /// A static atomic's whole value (Gate 3) — its cell's address, `8`, a null owner, since
+    /// the cell is immortal — as read-only data the value is copied out of, as a literal's is.
+    pub(crate) fn cell_value(
+        &mut self,
+        module: nazm_sema::module::ModuleId,
+        name: &str,
+    ) -> Option<SymId> {
+        let key = format!("{}.{name}", module.index());
+        if let Some(d) = self.cellvals.get(&key) {
+            return Some(*d);
+        }
+        let cell = self.cell(module, name)?;
+        let id = self.anonymous("c");
+        let lay = self.data.str();
+        let [p, len, _] = self.data.str_fields();
+        let mut contents = vec![0u8; lay.size as usize];
+        if let Some(slot) = contents.get_mut(len as usize..len as usize + 8) {
+            slot.copy_from_slice(&8u64.to_le_bytes());
+        }
+        let d = self.define_data(id, contents, lay.align, vec![(p, cell)]);
+        self.cellvals.insert(key, d);
+        Some(d)
     }
 
     /// A literal's bytes, read-only. An empty literal still gets a byte, so its pointer is
@@ -692,5 +774,17 @@ impl Fb {
             at,
             debug_vars: self.debug_vars,
         }
+    }
+}
+
+/// A static value's bytes (Gate 3): a number's canonical bits at its width, a `Bool` as one byte.
+fn static_bytes(v: &nazm_sema::numeric::ConstValue) -> Vec<u8> {
+    match v {
+        nazm_sema::numeric::ConstValue::Num(n) => {
+            let width = usize::try_from(n.kind.bits() >> 3).unwrap_or(8).max(1);
+            n.bits.to_le_bytes().get(..width).unwrap_or(&[0]).to_vec()
+        }
+        nazm_sema::numeric::ConstValue::Bool(b) => vec![u8::from(*b)],
+        nazm_sema::numeric::ConstValue::Str(_) => vec![0],
     }
 }

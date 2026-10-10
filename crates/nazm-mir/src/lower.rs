@@ -208,11 +208,22 @@ pub fn lower(
     let entry = res
         .entry()
         .and_then(|e| map.plain.get(e.index()).copied().flatten());
+    let statics = core
+        .statics
+        .iter()
+        .map(|s| crate::ir::Static {
+            module: s.module,
+            name: s.name.clone(),
+            owner: owner(graph, s.module, DefKind::Static, &s.name),
+            value: s.value.clone(),
+        })
+        .collect();
     Ok(Program {
         functions,
         modules,
         types,
         entry,
+        statics,
     })
 }
 
@@ -846,6 +857,10 @@ impl Fx<'_> {
             Some(cir::Const::Num { kind, bits }) => Const::Num {
                 kind: *kind,
                 bits: *bits,
+            },
+            Some(cir::Const::Cell { module, name }) => Const::Cell {
+                module: *module,
+                name: name.clone(),
             },
             None => {
                 self.fail(at, "a constant missing from its function's table");

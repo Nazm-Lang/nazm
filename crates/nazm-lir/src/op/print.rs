@@ -264,9 +264,10 @@ pub fn module(m: &Module) -> String {
             .iter()
             .map(|(o, s)| format!(" {o}:{}", sym(m, *s)))
             .collect::<String>();
+        let w = if d.writable { " writable" } else { "" };
         let _ = writeln!(
             out,
-            "data {} align {} [{hex}]{relocs}",
+            "data {} align {}{w} [{hex}]{relocs}",
             sym(m, d.sym),
             d.align
         );

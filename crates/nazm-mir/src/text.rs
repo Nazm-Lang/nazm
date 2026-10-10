@@ -84,6 +84,7 @@ fn constant(c: &Const) -> String {
             s.push('"');
             s
         }
+        Const::Cell { name, .. } => format!("static {name}"),
     }
 }
 
