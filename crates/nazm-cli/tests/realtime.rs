@@ -118,7 +118,9 @@ fn realtime_states_every_bound_it_establishes() {
             "no-ambient-time",
             "no-recursion",
             "no-blocking",
-            "bounded-loops"
+            "bounded-loops",
+            "no-heap",
+            "bounded-stack"
         ]
     );
     let b = &v["bounds"];

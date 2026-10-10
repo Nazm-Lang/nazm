@@ -1,0 +1,16 @@
+name = "virt, with its GIC, timer and PL061"
+isa = "aarch64"
+load_address = 0x40080000
+
+[uart]
+kind = "pl011"
+address = 0x9000000
+
+[stop]
+kind = "semihosting"
+
+[interrupts]
+controller = "gicv2"
+distributor = 0x8000000
+cpu = 0x8010000
+timer_period_us = 1000

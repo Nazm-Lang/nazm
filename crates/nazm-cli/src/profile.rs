@@ -291,6 +291,7 @@ pub(crate) fn enforce(
             || p.rules().contains(&profile::Rule::NoRecursion)
             || p.rules().contains(&profile::Rule::NoUnknownCalls)
             || p.rules().contains(&profile::Rule::NoHeap)
+            || p.rules().contains(&profile::Rule::BoundedStack)
             || p.rules().contains(&profile::Rule::BoundedLoops)
             || p.rules().contains(&profile::Rule::SignedWrites)
     });

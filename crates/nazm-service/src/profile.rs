@@ -64,11 +64,14 @@ pub enum Rule {
     /// No allocation site at all (Gate 3, `docs/spec.md`, *Boards*): what the program holds is
     /// its statics, its stack and its devices, whatever the board's manifest gives it.
     NoHeap,
+    /// The image's stack has a static bound (Gate 3): no call cycle and no call through a
+    /// function value, whose callee the bound could not follow.
+    BoundedStack,
 }
 
 impl Rule {
     /// Every rule, in identity order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::DeclaredEffects,
         Self::NoIo,
         Self::NoSpawn,
@@ -87,6 +90,7 @@ impl Rule {
         Self::CheckedPaths,
         Self::NoUnknownCalls,
         Self::NoHeap,
+        Self::BoundedStack,
     ];
 
     /// Its stable identity. Never reused and never renamed.
@@ -111,6 +115,7 @@ impl Rule {
             Self::CheckedPaths => "checked-paths",
             Self::NoUnknownCalls => "no-unknown-calls",
             Self::NoHeap => "no-heap",
+            Self::BoundedStack => "bounded-stack",
         }
     }
 
@@ -134,7 +139,8 @@ impl Rule {
             | Self::ExplicitAuthority
             | Self::CheckedPaths
             | Self::NoUnknownCalls
-            | Self::NoHeap => None,
+            | Self::NoHeap
+            | Self::BoundedStack => None,
         }
     }
 }
@@ -232,6 +238,8 @@ impl Profile {
                 Rule::NoRecursion,
                 Rule::NoBlocking,
                 Rule::BoundedLoops,
+                Rule::NoHeap,
+                Rule::BoundedStack,
             ],
             Self::Web3 => &[
                 Rule::DeclaredEffects,
@@ -469,6 +477,16 @@ pub fn evaluate(
                     vec![Witness {
                         span: at_main(),
                         note: "the program's resource facts were not computed".to_owned(),
+                    }]
+                }
+            } else if rule == Rule::BoundedStack {
+                if let Some(f) = facts {
+                    f.recursive.iter().chain(&f.indirect).cloned().collect()
+                } else {
+                    unknown = true;
+                    vec![Witness {
+                        span: at_main(),
+                        note: "the program's calls were not computed".to_owned(),
                     }]
                 }
             } else if rule == Rule::NoHeap {
@@ -755,6 +773,7 @@ pub fn diagnostics(e: &Evaluation) -> Vec<Diagnostic> {
                 Rule::ExplicitAuthority => "take the capability as a parameter and pass it from `main`: under this profile a function holds only what its scope holds (`nazm inspect` shows each function's `inherits`)".to_owned(),
                 Rule::SignedWrites => "compare `caller` with the state's owner, or another signer it names, before writing; an unguarded write lets anyone change the state".to_owned(),
                 Rule::NoUnknownCalls => "call the function by its name: a call through a function value has a callee, and so a contract, the compiler does not know, and this profile admits no obligation of unknown status (`nazm obligations` lists them)".to_owned(),
+                Rule::BoundedStack => "a call cycle has no stack bound, and a call through a function value has a callee the bound cannot follow; call each function directly, without a cycle (`bounds.json` states the bound)".to_owned(),
                 Rule::NoHeap => "each site allocates; under this profile a program holds its statics, its stack and its devices, so make the value a static, a fixed array or a local (`nazm explain-cost` lists every site)".to_owned(),
                 Rule::BoundedLoops => "write the loop as a counter from a literal, compared with a literal and stepped towards it once per turn by a positive literal (§7.65); `nazm check --profile-report` lists every loop's bound".to_owned(),
             })

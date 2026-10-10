@@ -1,0 +1,15 @@
+name = "MPS2 AN385, with SysTick"
+isa = "thumbv7m"
+load_address = 0x0
+
+[uart]
+kind = "cmsdk"
+address = 0x40004000
+
+[stop]
+kind = "semihosting"
+
+[interrupts]
+controller = "nvic"
+clock_hz = 25000000
+timer_period_us = 1000

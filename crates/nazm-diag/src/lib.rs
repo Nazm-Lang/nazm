@@ -167,6 +167,9 @@ pub mod codes {
     /// Bytes that are not UTF-8 made into a `Text`, a `Text` cut or read away from a scalar
     /// boundary, or an `Int` that is not a Unicode scalar value made into one (Gate 2).
     pub const NOT_UTF8: Code = Code::new("N0413");
+    /// A board's task released again before it had run: it missed its deadline, its period (Gate
+    /// 3, `docs/spec.md`, *Boards*).
+    pub const TASK_DEADLINE: Code = Code::new("N0414");
 
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");
