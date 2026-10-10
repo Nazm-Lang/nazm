@@ -11250,8 +11250,8 @@ killers = [{ package = "nazm-cli", test = "freestanding", name = "the_board_runt
 name = "n62-cranelift-tries-the-board"
 why = "Cranelift is handed the board and fails with its own unknown binary format instead of a refusal by name"
 file = "crates/nazm-cli/src/build/preflight.rs"
-find = '        && target.os == nazm_lir::backend::Os::None'
-replace = '        && false'
+find = "        && matches!(\n            target.os,\n            nazm_lir::backend::Os::None | nazm_lir::backend::Os::Wasi\n        )"
+replace = "        && false"
 killers = [{ package = "nazm-cli", test = "freestanding", name = "cranelift_builds_no_board" }]
 
 [[mutation]]
@@ -11398,8 +11398,8 @@ killers = [{ package = "nazm-cli", test = "wasm", name = "what_a_module_cannot_h
 name = "n64-a-module-gets-the-board-runtime"
 why = "a module links the board's runtime, which writes to a UART address and stops by semihosting instead of asking its host"
 file = "crates/nazm-cli/src/build/lower.rs"
-find = '        let runtime = if wasm {'
-replace = '        let runtime = if false {'
+find = "        } else if wasm {\n            nazm_lir::runtime::wasm::emit_runtime(needs.stack)"
+replace = "        } else if false {\n            nazm_lir::runtime::wasm::emit_runtime(needs.stack)"
 killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
 
 [[mutation]]
@@ -11438,8 +11438,8 @@ killers = [{ package = "nazm-cli", test = "wasm", name = "a_module_s_bound_is_ro
 name = "n64-a-module-has-no-host"
 why = "objects for WebAssembly are written without the reference host, so nothing says which imports may be granted"
 file = "crates/nazm-cli/src/build/objects.rs"
-find = '    if target.is_wasm() {'
-replace = '    if !target.is_wasm() {'
+find = "    } else if target.is_wasm() {\n        std::fs::write(dir.join(\"host.mjs\")"
+replace = "    } else if !target.is_wasm() {\n        std::fs::write(dir.join(\"host.mjs\")"
 killers = [{ package = "nazm-cli", test = "wasm", name = "a_program_builds_to_webassembly_objects_a_link_line_and_a_host" }]
 
 [[mutation]]
@@ -15883,3 +15883,39 @@ file = "crates/nazm-sema/src/stdlib.rs"
 find = "    (\"dist\", include_str!(\"../../../library/std/dist.nz\")),\n"
 replace = ""
 killers = [{ package = "nazm-cli", test = "distributed", name = "in_one_process_a_lost_answer_times_out_and_a_retry_is_applied_once" }]
+
+# --- Gate 3J: WASI (systems-domains.md Part O) ---
+# That a WASI module runs — its heap, streams, arguments, clocks and files beneath its preopen — is
+# wasi.rs's ignored container tests.
+
+[[mutation]]
+name = "g3-there-is-no-wasi-target"
+why = "wasm32-wasip1 is not a target, so a program for a WASI host cannot be built"
+file = "crates/nazm-lir/src/backend.rs"
+find = "            \"wasm32-wasip1\" => (Arch::Wasm32, Os::Wasi),\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "wasi", name = "the_wasi_target_writes_its_objects_link_line_and_host" }]
+
+[[mutation]]
+name = "g3-a-wasi-module-has-no-start"
+why = "a WASI module is linked without its command, so a WASI host has nothing to start"
+file = "crates/nazm-runtime/src/wasi.rs"
+find = "pub const LINK: &str = \"wasm-ld --stack-first -z stack-size=1048576 --export=_start -o module.wasm\";"
+replace = "pub const LINK: &str = \"wasm-ld --no-entry --stack-first -z stack-size=1048576 -o module.wasm\";"
+killers = [{ package = "nazm-cli", test = "wasi", name = "the_wasi_target_writes_its_objects_link_line_and_host" }]
+
+[[mutation]]
+name = "g3-a-wasi-module-gets-the-wasm-host"
+why = "a WASI module is given the freestanding host, which grants none of WASI's imports"
+file = "crates/nazm-cli/src/build/objects.rs"
+find = "    if target.is_wasi() {\n        std::fs::write(dir.join(\"wasi.mjs\"), nazm_lir::runtime::wasi::HOST)?;"
+replace = "    if false {\n        std::fs::write(dir.join(\"wasi.mjs\"), nazm_lir::runtime::wasi::HOST)?;"
+killers = [{ package = "nazm-cli", test = "wasi", name = "the_wasi_target_writes_its_objects_link_line_and_host" }]
+
+[[mutation]]
+name = "g3-wasi-refuses-without-saying-why"
+why = "a program reaching tasks on WASI is refused with a board's reason, not WASI's"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "            if target.is_wasi() {\n                eprintln!("
+replace = "            if false {\n                eprintln!("
+killers = [{ package = "nazm-cli", test = "wasi", name = "what_wasi_preview_1_has_not_got_is_refused_by_name" }]

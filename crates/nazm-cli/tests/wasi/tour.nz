@@ -1,0 +1,78 @@
+// A WASI module's tour (Gate 3, `docs/spec.md` *WASI*): its arguments, strings and sequences built
+// at run time on its heap, a closure, a whole file written and read back, a file through a handle
+// with a seek, its metadata, the clock, and a path outside the preopened directory refused.
+use "@std/io";
+use "@std/fs";
+use "@std/file";
+use "@std/ioerror";
+use "@std/time";
+use "@std/text";
+
+fn twice(f: fn(Int) -> Int ! {}, x: Int) -> Int ! {} { f(f(x)) }
+
+fn main(io: IoCap, t: TimeCap) -> Int ! { io } {
+    // Arguments, the program's own name not among them.
+    let mut i = 0;
+    let words = vec_new[Str]();
+    while i < args_count() {
+        vec_push(words, arg(i));
+        i = i + 1;
+    }
+    io_println(io, str_concat("args ", int_to_str(vec_len(words))));
+    // Strings and sequences on the heap; a closure.
+    let mut s = "";
+    let mut k = 0;
+    while k < 200 {
+        s = str_concat(s, int_to_str(k % 10));
+        k = k + 1;
+    }
+    let add = 7;
+    io_println(io, str_concat("built ", int_to_str(str_len(s) + twice(fn(x: Int) -> Int ! {} { x + add }, 1))));
+    // A whole file written and read back.
+    match fs_write(io, "note.txt", "written under WASI\n") {
+        Result.Ok(value: n) => {},
+        Result.Err(error: e) => { io_println(io, e); },
+    };
+    match fs_read(io, "note.txt") {
+        Result.Ok(value: text) => { io_println(io, text_trim(text)); },
+        Result.Err(error: e) => { io_println(io, e); },
+    };
+    // A handle: written, then read again from a seek.
+    match file_create(io, "data.bin") {
+        Result.Ok(value: f) => {
+            file_write_str(f, "0123456789");
+            file_close(f);
+        },
+        Result.Err(error: e) => { io_println(io, io_error_show(e)); },
+    };
+    match file_open(io, "data.bin") {
+        Result.Ok(value: f) => {
+            file_seek(f, 4);
+            let buf = bytes_new(3);
+            match file_read(f, buf) {
+                Result.Ok(value: n) => { io_println(io, str_concat("seek ", bytes_to_str(buf))); },
+                Result.Err(error: e) => { io_println(io, io_error_show(e)); },
+            };
+            file_close(f);
+        },
+        Result.Err(error: e) => { io_println(io, io_error_show(e)); },
+    };
+    match file_metadata(io, "data.bin") {
+        Result.Ok(value: m) => { io_println(io, str_concat("size ", int_to_str(m.size))); },
+        Result.Err(error: e) => { io_println(io, io_error_show(e)); },
+    };
+    // The clock runs forward.
+    let a = time_ms(t);
+    let b = time_ms(t);
+    io_println(io, if b >= a && a > 0 { "clock ok" } else { "clock wrong" });
+    // Only beneath the preopened directory.
+    match fs_read(io, "/etc/hostname") {
+        Result.Ok(value: text) => { io_println(io, "escaped"); },
+        Result.Err(error: e) => { io_println(io, "outside refused"); },
+    };
+    match fs_read(io, "missing.txt") {
+        Result.Ok(value: text) => { io_println(io, "found a missing file"); },
+        Result.Err(error: e) => { io_println(io, "missing refused"); },
+    };
+    0
+}

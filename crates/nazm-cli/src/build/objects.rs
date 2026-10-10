@@ -245,7 +245,9 @@ pub(super) fn objects_for_target(
                 .collect();
             let calls = crate::stack::calls(&texts);
             // The image's root: the board's entry, or the module's one export (N64).
-            let (root, reserved) = if target.is_wasm() {
+            let (root, reserved) = if target.is_wasi() {
+                ("_start", nazm_lir::runtime::wasi::STACK)
+            } else if target.is_wasm() {
                 ("nazm_main", nazm_lir::runtime::wasm::STACK)
             } else {
                 ("nz_board_main", board_for(choice, target).stack)
@@ -314,6 +316,8 @@ fn write_objects(
         // MinGW-w64 (Gate 3): Winsock and BCrypt, and the C runtime's own libraries linked in
         // statically, so the executable needs no MinGW DLL beside it.
         nazm_lir::backend::Os::Windows => "-static -pthread -lws2_32 -lbcrypt".to_owned(),
+        // A WASI module (Gate 3): itself, its imports WASI's.
+        nazm_lir::backend::Os::Wasi => format!("none; {}", nazm_lir::runtime::wasi::LINK),
         // A WebAssembly module links nothing but itself, by `wasm-ld` (N64).
         nazm_lir::backend::Os::None if target.is_wasm() => {
             format!("none; {}", nazm_lir::runtime::wasm::LINK)
@@ -329,7 +333,9 @@ fn write_objects(
     );
     std::fs::write(dir.join("link.txt"), text)?;
     // A module's reference host (N64): exactly the imports it may grant.
-    if target.is_wasm() {
+    if target.is_wasi() {
+        std::fs::write(dir.join("wasi.mjs"), nazm_lir::runtime::wasi::HOST)?;
+    } else if target.is_wasm() {
         std::fs::write(dir.join("host.mjs"), nazm_lir::runtime::wasm::HOST)?;
     }
     // The board's memory map, for `ld.lld -T link.ld` (N62).

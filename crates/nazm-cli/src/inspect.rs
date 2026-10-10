@@ -31,6 +31,8 @@ pub(crate) const TARGETS: &[&str] = &[
     "thumbv7m-none-eabi",
     // WebAssembly (N64, §7.66): objects, `wasm-ld`'s line and a reference host.
     "wasm32-unknown-unknown",
+    // WebAssembly with WASI preview 1 (Gate 3): objects, `wasm-ld`'s line and Node's WASI host.
+    "wasm32-wasip1",
 ];
 
 /// The board table, as data: where each image loads, its UART, how its machine stops, how it is

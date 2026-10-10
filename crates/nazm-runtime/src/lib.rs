@@ -20,6 +20,7 @@ pub(crate) mod net;
 pub(crate) mod os;
 pub mod platform;
 pub mod switch;
+pub mod wasi;
 pub mod wasm;
 
 use std::fmt::Write as _;

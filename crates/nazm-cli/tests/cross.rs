@@ -372,8 +372,8 @@ fn inspect_names_every_target_and_what_this_host_makes_of_it() {
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     let listed = v["toolchain"]["targets"].as_array().unwrap();
     // The four hosted triples and, since N62, the board, since N64, WebAssembly, since N86 the
-    // RISC-V board, and since Gate 3 Windows x86_64 and the Cortex-M board.
-    assert_eq!(listed.len(), 9);
+    // RISC-V board, and since Gate 3 Windows x86_64, the Cortex-M board and WebAssembly with WASI.
+    assert_eq!(listed.len(), 10);
     for t in listed {
         let target = Target::parse(t["triple"].as_str().unwrap()).unwrap();
         let want = if target.links_on(&host) {
