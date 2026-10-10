@@ -290,6 +290,7 @@ fn thunk_of(
         ret_span: target.ret_span,
         foreign: None,
         section: None,
+        interrupt: None,
         export: None,
         captures: Vec::new(),
         closure: true,
@@ -539,6 +540,7 @@ fn lower_function(
             ret_span: f.ret_span,
             foreign: Some(symbol.clone()),
             section: None,
+            interrupt: None,
             export: None,
             closure: None,
         });
@@ -655,6 +657,7 @@ fn lower_function(
         ret_span: f.ret_span,
         foreign: None,
         section: f.section.clone(),
+        interrupt: f.interrupt.clone(),
         export: f.export.clone(),
         closure,
     })

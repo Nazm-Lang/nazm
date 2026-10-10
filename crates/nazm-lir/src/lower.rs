@@ -324,6 +324,7 @@ pub fn lower_as(
                 || instance
                 || Some(f.id) == entry_id
                 || f.section.is_some()
+                || f.interrupt.is_some()
             {
                 Linkage::Hidden
             } else {
