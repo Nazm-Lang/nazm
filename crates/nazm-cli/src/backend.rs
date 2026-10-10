@@ -301,6 +301,11 @@ fn target_args(cross: Option<&str>) -> Vec<String> {
         .to_vec(),
         // A board runs with its MMU off, where every access is to Device memory and one not
         // aligned to its size faults (Gate 3): no unaligned access, a SIMD register's included.
+        // WASI (Gate 3): bulk memory, so LLVM's copies are instructions and never calls to the
+        // runtime's `memcpy`, whose length is the runtime's 64 bits.
+        Some("wasm32-wasip1") => ["-target", "wasm32-wasip1", "-mbulk-memory"]
+            .map(str::to_owned)
+            .to_vec(),
         Some("aarch64-unknown-none") => ["-target", "aarch64-unknown-none", "-mstrict-align"]
             .map(str::to_owned)
             .to_vec(),

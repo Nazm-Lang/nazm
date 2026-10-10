@@ -65,6 +65,9 @@ pub enum Os {
     Windows,
     /// No operating system and no C library (N62, §7.64): a freestanding image.
     None,
+    /// WASI preview 1 (Gate 3, `docs/spec.md` *WASI*): WebAssembly whose outside is the
+    /// `wasi_snapshot_preview1` imports, with a heap and no threads.
+    Wasi,
 }
 
 /// A target, by its explicit triple.
@@ -92,6 +95,7 @@ impl Target {
             "x86_64-pc-windows-gnu" => (Arch::X86_64, Os::Windows),
             "aarch64-unknown-none" => (Arch::Aarch64, Os::None),
             "wasm32-unknown-unknown" => (Arch::Wasm32, Os::None),
+            "wasm32-wasip1" => (Arch::Wasm32, Os::Wasi),
             "riscv64gc-unknown-none-elf" => (Arch::Riscv64, Os::None),
             "thumbv7m-none-eabi" => (Arch::Thumbv7m, Os::None),
             other => {
@@ -101,7 +105,7 @@ impl Target {
                      x86_64-apple-darwin, x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu and, \
                      freestanding, \
                      aarch64-unknown-none, riscv64gc-unknown-none-elf, thumbv7m-none-eabi and \
-                     wasm32-unknown-unknown"
+                     wasm32-unknown-unknown, and WebAssembly with WASI, wasm32-wasip1"
                 ))
             }
         };
@@ -123,6 +127,12 @@ impl Target {
     #[must_use]
     pub fn is_wasm(&self) -> bool {
         self.arch == Arch::Wasm32
+    }
+
+    /// Whether this is WebAssembly with WASI (Gate 3): its imports WASI's, with a heap.
+    #[must_use]
+    pub fn is_wasi(&self) -> bool {
+        self.os == Os::Wasi
     }
 
     /// The machine this compiler is running on.
@@ -582,6 +592,14 @@ pub const SUPPORT: &[Cell] = &[
         cranelift: Support::Unsupported("this Cranelift is built without a WebAssembly backend"),
         debugger: "DWARF sections present; a debugger not exercised",
     },
+    Cell {
+        triple: "wasm32-wasip1",
+        llvm_cpu: "generic",
+        cranelift_cpu: "none",
+        llvm: Support::Run("a_wasi_module_has_a_heap_streams_arguments_files_and_clocks"),
+        cranelift: Support::Unsupported("this Cranelift is built without a WebAssembly backend"),
+        debugger: "DWARF sections present; a debugger not exercised",
+    },
 ];
 
 /// What is refused by decision rather than by what this machine lacks, and why.
@@ -594,8 +612,9 @@ pub const NON_GOALS: &[(&str, &str)] = &[
     ),
     (
         "32-bit hosted targets",
-        "a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 and \
-         the Cortex-M board (`thumbv7m-none-eabi`) are the 32-bit targets, both freestanding",
+        "a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 — \
+         freestanding, or with WASI's imports and its own heap — and the Cortex-M board \
+         (`thumbv7m-none-eabi`) are the 32-bit targets",
     ),
     (
         "big-endian targets",

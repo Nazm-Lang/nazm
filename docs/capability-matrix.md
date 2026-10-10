@@ -4451,6 +4451,7 @@ to be the one the C compiler driver resolves for the triple.
 | `riscv64gc-unknown-none-elf` | run-verified | unsupported | generic-rv64 / none | not exercised |
 | `thumbv7m-none-eabi` | run-verified | unsupported | cortex-m3 / none | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | generic / none | DWARF present, not exercised |
+| `wasm32-wasip1` | run-verified | unsupported | generic / none | DWARF present, not exercised |
 
 Run-verified means programs built for the target ran and agreed with the interpreter: on the host,
 under Rosetta, in the Linux image, under QEMU, under Node — each cell's test is named in the table in
@@ -4741,4 +4742,13 @@ backoff and an idempotency key. `examples/apps/ledger`: a server stopped after l
 before answering, restarted on its address, the client's retry carrying it through, every credit
 applied exactly once; in one process, a lost answer timing out through `select`, interpreted and
 native alike. No database-maturity, consensus or partition-tolerance claim.
+
+**Gate 3J (2026-10-11)** · *WASI* (`spec.md` *WASI*; `systems-domains.md` Part O; `wasi.rs`).
+`wasm32-wasip1`, the tenth target: a heap — a bump arena grown by
+`memory.grow` — under the parts a board with a heap takes, so strings, sequences, `Bytes` and
+closures run; standard streams, arguments, the clocks and `time_sleep`; files and handles beneath
+the first preopened directory, a path outside it refused by the host; a failure reported with
+status 2. Tasks, channels and the network are refused by name: preview 1 has no threads or
+sockets. Run-verified at `-O0` and `-O2` under Node's `node:wasi` in `nazm-wasm:n64`, every import
+`wasi_snapshot_preview1`'s. Narrowed: no directory listing, environment or freeing.
 

@@ -120,6 +120,7 @@ pub(super) fn lowered(
                     unhosted: &mut unhosted,
                     watermark: choice.stack_watermark,
                     wasm: target.is_wasm(),
+                    wasi: target.is_wasi(),
                     adapter: choice.adapter,
                     board: super::board_for(choice, target),
                 }),
@@ -139,6 +140,17 @@ pub(super) fn lowered(
                     Some(map),
                     None,
                 ));
+            }
+            if target.is_wasi() {
+                eprintln!(
+                    "nazm: `{}` is WASI preview 1, one thread and no sockets, and this program \
+                     reaches what it has not got: {}; a WASI module has a heap, standard streams, \
+                     arguments, clocks and files beneath its preopened directory — no tasks, \
+                     channels, network or C",
+                    target.triple,
+                    unhosted.join(", ")
+                );
+                return Err(ExitCode::from(exit::CHECK_FAILED));
             }
             eprintln!(
                 "nazm: `{}` has no operating system, and this program reaches what only a hosted \
@@ -207,6 +219,8 @@ struct Freestanding<'a> {
     unhosted: &'a mut Vec<String>,
     watermark: bool,
     wasm: bool,
+    /// WebAssembly with WASI (Gate 3): its runtime and entry, with a heap.
+    wasi: bool,
     /// A contract's WebAssembly adapter, appended to the unit that defines its `init` (N71).
     adapter: Option<&'a crate::contract_wasm::Shape>,
     /// The board the image is for (Gate 3): `--board`'s, or the target's built-in one.
@@ -289,6 +303,7 @@ fn emit_artefacts(
         unhosted: refused,
         watermark,
         wasm,
+        wasi,
         adapter,
         board,
     }) = freestanding
@@ -319,7 +334,9 @@ fn emit_artefacts(
             }
         }
         // WebAssembly's runtime reaches its host through imports (N64, §7.66).
-        let runtime = if wasm {
+        let runtime = if wasi {
+            nazm_lir::runtime::wasi::emit_runtime(&needs)
+        } else if wasm {
             nazm_lir::runtime::wasm::emit_runtime(needs.stack)
         } else {
             nazm_lir::runtime::board::emit_runtime_for(&board, &needs)
@@ -365,7 +382,12 @@ fn emit_artefacts(
         if !library {
             out.push(Artefact {
                 name: "entry".to_owned(),
-                code: nazm_lir::backend::Code::Llvm(if wasm {
+                code: nazm_lir::backend::Code::Llvm(if wasi {
+                    nazm_lir::runtime::wasi::emit_entry(
+                        &native.entry.to_string(),
+                        native.entry_roots,
+                    )
+                } else if wasm {
                     nazm_lir::runtime::wasm::emit_entry(
                         &native.entry.to_string(),
                         native.entry_roots,
@@ -753,6 +775,8 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
                 && !s.starts_with("llvm.")
                 // The host's imports (N64): undefined in the module by design.
                 && !s.starts_with("nz.host_")
+                // WASI's imports (Gate 3): the host's, by name.
+                && !s.starts_with("wasi.")
                 // The failure hook's caller (Gate 3): the board entry's, written after this.
                 && s.as_str() != "nz_board_on_failure"
                 && !foreign.contains(&s.as_str())

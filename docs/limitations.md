@@ -132,6 +132,10 @@ found only by reading all of it.
   is the interpreter. Comptime is a command, not a language construct; nothing is hot-reloaded —
   `nazm reload-check` states the rule a reloader would follow (area 12). *Narrowed in N65:* until
   then, no REPL, comptime or reload rule existed.
+- WebAssembly with WASI (`wasm32-wasip1`, Gate 3) is preview 1 on one thread: no tasks, channels
+  or sockets (refused by name), no directory listing, an empty environment, permission bits
+  reported as `0o644`, and a heap that is a bump arena never returned — a long-running module's
+  memory only grows. Verified under Node's `node:wasi` only; wasmtime is not installed here.
 - WebAssembly is the freestanding subset only: no heap, so strings built at run time, sequences,
   channels, tasks and closures are refused; imports are `nazm_host.write` and `.report` alone, no
   WASI; only `nazm_main` is exported; verified on Node's engine only, linked by `wasm-ld` outside
