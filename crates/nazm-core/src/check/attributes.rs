@@ -138,6 +138,47 @@ fn failure_hook(f: &Function, errors: &mut Vec<Diagnostic>) {
     }
 }
 
+/// A task's shape (Gate 3): a handler's — what the scheduler can call with nothing but the device's
+/// authority — and not also a handler or a hook.
+fn task(f: &Function, errors: &mut Vec<Diagnostic>) {
+    if !f.attrs.iter().any(|a| a.name == "task") {
+        return;
+    }
+    let plain =
+        |t: &TypeName, name: &str| t.qualifier.is_none() && t.args.is_none() && t.name == name;
+    let runs = match f.params.as_slice() {
+        [] => true,
+        [p] => plain(&p.ty, "MmioCap"),
+        _ => false,
+    };
+    let quiet = f.effects.as_ref().is_some_and(|e| e.names.is_empty());
+    let alone = !f
+        .attrs
+        .iter()
+        .any(|a| a.name == "interrupt" || a.name == "on_failure");
+    let ordinary = f.type_params.is_empty()
+        && f.effect_params.is_empty()
+        && f.name != "main"
+        && f.foreign.is_none()
+        && f.export.is_none()
+        && f.method_of.is_none();
+    if !(runs && plain(&f.return_type, "Int") && quiet && alone && ordinary) {
+        errors.push(
+            Diagnostic::error(
+                codes::INTERRUPT_HANDLER,
+                f.name_span,
+                format!(
+                    "`@task` marks a function of the shape `fn NAME() -> Int ! {{}}` or \
+                     `fn NAME(m: MmioCap) -> Int ! {{}}`, and neither a handler nor a hook, and \
+                     `{}` is not one",
+                    f.name
+                ),
+            )
+            .help("the scheduler calls a task with nothing but the device's authority"),
+        );
+    }
+}
+
 /// Whether `name` is a section's name a linker script can write: letters, digits, `.` and `_`
 /// (Gate 3).
 pub(crate) fn section_name(name: &str) -> bool {
@@ -245,6 +286,26 @@ fn admitted(
                     )),
                 }
             }
+            // A board's periodic task (Gate 3, `docs/spec.md`, *Boards*): a function, its priority
+            // (0–255) and its period in board-timer ticks (at least 1), both written.
+            "task" => {
+                if target != Target::Function {
+                    errors.push(refuse(
+                        a.span,
+                        format!("`@task` marks a function, and this is {}", target.named()),
+                        "write it before the `fn` the board's scheduler runs",
+                    ));
+                }
+                if crate::constants::task_of(std::slice::from_ref(a)).is_none() {
+                    errors.push(refuse(
+                        a.span,
+                        "`@task` takes `priority = \"N\"`, from 0 to 255, and `period = \"P\"`, \
+                         at least 1 tick, and nothing else"
+                            .to_owned(),
+                        "`@task(priority = \"2\", period = \"10\")`",
+                    ));
+                }
+            }
             // A board's failure hook (Gate 3, `docs/spec.md`, *Boards*): a function, no arguments.
             "on_failure" => {
                 if target != Target::Function {
@@ -317,7 +378,8 @@ fn admitted(
                 a.name_span,
                 format!("`@{other}` is not an attribute Nazm has"),
                 "the attributes are `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated`, \
-                 `@section`, `@interrupt` and `@on_failure`; there are no user-defined attributes",
+                 `@section`, `@interrupt`, `@on_failure` and `@task`; there are no user-defined \
+                 attributes",
             )),
         }
     }
@@ -511,6 +573,7 @@ pub fn configure(
             shaped(f, errors);
             handler(f, errors);
             failure_hook(f, errors);
+            task(f, errors);
         }
         keep
     });

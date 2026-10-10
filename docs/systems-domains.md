@@ -164,6 +164,14 @@ boards (a cooperative run-to-completion loop over static tasks ordered by `@prio
 priority inversion avoided by construction: no locks exist, only channels and atomics. No WCET bound
 is claimed; the profile report keeps `wcet: null`. "Hard real-time" is never said.
 
+**Settled in 3F (spec.md, *Restriction profiles*, *Boards*).** `realtime` gains `bounded-stack` and
+`no-heap`. Narrowed: `no-heap-after-init` is `no-heap` — an initialisation phase that may allocate
+would need the analysis of which functions run only before the tasks, which 1.0 does not have — and
+`bounded-loops` keeps its one counted form. `static-topology` and `bounded-blocking` are what
+`no-spawn` and `no-blocking` already guarantee, so neither is a rule of its own. The scheduler is
+`@task(priority = "N", period = "P")`, periods in board-timer ticks, a deadline its period, a miss
+`N0414`.
+
 ## E–J. Domain profiles
 
 Each is a **composition** of existing and Part D rules, plus at most a few domain rules, with a

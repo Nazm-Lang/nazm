@@ -118,6 +118,25 @@ pub fn interrupt_of(attrs: &[nazm_syntax::ast::Attribute]) -> Option<String> {
     string_attr(attrs, "interrupt")
 }
 
+/// A function's `@task(priority = "N", period = "P")` (Gate 3): its priority and period, where both
+/// are written and in range — held to the attribute's rule elsewhere.
+#[must_use]
+pub fn task_of(attrs: &[nazm_syntax::ast::Attribute]) -> Option<(u32, u64)> {
+    let a = attrs.iter().find(|a| a.name == "task")?;
+    let mut priority = None;
+    let mut period = None;
+    for arg in a.args.as_deref()? {
+        if let nazm_syntax::ast::AttrArg::Pair { key, value, .. } = arg {
+            match key.as_str() {
+                "priority" => priority = value.parse::<u32>().ok().filter(|p| *p <= 255),
+                "period" => period = value.parse::<u64>().ok().filter(|p| *p >= 1),
+                _ => return None,
+            }
+        }
+    }
+    Some((priority?, period?))
+}
+
 /// The name a declaration's `@section` gives (Gate 3), held to the attribute's rule elsewhere.
 #[must_use]
 pub fn section_of(attrs: &[nazm_syntax::ast::Attribute]) -> Option<String> {

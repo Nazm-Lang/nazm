@@ -4646,3 +4646,14 @@ generic over the HAL, run unchanged on both AArch64 `virt` and the Cortex-M3 (`e
 heapless board (now a no-op there, every owner being null), and a Cortex-M3 has no CMSDK GPIO in QEMU,
 so its pins are the FPGA LED register.
 
+**Gate 3F (2026-10-11)** · *Realtime* (`spec.md` *Restriction profiles*, *Boards*; `systems-domains.md`
+Part D). `realtime` gains `bounded-stack` (no call cycle, no call through a function value) and
+`no-heap`. A board's **fixed-priority scheduler**: `@task(priority = "N", period = "P")` in board-timer
+ticks; `main` runs first as the initialisation, then the highest-priority released task runs to
+completion, one at a time, the core waiting for an interrupt when none is; a task released again before
+it has run fails the image (`N0414`, new); a task's non-zero answer ends the run; the scheduler owns the
+timer. **Emulator-verified** on both boards at `-O0` and `-O2` (`realtime_tasks.rs`): the higher priority
+ten times by the lower's fourth run (`1004`), an overrun reported. No WCET, no preemption, never "hard
+real-time". Semantic epoch 50. Found on the way: `-O2` deletes a busy loop that does nothing visible, so
+an overrun test must do observable work.
+

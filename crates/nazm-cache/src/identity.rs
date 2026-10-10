@@ -284,7 +284,9 @@ use crate::digest::{self, Framed};
 /// (`N0627`).
 /// `49` — Gate 3, 2026-10-10. `@on_failure` joined the attributes, so one before a function moved
 /// from refused (`N0619`) to accepted, held to a hook's shape and one hook (`N0627`).
-pub const SEMANTIC_EPOCH: u32 = 49;
+/// `50` — Gate 3, 2026-10-11. `@task(priority = "N", period = "P")` joined the attributes, held to a
+/// task's shape (`N0627`); a task's priority or period out of range is `N0619`.
+pub const SEMANTIC_EPOCH: u32 = 50;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

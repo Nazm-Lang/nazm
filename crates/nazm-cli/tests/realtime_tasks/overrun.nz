@@ -1,0 +1,15 @@
+// A task whose run outlasts its one-tick period: every turn of its loop is an atomic addition, so
+// no optimiser may take the loop away.
+static SPIN: Atomic = atomic_new(0);
+
+@task(priority = "1", period = "1")
+fn heavy() -> Int ! {} {
+    let mut i = 0;
+    while i < 5000000 {
+        atomic_add(SPIN, 1);
+        i = i + 1;
+    }
+    0
+}
+
+fn main(m: MmioCap) -> Int ! {} { 0 }
