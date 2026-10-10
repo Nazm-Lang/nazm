@@ -4713,3 +4713,32 @@ and SBOM are byte-identical; its record, signed with `ssh-keygen`, verifies and 
 executable changes. Run-verified on macOS AArch64; signing is the host's `ssh-keygen`. No sandboxing,
 non-interference or certification claim.
 
+**Gate 3H (2026-10-11)** · *AI / HPC* (`spec.md` *Accelerator kernels*, *Providers*, *SIMD*;
+`systems-domains.md` Part L; `accel_providers.rs`). A **provider boundary**: a kernel is one source
+text — the OpenCL C a device builds, with an element function `nz_item` beside the `__kernel` — and a
+provider runs it. The OpenCL provider builds it for Apple's GPU; the new **CPU provider** compiles
+the same text as C behind a prelude for OpenCL's words and runs `nz_item` over a pool of threads.
+`--provider auto|opencl|cpu`: `auto` runs on the GPU where it can and otherwise on the CPU, saying
+why in the report and on stderr; where the GPU ran it, the CPU provider runs it too as a second
+oracle (`cross_check`). **Float kernels**, `Float32` and `Float64`, one type throughout, `float_sqrt`
+and `float_abs` the built-ins they may call, held to the interpreter bit for bit (every NaN alike):
+no fused multiply-add on either provider, division and square root correctly rounded on the device.
+Verified here: `Int` and `Float32` on the GPU and the CPU, agreeing with each other and the
+interpreter; `Float64` refused by name on Apple's GPU (no `cl_khr_fp64`) and run on the CPU. `--scalar`
+builds the CPU loop without LLVM's vectoriser; the comparison is filed in `performance.md`.
+`nazm.accel/3`. Metal, CUDA, ROCm and SPIR-V remain named future providers.
+
+**Gate 3I (2026-10-11)** · *Storage and the distributed foundation* (`systems-domains.md` Parts M,
+N; `storage.rs`, `distributed.rs`). `examples/apps/pagestore`: fixed checksummed pages written in
+place behind a redo log of whole page images, a fresh store made atomically, one owner task serving
+readers and a writer through channels, a lock for one process. A run is crashed at **every** write
+boundary — half that write written — and each recovery checked against a model of the acknowledged
+writes: all there, nothing else but the one in flight, torn pages repaired from the log. The test
+found two defects in the engine as first written (a log handle kept across the checkpoint that
+replaced its file; a reopen that reset the crash counter), both fixed before this was committed.
+`@std/dist`: `NodeId`, framed `Msg`, the `Transport` trait with `Tcp` and `Local`, `retry` with
+backoff and an idempotency key. `examples/apps/ledger`: a server stopped after logging a credit and
+before answering, restarted on its address, the client's retry carrying it through, every credit
+applied exactly once; in one process, a lost answer timing out through `select`, interpreted and
+native alike. No database-maturity, consensus or partition-tolerance claim.
+

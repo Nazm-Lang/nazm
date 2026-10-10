@@ -35,7 +35,8 @@ found only by reading all of it.
   The C library's `float_sin` and its kin are as accurate as the host's library and may differ
   in the last place between hosts. There is no `Int64` alias, no 128-bit integer, no decimal
   floating point, no access to floating-point flags or rounding modes, and no SIMD vector type in
-  the language. The EVM and accelerator-kernel targets refuse every number but `Int`.
+  the language. The EVM target refuses every number but `Int`; an accelerator kernel computes in one
+  type, `Int`, `Float32` or `Float64`, never two (Gate 3).
 - Attributes (Gate 2): a closed vocabulary — `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated` —
   written only before a top-level declaration, not before a method inside an `impl` or a
   `trait`. `@deprecated` is metadata-only (G2-C1): `nazm doc` publishes it on a `pub` function,
@@ -109,13 +110,18 @@ found only by reading all of it.
   `Int`s and `Bool`s one array per field, whether or not its loops gain — it is 2× slower for a loop
   reading every field; the compiler does not choose; LLVM only (area 4). *Narrowed in N68:* until
   then, every element was laid out whole.
-- Accelerators are one command over one API: `nazm accel` maps a pure `(Int) -> Int` function, or
-  zips a `(Int, Int) -> Int` one over two inputs, of `Int`s through macOS's OpenCL on Apple's GPU,
-  and folds the results (`add`, `min`, `max`) on the host in index order; no kernels in the
-  language, no other vendor, API or operating system (Metal and SPIR-V BLOCKED here for want of a
-  toolchain), no device-side reduction, no layout specialisation; a light workload is slower than a
-  native CPU loop once transfers are counted (area 21). *Narrowed in N88:* until then, maps of one
-  sequence only; *in N67:* no GPU path.
+- Accelerators are one command over two providers: `nazm accel` maps a pure `(T) -> T` function,
+  or zips a `(T, T) -> T` one over two inputs — `T` an `Int`, or since Gate 3 a `Float32` or
+  `Float64` — through macOS's OpenCL on Apple's GPU or the CPU provider (the same kernel compiled as
+  C on a thread pool), and folds the results (`add`, `min`, `max`) on the host in index order; no
+  kernels in the language, no other GPU vendor or API (Metal, CUDA, ROCm and SPIR-V named future
+  providers; Metal and SPIR-V BLOCKED here for want of a toolchain), no device-side reduction, no
+  layout specialisation; a light workload is slower than a native CPU loop once transfers are
+  counted (area 21). A float kernel calls only `float_sqrt` and `float_abs`; Apple's GPU has no
+  `Float64` (`cl_khr_fp64`), so such a kernel runs on the CPU provider; a device that flushes
+  subnormal `Float32`s would differ from the interpreter there, and the check reports it. The CPU
+  provider's GPU cross-check is a second oracle, not a proof. *Narrowed in Gate 3:* until then, one
+  provider and `Int` only; *in N88:* maps of one sequence only; *in N67:* no GPU path.
 - Vectorisation is one idiom: the counted `Ints` summation loop, replaced by `ints_sum_from` in native
   builds at every `--opt-level`, on both backends (until Q1 this line said `2` and above, which the
   code never did), and only when nothing between the counter's `= 0` and the loop can write the
@@ -138,6 +144,14 @@ found only by reading all of it.
   got: a build that reaches them is refused by name; `float_sqrt`, `float_abs`, `float_floor`,
   `float_ceil` and `float_trunc` are instructions (Gate 3). The domain workloads round and clamp by
   comparison.
+- The storage engine (Gate 3) is a reference application, not a database: sixteen fixed pages of
+  `Int` keys and values, a redo log of whole page images, one process by a lock file a crash leaves
+  (`recover` breaks it) rather than `flock`, no mmap or direct I/O, no compaction of a full page.
+  Its crash test stops a process with a write torn, as a power cut would leave the file; the
+  operating system's cache survives a process, so the test cannot observe a missing `fsync`.
+  The distributed foundation is a library contract and two processes: no consensus, replication,
+  membership or partition tolerance, no TLS; idempotency is the receiver's record of keys, which
+  `@std/dist` leaves to it.
 - The domain profiles (Gate 3) are compositions of rules, and their workloads run on emulators with
   simulated sensors: no certification, qualification or regulatory approval, no hardware, no CAN
   — the automotive frame is text over a UART.

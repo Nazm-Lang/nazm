@@ -494,7 +494,7 @@ fn every_command_has_its_own_help_naming_the_schema_it_prints() {
         ("explain-cost", "nazm.cost/2", "nazm.profile/"),
         ("profile", "nazm.profile/2", "nazm.cost/"),
         ("explain-flow", "nazm.flow/2", "nazm.flow/1"),
-        ("accel", "nazm.accel/2", "nazm.accel/1"),
+        ("accel", "nazm.accel/3", "nazm.accel/2"),
         ("core-ir", "nazm.core-ir/2", "nazm.core-ir/1"),
     ] {
         let help = ok(d.path(), &["help", c]);

@@ -25,6 +25,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("binary", include_str!("../../../library/std/binary.nz")),
     ("chan", include_str!("../../../library/std/chan.nz")),
     ("deque", include_str!("../../../library/std/deque.nz")),
+    ("dist", include_str!("../../../library/std/dist.nz")),
     ("env", include_str!("../../../library/std/env.nz")),
     ("error", include_str!("../../../library/std/error.nz")),
     ("file", include_str!("../../../library/std/file.nz")),

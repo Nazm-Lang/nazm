@@ -566,16 +566,19 @@ pub(crate) enum Command {
         #[arg(long, value_name = "DIR")]
         accounts: Option<PathBuf>,
     },
-    /// Map a kernel over `Int`s on the GPU (N67): an eligible pure `(Int) -> Int` function of the
-    /// file, as an OpenCL kernel, over the whitespace-separated `Int`s of `--input`. One
-    /// `nazm.accel/2` line: the device, every transfer and the synchronisation, timings, the
-    /// kernel's identity, and whether the results agree with the interpreter's. macOS only.
+    /// Map a kernel over a sequence on an accelerator (N67): an eligible pure `(T) -> T` function
+    /// of the file — `T` an `Int`, or (Gate 3) a `Float32` or `Float64` — over the
+    /// whitespace-separated numbers of `--input`, on macOS's OpenCL GPU or the CPU provider. One
+    /// `nazm.accel/3` line: the provider and why, the device, every transfer and the
+    /// synchronisation, timings, the kernel's identity, and whether the results agree with the
+    /// interpreter's.
     Accel {
         file: PathBuf,
         /// The function to run as a kernel, in the file's own module.
         kernel: String,
-        /// The input: whitespace-separated `Int`s, at most 8,000,000. Twice for a kernel of two
-        /// `Int`s, a zip (N88): the two inputs are of one length, element `i` of each its arguments.
+        /// The input: whitespace-separated numbers of the kernel's type, at most 8,000,000. Twice
+        /// for a kernel of two, a zip (N88): the two inputs are of one length, element `i` of each
+        /// its arguments.
         #[arg(long, value_name = "FILE", required = true)]
         input: Vec<PathBuf>,
         /// Fold the kernel's results into one `Int`, in index order (N88): `add`, checked as
@@ -588,6 +591,15 @@ pub(crate) enum Command {
         /// Print the generated OpenCL C kernel and stop: no device is used, on any host.
         #[arg(long)]
         print_kernel: bool,
+        /// Where it runs (Gate 3): `opencl`, the GPU, refused where there is none; `cpu`, the
+        /// same kernel compiled as C and run on a pool of threads; `auto`, the GPU where one can
+        /// run it and the CPU otherwise, the report saying which and why.
+        #[arg(long, value_name = "PROVIDER", value_parser = ["auto", "opencl", "cpu"], default_value = "auto")]
+        provider: String,
+        /// Compile the CPU provider's loop without LLVM's vectoriser (Gate 3): the scalar side of
+        /// a SIMD measurement.
+        #[arg(long)]
+        scalar: bool,
     },
     /// Whether a running image could take a new version of a program (N65): one
     /// `nazm.reload-check/1` line naming each change as `reloadable` or `restart`, and why. Exits
