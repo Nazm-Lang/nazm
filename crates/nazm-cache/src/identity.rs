@@ -282,7 +282,9 @@ use crate::digest::{self, Framed};
 /// `48` — Gate 3, 2026-10-10. `@interrupt` joined the attributes, so one before a function moved
 /// from refused (`N0619`) to accepted, held to a handler's shape and one handler per interrupt
 /// (`N0627`).
-pub const SEMANTIC_EPOCH: u32 = 48;
+/// `49` — Gate 3, 2026-10-10. `@on_failure` joined the attributes, so one before a function moved
+/// from refused (`N0619`) to accepted, held to a hook's shape and one hook (`N0627`).
+pub const SEMANTIC_EPOCH: u32 = 49;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

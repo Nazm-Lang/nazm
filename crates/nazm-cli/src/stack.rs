@@ -55,6 +55,11 @@ pub(crate) fn calls(texts: &[&str]) -> BTreeMap<String, Vec<Option<String>>> {
                 continue;
             }
             let Some(f) = &current else { continue };
+            // A comment is not code: its words are not a call (Gate 3 — a runtime comment that
+            // said "its first call" read as a call through a value).
+            if line.trim_start().starts_with(';') {
+                continue;
+            }
             let Some((_, after)) = line.split_once("call ") else {
                 continue;
             };
@@ -197,6 +202,13 @@ mod tests {
 
     fn sizes(fs: &[(&str, u64)]) -> BTreeMap<String, u64> {
         fs.iter().map(|(f, n)| ((*f).to_owned(), *n)).collect()
+    }
+
+    #[test]
+    fn a_comment_that_says_call_is_not_a_call() {
+        let text = "define void @f() {\nentry:\n  ; its first call would look like one\n  call void @g()\n  ret void\n}\n";
+        let c = calls(&[text]);
+        assert_eq!(c.get("f"), Some(&vec![Some("g".to_owned())]));
     }
 
     #[test]
