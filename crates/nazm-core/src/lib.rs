@@ -619,6 +619,12 @@ pub fn board_only(core: &cir::Program) -> Option<(nazm_span::Span, String)> {
         .find(|f| f.section.is_some())
         .map(|f| (f.name_span, format!("`@section` on `{}`", f.name)))
         .or_else(|| {
+            core.functions
+                .iter()
+                .find(|f| f.interrupt.is_some())
+                .map(|f| (f.name_span, format!("`@interrupt` on `{}`", f.name)))
+        })
+        .or_else(|| {
             core.statics
                 .iter()
                 .find(|s| s.section.is_some())
@@ -632,9 +638,9 @@ pub fn board_only_refused(at: nazm_span::Span, what: &str, where_: &str) -> nazm
     nazm_diag::Diagnostic::error(
         nazm_diag::codes::MACHINE_ONLY,
         at,
-        format!("{where_} cannot honour {what}: only a board's image has sections it places"),
+        format!("{where_} cannot honour {what}: only a board's image has sections and interrupts"),
     )
-    .primary_label("placed in a section")
+    .primary_label("a board's alone")
     .help(
         "sections exist only in a board's build: `nazm build --target aarch64-unknown-none` or \
          `--target riscv64gc-unknown-none-elf`",

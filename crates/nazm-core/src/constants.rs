@@ -112,12 +112,23 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
     }
 }
 
+/// The interrupt a function's `@interrupt` names (Gate 3), held to the attribute's rule elsewhere.
+#[must_use]
+pub fn interrupt_of(attrs: &[nazm_syntax::ast::Attribute]) -> Option<String> {
+    string_attr(attrs, "interrupt")
+}
+
 /// The name a declaration's `@section` gives (Gate 3), held to the attribute's rule elsewhere.
 #[must_use]
 pub fn section_of(attrs: &[nazm_syntax::ast::Attribute]) -> Option<String> {
+    string_attr(attrs, "section")
+}
+
+/// The one string argument of the attribute `name`, where it is written with one.
+fn string_attr(attrs: &[nazm_syntax::ast::Attribute], name: &str) -> Option<String> {
     attrs
         .iter()
-        .find(|a| a.name == "section")
+        .find(|a| a.name == name)
         .and_then(|a| match a.args.as_deref() {
             Some([nazm_syntax::ast::AttrArg::Str { value, .. }]) => Some(value.clone()),
             _ => None,
