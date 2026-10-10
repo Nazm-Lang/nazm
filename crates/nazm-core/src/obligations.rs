@@ -408,9 +408,10 @@ impl Census<'_> {
             | Intrinsic::VecPush
             | Intrinsic::ChanNew
             | Intrinsic::ChanNewOf
+            | Intrinsic::AtomicNew
             | Intrinsic::ReadFile
             | Intrinsic::CStrCopy => Kind::Allocation,
-            Intrinsic::IntsSum => Kind::Overflow,
+            Intrinsic::IntsSum | Intrinsic::AtomicAdd => Kind::Overflow,
             _ => return,
         };
         self.push(kind, Status::Checked, at, None);

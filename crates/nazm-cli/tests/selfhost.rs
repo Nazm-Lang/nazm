@@ -2925,6 +2925,13 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("os_kill", "Gate 2 process and environment"),
         // Gate 2 (randomness): `RandomCap` is not in the Nazm checker's table.
         ("os_random_bytes", "Gate 2 randomness"),
+        // Gate 3 (atomics): `Atomic` is not in the Nazm checker's table.
+        ("atomic_new", "Gate 3 atomics"),
+        ("atomic_load", "Gate 3 atomics"),
+        ("atomic_store", "Gate 3 atomics"),
+        ("atomic_add", "Gate 3 atomics"),
+        ("atomic_swap", "Gate 3 atomics"),
+        ("atomic_compare_swap", "Gate 3 atomics"),
     ];
     let carried = |i: &nazm_core::Intrinsic| !NOT_CARRIED.iter().any(|(n, _)| *n == i.name());
     for (name, _) in NOT_CARRIED {

@@ -260,6 +260,13 @@ impl Effect {
             | Intrinsic::ChanSend
             | Intrinsic::ChanRecv
             | Intrinsic::ChanClose
+            // An atomic is the program's own memory (Gate 3).
+            | Intrinsic::AtomicNew
+            | Intrinsic::AtomicLoad
+            | Intrinsic::AtomicStore
+            | Intrinsic::AtomicAdd
+            | Intrinsic::AtomicSwap
+            | Intrinsic::AtomicCompareSwap
             | Intrinsic::ChanNewOf
             | Intrinsic::ChanSendOf
             | Intrinsic::ChanRecvOf

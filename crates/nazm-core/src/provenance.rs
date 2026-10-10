@@ -587,6 +587,8 @@ impl<'b> Walk<'_, 'b> {
             Some(Shape::Chan) => Some("Chan".to_owned()),
             // Every buffer and every view of one (Gate 2).
             Some(Shape::Bytes) => Some("Bytes".to_owned()),
+            // Every atomic cell (Gate 3).
+            Some(Shape::Atomic) => Some("Atomic".to_owned()),
             Some(Shape::VecT) => elem().map(|t| format!("Vec[{t}]")),
             // A select's channels: the cell is their elements', `Chan[T]`.
             Some(Shape::ChanT | Shape::ChansT) => elem().map(|t| format!("Chan[{t}]")),
@@ -867,6 +869,12 @@ impl<'b> Walk<'_, 'b> {
                         let v = flows.get(value).cloned().unwrap_or_default();
                         self.store(cell, callee_span, &v);
                         None
+                    }
+                    ContainerUse::Exchange { handle, value } => {
+                        let cell = self.cell(b, callee_span, handle);
+                        let v = flows.get(value).cloned().unwrap_or_default();
+                        self.store(cell.clone(), callee_span, &v);
+                        Some(Flow::cell(&cell, callee_span).joined(&all))
                     }
                     ContainerUse::Receive { from, into } => {
                         let source = self.cell(b, callee_span, from);

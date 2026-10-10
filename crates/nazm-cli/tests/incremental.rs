@@ -1462,11 +1462,11 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        44,
+        45,
         "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42, N49, N50, N51, N52, N53, N54, N55, \
          N62, N66, N76, N78, N79, N80, N85, N86, N87, N103, N104, Gate 1-C1, Gate 2 (three \
-         times), M1, Gate 2 eight times more, G2-C1 and Gate 3 each changed what the checker \
-         accepts, so the epoch moved forty-three times"
+         times), M1, Gate 2 eight times more, G2-C1 and Gate 3 (twice) each changed what the \
+         checker accepts, so the epoch moved forty-four times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/11");
 }
@@ -1858,6 +1858,7 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     // for imported impl methods' effects, and Gate 2 for impls of every numeric type and for
     // files and handles, for networking, for time, for process and environment, and for
     // randomness, and for exports of every number, and for attributes, and for where
-    // `@deprecated` may stand, and Gate 3 for the platform layer's reserved symbols.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 44);
+    // `@deprecated` may stand, and Gate 3 for the platform layer's reserved symbols and for
+    // atomics.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 45);
 }

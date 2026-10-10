@@ -532,6 +532,47 @@ impl Interpreter {
                     |v| Ok(Value::Int(v)),
                 )
             }
+            // Atomics (Gate 3): sequentially consistent, as `docs/spec.md` promises everywhere.
+            (Intrinsic::AtomicNew, [Value::Int(v)]) => Ok(Value::Atomic(Arc::new(
+                std::sync::atomic::AtomicI64::new(*v),
+            ))),
+            (Intrinsic::AtomicLoad, [Value::Atomic(a)]) => {
+                Ok(Value::Int(a.load(std::sync::atomic::Ordering::SeqCst)))
+            }
+            (Intrinsic::AtomicStore, [Value::Atomic(a), Value::Int(v)]) => {
+                a.store(*v, std::sync::atomic::Ordering::SeqCst);
+                Ok(Value::Int(0))
+            }
+            (Intrinsic::AtomicSwap, [Value::Atomic(a), Value::Int(v)]) => {
+                Ok(Value::Int(a.swap(*v, std::sync::atomic::Ordering::SeqCst)))
+            }
+            (
+                Intrinsic::AtomicCompareSwap,
+                [Value::Atomic(a), Value::Int(old), Value::Int(new)],
+            ) => {
+                use std::sync::atomic::Ordering::SeqCst;
+                Ok(Value::Bool(
+                    a.compare_exchange(*old, *new, SeqCst, SeqCst).is_ok(),
+                ))
+            }
+            // The cell is left as it was when the sum would leave `Int`.
+            (Intrinsic::AtomicAdd, [Value::Atomic(a), Value::Int(d)]) => {
+                use std::sync::atomic::Ordering::SeqCst;
+                a.fetch_update(SeqCst, SeqCst, |x| x.checked_add(*d))
+                    .map(Value::Int)
+                    .map_err(|_| RuntimeError {
+                        diagnostic: Box::new(
+                            Diagnostic::error(
+                                codes::INTEGER_OVERFLOW,
+                                span,
+                                "this addition overflows `Int`",
+                            )
+                            .help(
+                                "`Int` is a 64-bit signed integer; overflow stops the program rather than wrapping",
+                            ),
+                        ),
+                    })
+            }
             (Intrinsic::ChanNew | Intrinsic::ChanNewOf, [Value::Int(capacity)]) => {
                 let Ok(capacity) = usize::try_from(*capacity) else {
                     return Err(out_of_bounds(

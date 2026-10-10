@@ -2006,6 +2006,7 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         | Type::Vec(_)
         | Type::Bytes
         | Type::Text
+        | Type::Atomic
         | Type::Fn(_) => true,
         Type::Int
         | Type::Bool

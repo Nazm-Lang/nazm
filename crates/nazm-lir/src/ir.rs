@@ -505,6 +505,9 @@ impl Ty {
             // heap buffer it counts, which its built-ins write through; a `Text` is a `Str`
             // the checker knows is UTF-8.
             nazm_sema::Type::Bytes | nazm_sema::Type::Text => Self::Str,
+            // `Str`'s triple too (Gate 3): `ptr` is the cell, `len` its 8 bytes, `owner` the
+            // counted allocation holding it — or null for a static's, which nothing frees.
+            nazm_sema::Type::Atomic => Self::Str,
             nazm_sema::Type::Ints => Self::Ints,
             nazm_sema::Type::Strs => Self::Strs,
             nazm_sema::Type::Chan => Self::Chan,

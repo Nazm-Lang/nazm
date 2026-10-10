@@ -986,10 +986,13 @@ fn the_report_is_the_same_for_the_same_records_in_any_order_and_puts_correctness
         }
         Ok(reply(r, &v.to_string(), "fake-1"))
     }));
+    // Not a test of the cap: every one of the 32 calls must be made, and a context carries the
+    // repository's documents, which grow (Gate 3's spec took two trials past $1 at the fake
+    // price). The cap is far above what they cost.
     let out = run::run(
         suite(),
         &fake,
-        &config(dir.path(), Mode::Authoritative, 2, DOLLAR),
+        &config(dir.path(), Mode::Authoritative, 2, 100 * DOLLAR),
         o200k(),
         &mut |_| {},
     )

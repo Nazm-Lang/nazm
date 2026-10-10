@@ -58,6 +58,8 @@ pub enum Shape {
     Text,
     /// `OsHandle` (Gate 2, `docs/general-purpose.md` §8).
     OsHandle,
+    /// `Atomic` (Gate 3, `docs/spec.md`, *Atomics*).
+    Atomic,
 }
 
 /// Which numeric types a generic numeric built-in's `T` ranges over (Gate 2). Checked where
@@ -113,6 +115,7 @@ impl Shape {
             Self::Bytes => Some(Type::Bytes),
             Self::Text => Some(Type::Text),
             Self::OsHandle => Some(Type::OsHandle),
+            Self::Atomic => Some(Type::Atomic),
             Self::T | Self::VecT | Self::ChanT | Self::ChansT => None,
         }
     }
@@ -139,6 +142,7 @@ impl Shape {
             Self::Bytes => "Bytes",
             Self::Text => "Text",
             Self::OsHandle => "OsHandle",
+            Self::Atomic => "Atomic",
         }
     }
 }
@@ -497,11 +501,27 @@ pub enum Intrinsic {
     /// `os_random_bytes(buf: Bytes) -> Int` (Gate 2, §21): `buf` filled from the operating system's
     /// entropy; its length. Behind `RandomCap`, with no effect.
     OsRandomBytes,
+
+    // --- atomics, Gate 3 (`docs/spec.md`, *Atomics*) -----------------------------------------
+    /// `atomic_new(v: Int) -> Atomic` — a cell holding `v`.
+    AtomicNew,
+    /// `atomic_load(a: Atomic) -> Int`.
+    AtomicLoad,
+    /// `atomic_store(a: Atomic, v: Int) -> Int` — `0`.
+    AtomicStore,
+    /// `atomic_add(a: Atomic, d: Int) -> Int` — the value before; a sum outside `Int` stops
+    /// the program with `N0400` and leaves the cell as it was.
+    AtomicAdd,
+    /// `atomic_swap(a: Atomic, v: Int) -> Int` — the value before.
+    AtomicSwap,
+    /// `atomic_compare_swap(a: Atomic, expected: Int, new: Int) -> Bool` — `new` stored, and
+    /// `true`, exactly when the cell held `expected`.
+    AtomicCompareSwap,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 160] = [
+    pub const ALL: [Self; 166] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -662,6 +682,12 @@ impl Intrinsic {
         Self::OsWait,
         Self::OsKill,
         Self::OsRandomBytes,
+        Self::AtomicNew,
+        Self::AtomicLoad,
+        Self::AtomicStore,
+        Self::AtomicAdd,
+        Self::AtomicSwap,
+        Self::AtomicCompareSwap,
     ];
 
     #[must_use]
@@ -831,6 +857,12 @@ impl Intrinsic {
             Self::OsWait => "os_wait",
             Self::OsKill => "os_kill",
             Self::OsRandomBytes => "os_random_bytes",
+            Self::AtomicNew => "atomic_new",
+            Self::AtomicLoad => "atomic_load",
+            Self::AtomicStore => "atomic_store",
+            Self::AtomicAdd => "atomic_add",
+            Self::AtomicSwap => "atomic_swap",
+            Self::AtomicCompareSwap => "atomic_compare_swap",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -1058,6 +1090,10 @@ impl Intrinsic {
             Self::OsWait => &[Shape::OsHandle],
             Self::OsKill => &[Shape::OsHandle],
             Self::OsRandomBytes => &[Shape::Bytes],
+            Self::AtomicNew => &[Shape::Int],
+            Self::AtomicLoad => &[Shape::Atomic],
+            Self::AtomicStore | Self::AtomicAdd | Self::AtomicSwap => &[Shape::Atomic, Shape::Int],
+            Self::AtomicCompareSwap => &[Shape::Atomic, Shape::Int, Shape::Int],
             Self::TextFromStr => &[Shape::Str],
             Self::TextAssume => &[Shape::Str],
         }
@@ -1215,6 +1251,9 @@ impl Intrinsic {
             Self::OsWait => Shape::Int,
             Self::OsKill => Shape::Int,
             Self::OsRandomBytes => Shape::Int,
+            Self::AtomicNew => Shape::Atomic,
+            Self::AtomicLoad | Self::AtomicStore | Self::AtomicAdd | Self::AtomicSwap => Shape::Int,
+            Self::AtomicCompareSwap => Shape::Bool,
             Self::TextFromStr => Shape::Text,
             Self::TextAssume => Shape::Text,
         }

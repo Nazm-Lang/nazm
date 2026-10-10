@@ -243,7 +243,10 @@ pub fn escape(s: &str) -> String {
 /// `nz_os_terminate`, `nz_os_key`, `nz_net_read` … `nz_net_name`), the `stack` unit's task stacks,
 /// stack budget and clocks (`nz_os_stack_*`, `nz_os_page_size`, `nz_os_clock`), and on Windows
 /// the `init` unit and the entry's `nz_os_args` — so the runtime's own text names no system.
-pub const RUNTIME_ABI_REVISION: u32 = 21;
+/// 22 is Gate 3's atomics: `nz.atomic_load`, `nz.atomic_store`, `nz.atomic_swap` and
+/// `nz.atomic_cas`, sequentially consistent, defined by the hosted runtime and a board's alike;
+/// an atomic's cell is the data of a string backing, so it is `Str`'s triple.
+pub const RUNTIME_ABI_REVISION: u32 = 22;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -394,6 +397,10 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.chanv_send", [Ptr, Ptr], Some(Word::Bit), Channels, "borrows the channel; copies the slot in, taking the reference it holds; false and nothing copied when closed"),
     import!("nz.chanv_recv", [Ptr, Ptr], Some(Word::Bit), Channels, "borrows the channel; copies the oldest slot out, handing over its reference; false once closed and drained"),
     import!("nz.chanv_release", [Ptr], None, Channels, "one reference fewer; the last releases each queued slot and frees the channel"),
+    import!("nz.atomic_load", [Ptr], Some(Word::I64), Base, "borrows the cell; one sequentially consistent load (Gate 3)"),
+    import!("nz.atomic_store", [Ptr, I64], None, Base, "borrows the cell; one sequentially consistent store"),
+    import!("nz.atomic_swap", [Ptr, I64], Some(Word::I64), Base, "borrows the cell; the value before"),
+    import!("nz.atomic_cas", [Ptr, I64, I64], Some(Word::Bit), Base, "borrows the cell; true when it held the expected value and now holds the new one"),
     import!("nz.mmio_read32", [I64], Some(Word::I64), Base, "reads a device register; takes nothing (N62)"),
     import!("nz.mmio_write32", [I64, I64], Some(Word::I64), Base, "writes a device register; takes nothing (N62)"),
     import!("nz.mmio_read8", [I64], Some(Word::I64), Base, "reads a byte-wide device register; takes nothing (N86)"),
@@ -614,6 +621,10 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chanv_send", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "send a slot, blocking while full", "borrows the channel; takes the slot's reference when it returns true"),
     rt!("nz.chanv_recv", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "receive a slot, blocking while empty", "borrows the channel; hands the slot's reference to the caller when it returns true"),
     rt!("nz.chanv_release", "void" ("ptr") "", true, Channels, "", Never, Any, "one reference fewer; the last releases the queued slots and frees the channel", "takes a reference, atomically"),
+    rt!("nz.atomic_load", "i64" ("ptr") "", true, Base, "", Never, Any, "a sequentially consistent load of an atomic's cell (Gate 3)", "borrows the cell"),
+    rt!("nz.atomic_store", "void" ("ptr", "i64") "", true, Base, "", Never, Any, "a sequentially consistent store to an atomic's cell (Gate 3)", "borrows the cell"),
+    rt!("nz.atomic_swap", "i64" ("ptr", "i64") "", true, Base, "", Never, Any, "a sequentially consistent exchange of an atomic's cell (Gate 3)", "borrows the cell; the value before"),
+    rt!("nz.atomic_cas", "i1" ("ptr", "i64", "i64") "", true, Base, "", Status, Any, "a sequentially consistent compare-and-swap of an atomic's cell (Gate 3)", "borrows the cell; whether it stored"),
     rt!("nz.mmio_read32", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 32-bit read of a device register (N62); reached only in a freestanding image", "none"),
     rt!("nz.mmio_write32", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 32-bit write of a device register (N62); reached only in a freestanding image", "none"),
     rt!("nz.mmio_read8", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 8-bit read of a device register (N86); reached only in a freestanding image", "none"),
@@ -1145,9 +1156,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_one_and_reaches_the_system_only_through_its_platform_layer() {
+    fn the_runtime_is_revision_twenty_two_and_reaches_the_system_only_through_its_platform_layer() {
         // Gate 3's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 21);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 22);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));

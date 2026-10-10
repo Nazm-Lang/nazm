@@ -219,6 +219,13 @@ impl Origin {
             Intrinsic::OsSpawn => BuiltinFlow::WritePath,
             Intrinsic::OsChildPipe | Intrinsic::OsWait | Intrinsic::OsKill => BuiltinFlow::Derive,
             Intrinsic::OsRandomBytes => BuiltinFlow::Derive,
+            // An atomic is a container of one `Int` (Gate 3): made from its value, which the
+            // handle carries; written; and read, alone or as an exchange.
+            Intrinsic::AtomicNew | Intrinsic::AtomicStore => BuiltinFlow::Derive,
+            Intrinsic::AtomicLoad
+            | Intrinsic::AtomicAdd
+            | Intrinsic::AtomicSwap
+            | Intrinsic::AtomicCompareSwap => BuiltinFlow::Read,
             Intrinsic::OsOpenWrite
             | Intrinsic::OsMkdir
             | Intrinsic::OsRmdir
@@ -433,6 +440,21 @@ impl Origin {
             | Intrinsic::VecGet
             | Intrinsic::VecPop => ContainerUse::Read { handle: 0 },
             Intrinsic::IntsSum => ContainerUse::Read { handle: 1 },
+            Intrinsic::AtomicNew => ContainerUse::None,
+            Intrinsic::AtomicLoad => ContainerUse::Read { handle: 0 },
+            Intrinsic::AtomicStore => ContainerUse::Write {
+                handle: 0,
+                value: 1,
+            },
+            Intrinsic::AtomicAdd | Intrinsic::AtomicSwap => ContainerUse::Exchange {
+                handle: 0,
+                value: 1,
+            },
+            // Whether it stored depends on what the cell held.
+            Intrinsic::AtomicCompareSwap => ContainerUse::Exchange {
+                handle: 0,
+                value: 2,
+            },
             Intrinsic::IntsPush
             | Intrinsic::StrsPush
             | Intrinsic::VecPush
@@ -510,6 +532,13 @@ pub enum ContainerUse {
     },
     /// Argument `value` is written into the cell of argument `handle`'s container.
     Write {
+        handle: usize,
+        value: usize,
+    },
+    /// Argument `value` is written into the cell of argument `handle`'s container, and the
+    /// result carries the cell, which it read in the same step (Gate 3: an atomic's add, swap
+    /// and compare-and-swap).
+    Exchange {
         handle: usize,
         value: usize,
     },

@@ -8297,10 +8297,11 @@ Repointed by Gate 2's randomness, which moved it to 40: an entry that accepted a
 Repointed by Gate 2's C foundation, which moved it to 41: an entry that refused an export of a `Float64` must not be reused.
 Repointed by Gate 2's attributes, which moved it to 42: an entry that refused an `@` must not be reused.
 Repointed by G2-C1, which moved it to 43: an entry that accepted `@deprecated` on a private function must not be reused.
-Repointed by Gate 3, which moved it to 44: an entry that accepted a foreign `nz_os_clock` must not be reused."""
+Repointed by Gate 3, which moved it to 44: an entry that accepted a foreign `nz_os_clock` must not be reused.
+Repointed by Gate 3's atomics, which moved it to 45: an entry that accepted a record named `Atomic` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 44;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 43;"
+find = "pub const SEMANTIC_EPOCH: u32 = 45;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 44;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10511,11 +10512,12 @@ Repointed by Gate 2's networking, which moved it to 17 for the socket entries an
 Repointed by Gate 2's time, which moved it to 18 for the nanosecond clocks and the sleep.
 Repointed by Gate 2's process and environment, which moved it to 19 for the environment and child processes.
 Repointed by Gate 2's randomness, which moved it to 20 for the system's entropy.
-Repointed by Gate 3's platform layer, which moved it to 21 for the per-target system calls."""
+Repointed by Gate 3's platform layer, which moved it to 21 for the per-target system calls.
+Repointed by Gate 3's atomics, which moved it to 22 for the atomic entries."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 21;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 20;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_one_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 22;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 21;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_two_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -15258,3 +15260,45 @@ file = "crates/nazm-codegen-clif/src/translate.rs"
 find = "                ConvOp::FToS if ty.bits() < 32 => {"
 replace = "                ConvOp::FToS if false => {"
 killers = [{ package = "nazm-cli", test = "cross", name = "a_float_converted_to_a_narrow_integer_builds_for_every_target" }]
+
+# --- Gate 3D: atomics (docs/spec.md, Atomics) ---
+
+[[mutation]]
+name = "g3-an-atomic-add-keeps-a-lost-update"
+why = "atomic_add stores without checking that the cell still held what it read, so two tasks adding at once lose one of the additions"
+file = "crates/nazm-lir/src/op/atomics.rs"
+find = "                self.branch(stored, done, again);"
+replace = "                self.jump(done);"
+killers = [{ package = "nazm-cli", test = "atomics", name = "every_copy_and_every_task_reaches_one_cell" }]
+
+[[mutation]]
+name = "g3-an-atomic-add-wraps-in-the-interpreter"
+why = "the interpreter's atomic_add wraps a sum outside Int where + stops the program with N0400"
+file = "crates/nazm-core/src/eval/intrinsic.rs"
+find = "                a.fetch_update(SeqCst, SeqCst, |x| x.checked_add(*d))"
+replace = "                a.fetch_update(SeqCst, SeqCst, |x| Some(x.wrapping_add(*d)))"
+killers = [{ package = "nazm-cli", test = "atomics", name = "a_sum_outside_int_stops_the_program_as_plus_does" }]
+
+[[mutation]]
+name = "g3-a-compare-and-swap-always-succeeds"
+why = "the runtime's compare-and-swap answers true whether or not the cell held the expected value"
+file = "crates/nazm-runtime/src/board.rs"
+find = "  %ok = extractvalue { i64, i1 } %r, 1\n  ret i1 %ok"
+replace = "  %ok = extractvalue { i64, i1 } %r, 1\n  ret i1 true"
+killers = [{ package = "nazm-cli", test = "atomics", name = "every_operation_answers_as_specified" }]
+
+[[mutation]]
+name = "g3-an-atomic-exchange-forgets-what-it-wrote"
+why = "provenance treats an atomic's swap and add as reads only, so a value written by one never reaches a later load"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                        self.store(cell.clone(), callee_span, &v);\n                        Some(Flow::cell(&cell, callee_span).joined(&all))"
+replace = "                        let _ = &v;\n                        Some(Flow::cell(&cell, callee_span).joined(&all))"
+killers = [{ package = "nazm-core", test = "provenance", name = "an_atomic_cell_carries_what_any_write_put_there_to_every_read" }]
+
+[[mutation]]
+name = "g3-an-atomic-stays-in-its-task"
+why = "an Atomic is refused where a task is spawned, as a sequence is, so the one primitive for sharing a counter between tasks cannot be shared"
+file = "crates/nazm-sema/src/types.rs"
+find = "        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_))"
+replace = "        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_) | Self::Atomic)"
+killers = [{ package = "nazm-cli", test = "atomics", name = "every_copy_and_every_task_reaches_one_cell" }]

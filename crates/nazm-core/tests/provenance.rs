@@ -268,6 +268,33 @@ fn a_container_carries_what_any_container_of_its_type_was_given() {
 }
 
 #[test]
+fn an_atomic_cell_carries_what_any_write_put_there_to_every_read() {
+    // Every atomic is one cell (Gate 3): a file's length stored anywhere reaches a load, a
+    // swap's and an add's value before, and a compare-and-swap's answer, which depends on it.
+    let src = format!(
+        "fn fill(io: IoCap) -> Int {{ let a = atomic_new(0); atomic_store(a, str_len(read_file(\"f\"))) }}\n\
+         fn loaded() -> Int {{ let a = atomic_new(0); atomic_load(a) }}\n\
+         fn swapped() -> Int {{ let a = atomic_new(0); atomic_swap(a, 1) }}\n\
+         fn added() -> Int {{ let a = atomic_new(0); atomic_add(a, 1) }}\n\
+         fn compared() -> Bool {{ let a = atomic_new(0); atomic_compare_swap(a, 0, 1) }}\n{MAIN}"
+    );
+    for name in ["loaded", "swapped", "added", "compared"] {
+        assert_eq!(origins(&src, name), ["file"], "{name}");
+    }
+    // What an exchange writes is in the cell after it, as a store's is.
+    let src = format!(
+        "fn put(io: IoCap) -> Int {{ let a = atomic_new(0); atomic_swap(a, str_len(arg(0))) }}\n\
+         fn after() -> Int {{ let a = atomic_new(0); atomic_load(a) }}\n{MAIN}"
+    );
+    assert_eq!(origins(&src, "after"), ["argument"]);
+    // Made from its value: the handle carries it to the cell's reads.
+    let src = format!(
+        "fn made(io: IoCap) -> Int {{ let a = atomic_new(str_len(arg(0))); atomic_load(a) }}\n{MAIN}"
+    );
+    assert_eq!(origins(&src, "made"), ["argument"]);
+}
+
+#[test]
 fn authority_comes_from_main_and_survives_passing_storage_and_tasks() {
     let src = "struct Ctx { io: IoCap, n: Int, }\n\
         fn keep(io: IoCap) -> IoCap ! {} { io }\n\

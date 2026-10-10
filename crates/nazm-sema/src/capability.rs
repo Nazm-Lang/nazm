@@ -316,6 +316,12 @@ impl CapabilityKind {
             | Intrinsic::ChanSend
             | Intrinsic::ChanRecv
             | Intrinsic::ChanClose
+            | Intrinsic::AtomicNew
+            | Intrinsic::AtomicLoad
+            | Intrinsic::AtomicStore
+            | Intrinsic::AtomicAdd
+            | Intrinsic::AtomicSwap
+            | Intrinsic::AtomicCompareSwap
             | Intrinsic::ChanNewOf
             | Intrinsic::ChanSendOf
             | Intrinsic::ChanRecvOf

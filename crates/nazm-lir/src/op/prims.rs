@@ -51,6 +51,9 @@ impl Fx<'_, '_> {
         if self.files(dst, op, args) {
             return;
         }
+        if self.atomics(dst, op, args) {
+            return;
+        }
         match op {
             // Gate 2's files and handles, lowered above (`op/files.rs`); reaching here is a defect.
             Intrinsic::OsOpenRead
@@ -142,6 +145,17 @@ impl Fx<'_, '_> {
                 let at = self.at;
                 self.lw
                     .defect(at, "a numeric built-in its lowering did not take");
+            }
+            // Gate 3's atomics, lowered above (`op/atomics.rs`); reaching here is a defect.
+            Intrinsic::AtomicNew
+            | Intrinsic::AtomicLoad
+            | Intrinsic::AtomicStore
+            | Intrinsic::AtomicAdd
+            | Intrinsic::AtomicSwap
+            | Intrinsic::AtomicCompareSwap => {
+                let at = self.at;
+                self.lw
+                    .defect(at, "an atomic built-in its lowering did not take");
             }
             // Gate 2's bytes and text, lowered above (`op/bytes.rs`); reaching here is a defect.
             Intrinsic::BytesNew
