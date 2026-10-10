@@ -638,6 +638,24 @@ impl Machine<'_> {
                 None
             }
             "nz.stack_check" => Some(u64::from(self.depth > DEPTH - 100)),
+            // The oracle is one thread (Gate 3): an atomic access is the plain one.
+            "nz.atomic_load" => Some(self.read(arg(0), 8)?),
+            "nz.atomic_store" => {
+                self.write(arg(0), 8, arg(1))?;
+                None
+            }
+            "nz.atomic_swap" => {
+                let old = self.read(arg(0), 8)?;
+                self.write(arg(0), 8, arg(1))?;
+                Some(old)
+            }
+            "nz.atomic_cas" => {
+                let held = self.read(arg(0), 8)? == arg(1);
+                if held {
+                    self.write(arg(0), 8, arg(2))?;
+                }
+                Some(u64::from(held))
+            }
             "nz.closure_new" => {
                 let c = self.alloc(arg(0));
                 self.write(c, 8, 1)?;

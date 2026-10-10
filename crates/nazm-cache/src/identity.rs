@@ -270,7 +270,11 @@ use crate::digest::{self, Framed};
 /// `nz_net_read` and the rest, `check::RESERVED_C_SYMBOLS`) are the runtime's, so a foreign
 /// declaration or export of one is refused (`N0383`). A cached check from epoch 43
 /// accepted programs this one refuses.
-pub const SEMANTIC_EPOCH: u32 = 44;
+/// `45` — Gate 3, 2026-10-10. Atomics: `Atomic` became a built-in type name and `atomic_new`,
+/// `atomic_load`, `atomic_store`, `atomic_add`, `atomic_swap` and `atomic_compare_swap` built-in
+/// names, so a program defining any of them moved from accepted to refused; an `Atomic` crosses
+/// into a task.
+pub const SEMANTIC_EPOCH: u32 = 45;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

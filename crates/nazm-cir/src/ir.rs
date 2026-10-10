@@ -711,6 +711,7 @@ impl Law {
                 | Type::Bytes
                 | Type::Cap(_)
                 | Type::OsHandle
+                | Type::Atomic
                 | Type::Fn(_),
             ) => None,
         }
