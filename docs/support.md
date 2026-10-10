@@ -33,6 +33,8 @@ No cell says just "supported".
 | `thumbv7m-none-eabi` | emulator-verified | unsupported | QEMU `mps2-an385`, Cortex-M3 (Gate 3) | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | Node.js's engine, the reference host | DWARF sections present; a debugger not exercised |
 | `wasm32-wasip1` | run-verified | unsupported | Node.js's `node:wasi`, preview 1, in the `nazm-wasm:n64` container (Gate 3) | DWARF sections present; a debugger not exercised |
+| `aarch64-linux-android` | run-verified on a Linux kernel | unsupported | static Bionic executables, linked by the NDK r27c's `clang` for API level 30, run on an aarch64 Linux kernel in a Debian container; no Android device or emulator (Gate 3) | not exercised |
+| `aarch64-apple-ios` | compile-only | unsupported | linked against Xcode 27's iOS SDK, an archive and a program; never run — no simulator runtime is installed (Gate 3) | not exercised |
 
 Cranelift's two `unsupported` reasons: its object writer has no format for a target without an
 operating system, and this Cranelift is built without a WebAssembly backend.

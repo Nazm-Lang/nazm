@@ -153,6 +153,9 @@ struct Gen<'a> {
     height: usize,
     gas: u64,
     bounded: bool,
+    /// Each loop whose turns the compiler establishes, by its span, and their most per entry
+    /// (Gate 3, N63's counted form): the loops a gas bound can still be stated through.
+    loop_bounds: Vec<(Span, u128)>,
     depth: usize,
     fail_labels: BTreeMap<&'static str, usize>,
     conserved: Option<FnId>,
@@ -359,9 +362,16 @@ impl<'a> Gen<'a> {
                 self.height = h0;
                 self.place(end);
             }
-            Stmt::Loop { id, cond, body, .. } => {
-                // A loop's turns are not counted: the bound is open.
-                self.bounded = false;
+            Stmt::Loop { id, cond, body, at } => {
+                // A loop in the counted form (N63) turns at most `n` times an entry: its gas is
+                // `n` turns — the condition, the body and the jump back — and the last condition.
+                // Any other loop leaves the bound open (Gate 3).
+                let turns = self
+                    .loop_bounds
+                    .iter()
+                    .find(|(span, _)| span == at)
+                    .map(|(_, n)| *n);
+                let g_start = self.gas;
                 let top = self.label();
                 let cont = self.label();
                 let end = self.label();
@@ -371,12 +381,23 @@ impl<'a> Gen<'a> {
                 self.expr(fr, cond)?;
                 self.op(op::ISZERO);
                 self.jumpi(end);
+                let g_cond = self.gas - g_start;
                 self.block(fr, body, false)?;
                 self.pop_to(h0);
                 self.place(cont);
                 self.jump(top);
                 self.height = h0;
                 self.place(end);
+                let g_turn = self.gas - g_start;
+                match turns
+                    .and_then(|n| u64::try_from(n).ok())
+                    .and_then(|n| n.checked_mul(g_turn))
+                    .and_then(|all| all.checked_add(g_cond))
+                    .and_then(|all| g_start.checked_add(all))
+                {
+                    Some(total) => self.gas = total,
+                    None => self.bounded = false,
+                }
             }
             Stmt::Break { target, at } | Stmt::Continue { target, at } => {
                 let Some(&(cont, end, h)) = fr.loops.get(target) else {
@@ -937,6 +958,10 @@ pub fn compile(
         height: 0,
         gas: 0,
         bounded: true,
+        loop_bounds: crate::bounds::loops(program)
+            .into_iter()
+            .filter_map(|l| l.bound.map(|b| (l.at, b)))
+            .collect(),
         depth: 0,
         fail_labels: BTreeMap::new(),
         conserved: c
@@ -1042,6 +1067,7 @@ pub fn compile(
         height: 0,
         gas: 0,
         bounded: true,
+        loop_bounds: Vec::new(),
         depth: 0,
         fail_labels: BTreeMap::new(),
         conserved: None,

@@ -1,0 +1,28 @@
+// A heater controller's two requirements, traced (Gate 3): `nazm trace heater.nz --requirements
+// requirements.toml` resolves each to the definition it constrains and the test that verifies it.
+
+use "@std/test";
+
+/// The heater's power for `demand`, from 0 to 100.
+fn power(demand: Int) -> Int ! {}
+    ensures result >= 0 && result <= 100
+{
+    if demand < 0 { 0 } else { if demand > 100 { 100 } else { demand } }
+}
+
+/// Above 80.0 degrees the heater trips.
+fn over(t: Int) -> Bool ! {} { t > 800 }
+
+fn main() -> Int ! {} { power(50) }
+
+@test
+fn power_is_bounded() -> Result[Int, Str] {
+    assert_eq_int("power(500)", power(500), 100)?;
+    assert_eq_int("power(-5)", power(-5), 0)
+}
+
+@test
+fn trips_above_eighty() -> Result[Int, Str] {
+    assert_true("over(801)", over(801))?;
+    assert_true("not over(800)", !over(800))
+}

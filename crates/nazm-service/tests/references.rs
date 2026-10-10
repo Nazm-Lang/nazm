@@ -1153,6 +1153,14 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                             || (node.kind() == K::ImplItem && leaf.text == "for")
                             // `const NAME: T = …;`: `const` is its syntax (Gate 2).
                             || (node.kind() == K::ConstItem && leaf.text == "const")
+                            // `static`, likewise (Gate 3).
+                            || (node.kind() == K::ConstItem && leaf.text == "static")
+                            // `pub extern "C" fn …`: `extern` is an export's syntax (N85), met in
+                            // the corpus first by Gate 3's desktop example.
+                            || (node.kind() == K::FnItem && leaf.text == "extern")
+                            // An attribute's name is the compiler's vocabulary (Gate 2), never a
+                            // program's entity; met in the corpus first by Gate 3's examples.
+                            || node.kind() == K::Attribute
                             // A trait method's parameter, and `Self`, inside a trait (N78).
                             || (node.kind() == K::Param && in_a_trait(span))
                             || (node.kind() == K::Type && leaf.text == "Self" && in_a_trait(span));

@@ -3381,17 +3381,15 @@ fn stack_runtime() -> Str {
     let r = strs_new();
     strs_push(r, "define internal i32 @nz.stack_check() {");
     strs_push(r, "entry:");
-    strs_push(r, "  %rl = alloca [2 x i64], align 8");
     strs_push(r, "  %fp = call ptr @llvm.frameaddress.p0(i32 0)");
     strs_push(r, "  %sp = ptrtoint ptr %fp to i64");
     strs_push(r, "  %lim = load i64, ptr @nz.stack_limit");
     strs_push(r, "  %unset = icmp eq i64 %lim, 0");
     strs_push(r, "  br i1 %unset, label %init, label %compare");
     strs_push(r, "init:");
-    strs_push(r, "  ; RLIMIT_STACK is 3 on every v1 target, and struct rlimit is two 64-bit words there.");
-    strs_push(r, "  %rc = call i32 @getrlimit(i32 3, ptr %rl)");
-    strs_push(r, "  %cur = load i64, ptr %rl");
-    strs_push(r, "  %ok = icmp eq i32 %rc, 0");
+    strs_push(r, "  ; The main thread's stack, as the platform's stack unit reports it (Gate 3); 0 is unknown.");
+    strs_push(r, "  %cur = call i64 @nz_os_stack_size()");
+    strs_push(r, "  %ok = icmp ne i64 %cur, 0");
     strs_push(r, "  %cap = select i1 %ok, i64 %cur, i64 8388608");
     strs_push(r, "  %small = icmp ult i64 %cap, 8388608");
     strs_push(r, "  %size = select i1 %small, i64 %cap, i64 8388608");
@@ -5118,6 +5116,17 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
         add_line(head, "@nz.stack_limit = internal thread_local global i64 0");
         add_line(head, "declare ptr @llvm.frameaddress.p0(i32)");
         add_line(head, "declare i32 @getrlimit(i32, ptr)");
+        // The main thread's stack, as the Rust compiler's POSIX stack unit reports it (Gate 3):
+        // what the derived `nz.stack_check` now asks for.
+        add_line(head, "define internal i64 @nz_os_stack_size() {");
+        add_line(head, "entry:");
+        add_line(head, "  %rl = alloca [2 x i64], align 8");
+        add_line(head, "  %rc = call i32 @getrlimit(i32 3, ptr %rl)");
+        add_line(head, "  %cur = load i64, ptr %rl");
+        add_line(head, "  %ok = icmp eq i32 %rc, 0");
+        add_line(head, "  %size = select i1 %ok, i64 %cur, i64 0");
+        add_line(head, "  ret i64 %size");
+        add_line(head, "}");
     }
     add_line(head, "@nz.errmsg = internal thread_local global ptr null");
     add_line(head, "@nz.errlen = internal thread_local global i64 0");

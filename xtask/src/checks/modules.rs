@@ -60,9 +60,11 @@ const REGISTER: &[Entry] = &[
     Entry {
         file: "crates/nazm-core/src/eval/mod.rs",
         directory: true,
-        // The interpreter's context, its limits and stack budget, and its control flow.
+        // The interpreter's context, its limits and stack budget, and its control flow; and
+        // (Gate 3) `Cells`, the context's static atomics.
         may_define: &[
             "RuntimeError",
+            "Cells",
             "Frame",
             "Flow",
             "take",

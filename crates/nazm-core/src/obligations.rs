@@ -12,7 +12,7 @@
 
 use nazm_cir as cir;
 use nazm_sema::resolve::Resolution;
-use nazm_sema::{Intrinsic, Type};
+use nazm_sema::{FnId, Intrinsic, Type};
 use nazm_span::Span;
 
 use cir::{ArithOp, Block, Const, ConstId, Expr, ExprKind, Stmt};
@@ -80,6 +80,9 @@ impl Status {
 pub struct Obligation {
     /// The function it is in, by name, for a reader.
     pub function: String,
+    /// The same function by its definition (Gate 3): what `nazm trace` keys an obligation by,
+    /// its durable identity, where a name alone may be another module's.
+    pub def: FnId,
     pub kind: Kind,
     pub status: Status,
     pub at: Span,
@@ -99,6 +102,7 @@ pub fn census(core: &cir::Program, res: &Resolution) -> Vec<Obligation> {
         let mut c = Census {
             res,
             function: &f.name,
+            def: f.def,
             consts: &f.consts,
             out: Vec::new(),
         };
@@ -112,6 +116,7 @@ pub fn census(core: &cir::Program, res: &Resolution) -> Vec<Obligation> {
 struct Census<'a> {
     res: &'a Resolution,
     function: &'a str,
+    def: FnId,
     consts: &'a [Const],
     out: Vec<Obligation>,
 }
@@ -120,6 +125,7 @@ impl Census<'_> {
     fn push(&mut self, kind: Kind, status: Status, at: Span, witness: Option<String>) {
         self.out.push(Obligation {
             function: self.function.to_owned(),
+            def: self.def,
             kind,
             status,
             at,

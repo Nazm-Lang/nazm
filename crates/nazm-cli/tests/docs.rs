@@ -206,6 +206,7 @@ fn the_support_page_states_the_compilers_own_matrix() {
             Support::Run(_) if row.contains("QEMU") => vec!["emulator-verified"],
             Support::Run(_) => vec!["run-verified"],
             Support::Wine(_) => vec!["run-verified under Wine"],
+            Support::Bionic(_) => vec!["run-verified on a Linux kernel"],
             Support::Compile(_) => vec!["compile-only"],
             Support::Unsupported(_) => vec!["unsupported"],
         }

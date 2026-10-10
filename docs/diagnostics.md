@@ -558,3 +558,11 @@ assert on the code rather than the rendering.
 machine could not carry out one that is fine. 5 is separate from 2: a mistyped option is not a
 program that failed. The full definitions, and what moved when the contract was frozen (Q1-C1),
 are `docs/stability.md`, *Diagnostics and exit statuses*.
+
+**Applied to Gate 3, requirements traceability.** No diagnostic code. `nazm.trace/1` is new, with
+`schema/nazm.trace-1.json` checked against real output (`schemas.rs`): each requirement of a
+`requirements.toml` (`schema = "nazm.requirements/1"`) to its definitions by durable identity and
+digest, their obligations, and its tests' outcomes. A broken link — a definition renamed away, a test
+missing or failing, a requirement naming nothing to verify it — is written to `broken` and to
+standard error, and the command exits 1.
+

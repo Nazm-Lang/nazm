@@ -33,6 +33,9 @@ pub(crate) const TARGETS: &[&str] = &[
     "wasm32-unknown-unknown",
     // WebAssembly with WASI preview 1 (Gate 3): objects, `wasm-ld`'s line and Node's WASI host.
     "wasm32-wasip1",
+    // The mobile targets (Gate 3): objects for the NDK's `clang` and for Xcode's.
+    "aarch64-linux-android",
+    "aarch64-apple-ios",
 ];
 
 /// The board table, as data: where each image loads, its UART, how its machine stops, how it is

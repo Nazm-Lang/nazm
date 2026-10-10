@@ -1283,3 +1283,26 @@ fn a_deprecated_items_api_doc_matches_the_published_schema() {
     );
     check_against("nazm.api-doc-2.json", &[doc]);
 }
+
+#[test]
+fn trace_output_matches_its_schema() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let examples =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/requirements");
+    for f in ["heater.nz", "requirements.toml"] {
+        std::fs::copy(examples.join(f), dir.path().join(f)).expect("copy");
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_nazm"))
+        .args(["trace", "heater.nz", "--requirements", "requirements.toml"])
+        .current_dir(dir.path())
+        .output()
+        .expect("run nazm trace");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let objects = lines(&String::from_utf8_lossy(&out.stdout));
+    assert_eq!(objects.len(), 1);
+    check_against("nazm.trace-1.json", &objects);
+}

@@ -132,6 +132,11 @@ found only by reading all of it.
   is the interpreter. Comptime is a command, not a language construct; nothing is hot-reloaded —
   `nazm reload-check` states the rule a reloader would follow (area 12). *Narrowed in N65:* until
   then, no REPL, comptime or reload rule existed.
+- The mobile targets (Gate 3) are libraries and programs over the C ABI, not apps: Android's are
+  run only as static Bionic executables on an aarch64 Linux kernel — never on an Android device or
+  emulator — and iOS's only linked, never run, until a simulator runtime is installed; no UI
+  framework, no Java, Kotlin or Swift bindings, no `.xcframework`. The desktop example is one Cocoa
+  window on this host; a Nazm GUI framework is not v1's.
 - WebAssembly with WASI (`wasm32-wasip1`, Gate 3) is preview 1 on one thread: no tasks, channels
   or sockets (refused by name), no directory listing, an empty environment, permission bits
   reported as `0o644`, and a heap that is a bump arena never returned — a long-running module's

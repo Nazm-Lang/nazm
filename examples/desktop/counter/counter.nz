@@ -1,0 +1,36 @@
+// counter: the state and logic of a native window, as a Nazm shared library (Gate 3 reference,
+// `docs/systems-domains.md` Part Q). The window is the host's — `host.m`, Cocoa — and its event
+// loop calls these through the C ABI: each click or key a step of the state machine, each frame
+// a question of what to show. Nothing here knows a window exists.
+//
+// The state is one `Int`: the count in its low 32 bits, the mode above them — 0 counting up, 1
+// counting down. A step takes an event: 1 a click on `+`, 2 a click on `-`, 3 the mode switched,
+// 4 reset. The count stays from 0 to 99.
+
+fn count_of(state: Int) -> Int ! {} { state % 4294967296 }
+fn mode_of(state: Int) -> Int ! {} { state / 4294967296 }
+fn state(mode: Int, count: Int) -> Int ! {} { mode * 4294967296 + count }
+
+fn bounded(n: Int) -> Int ! {} { if n < 0 { 0 } else { if n > 99 { 99 } else { n } } }
+
+/// The state after `event`.
+pub extern "C" fn counter_step(s: Int, event: Int) -> Int ! {} = "nazm_counter_step" {
+    let count = count_of(s);
+    let mode = mode_of(s);
+    let up = if mode == 0 { 1 } else { -1 };
+    if event == 1 {
+        state(mode, bounded(count + up))
+    } else {
+        if event == 2 {
+            state(mode, bounded(count - up))
+        } else {
+            if event == 3 { state(1 - mode, count) } else { if event == 4 { state(0, 0) } else { s } }
+        }
+    }
+}
+
+/// The count to show.
+pub extern "C" fn counter_count(s: Int) -> Int ! {} = "nazm_counter_count" { count_of(s) }
+
+/// Whether the count runs down, for the host's mode label.
+pub extern "C" fn counter_down(s: Int) -> Int ! {} = "nazm_counter_down" { mode_of(s) }

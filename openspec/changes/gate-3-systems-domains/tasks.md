@@ -19,8 +19,8 @@
 - [x] 4.2 AI/HPC CPU provider, float kernels, SIMD (3H): the provider boundary, `Float32`/`Float64` bit for bit, the SIMD path measured (no speed-up claimed)
 - [x] 4.3 Storage engine; distributed foundation (3I): `pagestore`, crashed at every write boundary; `@std/dist` and the `ledger`, a server restarted mid-request
 - [x] 4.4 WASI (3J): `wasm32-wasip1`, a heap, streams, arguments, clocks, files beneath the preopen; run-verified under Node's WASI
-- [ ] 4.5 Android, iOS, desktop host (3K)
-- [ ] 4.6 Web3 qualification; requirements traceability; the domain matrix completed (3L)
+- [x] 4.5 Android, iOS, desktop host (3K): Android run on a Linux kernel as static Bionic; iOS link-verified (no simulator runtime); a Cocoa window on a Nazm library
+- [x] 4.6 Web3 qualification; requirements traceability; the domain matrix completed (3L): the qualification table, gas bounds through counted loops, `nazm trace`
 
 ## 5. Evidence
 

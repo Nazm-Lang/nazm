@@ -87,6 +87,22 @@ pub(super) fn preflight(
         );
         return Err(ExitCode::from(exit::USAGE));
     }
+    // The mobile targets (Gate 3) are the LLVM backend's.
+    if choice.backend == nazm_lir::backend::BackendId::Cranelift
+        && matches!(
+            target.os,
+            nazm_lir::backend::Os::Android | nazm_lir::backend::Os::Ios
+        )
+    {
+        if summary {
+            return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+        }
+        eprintln!(
+            "nazm: `--backend cranelift` builds no mobile target; `{}` is the LLVM backend's",
+            target.triple
+        );
+        return Err(ExitCode::from(exit::USAGE));
+    }
     // RISC-V (N86) is code generation the host's `clang` may not have — Apple's has none. Asked
     // before anything is compiled, so a missing code generator is named rather than reported as
     // the compiler's own fault.
@@ -355,6 +371,9 @@ pub(crate) fn switch_target(
         (Arch::X86_64, Os::Macos) => Some(SwitchTarget::X86_64Darwin),
         (Arch::X86_64, Os::Linux) => Some(SwitchTarget::X86_64Linux),
         (Arch::X86_64, Os::Windows) => Some(SwitchTarget::X86_64Windows),
+        // The mobile targets (Gate 3): Android is Linux's kernel with Bionic; iOS is Darwin.
+        (Arch::Aarch64, Os::Android) => Some(SwitchTarget::Aarch64Android),
+        (Arch::Aarch64, Os::Ios) => Some(SwitchTarget::Aarch64Darwin),
         _ => None,
     }
 }

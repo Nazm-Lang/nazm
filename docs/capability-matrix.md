@@ -4452,6 +4452,8 @@ to be the one the C compiler driver resolves for the triple.
 | `thumbv7m-none-eabi` | run-verified | unsupported | cortex-m3 / none | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | generic / none | DWARF present, not exercised |
 | `wasm32-wasip1` | run-verified | unsupported | generic / none | DWARF present, not exercised |
+| `aarch64-linux-android` | run-verified on a Linux kernel | unsupported | generic / none | not exercised |
+| `aarch64-apple-ios` | compile-only | unsupported | apple-a7 / none | not exercised |
 
 Run-verified means programs built for the target ran and agreed with the interpreter: on the host,
 under Rosetta, in the Linux image, under QEMU, under Node — each cell's test is named in the table in
@@ -4751,4 +4753,25 @@ the first preopened directory, a path outside it refused by the host; a failure 
 status 2. Tasks, channels and the network are refused by name: preview 1 has no threads or
 sockets. Run-verified at `-O0` and `-O2` under Node's `node:wasi` in `nazm-wasm:n64`, every import
 `wasi_snapshot_preview1`'s. Narrowed: no directory listing, environment or freeing.
+
+**Gate 3K (2026-10-11)** · *Mobile and desktop* (`spec.md` *Mobile targets*; `systems-domains.md`
+Parts P, Q; `mobile.rs`). Two more targets. `aarch64-linux-android`: Linux's kernel with Bionic, a
+switch target of its own; a C host and a Nazm library, and a whole program with its task pool,
+channels, files and clock, built as static executables by the NDK r27c and **run on an aarch64 Linux
+kernel** — a new support status, `run-verified on a Linux kernel`, because no Android device or
+emulator ran them. `aarch64-apple-ios`: Darwin's unit; an archive and a program **linked** against
+Xcode 27's iOS SDK and never run (`compile-only`), no simulator runtime being installed. `--backend
+cranelift` is refused for both. The desktop example, `examples/desktop/counter`: a Cocoa window whose
+button callbacks call a Nazm shared library's state machine through the C ABI, driven by synthetic
+clicks, every label checked — run-verified on this host.
+
+**Gate 3L (2026-10-11)** · *Web3 qualification and traceability* (`systems-domains.md` Parts R, S;
+`spec.md` *Requirements traceability*). The web3 qualification: every claim of the contract model,
+its profiles, the EVM and WebAssembly backends' agreement with the simulator and the upgrade check,
+each against the test that holds it. Tightened: an EVM entrypoint's gas bound now runs through a
+loop in the counted form — its turns times its condition and body — where it had been `null`; the
+EVM stays inside it (`evm.rs`, py-evm). sBPF BLOCKED. `nazm trace FILE --requirements FILE`,
+`nazm.trace/1`: each requirement to its definitions by durable identity and Core IR digest, their
+obligations keyed by definition, and its `@test`s run; a renamed definition, a missing or failing test
+reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification.
 
