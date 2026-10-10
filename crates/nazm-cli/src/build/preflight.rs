@@ -323,10 +323,10 @@ pub(crate) fn read_board(
         );
         return Err(ExitCode::from(exit::USAGE));
     };
-    let isa = if t.arch == Arch::Riscv64 {
-        Isa::Riscv64
-    } else {
-        Isa::Aarch64
+    let isa = match t.arch {
+        Arch::Riscv64 => Isa::Riscv64,
+        Arch::Thumbv7m => Isa::Thumbv7m,
+        _ => Isa::Aarch64,
     };
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,

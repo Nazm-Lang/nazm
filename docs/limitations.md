@@ -161,9 +161,10 @@ found only by reading all of it.
 
 ## Native code
 
-- Eight targets, no others: five hosted — `aarch64`/`x86_64` × macOS/Linux, and `x86_64` Windows
-  with MinGW-w64's toolchain (Gate 3) — and three freestanding, below; no 32-bit or CPU-feature
-  selection; a target the host has no linker for is built to objects (`--objects`) for its own
+- Nine targets, no others: five hosted — `aarch64`/`x86_64` × macOS/Linux, and `x86_64` Windows
+  with MinGW-w64's toolchain (Gate 3) — and four freestanding, below, two of them 32-bit (wasm32
+  and, since Gate 3, a Cortex-M3 board, with no floating point and no 64-bit device access); no
+  32-bit hosted target and no CPU-feature selection; a target the host has no linker for is built to objects (`--objects`) for its own
   toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here,
   Windows is run-verified **under Wine** only — no Windows host has run it, no DLL is built, and
   the MSVC environment and Windows ARM64 are refused — and Cranelift builds no freestanding or
@@ -186,7 +187,7 @@ found only by reading all of it.
   `ld.lld` outside this host; RISC-V is built only where `clang` has a RISC-V code generator (not
   Apple's — the `nazm-qemu:n86` image's), refused by name elsewhere. Since Gate 3D a board may be
   described by a manifest (`--board`), with sequentially consistent atomics and statics, sections,
-  a GICv2 and timer interrupts **on AArch64 only** (a RISC-V board's are refused by name), a bump
+  interrupts — a GICv2 and its timer on AArch64, an NVIC and SysTick on the Cortex-M3 — and none on RISC-V (refused by name), a bump
   arena that is never returned to, and a failure hook — every one verified under QEMU, none on
   hardware; there is no `@std` for a board yet, no weaker memory ordering, no nested interrupts
   and no interrupt priorities. `.bss` is zero because QEMU's loaded memory is, which a hardware
