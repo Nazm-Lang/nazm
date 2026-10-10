@@ -352,6 +352,13 @@ pub fn emit_runtime_for(board: &Board, needs: &crate::Needs) -> String {
     if board.heap.is_some() {
         out.push_str(HEAP_RUNTIME);
         out.push_str(&crate::core::board_heap_parts(needs));
+    } else if needs.strings {
+        // Without a heap nothing is allocated, so every owner a value can hold is null — a
+        // static atomic's, or a literal's — and counting it is nothing (Gate 3).
+        out.push_str(
+            "define hidden void @nz.str_retain(ptr %o) {\nentry:\n  ret void\n}\n\
+             define hidden void @nz.str_release(ptr %o) {\nentry:\n  ret void\n}\n",
+        );
     }
     out
 }
@@ -909,6 +916,122 @@ entry:
   store volatile i64 %new, ptr %p
   call void @nz.unmask(i32 %m)
   ret i64 %old
+}
+
+; The EABI's memory functions (sizes are 32 bits here), which LLVM calls to copy and clear what
+; a value occupies: byte loops LLVM may not turn back into calls to themselves. `memset`'s value
+; comes after its length, as the EABI orders them.
+define void @__aeabi_memcpy(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i32 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %sp = getelementptr i8, ptr %s, i32 %i
+  %b = load i8, ptr %sp
+  %dp = getelementptr i8, ptr %d, i32 %i
+  store i8 %b, ptr %dp
+  %j = add i32 %i, 1
+  br label %loop
+done:
+  ret void
+}
+
+define void @__aeabi_memcpy4(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  call void @__aeabi_memcpy(ptr %d, ptr %s, i32 %n)
+  ret void
+}
+
+define void @__aeabi_memcpy8(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  call void @__aeabi_memcpy(ptr %d, ptr %s, i32 %n)
+  ret void
+}
+
+define void @__aeabi_memmove(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  %di = ptrtoint ptr %d to i32
+  %si = ptrtoint ptr %s to i32
+  %forward = icmp ule i32 %di, %si
+  br i1 %forward, label %fwd, label %loop
+fwd:
+  call void @__aeabi_memcpy(ptr %d, ptr %s, i32 %n)
+  ret void
+loop:
+  %i = phi i32 [ %n, %entry ], [ %k, %body ]
+  %more = icmp ugt i32 %i, 0
+  br i1 %more, label %body, label %done
+body:
+  %k = sub i32 %i, 1
+  %sp = getelementptr i8, ptr %s, i32 %k
+  %b = load i8, ptr %sp
+  %dp = getelementptr i8, ptr %d, i32 %k
+  store i8 %b, ptr %dp
+  br label %loop
+done:
+  ret void
+}
+
+define void @__aeabi_memmove4(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  call void @__aeabi_memmove(ptr %d, ptr %s, i32 %n)
+  ret void
+}
+
+define void @__aeabi_memmove8(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  call void @__aeabi_memmove(ptr %d, ptr %s, i32 %n)
+  ret void
+}
+
+define void @__aeabi_memset(ptr %d, i32 %n, i32 %c) "no-builtins" {
+entry:
+  %b = trunc i32 %c to i8
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i32 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %dp = getelementptr i8, ptr %d, i32 %i
+  store i8 %b, ptr %dp
+  %j = add i32 %i, 1
+  br label %loop
+done:
+  ret void
+}
+
+define void @__aeabi_memset4(ptr %d, i32 %n, i32 %c) "no-builtins" {
+entry:
+  call void @__aeabi_memset(ptr %d, i32 %n, i32 %c)
+  ret void
+}
+
+define void @__aeabi_memset8(ptr %d, i32 %n, i32 %c) "no-builtins" {
+entry:
+  call void @__aeabi_memset(ptr %d, i32 %n, i32 %c)
+  ret void
+}
+
+define void @__aeabi_memclr(ptr %d, i32 %n) "no-builtins" {
+entry:
+  call void @__aeabi_memset(ptr %d, i32 %n, i32 0)
+  ret void
+}
+
+define void @__aeabi_memclr4(ptr %d, i32 %n) "no-builtins" {
+entry:
+  call void @__aeabi_memset(ptr %d, i32 %n, i32 0)
+  ret void
+}
+
+define void @__aeabi_memclr8(ptr %d, i32 %n) "no-builtins" {
+entry:
+  call void @__aeabi_memset(ptr %d, i32 %n, i32 0)
+  ret void
 }
 
 define { i64, i64 } @__aeabi_uldivmod(i64 %n, i64 %d) {

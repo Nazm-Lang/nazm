@@ -4633,3 +4633,16 @@ backend converts a float only to a 32- or 64-bit integer (3B-2, fixed); a placed
 inlined away at `-O2` (now hidden linkage); a failure hook's first call looked like a failure while
 the program's flag was set (cleared before the hook).
 
+**Gate 3E (2026-10-11)** · *Embedded* (`spec.md` *A freestanding target*, *Boards*; `systems-domains.md`
+Part C). **The Cortex-M board:** `thumbv7m-none-eabi` on QEMU's `mps2-an385`, the ninth target — 32-bit
+pointers and a 64-bit `Int`; a vector table at 0; the CMSDK UART; AArch32 semihosting; the 64-bit
+atomics (interrupts masked), division and the EABI's memory functions the board's runtime defines;
+floating point, 64-bit device registers and a heap refused by name (`cortex_m.rs`). **Interrupts on a
+Cortex-M:** an NVIC and SysTick from a manifest's `controller = "nvic"` and `clock_hz`. **`@std/hal`:**
+`Uart`, `Pin`, `Timer` and the emulated boards' impls. **The reference workload:** one traffic light,
+generic over the HAL, run unchanged on both AArch64 `virt` and the Cortex-M3 (`embedded.rs`).
+**Emulator-verified** at `-O0` and `-O2` in the `nazm-qemu:n86` image; nothing on hardware. Runtime ABI
+25. Found on the way: an atomic passed by value reached the string runtime's reference counting on a
+heapless board (now a no-op there, every owner being null), and a Cortex-M3 has no CMSDK GPIO in QEMU,
+so its pins are the FPGA LED register.
+

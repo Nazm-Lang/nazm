@@ -1,0 +1,13 @@
+use "@std/hal";
+use "light.nz";
+
+static TICKS: Atomic = atomic_new(0);
+
+@interrupt("timer")
+fn tick() -> Int ! {} { ticks_advance(Ticks(count: TICKS)) }
+
+fn main(m: MmioCap) -> Int ! {} {
+    let red = FpgaLed(base: 1073905664, bit: 0);
+    let green = FpgaLed(base: 1073905664, bit: 1);
+    light(CmsdkUart(base: 1073758208), red, green, Ticks(count: TICKS), m)
+}

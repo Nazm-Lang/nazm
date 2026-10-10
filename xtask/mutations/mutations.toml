@@ -15595,3 +15595,31 @@ find = "        Controller::Nvic { .. } => (0, 239),"
 replace = "        Controller::Nvic { .. } => (0, 1019),"
 killers = [{ package = "nazm-cli", test = "cortex_m", name = "a_cortex_m_boards_interrupts_are_an_nvic_and_systick" }]
 
+# --- Gate 3E: @std/hal and the embedded workload (systems-domains.md Part C) ---
+# That the traffic light runs on both boards, the HAL's devices doing what they say, is
+# embedded.rs's ignored QEMU test.
+
+[[mutation]]
+name = "g3-a-cortex-m-board-takes-a-heap"
+why = "a Cortex-M manifest's heap is accepted, and the arena's 64-bit sizes meet a 32-bit board's C calls"
+file = "crates/nazm-cli/src/board_manifest.rs"
+find = "        Some(_) if isa == Isa::Thumbv7m => {"
+replace = "        Some(_) if false => {"
+killers = [{ package = "nazm-cli", test = "embedded", name = "a_cortex_m_board_has_no_heap" }]
+
+[[mutation]]
+name = "g3-a-heapless-board-cannot-count-a-static"
+why = "a board without a heap does not define the owner counts, so a program that passes a static atomic by value is refused"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    } else if needs.strings {"
+replace = "    } else if false {"
+killers = [{ package = "nazm-cli", test = "embedded", name = "one_traffic_light_builds_for_both_boards_through_the_hal" }]
+
+[[mutation]]
+name = "g3-there-is-no-hal"
+why = "@std/hal is not one of the standard modules, so device code written against its traits names nothing"
+file = "crates/nazm-sema/src/stdlib.rs"
+find = "    (\"hal\", include_str!(\"../../../library/std/hal.nz\")),\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "embedded", name = "one_traffic_light_builds_for_both_boards_through_the_hal" }]
+

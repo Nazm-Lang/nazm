@@ -1,0 +1,139 @@
+// `@std/hal`: device code against traits, and each board's devices behind them (Gate 3).
+//
+// Imported with `use "@std/hal";`. A program that drives a UART, a pin or a timer is written
+// against `Uart`, `Pin` and `Timer`, generic over them (`fn blink[P: Pin](p: P, m: MmioCap)`), and
+// a board supplies the impls: the boundary is library-level, made of the traits the language
+// already has (N78), and no device is the language's. Every device method takes an `MmioCap`, so
+// the authority to touch a register is held where it is used, as `mmio_*` asks; a timer reads
+// a tick count, which is the program's own memory. `docs/systems-domains.md` Part C.
+//
+// The impls are the emulated boards' devices: the PL011, NS16550A and CMSDK UARTs, the PL061 GPIO
+// of QEMU's AArch64 `virt` machine, and the MPS2's FPGA LED register, the Cortex-M board's one
+// output that its emulator models. None has run on hardware.
+
+/// A serial port's transmitter: one byte out.
+pub trait Uart {
+    fn put(self: Self, m: MmioCap, byte: Int) -> Int ! {};
+}
+
+/// One digital line: driven high or low, and read back.
+pub trait Pin {
+    fn set(self: Self, m: MmioCap, high: Bool) -> Int ! {};
+    fn get(self: Self, m: MmioCap) -> Bool ! {};
+}
+
+/// A monotonic count of the board timer's ticks.
+pub trait Timer {
+    fn ticks(self: Self) -> Int ! {};
+}
+
+/// An Arm PL011's data register, at `base`.
+pub struct Pl011 {
+    base: Int,
+}
+
+/// A 16550-compatible UART's transmit register, at `base`.
+pub struct Ns16550 {
+    base: Int,
+}
+
+/// Arm's CMSDK APB UART, at `base`: the board's runtime enables its transmitter before `main`.
+pub struct CmsdkUart {
+    base: Int,
+}
+
+impl Uart for Pl011 {
+    fn put(self: Pl011, m: MmioCap, byte: Int) -> Int ! {} {
+        mmio_write8(self.base, byte)
+    }
+}
+
+impl Uart for Ns16550 {
+    fn put(self: Ns16550, m: MmioCap, byte: Int) -> Int ! {} {
+        mmio_write8(self.base, byte)
+    }
+}
+
+impl Uart for CmsdkUart {
+    fn put(self: CmsdkUart, m: MmioCap, byte: Int) -> Int ! {} {
+        mmio_write8(self.base, byte)
+    }
+}
+
+/// Every byte of `s` out of `u`, in order; how many.
+pub fn uart_write[U: Uart](u: U, m: MmioCap, s: Str) -> Int ! {} {
+    let mut i = 0;
+    while i < str_len(s) {
+        u.put(m, str_byte(s, i));
+        i = i + 1;
+    }
+    i
+}
+
+/// Line `line` (0–7) of an Arm PL061 at `base`. A PL061 masks each access by its address: bit
+/// `line` of the data is reached at `base + (4 << line)`, and no other line is touched.
+pub struct Pl061 {
+    base: Int,
+    line: Int,
+}
+
+/// `p`'s line made an output: its bit set in the direction register, the others left as they are.
+pub fn pl061_output(p: Pl061, m: MmioCap) -> Int ! {} {
+    let dir = p.base + 1024;
+    mmio_write32(dir, mmio_read32(dir) | (1 << p.line))
+}
+
+impl Pin for Pl061 {
+    fn set(self: Pl061, m: MmioCap, high: Bool) -> Int ! {} {
+        mmio_write32(self.base + (4 << self.line), if high { 1 << self.line } else { 0 })
+    }
+
+    fn get(self: Pl061, m: MmioCap) -> Bool ! {} {
+        mmio_read32(self.base + (4 << self.line)) != 0
+    }
+}
+
+/// Bit `bit` of the MPS2's FPGA LED register at `base`: written by reading the register and
+/// changing that bit alone, read back from it.
+pub struct FpgaLed {
+    base: Int,
+    bit: Int,
+}
+
+impl Pin for FpgaLed {
+    fn set(self: FpgaLed, m: MmioCap, high: Bool) -> Int ! {} {
+        let now = mmio_read32(self.base);
+        let mask = 1 << self.bit;
+        mmio_write32(self.base, if high { now | mask } else { now & (4294967295 ^ mask) })
+    }
+
+    fn get(self: FpgaLed, m: MmioCap) -> Bool ! {} {
+        (mmio_read32(self.base) & (1 << self.bit)) != 0
+    }
+}
+
+/// A tick count held in an atomic: the board timer's `@interrupt("timer")` handler advances it
+/// (`ticks_advance`), and every other function reads it (`Timer`).
+pub struct Ticks {
+    count: Atomic,
+}
+
+impl Timer for Ticks {
+    fn ticks(self: Ticks) -> Int ! {} {
+        atomic_load(self.count)
+    }
+}
+
+/// One more tick of `t`; the count before.
+pub fn ticks_advance(t: Ticks) -> Int ! {} {
+    atomic_add(t.count, 1)
+}
+
+/// Until `t` has counted `n` more ticks than it had: the ticks it counted.
+pub fn wait_ticks[T: Timer](t: T, n: Int) -> Int ! {} {
+    let start = t.ticks();
+    while t.ticks() - start < n {
+        0;
+    }
+    t.ticks() - start
+}
