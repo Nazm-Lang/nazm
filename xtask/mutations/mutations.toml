@@ -15478,3 +15478,38 @@ find = "                .find(|f| f.interrupt.is_some())"
 replace = "                .find(|_| false)"
 killers = [{ package = "nazm-cli", test = "interrupts", name = "a_handler_is_a_boards_alone" }]
 
+# --- Gate 3D: a board's heap, and no-heap (docs/spec.md, Boards) ---
+# The arena's own behaviour — the bump, running out as N0406 — is heap.rs's ignored QEMU test.
+
+[[mutation]]
+name = "g3-the-heap-is-not-reserved"
+why = "the linker script reserves no arena, so __heap_start and __heap_end are undefined and every allocation lands on whatever follows the stack"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    let heap = board.heap.map_or_else(String::new, |h| {"
+replace = "    let heap = None::<u64>.map_or_else(String::new, |h| {"
+killers = [{ package = "nazm-cli", test = "heap", name = "a_board_with_a_heap_allocates_and_one_without_refuses_by_name" }]
+
+[[mutation]]
+name = "g3-a-heap-admits-nothing"
+why = "a board whose manifest gives a heap still refuses every program that allocates, as if it had none"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    if board.heap.is_some() {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "heap", name = "a_board_with_a_heap_allocates_and_one_without_refuses_by_name" }]
+
+[[mutation]]
+name = "g3-no-heap-sees-no-site"
+why = "no-heap is given no allocation site, so the kernel profile accepts a program that allocates"
+file = "crates/nazm-cli/src/profile.rs"
+find = "        allocations: allocations(program),"
+replace = "        allocations: Vec::new(),"
+killers = [{ package = "nazm-cli", test = "heap", name = "the_kernel_profile_refuses_every_allocation_site_whatever_the_board" }]
+
+[[mutation]]
+name = "g3-the-kernel-profile-may-allocate"
+why = "the kernel profile leaves no-heap out, so it says nothing of a program's allocations"
+file = "crates/nazm-service/src/profile.rs"
+find = "                Rule::NoBlocking,\n                Rule::NoHeap,\n            ],"
+replace = "                Rule::NoBlocking,\n            ],"
+killers = [{ package = "nazm-cli", test = "heap", name = "the_kernel_profile_refuses_every_allocation_site_whatever_the_board" }]
+
