@@ -29,6 +29,7 @@ impl Interpreter {
             ));
         };
         let core = Arc::clone(&self.core);
+        let cells = Arc::clone(&self.cells);
         let max_depth = self.max_depth;
         let iterations_left = self.iterations_left;
         let task_name = name.clone();
@@ -42,6 +43,7 @@ impl Interpreter {
             .spawn(move || {
                 let mut task = Self {
                     core: Arc::clone(&core),
+                    cells: Arc::clone(&cells),
                     pending: Vec::new(),
                     depth: 0,
                     max_depth,

@@ -454,9 +454,9 @@ pub(crate) fn parse_region(
                 next += 2;
             }
             let after_pub = p.tokens.get(next).map(|t| t.kind.clone());
-            // `const NAME:` (Gate 2): a word only at the start of an item, before a name and a
-            // `:`, so no name a program already uses stops being one.
-            let constant = matches!(&after_pub, Some(TokenKind::Ident(w)) if w == "const")
+            // `const NAME:` (Gate 2) and `static NAME:` (Gate 3): words only at the start of an
+            // item, before a name and a `:`, so no name a program already uses stops being one.
+            let constant = matches!(&after_pub, Some(TokenKind::Ident(w)) if w == "const" || w == "static")
                 && matches!(
                     p.tokens.get(next + 1).map(|t| &t.kind),
                     Some(TokenKind::Ident(_))
@@ -2400,7 +2400,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `const NAME: Type = value;`, optionally `pub` (Gate 2).
+    /// `const NAME: Type = value;` (Gate 2) or `static NAME: Type = value;` (Gate 3), optionally
+    /// `pub`.
     fn constant(&mut self) -> Option<crate::ast::Const> {
         let at = self.checkpoint();
         let start = self.peek_span();
@@ -2409,7 +2410,7 @@ impl<'a> Parser<'a> {
             self.advance();
             s
         });
-        self.advance(); // `const`
+        let is_static = matches!(self.advance(), TokenKind::Ident(w) if w == "static");
         let name_span = self.peek_span();
         let TokenKind::Ident(name) = self.advance() else {
             return None;
@@ -2432,6 +2433,7 @@ impl<'a> Parser<'a> {
             ty,
             value,
             span: start.join(end),
+            is_static,
         })
     }
 

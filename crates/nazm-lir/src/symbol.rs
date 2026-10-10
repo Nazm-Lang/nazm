@@ -112,6 +112,22 @@ impl NativeSymbol {
         Self(format!("nz.u.{}.{}", module.index(), encode(name)))
     }
 
+    /// A static's storage (Gate 3): `nz.s.` and its owner, so it is one symbol in every unit and
+    /// never a function's.
+    #[must_use]
+    pub fn of_static(owner: &nazm_mir::Owner) -> Self {
+        match owner {
+            nazm_mir::Owner::Keyed(k) => Self(format!(
+                "nz.s.{}.{}",
+                encode(k.module().as_str()),
+                encode(k.name())
+            )),
+            nazm_mir::Owner::Unkeyed { module, name } => {
+                Self(format!("nz.su.{}.{}", module.index(), encode(name)))
+            }
+        }
+    }
+
     /// One concrete instance of a generic function: its definition's symbol and the
     /// [canonical keys](type_key) of its type arguments, in order.
     ///

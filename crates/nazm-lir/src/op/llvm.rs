@@ -174,9 +174,18 @@ pub fn module(m: &Module) -> String {
                 .join(", ");
             format!("<{{ {types} }}> <{{ {} }}>", parts.join(", "))
         };
+        // A static (Gate 3) is its module's, under its own name, and a static atomic's cell is
+        // written as the program runs; every other datum is a private literal.
+        let local = m.symbol(d.sym).is_none_or(|s| s.linkage == Linkage::Local);
+        let place = if local {
+            "private unnamed_addr "
+        } else {
+            "hidden "
+        };
+        let kind = if d.writable { "global" } else { "constant" };
         let _ = writeln!(
             out,
-            "{} = private unnamed_addr constant {body}, align {}",
+            "{} = {place}{kind} {body}, align {}",
             name(m, d.sym),
             d.align.max(1)
         );

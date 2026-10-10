@@ -25,6 +25,8 @@ pub struct Program {
     pub modules: Vec<(ModuleId, nazm_span::FileId)>,
     pub types: Types,
     pub entry: Option<FuncId>,
+    /// Every static (Gate 3), in the order the checker recorded them.
+    pub statics: Vec<Static>,
 }
 
 impl Program {
@@ -471,6 +473,12 @@ pub enum Const {
         kind: NumKind,
         bits: u64,
     },
+    /// A static `Atomic`'s cell (Gate 3), by its module and name: [`Program::statics`] says
+    /// what it is called and what it starts as. Immortal, as a literal's storage is.
+    Cell {
+        module: ModuleId,
+        name: String,
+    },
 }
 
 impl Const {
@@ -481,8 +489,19 @@ impl Const {
             Self::Bool(_) => Type::Bool,
             Self::Str(_) => Type::Str,
             Self::Num { kind, .. } => Type::of_num(*kind),
+            Self::Cell { .. } => Type::Atomic,
         }
     }
+}
+
+/// A static (Gate 3): what its module's unit defines, under the name its owner spells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Static {
+    pub module: ModuleId,
+    pub name: String,
+    /// Its durable owner, which the backend's symbol spells.
+    pub owner: Owner,
+    pub value: nazm_sema::StaticValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

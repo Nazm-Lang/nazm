@@ -74,8 +74,8 @@ pub use record::{CRepr, FieldDef, RecordDef, RecordId, Records, TaskUnsafe, OPAQ
 pub use references::{Coverage, ReferenceIndex, ReferenceTarget};
 pub use resolve::{
     CallSite, Callee, Capture, CheckedCall, ClosureInfo, FieldRef, FnDef, FnId, FnValueUse,
-    Instantiation, LocalDef, LocalRef, NumericFact, PayloadRef, Propagation, Resolution,
-    VariantRef, WrittenType,
+    Instantiation, LocalDef, LocalRef, NumericFact, PayloadRef, Propagation, Resolution, StaticDef,
+    StaticValue, VariantRef, WrittenType,
 };
 pub use scope::{Candidate, Named, ScopeTrace, Unavailable, Visible};
 pub use types::{

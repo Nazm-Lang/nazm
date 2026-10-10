@@ -235,6 +235,7 @@ impl Printer<'_> {
                             bits: *bits,
                         })),
                     ),
+                    Const::Cell { name, .. } => ("Atomic", J::Str(format!("static {name}"))),
                 };
                 J::Obj(vec![
                     ("id", J::uint(u64::try_from(i).unwrap_or(u64::MAX))),

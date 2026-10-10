@@ -36,7 +36,7 @@ pub mod verify;
 pub use ir::{
     ArithOp, ArrayInfo, BitOp, Block, BlockId, BlockOrigin, CmpOp, Const, EnumInfo, FieldInfo,
     FieldRef, FuncId, Function, Identity, Law, LocalDecl, LocalId, LocalOrigin, LocalTy, Operand,
-    Owner, PathRef, Program, RecordInfo, Rvalue, Statement, StatementKind, Terminator,
+    Owner, PathRef, Program, RecordInfo, Rvalue, Statement, StatementKind, Static, Terminator,
     TypeIdentity, Types, VariantInfo, VecInfo,
 };
 pub use lower::lower;
