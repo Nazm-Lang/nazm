@@ -10524,7 +10524,7 @@ Repointed by Gate 3's Cortex-M board, which moved it to 25."""
 file = "crates/nazm-runtime/src/lib.rs"
 find = '''pub const RUNTIME_ABI_REVISION: u32 = 26;'''
 replace = '''pub const RUNTIME_ABI_REVISION: u32 = 25;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_five_and_reaches_the_system_only_through_its_platform_layer" }]
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_six_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
