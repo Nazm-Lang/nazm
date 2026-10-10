@@ -172,6 +172,8 @@ pub struct Data {
     /// A static `Atomic`'s cell (Gate 3): changed as the program runs. Everything else is
     /// read-only.
     pub writable: bool,
+    /// A static's `@section` (Gate 3).
+    pub section: Option<String>,
     /// `(offset, symbol)`: the symbol's address, written at the offset, pointer-wide.
     pub relocs: Vec<(u32, SymId)>,
 }
@@ -494,6 +496,8 @@ pub struct Function {
     /// The function's own position, `(file, line)`, for debug information.
     pub at: Option<(u32, u32)>,
     pub debug_vars: Vec<DebugVar>,
+    /// The section `@section` places it in (Gate 3): a board's image only.
+    pub section: Option<String>,
 }
 
 /// One unit, as LIR.

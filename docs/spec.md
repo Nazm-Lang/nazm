@@ -3966,7 +3966,7 @@ every implementation and run. Reproducibility is the default; unpredictability i
 
 Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §16). An attribute is `@` and a name,
 with arguments in parentheses or none, written on the lines before a top-level declaration —
-a function, `struct`, `enum`, `trait`, `impl` or `const` — never before a `use`, and not, in
+a function, `struct`, `enum`, `trait`, `impl`, `const` or `static` — never before a `use`, and not, in
 1.0, inside an `impl` or a `trait`. An argument is a string, a word, `key = "value"`, or
 `name(…)` of further arguments. The vocabulary is closed: there are no user-defined attributes
 and no macros.
@@ -3978,6 +3978,7 @@ and no macros.
 | **`@bench`** | A function `nazm bench` measures (§19) |
 | **`@fuzz`** | A function `nazm test --fuzz` drives with generated input (§18) |
 | **`@deprecated`, `@deprecated("why")`** | **Metadata-only deprecation** (G2-C1). It marks a `pub` function, `struct` or `enum` and nothing else (`N0619` elsewhere): `nazm doc` publishes it, as the item's `deprecated` — the reason, or empty — in `nazm.api-doc/2` and as a line in the Markdown. No diagnostic reports a use, and a use compiles exactly as it would without the mark: 1.0 has one diagnostic severity, and compiler warnings are not part of it |
+| **`@section("NAME")`** (Gate 3) | Places a function or a static in a board's image (*Boards*, below); before anything else, `N0619` |
 | **Refused** | An attribute not in this list, one on a declaration it does not mark, one with arguments it does not take, or one other than `@cfg` written twice is `N0619`. A malformed argument is a syntax error (`N0100`), reported once; the attribute is then not checked again |
 
 Attributes change no expression's meaning. The formatter writes each on its own line, `@` against

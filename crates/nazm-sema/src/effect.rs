@@ -239,6 +239,8 @@ impl Effect {
             | Intrinsic::MmioWrite8
             | Intrinsic::MmioRead16
             | Intrinsic::MmioWrite16
+            | Intrinsic::MmioRead64
+            | Intrinsic::MmioWrite64
             // A sum of what the caller holds (N66).
             | Intrinsic::IntsSum
             | Intrinsic::ChanSelectOf

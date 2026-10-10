@@ -94,12 +94,62 @@ pub const STACK_HEADROOM: u64 = STACK >> 2;
 /// load address ahead of `_start` (N86).
 #[must_use]
 pub fn linker_script(board: &Board) -> String {
+    linker_script_placing(board, &Placed::default())
+}
+
+/// The sections a program's `@section` names (Gate 3, `docs/spec.md`, *Boards*), by kind: each
+/// is kept and placed after the board's own sections of that kind.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Placed {
+    pub code: Vec<String>,
+    pub rodata: Vec<String>,
+    pub data: Vec<String>,
+}
+
+impl Placed {
+    /// The sections the objects' LLVM text places definitions in: a function's code, a
+    /// constant's read-only data, a writable global's data. Read from what was compiled, so the
+    /// script cannot disagree with the objects it links.
+    #[must_use]
+    pub fn of(texts: &[&str]) -> Self {
+        let mut p = Self::default();
+        for line in texts.iter().flat_map(|t| t.lines()) {
+            let Some(at) = line.find(" section \"") else {
+                continue;
+            };
+            let rest = &line[at + 10..];
+            let Some(end) = rest.find('"') else { continue };
+            let name = rest[..end].to_owned();
+            let into = if line.starts_with("define ") {
+                &mut p.code
+            } else if line.contains(" global ") {
+                &mut p.data
+            } else {
+                &mut p.rodata
+            };
+            if !into.contains(&name) {
+                into.push(name);
+            }
+        }
+        p.code.sort();
+        p.rodata.sort();
+        p.data.sort();
+        p
+    }
+}
+
+/// [`linker_script`], keeping and placing `placed`'s sections (Gate 3).
+#[must_use]
+pub fn linker_script_placing(board: &Board, placed: &Placed) -> String {
     let triple = board.triple;
     let load = board.load_address;
+    let keep =
+        |names: &[String]| -> String { names.iter().map(|n| format!(" KEEP(*({n}))")).collect() };
+    let (code, rodata, data) = (keep(&placed.code), keep(&placed.rodata), keep(&placed.data));
     format!(
         "/* Written by nazm build for {triple} (N62, N86). */\nENTRY(_start)\nSECTIONS\n{{\n  \
-         . = {load:#x};\n  .text : {{ *(.text.start) *(.text*) }}\n  .rodata : {{ *(.rodata*) *(.srodata*) }}\n  \
-         .data : {{ *(.data*) *(.sdata*) }}\n  .bss : {{ *(.bss*) *(.sbss*) *(COMMON) }}\n  . = ALIGN(16);\n  __stack_bottom = .;\n  . = . + {STACK:#x};\n  \
+         . = {load:#x};\n  .text : {{ *(.text.start) *(.text*){code} }}\n  .rodata : {{ *(.rodata*) *(.srodata*){rodata} }}\n  \
+         .data : {{ *(.data*) *(.sdata*){data} }}\n  .bss : {{ *(.bss*) *(.sbss*) *(COMMON) }}\n  . = ALIGN(16);\n  __stack_bottom = .;\n  . = . + {STACK:#x};\n  \
          __stack_top = .;\n  /DISCARD/ : {{ *(.eh_frame*) }}\n}}\n"
     )
 }
@@ -325,6 +375,20 @@ entry:
   %p = inttoptr i64 %addr to ptr
   %t = trunc i64 %value to i32
   store volatile i32 %t, ptr %p
+  ret i64 0
+}
+
+define hidden i64 @nz.mmio_read64(i64 %addr) {
+entry:
+  %p = inttoptr i64 %addr to ptr
+  %v = load volatile i64, ptr %p
+  ret i64 %v
+}
+
+define hidden i64 @nz.mmio_write64(i64 %addr, i64 %value) {
+entry:
+  %p = inttoptr i64 %addr to ptr
+  store volatile i64 %value, ptr %p
   ret i64 0
 }
 ";

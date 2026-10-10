@@ -97,6 +97,8 @@ pub struct Function {
     pub foreign: Option<String>,
     /// The C symbol an exported function is also callable as (N55).
     pub export: Option<String>,
+    /// The section `@section` places it in (Gate 3): a board's image only.
+    pub section: Option<String>,
     /// For the code of a function value — a closure's body, or a named function's thunk
     /// (N50): the types of what the closure object carries, in order. Its local 0, a
     /// parameter, is the closure object; its declared parameters follow. `None` for every
@@ -502,6 +504,8 @@ pub struct Static {
     /// Its durable owner, which the backend's symbol spells.
     pub owner: Owner,
     pub value: nazm_sema::StaticValue,
+    /// Its `@section` (Gate 3).
+    pub section: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

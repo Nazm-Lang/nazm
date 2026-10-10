@@ -216,6 +216,7 @@ pub fn lower(
             name: s.name.clone(),
             owner: owner(graph, s.module, DefKind::Static, &s.name),
             value: s.value.clone(),
+            section: s.section.clone(),
         })
         .collect();
     Ok(Program {
@@ -288,6 +289,7 @@ fn thunk_of(
         name_span: at,
         ret_span: target.ret_span,
         foreign: None,
+        section: None,
         export: None,
         captures: Vec::new(),
         closure: true,
@@ -536,6 +538,7 @@ fn lower_function(
             span: f.span,
             ret_span: f.ret_span,
             foreign: Some(symbol.clone()),
+            section: None,
             export: None,
             closure: None,
         });
@@ -651,6 +654,7 @@ fn lower_function(
         span: f.span,
         ret_span: f.ret_span,
         foreign: None,
+        section: f.section.clone(),
         export: f.export.clone(),
         closure,
     })

@@ -262,7 +262,7 @@ pub(super) fn record_module_names(
         .filter_map(|n| types.consts.decls.get(n).map(|d| (n, *d)))
         .collect();
     statics.sort_by_key(|(_, s)| (s.file, s.start));
-    for (name, _) in statics {
+    for (name, at) in statics {
         let value = match (types.consts.cells.get(name), types.consts.values.get(name)) {
             (Some(init), _) => nazm_sema::StaticValue::Cell(*init),
             (None, Some((_, v))) => nazm_sema::StaticValue::Value(v.clone()),
@@ -272,6 +272,8 @@ pub(super) fn record_module_names(
             module,
             name: name.clone(),
             value,
+            at,
+            section: types.consts.sections.get(name).cloned(),
         });
     }
     use nazm_sema::scope::{defined, Candidate, Named};

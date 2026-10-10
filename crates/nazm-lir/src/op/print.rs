@@ -265,15 +265,23 @@ pub fn module(m: &Module) -> String {
             .map(|(o, s)| format!(" {o}:{}", sym(m, *s)))
             .collect::<String>();
         let w = if d.writable { " writable" } else { "" };
+        let placed = d
+            .section
+            .as_ref()
+            .map_or_else(String::new, |s| format!(" section {s}"));
         let _ = writeln!(
             out,
-            "data {} align {}{w} [{hex}]{relocs}",
+            "data {} align {}{w}{placed} [{hex}]{relocs}",
             sym(m, d.sym),
             d.align
         );
     }
     for f in &m.functions {
-        let _ = writeln!(out, "\nfunction {} ; {}", sym(m, f.sym), f.name);
+        let placed = f
+            .section
+            .as_ref()
+            .map_or_else(String::new, |s| format!(" section {s}"));
+        let _ = writeln!(out, "\nfunction {}{placed} ; {}", sym(m, f.sym), f.name);
         if let Some((file, line)) = f.at {
             let _ = writeln!(out, "  at {file} {line}");
         }
