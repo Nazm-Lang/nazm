@@ -29,6 +29,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("file", include_str!("../../../library/std/file.nz")),
     ("fmt", include_str!("../../../library/std/fmt.nz")),
     ("fs", include_str!("../../../library/std/fs.nz")),
+    ("hal", include_str!("../../../library/std/hal.nz")),
     ("hash", include_str!("../../../library/std/hash.nz")),
     ("hashmap", include_str!("../../../library/std/hashmap.nz")),
     ("hashset", include_str!("../../../library/std/hashset.nz")),
