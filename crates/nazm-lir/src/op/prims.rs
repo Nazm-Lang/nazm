@@ -635,22 +635,30 @@ impl Fx<'_, '_> {
                 self.set(dst, t);
             }
             // A device register (N62), volatile in the runtime.
-            Intrinsic::MmioRead32 | Intrinsic::MmioRead8 | Intrinsic::MmioRead16 => {
+            Intrinsic::MmioRead32
+            | Intrinsic::MmioRead8
+            | Intrinsic::MmioRead16
+            | Intrinsic::MmioRead64 => {
                 let a = self.arg(args, 0);
                 let symbol = match op {
                     Intrinsic::MmioRead8 => "nz.mmio_read8",
                     Intrinsic::MmioRead16 => "nz.mmio_read16",
+                    Intrinsic::MmioRead64 => "nz.mmio_read64",
                     _ => "nz.mmio_read32",
                 };
                 let t = self.rt_v(symbol, &[a], Class::I64);
                 self.set(dst, t);
             }
-            Intrinsic::MmioWrite32 | Intrinsic::MmioWrite8 | Intrinsic::MmioWrite16 => {
+            Intrinsic::MmioWrite32
+            | Intrinsic::MmioWrite8
+            | Intrinsic::MmioWrite16
+            | Intrinsic::MmioWrite64 => {
                 let a = self.arg(args, 0);
                 let v = self.arg(args, 1);
                 let symbol = match op {
                     Intrinsic::MmioWrite8 => "nz.mmio_write8",
                     Intrinsic::MmioWrite16 => "nz.mmio_write16",
+                    Intrinsic::MmioWrite64 => "nz.mmio_write64",
                     _ => "nz.mmio_write32",
                 };
                 let t = self.rt_v(symbol, &[a, v], Class::I64);

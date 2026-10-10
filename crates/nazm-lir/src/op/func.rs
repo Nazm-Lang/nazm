@@ -164,7 +164,9 @@ pub(crate) fn lower(lw: &mut Lw<'_>, f: &mir::Function, sig: &NativeSig, sym: Sy
                 .map(|(file, line, _)| (file, line))
         })
         .flatten();
-    fx.b.finish(sym, f.name.clone(), at)
+    let mut lowered = fx.b.finish(sym, f.name.clone(), at);
+    lowered.section.clone_from(&f.section);
+    lowered
 }
 
 impl<'l, 'a> Fx<'l, 'a> {

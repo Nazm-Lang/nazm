@@ -317,12 +317,18 @@ pub fn lower_as(
             // Bindable across objects when another artefact must reach it: exported, reached
             // from a generic body (whose instances are artefacts of their own), an instance,
             // or `main`, which the entry wrapper in a unit of its own calls.
-            let linkage =
-                if f.exported || f.reached_from_generic || instance || Some(f.id) == entry_id {
-                    Linkage::Hidden
-                } else {
-                    Linkage::Internal
-                };
+            // A function `@section` places (Gate 3) is in the image whether or not it was
+            // inlined: hidden, which the optimiser keeps, rather than internal.
+            let linkage = if f.exported
+                || f.reached_from_generic
+                || instance
+                || Some(f.id) == entry_id
+                || f.section.is_some()
+            {
+                Linkage::Hidden
+            } else {
+                Linkage::Internal
+            };
             Sig {
                 symbol: f
                     .foreign

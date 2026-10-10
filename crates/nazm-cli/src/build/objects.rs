@@ -224,7 +224,17 @@ pub(super) fn objects_for_target(
     // Objects for the target's own toolchain (N57): every object in link order, renamed by its
     // position so the order survives, and `link.txt` saying what to link them with.
     if let Some(dir) = choice.objects {
-        let mut written = write_objects(dir, objects, target);
+        // The sections `@section` names (Gate 3), read from what was compiled.
+        let placed = nazm_lir::runtime::board::Placed::of(
+            &artefacts
+                .iter()
+                .filter_map(|a| match &a.code {
+                    nazm_lir::backend::Code::Llvm(ir) => Some(ir.as_str()),
+                    nazm_lir::backend::Code::Object(_) => None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        let mut written = write_objects(dir, objects, target, &placed);
         if freestanding && written.is_ok() {
             let texts: Vec<&str> = artefacts
                 .iter()
@@ -284,6 +294,7 @@ fn write_objects(
     dir: &Path,
     objects: &[PathBuf],
     target: &nazm_lir::backend::Target,
+    placed: &nazm_lir::runtime::board::Placed,
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut listed = Vec::new();
@@ -324,7 +335,7 @@ fn write_objects(
     if target.is_board() {
         std::fs::write(
             dir.join("link.ld"),
-            nazm_lir::runtime::board::linker_script(board_of(target)),
+            nazm_lir::runtime::board::linker_script_placing(board_of(target), placed),
         )?;
     }
     Ok(())

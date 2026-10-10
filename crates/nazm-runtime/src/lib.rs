@@ -245,8 +245,9 @@ pub fn escape(s: &str) -> String {
 /// the `init` unit and the entry's `nz_os_args` — so the runtime's own text names no system.
 /// 22 is Gate 3's atomics: `nz.atomic_load`, `nz.atomic_store`, `nz.atomic_swap` and
 /// `nz.atomic_cas`, sequentially consistent, defined by the hosted runtime and a board's alike;
-/// an atomic's cell is the data of a string backing, so it is `Str`'s triple.
-pub const RUNTIME_ABI_REVISION: u32 = 22;
+/// an atomic's cell is the data of a string backing, so it is `Str`'s triple. 23 is Gate 3's
+/// 64-bit device registers: `nz.mmio_read64` and `nz.mmio_write64`.
+pub const RUNTIME_ABI_REVISION: u32 = 23;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -407,6 +408,8 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.mmio_write8", [I64, I64], Some(Word::I64), Base, "writes a byte-wide device register; takes nothing (N86)"),
     import!("nz.mmio_read16", [I64], Some(Word::I64), Base, "reads a 16-bit device register; takes nothing (N86)"),
     import!("nz.mmio_write16", [I64, I64], Some(Word::I64), Base, "writes a 16-bit device register; takes nothing (N86)"),
+    import!("nz.mmio_read64", [I64], Some(Word::I64), Base, "reads a 64-bit device register; takes nothing (Gate 3)"),
+    import!("nz.mmio_write64", [I64, I64], Some(Word::I64), Base, "writes a 64-bit device register; takes nothing (Gate 3)"),
     import!("nz.cstr_has_nul", [Ptr, I64], Some(Word::Bit), Strings, "borrows the bytes; whether they hold a NUL (N55)"),
     import!("nz.cstr_borrow", [Ptr, I64], Some(Word::Ptr), Strings, "borrows the bytes; a NUL-terminated copy the caller owns and frees, or null (N55)"),
     import!("nz.cstr_len", [Ptr], Some(Word::I64), Strings, "borrows the C string; its length up to the NUL (N85)"),
@@ -631,6 +634,8 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.mmio_write8", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 8-bit write of a device register (N86); reached only in a freestanding image", "none"),
     rt!("nz.mmio_read16", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 16-bit read of a device register (N86); reached only in a freestanding image", "none"),
     rt!("nz.mmio_write16", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 16-bit write of a device register (N86); reached only in a freestanding image", "none"),
+    rt!("nz.mmio_read64", "i64" ("i64") "", true, Base, "", Never, Owner, "a volatile 64-bit read of a device register (Gate 3); reached only in a freestanding image", "none"),
+    rt!("nz.mmio_write64", "i64" ("i64", "i64") "", true, Base, "", Never, Owner, "a volatile 64-bit write of a device register (Gate 3); reached only in a freestanding image", "none"),
     rt!("nz.cstr_has_nul", "i1" ("ptr", "i64") "", true, Strings, "", Status, Any, "whether a Str argument to C holds a NUL byte (N55)", "borrows the bytes"),
     rt!("nz.cstr_borrow", "ptr" ("ptr", "i64") "", true, Strings, "", Null, Any, "a Str argument as a C string, for one foreign call (N55)", "borrows the bytes; the copy is the caller's to free"),
     rt!("nz.cstr_len", "i64" ("ptr") "", true, Strings, "", Never, Any, "the length of a C string a foreign function returned (N85)", "borrows the C string"),
@@ -1156,9 +1161,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_two_and_reaches_the_system_only_through_its_platform_layer() {
+    fn the_runtime_is_revision_twenty_three_and_reaches_the_system_only_through_its_platform_layer()
+    {
         // Gate 3's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 22);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 23);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));

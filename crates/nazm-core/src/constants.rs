@@ -32,6 +32,8 @@ pub struct Constants {
     /// Each static `Atomic` (Gate 3): the value its cell starts with. Not in [`Self::values`]:
     /// a use of one is the cell, never a value written in its place.
     pub cells: HashMap<String, i64>,
+    /// Each static's `@section` (Gate 3), by its name.
+    pub sections: HashMap<String, String>,
 }
 
 /// Compute every constant of a module, refusing what cannot be computed.
@@ -102,7 +104,24 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
             .map(|c| c.name.clone())
             .collect(),
         cells: ev.cells,
+        sections: decls
+            .iter()
+            .filter(|c| c.is_static)
+            .filter_map(|c| section_of(&c.attrs).map(|s| (c.name.clone(), s)))
+            .collect(),
     }
+}
+
+/// The name a declaration's `@section` gives (Gate 3), held to the attribute's rule elsewhere.
+#[must_use]
+pub fn section_of(attrs: &[nazm_syntax::ast::Attribute]) -> Option<String> {
+    attrs
+        .iter()
+        .find(|a| a.name == "section")
+        .and_then(|a| match a.args.as_deref() {
+            Some([nazm_syntax::ast::AttrArg::Str { value, .. }]) => Some(value.clone()),
+            _ => None,
+        })
 }
 
 /// Whether a declared type is `Atomic`, written plainly.

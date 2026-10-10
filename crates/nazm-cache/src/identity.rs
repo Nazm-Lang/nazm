@@ -276,7 +276,10 @@ use crate::digest::{self, Framed};
 /// into a task.
 /// `46` — Gate 3, 2026-10-10. Statics: `static NAME: T = value;` at an item's start moved from
 /// refused to accepted, assigning one is refused (`N0625`), and a static is no array's length.
-pub const SEMANTIC_EPOCH: u32 = 46;
+/// `47` — Gate 3, 2026-10-10. `@section` joined the attributes, so one before a function or a
+/// static moved from refused (`N0619`) to accepted; `mmio_read64` and `mmio_write64` became
+/// built-in names.
+pub const SEMANTIC_EPOCH: u32 = 47;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

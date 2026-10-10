@@ -260,7 +260,8 @@ impl Origin {
             // A store's result is a constant; what reaches the device is the caller's (N62).
             | Intrinsic::MmioWrite32
             | Intrinsic::MmioWrite8
-            | Intrinsic::MmioWrite16 => BuiltinFlow::Derive,
+            | Intrinsic::MmioWrite16
+            | Intrinsic::MmioWrite64 => BuiltinFlow::Derive,
             // Read out of a handle: what is there is whatever was written into any container
             // of its type — its cell (N80, §7.81). Which cell is [`Origin::container`]'s.
             Intrinsic::IntsLen
@@ -280,7 +281,10 @@ impl Origin {
             // Read out of a handle, as `ints_get` is (N66).
             | Intrinsic::IntsSum => BuiltinFlow::Read,
             // A device register holds whatever the device put there (N62): not followed.
-            Intrinsic::MmioRead32 | Intrinsic::MmioRead8 | Intrinsic::MmioRead16 => {
+            Intrinsic::MmioRead32
+            | Intrinsic::MmioRead8
+            | Intrinsic::MmioRead16
+            | Intrinsic::MmioRead64 => {
                 BuiltinFlow::Source(Self::Unknown)
             }
             // What C left in `errno` is C's (N85), as everything C returns is (N42).
@@ -492,6 +496,8 @@ impl Origin {
             | Intrinsic::MmioRead8
             | Intrinsic::MmioWrite16
             | Intrinsic::MmioRead16
+            | Intrinsic::MmioWrite64
+            | Intrinsic::MmioRead64
             | Intrinsic::IntsNew
             | Intrinsic::StrsNew
             | Intrinsic::VecNew
@@ -1058,6 +1064,7 @@ mod tests {
                 // And a device register of another width (N86), as the 32-bit one.
                 ("mmio_read8", Origin::Unknown),
                 ("mmio_read16", Origin::Unknown),
+                ("mmio_read64", Origin::Unknown),
                 // Files and handles (Gate 2): a handle opened for reading, and what is read
                 // through one, are the file system's.
                 ("os_open_read", Origin::File),

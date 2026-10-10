@@ -64,6 +64,16 @@ pub(super) fn lowered(
                     )]);
                 }
             }
+            // Nor sections (Gate 3): a board's image is what a section is placed in.
+            if !target.is_board() {
+                if let Some((at, what)) = nazm_core::board_only(core) {
+                    return Err(vec![nazm_core::board_only_refused(
+                        at,
+                        &what,
+                        &format!("a build for `{}`", target.triple),
+                    )]);
+                }
+            }
             // The summation idiom, vectorised (N66, §7.68): a native build's rewrite of Core IR,
             // so the interpreter, reading the same program, still runs the loop.
             let mut core = core.clone();

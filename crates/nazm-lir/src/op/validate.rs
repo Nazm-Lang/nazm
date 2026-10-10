@@ -511,6 +511,7 @@ mod tests {
                 values: 16,
                 at: None,
                 debug_vars: Vec::new(),
+                section: None,
             }],
             data: Vec::new(),
             needs: crate::Needs::default(),
