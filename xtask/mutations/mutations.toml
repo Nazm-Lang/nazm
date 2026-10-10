@@ -11618,8 +11618,8 @@ killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_functio
 name = "n67-a-value-type-is-not-checked"
 why = "a function holding a record or enum value is not refused for its type, so the refusal names another reason"
 file = "crates/nazm-service/src/kernel.rs"
-find = '        if !matches!(l.ty, Type::Int | Type::Bool) {'
-replace = '        if false {'
+find = "        if !elem.admits(l.ty) {"
+replace = "        if false {"
 killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_function_is_refused_by_name_before_any_device" }]
 
 [[mutation]]
@@ -11627,8 +11627,8 @@ name = "n67-the-signature-is-not-checked"
 why = """a kernel of three parameters is accepted, though a map hands it one element and a zip two
 Repointed by N88, which made a kernel of two a zip: the rule is now one or two, never more."""
 file = "crates/nazm-service/src/kernel.rs"
-find = '    if !(1..=2).contains(&entry.params) || !ints || entry.ret != Type::Int {'
-replace = '    if !(1..=3).contains(&entry.params) || !ints || entry.ret != Type::Int {'
+find = "(1..=2).contains(&entry.params) && same"
+replace = "(1..=3).contains(&entry.params) && same"
 killers = [{ package = "nazm-cli", test = "accel", name = "an_ineligible_function_is_refused_by_name_before_any_device" }]
 
 [[mutation]]
@@ -13375,7 +13375,7 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "accel::tests::a_fold_is
 name = "n88-unequal-inputs-are-zipped"
 why = "a zip over inputs of different lengths reaches the device, reading past the shorter one"
 file = "crates/nazm-cli/src/accel.rs"
-find = "            if columns.iter().any(|c| c.len() != elements.len()) {"
+find = "            if columns.iter().any(|c| c.len() != elements) {"
 replace = "            if false {"
 killers = [{ package = "nazm-cli", test = "accel", name = "a_zip_needs_two_inputs_of_one_length_before_any_device" }]
 
@@ -15796,3 +15796,90 @@ file = "crates/nazm-sema/src/stdlib.rs"
 find = "    (\"audit\", include_str!(\"../../../library/std/audit.nz\")),\n"
 replace = ""
 killers = [{ package = "nazm-cli", test = "domains", name = "each_workload_meets_its_domain_profile_and_builds_for_its_boards" }]
+
+# --- Gate 3H: accelerator providers and float kernels (systems-domains.md Part L) ---
+# That the GPU and the CPU provider agree, and that a Float64 kernel falls back on a GPU without
+# double precision, is accel_providers.rs's ignored GPU test.
+
+[[mutation]]
+name = "g3-a-float-kernel-may-mix-types"
+why = "a float kernel may hold an Int, so a kernel computes in a type the device's element is not"
+file = "crates/nazm-service/src/kernel.rs"
+find = "        t == Type::Bool || Self::of(t) == Some(self)"
+replace = "        t == Type::Bool || Self::of(t).is_some()"
+killers = [{ package = "nazm-cli", test = "accel_providers", name = "a_float_kernel_is_one_type_throughout_and_calls_only_what_is_exact" }]
+
+[[mutation]]
+name = "g3-there-is-no-float32-kernel"
+why = "a Float32 kernel is refused as if its type were not a kernel's"
+file = "crates/nazm-service/src/kernel.rs"
+find = "            Type::Num(nazm_core::sema::NumKind::F32) => Some(Self::F32),"
+replace = "            Type::Num(nazm_core::sema::NumKind::F32) => None,"
+killers = [{ package = "nazm-cli", test = "accel_providers", name = "float_kernels_agree_with_the_interpreter_bit_for_bit" }]
+
+[[mutation]]
+name = "g3-a-float-remainder-truncates"
+why = "a float kernel's remainder is not fmod, so it differs from the language's where the quotient is not whole"
+file = "crates/nazm-service/src/kernel.rs"
+find = "                    ArithOp::Rem => format!(\"fmod({a}, {b})\"),"
+replace = "                    ArithOp::Rem => format!(\"({a} - {b})\"),"
+killers = [{ package = "nazm-cli", test = "accel_providers", name = "float_kernels_agree_with_the_interpreter_bit_for_bit" }]
+
+[[mutation]]
+name = "g3-auto-never-falls-back"
+why = "auto does not move to the CPU provider where the GPU cannot run the kernel, so a host without one runs nothing"
+file = "crates/nazm-cli/src/accel.rs"
+find = "            Err(NotRun::Unavailable(why)) => {\n                eprintln!(\"nazm: {why}; the CPU provider runs the kernel\");"
+replace = "            Err(NotRun::Unavailable(why)) if false => {\n                eprintln!(\"nazm: {why}; the CPU provider runs the kernel\");"
+killers = [{ package = "nazm-cli", test = "accel_providers", name = "auto_runs_where_it_can_and_says_where" }]
+
+[[mutation]]
+name = "g3-every-nan-differs"
+why = "two NaNs of different payloads are a difference, so a provider is held to bits the language does not promise"
+file = "crates/nazm-cli/src/accel.rs"
+find = "            x == y || (elem != Elem::Int && as_f64(*x, elem).is_nan() && as_f64(*y, elem).is_nan())"
+replace = "            x == y"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "accel::tests::results_are_the_same_bit_for_bit_and_every_nan_alike" }]
+
+[[mutation]]
+name = "g3-a-float-sum-is-not-in-index-order"
+why = "a float reduction is summed in another order, which is another IEEE sum"
+file = "crates/nazm-cli/src/accel.rs"
+find = "            Self::Add => Some(xs.iter().fold(0.0, |a, x| round(a + x))),"
+replace = "            Self::Add => Some(xs.iter().rev().fold(0.0, |a, x| round(a + x))),"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "accel::tests::a_float_fold_is_in_index_order_and_a_nan_loses" }]
+
+
+# --- Gate 3I: the storage engine and the distributed foundation (systems-domains.md Parts M, N) ---
+
+[[mutation]]
+name = "g3-a-torn-record-is-replayed"
+why = "recovery replays a log record without its checksum, so a record a crash tore writes half a page"
+file = "examples/apps/pagestore/pagestore.nz"
+find = "            && bytes_read_le[Int](rec, record_bytes() - 8) == checksum(rec, 0, record_bytes() - 8)\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "storage", name = "a_crash_at_every_write_boundary_recovers_every_acknowledged_write" }]
+
+[[mutation]]
+name = "g3-a-repeat-is-applied-twice"
+why = "the ledger applies a credit it has already logged, so a client's retry counts it twice"
+file = "examples/apps/ledger/ledger.nz"
+find = "let answer = match hashmap_get(applied, m.key) {"
+replace = "let answer = match Option[Int].None() {"
+killers = [{ package = "nazm-cli", test = "distributed", name = "a_client_retries_through_a_server_restart_and_every_credit_is_applied_once" }]
+
+[[mutation]]
+name = "g3-retry-gives-up-at-once"
+why = "retry tries once, so a request to a node restarting fails instead of waiting for it"
+file = "library/std/dist.nz"
+find = "    while i < attempts {"
+replace = "    while i < 1 {"
+killers = [{ package = "nazm-cli", test = "distributed", name = "a_client_retries_through_a_server_restart_and_every_credit_is_applied_once" }]
+
+[[mutation]]
+name = "g3-there-is-no-dist"
+why = "@std/dist is not one of the standard modules, so two nodes have no contract to talk through"
+file = "crates/nazm-sema/src/stdlib.rs"
+find = "    (\"dist\", include_str!(\"../../../library/std/dist.nz\")),\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "distributed", name = "in_one_process_a_lost_answer_times_out_and_a_retry_is_applied_once" }]

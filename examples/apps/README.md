@@ -12,6 +12,13 @@ standard input, every one held to the output recorded beside it and to its exit 
 | `kvstore/` | a persistent log-structured store: appended and synced records, replay on open, compaction by atomic replacement | `@std/file` append, sync and `file_replace_atomic`, a second process reading what the first wrote | `script.expected`, `again.expected`; the compacted log's exact bytes and no file left beside it |
 | `kvd/` | a concurrent TCP key-value server: one task owns the table, one task per connection asks it over channels; a demonstration with four clients at once and a fifth reading what they left | `@std/net`, `scope`/`spawn`, `Chan[Request]` carrying a reply channel, the task pool | `kvd.expected`, whatever order the clients finish in |
 
+Gate 3 adds two, held by their own tests (`docs/systems-domains.md` Parts M and N):
+
+| app | what it is | held by |
+| --- | --- | --- |
+| `pagestore/` | a page-structured store: fixed checksummed pages behind a redo log of whole page images, one owner task serving readers and a writer through channels, a lock for one process | `storage.rs`: a run crashed at every write boundary, each recovery checked against the acknowledged writes |
+| `ledger/` | two processes on `@std/dist`: a ledger server that logs each credit before it answers, and a client that retries with backoff and an idempotency key | `distributed.rs`: the server stopped after logging a credit and before answering, restarted, every credit applied once |
+
 ## Resources (2026-10-09)
 
 One run each of the native executables on an Apple M1 Pro (macOS, aarch64), wall time and peak

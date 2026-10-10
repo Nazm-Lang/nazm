@@ -1,0 +1,145 @@
+// ledger: two processes asking each other things and surviving one of them failing (Gate 3
+// reference workload, `docs/systems-domains.md` Part N), on `@std/dist`.
+//
+//     ledger serve ADDR LOG [die-after KEY]   a ledger node, its applied credits in LOG
+//     ledger client ADDR COUNT                COUNT credits of their key's amount, each retried
+//
+// A credit is a message: its idempotency key, and an amount. The server applies a key once: it
+// appends the key and its amount to LOG and syncs it, and only then answers with the balance as of
+// that credit. A repeat of a key it has applied — a client that never saw the answer, asking again —
+// is answered from the log, and applied no second time. When it starts it replays LOG, so a server
+// killed and restarted knows everything it applied. `die-after KEY` stops the server the moment
+// KEY's credit is in the log and before it answers: the failure a retry exists for.
+//
+// The client asks through `retry`, with exponential backoff, the same key each time; it prints each
+// credit's balance and then the total.
+
+use "@std/dist";
+use "@std/ioerror";
+use "@std/file";
+use "@std/fs";
+use "@std/hash";
+use "@std/hashmap";
+use "@std/io";
+use "@std/net";
+use "@std/text";
+use "@std/time";
+
+fn credit() -> Int ! {} { 1 }
+fn balance() -> Int ! {} { 2 }
+
+fn number(s: Str) -> Int ! {} {
+    match text_parse_int(text_trim(s)) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0,
+    }
+}
+
+/// Each key's balance as of its credit, from the log; and the balance now.
+fn replay(io: IoCap, log: Str, applied: HashMap[Int, Int]) -> Int ! { io } {
+    let mut total = 0;
+    if fs_exists(io, log) {
+        let lines = match fs_read_lines(io, log) {
+            Result.Ok(value: l) => l,
+            Result.Err(error: e) => strs_new(),
+        };
+        let mut i = 0;
+        while i < strs_len(lines) {
+            let parts = text_split(strs_get(lines, i), " ");
+            if strs_len(parts) == 2 {
+                total = total + number(strs_get(parts, 1));
+                hashmap_set(applied, number(strs_get(parts, 0)), total);
+            }
+            i = i + 1;
+        }
+    }
+    total
+}
+
+fn serve(io: IoCap, net: NetCap, addr: Str, log: Str, die_after: Int) -> Int ! { io } {
+    let applied = hashmap_new[Int, Int]();
+    let mut total = replay(io, log, applied);
+    let l = match tcp_listen(net, addr) {
+        Result.Ok(value: l) => l,
+        Result.Err(error: e) => {
+            io_eprintln(io, str_concat("ledger: ", io_error_show(e)));
+            return exit_with(1);
+        },
+    };
+    io_println(io, str_concat("listening, balance ", int_to_str(total)));
+    while true {
+        match tcp_accept(l) {
+            Result.Ok(value: c) => {
+                tcp_set_timeout(c, 5000);
+                match tcp_recv_msg(c) {
+                    Result.Ok(value: m) => {
+                        if m.kind == credit() {
+                            let answer = match hashmap_get(applied, m.key) {
+                                // A repeat: answered from the log, applied no second time.
+                                Option.Some(value: b) => b,
+                                Option.None() => {
+                                    total = total + number(m.body);
+                                    let f = match file_append(io, log) {
+                                        Result.Ok(value: f) => f,
+                                        Result.Err(error: e) => {
+                                            io_eprintln(io, str_concat("ledger: ", io_error_show(e)));
+                                            return exit_with(1);
+                                        },
+                                    };
+                                    file_write_str(f, str_concat(str_concat(str_concat(int_to_str(m.key), " "), m.body), "\n"));
+                                    file_sync(f);
+                                    file_close(f);
+                                    hashmap_set(applied, m.key, total);
+                                    if m.key == die_after {
+                                        io_eprintln(io, str_concat("ledger: stopping after logging key ", int_to_str(m.key)));
+                                        return exit_with(9);
+                                    }
+                                    total
+                                },
+                            };
+                            tcp_send_msg(c, Msg(from: "ledger", key: m.key, kind: balance(), body: int_to_str(answer)));
+                        };
+                    },
+                    Result.Err(error: e) => {},
+                };
+                tcp_close(c);
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    0
+}
+
+fn client(io: IoCap, net: NetCap, time: TimeCap, addr: Str, count: Int) -> Int ! { io } {
+    let to = Tcp(to: node_id("ledger", addr));
+    let mut last = 0;
+    let mut k = 1;
+    while k <= count {
+        let m = Msg(from: "client", key: k, kind: credit(), body: int_to_str(k * 10));
+        match retry(to, net, time, m, 10, 50, 2000) {
+            Result.Ok(value: a) => {
+                last = number(a.body);
+                io_println(io, str_concat(str_concat(int_to_str(k), " -> "), a.body));
+            },
+            Result.Err(error: e) => {
+                io_eprintln(io, str_concat("ledger: ", e));
+                return exit_with(1);
+            },
+        };
+        k = k + 1;
+    }
+    io_println(io, str_concat("balance ", int_to_str(last)));
+    0
+}
+
+fn main(io: IoCap, net: NetCap, time: TimeCap) -> Int ! { io } {
+    if args_count() >= 3 && arg(0) == "serve" {
+        let die_after = if args_count() == 5 && arg(3) == "die-after" { number(arg(4)) } else { 0 };
+        return serve(io, net, arg(1), arg(2), die_after);
+    }
+    if args_count() == 3 && arg(0) == "client" {
+        return client(io, net, time, arg(1), number(arg(2)));
+    }
+    io_eprintln(io, "usage: ledger serve ADDR LOG [die-after KEY] | ledger client ADDR COUNT");
+    exit_with(2)
+}

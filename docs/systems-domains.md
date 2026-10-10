@@ -216,6 +216,16 @@ proved to be a boundary, not OpenCL-shaped. `Float32`/`Float64` kernels; a SIMD 
 vectoriser with a measured comparison against scalar. One verified GPU provider remains (OpenCL on
 this host); Metal/CUDA/ROCm/SPIR-V are named future providers behind the same interface.
 
+*Settled in 3H (2026-10-11).* The boundary is the kernel's one source text and a provider that runs
+it: OpenCL builds it for the GPU; the CPU provider compiles it as C with a prelude for OpenCL's words
+(`__kernel`, `__global`, `get_global_id`, `atomic_min`, `mul_hi`) and runs its element function,
+`nz_item`, over a thread pool. `--provider auto|opencl|cpu`; `auto` falls back to the CPU and says
+so. Float kernels are one type throughout, `Float32` or `Float64`, held bit for bit: no FMA
+contraction on either provider, correctly rounded division and square root on the device. Narrowed:
+float kernels call only `float_sqrt` and `float_abs`; a GPU without `cl_khr_fp64` — Apple's — refuses
+`Float64` and the CPU provider runs it; a device that flushes subnormals differs from the interpreter
+there, and the check says so rather than hides it.
+
 ## M. Storage engine
 
 A reference storage engine beyond `kvstore`: a page-structured file with a fixed binary layout
@@ -231,6 +241,19 @@ serialization over `@std/binary`, a transport abstraction (a trait with TCP and 
 implementations), timeouts and cancellation through the existing `select`, a retry helper with
 exponential backoff and an idempotency key, and failure propagation as `Result`. Reference: two
 processes exchanging requests, one killed and restarted, the other retrying to an idempotent result.
+
+*Settled in 3I (2026-10-11).* The storage engine is a reference application, `pagestore`: sixteen
+fixed 256-byte pages (number, count, fourteen key–value slots, an FNV-1a checksum) written in place
+behind a redo log of whole page images, so a page torn by a crash is rewritten from its image; a
+fresh store's pages are made in one atomic replacement. The single-writer rule is one owner task —
+readers and the writer reach it through channels — and, across processes, a `LOCK` file a crash
+leaves and `recover` breaks: no `flock` was added, and no mmap or direct I/O. The crash test cuts a
+run at each of its write boundaries, half that write written, and checks every recovery against the
+acknowledged writes. It found two defects in the engine as first written — a log handle kept across
+the checkpoint that replaced its file, and a reopen that reset the crash counter — both fixed. The
+distributed foundation is `@std/dist` and the `ledger` reference: a server stopped after logging a
+credit and before answering, restarted on its address, and a client whose `retry` carries it
+through, every credit applied once.
 
 ## O. WASM / WASI
 

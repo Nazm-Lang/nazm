@@ -1040,10 +1040,16 @@ fn every_member_and_variant_of_the_repository_is_among_its_holes_candidates() {
                     Context::Variant
                 };
                 assert_eq!(c.context, expected_context);
-                let prelude = loaded.graph.module_of(decl.file) == loaded.graph.prelude();
+                // The core prelude and the standard library have no file a client can open: their
+                // members are named, not located (`Snapshot::target`). Gate 3's `ledger` is the first
+                // program here to name a standard struct's field.
+                let module = loaded.graph.module_of(decl.file);
+                let prelude = module == loaded.graph.prelude()
+                    || module
+                        .and_then(|m| loaded.graph.key(m))
+                        .is_some_and(nazm_core::sema::ModuleKey::is_std);
                 let name = res_name(&a.resolution, decl);
                 if prelude {
-                    // The core prelude has no file: its members are named, not located.
                     assert_eq!(
                         c.items.iter().filter(|i| i.name == name).count(),
                         1,

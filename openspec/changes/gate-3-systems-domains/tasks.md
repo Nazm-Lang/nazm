@@ -16,8 +16,8 @@
 ## 4. Domains
 
 - [x] 4.1 Robotics, industrial, high assurance, aerospace, automotive, medical-style, cyber (3G): seven profiles, three domain rules, `@std/linalg`, `@std/audit`, the board watchdog; six workloads emulator-verified, the secure service run-verified
-- [ ] 4.2 AI/HPC CPU provider, float kernels, SIMD (3H)
-- [ ] 4.3 Storage engine; distributed foundation (3I)
+- [x] 4.2 AI/HPC CPU provider, float kernels, SIMD (3H): the provider boundary, `Float32`/`Float64` bit for bit, the SIMD path measured (no speed-up claimed)
+- [x] 4.3 Storage engine; distributed foundation (3I): `pagestore`, crashed at every write boundary; `@std/dist` and the `ledger`, a server restarted mid-request
 - [ ] 4.4 WASI (3J)
 - [ ] 4.5 Android, iOS, desktop host (3K)
 - [ ] 4.6 Web3 qualification; requirements traceability; the domain matrix completed (3L)
