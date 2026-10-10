@@ -291,6 +291,7 @@ fn thunk_of(
         foreign: None,
         section: None,
         interrupt: None,
+        on_failure: false,
         export: None,
         captures: Vec::new(),
         closure: true,
@@ -541,6 +542,7 @@ fn lower_function(
             foreign: Some(symbol.clone()),
             section: None,
             interrupt: None,
+            on_failure: false,
             export: None,
             closure: None,
         });
@@ -658,6 +660,7 @@ fn lower_function(
         foreign: None,
         section: f.section.clone(),
         interrupt: f.interrupt.clone(),
+        on_failure: f.on_failure,
         export: f.export.clone(),
         closure,
     })

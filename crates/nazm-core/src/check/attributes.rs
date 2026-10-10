@@ -101,6 +101,43 @@ fn handler(f: &Function, errors: &mut Vec<Diagnostic>) {
     }
 }
 
+/// A failure hook's shape (Gate 3): `fn NAME(code: Int) -> Int ! {}`, or with an `MmioCap` after
+/// the number to reach a device — the failure's number in, and nothing but the device and the
+/// program's statics to act on. Not generic, not `main`, not foreign.
+fn failure_hook(f: &Function, errors: &mut Vec<Diagnostic>) {
+    if !f.attrs.iter().any(|a| a.name == "on_failure") {
+        return;
+    }
+    let plain =
+        |t: &TypeName, name: &str| t.qualifier.is_none() && t.args.is_none() && t.name == name;
+    let takes = match f.params.as_slice() {
+        [p] => plain(&p.ty, "Int"),
+        [p, m] => plain(&p.ty, "Int") && plain(&m.ty, "MmioCap"),
+        _ => false,
+    };
+    let quiet = f.effects.as_ref().is_some_and(|e| e.names.is_empty());
+    let ordinary = f.type_params.is_empty()
+        && f.effect_params.is_empty()
+        && f.name != "main"
+        && f.foreign.is_none()
+        && f.export.is_none()
+        && f.method_of.is_none();
+    if !(takes && plain(&f.return_type, "Int") && quiet && ordinary) {
+        errors.push(
+            Diagnostic::error(
+                codes::INTERRUPT_HANDLER,
+                f.name_span,
+                format!(
+                    "`@on_failure` marks a function of the shape `fn NAME(code: Int) -> Int ! {{}}` \
+                     or `fn NAME(code: Int, m: MmioCap) -> Int ! {{}}`, and `{}` is not one",
+                    f.name
+                ),
+            )
+            .help("the board calls the hook with the failure's number, before it stops the machine"),
+        );
+    }
+}
+
 /// Whether `name` is a section's name a linker script can write: letters, digits, `.` and `_`
 /// (Gate 3).
 pub(crate) fn section_name(name: &str) -> bool {
@@ -208,6 +245,26 @@ fn admitted(
                     )),
                 }
             }
+            // A board's failure hook (Gate 3, `docs/spec.md`, *Boards*): a function, no arguments.
+            "on_failure" => {
+                if target != Target::Function {
+                    errors.push(refuse(
+                        a.span,
+                        format!(
+                            "`@on_failure` marks a function, and this is {}",
+                            target.named()
+                        ),
+                        "write it before the `fn` the board calls when the program fails",
+                    ));
+                }
+                if a.args.is_some() {
+                    errors.push(refuse(
+                        a.span,
+                        "`@on_failure` takes no arguments".to_owned(),
+                        "write it alone: the board hands the hook the failure's number",
+                    ));
+                }
+            }
             // A board's interrupt handler (Gate 3, `docs/spec.md`, *Boards*): a function, by the
             // name the manifest gives the interrupt. Its shape is `handler`'s to hold.
             "interrupt" => {
@@ -260,7 +317,7 @@ fn admitted(
                 a.name_span,
                 format!("`@{other}` is not an attribute Nazm has"),
                 "the attributes are `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated`, \
-                 `@section` and `@interrupt`; there are no user-defined attributes",
+                 `@section`, `@interrupt` and `@on_failure`; there are no user-defined attributes",
             )),
         }
     }
@@ -453,9 +510,28 @@ pub fn configure(
         if keep {
             shaped(f, errors);
             handler(f, errors);
+            failure_hook(f, errors);
         }
         keep
     });
+    // One failure hook (Gate 3): the second is refused where it is written.
+    let mut hooks = program
+        .functions
+        .iter()
+        .filter(|f| f.attrs.iter().any(|a| a.name == "on_failure"));
+    if let Some(first) = hooks.next() {
+        for f in hooks {
+            errors.push(
+                Diagnostic::error(
+                    codes::INTERRUPT_HANDLER,
+                    f.name_span,
+                    "the program already has a failure hook",
+                )
+                .secondary(first.name_span, "the first")
+                .help("one hook; call one function from the other"),
+            );
+        }
+    }
     // One handler for each interrupt (Gate 3): the second is refused where it is written.
     let mut handled: Vec<(String, Span)> = Vec::new();
     for f in &program.functions {

@@ -184,10 +184,15 @@ found only by reading all of it.
 - Two boards, both emulated and neither run on hardware: `aarch64-unknown-none` and (N86)
   `riscv64gc-unknown-none-elf`, each on its QEMU `virt` machine: objects and `link.ld`, linked by
   `ld.lld` outside this host; RISC-V is built only where `clang` has a RISC-V code generator (not
-  Apple's — the `nazm-qemu:n86` image's), refused by name elsewhere. No atomics or memory orderings,
-  interrupts, heap or arena, or `@std`; `.bss` is zero because QEMU's loaded memory is, which a
-  hardware loader need not do; a board program that reaches allocation, input and output, tasks,
-  channels, closures or the C library is refused; Cranelift builds no board (areas 18, 33).
+  Apple's — the `nazm-qemu:n86` image's), refused by name elsewhere. Since Gate 3D a board may be
+  described by a manifest (`--board`), with sequentially consistent atomics and statics, sections,
+  a GICv2 and timer interrupts **on AArch64 only** (a RISC-V board's are refused by name), a bump
+  arena that is never returned to, and a failure hook — every one verified under QEMU, none on
+  hardware; there is no `@std` for a board yet, no weaker memory ordering, no nested interrupts
+  and no interrupt priorities. `.bss` is zero because QEMU's loaded memory is, which a hardware
+  loader need not do; a board program that reaches input and output, tasks, channels, number
+  formatting or the C library is refused, and allocation without a `[heap]`; Cranelift builds no
+  board (areas 18, 33).
   *Narrowed in N86:* until then, one board and 32-bit device registers only; *in N62:* no target
   without an operating system.
 - Cranelift keeps every non-scalar local in a stack slot; its loops are slower than LLVM's

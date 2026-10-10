@@ -1126,7 +1126,7 @@ Repointed by N40: linkage is decided from MIR's `exported`, `reached_from_generi
 
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/lower.rs"
-find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n                || f.interrupt.is_some()\n            {"
+find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n                || f.interrupt.is_some()\n                || f.on_failure\n            {"
 replace = "            let linkage = if false {"
 killers = [{ package = "nazm-cli", test = "lir_oracle", name = "control_flow_and_recursion_agree_with_the_oracle" }]
 
@@ -8301,10 +8301,11 @@ Repointed by Gate 3, which moved it to 44: an entry that accepted a foreign `nz_
 Repointed by Gate 3's atomics, which moved it to 45: an entry that accepted a record named `Atomic` must not be reused.
 Repointed by Gate 3's statics, which moved it to 46: an entry that refused a `static` item must not be reused.
 Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@section` must not be reused.
-Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@interrupt` must not be reused."""
+Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@interrupt` must not be reused.
+Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused `@on_failure` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 48;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 47;"
+find = "pub const SEMANTIC_EPOCH: u32 = 49;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 48;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10517,11 +10518,12 @@ Repointed by Gate 2's process and environment, which moved it to 19 for the envi
 Repointed by Gate 2's randomness, which moved it to 20 for the system's entropy.
 Repointed by Gate 3's platform layer, which moved it to 21 for the per-target system calls.
 Repointed by Gate 3's atomics, which moved it to 22 for the atomic entries.
-Repointed by Gate 3's 64-bit device registers, which moved it to 23."""
+Repointed by Gate 3's 64-bit device registers, which moved it to 23.
+Repointed by Gate 3's failure hook, which moved it to 24."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 23;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 22;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_three_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 24;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 23;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_four_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -15512,4 +15514,39 @@ file = "crates/nazm-service/src/profile.rs"
 find = "                Rule::NoBlocking,\n                Rule::NoHeap,\n            ],"
 replace = "                Rule::NoBlocking,\n            ],"
 killers = [{ package = "nazm-cli", test = "heap", name = "the_kernel_profile_refuses_every_allocation_site_whatever_the_board" }]
+
+# --- Gate 3D: the failure hook (docs/spec.md, Boards) ---
+# That the hook runs as code that has not failed is kernel.rs's ignored QEMU test.
+
+[[mutation]]
+name = "g3-a-failure-hook-may-take-anything"
+why = "a function of any shape is accepted as the failure hook, which the board then calls with one word"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "    if !(takes && plain(&f.return_type, \"Int\") && quiet && ordinary) {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "kernel", name = "a_failure_hook_takes_the_number_and_there_is_one" }]
+
+[[mutation]]
+name = "g3-a-program-may-have-two-failure-hooks"
+why = "two functions are marked @on_failure, and which the board calls is the order the build happened to find them in"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = "        for f in hooks {"
+replace = "        for f in hooks.take(0) {"
+killers = [{ package = "nazm-cli", test = "kernel", name = "a_failure_hook_takes_the_number_and_there_is_one" }]
+
+[[mutation]]
+name = "g3-a-hosted-build-ignores-a-failure-hook"
+why = "nazm run or a hosted build accepts @on_failure, a hook nothing there will call"
+file = "crates/nazm-core/src/lib.rs"
+find = "                .find(|f| f.on_failure)"
+replace = "                .find(|_| false)"
+killers = [{ package = "nazm-cli", test = "kernel", name = "a_failure_hook_takes_the_number_and_there_is_one" }]
+
+[[mutation]]
+name = "g3-a-comment-is-a-call"
+why = "the stack bound reads a comment that says call as a call through a value, so a board image with a commented runtime has no bound"
+file = "crates/nazm-cli/src/stack.rs"
+find = "            if line.trim_start().starts_with(';') {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "stack::tests::a_comment_that_says_call_is_not_a_call" }]
 
