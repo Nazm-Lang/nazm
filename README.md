@@ -24,8 +24,8 @@ hosted runtime runs tasks on a structured M:N scheduler, and this tree is backed
 bootstrap, mutation, fuzzing, platform and artifact-verification evidence.
 
 **Not yet released.** The tree says 1.0.0; no `v1.0.0` tag exists. The v1 programme's later gates
-and its final release gate stand between this tree and one, and a **licensing decision is required
-before public release** ([`docs/licensing.md`](docs/licensing.md)). Gate 1 found a memory defect — a
+and its final release gate stand between this tree and one. The licence is decided —
+`Apache-2.0 WITH LLVM-exception` ([`docs/licensing.md`](docs/licensing.md)). Gate 1 found a memory defect — a
 closure stored into a `Vec` it captured was never reclaimed — and Gate 1-C1 closed it by refusing
 the capture (`N0616`, [`docs/spec.md`](docs/spec.md), *Cycles*). The last published candidate is
 v0.3.0 ([`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)).
@@ -35,7 +35,7 @@ v0.3.0 ([`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)).
 | Language | **1.0** — [`docs/spec.md`](docs/spec.md) |
 | Toolchain | **1.0.0** — `nazm --version` |
 | Standard library | **1.0**, stable within 1.x |
-| Licence | Apache-2.0 — a decision on the runtime and standard library is open ([`docs/licensing.md`](docs/licensing.md)) |
+| Licence | Apache-2.0 WITH LLVM-exception — what Nazm compiles into a program carries no obligation ([`docs/licensing.md`](docs/licensing.md)) |
 
 ## A taste
 
@@ -337,8 +337,8 @@ result out, and report what is left as JSON.
 
 ## Licence
 
-Apache-2.0. See [`LICENSE`](LICENSE). Whether the runtime and standard library need an exception
-clause, as Swift and LLVM use, so that compiled programs are unambiguously unencumbered, is an open
-question. **LICENSING DECISION REQUIRED BEFORE PUBLIC v1.0.0 RELEASE** — the technical audit of
-what a compiled program contains, and what a human must decide, is
-[`docs/licensing.md`](docs/licensing.md).
+The Apache License 2.0 with LLVM Exceptions (`Apache-2.0 WITH LLVM-exception`), copyright Ferdous
+Alam — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The exceptions, the ones LLVM and Cranelift
+carry, mean that what Nazm compiles into your program — the runtime, the core prelude and the
+standard library — imposes no attribution or notice requirement on it. What a compiled program
+contains, and what is still open, is [`docs/licensing.md`](docs/licensing.md).

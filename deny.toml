@@ -16,8 +16,8 @@ ignore = [
 
 [licenses]
 version = 2
-# Apache-2.0 is the project's own licence (see LICENSE and the note in README
-# about the runtime-library exception question, which is a Phase 1 decision).
+# The project's own licence is Apache-2.0 WITH LLVM-exception (LICENSE, NOTICE,
+# docs/licensing.md); dependencies may be under either form.
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",

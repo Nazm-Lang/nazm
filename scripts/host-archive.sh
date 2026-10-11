@@ -17,7 +17,7 @@ trap 'rm -rf "$stage"' EXIT
 dir="$stage/nazm-$triple"
 mkdir -p "$dir/bin" "$dir/docs" "$outdir"
 cp "$binary" "$dir/bin/nazm"
-cp "$root/README.md" "$root"/LICENSE* "$dir/" 2>/dev/null || cp "$root/README.md" "$dir/"
+cp "$root/README.md" "$root"/LICENSE* "$root/NOTICE" "$dir/" 2>/dev/null || cp "$root/README.md" "$dir/"
 cp "$root/docs/getting-started.md" "$root/docs/support.md" "$dir/docs/"
 version=$("$dir/bin/nazm" --version 2>/dev/null || echo unknown)
 cat > "$dir/INSTALL.txt" <<TXT

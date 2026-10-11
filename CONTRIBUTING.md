@@ -60,9 +60,10 @@ append-only, every file is pinned by its digest, and a new stable rule adds a ca
 
 ## Licensing of contributions
 
-Contributor terms (DCO, CLA, or inbound-equals-outbound) are not yet decided; that decision, and
-whether the runtime and standard library carry an exception, are recorded as open in
-[`docs/licensing.md`](docs/licensing.md).
+Nazm is under `Apache-2.0 WITH LLVM-exception` ([`LICENSE`](LICENSE), [`NOTICE`](NOTICE)). A
+contribution is made under the same terms — the licence's own section 5, inbound equals outbound —
+unless its author says otherwise in writing. Whether contributions also need a sign-off (DCO) or a
+contributor agreement is not yet decided ([`docs/licensing.md`](docs/licensing.md)).
 
 ## Evidence, in its own vocabulary
 

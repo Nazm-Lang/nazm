@@ -4,7 +4,7 @@
   "description": "Nazm through the compiler's own language server: `nazm lsp`. No language logic lives here.",
   "version": "0.1.0",
   "publisher": "nazm",
-  "license": "Apache-2.0",
+  "license": "Apache-2.0 WITH LLVM-exception",
   "private": true,
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages"],

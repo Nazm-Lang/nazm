@@ -123,7 +123,7 @@ if [ -x "$target/bootstrap/stage2/nazmc" ]; then
 else
     fail "the bootstrap produced no stage-2 compiler to package"
 fi
-cp README.md LICENSE* SECURITY.md CONTRIBUTING.md "$out/"
+cp README.md LICENSE* NOTICE SECURITY.md CONTRIBUTING.md "$out/"
 cp docs/*.md docs/*.ebnf "$out/docs/"
 cp schema/*.json "$out/schema/"
 cp examples/*.nz "$out/examples/"

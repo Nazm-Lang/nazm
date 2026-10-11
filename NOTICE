@@ -1,0 +1,14 @@
+Nazm
+Copyright 2026 Ferdous Alam
+
+Licensed under the Apache License, Version 2.0, with LLVM Exceptions
+(SPDX: Apache-2.0 WITH LLVM-exception); see LICENSE.
+
+The exceptions mean that the parts of Nazm compiled into a program — the
+runtime, the core prelude and the standard library — impose no attribution
+or notice requirement on that program: you may distribute what you build
+with Nazm without carrying this notice or the licence text.
+
+The toolchain itself (bin/nazm) links third-party Rust crates under their
+own licences, which are permissive (MIT, Apache-2.0, BSD, ISC, Zlib and
+Unicode-3.0); docs/licensing.md lists them.
