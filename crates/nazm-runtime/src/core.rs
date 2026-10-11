@@ -491,7 +491,8 @@ entry:
   %unset = icmp eq i64 %lim, 0
   br i1 %unset, label %init, label %compare
 init:
-  ; The main thread's stack, as the platform's stack unit reports it (Gate 3); 0 is unknown.
+  ; The stack this thread has left, as the platform's stack unit reports it (Gate 3) — its own
+  ; stack, so a thread C started is budgeted from what it has (Q1-A1-04); 0 is unknown.
   %cur = call i64 @nz_os_stack_size()
   %ok = icmp ne i64 %cur, 0
   %cap = select i1 %ok, i64 %cur, i64 8388608
@@ -508,6 +509,21 @@ compare:
   %l = phi i64 [ %lim, %entry ], [ %limit, %init ]
   %past = icmp ult i64 %sp, %l
   %r = zext i1 %past to i32
+  ret i32 %r
+}
+
+; A function whose own frame is large asks this instead (Q1-A1-01): past the limit, or with less
+; than `need` bytes between this frame and the limit, so the frame itself would cross it.
+define hidden i32 @nz.stack_check_frame(i64 %need) {
+entry:
+  %past = call i32 @nz.stack_check()
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %sp = ptrtoint ptr %fp to i64
+  %lim = load i64, ptr @nz.stack_limit
+  %room = sub i64 %sp, %lim
+  %short = icmp ult i64 %room, %need
+  %s = zext i1 %short to i32
+  %r = or i32 %past, %s
   ret i32 %r
 }
 ";

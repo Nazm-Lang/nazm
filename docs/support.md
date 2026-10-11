@@ -84,7 +84,7 @@ Nothing is uploaded or published: the archives are local, under `target/archives
 | | |
 | --- | --- |
 | Windows with Microsoft's toolchain, and Windows ARM64 | unsupported: `x86_64-pc-windows-msvc` needs Microsoft's SDK and C runtime, which are not downloaded or accepted here, and no Windows ARM64 machine or emulator is here; Windows x86_64 is `x86_64-pc-windows-gnu`, with MinGW-w64's |
-| 32-bit hosted targets | a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 — freestanding, or with WASI's imports and its own heap — and the Cortex-M board (`thumbv7m-none-eabi`) are the 32-bit targets |
+| 32-bit hosted targets | a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 — freestanding, or with WASI's imports and its own heap — and the Cortex-M board (`thumbv7m-none-eabi`) are the 32-bit targets, where a C handle, a C string result and a callback are refused by name (`N0381`, Q1-A1-05) because a C pointer crosses as 64 bits |
 | big-endian targets | a non-goal: no big-endian machine or image is here to run one, and the DWARF writer and layouts assume little-endian |
 
 ## Optional features

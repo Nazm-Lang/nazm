@@ -53,9 +53,10 @@ assembly — allocation, atomics, the context switch, guarded task stacks, devic
 Fixed: generated code asked for no stack probes, so a frame larger than a task stack's one guard
 page could step over it into another task's stack (Q1-A1-01, the release-blocker); both backends
 now probe, and the overrun faults on the guard. The guard page's `mprotect` results were ignored
-(Q1-A1-10). Carried, *fix before v1*: such a frame faults rather than failing with `N0408`; an
-export called on a small C thread faults likewise (Q1-A1-04); wasm32 passes a handle as `i64`
-(Q1-A1-05). C's own behaviour once called is outside every claim (Q1-A1-16).
+(Q1-A1-10). Fixed before v1: such a frame now meets a check before its prologue lays it out and
+fails with `N0408`; an export called on a small C thread is budgeted from that thread's stack
+(Q1-A1-04); and on the 32-bit targets a C pointer crossing — which Nazm passes as 64 bits — is
+refused by name (`N0381`) rather than miscompiled (Q1-A1-05). C's own behaviour once called is outside every claim (Q1-A1-16).
 
 ## Robustness
 
@@ -203,7 +204,7 @@ disposition), **corrected** (documentation).
 | --- | --- | --- | --- | --- |
 | Q1-B-01 | summation rewrite misses a counter write after `= 0` (miscompile) | CRITICAL | RELEASE-BLOCKER | fixed |
 | Q1-A2-01 | reaper removes foreign containers by name and `kill -0` | HIGH | RELEASE-BLOCKER | fixed |
-| Q1-A1-01 | no stack probes; a frame steps over the guard page | HIGH | RELEASE-BLOCKER | fixed; residual carried (fault, not `N0408`) |
+| Q1-A1-01 | no stack probes; a frame steps over the guard page | HIGH | RELEASE-BLOCKER | fixed; residual fixed before v1 (`N0408` before the frame exists) |
 | Q1-B-02 | interpreter float text breaks ties away from even | HIGH | RELEASE-BLOCKER | fixed |
 | Q1-B-03 | UInt64 product past `i128` panics | HIGH | RELEASE-BLOCKER | fixed |
 | Q1-C-04 | `nazm.root` drops a manifest's profile | HIGH | RELEASE-BLOCKER | fixed |
@@ -221,8 +222,8 @@ disposition), **corrected** (documentation).
 | Q1-M-07 | check-cache facts not integrity-checked | MEDIUM | FIX-BEFORE-V1 | fixed |
 | Q1-M-11 | pool select deadline wraps and spins | MEDIUM | FIX-BEFORE-V1 | fixed |
 | Q1-D-05 | help and README deny floating point | MEDIUM | FIX-BEFORE-V1 | fixed |
-| Q1-A1-04 | C-thread export faults instead of `N0408` | MEDIUM | FIX-BEFORE-V1 | carried |
-| Q1-A1-05 | wasm32 handle width in C structs | MEDIUM | FIX-BEFORE-V1 | carried |
+| Q1-A1-04 | C-thread export faults instead of `N0408` | MEDIUM | FIX-BEFORE-V1 | fixed (the thread's own stack) |
+| Q1-A1-05 | wasm32 handle width in C structs | MEDIUM | FIX-BEFORE-V1 | fixed by refusal (`N0381` on 32-bit targets) |
 | Q1-B-05 | `exit_with` outside 0..255 differs by engine | MEDIUM | FIX-BEFORE-V1 | carried |
 | Q1-D-04 | VERIFIED sub-claims resting on ignored tests | MEDIUM | FIX-BEFORE-V1 | carried (experimental surfaces) |
 | Q1-D-06 | usage errors exit 2 | MEDIUM | FIX-BEFORE-V1 | fixed in Q1-C1: usage is 5 |

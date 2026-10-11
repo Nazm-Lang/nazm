@@ -9684,8 +9684,8 @@ killers = [{ package = "nazm-cli", test = "usability", name = "the_formatter_spa
 name = "n49-a-recursive-function-does-not-check-its-stack"
 why = "MIR places no stack check, so unbounded native recursion runs the thread off its stack and the process dies of a signal instead of N0408"
 file = "crates/nazm-mir/src/lower.rs"
-find = "    if facts.recursive.get(f.def.index()).copied().unwrap_or(false) {"
-replace = "    if false && facts.recursive.get(f.def.index()).copied().unwrap_or(false) {"
+find = "    if facts.recursive.get(f.def.index()).copied().unwrap_or(false) || frame >= crate::LARGE_FRAME"
+replace = "    if false && facts.recursive.get(f.def.index()).copied().unwrap_or(false) || frame >= crate::LARGE_FRAME"
 killers = [{ package = "nazm-cli", test = "mir", name = "a_function_in_a_call_cycle_checks_its_stack_first_and_no_other_does" }]
 
 [[mutation]]
@@ -10520,11 +10520,12 @@ Repointed by Gate 3's platform layer, which moved it to 21 for the per-target sy
 Repointed by Gate 3's atomics, which moved it to 22 for the atomic entries.
 Repointed by Gate 3's 64-bit device registers, which moved it to 23.
 Repointed by Gate 3's failure hook, which moved it to 24.
-Repointed by Gate 3's Cortex-M board, which moved it to 25."""
+Repointed by Gate 3's Cortex-M board, which moved it to 25.
+Repointed by the v1 stack fixes, which moved it to 27 for the frame check."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 26;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 25;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_six_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 27;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 26;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_seven_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -15981,3 +15982,69 @@ file = "crates/nazm-cli/src/trace.rs"
 find = "                    census.iter().filter(|o| o.def == f.def).collect();"
 replace = "                    census.iter().collect();"
 killers = [{ package = "nazm-cli", test = "trace", name = "each_requirement_reaches_its_definition_obligations_and_test" }]
+
+# --- v1 blockers: the stack check's frame and thread, and C pointers on 32-bit targets (Q1-A1-01, -04, -05) ---
+
+[[mutation]]
+name = "v1-a-large-frame-in-no-cycle-is-unchecked"
+why = "a function in no call cycle whose locals are large places no stack check, so its frame alone runs a task off its stack and the process dies of a signal instead of N0408"
+file = "crates/nazm-mir/src/lower.rs"
+find = "|| frame >= crate::LARGE_FRAME"
+replace = "|| frame >= u64::MAX"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting" }]
+
+[[mutation]]
+name = "v1-a-large-frame-has-no-entry"
+why = "a large frame is checked inside its own function, after the prologue has laid it out and probed it, so the guard page faults before the check runs"
+file = "crates/nazm-lir/src/op/func.rs"
+find = "                    self.frame_at = Some(self.at);"
+replace = "                    let _ = self.at;"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting" }]
+
+[[mutation]]
+name = "v1-the-entry-asks-for-no-room"
+why = "a large frame's entry asks the runtime for no room, so the check passes and the body's frame crosses the stack's end"
+file = "crates/nazm-lir/src/op/func.rs"
+find = "    let need = fx.iconst(i64::try_from(frame).unwrap_or(i64::MAX));"
+replace = "    let need = fx.iconst(0);"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting" }]
+
+[[mutation]]
+name = "v1-the-runtime-ignores-the-frame"
+why = "the hosted runtime's frame check compares only the frame's address with the limit, so a frame larger than the headroom passes"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %short = icmp ult i64 %room, %need"
+replace = "  %short = icmp ult i64 %room, 0"
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting" }]
+
+[[mutation]]
+name = "v1-a-c-thread-is-budgeted-from-rlimit"
+why = "Linux's stack unit ignores the calling thread's own bounds and answers RLIMIT_STACK, so an export recursing on a small C thread is budgeted for 8 MiB and faults (the contained campaign runs on Linux)"
+file = "crates/nazm-runtime/src/platform.rs"
+find = "  br i1 %in, label %room, label %limit"
+replace = "  br i1 false, label %room, label %limit"
+killers = [{ package = "nazm-cli", test = "ffi_v3", name = "an_export_recursing_on_a_small_c_thread_fails_with_n0408_rather_than_faulting" }]
+
+[[mutation]]
+name = "v1-a-c-pointer-crosses-at-32-bits"
+why = "a build for a 32-bit target imports a handle, a C string or a callback as a 64-bit word, a signature the C side does not have"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "if let Some(d) = narrow_pointer_refusal(resolution, &target.triple) {"
+replace = "if let Some(d) = narrow_pointer_refusal(resolution, &target.triple).filter(|_| false) {"
+killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_c_pointer_on_a_32_bit_target_is_refused_by_name" }]
+
+[[mutation]]
+name = "v1-a-struct-holding-a-handle-crosses-at-32-bits"
+why = "a C-layout record holding a handle crosses on a 32-bit target, laid out with an 8-byte handle where C has a 4-byte pointer"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "                CRepr::Opaque => return true,"
+replace = "                CRepr::Opaque => return false,"
+killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_c_pointer_on_a_32_bit_target_is_refused_by_name" }]
+
+[[mutation]]
+name = "v1-a-c-string-result-crosses-at-32-bits"
+why = "a C string result crosses on a 32-bit target as a 64-bit word, where C returns a 32-bit pointer"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "            Some(CrossOut::CString { .. }) => Some(\"return a C string\"),"
+replace = "            Some(CrossOut::CString { .. }) => None,"
+killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_c_pointer_on_a_32_bit_target_is_refused_by_name" }]

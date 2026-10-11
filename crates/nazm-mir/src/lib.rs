@@ -47,3 +47,8 @@ pub use verify::verify;
 /// The printed form's version. Internal: it names what this build writes, and promises no
 /// reader outside the workspace that a later build writes the same.
 pub const SCHEMA: &str = "nazm.mir/1";
+
+/// The frame, in bytes, from which a function checks its stack on entry though it is in no call
+/// cycle, and asks for room for the whole frame (Q1-A1-01): a page. Below it a frame fits in the
+/// quarter of the stack every limit keeps in reserve.
+pub const LARGE_FRAME: u64 = 4096;

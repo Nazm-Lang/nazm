@@ -587,7 +587,18 @@ fn lower_function(
     fx.cur = Some(entry);
     // A function in a call cycle checks its thread's stack before anything else (N49): the
     // parameters are borrowed and nothing is owned yet, so its failure edge releases nothing.
-    if facts.recursive.get(f.def.index()).copied().unwrap_or(false) {
+    // So does one whose locals are large (Q1-A1-01), whose frame alone could cross the limit:
+    // its code generator asks for room for the frame it lays out.
+    let frame: u64 = fx
+        .locals
+        .iter()
+        .filter_map(|l| match l.ty {
+            LocalTy::Value(t) => Some(res.types().data_bytes(t)),
+            LocalTy::Tasks => None,
+        })
+        .fold(0u64, u64::saturating_add);
+    if facts.recursive.get(f.def.index()).copied().unwrap_or(false) || frame >= crate::LARGE_FRAME
+    {
         let unwind = fx.unwind();
         fx.push(StatementKind::StackCheck { unwind }, f.name_span);
     }

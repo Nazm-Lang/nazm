@@ -49,10 +49,18 @@ pub(crate) struct Fx<'l, 'a> {
     promoted: Vec<Option<V>>,
     /// In a debug build, the variable holding each borrowed parameter's address.
     borrowed_at: std::collections::BTreeMap<usize, Var>,
+    /// Where a function whose own frame is large checks its stack (Q1-A1-01): set by its
+    /// `StackCheck`, so the function is entered through [`frame_entry`].
+    frame_at: Option<Span>,
 }
 
 /// Lower one MIR function.
-pub(crate) fn lower(lw: &mut Lw<'_>, f: &mir::Function, sig: &NativeSig, sym: SymId) -> Function {
+pub(crate) fn lower(
+    lw: &mut Lw<'_>,
+    f: &mir::Function,
+    sig: &NativeSig,
+    sym: SymId,
+) -> Vec<Function> {
     let mut fx = Fx {
         lw,
         b: Fb::new(),
@@ -64,6 +72,7 @@ pub(crate) fn lower(lw: &mut Lw<'_>, f: &mir::Function, sig: &NativeSig, sym: Sy
         carried: f.closure.iter().flatten().map(|t| Ty::of(*t)).collect(),
         promoted: vec![None; f.locals.len()],
         borrowed_at: std::collections::BTreeMap::new(),
+        frame_at: None,
     };
     let promotable = promotable(f);
     let mut next_param = 0u32;
@@ -164,9 +173,65 @@ pub(crate) fn lower(lw: &mut Lw<'_>, f: &mir::Function, sig: &NativeSig, sym: Sy
                 .map(|(file, line, _)| (file, line))
         })
         .flatten();
+    let frame_at = fx.frame_at;
     let mut lowered = fx.b.finish(sym, f.name.clone(), at);
     lowered.section.clone_from(&f.section);
-    lowered
+    let Some(at) = frame_at else {
+        return vec![lowered];
+    };
+    // A large frame is checked before it exists (Q1-A1-01): the function's prologue lays out —
+    // and probes — its whole frame before its first statement runs, so a check there comes too
+    // late. Its body moves to a symbol of its own, and the function's symbol becomes an entry
+    // with a small frame that asks for room for the body's frame, then calls it.
+    let frame: u64 = lowered
+        .slots
+        .iter()
+        .map(|s| u64::from(s.size).next_multiple_of(u64::from(s.align.max(1))))
+        .fold(0u64, u64::saturating_add);
+    let Some(sig) = lw.sig_of(sym) else {
+        return vec![lowered];
+    };
+    let body = lw.body_symbol(sig.clone());
+    lowered.sym = body;
+    let mut entry = frame_entry(lw, sym, body, &sig, frame, at);
+    entry.section.clone_from(&f.section);
+    vec![entry, lowered]
+}
+
+/// The entry of a function whose frame is large (Q1-A1-01): its parameters passed on unchanged
+/// to its body once the thread's stack has room for the body's `frame`, and `N0408` at the
+/// function's name, with the failure exit's stand-in, when it has not.
+fn frame_entry(
+    lw: &mut Lw<'_>,
+    sym: SymId,
+    body: SymId,
+    sig: &Sig,
+    frame: u64,
+    at: Span,
+) -> Function {
+    let mut fx = Fx::helper(lw);
+    fx.at = at;
+    let args: Vec<V> = (0..sig.params.len())
+        .map(|i| fx.param(u32::try_from(i).unwrap_or(0)))
+        .collect();
+    let need = fx.iconst(i64::try_from(frame).unwrap_or(i64::MAX));
+    let past = fx.rt_v("nz.stack_check_frame", &[need], Class::I32);
+    let bad = fx.cmp_imm(Cmp::Ne, past, Class::I32, 0);
+    let failing = fx.b.block();
+    let enter = fx.b.block();
+    fx.branch(bad, failing, enter);
+    fx.b.switch(failing);
+    let (d, n) = fx.lw.message("N0408", crate::STACK_EXHAUSTED, at);
+    let p = fx.addr_of(d);
+    let len = fx.iconst(i64::try_from(n).unwrap_or(0));
+    fx.rt("nz.fail", &[p, len]);
+    // The failure exit's stand-in, which the caller never reads (`Terminator::Unwind`).
+    let z = sig.ret.map(|c| fx.iconst_c(c, 0));
+    fx.b.term(Term::Return(z));
+    fx.b.switch(enter);
+    let r = fx.call(body, args);
+    fx.b.term(Term::Return(r));
+    fx.b.finish(sym, "a large frame's entry".to_owned(), None)
 }
 
 impl<'l, 'a> Fx<'l, 'a> {
@@ -183,6 +248,7 @@ impl<'l, 'a> Fx<'l, 'a> {
             carried: Vec::new(),
             promoted: Vec::new(),
             borrowed_at: std::collections::BTreeMap::new(),
+        frame_at: None,
         }
     }
 
@@ -933,7 +999,20 @@ impl<'l, 'a> Fx<'l, 'a> {
             }
             mir::StatementKind::CheckFailed { .. } => self.check_failed(),
             mir::StatementKind::StackCheck { .. } => {
-                // The runtime measures the thread's stack (N49); this only asks it.
+                // The runtime measures the thread's stack (N49); this only asks it. The locals'
+                // slots are laid out before the first statement, so a large frame is known here
+                // and asked about whole (Q1-A1-01).
+                let frame: u64 = self
+                    .b
+                    .slots
+                    .iter()
+                    .map(|s| u64::from(s.size).next_multiple_of(u64::from(s.align.max(1))))
+                    .fold(0u64, u64::saturating_add);
+                if frame >= mir::LARGE_FRAME {
+                    // The function's entry checks the whole frame (`frame_entry`); the body
+                    // still checks as a function in a call cycle does.
+                    self.frame_at = Some(self.at);
+                }
                 let past = self.rt_v("nz.stack_check", &[], Class::I32);
                 let bad = self.cmp_imm(Cmp::Ne, past, Class::I32, 0);
                 self.guard(bad, "N0408", crate::STACK_EXHAUSTED);

@@ -646,7 +646,7 @@ impl Machine<'_> {
                 self.exited = Some(2);
                 None
             }
-            "nz.stack_check" => Some(u64::from(self.depth > DEPTH - 100)),
+            "nz.stack_check" | "nz.stack_check_frame" => Some(u64::from(self.depth > DEPTH - 100)),
             // The oracle is one thread (Gate 3): an atomic access is the plain one.
             "nz.atomic_load" => Some(self.read(arg(0), 8)?),
             "nz.atomic_store" => {
