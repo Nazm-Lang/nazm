@@ -92,6 +92,9 @@ STABLE 1.0 surface is:
 - **Numbers, arrays and constants (Gate 2).** The fixed-width integers, `Float32` and `Float64`,
   bit operators and conversions (`spec.md`, *Numbers*); `[T; N]` of plain data with checked
   indexing (*Arrays*); module-private `const` (*Constants*).
+- **Bytes and text (Gate 2).** `Bytes`, a counted handle to a view of a fixed-length byte buffer,
+  its views and reads and writes by width and order, and `Text`, UTF-8 by construction, with their
+  built-ins (`spec.md`, *Bytes*, *Text*); listed here since v1 (Q1-D-18).
 - **Bindings and control.** `let` and `let mut`, same-scope shadowing refused, `while`, `break`,
   `continue`, `return`, `if`/`else` as a statement and an expression, blocks whose completion is
   decided by checking, unreachable code refused.
@@ -121,9 +124,10 @@ superseded.*
 
 Frozen as `docs/spec.md`, *The memory constitution*, states it, and observable only through it:
 
-- **Four kinds of value.** Immediates (`Int`, `Bool`) copy; `Str` is a shared immutable value
-  whose sharing is unobservable; `Ints`, `Strs` and `Vec[T]` are owned mutable handles —
-  binding, passing and returning share the storage; `Chan` and `Chan[T]` are runtime-managed
+- **Four kinds of value.** Immediates (`Int`, `Bool`, the other numbers and arrays of plain data)
+  copy; `Str` and `Text` are shared immutable values whose sharing is unobservable; `Ints`, `Strs`,
+  `Vec[T]` and `Bytes` are owned mutable handles — binding, passing and returning share the
+  storage, and every view of a `Bytes` buffer shares it; `Chan` and `Chan[T]` are runtime-managed
   handles. A record or enum is a value composed of these, copied field by field, so a handle
   inside one is shared by every copy.
 - **Reclamation is deterministic.** Storage is reclaimed when the last reference to it dies, and
@@ -238,6 +242,19 @@ else is promised:
   release record.
 - **DEBUG/INTERNAL** — versioned so a reader can refuse what it does not know; no other promise.
 
+**Closed schema files (v1, Q1-D-10).** The `additionalProperties: false` and closed enums in
+`schema/` describe **one toolchain's output exactly**, not the format for all of 1.x: a later minor's
+output may carry a field or an enum value that an earlier file closes. A consumer that validates
+strictly validates against the file the producing toolchain ships; one that keeps a file must
+accept what the law above allows (`docs/diagnostics.md`, *What compatibility means*).
+
+**Inputs read strictly (v1, Q1-D-16).** For the formats the toolchain *reads* — `nazm.package/1`,
+`nazm.lock/1`, `nazm.lock/2`, `nazm.registry-index/1` — the law runs one way: every 1.x toolchain
+reads every file an earlier 1.x wrote, and a toolchain refuses a field it does not know, by name,
+rather than ignoring it, since an ignored manifest field would be a build that silently means
+something else. A field added in a minor release is therefore one a manifest opts into, and a file
+using it needs that release or later.
+
 | Class | Schemas |
 | --- | --- |
 | **STABLE 1.x** | `nazm.diagnostic/1`, `nazm.check-report/1`, `nazm.command-summary/1`, `nazm.test/1`, `nazm.test-summary/1`, `nazm.capabilities/1`, `nazm.fix/1`, `nazm.build-report/1`, `nazm.provenance/1`, `nazm.publish-plan/1`, `nazm.api-doc/2`, `nazm.inspect/2` (its shape; its digests are the toolchain's), `nazm.package/1`, `nazm.lock/1`, `nazm.lock/2`, `nazm.registry-index/1` |
@@ -308,9 +325,11 @@ reference host for a subset. A target is promoted by evidence, in a minor releas
    epoch (`cargo xtask check`'s cache-soundness gate fails when the checker can raise a code the
    identity does not list, and says to bump it); a changed runtime contract bumps the ABI
    revision; a changed persisted shape bumps its schema's major version.
-3. **Deprecation.** Something stable to be removed in 2.0 is first marked deprecated in the spec
-   and, where the compiler can tell, reported with a warning carrying a fix, for at least one
-   minor release.
+3. **Deprecation.** Something stable to be removed in 2.0 is first marked deprecated in the spec,
+   with `@deprecated` where it is a declaration (published by `nazm doc`), and named in the release
+   record, for at least one minor release. A *warning* at each use, carrying a fix, needs a warning
+   severity the compiler does not have in 1.0 (`limitations.md`); it is promised only once one
+   exists, and until then a deprecation is announced, not reported at the use (v1, Q1-D-15).
 4. **Evidence follows.** `docs/capability-matrix.md` records what is verified and how;
    `docs/limitations.md` records what is not done; `tests/compat/v1/` gains a case for every new
    stable rule.

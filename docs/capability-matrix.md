@@ -725,6 +725,16 @@ blocks as values in the native backends.*
 
 ### 4. Memory model and reclamation — VERIFIED for the current type universe, closure environments included (Gate 1-C1)
 
+**v1 (2026-10-11, Q1-M-01, Q1-M-02)** · The type universe this row's VERIFIED covers is now written
+down whole: `spec.md`'s four kinds list Gate 2's numbers and arrays (immediates), `Text` (a shared
+immutable value), `Vec[T]` and `Bytes` (owned mutable handles; a buffer lives while any view does)
+and `Chan[T]`, and *What is not promised* names them. `Bytes` and `Text` reclamation is held by two
+programs: `every_buffer_is_reclaimed_by_its_last_view_everywhere` (views outliving their buffer's
+first holder, under scribbled freed memory) and
+`a_buffer_and_a_text_are_reclaimed_in_every_shape_on_every_path` — a buffer and a text in a record
+field, a `Vec`, a closure's environment and a `Result` passed on by `?`, on the normal end and on a
+trap, every count balanced, under the interpreter and both backends.
+
 **Gate 1-C1 (2026-10-07)** · *Status restored from PARTIAL to VERIFIED by a rule and its evidence,
 not by a narrower claim.* A closure's environment is a node of the ownership graph
 (`docs/architecture.md` §7.111, `docs/spec.md` *Cycles*): a closure may not capture a value whose
@@ -989,7 +999,7 @@ records with heap fields peak at the empty-program floor.
 
 ### 5. Effects — VERIFIED as scoped (N107)
 
-*N107, 2026-10-05: the scope audited (`audit-n107.md`, `architecture.md` §7.108).* The scope is two compiler-owned effects, inferred and checked, with declared sets as contracts and purity assertable. Handlers and user-defined effects are algebraic effects, a control mechanism; who may act is capabilities' (area 6), so neither is required. **Pure is not total:** a pure function may diverge; whether divergence is an effect stays an open question (`research-register.md`), and nothing relies on the answer.
+*N107, 2026-10-05: the scope audited (`audit-n107.md`, `architecture.md` §7.108).* The scope is the compiler-owned effects (three; `spec.md` *Effects*), inferred and checked, with declared sets as contracts and purity assertable. Handlers and user-defined effects are algebraic effects, a control mechanism; who may act is capabilities' (area 6), so neither is required. **Pure is not total:** a pure function may diverge; whether divergence is an effect stays an open question (`research-register.md`), and nothing relies on the answer.
 
 *N36, 2026-09-30: Typed Effects v1 — VERIFIED; Effect propagation v1 — VERIFIED; Effect-bearing
 interfaces v1 — VERIFIED; Purity checking v1 — VERIFIED. The row is PARTIAL: handlers, effect
@@ -1407,7 +1417,7 @@ accepted under its own criteria. `crates/nazm-lir/src/abi.rs` owns a target's da
 8 bytes, or 4 on `wasm32`), every record's and enum's byte layout on it, and whether a type owns
 anything; the Cranelift backend reads them (its `layout.rs` decides nothing now) and the LLVM backend
 reads ownership, and both validate the tables before generating any code (`N0900` if broken). `nazm
-lir` prints `nazm.lir/1` (`schema/nazm.lir-1.json`). Evidence: `crates/nazm-cli/tests/lir.rs` —
+lir` prints `nazm.lir/1` (`schema/nazm.lir-1.json`; since N105 `nazm.lir/2`, `schema/nazm.lir-2.json`, the only one in the tree). Evidence: `crates/nazm-cli/tests/lir.rs` —
 determinism, canonical order at natural alignment, an enum's tag and payload, wasm32's narrower
 handles with nothing else moving, ownership through containment, refusals, and a program using
 every shape agreeing on the interpreter, LLVM and Cranelift; `abi::tests` — the validator naming
@@ -1634,10 +1644,10 @@ the differential reference. `architecture.md` §7.43 is the constitution, writte
 | Traps and arithmetic edges | VERIFIED | `every_trap_is_the_same_trap` (overflow, `/` and `%` by zero, `MIN / -1`, bounds, capacities), `signed_arithmetic_and_its_edges_agree` (`MIN % -1` is 0) |
 | No silent fallback | VERIFIED | `choosing_cranelift_writes_no_llvm_text_for_any_unit`; a refusal writes nothing (`crates/nazm-cli/tests/cranelift.rs`); recursion compiles under both since N49 (`recursion_compiles_under_both_backends_and_agrees`) |
 | Typed, centralised runtime imports | VERIFIED | every call into the runtime is built from `crates/nazm-runtime/src/lib.rs`; `a_runtime_entry_the_registry_names_is_one_the_runtime_defines` |
-| Object-cache identity and reuse | VERIFIED | a key over each unit's MIR digests, layouts, callee signatures, target, backend version and settings and the runtime ABI revision, known before generation; `an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`, `a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those` |
+| Object-cache identity and reuse | VERIFIED | a key over each unit's LIR digests (MIR's until N105), layouts, callee signatures, target, backend version and settings and the runtime ABI revision, known before generation; `an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`, `a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those` |
 | Deterministic objects | VERIFIED | `the_same_mir_gives_the_same_object_bytes` (the compiler's own source) |
-| Debug information | MISSING | no DWARF; function symbols only (N48) |
-| A target other than the host | MISSING | refused by name (area 33) |
+| Debug information | VERIFIED as scoped | DWARF line tables, scopes and variables under `--debug` (N58, N91; area 27); MISSING until then, function symbols only (N48) |
+| A target other than the host | VERIFIED as scoped | `--target` and object output for another toolchain (N57); each target's evidence in the support matrix (area 33); refused by name until then |
 
 **Limitation** · Every local that is not a scalar lives in a stack slot and is copied by
 `memcpy`-sized loads and stores; no optimisation pass runs beyond Cranelift's own. The runtime
@@ -1683,7 +1693,7 @@ system adapter: the only C-library and POSIX-threads entry points anything calls
 `nazm-lir` and `nazm-codegen-clif` consume it. Runtime ABI revision 5, and `digest()` — blake3 of
 the whole runtime text, the platform entry and the inventory — enters every object key beside the
 revision under both backends (`the_runtime_s_digest_is_part_of_every_configuration`,
-`the_runtime_is_revision_five_and_its_digest_covers_generic_channels`). *N49:* runtime ABI revision 3 — `nz.stack_check`
+`the_runtime_is_revision_five_and_its_digest_covers_generic_channels`, renamed with each revision since — `…_revision_twenty_eight_…` at v1). *N49:* runtime ABI revision 3 — `nz.stack_check`
 and its thread-local limit, emitted only where a function in a call cycle calls it, and task
 threads started with an 8 MiB stack (`a_task_thread_has_the_stack_the_check_budgets_for_on_every_host`). `compiler/emit.nz`'s copy is **derived** from
 `core.rs` line by line, re-derived by `cargo xtask check`'s `runtime parity` gate since N8.
@@ -1691,7 +1701,7 @@ threads started with an 8 MiB stack (`a_task_thread_has_the_stack_the_check_budg
 | Claim | Status | Evidence |
 | --- | --- | --- |
 | One typed, versioned inventory of every runtime symbol | VERIFIED | `INVENTORY` (32 functions: signature, part, responsibility, ownership, effect, failure, thread safety) and `GLOBALS` (11); units' declarations generated from it; `every_runtime_definition_is_inventoried_with_its_exact_signature`, `every_runtime_global_is_inventoried`, `the_word_view_agrees_with_the_inventory` |
-| Runtime ABI revision in every object key | VERIFIED | `RUNTIME_ABI_REVISION` 2; Cranelift keys (N41) and clang's configuration (`the_runtime_abi_revision_is_part_of_every_configuration`) |
+| Runtime ABI revision in every object key | VERIFIED | `RUNTIME_ABI_REVISION` (2 when this row was written; 28 at v1); Cranelift keys (N41) and clang's configuration (`the_runtime_abi_revision_is_part_of_every_configuration`) |
 | Startup and shutdown defined | VERIFIED | arguments stored once without the program's name, roots minted by the entry alone, three distinguished endings (`the_three_ways_a_program_ends_are_distinguished`, `the_arguments_are_stored_once_at_startup_without_the_program_name`, `root_capabilities_come_from_the_entry_alone`) |
 | Memory contract | VERIFIED | strings, sequences, sequences of strings and of records, channels, shared backings across four threads, allocation-failure paths, all counted exactly (`the_runtime_s_services_keep_their_contract_when_called_directly`, a C harness linked against the runtime alone) |
 | Failure classes | VERIFIED | language, host-refused, I/O and explicit exit distinguished; a `Result` never becomes one (`an_err_is_data_and_never_a_failure`) |
@@ -1962,7 +1972,7 @@ without a `use`.
 | Ordinary failure is a value | VERIFIED | `text_parse_int` `Err` for no digits, a non-digit and both ends of the range; `None` for an absent search or an empty maximum |
 | Documented where the spec lists it | VERIFIED | `every_public_standard_function_is_documented_and_listed`; `nazm docs --section spec:std`; the spec's example runs (`the_spec_s_example_runs_everywhere`) |
 | Higher-order helpers | PARTIAL | `vec_map`, `vec_filter`, `vec_fold` in `@std/seq` (N50), plain Nazm over function values, on records and enums (`map_filter_and_fold_work_over_records_and_enums`); pure functions only until effects can be abstracted over |
-| Formatting, domains (HTTP, JSON, time, crypto) | MISSING | out of scope for v1 |
+| Formatting, domains (HTTP, JSON, time, crypto) | PARTIAL | JSON (`@std/json`, N84) and time (`@std/time`, Gate 2) exist; HTTP and cryptography MISSING, out of scope for v1 |
 
 **Limitation** · Functions carry their module's name (`text_split`): `use "@std/text" as t;` and
 `t::text_split` qualify them since N49, and a plain import still needs the prefix. The compiler
@@ -2328,7 +2338,7 @@ tracked as R7 in `research-register.md`.
 
 ### 22. Diagnostics — VERIFIED
 
-**Evidence** · `crates/nazm-diag/src/lib.rs` — 33 stable codes, byte-offset spans, a
+**Evidence** · `crates/nazm-diag/src/lib.rs` — the stable codes (33 when this row was written, at N31; far more since — `docs/diagnostics.md` lists them), byte-offset spans, a
 versioned JSON schema `schema/nazm.diagnostic-1.json` emitted per object. Conformance is
 tested against real binary output in `crates/nazm-cli/tests/schemas.rs`, and
 `crates/nazm-cli/tests/codes.rs` requires every declared code to be provoked by a test or
@@ -2368,8 +2378,10 @@ six read-only tools, index and detail equal to the service's, the index carried 
 file argument accepted, a stale id after an edit, syntax errors indexed, and 1,000 calls through
 edits and repairs with flat resident memory. Eighteen N30 mutations (area 30).
 
-**Limitation** · Two codes are unprovokable by construction. Spans are offsets into a
-merged buffer, so file identity is recovered rather than carried (area 2); the N30 index and
+**Limitation** · *At N31:* two codes were unprovokable by construction, and spans were offsets
+into a merged buffer, so file identity was recovered rather than carried. *Since:* one code is
+unprovokable, and a span carries its file (`FileId`, area 2) — published spans are offsets into the
+files' concatenation; the N30 index and
 detail recover it, by the same source map. No diagnostic carries typed facts, and the index is a
 module's analysis — a missing `main` (`N0204`) is `nazm check`'s, not the index's.
 
@@ -3332,6 +3344,11 @@ network. The results: `tools/agent-bench/results/`, `performance.md`. Sixteen N3
 
 ### 29. Differential testing — VERIFIED
 
+**Scope (v1, Q1-D-20)** · The comparisons with the compiler written in Nazm cover what it carries —
+its declared subset, which does not include Gate 2's numbers, arrays, `Bytes`, `Text` or the Gate 2
+and Gate 3 built-ins it lists as not carried (`selfhost.rs`, `NOT_CARRIED`). Every other mechanism
+here compares the interpreter, the LIR oracle and both backends over the whole language.
+
 **Evidence** · Five independent mechanisms. `crates/nazm-cli/tests/build.rs` — two oracles
 per case, both opt levels. `crates/nazm-cli/tests/concurrent.rs` — the same for
 concurrency. `crates/nazm-cli/src/test.rs` — `nazm test` runs every case interpreted and
@@ -3339,7 +3356,7 @@ native and requires agreement. `crates/nazm-cli/tests/selfhost.rs` — the Nazm-
 lexer, parser and checker against the Rust ones, token-for-token and span-for-span, over
 every `.nz` in the tree including their own sources, and eleven programs built by **both**
 compilers and required to report the same reclamation — plus, since N10.1, the 32-case
-transfer corpus run five ways. `compiler/bootstrap.sh` — thirteen conformance cases, six of
+transfer corpus run five ways. `compiler/bootstrap.sh` — at N10.1, thirteen conformance cases (twenty at v1), six of
 them the N10.1 transfer shapes and one the original reproducer byte for byte, and seven
 multi-module ones, under C2, C3 and the interpreter. *Since N12, propagation: 22 programs
 through both checkers by code and span, four `?` programs built by both compilers with equal
@@ -4196,6 +4213,10 @@ for the catalogue as it stands.
 
 ### 31. Bootstrap — VERIFIED as scoped
 
+**Scope (v1, Q1-D-20)** · The bootstrap is of the declared subset the compiler written in Nazm
+carries; it does not carry Gate 2 or Gate 3 (`selfhost.rs`, `NOT_CARRIED`; `limitations.md`,
+*Self-hosted compiler*), so a program using them is the reference compiler's alone.
+
 *N102, 2026-10-05: parity on every probe — 21 of 21.* `architecture.md` §7.103 first. The eight
 refusals N98 measured are gone: effects and capabilities, recursion (the reference's stack check,
 derived and gated by `check-runtime`), contracts, foreign declarations (`Int` only), `@std`, traits,
@@ -4386,7 +4407,7 @@ child with exit code 1. Found on the way: an IR string carried a literal NUL byt
 **Not done**: execution on a real Windows host (a final-v1 qualification item), a DLL, the MSVC
 environment, Windows ARM64, a prebuilt toolchain for a Windows host.
 
-**Evidence** · Two verified targets: `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`
+**Evidence** · *At N95:* two verified targets: `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`
 (the latter inside `docker/contained.Dockerfile`). The emitter states its own scope, and
 `crates/nazm-cli/tests/docs.rs` asserts the documented target and the emitter agree.
 
@@ -4456,7 +4477,8 @@ to be the one the C compiler driver resolves for the triple.
 | `aarch64-apple-ios` | compile-only | unsupported | apple-a7 / none | not exercised |
 
 Run-verified means programs built for the target ran and agreed with the interpreter: on the host,
-under Rosetta, in the Linux image, under QEMU, under Node — each cell's test is named in the table in
+under Rosetta, in the Linux image, under QEMU — the three boards, which `support.md` writes
+**emulator-verified**, the kind of run-verified no hardware stands behind (Q1-D-24) — under Node — each cell's test is named in the table in
 code. `x86_64-unknown-linux-gnu` is compile-only: no x86_64 Linux machine or image is here. A
 freestanding target is unsupported by Cranelift, whose object writer has no format for it, and
 WebAssembly by this Cranelift build. `x86_64-pc-windows-gnu` is run-verified **under Wine**: Gate
