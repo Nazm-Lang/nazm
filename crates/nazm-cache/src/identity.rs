@@ -288,7 +288,9 @@ use crate::digest::{self, Framed};
 /// task's shape (`N0627`); a task's priority or period out of range is `N0619`.
 /// `51` — Gate 3, 2026-10-11. `watchdog_feed()` joined the built-ins, a device's authority as the
 /// `mmio_*` built-ins are.
-pub const SEMANTIC_EPOCH: u32 = 51;
+/// `52` — R1a, 2026-10-11. `for x in e` and `for x in a..b` moved from refused (`N0101`) to
+/// accepted, `..` became a token, and iterating anything but a sequence is `N0628`.
+pub const SEMANTIC_EPOCH: u32 = 52;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -359,6 +361,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "NOT_A_FUNCTION_VALUE",
     "NOT_A_TRAIT",
     "NOT_IN_A_LOOP",
+    "NOT_ITERABLE",
     "NO_METHOD",
     "OPAQUE_HANDLE",
     "OWNERSHIP_CYCLE",

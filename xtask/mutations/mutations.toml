@@ -8297,10 +8297,11 @@ Repointed by Gate 3's atomics, which moved it to 45: an entry that accepted a re
 Repointed by Gate 3's statics, which moved it to 46: an entry that refused a `static` item must not be reused.
 Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@section` must not be reused.
 Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@interrupt` must not be reused.
-Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused `@on_failure` must not be reused."""
+Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused `@on_failure` must not be reused.
+Repointed by R1a, which moved it to 52 for `for` loops: an entry that refused `for x in xs` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 51;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 50;"
+find = "pub const SEMANTIC_EPOCH: u32 = 52;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 51;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -16155,3 +16156,93 @@ file = "xtask/src/contained.rs"
 find = '''        &format!("type=bind,source={},target=/src,readonly", repo.display()),'''
 replace = '''        &format!("type=bind,source={},target=/src", repo.display()),'''
 killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::a_contained_run_is_isolated_by_its_arguments" }]
+
+# --- R1a: `for` loops (docs/spec.md, *`for` loops*) ---
+
+[[mutation]]
+name = "r1a-for-steps-by-two"
+why = "a for loop's step adds 2, so every other element is skipped"
+file = "crates/nazm-core/src/lower.rs"
+find = "        let one = self.constant(Const::Int(1));"
+replace = "        let one = self.constant(Const::Int(2));"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-for-reads-one-past-the-end"
+why = "a for loop runs while i <= len, so its last step reads outside the sequence (N0405)"
+file = "crates/nazm-core/src/lower.rs"
+find = "                op: cir::CmpOp::Lt,"
+replace = "                op: cir::CmpOp::LtEq,"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-bytes-are-not-iterable"
+why = "the checker forgets that a Bytes is a sequence of UInt8, so a for over one is refused (N0628)"
+file = "crates/nazm-core/src/check/stmt.rs"
+find = "                    Type::Bytes => Some(Type::of_num(NumKind::U8)),"
+replace = "                    Type::Bytes => None,"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-the-loop-name-is-mutable"
+why = "a for loop's name is bound mutable, so assigning it is accepted instead of N0310"
+file = "crates/nazm-core/src/check/stmt.rs"
+find = "            element,\n            false,\n            Some(f.name_span),"
+replace = "            element,\n            true,\n            Some(f.name_span),"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "what_a_for_loop_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-the-loop-name-is-visible-only-after-the-body"
+why = "the name becomes visible at the body's end, so every use of it in the body is unknown (N0200)"
+file = "crates/nazm-core/src/check/stmt.rs"
+find = "            f.body.span.start,"
+replace = "            f.body.span.end,"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-in-is-not-recognised"
+why = "the parser looks for `of` instead of `in`, so every for loop is refused by name"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                Some(TokenKind::Ident(w)) if w == \"in\""
+replace = "                Some(TokenKind::Ident(w)) if w == \"of\""
+killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-two-dots-are-two-tokens"
+why = "the lexer makes `..` two `.` tokens, so a range does not parse"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "        Some((b'.', b'.')) => (Some(TokenKind::DotDot), 2),"
+replace = "        Some((b'.', b'.')) => (None, 0),"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-the-formatter-spaces-a-range"
+why = "the formatter writes `0 .. 3`, not the specification's `0..3`"
+file = "crates/nazm-syntax/src/format.rs"
+find = "        if *previous == TokenKind::DotDot || *next == TokenKind::DotDot {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "the_formatter_keeps_a_range_glued_and_is_idempotent" }]
+
+[[mutation]]
+name = "r1a-an-element-forgets-its-sequences-cell"
+why = "provenance gives a for loop's element only the handle's origins, so a file's contents read through the loop may name a written file"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                        Shaped::whole(Flow::cell(&cell, f.name_span).joined(&handle))"
+replace = "                        Shaped::whole(handle)"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "an_element_carries_its_sequences_provenance_and_a_range_its_starts" }]
+
+[[mutation]]
+name = "r1a-the-sequence-type-is-not-recorded"
+why = "the checker records no sequence type for a for loop, so provenance reads the wild cell and refuses a literal through an unrelated container"
+file = "crates/nazm-core/src/check/stmt.rs"
+find = "                    self.res.record_for_seq(f.name_span, t);"
+replace = "                    let _ = t;"
+killers = [{ package = "nazm-cli", test = "for_loops", name = "an_element_carries_its_sequences_provenance_and_a_range_its_starts" }]
+
+[[mutation]]
+name = "r1a-a-probe-never-splits-two-dots"
+why = "a completion probe keeps `..` whole with the cursor between its dots, so `a.|.c` in an editor offers nothing"
+file = "crates/nazm-syntax/src/lib.rs"
+find = "    if let Some(h) = hole {\n        split_dots_at(&mut lexemes, h);\n    }"
+replace = "    if let Some(h) = hole {\n        let _ = h;\n    }"
+killers = [{ package = "nazm-service", test = "incomplete", name = "every_member_and_variant_of_the_repository_is_among_its_holes_candidates" }]

@@ -504,6 +504,9 @@ pub mod codes {
     /// An interrupt handler of a shape the board cannot call, two handlers for one interrupt, or
     /// one for an interrupt the board does not have (Gate 3, `docs/spec.md`, *Boards*).
     pub const INTERRUPT_HANDLER: Code = Code::new("N0627");
+    /// A `for` loop over something that is not an `Ints`, `Strs`, `Vec[T]` or `Bytes` (R1a,
+    /// `docs/spec.md`, *`for` loops*).
+    pub const NOT_ITERABLE: Code = Code::new("N0628");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");

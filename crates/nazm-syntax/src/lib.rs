@@ -14,10 +14,10 @@ pub mod parser;
 
 pub use ast::{
     Assign, BinOp, Block, Const, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
-    FnTypeName, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm,
-    MethodOf, Param, PatternField, Place, PlaceField, PlaceStep, Program, Qualifier, Record,
-    Reexport, ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName,
-    TypeParam, Variant, While,
+    FnTypeName, For, ForIter, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import,
+    Let, MatchArm, MethodOf, Param, PatternField, Place, PlaceField, PlaceStep, Program, Qualifier,
+    Record, Reexport, ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod,
+    TypeName, TypeParam, Variant, While,
 };
 pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;
@@ -81,7 +81,10 @@ pub fn parse_both_at(
     text: &str,
     hole: Option<u32>,
 ) -> (Program, Cst, Vec<nazm_diag::Diagnostic>) {
-    let (lexemes, mut errors) = lex_lossless_in(file, text);
+    let (mut lexemes, mut errors) = lex_lossless_in(file, text);
+    if let Some(h) = hole {
+        split_dots_at(&mut lexemes, h);
+    }
     let tokens: Vec<&Token> = lexemes
         .iter()
         .filter_map(|l| match l {
@@ -92,6 +95,27 @@ pub fn parse_both_at(
     let (program, parse_errors, cst) = parser::parse_lossless(file, text, &lexemes, &tokens, hole);
     errors.extend(parse_errors);
     (program, cst, errors)
+}
+
+/// A completion probe's cursor between the two dots of `..` (R1a): `a.|.c` is a member chain
+/// missing a name — the editor's view — not a range, so the probe reads the two dots as two
+/// `.`s and finds its hole after the first. An ordinary parse never splits one.
+fn split_dots_at(lexemes: &mut Vec<Lexeme>, hole: u32) {
+    let Some(i) = lexemes.iter().position(|l| {
+        matches!(l, Lexeme::Token(t) if t.kind == TokenKind::DotDot && t.span.start + 1 == hole)
+    }) else {
+        return;
+    };
+    let Some(Lexeme::Token(t)) = lexemes.get(i).cloned() else {
+        return;
+    };
+    let dot = |start: u32| {
+        Lexeme::Token(Token {
+            kind: TokenKind::Dot,
+            span: nazm_span::Span::new(t.span.file, start, start + 1),
+        })
+    };
+    lexemes.splice(i..=i, [dot(t.span.start), dot(t.span.start + 1)]);
 }
 
 /// Parse every file of a compilation, in load order.

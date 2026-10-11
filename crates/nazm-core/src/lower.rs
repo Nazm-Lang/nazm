@@ -594,6 +594,21 @@ impl<'a> Lower<'a> {
                     at: w.span,
                 }
             }
+            AstStmt::For(f) => {
+                // Numbered where the `for` is, as a `while` is.
+                let id = LoopId(self.loops);
+                self.loops += 1;
+                self.open(Vec::new());
+                let stmts = self.for_loop(f, id);
+                let owns = self.close();
+                Stmt::Block(Block {
+                    stmts: stmts?,
+                    tail: None,
+                    ends: Ends::FallsThrough,
+                    owns,
+                    at: f.span,
+                })
+            }
             AstStmt::Scope(sc) => Stmt::Scope {
                 body: self.statement_block(&sc.body, Vec::new())?,
                 at: sc.span,
@@ -627,6 +642,158 @@ impl<'a> Lower<'a> {
             },
             AstStmt::Expr(e) => self.effect(e)?,
         })
+    }
+
+    /// A `for` loop as the `while` loop `docs/spec.md` (*`for` loops*) says it means (R1a):
+    /// `let seq = e; let mut i = 0; while i < len(seq) { let x = get(seq, i); i = i + 1; body }`,
+    /// or `let mut i = a; let end = b; while i < end { let x = i; i = i + 1; body }`. The
+    /// step is counted before the body, so `continue` moves on; the hidden locals are this
+    /// region's, released when the loop is done.
+    fn for_loop(&mut self, f: &nazm_syntax::For, id: LoopId) -> Lowered<Vec<Stmt>> {
+        let at = f.name_span;
+        let int = |kind: ExprKind| Expr {
+            kind,
+            ty: Some(Type::Int),
+            at,
+        };
+        let mut stmts = Vec::new();
+        let index = self.temp(Temp::ForIndex, Type::Int, at);
+        // What the condition compares the step with, and how each step's element is read.
+        let (bound, element): (Expr, Box<dyn Fn(Expr) -> Expr>) = match &f.iter {
+            nazm_syntax::ForIter::Each(e) => {
+                let seq_value = self.expr(e)?;
+                let Some(seq_ty) = seq_value.ty else {
+                    return defect(e.span(), "a `for` sequence the checker gave no type");
+                };
+                let (len, get, elem, type_args) = match seq_ty {
+                    Type::Ints => (
+                        nazm_sema::Intrinsic::IntsLen,
+                        nazm_sema::Intrinsic::IntsGet,
+                        Type::Int,
+                        Vec::new(),
+                    ),
+                    Type::Strs => (
+                        nazm_sema::Intrinsic::StrsLen,
+                        nazm_sema::Intrinsic::StrsGet,
+                        Type::Str,
+                        Vec::new(),
+                    ),
+                    Type::Bytes => (
+                        nazm_sema::Intrinsic::BytesLen,
+                        nazm_sema::Intrinsic::BytesGet,
+                        Type::of_num(NumKind::U8),
+                        Vec::new(),
+                    ),
+                    Type::Vec(v) => {
+                        let Some(elem) = self.res.types().vec_element(v) else {
+                            return defect(e.span(), "a `Vec` with no element type");
+                        };
+                        (
+                            nazm_sema::Intrinsic::VecLen,
+                            nazm_sema::Intrinsic::VecGet,
+                            elem,
+                            vec![elem],
+                        )
+                    }
+                    _ => return defect(e.span(), "a `for` over a type the checker refuses"),
+                };
+                let seq = self.temp(Temp::ForSeq, seq_ty, at);
+                stmts.push(Stmt::Let {
+                    local: seq,
+                    value: seq_value,
+                });
+                self.bind(seq);
+                let zero = self.constant(Const::Int(0));
+                stmts.push(Stmt::Let {
+                    local: index,
+                    value: int(ExprKind::Const(zero)),
+                });
+                self.bind(index);
+                let read_seq = Expr {
+                    kind: ExprKind::Local(seq),
+                    ty: Some(seq_ty),
+                    at,
+                };
+                let bound = int(ExprKind::Builtin {
+                    op: len,
+                    type_args: type_args.clone(),
+                    args: vec![read_seq.clone()],
+                    callee_at: at,
+                });
+                let element = Box::new(move |i: Expr| Expr {
+                    kind: ExprKind::Builtin {
+                        op: get,
+                        type_args: type_args.clone(),
+                        args: vec![read_seq.clone(), i],
+                        callee_at: at,
+                    },
+                    ty: Some(elem),
+                    at,
+                });
+                (bound, element as Box<dyn Fn(Expr) -> Expr>)
+            }
+            nazm_syntax::ForIter::Range { start, end } => {
+                let start = self.expr(start)?;
+                let end = self.expr(end)?;
+                stmts.push(Stmt::Let {
+                    local: index,
+                    value: start,
+                });
+                self.bind(index);
+                let last = self.temp(Temp::ForEnd, Type::Int, at);
+                stmts.push(Stmt::Let {
+                    local: last,
+                    value: end,
+                });
+                self.bind(last);
+                (
+                    int(ExprKind::Local(last)),
+                    Box::new(|i: Expr| i) as Box<dyn Fn(Expr) -> Expr>,
+                )
+            }
+        };
+        let read_index = int(ExprKind::Local(index));
+        let cond = Expr {
+            kind: ExprKind::Compare {
+                op: cir::CmpOp::Lt,
+                operand: Type::Int,
+                law: Law::Int,
+                lhs: Box::new(read_index.clone()),
+                rhs: Box::new(bound),
+            },
+            ty: Some(Type::Bool),
+            at,
+        };
+        let name = self.local_at(f.name_span)?;
+        let one = self.constant(Const::Int(1));
+        let step = vec![
+            Stmt::Let {
+                local: name,
+                value: element(read_index.clone()),
+            },
+            Stmt::Assign {
+                local: index,
+                path: Vec::new(),
+                value: int(ExprKind::Arith {
+                    op: cir::ArithOp::Add,
+                    lhs: Box::new(read_index),
+                    rhs: Box::new(int(ExprKind::Const(one))),
+                }),
+                at,
+            },
+        ];
+        self.targets.push(id);
+        let body = self.statement_block(&f.body, vec![name]);
+        self.targets.pop();
+        let mut body = body?;
+        body.stmts.splice(0..0, step);
+        stmts.push(Stmt::Loop {
+            id,
+            cond,
+            body,
+            at: f.span,
+        });
+        Ok(stmts)
     }
 
     /// An expression where no value is wanted.

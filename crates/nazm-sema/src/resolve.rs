@@ -426,6 +426,9 @@ pub struct Resolution {
     /// What each generic call site's type arguments were settled to, by the callee's name
     /// span — written or inferred, the checker decided and the backend reads.
     type_args: HashMap<Span, Vec<Type>>,
+    /// What each `for` loop iterates, by the span of the loop's name (R1a): the sequence's
+    /// type, which the checker settled and the provenance analysis reads to name its cell.
+    for_seqs: HashMap<Span, Type>,
     /// Keyed by the span of the **`?`** of a propagation, which is written once per one.
     propagations: HashMap<Span, Propagation>,
     /// Keyed by the span of a **user-defined type's name** wherever one is written: in a
@@ -1122,6 +1125,17 @@ impl Resolution {
     /// Record the type arguments a generic call site was checked with.
     pub fn record_type_args(&mut self, span: Span, args: Vec<Type>) {
         self.type_args.insert(span, args);
+    }
+
+    /// Record what the `for` loop whose name is at `span` iterates (R1a).
+    pub fn record_for_seq(&mut self, span: Span, seq: Type) {
+        self.for_seqs.insert(span, seq);
+    }
+
+    /// What the `for` loop whose name is at `span` iterates — absent for a range (R1a).
+    #[must_use]
+    pub fn for_seq(&self, span: Span) -> Option<Type> {
+        self.for_seqs.get(&span).copied()
     }
 
     /// The type arguments a generic call site was checked with, if it had any.
