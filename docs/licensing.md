@@ -1,23 +1,24 @@
 # Licensing — technical audit for 1.0
 
-**LICENSING DECISION REQUIRED BEFORE PUBLIC v1.0.0 RELEASE.**
+**Decided 2026-10-11 by the copyright holder: `Apache-2.0 WITH LLVM-exception`, copyright Ferdous
+Alam** (`LICENSE`, `NOTICE`). The exceptions — LLVM's and Cranelift's — let a program carry the parts
+of Nazm compiled into it (the runtime, the core prelude, the standard library) without complying
+with sections 4(a), 4(b) and 4(d): no licence text, notice or attribution travels with what a user
+builds. What is still open is under *What a human must decide*, below.
 
 This page records what a Nazm release and a program it compiles contain, and under which terms
-each part reaches its recipient, as facts a person can check. It draws no legal conclusion. The
-repository's policy does not yet settle whether Apache-2.0, as it stands, is intended for the
-runtime and standard-library code that ends up inside every compiled program; a human decides
-that, and the questions are listed at the end. Audited in Gate 1 of the v1 programme,
-2026-10-07, at the tree that declares toolchain 1.0.0.
+each part reaches its recipient, as facts a person can check. It draws no legal conclusion.
+Audited in Gate 1 of the v1 programme, 2026-10-07, at the tree that declares toolchain 1.0.0; the
+facts below that the decision changed say so.
 
 ## What the repository says
 
 | Fact | Where |
 | --- | --- |
-| The licence is the full, unmodified Apache License 2.0 text | `LICENSE` (202 lines) |
-| Its appendix's copyright line is the unfilled template, `Copyright [yyyy] [name of copyright owner]`; no project copyright line exists elsewhere | `LICENSE` |
-| There is no `NOTICE` file | repository root |
-| Every workspace crate declares `license = "Apache-2.0"` through `license.workspace = true`; `publish = false` | `Cargo.toml`, `crates/*/Cargo.toml`, `xtask/Cargo.toml` |
-| `fuzz/Cargo.toml` declares no licence | `fuzz/Cargo.toml` |
+| The licence is the full, unmodified Apache License 2.0 text, followed by the LLVM Exceptions, word for word as LLVM and Cranelift carry them (*since 2026-10-11*) | `LICENSE` |
+| The copyright notice — `Copyright 2026 Ferdous Alam` — and what the exceptions mean for a compiled program are in `NOTICE`; the licence's appendix keeps its template line, as LLVM's does (*since 2026-10-11*) | `NOTICE`, `LICENSE` |
+| Every workspace crate declares `license = "Apache-2.0 WITH LLVM-exception"` through `license.workspace = true`; `publish = false` (*since 2026-10-11*) | `Cargo.toml`, `crates/*/Cargo.toml`, `xtask/Cargo.toml` |
+| `fuzz/Cargo.toml` and the editor extension declare the same (*since 2026-10-11*) | `fuzz/Cargo.toml`, `editors/vscode/package.json` |
 | No source file carries a copyright or SPDX header — compiler, runtime generator, standard library or templates | `crates/`, `library/`, `crates/nazm-cli/templates/` |
 | Contributions have no stated terms: no DCO, CLA, sign-off or inbound-equals-outbound clause | `CONTRIBUTING.md` |
 | The open question is stated, and called a Phase 1 decision | `README.md` (*Licence*), `deny.toml` |
@@ -71,19 +72,25 @@ licence texts, attribution file, NOTICE or SBOM**; the SBOM is in the separate e
 
 ## What a human must decide
 
-1. **The runtime and standard library in user programs.** Whether to add an exception — for
-   example Apache-2.0 WITH LLVM-exception, or a clause of the kind Swift's runtime carries — so
-   that the generated runtime, `libnazmrt.a`, the prelude, the standard-library modules and the
-   `nazm init` templates impose nothing on a compiled program; or to state that Apache-2.0 as it
-   stands is intended for them.
-2. **The copyright holder.** Fill the copyright line, and decide whether a `NOTICE` file is
-   wanted.
-3. **Contributor terms.** DCO, CLA, or inbound-equals-outbound, written into `CONTRIBUTING.md`.
+**Decided (2026-10-11, the copyright holder):**
+
+1. **The runtime and standard library in user programs** — `Apache-2.0 WITH LLVM-exception` for the
+   whole project: the compiled runtime, `libnazmrt.a`, the prelude and the standard-library modules
+   impose nothing on a compiled program.
+2. **The copyright holder** — Ferdous Alam; `NOTICE` carries the line.
+
+**Still open:**
+
+3. **Contributor terms.** Until decided, a contribution is under the project's licence by its
+   section 5 (inbound equals outbound); whether a DCO sign-off or a contributor agreement is also
+   required is open. A contributor agreement keeps a later relicensing or commercial licence
+   possible; a DCO does not.
 4. **Third-party notices in the release.** Whether the archive carries the licence texts and
    notices of the crates linked into `bin/nazm` — in particular the Apache-2.0-only ones and any
-   with a `NOTICE` of its own — and licence data in the SBOM.
-5. **The policy gate.** Whether `deny.toml` names the alternatives it now admits only implicitly,
-   and whether `fuzz/Cargo.toml` and headers in `library/` and generated output are wanted.
-
-Until these are decided, no public 1.0.0 release is made (`docs/stability.md`,
-`docs/releases/`).
+   with a `NOTICE` of its own — and licence data in the SBOM. The licence chosen does not change
+   this duty; it is the toolchain's, not a compiled program's.
+5. **Templates, headers and the specification.** Whether `nazm init`'s templates are dedicated to
+   the user outright (for example `MIT-0`), whether source files carry SPDX headers, and whether
+   `docs/spec.md` is published under a documentation licence so other implementations may follow
+   it.
+6. **The name.** A licence does not protect "Nazm"; a trademark policy would.
