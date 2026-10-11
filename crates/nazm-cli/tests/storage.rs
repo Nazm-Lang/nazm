@@ -208,3 +208,36 @@ fn readers_and_one_writer_share_the_store_through_channels() {
     let want: BTreeMap<i64, i64> = (0..25).map(|i| (i, i * 10)).collect();
     assert_eq!(got, want);
 }
+
+/// A whole record whose checksum does not hold is not replayed, whatever it carries: here a sealed
+/// image of another page, which, applied, would change the store without a word. A crash cuts a
+/// record short; this is the record a crash cannot make and a bit flip can.
+#[test]
+fn a_whole_record_whose_checksum_fails_is_not_replayed() {
+    let d = tempfile::tempdir().unwrap();
+    let exe = engine(d.path());
+    let store = d.path().join("s");
+    std::fs::create_dir(&store).unwrap();
+    let script = d.path().join("script.txt");
+    std::fs::write(&script, "put 1 10\nput 2 20\n").unwrap();
+    let dump = d.path().join("dump.txt");
+    std::fs::write(&dump, "dump\n").unwrap();
+    let r = run(&exe, &store, &script, &[]);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    // Page 2's sealed image, offered as page 1's next version, its checksum wrong.
+    let pages = std::fs::read(store.join("pages")).unwrap();
+    let mut record = Vec::new();
+    record.extend_from_slice(&5_638_093_645_399_082_316_i64.to_le_bytes());
+    record.extend_from_slice(&1_i64.to_le_bytes());
+    record.extend_from_slice(&1_i64.to_le_bytes());
+    record.extend_from_slice(&pages[2 * 256..3 * 256]);
+    record.extend_from_slice(&0_i64.to_le_bytes());
+    assert_eq!(record.len(), 288);
+    std::fs::write(store.join("wal"), &record).unwrap();
+    let r = run(&exe, &store, &dump, &[]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    assert_eq!(
+        contents(r.stdout.lines().next().unwrap()),
+        [(1, 10), (2, 20)].into_iter().collect()
+    );
+}
