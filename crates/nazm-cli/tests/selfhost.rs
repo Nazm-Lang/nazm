@@ -3299,6 +3299,65 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
     }
 }
 
+/// v1, Q1-B-05: the compiler written in Nazm holds `exit_with` to the same status contract as the
+/// reference — a status in `0..=255` reaches the host unchanged, one outside fails with `N0416`
+/// and status 2 — and the interpreter agrees with both.
+#[test]
+fn the_nazm_written_compiler_holds_exit_with_to_0_to_255() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    for (status, expected, failure) in [
+        ("7", 7, false),
+        ("255", 255, false),
+        ("300", 2, true),
+        ("0 - 1", 2, true),
+    ] {
+        let src = format!("fn main(io: IoCap) -> Int ! {{ io }} {{ exit_with({status}) }}\n");
+        let file = dir.path().join("exit.nz");
+        std::fs::write(&file, &src).expect("write");
+        let (rc, ir, ir_err) = run_stage(&emitter, &file);
+        assert_eq!(
+            rc,
+            Some(0),
+            "the Nazm compiler refused exit_with({status}): {ir_err}"
+        );
+        let ll = dir.path().join("exit.ll");
+        std::fs::write(&ll, &ir).expect("write IR");
+        let exe = dir.path().join("exit");
+        let built = Command::new("clang")
+            .args(["-Wno-override-module", "-o"])
+            .arg(&exe)
+            .arg(&ll)
+            .output()
+            .expect("run clang");
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let (code, _, stderr) = run_bounded(
+            &mut common::bounded_exe(&exe),
+            std::time::Duration::from_secs(30),
+        )
+        .expect("the compiled program hung");
+        assert_eq!(code, Some(expected), "exit_with({status}): {stderr}");
+        assert_eq!(
+            stderr.contains("N0416"),
+            failure,
+            "exit_with({status}): {stderr}"
+        );
+        let interp = Command::new(NAZM)
+            .args(["run", file.to_str().unwrap()])
+            .output()
+            .expect("run");
+        assert_eq!(
+            interp.status.code(),
+            Some(expected),
+            "the interpreter, exit_with({status})"
+        );
+    }
+}
+
 /// The compiler written in Nazm emits the **same memory semantics** as the one written in
 /// Rust.
 ///

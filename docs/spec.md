@@ -2138,7 +2138,7 @@ standard error, and end the process. That is enough for a compiler, and it is al
 | **Writing** | `write_file(path, data) -> Int` — truncating; returns the byte count. Fails with `N0407` |
 | **Existence** | `file_exists(path) -> Bool` — whether it can be *opened for reading*, which is the question a program actually asks |
 | **Output** | `print(s)` and `eprint(s)` write bytes to descriptors 1 and 2 and return the count. Neither adds a newline: `str_from_byte(10)` is how you ask for one |
-| **Ending** | `exit_with(code)` ends the process. It never returns, which the type system cannot express, so it is written `Int` and the value never arrives |
+| **Ending** | `exit_with(code)` ends the process. It never returns, which the type system cannot express, so it is written `Int` and the value never arrives. **The status** (v1, Q1-B-05): the language's exit status is `0..=255`, and the host observes exactly that value — every host reports those unchanged. A `code` outside that range is not truncated by the host: it fails with `N0416`, *this exit status is outside 0 to 255*, and the process ends with status 2, as any failure does, in the interpreter and in every compiled program alike. Status 2 is therefore both a failure's and `exit_with(2)`'s; standard error tells them apart |
 
 Excluding the program name from `arg(i)` is deliberate: a compiled program's `argv[0]` is
 a path and an interpreted one has no equivalent, so including it would make the same
