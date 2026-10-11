@@ -818,7 +818,10 @@ Each part is encoded byte by byte: alphanumerics stand for themselves and everyt
 so the encoding is injective and `.` is free to separate fields. A symbol is therefore
 unique **by construction** — no digest, no truncation, no collision probability. That
 guarantee is available because the inputs are small, and it is why this scheme is preferred
-to hashing.
+to hashing. *v1 (Q1-B-06):* the one input that is not always small is a generic instance's type
+arguments, whose spelling nesting can make exponential; past 512 bytes an instance is named
+`….d.<BLAKE3 hex>` instead of `….g.<spelling>`, unique by collision resistance, since `.` cannot
+occur in a spelling and `d.` and `g.` therefore never meet.
 
 ```text
 @nz.m.lib_2Futil_2Enz.parse       lib/util.nz :: parse

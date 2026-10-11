@@ -39,7 +39,10 @@
 //! produced, so it is free to separate the fields. A symbol is therefore **unique by
 //! construction** rather than by a collision-resistance argument — there is no digest,
 //! no truncation and no probability to reason about. That is the strongest guarantee
-//! available and it is available because the inputs are small.
+//! available and it is available because the inputs are small. **One exception** (v1,
+//! Q1-B-06): a generic instance whose type arguments spell longer than
+//! [`MAX_SPELLED_ARGS`] carries their BLAKE3 digest instead, because nesting can make that
+//! spelling exponentially long and a linker refuses a name of megabytes.
 //!
 //! ```text
 //! @nz.m.lib_2Futil_2Enz.parse      lib/util.nz :: parse
@@ -138,7 +141,7 @@ impl NativeSymbol {
     /// no `.g.` part is an ordinary definition's: the two can never collide.
     #[must_use]
     pub fn of_instance(base: &Self, args: &[String]) -> Self {
-        Self(format!("{}.g.{}", base.0, encode(&args.join(","))))
+        Self(format!("{}.{}", base.0, instance_suffix(args)))
     }
 
     /// The name itself, with no sigil.
@@ -231,7 +234,7 @@ impl NativeTypeName {
     /// arguments' canonical keys, by the rule [`NativeSymbol::of_instance`] states.
     #[must_use]
     pub fn of_instance(base: &Self, args: &[String]) -> Self {
-        Self(format!("{}.g.{}", base.0, encode(&args.join(","))))
+        Self(format!("{}.{}", base.0, instance_suffix(args)))
     }
 
     #[must_use]
@@ -362,6 +365,28 @@ pub fn type_key(t: Type, types: &UserTypes, graph: &ModuleGraph) -> String {
         // A parameter never reaches a native name: instances are concrete.
         Type::Param(_) => "?".to_owned(),
         other => other.builtin_name().unwrap_or("?").to_owned(),
+    }
+}
+
+/// The longest spelling of an instance's type arguments written out (v1, Q1-B-06): 512 bytes.
+pub const MAX_SPELLED_ARGS: usize = 512;
+
+/// An instance's part of its name: `g.` and its type arguments' encoded keys — or, when those
+/// are longer than [`MAX_SPELLED_ARGS`], `d.` and the BLAKE3 digest of them.
+///
+/// A key's length can be exponential in a program's nesting — `P[P[T, T], P[T, T]]` sixteen deep
+/// spells 65,536 leaves — and a linker refuses a name of megabytes (Q1-B-06). So past the cap the
+/// name carries a digest of the same spelling. That form is unique by collision resistance rather
+/// than by construction, which this module otherwise avoids; it is the price of a bounded name, paid
+/// only where the spelling would not fit. `d.` and `g.` cannot meet: `.` never occurs in an
+/// encoded spelling, so the field after it says which form follows.
+fn instance_suffix(args: &[String]) -> String {
+    let joined = args.join(",");
+    let spelled = encode(&joined);
+    if spelled.len() <= MAX_SPELLED_ARGS {
+        format!("g.{spelled}")
+    } else {
+        format!("d.{}", blake3::hash(joined.as_bytes()).to_hex())
     }
 }
 
@@ -496,6 +521,29 @@ mod tests {
         assert_eq!(a.as_str(), "nz.u.0.helper");
         assert_ne!(a, b);
         assert_ne!(a.as_str(), sym("a.nz", "helper"));
+    }
+
+    #[test]
+    fn an_instance_too_long_to_spell_is_named_by_its_digest() {
+        let base = NativeSymbol::of_definition(&def("lib.nz", "g"));
+        let short = NativeSymbol::of_instance(&base, &["Int".to_owned()]);
+        assert!(short.as_str().ends_with(".g.Int"), "{short}");
+        let long_arg = "P[".repeat(200) + "Int" + &"]".repeat(200);
+        let long = NativeSymbol::of_instance(&base, &[long_arg.clone()]);
+        assert!(long.as_str().contains(".d."), "{long}");
+        assert!(
+            long.as_str().len() <= base.as_str().len() + 3 + 64,
+            "{long}"
+        );
+        // Deterministic, and a different spelling is a different digest.
+        assert_eq!(long, NativeSymbol::of_instance(&base, &[long_arg.clone()]));
+        let other = NativeSymbol::of_instance(&base, &[long_arg + "x"]);
+        assert_ne!(long, other);
+        // Exactly at the cap it is still spelled.
+        let at_cap = "a".repeat(super::MAX_SPELLED_ARGS);
+        assert!(NativeSymbol::of_instance(&base, &[at_cap])
+            .as_str()
+            .contains(".g."));
     }
 
     #[test]
