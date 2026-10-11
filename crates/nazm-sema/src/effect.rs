@@ -280,6 +280,15 @@ impl Effect {
             | Intrinsic::VecSet
             | Intrinsic::VecPush
             | Intrinsic::VecPop
+            | Intrinsic::BoxNew
+            | Intrinsic::BoxGet
+            | Intrinsic::ListFromVec
+            | Intrinsic::ListEmpty
+            | Intrinsic::ListLen
+            | Intrinsic::ListGet
+            | Intrinsic::BoxFresh
+            | Intrinsic::BoxFill
+            | Intrinsic::ListPush
             // The call these belong to performs `foreign` already (N85).
             | Intrinsic::ForeignNonNull
             | Intrinsic::CStrCopy

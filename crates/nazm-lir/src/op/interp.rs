@@ -79,6 +79,9 @@ struct Machine<'m> {
     argv: u64,
     /// Each function's values' classes, computed on its first call.
     classes: BTreeMap<(usize, usize), std::rc::Rc<Vec<Class>>>,
+    /// The sequences queued by the release in progress, as the runtime's queue holds them
+    /// (R1a): handle, element release, stride.
+    releasing: Vec<(u64, u64, u64)>,
 }
 
 /// Run a program: its modules, its entry's symbol, how many capability roots `main` takes, its
@@ -100,6 +103,7 @@ pub fn run(
         resolved: Vec::new(),
         codes: Vec::new(),
         counts: BTreeMap::new(),
+        releasing: Vec::new(),
         sizes: BTreeMap::new(),
         failed: None,
         stdout: Vec::new(),
@@ -747,13 +751,29 @@ impl Machine<'_> {
                 }
                 None
             }
+            // The runtime's queued release (R1a): nested in an element's release (a queue, any
+            // non-zero word here), the sequence is queued; outermost, it is emptied and then
+            // every sequence queued meanwhile, in a loop.
             "nz.vec_release" => {
-                let (h, f, stride) = (arg(0), arg(1), arg(2));
+                let (h, f, stride, q) = (arg(0), arg(1), arg(2), arg(3));
                 if self.release_count(h) {
-                    let len = self.read(h, 8)?;
-                    let data = self.read(h + 16, 8)?;
-                    for i in 0..len {
-                        self.call_address(f, &[data + stride * i])?;
+                    if q != 0 {
+                        self.releasing.push((h, f, stride));
+                    } else {
+                        let mark = self.releasing.len();
+                        let mut next = Some((h, f, stride));
+                        while let Some((h, f, stride)) = next {
+                            let len = self.read(h, 8)?;
+                            let data = self.read(h + 16, 8)?;
+                            for i in 0..len {
+                                self.call_address(f, &[data + stride * i, 1])?;
+                            }
+                            next = if self.releasing.len() > mark {
+                                self.releasing.pop()
+                            } else {
+                                None
+                            };
+                        }
                     }
                 }
                 None

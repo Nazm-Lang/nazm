@@ -3319,16 +3319,20 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
             Shape::VecT => "vec_new[Int]()",
             Shape::ChanT => "chan_new_of[Int](1)",
             Shape::ChansT => "vec_new[Chan[Int]]()",
+            // Immutable indirection (R1a).
+            Shape::BoxT => "box_new(0)",
+            Shape::ListT => "list_empty[Int]()",
         })
         .collect();
     // `vec_new` is the one built-in whose type argument nothing else could say.
     // `chan_new_of` likewise: its one parameter is the capacity, not a `T`.
     let name = if i.generics() > 0
-        && !i
-            .params()
-            .iter()
-            .any(|p| matches!(p, Shape::T | Shape::VecT | Shape::ChanT | Shape::ChansT))
-    {
+        && !i.params().iter().any(|p| {
+            matches!(
+                p,
+                Shape::T | Shape::VecT | Shape::ChanT | Shape::ChansT | Shape::BoxT | Shape::ListT
+            )
+        }) {
         format!("{}[Int]", i.name())
     } else {
         i.name().to_owned()
@@ -3360,6 +3364,8 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         Shape::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
         Shape::ChanT => format!("if chan_send_of({call}, 0) {{ 1 }} else {{ 0 }}"),
         Shape::ChansT => format!("vec_len({call})"),
+        Shape::BoxT => format!("box_get({call})"),
+        Shape::ListT => format!("list_len({call})"),
     };
     // Opening a handle names a path, which needs an `IoCap` (Gate 2).
     if i.params().contains(&Shape::OsHandle) {

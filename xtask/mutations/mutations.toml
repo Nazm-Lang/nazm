@@ -5483,8 +5483,8 @@ killers = [{ package = "nazm-service", test = "semantic", name = "a_thousand_edi
 name = "n23-a-built-in-type-is-not-recorded"
 why = "the checker resolves a written built-in type and records nothing, so `Int` and `Str` are never classified"
 file = "crates/nazm-core/src/check/written.rs"
-find = "        res.record_written_type(written.name_span, WrittenType::Builtin(t));"
-replace = "        let _ = t;"
+find = "        // A built-in, as the type resolution decided it is (N23).\n        res.record_written_type(written.name_span, WrittenType::Builtin(t));"
+replace = "        // A built-in, as the type resolution decided it is (N23).\n        let _ = t;"
 killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
 
 [[mutation]]
@@ -8068,8 +8068,8 @@ killers = [{ package = "nazm-core", test = "provenance", name = "the_sources_are
 name = "n38-shared-storage-is-followed"
 why = """a value read out of a sequence is taken to carry only what the read's arguments carry, as though no alias could have written it Repointed by N80, which follows containers by cell: a read that names no cell falls back to `unknown`, over-refusing."""
 file = "crates/nazm-sema/src/provenance.rs"
-find = "            | Intrinsic::VecPop => ContainerUse::Read { handle: 0 },"
-replace = "            | Intrinsic::VecPop => ContainerUse::None,"
+find = "            | Intrinsic::VecPop\n            | Intrinsic::ListFromVec => ContainerUse::Read { handle: 0 },"
+replace = "            | Intrinsic::VecPop\n            | Intrinsic::ListFromVec => ContainerUse::None,"
 killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_container_carries_what_any_container_of_its_type_was_given" }]
 
 [[mutation]]
@@ -8298,10 +8298,11 @@ Repointed by Gate 3's statics, which moved it to 46: an entry that refused a `st
 Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@section` must not be reused.
 Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@interrupt` must not be reused.
 Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused `@on_failure` must not be reused.
-Repointed by R1a, which moved it to 52 for `for` loops: an entry that refused `for x in xs` must not be reused."""
+Repointed by R1a, which moved it to 52 for `for` loops: an entry that refused `for x in xs` must not be reused.
+Repointed by R1a again, which moved it to 53 for `Box` and `List`: an entry that refused a type reaching itself through one must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 52;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 51;"
+find = "pub const SEMANTIC_EPOCH: u32 = 53;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 52;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10007,8 +10008,8 @@ killers = [{ package = "nazm-cli", test = "flow_v3", name = "a_closures_paramete
 name = "n50-a-function-value-may-cross-into-a-task"
 why = "a function value is handed to a task though its type does not say what it captured"
 file = "crates/nazm-sema/src/types.rs"
-find = "        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_))"
-replace = "        !self.is_sequence() && !self.is_param()"
+find = "            && !matches!(self, Self::Fn(_))"
+replace = "            && true"
 killers = [{ package = "nazm-cli", test = "closures", name = "a_function_value_has_no_equality_and_never_crosses_into_a_task" }]
 
 [[mutation]]
@@ -10518,11 +10519,12 @@ Repointed by Gate 3's 64-bit device registers, which moved it to 23.
 Repointed by Gate 3's failure hook, which moved it to 24.
 Repointed by Gate 3's Cortex-M board, which moved it to 25.
 Repointed by the v1 stack fixes, which moved it to 27 for the frame check.
-Repointed by the v1 monotonic deadlines, which moved it to 28."""
+Repointed by the v1 monotonic deadlines, which moved it to 28.
+Repointed by R1a's release queue, which moved it to 29."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 28;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 27;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_eight_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 29;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 28;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_nine_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -15294,8 +15296,8 @@ killers = [{ package = "nazm-core", test = "provenance", name = "an_atomic_cell_
 name = "g3-an-atomic-stays-in-its-task"
 why = "an Atomic is refused where a task is spawned, as a sequence is, so the one primitive for sharing a counter between tasks cannot be shared"
 file = "crates/nazm-sema/src/types.rs"
-find = "        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_))"
-replace = "        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_) | Self::Atomic)"
+find = "            && !matches!(self, Self::Fn(_))"
+replace = "            && !matches!(self, Self::Fn(_) | Self::Atomic)"
 killers = [{ package = "nazm-cli", test = "atomics", name = "every_copy_and_every_task_reaches_one_cell" }]
 
 # --- Gate 3D: statics (docs/spec.md, Statics) ---
@@ -16163,16 +16165,16 @@ killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::a_conta
 name = "r1a-for-steps-by-two"
 why = "a for loop's step adds 2, so every other element is skipped"
 file = "crates/nazm-core/src/lower.rs"
-find = "        let one = self.constant(Const::Int(1));"
-replace = "        let one = self.constant(Const::Int(2));"
+find = "        let one = self.constant(Const::Int(1));\n        let step = vec!["
+replace = "        let one = self.constant(Const::Int(2));\n        let step = vec!["
 killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
 
 [[mutation]]
 name = "r1a-for-reads-one-past-the-end"
 why = "a for loop runs while i <= len, so its last step reads outside the sequence (N0405)"
 file = "crates/nazm-core/src/lower.rs"
-find = "                op: cir::CmpOp::Lt,"
-replace = "                op: cir::CmpOp::LtEq,"
+find = "                op: cir::CmpOp::Lt,\n                operand: Type::Int,\n                law: Law::Int,\n                lhs: Box::new(read_index.clone()),"
+replace = "                op: cir::CmpOp::LtEq,\n                operand: Type::Int,\n                law: Law::Int,\n                lhs: Box::new(read_index.clone()),"
 killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
 
 [[mutation]]
@@ -16193,11 +16195,11 @@ killers = [{ package = "nazm-cli", test = "for_loops", name = "what_a_for_loop_r
 
 [[mutation]]
 name = "r1a-the-loop-name-is-visible-only-after-the-body"
-why = "the name becomes visible at the body's end, so every use of it in the body is unknown (N0200)"
+why = "the name is recorded as visible only from the body's end, so a tool asking what is in scope inside the body does not offer it (resolution itself does not read this)"
 file = "crates/nazm-core/src/check/stmt.rs"
 find = "            f.body.span.start,"
 replace = "            f.body.span.end,"
-killers = [{ package = "nazm-cli", test = "for_loops", name = "every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
+killers = [{ package = "nazm-service", test = "completion", name = "a_for_loops_name_is_visible_in_its_body_from_its_start_and_not_after" }]
 
 [[mutation]]
 name = "r1a-in-is-not-recognised"
@@ -16246,3 +16248,93 @@ file = "crates/nazm-syntax/src/lib.rs"
 find = "    if let Some(h) = hole {\n        split_dots_at(&mut lexemes, h);\n    }"
 replace = "    if let Some(h) = hole {\n        let _ = h;\n    }"
 killers = [{ package = "nazm-service", test = "incomplete", name = "every_member_and_variant_of_the_repository_is_among_its_holes_candidates" }]
+
+# --- R1a: immutable indirection, Box[T] and List[T] (docs/spec.md, *Immutable indirection*) ---
+
+[[mutation]]
+name = "r1a-a-counted-edge-does-not-dominate"
+why = "a path through a Vec inside a Box is labelled immutable, so a cycle through Box[Vec[Node]] is accepted and a value can own itself"
+file = "crates/nazm-sema/src/udt.rs"
+find = "    if a == COUNTED || b == COUNTED {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "box_list", name = "the_ownership_rule_accepts_immutable_cycles_and_refuses_counted_ones" }]
+
+[[mutation]]
+name = "r1a-cycles-close-through-the-wrong-edge"
+why = "the search for ownership cycles counts immutable edges as the ones that close an ownership cycle, so a cycle through a Vec is accepted and one through a Box refused"
+file = "crates/nazm-sema/src/udt.rs"
+find = "        let counted = counted || edge.reach == COUNTED;"
+replace = "        let counted = counted || edge.reach == IMMUTABLE;"
+killers = [{ package = "nazm-cli", test = "box_list", name = "the_ownership_rule_accepts_immutable_cycles_and_refuses_counted_ones" }]
+
+[[mutation]]
+name = "r1a-a-box-is-a-counted-edge"
+why = "an edge through a Box or List is labelled counted, so every recursive type through one is refused N0359"
+file = "crates/nazm-sema/src/udt.rs"
+find = "                    self.owned_by(e, then(reach, IMMUTABLE), via, uses, out);"
+replace = "                    self.owned_by(e, COUNTED, via, uses, out);"
+killers = [{ package = "nazm-cli", test = "box_list", name = "the_ownership_rule_accepts_immutable_cycles_and_refuses_counted_ones" }]
+
+[[mutation]]
+name = "r1a-a-generic-list-parameter-is-counted"
+why = "a generic definition's parameter used through a List is counted, so Tree[T] { kids: List[Tree[T]] } is refused"
+file = "crates/nazm-sema/src/udt.rs"
+find = "                Some(e) => compose(IMMUTABLE, self.reaches_param(e, p, uses)),"
+replace = "                Some(e) => compose(COUNTED, self.reaches_param(e, p, uses)),"
+killers = [{ package = "nazm-cli", test = "box_list", name = "the_ownership_rule_accepts_immutable_cycles_and_refuses_counted_ones" }]
+
+[[mutation]]
+name = "r1a-an-indirection-crosses-into-a-task"
+why = "a Box or List may be passed to a task, whose count is then adjusted by two threads without synchronisation"
+file = "crates/nazm-sema/src/types.rs"
+find = "            && !self.is_indirection()"
+replace = "            && true"
+killers = [{ package = "nazm-cli", test = "box_list", name = "a_box_or_list_is_neither_compared_nor_given_to_a_task_nor_written_bare" }]
+
+[[mutation]]
+name = "r1a-the-interpreter-releases-by-recursion"
+why = "the interpreter's sequence storage drops its elements in place, so releasing a million-deep Box chain overflows its stack"
+file = "crates/nazm-core/src/eval/value.rs"
+find = "    fn drain_into(&mut self, out: &mut Vec<Value>) {\n        out.append(self);\n    }"
+replace = "    fn drain_into(&mut self, out: &mut Vec<Value>) {\n        let _ = out;\n    }"
+killers = [{ package = "nazm-cli", test = "box_list", name = "a_million_deep_value_is_released_without_a_million_frames" }]
+
+[[mutation]]
+name = "r1a-a-helper-forgets-its-queue"
+why = "a release helper passes null instead of its queue, so every nested sequence is released by recursion and a deep value overflows a compiled program's stack"
+file = "crates/nazm-lir/src/op/func.rs"
+find = "            Some(q) => q,\n            None => self.null(),"
+replace = "            Some(_) | None => self.null(),"
+killers = [{ package = "nazm-cli", test = "box_list", name = "a_million_deep_value_is_released_without_a_million_frames" }]
+
+[[mutation]]
+name = "r1a-box-get-reads-the-wrong-slot"
+why = "box_get reads index 1 of the one-element vector underneath, failing N0405 on every box"
+file = "crates/nazm-lir/src/op/prims.rs"
+find = "                mir::Operand::Const(mir::Const::Int(0)),\n            ];"
+replace = "                mir::Operand::Const(mir::Const::Int(1)),\n            ];"
+killers = [{ package = "nazm-cli", test = "box_list", name = "trees_of_boxes_and_lists_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-list-from-vec-skips-the-first"
+why = "list_from_vec starts its copy at element 1, so a list loses its first element"
+file = "crates/nazm-core/src/lower.rs"
+find = "        let zero = self.constant(Const::Int(0));\n        let one = self.constant(Const::Int(1));\n        let int = |kind: ExprKind| Expr {"
+replace = "        let zero = self.constant(Const::Int(1));\n        let one = self.constant(Const::Int(1));\n        let int = |kind: ExprKind| Expr {"
+killers = [{ package = "nazm-cli", test = "box_list", name = "trees_of_boxes_and_lists_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-prelude-built-in-is-reserved"
+why = "a module's own function named like a prelude built-in is refused, so a 1.0 program defining box_new stops checking"
+file = "crates/nazm-core/src/check/unit.rs"
+find = "            && (Intrinsic::by_name(&f.name).is_some_and(|i| !i.is_prelude())"
+replace = "            && (Intrinsic::by_name(&f.name).is_some()"
+killers = [{ package = "nazm-cli", test = "box_list", name = "the_new_names_are_prelude_names_a_1_0_program_keeps" }]
+
+[[mutation]]
+name = "r1a-a-prelude-type-name-is-reserved"
+why = "Box resolves to the built-in even where the module declares its own Box, so a 1.0 program's Box changes meaning"
+file = "crates/nazm-core/src/check/written.rs"
+find = "        && !types.names.contains_key(written.name.as_str())"
+replace = "        && true"
+killers = [{ package = "nazm-cli", test = "box_list", name = "the_new_names_are_prelude_names_a_1_0_program_keeps" }]

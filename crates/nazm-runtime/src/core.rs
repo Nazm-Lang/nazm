@@ -552,9 +552,18 @@ entry:
 /// `nz.vec_release`: the per-element release `crate::emit`'s `vec_helper` writes for each
 /// element type, once, with the element's release passed in — the same decrement, walk, frees
 /// and count.
+///
+/// **Release is not recursion (R1a).** An element's release may release a sequence of its own,
+/// as deep as the program made it — a `Box` chain is a sequence inside a sequence a million
+/// times. So each release carries a queue: the outermost release (`%q` null) makes one, empties
+/// its own sequence into it and then every sequence queued while it does; a release nested in
+/// an element's (`%q` that queue) only queues, three words — handle, element release, stride —
+/// on a buffer the queue grows. Should growing fail, that one sequence is emptied there and
+/// then, as before R1a. The stack a release takes is bounded by the types, not by the value.
 const SHIM_SEQUENCE_RUNTIME: &str = r"
-define hidden void @nz.vec_release(ptr %h, ptr %f, i64 %stride) {
+define hidden void @nz.vec_release(ptr %h, ptr %f, i64 %stride, ptr %q) {
 entry:
+  %own = alloca [3 x i64]
   %none = icmp eq ptr %h, null
   br i1 %none, label %done, label %drop
 drop:
@@ -563,29 +572,107 @@ drop:
   %rc2 = sub i64 %rc, 1
   store i64 %rc2, ptr %rcp
   %last = icmp sle i64 %rc2, 0
-  br i1 %last, label %contents, label %done
-contents:
+  br i1 %last, label %which, label %done
+which:
+  %nested = icmp ne ptr %q, null
+  br i1 %nested, label %enqueue, label %outer
+enqueue:
+  %ok = call i1 @nz.vec_enqueue(ptr %q, ptr %h, ptr %f, i64 %stride)
+  br i1 %ok, label %done, label %now
+now:
+  call void @nz.vec_drain(ptr %h, ptr %f, i64 %stride, ptr %q)
+  br label %done
+outer:
+  store ptr null, ptr %own
+  %olen = getelementptr i8, ptr %own, i64 8
+  store i64 0, ptr %olen
+  %ocap = getelementptr i8, ptr %own, i64 16
+  store i64 0, ptr %ocap
+  call void @nz.vec_drain(ptr %h, ptr %f, i64 %stride, ptr %own)
+  br label %loop
+loop:
+  %len = load i64, ptr %olen
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %finish, label %pop
+pop:
+  %top = sub i64 %len, 1
+  store i64 %top, ptr %olen
+  %buf = load ptr, ptr %own
+  %off = mul i64 %top, 24
+  %ent = getelementptr i8, ptr %buf, i64 %off
+  %th = load ptr, ptr %ent
+  %tfp = getelementptr i8, ptr %ent, i64 8
+  %tf = load ptr, ptr %tfp
+  %tsp = getelementptr i8, ptr %ent, i64 16
+  %ts = load i64, ptr %tsp
+  call void @nz.vec_drain(ptr %th, ptr %tf, i64 %ts, ptr %own)
+  br label %loop
+finish:
+  %spent = load ptr, ptr %own
+  call void @free(ptr %spent)
+  br label %done
+done:
+  ret void
+}
+
+define hidden void @nz.vec_drain(ptr %h, ptr %f, i64 %stride, ptr %q) {
+entry:
   %n = load i64, ptr %h
   %dp = getelementptr i8, ptr %h, i64 16
   %data = load ptr, ptr %dp
   br label %test
 test:
-  %i = phi i64 [ 0, %contents ], [ %next, %body ]
+  %i = phi i64 [ 0, %entry ], [ %next, %body ]
   %more = icmp slt i64 %i, %n
   br i1 %more, label %body, label %storage
 body:
   %off = mul i64 %i, %stride
   %e = getelementptr i8, ptr %data, i64 %off
-  call void %f(ptr %e)
+  call void %f(ptr %e, ptr %q)
   %next = add i64 %i, 1
   br label %test
 storage:
   call void @free(ptr %data)
   call void @free(ptr %h)
   %c = atomicrmw add ptr @nz.seq_reclaimed, i64 1 monotonic
-  br label %done
-done:
   ret void
+}
+
+define hidden i1 @nz.vec_enqueue(ptr %q, ptr %h, ptr %f, i64 %stride) {
+entry:
+  %lenp = getelementptr i8, ptr %q, i64 8
+  %len = load i64, ptr %lenp
+  %capp = getelementptr i8, ptr %q, i64 16
+  %cap = load i64, ptr %capp
+  %full = icmp eq i64 %len, %cap
+  br i1 %full, label %grow, label %put
+grow:
+  %twice = shl i64 %cap, 1
+  %zero = icmp eq i64 %cap, 0
+  %cap2 = select i1 %zero, i64 16, i64 %twice
+  %bytes = mul i64 %cap2, 24
+  %old = load ptr, ptr %q
+  %new = call ptr @realloc(ptr %old, i64 %bytes)
+  %fail = icmp eq ptr %new, null
+  br i1 %fail, label %no, label %grown
+grown:
+  store ptr %new, ptr %q
+  store i64 %cap2, ptr %capp
+  br label %put
+put:
+  %buf = load ptr, ptr %q
+  %off = mul i64 %len, 24
+  %ent = getelementptr i8, ptr %buf, i64 %off
+  store ptr %h, ptr %ent
+  %fp = getelementptr i8, ptr %ent, i64 8
+  store ptr %f, ptr %fp
+  %sp = getelementptr i8, ptr %ent, i64 16
+  store i64 %stride, ptr %sp
+  %len1 = add i64 %len, 1
+  store i64 %len1, ptr %lenp
+  ret i1 true
+no:
+  ret i1 false
 }
 ";
 
@@ -2905,7 +2992,7 @@ body:
   %idx = urem i64 %sum, %cap
   %off = mul i64 %idx, %stride
   %slot = getelementptr i8, ptr %data0, i64 %off
-  call void %rel(ptr %slot)
+  call void %rel(ptr %slot, ptr null)
   %next = add i64 %i, 1
   br label %test
 destroy:

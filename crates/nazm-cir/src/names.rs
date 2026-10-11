@@ -58,8 +58,13 @@ impl<'a> Names<'a> {
     pub fn ty(&self, t: Type) -> String {
         let types = self.res.types();
         match t {
-            Type::Vec(v) => format!(
-                "Vec[{}]",
+            Type::Vec(v) | Type::Box(v) | Type::List(v) => format!(
+                "{}[{}]",
+                match t {
+                    Type::Box(_) => "Box",
+                    Type::List(_) => "List",
+                    _ => "Vec",
+                },
                 types
                     .vec_element(v)
                     .map_or_else(|| "?".to_owned(), |e| self.ty(e))

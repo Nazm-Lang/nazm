@@ -184,6 +184,14 @@ impl Origin {
             | Intrinsic::ScalarText
             | Intrinsic::TextFromStr
             | Intrinsic::TextAssume => BuiltinFlow::Derive,
+            // Immutable indirection (R1a): nothing can write into one after it is made, so what
+            // it holds is carried on the value itself, and read back out of it.
+            Intrinsic::BoxNew | Intrinsic::BoxGet | Intrinsic::ListLen | Intrinsic::ListGet => {
+                BuiltinFlow::Derive
+            }
+            Intrinsic::ListEmpty | Intrinsic::BoxFresh => BuiltinFlow::Fresh,
+            // Made by lowering only, after this analysis has run on the program as written.
+            Intrinsic::BoxFill | Intrinsic::ListPush => BuiltinFlow::Derive,
             Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),
             Intrinsic::ReadFile | Intrinsic::FileExists => BuiltinFlow::Source(Self::File),
             // Where a file is written is the one restricted sink v1 has.
@@ -274,6 +282,8 @@ impl Origin {
             | Intrinsic::VecLen
             | Intrinsic::VecGet
             | Intrinsic::VecPop
+            // A copy of a `Vec`'s elements, read out of its cell (R1a).
+            | Intrinsic::ListFromVec
             | Intrinsic::ChanRecvOf
             | Intrinsic::ChanSelectOf
             | Intrinsic::ChanSelectUntil
@@ -442,7 +452,17 @@ impl Origin {
             | Intrinsic::StrJoin
             | Intrinsic::VecLen
             | Intrinsic::VecGet
-            | Intrinsic::VecPop => ContainerUse::Read { handle: 0 },
+            | Intrinsic::VecPop
+            | Intrinsic::ListFromVec => ContainerUse::Read { handle: 0 },
+            // Immutable (R1a): no cell; what one holds rides on the value.
+            Intrinsic::BoxNew
+            | Intrinsic::BoxGet
+            | Intrinsic::ListEmpty
+            | Intrinsic::ListLen
+            | Intrinsic::ListGet
+            | Intrinsic::BoxFresh
+            | Intrinsic::BoxFill
+            | Intrinsic::ListPush => ContainerUse::None,
             Intrinsic::IntsSum => ContainerUse::Read { handle: 1 },
             Intrinsic::AtomicNew => ContainerUse::None,
             Intrinsic::AtomicLoad => ContainerUse::Read { handle: 0 },

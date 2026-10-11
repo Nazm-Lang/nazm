@@ -319,6 +319,25 @@ impl Interpreter {
         args: &[Value],
         span: nazm_span::Span,
     ) -> Result<Value, RuntimeError> {
+        // Immutable indirection (R1a): a `Box[T]` and a `List[T]` are a `Vec[T]` nothing writes
+        // once it is made, so each of their operations is the `Vec` one it means.
+        let same = match i {
+            Intrinsic::BoxFresh | Intrinsic::ListEmpty => Some(Intrinsic::VecNew),
+            Intrinsic::BoxFill | Intrinsic::ListPush => Some(Intrinsic::VecPush),
+            Intrinsic::ListLen => Some(Intrinsic::VecLen),
+            Intrinsic::ListGet => Some(Intrinsic::VecGet),
+            _ => None,
+        };
+        if let Some(vec_op) = same {
+            return self.intrinsic(vec_op, args, span);
+        }
+        if i == Intrinsic::BoxGet {
+            let first = [
+                args.first().cloned().unwrap_or(Value::Int(0)),
+                Value::Int(0),
+            ];
+            return self.intrinsic(Intrinsic::VecGet, &first, span);
+        }
         let bug = |what: &str| RuntimeError {
             diagnostic: Box::new(
                 Diagnostic::error(

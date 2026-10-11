@@ -24,10 +24,17 @@ pub fn ty(program: &Program, t: Type) -> String {
             .types
             .enumeration(id)
             .map_or_else(|| "?enum".to_owned(), |e| e.key.clone()),
-        Type::Vec(v) => program
-            .types
-            .vec(v)
-            .map_or_else(|| "Vec(?)".to_owned(), |i| format!("Vec({})", i.elem_key)),
+        Type::Vec(v) | Type::Box(v) | Type::List(v) => {
+            let kind = match t {
+                Type::Box(_) => "Box",
+                Type::List(_) => "List",
+                _ => "Vec",
+            };
+            program.types.vec(v).map_or_else(
+                || format!("{kind}(?)"),
+                |i| format!("{kind}({})", i.elem_key),
+            )
+        }
         Type::ChanOf(c) => program
             .types
             .chan(c)

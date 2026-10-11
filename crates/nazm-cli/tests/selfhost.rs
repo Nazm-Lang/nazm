@@ -2827,6 +2827,13 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("mmio_write64", "MmioCap"),
         // Gate 3: a board's watchdog, a device's authority as the registers are.
         ("watchdog_feed", "MmioCap"),
+        // R1a: immutable indirection, outside the Nazm-written compiler's type table until R2.
+        ("box_new", "Box[T]"),
+        ("box_get", "Box[T]"),
+        ("list_from_vec", "List[T]"),
+        ("list_empty", "List[T]"),
+        ("list_len", "List[T]"),
+        ("list_get", "List[T]"),
         // Gate 2 (numbers): the Nazm checker's type table has `Int` alone, so these, generic over
         // the widths and floats, are unknown functions there and refused by name.
         ("wrapping_add", "Gate 2 numbers"),

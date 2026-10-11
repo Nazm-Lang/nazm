@@ -578,9 +578,10 @@ impl<'a> Lw<'a> {
         }
         let (what, name, params, ret) = match h {
             Helper::Retain(t) => ("ret", self.type_name(t), 1, None),
-            Helper::Release(t) => ("rel", self.type_name(t), 1, None),
+            // A release takes the queue of the release in progress, too (R1a).
+            Helper::Release(t) => ("rel", self.type_name(t), 2, None),
             Helper::Equal(t) => ("eq", self.type_name(t), 2, Some(Class::Bit)),
-            Helper::ReleaseElement(t) => ("vel", self.type_name(t), 1, None),
+            Helper::ReleaseElement(t) => ("vel", self.type_name(t), 2, None),
             Helper::ClosureRelease(f) => ("clo", format!("{}", f.0), 1, None),
         };
         let sig = Sig {
