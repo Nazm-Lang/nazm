@@ -16069,3 +16069,21 @@ file = "crates/nazm-lir/src/symbol.rs"
 find = "    if spelled.len() <= MAX_SPELLED_ARGS {"
 replace = "    if spelled.len() <= usize::MAX {"
 killers = [{ package = "nazm-cli", test = "generics", name = "an_instance_too_long_to_spell_builds_with_a_bounded_symbol" }]
+
+# --- v1: an unreadable root's location, a reused module's parameter names (Q1-D-09, Q1-M-08) ---
+
+[[mutation]]
+name = "v1-an-unreadable-file-is-reported-at-file-zero"
+why = "a file that cannot be read is reported at file 0's first byte, which for an unreadable root is a line of the core prelude"
+file = "crates/nazm-service/src/load.rs"
+find = "                        Span::new(id, 0, 0),"
+replace = "                        Span::synthetic(),"
+killers = [{ package = "nazm-cli", test = "exit_contract", name = "an_unreadable_root_is_reported_at_itself_not_at_the_prelude" }]
+
+[[mutation]]
+name = "v1-a-reused-module-forgets-its-parameter-names"
+why = "a definition keeps no parameter names, so a module whose check was reused names its parameter `#1` where a cold check names it"
+file = "crates/nazm-core/src/check/unit.rs"
+find = "            param_names: f.params.iter().map(|p| p.name.clone()).collect(),"
+replace = "            param_names: Vec::new(),"
+killers = [{ package = "nazm-cli", test = "incremental", name = "a_helper_in_another_module_that_writes_to_its_parameter_carries_the_rule_across" }]

@@ -489,6 +489,7 @@ impl Checker<'_> {
             module: self.module,
             visibility: Visibility::Private,
             params: param_types.clone(),
+            param_names: params.iter().map(|p| p.name.clone()).collect(),
             ret,
             name_span: fn_span,
             decl,

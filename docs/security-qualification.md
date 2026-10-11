@@ -105,8 +105,8 @@ used unchecked, so an edited sink list turned a refusal into `ok` (Q1-M-07); a m
 closure filed an entry that cannot be read back, so the **next run refused what a cold check
 accepts** (Q1-B-C1); and the cold/warm comparison read diagnostic fields that do not exist, so it
 compared codes only (Q1-M-09). All three fixed — entries are `nazm.check/5`, sealed by a digest; a
-closure-making module files no entry; whole diagnostics are compared. Carried: a warm check names a
-reused module's parameter by position (Q1-M-08); the verdict, code and spans are the same.
+closure-making module files no entry; whole diagnostics are compared. Fixed before v1: a warm check
+named a reused module's parameter by position (Q1-M-08); it now names it from the signature.
 
 ## Profiles, capabilities, effects and provenance
 
@@ -247,12 +247,12 @@ disposition), **corrected** (documentation).
 | Q1-A1-09 | type depth exponential | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-A1-10 | guard-page `mprotect` unchecked | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-M-01, -02 | `Bytes`/`Text` absent from the memory tables; one reclamation test | LOW | FIX-BEFORE-V1 | carried to Gate 2's close |
-| Q1-M-08 | warm diagnostic names a parameter by position | LOW | FIX-BEFORE-V1 | carried |
+| Q1-M-08 | warm diagnostic names a parameter by position | LOW | FIX-BEFORE-V1 | fixed (names from the signature; `incremental.rs` compares whole) |
 | Q1-M-10 | Cranelift key relied on a hand-bumped revision | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-M-12 | native select deadline on the wall clock | LOW | FIX-BEFORE-V1 | carried |
 | Q1-B-06 | generic symbol names grow exponentially | LOW | FIX-BEFORE-V1 | fixed (a digest past 512 bytes; `generics.rs`) |
 | Q1-B-07 | LIR oracle lacks float formatting | LOW | FIX-BEFORE-V1 | carried |
-| Q1-D-09 | unreadable root reported at a prelude span | LOW | FIX-BEFORE-V1 | carried |
+| Q1-D-09 | unreadable root reported at a prelude span | LOW | FIX-BEFORE-V1 | fixed (reported at itself; `exit_contract.rs`) |
 | Q1-D-11, -13, -14 | no public code registry; `N0101` a catch-all; reserved codes | LOW | FIX-BEFORE-V1 | carried |
 | Q1-D-12 | phantom codes `N0703`/`N0704` | LOW | FIX-BEFORE-V1 | corrected (`N0357`, `N0358`) |
 | Q1-D-15, -16 | no warning severity for deprecation; strict input readers undocumented | LOW | FIX-BEFORE-V1 | carried |

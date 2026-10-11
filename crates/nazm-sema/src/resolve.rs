@@ -116,6 +116,10 @@ pub struct FnDef {
     /// Whether modules that import this one may name it.
     pub visibility: Visibility,
     pub params: Vec<Type>,
+    /// Each parameter's name, in order, as its declaration wrote it — known from the
+    /// signature alone, so a module whose body was not checked (its check reused) still names
+    /// its parameters where [`Self::locals`] is empty (v1, Q1-M-08).
+    pub param_names: Vec<String>,
     pub ret: Type,
     pub name_span: Span,
     /// Where the body is: this function's index in `Program::functions`.
