@@ -195,3 +195,53 @@ fn the_summary_carries_the_status_the_process_returns() {
         assert_eq!(v["status"], state, "{args:?}: {v}");
     }
 }
+
+/// Q1-D-09: a root file that cannot be read is reported at itself — exit 3, `N0205` — never at a
+/// line of the core prelude, which was the only file loaded when the root was not; in text and in
+/// JSON, missing or not UTF-8, under every command that loads a program.
+#[test]
+fn an_unreadable_root_is_reported_at_itself_not_at_the_prelude() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("bad.nz"), [0xff, 0xfe]).unwrap();
+    for file in ["missing.nz", "bad.nz"] {
+        for args in [
+            vec!["run", file],
+            vec!["check", file],
+            vec!["inspect", file],
+            vec!["build", file, "-o", "x"],
+        ] {
+            let o = nazm_in(d.path(), &args);
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert_eq!(o.status.code(), Some(3), "{args:?}: {err}");
+            assert!(err.contains("N0205"), "{args:?}: {err}");
+            assert!(err.contains(&format!("--> {file}:1:1")), "{args:?}: {err}");
+            assert!(!err.contains("prelude"), "{args:?}: {err}");
+        }
+        let o = nazm_in(d.path(), &["check", "--json", file]);
+        let out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let line = out
+            .lines()
+            .find(|l| l.contains("\"N0205\""))
+            .unwrap_or_else(|| panic!("no N0205 line: {out}"));
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(v["code"], "N0205", "{line}");
+        // The span is the unreadable file's first byte, which it has none past: the
+        // concatenation starts with it, so offset 0 is no longer the prelude's.
+        assert_eq!(v["primary"]["span"]["start"], 0, "{line}");
+    }
+    // An imported file that exists but cannot be read is reported at itself too, not at the
+    // root that imports it.
+    std::fs::write(
+        d.path().join("b.nz"),
+        "use \"bad.nz\";\nfn main() -> Int { 0 }\n",
+    )
+    .unwrap();
+    let o = nazm_in(d.path(), &["check", "b.nz"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(3), "{err}");
+    assert!(err.contains("--> bad.nz:1:1"), "{err}");
+}
