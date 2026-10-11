@@ -248,7 +248,7 @@ impl<'l, 'a> Fx<'l, 'a> {
             carried: Vec::new(),
             promoted: Vec::new(),
             borrowed_at: std::collections::BTreeMap::new(),
-        frame_at: None,
+            frame_at: None,
         }
     }
 
@@ -1625,6 +1625,22 @@ impl<'l, 'a> Fx<'l, 'a> {
             }
             mir::Terminator::Exit(code) => {
                 let c = self.value(code);
+                // A status is `0..=255`, what every host reports unchanged (v1, Q1-B-05): one
+                // outside fails with `N0416` and ends the process as a failure does — there is
+                // nothing to unwind into, since `exit_with` ends the program from wherever it is.
+                let bad = self.cmp_imm(Cmp::UGt, c, Class::I64, 255);
+                let failing = self.b.block();
+                let fine = self.b.block();
+                self.branch(bad, failing, fine);
+                self.b.switch(failing);
+                let at = self.at;
+                let (d, n) = self.lw.message("N0416", crate::EXIT_STATUS, at);
+                let p = self.addr_of(d);
+                let len = self.iconst(i64::try_from(n).unwrap_or(0));
+                self.rt("nz.fail", &[p, len]);
+                self.rt("nz.report", &[]);
+                self.b.term(Term::Unreachable);
+                self.b.switch(fine);
                 let narrow = self.trunc(Class::I32, c);
                 self.rt("exit", &[narrow]);
                 self.b.term(Term::Unreachable);
