@@ -84,23 +84,30 @@ licence texts, attribution file or SBOM**; the SBOM is in the separate evidence 
 
 3. **Contributor terms** — a contributor licence agreement (`docs/CLA.md`): the contributor keeps
    copyright and licenses the contribution to the copyright holder with the right to relicense it,
-   commercially included. The text is a draft written without legal review; it is reviewed by a
-   lawyer, and a signing service chosen, before the first outside contribution is accepted.
+   commercially included. Signed through a bot, CLA Assistant Lite (`.github/workflows/cla.yml`),
+   which keeps the signatures in this repository; it stays off until the repository variable
+   `CLA_ENABLED` is set. The text is a draft written without legal review; it is reviewed by a
+   lawyer, and the bot switched on, before the first outside contribution is accepted.
 4. **Templates** — MIT-0 (`crates/nazm-cli/templates/LICENSE`).
 5. **Headers** — none: no copyright or SPDX line per file; the root licence files govern.
 6. **The specification** — CC-BY-4.0, and also the project's licence (`docs/spec.md`, its opening;
    `LICENSE-CC-BY-4.0`). The rest of `docs/` stays under the project's licence only.
 
+7. **Third-party notices** — to be removed at the source: the toolchain is rewritten in Nazm, soon
+   rather than after years, so `bin/nazm` stops linking the third-party crates of *What the
+   toolchain contains*. The duty does not wait for the rewrite: a toolchain binary published
+   before it — a 0.x preview included — links those crates and owes their licence texts and
+   notices, which can be generated from `Cargo.lock`. The rewritten toolchain owes none only if
+   it links no third-party code; calling a separately installed `clang` (`DRIVER` in
+   `crates/nazm-cli/src/backend.rs`) carries no notice, while a backend linked in, as Cranelift is
+   today, would.
+
 **Still open:**
 
-7. **Third-party notices in the release.** Whether the archive carries the licence texts and
-   notices of the crates linked into `bin/nazm` — in particular the Apache-2.0-only ones and any
-   with a `NOTICE` of its own — and licence data in the SBOM. The licence chosen does not change
-   this duty; it is the toolchain's, not a compiled program's, and it applies to any binary
-   release, a 0.x preview included.
-8. **The name.** A licence does not protect "Nazm"; Apache-2.0 section 6 grants no trademark
-   rights. A search for existing marks, a registration and a short usage policy are open.
-9. **Legal review** of `docs/CLA.md`, and the signing service.
+8. **The name, worldwide.** A licence does not protect "Nazm"; Apache-2.0 section 6 grants no
+   trademark rights. A search for existing marks, the route to registration in many countries,
+   and a short usage policy are open.
+9. **Legal review** of `docs/CLA.md`, after which the bot is switched on.
 
 **Bearing on a toolchain rewritten in Nazm** (decided 2026-10-11 as the project's direction): the
 licences above apply to `.nz` source as to Rust; the third-party crates of *What the toolchain

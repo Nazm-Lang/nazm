@@ -87,15 +87,21 @@ licences already granted for Contributions submitted before then stay in force.
 
 ## How to sign
 
-Until the project uses an automated signing service, sign by adding this line, with your details,
-to the description of your first pull request, and by making that pull request from an account
-whose name and e-mail address match it:
+**Individuals** sign through a bot. On your first pull request, a check named `cla` asks you to
+sign; reply to the pull request with exactly this sentence, from the account that made it:
 
 ```text
-I have read the Nazm Contributor Licence Agreement, version 0.1, and I agree to it for all my
-Contributions to Nazm. — Full name, e-mail address, date[, on behalf of: entity name]
+I have read the Nazm Contributor Licence Agreement, version 0.1, and I agree to it.
 ```
 
-An entity signing for its employees names, in that line or in a message to the Maintainer, the
-people whose Contributions it covers, and tells the Maintainer when that list changes. The
-Maintainer keeps a record of every signature.
+The bot records your GitHub account, the pull request and the time, and the check then passes on
+this and every later pull request. The record is kept in the Nazm repository
+(`cla/signatures.json` on the `cla-signatures` branch; `.github/workflows/cla.yml`).
+
+**An entity** signing for its employees writes to the Maintainer, naming itself, the person
+signing for it and the people whose Contributions it covers, and tells the Maintainer when that list
+changes; each of those people then also signs through the bot. The Maintainer keeps a record of
+every signature.
+
+A new version of this agreement is announced in the repository, and a contributor signs it before
+their next Contribution under it.

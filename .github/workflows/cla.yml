@@ -1,0 +1,55 @@
+# The contributor licence agreement, signed by a bot (decided 2026-10-11, `docs/licensing.md`).
+#
+# CLA Assistant Lite: a pull request from someone who has not signed fails this check and gets a
+# comment linking `docs/CLA.md`; the contributor signs by replying with the sentence below. The
+# signatures are kept in this repository — `cla/signatures.json` on the `cla-signatures` branch —
+# and not with a third-party service.
+#
+# **Off until switched on.** The agreement is a draft awaiting legal review, and no outside
+# contribution is accepted before that review (`CONTRIBUTING.md`). Nothing here runs until the
+# repository variable `CLA_ENABLED` is set to `true` (Settings → Secrets and variables → Actions →
+# Variables), and the `cla-signatures` branch must exist first.
+#
+# `pull_request_target` runs with the base repository's token so the bot can comment and record
+# a signature on a pull request from a fork. That is safe only because this workflow never checks
+# out or runs the pull request's code; keep it that way.
+name: cla
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    if: vars.CLA_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - if: >-
+          github.event.comment.body == 'I have read the Nazm Contributor Licence Agreement, version 0.1, and I agree to it.'
+          || github.event.comment.body == 'recheck'
+          || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: https://github.com/mdferdousalam/nazm/blob/main/docs/CLA.md
+          path-to-signatures: cla/signatures.json
+          branch: cla-signatures
+          # The copyright holder needs no licence from himself; bots sign nothing.
+          allowlist: mdferdousalam,dependabot[bot],github-actions[bot]
+          custom-pr-sign-comment: I have read the Nazm Contributor Licence Agreement, version 0.1, and I agree to it.
+          custom-notsigned-prcomment: >-
+            Thank you for contributing to Nazm. Before it can be merged, please read the
+            [Nazm Contributor Licence Agreement](https://github.com/mdferdousalam/nazm/blob/main/docs/CLA.md)
+            and sign it by replying to this pull request with the sentence below. Signing once covers
+            all your contributions. If you contribute for an employer, see the agreement's *How to sign*.
+          custom-allsigned-prcomment: Every contributor to this pull request has signed the Nazm CLA.
+          lock-pullrequest-aftermerge: false
