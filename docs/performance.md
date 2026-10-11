@@ -3268,9 +3268,10 @@ frequency scaling.
   one another and an order of magnitude ahead of CPython. It does **not** say Nazm matches Rust or C,
   or beats Go: a larger input is the measurement that would.
 - **Nazm's channel hand-off is about 21 times slower than Go's here** — 233 ms against 11 ms for
-  50,000 hand-offs, about 4.6 µs each against 0.2 µs. The interpreter is within 15 % of the native
-  builds, so the cost is the runtime's hand-off — each send and receive a wait and a wake on the pool
-  — not the code generated around it. This is a measured weakness of the 1.0 runtime, stated as one.
+  50,000 hand-offs, about 4.6 µs each against 0.2 µs, on this workload. The interpreter is within 15 %
+  of the native builds, which **suggests** the cost is the runtime's hand-off — each send and receive a
+  wait and a wake on the pool — rather than the code generated around it; that is a hypothesis, not
+  profiled. It is a measured weakness of this workload under the 1.0 runtime, stated as one.
   CPython's threads are slower again, at 407 ms.
 - **Builds.** A cold Nazm build (`--no-cache`, the runtime compiled with the program) took 150 to 300
   ms; with its object cache warm, 81 to 84 ms — beside `clang`'s 81 ms, `rustc`'s 173 ms, both from
