@@ -40,6 +40,10 @@ pub use nazm_runtime::{Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE};
 /// What a program sees when a native call stack is exhausted (N49): `N0408`'s message.
 pub const STACK_EXHAUSTED: &str = "the native call stack is exhausted";
 
+/// What a program sees when `exit_with` is given a status outside `0..=255` (v1, Q1-B-05):
+/// `N0416`'s message, the interpreter's too.
+pub const EXIT_STATUS: &str = "this exit status is outside 0 to 255";
+
 /// One unit as the LLVM text the default backend compiles, on a 64-bit target: its LIR,
 /// lowered, validated and printed (N105). For a caller that measures or inspects the text; a
 /// build goes through [`backend::LlvmText`].

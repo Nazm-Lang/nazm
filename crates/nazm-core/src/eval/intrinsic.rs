@@ -5,6 +5,9 @@ use super::channel::{select, Channel};
 use super::value::{seq, BytesView, Seq, Str, Value};
 use super::*;
 
+/// `N0416`'s sentence, which the compiled program writes too (`nazm_lir::EXIT_STATUS`).
+const EXIT_STATUS_MESSAGE: &str = "this exit status is outside 0 to 255";
+
 /// A `Bytes` or `Text` built-in (Gate 2), with the sentences the compiled program writes;
 /// `None` for any other. `ty` is the call's result type, which is a read's `T`.
 #[allow(clippy::too_many_lines)]
@@ -841,13 +844,23 @@ impl Interpreter {
                 }
             }
             (Intrinsic::ExitWith, [Value::Int(code)]) => {
+                // A status is `0..=255`, what every host reports unchanged (v1, Q1-B-05):
+                // anything else fails, as natively, rather than reaching the host truncated.
+                let Ok(status) = u8::try_from(*code) else {
+                    return Err(RuntimeError {
+                        diagnostic: Box::new(
+                            Diagnostic::error(codes::EXIT_STATUS, span, EXIT_STATUS_MESSAGE)
+                                .help(format!("`exit_with({code})`: a status is 0 to 255")),
+                        ),
+                    });
+                };
                 // Ends the process, here as natively. The interpreter runs on a thread
                 // it owns, and `exit` from a thread ends the whole process — which is
                 // the point: `exit_with` means the program is over, not that this
                 // evaluation is.
                 use std::io::Write as _;
                 let _ = std::io::stdout().flush();
-                std::process::exit(i32::try_from(*code).unwrap_or(1))
+                std::process::exit(i32::from(status))
             }
             // Declassification changes provenance and nothing at run time (N52).
             (Intrinsic::StrVouch, [v @ Value::Str(_)]) => Ok(v.clone()),

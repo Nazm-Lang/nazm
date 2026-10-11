@@ -386,8 +386,9 @@ classification and evidence of each is in `docs/security-qualification.md`, and 
   handle or a callback, returning a handle or a C string, or taking a C-layout record holding a
   handle is refused by name (`N0381`) rather than imported with a signature C does not have.
   Crossing pointers at the target's width there is not built.
-- `exit_with` with a status outside 0..255 ends with a different status in the interpreter, a
-  native build and the LIR oracle; the specification does not define it. *Fix before v1* (Q1-B-05).
+- *Fixed before v1 (Q1-B-05):* `exit_with` with a status outside 0..255 ended with a different status
+  in the interpreter, a native build and the LIR oracle. The specification now defines the status as
+  `0..=255`, reported unchanged; anything else fails with `N0416` everywhere (*Ending*).
 - A generic instantiated through many levels of nesting gets a symbol name that grows
   exponentially; sixteen levels can exceed the linker's limits. *Fix before v1* (Q1-B-06).
 - Native select deadlines are measured on the wall clock, the interpreter's and `time_now_ms`'s

@@ -566,3 +566,8 @@ digest, their obligations, and its tests' outcomes. A broken link — a definiti
 missing or failing, a requirement naming nothing to verify it — is written to `broken` and to
 standard error, and the command exits 1.
 
+**Applied to the v1 fixes.** One code appeared, compatible: `N0416`, a run-time failure — `exit_with`
+given a status outside `0..=255` (Q1-B-05). Until then such a status reached the host and was
+truncated differently by each implementation; no program that ran with a status in range changes.
+`N0381` gained a use, also compatible: on a 32-bit target, a foreign declaration whose crossing is a
+C pointer (Q1-A1-05).

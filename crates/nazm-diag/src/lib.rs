@@ -173,6 +173,9 @@ pub mod codes {
     /// A board's watchdog expired: no task fed it within its manifest's ticks (Gate 3,
     /// `docs/spec.md`, *Boards*).
     pub const WATCHDOG_EXPIRED: Code = Code::new("N0415");
+    /// `exit_with` given a status outside `0..=255`, the statuses every host reports unchanged
+    /// (v1, Q1-B-05, `docs/spec.md`, *Ending*): refused rather than truncated by the host.
+    pub const EXIT_STATUS: Code = Code::new("N0416");
 
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");

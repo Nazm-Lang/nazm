@@ -16048,3 +16048,21 @@ file = "crates/nazm-cli/src/build/lower.rs"
 find = "            Some(CrossOut::CString { .. }) => Some(\"return a C string\"),"
 replace = "            Some(CrossOut::CString { .. }) => None,"
 killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_c_pointer_on_a_32_bit_target_is_refused_by_name" }]
+
+# --- v1: the exit status (Q1-B-05) ---
+
+[[mutation]]
+name = "v1-a-native-exit-status-is-truncated"
+why = "a compiled program hands any exit_with status to the host, which truncates it, so 256 ends as 0"
+file = "crates/nazm-lir/src/op/func.rs"
+find = "                let bad = self.cmp_imm(Cmp::UGt, c, Class::I64, 255);"
+replace = "                let bad = self.cmp_imm(Cmp::UGt, c, Class::I64, 4294967295);"
+killers = [{ package = "nazm-cli", test = "exit_status", name = "a_status_outside_0_to_255_fails_with_n0416_everywhere" }]
+
+[[mutation]]
+name = "v1-the-interpreter-exit-status-is-truncated"
+why = "the interpreter hands a status above 255 to the host, which truncates it, so 256 ends as 0"
+file = "crates/nazm-core/src/eval/intrinsic.rs"
+find = "                let Ok(status) = u8::try_from(*code) else {"
+replace = "                let Ok(status) = u16::try_from(*code) else {"
+killers = [{ package = "nazm-cli", test = "exit_status", name = "a_status_outside_0_to_255_fails_with_n0416_everywhere" }]

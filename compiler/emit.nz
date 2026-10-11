@@ -5544,6 +5544,10 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
     if name == "eprint" { return write_bytes(out, next, "2", a0); }
 
     if name == "exit_with" {
+        // A status is 0 to 255, what every host reports unchanged (v1, Q1-B-05): one outside
+        // fails with `N0416`, as the reference compiler's programs do.
+        let wide = binop(out, next, "icmp ugt", "i64", v(a0), "255");
+        guard(out, msgs, next, current, live, wide, "N0416", "this exit status is outside 0 to 255", at, owned, otype, rowns);
         let narrow = cast(out, next, "trunc", "i64", a0, "i32");
         add_line(out, str_concat(str_concat("  call void @exit(i32 ", v(narrow)), ")"));
         add_line(out, "  unreachable");
