@@ -1888,10 +1888,14 @@ language whose specification already promised aliasing.
 
 | Kind | Types | Assignment produces | Storage |
 | --- | --- | --- | --- |
-| **Immediate** | `Int`, `Bool` | an independent copy | none |
-| **Shared immutable value** | `Str` | a value with the same bytes | reclaimed when the last value naming it dies; shared or copied **unobservably** until then |
-| **Owned mutable handle** | `Ints`, `Strs` | another reference to the same storage | reclaimed when the last reference dies |
-| **Runtime-managed handle** | `Chan` | another reference to the same channel | the runtime's, reclaimed when the last reference dies |
+| **Immediate** | `Int`, `Bool`; the other numbers and arrays of plain data (Gate 2) | an independent copy | none |
+| **Shared immutable value** | `Str`; `Text` (Gate 2) | a value with the same bytes | reclaimed when the last value naming it dies; shared or copied **unobservably** until then |
+| **Owned mutable handle** | `Ints`, `Strs`; `Vec[T]`; `Bytes` (Gate 2) | another reference to the same storage — for `Bytes`, to the same view of the same buffer | reclaimed when the last reference dies; a `Bytes` buffer when its last view dies |
+| **Runtime-managed handle** | `Chan`; `Chan[T]` | another reference to the same channel | the runtime's, reclaimed when the last reference dies |
+
+*Listed since v1 (Q1-M-01):* `Vec[T]`, `Chan[T]`, `Text` and `Bytes` were each in their own section
+but not in this table; their rules were the rows they now sit in. Function values are counted
+handles too (*Function values*, *Cycles*).
 
 There are four because the language has four kinds of thing, not because four was a good
 number. A fifth would need a value that is none of: a number, an immutable byte string, a
@@ -2104,7 +2108,8 @@ no pause, and a future kind of value that needs cycles must arrive with its own 
 - **Leak freedom for a whole program, as a permanent property.** Every heap-backed type
   the language *currently has* is reclaimed — function values and their environments included
   since Gate 1-C1 (*Cycles*, below) — which is a claim about `Int`, `Bool`, `Str`,
-  `Ints`, `Strs`, `Chan` and the records and enums composed of them, and about nothing else. It rests on the cycle argument below,
+  `Ints`, `Strs`, `Chan`, the numbers and arrays, `Text`, `Bytes`, `Vec[T]`, `Chan[T]`, function
+  values, and the records and enums composed of them, and about nothing else. It rests on the cycle argument below,
   which is a fact about this type system rather than about counting in general: the first
   recursive user-defined type ends it, and the paragraph after next says in advance what
   admitting one requires. `capability-matrix.md` states the scope per type rather than as

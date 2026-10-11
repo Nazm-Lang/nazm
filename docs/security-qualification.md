@@ -229,8 +229,8 @@ disposition), **corrected** (documentation).
 | Q1-D-06 | usage errors exit 2 | MEDIUM | FIX-BEFORE-V1 | fixed in Q1-C1: usage is 5 |
 | Q1-D-07 | user errors exit 4 | MEDIUM | FIX-BEFORE-V1 | fixed in Q1-C1: 1 or 3 by kind |
 | Q1-D-08 | `nazm doc` drops the loader's diagnostic | MEDIUM | FIX-BEFORE-V1 | fixed (message, and status by kind in Q1-C1) |
-| Q1-D-10 | published schemas closed against additive fields | MEDIUM | FIX-BEFORE-V1 | carried |
-| Q1-D-18 | stability omits `Bytes` and `Text` | MEDIUM | FIX-BEFORE-V1 | carried to Gate 2's close |
+| Q1-D-10 | published schemas closed against additive fields | MEDIUM | FIX-BEFORE-V1 | corrected (`stability.md`, *Closed schema files*) |
+| Q1-D-18 | stability omits `Bytes` and `Text` | MEDIUM | FIX-BEFORE-V1 | corrected in v1 (not done at Gate 2's close): listed as stable and in the memory contract |
 | Q1-D-19 | Gate 2 untested in the formatter, provenance, validators | MEDIUM | FIX-BEFORE-V1 | carried to Gate 2's close |
 | Q1-M-14 | failed task with a blocked sibling hangs silently | MEDIUM | ACCEPTED-LIMITATION | carried, documented |
 | Q1-A2-03 | symlink loop hangs resolution | LOW | FIX-BEFORE-V1 | fixed |
@@ -246,7 +246,7 @@ disposition), **corrected** (documentation).
 | Q1-A1-08 | package source walk follows directory symlinks | LOW | FIX-BEFORE-V1 | fixed (with Q1-A2-03) |
 | Q1-A1-09 | type depth exponential | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-A1-10 | guard-page `mprotect` unchecked | LOW | FIX-BEFORE-V1 | fixed |
-| Q1-M-01, -02 | `Bytes`/`Text` absent from the memory tables; one reclamation test | LOW | FIX-BEFORE-V1 | carried to Gate 2's close |
+| Q1-M-01, -02 | `Bytes`/`Text` absent from the memory tables; one reclamation test | LOW | FIX-BEFORE-V1 | fixed in v1 (not done at Gate 2's close): the four kinds list them; `a_buffer_and_a_text_are_reclaimed_in_every_shape_on_every_path` |
 | Q1-M-08 | warm diagnostic names a parameter by position | LOW | FIX-BEFORE-V1 | fixed (names from the signature; `incremental.rs` compares whole) |
 | Q1-M-10 | Cranelift key relied on a hand-bumped revision | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-M-12 | native select deadline on the wall clock | LOW | FIX-BEFORE-V1 | fixed (monotonic deadlines; `select.rs` steps the wall clock back) |
@@ -255,11 +255,11 @@ disposition), **corrected** (documentation).
 | Q1-D-09 | unreadable root reported at a prelude span | LOW | FIX-BEFORE-V1 | fixed (reported at itself; `exit_contract.rs`) |
 | Q1-D-11, -13, -14 | no public code registry; `N0101` a catch-all; reserved codes | LOW | FIX-BEFORE-V1 | carried |
 | Q1-D-12 | phantom codes `N0703`/`N0704` | LOW | FIX-BEFORE-V1 | corrected (`N0357`, `N0358`) |
-| Q1-D-15, -16 | no warning severity for deprecation; strict input readers undocumented | LOW | FIX-BEFORE-V1 | carried |
+| Q1-D-15, -16 | no warning severity for deprecation; strict input readers undocumented | LOW | FIX-BEFORE-V1 | corrected (`stability.md`: deprecation announced until a warning severity exists; inputs read strictly) |
 | Q1-D-17 | no compat case for epoch 34 or `N0359` | LOW | FIX-BEFORE-V1 | carried |
-| Q1-D-20 | self-hosted compiler does not carry Gate 2, unsaid | LOW | FIX-BEFORE-V1 | carried (`docs/limitations.md`) |
+| Q1-D-20 | self-hosted compiler does not carry Gate 2, unsaid | LOW | FIX-BEFORE-V1 | corrected (`limitations.md`; areas 29 and 31 state the scope) |
 | Q1-D-22 | `fmt` lays out a file that does not parse | LOW | ACCEPTED-LIMITATION | carried, documented |
-| Q1-D-24 | stale text in VERIFIED matrix rows | LOW | FIX-BEFORE-V1 | carried |
+| Q1-D-24 | stale text in VERIFIED matrix rows | LOW | FIX-BEFORE-V1 | corrected (each line of the audit's list re-found by its text and dated or corrected; the `codes.rs` check is Q1-D-11's) |
 | Q1-D-25 | unscoped "sandbox", "safe", "memory safety" | LOW | FIX-BEFORE-V1 | corrected |
 | Q1-F-01 | fuzz hangs counted, not kept | LOW | FIX-BEFORE-V1 | carried |
 | Q1-FI-01 | interrupted build leaves its scratch directory | LOW | POST-V1 | carried |

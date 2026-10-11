@@ -487,3 +487,137 @@ fn bytes_and_text_cross_a_public_signature_cold_and_cached() {
         assert_eq!(r.stdout, "hi añ\n9\n", "{backend}: {r:?}");
     }
 }
+
+/// Every report line's three counts for `what` (`sequences`, `strings`, `closures`) — allocated,
+/// reclaimed, live.
+fn counts(stderr: &str, what: &str) -> Option<(u64, u64, u64)> {
+    let line = stderr.lines().find(|l| l.starts_with("nazm-memory:"))?;
+    let at = line.find(&format!("{what} allocated="))?;
+    let mut nums = line[at..]
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<u64>().ok());
+    Some((nums.next()??, nums.next()??, nums.next()??))
+}
+
+/// Q1-M-02: a buffer and a text are reclaimed in every shape that can hold one — a record field, a
+/// `Vec`, a closure's environment, a `Result` passed on by `?`, a view in a `Vec` — and on every way
+/// out: the normal end, and a trap after they were made, which releases what the frames own. Before
+/// v1 one program on the normal path held `Bytes` and `Text` reclamation; this holds the shapes,
+/// both paths, under the interpreter and both backends, and `bytes_copy` between overlapping views
+/// in both directions.
+#[test]
+fn a_buffer_and_a_text_are_reclaimed_in_every_shape_on_every_path() {
+    let items = r#"
+struct Frame { tag: Int, data: Bytes, name: Text }
+
+fn make(n: Int) -> Result[Bytes, Str] {
+    if n > 0 { Result[Bytes, Str].Ok(value: bytes_new(n)) } else { Result[Bytes, Str].Err(error: "none") }
+}
+
+fn take(n: Int) -> Result[Int, Str] {
+    let b = make(n)?;
+    Result[Int, Str].Ok(value: bytes_len(b))
+}
+
+fn round(i: Int) -> Int {
+    let f = Frame(tag: i, data: bytes_from_str("abcdef"), name: Text("añb"));
+    let v = vec_new[Bytes]();
+    vec_push(v, bytes_slice(f.data, 1, 3));
+    vec_push(v, bytes_new(2));
+    let len = fn() -> Int { bytes_len(f.data) + text_len(f.name) };
+    let got = match take(i) { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1 };
+    bytes_copy(bytes_slice(f.data, 2, 6), bytes_slice(f.data, 0, 4));
+    len() + got + bytes_len(vec_get(v, 0))
+}
+"#;
+    let normal = format!(
+        "{items}
+fn main(io: IoCap) -> Int ! {{ io }} {{
+    let mut i = 0;
+    let mut sum = 0;
+    while i < 4 {{
+        sum = sum + round(i);
+        i = i + 1;
+    }}
+    let b = bytes_from_str(\"abcdef\");
+    bytes_copy(bytes_slice(b, 2, 6), bytes_slice(b, 0, 4));
+    print(bytes_to_str(b));
+    let c = bytes_from_str(\"abcdef\");
+    bytes_copy(bytes_slice(c, 0, 4), bytes_slice(c, 2, 6));
+    print(str_concat(\" \", bytes_to_str(c)));
+    print(str_concat(\" \", int_to_str(sum)));
+    print(\"\\n\");
+    0
+}}
+"
+    );
+    let trapping = format!(
+        "{items}
+fn main(io: IoCap) -> Int ! {{ io }} {{
+    let kept = round(3);
+    let f = Frame(tag: 1, data: bytes_new(4), name: Text(\"x\"));
+    let v = vec_new[Bytes]();
+    vec_push(v, f.data);
+    bytes_get(vec_get(v, 0), 9 + kept);
+    0
+}}
+"
+    );
+    let d = tempfile::tempdir().unwrap();
+    for (name, src, status, stdout) in [
+        ("normal", &normal, Some(0), "ababcd cdefef 53\n0\n"),
+        ("trap", &trapping, Some(2), ""),
+    ] {
+        std::fs::write(d.path().join(format!("{name}.nz")), src).unwrap();
+        let mut runs = vec![(
+            "interpreter".to_owned(),
+            run_bounded(
+                Command::new(NAZM)
+                    .current_dir(d.path())
+                    .env("NAZM_MEMORY_REPORT", "1")
+                    .args(["run", &format!("{name}.nz")]),
+                "nazm run",
+            ),
+        )];
+        for backend in ["llvm", "cranelift"] {
+            let exe = d.path().join(format!("{name}-{backend}"));
+            let b = nazm(
+                d.path(),
+                &[
+                    "build",
+                    "--no-cache",
+                    "--backend",
+                    backend,
+                    &format!("{name}.nz"),
+                    "-o",
+                    exe.to_str().unwrap(),
+                ],
+            );
+            assert_eq!(b.code, Some(0), "{name} {backend}: {}", b.stderr);
+            let mut c = common::bounded_exe(&exe);
+            c.env("NAZM_MEMORY_REPORT", "1")
+                .env("MALLOC_PERTURB_", "165")
+                .env("MallocScribble", "1");
+            runs.push((backend.to_owned(), run_bounded(&mut c, backend)));
+        }
+        for (label, r) in runs {
+            assert_eq!(r.code, status, "{name} {label}: {r:?}");
+            assert_eq!(r.stdout, stdout, "{name} {label}: {r:?}");
+            if status == Some(2) {
+                assert!(r.stderr.contains("N0405"), "{name} {label}: {}", r.stderr);
+            }
+            for what in ["strings", "sequences", "closures"] {
+                let (made, freed, live) = counts(&r.stderr, what)
+                    .unwrap_or_else(|| panic!("{name} {label}: no {what} count: {}", r.stderr));
+                assert!(made > 0 || what == "closures", "{name} {label}: {what}");
+                assert_eq!(
+                    (made, live),
+                    (freed, 0),
+                    "{name} {label}: {what}: {}",
+                    r.stderr
+                );
+            }
+        }
+    }
+}
