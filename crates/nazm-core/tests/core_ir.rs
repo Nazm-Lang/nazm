@@ -934,3 +934,72 @@ fn a_program_of_thousands_of_functions_lowers_in_time_proportional_to_its_size()
         "750 → {a:?}, 3,000 → {b:?}"
     );
 }
+
+/// Q1-D-19: the verifier's Gate 2 rules refuse a broken array literal, a repeat of the wrong
+/// length and an index by something not an `Int`.
+#[test]
+fn the_verifier_refuses_broken_arrays_and_indexes() {
+    let src = "fn main() -> Int {\n\
+                 let xs = [1, 2, 3];\n\
+                 let ys = [0; 4];\n\
+                 xs[1] + ys[2]\n\
+               }";
+    with(src, |core, res, _| {
+        assert!(cir::verify(core, res).is_empty());
+        let main_at = core
+            .functions
+            .iter()
+            .position(|f| f.name == "main")
+            .unwrap();
+
+        let mut broken = core.clone();
+        let Stmt::Let { value, .. } = &mut broken.functions[main_at].body.stmts[0] else {
+            panic!("the first statement binds the array")
+        };
+        let ExprKind::Array { elems } = &mut value.kind else {
+            panic!("an array literal")
+        };
+        elems.pop();
+        assert!(cir::verify(&broken, res)
+            .iter()
+            .any(|p| p.contains("an array whose elements are not its element type and length")));
+
+        let mut broken = core.clone();
+        let Stmt::Let { value, .. } = &mut broken.functions[main_at].body.stmts[1] else {
+            panic!("the second statement binds the repeat")
+        };
+        let ExprKind::ArrayRepeat { count, .. } = &mut value.kind else {
+            panic!("a repeated array")
+        };
+        *count += 1;
+        assert!(cir::verify(&broken, res)
+            .iter()
+            .any(|p| p.contains("a repeated array of another element type or length")));
+
+        let mut broken = core.clone();
+        let tail = broken.functions[main_at].body.tail.as_mut().unwrap();
+        let mut all = Vec::new();
+        expr_all(tail, &mut all);
+        assert!(all.iter().any(|e| matches!(e.kind, ExprKind::Index { .. })));
+        fn first_index(e: &mut cir::Expr) -> Option<&mut cir::Expr> {
+            if matches!(e.kind, ExprKind::Index { .. }) {
+                return Some(e);
+            }
+            match &mut e.kind {
+                ExprKind::Arith { lhs, rhs, .. } => first_index(lhs).or_else(|| first_index(rhs)),
+                _ => None,
+            }
+        }
+        let at = first_index(tail).expect("an index in the tail");
+        let ExprKind::Index { index, .. } = &mut at.kind else {
+            panic!()
+        };
+        index.ty = Some(nazm_core::Type::Bool);
+        assert!(
+            cir::verify(&broken, res)
+                .iter()
+                .any(|p| p
+                    .contains("an index into something that is not an array, or by a non-`Int`"))
+        );
+    });
+}

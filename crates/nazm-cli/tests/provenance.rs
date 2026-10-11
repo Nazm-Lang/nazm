@@ -136,3 +136,39 @@ fn a_restricted_flow_is_refused_before_anything_is_built() {
     assert!(String::from_utf8_lossy(&built.stderr).contains("N0372"));
     assert!(!dir.path().join("prog").exists());
 }
+
+/// Q1-D-19: a file's contents carried through Gate 2's `Bytes` and `Text` — made from, sliced,
+/// turned back into a `Str` — keep their provenance: as a write's path each is refused with
+/// `N0372`, like the `Str` itself; as the data written, each is accepted.
+#[test]
+fn provenance_survives_bytes_and_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let check = |body: &str| {
+        std::fs::write(
+            dir.path().join("p.nz"),
+            format!("fn main(io: IoCap) -> Int ! {{ io }} {{ {body} }}\n"),
+        )
+        .unwrap();
+        let o = Command::new(NAZM)
+            .args(["check", "p.nz"])
+            .current_dir(dir.path())
+            .output()
+            .expect("check");
+        (
+            o.status.code(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        )
+    };
+    for path in [
+        "bytes_to_str(bytes_from_str(read_file(\"cfg\")))",
+        "bytes_to_str(bytes_slice(bytes_from_str(read_file(\"cfg\")), 0, 2))",
+        "text_as_str(Text(read_file(\"cfg\")))",
+        "text_as_str(text_slice(Text(read_file(\"cfg\")), 0, 1))",
+    ] {
+        let (code, err) = check(&format!("write_file({path}, \"x\")"));
+        assert_eq!(code, Some(1), "{path}: {err}");
+        assert!(err.contains("N0372"), "{path}: {err}");
+        let (code, err) = check(&format!("write_file(arg(0), {path})"));
+        assert_eq!(code, Some(0), "{path} as data: {err}");
+    }
+}
