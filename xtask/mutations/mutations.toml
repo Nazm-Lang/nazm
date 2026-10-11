@@ -16094,11 +16094,12 @@ killers = [{ package = "nazm-cli", test = "incremental", name = "a_helper_in_ano
 
 [[mutation]]
 name = "v1-the-pool-reads-the-wall-clock"
-why = "the pool compares a task's monotonic deadline with the wall clock, so every deadline is long past and a waiting select or sleep ends at once"
+why = """the pool compares a task's monotonic deadline with the wall clock, so every deadline looks long past: the task is woken at once, looks again on the monotonic clock, parks, and its worker spins until the deadline — the answer on time, a core busy
+Repointed before its first verdict: its first killer (the stepped clock) cannot see it, since select and sleep look again on the monotonic clock; the contained run fell through to the workspace tier."""
 file = "crates/nazm-runtime/src/core.rs"
 find = "  %r = call i32 @nz_os_clock(i32 4, ptr %ts)"
 replace = "  %r = call i32 @nz_os_clock(i32 0, ptr %ts)"
-killers = [{ package = "nazm-cli", test = "select", name = "a_wall_clock_stepped_back_moves_no_deadline" }]
+killers = [{ package = "nazm-cli", test = "scheduler_pool", name = "a_pool_task_waiting_on_a_deadline_parks_without_spinning" }]
 
 [[mutation]]
 name = "v1-a-select-checks-its-deadline-on-the-wall-clock"

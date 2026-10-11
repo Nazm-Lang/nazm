@@ -382,6 +382,61 @@ fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
 /// answer was right; the core was not idle — which is what this measures. Main waits four seconds
 /// on the main thread; three seconds in, the process has used next to no CPU time (`ps`). The Q1
 /// campaign showed the earlier, output-only versions of this test could not see the spin.
+/// The CPU time `ps` reports for a running process, in seconds: `00:00:01` (procps) or `0:01.49`
+/// (BSD) — seconds, minutes, hours from the right.
+fn cpu_seconds(pid: u32) -> (f64, String) {
+    let cpu = Command::new("ps")
+        .args(["-o", "time=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&cpu.stdout).trim().to_owned();
+    let seconds = text
+        .rsplit(':')
+        .zip([1.0, 60.0, 3600.0])
+        .map(|(part, unit)| part.trim().parse::<f64>().unwrap_or(f64::MAX) * unit)
+        .sum();
+    (seconds, text)
+}
+
+/// Q1-M-12: a pool task waiting on an ordinary deadline — four seconds — is parked until the
+/// pool's monotonic clock reaches it, not woken at once and parked again in a loop. Select and
+/// sleep look again on the monotonic clock either way, so a pool that compared the deadline with
+/// another clock would still answer on time and only spin: three seconds in, the process must have
+/// used next to no CPU.
+#[test]
+fn a_pool_task_waiting_on_a_deadline_parks_without_spinning() {
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn waiter(io: IoCap, tm: TimeCap, c: Chan[Int], res: Chan[Int]) -> Int ! { io } {\n\
+                   let cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\n\
+                   chan_send_of(res, chan_select_until(cs, out, 4000)); 0 }\n\
+               fn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\n\
+                   let c = chan_new_of[Int](1); let res = chan_new_of[Int](1); let got = vec_new[Int]();\n\
+                   scope { spawn waiter(io, tm, c, res); let r = chan_recv_of(res, got); }\n\
+                   print(int_to_str(vec_get(got, 0))); 0 }\n";
+    built(d.path(), "near", src, "llvm");
+    let child = Command::new(d.path().join("near"))
+        .env("NAZM_SCHEDULER", "pool")
+        .env("NAZM_WORKERS", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let (seconds, text) = cpu_seconds(child.id());
+    let o = child.wait_with_output().unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "-20\n");
+    assert!(
+        seconds < 1.0,
+        "a pool task waiting four seconds used {text} of CPU in three"
+    );
+}
+
 #[test]
 fn a_deadline_past_the_nanosecond_range_parks_without_spinning() {
     let d = tempfile::tempdir().unwrap();
