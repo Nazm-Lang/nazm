@@ -271,7 +271,10 @@ fn an_export_recursing_on_a_small_c_thread_fails_with_n0408_rather_than_faulting
     );
     assert_eq!(r.code, Some(2), "{r:?}");
     assert_eq!(r.stdout, "100|", "{r:?}");
-    assert!(r.stderr.contains("error[N0408]") && r.stderr.contains("prog.nz:2:"), "{r:?}");
+    assert!(
+        r.stderr.contains("error[N0408]") && r.stderr.contains("prog.nz:2:"),
+        "{r:?}"
+    );
 }
 
 /// Q1-A1-05: a C pointer crosses as a 64-bit word, so on a target whose pointers are 32 bits every
@@ -282,13 +285,21 @@ fn an_export_recursing_on_a_small_c_thread_fails_with_n0408_rather_than_faulting
 #[test]
 fn a_c_pointer_on_a_32_bit_target_is_refused_by_name() {
     let cases = [
-        ("fn h_open(n: Int) -> Counter = \"h_open\";", "h_open(1);", "return a C handle"),
+        (
+            "fn h_open(n: Int) -> Counter = \"h_open\";",
+            "h_open(1);",
+            "return a C handle",
+        ),
         (
             "fn h_maybe(n: Int) -> Option[Counter] = \"h_maybe\";",
             "h_maybe(1);",
             "return a C handle",
         ),
-        ("fn s_name(n: Int) -> Str = \"s_name\";", "s_name(1);", "return a C string"),
+        (
+            "fn s_name(n: Int) -> Str = \"s_name\";",
+            "s_name(1);",
+            "return a C string",
+        ),
         (
             "fn s_maybe(n: Int) -> Option[Str] = \"s_maybe\";",
             "s_maybe(1);",
@@ -310,7 +321,11 @@ fn a_c_pointer_on_a_32_bit_target_is_refused_by_name() {
             "take a C struct holding a handle",
         ),
     ];
-    for target in ["wasm32-unknown-unknown", "wasm32-wasip1", "thumbv7m-none-eabi"] {
+    for target in [
+        "wasm32-unknown-unknown",
+        "wasm32-wasip1",
+        "thumbv7m-none-eabi",
+    ] {
         for (decl, call, what) in cases {
             let src = format!(
                 "extern \"C\" struct Counter;\n\
@@ -326,7 +341,10 @@ fn a_c_pointer_on_a_32_bit_target_is_refused_by_name() {
             let err = stderr(&o);
             assert!(!o.status.success(), "{target} {decl}: {err}");
             assert!(err.contains("error[N0381]"), "{target} {decl}: {err}");
-            assert!(err.contains(what) && err.contains(target), "{target} {decl}: {err}");
+            assert!(
+                err.contains(what) && err.contains(target),
+                "{target} {decl}: {err}"
+            );
             assert!(err.contains("prog.nz:5:"), "{target} {decl}: {err}");
         }
     }
@@ -339,7 +357,14 @@ fn a_c_pointer_on_a_32_bit_target_is_refused_by_name() {
          fn main(f: ForeignCap) -> Int ! { foreign } { point_sum(Point(x: 1, flag: true, y: 2)) + twice(3) }\n",
     )]);
     std::fs::create_dir(d.path("o")).unwrap();
-    let o = d.nazm(&["build", "--target", "wasm32-wasip1", "--objects", "o", "prog.nz"]);
+    let o = d.nazm(&[
+        "build",
+        "--target",
+        "wasm32-wasip1",
+        "--objects",
+        "o",
+        "prog.nz",
+    ]);
     assert!(o.status.success(), "{}", stderr(&o));
 }
 

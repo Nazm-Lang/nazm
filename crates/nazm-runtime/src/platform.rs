@@ -2831,7 +2831,9 @@ done:
 pub fn emit_stack(target: SwitchTarget) -> String {
     let (body, size) = match target {
         SwitchTarget::X86_64Windows => (WINDOWS_STACK, ""),
-        SwitchTarget::Aarch64Darwin | SwitchTarget::X86_64Darwin => (POSIX_STACK, DARWIN_STACK_SIZE),
+        SwitchTarget::Aarch64Darwin | SwitchTarget::X86_64Darwin => {
+            (POSIX_STACK, DARWIN_STACK_SIZE)
+        }
         SwitchTarget::Aarch64Linux | SwitchTarget::X86_64Linux | SwitchTarget::Aarch64Android => {
             (POSIX_STACK, LINUX_STACK_SIZE)
         }

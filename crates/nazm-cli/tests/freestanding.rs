@@ -363,5 +363,8 @@ fn the_image_boots_on_qemu_and_reports_on_the_uart() {
          fn main() -> Int { big(3) }\n",
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("error[N0408]") && out.contains("prog.nz:1:4"), "{out}");
+    assert!(
+        out.contains("error[N0408]") && out.contains("prog.nz:1:4"),
+        "{out}"
+    );
 }

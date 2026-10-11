@@ -1177,7 +1177,8 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_seven_and_reaches_the_system_only_through_its_platform_layer() {
+    fn the_runtime_is_revision_twenty_seven_and_reaches_the_system_only_through_its_platform_layer()
+    {
         // Gate 3's revision: a bump is a decision, so a test says which one was made.
         assert_eq!(crate::RUNTIME_ABI_REVISION, 27);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
