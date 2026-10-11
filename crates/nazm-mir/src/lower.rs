@@ -597,8 +597,7 @@ fn lower_function(
             LocalTy::Tasks => None,
         })
         .fold(0u64, u64::saturating_add);
-    if facts.recursive.get(f.def.index()).copied().unwrap_or(false) || frame >= crate::LARGE_FRAME
-    {
+    if facts.recursive.get(f.def.index()).copied().unwrap_or(false) || frame >= crate::LARGE_FRAME {
         let unwind = fx.unwind();
         fx.push(StatementKind::StackCheck { unwind }, f.name_span);
     }

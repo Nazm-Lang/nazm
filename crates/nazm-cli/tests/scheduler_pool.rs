@@ -302,7 +302,14 @@ fn a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting() {
             let o = nazm(
                 d.path(),
                 &[
-                    "build", "--backend", backend, "--opt-level", level, "big.nz", "-o", &name,
+                    "build",
+                    "--backend",
+                    backend,
+                    "--opt-level",
+                    level,
+                    "big.nz",
+                    "-o",
+                    &name,
                 ],
             );
             assert!(o.status.success(), "{name}: {}", text(&o));
@@ -311,7 +318,12 @@ fn a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting() {
             assert!(small.1.contains("error[N0408]"), "{name}: {}", small.1);
             assert!(small.1.contains("big.nz:1:4"), "{name}: {}", small.1);
             let large = run(d.path(), &name, &[], &[("NAZM_TASK_STACK", "1048576")]);
-            assert_eq!((large.0.as_str(), large.2), ("150\n", Some(0)), "{name}: {}", large.1);
+            assert_eq!(
+                (large.0.as_str(), large.2),
+                ("150\n", Some(0)),
+                "{name}: {}",
+                large.1
+            );
         }
         let name = format!("deep-{backend}");
         built(d.path(), &name, deep, backend);
@@ -320,7 +332,12 @@ fn a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting() {
         assert_eq!(small.2, Some(2), "{name}: {}", small.1);
         assert!(small.1.contains("error[N0408]"), "{name}: {}", small.1);
         let threads = run(d.path(), &name, &[&n], &[("NAZM_SCHEDULER", "threads")]);
-        assert_eq!((threads.0.as_str(), threads.2), ("2000\n", Some(0)), "{name}: {}", threads.1);
+        assert_eq!(
+            (threads.0.as_str(), threads.2),
+            ("2000\n", Some(0)),
+            "{name}: {}",
+            threads.1
+        );
     }
 }
 
