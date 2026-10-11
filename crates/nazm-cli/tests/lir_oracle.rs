@@ -297,3 +297,32 @@ fn a_remainder_never_divides_by_minus_one() {
     );
     assert!(body.contains("srem"), "{body}");
 }
+
+/// Q1-B-07: the oracle formats floats and `UInt64`s — every shape the shortest round-trip text
+/// takes, `Float32` and `Float64`, the edges (`-0`, an infinity, a NaN, `1e+21`, `1.5e-7`) and the
+/// largest `UInt64` — by the function the interpreter uses, so a program that prints a number now
+/// has its fifth tier, held to LLVM at both levels and Cranelift.
+#[test]
+fn floats_and_unsigned_words_print_alike_on_the_oracle() {
+    agree(
+        "fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \" \")) }\n\
+         fn main(out: OutCap) -> Int ! {io} {\n\
+             show(out, num_to_str(1.5));\n\
+             show(out, num_to_str(0.1 + 0.2));\n\
+             show(out, num_to_str(1e21));\n\
+             show(out, num_to_str(0.00000015));\n\
+             show(out, num_to_str(100.0));\n\
+             show(out, num_to_str(0.0 * (0.0 - 1.0)));\n\
+             show(out, num_to_str(Float32(0.1)));\n\
+             show(out, num_to_str(Float32(16777217.0)));\n\
+             show(out, num_to_str(1.0 / 0.0));\n\
+             show(out, num_to_str(0.0 - 1.0 / 0.0));\n\
+             show(out, num_to_str(0.0 / 0.0));\n\
+             show(out, num_to_str(UInt64(18446744073709551615)));\n\
+             show(out, num_to_str(UInt64(0)));\n\
+             0\n\
+         }\n",
+        &[],
+        "1.5 0.30000000000000004 1e+21 1.5e-7 100 -0 0.1 16777216 inf -inf nan 18446744073709551615 0 0\n",
+    );
+}

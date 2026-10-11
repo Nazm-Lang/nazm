@@ -16116,3 +16116,13 @@ file = "crates/nazm-runtime/src/core.rs"
 find = "  %any = icmp sgt i64 %who, 0"
 replace = "  %any = icmp sgt i64 %who, 9223372036854775806"
 killers = [{ package = "nazm-cli", test = "select", name = "a_waiting_select_is_woken_by_another_task_s_send" }]
+
+# --- v1: the oracle's number text (Q1-B-07) ---
+
+[[mutation]]
+name = "v1-the-oracle-prints-a-float32-as-a-float64"
+why = "the oracle ignores the Float32 flag and writes the shortest Float64 text, so Float32(0.1) prints 0.10000000149011612 where every engine prints 0.1"
+file = "crates/nazm-lir/src/op/interp.rs"
+find = "                let kind = if arg(2) & 1 == 1 {"
+replace = "                let kind = if false {"
+killers = [{ package = "nazm-cli", test = "lir_oracle", name = "floats_and_unsigned_words_print_alike_on_the_oracle" }]

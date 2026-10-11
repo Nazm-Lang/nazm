@@ -692,6 +692,30 @@ impl Machine<'_> {
                 self.put(arg(0), text.as_bytes())?;
                 Some(text.len() as u64)
             }
+            // A float's text and an unsigned word's (v1, Q1-B-07): by the one function the
+            // interpreter and the specification use, `nazm_sema::numeric::to_str`, so the oracle
+            // agrees with them by construction rather than by a second implementation.
+            "nz.format_float" => {
+                let kind = if arg(2) & 1 == 1 {
+                    nazm_sema::NumKind::F32
+                } else {
+                    nazm_sema::NumKind::F64
+                };
+                let x = f64::from_bits(arg(1));
+                #[allow(clippy::cast_possible_truncation)]
+                let bits = match kind {
+                    nazm_sema::NumKind::F32 => u64::from((x as f32).to_bits()),
+                    _ => arg(1),
+                };
+                let text = nazm_sema::numeric::to_str(nazm_sema::numeric::NumVal { kind, bits });
+                self.put(arg(0), text.as_bytes())?;
+                Some(text.len() as u64)
+            }
+            "nz.format_u64" => {
+                let text = arg(1).to_string();
+                self.put(arg(0), text.as_bytes())?;
+                Some(text.len() as u64)
+            }
             "nz.str_alloc" => {
                 let n = arg(0);
                 if n > (1 << 40) {
