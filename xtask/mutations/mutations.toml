@@ -10514,11 +10514,12 @@ Repointed by Gate 3's atomics, which moved it to 22 for the atomic entries.
 Repointed by Gate 3's 64-bit device registers, which moved it to 23.
 Repointed by Gate 3's failure hook, which moved it to 24.
 Repointed by Gate 3's Cortex-M board, which moved it to 25.
-Repointed by the v1 stack fixes, which moved it to 27 for the frame check."""
+Repointed by the v1 stack fixes, which moved it to 27 for the frame check.
+Repointed by the v1 monotonic deadlines, which moved it to 28."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 27;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 26;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_seven_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 28;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 27;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_twenty_eight_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -16087,3 +16088,31 @@ file = "crates/nazm-core/src/check/unit.rs"
 find = "            param_names: f.params.iter().map(|p| p.name.clone()).collect(),"
 replace = "            param_names: Vec::new(),"
 killers = [{ package = "nazm-cli", test = "incremental", name = "a_helper_in_another_module_that_writes_to_its_parameter_carries_the_rule_across" }]
+
+# --- v1: deadlines on the monotonic clock (Q1-M-12) ---
+
+[[mutation]]
+name = "v1-the-pool-reads-the-wall-clock"
+why = "the pool compares a task's monotonic deadline with the wall clock, so every deadline is long past and a waiting select or sleep ends at once"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %r = call i32 @nz_os_clock(i32 4, ptr %ts)"
+replace = "  %r = call i32 @nz_os_clock(i32 0, ptr %ts)"
+killers = [{ package = "nazm-cli", test = "select", name = "a_wall_clock_stepped_back_moves_no_deadline" }]
+
+[[mutation]]
+name = "v1-a-select-checks-its-deadline-on-the-wall-clock"
+why = "a thread's select checks its monotonic deadline against the wall clock, so it ends at once instead of waiting"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %r1 = call i32 @nz_os_clock(i32 4, ptr %now)"
+replace = "  %r1 = call i32 @nz_os_clock(i32 0, ptr %now)"
+killers = [{ package = "nazm-cli", test = "select", name = "a_wall_clock_stepped_back_moves_no_deadline" }]
+
+# --- v1: a parked select is woken (Q1-M-17) ---
+
+[[mutation]]
+name = "v1-a-parked-select-is-never-woken"
+why = "a send or close advances the event count but never wakes a selector already parked, so a select that found nothing waits for ever"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %any = icmp sgt i64 %who, 0"
+replace = "  %any = icmp sgt i64 %who, 9223372036854775806"
+killers = [{ package = "nazm-cli", test = "select", name = "a_waiting_select_is_woken_by_another_task_s_send" }]

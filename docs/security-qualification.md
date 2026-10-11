@@ -94,7 +94,7 @@ outliving owners, overlapping copies, closures in vectors, early returns from lo
 task failure holding values, attempts past `N0616` — ended with no live value on every engine and
 nothing under macOS's malloc checks. Concurrency holds as documented after about 2,000 probe runs;
 one defect fixed — a pool task's select deadline past `i64` nanoseconds wrapped into the past and
-spun a core (Q1-M-11). Carried: the wall-clock deadline (Q1-M-12), a blocking built-in holding a
+spun a core (Q1-M-11). Fixed before v1: the wall-clock deadline (Q1-M-12). Carried: a blocking built-in holding a
 worker (Q1-M-13), a failed task with a blocked sibling hanging silently (Q1-M-14, documented).
 
 ## Cache and incremental checking
@@ -249,7 +249,7 @@ disposition), **corrected** (documentation).
 | Q1-M-01, -02 | `Bytes`/`Text` absent from the memory tables; one reclamation test | LOW | FIX-BEFORE-V1 | carried to Gate 2's close |
 | Q1-M-08 | warm diagnostic names a parameter by position | LOW | FIX-BEFORE-V1 | fixed (names from the signature; `incremental.rs` compares whole) |
 | Q1-M-10 | Cranelift key relied on a hand-bumped revision | LOW | FIX-BEFORE-V1 | fixed |
-| Q1-M-12 | native select deadline on the wall clock | LOW | FIX-BEFORE-V1 | carried |
+| Q1-M-12 | native select deadline on the wall clock | LOW | FIX-BEFORE-V1 | fixed (monotonic deadlines; `select.rs` steps the wall clock back) |
 | Q1-B-06 | generic symbol names grow exponentially | LOW | FIX-BEFORE-V1 | fixed (a digest past 512 bytes; `generics.rs`) |
 | Q1-B-07 | LIR oracle lacks float formatting | LOW | FIX-BEFORE-V1 | carried |
 | Q1-D-09 | unreadable root reported at a prelude span | LOW | FIX-BEFORE-V1 | fixed (reported at itself; `exit_contract.rs`) |
@@ -266,7 +266,8 @@ disposition), **corrected** (documentation).
 | Q1-A2-10, -11, -14 | root in the container; export staging name; unlocked index | LOW/INFO | POST-V1 | carried |
 | Q1-A1-11, -14, -15 | reserved symbols; textual unsafe gate; developer tooling | LOW/INFO | POST-V1 | carried |
 | Q1-B-08, -09, -10 | literal underscores; quadratic wide records; huge diagnostics | LOW | POST-V1 | carried |
-| Q1-M-15, -16, -17, -18 | runtime SIGINT, `NAZM_TASK_STACK` wrap, select order in tests, cache doc drift | INFO | POST-V1 / FIX-BEFORE-V1 | carried |
+| Q1-M-15, -16, -18 | runtime SIGINT, `NAZM_TASK_STACK` wrap, cache doc drift | INFO | POST-V1 | carried |
+| Q1-M-17 | select's wake-while-parked path not forced by tests | INFO | FIX-BEFORE-V1 | fixed (a handshake parks each select; `v1-a-parked-select-is-never-woken` caught) |
 | Q1-A1-12, -13, -16; Q1-A2-12, -13, -15; Q1-M-03, -05, -06, -13 | stated hazards and boundaries | LOW/INFO | ACCEPTED-LIMITATION | carried, documented |
 | Q1-D-21, Q1-FI-02 | a failed build leaves the previous output | INFO | ACCEPTED-LIMITATION | by design: rename on success |
 | Q1-E-01 | supply-chain policy failing and unenforced | MEDIUM | FIX-BEFORE-V1 | fixed |

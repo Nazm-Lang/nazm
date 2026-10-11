@@ -177,11 +177,21 @@ fn main(out: OutCap) -> Int {
 
 #[test]
 fn a_waiting_select_is_woken_by_another_task_s_send() {
+    // Q1-M-17: the sender waits for `go`, which `main` sends just before it selects, and then
+    // sleeps, so the select has found nothing and is parked when the value comes — only the wake
+    // of a parked selector can end it. Without the handshake the send could land first, and the
+    // test passed whether or not a parked select was ever woken.
     agrees(
         r#"
-fn later(c: Chan[Str]) -> Bool ! {} { chan_send_of(c, str_concat("wo", "ke")) }
+fn later(t: TimeCap, go: Chan[Int], c: Chan[Str]) -> Bool ! {} {
+    let g = vec_new[Int]();
+    chan_recv_of(go, g);
+    time_sleep_ms(50);
+    chan_send_of(c, str_concat("wo", "ke"))
+}
 
-fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {
+fn main(io: IoCap, sp: SpawnCap, t: TimeCap) -> Int ! { io, spawn } {
+    let go = chan_new_of[Int](1);
     let c = chan_new_of[Str](1);
     let idle = chan_new_of[Str](1);
     let cs = vec_new[Chan[Str]]();
@@ -190,7 +200,8 @@ fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {
     let got = vec_new[Str]();
     let mut i = 0;
     scope {
-        spawn later(c);
+        spawn later(t, go, c);
+        chan_send_of(go, 1);
         i = chan_select_of(cs, got);
     }
     print(int_to_str(i));
@@ -205,7 +216,8 @@ fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {
 #[test]
 fn closing_a_channel_cancels_a_task_waiting_in_select() {
     // The worker doubles jobs until `stop` is closed. It is waiting in a select when the close
-    // comes — every job it was sent has been answered — so only the close can end it, and the
+    // comes — every job it was sent has been answered, and `main` sleeps before closing so the
+    // worker has looked again and parked (Q1-M-17) — so only the close can end it, and the
     // scope's join returning at all is the evidence.
     agrees(
         r#"
@@ -228,7 +240,7 @@ fn worker(stop: Chan[Int], jobs: Chan[Int], out: Chan[Int]) -> Int ! {} {
     done
 }
 
-fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {
+fn main(io: IoCap, sp: SpawnCap, t: TimeCap) -> Int ! { io, spawn } {
     let stop = chan_new_of[Int](1);
     let jobs = chan_new_of[Int](4);
     let out = chan_new_of[Int](4);
@@ -240,6 +252,7 @@ fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {
         chan_send_of(jobs, 6);
         if chan_recv_of(out, r) { sum = sum + vec_pop(r); }
         if chan_recv_of(out, r) { sum = sum + vec_pop(r); }
+        time_sleep_ms(50);
         chan_close_of(stop);
     }
     print(int_to_str(sum));
@@ -381,4 +394,134 @@ fn a_select_s_operations_are_resource_sites() {
         .filter_map(|s| s["op"].as_str())
         .collect();
     assert_eq!(ops, ["chan_select_of"], "{v}");
+}
+
+/// A C shim the native programs below run with: 150 ms after its first call, the wall clock
+/// (`CLOCK_REALTIME`) it reports steps back an hour, as an operator's or NTP's correction might;
+/// the monotonic clock is untouched. Interposed with `DYLD_INSERT_LIBRARIES` or `LD_PRELOAD`.
+const CLOCK_STEP: &str = r#"
+#define _GNU_SOURCE
+#include <stdatomic.h>
+#include <time.h>
+static _Atomic long long first_ms = -1;
+static long long mono_ms(void) {
+    struct timespec m;
+#ifdef __APPLE__
+    clock_gettime(CLOCK_MONOTONIC_RAW, &m);
+#else
+    clock_gettime(CLOCK_MONOTONIC, &m);
+#endif
+    return (long long)m.tv_sec * 1000 + m.tv_nsec / 1000000;
+}
+static void step(clockid_t c, struct timespec *t) {
+    if (c != CLOCK_REALTIME) return;
+    long long now = mono_ms(), none = -1;
+    atomic_compare_exchange_strong(&first_ms, &none, now);
+    if (now - atomic_load(&first_ms) >= 150) t->tv_sec -= 3600;
+}
+#ifdef __APPLE__
+static int shim(clockid_t c, struct timespec *t) { int r = clock_gettime(c, t); step(c, t); return r; }
+__attribute__((used)) static struct { const void *n; const void *o; } interposers[]
+    __attribute__((section("__DATA,__interpose"))) = { { (const void *)shim, (const void *)clock_gettime } };
+#else
+#include <dlfcn.h>
+int clock_gettime(clockid_t c, struct timespec *t) {
+    static int (*real)(clockid_t, struct timespec *);
+    if (!real) real = (int (*)(clockid_t, struct timespec *))dlsym(RTLD_NEXT, "clock_gettime");
+    int r = real(c, t);
+    step(c, t);
+    return r;
+}
+#endif
+"#;
+
+/// Q1-M-12: a deadline is on the monotonic clock, so a wall clock stepped back an hour while a
+/// select or a sleep waits moves nothing — under both backends, on a thread and as a pool task.
+/// With the deadline on the wall clock, the wait found its deadline an hour away and did not end.
+#[cfg(unix)]
+#[test]
+fn a_wall_clock_stepped_back_moves_no_deadline() {
+    let d = tempfile::tempdir().unwrap();
+    let shim = d.path().join(if cfg!(target_os = "macos") {
+        "step.dylib"
+    } else {
+        "step.so"
+    });
+    std::fs::write(d.path().join("step.c"), CLOCK_STEP).unwrap();
+    let mut cc = Command::new("clang");
+    cc.current_dir(d.path());
+    if cfg!(target_os = "macos") {
+        cc.args(["-dynamiclib", "step.c", "-o"]);
+    } else {
+        cc.args(["-shared", "-fPIC", "step.c", "-ldl", "-o"]);
+    }
+    let o = cc.arg(&shim).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    std::fs::write(
+        d.path().join("prog.nz"),
+        r#"
+fn wait(io: IoCap, t: TimeCap, done: Chan[Int]) -> Int ! { io } {
+    let quiet = chan_new_of[Int](1);
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, quiet);
+    let got = vec_new[Int]();
+    let t0 = time_now_ms();
+    let r = chan_select_until(cs, got, 1000);
+    time_sleep_ms(300);
+    chan_send_of(done, time_now_ms() - t0);
+    r
+}
+
+fn main(io: IoCap, t: TimeCap, sp: SpawnCap) -> Int ! { io, spawn } {
+    let done = chan_new_of[Int](2);
+    let mine = wait(io, t, done);
+    scope { spawn wait(io, t, done); }
+    let got = vec_new[Int]();
+    chan_recv_of(done, got);
+    chan_recv_of(done, got);
+    let b = vec_pop(got);
+    let a = vec_pop(got);
+    if a >= 1300 && b >= 1300 && a < 4000 && b < 4000 { print("on time") } else { print("off") };
+    print(" ");
+    print(int_to_str(mine));
+    0
+}
+"#,
+    )
+    .unwrap();
+    let inject = if cfg!(target_os = "macos") {
+        "DYLD_INSERT_LIBRARIES"
+    } else {
+        "LD_PRELOAD"
+    };
+    for backend in ["llvm", "cranelift"] {
+        let exe = d.path().join(backend);
+        let b = nazm(
+            d.path(),
+            &[
+                "build",
+                "--no-cache",
+                "--backend",
+                backend,
+                "prog.nz",
+                "-o",
+                exe.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(b.code, Some(0), "{backend}: {}", b.stderr);
+        for scheduler in ["pool", "threads"] {
+            // Not through `bounded_exe`: its `/bin/sh` is a protected binary on macOS, whose
+            // loader drops `DYLD_*` before the program runs.
+            let mut c = Command::new(&exe);
+            c.env(inject, &shim).env("NAZM_SCHEDULER", scheduler);
+            let r = common::run_within(&mut c, std::time::Duration::from_secs(20)).unwrap_or_else(
+                || panic!("{backend}, {scheduler}: a wait did not end — its deadline moved"),
+            );
+            assert_eq!(
+                (r.code, r.stdout.as_str()),
+                (Some(0), "on time -20\n"),
+                "{backend}, {scheduler}: {r:?}"
+            );
+        }
+    }
 }
