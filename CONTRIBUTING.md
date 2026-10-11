@@ -60,10 +60,14 @@ append-only, every file is pinned by its digest, and a new stable rule adds a ca
 
 ## Licensing of contributions
 
-Nazm is under `Apache-2.0 WITH LLVM-exception` ([`LICENSE`](LICENSE), [`NOTICE`](NOTICE)). A
-contribution is made under the same terms — the licence's own section 5, inbound equals outbound —
-unless its author says otherwise in writing. Whether contributions also need a sign-off (DCO) or a
-contributor agreement is not yet decided ([`docs/licensing.md`](docs/licensing.md)).
+Nazm is under `Apache-2.0 WITH LLVM-exception` ([`LICENSE`](LICENSE), [`NOTICE`](NOTICE)). Every
+contribution needs a signed **Contributor Licence Agreement** ([`docs/CLA.md`](docs/CLA.md)) before
+it can be merged: you keep your copyright and license it to the project, including the right to
+relicense it. The agreement is a draft awaiting legal review, and no outside contribution is
+accepted until that review is done. If any part of a contribution was produced by a generative
+tool, say so in its description (the agreement's section 5). A change to the specification is also
+published under CC-BY-4.0, and a change to a `nazm init` template under MIT-0
+([`docs/licensing.md`](docs/licensing.md)).
 
 ## Evidence, in its own vocabulary
 

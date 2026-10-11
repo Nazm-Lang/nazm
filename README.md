@@ -341,4 +341,6 @@ The Apache License 2.0 with LLVM Exceptions (`Apache-2.0 WITH LLVM-exception`), 
 Alam — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). The exceptions, the ones LLVM and Cranelift
 carry, mean that what Nazm compiles into your program — the runtime, the core prelude and the
 standard library — imposes no attribution or notice requirement on it. What a compiled program
-contains, and what is still open, is [`docs/licensing.md`](docs/licensing.md).
+contains, and what is still open, is [`docs/licensing.md`](docs/licensing.md). The specification
+is also under CC-BY-4.0, the `nazm init` templates are MIT-0, and contributions are made under a
+contributor licence agreement ([`docs/CLA.md`](docs/CLA.md)).

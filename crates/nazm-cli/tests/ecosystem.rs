@@ -131,6 +131,10 @@ fn every_template_file_is_one_init_writes() {
     let templates = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
     for t in std::fs::read_dir(&templates).unwrap().flatten() {
         let name = t.file_name().to_string_lossy().into_owned();
+        // The templates' licence (MIT-0) sits beside them and is not a template.
+        if name == "LICENSE" {
+            continue;
+        }
         let p = init(d.path(), &format!("t-{name}"), &name);
         let mut stack = vec![t.path()];
         while let Some(dir) = stack.pop() {

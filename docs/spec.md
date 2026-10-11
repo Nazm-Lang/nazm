@@ -24,6 +24,13 @@ have is listed under *Not in Nazm 1.0*, and a program using any of it is refused
 Ecosystem and domain support — targets, profiles, tools — is evidence rather than semantics, and
 lives in `capability-matrix.md` and `limitations.md`.
 
+**Licence.** This specification is licensed under the Creative Commons Attribution 4.0
+International licence (SPDX: CC-BY-4.0; [`LICENSE-CC-BY-4.0`](../LICENSE-CC-BY-4.0)): you may
+copy, translate, adapt and republish it, including commercially, if you credit *the Nazm language
+specification, © 2026 Ferdous Alam*, link the licence and say what you changed. As part of the
+repository it is also available under the project's licence, `Apache-2.0 WITH LLVM-exception`, so
+its code fragments may be used as code ([`licensing.md`](licensing.md)).
+
 ## Stability classification for 1.0
 <!-- id: classification -->
 

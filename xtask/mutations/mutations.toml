@@ -7174,10 +7174,11 @@ killers = [{ package = "xtask", bin = "xtask", name = "suite::tests::a_target_th
 name = "r1-the-digest-forgets-the-lockfile"
 why = """the build-input digest leaves out `Cargo.lock`, so a changed dependency pin leaves a release's provenance unchanged
 Repointed by M1, whose entry list gained `tests` and the governance files and so wrapped differently.
-Repointed by the licence decision, which added `NOTICE` to the entry list."""
+Repointed by the licence decision, which added `NOTICE` to the entry list.
+Repointed again by the specification's licence, which added `LICENSE-CC-BY-4.0`."""
 file = "scripts/source-digest.sh"
-find = "Cargo.lock Cargo.toml LICENSE NOTICE README.md SECURITY.md _typos.toml bench compiler corpus crates"
-replace = "Cargo.toml LICENSE NOTICE README.md SECURITY.md _typos.toml bench compiler corpus crates"
+find = "Cargo.lock Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md _typos.toml bench compiler corpus crates"
+replace = "Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md _typos.toml bench compiler corpus crates"
 killers = [{ package = "xtask", test = "release", name = "every_build_input_moves_the_digest_and_nothing_git_ignores_does" }]
 
 [[mutation]]
