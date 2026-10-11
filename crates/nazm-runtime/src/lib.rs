@@ -256,8 +256,10 @@ pub fn escape(s: &str) -> String {
 /// manifest has a `[watchdog]`. 27 is the v1 stack fixes': `nz.stack_check_frame`, which a
 /// function whose own frame is large calls on entry (Q1-A1-01), and a stack unit whose
 /// `nz_os_stack_size` is the calling thread's stack left below its frame, not `RLIMIT_STACK`
-/// (Q1-A1-04).
-pub const RUNTIME_ABI_REVISION: u32 = 27;
+/// (Q1-A1-04). 28 is the monotonic deadlines' (Q1-M-12): `nz.ctimedwait` takes a monotonic
+/// time, `nz.pool_now` reads the monotonic clock, and `nz.timed_nap` turns a deadline into the
+/// wall-clock nap a timed wait measures.
+pub const RUNTIME_ABI_REVISION: u32 = 28;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -672,7 +674,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.pool_sync", "ptr" () "", false, Tasks, "", Null, Any, "a mutex and a condition variable in one allocation (N83)", "the process owns it"),
     rt!("nz.pool_start", "i1" () "", false, Tasks, "", Status, Any, "start the pool's tables and workers (N83)", "the process owns them"),
     rt!("nz.pool_push", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue a runnable task on its worker and wake it (N83)", "the worker's queue holds the task"),
-    rt!("nz.pool_now", "i64" () "", false, Tasks, "", Never, Any, "the wall clock in nanoseconds (N83)", "none"),
+    rt!("nz.pool_now", "i64" () "", false, Tasks, "", Never, Any, "the monotonic clock in nanoseconds, which every deadline is on (N83, Q1-M-12)", "none"),
     rt!("nz.pool_timers", "i1" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", "none"),
     rt!("nz.task_enter", "void" ("ptr") "", false, Tasks, "", Never, Owner, "make a task this thread's, with its own failure state and stack limit (N83)", "borrows the task"),
     rt!("nz.task_leave", "void" ("ptr") "", false, Tasks, "", Never, Owner, "save a task's failure state and stack limit and clear the thread's (N83)", "borrows the task"),
@@ -684,7 +686,8 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.pool_bucket", "ptr" ("ptr") "", false, Tasks, "", Never, Any, "the waiter list a condition variable hashes to (N83)", "none"),
     rt!("nz.pool_unwait", "void" ("ptr") "", false, Tasks, "", Never, Any, "take a task off the waiters it is still on (N83)", "none"),
     rt!("nz.cwait", "i32" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "wait on a condition variable: park a pool task, block a thread (N83)", "the mutex is held again on return"),
-    rt!("nz.ctimedwait", "i32" ("ptr", "ptr", "ptr") "", false, Tasks, "", Never, Locked, "as nz.cwait, until a wall-clock time (N83)", "the mutex is held again on return"),
+    rt!("nz.ctimedwait", "i32" ("ptr", "ptr", "ptr") "", false, Tasks, "", Never, Locked, "as nz.cwait, until a monotonic time; a thread naps at most 100 ms on the wall clock and its caller looks again (N83, Q1-M-12)", "the mutex is held again on return"),
+    rt!("nz.timed_nap", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Any, "a monotonic deadline as the wall-clock time a timed wait measures, at most 100 ms ahead (Q1-M-12)", "writes the second timespec"),
     rt!("nz.pool_park", "void" ("ptr", "ptr", "ptr", "i64") "", false, Tasks, "", Never, Locked, "register a task as a waiter, park it and give its worker back (N83)", "releases and retakes the mutex"),
     rt!("nz.cwake", "void" ("ptr") "", false, Tasks, "", Never, Any, "wake every thread and pool task waiting on a condition variable (N83)", "none"),
     rt!("nz.task_yield", "void" () "", false, Tasks, "", Never, Owner, "let a pool task's worker run its other tasks first (N83)", "none"),
@@ -1177,10 +1180,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_seven_and_reaches_the_system_only_through_its_platform_layer()
+    fn the_runtime_is_revision_twenty_eight_and_reaches_the_system_only_through_its_platform_layer()
     {
         // Gate 3's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 27);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 28);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));
