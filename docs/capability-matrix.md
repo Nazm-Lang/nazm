@@ -4378,6 +4378,18 @@ machines.*
 
 ### 33. Platform and target matrix — PARTIAL
 
+**Ignored tests, run and kept (v1, 2026-10-11, Q1-D-04)** · Every cell and sub-claim here and in
+areas 18, 19, 21, 27 and 34 that rests on an `#[ignore]`d test — one that starts a container,
+QEMU, a WebAssembly engine, Wine, py-evm, gdb or the GPU — was run at `af57a42`, one at a time:
+**38 run, 38 passed**, `target/gates/v1/ignored.log` (08:47–08:58 UTC). They are: both boards and
+the Cortex-M board booting, their interrupts, sections, manifests, the heap arena and the kernel
+workload; the six domain workloads and the traffic light; the realtime scheduler and stack bound;
+the WebAssembly corpus, its absent authority and its stack check, and WASI's two; the EVM and
+WebAssembly contracts against the simulator, generated sequences included (N96); the GPU's four
+and the CPU provider's; the Bionic and Cocoa runs; Windows under Wine, both; and gdb live under both
+backends. The cost measurements (`what_…_cost…`) were not re-run: they record numbers, not claims.
+A VERIFIED sub-claim resting on an ignored test cites this log, and the release gate re-runs it.
+
 **Gate 3 (2026-10-10)** · *Prebuilt toolchains* (`systems-domains.md` Part A; `support.md`). Host
 archives by `scripts/host-archive.sh` — the release binary with the standard library and runtime
 inside it — and `scripts/clean-install-test.sh`, which installs one where no Rust is reachable and

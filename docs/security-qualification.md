@@ -225,7 +225,7 @@ disposition), **corrected** (documentation).
 | Q1-A1-04 | C-thread export faults instead of `N0408` | MEDIUM | FIX-BEFORE-V1 | fixed (the thread's own stack) |
 | Q1-A1-05 | wasm32 handle width in C structs | MEDIUM | FIX-BEFORE-V1 | fixed by refusal (`N0381` on 32-bit targets) |
 | Q1-B-05 | `exit_with` outside 0..255 differs by engine | MEDIUM | FIX-BEFORE-V1 | fixed (`N0416` everywhere; `exit_status.rs`) |
-| Q1-D-04 | VERIFIED sub-claims resting on ignored tests | MEDIUM | FIX-BEFORE-V1 | carried (experimental surfaces) |
+| Q1-D-04 | VERIFIED sub-claims resting on ignored tests | MEDIUM | FIX-BEFORE-V1 | fixed for this tree: all 38 run and passed at `af57a42`, `target/gates/v1/ignored.log`, cited in area 33; the release gate re-runs them |
 | Q1-D-06 | usage errors exit 2 | MEDIUM | FIX-BEFORE-V1 | fixed in Q1-C1: usage is 5 |
 | Q1-D-07 | user errors exit 4 | MEDIUM | FIX-BEFORE-V1 | fixed in Q1-C1: 1 or 3 by kind |
 | Q1-D-08 | `nazm doc` drops the loader's diagnostic | MEDIUM | FIX-BEFORE-V1 | fixed (message, and status by kind in Q1-C1) |
