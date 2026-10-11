@@ -270,6 +270,60 @@ fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker() {
     assert_eq!((&threads.0, threads.2), (&large.0, large.2));
 }
 
+/// Q1-A1-01: a task whose own frame is larger than its stack — five 64 KiB arrays on the default
+/// 256 KiB — fails with `N0408` at the function's name under both backends and both levels, rather
+/// than faulting on the guard page as its prologue lays the frame out; so does a recursive function
+/// whose 8 KiB frames two hundred deep do not fit a task's stack. A stack that holds them runs both.
+#[test]
+fn a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting() {
+    let d = tempfile::tempdir().unwrap();
+    let big = "fn worker(c: Chan[Int]) -> Int ! {spawn} {\n\
+                   let mut a = [0; 8192]; let mut b = [0; 8192]; let mut x = [0; 8192];\n\
+                   let mut y = [0; 8192]; let mut z = [0; 8192];\n\
+                   a[1] = 1; b[2] = 2; x[3] = 3; y[4] = 4; z[5] = 5;\n\
+                   chan_send_of(c, a[1] + b[2] + x[3] + y[4] + z[5]); 0 }\n\
+               fn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {\n\
+                   let c = chan_new_of[Int](1);\n\
+                   scope { spawn worker(c); }\n\
+                   let got = vec_new[Int](); chan_recv_of(c, got);\n\
+                   print(int_to_str(vec_get(got, 0))); 0 }\n";
+    let deep = "fn down(n: Int) -> Int { let mut pad = [0; 1024]; pad[n % 1024] = n;\n\
+                    if n == 0 { 0 } else { pad[n % 1024] - n + 1 + down(n - 1) } }\n\
+                fn work(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, down(n)); 0 }\n\
+                fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
+                    let c = chan_new(1); let got = ints_new();\n\
+                    scope { spawn work(io, c, str_len(arg(0)) * 10); }\n\
+                    let r = chan_recv(c, got);\n\
+                    print(int_to_str(ints_get(got, 0))); 0 }\n";
+    for backend in ["llvm", "cranelift"] {
+        for level in ["0", "2"] {
+            let name = format!("big-{backend}-{level}");
+            std::fs::write(d.path().join("big.nz"), big).unwrap();
+            let o = nazm(
+                d.path(),
+                &[
+                    "build", "--backend", backend, "--opt-level", level, "big.nz", "-o", &name,
+                ],
+            );
+            assert!(o.status.success(), "{name}: {}", text(&o));
+            let small = run(d.path(), &name, &[], &[]);
+            assert_eq!(small.2, Some(2), "{name}: {}", small.1);
+            assert!(small.1.contains("error[N0408]"), "{name}: {}", small.1);
+            assert!(small.1.contains("big.nz:1:4"), "{name}: {}", small.1);
+            let large = run(d.path(), &name, &[], &[("NAZM_TASK_STACK", "1048576")]);
+            assert_eq!((large.0.as_str(), large.2), ("150\n", Some(0)), "{name}: {}", large.1);
+        }
+        let name = format!("deep-{backend}");
+        built(d.path(), &name, deep, backend);
+        let n = "x".repeat(20);
+        let small = run(d.path(), &name, &[&n], &[]);
+        assert_eq!(small.2, Some(2), "{name}: {}", small.1);
+        assert!(small.1.contains("error[N0408]"), "{name}: {}", small.1);
+        let threads = run(d.path(), &name, &[&n], &[("NAZM_SCHEDULER", "threads")]);
+        assert_eq!((threads.0.as_str(), threads.2), ("2000\n", Some(0)), "{name}: {}", threads.1);
+    }
+}
+
 #[test]
 fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run() {
     let d = tempfile::tempdir().unwrap();

@@ -131,6 +131,22 @@ entry:
   ret i32 %r
 }}
 
+; A function whose own frame is large asks this instead (Q1-A1-01): past the limit, or with less
+; than `need` bytes between this frame and the limit.
+define hidden i32 @nz.stack_check_frame(i64 %need) {{
+entry:
+  %fp = call ptr @llvm.frameaddress.p0(i32 0)
+  %sp = ptrtoint ptr %fp to i64
+  %low = ptrtoint ptr @__stack_low to i64
+  %limit = add i64 %low, {STACK_HEADROOM}
+  %past = icmp ult i64 %sp, %limit
+  %room = sub i64 %sp, %limit
+  %short = icmp ult i64 %room, %need
+  %either = or i1 %past, %short
+  %r = zext i1 %either to i32
+  ret i32 %r
+}}
+
 ; The stack the linker reserved, for the parts that budget against it.
 define hidden i64 @nz_os_stack_size() {{
 entry:

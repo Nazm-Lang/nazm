@@ -302,6 +302,33 @@ fn absent_authority_is_an_absent_import() {
     assert_eq!(out("pure", "status").trim(), "0");
 }
 
+/// Q1-A1-01: a frame larger than the module's 64 KiB stack, in no call cycle, fails with `N0408` at
+/// the function rather than running the stack pointer below the start of linear memory. Needs
+/// Docker and `nazm-wasm:n64`.
+#[test]
+#[ignore = "starts a container"]
+fn a_frame_larger_than_the_module_s_stack_fails_with_n0408() {
+    let root = tempfile::tempdir().unwrap();
+    let d = root.path().join("big");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("prog.nz"),
+        "fn big(n: Int) -> Int { let mut a = [0; 4096]; let mut b = [0; 4096];\n\
+         a[n] = 1; b[n] = 2; a[n] + b[n] }\n\
+         fn main() -> Int { big(3) }\n",
+    )
+    .unwrap();
+    let o = objects(&d, &[]);
+    assert!(o.status.success(), "{}", err(&o));
+    for f in std::fs::read_dir(d.join("out")).unwrap().flatten() {
+        std::fs::rename(f.path(), d.join(f.file_name())).unwrap();
+    }
+    link_and_run(root.path());
+    let out = |f: &str| std::fs::read_to_string(d.join(f)).unwrap();
+    assert_eq!(out("status").trim(), "2", "{}", out("stderr"));
+    assert!(out("stderr").contains("error[N0408]"), "{}", out("stderr"));
+}
+
 /// Every program in the repository's corpora, built for WebAssembly: each one either is refused by
 /// part — counted, never stubbed — or runs under the reference host with the interpreter's
 /// standard output and status. Needs Docker and `nazm-wasm:n64`.

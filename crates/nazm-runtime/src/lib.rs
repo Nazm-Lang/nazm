@@ -253,8 +253,11 @@ pub fn escape(s: &str) -> String {
 /// board: every board's entry calls `nz.uart_init` before `main`, and a Thumb board's runtime
 /// defines the 64-bit atomics and division ARMv7-M has no instruction for. 26 is Gate 3's
 /// watchdog: `nz.watchdog_feed` and its two counters, which a board's scheduler arms where its
-/// manifest has a `[watchdog]`.
-pub const RUNTIME_ABI_REVISION: u32 = 26;
+/// manifest has a `[watchdog]`. 27 is the v1 stack fixes': `nz.stack_check_frame`, which a
+/// function whose own frame is large calls on entry (Q1-A1-01), and a stack unit whose
+/// `nz_os_stack_size` is the calling thread's stack left below its frame, not `RLIMIT_STACK`
+/// (Q1-A1-04).
+pub const RUNTIME_ABI_REVISION: u32 = 27;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -371,6 +374,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.failed_now", [], Some(Word::I32), Base, "whether this thread has failed; takes nothing"),
     import!("nz.report", [], None, Base, "writes this thread's failure and ends the process with status 2; does not return (an export's C entry, N55)"),
     import!("nz.stack_check", [], Some(Word::I32), Base, "nonzero when this thread's stack is nearly exhausted; takes nothing"),
+    import!("nz.stack_check_frame", [I64], Some(Word::I32), Base, "nonzero when this thread's stack is nearly exhausted or a frame of this many bytes would cross its limit; takes nothing"),
     import!("nz.closure_new", [I64, Ptr, Ptr], Some(Word::Ptr), Closures, "a closure object of this many bytes with its code and release, holding one reference the caller owns, or null"),
     import!("nz.closure_retain", [Ptr], None, Closures, "one more reference to a closure object; null is a no-op"),
     import!("nz.closure_release", [Ptr], None, Closures, "one reference fewer; the last runs its release and frees it; null is a no-op"),
@@ -601,6 +605,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.fail", "void" ("ptr", "i64") "", true, Base, "", Records, Any, "record this thread's first failure", "takes a static message; owns nothing"),
     rt!("nz.report", "void" () "noreturn", true, Base, "", Ends, Entry, "write the thread's failure to stderr and exit 2", "none"),
     rt!("nz.stack_check", "i32" () "", true, Base, "", Never, Any, "whether this thread's stack is past its limit, the limit set on the thread's first check (N49)", "none"),
+    rt!("nz.stack_check_frame", "i32" ("i64") "", true, Base, "", Never, Any, "whether this thread's stack is past its limit or a frame of that many bytes would cross it (Q1-A1-01)", "none"),
     rt!("nz.closure_new", "ptr" ("i64", "ptr", "ptr") "", true, Closures, "", Null, Any, "a closure object with its code and release function (N50)", "one reference, owned by the caller; the caller stores the captures"),
     rt!("nz.closure_retain", "void" ("ptr") "", true, Closures, "", Never, Any, "one more reference to a closure object", "adds a reference, atomically; null is a no-op"),
     rt!("nz.closure_release", "void" ("ptr") "", true, Closures, "", Never, Any, "one reference fewer; the last releases the captures and frees it", "takes a reference, atomically; null is a no-op"),
@@ -1172,9 +1177,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_six_and_reaches_the_system_only_through_its_platform_layer() {
+    fn the_runtime_is_revision_twenty_seven_and_reaches_the_system_only_through_its_platform_layer() {
         // Gate 3's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 26);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 27);
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));

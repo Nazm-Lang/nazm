@@ -374,15 +374,18 @@ classification and evidence of each is in `docs/security-qualification.md`, and 
 
 **Native code and runtime**
 
-- A task frame larger than the stack left to it faults on the task's guard page (SIGSEGV or
-  SIGBUS) rather than failing with `N0408`: the stack check runs only on entry to a function in a
-  call cycle. Stack probes (Q1) make the fault deterministic — the frame can no longer step over
-  the guard into memory below it — but a frame of hundreds of KiB, such as a record of large
-  arrays, needs `NAZM_TASK_STACK` raised or `NAZM_SCHEDULER=threads`. *Fix before v1* (Q1-A1-01).
-- An export called from a C thread on a small stack faults instead of failing with `N0408`: the
-  stack check budgets from `RLIMIT_STACK`, not that thread's stack. *Fix before v1* (Q1-A1-04).
-- On `wasm32-unknown-unknown` a handle crosses the C boundary as `i64`, not the target's pointer
-  width, and a C struct holding one is laid out wrongly. *Fix before v1* (Q1-A1-05).
+- *Fixed before v1 (Q1-A1-01):* a task frame larger than the stack left to it faulted on the task's
+  guard page rather than failing with `N0408`. A function whose own frame is a page or more is now
+  entered through a check that the whole frame fits, made before its prologue lays the frame out.
+  A chain of smaller non-recursive frames deeper than the headroom is still unmeasured (*Native
+  recursion*).
+- *Fixed before v1 (Q1-A1-04):* an export called from a C thread on a small stack faulted instead of
+  failing with `N0408`; the stack check now budgets from the calling thread's own stack.
+- *Narrowed before v1 (Q1-A1-05):* a C pointer crosses as a 64-bit word, so on the 32-bit targets
+  (`wasm32-unknown-unknown`, `wasm32-wasip1`, `thumbv7m-none-eabi`) a foreign function taking a
+  handle or a callback, returning a handle or a C string, or taking a C-layout record holding a
+  handle is refused by name (`N0381`) rather than imported with a signature C does not have.
+  Crossing pointers at the target's width there is not built.
 - `exit_with` with a status outside 0..255 ends with a different status in the interpreter, a
   native build and the LIR oracle; the specification does not define it. *Fix before v1* (Q1-B-05).
 - A generic instantiated through many levels of nesting gets a symbol name that grows

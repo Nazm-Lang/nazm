@@ -74,6 +74,17 @@ pub(super) fn lowered(
                     )]);
                 }
             }
+            // A C pointer crosses as a 64-bit word (N85), which is C's pointer only where pointers
+            // are 64 bits: on wasm32 and a Cortex-M3 it is refused by name rather than passed as
+            // the wrong type (Q1-A1-05).
+            if matches!(
+                target.arch,
+                nazm_lir::backend::Arch::Wasm32 | nazm_lir::backend::Arch::Thumbv7m
+            ) {
+                if let Some(d) = narrow_pointer_refusal(resolution, &target.triple) {
+                    return Err(vec![d]);
+                }
+            }
             // A Cortex-M3 (Gate 3) has no floating point, and a board no library to supply it; and
             // no access of 64 bits, which a 64-bit device register promises is one.
             if target.arch == nazm_lir::backend::Arch::Thumbv7m {
@@ -619,6 +630,87 @@ fn board_watchdog(
         "a watchdog is the manifest's `[watchdog] ticks = N`, counted on the scheduler's ticks: \
          give the board one, and feed it from a `@task` with `watchdog_feed()`",
     )])
+}
+
+/// What crosses the C boundary as a pointer, on a target whose pointers are 32 bits (Q1-A1-05):
+/// a handle argument or result, a C string result, a callback, and a C-layout record holding a
+/// handle. Each crosses as a 64-bit word (N85, §7.86), so a C function compiled for the target —
+/// which takes and returns 32-bit pointers, and lays a pointer field out in four bytes — would be
+/// called with the wrong signature and read the wrong fields. `N0381` at the first declaration,
+/// naming the target; `Int`, `Bool` and a C-layout record of them still cross.
+fn narrow_pointer_refusal(
+    res: &nazm_core::sema::Resolution,
+    triple: &str,
+) -> Option<nazm_diag::Diagnostic> {
+    use nazm_core::check::{foreign_param, foreign_result, CrossIn, CrossOut};
+    use nazm_core::sema::{CRepr, Type};
+    // Whether a C-layout record holds a handle, at any depth of nested C-layout records.
+    let holds_handle = |t: Type| {
+        let mut work = vec![t];
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(t) = work.pop() {
+            let Type::Record(id) = t else { continue };
+            if !seen.insert(id.index()) {
+                continue;
+            }
+            let Some(r) = res.records().get(id) else {
+                continue;
+            };
+            match r.repr {
+                CRepr::Opaque => return true,
+                CRepr::Layout => work.extend(r.fields.iter().map(|f| f.ty)),
+                CRepr::Nazm => {}
+            }
+        }
+        false
+    };
+    for f in res.functions() {
+        if f.foreign.is_none() {
+            continue;
+        }
+        let param = f.params.iter().find_map(|t| match foreign_param(res, *t)? {
+            CrossIn::Handle(_) => Some("take a C handle"),
+            CrossIn::Callback => Some("take a C function pointer"),
+            CrossIn::Struct if holds_handle(*t) => Some("take a C struct holding a handle"),
+            _ => None,
+        });
+        let result = match foreign_result(res, checked_option_of(res, f.ret), f.ret) {
+            Some(CrossOut::Handle { .. }) => Some("return a C handle"),
+            Some(CrossOut::CString { .. }) => Some("return a C string"),
+            _ => None,
+        };
+        if let Some(what) = param.or(result) {
+            return Some(
+                nazm_diag::Diagnostic::error(
+                    nazm_diag::codes::FOREIGN_TYPE,
+                    f.name_span,
+                    format!(
+                        "`{}` cannot {what} in a build for `{triple}`: a C pointer crosses as \
+                         64 bits, and this target's pointers are 32",
+                        f.name
+                    ),
+                )
+                .help(
+                    "on a 32-bit target only `Int`, `Bool` and C-layout records of them cross to \
+                     C; build a program that uses C handles, C strings or callbacks for a 64-bit \
+                     target",
+                ),
+            );
+        }
+    }
+    None
+}
+
+/// The enum definition a foreign result's type applies, as Core IR lowering takes it: the checker
+/// accepted the declaration only if it is the prelude's `Option`.
+fn checked_option_of(
+    res: &nazm_core::sema::Resolution,
+    t: nazm_core::sema::Type,
+) -> Option<nazm_core::sema::EnumId> {
+    match res.types().definition_of(t) {
+        Some(nazm_core::sema::TypeNode::Enum(e)) => Some(e),
+        _ => None,
+    }
 }
 
 /// What a Cortex-M3 cannot do, at the first place the program asks it (Gate 3, `docs/spec.md`,

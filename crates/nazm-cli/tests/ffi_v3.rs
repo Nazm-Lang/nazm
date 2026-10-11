@@ -62,6 +62,11 @@ int64_t apply_on_thread(cb f, int64_t x) {
     pthread_t t; struct job j = { f, x, 0 };
     pthread_create(&t, 0, runner, &j); pthread_join(t, 0); return j.r;
 }
+int64_t apply_on_small_thread(cb f, int64_t x, int64_t bytes) {
+    pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, (size_t)bytes);
+    pthread_t t; struct job j = { f, x, 0 };
+    pthread_create(&t, &at, runner, &j); pthread_join(t, 0); return j.r;
+}
 int64_t blocks_in_use(void) {
 #ifdef __APPLE__
     malloc_statistics_t s; malloc_zone_statistics(NULL, &s); return (int64_t)s.blocks_in_use;
@@ -248,6 +253,94 @@ fn a_handle_a_c_struct_a_c_string_errno_and_a_callback_cross_under_both_backends
         "7,17,kept|18|none|10|hello, C!|null|7103,816|2000686|-1,34|18,15|00\n"
     );
     balanced(&r);
+}
+
+/// Q1-A1-04: an export C calls on a thread with a small stack is budgeted from that thread's stack,
+/// so recursion in it fails with `N0408` at the function — the export's C entry reporting it —
+/// under both backends, rather than faulting past the bottom of a 128 KiB stack it was budgeted
+/// as if it had the main thread's.
+#[test]
+fn an_export_recursing_on_a_small_c_thread_fails_with_n0408_rather_than_faulting() {
+    let r = both(
+        "extern \"C\" fn apply_on_small_thread(f: fn(Int) -> Int, x: Int, bytes: Int) -> Int = \"apply_on_small_thread\";\n\
+         pub extern \"C\" fn deep(n: Int) -> Int ! {} = \"nz_deep\" { if n == 0 { 0 } else { deep(n - 1) + 1 } }\n\
+         fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {\n    \
+         print(int_to_str(apply_on_small_thread(deep, 100, 131072))); print(\"|\");\n    \
+         print(int_to_str(apply_on_small_thread(deep, 10000000, 131072))); print(\"|\");\n    \
+         0\n}\n",
+    );
+    assert_eq!(r.code, Some(2), "{r:?}");
+    assert_eq!(r.stdout, "100|", "{r:?}");
+    assert!(r.stderr.contains("error[N0408]") && r.stderr.contains("prog.nz:2:"), "{r:?}");
+}
+
+/// Q1-A1-05: a C pointer crosses as a 64-bit word, so on a target whose pointers are 32 bits every
+/// crossing that is one — a handle argument or result, a C string result, a callback, a C-layout
+/// record holding a handle — is refused by name with `N0381` at the declaration, rather than
+/// imported with a signature the C side does not have. `Int`, `Bool` and a C-layout record of
+/// them still build.
+#[test]
+fn a_c_pointer_on_a_32_bit_target_is_refused_by_name() {
+    let cases = [
+        ("fn h_open(n: Int) -> Counter = \"h_open\";", "h_open(1);", "return a C handle"),
+        (
+            "fn h_maybe(n: Int) -> Option[Counter] = \"h_maybe\";",
+            "h_maybe(1);",
+            "return a C handle",
+        ),
+        ("fn s_name(n: Int) -> Str = \"s_name\";", "s_name(1);", "return a C string"),
+        (
+            "fn s_maybe(n: Int) -> Option[Str] = \"s_maybe\";",
+            "s_maybe(1);",
+            "return a C string",
+        ),
+        (
+            "fn h_use(c: Counter, n: Int) -> Int = \"h_use\";",
+            "0;",
+            "take a C handle",
+        ),
+        (
+            "fn on_c(f: fn(Int) -> Int, x: Int) -> Int = \"on_c\";",
+            "on_c(triple, 1);",
+            "take a C function pointer",
+        ),
+        (
+            "fn seg_score(s: Seg) -> Int = \"seg_score\";",
+            "0;",
+            "take a C struct holding a handle",
+        ),
+    ];
+    for target in ["wasm32-unknown-unknown", "wasm32-wasip1", "thumbv7m-none-eabi"] {
+        for (decl, call, what) in cases {
+            let src = format!(
+                "extern \"C\" struct Counter;\n\
+                 extern \"C\" struct Point {{ x: Int, flag: Bool, y: Int }}\n\
+                 extern \"C\" struct Seg {{ a: Point, owner: Counter, b: Point, tag: Int }}\n\
+                 pub extern \"C\" fn triple(x: Int) -> Int ! {{}} = \"nz_triple\" {{ x * 3 }}\n\
+                 extern \"C\" {decl}\n\
+                 fn main(f: ForeignCap) -> Int ! {{ foreign }} {{ {call} 0 }}\n"
+            );
+            let d = Dir::new(&[("prog.nz", &src)]);
+            std::fs::create_dir(d.path("o")).unwrap();
+            let o = d.nazm(&["build", "--target", target, "--objects", "o", "prog.nz"]);
+            let err = stderr(&o);
+            assert!(!o.status.success(), "{target} {decl}: {err}");
+            assert!(err.contains("error[N0381]"), "{target} {decl}: {err}");
+            assert!(err.contains(what) && err.contains(target), "{target} {decl}: {err}");
+            assert!(err.contains("prog.nz:5:"), "{target} {decl}: {err}");
+        }
+    }
+    // What does not cross as a pointer still builds where the target can call C at all.
+    let d = Dir::new(&[(
+        "prog.nz",
+        "extern \"C\" struct Point { x: Int, flag: Bool, y: Int }\n\
+         extern \"C\" fn point_sum(p: Point) -> Int = \"point_sum\";\n\
+         extern \"C\" fn twice(n: Int) -> Int = \"twice\";\n\
+         fn main(f: ForeignCap) -> Int ! { foreign } { point_sum(Point(x: 1, flag: true, y: 2)) + twice(3) }\n",
+    )]);
+    std::fs::create_dir(d.path("o")).unwrap();
+    let o = d.nazm(&["build", "--target", "wasm32-wasip1", "--objects", "o", "prog.nz"]);
+    assert!(o.status.success(), "{}", stderr(&o));
 }
 
 #[test]
