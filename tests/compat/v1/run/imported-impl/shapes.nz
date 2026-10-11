@@ -1,0 +1,12 @@
+// The trait and its impl live here; `main.nz` calls the method across the module boundary.
+pub trait Area {
+    fn area(self: Self) -> Int;
+}
+
+pub struct Square {
+    side: Int,
+}
+
+impl Area for Square {
+    fn area(self: Square) -> Int { self.side * self.side }
+}

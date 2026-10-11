@@ -507,6 +507,9 @@ pub mod codes {
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");
+    // `N0620` is reserved, never assigned (v1, Q1-D-14): kept for a warning at each use of a
+    // deprecated item, should a warning severity ever exist. `docs/diagnostics.md`'s registry
+    // lists it as reserved, and `codes.rs` fails if it is ever declared with another meaning.
 
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no
@@ -1052,38 +1055,19 @@ mod tests {
     #[test]
     fn every_code_is_distinct() {
         // A reused code means two different failures are indistinguishable to anything
-        // matching on it, which is the one thing codes exist to prevent.
-        let all = [
-            codes::UNKNOWN_CHARACTER,
-            codes::UNTERMINATED_STRING,
-            codes::INTEGER_TOO_LARGE,
-            codes::UNEXPECTED_TOKEN,
-            codes::UNSUPPORTED_CONSTRUCT,
-            codes::UNDEFINED_VARIABLE,
-            codes::UNDEFINED_FUNCTION,
-            codes::ALREADY_DEFINED_IN_SCOPE,
-            codes::DUPLICATE_FUNCTION,
-            codes::MISSING_MAIN,
-            codes::TYPE_MISMATCH,
-            codes::CONDITION_NOT_BOOL,
-            codes::BRANCH_TYPES_DIFFER,
-            codes::WRONG_ARGUMENT_COUNT,
-            codes::INVALID_OPERANDS,
-            codes::UNKNOWN_TYPE,
-            codes::ASSIGN_TO_IMMUTABLE,
-            codes::MUTABLE_PARAMETER,
-            codes::NOT_IN_A_LOOP,
-            codes::UNREACHABLE_STATEMENT,
-            codes::CONTROL_FLOW_AS_VALUE,
-            codes::INTEGER_OVERFLOW,
-            codes::DIVISION_BY_ZERO,
-            codes::ITERATION_LIMIT,
-            codes::CALL_DEPTH_LIMIT,
-        ];
-        let mut seen: Vec<&str> = all.iter().map(Code::as_str).collect();
-        let before = seen.len();
+        // matching on it, which is the one thing codes exist to prevent. Every declared code,
+        // read from this file (v1, Q1-D-11: this listed twenty-five by hand).
+        let source = include_str!("lib.rs");
+        let mut seen: Vec<&str> = source
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub const "))
+            .filter_map(|l| l.split_once(": Code = Code::new(\""))
+            .filter_map(|(_, rest)| rest.split('"').next())
+            .collect();
+        let total = seen.len();
+        assert!(total > 140, "only {total} codes found");
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), before, "a diagnostic code is used twice");
+        assert_eq!(seen.len(), total, "a code is declared twice");
     }
 }

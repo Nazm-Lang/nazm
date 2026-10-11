@@ -1,0 +1,9 @@
+// A method whose impl is in another module is checked against its trait method's effects — pure
+// here — rather than refused as an undeclared function (semantic epoch 34; spec: traits).
+use "shapes.nz";
+
+fn twice[T: Area](x: T) -> Int { x.area() * 2 }
+
+fn main() -> Int {
+    Square(side: 3).area() + twice(Square(side: 2))
+}

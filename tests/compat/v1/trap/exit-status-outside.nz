@@ -1,0 +1,6 @@
+// expect: N0416
+// An exit status is 0 to 255, what every host reports unchanged; one outside fails rather than
+// reaching the host truncated (spec: Ending; v1).
+fn main(io: IoCap) -> Int ! { io } {
+    exit_with(256)
+}
