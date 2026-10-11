@@ -237,7 +237,7 @@ disposition), **corrected** (documentation).
 | Q1-A2-04 | publish merges into a stale version directory | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-A2-05 | lockfile names a package twice | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-A2-06 | "no scripts" guarded indirectly | LOW | FIX-BEFORE-V1 | fixed |
-| Q1-A2-07 | contained runner's isolation flags untested | LOW | FIX-BEFORE-V1 | carried |
+| Q1-A2-07 | contained runner's isolation flags untested | LOW | FIX-BEFORE-V1 | fixed (`run_argv`, a pure function; `a_contained_run_is_isolated_by_its_arguments`; three mutants) |
 | Q1-A2-08 | subnet overlap by octets | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-A2-09 | integration-testing overclaims | LOW | FIX-BEFORE-V1 | corrected |
 | Q1-A1-03 | build work directory follows a planted symlink | LOW | FIX-BEFORE-V1 | fixed |
