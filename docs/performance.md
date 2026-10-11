@@ -3224,6 +3224,66 @@ what is shown is that the path exists — the float loops vectorise and agree wi
 bit for bit either way (`accel_providers.rs`) — and that this workload does not profit from it.
 A compute-bound kernel, or one thread, would be the next measurement.
 
+## Gate 4 light: a small cross-language set, measured (2026-10-11)
+
+What Gate 4 light set out to measure, and why so little: three programs already in
+`bench/programs/`, each against references written **statement for statement** in the other languages
+(`bench/reference/`), because a different algorithm would measure the algorithm. `floor` does nothing
+and measures what a process costs to start; `sieve` is the program this file already compared with C
+and Python; `channels` hands 50,000 integers through a channel of capacity one from one task to
+another — the synchronisation the concurrency model rests on, and the one shape a Go service lives on.
+Chosen for the C, Rust, Go and Python rows of `v1-competitor-map.md`; Zig and Julia are **unmeasured**,
+not installed here.
+
+`python3 bench/cross.py NAZM OUT` (in the tree; results in `target/gates/v1/bench/cross.json`). Apple M1
+Pro, 10 cores, macOS (Darwin 27.2); `nazm` 1.0.0 built `--release` from the compiler of `b1b48f2`;
+Apple clang 21.0.0; rustc 1.98.1; go 1.27.1; Python 3.14.8. Every executable printed the program's
+`.expected` answer before it was timed. Three unmeasured warm-up runs, then 21 runs, each the wall
+clock around a whole process; the median, the extremes and the interquartile range. Build time is
+measured apart from run time, five builds each. Not controlled: thermal state, other processes,
+frequency scaling.
+
+| program | variant | arithmetic | run, median | min–max | IQR | peak RSS | build, median |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| floor | Nazm, LLVM `-O2` | checked | 3.86 ms | 3.29–8.81 | 0.98 | 1.7 MiB | 151 ms cold |
+| floor | Nazm, Cranelift | checked | 3.87 ms | 3.65–5.23 | 0.46 | 1.7 MiB | 262 ms cold |
+| sieve | Nazm, LLVM `-O2` | checked, bounds-checked | 5.82 ms | 5.36–7.33 | 0.54 | 6.9 MiB | 178 ms cold, 84 ms warm |
+| sieve | Nazm, Cranelift | checked, bounds-checked | 7.78 ms | 7.20–8.82 | 0.53 | 6.9 MiB | 265 ms cold |
+| sieve | C, `clang -O2` | unchecked | 4.81 ms | 4.34–6.30 | 0.58 | 4.8 MiB | 81 ms |
+| sieve | Rust, `rustc -O -C overflow-checks=on` | checked, bounds-checked | 5.65 ms | 5.17–8.04 | 0.41 | 7.0 MiB | 173 ms |
+| sieve | Go, `go build` | wrapping, bounds-checked | 8.48 ms | 7.64–9.72 | 0.73 | 16.9 MiB | 64 ms warm |
+| sieve | Python 3.14 | unbounded | 78.1 ms | 75.2–85.5 | 3.80 | 19.1 MiB | — |
+| sieve | Nazm, interpreter | checked | 274 ms | 268–284 | 8.94 | 11.5 MiB | — |
+| channels | Nazm, LLVM `-O2` | checked | 233 ms | 226–260 | 17.0 | 1.9 MiB | 302 ms cold, 81 ms warm |
+| channels | Nazm, Cranelift | checked | 238 ms | 234–358 | 8.47 | 1.9 MiB | 258 ms cold |
+| channels | Go, `go build` | wrapping | 11.0 ms | 9.82–13.5 | 1.49 | 4.3 MiB | 63 ms warm |
+| channels | Python 3.14, threads | unbounded | 407 ms | 391–519 | 32.4 | 14.5 MiB | — |
+| channels | Nazm, interpreter | checked | 266 ms | 256–285 | 9.95 | 6.5 MiB | — |
+
+**What it shows.**
+
+- **The sieve is not a compute comparison.** Every native variant finishes within about 1 to 5 ms
+  of a process that does nothing (Nazm's `floor`, 3.9 ms), so the column is mostly process start-up.
+  It says only that on this program the natively compiled variants land within a few milliseconds of
+  one another and an order of magnitude ahead of CPython. It does **not** say Nazm matches Rust or C,
+  or beats Go: a larger input is the measurement that would.
+- **Nazm's channel hand-off is about 21 times slower than Go's here** — 233 ms against 11 ms for
+  50,000 hand-offs, about 4.6 µs each against 0.2 µs. The interpreter is within 15 % of the native
+  builds, so the cost is the runtime's hand-off — each send and receive a wait and a wake on the pool
+  — not the code generated around it. This is a measured weakness of the 1.0 runtime, stated as one.
+  CPython's threads are slower again, at 407 ms.
+- **Builds.** A cold Nazm build (`--no-cache`, the runtime compiled with the program) took 150 to 300
+  ms; with its object cache warm, 81 to 84 ms — beside `clang`'s 81 ms, `rustc`'s 173 ms, both from
+  source, and Go's 63 ms with its build cache warm. Like with like is the warm rows with Go's.
+- **Memory.** Nazm's native programs held 1.7 to 6.9 MiB at peak, in the range of C's and Rust's and
+  below Go's and CPython's on these programs.
+
+**What it does not show.** Nothing about a language as a whole, nothing about a larger input or
+another machine, and nothing about server throughput, latency under load, task scalability, numeric
+kernels or memory over time — each its own measurement, none taken. A result inside `cargo xtask
+bench`'s 25 % regression threshold is a statement about Nazm against its own baseline, never about a
+competitor. No aggregate score is derived.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release
