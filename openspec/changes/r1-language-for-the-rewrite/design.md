@@ -32,7 +32,7 @@ exceptions, a general iterator protocol, methods.
 
 Each marked **for approval** is a language decision the copyright holder makes before code.
 
-### D1. Immutable indirection: `Box[T]` and `List[T]` — for approval
+### D1. Immutable indirection: `Box[T]` and `List[T]` — approved 2026-10-11 (as L1)
 
 Two built-in generic types of a new value kind, **shared immutable**, the kind `Str` already is:
 
@@ -76,7 +76,7 @@ closure that captures one cannot be inside it.
 `List` is refused once they are the language's, as `Result` and `Option` are (*Its names are
 reserved*). Alternatives, if the names are wanted for users: `Rc[T]`/`Seq[T]`, `Frozen[T]`/`FrozenList[T]`.
 
-### D2. Linear-time string building — for approval
+### D2. Linear-time string building — approved 2026-10-11
 
 A guarantee added to the cost table, not a new type:
 
@@ -89,7 +89,7 @@ are a heap buffer it alone owns, and the buffer has room; otherwise it copies in
 room to grow. Rule 1 already makes the difference unobservable. A `@std/text` `StrBuf` is not
 added: the guarantee makes the existing idiom right instead of adding a second one.
 
-### D3. `for` loops — for approval
+### D3. `for` loops — approved 2026-10-11
 
 ```nazm
 for x in xs { … }        // xs: Ints, Strs, Vec[T], List[T], Bytes (each Int byte)
@@ -104,7 +104,7 @@ fresh immutable binding per step; `break` and `continue` behave as in `while`. `
 reserved word (`RESERVED` in `parser.rs`); `in` is recognised only after a `for` pattern and stays
 an ordinary name elsewhere; `..` was a lexical error before. So no valid program changes meaning.
 
-### D4. Library additions — for approval
+### D4. Library additions — approved 2026-10-11
 
 | Module or built-in | What | Notes |
 | --- | --- | --- |
@@ -118,7 +118,7 @@ an ordinary name elsewhere; `..` was a lexical error before. So no valid program
 **Not added:** setting the process's own environment (`setenv` is unsafe beside the task pool's
 threads); a child's environment is given through `os_spawn_in` instead.
 
-### D5. A bounded heap — for approval
+### D5. A bounded heap — approved 2026-10-11
 
 `nazm build --heap-limit SIZE` (and a manifest key) builds a native program whose runtime counts
 live heap bytes and ends the program with a run-time failure — a fixed message and status, as other
@@ -126,11 +126,84 @@ run-time failures have — when an allocation would pass `SIZE`. Without the fla
 Nazm-built toolchain is built with a limit; this is the mechanism R6 needs to argue host execution
 safe, and what keeps a runaway compiler stage from exhausting the machine meanwhile.
 
-### D6. Closures in generic functions — recommended deferred
+### D6. Closures in generic functions — superseded by L10 (approved 2026-10-11)
 
 `N0387` refuses a closure or a named function value in a generic function's body. The rewrite can
 be written without it (pass a function value in; write the closure at the call site). Recommended:
 not in R1; reconsider if R2–R5 show a real cost.
+
+### D7. Capable first — the copyright holder's direction, 2026-10-11
+
+"Before re-write by nazm, nazm should be capable of doing everything." R1 is therefore sized by an
+audit, not by this list alone: every idiom the Rust toolchain relies on (data structures,
+polymorphism, closures and iteration, errors, formatting, serialisation, concurrency, the platform)
+is classified as expressible, expressible only by a pervasive workaround, or not expressible; each
+of the last two becomes a proposed decision here, D1 among them, and R1 closes when the audit's
+blockers and heavy workarounds are closed or explicitly accepted.
+
+### D8. The capability audit's findings — approved 2026-10-11
+
+Three read-only audits of the Rust toolchain (2026-10-11, at `4816d58`): the compiler crates
+(~62k lines), the tool and service crates (~128k with tests), and the runtime, code generator and
+harness. Each idiom the Rust relies on was classed BLOCKER (no sensible expression in Nazm), HEAVY (a
+workaround repeated hundreds of times) or CONVENIENCE. Counts are grep counts over source.
+
+**Approved by the copyright holder, 2026-10-11:** the whole list, with the direction "first make
+Nazm mature, to rewrite everything". Where a choice remained, the recommended one was taken: L1's
+names are `Box` and `List`; L3 includes `_` with a warning when it covers variants; S5 builds
+`@std/regex`.
+
+**Language — each changes what a program can say; spec first, then both implementations:**
+
+| # | Proposal | Evidence | Class |
+| --- | --- | --- | --- |
+| L1 | D1: `Box[T]`/`List[T]`, recursive types through immutable indirection | 48 `Box<` in the AST and Core IR; 239 tree matches in the service | BLOCKER |
+| L2 | Derived serialisation: `@derive(json)` (and TOML) emitting encode, decode and JSON Schema, structural like derived `==`, with a closed set of field and type attributes (`rename`, `default`, `omit_none`, `tag`, `untagged`, `rename_all`, `deny_unknown`) | 176 serde types, 70 versioned schemas, 118 shape attributes; 81 more in the harness | BLOCKER |
+| L3 | Patterns: a `_` arm, `A \| B` or-patterns, nested and literal patterns, `if let` and `let … else`. **Reverses a recorded decision** (*Enums*: no wildcard, so adding a variant forces every `match` to be revisited); proposed with a warning when `_` covers variants, so the evolution argument keeps a voice | 333 or-patterns, 301 `_` arms, 526 `if let`, 428 `let … else`, 585 nested patterns | HEAVY |
+| L4 | String interpolation `"…{x}…"` over `Str`, numbers and `Show`, with width and precision; float formatting | 1,318 `format!`, 161 `write!`, 651 inline captures | HEAVY |
+| L5 | Tuples: `(A, B)` types, `let (a, b) = …`, usable as map keys | 134 tuple types, 322 destructurings, 26 tuple-keyed maps | HEAVY |
+| L6 | Derived `Hash` and `Ord` for plain records, enums and tuples | 92 Hash, 74 Ord derives; 257 ordered-map uses | HEAVY |
+| L7 | `Cell[T]`, a mutable handle of one value (the kind `Vec` is, so `N0359` covers it unchanged), for context records updated by callees | 631 `&mut self`, 199 inherent impls | HEAVY |
+| L8 | `pub const`, constant arrays of `Str` and records | 257 consts, 87 static string tables; kinds written as `fn k() -> Int` | HEAVY |
+| L9 | Multi-line and raw string literals | the runtime's ~225 IR templates; `emit.nz` has 423 one-line literals | HEAVY |
+| L10 | Closures in generic functions (lifts `N0387`, was D6) and non-escaping capture of a `let mut` (lifts `N0386` where the closure cannot outlive the binding) | 1,894 closures, 1,491 iterator chains; `for` absorbs most | HEAVY |
+| L11 | Impls for generic types (`impl[T: Show] Show for Option[T]`) and default trait methods | ~40 generic impls | CONVENIENCE |
+| L12 | `defer` — scope-exit cleanup that runs on `?`, `return` and `break` | locks, watchdogs, temp dirs in the harness | CONVENIENCE, a correctness risk |
+| L13 | `checked_add/sub/mul -> Option[T]`, a widening multiply, `Int128`/`UInt128` | 160 checked/overflowing calls; constant folding | HEAVY (local) |
+| L14 | Stack size: `--stack-size` for the main thread and tasks | 13 deep-stack threads (up to 1 GiB) | CONVENIENCE |
+
+**Platform built-ins — runtime ABI:**
+
+| # | Proposal | Evidence | Class |
+| --- | --- | --- | --- |
+| P1 | Process control beyond D4's `os_spawn_in`: `os_pid`, `os_child_pid`, a new process group, `os_kill_group(pgid, sig)`, `os_try_wait`, `os_wait_until(h, deadline)`, a null standard input, `os_child_rusage` (peak memory) | the harness's watchdog and contained runner | BLOCKER |
+| P2 | Filesystem: `os_lstat` with a symlink kind and device/inode, `os_chmod`, `os_realpath`, a temporary directory, `os_try_lock` beside D4's `os_lock` | bench workspace checks; the mutation lock | HEAVY |
+| P3 | Streaming standard input: read into a buffer, read a line | LSP framing, the MCP line protocol | HEAVY |
+
+**Library, in Nazm — no language change:**
+
+| # | Proposal | Class |
+| --- | --- | --- |
+| S1 | D4 as approved: `@std/blake3`, `@std/sha256`, `@std/toml`, `file_walk` | BLOCKER |
+| S2 | `ByteBuf`: amortised growth, `put_le`/`put_be`, `patch_at`, `align_to`, SLEB128 and ULEB128 — the object writer's and DWARF's buffer | HEAVY |
+| S3 | `@std/ordmap` over `Ord` keys, in-order iteration; `@std/bitset`; in-place sort | HEAVY |
+| S4 | `@std/args`: subcommands, options, conflicts and requirements, generated help — for `nazm`'s 42 subcommands | HEAVY |
+| S5 | `@std/regex`, linear-time, with what `nazm-tokens`' pre-tokenisers need, or a decision to keep tokenisation an external oracle | BLOCKER for `nazm-tokens` only |
+
+**Not proposed, and why:** trait objects (4 real uses; enums and function values serve), lifetimes
+and borrowed slices (reference counting and `str_slice` serve), async (a synchronous stdio loop
+serves the MCP server), a mutex (the interpreter keeps its own heap of counted objects — the right
+design for it, and what makes its memory report exact), leaking cycles (the reclamation claim stays).
+
+**Design notes for later phases:** the fuzzer cannot catch a crash in process with no unwinding, so
+it becomes a server re-spawned after a crash or hang, with coverage emitted by Nazm's code generator
+(R7, R9); the runtime keeps its context switch as `module asm` in LLVM text, so clang remains the
+assembler and no assembler is written; 1,388 of the 1,538 mutation entries and the layering, reach
+and module checks read Rust and are redesigned in R7.
+
+**Sequencing, if approved:** R1a — `for`, L1, L3, L5, L6, L8, L9, L4; R1b — L7, L10, L11, L12, L13,
+L14; R1c — L2 with S1's TOML; R1d — D5, P1–P3, D4's built-ins; R1e — S1–S5. Each a commit series
+with its gates. Every addition is also owed to the Nazm compiler in R2.
 
 ## Risks / Trade-offs
 
