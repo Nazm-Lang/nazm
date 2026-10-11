@@ -580,6 +580,7 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0625` | `STATIC_ASSIGNED` | An assignment to a static, which is read-only — changed, if an `Atomic`, only by the atomic operations (Gate 3, `docs/spec.md`, *Statics*) |
 | `N0626` | `BOARD_MANIFEST` | A board's manifest the build cannot honour |
 | `N0627` | `INTERRUPT_HANDLER` | An interrupt handler of a shape the board cannot call, two handlers for one interrupt, or one for an interrupt the board does not have (Gate 3, `docs/spec.md`, *Boards*) |
+| `N0628` | `NOT_ITERABLE` | A `for` loop over something that is not an `Ints`, `Strs`, `Vec[T]` or `Bytes` (R1a, `docs/spec.md`, *`for` loops*) |
 | `N0900` | `COMPILER_DEFECT` | The compiler contradicted itself (N39) |
 <!-- registry:end -->
 

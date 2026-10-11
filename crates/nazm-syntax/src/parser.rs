@@ -36,17 +36,22 @@ use nazm_span::{FileId, Span};
 
 use crate::ast::{
     Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
-    FnTypeName, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import, Let, MatchArm,
-    MethodOf, Param, PatternField, Place, PlaceField, PlaceStep, Program, Qualifier, Record,
-    Reexport, ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod, TypeName,
-    TypeParam, Variant, While,
+    FnTypeName, For, ForIter, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import,
+    Let, MatchArm, MethodOf, Param, PatternField, Place, PlaceField, PlaceStep, Program, Qualifier,
+    Record, Reexport, ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod,
+    TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
 
 /// Constructs that are deliberately absent from the language, so they can be refused by name.
 const RESERVED: &[(&str, &str)] = &[
-    ("for", "there is no `for`; iterate with `while`"),
+    // `for` begins a loop since R1a and is still no name: it stays here so a binding, a
+    // parameter or a type named `for` is refused by name, as it always was.
+    (
+        "for",
+        "`for` begins a loop, `for x in xs { … }`, and is not a name",
+    ),
     (
         "label",
         "there are no loop labels; `break` leaves the innermost loop",
@@ -2665,6 +2670,11 @@ impl<'a> Parser<'a> {
             *deepest = (*deepest).max(self.child());
             return Some(Parsed::Stmt(s));
         }
+        if matches!(self.peek(), TokenKind::Ident(w) if w == "for") {
+            let s = Stmt::For(self.for_stmt()?);
+            *deepest = (*deepest).max(self.child());
+            return Some(Parsed::Stmt(s));
+        }
         if self.at(&TokenKind::Return) {
             let s = Stmt::Return(self.return_stmt()?);
             *deepest = (*deepest).max(self.child());
@@ -2894,6 +2904,63 @@ impl<'a> Parser<'a> {
             mutable,
             value,
             span: let_span.join(semi),
+        })
+    }
+
+    /// `for NAME in e { … }` or `for NAME in a..b { … }` (R1a, `docs/spec.md`, *`for` loops*).
+    ///
+    /// A `for` in any other shape is refused by name, `N0101`, as every `for` was before R1a:
+    /// `in` is a word only here, after the loop's name, and an ordinary name everywhere else.
+    fn for_stmt(&mut self) -> Option<For> {
+        let at = self.checkpoint();
+        let start = self.peek_span();
+        self.advance();
+        let name_span = self.peek_span();
+        let shaped = matches!(self.peek(), TokenKind::Ident(_))
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(w)) if w == "in"
+            );
+        if !shaped {
+            self.report(
+                Diagnostic::error(
+                    codes::UNSUPPORTED_CONSTRUCT,
+                    start,
+                    "a `for` loop is written `for NAME in …`",
+                )
+                .primary_label("not a `for` loop of either form")
+                .help(format!(
+                    "iterate a sequence with `for x in xs {{ … }}`, or integers with \
+                     `for i in 0..n {{ … }}`. In general, {SUPPORTED}"
+                )),
+            );
+            return None;
+        }
+        let TokenKind::Ident(name) = self.advance() else {
+            return None;
+        };
+        if self.reserved(&name, name_span) {
+            return None;
+        }
+        self.advance(); // `in`, a word only here
+        let first = self.expr()?;
+        let mut depth = self.child();
+        let iter = if self.eat(&TokenKind::DotDot) {
+            let end = self.expr()?;
+            depth = depth.max(self.child());
+            ForIter::Range { start: first, end }
+        } else {
+            ForIter::Each(first)
+        };
+        let body = self.block()?;
+        self.built = depth.max(self.child());
+        self.wrap(at, SyntaxKind::ForStmt);
+        Some(For {
+            name,
+            name_span,
+            iter,
+            span: start.join(body.span),
+            body,
         })
     }
 
@@ -4318,6 +4385,12 @@ mod ast_depth_tests {
                             Stmt::While(w) => {
                                 stack.push((Node::Expr(&w.cond), d + 1));
                                 stack.push((Node::Block(&w.body), d + 1));
+                            }
+                            Stmt::For(f) => {
+                                for e in f.iter.exprs() {
+                                    stack.push((Node::Expr(e), d + 1));
+                                }
+                                stack.push((Node::Block(&f.body), d + 1));
                             }
                             Stmt::Expr(e) => stack.push((Node::Expr(e), d + 1)),
                             Stmt::Scope(sc) => stack.push((Node::Block(&sc.body), d + 1)),

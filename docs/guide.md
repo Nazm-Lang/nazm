@@ -538,11 +538,12 @@ accepts.
 | `function_type` | `"fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ]` |
 | `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
-| `statement` | `let_statement \| assignment \| while_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
+| `statement` | `let_statement \| assignment \| while_statement \| for_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
 | `let_statement` | `"let" , [ "mut" ] , IDENT , "=" , expression , ";"` |
 | `assignment` | `place , "=" , expression , ";"` |
 | `place` | `IDENT , { "." , IDENT \| "[" , expression , "]" }` |
 | `while_statement` | `"while" , expression , block` |
+| `for_statement` | `"for" , IDENT , "in" , ( expression , ".." , expression \| expression ) , block` |
 | `return_statement` | `"return" , expression , ";"` |
 | `break_statement` | `"break" , ";"` |
 | `continue_statement` | `"continue" , ";"` |
@@ -1167,7 +1168,7 @@ fn main() -> Int { 1 }
 ### `statement`
 
 ```ebnf
-statement = let_statement | assignment | while_statement | return_statement | break_statement | continue_statement | scope_statement | spawn_statement | expression_statement ;
+statement = let_statement | assignment | while_statement | for_statement | return_statement | break_statement | continue_statement | scope_statement | spawn_statement | expression_statement ;
 ```
 
 ```nazm
@@ -1228,6 +1229,19 @@ while_statement = "while" , expression , block ;
 
 ```nazm
 fn main() -> Int { let mut i = 0; while i < 3 { i = i + 1; } i }
+```
+
+### `for_statement`
+
+```ebnf
+for_statement = "for" , IDENT , "in" , ( expression , ".." , expression | expression ) , block ;
+```
+
+R1a. `in` is a word only here; `..` only between a range's bounds. Each form means the
+`while` loop `docs/spec.md` (*`for` loops*) gives for it.
+
+```nazm
+fn main() -> Int { let xs = ints_new(); ints_push(xs, 2); let mut t = 0; for x in xs { t = t + x; } for i in 0..3 { t = t + i; } t }
 ```
 
 ### `return_statement`

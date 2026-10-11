@@ -88,6 +88,11 @@ impl Checker<'_> {
                 // there is no way to tell that it will not be.
                 false
             }
+            Stmt::For(f) => {
+                self.check_for(f);
+                // A `for` always completes, as the `while` it means does.
+                false
+            }
             Stmt::Return(r) => {
                 self.check_return(r);
                 true
@@ -482,6 +487,88 @@ impl Checker<'_> {
                      it to something is the other repair, and this cannot tell which \
                      was meant",
                 ),
+            );
+        }
+    }
+
+    /// A `for` loop (R1a, `docs/spec.md`, *`for` loops*): what it iterates, then its body with
+    /// the name bound in the body's own scope — so the name is new each step, immutable, gone
+    /// after the loop, and a `let` of it in the body is a same-scope duplicate (`N0202`).
+    fn check_for(&mut self, f: &nazm_syntax::For) {
+        let element = match &f.iter {
+            nazm_syntax::ForIter::Each(e) => {
+                let t = self.value_type(e, None);
+                let element = match t {
+                    Type::Ints => Some(Type::Int),
+                    Type::Strs => Some(Type::Str),
+                    Type::Bytes => Some(Type::of_num(NumKind::U8)),
+                    Type::Vec(v) => self.res.types().vec_element(v),
+                    _ => None,
+                };
+                if element.is_some() {
+                    self.res.record_for_seq(f.name_span, t);
+                }
+                if element.is_none() {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::NOT_ITERABLE,
+                            e.span(),
+                            format!("a `for` loop cannot iterate `{}`", self.show(t)),
+                        )
+                        .help(
+                            "a `for` loop iterates an `Ints`, a `Strs`, a `Vec[T]` or a `Bytes`, \
+                             or integers written `a..b`",
+                        ),
+                    );
+                }
+                element.unwrap_or(Type::Int)
+            }
+            nazm_syntax::ForIter::Range { start, end } => {
+                for bound in [start, end] {
+                    let t = self.value_type(bound, Some(Type::Int));
+                    if t != Type::Int {
+                        self.errors.push(
+                            Diagnostic::error(
+                                codes::TYPE_MISMATCH,
+                                bound.span(),
+                                format!(
+                                    "a range's bounds are `Int`s, but this is `{}`",
+                                    self.show(t)
+                                ),
+                            )
+                            .help("convert it with `Int(…)`"),
+                        );
+                    }
+                }
+                Type::Int
+            }
+        };
+        self.loop_depth += 1;
+        self.open_scope(f.body.span);
+        let slot = self.allocate(&f.name, f.name_span, element, false);
+        self.record_var(f.name_span, slot);
+        self.define(
+            &f.name,
+            element,
+            false,
+            Some(f.name_span),
+            slot,
+            f.body.span.start,
+        );
+        let body = self.check_block_inner(&f.body, None);
+        self.close_scope();
+        self.loop_depth -= 1;
+        if let (Completion::Value(t), Some(tail)) = (body, &f.body.tail) {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    tail.span(),
+                    format!(
+                        "a loop body has no value, but this produces `{}`",
+                        self.show(t)
+                    ),
+                )
+                .help("add `;` to discard it, or assign it to something"),
             );
         }
     }

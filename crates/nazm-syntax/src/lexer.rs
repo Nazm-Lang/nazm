@@ -84,6 +84,9 @@ pub enum TokenKind {
     /// `.` — field projection, and the separator between an enum and one of its
     /// variants. Never part of a number: `docs/spec.md` has no float.
     Dot,
+    /// `..` — only between a `for` loop's bounds, `for i in a..b` (R1a). Before R1a two dots
+    /// were two `Dot`s and always an error, so the token changes no valid program.
+    DotDot,
     Semi,
     /// `?` — propagation, N12: postfix, after an operand whose type is the core prelude's
     /// `Result`. One character with one meaning; `??` is two of them, not a token of its
@@ -175,6 +178,7 @@ impl TokenKind {
         Self::Comma,
         Self::Colon,
         Self::Dot,
+        Self::DotDot,
         Self::Semi,
         Self::Question,
         Self::Bang,
@@ -250,6 +254,7 @@ impl TokenKind {
             Self::Comma => Some(","),
             Self::Colon => Some(":"),
             Self::Dot => Some("."),
+            Self::DotDot => Some(".."),
             Self::Semi => Some(";"),
             Self::Question => Some("?"),
             Self::Bang => Some("!"),
@@ -318,6 +323,7 @@ impl TokenKind {
             Self::Comma => "`,`".to_owned(),
             Self::Colon => "`:`".to_owned(),
             Self::Dot => "`.`".to_owned(),
+            Self::DotDot => "`..`".to_owned(),
             Self::Semi => "`;`".to_owned(),
             Self::Question => "`?`".to_owned(),
             Self::Bang => "`!`".to_owned(),
@@ -844,6 +850,7 @@ pub(crate) fn scan_one(
         Some((b'>', b'=')) => (Some(TokenKind::GtEq), 2),
         Some((b'&', b'&')) => (Some(TokenKind::AmpAmp), 2),
         Some((b':', b':')) => (Some(TokenKind::ColonColon), 2),
+        Some((b'.', b'.')) => (Some(TokenKind::DotDot), 2),
         Some((b'|', b'|')) => (Some(TokenKind::PipePipe), 2),
         Some((b'<', b'<')) => (Some(TokenKind::Shl), 2),
         Some((b'>', b'>')) => (Some(TokenKind::Shr), 2),
