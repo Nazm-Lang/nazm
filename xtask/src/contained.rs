@@ -713,6 +713,78 @@ fn guarded(argv: &[&str], cached: bool) -> Vec<String> {
 }
 
 /// Runs `argv` inside the bounded environment with `repo` mounted read-only at `/src`.
+/// The `docker` arguments a contained run is started with — every isolation property in one place,
+/// a pure function a test can read (v1, Q1-A2-07: built inline, the properties held but nothing
+/// asserted them). `container` is the run's name, `pid` and `host` the supervisor's.
+fn run_argv(
+    repo: &Path,
+    container: &str,
+    argv: &[&str],
+    b: &Bounds,
+    pid: u32,
+    host: &str,
+) -> Vec<String> {
+    let mut a: Vec<String> = Vec::new();
+    let mut push = |items: &[&str]| a.extend(items.iter().map(|s| (*s).to_owned()));
+    // `--rm` only when nothing has to be copied out: a removed container has no files.
+    if b.export.is_none() {
+        push(&["run", "--rm"]);
+    } else {
+        push(&["run"]);
+    }
+    push(&["--name", container]);
+    push(&["--label", RUN_OWNER]);
+    push(&["--label", &format!("{SUPERVISOR_PID}={pid}")]);
+    push(&["--label", &format!("{SUPERVISOR_HOST}={host}")]);
+    push(&["--memory", &format!("{}m", b.memory_mb)]);
+    // Equal to --memory: a cap that can be exceeded by swapping is not a cap.
+    push(&["--memory-swap", &format!("{}m", b.memory_mb)]);
+    push(&[
+        "--cpus",
+        &format!("{:.3}", f64::from(b.milli_cpus) / 1000.0),
+    ]);
+    push(&["--pids-limit", &b.pids.to_string()]);
+    push(&["--storage-opt", &format!("size={}G", b.storage_gb)]);
+    push(&["--ulimit", &format!("fsize={}", b.fsize_bytes)]);
+    push(&[
+        "--tmpfs",
+        &format!("/scratch:rw,exec,size={}m", b.scratch_mb),
+    ]);
+    // Reaps orphans, so a detached grandchild cannot accumulate against the pid limit.
+    push(&["--init"]);
+    // No network, ever (N34): the image carries every crate and the repository every
+    // asset, so a workload that reached for the network would be one whose evidence
+    // could not be reproduced offline.
+    push(&["--network", "none"]);
+    push(&["--log-driver", "none"]);
+    push(&[
+        "--mount",
+        &format!("type=bind,source={},target=/src,readonly", repo.display()),
+    ]);
+    if let Some(v) = &b.cache {
+        push(&[
+            "--mount",
+            &format!("type=volume,source={v},target=/work/target"),
+        ]);
+    }
+    // The only place a real ceiling applies, so the only place this is set.
+    push(&["--env", "NAZM_CONTAINED=1"]);
+    push(&["--env", &format!("NAZM_PROFILE={}", b.profile.name)]);
+    push(&[
+        "--env",
+        &format!("NAZM_CARGO_JOBS={}", b.profile.cargo_jobs),
+    ]);
+    push(&[
+        "--env",
+        &format!("NAZM_TEST_THREADS={}", b.profile.test_threads),
+    ]);
+    push(&["--env", "CARGO_TARGET_DIR=/work/target"]);
+    push(platform_args());
+    push(&[image()]);
+    a.extend(guarded(argv, b.cache.is_some()));
+    a
+}
+
 pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report {
     let empty = Report {
         outcome: Outcome::Passed,
@@ -751,69 +823,17 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
 
     let container = format!("nazm-{name}-{}", std::process::id());
     let mut cmd = Command::new("docker");
-    // `--rm` only when nothing has to be copied out: a removed container has no files.
-    if b.export.is_none() {
-        cmd.arg("run").arg("--rm");
-    } else {
-        cmd.arg("run");
-    }
-    cmd.args(["--name", &container])
-        .args(["--label", RUN_OWNER])
-        .args([
-            "--label",
-            &format!("{SUPERVISOR_PID}={}", std::process::id()),
-        ])
-        .args(["--label", &format!("{SUPERVISOR_HOST}={}", host_name())])
-        .args(["--memory", &format!("{}m", b.memory_mb)])
-        // Equal to --memory: a cap that can be exceeded by swapping is not a cap.
-        .args(["--memory-swap", &format!("{}m", b.memory_mb)])
-        .args([
-            "--cpus",
-            &format!("{:.3}", f64::from(b.milli_cpus) / 1000.0),
-        ])
-        .args(["--pids-limit", &b.pids.to_string()])
-        .args(["--storage-opt", &format!("size={}G", b.storage_gb)])
-        .args(["--ulimit", &format!("fsize={}", b.fsize_bytes)])
-        .args([
-            "--tmpfs",
-            &format!("/scratch:rw,exec,size={}m", b.scratch_mb),
-        ])
-        // Reaps orphans, so a detached grandchild cannot accumulate against the pid limit.
-        .arg("--init")
-        // No network, ever (N34): the image carries every crate and the repository every
-        // asset, so a workload that reached for the network would be one whose evidence
-        // could not be reproduced offline.
-        .args(["--network", "none"])
-        .args(["--log-driver", "none"])
-        .arg("--mount")
-        .arg(format!(
-            "type=bind,source={},target=/src,readonly",
-            repo.display()
-        ))
-        .args(b.cache.iter().flat_map(|v| {
-            [
-                "--mount".to_owned(),
-                format!("type=volume,source={v},target=/work/target"),
-            ]
-        }))
-        // The only place a real ceiling applies, so the only place this is set.
-        .args(["--env", "NAZM_CONTAINED=1"])
-        .args(["--env", &format!("NAZM_PROFILE={}", b.profile.name)])
-        .args([
-            "--env",
-            &format!("NAZM_CARGO_JOBS={}", b.profile.cargo_jobs),
-        ])
-        .args([
-            "--env",
-            &format!("NAZM_TEST_THREADS={}", b.profile.test_threads),
-        ])
-        .args(["--env", "CARGO_TARGET_DIR=/work/target"])
-        .args(platform_args())
-        .arg(image())
-        .args(guarded(argv, b.cache.is_some()))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(run_argv(
+        repo,
+        &container,
+        argv,
+        b,
+        std::process::id(),
+        &host_name(),
+    ))
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
 
     let started = Instant::now();
     let mut child = match cmd.spawn() {
@@ -1674,5 +1694,73 @@ mod tests {
         assert!(r.is_err(), "a directory must refuse, got {why}");
         assert!(why.contains("directory"), "{why}");
         assert!(!local.exists());
+    }
+
+    /// The value after `flag` in a docker argument list, the first time it appears.
+    fn after<'a>(a: &'a [String], flag: &str) -> Option<&'a str> {
+        a.iter()
+            .position(|x| x == flag)
+            .and_then(|i| a.get(i + 1))
+            .map(String::as_str)
+    }
+
+    /// Q1-A2-07: every isolation property of a contained run, read off the argument list it is
+    /// started with — no network, the repository bound read-only, swap no larger than memory,
+    /// every ceiling set, no daemon socket, no privilege — with and without the verification
+    /// cache, which is the one other mount there may be.
+    #[test]
+    fn a_contained_run_is_isolated_by_its_arguments() {
+        let repo = Path::new("/repo");
+        let mut b = Bounds::default();
+        for cache in [None, Some("nazm-verify".to_owned())] {
+            b.cache = cache.clone();
+            let a = run_argv(repo, "nazm-t-1", &["true"], &b, 7, "h");
+            assert_eq!(after(&a, "--network"), Some("none"), "{a:?}");
+            assert_eq!(
+                after(&a, "--memory-swap"),
+                after(&a, "--memory"),
+                "swap past memory is not a cap: {a:?}"
+            );
+            assert_eq!(
+                after(&a, "--memory"),
+                Some(format!("{}m", b.memory_mb).as_str())
+            );
+            assert!(after(&a, "--pids-limit").is_some() && after(&a, "--cpus").is_some());
+            assert!(after(&a, "--storage-opt").is_some() && after(&a, "--ulimit").is_some());
+            assert!(a.iter().any(|x| x == "--init"), "{a:?}");
+            let mounts: Vec<&str> = a
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| *x == "--mount")
+                .filter_map(|(i, _)| a.get(i + 1).map(String::as_str))
+                .collect();
+            assert!(
+                mounts.contains(&"type=bind,source=/repo,target=/src,readonly"),
+                "{mounts:?}"
+            );
+            // The repository read-only; the cache the only other mount, and a named volume.
+            assert_eq!(mounts.len(), 1 + usize::from(cache.is_some()), "{mounts:?}");
+            for m in &mounts {
+                assert!(
+                    m.ends_with(",readonly") || m.starts_with("type=volume,"),
+                    "a writable bind: {m}"
+                );
+            }
+            for x in &a {
+                assert!(
+                    !x.contains("docker.sock"),
+                    "the daemon's socket mounted: {a:?}"
+                );
+                assert!(
+                    !matches!(
+                        x.as_str(),
+                        "--privileged" | "--cap-add" | "--device" | "--pid" | "--ipc" | "--userns"
+                    ),
+                    "{x}: {a:?}"
+                );
+                assert!(!x.starts_with("--network=") && !x.starts_with("--volume") && x != "-v");
+            }
+            assert!(a.iter().any(|x| x == "NAZM_CONTAINED=1"), "{a:?}");
+        }
     }
 }
