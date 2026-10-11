@@ -123,11 +123,11 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
 | 16 | Standard library | VERIFIED as scoped — 1.0 (N84): seventeen modules, a checked API manifest, four representative programs; Gate 2's collections, files and handles, I/O errors, networking, environment, processes, errors, binary encoding, randomness and logging (twenty-nine modules); no cryptography; numbers are the language's since Gate 2 (area 3) |
-| 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; every number across in both directions (Gate 2); no by-value structs, variadics or `dlopen` |
-| 18 | Embedded support | VERIFIED as scoped — two boards, two architecture families, emulated (N86), within the published support matrix; atomics, interrupts and a heap DESIGNED; no hardware |
+| 17 | FFI and ABI | VERIFIED as scoped — a practical C ABI subset (N85): opaque handles, C structs by borrowed pointer, strings both ways, `errno`, exports as callbacks, static and shared libraries, header bindings; every number across in both directions (Gate 2); no by-value structs, variadics or `dlopen`; on the 32-bit targets a C pointer crossing is refused by name (`N0381`, Q1-A1-05) |
+| 18 | Embedded support | VERIFIED as scoped — three emulated boards in three architecture families (N86, Gate 3E): atomics, statics, `@section`, board manifests, AArch64 and Cortex-M interrupts, a heap arena on 64-bit boards, `@on_failure`, a fixed-priority `@task` scheduler and a watchdog (Gate 3D–3G), each emulator-verified under QEMU; RISC-V has no interrupts, Cortex-M no heap; no hardware |
 | 19 | Critical profile | VERIFIED as scoped — profile enforcement and obligation evidence (N87): contracts, an obligation census with three statuses, no obligation of unknown status; not certification |
 | 20 | Cybersecurity profile | VERIFIED as scoped — profile enforcement (N87): declared authority, no C, a locked build, contents kept in files, checked paths, no unknown calls; constant time RESEARCH; not certification |
-| 21 | AI/HPC | PARTIAL — maps, zips and reductions of `Int` kernels on one GPU, OpenCL on Apple M1 Pro (N67, N88); vectorised sums (N66); a second provider BLOCKED here; vector operations in LIR DESIGNED |
+| 21 | AI/HPC | PARTIAL — maps, zips and reductions of `Int`, `Float32` and `Float64` kernels behind a provider boundary: OpenCL on Apple's GPU and a CPU provider that is its second oracle, `Float64` refused on the GPU (N67, N88, Gate 3H); vectorised sums (N66); SIMD measured, no speed-up claimed; Metal, CUDA, ROCm and SPIR-V providers not built |
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | VERIFIED |
@@ -139,7 +139,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of five targets with a replayed corpus (N93; `lir`, N105), re-run in Q1: 3.4 million executions, no crash; no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
 | 31 | Bootstrap | VERIFIED as scoped — the declared subset the Nazm-written compiler carries; not Gate 2 (Q1-D-25) |
 | 32 | Reproducibility and provenance | PARTIAL — a stated five-part model, signed in-toto statements and a CycloneDX SBOM (N94); one host and one image, no transparency log |
-| 33 | Platform and target matrix | PARTIAL — every cell run-verified, compile-only or unsupported (N95): 9 run, 2 compile-only, 3 unsupported; x86_64 Linux not run |
+| 33 | Platform and target matrix | PARTIAL — every cell in the support matrix's words (N95, Gate 3): twelve targets — five run-verified, three emulator-verified, Windows run-verified under Wine only, Android run-verified on a Linux kernel only, x86_64 Linux and iOS compile-only; x86_64 Linux and a Windows host deferred to the final v1 qualification |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72); both VMs held to the simulator on generated sequences (N96) |
 
 After N107, 2026-10-05: twenty-nine VERIFIED (areas 2, 3, 5, 6 and 7 moved, the last four as scoped:

@@ -8,9 +8,9 @@ structured concurrency, compiler-checked effects, authority and data provenance,
 machine-readable tooling for people and coding agents alike. A second compiler, written in Nazm
 for a declared subset of the language, compiles itself.**
 
-## Current release: 1.0.0 — the first stable language and toolchain release
+## 1.0.0 — a release candidate, not yet released
 
-Nazm 1.0.0 is the first stable language/toolchain release. A program valid under stable Nazm 1.0,
+Nazm 1.0.0 is to be the first stable language/toolchain release. A program valid under stable Nazm 1.0,
 using only stable public surfaces, does not silently change meaning under a later 1.x toolchain:
 [`docs/stability.md`](docs/stability.md) is that contract — what is stable, what is experimental or
 internal, and what a patch, minor or major release may change — and
@@ -20,7 +20,7 @@ A stable contract is not a complete ecosystem. Optional subsystems — GPU kerne
 the freestanding and WebAssembly targets, the agent and editor tooling — remain experimental or
 partial where documented, and nothing in Nazm is certified, proved correct or claimed free of
 defects. Native compilation passes through one shared low-level IR into LLVM and Cranelift, the
-hosted runtime runs tasks on a structured M:N scheduler, and the release is backed by contained
+hosted runtime runs tasks on a structured M:N scheduler, and this tree is backed by contained
 bootstrap, mutation, fuzzing, platform and artifact-verification evidence.
 
 **Not yet released.** The tree says 1.0.0; no `v1.0.0` tag exists. The v1 programme's later gates
@@ -184,7 +184,8 @@ budget** — `nazm run` stops a runaway loop after `--max-iterations`, a native 
 
 ## Evidence
 
-Every claim above is backed by a test or a recorded run, and the evidence is described by what it
+Each claim above is backed by a test or a recorded run named in
+[`docs/capability-matrix.md`](docs/capability-matrix.md), and the evidence is described by what it
 does **not** establish as carefully as by what it does:
 
 - **Differential testing:** the interpreter, both native backends and LIR's own interpreter are

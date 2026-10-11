@@ -25,7 +25,8 @@ running anything, and `nazm test` runs a directory of programs against recorded 
 
 `nazm build` has two code generators. The default, `--backend llvm`, writes LLVM IR as text and
 has clang compile it; `--backend cranelift` compiles every function in process with Cranelift,
-which builds noticeably faster. They produce programs that behave identically — the same output,
+which built the compiler's own source at `-O0` in 0.74 s against LLVM's 1.21 s on the measured host
+(`docs/performance.md`, N41). They produce programs that behave identically — the same output,
 the same failures, the same memory report — and neither ever stands in for the other: a program
 one cannot compile is refused, never quietly built by the other. `--target` names the target
 triple: one of nine (`docs/support.md`), built to an executable where this host can link it and to
