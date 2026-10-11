@@ -42,8 +42,9 @@ installed); every other row is documented capability only.
 
 **What the measurements say** (`performance.md`, *Gate 4 light*): the sieve sits within a few
 milliseconds of a 3.9 ms process floor for every native language — not a compute comparison; Nazm's
-channel hand-off is **about 21 times slower than Go's** (233 ms against 11 ms for 50,000 hand-offs, the
-interpreter within 15 % of native, so the cost is the runtime's wait and wake, not code generation);
+channel hand-off is **about 21 times slower than Go's on this workload** (233 ms against 11 ms for
+50,000 hand-offs; the interpreter within 15 % of native suggests — unprofiled, a hypothesis — that the
+cost is the runtime's wait and wake rather than code generation);
 builds with a warm object cache take 81–84 ms. No superiority is claimed; a result within the bench's
 25 % regression threshold is a statement about Nazm against itself only.
 
