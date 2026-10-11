@@ -112,29 +112,6 @@ fn meaning(r: &Run) -> (bool, &[String]) {
     (r.accepted, &r.diagnostics)
 }
 
-/// The answer, and every diagnostic's code and spans, without its wording. Used only where a
-/// warm run's wording is known to differ: Q1-M-08, a parameter of a module the cache reused is
-/// named by position (`#1`), because its body's locals were never bound. Open, FIX-BEFORE-V1.
-fn verdict(r: &Run) -> (bool, Vec<String>) {
-    let spans = |d: &serde_json::Value| {
-        let mut out = vec![d["code"].to_string(), d["primary"]["span"].to_string()];
-        for s in d["secondary"].as_array().into_iter().flatten() {
-            out.push(s["span"].to_string());
-        }
-        out.join(" ")
-    };
-    let diagnostics = r
-        .diagnostics
-        .iter()
-        .map(|d| {
-            let json = d.split_once(' ').map_or("", |(_, j)| j);
-            serde_json::from_str::<serde_json::Value>(json)
-                .map_or_else(|_| d.clone(), |v| spans(&v))
-        })
-        .collect();
-    (r.accepted, diagnostics)
-}
-
 /// A project marked with a root, so its modules keep one identity.
 fn project(dir: &Path) {
     write(dir, "nazm.root", "");
@@ -699,8 +676,15 @@ fn a_helper_in_another_module_that_writes_to_its_parameter_carries_the_rule_acro
         warm.diagnostics.iter().all(|d| d.starts_with("N0372")) && !warm.accepted,
         "{warm:?}"
     );
+    // The whole meaning, wording included: a reused module's parameter is named from its
+    // signature, as a cold check names it (v1, Q1-M-08; until then only codes and spans agreed).
     let reused = check(dir.path(), "a.nz");
-    assert_eq!(verdict(&reused), verdict(&warm));
+    assert_eq!(meaning(&reused), meaning(&warm));
+    assert!(
+        reused.diagnostics.iter().any(|d| d.contains("`p`"))
+            && !reused.diagnostics.iter().any(|d| d.contains("#1")),
+        "{reused:?}"
+    );
     write(
         dir.path(),
         "a.nz",

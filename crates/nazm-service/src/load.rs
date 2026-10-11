@@ -335,13 +335,19 @@ pub fn load_packaged(
         let text = match read {
             Ok(t) => t,
             Err(e) => {
-                // No file to point into: this one could not be read. Said plainly rather
-                // than aimed at an arbitrary byte of whatever had been loaded so far,
-                // which is what the merged-buffer version did.
+                // No text to point into: this file could not be read. It gets an empty entry
+                // of its own, so the report names it — not whichever file has id 0, which for
+                // an unreadable root was the prelude, loaded last and so first (v1, Q1-D-09).
+                // It is in the graph with no identity and no imports; the load fails anyway.
+                let id = FileId::from_index(parts.len());
+                index.insert(canonical, parts.len());
+                keys.push(None);
+                named.push(Vec::new());
+                parts.push((path.display().to_string(), String::new()));
                 errors.push(
                     Diagnostic::error(
                         codes::MODULE_NOT_FOUND,
-                        Span::synthetic(),
+                        Span::new(id, 0, 0),
                         format!("cannot read `{}`", path.display()),
                     )
                     .help(format!("{e}")),

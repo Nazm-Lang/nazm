@@ -402,9 +402,9 @@ classification and evidence of each is in `docs/security-qualification.md`, and 
 (`nazm_main`, `nazm_init`, …) (Q1-A1-11); with the opt-in pool scheduler and C, `errno` is per
 thread rather than per task and C runs on a task's 256 KiB stack (Q1-A1-12).
 
-**Checker and caches**: a warm check names a parameter of a module the cache reused by position
-(`#1`) where a cold check names it (`path`) — the verdict, code and spans are the same. *Fix before
-v1* (Q1-M-08). Checking very wide records and many impls is quadratic, and a huge identifier gives
+**Checker and caches**: *fixed before v1 (Q1-M-08):* a warm check named a parameter of a module the
+cache reused by position (`#1`) where a cold check named it; a definition now carries its parameters'
+names from its signature, and the two checks agree whole. Checking very wide records and many impls is quadratic, and a huge identifier gives
 a diagnostic of that size, with no cap on their number (Q1-B-09, Q1-B-10).
 
 **Packages**: a path dependency may name any directory, and a symlinked `root` or `main` is

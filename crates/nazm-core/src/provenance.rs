@@ -1804,7 +1804,14 @@ impl Tracer<'_, '_> {
                     .and_then(|cap| d.locals.get(cap.inner as usize)),
                 _ => d.locals.get(i as usize),
             })
-            .map_or_else(|| format!("#{i}"), |l| format!("`{}`", l.name));
+            .map(|l| l.name.as_str())
+            // A reused module's body was not checked, so its locals are empty; its
+            // signature still names its parameters (v1, Q1-M-08).
+            .or_else(|| {
+                let d = self.res.function(g)?;
+                d.param_names.get(i as usize).map(String::as_str)
+            })
+            .map_or_else(|| format!("#{i}"), |n| format!("`{n}`"));
         let message = match via {
             Some("capture") => format!(
                 "this closure writes to a path made from what it captures, {param}, and that \
@@ -2156,7 +2163,14 @@ impl Tracer<'_, '_> {
                     .and_then(|cap| d.locals.get(cap.inner as usize)),
                 _ => d.locals.get(p as usize),
             })
-            .map_or_else(|| format!("#{p}"), |l| format!("`{}`", l.name));
+            .map(|l| l.name.as_str())
+            // A reused module's body was not checked, so its locals are empty; its
+            // signature still names its parameters (v1, Q1-M-08).
+            .or_else(|| {
+                let d = self.res.function(g)?;
+                d.param_names.get(p as usize).map(String::as_str)
+            })
+            .map_or_else(|| format!("#{p}"), |n| format!("`{n}`"));
         if self.res.function(g).is_some_and(|d| d.export.is_some()) && o == Origin::Unknown {
             if let Some(d) = self.res.function(g) {
                 steps.push(Step {

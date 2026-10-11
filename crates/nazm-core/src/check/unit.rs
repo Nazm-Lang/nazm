@@ -257,6 +257,7 @@ pub fn declare_unit(
             module: unit.module,
             visibility,
             params: params.clone(),
+            param_names: f.params.iter().map(|p| p.name.clone()).collect(),
             ret,
             name_span: f.name_span,
             decl: *decl,
