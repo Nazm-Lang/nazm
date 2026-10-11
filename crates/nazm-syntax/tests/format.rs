@@ -401,3 +401,84 @@ fn an_effect_set_is_laid_out_on_one_line_before_the_body_it_introduces() {
     };
     assert_eq!(kinds(text), kinds(&out), "the same tokens");
 }
+
+/// Every `.nz` file under `dir`, recursively.
+fn sources_under(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            sources_under(&p, out);
+        } else if p.extension().is_some_and(|e| e == "nz") {
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                out.push((p.display().to_string(), text));
+            }
+        }
+    }
+}
+
+/// Q1-D-19: the formatter's promises over the programs that use Gate 2's and Gate 3's language —
+/// numbers, arrays, constants, bytes and text, attributes, statics, sections, interrupts, tasks —
+/// the compatibility corpus's runs, traps and checks and the domain workloads, none of which the
+/// tree-sources test read. Its refusal cases are left out: some do not parse, on purpose.
+#[test]
+fn the_promises_hold_for_every_gate_2_and_gate_3_program() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf();
+    let mut sources = Vec::new();
+    for dir in [
+        "tests/compat/v1/run",
+        "tests/compat/v1/trap",
+        "tests/compat/v1/check",
+        "crates/nazm-cli/tests/domains",
+    ] {
+        sources_under(&root.join(dir), &mut sources);
+    }
+    sources.sort();
+    assert!(sources.len() >= 30, "only {} sources", sources.len());
+    let gate_2 = ["Float64", "[0;", "Bytes", "Text", "const ", "@cfg", "UInt8"];
+    for word in gate_2 {
+        assert!(
+            sources.iter().any(|(_, t)| t.contains(word)),
+            "no program here uses {word}"
+        );
+    }
+    for (name, text) in &sources {
+        holds(name, text);
+    }
+}
+
+/// Q1-D-19: Gate 2's and Gate 3's syntax written badly — arrays and repeats, float and hex
+/// literals, constants, attributes, statics — formats to one fixed point with every token kept.
+#[test]
+fn the_promises_hold_for_ugly_gate_2_and_gate_3_input() {
+    for (what, source) in [
+        (
+            "arrays, repeats and indexing on one line",
+            "fn main()->Int{let mut g=[[0;3];2];g[1][2]=7;let xs=[1,2,3];g[1][2]+xs[0]}",
+        ),
+        (
+            "floats, hex, underscores and conversions",
+            "fn main()->Int{let x=1.5e-7;let m=UInt32(0xFF00_FF00);let y=Float32(0.1);Int(x*2.0)+Int(m&UInt32(1))}",
+        ),
+        (
+            "a constant and an attribute crowded together",
+            "const N:Int=4;@cfg(target_os=\"macos\")fn f()->Int{N}\nfn main()->Int{0}",
+        ),
+        (
+            "a static, an atomic and a section",
+            "static mut_count:Atomic=Atomic(0);@section(\".fast\")fn f()->Int{atomic_load(mut_count)}fn main()->Int{f()}",
+        ),
+        (
+            "bytes and text built in one expression",
+            "fn main()->Int{let b=bytes_new(4);bytes_set(b,0,UInt8(7));let t=Text(\"añb\");Int(bytes_get(b,0))+text_len(t)}",
+        ),
+    ] {
+        holds(what, source);
+    }
+}

@@ -231,7 +231,7 @@ disposition), **corrected** (documentation).
 | Q1-D-08 | `nazm doc` drops the loader's diagnostic | MEDIUM | FIX-BEFORE-V1 | fixed (message, and status by kind in Q1-C1) |
 | Q1-D-10 | published schemas closed against additive fields | MEDIUM | FIX-BEFORE-V1 | corrected (`stability.md`, *Closed schema files*) |
 | Q1-D-18 | stability omits `Bytes` and `Text` | MEDIUM | FIX-BEFORE-V1 | corrected in v1 (not done at Gate 2's close): listed as stable and in the memory contract |
-| Q1-D-19 | Gate 2 untested in the formatter, provenance, validators | MEDIUM | FIX-BEFORE-V1 | carried to Gate 2's close |
+| Q1-D-19 | Gate 2 untested in the formatter, provenance, validators | MEDIUM | FIX-BEFORE-V1 | fixed in v1 (not done at Gate 2's close): `format.rs` over the compat corpus and domain workloads, `provenance.rs` through `Bytes`/`Text`, the MIR and Core IR validators' array, index and conversion rules |
 | Q1-M-14 | failed task with a blocked sibling hangs silently | MEDIUM | ACCEPTED-LIMITATION | carried, documented |
 | Q1-A2-03 | symlink loop hangs resolution | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-A2-04 | publish merges into a stale version directory | LOW | FIX-BEFORE-V1 | fixed |

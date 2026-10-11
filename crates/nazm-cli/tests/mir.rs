@@ -1164,3 +1164,100 @@ fn what_mir_looks_like_on_the_compiler() {
         largest.locals.len()
     );
 }
+
+/// A program with Gate 2's arrays, repeats, indexing and a float conversion, for the validator
+/// refusals below (Q1-D-19).
+const NUMBERS: &str = r#"
+fn main() -> Int {
+    let xs = [1, 2, 3];
+    let ys = [0; 4];
+    let f = 1.5;
+    xs[1] + ys[2] + Int(f)
+}
+"#;
+
+/// Q1-D-19: the validator's Gate 2 rules each refuse a broken shape — an array literal with an
+/// element too few, a repeat of the wrong count, an index by something not an `Int`, a conversion
+/// from something not a number.
+#[test]
+fn the_validator_refuses_broken_arrays_indexes_and_conversions() {
+    let mut p = valid(NUMBERS);
+    let f = function_mut(&mut p, "main");
+    let s = first_stmt_where(f, |k| {
+        matches!(
+            k,
+            StatementKind::Assign {
+                value: Rvalue::Array { .. },
+                ..
+            }
+        )
+    });
+    if let StatementKind::Assign {
+        value: Rvalue::Array { elems },
+        ..
+    } = &mut s.kind
+    {
+        elems.pop();
+    }
+    refused(&p, "an array whose elements are not its type");
+
+    let mut p = valid(NUMBERS);
+    let f = function_mut(&mut p, "main");
+    let s = first_stmt_where(f, |k| {
+        matches!(
+            k,
+            StatementKind::Assign {
+                value: Rvalue::ArrayRepeat { .. },
+                ..
+            }
+        )
+    });
+    if let StatementKind::Assign {
+        value: Rvalue::ArrayRepeat { count, .. },
+        ..
+    } = &mut s.kind
+    {
+        *count += 1;
+    }
+    refused(&p, "a repeated array of another type");
+
+    let mut p = valid(NUMBERS);
+    let f = function_mut(&mut p, "main");
+    let s = first_stmt_where(f, |k| {
+        matches!(
+            k,
+            StatementKind::Assign {
+                value: Rvalue::Index { .. },
+                ..
+            }
+        )
+    });
+    if let StatementKind::Assign {
+        value: Rvalue::Index { index, .. },
+        ..
+    } = &mut s.kind
+    {
+        *index = Operand::Const(nazm_mir::Const::Bool(true));
+    }
+    refused(&p, "an index that is not an array's element");
+
+    let mut p = valid(NUMBERS);
+    let f = function_mut(&mut p, "main");
+    let s = first_stmt_where(f, |k| {
+        matches!(
+            k,
+            StatementKind::Assign {
+                value: Rvalue::Convert { .. },
+                ..
+            }
+        )
+    });
+    if let StatementKind::Assign {
+        value: Rvalue::Convert { operand, .. },
+        ..
+    } = &mut s.kind
+    {
+        *operand = Operand::Const(nazm_mir::Const::Bool(true));
+    }
+    refused(&p, "a conversion that is not between numbers");
+}
