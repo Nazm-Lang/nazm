@@ -222,6 +222,35 @@ fn a_binding_is_visible_from_where_the_checker_introduces_it_and_no_earlier() {
 }
 
 #[test]
+fn a_for_loops_name_is_visible_in_its_body_from_its_start_and_not_after() {
+    // R1a (`docs/spec.md`, *`for` loops*): the name is the body's, as a `let` at its top is.
+    const T: &str = "fn f(xs: Ints) -> Int {\n    \
+    let mut t = 0;\n    \
+    for x in xs { t = t + x; }\n    \
+    t\n\
+}\nfn main() -> Int { f(ints_new()) }\n";
+    let p = Project::new(&[]);
+    let m = p.path("m.nz");
+    on_the_service_stack(move || {
+        let mut s = LanguageService::new();
+        let out = s.open(&m, 1, T.into());
+        assert!(out[0].diagnostics.is_empty(), "{out:#?}");
+        let names = |o: u32| -> Vec<String> { locals(&s, &m, o) };
+        assert_eq!(names(at(T, "t = t + x", 0, 0)), ["t", "x", "xs"]);
+        let use_of_x = complete(&s, &m, 1, at(T, "+ x;", 0, 3));
+        // Every visible name with the prefix `x`: the loop's `x`, and the parameter `xs`.
+        assert_eq!(
+            ids(&use_of_x),
+            [
+                id("x", "local", "m.nz", at(T, "for x", 0, 4)),
+                id("xs", "local", "m.nz", at(T, "f(xs", 0, 2)),
+            ]
+        );
+        assert_eq!(names(at(T, "    t\n", 0, 4)), ["t", "xs"]);
+    });
+}
+
+#[test]
 fn a_match_arms_bindings_stay_in_their_arm() {
     const T: &str = "enum E { A(v: Int), B(v: Int), }\n\
 fn f(e: E) -> Int {\n    \

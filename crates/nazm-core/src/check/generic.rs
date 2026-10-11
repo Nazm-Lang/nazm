@@ -73,7 +73,12 @@ fn inferred_from(
 ) -> Option<Type> {
     match formal {
         Type::Param(p) if p == param => Some(actual),
-        Type::Vec(_) | Type::ChanOf(_) | Type::Record(_) | Type::Enum(_) => types
+        Type::Vec(_)
+        | Type::Box(_)
+        | Type::List(_)
+        | Type::ChanOf(_)
+        | Type::Record(_)
+        | Type::Enum(_) => types
             .type_args(formal)
             .into_iter()
             .zip(types.type_args(actual))
@@ -558,14 +563,17 @@ impl Checker<'_> {
                     }),
                 }
             }
-            Type::Vec(_) => {
-                let (Type::Vec(_), Some(fe), Some(ae)) = (
-                    actual,
+            // `Box` and `List` (R1a) as a `Vec` is, each only with its own kind.
+            Type::Vec(_) | Type::Box(_) | Type::List(_) => {
+                let (Some(fe), Some(ae)) = (
                     types.type_args(formal).first().copied(),
                     types.type_args(actual).first().copied(),
                 ) else {
                     return Err(Unify::Mismatch);
                 };
+                if std::mem::discriminant(&formal) != std::mem::discriminant(&actual) {
+                    return Err(Unify::Mismatch);
+                }
                 self.unify(fe, ae, owner, solved, bound, caller, arg)
             }
             // A generic channel, as a `Vec` is: through its element (N53).

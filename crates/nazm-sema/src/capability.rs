@@ -336,6 +336,15 @@ impl CapabilityKind {
             | Intrinsic::VecSet
             | Intrinsic::VecPush
             | Intrinsic::VecPop
+            | Intrinsic::BoxNew
+            | Intrinsic::BoxGet
+            | Intrinsic::ListFromVec
+            | Intrinsic::ListEmpty
+            | Intrinsic::ListLen
+            | Intrinsic::ListGet
+            | Intrinsic::BoxFresh
+            | Intrinsic::BoxFill
+            | Intrinsic::ListPush
             | Intrinsic::ForeignNonNull
             | Intrinsic::CStrCopy
             | Intrinsic::CallbackAddress

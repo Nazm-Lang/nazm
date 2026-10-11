@@ -162,8 +162,10 @@ pub fn declare_unit(
         // A built-in has no source span to point at, so "first defined here" would aim
         // at byte zero. Said plainly instead. Built-ins are not a module's definitions,
         // so no visibility rule makes this one legal.
+        // A prelude built-in (R1a) is hidden by a module's own function of its name instead.
         if method.is_none()
-            && (Intrinsic::by_name(&f.name).is_some() || CONVERSIONS.contains(&f.name.as_str()))
+            && (Intrinsic::by_name(&f.name).is_some_and(|i| !i.is_prelude())
+                || CONVERSIONS.contains(&f.name.as_str()))
         {
             errors.push(
                 Diagnostic::error(
@@ -652,6 +654,8 @@ fn environment(
                 let c = res.types_mut().chan_of(t);
                 res.types_mut().vec_of(c)
             }
+            None if s == Shape::BoxT => res.types_mut().box_of(t),
+            None if s == Shape::ListT => res.types_mut().list_of(t),
             None => res.types_mut().vec_of(t),
         };
         let params: Vec<Type> = i.params().iter().map(|s| shape(*s)).collect();

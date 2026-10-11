@@ -228,6 +228,8 @@ impl UserTypes {
                 }
             }
             Type::Vec(_) => format!("Vec[{}]", shown(self)),
+            Type::Box(_) => format!("Box[{}]", shown(self)),
+            Type::List(_) => format!("List[{}]", shown(self)),
             Type::Array(a) => match self.array_info(a) {
                 Some((e, n)) => format!("[{}; {n}]", self.show(e)),
                 None => "[?; ?]".to_owned(),
@@ -342,6 +344,13 @@ impl UserTypes {
                 Type::Vec(v) => {
                     if let Some(e) = self.vec_element(v) {
                         work.push((e, holder.or(Some(ty))));
+                    }
+                }
+                // Immutable (R1a): what a `Box` or `List` holds was made before it and cannot be
+                // replaced, so it is no holder — a mutable handle inside it still is.
+                Type::Box(v) | Type::List(v) => {
+                    if let Some(e) = self.vec_element(v) {
+                        work.push((e, holder));
                     }
                 }
                 Type::ChanOf(c) => {
@@ -806,16 +815,32 @@ pub struct OwnershipCycle {
 
 const INLINE: u8 = 1;
 const COUNTED: u8 = 2;
+/// Through a `Box` or a `List` (R1a): finite, and unable to close a cycle on its own, because
+/// what it holds is older than it and cannot be replaced.
+const IMMUTABLE: u8 = 4;
 
-/// How a use through `outer` composes with a use of kind `inner`: inline only when both
-/// are, and counted as soon as either is.
+/// One path kind followed by another: counted as soon as either is, else immutable as soon as
+/// either is, else inline (`docs/spec.md`, *Immutable indirection*).
+const fn then(a: u8, b: u8) -> u8 {
+    if a == COUNTED || b == COUNTED {
+        COUNTED
+    } else if a == IMMUTABLE || b == IMMUTABLE {
+        IMMUTABLE
+    } else {
+        INLINE
+    }
+}
+
+/// How a use through `outer` composes with a use of kind `inner`, over every pair of the kinds
+/// each may be: inline only when both are, counted as soon as either is, immutable otherwise.
 fn compose(outer: u8, inner: u8) -> u8 {
     let mut out = 0;
-    if outer & INLINE != 0 && inner & INLINE != 0 {
-        out |= INLINE;
-    }
-    if (outer & COUNTED != 0 && inner != 0) || (inner & COUNTED != 0 && outer != 0) {
-        out |= COUNTED;
+    for a in [INLINE, COUNTED, IMMUTABLE] {
+        for b in [INLINE, COUNTED, IMMUTABLE] {
+            if outer & a != 0 && inner & b != 0 {
+                out |= then(a, b);
+            }
+        }
     }
     out
 }
@@ -881,8 +906,12 @@ impl UserTypes {
         match t {
             Type::Param(q) if q == p => INLINE,
             Type::Vec(v) => match self.vec_element(v) {
-                Some(e) if self.reaches_param(e, p, uses) != 0 => COUNTED,
-                _ => 0,
+                Some(e) => compose(COUNTED, self.reaches_param(e, p, uses)),
+                None => 0,
+            },
+            Type::Box(v) | Type::List(v) => match self.vec_element(v) {
+                Some(e) => compose(IMMUTABLE, self.reaches_param(e, p, uses)),
+                None => 0,
             },
             // A channel holds what it queues behind a counted handle, as a `Vec` does (N53).
             Type::ChanOf(c) => match self.chan_element(c) {
@@ -965,6 +994,11 @@ impl UserTypes {
                     self.owned_by(e, COUNTED, via, uses, out);
                 }
             }
+            Type::Box(v) | Type::List(v) => {
+                if let Some(e) = self.vec_element(v) {
+                    self.owned_by(e, then(reach, IMMUTABLE), via, uses, out);
+                }
+            }
             Type::ChanOf(c) => {
                 if let Some(e) = self.chan_element(c) {
                     self.owned_by(e, COUNTED, via, uses, out);
@@ -981,7 +1015,7 @@ impl UserTypes {
                         .copied()
                         .unwrap_or(0);
                     let through = compose(used, reach);
-                    for bit in [INLINE, COUNTED] {
+                    for bit in [INLINE, COUNTED, IMMUTABLE] {
                         if through & bit != 0 {
                             self.owned_by(a, bit, via, uses, out);
                         }
@@ -1012,9 +1046,10 @@ impl UserTypes {
     /// Every cycle in the ownership graph of this compilation's definitions.
     ///
     /// Two passes. The first follows inline edges only and finds the impossible layouts;
-    /// the second follows every edge, stays out of the definitions the first reported, and
-    /// finds the cycles that run through a counted handle. One cycle is reported once, and a
-    /// definition already in one is not reported again.
+    /// the second stays out of the definitions the first reported and finds the cycles that
+    /// run through a counted handle — following every edge, but closing only through a
+    /// counted one, so a cycle of inline and immutable edges (R1a) is not one. One cycle is
+    /// reported once, and a definition already in one is not reported again.
     ///
     /// Iterative depth-first search with an explicit stack, as every walk here is.
     #[must_use]
@@ -1027,19 +1062,81 @@ impl UserTypes {
             .collect();
         let mut out: Vec<OwnershipCycle> = Vec::new();
         let mut reported: Vec<TypeNode> = Vec::new();
-        for pass in [INLINE, INLINE | COUNTED] {
-            for start in &nodes {
-                if reported.contains(start) {
-                    continue;
-                }
-                if let Some(cycle) = find_cycle(*start, &edges, pass, &reported) {
-                    reported.extend(cycle.through.iter().copied());
-                    out.push(cycle);
-                }
+        for start in &nodes {
+            if reported.contains(start) {
+                continue;
+            }
+            if let Some(cycle) = find_cycle(*start, &edges, INLINE, &reported) {
+                reported.extend(cycle.through.iter().copied());
+                out.push(cycle);
+            }
+        }
+        for start in &nodes {
+            if reported.contains(start) {
+                continue;
+            }
+            if let Some(cycle) = find_counted_cycle(*start, &edges, &reported) {
+                reported.extend(cycle.through.iter().copied());
+                out.push(cycle);
             }
         }
         out
     }
+}
+
+/// A cycle through `start` with a counted edge somewhere on it, closed over edges of any kind
+/// and avoiding `excluded`, if there is one (R1a): an ownership cycle is exactly a cycle with a
+/// counted edge on it, and a cycle of inline and immutable edges only is not one.
+///
+/// Iterative depth-first search over (definition, whether the path so far has a counted edge),
+/// so a definition may be passed once without a counted edge behind it and once with one.
+fn find_counted_cycle(
+    start: TypeNode,
+    edges: &std::collections::HashMap<TypeNode, Vec<Owns>>,
+    excluded: &[TypeNode],
+) -> Option<OwnershipCycle> {
+    // Each frame: a node, whether the path to it has a counted edge, the next edge to try, and
+    // the edge that entered it.
+    let mut stack: Vec<(TypeNode, bool, usize, Option<Owns>)> = vec![(start, false, 0, None)];
+    let mut seen: Vec<(TypeNode, bool)> = vec![(start, false)];
+    while let Some((node, counted, at, _)) = stack.last().copied() {
+        let next = edges.get(&node).and_then(|e| e.get(at)).copied();
+        let Some(edge) = next else {
+            stack.pop();
+            continue;
+        };
+        if let Some(top) = stack.last_mut() {
+            top.2 += 1;
+        }
+        if excluded.contains(&edge.to) {
+            continue;
+        }
+        let counted = counted || edge.reach == COUNTED;
+        if edge.to == start {
+            if !counted {
+                continue;
+            }
+            let mut through: Vec<TypeNode> = stack.iter().map(|(n, _, _, _)| *n).collect();
+            through.push(start);
+            let mut hops: Vec<CycleEdge> = stack
+                .iter()
+                .skip(1)
+                .filter_map(|(_, _, _, e)| e.map(|e| e.via))
+                .collect();
+            hops.push(edge.via);
+            return Some(OwnershipCycle {
+                reach: Reach::Counted,
+                through,
+                hops,
+            });
+        }
+        if seen.contains(&(edge.to, counted)) {
+            continue;
+        }
+        seen.push((edge.to, counted));
+        stack.push((edge.to, counted, 0, Some(edge)));
+    }
+    None
 }
 
 /// A cycle reachable from `start` over edges whose reach is in `allowed`, avoiding

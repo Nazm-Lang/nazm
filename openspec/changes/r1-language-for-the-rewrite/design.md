@@ -172,6 +172,12 @@ names are `Box` and `List`; L3 includes `_` with a warning when it covers varian
 | L13 | `checked_add/sub/mul -> Option[T]`, a widening multiply, `Int128`/`UInt128` | 160 checked/overflowing calls; constant folding | HEAVY (local) |
 | L14 | Stack size: `--stack-size` for the main thread and tasks | 13 deep-stack threads (up to 1 GiB) | CONVENIENCE |
 
+**Found while carrying it out (2026-10-12):**
+
+| # | Proposal | Why |
+| --- | --- | --- |
+| L15 | A **warning** severity for diagnostics, with `--deny-warnings` | L3's `_` is to warn when it covers enum variants, and Nazm has no warning severity (Q1-D-15 found the same gap for deprecation). Until L15, `_` is accepted without the warning, recorded in `limitations.md`; L15 adds it, and the deprecation warning `N0620` was reserved for |
+
 **Platform built-ins — runtime ABI:**
 
 | # | Proposal | Evidence | Class |

@@ -190,6 +190,16 @@ pub enum PersistentType {
     Chan {
         chan: Box<PersistentType>,
     },
+    /// `Box[T]` (R1a), written `{"box":T}`. Arrived without a schema move, as the function
+    /// shape did: an older reader refuses a file that has one.
+    Boxed {
+        #[serde(rename = "box")]
+        boxed: Box<PersistentType>,
+    },
+    /// `List[T]` (R1a), written `{"list":T}`, likewise.
+    List {
+        list: Box<PersistentType>,
+    },
     /// `[T; N]` (Gate 2), written `{"array":T,"len":N}`.
     Array {
         array: Box<PersistentType>,
@@ -385,6 +395,12 @@ fn persist(t: Type, types: &UserTypes, graph: &ModuleGraph) -> Option<Persistent
         }),
         Type::ChanOf(c) => Some(PersistentType::Chan {
             chan: Box::new(persist(types.chan_element(c)?, types, graph)?),
+        }),
+        Type::Box(v) => Some(PersistentType::Boxed {
+            boxed: Box::new(persist(types.vec_element(v)?, types, graph)?),
+        }),
+        Type::List(v) => Some(PersistentType::List {
+            list: Box::new(persist(types.vec_element(v)?, types, graph)?),
         }),
         Type::Array(a) => {
             let (elem, len) = types.array_info(a)?;
@@ -647,6 +663,9 @@ fn validate_type(
         PersistentType::Vec { vec } => validate_type(vec, params, defined, depth + 1, owner)?,
         PersistentType::Chan { chan } => {
             validate_type(chan, params, defined, depth + 1, owner)?;
+        }
+        PersistentType::Boxed { boxed: inner } | PersistentType::List { list: inner } => {
+            validate_type(inner, params, defined, depth + 1, owner)?;
         }
         PersistentType::Array { array, .. } => {
             validate_type(array, params, defined, depth + 1, owner)?;
@@ -1520,6 +1539,14 @@ fn read_type(
         PersistentType::Chan { chan } => {
             let elem = read_type(chan, ids, types, owner);
             types.chan_of(elem)
+        }
+        PersistentType::Boxed { boxed } => {
+            let elem = read_type(boxed, ids, types, owner);
+            types.box_of(elem)
+        }
+        PersistentType::List { list } => {
+            let elem = read_type(list, ids, types, owner);
+            types.list_of(elem)
         }
         PersistentType::Array { array, len } => {
             let elem = read_type(array, ids, types, owner);

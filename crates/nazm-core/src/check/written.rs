@@ -563,6 +563,39 @@ fn resolve_written_inner(
             return chan;
         }
     }
+    // `Box[T]` and `List[T]` (R1a), prelude names: a module's own type of the name keeps it.
+    if !qualified
+        && (written.name == "Box" || written.name == "List")
+        && !types.names.contains_key(written.name.as_str())
+    {
+        let Some(args) = args else {
+            errors.push(
+                Diagnostic::error(
+                    codes::MISSING_TYPE_ARGUMENTS,
+                    written.name_span,
+                    format!("`{}` is written with its element type", written.name),
+                )
+                .help(format!(
+                    "a {} of `Int` is `{}[Int]`; `{}` alone is not a type",
+                    if written.name == "Box" { "box" } else { "list" },
+                    written.name,
+                    written.name
+                )),
+            );
+            return Type::Int;
+        };
+        if args.len() != 1 {
+            errors.push(wrong_arity(&written.name, 1, args.len(), written.span));
+        }
+        let elem = args.first().copied().unwrap_or(Type::Int);
+        let t = if written.name == "Box" {
+            res.types_mut().box_of(elem)
+        } else {
+            res.types_mut().list_of(elem)
+        };
+        res.record_written_type(written.name_span, WrittenType::Builtin(t));
+        return t;
+    }
     if !qualified && written.name == VEC {
         let Some(args) = args else {
             errors.push(

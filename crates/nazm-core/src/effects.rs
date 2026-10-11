@@ -494,7 +494,7 @@ fn carries(t: nazm_sema::Type, kind: CapabilityKind, res: &Resolution, depth: us
                 .iter()
                 .any(|v| v.fields.iter().any(|f| carries(f.ty, kind, res, depth + 1)))
         }),
-        nazm_sema::Type::Vec(v) => res
+        nazm_sema::Type::Vec(v) | nazm_sema::Type::Box(v) | nazm_sema::Type::List(v) => res
             .types()
             .vec_element(v)
             .is_some_and(|e| carries(e, kind, res, depth + 1)),

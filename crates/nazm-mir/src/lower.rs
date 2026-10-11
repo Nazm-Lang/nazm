@@ -2042,6 +2042,8 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         | Type::Chan
         | Type::ChanOf(_)
         | Type::Vec(_)
+        | Type::Box(_)
+        | Type::List(_)
         | Type::Bytes
         | Type::Text
         | Type::Atomic
@@ -2183,6 +2185,8 @@ fn collect_types(res: &Resolution, graph: &ModuleGraph, functions: &[Function]) 
                     },
                 );
             }
+            // Represented as the `Vec[T]` of the same id (R1a).
+            Type::Box(v) | Type::List(v) => work.push(Type::Vec(v)),
             Type::Vec(v) => {
                 let key = u32::try_from(v.index()).unwrap_or(u32::MAX);
                 if types.vecs.contains_key(&key) {

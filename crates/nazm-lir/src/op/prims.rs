@@ -35,6 +35,28 @@ impl Fx<'_, '_> {
         elem: Option<Ty>,
         args: &[mir::Operand],
     ) {
+        // Immutable indirection (R1a): a `Box[T]` and a `List[T]` are their `Vec[T]`, so each of
+        // their operations is the `Vec` one it means, taking the same path — a field-by-field
+        // layout's included — as the `Vec` would.
+        let same = match op {
+            Intrinsic::BoxFresh | Intrinsic::ListEmpty => Some(Intrinsic::VecNew),
+            Intrinsic::BoxFill | Intrinsic::ListPush => Some(Intrinsic::VecPush),
+            Intrinsic::ListLen => Some(Intrinsic::VecLen),
+            Intrinsic::ListGet => Some(Intrinsic::VecGet),
+            _ => None,
+        };
+        if let Some(vec_op) = same {
+            return self.primitive(dst, vec_op, elem, args);
+        }
+        if op == Intrinsic::BoxGet {
+            let first = [
+                args.first()
+                    .cloned()
+                    .unwrap_or(mir::Operand::Const(mir::Const::Int(0))),
+                mir::Operand::Const(mir::Const::Int(0)),
+            ];
+            return self.primitive(dst, Intrinsic::VecGet, elem, &first);
+        }
         if self.soa_primitive(dst, op, elem, args) {
             return;
         }
@@ -145,6 +167,23 @@ impl Fx<'_, '_> {
                 let at = self.at;
                 self.lw
                     .defect(at, "a numeric built-in its lowering did not take");
+            }
+            // Immutable indirection (R1a): `box_new` and `list_from_vec` are written by Core IR
+            // lowering in the built-ins above; the rest were taken above. Reaching here is a defect.
+            Intrinsic::BoxNew
+            | Intrinsic::BoxGet
+            | Intrinsic::ListFromVec
+            | Intrinsic::ListEmpty
+            | Intrinsic::ListLen
+            | Intrinsic::ListGet
+            | Intrinsic::BoxFresh
+            | Intrinsic::BoxFill
+            | Intrinsic::ListPush => {
+                let at = self.at;
+                self.lw.defect(
+                    at,
+                    "a `Box` or `List` built-in Core IR lowering did not rewrite",
+                );
             }
             // Gate 3's atomics, lowered above (`op/atomics.rs`); reaching here is a defect.
             Intrinsic::AtomicNew
