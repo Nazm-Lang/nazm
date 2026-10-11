@@ -97,6 +97,8 @@ pub enum SyntaxKind {
     Comma,
     Colon,
     Dot,
+    /// `..`, between a `for` loop's bounds (R1a).
+    DotDot,
     Semi,
     Question,
     Bang,
@@ -158,6 +160,8 @@ pub enum SyntaxKind {
     /// The left side of an assignment: `name` or `name.field.field`.
     Place,
     WhileStmt,
+    /// `for NAME in e { … }` or `for NAME in a..b { … }` (R1a).
+    ForStmt,
     ReturnStmt,
     BreakStmt,
     ContinueStmt,
@@ -251,6 +255,7 @@ impl SyntaxKind {
         Self::Comma,
         Self::Colon,
         Self::Dot,
+        Self::DotDot,
         Self::Semi,
         Self::Question,
         Self::Bang,
@@ -304,6 +309,7 @@ impl SyntaxKind {
         Self::AssignStmt,
         Self::Place,
         Self::WhileStmt,
+        Self::ForStmt,
         Self::ReturnStmt,
         Self::BreakStmt,
         Self::ContinueStmt,
@@ -388,6 +394,7 @@ impl SyntaxKind {
             TokenKind::Comma => Self::Comma,
             TokenKind::Colon => Self::Colon,
             TokenKind::Dot => Self::Dot,
+            TokenKind::DotDot => Self::DotDot,
             TokenKind::Semi => Self::Semi,
             TokenKind::Question => Self::Question,
             TokenKind::Bang => Self::Bang,

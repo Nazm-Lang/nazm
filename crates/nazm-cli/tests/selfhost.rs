@@ -119,6 +119,9 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 // `@` (Gate 2), which the Nazm-written lexer refuses as an unknown byte; no source
                 // this test reads writes one.
                 T::At => 67,
+                // `..` (R1a), between a `for` range's bounds — outside the Nazm-written
+                // compiler's subset until R2; no source this test reads writes one.
+                T::DotDot => 68,
                 T::Str(_) => 2,
                 T::Ident(_) => 3,
                 T::Fn => 10,
@@ -548,6 +551,16 @@ fn dump_stmt(s: &nazm_core::__syntax::Stmt, out: &mut String) {
             dump_expr(&w.cond, out);
             dump_block(&w.body, out);
             push_node(out, "while", 2, w.span.start, w.span.end, "");
+        }
+        // A `for` loop (R1a), outside the Nazm-written compiler's subset until R2: no source
+        // this test reads writes one, so the shape here is only the Rust parser's.
+        S::For(f) => {
+            for e in f.iter.exprs() {
+                dump_expr(e, out);
+            }
+            dump_block(&f.body, out);
+            let arity = f.iter.exprs().len() + 1;
+            push_node(out, "for", arity, f.span.start, f.span.end, &f.name);
         }
         S::Return(r) => {
             dump_expr(&r.value, out);

@@ -16,9 +16,11 @@ found only by reading all of it.
   handlers; pass the vector as an argument instead (area 4). *Narrowed from a defect:* Gate 1
   found that such a closure, stored into the `Vec` it captured, was never reclaimed; the refusal
   closes that route and no collector was added.
-- `for`, `loop`, loop labels, valueless `return` and mutable parameters are not in 1.0, each
+- `loop`, loop labels, valueless `return` and mutable parameters are not in 1.0, each
   refused by name (`N0101`, `N0311`). *Narrowed in Gate 2:* floating point and integers other than
-  the 64-bit `Int` exist (`spec.md`, *Numbers*).
+  the 64-bit `Int` exist (`spec.md`, *Numbers*). *Narrowed in R1a:* `for x in e` and `for x in a..b`
+  exist (`spec.md`, *`for` loops*); a `for` of any other shape is still refused by name. The
+  compiler written in Nazm (`compiler/*.nz`) does not carry `for` until R2 of the rewrite.
 - Arrays (Gate 2) hold plain data only — numbers, `Bool`s, and records, enums and arrays of them —
   at most 64 KiB, and do not cross the C boundary; there are no slices or views of an array, no
   iteration form beyond `while`, and a method call on an element is written `(xs[i]).m()` —

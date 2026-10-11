@@ -537,6 +537,10 @@ impl<'a> Printer<'a> {
         if *previous == TokenKind::At {
             return false;
         }
+        // `a..b`: a range's `..` is glued to both bounds (R1a), as the specification writes it.
+        if *previous == TokenKind::DotDot || *next == TokenKind::DotDot {
+            return false;
+        }
         // Nothing after an opener, or after a `.` or a `::`; and nothing before a `::`, which
         // binds an alias to the item it names: `t::split`, never `t :: split` (N49).
         if matches!(

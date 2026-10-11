@@ -475,6 +475,26 @@ impl<'b> Walk<'_, 'b> {
                 self.expr(&w.cond);
                 self.block(&w.body);
             }
+            // The `while` loop it means (R1a): an element is read out of its sequence's cell,
+            // as `vec_get(seq, i)` reads it, joined with the handle's own; a range's name is its
+            // start's, stepped by a constant, and its end is only compared — a condition,
+            // contributing none.
+            Stmt::For(f) => {
+                let v = match &f.iter {
+                    nazm_syntax::ForIter::Each(e) => {
+                        let handle = self.expr(e);
+                        let cell = self.for_cell(f.name_span);
+                        Shaped::whole(Flow::cell(&cell, f.name_span).joined(&handle))
+                    }
+                    nazm_syntax::ForIter::Range { start, end } => {
+                        let v = Shaped::whole(self.expr(start));
+                        self.expr(end);
+                        v
+                    }
+                };
+                self.assign(f.name_span, &v);
+                self.block(&f.body);
+            }
             Stmt::Return(r) => {
                 let v = self.expr(&r.value);
                 self.returned(&v);
@@ -592,6 +612,23 @@ impl<'b> Walk<'_, 'b> {
             Some(Shape::VecT) => elem().map(|t| format!("Vec[{t}]")),
             // A select's channels: the cell is their elements', `Chan[T]`.
             Some(Shape::ChanT | Shape::ChansT) => elem().map(|t| format!("Chan[{t}]")),
+            _ => None,
+        };
+        name.unwrap_or_else(|| WILD_CELL.to_owned())
+    }
+
+    /// The cell a `for` loop's sequence is read through (R1a): the one its `*_get` names.
+    fn for_cell(&self, name: Span) -> String {
+        let name = match self.res.for_seq(name) {
+            Some(nazm_sema::Type::Ints) => Some("Ints".to_owned()),
+            Some(nazm_sema::Type::Strs) => Some("Strs".to_owned()),
+            Some(nazm_sema::Type::Bytes) => Some("Bytes".to_owned()),
+            Some(nazm_sema::Type::Vec(v)) => self
+                .res
+                .types()
+                .vec_element(v)
+                .filter(|t| self.res.types().is_concrete(*t))
+                .map(|t| format!("Vec[{}]", self.res.types().show(t))),
             _ => None,
         };
         name.unwrap_or_else(|| WILD_CELL.to_owned())

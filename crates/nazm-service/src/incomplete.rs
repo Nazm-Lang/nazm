@@ -60,12 +60,21 @@ use crate::structure::{candidates, complete, StructureSite};
 pub(crate) fn completion(s: &Snapshot, offset: u32) -> Result<Completion, NoCompletion> {
     // The punctuation, as the concrete tree has it: a `.` or `(` token ending at the cursor.
     // A dot in a string or a comment is inside a leaf of another kind, and is never one.
+    // A `..` (R1a) is two dots to completion, as it was before it was one token: with the cursor
+    // between them, `a.|.c`, a member chain missing a name; after them, a second dot.
     let punctuation = s
         .cst
         .leaves()
         .into_iter()
-        .find(|l| l.span.end == offset && !l.kind.is_trivia())
-        .map(|l| l.kind);
+        .find(|l| {
+            !l.kind.is_trivia()
+                && (l.span.end == offset
+                    || (l.kind == SyntaxKind::DotDot && l.span.start + 1 == offset))
+        })
+        .map(|l| match l.kind {
+            SyntaxKind::DotDot => SyntaxKind::Dot,
+            k => k,
+        });
     if !matches!(punctuation, Some(SyntaxKind::Dot | SyntaxKind::LParen)) {
         return Err(NoCompletion::NotAName);
     }

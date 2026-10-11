@@ -234,6 +234,12 @@ pub enum Temp {
     Result,
     /// The value `try_convert` tests before converting it (Gate 2).
     Convert,
+    /// What a `for` loop iterates, evaluated once (R1a).
+    ForSeq,
+    /// A `for` loop's step count, or its range's current value (R1a).
+    ForIndex,
+    /// A `for` range's end, evaluated once (R1a).
+    ForEnd,
 }
 
 impl Temp {
@@ -245,6 +251,9 @@ impl Temp {
             Self::Foreign => "c",
             Self::Result => "result",
             Self::Convert => "convert",
+            Self::ForSeq => "seq",
+            Self::ForIndex => "i",
+            Self::ForEnd => "end",
         }
     }
 }

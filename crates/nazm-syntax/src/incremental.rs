@@ -1107,6 +1107,25 @@ impl Shift for Stmt {
                 body.shift(file, by);
                 span.shift(file, by);
             }
+            Self::For(f) => {
+                let crate::ast::For {
+                    name: _,
+                    name_span,
+                    iter,
+                    body,
+                    span,
+                } = f;
+                name_span.shift(file, by);
+                match iter {
+                    crate::ast::ForIter::Each(e) => e.shift(file, by),
+                    crate::ast::ForIter::Range { start, end } => {
+                        start.shift(file, by);
+                        end.shift(file, by);
+                    }
+                }
+                body.shift(file, by);
+                span.shift(file, by);
+            }
             Self::Return(r) => {
                 let crate::ast::Return { value, span } = r;
                 value.shift(file, by);

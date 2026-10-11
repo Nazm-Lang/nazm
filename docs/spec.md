@@ -125,6 +125,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `atomics` | STABLE 1.0 | Gate 3: sequentially consistent only; an ordering parameter would be an extension |
 | `statics` | STABLE 1.0 | Gate 3: a number, a `Bool` or an atomic; read-only, or an atomic; module-private. A record, enum or array would be an extension |
 | `boards` | EXPERIMENTAL | Gate 3: manifests, sections, interrupts, the arena and the failure hook, emulator-verified |
+| `for` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; each form means its `while` loop |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -4193,11 +4194,62 @@ refuses `@section`, `@interrupt` and `@on_failure` by name (`N0392`). Every boar
 | **`@task(priority = "N", period = "P")`** | On `fn f() -> Int ! {}` or `fn f(m: MmioCap) -> Int ! {}`: a periodic task of the board's **fixed-priority scheduler**, released every `P` ticks of the board's timer (a manifest's `timer_period_us`) from its first tick, `N` from 0 (lowest) to 255. `main` runs first, as the image's initialisation; then the scheduler runs, run to completion and one at a time, the highest-priority task that is released and has not run since, and waits for an interrupt when none is. A task released again before it has run has missed its deadline, its period: the image fails with `N0414`, reported and stopped as any failure. A task that answers anything but `0` stops the machine with that answer as the image's result, as `main`'s would be. No lock exists, only atomics and statics, so no priority inversion can; the scheduler owns the board's timer, so `@interrupt("timer")` beside a task is `N0627`, as are a task of another shape and a task on a board with no timer; a priority or period out of range is `N0619` |
 | **Not here** | Inline assembly: the C ABI is the low-level escape. A kernel or driver claim: the reference workload is a kernel-*style* image under QEMU, never "OS-ready" |
 
+### `for` loops — R1
+<!-- id: for -->
+
+Settled by R1a, 2026-10-11 (`openspec/changes/r1-language-for-the-rewrite`, D3).
+
+```nazm
+fn total(xs: Vec[Int]) -> Int {
+    let mut sum = 0;
+    for x in xs {
+        sum = sum + x;
+    }
+    for i in 0..3 {
+        sum = sum + i;
+    }
+    sum
+}
+```
+
+A `for` loop is a statement, as `while` is, and has no value. It comes in two forms, and **each
+means exactly the `while` loop written beside it** — nothing about evaluation, failure,
+reclamation or control is new:
+
+| Written | Means |
+| --- | --- |
+| `for x in e { body }` | `{ let seq = e; let mut i = 0; while i < len(seq) { let x = get(seq, i); i = i + 1; body } }` |
+| `for x in a..b { body }` | `{ let mut i = a; let end = b; while i < end { let x = i; i = i + 1; body } }` |
+
+- **What may be iterated.** `e` is an `Ints`, a `Strs`, a `Vec[T]` or a `Bytes`; `len` and `get`
+  are then `ints_len`/`ints_get`, `strs_len`/`strs_get`, `vec_len`/`vec_get` and
+  `bytes_len`/`bytes_get`, so `x` is an `Int`, a `Str`, a `T` or a `UInt8`. Anything else is
+  refused (`N0628`). In the range form `a` and `b` are `Int`s; `a..b` is written only there — it is
+  not an expression.
+- **Evaluated once, read every step.** `e`, or `a` and `b`, is evaluated once, before the first
+  step. The length is read before **every** step, as the `while` loop's condition is: an element
+  pushed during the loop is visited, and a `vec_pop` that shortens the sequence ends the loop
+  sooner. A handle is shared, not copied (*The memory constitution*), so the loop sees the
+  sequence the program is changing.
+- **`x` is new each step and immutable.** It is a binding of the loop's body, as a `let` at the
+  body's top would be; assigning it is refused as assigning any `let` is (`N0310`), and naming it
+  after the loop is an unknown name. Same-scope shadowing is refused as for `let` (`N0202`).
+- **`break` and `continue`** leave the `for` loop and start its next step, as in `while`; the step
+  is counted before the body runs, so `continue` never repeats an element.
+- **The hidden names** `seq`, `i` and `end` above are the explanation, not names a program can
+  see or collide with.
+- **Words.** `for` was reserved from the beginning, so no program could name anything `for`; `in`
+  is recognised only between a `for` loop's name and what it iterates, and stays an ordinary name
+  everywhere else. A `for` that is not of either form is still refused by name (`N0101`).
+
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, floating point. A
 program using any of them is rejected by name rather than misparsed into something else.
+
+**Corrected 2026-10-11, R1a.** `for` left this list: `for x in e` and `for x in a..b` exist
+(*`for` loops*, above). A `for` in any other shape is still refused by name, `N0101`.
 
 **Corrected 2026-10-07, Gate 2.** Floating point left this list: `Float32` and `Float64` exist,
 with fixed-width integers and bit operators (*Numbers*, above). The compatibility corpus keeps

@@ -594,6 +594,13 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                             stack.push(Node::Expr(&w.cond));
                             stack.push(Node::Block(&w.body));
                         }
+                        Stmt::For(f) => {
+                            spans.push((SyntaxKind::ForStmt, f.span));
+                            for e in f.iter.exprs() {
+                                stack.push(Node::Expr(e));
+                            }
+                            stack.push(Node::Block(&f.body));
+                        }
                         Stmt::Expr(e) => stack.push(Node::Expr(e)),
                         Stmt::Scope(sc) => {
                             spans.push((SyntaxKind::ScopeStmt, sc.span));

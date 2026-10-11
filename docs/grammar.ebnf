@@ -285,6 +285,7 @@ block = "{" , { statement } , [ expression ] , "}" ;
 statement = let_statement
           | assignment
           | while_statement
+          | for_statement
           | return_statement
           | break_statement
           | continue_statement
@@ -310,6 +311,11 @@ place = IDENT , { "." , IDENT | "[" , expression , "]" } ;
 
 (* @example fn main() -> Int { let mut i = 0; while i < 3 { i = i + 1; } i } *)
 while_statement = "while" , expression , block ;
+
+(* R1a. `in` is a word only here; `..` only between a range's bounds. Each form means the
+ * `while` loop `docs/spec.md` (*`for` loops*) gives for it. *)
+(* @example fn main() -> Int { let xs = ints_new(); ints_push(xs, 2); let mut t = 0; for x in xs { t = t + x; } for i in 0..3 { t = t + i; } t } *)
+for_statement = "for" , IDENT , "in" , ( expression , ".." , expression | expression ) , block ;
 
 (* @example fn f() -> Int { return 1; } fn main() -> Int { f() } *)
 return_statement = "return" , expression , ";" ;

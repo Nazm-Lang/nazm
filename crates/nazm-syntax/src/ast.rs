@@ -509,6 +509,10 @@ impl Block {
                             exprs.push(&w.cond);
                             blocks.push(&w.body);
                         }
+                        Stmt::For(f) => {
+                            exprs.extend(f.iter.exprs());
+                            blocks.push(&f.body);
+                        }
                         Stmt::Return(r) => exprs.push(&r.value),
                         Stmt::Expr(e) => exprs.push(e),
                         Stmt::Scope(sc) => blocks.push(&sc.body),
@@ -598,6 +602,9 @@ pub enum Stmt {
     /// the oldest C bugs and nothing is gained by reproducing it.
     Assign(Assign),
     While(While),
+    /// `for NAME in e { … }` or `for NAME in a..b { … }` (R1a): each the `while` loop
+    /// `docs/spec.md` (*`for` loops*) gives for it.
+    For(For),
     /// Leave the enclosing function with this value.
     Return(Return),
     /// Leave the innermost enclosing loop.
@@ -645,6 +652,7 @@ impl Stmt {
             Self::Let(l) => l.span,
             Self::Assign(a) => a.span,
             Self::While(w) => w.span,
+            Self::For(f) => f.span,
             Self::Return(r) => r.span,
             Self::Break { span } | Self::Continue { span } => *span,
             Self::Scope(s) => s.span,
@@ -768,6 +776,37 @@ pub struct While {
     pub cond: Expr,
     pub body: Block,
     pub span: Span,
+}
+
+/// A `for` loop (R1a): its name, what it iterates, and its body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct For {
+    /// The name each step binds, immutable and new each step.
+    pub name: String,
+    pub name_span: Span,
+    pub iter: ForIter,
+    pub body: Block,
+    pub span: Span,
+}
+
+/// What a `for` loop iterates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForIter {
+    /// `in e`: an `Ints`, `Strs`, `Vec[T]` or `Bytes`, evaluated once.
+    Each(Expr),
+    /// `in a..b`: the `Int`s from `a` up to, not including, `b`; each evaluated once.
+    Range { start: Expr, end: Expr },
+}
+
+impl ForIter {
+    /// The expressions written, in evaluation order.
+    #[must_use]
+    pub fn exprs(&self) -> Vec<&Expr> {
+        match self {
+            Self::Each(e) => vec![e],
+            Self::Range { start, end } => vec![start, end],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

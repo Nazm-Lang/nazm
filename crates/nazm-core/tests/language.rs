@@ -267,7 +267,8 @@ fn absent_features_are_refused_by_name() {
 
     for (src, word) in [
         ("fn main() -> Int { loop { 1 } }", "loop"),
-        ("fn main() -> Int { for x in y { 1 } }", "for"),
+        // `for x in y` is a loop since R1a; a `for` of neither form is still refused by name.
+        ("fn main() -> Int { for x { 1 } }", "for"),
         // `print` was on this list until B3, `struct` until N9, `enum` and `match` until
         // N10, and `impl` until N78 — each stopped being a name held for a feature that did not exist and
         // became the feature. A reserved word earns its place by naming something absent;

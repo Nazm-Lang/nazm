@@ -200,6 +200,19 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1a (2026-10-11)** · *`for` loops* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`,
+D3). `for x in e` over an `Ints`, `Strs`, `Vec[T]` or `Bytes`, and `for x in a..b`; `..` a token, `in`
+a word only after a `for` loop's name, and a `for` of any other shape still refused by name
+(`N0101`); a non-sequence is `N0628`. Checked once and lowered to Core IR as the `while` loop the
+specification gives, so the interpreter, the LIR oracle and both backends run what the `while`
+runs. Semantic epoch 52; EXPERIMENTAL in `spec.md`'s classification until R1 closes, so not yet in
+the compatibility corpus. The compiler written in Nazm does not carry it (area 31, R2). Evidence:
+`crates/nazm-cli/tests/for_loops.rs` — every rule of the section by hand-worked output in the
+interpreter, the LIR oracle, LLVM `-O0` and `-O2` and Cranelift, nothing left live in any memory
+report; the same program written with the specification's `while` loops printing and reclaiming
+identically; ten refusals by code; `in` as a function, parameter and binding name; the formatter
+gluing `a..b`; `docs/grammar.ebnf`'s example.
+
 **Gate 2 (2026-10-09)** · *Attributes* and *Conditional compilation* (`general-purpose.md` §16–§17;
 `spec.md`). `@name` and `@name(args)` before a top-level declaration, a closed vocabulary refused
 by name otherwise (`N0619`); a malformed one is one syntax error. A declaration whose `@cfg` does
