@@ -1406,8 +1406,8 @@ counted:
   %istimed = icmp ne i64 %timed, 0
   br i1 %istimed, label %deadline, label %look
 deadline:
-  ; `nz_os_clock` 0 is the wall clock, which pthread_cond_timedwait measures (Gate 3).
-  %r0 = call i32 @nz_os_clock(i32 0, ptr %ts)
+  ; `nz_os_clock` 4 is the monotonic clock: a deadline no step of the wall clock moves (Q1-M-12).
+  %r0 = call i32 @nz_os_clock(i32 4, ptr %ts)
   %sec0 = load i64, ptr %ts
   %tsn = getelementptr i8, ptr %ts, i64 8
   %nsec0 = load i64, ptr %tsn
@@ -1458,7 +1458,7 @@ ended:
 idle:
   br i1 %istimed, label %check, label %wait
 check:
-  %r1 = call i32 @nz_os_clock(i32 0, ptr %now)
+  %r1 = call i32 @nz_os_clock(i32 4, ptr %now)
   %nsec = load i64, ptr %now
   %nwn = getelementptr i8, ptr %now, i64 8
   %nnsec = load i64, ptr %nwn
@@ -1486,8 +1486,9 @@ recheck:
 sleep:
   br i1 %istimed, label %tsleep, label %fsleep
 tsleep:
-  ; Woken, timed out or spurious alike: look again, and the deadline check decides.
-  %tw = call i32 @pthread_cond_timedwait(ptr %wcv, ptr %s, ptr %ts)
+  ; Woken, timed out or spurious alike: look again, and the deadline check decides. Through
+  ; `nz.ctimedwait`, which takes the monotonic deadline (Q1-M-12).
+  %tw = call i32 @nz.ctimedwait(ptr %wcv, ptr %s, ptr %ts)
   br label %woke
 fsleep:
   %fw = call i32 @pthread_cond_wait(ptr %wcv, ptr %s)
@@ -1551,7 +1552,8 @@ start:
   %t = alloca [2 x i64], align 8
   %mi = call i32 @pthread_mutex_init(ptr %m, ptr null)
   %ci = call i32 @pthread_cond_init(ptr %cv, ptr null)
-  %r0 = call i32 @nz_os_clock(i32 0, ptr %ts)
+  ; The monotonic clock, as `nz.ctimedwait` takes it (Q1-M-12).
+  %r0 = call i32 @nz_os_clock(i32 4, ptr %ts)
   %s0 = load i64, ptr %ts
   %np = getelementptr i8, ptr %ts, i64 8
   %n0 = load i64, ptr %np
@@ -1567,7 +1569,7 @@ start:
   br label %loop
 loop:
   %c = call i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts)
-  %r1 = call i32 @nz_os_clock(i32 0, ptr %t)
+  %r1 = call i32 @nz_os_clock(i32 4, ptr %t)
   %s1 = load i64, ptr %t
   %tn = getelementptr i8, ptr %t, i64 8
   %n1 = load i64, ptr %tn
@@ -2119,11 +2121,11 @@ linked:
   ret void
 }
 
-; The wall clock in nanoseconds, as `pthread_cond_timedwait` measures it.
+; The monotonic clock in nanoseconds, which every deadline is on (Q1-M-12).
 define hidden i64 @nz.pool_now() {
 entry:
   %ts = alloca [2 x i64], align 8
-  %r = call i32 @nz_os_clock(i32 0, ptr %ts)
+  %r = call i32 @nz_os_clock(i32 4, ptr %ts)
   %s = load i64, ptr %ts
   %np = getelementptr i8, ptr %ts, i64 8
   %n = load i64, ptr %np
@@ -2237,6 +2239,7 @@ entry:
 define hidden ptr @nz.worker_main(ptr %w) {
 entry:
   %ts = alloca [2 x i64], align 8
+  %nap = alloca [2 x i64], align 8
   %l0 = call i32 @pthread_mutex_lock(ptr %w)
   br label %look
 look:
@@ -2249,7 +2252,9 @@ idle:
   %cv = getelementptr i8, ptr %w, i64 128
   br i1 %timed, label %tw, label %fw
 tw:
-  %a = call i32 @pthread_cond_timedwait(ptr %cv, ptr %w, ptr %ts)
+  ; The soonest deadline is monotonic; the wait measures the wall clock (Q1-M-12).
+  call void @nz.timed_nap(ptr %ts, ptr %nap)
+  %a = call i32 @pthread_cond_timedwait(ptr %cv, ptr %w, ptr %nap)
   br label %look
 fw:
   %b = call i32 @pthread_cond_wait(ptr %cv, ptr %w)
@@ -2516,14 +2521,18 @@ task:
   ret i32 0
 }
 
-; As `nz.cwait`, giving up at the wall-clock time `%ts`.
+; As `nz.cwait`, giving up at the **monotonic** time `%ts` (Q1-M-12): a task parks until the pool's
+; monotonic clock passes it; a thread naps on the wall clock `pthread_cond_timedwait` measures, at
+; most 100 ms at a time, and its caller looks again — every caller loops on its own deadline check.
 define hidden i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts) {
 entry:
+  %nap = alloca [2 x i64], align 8
   %t = load ptr, ptr @nz.cur_task
   %isthread = icmp eq ptr %t, null
   br i1 %isthread, label %thread, label %task
 thread:
-  %r = call i32 @pthread_cond_timedwait(ptr %cv, ptr %m, ptr %ts)
+  call void @nz.timed_nap(ptr %ts, ptr %nap)
+  %r = call i32 @pthread_cond_timedwait(ptr %cv, ptr %m, ptr %nap)
   ret i32 %r
 task:
   %s = load i64, ptr %ts
@@ -2539,6 +2548,45 @@ task:
   %d = select i1 %zero, i64 1, i64 %d1
   call void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %d)
   ret i32 0
+}
+
+; A monotonic deadline as the wall-clock time `pthread_cond_timedwait` measures (Q1-M-12): the wall
+; clock now, plus what is left of the deadline, at most 100 ms. A wall clock stepped forward ends a
+; nap early and the caller, looking again on the monotonic clock, naps once more; one stepped back
+; costs at most the 100 ms. Never a deadline on the wall clock itself.
+define hidden void @nz.timed_nap(ptr %deadline, ptr %nap) {
+entry:
+  %mono = alloca [2 x i64], align 8
+  %r0 = call i32 @nz_os_clock(i32 4, ptr %mono)
+  %ms = load i64, ptr %mono
+  %mnp = getelementptr i8, ptr %mono, i64 8
+  %mn = load i64, ptr %mnp
+  %msn = mul i64 %ms, 1000000000
+  %now = add i64 %msn, %mn
+  %ds = load i64, ptr %deadline
+  %dnp = getelementptr i8, ptr %deadline, i64 8
+  %dn = load i64, ptr %dnp
+  ; Past i64's nanoseconds the deadline is "never" (as `nz.ctimedwait`'s task path saturates).
+  %far = icmp sgt i64 %ds, 9223372035
+  %dsn = mul i64 %ds, 1000000000
+  %d0 = add i64 %dsn, %dn
+  %d = select i1 %far, i64 9223372036854775807, i64 %d0
+  %left0 = sub i64 %d, %now
+  %past = icmp slt i64 %left0, 0
+  %left = select i1 %past, i64 0, i64 %left0
+  %long = icmp sgt i64 %left, 100000000
+  %step = select i1 %long, i64 100000000, i64 %left
+  %r1 = call i32 @nz_os_clock(i32 0, ptr %nap)
+  %ws = load i64, ptr %nap
+  %wnp = getelementptr i8, ptr %nap, i64 8
+  %wn = load i64, ptr %wnp
+  %wn1 = add i64 %wn, %step
+  %carry = sdiv i64 %wn1, 1000000000
+  %wn2 = srem i64 %wn1, 1000000000
+  %ws1 = add i64 %ws, %carry
+  store i64 %ws1, ptr %nap
+  store i64 %wn2, ptr %wnp
+  ret void
 }
 
 ; Register as a waiter on `%cv`, mark the task parking under its worker's lock, let go of `%m`,

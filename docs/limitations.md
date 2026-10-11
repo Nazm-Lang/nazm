@@ -393,9 +393,11 @@ classification and evidence of each is in `docs/security-qualification.md`, and 
   name that grew exponentially, and sixteen levels exceeded the linker's limits. Past 512 bytes of
   spelled type arguments an instance is named by their BLAKE3 digest; building such a program still
   takes time and memory exponential in the nesting, since every instance is generated.
-- Native select deadlines are measured on the wall clock, the interpreter's and `time_now_ms`'s
-  on a monotonic one (Q1-M-12); a blocking built-in (`read_file`, …) holds a pool worker while it
-  blocks, as a C call does (Q1-M-13).
+- *Fixed before v1 (Q1-M-12):* native select and sleep deadlines were on the wall clock, so a step
+  of it ended a wait early or never; they are on the monotonic clock now, as the interpreter's and
+  `time_now_ms`'s are, and a wait on a thread naps at most 100 ms of wall clock before looking again
+  — the most a wall clock stepped back delays it. A blocking built-in (`read_file`, …) holds a pool
+  worker while it blocks, as a C call does (Q1-M-13).
 - A `nazm build` stopped by a signal leaves its scratch directory beside the output (Q1-FI-01).
 
 **FFI**: `RESERVED_C_SYMBOLS` lists what the runtime imports, not the runtime's own definitions
