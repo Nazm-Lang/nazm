@@ -253,10 +253,10 @@ disposition), **corrected** (documentation).
 | Q1-B-06 | generic symbol names grow exponentially | LOW | FIX-BEFORE-V1 | fixed (a digest past 512 bytes; `generics.rs`) |
 | Q1-B-07 | LIR oracle lacks float formatting | LOW | FIX-BEFORE-V1 | carried |
 | Q1-D-09 | unreadable root reported at a prelude span | LOW | FIX-BEFORE-V1 | fixed (reported at itself; `exit_contract.rs`) |
-| Q1-D-11, -13, -14 | no public code registry; `N0101` a catch-all; reserved codes | LOW | FIX-BEFORE-V1 | carried |
+| Q1-D-11, -13, -14 | no public code registry; `N0101` a catch-all; reserved codes | LOW | FIX-BEFORE-V1 | fixed (`diagnostics.md` registry of all 153 codes held by `codes.rs`; `N0101` named the umbrella; `N0620` reserved) |
 | Q1-D-12 | phantom codes `N0703`/`N0704` | LOW | FIX-BEFORE-V1 | corrected (`N0357`, `N0358`) |
 | Q1-D-15, -16 | no warning severity for deprecation; strict input readers undocumented | LOW | FIX-BEFORE-V1 | corrected (`stability.md`: deprecation announced until a warning severity exists; inputs read strictly) |
-| Q1-D-17 | no compat case for epoch 34 or `N0359` | LOW | FIX-BEFORE-V1 | carried |
+| Q1-D-17 | no compat case for epoch 34 or `N0359` | LOW | FIX-BEFORE-V1 | fixed (`run/imported-impl/`, `refuse/vec-ownership-cycle.nz`; and `trap/exit-status-outside.nz` for v1's `N0416`) |
 | Q1-D-20 | self-hosted compiler does not carry Gate 2, unsaid | LOW | FIX-BEFORE-V1 | corrected (`limitations.md`; areas 29 and 31 state the scope) |
 | Q1-D-22 | `fmt` lays out a file that does not parse | LOW | ACCEPTED-LIMITATION | carried, documented |
 | Q1-D-24 | stale text in VERIFIED matrix rows | LOW | FIX-BEFORE-V1 | corrected (each line of the audit's list re-found by its text and dated or corrected; the `codes.rs` check is Q1-D-11's) |
