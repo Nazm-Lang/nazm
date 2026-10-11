@@ -1,0 +1,9 @@
+// expect: N0359
+// A type that can own itself through a counted container would make a cycle counting never
+// reclaims, so it is refused where it is declared (spec: cycles).
+struct Node {
+    value: Int,
+    children: Vec[Node],
+}
+
+fn main() -> Int { 0 }

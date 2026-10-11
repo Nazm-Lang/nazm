@@ -415,6 +415,174 @@ continues N78's block, the N03xx block being full. One refusal changed code: `1.
 code's meaning moved. `nazm.capabilities/1`'s `types` gained the five capability types it lacked,
 new array values.
 
+## The code registry
+
+Every code `nazm` can report, generated from `crates/nazm-diag/src/lib.rs` (`codes`) and held to it
+by `crates/nazm-cli/tests/codes.rs`, which fails if a declared code is missing here, a row names a
+code that is not declared, or two rows share a code (v1, Q1-D-11). A code's meaning is the first
+sentence of its declaration's comment, or its constant's name where it has none; the sections above
+say how each family is used. A **reserved** row names a code that is not declared and will not be
+given a different meaning. Codes are never reused (*What compatibility means*).
+
+<!-- registry:begin -->
+| Code | Constant | What it reports |
+| --- | --- | --- |
+| `N0001` | `UNKNOWN_CHARACTER` | Unknown character |
+| `N0002` | `UNTERMINATED_STRING` | Unterminated string |
+| `N0003` | `INTEGER_TOO_LARGE` | Integer too large |
+| `N0004` | `INVALID_ESCAPE` | A backslash in a string literal that is not one of the escapes `docs/spec.md` lists (N49) |
+| `N0100` | `UNEXPECTED_TOKEN` | Unexpected token |
+| `N0101` | `UNSUPPORTED_CONSTRUCT` | Unsupported construct — **the umbrella code** for a construct this implementation refuses; its message names the construct, and a more specific code replaces it where one exists (Q1-D-13) |
+| `N0102` | `NESTING_TOO_DEEP` | An expression or block nested past the parser's limit |
+| `N0200` | `UNDEFINED_VARIABLE` | Undefined variable |
+| `N0201` | `UNDEFINED_FUNCTION` | Undefined function |
+| `N0202` | `ALREADY_DEFINED_IN_SCOPE` | Already defined in scope |
+| `N0203` | `DUPLICATE_FUNCTION` | Duplicate function |
+| `N0204` | `MISSING_MAIN` | Missing main |
+| `N0205` | `MODULE_NOT_FOUND` | `use "path";` named a file that could not be read |
+| `N0206` | `PRIVATE_DEFINITION` | A name that exists in an imported module, and is private there |
+| `N0207` | `AMBIGUOUS_IMPORT` | Two directly imported modules export the same name |
+| `N0208` | `IMPORT_COLLIDES_WITH_DEFINITION` | An import brings in a name this module also defines |
+| `N0209` | `ALIAS_COLLIDES` | `use "PATH" as NAME;` where `NAME` is already a function, a type or another import's name in the importing module (N49) |
+| `N0210` | `UNKNOWN_QUALIFIED_NAME` | `NAME::item` where `NAME` is no alias, or the aliased module exports no `item` (N49) |
+| `N0211` | `REEXPORT_UNKNOWN` | A `pub use` names something the module it re-exports from does not export (N103) |
+| `N0212` | `REEXPORT_COLLIDES` | A module offers one name twice, its own or a re-export's (N103) |
+| `N0213` | `REEXPORT_CYCLE` | Modules re-export from each other in a cycle (N103) |
+| `N0300` | `TYPE_MISMATCH` | Type mismatch |
+| `N0301` | `CONDITION_NOT_BOOL` | Condition not bool |
+| `N0302` | `BRANCH_TYPES_DIFFER` | Branch types differ |
+| `N0303` | `WRONG_ARGUMENT_COUNT` | Wrong argument count |
+| `N0304` | `INVALID_OPERANDS` | Invalid operands |
+| `N0305` | `UNKNOWN_TYPE` | Unknown type |
+| `N0310` | `ASSIGN_TO_IMMUTABLE` | Assign to immutable |
+| `N0311` | `MUTABLE_PARAMETER` | Mutable parameter |
+| `N0312` | `NOT_IN_A_LOOP` | `break` or `continue` outside a loop |
+| `N0313` | `UNREACHABLE_STATEMENT` | A statement that provably cannot run |
+| `N0314` | `CONTROL_FLOW_AS_VALUE` | `break` or `continue` where a value is expected |
+| `N0320` | `SPAWN_OUTSIDE_SCOPE` | `spawn` outside a `scope` |
+| `N0321` | `ILLEGAL_TASK_CAPTURE` | A value that may not cross into a task |
+| `N0330` | `DUPLICATE_TYPE` | Two types declared with one name in one module |
+| `N0331` | `BUILTIN_TYPE_REDEFINED` | A type declared with a built-in type's name |
+| `N0332` | `DUPLICATE_FIELD` | Two fields of one record, or of one variant's payload, with one name |
+| `N0333` | `UNKNOWN_FIELD` | A field named in a construction, a projection or a pattern that the record or variant does not have |
+| `N0334` | `MISSING_FIELD` | A construction that does not give every field a value, or a pattern that does not name every payload field |
+| `N0335` | `INVALID_PROJECTION` | `.field` on something that is not a record — including an enum, whose payload is reached by `match` and not by projection |
+| `N0336` | `RECURSIVE_RECORD` | A user-defined type that contains itself by value, directly or through others |
+| `N0337` | `PRIVATE_TYPE_EXPOSED` | A public function, record or enum whose signature, fields or payloads name a private type, which an importer could not resolve |
+| `N0338` | `TYPE_NESTING_TOO_DEEP` | User-defined types nested inside one another past the stated bound |
+| `N0339` | `EMPTY_ENUM` | An enum with no variants |
+| `N0340` | `DUPLICATE_VARIANT` | Two variants of one enum with one name |
+| `N0341` | `UNKNOWN_VARIANT` | A variant named in a construction or a pattern that the enum does not have |
+| `N0342` | `MATCH_ON_NON_ENUM` | `match` on a value that is not an enum |
+| `N0343` | `NON_EXHAUSTIVE_MATCH` | A `match` that does not name every variant of its enum |
+| `N0344` | `DUPLICATE_MATCH_ARM` | A `match` that names one variant twice |
+| `N0345` | `WRONG_ENUM_IN_PATTERN` | A pattern whose variant belongs to a different enum than the scrutinee |
+| `N0350` | `DUPLICATE_TYPE_PARAMETER` | Two type parameters of one declaration with one name |
+| `N0351` | `TYPE_ARGUMENTS_ON_NON_GENERIC` | Type arguments written on something that takes none |
+| `N0352` | `MISSING_TYPE_ARGUMENTS` | A generic definition, or `Vec`, written where a complete type is required but without its type arguments |
+| `N0353` | `WRONG_TYPE_ARGUMENT_COUNT` | A generic definition applied to the wrong number of type arguments |
+| `N0354` | `CANNOT_INFER_TYPE_ARGUMENT` | A generic call whose arguments do not determine every type parameter |
+| `N0355` | `CONFLICTING_TYPE_ARGUMENTS` | Two arguments of one call that give one type parameter different types |
+| `N0356` | `GENERIC_MAIN` | A generic `main` |
+| `N0357` | `UNBOUNDED_SPECIALISATION` | A generic function whose native instances would never end — polymorphic recursion, `f[T]` calling `f[Vec[T]]` |
+| `N0358` | `GENERIC_INSTANCE_LIMIT` | More native generic instances than one program may have, or one nested too deeply |
+| `N0359` | `OWNERSHIP_CYCLE` | A type that can own itself through a reference-counted container — `Node { children |
+| `N0360` | `PROPAGATE_NON_RESULT` | `?` applied to something that is not the core prelude's `Result` — an `Option`, a project enum shaped like one, anything else |
+| `N0361` | `PROPAGATE_OUTSIDE_RESULT` | `?` in a function whose return type is not the core prelude's `Result` |
+| `N0362` | `PROPAGATE_ERROR_MISMATCH` | `?` whose operand's error type is not exactly the enclosing function's |
+| `N0363` | `PRELUDE_TYPE_REDECLARED` | A project type named like one of the core prelude's, which every module sees |
+| `N0364` | `UNSATISFIED_REQUIREMENT` | A type argument, written or inferred, that does not have a capability its parameter requires — a concrete type without equality, or a caller's own parameter whose … |
+| `N0365` | `UNKNOWN_REQUIREMENT` | A requirement naming something that is not a capability |
+| `N0366` | `UNDECLARED_EFFECT` | A function whose declared effect set lacks an effect its body requires |
+| `N0367` | `UNKNOWN_EFFECT` | A name in an effect set that is not an effect |
+| `N0368` | `DUPLICATE_EFFECT` | An effect written twice in one set |
+| `N0369` | `MISSING_AUTHORITY` | An operation whose authority the function does not hold (N37) |
+| `N0370` | `CAPABILITY_CONSTRUCTED` | An attempt to build a capability |
+| `N0371` | `MAIN_PARAMETER` | A `main` parameter that is not a capability |
+| `N0372` | `RESTRICTED_FLOW` | A restricted flow (N38) |
+| `N0380` | `FOREIGN_ABI` | A foreign declaration names an ABI other than `"C"` (N42) |
+| `N0381` | `FOREIGN_TYPE` | A foreign declaration takes or returns a type that cannot cross the C boundary (N42) |
+| `N0382` | `FOREIGN_SYMBOL` | A foreign declaration's symbol is not a C identifier a linker can be handed (N42) |
+| `N0383` | `FOREIGN_CONFLICT` | Two foreign declarations of one symbol disagree about its signature (N42) |
+| `N0384` | `FOREIGN_SHAPE` | A foreign declaration has type parameters or a written effect set (N42) |
+| `N0385` | `FOREIGN_NOT_INTERPRETED` | `nazm run` was asked to run a program that calls a foreign function (N42) |
+| `N0386` | `CAPTURE_REFUSED` | A closure captures a `let mut` binding or a capability (N50) |
+| `N0387` | `NOT_A_FUNCTION_VALUE` | A function that cannot be a value — generic, foreign or built-in — is used as one, or a closure is written inside a generic function (N50) |
+| `N0388` | `EFFECT_PARAMETER` | An effect parameter where none may be |
+| `N0389` | `CONFLICTING_EFFECT_ARGUMENT` | A call binds its callee's effect parameter to two different sets (N51) |
+| `N0390` | `CHANNEL_ELEMENT` | A `Chan[T]` whose `T` may not cross into a task (N53) |
+| `N0391` | `EXPORT_SHAPE` | An export (N55) that is not public, declares an effect, is generic, or takes or returns a type other than `Int` and `Bool` |
+| `N0392` | `MACHINE_ONLY` | A device-register built-in (`mmio_read32`, `mmio_write32`) reached by something that has no device registers |
+| `N0393` | `COMPTIME_REFUSED` | A function `nazm comptime` will not evaluate |
+| `N0394` | `KERNEL_INELIGIBLE` | A function `nazm accel` will not run as a kernel |
+| `N0395` | `NOT_A_CONTRACT` | A module `nazm contract` was given that does not have a contract's shape |
+| `N0396` | `CONSERVATION_BROKEN` | A transaction that would change the contract's conserved quantity |
+| `N0397` | `CALLER_NOT_INT` | A sender whose address is not an `Int`, as the language's `caller` must be |
+| `N0398` | `BAD_CALLDATA` | Calldata that is not a known entrypoint's selector and `int64` arguments |
+| `N0399` | `EVM_UNSUPPORTED` | A contract construct the EVM backend does not emit, or a storage upgrade it refuses |
+| `N0400` | `INTEGER_OVERFLOW` | Integer overflow |
+| `N0401` | `DIVISION_BY_ZERO` | Division by zero |
+| `N0402` | `ITERATION_LIMIT` | The interpreter's iteration guard, not a language rule |
+| `N0403` | `CALL_DEPTH_LIMIT` | Runaway recursion, caught before the stack is exhausted |
+| `N0404` | `INTERPRETER_UNAVAILABLE` | The host refused what running needs |
+| `N0405` | `INDEX_OUT_OF_BOUNDS` | An index outside a value's bounds |
+| `N0406` | `ALLOCATION_FAILED` | The allocator refused |
+| `N0407` | `IO_FAILED` | A file could not be read or written |
+| `N0408` | `STACK_EXHAUSTED` | A compiled program's call would exhaust its thread's stack (N49) |
+| `N0409` | `NULL_FROM_C` | A foreign function returned null where its declaration promised a value (N85) |
+| `N0410` | `PRECONDITION_FAILED` | A precondition that did not hold as the function was entered (N87) |
+| `N0411` | `POSTCONDITION_FAILED` | A postcondition that did not hold as the function returned (N87) |
+| `N0412` | `SHIFT_OUT_OF_RANGE` | A shift or rotation by a negative amount, or a shift by the operand's width or more (Gate 2) |
+| `N0413` | `NOT_UTF8` | Bytes that are not UTF-8 made into a `Text`, a `Text` cut or read away from a scalar boundary, or an `Int` that is not a Unicode scalar value made into one (Gate 2) |
+| `N0414` | `TASK_DEADLINE` | A board's task released again before it had run |
+| `N0415` | `WATCHDOG_EXPIRED` | A board's watchdog expired |
+| `N0416` | `EXIT_STATUS` | `exit_with` given a status outside `0..=255`, the statuses every host reports unchanged (v1, Q1-B-05, `docs/spec.md`, *Ending*) |
+| `N0500` | `MANIFEST_INVALID` | A manifest that cannot be read as `nazm.package/1` |
+| `N0501` | `PACKAGE_NOT_FOUND` | A dependency's directory or manifest is not there |
+| `N0502` | `VERSION_MISMATCH` | A dependency's manifest states another version than the one declared for it |
+| `N0503` | `PACKAGE_CONFLICT` | Two packages of one name in one build |
+| `N0504` | `PACKAGE_CYCLE` | A package depends on itself, through its dependencies |
+| `N0505` | `LOCK_MISSING` | `--locked`, and there is no lockfile |
+| `N0506` | `LOCK_MISMATCH` | `--locked`, and the packages resolved are not the ones the lockfile records |
+| `N0507` | `DIGEST_MISMATCH` | A package's bytes no longer match the digest the lockfile records for it |
+| `N0508` | `UNKNOWN_DEPENDENCY` | An import names a package the importing package does not declare |
+| `N0509` | `NO_ENTRY` | A package built as a program has no `main` |
+| `N0510` | `PROFILE_VIOLATION` | A program that breaks a rule of a profile in force |
+| `N0511` | `UNKNOWN_PROFILE` | A profile named on the command line or in a manifest that does not exist |
+| `N0512` | `REGISTRY_INVALID` | A registry index that is not `nazm.registry-index/1`, names another package, records a version twice or a digest of the wrong shape; or a publish of a version already … |
+| `N0513` | `VERSION_UNSATISFIABLE` | No version in the registry satisfies every requirement on a package |
+| `N0514` | `PACKAGE_UNSAFE` | A registry package holding a symbolic link or anything but files and directories |
+| `N0600` | `IMPL_CONFLICT` | Two impls of one trait for one type in one compilation |
+| `N0601` | `IMPL_ORPHAN` | An impl in a module that declares neither the trait nor the type |
+| `N0602` | `IMPL_MISSING_METHOD` | An impl that does not define every method of its trait |
+| `N0603` | `IMPL_METHOD_MISMATCH` | An impl method its trait does not declare, or one whose signature is not the trait's with `Self` replaced by the impl's type, effects included |
+| `N0604` | `IMPL_TYPE_REFUSED` | An impl for a type that cannot have one |
+| `N0605` | `NO_METHOD` | A method call no trait in scope provides for the receiver's type |
+| `N0606` | `AMBIGUOUS_METHOD` | A method call more than one trait in scope provides |
+| `N0607` | `TRAIT_NOT_A_TYPE` | A trait written where a type is expected |
+| `N0608` | `METHOD_NOT_A_VALUE` | A method named without being called |
+| `N0609` | `TRAIT_METHOD_SELF` | A trait method whose first parameter is not `self |
+| `N0610` | `NOT_A_TRAIT` | A bound, an impl or a qualified call naming a type that is not a trait |
+| `N0611` | `OPAQUE_HANDLE` | An opaque handle (`extern "C" struct S;`) built or taken apart |
+| `N0612` | `CALLBACK_NOT_EXPORT` | A callback argument to C that is not an export's name |
+| `N0613` | `ERRNO_UNAVAILABLE` | `c_errno()` in a build for a target with no `errno` |
+| `N0614` | `CONTRACT_SHAPE` | A contract clause that is not made only of literals, names, operators, field reads and calls of pure functions |
+| `N0615` | `PRECONDITION_REFUTED` | A call whose arguments are all literals and that breaks its callee's precondition |
+| `N0616` | `CAPTURE_CYCLE` | A closure capturing a value that can hold a function value behind a counted handle — a `Vec[fn() -> Int]`, a `Vec` of records with a function field, a record holding one |
+| `N0617` | `SHIFT_AMOUNT_REFUSED` | A shift whose amount is a constant outside `0..width` (Gate 2) |
+| `N0618` | `ARRAY_TOO_LARGE` | An array over 64 KiB, or of no elements (Gate 2) |
+| `N0619` | `ATTRIBUTE` | An attribute the language does not have, on a declaration it does not apply to, or with arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*) |
+| `N0620` | — | **reserved**, never assigned: kept for a warning at each use of a deprecated item, should a warning severity ever exist (Q1-D-14) |
+| `N0621` | `ARRAY_ELEMENT` | An array whose element owns something — a `Str`, a handle, a function value — rather than plain data (Gate 2) |
+| `N0622` | `NOT_A_CONSTANT` | A constant's value, or an array's length, that is not computed from literals, other constants, operators and numeric conversions (Gate 2) |
+| `N0623` | `CONSTANT_FAILS` | A constant whose computation overflows, divides by zero or shifts out of range (Gate 2) |
+| `N0624` | `ARRAY_INDEX` | An index that is not into an array, or a constant index outside it (Gate 2) |
+| `N0625` | `STATIC_ASSIGNED` | An assignment to a static, which is read-only — changed, if an `Atomic`, only by the atomic operations (Gate 3, `docs/spec.md`, *Statics*) |
+| `N0626` | `BOARD_MANIFEST` | A board's manifest the build cannot honour |
+| `N0627` | `INTERRUPT_HANDLER` | An interrupt handler of a shape the board cannot call, two handlers for one interrupt, or one for an interrupt the board does not have (Gate 3, `docs/spec.md`, *Boards*) |
+| `N0900` | `COMPILER_DEFECT` | The compiler contradicted itself (N39) |
+<!-- registry:end -->
+
 ## Spans are byte offsets
 
 `start` is inclusive, `end` is exclusive, and both count **bytes** from the beginning of
