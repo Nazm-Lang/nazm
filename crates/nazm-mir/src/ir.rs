@@ -812,6 +812,8 @@ impl Types {
             | Type::Chan
             | Type::ChanOf(_)
             | Type::Vec(_)
+            | Type::Box(_)
+            | Type::List(_)
             | Type::Bytes
             | Type::Text
             | Type::Atomic

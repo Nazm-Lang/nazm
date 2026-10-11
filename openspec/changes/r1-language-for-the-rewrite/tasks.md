@@ -15,7 +15,7 @@ each new construct by name until R2 carries it.
 ## 3. R1a — the core language
 
 - [x] 3.1 D3 `for x in xs` and `for i in a..b` (EXPERIMENTAL until 8.1)
-- [ ] 3.2 L1 `Box[T]`, `List[T]` and the ownership rule (D1)
+- [x] 3.2 L1 `Box[T]`, `List[T]` and the ownership rule (D1); release by worklist (runtime ABI 29)
 - [ ] 3.3 L3 patterns: `_` (with the covering warning), or-patterns, nested and literal patterns, `if let`, `let … else`
 - [ ] 3.4 L5 tuples
 - [ ] 3.5 L6 derived `Hash` and `Ord`
@@ -31,6 +31,7 @@ each new construct by name until R2 carries it.
 - [ ] 4.4 L12 `defer`
 - [ ] 4.5 L13 checked arithmetic, widening multiply, `Int128`/`UInt128`
 - [ ] 4.6 L14 stack size
+- [ ] 4.8 L15 a warning severity, `--deny-warnings`; L3's covering warning on `_`
 - [ ] 4.7 D2 linear `s = str_concat(s, t)`
 
 ## 5. R1c — serialisation

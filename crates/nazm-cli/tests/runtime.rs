@@ -47,7 +47,7 @@ extern void arr_retain(void *) NZ("arr_retain");
 extern bool arr_release(void *) NZ("arr_release");
 extern void seq_release(void *) NZ("seq_release");
 extern void strs_release(void *) NZ("strs_release");
-extern void vec_release(void *, void (*)(void *), int64_t) NZ("vec_release");
+extern void vec_release(void *, void (*)(void *, void *), int64_t, void *) NZ("vec_release");
 extern void *chan_new(int64_t) NZ("chan_new");
 extern bool chan_send(void *, int64_t) NZ("chan_send");
 extern bool chan_recv(void *, void *, const char *, int64_t) NZ("chan_recv");
@@ -164,7 +164,8 @@ static void strings_in_sequences(void) {
 
 typedef struct { Str name; int64_t n; Str tag; } Rec;
 static int64_t released_records = 0;
-static void release_rec(void *p) {
+static void release_rec(void *p, void *queue) {
+    (void)queue;
     Rec *r = p;
     str_release(r->name.owner);
     str_release(r->tag.owner);
@@ -180,11 +181,34 @@ static void records_in_sequences(void) {
         slot[s->len++] = r;
     }
     arr_retain(s);
-    vec_release(s, release_rec, sizeof(Rec));
+    vec_release(s, release_rec, sizeof(Rec), NULL);
     CHECK(released_records == 0);
-    vec_release(s, release_rec, sizeof(Rec));
+    vec_release(s, release_rec, sizeof(Rec), NULL);
     CHECK(released_records == 300);
     CHECK(str_allocated - sa == 600 && str_reclaimed - sr == 600);
+}
+
+/* R1a: an element's release releasing a sequence of its own passes the queue it was given, so
+ * the inner sequence is queued and emptied by the outermost release, not by recursion. */
+static void release_inner(void *p, void *queue) {
+    vec_release(*(void **)p, release_rec, sizeof(Rec), queue);
+}
+
+static void sequences_of_sequences(void) {
+    int64_t before = released_records;
+    Seq *outer = seq_new();
+    for (int i = 0; i < 50; i++) {
+        Seq *inner = seq_new();
+        for (int j = 0; j < 4; j++) {
+            Rec *slot = arr_grow(inner, sizeof(Rec));
+            Rec r = { make_str("n"), j, make_str("t") };
+            slot[inner->len++] = r;
+        }
+        void **slot = arr_grow(outer, sizeof(void *));
+        slot[outer->len++] = inner;
+    }
+    vec_release(outer, release_inner, sizeof(void *), NULL);
+    CHECK(released_records - before == 200);
 }
 
 static const char MSG[] = "out of memory";
@@ -293,6 +317,7 @@ int main(void) {
     sequences();
     strings_in_sequences();
     records_in_sequences();
+    sequences_of_sequences();
     channels();
     shared_strings();
     formatting();

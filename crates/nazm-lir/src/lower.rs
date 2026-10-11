@@ -518,7 +518,7 @@ pub fn lower_as(
                         }
                     }
                 }
-                Type::Vec(id) => {
+                Type::Vec(id) | Type::Box(id) | Type::List(id) => {
                     let k = u32::try_from(id.index()).unwrap_or(u32::MAX);
                     if vs.insert(k) {
                         if let Some(v) = program.types.vec(id) {

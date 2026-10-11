@@ -240,6 +240,9 @@ pub enum Temp {
     ForIndex,
     /// A `for` range's end, evaluated once (R1a).
     ForEnd,
+    /// The `Box` or `List` `box_new` or `list_from_vec` is making, before anything else can see
+    /// it (R1a).
+    Made,
 }
 
 impl Temp {
@@ -254,6 +257,7 @@ impl Temp {
             Self::ForSeq => "seq",
             Self::ForIndex => "i",
             Self::ForEnd => "end",
+            Self::Made => "made",
         }
     }
 }
@@ -735,6 +739,8 @@ impl Law {
                 | Type::Chan
                 | Type::ChanOf(_)
                 | Type::Vec(_)
+                | Type::Box(_)
+                | Type::List(_)
                 | Type::Bytes
                 | Type::Cap(_)
                 | Type::OsHandle

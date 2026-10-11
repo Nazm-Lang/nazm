@@ -126,6 +126,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `statics` | STABLE 1.0 | Gate 3: a number, a `Bool` or an atomic; read-only, or an atomic; module-private. A record, enum or array would be an extension |
 | `boards` | EXPERIMENTAL | Gate 3: manifests, sections, interrupts, the arena and the failure hook, emulator-verified |
 | `for` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; each form means its `while` loop |
+| `box-list` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; recursive types through immutable indirection |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -1036,6 +1037,9 @@ corresponding parameter. Then:
 - a cycle whose every edge is inline is an **impossible layout** — `N0336`, as before;
 - any other cycle is an **ownership cycle** — `N0359`, with the path that closes it.
 
+*R1a* labels an edge through `Box` or `List` **immutable** and accepts a cycle of inline and immutable
+edges (*Immutable indirection*, below); a cycle through a `Vec` is refused as here.
+
 So `Node { children: Vec[Node] }`, `A → Vec[B] → B → Vec[A]`, `enum Tree { Leaf, Node(kids: Vec[Tree]) }`
 and `Tree[T] { kids: Vec[Tree[T]] }` are refused, and `Vec[Vec[Int]]`, `Vec[Pair[Int, Str]]`,
 a record holding a `Vec[Int]` and an enum holding a `Vec[Str]` are not: an acyclic ownership
@@ -1897,7 +1901,7 @@ language whose specification already promised aliasing.
 | Kind | Types | Assignment produces | Storage |
 | --- | --- | --- | --- |
 | **Immediate** | `Int`, `Bool`; the other numbers and arrays of plain data (Gate 2) | an independent copy | none |
-| **Shared immutable value** | `Str`; `Text` (Gate 2) | a value with the same bytes | reclaimed when the last value naming it dies; shared or copied **unobservably** until then |
+| **Shared immutable value** | `Str`; `Text` (Gate 2); `Box[T]`, `List[T]` (R1a) | a value with the same bytes; for `Box` and `List`, another reference to the same immutable value | reclaimed when the last value naming it dies; shared or copied **unobservably** until then |
 | **Owned mutable handle** | `Ints`, `Strs`; `Vec[T]`; `Bytes` (Gate 2) | another reference to the same storage — for `Bytes`, to the same view of the same buffer | reclaimed when the last reference dies; a `Bytes` buffer when its last view dies |
 | **Runtime-managed handle** | `Chan`; `Chan[T]` | another reference to the same channel | the runtime's, reclaimed when the last reference dies |
 
@@ -2006,6 +2010,10 @@ Nazm does not call something automatic and leave the reader to find out what it 
 | `p.x` where `x` is an `Int` | no | no | no | no | no |
 | `p.name` where `name` is a `Str` | no | no | **yes** | no | no |
 | `p.name = s;` | no | no | **yes**, one taken and one released | no | no |
+| `let b = box_new(v);` (R1a) | **yes** | no | **yes**, if `v` owns something | no | no |
+| `box_get(b)` | no | no | **yes**, if the value owns something | no | no |
+| `let l = list_from_vec(xs);` | **yes** | **yes**, the elements | **yes**, one per element that owns something | no | no |
+| `list_get(l, i)` | no | no | **yes**, if the element owns something | no | no |
 
 Two entries in that table deserve their emphasis. **Passing a value to a function costs
 nothing**, which is rule 2 turned into a number: the caller keeps its reference across the
@@ -2095,6 +2103,13 @@ reachable; and a cycle through an environment would have to come back through on
 which none can. A cycle that runs through no environment is a cycle of definitions, refused by
 `N0336` and `N0359`. **Every value of every type a program can write is again reclaimed by
 counting**, environments included.
+
+**R1a admitted recursive types, 2026-10-11, by the second option's discipline without its cost.**
+`Box[T]` and `List[T]` are a value kind that can form a definition cycle — and arrive with the
+policy: they are immutable, so a value can refer through one only to values older than itself, and
+the ownership rule refuses every definition cycle that runs through a mutable handle. The argument,
+and the release that takes no stack per level, are in *Immutable indirection: `Box[T]` and
+`List[T]`*, below.
 
 The rule is decided by the captured binding's **type**, where the closure is written: not by
 names, aliases or what the program later does with either value. `let alias = fs;` captured
@@ -4221,9 +4236,9 @@ reclamation or control is new:
 | `for x in e { body }` | `{ let seq = e; let mut i = 0; while i < len(seq) { let x = get(seq, i); i = i + 1; body } }` |
 | `for x in a..b { body }` | `{ let mut i = a; let end = b; while i < end { let x = i; i = i + 1; body } }` |
 
-- **What may be iterated.** `e` is an `Ints`, a `Strs`, a `Vec[T]` or a `Bytes`; `len` and `get`
-  are then `ints_len`/`ints_get`, `strs_len`/`strs_get`, `vec_len`/`vec_get` and
-  `bytes_len`/`bytes_get`, so `x` is an `Int`, a `Str`, a `T` or a `UInt8`. Anything else is
+- **What may be iterated.** `e` is an `Ints`, a `Strs`, a `Vec[T]`, a `List[T]` or a `Bytes`; `len`
+  and `get` are then `ints_len`/`ints_get`, `strs_len`/`strs_get`, `vec_len`/`vec_get`,
+  `list_len`/`list_get` and `bytes_len`/`bytes_get`, so `x` is an `Int`, a `Str`, a `T` or a `UInt8`. Anything else is
   refused (`N0628`). In the range form `a` and `b` are `Int`s; `a..b` is written only there — it is
   not an expression.
 - **Evaluated once, read every step.** `e`, or `a` and `b`, is evaluated once, before the first
@@ -4241,6 +4256,81 @@ reclamation or control is new:
 - **Words.** `for` was reserved from the beginning, so no program could name anything `for`; `in`
   is recognised only between a `for` loop's name and what it iterates, and stays an ordinary name
   everywhere else. A `for` that is not of either form is still refused by name (`N0101`).
+
+### Immutable indirection: `Box[T]` and `List[T]` — R1
+<!-- id: box-list -->
+
+Settled by R1a, 2026-10-11 (`openspec/changes/r1-language-for-the-rewrite`, D1 and L1).
+
+```nazm
+enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]), }
+
+fn eval(e: Expr) -> Int {
+    match e {
+        Expr.Num(v: v) => v,
+        Expr.Add(l: l, r: r) => eval(box_get(l)) + eval(box_get(r)),
+    }
+}
+
+struct Node { name: Str, kids: List[Node], }
+```
+
+Two built-in generic types through which a definition may refer to itself. Neither can be changed
+after it is made, and that is what makes them safe.
+
+| | `Box[T]` | `List[T]` |
+| --- | --- | --- |
+| Holds | one `T` | a sequence of `T` |
+| Made by | `box_new(v: T) -> Box[T]` | `list_from_vec(xs: Vec[T]) -> List[T]`, a copy of `xs`'s elements as they are then — a later change to `xs` does not reach it; `list_empty[T]() -> List[T]` |
+| Read by | `box_get(b) -> T`, a copy by `T`'s own law | `list_len(l) -> Int`; `list_get(l, i) -> T`, `N0405` outside `0..list_len(l)`; `for x in l` (*`for` loops*) |
+| Changed by | nothing | nothing |
+| Assignment | shares: another reference to the same immutable value | shares |
+| Equality | none yet (`N0304`), as for a sequence; structural equality arrives with L6 | none yet (`N0304`) |
+| Into a task | refused (`N0321`), as a handle is | refused (`N0321`) |
+
+**The kind.** Both are **shared immutable values** (*The memory constitution*), the kind `Str`
+is: assignment shares, nothing can write through a copy, and the storage is reclaimed when the last
+value naming it dies. A `Box[Vec[Int]]` shares the `Vec` it holds, and the `Vec` is still mutable
+through whatever reaches it — immutability is of the `Box`, not of what a handle inside it names.
+
+**The ownership rule.** An edge of the ownership graph of definitions (*Generics*, *What may not be
+expressed: an ownership cycle*) through a `Box` or a `List` is labelled **immutable**, and one
+through a mutable handle — `Vec`, `Ints`, `Strs`, `Bytes`, `Chan[T]` — **counted**, as before. A path's
+label is the strongest along it: counted over immutable over inline. Then:
+
+- a cycle whose every edge is inline is an impossible layout — `N0336`, unchanged;
+- a cycle with a counted edge anywhere on it is an ownership cycle — `N0359`, unchanged;
+- a cycle of inline and immutable edges, at least one immutable, is **accepted**.
+
+So `enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]) }`, `struct Node { kids: List[Node] }`
+and `struct Tree[T] { kids: List[Tree[T]] }` are legal; `struct Node { kids: Vec[Node] }`,
+`struct Node { kids: Box[Vec[Node]] }` and `struct A { kids: Vec[B] } struct B { up: Box[A] }` are
+still refused — each closes its cycle through a `Vec`.
+
+**Why counting still reclaims everything** (*Cycles* requires the argument before a recursive type
+is admitted). A cycle among values follows edges of the definitions' graph, so it is a closed walk
+there, and a closed walk through an edge contains a simple cycle through that edge. A value cycle
+through a mutable handle would need a definition cycle through a counted edge, which is refused. A
+value cycle through inline and immutable edges only cannot exist: inline containment is finite, and
+an immutable edge points at a value that existed before the `Box` or `List` holding it was made and
+can never be made to point elsewhere — the fact that already makes closure environments safe
+(*Cycles*, Gate 1-C1, fact 1). So every value of every type a program can write is still reclaimed
+by counting.
+
+**Release is not recursion.** A recursive value can be as deep as a program makes it — a list of a
+million boxes is a million levels — and releasing it must not take a million stack frames. Every
+implementation releases what a value owns through a worklist: a sequence or indirection whose last
+reference dies is queued and emptied in a loop, so releasing any value takes stack bounded by the
+types, not by the value.
+
+**Closures.** `N0616` (*Cycles*) is about **mutable** handles: a closure may capture a `Box` or
+`List` that can hold a function value, because what either holds was made before it and cannot be
+replaced, so the closure that captures one cannot be inside it.
+
+**Names.** `Box`, `List` and their built-ins arrive after 1.0, so they are **prelude names**: a
+module that declares a type named `Box` or `List`, or a function named like one of the built-ins,
+keeps its own, and the built-in is hidden in that module. No program valid under 1.0 changes
+meaning. The built-in names of 1.0 (`Int`, `Vec`, `Result` and the rest) stay unshadowable (`N0331`).
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

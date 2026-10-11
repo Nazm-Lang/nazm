@@ -738,6 +738,25 @@ blocks as values in the native backends.*
 
 ### 4. Memory model and reclamation — VERIFIED for the current type universe, closure environments included (Gate 1-C1)
 
+**R1a (2026-10-12)** · *Immutable indirection: `Box[T]` and `List[T]`* (`spec.md`;
+`openspec/changes/r1-language-for-the-rewrite`, D1/L1). A definition may reach itself through a
+`Box` or `List`: the ownership graph labels those edges immutable and refuses only a cycle with a
+counted edge on it (`N0359`), with the reclamation argument in the specification. Both are a
+`Vec[T]` underneath, nothing writes after they are made, and they are distinct types to the
+checker only: Core IR lowering writes `box_new` and `list_from_vec` with three internal built-ins
+no program can name, and the interpreter, the LIR oracle and LIR carry each operation out as the
+`Vec` one it means. Release is a worklist, not recursion, in all three: the interpreter's
+sequence storage hands its elements to a per-thread queue, and the runtime's `nz.vec_release`
+takes the queue of the release in progress — runtime ABI 29. Prelude names: a module's own `Box`,
+`List` or `box_new` keeps its meaning. Semantic epoch 53; EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/box_list.rs` — trees of boxes and lists by hand-worked output under the
+interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; a million-deep `Box`
+chain built and released by the interpreter, LLVM and Cranelift with every sequence reclaimed
+(before the queue the interpreter overflowed its stack and a compiled program died releasing it);
+the ownership rule's acceptances and refusals; no equality, no task, no bare `Box`; a closure
+capturing a `List` of function values accepted and a `Vec` of them refused (`N0616`); the prelude
+names; provenance through both; a recursive type crossing a module's interface.
+
 **v1 (2026-10-11, Q1-M-01, Q1-M-02)** · The type universe this row's VERIFIED covers is now written
 down whole: `spec.md`'s four kinds list Gate 2's numbers and arrays (immediates), `Text` (a shared
 immutable value), `Vec[T]` and `Bytes` (owned mutable handles; a buffer lives while any view does)

@@ -52,6 +52,10 @@ pub(crate) struct Fx<'l, 'a> {
     /// Where a function whose own frame is large checks its stack (Q1-A1-01): set by its
     /// `StackCheck`, so the function is entered through [`frame_entry`].
     frame_at: Option<Span>,
+    /// In a release helper, the queue of the release in progress (R1a): every sequence it
+    /// releases is queued on it rather than released by recursion. `None` everywhere else, where
+    /// a release is the outermost one.
+    pub queue: Option<V>,
 }
 
 /// Lower one MIR function.
@@ -73,6 +77,7 @@ pub(crate) fn lower(
         promoted: vec![None; f.locals.len()],
         borrowed_at: std::collections::BTreeMap::new(),
         frame_at: None,
+        queue: None,
     };
     let promotable = promotable(f);
     let mut next_param = 0u32;
@@ -249,6 +254,15 @@ impl<'l, 'a> Fx<'l, 'a> {
             promoted: Vec::new(),
             borrowed_at: std::collections::BTreeMap::new(),
             frame_at: None,
+            queue: None,
+        }
+    }
+
+    /// The queue a release passes on (R1a): this helper's, or null for an outermost release.
+    pub(crate) fn release_queue(&mut self) -> V {
+        match self.queue {
+            Some(q) => q,
+            None => self.null(),
         }
     }
 
@@ -761,7 +775,8 @@ impl<'l, 'a> Fx<'l, 'a> {
             }
             Ty::Record(_) | Ty::Enum(_) => {
                 let h = self.lw.helper(Helper::Release(t));
-                self.call(h, vec![addr]);
+                let q = self.release_queue();
+                self.call(h, vec![addr, q]);
             }
             _ => {
                 let v = self.load(Class::Ptr, addr, 0);
@@ -804,7 +819,8 @@ impl<'l, 'a> Fx<'l, 'a> {
                     let h = self.lw.helper(Helper::ReleaseElement(elem));
                     let f = self.addr_of(h);
                     let stride = self.iconst(i64::from(self.size(elem)));
-                    self.rt("nz.vec_release", &[v, f, stride]);
+                    let q = self.release_queue();
+                    self.rt("nz.vec_release", &[v, f, stride, q]);
                 } else {
                     self.rt("nz.seq_release", &[v]);
                 }

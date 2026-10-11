@@ -305,6 +305,14 @@ const fn allocates(op: Intrinsic) -> bool {
         Intrinsic::IntsNew
         | Intrinsic::StrsNew
         | Intrinsic::VecNew
+        // Written as `Vec` operations by Core IR lowering (R1a); never in MIR, classified as
+        // what they become.
+        | Intrinsic::BoxNew
+        | Intrinsic::ListFromVec
+        | Intrinsic::ListEmpty
+        | Intrinsic::BoxFresh
+        | Intrinsic::BoxFill
+        | Intrinsic::ListPush
         | Intrinsic::ChanNew
         | Intrinsic::ChanNewOf
         | Intrinsic::AtomicNew
@@ -421,6 +429,9 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::VecGet
         | Intrinsic::VecSet
         | Intrinsic::VecPop
+        | Intrinsic::BoxGet
+        | Intrinsic::ListLen
+        | Intrinsic::ListGet
         | Intrinsic::WrappingAdd
         | Intrinsic::WrappingSub
         | Intrinsic::WrappingMul

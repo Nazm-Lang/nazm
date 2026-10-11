@@ -15,6 +15,10 @@ use crate::ir::{EnumTy, RecordTy, Ty};
 pub(crate) fn define(lw: &mut Lw<'_>, sym: SymId, h: Helper) -> Function {
     let mut fx = Fx::helper(lw);
     let a = fx.param(0);
+    // A release helper's second parameter is the queue of the release in progress (R1a).
+    if matches!(h, Helper::Release(_) | Helper::ReleaseElement(_)) {
+        fx.queue = Some(fx.param(1));
+    }
     let name = match h {
         Helper::Retain(t) | Helper::Release(t) => {
             let retain = matches!(h, Helper::Retain(_));

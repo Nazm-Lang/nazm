@@ -44,6 +44,10 @@ pub enum Shape {
     VecT,
     /// `Chan[T]` (N53).
     ChanT,
+    /// `Box[T]` (R1a).
+    BoxT,
+    /// `List[T]` (R1a).
+    ListT,
     /// `Vec[Chan[T]]`: the channels a select waits on (N54).
     ChansT,
     /// `Float64`, `Float32`, `UInt64` and `UInt32` (Gate 2): the monomorphic numeric shapes the
@@ -116,7 +120,7 @@ impl Shape {
             Self::Text => Some(Type::Text),
             Self::OsHandle => Some(Type::OsHandle),
             Self::Atomic => Some(Type::Atomic),
-            Self::T | Self::VecT | Self::ChanT | Self::ChansT => None,
+            Self::T | Self::VecT | Self::ChanT | Self::ChansT | Self::BoxT | Self::ListT => None,
         }
     }
 
@@ -134,6 +138,8 @@ impl Shape {
             Self::VecT => "Vec[T]",
             Self::ChanT => "Chan[T]",
             Self::ChansT => "Vec[Chan[T]]",
+            Self::BoxT => "Box[T]",
+            Self::ListT => "List[T]",
             Self::F64 => "Float64",
             Self::F32 => "Float32",
             Self::U64 => "UInt64",
@@ -525,11 +531,38 @@ pub enum Intrinsic {
     /// `atomic_compare_swap(a: Atomic, expected: Int, new: Int) -> Bool` — `new` stored, and
     /// `true`, exactly when the cell held `expected`.
     AtomicCompareSwap,
+
+    // --- immutable indirection, R1a (`docs/spec.md`, *Immutable indirection*) -------------
+    //
+    // Prelude built-ins ([`Intrinsic::is_prelude`]): a module's own definition of one of these
+    // names hides it. Core IR lowering writes each as the `Vec[T]` operations it means, so no
+    // layer below the checker sees one.
+    /// `box_new[T](v: T) -> Box[T]` — one `T`, which nothing can replace.
+    BoxNew,
+    /// `box_get[T](b: Box[T]) -> T` — a copy of it, by `T`'s law.
+    BoxGet,
+    /// `list_from_vec[T](xs: Vec[T]) -> List[T]` — `xs`'s elements as they are now, copied.
+    ListFromVec,
+    /// `list_empty[T]() -> List[T]` — no elements. `T` is written.
+    ListEmpty,
+    /// `list_len[T](l: List[T]) -> Int`
+    ListLen,
+    /// `list_get[T](l: List[T], i: Int) -> T` — fails with `N0405` unless `0 <= i < len`.
+    ListGet,
+    /// Internal (R1a): a `Box[T]` with nothing in it yet, which [`Self::BoxFill`] fills before
+    /// anything else sees it. Made by Core IR lowering for `box_new`; no program can name it.
+    BoxFresh,
+    /// Internal (R1a): `box`'s one element, `v`, written while the box is still the lowering's
+    /// alone. Made by Core IR lowering for `box_new`; no program can name it.
+    BoxFill,
+    /// Internal (R1a): `v` appended to a `List[T]` that is still the lowering's alone. Made by
+    /// Core IR lowering for `list_from_vec`; no program can name it.
+    ListPush,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 169] = [
+    pub const ALL: [Self; 175] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -699,6 +732,12 @@ impl Intrinsic {
         Self::AtomicAdd,
         Self::AtomicSwap,
         Self::AtomicCompareSwap,
+        Self::BoxNew,
+        Self::BoxGet,
+        Self::ListFromVec,
+        Self::ListEmpty,
+        Self::ListLen,
+        Self::ListGet,
     ];
 
     #[must_use]
@@ -877,6 +916,15 @@ impl Intrinsic {
             Self::AtomicAdd => "atomic_add",
             Self::AtomicSwap => "atomic_swap",
             Self::AtomicCompareSwap => "atomic_compare_swap",
+            Self::BoxNew => "box_new",
+            Self::BoxGet => "box_get",
+            Self::ListFromVec => "list_from_vec",
+            Self::ListEmpty => "list_empty",
+            Self::ListLen => "list_len",
+            Self::ListGet => "list_get",
+            Self::BoxFresh => "box_fresh",
+            Self::BoxFill => "box_fill",
+            Self::ListPush => "list_push",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -898,7 +946,16 @@ impl Intrinsic {
             | Self::ChanRecvOf
             | Self::ChanCloseOf
             | Self::ChanSelectOf
-            | Self::ChanSelectUntil => 1,
+            | Self::ChanSelectUntil
+            | Self::BoxNew
+            | Self::BoxGet
+            | Self::ListFromVec
+            | Self::ListEmpty
+            | Self::ListLen
+            | Self::ListGet
+            | Self::BoxFresh
+            | Self::BoxFill
+            | Self::ListPush => 1,
             other if other.requires().is_some() => 1,
             _ => 0,
         }
@@ -1113,6 +1170,15 @@ impl Intrinsic {
             Self::AtomicLoad => &[Shape::Atomic],
             Self::AtomicStore | Self::AtomicAdd | Self::AtomicSwap => &[Shape::Atomic, Shape::Int],
             Self::AtomicCompareSwap => &[Shape::Atomic, Shape::Int, Shape::Int],
+            Self::BoxNew => &[Shape::T],
+            Self::BoxGet => &[Shape::BoxT],
+            Self::ListFromVec => &[Shape::VecT],
+            Self::ListEmpty => &[],
+            Self::ListLen => &[Shape::ListT],
+            Self::ListGet => &[Shape::ListT, Shape::Int],
+            Self::BoxFresh => &[],
+            Self::BoxFill => &[Shape::BoxT, Shape::T],
+            Self::ListPush => &[Shape::ListT, Shape::T],
             Self::TextFromStr => &[Shape::Str],
             Self::TextAssume => &[Shape::Str],
         }
@@ -1276,9 +1342,30 @@ impl Intrinsic {
             Self::AtomicNew => Shape::Atomic,
             Self::AtomicLoad | Self::AtomicStore | Self::AtomicAdd | Self::AtomicSwap => Shape::Int,
             Self::AtomicCompareSwap => Shape::Bool,
+            Self::BoxNew => Shape::BoxT,
+            Self::BoxGet | Self::ListGet => Shape::T,
+            Self::ListFromVec | Self::ListEmpty => Shape::ListT,
+            Self::ListLen | Self::BoxFill | Self::ListPush => Shape::Int,
+            Self::BoxFresh => Shape::BoxT,
             Self::TextFromStr => Shape::Text,
             Self::TextAssume => Shape::Text,
         }
+    }
+
+    /// Whether this built-in arrived after 1.0 as a **prelude** name (R1a): a module that
+    /// defines a function of the same name keeps its own, and this one is hidden there, so no
+    /// program valid under 1.0 changes meaning. The built-ins of 1.0 are never shadowed.
+    #[must_use]
+    pub const fn is_prelude(self) -> bool {
+        matches!(
+            self,
+            Self::BoxNew
+                | Self::BoxGet
+                | Self::ListFromVec
+                | Self::ListEmpty
+                | Self::ListLen
+                | Self::ListGet
+        )
     }
 
     /// The built-in of this name, if there is one.

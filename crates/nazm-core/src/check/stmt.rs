@@ -502,7 +502,7 @@ impl Checker<'_> {
                     Type::Ints => Some(Type::Int),
                     Type::Strs => Some(Type::Str),
                     Type::Bytes => Some(Type::of_num(NumKind::U8)),
-                    Type::Vec(v) => self.res.types().vec_element(v),
+                    Type::Vec(v) | Type::List(v) => self.res.types().vec_element(v),
                     _ => None,
                 };
                 if element.is_some() {

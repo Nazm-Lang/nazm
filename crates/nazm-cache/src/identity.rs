@@ -290,7 +290,10 @@ use crate::digest::{self, Framed};
 /// `mmio_*` built-ins are.
 /// `52` — R1a, 2026-10-11. `for x in e` and `for x in a..b` moved from refused (`N0101`) to
 /// accepted, `..` became a token, and iterating anything but a sequence is `N0628`.
-pub const SEMANTIC_EPOCH: u32 = 52;
+/// `53` — R1a, 2026-10-12. `Box[T]` and `List[T]`: a definition reaching itself through one moved
+/// from refused (`N0359`) to accepted, the two types and six built-ins became prelude names, and
+/// `for` iterates a `List`.
+pub const SEMANTIC_EPOCH: u32 = 53;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

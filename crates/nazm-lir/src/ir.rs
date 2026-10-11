@@ -490,7 +490,8 @@ impl Ty {
     #[must_use]
     pub fn of(t: nazm_sema::Type) -> Self {
         match t {
-            nazm_sema::Type::Vec(id) => {
+            // A `Box[T]` and a `List[T]` are their `Vec[T]`, which nothing writes (R1a).
+            nazm_sema::Type::Vec(id) | nazm_sema::Type::Box(id) | nazm_sema::Type::List(id) => {
                 Self::Vec(VecTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
             }
             nazm_sema::Type::ChanOf(id) => {

@@ -258,8 +258,10 @@ pub fn escape(s: &str) -> String {
 /// `nz_os_stack_size` is the calling thread's stack left below its frame, not `RLIMIT_STACK`
 /// (Q1-A1-04). 28 is the monotonic deadlines' (Q1-M-12): `nz.ctimedwait` takes a monotonic
 /// time, `nz.pool_now` reads the monotonic clock, and `nz.timed_nap` turns a deadline into the
-/// wall-clock nap a timed wait measures.
-pub const RUNTIME_ABI_REVISION: u32 = 28;
+/// wall-clock nap a timed wait measures. 29 is R1a's release queue: `nz.vec_release` takes the
+/// queue of the release in progress, and an element's release function takes it too, so a
+/// release nested in another queues instead of recursing (`nz.vec_drain`, `nz.vec_enqueue`).
+pub const RUNTIME_ABI_REVISION: u32 = 29;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -387,7 +389,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.seq_new", [], Some(Word::Ptr), Sequences, "an empty sequence with one reference the caller owns, or null"),
     import!("nz.seq_release", [Ptr], None, Sequences, "releases a sequence whose elements own nothing; null is a no-op"),
     import!("nz.strs_release", [Ptr], None, Sequences, "releases a sequence of strings, and on the last reference each string"),
-    import!("nz.vec_release", [Ptr, Ptr, I64], None, Sequences, "releases a sequence; on the last reference calls the release function on each element at the stride given, then frees it"),
+    import!("nz.vec_release", [Ptr, Ptr, I64, Ptr], None, Sequences, "releases a sequence; on the last reference calls the release function on each element at the stride given, then frees it — queued on the release in progress, if one is (R1a)"),
     import!("nz.arr_new", [], Some(Word::Ptr), Sequences, "an empty internal list, one reference, not counted as a program sequence; or null"),
     import!("nz.arr_grow", [Ptr, I64], Some(Word::Ptr), Sequences, "room for one more element of this size; the data pointer, or null with the sequence unchanged"),
     import!("nz.ints_sum", [Ptr, I64, Ptr], Some(Word::I64), Sequences, "borrows the sequence; the sum, or 0 with the flag set at the first running sum that overflows (N66)"),
@@ -694,7 +696,9 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.pool_report", "void" () "", false, Tasks, "", Never, Entry, "the pool's line of the schedule report, where it ran (N83)", "none"),
     rt!("nz.join_one", "i32" ("ptr") "", false, Tasks, "", Status, Any, "wait for one task to end, its thread joined or its record freed (N83)", "frees the pool task's record"),
     rt!("nz.format_int", "i64" ("ptr", "i64") "", false, Base, "", Never, Any, "an Int's decimal digits into a 21-byte buffer", "writes into the caller's buffer"),
-    rt!("nz.vec_release", "void" ("ptr", "ptr", "i64") "", false, Sequences, "", Never, Owner, "release a sequence, each element with its type's release at its stride", "takes a reference; null is a no-op"),
+    rt!("nz.vec_release", "void" ("ptr", "ptr", "i64", "ptr") "", false, Sequences, "", Never, Owner, "release a sequence, each element with its type's release at its stride, through a queue rather than recursion (R1a)", "takes a reference; null is a no-op; the queue is null outside a release"),
+    rt!("nz.vec_drain", "void" ("ptr", "ptr", "i64", "ptr") "", false, Sequences, "", Never, Owner, "empty a dead sequence: each element's release, given the queue, then its storage (R1a)", "takes the sequence's last reference"),
+    rt!("nz.vec_enqueue", "i1" ("ptr", "ptr", "ptr", "i64") "", false, Sequences, "", Never, Owner, "queue a dead sequence on the release in progress; false when the queue cannot grow (R1a)", "takes the sequence's last reference when it answers true"),
     rt!("nz.read_file_to", "void" ("ptr", "ptr", "i64") "", false, Io, "io", Status, Any, "`nz.read_file`, written through a pointer", "as `nz.read_file`"),
     rt!("nz.str_join_to", "void" ("ptr", "ptr", "ptr", "i64") "", false, Join, "", Null, Any, "`nz.str_join`, written through a pointer", "as `nz.str_join`"),
     rt!("nz.scope_join_to", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Any, "`nz.scope_join`, written through a pointer", "as `nz.scope_join`"),
@@ -1180,10 +1184,12 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_eight_and_reaches_the_system_only_through_its_platform_layer()
+    fn the_runtime_is_revision_twenty_nine_and_reaches_the_system_only_through_its_platform_layer()
     {
-        // Gate 3's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 28);
+        // R1a's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 29);
+        // The release queue (R1a): a nested release queues on it rather than recursing.
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.vec_enqueue("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_spawn("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.time_sleep_ms("));

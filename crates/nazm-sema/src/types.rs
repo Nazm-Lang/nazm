@@ -313,6 +313,12 @@ pub enum Type {
     Enum(EnumId),
     /// `Vec[T]`, interned by element type. N11. A mutable handle, by the sequence law.
     Vec(VecId),
+    /// `Box[T]` (R1a): one `T`, an immutable shared value, by the id of `Vec[T]` — its
+    /// representation is a `Vec[T]` of one element, which nothing can change.
+    Box(VecId),
+    /// `List[T]` (R1a): a sequence of `T`, an immutable shared value, by the id of `Vec[T]`,
+    /// its representation.
+    List(VecId),
     /// A type parameter, inside the declaration that owns it.
     Param(TypeParam),
     /// A capability: authority of one compiler-owned kind (N37). A value, freely copied,
@@ -419,6 +425,8 @@ impl Type {
             Self::Record(_)
             | Self::Enum(_)
             | Self::Vec(_)
+            | Self::Box(_)
+            | Self::List(_)
             | Self::Param(_)
             | Self::Fn(_)
             | Self::ChanOf(_)
@@ -490,6 +498,23 @@ impl Type {
         matches!(self, Self::Ints | Self::Strs | Self::Vec(_) | Self::Bytes)
     }
 
+    /// Whether this is `Box[T]` or `List[T]` (R1a): shared, immutable, and — for now — neither
+    /// comparable nor crossing into a task.
+    #[must_use]
+    pub const fn is_indirection(self) -> bool {
+        matches!(self, Self::Box(_) | Self::List(_))
+    }
+
+    /// The `Vec[T]` a `Box[T]` or `List[T]` is represented as, and every other type as it is: what
+    /// every layer below the checker sees (R1a).
+    #[must_use]
+    pub const fn represented(self) -> Self {
+        match self {
+            Self::Box(v) | Self::List(v) => Self::Vec(v),
+            t => t,
+        }
+    }
+
     /// Whether this is a capability type (N37).
     #[must_use]
     pub const fn is_capability(self) -> bool {
@@ -515,7 +540,10 @@ impl Type {
     #[must_use]
     pub fn may_cross_into_a_task(self) -> bool {
         // Nor a function value (N50): its type does not say what it captured.
-        !self.is_sequence() && !self.is_param() && !matches!(self, Self::Fn(_))
+        !self.is_sequence()
+            && !self.is_indirection()
+            && !self.is_param()
+            && !matches!(self, Self::Fn(_))
     }
 
     /// Parse a written **built-in** type name. `None` for anything else, including every

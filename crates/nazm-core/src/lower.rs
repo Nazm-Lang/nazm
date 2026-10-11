@@ -695,6 +695,18 @@ impl<'a> Lower<'a> {
                             vec![elem],
                         )
                     }
+                    // A `List` (R1a), read as `list_len` and `list_get` read it.
+                    Type::List(v) => {
+                        let Some(elem) = self.res.types().vec_element(v) else {
+                            return defect(e.span(), "a `List` with no element type");
+                        };
+                        (
+                            nazm_sema::Intrinsic::ListLen,
+                            nazm_sema::Intrinsic::ListGet,
+                            elem,
+                            vec![elem],
+                        )
+                    }
                     _ => return defect(e.span(), "a `for` over a type the checker refuses"),
                 };
                 let seq = self.temp(Temp::ForSeq, seq_ty, at);
@@ -1350,6 +1362,13 @@ impl<'a> Lower<'a> {
             }
         };
         let kind = match checked.callee {
+            // Made out of the `Box` and `List` operations a program cannot name (R1a).
+            Callee::Builtin(nazm_sema::Intrinsic::BoxNew) => {
+                return self.box_new(type_args(true)?, args, ty, callee_at, at);
+            }
+            Callee::Builtin(nazm_sema::Intrinsic::ListFromVec) => {
+                return self.list_from_vec(type_args(true)?, args, ty, callee_at, at);
+            }
             Callee::Builtin(op) => ExprKind::Builtin {
                 op,
                 type_args: type_args(op.generics() > 0)?,
@@ -1392,6 +1411,181 @@ impl<'a> Lower<'a> {
         };
         Ok(Expr {
             kind,
+            ty: Some(ty),
+            at,
+        })
+    }
+
+    /// `box_new(v)` (R1a), as `{ let made = <a fresh box>; <fill made with v>; made }`: the box
+    /// is the lowering's alone until it is the result, which is what lets it be written once.
+    fn box_new(
+        &mut self,
+        type_args: Vec<Type>,
+        mut args: Vec<Expr>,
+        ty: Type,
+        callee_at: Span,
+        at: Span,
+    ) -> Lowered<Expr> {
+        let Some(value) = args.pop() else {
+            return defect(callee_at, "a `box_new` with no value");
+        };
+        let made = self.temp(Temp::Made, ty, at);
+        let read = Expr {
+            kind: ExprKind::Local(made),
+            ty: Some(ty),
+            at,
+        };
+        let stmts = vec![
+            Stmt::Let {
+                local: made,
+                value: Expr {
+                    kind: ExprKind::Builtin {
+                        op: nazm_sema::Intrinsic::BoxFresh,
+                        type_args: type_args.clone(),
+                        args: Vec::new(),
+                        callee_at,
+                    },
+                    ty: Some(ty),
+                    at,
+                },
+            },
+            Stmt::Eval(Expr {
+                kind: ExprKind::Builtin {
+                    op: nazm_sema::Intrinsic::BoxFill,
+                    type_args,
+                    args: vec![read.clone(), value],
+                    callee_at,
+                },
+                ty: Some(Type::Int),
+                at,
+            }),
+        ];
+        Ok(Expr {
+            kind: ExprKind::Block(Block {
+                stmts,
+                tail: Some(Box::new(read)),
+                ends: Ends::FallsThrough,
+                owns: vec![made],
+                at,
+            }),
+            ty: Some(ty),
+            at,
+        })
+    }
+
+    /// `list_from_vec(xs)` (R1a), as `{ let seq = xs; let made = list_empty(); let mut i = 0;
+    /// while i < vec_len(seq) { list_push(made, vec_get(seq, i)); i = i + 1; } made }`: the
+    /// elements as they are now, copied by their own law.
+    fn list_from_vec(
+        &mut self,
+        type_args: Vec<Type>,
+        mut args: Vec<Expr>,
+        ty: Type,
+        callee_at: Span,
+        at: Span,
+    ) -> Lowered<Expr> {
+        use nazm_sema::Intrinsic as I;
+        let Some(source) = args.pop() else {
+            return defect(callee_at, "a `list_from_vec` with no vector");
+        };
+        let Some(seq_ty) = source.ty else {
+            return defect(
+                callee_at,
+                "a `list_from_vec` vector the checker gave no type",
+            );
+        };
+        let elem = type_args.first().copied().unwrap_or(Type::Int);
+        let seq = self.temp(Temp::ForSeq, seq_ty, at);
+        let made = self.temp(Temp::Made, ty, at);
+        let index = self.temp(Temp::ForIndex, Type::Int, at);
+        let local = |l: LocalId, t: Type| Expr {
+            kind: ExprKind::Local(l),
+            ty: Some(t),
+            at,
+        };
+        let builtin = |op: I, args: Vec<Expr>, t: Type| Expr {
+            kind: ExprKind::Builtin {
+                op,
+                type_args: type_args.clone(),
+                args,
+                callee_at,
+            },
+            ty: Some(t),
+            at,
+        };
+        let zero = self.constant(Const::Int(0));
+        let one = self.constant(Const::Int(1));
+        let int = |kind: ExprKind| Expr {
+            kind,
+            ty: Some(Type::Int),
+            at,
+        };
+        let id = LoopId(self.loops);
+        self.loops += 1;
+        let cond = Expr {
+            kind: ExprKind::Compare {
+                op: cir::CmpOp::Lt,
+                operand: Type::Int,
+                law: Law::Int,
+                lhs: Box::new(local(index, Type::Int)),
+                rhs: Box::new(builtin(I::VecLen, vec![local(seq, seq_ty)], Type::Int)),
+            },
+            ty: Some(Type::Bool),
+            at,
+        };
+        let body = Block {
+            stmts: vec![
+                Stmt::Eval(builtin(
+                    I::ListPush,
+                    vec![
+                        local(made, ty),
+                        builtin(
+                            I::VecGet,
+                            vec![local(seq, seq_ty), local(index, Type::Int)],
+                            elem,
+                        ),
+                    ],
+                    Type::Int,
+                )),
+                Stmt::Assign {
+                    local: index,
+                    path: Vec::new(),
+                    value: int(ExprKind::Arith {
+                        op: cir::ArithOp::Add,
+                        lhs: Box::new(local(index, Type::Int)),
+                        rhs: Box::new(int(ExprKind::Const(one))),
+                    }),
+                    at,
+                },
+            ],
+            tail: None,
+            ends: Ends::FallsThrough,
+            owns: Vec::new(),
+            at,
+        };
+        let stmts = vec![
+            Stmt::Let {
+                local: seq,
+                value: source,
+            },
+            Stmt::Let {
+                local: made,
+                value: builtin(I::ListEmpty, Vec::new(), ty),
+            },
+            Stmt::Let {
+                local: index,
+                value: int(ExprKind::Const(zero)),
+            },
+            Stmt::Loop { id, cond, body, at },
+        ];
+        Ok(Expr {
+            kind: ExprKind::Block(Block {
+                stmts,
+                tail: Some(Box::new(local(made, ty))),
+                ends: Ends::FallsThrough,
+                owns: vec![seq, made, index],
+                at,
+            }),
             ty: Some(ty),
             at,
         })

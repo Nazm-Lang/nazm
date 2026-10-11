@@ -449,23 +449,107 @@ impl BytesView {
 /// counted here, the same two numbers a compiled program reports, and a test compares
 /// them. If the interpreter ever stopped reclaiming, the count would say so instead of the
 /// two implementations silently disagreeing.
+///
+/// # Release is not recursion (R1a)
+///
+/// A `Vec[Value]` can hold values that hold sequences, as deep as a program makes them — a
+/// `Box` chain a million long is a million sequences inside one another — and the host's own
+/// drop would recurse once per level and overflow the stack. So a sequence of values gives its
+/// elements to a worklist instead of dropping them in place, and the first release on a thread
+/// empties that worklist in a loop: a release nested inside it only adds to it. The stack a
+/// release takes is bounded by the types, never by the value (`docs/spec.md`, *Immutable
+/// indirection*).
 #[derive(Debug, Default)]
-pub struct Seq<T>(Mutex<T>);
+pub struct Seq<T: Drain>(Mutex<T>);
 
-impl<T> Seq<T> {
+/// What a sequence's storage hands over when it is released: its elements that can own
+/// sequences, for the worklist; nothing for those that cannot.
+pub trait Drain {
+    fn drain_into(&mut self, out: &mut Vec<Value>);
+}
+
+impl Drain for Vec<i64> {
+    fn drain_into(&mut self, _: &mut Vec<Value>) {}
+}
+
+impl Drain for Vec<Str> {
+    fn drain_into(&mut self, _: &mut Vec<Value>) {}
+}
+
+impl Drain for Vec<Value> {
+    fn drain_into(&mut self, out: &mut Vec<Value>) {
+        out.append(self);
+    }
+}
+
+std::thread_local! {
+    /// The worklist of the release in progress on this thread, if one is.
+    static RELEASING: std::cell::RefCell<Option<Vec<Value>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Release `values`: queued behind the release already in progress on this thread, or, if
+/// none is, dropped one at a time in a loop until nothing they owned is left.
+fn release(mut values: Vec<Value>) {
+    if values.is_empty() {
+        return;
+    }
+    let queued = RELEASING.with(|r| match r.try_borrow_mut() {
+        Ok(mut slot) => match slot.as_mut() {
+            Some(queue) => {
+                queue.append(&mut values);
+                true
+            }
+            None => {
+                *slot = Some(Vec::new());
+                false
+            }
+        },
+        // Borrowed only by this function, never across a drop; a failure here would be a
+        // release inside the queue's own bookkeeping, which nothing does.
+        Err(_) => false,
+    });
+    if queued {
+        return;
+    }
+    loop {
+        // Each value is dropped outside the borrow, so a sequence it releases queues its own.
+        drop(values);
+        values = RELEASING.with(|r| {
+            r.try_borrow_mut()
+                .ok()
+                .and_then(|mut slot| slot.as_mut().map(std::mem::take))
+                .unwrap_or_default()
+        });
+        if values.is_empty() {
+            break;
+        }
+    }
+    RELEASING.with(|r| {
+        if let Ok(mut slot) = r.try_borrow_mut() {
+            *slot = None;
+        }
+    });
+}
+
+impl<T: Drain> Seq<T> {
     pub(super) fn new(value: T) -> Self {
         ALLOCATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self(Mutex::new(value))
     }
 }
 
-impl<T> Drop for Seq<T> {
+impl<T: Drain> Drop for Seq<T> {
     fn drop(&mut self) {
         RECLAIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut owned = Vec::new();
+        if let Ok(inner) = self.0.get_mut() {
+            inner.drain_into(&mut owned);
+        }
+        release(owned);
     }
 }
 
-impl<T> std::ops::Deref for Seq<T> {
+impl<T: Drain> std::ops::Deref for Seq<T> {
     type Target = Mutex<T>;
 
     fn deref(&self) -> &Mutex<T> {
