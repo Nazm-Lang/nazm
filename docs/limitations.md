@@ -389,8 +389,10 @@ classification and evidence of each is in `docs/security-qualification.md`, and 
 - *Fixed before v1 (Q1-B-05):* `exit_with` with a status outside 0..255 ended with a different status
   in the interpreter, a native build and the LIR oracle. The specification now defines the status as
   `0..=255`, reported unchanged; anything else fails with `N0416` everywhere (*Ending*).
-- A generic instantiated through many levels of nesting gets a symbol name that grows
-  exponentially; sixteen levels can exceed the linker's limits. *Fix before v1* (Q1-B-06).
+- *Fixed before v1 (Q1-B-06):* a generic instantiated through many levels of nesting got a symbol
+  name that grew exponentially, and sixteen levels exceeded the linker's limits. Past 512 bytes of
+  spelled type arguments an instance is named by their BLAKE3 digest; building such a program still
+  takes time and memory exponential in the nesting, since every instance is generated.
 - Native select deadlines are measured on the wall clock, the interpreter's and `time_now_ms`'s
   on a monotonic one (Q1-M-12); a blocking built-in (`read_file`, …) holds a pool worker while it
   blocks, as a C call does (Q1-M-13).

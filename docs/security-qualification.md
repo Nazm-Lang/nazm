@@ -250,7 +250,7 @@ disposition), **corrected** (documentation).
 | Q1-M-08 | warm diagnostic names a parameter by position | LOW | FIX-BEFORE-V1 | carried |
 | Q1-M-10 | Cranelift key relied on a hand-bumped revision | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-M-12 | native select deadline on the wall clock | LOW | FIX-BEFORE-V1 | carried |
-| Q1-B-06 | generic symbol names grow exponentially | LOW | FIX-BEFORE-V1 | carried |
+| Q1-B-06 | generic symbol names grow exponentially | LOW | FIX-BEFORE-V1 | fixed (a digest past 512 bytes; `generics.rs`) |
 | Q1-B-07 | LIR oracle lacks float formatting | LOW | FIX-BEFORE-V1 | carried |
 | Q1-D-09 | unreadable root reported at a prelude span | LOW | FIX-BEFORE-V1 | carried |
 | Q1-D-11, -13, -14 | no public code registry; `N0101` a catch-all; reserved codes | LOW | FIX-BEFORE-V1 | carried |

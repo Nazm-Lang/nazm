@@ -104,6 +104,67 @@ fn an_instance_nested_past_the_stated_bound_is_refused_rather_than_generated() {
     assert!(stderr.contains("N0358"), "{stderr}");
 }
 
+/// Q1-B-06: an instance whose type arguments nest sixteen deep — 65,536 leaves in their spelling —
+/// builds and runs natively under both backends, its symbol a bounded digest rather than the
+/// megabytes the linker refused; the interpreter agrees.
+#[test]
+fn an_instance_too_long_to_spell_builds_with_a_bounded_symbol() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut src = String::from("struct P[A, B] { a: A, b: B }\nfn g0[T](x: T) -> Int { 1 }\n");
+    for i in 1..=16 {
+        src.push_str(&format!(
+            "fn g{i}[T](x: T) -> Int {{ g{p}(P[T, T](a: x, b: x)) + g{p}(x) }}\n",
+            p = i - 1
+        ));
+    }
+    src.push_str("fn main() -> Int { g16(1) }\n");
+    write(dir.path(), "m.nz", &src);
+    let (ok, stdout, stderr) = nazm(dir.path(), &["run", "m.nz"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, "65536");
+    for backend in ["llvm", "cranelift"] {
+        let (ok, _, stderr) = nazm(
+            dir.path(),
+            &[
+                "build",
+                "--no-cache",
+                "--backend",
+                backend,
+                "m.nz",
+                "-o",
+                "prog",
+            ],
+        );
+        assert!(ok, "{backend}: {stderr}");
+        let out = Command::new(dir.path().join("prog")).output().expect("run");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "65536",
+            "{backend}"
+        );
+    }
+    let (ok, _, stderr) = nazm(
+        dir.path(),
+        &["build", "--no-cache", "--emit-ir", "m.nz", "-o", "ir"],
+    );
+    assert!(ok, "{stderr}");
+    let mut longest = 0;
+    for e in std::fs::read_dir(dir.path()).expect("dir") {
+        let p = e.expect("entry").path();
+        if p.extension().is_some_and(|x| x == "ll") {
+            for line in std::fs::read_to_string(&p).expect("ll").lines() {
+                if line.starts_with("define ") {
+                    longest = longest.max(line.len());
+                }
+            }
+        }
+    }
+    assert!(
+        longest > 0 && longest < 1024,
+        "a define line of {longest} bytes"
+    );
+}
+
 #[test]
 fn a_failure_inside_an_instance_names_the_generic_definitions_line() {
     // The instance is lowered from the definition's own body, spans and all, so a failure
