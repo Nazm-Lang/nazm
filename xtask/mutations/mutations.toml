@@ -2559,18 +2559,11 @@ killers = [{ package = "nazm-cli", test = "durable_identity", name = "a_generic_
 name = "an-instance-symbol-keeps-only-its-first-argument"
 why = """
 `swap[Int, Str]` and `swap[Int, Bool]` get one symbol, so two different instances are one definition to the linker
+Repointed by the v1 fixes (Q1-B-06): the spelling moved into `instance_suffix`, shared by symbols and type names.
 """
 file = "crates/nazm-lir/src/symbol.rs"
-find = """    pub fn of_instance(base: &Self, args: &[String]) -> Self {
-        Self(format!("{}.g.{}", base.0, encode(&args.join(","))))
-    }
-
-    /// The name itself, with no sigil."""
-replace = """    pub fn of_instance(base: &Self, args: &[String]) -> Self {
-        Self(format!("{}.g.{}", base.0, encode(args.first().map_or("", String::as_str))))
-    }
-
-    /// The name itself, with no sigil."""
+find = """    let joined = args.join(",");"""
+replace = """    let joined = args.first().cloned().unwrap_or_default();"""
 killers = [{ package = "nazm-cli", test = "generics", name = "two_instances_that_differ_only_in_a_later_argument_are_two_functions" }]
 
 [[mutation]]
@@ -16066,3 +16059,13 @@ file = "crates/nazm-core/src/eval/intrinsic.rs"
 find = "                let Ok(status) = u8::try_from(*code) else {"
 replace = "                let Ok(status) = u16::try_from(*code) else {"
 killers = [{ package = "nazm-cli", test = "exit_status", name = "a_status_outside_0_to_255_fails_with_n0416_everywhere" }]
+
+# --- v1: generic instance symbols (Q1-B-06) ---
+
+[[mutation]]
+name = "v1-an-instance-is-always-spelled"
+why = "an instance is spelled however long its type arguments, so a deeply nested generic gets a symbol of megabytes and the linker asserts"
+file = "crates/nazm-lir/src/symbol.rs"
+find = "    if spelled.len() <= MAX_SPELLED_ARGS {"
+replace = "    if spelled.len() <= usize::MAX {"
+killers = [{ package = "nazm-cli", test = "generics", name = "an_instance_too_long_to_spell_builds_with_a_bounded_symbol" }]
