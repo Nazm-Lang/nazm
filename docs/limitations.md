@@ -426,9 +426,10 @@ holds the subset it does carry (Q1-D-20).
 5, no longer 2, and user errors are 1 or 3, no longer 4 (Q1-D-06, Q1-D-07 — closed). `nazm fmt`
 lays out a file that lexes but does not parse, as its documented guarantee allows (Q1-D-22).
 
-**Fuzzing**: the `run` target counts an input still running after two seconds as a hang and does
-not keep it; such inputs are programs that block, which Nazm does not promise against, but they are
-not preserved for triage (Q1-F-01).
+**Fuzzing**: the `run` target counts an input still running after two seconds as a hang — a program
+that blocks, which Nazm does not promise against. *Fixed before v1 (Q1-F-01):* each is now kept, as
+it was, under `OUT/hangs/` for triage; until then it was counted and dropped. Q1's 36 are not
+recovered: the next campaign keeps its own.
 
 ## Carried from M2-Core (2026-10-09) — closed in M2-C1
 

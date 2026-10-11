@@ -251,7 +251,7 @@ disposition), **corrected** (documentation).
 | Q1-M-10 | Cranelift key relied on a hand-bumped revision | LOW | FIX-BEFORE-V1 | fixed |
 | Q1-M-12 | native select deadline on the wall clock | LOW | FIX-BEFORE-V1 | fixed (monotonic deadlines; `select.rs` steps the wall clock back) |
 | Q1-B-06 | generic symbol names grow exponentially | LOW | FIX-BEFORE-V1 | fixed (a digest past 512 bytes; `generics.rs`) |
-| Q1-B-07 | LIR oracle lacks float formatting | LOW | FIX-BEFORE-V1 | carried |
+| Q1-B-07 | LIR oracle lacks float formatting | LOW | FIX-BEFORE-V1 | fixed (the interpreter's formatter; `lir_oracle.rs`) |
 | Q1-D-09 | unreadable root reported at a prelude span | LOW | FIX-BEFORE-V1 | fixed (reported at itself; `exit_contract.rs`) |
 | Q1-D-11, -13, -14 | no public code registry; `N0101` a catch-all; reserved codes | LOW | FIX-BEFORE-V1 | fixed (`diagnostics.md` registry of all 153 codes held by `codes.rs`; `N0101` named the umbrella; `N0620` reserved) |
 | Q1-D-12 | phantom codes `N0703`/`N0704` | LOW | FIX-BEFORE-V1 | corrected (`N0357`, `N0358`) |
@@ -261,7 +261,7 @@ disposition), **corrected** (documentation).
 | Q1-D-22 | `fmt` lays out a file that does not parse | LOW | ACCEPTED-LIMITATION | carried, documented |
 | Q1-D-24 | stale text in VERIFIED matrix rows | LOW | FIX-BEFORE-V1 | corrected (each line of the audit's list re-found by its text and dated or corrected; the `codes.rs` check is Q1-D-11's) |
 | Q1-D-25 | unscoped "sandbox", "safe", "memory safety" | LOW | FIX-BEFORE-V1 | corrected |
-| Q1-F-01 | fuzz hangs counted, not kept | LOW | FIX-BEFORE-V1 | carried |
+| Q1-F-01 | fuzz hangs counted, not kept | LOW | FIX-BEFORE-V1 | fixed (kept under `OUT/hangs/`; `fuzz` crate's `a_hang_is_kept_once_and_unchanged`) |
 | Q1-FI-01 | interrupted build leaves its scratch directory | LOW | POST-V1 | carried |
 | Q1-A2-10, -11, -14 | root in the container; export staging name; unlocked index | LOW/INFO | POST-V1 | carried |
 | Q1-A1-11, -14, -15 | reserved symbols; textual unsafe gate; developer tooling | LOW/INFO | POST-V1 | carried |

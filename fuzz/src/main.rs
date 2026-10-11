@@ -6,7 +6,8 @@
 //! coverage from LLVM's SanitizerCoverage, counted by `cov.c` — and mutated from there: byte
 //! edits, tokens of the language inserted, whole lines duplicated, deleted, swapped or spliced
 //! from another input, names renamed. A panic is a defect: the input is shrunk by lines and
-//! written to `OUT/crashes/`. `--minimize` writes the smallest set of kept inputs that reaches
+//! written to `OUT/crashes/`. An input that runs past its time limit is written, as it was, to
+//! `OUT/hangs/` (v1, Q1-F-01: hangs were counted and nothing kept). `--minimize` writes the smallest set of kept inputs that reaches
 //! every edge reached, which is the persistent corpus `fuzz/corpus/TARGET/` is made from.
 //!
 //! The targets are the compiler's own entry points, called in process:
@@ -207,15 +208,94 @@ impl Rng {
 
 /// Tokens of the language, and of a manifest, inserted whole: structure a byte flip rarely makes.
 const TOKENS: &[&str] = &[
-    "fn ", "let ", "let mut ", "if ", "else ", "while ", "match ", "return ", "break;", "continue;",
-    "struct ", "enum ", "trait ", "impl ", "pub ", "use \"", "scope { ", "spawn ", "requires ",
-    "ensures ", "result", "! {}", "! { io }", "-> Int", "-> Bool", "-> Str", ": Int", "(", ")", "{",
-    "}", "[", "]", "<", ">", ",", ";", ":", "::", "=>", "->", "=", "==", "!=", "<=", ">=", "&&",
-    "||", "!", "+", "-", "*", "/", "%", "?", "\"", "0", "1", "-1", "9223372036854775807", "true",
-    "false", "Int", "Bool", "Str", "Vec[Int]", "Option[Int]", "Result[Int, Str]", "Some(", "None",
-    "Ok(", "Err(", "|x| ", "ints_new()", "str_len(", "chan_new_of[Int](1)", "main", "\n", "  ",
-    "[package]\n", "name = ", "version = \"1.0.0\"\n", "[dependencies]\n", "^1.2.3", "~0.1.0",
-    "=2.0.0", "{ path = \"../x\" }", "schema = \"nazm.package/1\"\n",
+    "fn ",
+    "let ",
+    "let mut ",
+    "if ",
+    "else ",
+    "while ",
+    "match ",
+    "return ",
+    "break;",
+    "continue;",
+    "struct ",
+    "enum ",
+    "trait ",
+    "impl ",
+    "pub ",
+    "use \"",
+    "scope { ",
+    "spawn ",
+    "requires ",
+    "ensures ",
+    "result",
+    "! {}",
+    "! { io }",
+    "-> Int",
+    "-> Bool",
+    "-> Str",
+    ": Int",
+    "(",
+    ")",
+    "{",
+    "}",
+    "[",
+    "]",
+    "<",
+    ">",
+    ",",
+    ";",
+    ":",
+    "::",
+    "=>",
+    "->",
+    "=",
+    "==",
+    "!=",
+    "<=",
+    ">=",
+    "&&",
+    "||",
+    "!",
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    "?",
+    "\"",
+    "0",
+    "1",
+    "-1",
+    "9223372036854775807",
+    "true",
+    "false",
+    "Int",
+    "Bool",
+    "Str",
+    "Vec[Int]",
+    "Option[Int]",
+    "Result[Int, Str]",
+    "Some(",
+    "None",
+    "Ok(",
+    "Err(",
+    "|x| ",
+    "ints_new()",
+    "str_len(",
+    "chan_new_of[Int](1)",
+    "main",
+    "\n",
+    "  ",
+    "[package]\n",
+    "name = ",
+    "version = \"1.0.0\"\n",
+    "[dependencies]\n",
+    "^1.2.3",
+    "~0.1.0",
+    "=2.0.0",
+    "{ path = \"../x\" }",
+    "schema = \"nazm.package/1\"\n",
 ];
 
 fn mutate(rng: &mut Rng, input: &str, others: &[String]) -> String {
@@ -313,6 +393,18 @@ fn shrink(target: Target, input: &str) -> String {
     lines.join("\n")
 }
 
+/// Keep an input that hung (v1, Q1-F-01): `OUT/hangs/NAME.txt`, once per input. Not shrunk —
+/// shrinking re-runs it, and each run of a hang leaves a blocked thread behind.
+fn keep_hang(out: &Path, input: &str, kept: &mut BTreeSet<String>) {
+    let name = name_of(input);
+    if kept.insert(name.clone()) {
+        let dir = out.join("hangs");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(format!("{name}.txt")), input);
+        eprintln!("hang {name}");
+    }
+}
+
 fn name_of(text: &str) -> String {
     // FNV-1a: a stable file name for an input.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -362,8 +454,12 @@ fn main() {
             .position(|a| a == flag)
             .and_then(|i| args.get(i + 1).cloned())
     };
-    let seconds: u64 = value("--seconds").and_then(|s| s.parse().ok()).unwrap_or(60);
-    let seed: u64 = value("--seed").and_then(|s| s.parse().ok()).unwrap_or(0x5eed);
+    let seconds: u64 = value("--seconds")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let seed: u64 = value("--seed")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0x5eed);
     let out = PathBuf::from(value("--out").unwrap_or_else(|| "fuzz-out".to_owned()));
     let corpora: Vec<PathBuf> = args
         .windows(2)
@@ -387,6 +483,7 @@ fn main() {
     };
     let mut execs: u64 = 0;
     let mut hangs: usize = 0;
+    let mut hung: BTreeSet<String> = BTreeSet::new();
     // Every seed runs; one that reaches a new edge is kept. An empty input always is.
     let mut initial = seeds(&corpora, target);
     initial.insert(0, String::new());
@@ -395,7 +492,10 @@ fn main() {
         execs += 1;
         match exec_bounded(target, &s) {
             Ended::Panicked(m) => record(&s, &m, &mut crashes),
-            Ended::Hung => hangs += 1,
+            Ended::Hung => {
+                hangs += 1;
+                keep_hang(&out, &s, &mut hung);
+            }
             Ended::Done if fresh() > 0 => {
                 keep();
                 queue.push(s);
@@ -417,7 +517,10 @@ fn main() {
         execs += 1;
         match exec_bounded(target, &child) {
             Ended::Panicked(m) => record(&child, &m, &mut crashes),
-            Ended::Hung => hangs += 1,
+            Ended::Hung => {
+                hangs += 1;
+                keep_hang(&out, &child, &mut hung);
+            }
             Ended::Done if fresh() > 0 => {
                 keep();
                 queue.push(child);
@@ -443,7 +546,13 @@ fn main() {
         loop {
             let best = (0..queue.len())
                 .filter(|i| !chosen.contains(i))
-                .map(|i| (edges[i].difference(&covered).count(), std::cmp::Reverse(queue[i].len()), i))
+                .map(|i| {
+                    (
+                        edges[i].difference(&covered).count(),
+                        std::cmp::Reverse(queue[i].len()),
+                        i,
+                    )
+                })
                 .max();
             match best {
                 Some((gain, _, i)) if gain > 0 => {
@@ -459,7 +568,11 @@ fn main() {
             let q = &queue[*i];
             let _ = std::fs::write(dir.join(format!("{}.txt", name_of(q))), q);
         }
-        eprintln!("minimized: {} inputs cover {} edges", chosen.len(), covered.len());
+        eprintln!(
+            "minimized: {} inputs cover {} edges",
+            chosen.len(),
+            covered.len()
+        );
     }
     // On standard error: standard output is the interpreted programs', and is discarded.
     eprintln!(
@@ -472,5 +585,28 @@ fn main() {
     );
     if !crashes.is_empty() {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Q1-F-01: a hung input is kept under `hangs/`, as it was, once however often it hangs.
+    #[test]
+    fn a_hang_is_kept_once_and_unchanged() {
+        let out = std::env::temp_dir().join(format!("nazm-fuzz-hangs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let mut kept = std::collections::BTreeSet::new();
+        let input = "fn main() -> Int { while true { } 0 }\n";
+        super::keep_hang(&out, input, &mut kept);
+        super::keep_hang(&out, input, &mut kept);
+        super::keep_hang(&out, "another", &mut kept);
+        let files: Vec<_> = std::fs::read_dir(out.join("hangs"))
+            .map(|d| d.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert_eq!(files.len(), 2, "{files:?}");
+        let name = super::name_of(input);
+        let text = std::fs::read_to_string(out.join("hangs").join(format!("{name}.txt")));
+        assert_eq!(text.ok().as_deref(), Some(input));
+        let _ = std::fs::remove_dir_all(&out);
     }
 }

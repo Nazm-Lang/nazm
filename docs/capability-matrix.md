@@ -1361,7 +1361,10 @@ gone; a validator and a mechanical gate keep the boundary.
 
 *N105, 2026-10-05: one LIR both backends consume — VERIFIED; LIR validator v2 — VERIFIED; LIR
 oracle interpreter — VERIFIED for the sequential subset (tasks, channels, C and the clock refused by
-name); `nazm.lir/2` — VERIFIED.* `architecture.md` §7.106 is the constitution, written before the
+name); `nazm.lir/2` — VERIFIED.* *v1 (Q1-B-07): the oracle formats floats and `UInt64`s
+(`nz.format_float`, `nz.format_u64`) by the interpreter's own `nazm_sema::numeric::to_str`, so a
+program printing a number has its oracle tier — until then it refused them by name
+(`floats_and_unsigned_words_print_alike_on_the_oracle`, the `numbers` compatibility case).* `architecture.md` §7.106 is the constitution, written before the
 code. `crates/nazm-lir/src/op/` is an instruction set below MIR: values of a machine class (`bit`,
 `i8`, `i32`, `i64`, `ptr`) defined once and used where they dominate, variables, stack slots, loads
 and stores at byte offsets, wrapping and overflow-checked arithmetic, comparisons, selects, calls
