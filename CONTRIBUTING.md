@@ -63,7 +63,8 @@ append-only, every file is pinned by its digest, and a new stable rule adds a ca
 Nazm is under `Apache-2.0 WITH LLVM-exception` ([`LICENSE`](LICENSE), [`NOTICE`](NOTICE)). Every
 contribution needs a signed **Contributor Licence Agreement** ([`docs/CLA.md`](docs/CLA.md)) before
 it can be merged: you keep your copyright and license it to the project, including the right to
-relicense it. The agreement is a draft awaiting legal review, and no outside contribution is
+relicense it. You sign once, by replying to a bot on your first pull request. The agreement is a
+draft awaiting legal review, and no outside contribution is
 accepted until that review is done. If any part of a contribution was produced by a generative
 tool, say so in its description (the agreement's section 5). A change to the specification is also
 published under CC-BY-4.0, and a change to a `nazm init` template under MIT-0
