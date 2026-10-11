@@ -394,3 +394,8 @@ metric = "spawn and join, a round trip, a parked receive woken, and resident mem
 heading = "The CPU provider's SIMD path, measured (Gate 3H, 2026-10-11)"
 status = "dated"
 why = "measured on the tree of its date by the method its prose describes — `nazm accel --provider cpu`, with and without `--scalar`, seven runs each over 8,000,000 elements; a record of that date and machine, and no speed-up is claimed from it"
+
+[[claim]]
+heading = "Gate 4 light: a small cross-language set, measured (2026-10-11)"
+status = "dated"
+why = "measured on the tree of its date with `python3 bench/cross.py`, 21 runs a variant on one uncontrolled host (results kept in target/gates/v1/bench/); a record of that date and machine — it supports no language-wide claim, and the script reproduces the method, not these numbers"

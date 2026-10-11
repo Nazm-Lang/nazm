@@ -91,8 +91,8 @@ Nothing is uploaded or published: the archives are local, under `target/archives
 
 | Feature | Status in 1.0.0 | What exists, and what stops more |
 | --- | --- | --- |
-| WebAssembly | verified, scoped | the freestanding subset, run on Node.js's engine and held to the interpreter; no WASI, no heap |
-| GPU (`nazm accel`) | verified, scoped; experimental | maps, zips and reductions of `Int` kernels through OpenCL on Apple's GPU (macOS); a second provider **blocked** — no Metal or SPIR-V toolchain here |
+| WebAssembly | verified, scoped | the freestanding subset, run on Node.js's engine and held to the interpreter; and `wasm32-wasip1` (Gate 3J), with a heap that is never freed, standard streams, arguments, clocks and files beneath a preopened directory, run under Node.js's `node:wasi`; no tasks, channels, network or directory listing |
+| GPU (`nazm accel`) | verified, scoped; experimental | maps, zips and reductions of `Int`, `Float32` and `Float64` kernels behind a provider boundary (Gate 3H): OpenCL on Apple's GPU (macOS) and a CPU provider, each the other's oracle; `Float64` refused on Apple's GPU; Metal, CUDA, ROCm and SPIR-V providers **blocked** — no toolchain for them here |
 | EVM contracts (`nazm contract --evm`) | verified, scoped; experimental | EVM bytecode run in py-evm, the reference EVM, and held to the simulator on generated transaction sequences; no chain deployment |
 | WebAssembly contracts | verified, scoped; experimental | run under the reference host only; no chain's host interface |
 | sBPF / Solana | **blocked** | signer analysis and account metadata only; no sBPF toolchain or validator exists here, so nothing is built or run |
