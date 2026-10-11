@@ -7600,6 +7600,14 @@ derived rule (§7.13, *Task safety is derived*) answering for a new type, not a 
 C function that frees it, and using a handle after that is C's undefined behaviour, outside every Nazm
 guarantee — the same trust boundary as everything else C does.
 
+**Pointer width (v1, Q1-A1-05).** Below the checker a crossing pointer — a handle, a C string
+result, a callback — is an `Int`, so it crosses as 64 bits. That is C's pointer on every 64-bit
+target and on no 32-bit one: there a C function takes and returns 32-bit pointers and lays a
+pointer field out in four bytes. A build for a 32-bit target (`wasm32-*`, `thumbv7m-none-eabi`)
+refuses each such crossing by name, `N0381` at the foreign declaration (`build/lower.rs`,
+`narrow_pointer_refusal`), rather than importing a signature C does not have; crossing pointers at
+the target's width is not built.
+
 **Nullability is in the type.** A result `-> Db` promises a non-null pointer: the call checks it, and
 a null result fails the call with `N0409` *after* C returns — never a handle that is null. A result
 `-> Option[Db]` maps null to `None` and anything else to `Some`. An argument is always a handle: no

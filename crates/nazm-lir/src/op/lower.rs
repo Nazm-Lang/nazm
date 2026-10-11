@@ -198,7 +198,7 @@ pub fn lower_unit(
             continue;
         };
         let lowered = super::func::lower(&mut lw, f, sig, sym);
-        lw.functions.push(lowered);
+        lw.functions.extend(lowered);
         // An export's C entry, beside the function it calls (N55).
         if let Some(symbol) = &sig.export {
             let c = lw.c_sig(&sig.params, sig.ret);
@@ -387,7 +387,7 @@ impl<'a> Lw<'a> {
         }
         // The word-level entries this lowering calls are the second compiler's shims (N41).
         self.needs.shims = true;
-        if name == "nz.stack_check" {
+        if name == "nz.stack_check" || name == "nz.stack_check_frame" {
             self.needs.stack = true;
         }
         // Defined beside the string runtime, whose backings it releases.
@@ -629,6 +629,13 @@ impl<'a> Lw<'a> {
             Ty::Num(k) => k.name().to_owned(),
             other => other.name().to_owned(),
         }
+    }
+
+    /// The symbol a large frame's body moves to (Q1-A1-01), beside the entry that keeps the
+    /// function's own symbol.
+    pub(crate) fn body_symbol(&mut self, sig: Sig) -> SymId {
+        let name = self.anonymous("frame");
+        self.symbol(&name, Linkage::Local, SymKind::Func { sig })
     }
 
     /// A trampoline for a spawn site, declared now and defined after the functions.

@@ -355,4 +355,13 @@ fn the_image_boots_on_qemu_and_reports_on_the_uart() {
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(out.contains("error[N0408]"), "{out}");
+    // Q1-A1-01: a frame larger than the board's whole 64 KiB stack, in no call cycle, meets the
+    // check before its prologue lays it out.
+    let (code, out) = boot(
+        "fn big(n: Int) -> Int { let mut a = [0; 4096]; let mut b = [0; 4096];\n\
+         a[n] = 1; b[n] = 2; a[n] + b[n] }\n\
+         fn main() -> Int { big(3) }\n",
+    );
+    assert_eq!(code, Some(2), "{out}");
+    assert!(out.contains("error[N0408]") && out.contains("prog.nz:1:4"), "{out}");
 }
