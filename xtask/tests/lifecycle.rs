@@ -47,6 +47,17 @@ use std::time::{Duration, Instant};
 
 const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 
+/// The xtask binary, as a fixture campaign starts it: without the caller's `CARGO_TARGET_DIR`, so
+/// each fixture builds in its own target. Inherited, every fixture — run in parallel, each a crate
+/// of one name — shared one directory, and one listed another's tests ("`already_failing` is not a
+/// test in fixture"): ten of nineteen failed under `CARGO_TARGET_DIR=…` and passed without it
+/// (v1). A test that wants a target sets one after this.
+fn xtask_command() -> Command {
+    let mut c = Command::new(XTASK);
+    c.env_remove("CARGO_TARGET_DIR");
+    c
+}
+
 /// The disposable project's one source file.
 ///
 /// Three separate mutation targets, each unique in the file so the runner's
@@ -225,7 +236,7 @@ impl Run {
 }
 
 fn xtask(args: &[&str]) -> Run {
-    let out = Command::new(XTASK)
+    let out = xtask_command()
         .args(args)
         .stderr(Stdio::piped())
         .output()
@@ -372,7 +383,7 @@ fn two_independent_processes_never_both_hold_the_tree() {
     let ready = root.join("held");
     let release = root.join("go");
 
-    let mut holder = Command::new(XTASK)
+    let mut holder = xtask_command()
         .args([
             "mutate-hold",
             "--root",
@@ -401,7 +412,7 @@ fn two_independent_processes_never_both_hold_the_tree() {
 
     // A second, entirely independent process asks for the same tree.
     let rival_ready = root.join("held-2");
-    let rival = Command::new(XTASK)
+    let rival = xtask_command()
         .args([
             "mutate-hold",
             "--root",
@@ -481,7 +492,7 @@ fn an_interrupted_real_run_is_recovered_through_the_production_path() {
     assert_ne!(expected_mutated, SOURCE, "the fixture must actually change");
 
     let ready = project_scratch.path().join("descendant.pid");
-    let mut runner = Command::new(XTASK)
+    let mut runner = xtask_command()
         .args([
             "mutate-run",
             "--root",
@@ -699,7 +710,7 @@ fn a_second_run_refuses_while_a_descendant_of_the_dead_coordinator_survives() {
     // Its own group, so cleanup at the end can reach every descendant. The kill in the
     // middle of this test is aimed at the coordinator alone, by pid.
     let escaped_file = root.join("escaped.pid");
-    let mut runner = Command::new(XTASK)
+    let mut runner = xtask_command()
         .args(["mutate-run", "--root", &root_s, "--catalogue", &cat_s])
         .env("NAZM_FIXTURE_READY", &ready)
         .env("NAZM_FIXTURE_ESCAPE", &escaped_file)
@@ -932,7 +943,7 @@ fn a_failed_restore_keeps_the_record_and_abandons_the_rest_of_the_catalogue() {
     .expect("catalogue");
     let expected_mutated = SOURCE.replacen("u64 { 0 }", &format!("u64 {{ {DELAY} }}"), 1);
 
-    let runner = Command::new(XTASK)
+    let runner = xtask_command()
         .args([
             "mutate-run",
             "--root",
@@ -1265,7 +1276,7 @@ fn a_deadline_at_any_tier_is_no_verdict_and_leaves_nothing_running() {
             flag.to_owned(),
             "3".to_owned(),
         ];
-        let out = Command::new(XTASK)
+        let out = xtask_command()
             .args(&args)
             .env("NAZM_FIXTURE_READY", &ready)
             .output()
@@ -1380,7 +1391,7 @@ fn every_mutant_is_measured_against_its_own_build() {
     .expect("catalogue");
     for strategy in ["full", "targeted"] {
         let _ = fs::remove_file(&observed);
-        let out = Command::new(XTASK)
+        let out = xtask_command()
             .args([
                 "mutate-run",
                 "--root",
@@ -1458,7 +1469,7 @@ fn an_interrupted_campaign_resumes_its_own_journal_and_refuses_any_other() {
     };
 
     // 1. Interrupted inside the second mutant, after the first was finalized.
-    let mut runner = Command::new(XTASK)
+    let mut runner = xtask_command()
         .args(args(false))
         .env("NAZM_FIXTURE_READY", &ready)
         .process_group(0)
@@ -1767,7 +1778,7 @@ fn a_warm_session_verifies_every_killer_against_each_mutants_own_bytes() {
         ),
     )
     .expect("catalogue");
-    let out = Command::new(XTASK)
+    let out = xtask_command()
         .args([
             "mutate-run",
             "--root",
@@ -1898,7 +1909,7 @@ fn session(
         "--verify-killers".to_owned(),
     ];
     args.extend(extra.iter().map(|s| (*s).to_owned()));
-    let out = Command::new(XTASK)
+    let out = xtask_command()
         .args(&args)
         .env("CARGO_TARGET_DIR", target)
         .env("NAZM_FIXTURE_OBSERVE", observed)
