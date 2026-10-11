@@ -4,7 +4,9 @@
 Alam** (`LICENSE`, `NOTICE`). The exceptions — LLVM's and Cranelift's — let a program carry the parts
 of Nazm compiled into it (the runtime, the core prelude, the standard library) without complying
 with sections 4(a), 4(b) and 4(d): no licence text, notice or attribution travels with what a user
-builds. What is still open is under *What a human must decide*, below.
+builds. Also decided that day: a contributor licence agreement, MIT-0 for the `nazm init` templates,
+CC-BY-4.0 for the specification, and no per-file licence headers. What is still open is under
+*What a human must decide*, below.
 
 This page records what a Nazm release and a program it compiles contain, and under which terms
 each part reaches its recipient, as facts a person can check. It draws no legal conclusion.
@@ -19,9 +21,10 @@ facts below that the decision changed say so.
 | The copyright notice — `Copyright 2026 Ferdous Alam` — and what the exceptions mean for a compiled program are in `NOTICE`; the licence's appendix keeps its template line, as LLVM's does (*since 2026-10-11*) | `NOTICE`, `LICENSE` |
 | Every workspace crate declares `license = "Apache-2.0 WITH LLVM-exception"` through `license.workspace = true`; `publish = false` (*since 2026-10-11*) | `Cargo.toml`, `crates/*/Cargo.toml`, `xtask/Cargo.toml` |
 | `fuzz/Cargo.toml` and the editor extension declare the same (*since 2026-10-11*) | `fuzz/Cargo.toml`, `editors/vscode/package.json` |
-| No source file carries a copyright or SPDX header — compiler, runtime generator, standard library or templates | `crates/`, `library/`, `crates/nazm-cli/templates/` |
-| Contributions have no stated terms: no DCO, CLA, sign-off or inbound-equals-outbound clause | `CONTRIBUTING.md` |
-| The open question is stated, and called a Phase 1 decision | `README.md` (*Licence*), `deny.toml` |
+| No source file carries a copyright or SPDX header — compiler, runtime generator, standard library or templates — and none will: the root licence files cover the tree, as Rust's do (*decided 2026-10-11*) | `crates/`, `library/`, `crates/nazm-cli/templates/` |
+| Contributions are made under a contributor licence agreement, a draft awaiting legal review; no outside contribution is accepted before that review (*since 2026-10-11*) | `docs/CLA.md`, `CONTRIBUTING.md` |
+| The `nazm init` templates are dedicated to the user under MIT-0; the licence file sits beside the templates and is not copied into a new project (*since 2026-10-11*) | `crates/nazm-cli/templates/LICENSE` |
+| The specification is under CC-BY-4.0, and as part of the repository also under the project's licence (*since 2026-10-11*) | `docs/spec.md` (its opening), `LICENSE-CC-BY-4.0` |
 
 ## What a compiled program contains
 
@@ -32,7 +35,7 @@ facts below that the decision changed say so.
 | **The core prelude** | `library/core/prelude.nz`, compiled into every program (`include_str!` in the compiler) | project code, Apache-2.0 |
 | **The standard library** | each `library/std/*.nz` module a program imports with `use "@std/…"`, compiled into it | project code, Apache-2.0 |
 | **Generated glue** | WebAssembly imports, EVM and account-contract scaffolding for the experimental targets; no licence header in any generated output | project code |
-| **Project templates** | `nazm init` copies `crates/nazm-cli/templates/{cli,library,server,embedded,wasm,contract}` into the user's directory, with no licence header | project code |
+| **Project templates** | `nazm init` copies `crates/nazm-cli/templates/{cli,library,server,embedded,wasm,contract}` into the user's directory, with no licence header | project code, MIT-0 (*since 2026-10-11*) |
 | **`nazm bindgen` output** | declarations derived from the user's own C header | the user's |
 
 ## What the toolchain contains
@@ -65,10 +68,10 @@ tokenizer data `nazm-tokens` records (two MIT, two Apache-2.0) is not embedded i
 
 ## What a release archive contains
 
-`scripts/release-candidate.sh` copies `README.md`, `LICENSE`, `SECURITY.md` and
-`CONTRIBUTING.md` beside `bin/nazm`, `bin/nazmc-selfhosted`, the documentation, schemas,
+`scripts/release-candidate.sh` copies `README.md`, `LICENSE`, `LICENSE-CC-BY-4.0`, `NOTICE`,
+`SECURITY.md` and `CONTRIBUTING.md` beside `bin/nazm`, `bin/nazmc-selfhosted`, the documentation, schemas,
 examples, the compiler written in Nazm, the benchmark and scripts. It contains **no third-party
-licence texts, attribution file, NOTICE or SBOM**; the SBOM is in the separate evidence bundle.
+licence texts, attribution file or SBOM**; the SBOM is in the separate evidence bundle.
 
 ## What a human must decide
 
@@ -79,18 +82,28 @@ licence texts, attribution file, NOTICE or SBOM**; the SBOM is in the separate e
    impose nothing on a compiled program.
 2. **The copyright holder** — Ferdous Alam; `NOTICE` carries the line.
 
+3. **Contributor terms** — a contributor licence agreement (`docs/CLA.md`): the contributor keeps
+   copyright and licenses the contribution to the copyright holder with the right to relicense it,
+   commercially included. The text is a draft written without legal review; it is reviewed by a
+   lawyer, and a signing service chosen, before the first outside contribution is accepted.
+4. **Templates** — MIT-0 (`crates/nazm-cli/templates/LICENSE`).
+5. **Headers** — none: no copyright or SPDX line per file; the root licence files govern.
+6. **The specification** — CC-BY-4.0, and also the project's licence (`docs/spec.md`, its opening;
+   `LICENSE-CC-BY-4.0`). The rest of `docs/` stays under the project's licence only.
+
 **Still open:**
 
-3. **Contributor terms.** Until decided, a contribution is under the project's licence by its
-   section 5 (inbound equals outbound); whether a DCO sign-off or a contributor agreement is also
-   required is open. A contributor agreement keeps a later relicensing or commercial licence
-   possible; a DCO does not.
-4. **Third-party notices in the release.** Whether the archive carries the licence texts and
+7. **Third-party notices in the release.** Whether the archive carries the licence texts and
    notices of the crates linked into `bin/nazm` — in particular the Apache-2.0-only ones and any
    with a `NOTICE` of its own — and licence data in the SBOM. The licence chosen does not change
-   this duty; it is the toolchain's, not a compiled program's.
-5. **Templates, headers and the specification.** Whether `nazm init`'s templates are dedicated to
-   the user outright (for example `MIT-0`), whether source files carry SPDX headers, and whether
-   `docs/spec.md` is published under a documentation licence so other implementations may follow
-   it.
-6. **The name.** A licence does not protect "Nazm"; a trademark policy would.
+   this duty; it is the toolchain's, not a compiled program's, and it applies to any binary
+   release, a 0.x preview included.
+8. **The name.** A licence does not protect "Nazm"; Apache-2.0 section 6 grants no trademark
+   rights. A search for existing marks, a registration and a short usage policy are open.
+9. **Legal review** of `docs/CLA.md`, and the signing service.
+
+**Bearing on a toolchain rewritten in Nazm** (decided 2026-10-11 as the project's direction): the
+licences above apply to `.nz` source as to Rust; the third-party crates of *What the toolchain
+contains* leave the binary as they are replaced, which shrinks item 7; Rust code translated into
+Nazm is a derivative work of it, so contributors' rights in the Rust code carry over to the
+translation.

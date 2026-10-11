@@ -9,6 +9,11 @@ runtime, the core prelude and the standard library — impose no attribution
 or notice requirement on that program: you may distribute what you build
 with Nazm without carrying this notice or the licence text.
 
+The project templates `nazm init` writes into a new project are dedicated to
+the user under MIT-0 (crates/nazm-cli/templates/LICENSE). The language
+specification, docs/spec.md, is also available under CC-BY-4.0
+(LICENSE-CC-BY-4.0).
+
 The toolchain itself (bin/nazm) links third-party Rust crates under their
 own licences, which are permissive (MIT, Apache-2.0, BSD, ISC, Zlib and
 Unicode-3.0); docs/licensing.md lists them.
