@@ -54,6 +54,9 @@ pub mod codes {
     /// A backslash in a string literal that is not one of the escapes `docs/spec.md` lists
     /// (N49): an unknown letter, `\x` without two hex digits, or `\x` above `7F`.
     pub const INVALID_ESCAPE: Code = Code::new("N0004");
+    /// A line of a multi-line string that does not begin with its closing delimiter's
+    /// indentation, or text after an opening `"""` (R1a, L9).
+    pub const STRING_LAYOUT: Code = Code::new("N0005");
 
     // Parsing
     /// An expression or block nested past the parser's limit. A parse-time bound, so

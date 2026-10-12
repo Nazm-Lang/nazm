@@ -441,8 +441,13 @@ primary = atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] | INTEGER ) | "
 (* A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
  * `INTEGER` may be written `0x`, `0o` or `0b`, with `_` between digits.
  *)
+(* A `STRING` is an ordinary literal, or since R1a a raw one — `r"…"`, `r#"…"#` — or a multi-line
+ * one between `"""` lines (`docs/spec.md`, *Multi-line and raw strings*): one token class, as the
+ * lexer reads them.
+ *)
 (* @example fn main() -> Int { 1 } *)
 (* @example fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 } *)
+(* @example fn main() -> Int { str_len(r#"say "hi""#) + str_len(r"C:\path") } *)
 atom = INTEGER
      | FLOAT
      | STRING

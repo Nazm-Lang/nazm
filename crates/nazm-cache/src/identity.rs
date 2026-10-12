@@ -303,7 +303,9 @@ use crate::digest::{self, Framed};
 /// each moved from refused to accepted; a tuple of more than eight moved to refused.
 /// `57` — R1a, 2026-10-12. Arrays of strings, constants of record, enum, tuple and array types,
 /// `pub const` and `m::NAME` moved from refused to accepted.
-pub const SEMANTIC_EPOCH: u32 = 57;
+/// `58` — R1a, 2026-10-12. Multi-line (`"""`) and raw (`r"…"`, `r#"…"#`) string literals moved
+/// from refused to accepted; `N0005`.
+pub const SEMANTIC_EPOCH: u32 = 58;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

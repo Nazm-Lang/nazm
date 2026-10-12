@@ -1577,6 +1577,9 @@ atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | qualifier , IDENT |
 
 A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
 `INTEGER` may be written `0x`, `0o` or `0b`, with `_` between digits.
+A `STRING` is an ordinary literal, or since R1a a raw one — `r"…"`, `r#"…"#` — or a multi-line
+one between `"""` lines (`docs/spec.md`, *Multi-line and raw strings*): one token class, as the
+lexer reads them.
 
 ```nazm
 fn main() -> Int { 1 }
@@ -1584,6 +1587,10 @@ fn main() -> Int { 1 }
 
 ```nazm
 fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 }
+```
+
+```nazm
+fn main() -> Int { str_len(r#"say "hi""#) + str_len(r"C:\path") }
 ```
 
 ### `tuple`
