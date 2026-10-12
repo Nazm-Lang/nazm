@@ -2862,6 +2862,10 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("cell_new", "Cell[T]"),
         ("cell_get", "Cell[T]"),
         ("cell_set", "Cell[T]"),
+        // R1b: checked arithmetic, generic over the integers, likewise.
+        ("checked_add", "Option[T]"),
+        ("checked_sub", "Option[T]"),
+        ("checked_mul", "Option[T]"),
         // Gate 2 (numbers): the Nazm checker's type table has `Int` alone, so these, generic over
         // the widths and floats, are unknown functions there and refused by name.
         ("wrapping_add", "Gate 2 numbers"),

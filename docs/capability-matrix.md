@@ -200,6 +200,19 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-13)** · *Checked arithmetic* (`spec.md`, *Numbers*, **Functions**;
+`openspec/changes/r1-language-for-the-rewrite`, L13a). `checked_add`, `checked_sub` and
+`checked_mul`, over every integer type, return `Option[T]` — `Some` of the exact result, `None`
+where it does not fit — as prelude names; a built-in signature may now name the prelude's `Option`
+(`Shape::OptionT`). Core IR lowering writes each from operations every implementation has: a sum or
+difference overflows exactly when its wrapping and saturating results differ; a product, `a` being
+neither `0` nor `-1`, exactly when the wrapped product divided by `a` is not `b`, and `-1` times a
+signed minimum is tested by name. Nothing below Core IR is new. Semantic epoch 65; EXPERIMENTAL
+until R1 closes. `Int128`, `UInt128` and the widening multiply (L13b) remain. Evidence:
+`crates/nazm-cli/tests/checked.rs` — each bound, `-1` times the minimum and zero at `Int`, `Int8`
+and `UInt8` under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing
+live; a float refused; the prelude name.
+
 **R1b (2026-10-13)** · *Scope-exit cleanup: `defer`* (`spec.md`; `openspec/changes/
 r1-language-for-the-rewrite`, L12). `defer { … }` runs a block whenever its block is left — at its
 end, or by `return`, `?`, `break` or `continue` — the last registered first, after a returned value

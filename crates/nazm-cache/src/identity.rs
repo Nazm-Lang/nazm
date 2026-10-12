@@ -317,7 +317,9 @@ use crate::digest::{self, Framed};
 /// `63` — R1b, 2026-10-13. An impl with type parameters for a generic record or enum moved from
 /// refused to accepted.
 /// `64` — R1b, 2026-10-13. `defer { … }` moved from refused to accepted; `N0631`.
-pub const SEMANTIC_EPOCH: u32 = 64;
+/// `65` — R1b, 2026-10-13. `checked_add`, `checked_sub` and `checked_mul` moved from refused to
+/// accepted, as prelude names.
+pub const SEMANTIC_EPOCH: u32 = 65;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
