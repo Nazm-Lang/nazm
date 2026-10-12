@@ -75,12 +75,22 @@ which gives the same answer.
 
 ## Install
 
-You need the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it on first use) and
+On macOS on Apple Silicon, the 0.9.0 preview installs prebuilt:
+
+```sh
+brew install nazm-lang/tap/nazm
+```
+
+or from the archive on the [release page](https://github.com/Nazm-Lang/nazm/releases/tag/v0.9.0)
+([`docs/releases/0.9.0.md`](docs/releases/0.9.0.md), *Installing*). `nazm build` also needs the
+Xcode command-line tools.
+
+To build from source, you need the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it on first use) and
 `clang`, which `nazm build` uses for the runtime and the link — Apple's on macOS (Xcode
 command-line tools), your distribution's `clang` package on Linux.
 
 ```sh
-git clone https://github.com/mdferdousalam/nazm
+git clone https://github.com/Nazm-Lang/nazm
 cd nazm
 cargo build --release -p nazm-cli            # target/release/nazm
 # or: cargo install --path crates/nazm-cli --locked
