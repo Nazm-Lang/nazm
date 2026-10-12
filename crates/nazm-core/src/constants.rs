@@ -36,8 +36,13 @@ pub struct Constants {
     pub sections: HashMap<String, String>,
 }
 
-/// Compute every constant of a module, refusing what cannot be computed.
-pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
+/// Compute every constant of a module, refusing what cannot be computed. `imported` are the
+/// constants its imports export (L8), by the name this module writes, which its own may use.
+pub fn evaluate(
+    decls: &[&Const],
+    imported: Vec<(String, (Type, ConstValue))>,
+    errors: &mut Vec<Diagnostic>,
+) -> Constants {
     let by_name: HashMap<&str, &Const> = decls.iter().map(|c| (c.name.as_str(), *c)).collect();
     let mut decl_spans: HashMap<String, nazm_span::Span> = HashMap::new();
     for c in decls {
@@ -45,12 +50,18 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
     }
     let mut ev = Evaluator {
         decls: by_name,
-        done: HashMap::new(),
+        // An import's constants first: a module's own of the same name hides one.
+        done: imported.into_iter().collect(),
         cells: HashMap::new(),
         active: Vec::new(),
         refs: Vec::new(),
         errors,
+        types: None,
+        aggregates: HashMap::new(),
     };
+    for c in decls {
+        ev.done.remove(&c.name);
+    }
     for c in decls {
         if let Some(prior) = decls
             .iter()
@@ -68,20 +79,20 @@ pub fn evaluate(decls: &[&Const], errors: &mut Vec<Diagnostic>) -> Constants {
                 continue;
             }
         }
-        if let Some(p) = c.pub_span {
-            let what = if c.is_static { "static" } else { "constant" };
+        // A constant is exported by its value (L8); a static is storage, its module's.
+        if let Some(p) = c.pub_span.filter(|_| c.is_static) {
             ev.errors.push(
                 Diagnostic::error(
                     codes::UNSUPPORTED_CONSTRUCT,
                     p,
                     format!(
-                        "`{}` cannot be exported: a {what} is its own module's",
+                        "`{}` cannot be exported: a static is its own module's",
                         c.name
                     ),
                 )
                 .help(
-                    "an importer would need the value in the module's published interface, \
-                     which does not carry constants yet; export a function returning it",
+                    "a static is storage with one address in its module; export a function \
+                     that reads it, or a constant if its value never changes",
                 ),
             );
         }
@@ -166,6 +177,49 @@ struct Evaluator<'a, 'e> {
     active: Vec<String>,
     refs: Vec<(nazm_span::Span, String)>,
     errors: &'e mut Vec<Diagnostic>,
+    /// The module's types, in the second phase (L8): `None` while only scalars are computed,
+    /// before any record is known.
+    types: Option<&'a nazm_sema::UserTypes>,
+    /// Each constant of a record, enum, tuple or array type, by name: its declared type,
+    /// resolved (L8).
+    aggregates: HashMap<String, Type>,
+}
+
+/// The second phase (R1a, L8, `docs/spec.md`, *Constant tables and exported constants*): each
+/// constant of a record, enum, tuple or array type — `tys`, its declared type resolved where the
+/// module's types are known — computed into `consts` beside the scalars the first phase did.
+pub fn evaluate_aggregates(
+    consts: &mut Constants,
+    decls: &[&Const],
+    tys: &[(String, Type)],
+    types: &nazm_sema::UserTypes,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let mut ev = Evaluator {
+        decls: decls.iter().map(|c| (c.name.as_str(), *c)).collect(),
+        done: consts.values.clone(),
+        cells: HashMap::new(),
+        active: Vec::new(),
+        refs: Vec::new(),
+        errors,
+        types: Some(types),
+        aggregates: tys.iter().cloned().collect(),
+    };
+    for (name, _) in tys {
+        ev.constant(name);
+    }
+    consts.values = ev.done;
+    consts.refs.extend(ev.refs);
+    consts.refs.sort_by_key(|(s, _)| (s.file, s.start));
+    consts.refs.dedup();
+}
+
+/// Whether a constant's declared type is computed in the second phase (L8): anything but a
+/// number, a `Bool` or a `Str` — a record, an enum, a tuple or an array, or a mistake the second
+/// phase reports.
+#[must_use]
+pub fn is_aggregate(c: &Const) -> bool {
+    !c.is_static && declared(&c.ty).is_none()
 }
 
 /// Why an expression has no constant value: already reported.
@@ -233,6 +287,20 @@ impl Evaluator<'_, '_> {
             ));
             return None;
         }
+        // A record, enum, tuple or array (L8): the second phase's, where types are known.
+        if !decl.is_static && declared(&decl.ty).is_none() {
+            if let Some(ty) = self.aggregates.get(name).copied() {
+                return self.aggregate(name, decl, ty);
+            }
+            if !self.active.is_empty() {
+                self.errors.push(Diagnostic::error(
+                    codes::NOT_A_CONSTANT,
+                    decl.name_span,
+                    format!("`{name}` is not a number, a `Bool` or a `Str`, which this needs"),
+                ));
+            }
+            return None;
+        }
         let ty = declared(&decl.ty).filter(|t| !(decl.is_static && *t == Type::Str));
         if decl.is_static && ty.is_none() {
             self.errors.push(
@@ -285,6 +353,206 @@ impl Evaluator<'_, '_> {
         }
         self.done.insert(name.to_owned(), (ty, value.clone()));
         Some((ty, value))
+    }
+
+    /// A constant of a record, enum, tuple or array type (L8).
+    fn aggregate(&mut self, name: &str, decl: &Const, ty: Type) -> Option<(Type, ConstValue)> {
+        let types = self.types?;
+        if let Some(handle) = types.not_value(ty, true) {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::NOT_A_CONSTANT,
+                    decl.ty.span,
+                    format!(
+                        "a constant is a value, and `{}` holds a `{}`",
+                        types.show(ty),
+                        types.show(handle)
+                    ),
+                )
+                .help(
+                    "a constant is a number, a `Bool`, a `Str`, or a record, enum, tuple or \
+                     array of them — computed when the program is checked, with no storage",
+                ),
+            );
+            return None;
+        }
+        self.active.push(name.to_owned());
+        let value = self.agg(&decl.value, ty).ok();
+        self.active.pop();
+        // Still declared at its type when refused, so a use is not a second error.
+        let value = value.unwrap_or_else(|| ConstValue::Array {
+            ty,
+            elems: Vec::new(),
+        });
+        self.done.insert(name.to_owned(), (ty, value.clone()));
+        Some((ty, value))
+    }
+
+    /// `e` as a value of `ty`, a record, enum, tuple or array built of constant parts, or a scalar
+    /// constant expression (L8).
+    fn agg(&mut self, e: &Expr, ty: Type) -> Result<ConstValue, Refused> {
+        let Some(types) = self.types else {
+            return Err(Refused);
+        };
+        if matches!(ty, Type::Int | Type::Bool | Type::Str | Type::Num(_)) {
+            let v = self.value(e, ty)?;
+            if v.ty() != ty {
+                return Err(self.mismatch(e.span(), ty));
+            }
+            return Ok(v);
+        }
+        if let Expr::Var { name, span } = e {
+            let own = self.decls.contains_key(name.as_str());
+            // Its own constant, or one an import exports (L8).
+            if !own && !self.done.contains_key(name.as_str()) {
+                return Err(self.refuse(*span, &format!("name `{name}`, which is not a constant")));
+            }
+            if own {
+                self.refs.push((*span, name.clone()));
+            }
+            return match self.constant(name) {
+                Some((t, v)) if t == ty => Ok(v),
+                Some(_) => Err(self.mismatch(*span, ty)),
+                None => Err(Refused),
+            };
+        }
+        let base = |n: &str| types.show(ty).split('[').next() == Some(n);
+        match (ty, e) {
+            (Type::Record(_), Expr::Tuple { elems, span }) => {
+                let Some(want) = types.tuple_elements(ty) else {
+                    return Err(self.mismatch(*span, ty));
+                };
+                if want.len() != elems.len() {
+                    return Err(self.mismatch(*span, ty));
+                }
+                let fields = elems
+                    .iter()
+                    .zip(want)
+                    .map(|(x, t)| self.agg(x, t))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ConstValue::Record { ty, fields })
+            }
+            (
+                Type::Record(id),
+                Expr::Construct {
+                    ty: written,
+                    fields: inits,
+                    span,
+                    ..
+                },
+            ) if base(written) && types.tuple_elements(ty).is_none() => {
+                let Some(def) = types.records().get(id) else {
+                    return Err(Refused);
+                };
+                let want: Vec<(String, Type)> =
+                    def.fields.iter().map(|f| (f.name.clone(), f.ty)).collect();
+                let fields = self.fields(&want, inits, *span)?;
+                Ok(ConstValue::Record { ty, fields })
+            }
+            (
+                Type::Enum(id),
+                Expr::Variant {
+                    ty: written,
+                    variant,
+                    variant_span,
+                    fields: inits,
+                    span,
+                    ..
+                },
+            ) if base(written) => {
+                let Some(def) = types.enums().get(id) else {
+                    return Err(Refused);
+                };
+                let Some((vi, v)) = def
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .find(|(_, v)| v.name == *variant)
+                else {
+                    return Err(self.mismatch(*variant_span, ty));
+                };
+                let want: Vec<(String, Type)> =
+                    v.fields.iter().map(|f| (f.name.clone(), f.ty)).collect();
+                let fields = self.fields(&want, inits, *span)?;
+                Ok(ConstValue::Variant {
+                    ty,
+                    variant: u32::try_from(vi).unwrap_or(u32::MAX),
+                    fields,
+                })
+            }
+            (Type::Array(a), Expr::Array { elems, span }) => {
+                let Some((elem, len)) = types.array_info(a) else {
+                    return Err(Refused);
+                };
+                if elems.len() != len as usize {
+                    return Err(self.mismatch(*span, ty));
+                }
+                let elems = elems
+                    .iter()
+                    .map(|x| self.agg(x, elem))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ConstValue::Array { ty, elems })
+            }
+            (Type::Array(a), Expr::ArrayRepeat { value, count, span }) => {
+                let Some((elem, len)) = types.array_info(a) else {
+                    return Err(Refused);
+                };
+                let n = self.value(count, Type::Int)?.as_int();
+                if n != Some(i128::from(len)) {
+                    return Err(self.mismatch(*span, ty));
+                }
+                let one = self.agg(value, elem)?;
+                Ok(ConstValue::Array {
+                    ty,
+                    elems: vec![one; len as usize],
+                })
+            }
+            (_, Expr::Call { span, .. }) => Err(self.refuse(*span, "call a function")),
+            (_, other) => Err(self.mismatch(other.span(), ty)),
+        }
+    }
+
+    /// A construction's fields as `want` declares them, each once, in declaration order (L8).
+    fn fields(
+        &mut self,
+        want: &[(String, Type)],
+        inits: &[nazm_syntax::FieldInit],
+        at: nazm_span::Span,
+    ) -> Result<Vec<ConstValue>, Refused> {
+        if let Some(extra) = inits
+            .iter()
+            .find(|i| !want.iter().any(|(n, _)| *n == i.name))
+        {
+            self.errors.push(Diagnostic::error(
+                codes::TYPE_MISMATCH,
+                extra.name_span,
+                format!("there is no field `{}` here", extra.name),
+            ));
+            return Err(Refused);
+        }
+        let mut out = Vec::with_capacity(want.len());
+        for (name, t) in want {
+            let Some(init) = inits.iter().find(|i| i.name == *name) else {
+                self.errors.push(Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    at,
+                    format!("this constant's construction does not give `{name}`"),
+                ));
+                return Err(Refused);
+            };
+            out.push(self.agg(&init.value, *t)?);
+        }
+        Ok(out)
+    }
+
+    fn mismatch(&mut self, at: nazm_span::Span, ty: Type) -> Refused {
+        let shown = self.types.map_or_else(|| show(ty), |t| t.show(ty));
+        self.errors.push(Diagnostic::error(
+            codes::TYPE_MISMATCH,
+            at,
+            format!("a constant of type `{shown}` is not this"),
+        ));
+        Refused
     }
 
     fn refuse(&mut self, at: nazm_span::Span, why: &str) -> Refused {

@@ -200,6 +200,21 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1a (2026-10-12)** · *Constant tables and exported constants* (`spec.md`;
+`openspec/changes/r1-language-for-the-rewrite`, L8). An array may hold `Str`, `Text` and records,
+enums and arrays of them (`N0621` names a handle): MIR counts an array managed by its element,
+writing an element moves the value in and releases the old one, and LIR retains on every copy in
+and out and releases element by element (`each_owned`'s array loop). A constant may be a record,
+enum value, tuple or array of constant parts, computed by a second phase once types are known,
+and lowered at each use to its construction; `pub const` publishes the value in the interface
+(`nazm.interface/12`, each value keyed by field and variant names) and an importer reads it as
+`NAME` or `m::NAME`; a stage 1b computes constants in dependency order so one may be computed
+from an import's. Semantic epoch 57; EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/const_tables.rs` — string arrays and constant tables by hand-worked output
+in the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; constants
+across modules, plain and under a name, under `run` and two `build`s (the second from the cache);
+the published interface; refusals by code.
+
 **R1a (2026-10-12)** · *Ordering and hashing are derived* (`spec.md`; `openspec/changes/
 r1-language-for-the-rewrite`, L6). `< <= > >=` on `Bool`, `Str` (bytes) and records, enums and
 tuples of ordered components, by the **names** of fields and variants (the canonical order the

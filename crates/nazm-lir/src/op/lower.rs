@@ -802,6 +802,7 @@ fn static_bytes(v: &nazm_sema::numeric::ConstValue) -> Vec<u8> {
             n.bits.to_le_bytes().get(..width).unwrap_or(&[0]).to_vec()
         }
         nazm_sema::numeric::ConstValue::Bool(b) => vec![u8::from(*b)],
-        nazm_sema::numeric::ConstValue::Str(_) => vec![0],
+        // A static is a number or a `Bool`: nothing else reaches here.
+        _ => vec![0],
     }
 }

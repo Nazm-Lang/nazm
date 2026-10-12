@@ -29,6 +29,23 @@ pub enum ConstValue {
     Num(NumVal),
     Bool(bool),
     Str(Vec<u8>),
+    /// A record or tuple (R1a, L8): its fields' values in declaration order.
+    Record {
+        ty: crate::types::Type,
+        fields: Vec<ConstValue>,
+    },
+    /// An enum value (L8): its variant by declaration index, and the payload in declaration
+    /// order.
+    Variant {
+        ty: crate::types::Type,
+        variant: u32,
+        fields: Vec<ConstValue>,
+    },
+    /// An array (L8): its elements in order.
+    Array {
+        ty: crate::types::Type,
+        elems: Vec<ConstValue>,
+    },
 }
 
 impl ConstValue {
@@ -39,6 +56,7 @@ impl ConstValue {
             Self::Num(n) => crate::types::Type::of_num(n.kind),
             Self::Bool(_) => crate::types::Type::Bool,
             Self::Str(_) => crate::types::Type::Str,
+            Self::Record { ty, .. } | Self::Variant { ty, .. } | Self::Array { ty, .. } => *ty,
         }
     }
 

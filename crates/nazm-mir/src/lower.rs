@@ -1151,6 +1151,8 @@ impl Fx<'_> {
         }
         let tmp = self.temp(current, at, "element");
         self.expr_into(value, Some(tmp));
+        // Owned until the write takes it (L8): an index that fails releases it on the way out.
+        self.own(tmp);
         let mut refs = Vec::with_capacity(path.len());
         for (step, s) in path.iter().zip(shape) {
             match (step, s) {
@@ -1176,6 +1178,7 @@ impl Fx<'_> {
             },
             at,
         );
+        self.forget(tmp);
     }
 
     fn record_field_ty(&mut self, rid: RecordId, field: u32, at: Span) -> Type {
@@ -1542,7 +1545,8 @@ impl Fx<'_> {
                 );
                 self.release(h, at);
             }
-            // Arrays (Gate 2): plain data, so every element is a copy and nothing is retained.
+            // Arrays (Gate 2): every element borrowed and copied in, the copy taking its own
+            // reference to any string it holds (L8).
             cir::ExprKind::Array { elems } => {
                 let Some((ops, held)) = self.operands(elems) else {
                     return;
@@ -2100,13 +2104,14 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         | Type::Text
         | Type::Atomic
         | Type::Fn(_) => true,
-        Type::Int
-        | Type::Bool
-        | Type::Cap(_)
-        | Type::OsHandle
-        | Type::Param(_)
-        | Type::Num(_)
-        | Type::Array(_) => false,
+        Type::Int | Type::Bool | Type::Cap(_) | Type::OsHandle | Type::Param(_) | Type::Num(_) => {
+            false
+        }
+        // An array owns what its elements do (R1a, L8).
+        Type::Array(a) => res
+            .types()
+            .array_info(a)
+            .is_some_and(|(e, _)| managed_type(res, e, depth + 1)),
         Type::Record(id) => res
             .records()
             .get(id)

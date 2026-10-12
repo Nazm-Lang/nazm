@@ -30,13 +30,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use nazm_sema::enums::{EnumDef, VariantDef};
-use nazm_sema::interface::{EnumExport, Export, RecordExport, UnitInterface, Visibility};
+use nazm_sema::interface::{
+    ConstExport, EnumExport, Export, RecordExport, UnitInterface, Visibility,
+};
 use nazm_sema::key::{DefKey, DefKind, ModuleKey};
 use nazm_sema::module::ModuleGraph;
+use nazm_sema::numeric::{ConstValue, NumVal};
 use nazm_sema::record::{FieldDef, RecordDef};
 use nazm_sema::resolve::FnId;
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes};
+use nazm_sema::NumKind;
 use nazm_sema::{ModuleId, MAX_TYPE_DEPTH};
 use nazm_span::Span;
 
@@ -148,7 +152,15 @@ use nazm_span::Span;
 /// Gate 2 adds the numeric types by name (`UInt8`, `Float64`, …) and an array type as
 /// `{"array":T,"len":N}` without moving it: a `/11` reader from before Gate 2 refuses either as
 /// an unknown type rather than misreading it, as an older reader did `IoCap`.
-pub const SCHEMA: &str = "nazm.interface/11";
+///
+/// # `/12` (R1a, L8)
+///
+/// A module may export constants: `consts` lists each with its type and the value an importer
+/// writes where it uses one ([`PersistentValue`]). A `/11` reader would ignore the list and
+/// refuse every use as an unknown name — or, worse, take an importer's name for its own — so the
+/// major moves. Absent where empty. R1a's other additions — `{"box":T}`, `{"list":T}`,
+/// `{"tuple":[…]}` — are types an older reader refuses as unknown, and moved nothing.
+pub const SCHEMA: &str = "nazm.interface/12";
 
 /// A type as persisted.
 ///
@@ -511,6 +523,204 @@ pub struct PersistentUnitInterface {
     /// writes, and the type's durable identity. Sorted by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reexported_types: Vec<(String, String)>,
+    /// Its exported constants, sorted by name (R1a, L8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consts: Vec<PersistentConst>,
+}
+
+/// An exported constant (L8): its name, its type, and its value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentConst {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: PersistentType,
+    pub value: PersistentValue,
+}
+
+/// A constant's value as persisted (L8), read against its type, which says what each part is.
+///
+/// | Shape | Means |
+/// | --- | --- |
+/// | `{"bits":"N"}` | a number: its canonical bits, in decimal (a JSON number would lose 64 bits) |
+/// | `{"bool":b}` | a `Bool` |
+/// | `{"bytes":"hex"}` | a `Str`'s bytes, which need not be UTF-8 |
+/// | `{"fields":[[name, v], …]}` | a record or tuple, its fields by name, sorted |
+/// | `{"variant":name,"fields":[…]}` | an enum value |
+/// | `{"elems":[…]}` | an array, in order |
+///
+/// By name rather than position: a record's fields are persisted sorted by name, so a reader's
+/// definition has no declaration order to match a position against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PersistentValue {
+    Bits {
+        bits: String,
+    },
+    Bool {
+        bool: bool,
+    },
+    Bytes {
+        bytes: String,
+    },
+    Fields {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variant: Option<String>,
+        fields: Vec<(String, PersistentValue)>,
+    },
+    Elems {
+        elems: Vec<PersistentValue>,
+    },
+}
+
+/// A constant's value, persisted (L8).
+fn persist_value(v: &ConstValue, types: &UserTypes) -> PersistentValue {
+    let named = |names: Vec<String>, fields: &[ConstValue]| {
+        let mut out: Vec<(String, PersistentValue)> = names
+            .into_iter()
+            .zip(fields)
+            .map(|(n, f)| (n, persist_value(f, types)))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    };
+    match v {
+        ConstValue::Num(n) => PersistentValue::Bits {
+            bits: n.bits.to_string(),
+        },
+        ConstValue::Bool(b) => PersistentValue::Bool { bool: *b },
+        ConstValue::Str(s) => PersistentValue::Bytes {
+            bytes: s.iter().map(|b| format!("{b:02x}")).collect(),
+        },
+        ConstValue::Record { ty, fields } => {
+            let names = match ty {
+                Type::Record(id) => types
+                    .records()
+                    .get(*id)
+                    .map(|d| d.fields.iter().map(|f| f.name.clone()).collect())
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            PersistentValue::Fields {
+                variant: None,
+                fields: named(names, fields),
+            }
+        }
+        ConstValue::Variant {
+            ty,
+            variant,
+            fields,
+        } => {
+            let v = match ty {
+                Type::Enum(id) => types
+                    .enums()
+                    .get(*id)
+                    .and_then(|d| d.variants.get(*variant as usize)),
+                _ => None,
+            };
+            PersistentValue::Fields {
+                variant: v.map(|v| v.name.clone()),
+                fields: named(
+                    v.map(|v| v.fields.iter().map(|f| f.name.clone()).collect())
+                        .unwrap_or_default(),
+                    fields,
+                ),
+            }
+        }
+        ConstValue::Array { elems, .. } => PersistentValue::Elems {
+            elems: elems.iter().map(|e| persist_value(e, types)).collect(),
+        },
+    }
+}
+
+/// A persisted constant's value, read against its type (L8); `None` where they disagree.
+fn read_value(p: &PersistentValue, ty: Type, types: &UserTypes) -> Option<ConstValue> {
+    let fields_of = |names: &[(String, Type)], given: &[(String, PersistentValue)]| {
+        if names.len() != given.len() {
+            return None;
+        }
+        names
+            .iter()
+            .map(|(n, t)| {
+                let (_, v) = given.iter().find(|(g, _)| g == n)?;
+                read_value(v, *t, types)
+            })
+            .collect::<Option<Vec<_>>>()
+    };
+    match (ty, p) {
+        (Type::Int, PersistentValue::Bits { bits }) => Some(ConstValue::Num(NumVal {
+            kind: NumKind::I64,
+            bits: bits.parse().ok()?,
+        })),
+        (Type::Num(kind), PersistentValue::Bits { bits }) => Some(ConstValue::Num(NumVal {
+            kind,
+            bits: bits.parse().ok()?,
+        })),
+        (Type::Bool, PersistentValue::Bool { bool }) => Some(ConstValue::Bool(*bool)),
+        (Type::Str, PersistentValue::Bytes { bytes }) => {
+            if bytes.len() % 2 != 0 {
+                return None;
+            }
+            (0..bytes.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(bytes.get(i..i + 2)?, 16).ok())
+                .collect::<Option<Vec<u8>>>()
+                .map(ConstValue::Str)
+        }
+        (
+            Type::Record(id),
+            PersistentValue::Fields {
+                variant: None,
+                fields,
+            },
+        ) => {
+            let names: Vec<(String, Type)> = types
+                .records()
+                .get(id)?
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), f.ty))
+                .collect();
+            Some(ConstValue::Record {
+                ty,
+                fields: fields_of(&names, fields)?,
+            })
+        }
+        (
+            Type::Enum(id),
+            PersistentValue::Fields {
+                variant: Some(name),
+                fields,
+            },
+        ) => {
+            let def = types.enums().get(id)?;
+            let (vi, v) = def
+                .variants
+                .iter()
+                .enumerate()
+                .find(|(_, v)| v.name == *name)?;
+            let names: Vec<(String, Type)> =
+                v.fields.iter().map(|f| (f.name.clone(), f.ty)).collect();
+            Some(ConstValue::Variant {
+                ty,
+                variant: u32::try_from(vi).ok()?,
+                fields: fields_of(&names, fields)?,
+            })
+        }
+        (Type::Array(a), PersistentValue::Elems { elems }) => {
+            let (elem, len) = types.array_info(a)?;
+            if elems.len() != len as usize {
+                return None;
+            }
+            Some(ConstValue::Array {
+                ty,
+                elems: elems
+                    .iter()
+                    .map(|e| read_value(e, elem, types))
+                    .collect::<Option<Vec<_>>>()?,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// An exported trait (N78). In each method's types, `{"param": 0}` is `Self`.
@@ -977,6 +1187,20 @@ impl PersistentUnitInterface {
         reexported_types.sort();
         reexported_types.dedup();
 
+        // Its exported constants (L8), sorted by name. A type that cannot be written durably
+        // was refused with the exports'.
+        let consts: Vec<PersistentConst> = interface
+            .consts()
+            .iter()
+            .filter_map(|c| {
+                Some(PersistentConst {
+                    name: c.name.clone(),
+                    ty: persist(c.ty, types, graph)?,
+                    value: persist_value(&c.value, types),
+                })
+            })
+            .collect();
+
         Ok(Self {
             schema: SCHEMA.to_owned(),
             module: module.as_str().to_owned(),
@@ -987,6 +1211,7 @@ impl PersistentUnitInterface {
             traits,
             impls,
             reexported_types,
+            consts,
         })
     }
 
@@ -1133,6 +1358,18 @@ impl PersistentUnitInterface {
                     validate_type(&f.ty, e.generics, &defined, 0, &e.def)?;
                 }
             }
+        }
+
+        // Each constant's type a definition this file carries, with no parameter (L8), and the
+        // names sorted and distinct.
+        for c in &self.consts {
+            validate_type(&c.ty, 0, &defined, 0, &c.name)?;
+        }
+        if self.consts.windows(2).any(|w| match w {
+            [a, b] => a.name >= b.name,
+            _ => false,
+        }) {
+            return Err(ReadError::NotCanonical("consts".to_owned()));
         }
 
         let mut previous: Option<&str> = None;
@@ -1433,8 +1670,24 @@ impl PersistentUnitInterface {
                 _ => None,
             })
             .collect();
+        // Its exported constants (L8), each read against its type; one that disagrees with it
+        // is not offered, and a use of it is refused as an unknown name, never misread.
+        let consts: Vec<ConstExport> = self
+            .consts
+            .iter()
+            .filter_map(|c| {
+                let ty = read_type(&c.ty, &ids, types, ParamOwner::Function(first));
+                Some(ConstExport {
+                    name: c.name.clone(),
+                    ty,
+                    value: read_value(&c.value, ty, types)?,
+                    name_span: Span::synthetic(),
+                })
+            })
+            .collect();
         let mut iface =
-            UnitInterface::new(module, exports, record_exports, enum_exports, Vec::new());
+            UnitInterface::new(module, exports, record_exports, enum_exports, Vec::new())
+                .with_consts(consts);
         // Types offered by name from another module (N103): their shapes are in the lists
         // above, as every mentioned type's is.
         for (name, key) in &self.reexported_types {

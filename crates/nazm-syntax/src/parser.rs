@@ -4226,21 +4226,17 @@ impl<'a> Parser<'a> {
                 span: span.join(close),
             })
         } else {
-            // A qualified name names a definition, and Nazm has no module-level
-            // values: `m::x` alone is not an expression (N49).
+            // `m::NAME` (R1a, L8): an imported module's exported constant, the one module-level
+            // value Nazm has. The name is written whole, as the checker keys what an import
+            // under a name offers; anything else it could name is not a value, and is refused
+            // there as an unknown name.
             if let Some(q) = qualifier {
-                self.report(
-                    Diagnostic::error(
-                        codes::UNEXPECTED_TOKEN,
-                        q.span.join(span),
-                        format!("`{}::{name}` names a definition, not a value", q.name),
-                    )
-                    .help(
-                        "a qualified name is called, constructed or names a variant: \
-                         `m::f(…)`, `m::R(…)`, `m::E.V(…)`",
-                    ),
-                );
-                return None;
+                self.built(1)?;
+                self.wrap(at, SyntaxKind::NameRef);
+                return Some(Expr::Var {
+                    name: format!("{}::{name}", q.name),
+                    span: q.span.join(span),
+                });
             }
             self.built(1)?;
             self.wrap(at, SyntaxKind::NameRef);
