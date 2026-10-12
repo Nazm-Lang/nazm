@@ -21,6 +21,7 @@ impl Checker<'_> {
         expected: Option<Type>,
     ) -> Completion {
         let sty = self.value_type(scrutinee, None);
+        let errors_before = self.errors.len();
         // A variant pattern needs an enum; before R1a every `match` did.
         // An empty `match` of anything else matches nothing, and is refused as before R1a.
         let wants_enum = arms.is_empty() || arms.iter().any(|a| has_variant_pattern(&a.pattern));
@@ -150,6 +151,13 @@ impl Checker<'_> {
         if !unresolved {
             self.report_uncovered(sty, &rows, span, source);
         }
+        // A `_` that covers variants (L15), only where the `match` is otherwise right.
+        if !unresolved
+            && source == nazm_syntax::MatchSource::Written
+            && self.errors.len() == errors_before
+        {
+            self.warn_covering(sty, arms);
+        }
         match result {
             Some(c) => c,
             // Every arm's pattern was refused: what the `match` would produce is unknown, and
@@ -158,6 +166,65 @@ impl Checker<'_> {
             None if unresolved => Completion::Diverges,
             None => Completion::Value(expected.unwrap_or(Type::Int)),
         }
+    }
+
+    /// `N0632`, a warning (R1b, L15): a `match` on an enum whose `_`, or bare name, covers
+    /// variants no arm names — so a variant added to the enum later is covered too, and the
+    /// change that should have been reported at every `match` is reported at none. `docs/spec.md`,
+    /// *Patterns*, which kept this voice when it admitted `_` (L3).
+    fn warn_covering(&mut self, sty: Type, arms: &[MatchArm]) {
+        let Type::Enum(id) = sty else { return };
+        let Some(def) = self.res.enums().get(id) else {
+            return;
+        };
+        let variants: Vec<String> = def.variants.iter().map(|v| v.name.clone()).collect();
+        fn named(p: &nazm_syntax::Pattern, out: &mut Vec<String>) {
+            match p {
+                nazm_syntax::Pattern::Variant(v) => out.push(v.variant.clone()),
+                nazm_syntax::Pattern::Or { alts, .. } => alts.iter().for_each(|a| named(a, out)),
+                _ => {}
+            }
+        }
+        let mut seen = Vec::new();
+        for a in arms {
+            named(&a.pattern, &mut seen);
+        }
+        let Some(catch_all) = arms.iter().find(|a| {
+            matches!(
+                a.pattern,
+                nazm_syntax::Pattern::Wildcard { .. } | nazm_syntax::Pattern::Bind { .. }
+            )
+        }) else {
+            return;
+        };
+        let covered: Vec<&String> = variants.iter().filter(|v| !seen.contains(v)).collect();
+        if covered.is_empty() {
+            return;
+        }
+        let shown = self.show(sty);
+        let base = shown.split('[').next().unwrap_or(&shown).to_owned();
+        let list = covered
+            .iter()
+            .map(|v| format!("`{base}.{v}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let which = if matches!(catch_all.pattern, nazm_syntax::Pattern::Wildcard { .. }) {
+            "`_`".to_owned()
+        } else {
+            "this name".to_owned()
+        };
+        // `codes::WILDCARD_COVERS_VARIANTS`'s text: resolution holds no `nazm-diag` type.
+        self.res.warn(nazm_sema::resolve::Warning {
+            code: "N0632",
+            span: catch_all.pattern.span(),
+            message: format!(
+                "{which} covers {list}, which no arm names: a variant added to `{base}` later is \
+                 covered too, without a word"
+            ),
+            help: Some(format!(
+                "name them, so that adding a variant to `{base}` is reported at this `match`"
+            )),
+        });
     }
 
     /// `N0344` for an arm whose every value an earlier arm matches — said as before R1a when

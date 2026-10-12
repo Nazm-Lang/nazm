@@ -1067,8 +1067,12 @@ acceptance. The next run finds it, skips the module, and reports nothing — a c
 accepts a program it has already refused
 """
 file = "crates/nazm-core/src/check/mod.rs"
-find = "        if !unparsed && errors.len() == before && declared_cleanly.get(n) == Some(&true) {"
-replace = "        if true {"
+find = '''
+        if !unparsed
+            && errors.len() == before'''
+replace = '''
+        if true
+            || errors.len() == before'''
 killers = [{ package = "nazm-cli", test = "ffi", name = "an_imported_foreign_function_needs_a_foreign_cap_too" }]
 
 [[mutation]]
@@ -8317,10 +8321,11 @@ Repointed by R1b again, which moved it to 61 for L10: an entry that refused a cl
 Repointed by R1b a third time, which moved it to 62 for L11: an entry that refused a trait default body must not be reused.
 Repointed by R1b a fourth time, which moved it to 63 for L11b: an entry that refused an impl of a generic type must not be reused.
 Repointed by R1b a fifth time, which moved it to 64 for L12: an entry that refused `defer` must not be reused.
-Repointed by R1b a sixth time, which moved it to 65 for L13: an entry that refused `checked_add` must not be reused."""
+Repointed by R1b a sixth time, which moved it to 65 for L13: an entry that refused `checked_add` must not be reused.
+Repointed by R1b a seventh time, which moved it to 66 for L15: an entry kept before warnings existed must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 65;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 64;"
+find = "pub const SEMANTIC_EPOCH: u32 = 66;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 65;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -17195,3 +17200,53 @@ file = "crates/nazm-cli/src/cli.rs"
 find = "        Some((i, 'M' | 'm')) => (&raw[..i], 1u64 << 20),"
 replace = "        Some((i, 'M' | 'm')) => (&raw[..i], 1u64 << 10),"
 killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
+
+# --- R1b L15: warnings (`docs/spec.md`, *Patterns*; `docs/diagnostics.md`) ------------------------
+
+[[mutation]]
+name = "r1b-a-covering-wildcard-is-silent"
+why = "a `_` that covers enum variants draws no warning, so a variant added later is covered without a word"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "        if covered.is_empty() {"
+replace = "        if true {"
+killers = [{ package = "nazm-cli", test = "warnings", name = "a_wildcard_covering_variants_is_a_warning_and_the_program_checks" }]
+
+[[mutation]]
+name = "r1b-a-named-variant-is-said-to-be-covered"
+why = "the covering warning lists every variant, those an arm names among them"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "        let covered: Vec<&String> = variants.iter().filter(|v| !seen.contains(v)).collect();"
+replace = "        let covered: Vec<&String> = variants.iter().filter(|_| !seen.is_empty() || true).collect();"
+killers = [{ package = "nazm-cli", test = "warnings", name = "a_wildcard_covering_variants_is_a_warning_and_the_program_checks" }]
+
+[[mutation]]
+name = "r1b-an-if-let-warns"
+why = "an `if let`, whose `else` is the `_` it was written to have, is warned of"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "            && source == nazm_syntax::MatchSource::Written"
+replace = "            && source != nazm_syntax::MatchSource::Let"
+killers = [{ package = "nazm-cli", test = "warnings", name = "a_wildcard_covering_variants_is_a_warning_and_the_program_checks" }]
+
+[[mutation]]
+name = "r1b-a-warning-is-cached-away"
+why = "a module that warns is kept as checked, so a later run reuses it and says nothing"
+file = "crates/nazm-core/src/check/mod.rs"
+find = "            && res.warnings().len() == warned"
+replace = "            && res.warnings().len() >= warned"
+killers = [{ package = "nazm-cli", test = "warnings", name = "a_wildcard_covering_variants_is_a_warning_and_the_program_checks" }]
+
+[[mutation]]
+name = "r1b-deny-warnings-denies-nothing"
+why = "`nazm check --deny-warnings` accepts a program the checker warns of"
+file = "crates/nazm-cli/src/checking.rs"
+find = "    let denied = deny_warnings && !warnings.is_empty();"
+replace = "    let denied = deny_warnings && warnings.is_empty();"
+killers = [{ package = "nazm-cli", test = "warnings", name = "deny_warnings_refuses_what_the_checker_warns_of" }]
+
+[[mutation]]
+name = "r1b-a-build-ignores-deny-warnings"
+why = "`nazm build --deny-warnings` builds a program the checker warns of"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "                if choice.deny_warnings {"
+replace = "                if !choice.deny_warnings && false {"
+killers = [{ package = "nazm-cli", test = "warnings", name = "deny_warnings_refuses_what_the_checker_warns_of" }]

@@ -492,6 +492,7 @@ impl LanguageService {
                 code: d.code.to_string(),
                 severity: match d.severity {
                     nazm_diag::Severity::Error => "error",
+                    nazm_diag::Severity::Warning => "warning",
                 },
                 start: d.primary.span.start,
                 end: d.primary.span.end,

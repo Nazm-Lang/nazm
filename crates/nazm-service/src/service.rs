@@ -755,11 +755,13 @@ pub(crate) fn analyse(
 /// nowhere else to be shown.
 fn own_diagnostics(s: &Snapshot) -> Vec<Diagnostic> {
     let root = FileId::ROOT;
+    // The checker's warnings too (R1b, L15), at their own severity.
     s.analysis
         .diagnostics
         .iter()
-        .filter(|d| d.primary.span.file == root || d.primary.span == Span::synthetic())
         .cloned()
+        .chain(nazm_core::warnings(&s.analysis.resolution))
+        .filter(|d| d.primary.span.file == root || d.primary.span == Span::synthetic())
         .collect()
 }
 

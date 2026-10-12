@@ -319,7 +319,9 @@ use crate::digest::{self, Framed};
 /// `64` — R1b, 2026-10-13. `defer { … }` moved from refused to accepted; `N0631`.
 /// `65` — R1b, 2026-10-13. `checked_add`, `checked_sub` and `checked_mul` moved from refused to
 /// accepted, as prelude names.
-pub const SEMANTIC_EPOCH: u32 = 65;
+/// `66` — R1b, 2026-10-13. A warning severity: a `_` or a name covering enum variants no arm names
+/// is `N0632`, a warning; a module that warns is not kept as checked.
+pub const SEMANTIC_EPOCH: u32 = 66;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -430,6 +432,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "UNREACHABLE_STATEMENT",
     "UNSATISFIED_REQUIREMENT",
     "UNSUPPORTED_CONSTRUCT",
+    "WILDCARD_COVERS_VARIANTS",
     "WRONG_ARGUMENT_COUNT",
     "WRONG_ENUM_IN_PATTERN",
     "WRONG_TYPE_ARGUMENT_COUNT",

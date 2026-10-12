@@ -52,7 +52,7 @@
         "id": { "type": ["string", "null"], "description": "N30's diagnostic id, within `state`, where N30 indexes the diagnostic; null for a command reference." },
         "scope": { "enum": ["index", "command"], "description": "`index`: N30 indexes it, and `id` selects its detail. `command`: only the command reports it — a program's missing `main` (`N0204`), a backend's refusal — and it has no N30 id." },
         "code": { "type": "string", "pattern": "^N[0-9]{4}$" },
-        "severity": { "enum": ["error"] },
+        "severity": { "enum": ["error", "warning"] },
         "primary": {
           "type": ["object", "null"],
           "additionalProperties": false,

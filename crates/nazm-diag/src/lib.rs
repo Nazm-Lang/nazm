@@ -521,6 +521,9 @@ pub mod codes {
     /// A `defer` body that would leave it: `return`, `?`, or `break`/`continue` out of it (R1b,
     /// `docs/spec.md`, *`defer`*).
     pub const DEFER_LEAVES: Code = Code::new("N0631");
+    /// A warning (R1b, L15): a `match` on an enum whose `_` — or a bare name — covers variants
+    /// no arm names, so a variant added later is covered too, unseen (`docs/spec.md`, *Patterns*).
+    pub const WILDCARD_COVERS_VARIANTS: Code = Code::new("N0632");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");
@@ -540,6 +543,9 @@ pub mod codes {
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     Error,
+    /// R1b (L15): a program that is accepted, with something its author should know — it builds
+    /// and runs, unless `--deny-warnings` makes it refuse.
+    Warning,
 }
 
 /// The identifier every emitted diagnostic object carries in its `schema` field.
@@ -687,6 +693,15 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    /// A warning (R1b, L15): [`Self::error`]'s shape, at [`Severity::Warning`].
+    #[must_use]
+    pub fn warning(code: Code, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Warning,
+            ..Self::error(code, span, message)
+        }
+    }
+
     #[must_use]
     pub fn error(code: Code, span: Span, message: impl Into<String>) -> Self {
         let message = message.into();
@@ -837,7 +852,11 @@ impl Diagnostic {
         let mut out = String::new();
         let at = map.line_col(self.primary.span);
 
-        let _ = writeln!(out, "error[{}]: {}", self.code, self.message);
+        let word = match self.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        let _ = writeln!(out, "{word}[{}]: {}", self.code, self.message);
         // The span says which file it is in, so this is a lookup rather than the binary
         // search over a merged buffer it used to be.
         let _ = writeln!(

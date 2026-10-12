@@ -1243,6 +1243,7 @@ fn lsp_diagnostic(d: &nazm_diag::Diagnostic, index: &LineIndex<'_>) -> LspDiagno
         },
         severity: Some(match d.severity {
             nazm_diag::Severity::Error => DiagnosticSeverity::ERROR,
+            nazm_diag::Severity::Warning => DiagnosticSeverity::WARNING,
         }),
         code: Some(NumberOrString::String(d.code.to_string())),
         source: Some("nazm".to_owned()),

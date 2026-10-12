@@ -23,8 +23,11 @@ found only by reading all of it.
   exist (`spec.md`, *`for` loops*); a `for` of any other shape is still refused by name. The
   compiler written in Nazm (`compiler/*.nz`) does not carry `for` until R2 of the rewrite.
 - Patterns (R1a, EXPERIMENTAL until R1 closes): no guards, range, record or `@` patterns, no `..`
-  in a payload; a `_` that covers enum variants draws no warning until L15 adds a warning
-  severity; the compiler written in Nazm parses only the plain variant pattern until R2.
+  in a payload; the compiler written in Nazm parses only the plain variant pattern until R2.
+- Warnings (R1b, L15, EXPERIMENTAL until R1 closes): `nazm check`, `nazm build` and the language
+  service report them; `nazm run` and `nazm test` do not. A module that warns is checked again on
+  every run rather than reused from the check cache. A use of a `@deprecated` item still draws no
+  warning (`N0620` stays reserved): that needs deprecation carried in a module's interface.
 - Interpolation (R1a, EXPERIMENTAL until R1 closes): a hole stays on one line; a format is
   alignment, width in bytes and a float's precision — no fill character, no zero padding, no
   hexadecimal (`@std/fmt` has `fmt_int_zero` and `fmt_hex`); a hole's own parse errors are one

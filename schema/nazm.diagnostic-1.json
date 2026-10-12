@@ -16,7 +16,7 @@
       "pattern": "^N[0-9]{4}$",
       "description": "Stable. A code never changes meaning and is never reused, so matching on one is the supported way to recognise a diagnostic."
     },
-    "severity": { "enum": ["error"] },
+    "severity": { "enum": ["error", "warning"] },
     "message": {
       "type": "string",
       "description": "One sentence, without a trailing full stop. Prose: match on `code`, not on this."

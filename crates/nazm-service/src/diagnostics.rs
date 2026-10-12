@@ -669,6 +669,7 @@ pub(crate) fn fix_counts(d: &Diagnostic) -> FixCounts {
 pub(crate) const fn severity(d: &Diagnostic) -> &'static str {
     match d.severity {
         nazm_diag::Severity::Error => "error",
+        nazm_diag::Severity::Warning => "warning",
     }
 }
 

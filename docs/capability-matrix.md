@@ -200,6 +200,19 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-13)** · *Warnings* (`spec.md`, *Patterns*; `diagnostics.md`;
+`openspec/changes/r1-language-for-the-rewrite`, L15). A warning severity: `nazm.diagnostic/1`'s
+`severity` takes `"warning"`, and the first warning is `N0632` — a `_` or a name in a written
+`match` of an enum that covers variants no arm names, listing them (the voice L3 kept when it
+admitted `_`). The checker records warnings on the resolution, apart from the errors a stage stops
+on; `nazm check` and `nazm build` report them and succeed, `--deny-warnings` refuses, and the
+language service publishes them at the warning severity. A module that warns is not kept as
+checked, so the warning is not cached away. Semantic epoch 66; EXPERIMENTAL until R1 closes.
+`nazm run` and `nazm test` do not report warnings, and a `@deprecated` use draws none yet (`N0620`
+reserved). Evidence: `crates/nazm-cli/tests/warnings.rs` — both forms of the warning with exact
+lists, none for a match naming every variant or an `if let`, again from the cache, as JSON;
+`--deny-warnings` refusing a check and a build; a build that warns and runs.
+
 **R1b (2026-10-13)** · *The stack asked for: `--stack-size`* (`spec.md`, *Native recursion, and
 the stack it runs on*; `openspec/changes/r1-language-for-the-rewrite`, L14). `nazm build
 --stack-size N` (bytes or `K`/`M`/`G`, 64 KiB to 4 GiB; refused for a board or WebAssembly) runs
