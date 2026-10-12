@@ -184,7 +184,11 @@ impl Fx<'_, '_> {
             // it means, so none reaches LIR.
             | Intrinsic::CellNew
             | Intrinsic::CellGet
-            | Intrinsic::CellSet => {
+            | Intrinsic::CellSet
+            // Checked arithmetic (L13): written from other operations by Core IR lowering.
+            | Intrinsic::CheckedAdd
+            | Intrinsic::CheckedSub
+            | Intrinsic::CheckedMul => {
                 let at = self.at;
                 self.lw.defect(
                     at,

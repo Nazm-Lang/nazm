@@ -440,6 +440,10 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::CellGet
         | Intrinsic::CellSet
         | Intrinsic::WrappingAdd
+        // Written as wrapping, saturating and dividing operations by Core IR lowering (L13).
+        | Intrinsic::CheckedAdd
+        | Intrinsic::CheckedSub
+        | Intrinsic::CheckedMul
         | Intrinsic::WrappingSub
         | Intrinsic::WrappingMul
         | Intrinsic::SaturatingAdd

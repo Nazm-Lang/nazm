@@ -50,6 +50,8 @@ pub enum Shape {
     ListT,
     /// `Cell[T]` (R1b).
     CellT,
+    /// `Option[T]`, the core prelude's (R1b, L13): what a checked operation returns.
+    OptionT,
     /// `Vec[Chan[T]]`: the channels a select waits on (N54).
     ChansT,
     /// `Float64`, `Float32`, `UInt64` and `UInt32` (Gate 2): the monomorphic numeric shapes the
@@ -128,7 +130,8 @@ impl Shape {
             | Self::ChansT
             | Self::BoxT
             | Self::ListT
-            | Self::CellT => None,
+            | Self::CellT
+            | Self::OptionT => None,
         }
     }
 
@@ -149,6 +152,7 @@ impl Shape {
             Self::BoxT => "Box[T]",
             Self::ListT => "List[T]",
             Self::CellT => "Cell[T]",
+            Self::OptionT => "Option[T]",
             Self::F64 => "Float64",
             Self::F32 => "Float32",
             Self::U64 => "UInt64",
@@ -587,11 +591,22 @@ pub enum Intrinsic {
     CellGet,
     /// `cell_set[T](c: Cell[T], v: T) -> Int` — `v` stored in place of what was there; 0.
     CellSet,
+
+    // --- checked arithmetic, R1b (`docs/spec.md`, *Integer arithmetic*, L13) ---------------
+    //
+    // Prelude built-ins over every integer type. Core IR lowering writes each from the wrapping,
+    // saturating and dividing operations it means, so no layer below the checker sees one.
+    /// `checked_add[T](a: T, b: T) -> Option[T]` — `Some` of the sum, `None` where it does not fit.
+    CheckedAdd,
+    /// `checked_sub[T](a: T, b: T) -> Option[T]` — `Some` of the difference, or `None`.
+    CheckedSub,
+    /// `checked_mul[T](a: T, b: T) -> Option[T]` — `Some` of the product, or `None`.
+    CheckedMul,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 181] = [
+    pub const ALL: [Self; 184] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -773,6 +788,9 @@ impl Intrinsic {
         Self::CellNew,
         Self::CellGet,
         Self::CellSet,
+        Self::CheckedAdd,
+        Self::CheckedSub,
+        Self::CheckedMul,
     ];
 
     #[must_use]
@@ -966,6 +984,9 @@ impl Intrinsic {
             Self::CellNew => "cell_new",
             Self::CellGet => "cell_get",
             Self::CellSet => "cell_set",
+            Self::CheckedAdd => "checked_add",
+            Self::CheckedSub => "checked_sub",
+            Self::CheckedMul => "checked_mul",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -1025,7 +1046,10 @@ impl Intrinsic {
             | Self::ToBigEndian
             | Self::FromBigEndian
             | Self::ToLittleEndian
-            | Self::FromLittleEndian => Some(NumClass::Integer),
+            | Self::FromLittleEndian
+            | Self::CheckedAdd
+            | Self::CheckedSub
+            | Self::CheckedMul => Some(NumClass::Integer),
             Self::FloatSqrt
             | Self::FloatAbs
             | Self::FloatFloor
@@ -1227,6 +1251,7 @@ impl Intrinsic {
             Self::BoxFill => &[Shape::BoxT, Shape::T],
             Self::ListPush => &[Shape::ListT, Shape::T],
             Self::CellNew => &[Shape::T],
+            Self::CheckedAdd | Self::CheckedSub | Self::CheckedMul => &[Shape::T, Shape::T],
             Self::CellGet => &[Shape::CellT],
             Self::CellSet => &[Shape::CellT, Shape::T],
             Self::TextFromStr => &[Shape::Str],
@@ -1399,6 +1424,7 @@ impl Intrinsic {
             Self::ListFromVec | Self::ListEmpty => Shape::ListT,
             Self::ListLen | Self::BoxFill | Self::ListPush | Self::CellSet => Shape::Int,
             Self::CellNew => Shape::CellT,
+            Self::CheckedAdd | Self::CheckedSub | Self::CheckedMul => Shape::OptionT,
             Self::CellGet => Shape::T,
             Self::BoxFresh => Shape::BoxT,
             Self::TextFromStr => Shape::Text,
@@ -1422,6 +1448,9 @@ impl Intrinsic {
                 | Self::CellNew
                 | Self::CellGet
                 | Self::CellSet
+                | Self::CheckedAdd
+                | Self::CheckedSub
+                | Self::CheckedMul
                 | Self::FloatToStrFixed
                 | Self::StrPadStart
                 | Self::StrPadEnd

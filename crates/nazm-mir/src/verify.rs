@@ -640,6 +640,7 @@ fn primitive(
                     | Shape::BoxT
                     | Shape::ListT
                     | Shape::CellT
+                    | Shape::OptionT
             )
         });
     if generic != elem.is_some() {
