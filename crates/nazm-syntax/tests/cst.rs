@@ -671,12 +671,25 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                 Expr::Match {
                     scrutinee,
                     arms,
+                    source,
                     span,
                 } => {
-                    spans.push((SyntaxKind::MatchExpr, *span));
+                    // What `if let` and `let … else` mean is a `match` with no `match` written
+                    // (R1a): only a written one's arms are nodes of the concrete tree.
+                    match source {
+                        nazm_syntax::MatchSource::Written => {
+                            spans.push((SyntaxKind::MatchExpr, *span));
+                            for a in arms {
+                                spans.push((SyntaxKind::MatchArm, a.span));
+                            }
+                        }
+                        nazm_syntax::MatchSource::IfLet => {
+                            spans.push((SyntaxKind::IfLetExpr, *span));
+                        }
+                        nazm_syntax::MatchSource::LetElse => {}
+                    }
                     stack.push(Node::Expr(scrutinee));
                     for a in arms {
-                        spans.push((SyntaxKind::MatchArm, a.span));
                         stack.push(Node::Expr(&a.body));
                     }
                 }

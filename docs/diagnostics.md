@@ -581,6 +581,8 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0626` | `BOARD_MANIFEST` | A board's manifest the build cannot honour |
 | `N0627` | `INTERRUPT_HANDLER` | An interrupt handler of a shape the board cannot call, two handlers for one interrupt, or one for an interrupt the board does not have (Gate 3, `docs/spec.md`, *Boards*) |
 | `N0628` | `NOT_ITERABLE` | A `for` loop over something that is not an `Ints`, `Strs`, `Vec[T]` or `Bytes` (R1a, `docs/spec.md`, *`for` loops*) |
+| `N0629` | `OR_PATTERN_BINDINGS` | An or-pattern's alternatives that bind different names, or one name with different types (R1a, `docs/spec.md`, *Patterns*) |
+| `N0630` | `LET_ELSE_COMPLETES` | A `let … else` whose `else` can finish (R1a, `docs/spec.md`, *Patterns*) |
 | `N0900` | `COMPILER_DEFECT` | The compiler contradicted itself (N39) |
 <!-- registry:end -->
 

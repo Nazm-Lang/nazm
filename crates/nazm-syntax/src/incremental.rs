@@ -1178,21 +1178,42 @@ impl Shift for Place {
 impl Shift for MatchArm {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
-            qualifier,
-            ty: _,
-            ty_span,
-            variant: _,
-            variant_span,
-            fields,
+            pattern,
             body,
             span,
         } = self;
-        qualifier.shift(file, by);
-        ty_span.shift(file, by);
-        variant_span.shift(file, by);
-        fields.shift(file, by);
+        pattern.shift(file, by);
         body.shift(file, by);
         span.shift(file, by);
+    }
+}
+
+impl Shift for crate::ast::Pattern {
+    fn shift(&mut self, file: FileId, by: i64) {
+        match self {
+            Self::Wildcard { span } | Self::Bind { span, .. } => span.shift(file, by),
+            Self::Literal(e) => e.shift(file, by),
+            Self::Variant(v) => {
+                let crate::ast::VariantPattern {
+                    qualifier,
+                    ty: _,
+                    ty_span,
+                    variant: _,
+                    variant_span,
+                    fields,
+                    span,
+                } = v;
+                qualifier.shift(file, by);
+                ty_span.shift(file, by);
+                variant_span.shift(file, by);
+                fields.shift(file, by);
+                span.shift(file, by);
+            }
+            Self::Or { alts, span } => {
+                alts.shift(file, by);
+                span.shift(file, by);
+            }
+        }
     }
 }
 
@@ -1201,11 +1222,10 @@ impl Shift for PatternField {
         let Self {
             name: _,
             name_span,
-            binding: _,
-            binding_span,
+            pattern,
         } = self;
         name_span.shift(file, by);
-        binding_span.shift(file, by);
+        pattern.shift(file, by);
     }
 }
 
@@ -1351,6 +1371,7 @@ impl Shift for Expr {
             Self::Match {
                 scrutinee,
                 arms,
+                source: _,
                 span,
             } => {
                 scrutinee.shift(file, by);

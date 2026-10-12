@@ -685,24 +685,34 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
             scrutinee,
             arms,
             span,
+            ..
         } => {
             dump_expr(scrutinee, out);
             for a in arms {
                 dump_expr(&a.body, out);
-                let pattern = a
-                    .fields
-                    .iter()
-                    .map(|f| format!("{}:{}", f.name, f.binding.as_deref().unwrap_or("_")))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                push_node(
-                    out,
-                    "arm",
-                    1,
-                    a.span.start,
-                    a.span.end,
-                    &format!("{}.{}({pattern})", a.ty, a.variant),
-                );
+                // A plain variant pattern, the subset the compiler written in Nazm parses; any
+                // other (R1a) is outside it until R2, and named so a source writing one differs.
+                let text = match &a.pattern {
+                    nazm_core::__syntax::Pattern::Variant(v) => {
+                        let pattern = v
+                            .fields
+                            .iter()
+                            .map(|f| match &f.pattern {
+                                nazm_core::__syntax::Pattern::Bind { name, .. } => {
+                                    format!("{}:{name}", f.name)
+                                }
+                                nazm_core::__syntax::Pattern::Wildcard { .. } => {
+                                    format!("{}:_", f.name)
+                                }
+                                _ => format!("{}:<R1a pattern>", f.name),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        format!("{}.{}({pattern})", v.ty, v.variant)
+                    }
+                    _ => "<R1a pattern>".to_owned(),
+                };
+                push_node(out, "arm", 1, a.span.start, a.span.end, &text);
             }
             push_node(out, "match", arms.len() + 1, span.start, span.end, "");
         }
