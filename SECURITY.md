@@ -25,13 +25,9 @@ maintainer have agreed a disclosure date.
 - **Otherwise:** email the maintainer at the address in the workspace manifest's `authors`
   (`Cargo.toml`), with "Nazm security" in the subject.
 
-*Status, Q1 (2026-10-08):* the repository `mdferdousalam/nazm` exists and is **private**, and
-GitHub offers private vulnerability reporting only for public repositories (its API answers 404
-for this one), so the preferred channel **is not available yet** and the email fallback is the
-only one. Making the repository public, enabling private vulnerability reporting and confirming
-the fallback address receives mail are required before any public release
-(`docs/releases/996984f.md`, step 7; `docs/vulnerability-process.md`, *Intake*). The fallback
-address is present in `Cargo.toml`.
+*Status, 0.9.0 (2026-10-12):* the repository is public at `Nazm-Lang/nazm` and private
+vulnerability reporting is enabled on it, so the preferred channel is open. That the fallback
+address receives mail has not been confirmed (`docs/vulnerability-process.md`, *Intake*).
 
 Include the toolchain version (`nazm --version`), the host and target, a minimal program or
 input that shows the problem, and what you expected. You will get an acknowledgement, and the

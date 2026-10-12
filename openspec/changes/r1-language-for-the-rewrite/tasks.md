@@ -55,5 +55,10 @@ each new construct by name until R2 carries it.
 
 - [ ] 8.1 Promote each R1 section from EXPERIMENTAL to stable, and add its pinned compat case to
       `tests/compat/v1/` then (the corpus holds stable surfaces only)
-- [ ] 8.2 Contained tests, selfhost and bootstrap on the resulting tree; every new mutant caught
+- [ ] 8.2 Contained tests, selfhost and bootstrap on the resulting tree; every new mutant caught.
+      R1a's run was stopped after batch I on 2026-10-12 to go faster, by the copyright holder's
+      choice: every mutant run so far was caught (batches A–I), and the rest — the tuple-place,
+      ordering and hashing remainder, the arrays of `Str`, the constant tables, the string
+      literals and the interpolation (batches J–O of `r1a-*` with `n13-*`, `n36-*`, `n38-*`,
+      `n78-*` and `g2-*` repoints) — run here, with R1b–R1e's
 - [ ] 8.3 Authorities updated; `openspec validate --strict`; archive with `--skip-specs`

@@ -13,7 +13,7 @@
 //! 2. **All attempts count, including failures.** Post-success activity is categorised to
 //!    explain where cost went, never to exclude it from the denominator. See [`outcome`].
 //!
-//! [`docs/research/evaluation.md`]: https://github.com/mdferdousalam/nazm/blob/main/docs/research/evaluation.md
+//! [`docs/research/evaluation.md`]: https://github.com/Nazm-Lang/nazm/blob/main/docs/research/evaluation.md
 
 pub mod acceptance;
 pub mod cost;
