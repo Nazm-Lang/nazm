@@ -316,7 +316,8 @@ use crate::digest::{self, Framed};
 /// it, moved from refused to accepted.
 /// `63` — R1b, 2026-10-13. An impl with type parameters for a generic record or enum moved from
 /// refused to accepted.
-pub const SEMANTIC_EPOCH: u32 = 63;
+/// `64` — R1b, 2026-10-13. `defer { … }` moved from refused to accepted; `N0631`.
+pub const SEMANTIC_EPOCH: u32 = 64;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -348,6 +349,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CONFLICTING_TYPE_ARGUMENTS",
     "CONSTANT_FAILS",
     "CONTRACT_SHAPE",
+    "DEFER_LEAVES",
     "DUPLICATE_EFFECT",
     "DUPLICATE_FIELD",
     "DUPLICATE_FUNCTION",

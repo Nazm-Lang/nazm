@@ -306,6 +306,7 @@ statement = let_statement
           | break_statement
           | continue_statement
           | scope_statement
+          | defer_statement
           | spawn_statement
           | expression_statement ;
 
@@ -353,6 +354,13 @@ continue_statement = "continue" , ";" ;
 
 (* @example fn w(c: Chan) -> Int { 0 } fn main(t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c); } 0 } *)
 scope_statement = "scope" , block ;
+
+(* R1b: a block run when the enclosing block is left — at its end, or by `return`, `?`,
+ * `break` or `continue` — the last registered first. `defer` is a word only here, before
+ * `{`. Its body leaves nothing: no value, and no `return`, `?`, `break` or `continue` out of
+ * it (`N0631`). *)
+(* @example fn main() -> Int { let mut n = 0; { defer { n = n + 1; } n = 10; } n } *)
+defer_statement = "defer" , block ;
 
 (* @example fn w(c: Chan, n: Int) -> Int { 0 } fn main(t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c, 1); } 0 } *)
 spawn_statement = "spawn" , IDENT , "(" , [ arguments ] , ")" , ";" ;

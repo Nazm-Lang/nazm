@@ -218,6 +218,9 @@ struct Lower<'a> {
     /// A shared binding's field assignment in progress (R1b, L10): its cell, the copy being
     /// changed, and the read that fills the copy.
     pending_cell: Option<(LocalId, LocalId, Expr)>,
+    /// The `defer` bodies registered in the blocks being lowered (R1b, L12), innermost last,
+    /// each with how many loops enclosed it: emitted, last first, wherever their block is left.
+    defers: Vec<(AstBlock, usize)>,
 }
 
 impl<'a> Lower<'a> {
@@ -265,6 +268,7 @@ impl<'a> Lower<'a> {
             result_slot: None,
             result_here: None,
             pending_cell: None,
+            defers: Vec::new(),
         }
     }
 
@@ -538,19 +542,41 @@ impl<'a> Lower<'a> {
     /// transfer, in which case no tail is lowered because none can run.
     fn value_block(&mut self, b: &AstBlock, seed: Vec<LocalId>) -> Lowered<Block> {
         self.open(seed);
-        let lowered = self.statements(&b.statements).and_then(|(stmts, ends)| {
-            let tail = match (ends, &b.tail) {
-                (Ends::Transfers, _) => None,
-                (Ends::FallsThrough, Some(t)) => Some(Box::new(self.expr(t)?)),
-                (Ends::FallsThrough, None) => {
-                    return defect(
-                        b.span,
-                        "a block whose value is wanted has no final expression",
-                    )
-                }
-            };
-            Ok((stmts, ends, tail))
-        });
+        let mark = self.defers.len();
+        let lowered = self
+            .statements(&b.statements)
+            .and_then(|(mut stmts, ends)| {
+                let tail = match (ends, &b.tail) {
+                    (Ends::Transfers, _) => None,
+                    (Ends::FallsThrough, Some(t)) => Some(Box::new(self.expr(t)?)),
+                    (Ends::FallsThrough, None) => {
+                        return defect(
+                            b.span,
+                            "a block whose value is wanted has no final expression",
+                        )
+                    }
+                };
+                // What this block deferred runs after its value is computed (L12).
+                let tail = match tail {
+                    Some(t) if self.defers.len() > mark => {
+                        let ty = t.ty.unwrap_or(Type::Int);
+                        let held = self.temp(Temp::Result, ty, b.span);
+                        stmts.push(Stmt::Let {
+                            local: held,
+                            value: *t,
+                        });
+                        stmts.extend(self.deferred_since(mark)?);
+                        Some(Box::new(Expr {
+                            kind: ExprKind::Local(held),
+                            ty: Some(ty),
+                            at: b.span,
+                        }))
+                    }
+                    other => other,
+                };
+                Ok((stmts, ends, tail))
+            });
+        self.defers.truncate(mark);
         let owns = self.close();
         let (stmts, ends, tail) = lowered?;
         Ok(Block {
@@ -566,6 +592,7 @@ impl<'a> Lower<'a> {
     /// `match` or a block in statement form, or anything else evaluated and discarded.
     fn statement_block(&mut self, b: &AstBlock, seed: Vec<LocalId>) -> Lowered<Block> {
         self.open(seed);
+        let mark = self.defers.len();
         let lowered = self
             .statements(&b.statements)
             .and_then(|(mut stmts, ends)| match (ends, &b.tail) {
@@ -576,7 +603,15 @@ impl<'a> Lower<'a> {
                     Ok((stmts, ends))
                 }
                 _ => Ok((stmts, ends)),
+            })
+            // What this block deferred runs as it falls through (L12).
+            .and_then(|(mut stmts, ends)| {
+                if ends == Ends::FallsThrough {
+                    stmts.extend(self.deferred_since(mark)?);
+                }
+                Ok((stmts, ends))
             });
+        self.defers.truncate(mark);
         let owns = self.close();
         let (stmts, ends) = lowered?;
         Ok(Block {
@@ -803,14 +838,31 @@ impl<'a> Lower<'a> {
                 let value = self.expr(&r.value)?;
                 self.leave(value, r.span)?
             }
-            AstStmt::Break { span } => Stmt::Break {
-                target: self.target("break", *span)?,
-                at: *span,
-            },
-            AstStmt::Continue { span } => Stmt::Continue {
-                target: self.target("continue", *span)?,
-                at: *span,
-            },
+            AstStmt::Break { span } => {
+                let leave = Stmt::Break {
+                    target: self.target("break", *span)?,
+                    at: *span,
+                };
+                self.through_defers(self.targets.len(), leave, *span)?
+            }
+            AstStmt::Continue { span } => {
+                let leave = Stmt::Continue {
+                    target: self.target("continue", *span)?,
+                    at: *span,
+                };
+                self.through_defers(self.targets.len(), leave, *span)?
+            }
+            // Registered, and run where its block is left (L12): nothing happens here.
+            AstStmt::Defer(d) => {
+                self.defers.push((d.body.clone(), self.targets.len()));
+                Stmt::Block(Block {
+                    stmts: Vec::new(),
+                    tail: None,
+                    ends: Ends::FallsThrough,
+                    owns: Vec::new(),
+                    at: d.span,
+                })
+            }
             AstStmt::Expr(e) => self.effect(e)?,
         })
     }
@@ -2171,15 +2223,70 @@ impl<'a> Lower<'a> {
         })
     }
 
+    /// The `defer` bodies registered since `mark` (R1b, L12), last first, each lowered where it
+    /// runs: a block of statements.
+    fn deferred_since(&mut self, mark: usize) -> Lowered<Vec<Stmt>> {
+        let bodies: Vec<AstBlock> = self
+            .defers
+            .get(mark..)
+            .unwrap_or_default()
+            .iter()
+            .rev()
+            .map(|(b, _)| b.clone())
+            .collect();
+        // A body runs without the defers registered at or after its own, which have run.
+        let saved = std::mem::take(&mut self.defers);
+        let mut out = Vec::with_capacity(bodies.len());
+        let mut failed = None;
+        for b in &bodies {
+            match self.statement_block(b, Vec::new()) {
+                Ok(block) => out.push(Stmt::Block(block)),
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
+        self.defers = saved;
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(out),
+        }
+    }
+
+    /// `leave` — a `break` or `continue` — after the defers registered inside the loops it
+    /// leaves (L12): those registered while `loops` loops, or more, enclosed them.
+    fn through_defers(&mut self, loops: usize, leave: Stmt, at: Span) -> Lowered<Stmt> {
+        let mark = self
+            .defers
+            .iter()
+            .position(|(_, n)| *n >= loops)
+            .unwrap_or(self.defers.len());
+        if mark == self.defers.len() {
+            return Ok(leave);
+        }
+        let mut stmts = self.deferred_since(mark)?;
+        stmts.push(leave);
+        Ok(Stmt::Block(Block {
+            stmts,
+            tail: None,
+            ends: Ends::Transfers,
+            owns: Vec::new(),
+            at,
+        }))
+    }
+
     /// Leave the function with `value` (N87): a `return`, after every `ensures` clause holds of
     /// it. With none, a `return` as it always was.
     fn leave(&mut self, value: Expr, at: Span) -> Lowered<Stmt> {
-        if self.ensures.is_empty() {
+        if self.ensures.is_empty() && self.defers.is_empty() {
             return Ok(Stmt::Return { value, at });
         }
         let ty = self.def.ret;
         let held = self.temp(Temp::Result, ty, at);
         let mut stmts = vec![Stmt::Let { local: held, value }];
+        // Every `defer` pending in the function runs once the value is held (L12).
+        stmts.extend(self.deferred_since(0)?);
         stmts.extend(self.postconditions(held)?);
         stmts.push(Stmt::Return {
             value: Expr {

@@ -28,7 +28,7 @@ each new construct by name until R2 carries it.
 - [x] 4.1 L7 `Cell[T]`
 - [x] 4.2 L10 closures in generic functions; `let mut` capture (shared, see design.md)
 - [x] 4.3 L11 impls for generic types; default methods (L11a default methods, L11b impls of generic types, 2026-10-13)
-- [ ] 4.4 L12 `defer`
+- [x] 4.4 L12 `defer`
 - [ ] 4.5 L13 checked arithmetic, widening multiply, `Int128`/`UInt128`
 - [ ] 4.6 L14 stack size
 - [ ] 4.8 L15 a warning severity, `--deny-warnings`; L3's covering warning on `_`

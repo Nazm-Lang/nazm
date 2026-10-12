@@ -531,6 +531,7 @@ impl Block {
                         Stmt::Return(r) => exprs.push(&r.value),
                         Stmt::Expr(e) => exprs.push(e),
                         Stmt::Scope(sc) => blocks.push(&sc.body),
+                        Stmt::Defer(df) => blocks.push(&df.body),
                         Stmt::Spawn(sp) => exprs.extend(sp.args.iter()),
                         Stmt::Break { .. } | Stmt::Continue { .. } => {}
                     }
@@ -649,6 +650,10 @@ pub enum Stmt {
     /// has. A statement, not an expression: it produces no value, and there is nothing a
     /// join could sensibly return.
     Scope(Scope),
+    /// `defer { … }` (R1b, L12): a block run when the enclosing block is left — at its end, by
+    /// `return`, `break`, `continue` or `?` — the last registered first. `defer` is a word only
+    /// at the start of a statement and before `{`.
+    Defer(Defer),
     /// `spawn f(args);` — start a task.
     ///
     /// The callee is a **name**, not an expression: the language has no function values,
@@ -659,6 +664,14 @@ pub enum Stmt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Defer {
+    /// The word `defer`.
+    pub keyword_span: Span,
     pub body: Block,
     pub span: Span,
 }
@@ -682,6 +695,7 @@ impl Stmt {
             Self::Return(r) => r.span,
             Self::Break { span } | Self::Continue { span } => *span,
             Self::Scope(s) => s.span,
+            Self::Defer(d) => d.span,
             Self::Spawn(s) => s.span,
             Self::Expr(e) => e.span(),
         }

@@ -518,6 +518,9 @@ pub mod codes {
     pub const OR_PATTERN_BINDINGS: Code = Code::new("N0629");
     /// A `let … else` whose `else` can finish (R1a, `docs/spec.md`, *Patterns*).
     pub const LET_ELSE_COMPLETES: Code = Code::new("N0630");
+    /// A `defer` body that would leave it: `return`, `?`, or `break`/`continue` out of it (R1b,
+    /// `docs/spec.md`, *`defer`*).
+    pub const DEFER_LEAVES: Code = Code::new("N0631");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");
