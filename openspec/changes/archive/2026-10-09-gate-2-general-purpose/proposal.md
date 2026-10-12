@@ -2,9 +2,9 @@
 
 Gate 2 of the v1 programme (`03_GATE_2_GENERAL_PURPOSE_COMPLETENESS`) closes the foundational gaps
 that keep Nazm out of ordinary application, server, numeric, storage and platform work. Its first
-part landed before M1 (`2a584c4`–`8f691e2`: numbers, fixed arrays, constants, `Bytes`, `Text`;
-epochs 31–33) and stopped on a checker defect fixed in M1-1 (`f0023cd`). M1, Q1 and M2-Core are
-closed; this change carries the rest from the accepted baseline `98a6d41`.
+part landed before M1 (`f29a23c`–`b2e2985`: numbers, fixed arrays, constants, `Bytes`, `Text`;
+epochs 31–33) and stopped on a checker defect fixed in M1-1 (`28e54f8`). M1, Q1 and M2-Core are
+closed; this change carries the rest from the accepted baseline `fa94535`.
 
 ## What Changes
 

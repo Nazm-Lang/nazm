@@ -2,7 +2,7 @@
 
 The survey that motivates this change is `target/gates/m2-survey/` (metrics, churn, and three
 concern-by-concern reports). The reviewer accepted a reduced scope (M2-Core) on 2026-10-08 after Q1
-closed at `660c962`. Execution, evidence and handoff state are in
+closed at `f48a818`. Execution, evidence and handoff state are in
 `.agent/plans/m2-core-separation-of-concerns.md`.
 
 ## Goals / Non-Goals

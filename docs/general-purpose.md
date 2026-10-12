@@ -1,6 +1,6 @@
 # The general-purpose foundation — Gate 2 decision record
 
-*Gate 2 of the v1 programme, 2026-10-07, from the accepted baseline `3ba27ee` (toolchain 1.0.0,
+*Gate 2 of the v1 programme, 2026-10-07, from the accepted baseline `b5f7506` (toolchain 1.0.0,
 semantic epoch 30, `nazm.interface/11`, runtime ABI 14, standard library API 1.0). This file is the
 design written before the code. Each mechanism below states the problem, the mechanism Nazm already
 has, why that is not enough, what the extension costs the language, where it lives, and what will
@@ -9,9 +9,9 @@ record and the matrix disagree, the matrix is right and this record is history.*
 
 ## What Gate 2 starts from
 
-A survey of the tree at `3ba27ee`, recorded so that every decision below can be checked against it:
+A survey of the tree at `b5f7506`, recorded so that every decision below can be checked against it:
 
-| Area | At `3ba27ee` |
+| Area | At `b5f7506` |
 | --- | --- |
 | Numbers | one `Int`, 64-bit two's complement, overflow traps (`N0400`); no floating point (`1.5` is `N0101`), no other widths, no bitwise operators (`&`, `\|`, `^`, `~` do not lex; `<<` is two `<`) |
 | Storage | records and enums inline, `Vec[T]`, `Ints`, `Strs` and `Chan[T]` counted handles; no fixed-size aggregate, no non-owning view in the language (`str_slice` already shares storage, as a value) |
@@ -32,7 +32,7 @@ interpreter, under LLVM and under Cranelift; profiles may refuse it, and none re
 **Prefer the mechanism that exists.** A new built-in function before new syntax, a library module
 before a built-in, an existing handle discipline before a new one. **Authority is a capability**,
 **what a function does is an effect**, and the two stay separate problems (`architecture.md` §5).
-**Nothing silently changes meaning:** every program that checks at `3ba27ee` checks and means the
+**Nothing silently changes meaning:** every program that checks at `b5f7506` checks and means the
 same after Gate 2 — the compatibility corpus (`tests/compat/v1/`) is the proof, and is append-only.
 
 ---

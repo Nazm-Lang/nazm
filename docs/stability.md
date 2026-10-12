@@ -67,7 +67,7 @@ release; Gate 1-C1 then moved the semantic epoch, because the checker began refu
 had accepted. Gate 2 moved the semantic epoch again and the runtime ABI, adding the language's
 numbers before the first 1.0.0 release; its later slices move what they change and say so here.
 
-| Identity | Before (R1, `7a16a40`) | Now (0.9.0 preview) | Why it moved, or did not | Where it is reported |
+| Identity | Before (R1, `996984f`) | Now (0.9.0 preview) | Why it moved, or did not | Where it is reported |
 | --- | --- | --- | --- | --- |
 | **Language version** | v0.3 | **1.0 draft** | the settled semantics are the draft of the 1.x contract, frozen at 1.0 | `docs/spec.md`'s status line; `nazm --help` |
 | **Toolchain version** | 0.3.0 | **0.9.0** | the public preview (the tree said 1.0.0 before it; never tagged) | `nazm --version`; `toolchain.compiler` in `nazm inspect`; the release manifest |
@@ -346,12 +346,12 @@ reference host for a subset. A target is promoted by evidence, in a minor releas
 *0.9.0 (2026-10-12).* The tree said toolchain 1.0.0 from Gate 1 on, but no 1.0.0 was tagged. The
 first public release is the 0.9.0 preview of the 1.0 draft, built by the Rust implementation, for
 macOS on Apple Silicon; 1.0 waits for the toolchain rewritten in Nazm and its release gate. 0.9 was
-chosen over 0.3, which an earlier internal candidate used (`docs/releases/7a16a40.md`).
+chosen over 0.3, which an earlier internal candidate used (`docs/releases/996984f.md`).
 
 Until Gate 1 this document said Nazm was pre-1.0 and experimental: *"v0.x may evolve, but a
 breaking change is deliberate, documented and versioned, and never silently reinterprets
 existing code"*; a minor release (0.3 → 0.4) could change the language; the runtime ABI was not
 a public interface; and *"What 1.0 would mean — not promised, and not scheduled."* R1 released
-the v0.3.0 candidate under that policy (`docs/releases/7a16a40.md`). Before R1 the crates said
+the v0.3.0 candidate under that policy (`docs/releases/996984f.md`). Before R1 the crates said
 `0.0.1` while the specification said v0.3, and project records called the work "the v1
 foundation" — an architecture phase of the roadmap, not a semantic version.

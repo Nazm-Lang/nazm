@@ -8,7 +8,7 @@ Rosetta*, *emulated host*, ***under Wine** (not evidence from a Windows host)*, 
 [`capability-matrix.md`](capability-matrix.md) remains the implementation truth; where they
 disagree, it is right.
 
-*Opened 2026-10-10 at `5caa642`, the start of Gate 3: each status below is the state before Gate 3's
+*Opened 2026-10-10 at `3a2e3ba`, the start of Gate 3: each status below is the state before Gate 3's
 work, and is updated by the step that changes it.*
 
 ## Hosts

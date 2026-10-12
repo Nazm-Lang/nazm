@@ -1838,7 +1838,7 @@ benchmark stage's release builds and the mutation stage's pristine build started
 
 ### The post-v1 baseline — N75, frozen 2026-10-02
 
-The release gate's benchmark stage at the candidate `34e2380`: `cargo xtask contained bench`, one
+The release gate's benchmark stage at the candidate `054efc1`: `cargo xtask contained bench`, one
 CPU, 4 GiB, offline, with the host otherwise idle. Milliseconds, minimum / median, five runs; the
 record is kept with the gate's evidence (`bench/record.json` of that run). It replaces N48's as the
 reference; no single score is derived from it.
@@ -2657,7 +2657,7 @@ than a parse that drops its scan.
 
 **What changed:** `compiler/*.nz` grew from 12,767 to 16,200 lines (`cat compiler/*.nz | wc -l`).
 **Method:** the debug `nazm` binary on the host (Apple M1 Pro, macOS 27.2), the tree before N102 (a
-pristine export of `d7c7754`) against the tree after, `nazm check compiler/emit.nz` with every
+pristine export of `875f459`) against the tree after, `nazm check compiler/emit.nz` with every
 `.nazm` cache removed before each of three runs, and `nazm build --no-cache compiler/emit.nz`;
 `/usr/bin/time -l`, wall time and maximum resident set.
 
@@ -2823,11 +2823,11 @@ little or nothing to build, and nothing to run.
 
 **What flagged it.** `cargo xtask contained bench` (one CPU, Linux aarch64) against the baseline
 re-saved at N106: `arith`, `channels` and `sequences` built 25–39 % slower at `-O0` or `-O2`, in two
-runs. **Attributed** by building the tree before Gate 2 (`3ba27ee`, Gate 1-C1D) and running the same
-contained bench on it, and on `ec5b958` (measured as `a9dc706`, its id before G2-C1 rewrote the
+runs. **Attributed** by building the tree before Gate 2 (`b5f7506`, Gate 1-C1D) and running the same
+contained bench on it, and on `0f60b4b` (measured as `a9dc706`, its id before G2-C1 rewrote the
 unpushed Gate 2 history; the tree is the same), both in one session, min of the bench's runs:
 
-| | before Gate 2 | after (`ec5b958`) | N106's baseline |
+| | before Gate 2 | after (`0f60b4b`) | N106's baseline |
 | --- | ---: | ---: | ---: |
 | `arith` build `-O0` | 102.7 ms | 109.1 ms | 87.5 ms |
 | `calls` build `-O0` | 105.2 | 110.8 | — |
@@ -2897,9 +2897,9 @@ the pool by default but nothing here was timed.
 **The regressions, attributed.** Release builds of each milestone's commit on the host, and
 samples of the phase harness (`core_ir.rs`'s `what_each_phase_costs_on_the_compiler`) with symbols.
 
-*`channels` builds, 13–31 % slower:* N83. The commit before the pool (`9ae0e55`) builds `channels.nz`
+*`channels` builds, 13–31 % slower:* N83. The commit before the pool (`eb6bc1a`) builds `channels.nz`
 as N75 does — 149 and 200 ms at `-O0` and `-O2` (`--no-cache`, eleven runs, median), against N75's
-151 and 203 — and the pool's commit (`5e63d32`) in 181 and 261: the runtime unit grew from 38,322 to
+151 and 203 — and the pool's commit (`1bc5b02`) in 181 and 261: the runtime unit grew from 38,322 to
 62,537 bytes of LLVM text (clang `-O2` on it alone: 69 → 102 ms) and a `switch` unit joined it. It is
 the pool's code, which is now the default runtime's: **accepted**, and paid once — the runtime's
 object is reused by every warm build, keyed by its digest.
@@ -2974,7 +2974,7 @@ the runtime with every service.
 measurable amount, and nothing at runtime. **Changed path:** `nazm check --no-cache`, whose
 provenance walk and solve changed; nothing below the checker did. **Workload:** the two largest
 compiler sources and one small example, checked cold. **Method:** release builds of N79's head
-(`38d8755`, in a worktree) and of N80, the two run interleaved in one Python loop, 21 to 31 runs
+(`8daf107`, in a worktree) and of N80, the two run interleaved in one Python loop, 21 to 31 runs
 each, the median with its minimum and maximum. Apple M1 Pro, macOS 27.2, rustc 1.98.1.
 
 | File | N79 | N80 | Ratio |
@@ -3236,7 +3236,7 @@ Chosen for the C, Rust, Go and Python rows of `v1-competitor-map.md`; Zig and Ju
 not installed here.
 
 `python3 bench/cross.py NAZM OUT` (in the tree; results in `target/gates/v1/bench/cross.json`). Apple M1
-Pro, 10 cores, macOS (Darwin 27.2); `nazm` 1.0.0 built `--release` from the compiler of `b1b48f2`;
+Pro, 10 cores, macOS (Darwin 27.2); `nazm` 1.0.0 built `--release` from the compiler of `734443e`;
 Apple clang 21.0.0; rustc 1.98.1; go 1.27.1; Python 3.14.8. Every executable printed the program's
 `.expected` answer before it was timed. Three unmeasured warm-up runs, then 21 runs, each the wall
 clock around a whole process; the median, the extremes and the interquartile range. Build time is
