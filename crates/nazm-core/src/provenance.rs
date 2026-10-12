@@ -399,7 +399,21 @@ impl<'b> Walk<'_, 'b> {
         let _ = self.result.join(v);
     }
 
+    /// The cell a binding a closure shares is kept in (R1b, L10), named as a `Cell` container's
+    /// is: a write through the function or any closure reaches every read of it.
+    fn shared_cell(&self, name_span: Span) -> Option<String> {
+        let cell = self.res.shared(self.id, self.res.var(name_span)?)?;
+        Some(if self.res.types().is_concrete(cell) {
+            self.res.types().show(cell)
+        } else {
+            WILD_CELL.to_owned()
+        })
+    }
+
     fn assign(&mut self, name_span: Span, v: &Shaped) {
+        if let Some(cell) = self.shared_cell(name_span) {
+            self.store(cell, name_span, &v.flow);
+        }
         let Some(s) = self.res.var(name_span).map(|s| s as usize) else {
             return;
         };
@@ -432,6 +446,9 @@ impl<'b> Walk<'_, 'b> {
 
     /// A write to a field of a binding, `a.b = v`: the binding is whole from then on.
     fn assign_field(&mut self, name_span: Span, v: &Flow) {
+        if let Some(cell) = self.shared_cell(name_span) {
+            self.store(cell, name_span, v);
+        }
         let Some(s) = self.res.var(name_span).map(|s| s as usize) else {
             return;
         };
@@ -704,6 +721,14 @@ impl<'b> Walk<'_, 'b> {
         };
         if let Some(r) = self.read.get_mut(s) {
             *r = true;
+        }
+        // A shared binding holds whatever any function sharing it wrote (R1b, L10): its cell is
+        // where that is, so a closure's copy of the handle adds nothing.
+        if let Some(cell) = self.shared_cell(span) {
+            return Shaped {
+                flow: Flow::cell(&cell, span),
+                parts: None,
+            };
         }
         let flow = self.slots.get(s).cloned().unwrap_or_default();
         let parts = match self.shapes.get(s) {

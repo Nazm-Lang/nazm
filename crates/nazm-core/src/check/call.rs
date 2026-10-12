@@ -474,20 +474,6 @@ impl Checker<'_> {
         let Some(enclosing) = self.current else {
             return expected.unwrap_or(Type::Int);
         };
-        if !self.type_scope.is_empty() {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::NOT_A_FUNCTION_VALUE,
-                    fn_span,
-                    "a closure inside a generic function is not supported yet",
-                )
-                .help(
-                    "a closure there would need an instance per type argument; write it in a \
-                     function that is not generic, or pass a function value in",
-                ),
-            );
-            return expected.unwrap_or(Type::Int);
-        }
         let param_types: Vec<Type> = params
             .iter()
             .map(|p| self.resolve_written_type(&p.ty))

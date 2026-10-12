@@ -78,10 +78,17 @@ pub fn lower(
     let mut thunks: BTreeMap<(usize, usize), FuncId> = BTreeMap::new();
     let mut next_thunk = first_instance + u32::try_from(instances.planned.len()).unwrap_or(0);
     let mut thunk_plan: Vec<(nazm_sema::ModuleId, FnId, Span)> = Vec::new();
+    // Thunks a generic body makes a value of (L10): its instances are artefacts of their own, so
+    // the thunk must be bindable across objects, as what a generic body calls is.
+    let mut thunk_from_generic: std::collections::BTreeSet<(usize, usize)> =
+        std::collections::BTreeSet::new();
     for use_ in res.fn_values() {
         let Some(m) = graph.ids().find(|m| graph.file(*m) == Some(use_.at.file)) else {
             continue;
         };
+        if use_.within.and_then(|w| res.type_owner(w)).is_some() {
+            thunk_from_generic.insert((m.index(), use_.function.index()));
+        }
         thunks
             .entry((m.index(), use_.function.index()))
             .or_insert_with(|| {
@@ -101,8 +108,8 @@ pub fn lower(
     // Functions a generic definition's body calls: an instance of that body is an artefact of
     // its own, so what it calls must be bindable across objects. Decided by the definitions.
     let mut from_generic = vec![false; res.functions().len()];
-    for f in res.functions() {
-        if f.type_params.is_empty() {
+    for (i, f) in res.functions().iter().enumerate() {
+        if res.type_owner(FnId::from_index(i)).is_none() {
             continue;
         }
         for site in &f.call_sites {
@@ -157,8 +164,9 @@ pub fn lower(
             continue;
         };
         let id = FuncId(first_instance + u32::try_from(at).unwrap_or(u32::MAX));
+        // A closure is substituted under its generic function's parameters (L10).
         let subst = Some((
-            ParamOwner::Function(planned.key.def),
+            ParamOwner::Function(res.type_owner(planned.key.def).unwrap_or(planned.key.def)),
             planned.key.args.clone(),
         ));
         match lower_function(&res, &map, f, subst, id, planned.identity.clone(), &facts) {
@@ -188,6 +196,7 @@ pub fn lower(
         match lower_function(&res, &map, &thunk, None, id, identity, &facts) {
             Ok(mut m) => {
                 m.exported = false;
+                m.reached_from_generic = thunk_from_generic.contains(&(module.index(), g.index()));
                 functions.push(m);
             }
             Err(e) => defects.push(*e),
@@ -1680,7 +1689,16 @@ impl Fx<'_> {
                 ..
             } => self.builtin(*op, type_args, args, dst, at),
             cir::ExprKind::Closure { func, captures } => {
-                let Some(target) = self.map.plain.get(func.index()).copied().flatten() else {
+                // A closure in a generic function is the instance of this one's arguments (L10).
+                let generic = self.res.type_owner(*func).is_some();
+                let target = match (&self.subst, generic) {
+                    (Some((_, args)), true) => self.map.instance(&InstanceKey {
+                        def: *func,
+                        args: args.clone(),
+                    }),
+                    _ => self.map.plain.get(func.index()).copied().flatten(),
+                };
+                let Some(target) = target else {
                     self.fail(at, "a closure with no MIR function");
                     return;
                 };
