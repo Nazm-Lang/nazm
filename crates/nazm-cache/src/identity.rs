@@ -296,7 +296,9 @@ use crate::digest::{self, Framed};
 /// `54` — R1a, 2026-10-12. Patterns: `_`, names, literals, or-patterns and nesting in a `match`,
 /// a `match` of any type a pattern fits, `if let` and `let … else` moved from refused to
 /// accepted; `N0629` and `N0630`.
-pub const SEMANTIC_EPOCH: u32 = 54;
+/// `55` — R1a, 2026-10-12. Tuples: `(A, B)` types, `(a, b)` values, `t.0`, tuple patterns, `let P
+/// = e;` and `for (a, b) in e` moved from refused to accepted.
+pub const SEMANTIC_EPOCH: u32 = 55;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

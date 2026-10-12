@@ -197,6 +197,12 @@ pub enum SyntaxKind {
     Pattern,
     /// `p | q | …` (R1a).
     OrPattern,
+    /// `(p, q, …)` (L5).
+    TuplePattern,
+    /// `(a, b, …)` (L5).
+    TupleExpr,
+    /// `(A, B, …)` (L5).
+    TupleType,
     PatternFieldList,
     PatternField,
     /// `trait Name { … }` (N78).
@@ -347,6 +353,9 @@ impl SyntaxKind {
         Self::MatchArm,
         Self::Pattern,
         Self::OrPattern,
+        Self::TuplePattern,
+        Self::TupleExpr,
+        Self::TupleType,
         Self::PatternFieldList,
         Self::PatternField,
         Self::TraitItem,

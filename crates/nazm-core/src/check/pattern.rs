@@ -148,9 +148,16 @@ impl Checker<'_> {
         }
 
         if !unresolved {
-            self.report_uncovered(sty, &rows, span);
+            self.report_uncovered(sty, &rows, span, source);
         }
-        result.unwrap_or(Completion::Value(expected.unwrap_or(Type::Int)))
+        match result {
+            Some(c) => c,
+            // Every arm's pattern was refused: what the `match` would produce is unknown, and
+            // saying so again — a loop body with a value, a missing tail — would be a second
+            // diagnostic about the one mistake.
+            None if unresolved => Completion::Diverges,
+            None => Completion::Value(expected.unwrap_or(Type::Int)),
+        }
     }
 
     /// `N0344` for an arm whose every value an earlier arm matches — said as before R1a when
@@ -209,13 +216,31 @@ impl Checker<'_> {
 
     /// `N0343` for a `match` some value of `sty` escapes — said as before R1a, listing the
     /// variants no arm names, when every arm is one variant's plain pattern.
-    fn report_uncovered(&mut self, sty: Type, rows: &[Vec<usefulness::Pat>], span: Span) {
+    fn report_uncovered(
+        &mut self,
+        sty: Type,
+        rows: &[Vec<usefulness::Pat>],
+        span: Span,
+        source: nazm_syntax::MatchSource,
+    ) {
         let witness = {
             let sig = Sigs(self);
             usefulness::witness(rows, &[sty], &sig)
                 .map(|w| w.first().map_or_else(|| "_".to_owned(), |x| x.show(&sig)))
         };
         let Some(shown_witness) = witness else { return };
+        // `let P = e;` (L5) with a pattern that can fail.
+        if source == nazm_syntax::MatchSource::Let {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::NON_EXHAUSTIVE_MATCH,
+                    span,
+                    format!("this `let` pattern does not match `{shown_witness}`"),
+                )
+                .help("a pattern that can fail needs an `else`: `let P = e else { return …; };`"),
+            );
+            return;
+        }
         let all_plain = rows.iter().all(|r| {
             matches!(r.first(), Some(usefulness::Pat::Ctor { args, .. })
                 if args.iter().all(|a| *a == usefulness::Pat::Wild))
@@ -296,6 +321,32 @@ impl Checker<'_> {
             }
             P::Literal(e) => self.check_literal_pattern(e, ty),
             P::Variant(v) => self.check_variant_pattern(v, ty, scrutinee, binds, aliases),
+            // `(p, q, …)` (L5): a tuple of as many elements, each matching its pattern.
+            P::Tuple { elems, span } => {
+                let fields = self.res.types().tuple_elements(ty);
+                match fields {
+                    Some(fields) if fields.len() == elems.len() => {
+                        let args = elems
+                            .iter()
+                            .zip(fields)
+                            .map(|(p, t)| self.check_pattern(p, t, scrutinee, binds, aliases))
+                            .collect();
+                        Pat::Tuple(args)
+                    }
+                    _ => {
+                        let shown = self.show(ty);
+                        self.errors.push(Diagnostic::error(
+                            codes::TYPE_MISMATCH,
+                            *span,
+                            format!(
+                                "this pattern is a tuple of {}, but the value is a `{shown}`",
+                                elems.len()
+                            ),
+                        ));
+                        Pat::Wild
+                    }
+                }
+            }
             P::Or { alts, span } => {
                 let mut out = Vec::new();
                 let mut first: Option<Vec<(String, Span, Type)>> = None;
@@ -838,6 +889,10 @@ impl usefulness::Signatures for Sigs<'_, '_> {
                 .map(|v| v.fields.iter().map(|f| f.ty).collect())
                 .collect(),
         ))
+    }
+
+    fn tuple(&self, t: Type) -> Option<Vec<Type>> {
+        self.0.res.types().tuple_elements(t)
     }
 
     fn spell(&self, enumeration: EnumId, variant: u32) -> (String, Vec<String>) {

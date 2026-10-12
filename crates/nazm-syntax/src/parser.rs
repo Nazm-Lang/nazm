@@ -269,7 +269,8 @@ enum Parsed {
     LetElse {
         pattern: Pattern,
         value: Expr,
-        otherwise: Block,
+        /// `None` for `let P = e;` (L5), whose pattern must match every value.
+        otherwise: Option<Block>,
         span: Span,
     },
 }
@@ -2351,6 +2352,9 @@ impl<'a> Parser<'a> {
         if self.at(&TokenKind::LBracket) {
             return self.array_type(at);
         }
+        if self.at(&TokenKind::LParen) {
+            return self.tuple_type(at);
+        }
         let name_span = self.peek_span();
         let qualifier = self.qualifier_before_name();
         let name_span = if qualifier.is_some() {
@@ -2386,6 +2390,55 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    /// `(A, B, …)` (R1a, L5): a tuple type of two or more elements; `(A)` is `A`, parenthesised.
+    fn tuple_type(&mut self, at: Checkpoint) -> Option<TypeName> {
+        let open = self.expect(&TokenKind::LParen, "to start a tuple type")?;
+        let first = self.type_name()?;
+        if !self.at(&TokenKind::Comma) {
+            self.expect(&TokenKind::RParen, "to close the parenthesised type")?;
+            return Some(first);
+        }
+        let mut elems = vec![first];
+        while self.eat(&TokenKind::Comma) {
+            if self.at(&TokenKind::RParen) {
+                break;
+            }
+            elems.push(self.type_name()?);
+        }
+        let close = self.expect(&TokenKind::RParen, "to close a tuple type")?;
+        self.two_or_more(elems.len(), open.join(close))?;
+        self.wrap(at, SyntaxKind::TupleType);
+        let span = open.join(close);
+        Some(TypeName {
+            qualifier: None,
+            function: None,
+            name: TypeName::TUPLE.to_owned(),
+            name_span: span,
+            span,
+            args: Some(elems),
+            length: None,
+        })
+    }
+
+    /// A tuple has two elements or more (L5): `(x,)` is refused by name, since `(x)` is `x`
+    /// parenthesised and there is no tuple of one to write instead.
+    fn two_or_more(&mut self, len: usize, span: Span) -> Option<()> {
+        if len >= 2 {
+            return Some(());
+        }
+        self.report(
+            Diagnostic::error(
+                codes::UNSUPPORTED_CONSTRUCT,
+                span,
+                "a tuple has two or more elements",
+            )
+            .help(
+                "`(x)` is `x`, parenthesised: drop the comma, or add the elements the tuple holds",
+            ),
+        );
+        None
     }
 
     /// `[T; N]` (Gate 2): a fixed-size array type. Its length is an integer literal or a
@@ -2650,24 +2703,33 @@ impl<'a> Parser<'a> {
                         tail: rest_tail,
                         span: Span::new(self.file, rest_start, rest_end),
                     };
-                    let wild = Pattern::Wildcard {
-                        span: Span::new(self.file, otherwise.span.start, otherwise.span.start),
+                    let first = MatchArm {
+                        span: pattern.span().join(rest.span),
+                        pattern,
+                        body: Expr::Block(Box::new(rest)),
                     };
-                    tail = Some(Box::new(Expr::Match {
-                        scrutinee: Box::new(value),
-                        arms: vec![
-                            MatchArm {
-                                span: pattern.span().join(rest.span),
-                                pattern,
-                                body: Expr::Block(Box::new(rest)),
-                            },
-                            MatchArm {
+                    let (arms, source) = match otherwise {
+                        Some(otherwise) => {
+                            let wild = Pattern::Wildcard {
+                                span: Span::new(
+                                    self.file,
+                                    otherwise.span.start,
+                                    otherwise.span.start,
+                                ),
+                            };
+                            let second = MatchArm {
                                 span: otherwise.span,
                                 pattern: wild,
                                 body: Expr::Block(Box::new(otherwise)),
-                            },
-                        ],
-                        source: MatchSource::LetElse,
+                            };
+                            (vec![first, second], MatchSource::LetElse)
+                        }
+                        None => (vec![first], MatchSource::Let),
+                    };
+                    tail = Some(Box::new(Expr::Match {
+                        scrutinee: Box::new(value),
+                        arms,
+                        source,
                         span: span.join(Span::new(self.file, rest_end, rest_end)),
                     }));
                     break;
@@ -2928,11 +2990,16 @@ impl<'a> Parser<'a> {
     }
 
     /// Whether the `let` at the cursor binds one name — `let x =` or `let mut` — rather than
-    /// matching a pattern.
+    /// matching a pattern. A name not followed by what continues a variant pattern (`.`, `[`,
+    /// `(`) is a plain `let`, so a malformed one (`let x: T = …`) is reported as before R1a.
     fn plain_let_ahead(&self) -> bool {
         let at = |k: usize| self.tokens.get(self.pos + k).map(|t| &t.kind);
         matches!(at(1), Some(TokenKind::Mut))
-            || (matches!(at(1), Some(TokenKind::Ident(_))) && matches!(at(2), Some(TokenKind::Eq)))
+            || (matches!(at(1), Some(TokenKind::Ident(n)) if n != "_")
+                && !matches!(
+                    at(2),
+                    Some(TokenKind::Dot | TokenKind::LBracket | TokenKind::LParen)
+                ))
     }
 
     /// `let P = e else { D };` (R1a).
@@ -2943,9 +3010,20 @@ impl<'a> Parser<'a> {
         let pattern = self.pattern()?;
         self.expect(&TokenKind::Eq, "between a `let` pattern and its value")?;
         let value = self.expr()?;
+        // `let P = e;` (L5): no `else`, so `P` must match every value.
+        if self.at(&TokenKind::Semi) {
+            let semi = self.expect(&TokenKind::Semi, "after a `let`")?;
+            self.wrap(at, SyntaxKind::LetElseStmt);
+            return Some(Parsed::LetElse {
+                pattern,
+                value,
+                otherwise: None,
+                span: start.join(semi),
+            });
+        }
         self.expect(
             &TokenKind::Else,
-            "after a `let` pattern's value: `let P = e else { … };`",
+            "after a `let` pattern's value: `;`, or `else { … };` if it can fail",
         )?;
         let otherwise = self.block()?;
         let semi = self.expect(&TokenKind::Semi, "after a `let … else`")?;
@@ -2953,7 +3031,7 @@ impl<'a> Parser<'a> {
         Some(Parsed::LetElse {
             pattern,
             value,
-            otherwise,
+            otherwise: Some(otherwise),
             span: start.join(semi),
         })
     }
@@ -3008,6 +3086,10 @@ impl<'a> Parser<'a> {
                 self.tokens.get(self.pos + 1).map(|t| &t.kind),
                 Some(TokenKind::Ident(w)) if w == "in"
             );
+        // `for (a, b) in e` (L5): a tuple pattern, which must match every element.
+        if self.at(&TokenKind::LParen) {
+            return self.for_pattern(at, start);
+        }
         if !shaped {
             self.report(
                 Diagnostic::error(
@@ -3047,6 +3129,63 @@ impl<'a> Parser<'a> {
             name_span,
             iter,
             span: start.join(body.span),
+            body,
+        })
+    }
+
+    /// `for (p, q, …) in e { body }` (L5), as `for item in e { let (p, q, …) = item; body }`
+    /// with a name no program can write: the pattern is the `let`'s, which must match every
+    /// value (`N0343` otherwise), and its names are the body's.
+    fn for_pattern(&mut self, at: Checkpoint, start: Span) -> Option<For> {
+        let pattern = self.pattern()?;
+        let name_span = pattern.span();
+        if !matches!(self.peek(), TokenKind::Ident(w) if w == "in") {
+            let found = self.peek().describe();
+            self.report(Diagnostic::error(
+                codes::UNEXPECTED_TOKEN,
+                self.peek_span(),
+                format!("expected `in` after a `for` loop's pattern, found {found}"),
+            ));
+            return None;
+        }
+        self.advance();
+        let first = self.expr()?;
+        let mut depth = self.child();
+        let iter = if self.eat(&TokenKind::DotDot) {
+            let end = self.expr()?;
+            depth = depth.max(self.child());
+            ForIter::Range { start: first, end }
+        } else {
+            ForIter::Each(first)
+        };
+        let written = self.block()?;
+        self.built = depth.max(self.child());
+        self.wrap(at, SyntaxKind::ForStmt);
+        let name = FOR_ITEM.to_owned();
+        let item = Expr::Var {
+            name: name.clone(),
+            span: name_span,
+        };
+        let body_span = written.span;
+        let body = Block {
+            statements: Vec::new(),
+            tail: Some(Box::new(Expr::Match {
+                scrutinee: Box::new(item),
+                arms: vec![MatchArm {
+                    span: pattern.span().join(body_span),
+                    pattern,
+                    body: Expr::Block(Box::new(written)),
+                }],
+                source: MatchSource::Let,
+                span: body_span,
+            })),
+            span: body_span,
+        };
+        Some(For {
+            name,
+            name_span,
+            iter,
+            span: start.join(body_span),
             body,
         })
     }
@@ -3116,9 +3255,13 @@ impl<'a> Parser<'a> {
                     at += 1;
                 }
                 Some(TokenKind::Dot) => {
+                    // A field's name, or a tuple's position (`t.0`, and `t.0.1` lexed as `0.1`).
                     if matches!(
                         self.tokens.get(at + 1).map(|t| &t.kind),
-                        Some(TokenKind::Ident(_))
+                        Some(TokenKind::Ident(_) | TokenKind::Int(_))
+                    ) || matches!(
+                        self.tokens.get(at + 1).map(|t| &t.kind),
+                        Some(TokenKind::Float(text)) if positions(text).is_some()
                     ) {
                         at += 2;
                     } else {
@@ -3153,8 +3296,29 @@ impl<'a> Parser<'a> {
                 break;
             }
             let field_span = self.peek_span();
-            let TokenKind::Ident(field) = self.advance() else {
-                return Some(None);
+            let field = match self.advance() {
+                TokenKind::Ident(field) => field,
+                // `t.0 = …` (L5): a tuple's element, by position.
+                TokenKind::Int(i) => i.to_string(),
+                // `t.0.1 = …`: two positions, as in an expression.
+                TokenKind::Float(text) => {
+                    let Some((a, b)) = positions(&text) else {
+                        return Some(None);
+                    };
+                    let cut = field_span.start + u32::try_from(a.len()).unwrap_or(0);
+                    path.push(PlaceStep::Field(PlaceField {
+                        name: a,
+                        name_span: Span::new(self.file, field_span.start, cut),
+                    }));
+                    let second = Span::new(self.file, cut + 1, field_span.end);
+                    last = second;
+                    path.push(PlaceStep::Field(PlaceField {
+                        name: b,
+                        name_span: second,
+                    }));
+                    continue;
+                }
+                _ => return Some(None),
             };
             last = field_span;
             path.push(PlaceStep::Field(PlaceField {
@@ -3424,6 +3588,30 @@ impl<'a> Parser<'a> {
             | TokenKind::False
             | TokenKind::Str(_)
             | TokenKind::Minus => Some(Pattern::Literal(self.primary()?)),
+            // `(p, q, …)` (R1a, L5): a tuple pattern; `(p)` is `p`.
+            TokenKind::LParen => {
+                let at = self.checkpoint();
+                self.advance();
+                let first = self.pattern()?;
+                if !self.at(&TokenKind::Comma) {
+                    self.expect(&TokenKind::RParen, "to close the parenthesised pattern")?;
+                    return Some(first);
+                }
+                let mut elems = vec![first];
+                while self.eat(&TokenKind::Comma) {
+                    if self.at(&TokenKind::RParen) {
+                        break;
+                    }
+                    elems.push(self.pattern()?);
+                }
+                let close = self.expect(&TokenKind::RParen, "to close a tuple pattern")?;
+                self.two_or_more(elems.len(), span.join(close))?;
+                self.wrap(at, SyntaxKind::TuplePattern);
+                Some(Pattern::Tuple {
+                    elems,
+                    span: span.join(close),
+                })
+            }
             TokenKind::Ident(name) => {
                 let next = self.tokens.get(self.pos + 1).map(|t| &t.kind);
                 if matches!(next, Some(TokenKind::Dot | TokenKind::ColonColon)) {
@@ -3764,6 +3952,33 @@ impl<'a> Parser<'a> {
             let name_span = self.peek_span();
             let name = match self.advance() {
                 TokenKind::Ident(n) => n,
+                // `t.0` (R1a, L5): a tuple's element, by position.
+                TokenKind::Int(i) => i.to_string(),
+                // `t.0.1`, which the lexer reads as `t.` and the number `0.1`: two positions.
+                TokenKind::Float(text) if positions(&text).is_some() => {
+                    let (a, b) = positions(&text).unwrap_or_default();
+                    let cut = name_span.start + u32::try_from(a.len()).unwrap_or(0);
+                    let first = Span::new(self.file, name_span.start, cut);
+                    let second = Span::new(self.file, cut + 1, name_span.end);
+                    depth += 1;
+                    self.built(depth)?;
+                    out = Expr::Field {
+                        span: out.span().join(first),
+                        base: Box::new(out),
+                        name: a,
+                        name_span: first,
+                    };
+                    depth += 1;
+                    self.built(depth)?;
+                    self.wrap(at, SyntaxKind::FieldExpr);
+                    out = Expr::Field {
+                        span: out.span().join(second),
+                        base: Box::new(out),
+                        name: b,
+                        name_span: second,
+                    };
+                    continue;
+                }
                 other => {
                     self.report(
                         Diagnostic::error(
@@ -4258,6 +4473,26 @@ impl<'a> Parser<'a> {
             TokenKind::LParen => {
                 self.advance();
                 let inner = self.expr()?;
+                // `(a, b, …)` (R1a, L5): a tuple.
+                if self.at(&TokenKind::Comma) {
+                    let mut deepest = self.child();
+                    let mut elems = vec![inner];
+                    while self.eat(&TokenKind::Comma) {
+                        if self.at(&TokenKind::RParen) {
+                            break;
+                        }
+                        elems.push(self.expr()?);
+                        deepest = deepest.max(self.child());
+                    }
+                    let close = self.expect(&TokenKind::RParen, "to close a tuple")?;
+                    self.two_or_more(elems.len(), span.join(close))?;
+                    self.built(deepest + 1)?;
+                    self.wrap(at, SyntaxKind::TupleExpr);
+                    return Some(Expr::Tuple {
+                        elems,
+                        span: span.join(close),
+                    });
+                }
                 self.expect(&TokenKind::RParen, "to close the group")?;
                 // No abstract node: `(x)` *is* `x`. `self.built` already holds the inner
                 // depth and must not be incremented, or the limit would count punctuation.
@@ -4634,7 +4869,7 @@ mod ast_depth_tests {
                         }
                     }
                     Expr::Field { base, .. } => stack.push((Node::Expr(base), d + 1)),
-                    Expr::Array { elems, .. } => {
+                    Expr::Array { elems, .. } | Expr::Tuple { elems, .. } => {
                         for x in elems {
                             stack.push((Node::Expr(x), d + 1));
                         }
@@ -5038,3 +5273,14 @@ fn qualified(mut e: Expr, q: Option<Qualifier>) -> Expr {
     }
     e
 }
+
+/// The two positions of `0.1` read after a `.` (L5): `t.0.1` is the second element of the first.
+fn positions(text: &str) -> Option<(String, String)> {
+    let (a, b) = text.split_once('.')?;
+    let digits = |d: &str| !d.is_empty() && d.bytes().all(|c| c.is_ascii_digit());
+    (digits(a) && digits(b)).then(|| (a.to_owned(), b.to_owned()))
+}
+
+/// The name a `for` loop over a pattern binds each element to before matching it (L5): not an
+/// identifier, so no program can write it.
+pub(crate) const FOR_ITEM: &str = "for#item";

@@ -200,6 +200,18 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1a (2026-10-12)** · *Tuples* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`, L5).
+`(A, B, …)` types, `(a, b, …)` values, `t.0` (and `t.0.1`, which the lexer reads as a float and the
+parser splits), `t.0 = e` on a `let mut`, tuple patterns, `let P = e;` (a `let` whose pattern must
+match every value, `N0343` otherwise) and `for (a, b) in e`. A tuple is an anonymous generic record
+the checker interns by arity (fields `0`, `1`, …), so layout, release, equality, task crossing and
+every backend take it as a record with no new code; an interface writes it as its elements
+(`{"tuple":[…]}`). `(x,)` is refused (`N0101`). Semantic epoch 55; EXPERIMENTAL until R1 closes.
+Evidence: `crates/nazm-cli/tests/tuples.rs` — a program of every form by hand-worked output in the
+interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; refusals by code with
+one error each; a tuple across a module's interface under `run` and `build`; the formatter's
+spelling.
+
 **R1a (2026-10-12)** · *Patterns* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`, L3).
 `_`, a name, a literal (an integer, perhaps negated, a string, `true`, `false`), a variant pattern
 whose fields are patterns, and `|` alternatives — in a `match` of any type a pattern fits, in

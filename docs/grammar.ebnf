@@ -254,7 +254,13 @@ parameter = IDENT , ":" , type ;
 (* @example fn f(xs: Vec[Vec[Int]]) -> Int { vec_len(xs) } fn main() -> Int { f(vec_new[Vec[Int]]()) } *)
 (* @example fn say(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int { say(io, "hi") } *)
 (* @example fn f(xs: [Int; 4]) -> Int { xs[0] } fn main() -> Int { f([1, 2, 3, 4]) } *)
-type = function_type | array_type | [ qualifier ] , IDENT , [ type_arguments ] ;
+type = function_type | array_type | tuple_type | [ qualifier ] , IDENT , [ type_arguments ] ;
+
+(* R1a: a tuple type, two elements or more; `(T)` is `T`, parenthesised, and `(T,)` is refused
+ * (`N0101`). See `docs/spec.md`, *Tuples*.
+ *)
+(* @example fn f(p: (Int, Str)) -> (Str, Int) { (p.1, p.0) } fn main() -> Int { f((1, "a")).1 } *)
+tuple_type = "(" , type , "," , type , { "," , type } , [ "," ] , ")" ;
 
 (* A fixed-size array type (Gate 2): its element type and its length, an integer literal or a
  * constant's name. See `docs/spec.md`, *Arrays*.
@@ -298,9 +304,12 @@ statement = let_statement
 (* @example fn main() -> Int { let mut a = 1; a = 2; a } *)
 let_statement = "let" , [ "mut" ] , IDENT , "=" , expression , ";" ;
 
-(* R1a: `let P = e else { … };` — the `else` must leave; `P`'s names are in scope after it. *)
+(* R1a: `let P = e else { … };` — the `else` must leave; `P`'s names are in scope after it.
+ * Without `else` (L5), `P` must match every value (`N0343`): `let (a, b) = pair;`.
+ *)
 (* @example fn f(o: Option[Int]) -> Int { let Option.Some(value: x) = o else { return 0; }; x } fn main() -> Int { f(Option[Int].Some(value: 2)) } *)
-let_else_statement = "let" , pattern , "=" , expression , "else" , block , ";" ;
+(* @example fn main() -> Int { let (a, _) = (1, "b"); a } *)
+let_else_statement = "let" , pattern , "=" , expression , [ "else" , block ] , ";" ;
 
 (* The left-hand side is a **place**: a binding, then a path of fields through it.
  * Mutability is checked at the binding, so `p.x = 2` needs `let mut p` — see
@@ -312,7 +321,8 @@ assignment = place , "=" , expression , ";" ;
 
 (* @example struct I { n: Int, } struct O { i: I, } fn main() -> Int { let mut o = O(i: I(n: 1)); o.i.n = 2; o.i.n } *)
 (* @example fn main() -> Int { let mut g = [[0; 2]; 2]; g[1][0] = 5; g[1][0] } *)
-place = IDENT , { "." , IDENT | "[" , expression , "]" } ;
+(* @example fn main() -> Int { let mut t = ((1, 2), 3); t.0.1 = 5; t.0.1 } *)
+place = IDENT , { "." , ( IDENT | INTEGER ) | "[" , expression , "]" } ;
 
 (* @example fn main() -> Int { let mut i = 0; while i < 3 { i = i + 1; } i } *)
 while_statement = "while" , expression , block ;
@@ -320,7 +330,8 @@ while_statement = "while" , expression , block ;
 (* R1a. `in` is a word only here; `..` only between a range's bounds. Each form means the
  * `while` loop `docs/spec.md` (*`for` loops*) gives for it. *)
 (* @example fn main() -> Int { let xs = ints_new(); ints_push(xs, 2); let mut t = 0; for x in xs { t = t + x; } for i in 0..3 { t = t + i; } t } *)
-for_statement = "for" , IDENT , "in" , ( expression , ".." , expression | expression ) , block ;
+(* @example fn main() -> Int { let ps = vec_new[(Int, Int)](); vec_push(ps, (2, 3)); let mut t = 0; for (a, b) in ps { t = t + a * b; } t } *)
+for_statement = "for" , ( IDENT | tuple_pattern ) , "in" , ( expression , ".." , expression | expression ) , block ;
 
 (* @example fn f() -> Int { return 1; } fn main() -> Int { f() } *)
 return_statement = "return" , expression , ";" ;
@@ -416,8 +427,11 @@ unary = [ "-" | "!" | "~" ] , primary ;
  * `points[i].x`. After a name, a `[` followed by types and then `(` is type arguments instead,
  * as it always was: `vec_new[Int]()`; a method call on an element is written `(xs[i]).m()`.
  *)
+(* `.0` after an operand is a tuple's element (R1a, L5); `t.0.1` is two of them.
+ *)
 (* @example fn main() -> Int { let xs = [1, 2, 3]; xs[1] } *)
-primary = atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] | "?" | "[" , expression , "]" } ;
+(* @example fn main() -> Int { let t = ((1, 2), 3); t.0.1 + t.1 } *)
+primary = atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] | INTEGER ) | "?" | "[" , expression , "]" } ;
 
 (* A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
  * `INTEGER` may be written `0x`, `0o` or `0b`, with `_` between digits.
@@ -438,7 +452,12 @@ atom = INTEGER
      | match_expression
      | closure
      | array
+     | tuple
      | "(" , expression , ")" ;
+
+(* R1a: a tuple, two elements or more (`docs/spec.md`, *Tuples*). *)
+(* @example fn main() -> Int { let t = (1, "two", true); t.0 } *)
+tuple = "(" , expression , "," , expression , { "," , expression } , [ "," ] , ")" ;
 
 (* An array (Gate 2): its elements, or one value and a count. *)
 (* @example fn main() -> Int { let a = [1, 2, 3]; let b = [0; 4]; a[2] + b[3] } *)
@@ -531,7 +550,11 @@ pattern = pattern_one , { "|" , pattern_one } ;
  * variant pattern.
  *)
 (* @example enum E { A, B(x: Int), } fn main() -> Int { match E.B(x: 3) { E.B(x: 3) => 1, E.B(x: _) => 2, _ => 0, } } *)
-pattern_one = "_" | IDENT | [ "-" ] , INT | STRING | "true" | "false" | variant_pattern ;
+pattern_one = "_" | IDENT | [ "-" ] , INT | STRING | "true" | "false" | variant_pattern | tuple_pattern ;
+
+(* R1a: a tuple pattern, as many elements as the tuple; `(p)` is `p`, parenthesised. *)
+(* @example fn main() -> Int { match (1, true) { (0, _) => 0, (n, true) => n, (_, false) => 2, } } *)
+tuple_pattern = "(" , pattern , "," , pattern , { "," , pattern } , [ "," ] , ")" ;
 
 (* @example enum E { V(x: Int, y: Bool), } fn main() -> Int { match E.V(x: 1, y: true) { E.V(x: 1, y: _) => 1, E.V(x: n, y: _) => n, } } *)
 variant_pattern = [ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" ;

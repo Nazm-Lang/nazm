@@ -43,6 +43,9 @@ pub struct Instance<Id> {
     pub args: Vec<Type>,
 }
 
+/// A tuple record's name (L5): not an identifier, so no program can write it.
+pub const TUPLE_NAME: &str = "(,)";
+
 /// How deeply one type term may nest before an instance of it is left uncompleted.
 ///
 /// Well past [`crate::MAX_TYPE_DEPTH`], which is the language's bound and is reported; this
@@ -64,6 +67,9 @@ pub struct Generics {
     /// Array element types and lengths, by [`ArrayId`] (Gate 2).
     arrays: Vec<(Type, u32)>,
     array_ids: HashMap<(Type, u32), ArrayId>,
+    /// The tuple record of each arity (L5): the generic definition `(A, B, …)` is an
+    /// application of.
+    tuples: HashMap<usize, crate::record::RecordId>,
     /// Function types, by [`FnTypeId`] (N50).
     fns: Vec<FnSignature>,
     fn_ids: HashMap<FnSignature, FnTypeId>,
@@ -201,6 +207,65 @@ impl UserTypes {
     #[must_use]
     pub fn chan_element(&self, id: ChanId) -> Option<Type> {
         self.generics().chans.get(id.index()).copied()
+    }
+
+    /// `(elems…)` (R1a, L5): a tuple — an application of the generic record of its arity, which
+    /// this makes the first time it is asked for. The record has no name a program can write,
+    /// fields `0`, `1`, … and one type parameter per element, so every layer below the checker
+    /// takes a tuple as the record it is.
+    pub fn tuple_of(&mut self, elems: Vec<Type>) -> Type {
+        let n = elems.len();
+        let template = if let Some(t) = self.generics().tuples.get(&n) {
+            *t
+        } else {
+            let span = nazm_span::Span::synthetic();
+            let template = self
+                .records_mut()
+                .declare_unnamed(crate::record::RecordDef {
+                    name: TUPLE_NAME.to_owned(),
+                    module: crate::module::ModuleId::ROOT,
+                    visibility: crate::interface::Visibility::Exported,
+                    name_span: span,
+                    fields: Vec::new(),
+                    layout: Vec::new(),
+                    decl: u32::MAX,
+                    params: (0..n).map(|i| format!("T{i}")).collect(),
+                    instance: None,
+                    repr: crate::record::CRepr::Nazm,
+                });
+            let owner = ParamOwner::Record(template);
+            let fields = (0..n)
+                .map(|i| crate::record::FieldDef {
+                    name: i.to_string(),
+                    ty: Type::Param(TypeParam {
+                        owner,
+                        index: u32::try_from(i).unwrap_or(u32::MAX),
+                    }),
+                    name_span: span,
+                    ty_span: span,
+                })
+                .collect();
+            self.records_mut().complete(template, fields);
+            self.name_params(owner, (0..n).map(|i| format!("T{i}")).collect());
+            self.generics_mut().tuples.insert(n, template);
+            template
+        };
+        self.apply_record(template, elems)
+    }
+
+    /// The tuple of these elements if it has been interned already (L5). Never creates one.
+    #[must_use]
+    pub fn find_tuple(&self, elems: &[Type]) -> Option<Type> {
+        let template = *self.generics().tuples.get(&elems.len())?;
+        self.records().instance(template, elems).map(Type::Record)
+    }
+
+    /// The elements of a tuple type (L5); `None` for any other type.
+    #[must_use]
+    pub fn tuple_elements(&self, t: Type) -> Option<Vec<Type>> {
+        let Type::Record(id) = t else { return None };
+        let def = self.records().get(id)?;
+        (def.name == TUPLE_NAME && def.instance.is_some()).then(|| self.type_args(t))
     }
 
     /// `Box[elem]`, interned with the `Vec[elem]` it is represented as (R1a).

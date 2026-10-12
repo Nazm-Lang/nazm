@@ -28,6 +28,8 @@ pub(super) enum Pat {
         args: Vec<Pat>,
     },
     Or(Vec<Pat>),
+    /// A tuple (L5), its elements' patterns: the one constructor of a tuple type.
+    Tuple(Vec<Pat>),
 }
 
 /// What a column's type is made of.
@@ -37,6 +39,8 @@ pub(super) trait Signatures {
     fn variants(&self, t: Type) -> Option<(EnumId, Vec<Vec<Type>>)>;
     /// A variant's spelling and its fields' names, for a witness.
     fn spell(&self, enumeration: EnumId, variant: u32) -> (String, Vec<String>);
+    /// A tuple type's element types (L5); `None` for any other type.
+    fn tuple(&self, t: Type) -> Option<Vec<Type>>;
 }
 
 /// A head constructor a row can be specialised on.
@@ -45,6 +49,7 @@ enum Head {
     Bool(bool),
     Lit(String),
     Variant(u32),
+    Tuple,
 }
 
 fn head_of(p: &Pat) -> Option<Head> {
@@ -52,6 +57,7 @@ fn head_of(p: &Pat) -> Option<Head> {
         Pat::Bool(b) => Some(Head::Bool(*b)),
         Pat::Lit(k) => Some(Head::Lit(k.clone())),
         Pat::Ctor { variant, .. } => Some(Head::Variant(*variant)),
+        Pat::Tuple(_) => Some(Head::Tuple),
         Pat::Wild | Pat::Or(_) => None,
     }
 }
@@ -85,7 +91,7 @@ fn specialise(rows: &[Vec<Pat>], head: &Head, arity: usize) -> Vec<Vec<Pat>> {
             let mut out = match first {
                 Pat::Wild => vec![Pat::Wild; arity],
                 p if head_of(p).as_ref() == Some(head) => match p {
-                    Pat::Ctor { args, .. } => args.clone(),
+                    Pat::Ctor { args, .. } | Pat::Tuple(args) => args.clone(),
                     _ => Vec::new(),
                 },
                 _ => return None,
@@ -110,6 +116,7 @@ fn default(rows: &[Vec<Pat>]) -> Vec<Vec<Pat>> {
 pub(super) enum Witness {
     Any,
     Bool(bool),
+    Tuple(Vec<Witness>),
     Variant {
         enumeration: EnumId,
         variant: u32,
@@ -122,6 +129,10 @@ impl Witness {
         match self {
             Self::Any => "_".to_owned(),
             Self::Bool(b) => b.to_string(),
+            Self::Tuple(args) => {
+                let inner: Vec<String> = args.iter().map(|a| a.show(sig)).collect();
+                format!("({})", inner.join(", "))
+            }
             Self::Variant {
                 enumeration,
                 variant,
@@ -188,7 +199,7 @@ fn witness_at(
                 (Head::Bool(false), Vec::new(), None),
             ])
         } else {
-            None
+            sig.tuple(*ty).map(|elems| vec![(Head::Tuple, elems, None)])
         };
     let present: Vec<Head> = rows
         .iter()
@@ -228,6 +239,7 @@ fn witness_at(
 fn build(head: &Head, args: Vec<Witness>, id: Option<EnumId>) -> Witness {
     match (head, id) {
         (Head::Bool(b), _) => Witness::Bool(*b),
+        (Head::Tuple, _) => Witness::Tuple(args),
         (Head::Variant(v), Some(enumeration)) => Witness::Variant {
             enumeration,
             variant: *v,
@@ -282,7 +294,7 @@ fn useful_at(
                         (Head::Bool(false), Vec::new()),
                     ])
                 } else {
-                    None
+                    sig.tuple(*ty).map(|elems| vec![(Head::Tuple, elems)])
                 };
             match finite {
                 Some(all) if all.iter().all(|(h, _)| present.contains(h)) => {
@@ -306,6 +318,11 @@ fn useful_at(
         p => {
             let Some(head) = head_of(p) else { return false };
             let (args, fields): (Vec<Pat>, Vec<Type>) = match p {
+                Pat::Tuple(args) => (
+                    args.clone(),
+                    sig.tuple(*ty)
+                        .unwrap_or_else(|| vec![Type::Int; args.len()]),
+                ),
                 Pat::Ctor { args, variant, .. } => {
                     let fields = sig
                         .variants(*ty)

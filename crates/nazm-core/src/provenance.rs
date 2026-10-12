@@ -662,7 +662,8 @@ impl<'b> Walk<'_, 'b> {
                     self.bind_pattern(&f.pattern, &part);
                 }
             }
-            nazm_syntax::Pattern::Or { alts, .. } => {
+            nazm_syntax::Pattern::Or { alts, .. }
+            | nazm_syntax::Pattern::Tuple { elems: alts, .. } => {
                 for alt in alts {
                     self.bind_pattern(alt, v);
                 }
@@ -756,7 +757,8 @@ impl<'b> Walk<'_, 'b> {
             }
             // An array carries what its elements carry; an element carries its array's and its
             // index's (Gate 2).
-            Expr::Array { elems, .. } => {
+            // A tuple (L5) carries what its elements carry, as an array does.
+            Expr::Array { elems, .. } | Expr::Tuple { elems, .. } => {
                 let mut flow: Option<Flow> = None;
                 for x in elems {
                     let f = self.expr(x);

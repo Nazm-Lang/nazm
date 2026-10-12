@@ -93,6 +93,19 @@ impl Checker<'_> {
             Expr::Array { elems, span } => {
                 Completion::Value(self.check_array_literal(elems, *span, expected))
             }
+            // `(a, b, …)` (L5): a tuple of the elements' types, each checked against the one
+            // expected where a tuple of that many is expected.
+            Expr::Tuple { elems, .. } => {
+                let wanted = expected
+                    .and_then(|t| self.res.types().tuple_elements(t))
+                    .filter(|w| w.len() == elems.len());
+                let mut tys = Vec::with_capacity(elems.len());
+                for (i, e) in elems.iter().enumerate() {
+                    let want = wanted.as_ref().and_then(|w| w.get(i).copied());
+                    tys.push(self.value_type(e, want));
+                }
+                Completion::Value(self.res.types_mut().tuple_of(tys))
+            }
             Expr::ArrayRepeat { value, count, span } => {
                 Completion::Value(self.check_array_repeat(value, count, *span, expected))
             }

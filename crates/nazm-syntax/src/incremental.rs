@@ -1209,7 +1209,7 @@ impl Shift for crate::ast::Pattern {
                 fields.shift(file, by);
                 span.shift(file, by);
             }
-            Self::Or { alts, span } => {
+            Self::Or { alts, span } | Self::Tuple { elems: alts, span } => {
                 alts.shift(file, by);
                 span.shift(file, by);
             }
@@ -1246,7 +1246,7 @@ impl Shift for FieldInit {
 impl Shift for Expr {
     fn shift(&mut self, file: FileId, by: i64) {
         match self {
-            Self::Array { elems, span } => {
+            Self::Array { elems, span } | Self::Tuple { elems, span } => {
                 elems.shift(file, by);
                 span.shift(file, by);
             }

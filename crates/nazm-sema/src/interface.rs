@@ -347,6 +347,10 @@ pub fn reachable_types(types: &UserTypes, roots: impl IntoIterator<Item = Type>)
             Type::Vec(v) | Type::Box(v) | Type::List(v) => work.extend(types.vec_element(v)),
             Type::ChanOf(c) => work.extend(types.chan_element(c)),
             Type::Fn(_) => work.extend(types.type_args(t)),
+            // A tuple (L5) is no definition either: an interface writes it as its elements.
+            Type::Record(_) if types.tuple_elements(t).is_some() => {
+                work.extend(types.type_args(t));
+            }
             Type::Record(_) | Type::Enum(_) => {
                 // An application reaches the **definition** it applies — which is what an
                 // interface publishes — and everything its arguments reach.

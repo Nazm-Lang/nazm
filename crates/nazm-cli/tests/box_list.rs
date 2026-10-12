@@ -265,7 +265,26 @@ fn the_ownership_rule_accepts_immutable_cycles_and_refuses_counted_ones() {
             "enum E { Leaf, Pair(a: Box[E], b: List[E]), }\nfn main() -> Int { 0 }",
             none.clone(),
         ),
+        // Through a generic definition's parameter: the parameter's own use decides — a `List`
+        // of it is immutable, so a cycle through it is accepted.
+        (
+            "struct W[T] { items: List[T], }\nstruct Node { w: W[Node], }\nfn main() -> Int { 0 }",
+            none.clone(),
+        ),
         // Through a mutable handle anywhere on the cycle: still an ownership cycle.
+        (
+            "struct W[T] { items: Vec[T], }\nstruct Node { w: W[Node], }\nfn main() -> Int { 0 }",
+            vec!["N0359".to_owned()],
+        ),
+        // A counted edge inside an immutable one, and the other way round, through a parameter.
+        (
+            "struct H[T] { b: Box[Vec[T]], }\nstruct Node { h: H[Node], }\nfn main() -> Int { 0 }",
+            vec!["N0359".to_owned()],
+        ),
+        (
+            "struct H[T] { b: Vec[Box[T]], }\nstruct Node { h: H[Node], }\nfn main() -> Int { 0 }",
+            vec!["N0359".to_owned()],
+        ),
         (
             "struct Node { kids: Vec[Node], }\nfn main() -> Int { 0 }",
             vec!["N0359".to_owned()],

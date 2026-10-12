@@ -686,7 +686,7 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                         nazm_syntax::MatchSource::IfLet => {
                             spans.push((SyntaxKind::IfLetExpr, *span));
                         }
-                        nazm_syntax::MatchSource::LetElse => {}
+                        nazm_syntax::MatchSource::LetElse | nazm_syntax::MatchSource::Let => {}
                     }
                     stack.push(Node::Expr(scrutinee));
                     for a in arms {
@@ -696,6 +696,12 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                 Expr::Field { base, .. } => stack.push(Node::Expr(base)),
                 Expr::Array { elems, span } => {
                     spans.push((SyntaxKind::ArrayExpr, *span));
+                    for x in elems {
+                        stack.push(Node::Expr(x));
+                    }
+                }
+                Expr::Tuple { elems, span } => {
+                    spans.push((SyntaxKind::TupleExpr, *span));
                     for x in elems {
                         stack.push(Node::Expr(x));
                     }

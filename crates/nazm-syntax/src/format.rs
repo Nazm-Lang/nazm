@@ -562,11 +562,13 @@ impl<'a> Printer<'a> {
         // `f(` is one thing; `while (` is two. The bracket is glued to a name — or to the
         // type arguments after one, `f[Int](` — and separated from anything else.
         // `fn(` too, in a function type or a closure (N50): `fn` before `(` is never a name.
+        // `for (a, b) in …` (L5) is two: `for` is reserved, never a function's name.
         if *next == TokenKind::LParen {
-            return !matches!(
-                previous,
-                TokenKind::Ident(_) | TokenKind::RBracket | TokenKind::Fn
-            );
+            return matches!(previous, TokenKind::Ident(w) if w == "for")
+                || !matches!(
+                    previous,
+                    TokenKind::Ident(_) | TokenKind::RBracket | TokenKind::Fn
+                );
         }
         true
     }

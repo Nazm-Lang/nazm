@@ -498,6 +498,13 @@ fn resolve_written_inner(
             );
         }
     }
+    // `(A, B, …)` (L5): a tuple of the elements written.
+    if written.name == TypeName::TUPLE && written.qualifier.is_none() {
+        let elems = args.clone().unwrap_or_default();
+        let t = res.types_mut().tuple_of(elems);
+        res.record_written_type(written.name_span, WrittenType::Builtin(t));
+        return t;
+    }
     // `[T; N]` (Gate 2): an array of the element written, its length a constant.
     if let (Some(len), true) = (&written.length, written.name == TypeName::ARRAY) {
         let elem = args
