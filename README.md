@@ -8,34 +8,31 @@ structured concurrency, compiler-checked effects, authority and data provenance,
 machine-readable tooling for people and coding agents alike. A second compiler, written in Nazm
 for a declared subset of the language, compiles itself.**
 
-## 1.0.0 — a release candidate, not yet released
+## 0.9.0 — a public preview of the 1.0 draft
 
-Nazm 1.0.0 is to be the first stable language/toolchain release. A program valid under stable Nazm 1.0,
-using only stable public surfaces, does not silently change meaning under a later 1.x toolchain:
-[`docs/stability.md`](docs/stability.md) is that contract — what is stable, what is experimental or
-internal, and what a patch, minor or major release may change — and
-[`tests/compat/v1/`](tests/compat/v1) is the corpus every 1.x toolchain is held to.
+Nazm **0.9.0** is a preview: the toolchain, written in Rust, for **macOS on Apple Silicon**
+(`aarch64-apple-darwin`) only, and the language as a **1.0 draft**. There is **no compatibility
+promise until 1.0**: [`docs/stability.md`](docs/stability.md) states the contract 1.0 will make —
+what will be stable, what experimental or internal, and what a patch, minor or major release may
+change — and [`tests/compat/v1/`](tests/compat/v1) is the corpus the toolchain is held to on the way;
+a preview may still change what they say. The toolchain is being rewritten in Nazm
+([`openspec/changes/rewrite-in-nazm`](openspec/changes/rewrite-in-nazm)); 1.0 comes after it.
 
-A stable contract is not a complete ecosystem. Optional subsystems — GPU kernels, smart contracts,
-the freestanding and WebAssembly targets, the agent and editor tooling — remain experimental or
-partial where documented, and nothing in Nazm is certified, proved correct or claimed free of
-defects. Native compilation passes through one shared low-level IR into LLVM and Cranelift, the
-hosted runtime runs tasks on a structured M:N scheduler, and this tree is backed by contained
-bootstrap, mutation, fuzzing, platform and artifact-verification evidence.
-
-**Not yet released.** The tree says 1.0.0; no `v1.0.0` tag exists. The v1 programme's later gates
-and its final release gate stand between this tree and one. The licence is decided —
-`Apache-2.0 WITH LLVM-exception` ([`docs/licensing.md`](docs/licensing.md)). Gate 1 found a memory defect — a
-closure stored into a `Vec` it captured was never reclaimed — and Gate 1-C1 closed it by refusing
-the capture (`N0616`, [`docs/spec.md`](docs/spec.md), *Cycles*). The last published candidate is
-v0.3.0 ([`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)).
+The preview is backed by contained bootstrap, mutation, fuzzing and artifact-verification evidence,
+and by the gates and release notes in [`docs/releases/`](docs/releases) — what was not run for it
+is named there ([`docs/releases/0.9.0.md`](docs/releases/0.9.0.md)). Optional subsystems — GPU
+kernels, smart contracts, the freestanding and WebAssembly targets, the agent and editor tooling —
+remain experimental or partial where documented, and nothing in Nazm is certified, proved correct
+or claimed free of defects. External contributions are not accepted yet: the contributor licence
+agreement awaits legal review ([`docs/licensing.md`](docs/licensing.md)).
 
 | | |
 | --- | --- |
-| Language | **1.0** — [`docs/spec.md`](docs/spec.md) |
-| Toolchain | **1.0.0** — `nazm --version` |
-| Standard library | **1.0**, stable within 1.x |
-| Licence | Apache-2.0 WITH LLVM-exception — what Nazm compiles into a program carries no obligation ([`docs/licensing.md`](docs/licensing.md)) |
+| Language | **1.0 draft** — [`docs/spec.md`](docs/spec.md) |
+| Toolchain | **0.9.0** — `nazm --version` |
+| Target | macOS on Apple Silicon (`aarch64-apple-darwin`); others are unverified rather than unsupported, and not released |
+| Standard library | **1.0 draft** |
+| Licence | Apache-2.0 WITH LLVM-exception — what Nazm compiles into a program carries no obligation; the toolchain binary's third-party notices are in `THIRD-PARTY-NOTICES.md` ([`docs/licensing.md`](docs/licensing.md)) |
 
 ## A taste
 
@@ -87,7 +84,7 @@ git clone https://github.com/mdferdousalam/nazm
 cd nazm
 cargo build --release -p nazm-cli            # target/release/nazm
 # or: cargo install --path crates/nazm-cli --locked
-nazm --version                                # nazm 1.0.0
+nazm --version                                # nazm 0.9.0
 ```
 
 The binary carries the standard library inside it and needs no installation directory. Nothing

@@ -16,6 +16,7 @@ mod governance;
 mod guide;
 mod metadata;
 mod mutate;
+mod notices;
 mod plan;
 mod procs;
 mod rules;
@@ -173,6 +174,11 @@ fn main() -> ExitCode {
         Some("evidence") => {
             let rest: Vec<String> = args.collect();
             evidence::run(&rest)
+        }
+        // The third-party notices a shipped binary owes (0.3.0 preview).
+        Some("notices") => {
+            let rest: Vec<String> = args.collect();
+            notices::run(&rest)
         }
         Some("help" | "--help" | "-h") | None => {
             help();

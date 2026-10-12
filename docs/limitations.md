@@ -1,8 +1,9 @@
 # Known limitations
 
 One list, kept current, of what Nazm does **not** do or does only partly — the v1 foundation and
-everything N49–N74 added to it, as audited in N75, and kept current through Nazm 1.0 (Gate 1,
-2026-10-07). What 1.x promises about what is here is `stability.md`. Each line names the
+everything N49–N74 added to it, as audited in N75, and kept current through the 1.0 draft (Gate 1,
+2026-10-07; the 0.9.0 preview, 2026-10-12). What 1.0 will promise about what is here is
+`stability.md`. Each line names the
 capability-matrix area that owns it (`capability-matrix.md`), where the evidence and the status
 live; this file adds nothing a reader could not find there, and exists so nothing material is
 found only by reading all of it.
@@ -100,7 +101,7 @@ found only by reading all of it.
   name only, and `pub use "PATH" as m;` is refused. *Narrowed in N77:* until then, nothing a check
   decided about a body outlived the process. *Narrowed in N103:* a module may re-export a name, and
   under another name.
-- The standard library is 1.0 (N84) and stable within 1.x, but has no networking, no
+- The standard library is the 1.0 draft (N84), to be stable within 1.x from 1.0, but has no networking, no
   cryptography and no floating point; `@std/map` inserts in linear time (a sorted array), and
   channel helpers exist for `Int` and `Str` only, since a channel cannot carry a type parameter
   (area 16).

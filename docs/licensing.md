@@ -1,4 +1,4 @@
-# Licensing — technical audit for 1.0
+# Licensing — technical audit for 1.0, and the 0.9.0 preview
 
 **Decided 2026-10-11 by the copyright holder: `Apache-2.0 WITH LLVM-exception`, copyright Ferdous
 Alam** (`LICENSE`, `NOTICE`). The exceptions — LLVM's and Cranelift's — let a program carry the parts
@@ -69,9 +69,13 @@ tokenizer data `nazm-tokens` records (two MIT, two Apache-2.0) is not embedded i
 ## What a release archive contains
 
 `scripts/release-candidate.sh` copies `README.md`, `LICENSE`, `LICENSE-CC-BY-4.0`, `NOTICE`,
-`SECURITY.md` and `CONTRIBUTING.md` beside `bin/nazm`, `bin/nazmc-selfhosted`, the documentation, schemas,
-examples, the compiler written in Nazm, the benchmark and scripts. It contains **no third-party
-licence texts, attribution file or SBOM**; the SBOM is in the separate evidence bundle.
+`THIRD-PARTY-NOTICES.md` (since the 0.9.0 preview), `SECURITY.md` and `CONTRIBUTING.md` beside
+`bin/nazm`, `bin/nazmc-selfhosted`, the documentation, schemas,
+examples, the compiler written in Nazm, the benchmark and scripts. `THIRD-PARTY-NOTICES.md` is
+generated from `Cargo.lock` by `cargo xtask notices` — the crates `bin/nazm` and `bin/nazm-mcp`
+link for `aarch64-apple-darwin`, each with its licence expression, authors and every licence or
+notice file it ships — and `cargo xtask check` fails when it falls behind the lockfile. The SBOM
+stays in the separate evidence bundle.
 
 ## What a human must decide
 
@@ -100,7 +104,8 @@ licence texts, attribution file or SBOM**; the SBOM is in the separate evidence 
    notices, which can be generated from `Cargo.lock`. The rewritten toolchain owes none only if
    it links no third-party code; calling a separately installed `clang` (`DRIVER` in
    `crates/nazm-cli/src/backend.rs`) carries no notice, while a backend linked in, as Cranelift is
-   today, would.
+   today, would. *For the 0.9.0 preview (2026-10-12):* the archive carries
+   `THIRD-PARTY-NOTICES.md` (*What a release archive contains*), which discharges the duty for it.
 
 **Still open:**
 
