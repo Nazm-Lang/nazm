@@ -674,7 +674,7 @@ fn handles_still_have_no_equality() {
         "==",
         0,
     );
-    // Nor ordering on anything that now compares.
-    let src = format!("{POINT}\nfn main() -> Int {{ if Point(x: 1, y: 1) < Point(x: 2, y: 2) {{ 1 }} else {{ 0 }} }}");
-    refused(&src, "<", 0);
+    // Ordering is derived since R1a (L6), but not through a handle.
+    let src = "struct H { v: Vec[Int], }\nfn main() -> Int { let h = H(v: vec_new[Int]()); if h < h { 1 } else { 0 } }";
+    refused(src, "<", 0);
 }

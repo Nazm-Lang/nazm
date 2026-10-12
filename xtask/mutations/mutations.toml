@@ -3731,8 +3731,10 @@ name = "n13-a-type-answers-for-its-first-component-only"
 why = "the capability walk looks at each definition's first field or payload field and no further, so `struct B { ok: Int, values: Vec[Int] }` compares"
 file = "crates/nazm-sema/src/udt.rs"
 find = """            stack.push((node, at + 1, pushed));
+            let ty = open(ty);
             match TypeNode::of(ty) {"""
-replace = """            match TypeNode::of(ty) {"""
+replace = """            let ty = open(ty);
+            match TypeNode::of(ty) {"""
 killers = [{ package = "nazm-core", test = "equality", name = "a_record_has_equality_exactly_when_every_field_does" }]
 
 [[mutation]]
@@ -3740,11 +3742,13 @@ name = "n13-an-enum-answers-for-its-first-variant-only"
 why = "the capability walk skips every variant after the first, so `enum Work { Empty, Values(value: Vec[Int]) }` compares — the flow-insensitive rule broken the way a value-based reading would break it"
 file = "crates/nazm-sema/src/udt.rs"
 find = """            stack.push((node, at + 1, pushed));
+            let ty = open(ty);
             match TypeNode::of(ty) {"""
 replace = """            stack.push((node, at + 1, pushed));
             if variant.is_some_and(|v| v > 0) {
                 continue;
             }
+            let ty = open(ty);
             match TypeNode::of(ty) {"""
 killers = [{ package = "nazm-core", test = "equality", name = "an_enum_has_equality_only_when_every_variant_does" }]
 
@@ -3828,9 +3832,13 @@ why = """the native record helper compares the first field in layout order and r
 Repointed by N105: the rule is LIR's, made once for both backends."""
 file = "crates/nazm-lir/src/op/helpers.rs"
 find = '''            for (off, ft) in s.offsets.iter().zip(&s.fields) {
-                let x = fx.ptr_off(a, i64::from(*off));'''
+                let x = fx.ptr_off(a, i64::from(*off));
+                let y = fx.ptr_off(b, i64::from(*off));
+                field_equal(fx, x, y, *ft, differ);'''
 replace = '''            for (off, ft) in s.offsets.iter().zip(&s.fields).take(1) {
-                let x = fx.ptr_off(a, i64::from(*off));'''
+                let x = fx.ptr_off(a, i64::from(*off));
+                let y = fx.ptr_off(b, i64::from(*off));
+                field_equal(fx, x, y, *ft, differ);'''
 killers = [{ package = "nazm-cli", test = "equality", name = "record_equality_compiles_to_the_interpreter_s_answer" }]
 
 [[mutation]]
@@ -8298,10 +8306,11 @@ Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused 
 Repointed by R1a, which moved it to 52 for `for` loops: an entry that refused `for x in xs` must not be reused.
 Repointed by R1a again, which moved it to 53 for `Box` and `List`: an entry that refused a type reaching itself through one must not be reused.
 Repointed by R1a a third time, which moved it to 54 for patterns: an entry that refused a `_` arm must not be reused.
-Repointed by R1a a fourth time, which moved it to 55 for tuples: an entry that refused `(1, 2)` must not be reused."""
+Repointed by R1a a fourth time, which moved it to 55 for tuples: an entry that refused `(1, 2)` must not be reused.
+Repointed by R1a a fifth time, which moved it to 56 for derived ordering: an entry that refused `"a" < "b"` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 55;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 54;"
+find = "pub const SEMANTIC_EPOCH: u32 = 56;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 55;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -16288,7 +16297,7 @@ why = "a Box or List may be passed to a task, whose count is then adjusted by tw
 file = "crates/nazm-sema/src/types.rs"
 find = "            && !self.is_indirection()"
 replace = "            && true"
-killers = [{ package = "nazm-cli", test = "box_list", name = "a_box_or_list_is_neither_compared_nor_given_to_a_task_nor_written_bare" }]
+killers = [{ package = "nazm-cli", test = "box_list", name = "a_box_or_list_is_neither_ordered_nor_given_to_a_task_nor_written_bare" }]
 
 [[mutation]]
 name = "r1a-the-interpreter-releases-by-recursion"
@@ -16485,3 +16494,81 @@ file = "crates/nazm-syntax/src/format.rs"
 find = "            return matches!(previous, TokenKind::Ident(w) if w == \"for\")"
 replace = "            return matches!(previous, TokenKind::Ident(w) if w == \"rof\")"
 killers = [{ package = "nazm-cli", test = "tuples", name = "a_tuple_is_written_and_formatted_as_the_specification_spells_it" }]
+
+# --- R1a: derived ordering and hashing (docs/spec.md, *Ordering and hashing are derived*) ---
+
+[[mutation]]
+name = "r1a-ordering-is-numeric-only"
+why = "the checker keeps ordering to numbers, so `\"a\" < \"b\"` and every derived order is refused"
+file = "crates/nazm-core/src/check/operators.rs"
+find = "                lt == rt && self.res.types().ordering(lt).is_ok()"
+replace = "                lt == rt && lt.num().is_some()"
+killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_orders_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-record-orders-by-declaration"
+why = "the interpreter orders a record by its fields as declared, so reordering a declaration changes a comparison"
+file = "crates/nazm-core/src/eval/arith.rs"
+find = """            let canon = orders.records.get(x.def().index())?;
+            fields(canon, &x.fields, &y.fields)"""
+replace = """            let canon: Vec<u32> = (0..u32::try_from(x.fields.len()).unwrap_or(0)).collect();
+            fields(&canon, &x.fields, &y.fields)"""
+killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_orders_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-an-enum-orders-by-declaration"
+why = "the interpreter ranks an enum's variants as declared rather than by name"
+file = "crates/nazm-core/src/eval/arith.rs"
+find = "            let rank = |v: u32| e.variants.iter().position(|d| *d == v);"
+replace = "            let rank = |v: u32| usize::try_from(v).ok();"
+killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_orders_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-native-bool-orders-signed"
+why = "compiled code orders a `Bool` as a signed bit, so `true < false`"
+file = "crates/nazm-lir/src/op/func.rs"
+find = "                            mir::CmpOp::Lt if bit => Cmp::ULt,"
+replace = "                            mir::CmpOp::Lt if bit => Cmp::Lt,"
+killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_orders_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-native-a-prefix-sorts-last"
+why = "compiled code puts the longer of two strings sharing a prefix first, so `\"ab\" < \"a\"`"
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = """            let lt = fx.cmp(Cmp::Lt, la, lb);
+            split(fx, lt, &|fx| fx.cmp(Cmp::Gt, la, lb));"""
+replace = """            let lt = fx.cmp(Cmp::Lt, lb, la);
+            split(fx, lt, &|fx| fx.cmp(Cmp::Gt, lb, la));"""
+killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_orders_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-list-is-equal-to-any-list"
+why = "the interpreter answers every `Box` or `List` comparison as equal, as if one storage"
+file = "crates/nazm-core/src/eval/arith.rs"
+find = "            if std::sync::Arc::ptr_eq(x, y) {"
+replace = "            if true || std::sync::Arc::ptr_eq(x, y) {"
+killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_orders_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-derived-hash-folds-nothing"
+why = "the interpreter's derived hash drops every component, so every record hashes alike and maps degrade to one bucket's worth of `same`"
+file = "crates/nazm-core/src/eval/arith.rs"
+find = "            h = fnv::combine(h, derived_hash(xs.get(*i as usize)?, orders)?);"
+replace = "            let _ = derived_hash(xs.get(*i as usize)?, orders)?;"
+killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_hashes_follow_the_definition_everywhere" }]
+
+[[mutation]]
+name = "r1a-native-hash-forgets-the-variant"
+why = "compiled code starts an enum value's hash from 0, not its variant's name, so two variants with equal payloads collide and the hash differs from the interpreter's"
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = "                let mut h = word_const(fx, fnv::bytes(name.as_bytes()));"
+replace = "                let mut h = word_const(fx, fnv::word(0));"
+killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_hashes_follow_the_definition_everywhere" }]
+
+[[mutation]]
+name = "r1a-a-written-impl-is-derived-over"
+why = "a record holding a type with its own `Hash` derives one anyway, and its `same` silently becomes `==`"
+file = "crates/nazm-sema/src/traits.rs"
+find = "                .hashing(ty, |c| self.find(trait_id, c).is_some())"
+replace = "                .hashing(ty, |_| false)"
+killers = [{ package = "nazm-cli", test = "order_hash", name = "what_has_no_order_or_derived_hash_and_by_which_code" }]

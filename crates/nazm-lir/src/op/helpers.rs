@@ -6,6 +6,7 @@
 //! the generated code, not in this compiler.
 
 use nazm_mir as mir;
+use nazm_sema::fnv;
 
 use super::func::Fx;
 use super::ir::{Class, Cmp, Function, SymId, Term, B, V};
@@ -69,6 +70,26 @@ pub(crate) fn define(lw: &mut Lw<'_>, sym: SymId, h: Helper) -> Function {
             let no = fx.bit(false);
             fx.b.term(Term::Return(Some(no)));
             format!("equality of {}", t.name())
+        }
+        Helper::Order(t) => {
+            let b = fx.param(1);
+            let less = fx.b.block();
+            let greater = fx.b.block();
+            order(&mut fx, a, b, t, less, greater);
+            let zero = fx.iconst(0);
+            fx.b.term(Term::Return(Some(zero)));
+            fx.b.switch(less);
+            let minus = fx.iconst(-1);
+            fx.b.term(Term::Return(Some(minus)));
+            fx.b.switch(greater);
+            let one = fx.iconst(1);
+            fx.b.term(Term::Return(Some(one)));
+            format!("order of {}", t.name())
+        }
+        Helper::Hash(t) => {
+            let h = hash(&mut fx, a, t);
+            fx.b.term(Term::Return(Some(h)));
+            format!("hash of {}", t.name())
         }
     };
     fx.b.finish(sym, name, None)
@@ -244,12 +265,380 @@ fn equal(fx: &mut Fx<'_, '_>, a: V, b: V, t: Ty, differ: B) {
             fx.jump(head);
             fx.b.switch(done);
         }
+        // A `Box` or `List` (L6), a `Vec` underneath: one storage is equal to itself; otherwise
+        // the lengths, then element by element. Checking refuses `==` on a `Vec` itself.
+        Ty::Vec(v) => {
+            let elem = fx
+                .lw
+                .native
+                .program
+                .types
+                .vecs
+                .get(&v.0)
+                .map(|i| Ty::of(i.elem));
+            let Some(elem) = elem else {
+                fx.jump(differ);
+                let dead = fx.b.block();
+                fx.b.switch(dead);
+                return;
+            };
+            let ha = fx.load(Class::Ptr, a, 0);
+            let hb = fx.load(Class::Ptr, b, 0);
+            let done = fx.b.block();
+            let walk = fx.b.block();
+            let one = fx.cmp(Cmp::Eq, ha, hb);
+            fx.branch(one, done, walk);
+            fx.b.switch(walk);
+            let la = fx.load(Class::I64, ha, rt::SEQ_LEN);
+            let lb = fx.load(Class::I64, hb, rt::SEQ_LEN);
+            let same = fx.cmp(Cmp::Eq, la, lb);
+            next(fx, same, differ);
+            let da = fx.load(Class::Ptr, ha, rt::SEQ_DATA);
+            let db = fx.load(Class::Ptr, hb, rt::SEQ_DATA);
+            let stride = fx.size(elem);
+            let i = fx.b.var(Class::I64);
+            let zero = fx.iconst(0);
+            fx.set_var(i, zero);
+            let head = fx.b.block();
+            let body = fx.b.block();
+            fx.jump(head);
+            fx.b.switch(head);
+            let iv = fx.get_var(i);
+            let more = fx.cmp(Cmp::Lt, iv, la);
+            fx.branch(more, body, done);
+            fx.b.switch(body);
+            let iv = fx.get_var(i);
+            let k = fx.iconst(i64::from(stride));
+            let off = fx.bin(super::ir::BinOp::Mul, iv, k);
+            let x = fx.ptr_add(da, off);
+            let y = fx.ptr_add(db, off);
+            field_equal(fx, x, y, elem, differ);
+            let iv = fx.get_var(i);
+            let step = fx.add_imm(iv, 1);
+            fx.set_var(i, step);
+            fx.jump(head);
+            fx.b.switch(done);
+        }
         // No equality exists for a handle; the checker refuses the comparison.
         _ => {
             fx.jump(differ);
             let dead = fx.b.block();
             fx.b.switch(dead);
         }
+    }
+}
+
+/// Continue if the values of type `t` at `a` and `b` order equal; jump to `less` or `greater`
+/// if not (L6, `docs/spec.md`, *Ordering and hashing are derived*). A record's fields and an
+/// enum's variants are already laid out in the canonical order, by name, which is the derived
+/// order's: a walk of the layout is the walk the specification describes.
+fn order(fx: &mut Fx<'_, '_>, a: V, b: V, t: Ty, less: B, greater: B) {
+    let split = |fx: &mut Fx<'_, '_>, lt: V, gt_of: &dyn Fn(&mut Fx<'_, '_>) -> V| {
+        let not_less = fx.b.block();
+        fx.branch(lt, less, not_less);
+        fx.b.switch(not_less);
+        let gt = gt_of(fx);
+        let cont = fx.b.block();
+        fx.branch(gt, greater, cont);
+        fx.b.switch(cont);
+    };
+    match t {
+        Ty::Int | Ty::Bool => {
+            let x = fx.load(class(t), a, 0);
+            let y = fx.load(class(t), b, 0);
+            // `false` before `true`: unsigned, as a bit is.
+            let (l, g) = if t == Ty::Bool {
+                (Cmp::ULt, Cmp::UGt)
+            } else {
+                (Cmp::Lt, Cmp::Gt)
+            };
+            let lt = fx.cmp(l, x, y);
+            split(fx, lt, &|fx| fx.cmp(g, x, y));
+        }
+        Ty::Num(k) => {
+            let x = fx.load(class(t), a, 0);
+            let y = fx.load(class(t), b, 0);
+            let lt = fx.num_compare(mir::CmpOp::Lt, k, x, y);
+            split(fx, lt, &|fx| fx.num_compare(mir::CmpOp::Gt, k, x, y));
+        }
+        // By bytes: the common prefix, then the shorter first.
+        Ty::Str => {
+            let [pf, lf, _] = fx.lw.data.str_fields();
+            let la = fx.load(Class::I64, a, super::func::offset(lf));
+            let lb = fx.load(Class::I64, b, super::func::offset(lf));
+            let m = fx.b.var(Class::I64);
+            fx.set_var(m, la);
+            let shorter = fx.b.block();
+            let measured = fx.b.block();
+            let b_short = fx.cmp(Cmp::Lt, lb, la);
+            fx.branch(b_short, shorter, measured);
+            fx.b.switch(shorter);
+            fx.set_var(m, lb);
+            fx.jump(measured);
+            fx.b.switch(measured);
+            let n = fx.get_var(m);
+            let pa = fx.load(Class::Ptr, a, super::func::offset(pf));
+            let pb = fx.load(Class::Ptr, b, super::func::offset(pf));
+            let diff = fx.rt_v("memcmp", &[pa, pb, n], Class::I32);
+            let lt = fx.cmp_imm(Cmp::Lt, diff, Class::I32, 0);
+            split(fx, lt, &|fx| fx.cmp_imm(Cmp::Gt, diff, Class::I32, 0));
+            let lt = fx.cmp(Cmp::Lt, la, lb);
+            split(fx, lt, &|fx| fx.cmp(Cmp::Gt, la, lb));
+        }
+        Ty::Record(RecordTy(id)) => {
+            let Some(s) = fx.lw.lay.records.get(&id).cloned() else {
+                return;
+            };
+            for (off, ft) in s.offsets.iter().zip(&s.fields) {
+                let x = fx.ptr_off(a, i64::from(*off));
+                let y = fx.ptr_off(b, i64::from(*off));
+                field_order(fx, x, y, *ft, less, greater);
+            }
+        }
+        Ty::Enum(EnumTy(id)) => {
+            let Some(e) = fx.lw.lay.enums.get(&id).cloned() else {
+                return;
+            };
+            // The tag is the canonical position, by name.
+            let ta = fx.load(Class::I64, a, 0);
+            let tb = fx.load(Class::I64, b, 0);
+            let lt = fx.cmp(Cmp::Lt, ta, tb);
+            split(fx, lt, &|fx| fx.cmp(Cmp::Gt, ta, tb));
+            let tied = fx.b.block();
+            let mut cases = Vec::new();
+            let mut arms = Vec::new();
+            let carrying = e.variants.iter().enumerate();
+            for (tagno, v) in carrying.filter(|(_, v)| !v.fields.is_empty()) {
+                let blk = fx.b.block();
+                cases.push((i64::try_from(tagno).unwrap_or(0), blk));
+                arms.push((blk, v.clone()));
+            }
+            fx.b.term(Term::Switch {
+                value: ta,
+                cases,
+                default: tied,
+            });
+            for (blk, v) in arms {
+                fx.b.switch(blk);
+                for (off, ft) in v.offsets.iter().zip(&v.fields) {
+                    let x = fx.ptr_off(a, i64::from(crate::abi::PAYLOAD + *off));
+                    let y = fx.ptr_off(b, i64::from(crate::abi::PAYLOAD + *off));
+                    field_order(fx, x, y, *ft, less, greater);
+                }
+                fx.jump(tied);
+            }
+            fx.b.switch(tied);
+        }
+        // Nothing else orders; the checker refuses the comparison.
+        _ => {}
+    }
+}
+
+/// A 64-bit constant, by its bits.
+#[allow(clippy::cast_possible_wrap)]
+fn word_const(fx: &mut Fx<'_, '_>, x: u64) -> V {
+    fx.iconst(x as i64)
+}
+
+/// `hash_finish` (`nazm_sema::fnv::finish`), as instructions.
+fn finish(fx: &mut Fx<'_, '_>, x: V) -> V {
+    use super::ir::BinOp::{LShr, Mul, Xor};
+    let mut x = x;
+    for (shift, mul) in [(30, Some(fnv::MIX1)), (27, Some(fnv::MIX2)), (31, None)] {
+        let s = fx.iconst(shift);
+        let hi = fx.bin(LShr, x, s);
+        x = fx.bin(Xor, x, hi);
+        if let Some(m) = mul {
+            let m = word_const(fx, m);
+            x = fx.bin(Mul, x, m);
+        }
+    }
+    x
+}
+
+/// `hash_u64` (`nazm_sema::fnv::word`) of a 64-bit value, as instructions: eight bytes, least
+/// significant first, unrolled.
+fn word(fx: &mut Fx<'_, '_>, x: V) -> V {
+    use super::ir::BinOp::{And, LShr, Mul, Xor};
+    let mut h = word_const(fx, fnv::OFFSET);
+    let prime = word_const(fx, fnv::PRIME);
+    let byte = fx.iconst(255);
+    let eight = fx.iconst(8);
+    let mut w = x;
+    for _ in 0..8 {
+        let low = fx.bin(And, w, byte);
+        let mixed = fx.bin(Xor, h, low);
+        h = fx.bin(Mul, mixed, prime);
+        w = fx.bin(LShr, w, eight);
+    }
+    finish(fx, h)
+}
+
+/// `hash_combine` (`nazm_sema::fnv::combine`), as instructions.
+fn combine(fx: &mut Fx<'_, '_>, a: V, b: V) -> V {
+    use super::ir::BinOp::{Add, Mul};
+    let prime = word_const(fx, fnv::PRIME);
+    let m = fx.bin(Mul, a, prime);
+    let s = fx.bin(Add, m, b);
+    finish(fx, s)
+}
+
+/// The derived hash of the value of type `t` at `a` (L6, `docs/spec.md`, *Ordering and
+/// hashing are derived*): the library's hash of an integer's 64-bit pattern, a `Bool` as 0 or
+/// 1 and a `Str`'s bytes; a record from `hash_u64(0)` and an enum value from its variant's name,
+/// each component folded in with `hash_combine` in the canonical order — the layout's.
+fn hash(fx: &mut Fx<'_, '_>, a: V, t: Ty) -> V {
+    use super::ir::BinOp::{Mul, Xor};
+    match t {
+        Ty::Int => {
+            let x = fx.load(Class::I64, a, 0);
+            word(fx, x)
+        }
+        Ty::Bool => {
+            let x = fx.load(Class::Bit, a, 0);
+            let x = fx.ext(Class::I64, x, false);
+            word(fx, x)
+        }
+        Ty::Num(k) => {
+            let x = fx.load(class(t), a, 0);
+            let x = if class(t) == Class::I64 {
+                x
+            } else {
+                fx.ext(Class::I64, x, k.is_signed())
+            };
+            word(fx, x)
+        }
+        Ty::Str => {
+            let [pf, lf, _] = fx.lw.data.str_fields();
+            let n = fx.load(Class::I64, a, super::func::offset(lf));
+            let p = fx.load(Class::Ptr, a, super::func::offset(pf));
+            let h = fx.b.var(Class::I64);
+            let start = word_const(fx, fnv::OFFSET);
+            fx.set_var(h, start);
+            let i = fx.b.var(Class::I64);
+            let zero = fx.iconst(0);
+            fx.set_var(i, zero);
+            let head = fx.b.block();
+            let body = fx.b.block();
+            let done = fx.b.block();
+            fx.jump(head);
+            fx.b.switch(head);
+            let iv = fx.get_var(i);
+            let more = fx.cmp(Cmp::Lt, iv, n);
+            fx.branch(more, body, done);
+            fx.b.switch(body);
+            let iv = fx.get_var(i);
+            let at = fx.ptr_add(p, iv);
+            let b = fx.load(Class::I8, at, 0);
+            let b = fx.ext(Class::I64, b, false);
+            let hv = fx.get_var(h);
+            let mixed = fx.bin(Xor, hv, b);
+            let prime = word_const(fx, fnv::PRIME);
+            let next_h = fx.bin(Mul, mixed, prime);
+            fx.set_var(h, next_h);
+            let step = fx.add_imm(iv, 1);
+            fx.set_var(i, step);
+            fx.jump(head);
+            fx.b.switch(done);
+            let hv = fx.get_var(h);
+            finish(fx, hv)
+        }
+        Ty::Record(RecordTy(id)) => {
+            let mut h = word_const(fx, fnv::word(0));
+            let Some(s) = fx.lw.lay.records.get(&id).cloned() else {
+                return h;
+            };
+            for (off, ft) in s.offsets.iter().zip(&s.fields) {
+                let x = fx.ptr_off(a, i64::from(*off));
+                let fh = field_hash(fx, x, *ft);
+                h = combine(fx, h, fh);
+            }
+            h
+        }
+        Ty::Enum(EnumTy(id)) => {
+            let out = fx.b.var(Class::I64);
+            let zero = fx.iconst(0);
+            fx.set_var(out, zero);
+            let (Some(e), Some(info)) = (
+                fx.lw.lay.enums.get(&id).cloned(),
+                fx.lw.native.program.types.enums.get(&id).cloned(),
+            ) else {
+                return zero;
+            };
+            let tag = fx.load(Class::I64, a, 0);
+            let done = fx.b.block();
+            let mut cases = Vec::new();
+            let mut arms = Vec::new();
+            for (tagno, v) in e.variants.iter().enumerate() {
+                let name = info
+                    .canonical
+                    .get(tagno)
+                    .and_then(|d| info.variants.get(*d as usize))
+                    .map(|v| v.name.clone())
+                    .unwrap_or_default();
+                let blk = fx.b.block();
+                cases.push((i64::try_from(tagno).unwrap_or(0), blk));
+                arms.push((blk, v.clone(), name));
+            }
+            fx.b.term(Term::Switch {
+                value: tag,
+                cases,
+                default: done,
+            });
+            for (blk, v, name) in arms {
+                fx.b.switch(blk);
+                let mut h = word_const(fx, fnv::bytes(name.as_bytes()));
+                for (off, ft) in v.offsets.iter().zip(&v.fields) {
+                    let x = fx.ptr_off(a, i64::from(crate::abi::PAYLOAD + *off));
+                    let fh = field_hash(fx, x, *ft);
+                    h = combine(fx, h, fh);
+                }
+                fx.set_var(out, h);
+                fx.jump(done);
+            }
+            fx.b.switch(done);
+            fx.get_var(out)
+        }
+        // Nothing else hashes by derivation; the checker refuses it.
+        _ => fx.iconst(0),
+    }
+}
+
+/// A nested record or enum hashes through its own helper, so the recursion is in the
+/// generated program.
+fn field_hash(fx: &mut Fx<'_, '_>, x: V, t: Ty) -> V {
+    match t {
+        Ty::Record(_) | Ty::Enum(_) => {
+            let h = fx.lw.helper(Helper::Hash(t));
+            match fx.call(h, vec![x]) {
+                Some(v) => v,
+                None => fx.iconst(0),
+            }
+        }
+        _ => hash(fx, x, t),
+    }
+}
+
+/// A nested record or enum field orders through its own helper, so the recursion is in the
+/// generated program.
+fn field_order(fx: &mut Fx<'_, '_>, x: V, y: V, t: Ty, less: B, greater: B) {
+    match t {
+        Ty::Record(_) | Ty::Enum(_) => {
+            let h = fx.lw.helper(Helper::Order(t));
+            let r = match fx.call(h, vec![x, y]) {
+                Some(v) => v,
+                None => fx.iconst(0),
+            };
+            let not_less = fx.b.block();
+            let lt = fx.cmp_imm(Cmp::Lt, r, Class::I64, 0);
+            fx.branch(lt, less, not_less);
+            fx.b.switch(not_less);
+            let gt = fx.cmp_imm(Cmp::Gt, r, Class::I64, 0);
+            let cont = fx.b.block();
+            fx.branch(gt, greater, cont);
+            fx.b.switch(cont);
+        }
+        _ => order(fx, x, y, t, less, greater),
     }
 }
 

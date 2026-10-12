@@ -1,13 +1,45 @@
 //! Statements and expressions: what each Core IR form does when it runs.
 
 use super::arith::{
-    arith, as_bool, as_num, compare, from_num, index_outside, no_such_place, num_failure,
+    arith, as_bool, as_num, compare, derived_hash, from_num, index_outside, no_such_place,
+    num_failure,
 };
 use super::intrinsic::bytes_text_intrinsic;
 use super::value::{EnumVal, FuncVal, Rec, Str, Value};
 use super::*;
 
 impl Interpreter {
+    /// A derived `Hash`'s method (L6): `hash` is the type's walk, `same` its `==`. Out of line,
+    /// so the evaluator's frame — which every nested call pays for — does not grow by it.
+    #[inline(never)]
+    fn derived_hash_call(
+        &self,
+        method: u32,
+        values: &[Value],
+        at: Span,
+    ) -> Result<Flow, RuntimeError> {
+        let answer = match (self.core.derived_hash, values) {
+            (Some(d), [v]) if method == d.hash => derived_hash(v, &self.core.orders).map(|h| {
+                Value::Num(nazm_sema::numeric::NumVal::wrapped(
+                    nazm_sema::NumKind::U64,
+                    h,
+                ))
+            }),
+            (Some(d), [a, b]) if method == d.same => {
+                compare(cir::CmpOp::Eq, a, b, at, &self.core.orders).ok()
+            }
+            _ => None,
+        };
+        match answer {
+            Some(v) => Ok(Flow::Fell(Some(v))),
+            None => Err(fail(
+                codes::COMPILER_DEFECT,
+                at,
+                "a derived hash of a value that has none",
+            )),
+        }
+    }
+
     /// `match`, in either position.
     ///
     /// The scrutinee is evaluated **once**, into a value this expression owns, and the arm
@@ -383,7 +415,7 @@ impl Interpreter {
             ExprKind::Compare { op, lhs, rhs, .. } => {
                 let l = take!(self, f, lhs, env);
                 let r = take!(self, f, rhs, env);
-                compare(*op, &l, &r, e.at)?
+                compare(*op, &l, &r, e.at, &self.core.orders)?
             }
 
             // Gate 2's numeric forms, through the shared semantics.
@@ -595,6 +627,15 @@ impl Interpreter {
                         .first()
                         .and_then(Value::runtime_type)
                         .and_then(|t| self.core.method_fn(*trait_id, t, *method));
+                    // A derived `Hash` (L6): no impl, so the type's own walk.
+                    if callee.is_none()
+                        && self
+                            .core
+                            .derived_hash
+                            .is_some_and(|d| d.trait_id == *trait_id)
+                    {
+                        return self.derived_hash_call(*method, &values, e.at);
+                    }
                     match callee {
                         Some(c) => target = Ok(c),
                         None => {

@@ -636,7 +636,14 @@ impl Verifier<'_> {
                 if args.first().and_then(|r| r.ty) != Some(*self_ty) {
                     self.bad("a trait call whose receiver is not of its `Self` type");
                 }
-                if !matches!(self_ty, Type::Param(_)) {
+                // On a concrete type it is an ordinary call — unless that type's `Hash` is
+                // derived (L6), which has no function to call.
+                if !matches!(self_ty, Type::Param(_))
+                    && !self
+                        .res
+                        .traits()
+                        .derives(*trait_id, *self_ty, self.res.types())
+                {
                     self.bad("a trait call on a concrete type, which is an ordinary call");
                 }
             }

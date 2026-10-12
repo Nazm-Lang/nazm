@@ -30,6 +30,43 @@ pub struct Program {
     /// Every static of the program (Gate 3), as the checker recorded them: storage each
     /// module's unit defines.
     pub statics: Vec<nazm_sema::StaticDef>,
+    /// The canonical order of every record's fields and every enum's variants and payloads
+    /// (L6): what a derived order and a derived hash walk, so that reordering a declaration —
+    /// an edit the language says means nothing — changes no comparison and no hash.
+    pub orders: Orders,
+    /// `@std/hash`'s `Hash`, when the program has it (L6): a call through it whose receiver's
+    /// type has no impl is that type's derived hash or `same`.
+    pub derived_hash: Option<DerivedHash>,
+}
+
+/// The derivable trait (L6) and the positions of its two methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DerivedHash {
+    pub trait_id: TraitId,
+    /// `hash(self) -> UInt64`.
+    pub hash: u32,
+    /// `same(self, other) -> Bool`, which a derived type answers with `==`.
+    pub same: u32,
+}
+
+/// Canonical orders (L6), by definition index: declaration indices sorted by name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Orders {
+    /// By [`nazm_sema::RecordId`] index: the record's fields.
+    pub records: Vec<Vec<u32>>,
+    /// By [`nazm_sema::EnumId`] index.
+    pub enums: Vec<EnumOrder>,
+}
+
+/// One enum's canonical orders (L6).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnumOrder {
+    /// Its variants, as declaration indices sorted by name.
+    pub variants: Vec<u32>,
+    /// By declaration index: that variant's payload fields, sorted by name.
+    pub payloads: Vec<Vec<u32>>,
+    /// By declaration index: that variant's name, which a derived hash starts from.
+    pub names: Vec<String>,
 }
 
 /// One impl, as Core IR resolves calls through a bound against it.
@@ -717,7 +754,8 @@ pub enum Law {
     /// `Str`: equal bytes, whatever backs them.
     Bytes,
     /// A record's or enum's derived equality: field by field, or the active variant and its
-    /// payload.
+    /// payload. For an ordering (L6), its derived order: fields, and variants, in the byte
+    /// order of their names.
     Structural,
     /// A type parameter that requires equality: its instance's law.
     Parametric,
@@ -734,12 +772,16 @@ impl Law {
         match (op.is_ordering(), operand) {
             (_, Type::Int) => Some(Self::Int),
             (_, Type::Num(_)) => Some(Self::Num),
+            // Ordering is derived for `Bool`, `Str` and records and enums too (L6).
+            (_, Type::Bool) => Some(Self::Bool),
+            (_, Type::Str) => Some(Self::Bytes),
+            (_, Type::Record(_) | Type::Enum(_)) => Some(Self::Structural),
             (true, _) => None,
             // An array compares element by element, by its element's law (Gate 2).
             (false, Type::Array(_)) => Some(Self::Structural),
-            (false, Type::Bool) => Some(Self::Bool),
-            (false, Type::Str | Type::Text) => Some(Self::Bytes),
-            (false, Type::Record(_) | Type::Enum(_)) => Some(Self::Structural),
+            (false, Type::Text) => Some(Self::Bytes),
+            // A `Box` or `List` compares by what it holds (L6).
+            (false, Type::Box(_) | Type::List(_)) => Some(Self::Structural),
             (false, Type::Param(_)) => Some(Self::Parametric),
             (
                 false,
@@ -748,8 +790,6 @@ impl Law {
                 | Type::Chan
                 | Type::ChanOf(_)
                 | Type::Vec(_)
-                | Type::Box(_)
-                | Type::List(_)
                 | Type::Bytes
                 | Type::Cap(_)
                 | Type::OsHandle

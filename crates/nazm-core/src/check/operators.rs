@@ -23,9 +23,12 @@ impl Checker<'_> {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
                 lt == rt && lt.num().is_some()
             }
-            // Ordering is numeric only: comparing strings needs a collation decision, and
-            // ordering booleans is almost always a mistake.
-            BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => lt == rt && lt.num().is_some(),
+            // Ordering is derived (L6): numbers, `Bool`, `Str` by its bytes, and records, enums
+            // and tuples of ordered components, by the names of their fields and variants
+            // (`docs/spec.md`, *Ordering and hashing are derived*).
+            BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                lt == rt && self.res.types().ordering(lt).is_ok()
+            }
             // The bit operators (Gate 2): two integers of one type, or for a shift an integer
             // and an `Int` amount.
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => lt == rt && lt.is_integer(),
@@ -60,17 +63,25 @@ impl Checker<'_> {
             // only that.
             let blocked = match op {
                 BinOp::Eq | BinOp::NotEq if lt == rt => self.res.types().equality(lt).err(),
+                BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq if lt == rt => {
+                    self.res.types().ordering(lt).err()
+                }
                 _ => None,
+            };
+            let property = if op.is_equality() {
+                "equality"
+            } else {
+                "order"
             };
             // A type parameter without a requirement is the one blocker the author can lift
             // where they stand, by declaring it (N14); say so, naming the parameter.
             let unrequired = blocked.as_ref().and_then(|w| match w.ty {
-                Type::Param(_) => Some(self.show(w.ty)),
+                Type::Param(_) if op.is_equality() => Some(self.show(w.ty)),
                 _ => None,
             });
             let detail = if let Some(why) = blocked.filter(|w| !w.path.is_empty()) {
                 format!(
-                    "`{}` does not apply to `{slt}`: its `{}` is a `{}`, which has no equality",
+                    "`{}` does not apply to `{slt}`: its `{}` is a `{}`, which has no {property}",
                     op.symbol(),
                     why.path.join("."),
                     self.show(why.ty)
