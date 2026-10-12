@@ -8314,10 +8314,11 @@ Repointed by R1a a seventh time, which moved it to 58 for raw strings: an entry 
 Repointed by R1a an eighth time, which moved it to 59 for interpolation: an entry that refused `f\"{x}\"` must not be reused.
 Repointed by R1b, which moved it to 60 for `Cell[T]`: an entry that refused `cell_new` must not be reused.
 Repointed by R1b again, which moved it to 61 for L10: an entry that refused a closure in a generic function must not be reused.
-Repointed by R1b a third time, which moved it to 62 for L11: an entry that refused a trait default body must not be reused."""
+Repointed by R1b a third time, which moved it to 62 for L11: an entry that refused a trait default body must not be reused.
+Repointed by R1b a fourth time, which moved it to 63 for L11b: an entry that refused an impl of a generic type must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 62;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 61;"
+find = "pub const SEMANTIC_EPOCH: u32 = 63;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 62;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -12461,13 +12462,9 @@ killers = [{ package = "nazm-cli", test = "traits", name = "a_method_no_trait_in
 [[mutation]]
 name = "n78-an-impl-is-used-from-anywhere"
 why = "an impl in a module the caller does not import resolves its calls, so a cached check depends on a module outside its key"
-file = "crates/nazm-core/src/check/call.rs"
-find = """
-                .is_some_and(|d| self.impl_modules.contains(&d.module));
-            if in_scope && usable {"""
-replace = """
-                .is_some();
-            if in_scope && usable {"""
+file = "crates/nazm-core/src/check/generic.rs"
+find = "            return self.impl_modules.contains(&d.module)"
+replace = "            return true"
 killers = [{ package = "nazm-cli", test = "traits", name = "an_impl_out_of_scope_is_not_a_candidate_even_when_another_trait_has_the_method" }]
 
 [[mutation]]
@@ -16559,7 +16556,7 @@ killers = [{ package = "nazm-cli", test = "order_hash", name = "derived_hashes_f
 name = "r1a-a-written-impl-is-derived-over"
 why = "a record holding a type with its own `Hash` derives one anyway, and its `same` silently becomes `==`"
 file = "crates/nazm-sema/src/traits.rs"
-find = "                .hashing(ty, |c| self.find(trait_id, c).is_some())"
+find = "                .hashing(ty, |c| self.applying(trait_id, c, types).is_some())"
 replace = "                .hashing(ty, |_| false)"
 killers = [{ package = "nazm-cli", test = "order_hash", name = "what_has_no_order_or_derived_hash_and_by_which_code" }]
 
@@ -16931,22 +16928,18 @@ killers = [{ package = "nazm-cli", test = "default_methods", name = "a_default_b
 
 [[mutation]]
 name = "r1b-a-bound-call-to-a-default-takes-no-type"
-why = "a call through a bound that reaches a default body is lowered with no type argument for the instance's type"
-file = "crates/nazm-mir/src/lower.rs"
-find = '''
-                        type_args: if defaulted {
-                            vec![concrete]'''
-replace = '''
-                        type_args: if false {
-                            vec![concrete]'''
+why = "a call that reaches a default body — through a bound, or direct — passes no type argument for the receiver's type"
+file = "crates/nazm-sema/src/resolve.rs"
+find = "            None => self.default_method(trait_id, method).map(|d| (d, vec![ty])),"
+replace = "            None => self.default_method(trait_id, method).map(|d| (d, Vec::new())),"
 killers = [{ package = "nazm-cli", test = "default_methods", name = "a_default_body_means_the_same_everywhere_and_is_reclaimed" }]
 
 [[mutation]]
 name = "r1b-no-default-instance-is-planned"
 why = "the default bodies an impl relies on are not planned at its type, so a call through a bound reaches no instance"
 file = "crates/nazm-mir/src/instance.rs"
-find = "            let Some((d, true)) = res.method_target(trait_id, ty, u32::try_from(m).unwrap_or(0))"
-replace = "            let Some((d, true)) = None::<(FnId, bool)>"
+find = "            let Some((d, args)) = res.method_target(trait_id, ty, u32::try_from(m).unwrap_or(0))"
+replace = "            let Some((d, args)) = None::<(FnId, Vec<Type>)>"
 killers = [{ package = "nazm-cli", test = "default_methods", name = "a_default_body_means_the_same_everywhere_and_is_reclaimed" }]
 
 [[mutation]]
@@ -16972,3 +16965,61 @@ file = "crates/nazm-syntax/src/parser.rs"
 find = "                        effects: Some(m.effects.clone().unwrap_or(crate::ast::EffectDecl {"
 replace = "                        effects: m.effects.clone().and(Some(crate::ast::EffectDecl {"
 killers = [{ package = "nazm-cli", test = "default_methods", name = "a_default_body_is_checked_once_and_held_to_its_signature" }]
+
+# --- R1b L11b: impls of generic types (`docs/spec.md`, *Traits and methods*, **Impls of generic types**) ---
+
+[[mutation]]
+name = "r1b-an-instance-finds-no-generic-impl"
+why = "an instance of a generic type does not fall back to its definition's impl, so `Pair[Int, Str]` has no `show`"
+file = "crates/nazm-sema/src/traits.rs"
+find = "        self.find(trait_id, template).map(|i| (i, args))"
+replace = "        None::<ImplId>.map(|i| (i, args))"
+killers = [{ package = "nazm-cli", test = "generic_impls", name = "an_impl_of_a_generic_type_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-a-generic-impls-requirement-is-not-checked"
+why = "an impl of a generic type applies to an instance whose argument does not meet its parameter's requirement"
+file = "crates/nazm-core/src/check/generic.rs"
+find = "                        self.satisfies_within(*t, *a, depth + 1)"
+replace = "                        true || self.satisfies_within(*t, *a, depth + 1)"
+killers = [{ package = "nazm-cli", test = "generic_impls", name = "a_generic_impl_is_for_the_type_applied_to_its_parameters_and_holds_its_requirements" }]
+
+[[mutation]]
+name = "r1b-a-generic-impl-header-takes-any-arguments"
+why = "an impl header's arguments are not held to the impl's parameters in order, so `P[B, A]` is filed as `P`"
+file = "crates/nazm-core/src/check/traits.rs"
+find = "            a.qualifier.is_none() && a.args.is_none() && a.function.is_none() && a.name == p.name"
+replace = "            a.qualifier.is_none() && a.args.is_none() && a.function.is_none()"
+killers = [{ package = "nazm-cli", test = "generic_impls", name = "a_generic_impl_is_for_the_type_applied_to_its_parameters_and_holds_its_requirements" }]
+
+[[mutation]]
+name = "r1b-a-generic-impls-self-is-the-definition"
+why = "inside an impl of a generic record, `Self` is the bare definition rather than it applied to the method's parameters"
+file = "crates/nazm-core/src/check/unit.rs"
+find = "                    Some(n) if n > 0 => res.types_mut().apply_record(r, own(n)),"
+replace = "                    Some(n) if n > 99 => res.types_mut().apply_record(r, own(n)),"
+killers = [{ package = "nazm-cli", test = "generic_impls", name = "an_impl_of_a_generic_type_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-the-interpreter-finds-no-generic-impl"
+why = "Core IR's impl table does not fall back from an instance to its definition, so the interpreter finds no impl"
+file = "crates/nazm-cir/src/ir.rs"
+find = "            .or_else(template)"
+replace = "            .or_else(|| template().filter(|_| false))"
+killers = [{ package = "nazm-cli", test = "generic_impls", name = "an_impl_of_a_generic_type_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-a-bound-call-at-an-instance-is-not-planned"
+why = "a call through a bound that reaches an impl of a generic type, or a default, at an instance is not planned"
+file = "crates/nazm-mir/src/instance.rs"
+find = "                    if !next.args.is_empty() && !seen.contains_key(&next) {"
+replace = "                    if false && !seen.contains_key(&next) {"
+killers = [{ package = "nazm-cli", test = "generic_impls", name = "an_impl_of_a_generic_type_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-a-generic-definitions-module-may-not-implement"
+why = "the orphan rule no longer lets a generic definition's module hold its impl"
+file = "crates/nazm-core/src/check/traits.rs"
+find = "        template_home(res, ty)"
+replace = "        None"
+killers = [{ package = "nazm-cli", test = "generic_impls", name = "an_impl_of_a_generic_type_crosses_modules" }]

@@ -74,11 +74,13 @@ trait_item = [ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}" ;
 (* @example trait Size { fn size(self: Self) -> Int; fn big(self: Self) -> Bool { self.size() > 9 } } fn main() -> Int { 0 } *)
 trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ( ";" | block ) ;
 
-(* `impl Trait for Type`: every method of the trait, once, with `Self` written as the type.
- * `for` is a word here and nowhere else. At most one impl of a trait for a type, in the
- * trait's module or the type's. *)
+(* `impl Trait for Type`: every method of the trait without a default body, once, with
+ * `Self` written as the type. `for` is a word here and nowhere else. At most one impl of a
+ * trait for a type, in the trait's module or the type's. Since R1b, `impl[T…] Trait for
+ * D[T…]` implements it for every instance of a generic record or enum. *)
 (* @example trait Size { fn size(self: Self) -> Int; } struct P { x: Int, } impl Size for P { fn size(self: P) -> Int { 1 } } fn main() -> Int { 0 } *)
-impl_item = "impl" , type , IDENT , type , "{" , { function } , "}" ;
+(* @example trait Size { fn size(self: Self) -> Int; } struct W[T] { v: T, } impl[T] Size for W[T] { fn size(self: W[T]) -> Int { 1 } } fn main() -> Int { 0 } *)
+impl_item = "impl" , [ type_parameters ] , type , IDENT , type , "{" , { function } , "}" ;
 
 (* @example use "lib/helpers.nz"; fn main() -> Int { 0 } *)
 (* `as NAME` imports the module under a name (N49): its exports are written `NAME::item`

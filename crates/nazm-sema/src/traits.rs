@@ -101,8 +101,19 @@ pub struct ImplDef {
     /// The `impl` keyword.
     pub impl_span: Span,
     /// The function for each trait method, by the trait's method order; `None` where the
-    /// impl did not define one, which checking has refused.
+    /// impl did not define one — a default body's (L11a), or refused.
     pub methods: Vec<Option<FnId>>,
+    /// What each of an impl of a generic type's parameters requires (R1b, L11b), by position;
+    /// empty for an impl of a type that is not generic. The impl applies to an instance only
+    /// where its arguments meet these.
+    pub requires: Vec<Option<Require>>,
+}
+
+/// What a type parameter of an impl requires of its argument (R1b, L11b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Require {
+    Equality,
+    Trait(TraitId),
 }
 
 /// A method call resolved through a trait, where the receiver's type is a type parameter
@@ -157,10 +168,37 @@ impl Traits {
     #[must_use]
     pub fn derives(&self, trait_id: TraitId, ty: Type, types: &crate::UserTypes) -> bool {
         self.derived_hash == Some(trait_id)
-            && self.find(trait_id, ty).is_none()
+            && self.applying(trait_id, ty, types).is_none()
             && types
-                .hashing(ty, |c| self.find(trait_id, c).is_some())
+                .hashing(ty, |c| self.applying(trait_id, c, types).is_some())
                 .is_ok()
+    }
+
+    /// The impl of `trait_id` that applies to `ty`, with the type arguments its methods take
+    /// (R1b, L11b): the impl for exactly `ty`, with none; or the impl for the generic definition
+    /// `ty` is an instance of, with `ty`'s arguments.
+    #[must_use]
+    pub fn applying(
+        &self,
+        trait_id: TraitId,
+        ty: Type,
+        types: &crate::UserTypes,
+    ) -> Option<(ImplId, Vec<Type>)> {
+        if let Some(i) = self.find(trait_id, ty) {
+            return Some((i, Vec::new()));
+        }
+        let (template, args) = match ty {
+            Type::Record(id) => {
+                let inst = types.records().get(id)?.instance.as_ref()?;
+                (Type::Record(inst.template), inst.args.clone())
+            }
+            Type::Enum(id) => {
+                let inst = types.enums().get(id)?.instance.as_ref()?;
+                (Type::Enum(inst.template), inst.args.clone())
+            }
+            _ => return None,
+        };
+        self.find(trait_id, template).map(|i| (i, args))
     }
 
     pub fn declare(&mut self, def: TraitDef) -> TraitId {
