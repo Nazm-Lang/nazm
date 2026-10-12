@@ -158,7 +158,7 @@
       "required": ["code", "severity", "start", "end", "fixes"],
       "properties": {
         "code": { "type": "string", "pattern": "^N[0-9]{4}$" },
-        "severity": { "enum": ["error"] },
+        "severity": { "enum": ["error", "warning"] },
         "start": { "type": "integer", "minimum": 0 },
         "end": { "type": "integer", "minimum": 0 },
         "fixes": { "type": "integer", "minimum": 0, "description": "How many fixes the compiler attached." }

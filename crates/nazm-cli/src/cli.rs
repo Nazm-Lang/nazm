@@ -259,6 +259,10 @@ pub(crate) enum Command {
         /// its verdict and its witnesses.
         #[arg(long)]
         profile_report: bool,
+        /// Refuse a program the checker warns of (R1b, L15), as though each warning were an
+        /// error: for a build that must stay free of them.
+        #[arg(long)]
+        deny_warnings: bool,
     },
     /// Apply the repairs the compiler already knows about.
     ///
@@ -855,6 +859,9 @@ pub(crate) enum Command {
         /// thread or 256 KiB in the pool, and `NAZM_TASK_STACK` still overrides the pool's.
         #[arg(long, value_name = "BYTES", value_parser = stack_size)]
         stack_size: Option<u64>,
+        /// Refuse a program the checker warns of (R1b, L15), as `nazm check --deny-warnings`.
+        #[arg(long)]
+        deny_warnings: bool,
         /// A board's manifest (Gate 3, `docs/spec.md`, *Boards*): load address, stack, UART, how
         /// the machine stops, a heap. A board's target only; without it, the target's built-in
         /// board, which `nazm inspect` prints as a manifest.

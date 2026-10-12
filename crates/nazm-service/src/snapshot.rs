@@ -405,6 +405,7 @@ impl Manifest {
                 d.code.to_string(),
                 match d.severity {
                     nazm_diag::Severity::Error => "error",
+                    nazm_diag::Severity::Warning => "warning",
                 },
                 p.start - decl.start,
                 p.end - decl.start,

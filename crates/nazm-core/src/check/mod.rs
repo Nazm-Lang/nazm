@@ -727,9 +727,16 @@ pub fn check_reusing(
             .filter_map(|d| interfaces.get(d.on.index()))
             .collect();
         let before = errors.len();
+        let warned = res.warnings().len();
         check_unit(u, &deps, &mut res, &mut errors);
         let facts = crate::provenance::facts(&u.functions, u.module, &res);
-        if !unparsed && errors.len() == before && declared_cleanly.get(n) == Some(&true) {
+        // A module that warns is not kept as checked (L15): reusing its answer would drop its
+        // warnings from every later run, so it is checked again each time.
+        if !unparsed
+            && errors.len() == before
+            && res.warnings().len() == warned
+            && declared_cleanly.get(n) == Some(&true)
+        {
             reuse.checked_clean(u.module, &facts, &res);
         }
         all_facts.push((u.module, Some(facts)));
