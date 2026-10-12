@@ -62,7 +62,9 @@ pub mod udt;
 pub use capability::{CapabilityKind, CapabilitySet};
 pub use effect::{Effect, EffectReason, EffectSet, EffectSource};
 pub use enums::{EnumDef, EnumId, Enums, VariantDef};
-pub use interface::{reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility};
+pub use interface::{
+    reachable_types, ConstExport, EnumExport, Export, RecordExport, UnitInterface, Visibility,
+};
 pub use intrinsic::{Intrinsic, NumClass, Shape};
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{BuildConfig, Dependency, ModuleGraph, ModuleId, ReexportItem, ReexportSpec};

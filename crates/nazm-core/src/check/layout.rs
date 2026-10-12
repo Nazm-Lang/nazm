@@ -290,16 +290,23 @@ pub(super) fn array_refusal(res: &Resolution, t: Type, at: Span) -> Option<Diagn
             Diagnostic::error(
                 codes::ARRAY_ELEMENT,
                 at,
-                format!(
-                    "an array holds plain data, and `{}` holds a `{}`",
-                    res.types().show(elem),
-                    res.types().show(owner)
-                ),
+                if owner == elem {
+                    format!(
+                        "an array holds values, and `{}` is a handle",
+                        res.types().show(elem)
+                    )
+                } else {
+                    format!(
+                        "an array holds values, and `{}` holds a `{}`",
+                        res.types().show(elem),
+                        res.types().show(owner)
+                    )
+                },
             )
             .help(
-                "an array's elements are numbers, `Bool`s, and records, enums and arrays of \
-                 them — values that own nothing and are copied by their bytes; a collection \
-                 of strings or handles is a `Vec`",
+                "an array's elements are numbers, `Bool`s, strings, and records, enums and \
+                 arrays of them — values, copied with the strings they hold; a collection of \
+                 handles is a `Vec`",
             ),
         ),
         nazm_sema::ArrayProblem::TooLarge(bytes) => Some(

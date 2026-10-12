@@ -944,21 +944,7 @@ impl<'a> Lower<'a> {
                 let Some(value) = self.res.const_use(*span).cloned() else {
                     return defect(*span, "a constant the checker did not compute");
                 };
-                let ty = value.ty();
-                let c = match value {
-                    nazm_sema::numeric::ConstValue::Num(n) if n.kind == NumKind::I64 =>
-                    {
-                        #[allow(clippy::cast_possible_wrap)]
-                        Const::Int(n.bits as i64)
-                    }
-                    nazm_sema::numeric::ConstValue::Num(n) => Const::Num {
-                        kind: n.kind,
-                        bits: n.bits,
-                    },
-                    nazm_sema::numeric::ConstValue::Bool(b) => Const::Bool(b),
-                    nazm_sema::numeric::ConstValue::Str(s) => Const::Str(s),
-                };
-                node(ExprKind::Const(self.constant(c)), Some(ty), *span)
+                self.const_value(&value, *span)?
             }
             // A named function as a value (N50): the checker recorded which, and its type.
             AstExpr::Var { span, .. } if self.res.var(*span).is_none() => {
@@ -2543,6 +2529,75 @@ impl<'a> Lower<'a> {
                 })
             }
         }
+    }
+
+    /// A constant's value (Gate 2), written where it is used: a scalar as a literal, and a
+    /// record, enum value, tuple or array (L8) as its construction, built here, of literals.
+    fn const_value(&mut self, value: &nazm_sema::numeric::ConstValue, at: Span) -> Lowered<Expr> {
+        use nazm_sema::numeric::ConstValue as V;
+        let ty = value.ty();
+        let inits = |this: &mut Self, fields: &[V]| -> Lowered<Vec<Init>> {
+            fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    Ok(Init {
+                        field: u32::try_from(i).unwrap_or(u32::MAX),
+                        at,
+                        value: this.const_value(f, at)?,
+                    })
+                })
+                .collect()
+        };
+        let kind = match value {
+            V::Num(n) if n.kind == NumKind::I64 =>
+            {
+                #[allow(clippy::cast_possible_wrap)]
+                ExprKind::Const(self.constant(Const::Int(n.bits as i64)))
+            }
+            V::Num(n) => ExprKind::Const(self.constant(Const::Num {
+                kind: n.kind,
+                bits: n.bits,
+            })),
+            V::Bool(b) => ExprKind::Const(self.constant(Const::Bool(*b))),
+            V::Str(s) => ExprKind::Const(self.constant(Const::Str(s.clone()))),
+            V::Record { ty, fields } => {
+                let Type::Record(record) = *ty else {
+                    return defect(at, "a record constant of another type");
+                };
+                ExprKind::Record {
+                    record,
+                    arity: u32::try_from(fields.len()).unwrap_or(u32::MAX),
+                    fields: inits(self, fields)?,
+                }
+            }
+            V::Variant {
+                ty,
+                variant,
+                fields,
+            } => {
+                let Type::Enum(enumeration) = *ty else {
+                    return defect(at, "an enum constant of another type");
+                };
+                ExprKind::Variant {
+                    enumeration,
+                    variant: *variant,
+                    arity: u32::try_from(fields.len()).unwrap_or(u32::MAX),
+                    fields: inits(self, fields)?,
+                }
+            }
+            V::Array { elems, .. } => ExprKind::Array {
+                elems: elems
+                    .iter()
+                    .map(|e| self.const_value(e, at))
+                    .collect::<Lowered<Vec<_>>>()?,
+            },
+        };
+        Ok(Expr {
+            kind,
+            ty: Some(ty),
+            at,
+        })
     }
 
     /// Element `i` of the tuple `v` (L5): a projection of its record.

@@ -24,6 +24,11 @@ found only by reading all of it.
 - Patterns (R1a, EXPERIMENTAL until R1 closes): no guards, range, record or `@` patterns, no `..`
   in a payload; a `_` that covers enum variants draws no warning until L15 adds a warning
   severity; the compiler written in Nazm parses only the plain variant pattern until R2.
+- Constant tables (R1a, EXPERIMENTAL until R1 closes): every use of an aggregate constant builds
+  it where it is used, so indexing a large table in a loop builds the table each time — a
+  read-only table in the binary is an optimisation not yet made; an imported constant is not an
+  array's length in a type declaration (field types are resolved before imports' constants are
+  known); a constant's parts are not calls, so a table of function values is not a constant.
 - Derived ordering and hashing (R1a, EXPERIMENTAL until R1 closes): no `T: Ordered` requirement on
   a type parameter until `@std/ordmap` (S3); no customised `<`; inside a generic body `Pair[T]` does
   not derive `Hash`, only a concrete type does; a record holding a type with a written `Hash` impl

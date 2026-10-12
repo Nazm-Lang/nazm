@@ -554,6 +554,8 @@ impl Reuse for CheckEverything {
 /// in [`declare_unit`] and [`check_unit`], which are the same functions a single unit is
 /// checked with. There is no second path that resolves names differently for the
 /// whole-program case.
+///
+/// (A module's position among `units` is its id's index.)
 #[must_use]
 pub fn check(program: &Program, graph: &ModuleGraph) -> (Resolution, Vec<Diagnostic>) {
     check_reusing(program, graph, &mut CheckEverything, &[])
@@ -695,6 +697,12 @@ pub fn check_reusing(
         }
     }
     errors.extend(refused);
+    // Stage 1b (L8): every module's constants, in dependency order.
+    for n in unit::declare_all_consts(&units, &mut interfaces, &mut res, &mut errors) {
+        if let Some(c) = declared_cleanly.get_mut(n) {
+            *c = false;
+        }
+    }
     // The arrays the signatures wrote (Gate 2).
     validate_new_arrays(&mut res, &mut errors);
 

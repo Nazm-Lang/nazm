@@ -7862,10 +7862,11 @@ Repointed by N42, whose `/7` adds foreign exports: the rule is the same, one ver
 Repointed by N78, whose `/8` adds traits and impls: a `/7` file must not be read as an `/8` one.
 Repointed by N85, whose `/9` adds C structs and handles: an `/8` file must not be read as a `/9` one.
 Repointed by N87, whose `/10` adds preconditions: a `/9` file must not be read as a `/10` one.
-Repointed by N103, whose `/11` adds re-exports: a `/10` file must not be read as an `/11` one."""
+Repointed by N103, whose `/11` adds re-exports: a `/10` file must not be read as an `/11` one.
+Repointed by R1a (L8), whose `/12` adds exported constants: an `/11` file must not be read as a `/12` one."""
 file = "crates/nazm-iface/src/wire.rs"
-find = """pub const SCHEMA: &str = "nazm.interface/11";"""
-replace = """pub const SCHEMA: &str = "nazm.interface/10";"""
+find = """pub const SCHEMA: &str = "nazm.interface/12";"""
+replace = """pub const SCHEMA: &str = "nazm.interface/11";"""
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
 
 # `n36-the-epoch-stays` is retired: N37 moved the epoch to 9, and the rule it pinned — the epoch
@@ -8307,10 +8308,11 @@ Repointed by R1a, which moved it to 52 for `for` loops: an entry that refused `f
 Repointed by R1a again, which moved it to 53 for `Box` and `List`: an entry that refused a type reaching itself through one must not be reused.
 Repointed by R1a a third time, which moved it to 54 for patterns: an entry that refused a `_` arm must not be reused.
 Repointed by R1a a fourth time, which moved it to 55 for tuples: an entry that refused `(1, 2)` must not be reused.
-Repointed by R1a a fifth time, which moved it to 56 for derived ordering: an entry that refused `"a" < "b"` must not be reused."""
+Repointed by R1a a fifth time, which moved it to 56 for derived ordering: an entry that refused `"a" < "b"` must not be reused.
+Repointed by R1a a sixth time, which moved it to 57 for constant tables: an entry that refused `[\"a\"; 2]` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 56;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 55;"
+find = "pub const SEMANTIC_EPOCH: u32 = 57;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 56;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -12533,11 +12535,13 @@ find = """
             traits,
             impls,
             reexported_types,
+            consts,
         })"""
 replace = """
             traits,
             impls: { let _ = impls; Vec::new() },
             reexported_types,
+            consts,
         })"""
 killers = [{ package = "nazm-cli", test = "traits", name = "the_interface_carries_exported_traits_impls_and_bounds" }]
 
@@ -14306,10 +14310,11 @@ killers = [{ package = "nazm-cli", test = "arrays", name = "an_array_is_a_value_
 
 [[mutation]]
 name = "g2-an-array-may-own-something"
-why = "an array of strings or of records holding a `Vec` checks, so a copy by bytes would share what it owns"
+why = """an array of records holding a `Vec` checks, so a copy by bytes would share what it owns
+Repointed by R1a (L8), which admits strings: the rule is now that no element holds a handle."""
 file = "crates/nazm-sema/src/udt.rs"
-find = "        if let Some(owner) = self.not_plain(elem) {"
-replace = "        if let Some(owner) = self.not_plain(elem).filter(|_| false) {"
+find = "        if let Some(owner) = self.not_value(elem, true) {"
+replace = "        if let Some(owner) = self.not_value(elem, true).filter(|_| false) {"
 killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]
 
 [[mutation]]
@@ -14330,9 +14335,10 @@ killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_m
 
 [[mutation]]
 name = "g2-a-public-constant-is-accepted"
-why = "`pub const` checks, though a module's persisted interface carries no value, so a cold and a cached build could disagree"
+why = """`pub static` checks, though a static is its module's storage and an importer would read a copy
+Repointed by R1a (L8), which exports constants by their values: the refusal is a static's now."""
 file = "crates/nazm-core/src/constants.rs"
-find = "        if let Some(p) = c.pub_span {"
+find = "        if let Some(p) = c.pub_span.filter(|_| c.is_static) {"
 replace = "        if let Some(p) = c.pub_span.filter(|_| false) {"
 killers = [{ package = "nazm-cli", test = "arrays", name = "array_and_constant_misuse_is_refused_before_anything_runs" }]
 
@@ -16572,3 +16578,83 @@ file = "crates/nazm-sema/src/traits.rs"
 find = "                .hashing(ty, |c| self.find(trait_id, c).is_some())"
 replace = "                .hashing(ty, |_| false)"
 killers = [{ package = "nazm-cli", test = "order_hash", name = "what_has_no_order_or_derived_hash_and_by_which_code" }]
+
+# --- R1a: constant tables and exported constants (docs/spec.md, *Constant tables …*) ---
+
+[[mutation]]
+name = "r1a-an-array-refuses-strings"
+why = "an array's element may not be a string, as before L8, so every table of names is refused"
+file = "crates/nazm-sema/src/udt.rs"
+find = "                Type::Str | Type::Text if strings => {}"
+replace = "                Type::Str | Type::Text if strings && false => {}"
+killers = [{ package = "nazm-cli", test = "const_tables", name = "arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-mir-takes-an-array-to-own-nothing"
+why = "MIR treats an array of strings as owning nothing, so its strings are never released and a copy shares them uncounted"
+file = "crates/nazm-mir/src/ir.rs"
+find = "                .is_some_and(|(e, _)| self.managed_within(e, depth + 1)),"
+replace = "                .is_some_and(|_| false),"
+killers = [{ package = "nazm-cli", test = "const_tables", name = "arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-written-element-is-not-released"
+why = "writing an array element does not release the string it replaces, which leaks"
+file = "crates/nazm-lir/src/op/arrays.rs"
+find = """        self.release_at(a, t);
+        self.move_into(a, value);"""
+replace = """        self.move_into(a, value);"""
+killers = [{ package = "nazm-cli", test = "const_tables", name = "arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-an-element-read-takes-no-reference"
+why = "reading an element out of an array takes no reference to its strings, so the copy's release frees what the array still holds"
+file = "crates/nazm-lir/src/op/arrays.rs"
+find = """                    self.copy(d, at, n);
+                    // The copy out is a new reference to what it holds (L8).
+                    self.retain_at(d, elem);"""
+replace = """                    self.copy(d, at, n);"""
+killers = [{ package = "nazm-cli", test = "const_tables", name = "arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-an-array-literal-takes-no-reference"
+why = "building an array from borrowed strings takes no reference of its own, so releasing the array frees what the operands still hold"
+file = "crates/nazm-lir/src/op/arrays.rs"
+find = """            self.store(at, 0, v);
+        }
+        self.retain_at(at, t);"""
+replace = """            self.store(at, 0, v);
+        }"""
+killers = [{ package = "nazm-cli", test = "const_tables", name = "arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-constant-table-is-refused"
+why = "a constant of a record, enum, tuple or array type is never computed, so every table is refused as before L8"
+file = "crates/nazm-core/src/constants.rs"
+find = "    !c.is_static && declared(&c.ty).is_none()"
+replace = "    false"
+killers = [{ package = "nazm-cli", test = "const_tables", name = "constant_tables_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-constant-construction-takes-the-first-field"
+why = "a constant construction gives each field the first value written, whatever its name, so a construction written out of order is refused or wrong"
+file = "crates/nazm-core/src/constants.rs"
+find = "            let Some(init) = inits.iter().find(|i| i.name == *name) else {"
+replace = "            let Some(init) = inits.first() else {"
+killers = [{ package = "nazm-cli", test = "const_tables", name = "constant_tables_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-an-interface-carries-no-constants"
+why = "stage 1b computes each module's constants and does not put them in its interface, so no importer sees one"
+file = "crates/nazm-core/src/check/unit.rs"
+find = "            *i = i.clone().with_consts(consts);"
+replace = "            *i = i.clone().with_consts(Vec::new());"
+killers = [{ package = "nazm-cli", test = "const_tables", name = "an_exported_constant_crosses_a_module_plainly_and_under_a_name" }]
+
+[[mutation]]
+name = "r1a-a-qualified-name-drops-its-module"
+why = "`m::NAME` is read as `NAME`, so a constant imported under a name is unknown and a plain one of the same name would be taken instead"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                    name: format!(\"{}::{name}\", q.name),"
+replace = "                    name: name.clone(),"
+killers = [{ package = "nazm-cli", test = "const_tables", name = "an_exported_constant_crosses_a_module_plainly_and_under_a_name" }]

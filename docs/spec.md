@@ -80,7 +80,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `modules` | STABLE 1.0 | |
 | `packages` | STABLE 1.0 | |
 | `profiles` | STABLE 1.0 / EXPERIMENTAL | the mechanism — a profile only refuses, and never changes what an accepted program does — is stable; each profile's rule set is experimental and may grow |
-| `durable-identity` | STABLE 1.0 / DEBUG | what a module path resolves to is stable; the persisted key format is internal (`nazm.interface/11`) |
+| `durable-identity` | STABLE 1.0 / DEBUG | what a module path resolves to is stable; the persisted key format is internal (`nazm.interface/12`) |
 | `concurrency` | STABLE 1.0 | the M:N scheduler is an implementation choice |
 | `effects` | STABLE 1.0 | three effects (the section's own "exactly two" is corrected in place) |
 | `capabilities` | STABLE 1.0 | revocation and finer-grained authority would be extensions |
@@ -129,6 +129,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `box-list` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; recursive types through immutable indirection |
 | `patterns` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; supersedes the N10 limits on patterns where it says so |
 | `tuples` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; a tuple is an anonymous record |
+| `const-tables` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; widens *Constants* and *Arrays* |
 | `order-hash` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; widens *Equality is derived*'s "not ordering, not hashing" |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
@@ -3892,11 +3893,11 @@ fn main() -> Int {
 
 | | |
 | --- | --- |
-| **Type** | `[T; N]`: `N` elements of `T`. `N` is an integer literal or an `Int` constant's name (*Constants*), at least 1. `T` is **plain data** — a numeric type, `Bool`, or a record, enum or array of them — and the array at most 65,536 bytes, counting each element's scalars without padding (`N0621` for an element that owns something, `N0618` for one too large or empty). A collection of strings or handles, or a larger buffer, is a `Vec` |
+| **Type** | `[T; N]`: `N` elements of `T`. `N` is an integer literal or an `Int` constant's name (*Constants*), at least 1. `T` is **plain data** — a numeric type, `Bool`, or a record, enum or array of them — and the array at most 65,536 bytes, counting each element's scalars without padding (`N0621` for an element that owns something, `N0618` for one too large or empty). A collection of strings or handles, or a larger buffer, is a `Vec`. *Corrected 2026-10-12, R1a (L8):* `T` may also be `Str` or `Text`, and records, enums and arrays holding them — a **value**: anything but a handle (`N0621` names the handle). A string counts 24 bytes, its pointer, length and owner |
 | **Values** | `[a, b, c]` — every element of one type (`N0300`), the length the count; `[value; count]` — `count` copies, `count` a literal or a constant. An empty array cannot be written |
 | **Indexing** | `xs[i]`, `i` an `Int`, is a copy of the element. An index outside `0..N` stops the program (`N0405`), and a constant one is refused (`N0624`); `[…]` on anything but an array is refused (`N0624`), and a `Vec`'s element is `vec_get`. After a name, a `[` followed by types and a `(` is still type arguments, so a method call on an element is written `(xs[i]).show()` |
 | **Writing** | `xs[i] = v`, `grid[r][c] = v`, `points[i].x = v` and `frame.data[i] = v` on a `let mut` binding: the value, then each index outermost first, then one checked write |
-| **Value semantics** | An array is a value held inline, like a record: assignment and passing copy it, no two bindings share one, and it owns nothing. Equality, task crossing and every ownership rule are its element's (*Equality is derived*); `==` compares element by element, so an array holding a NaN is not equal to itself |
+| **Value semantics** | An array is a value held inline, like a record: assignment and passing copy it, no two bindings share one, and it owns nothing. *(R1a, L8: it owns the strings its elements hold, by each string's own law — copying an array takes a reference to each, writing an element releases the one it replaces, and an array going away releases them all, exactly as a record's string fields are.)* Equality, task crossing and every ownership rule are its element's (*Equality is derived*); `==` compares element by element, so an array holding a NaN is not equal to itself |
 | **Layout** | Its elements contiguous, in index order, each at a multiple of the element's size. Arrays do not cross the C boundary in Gate 2 |
 
 ### Constants — Gate 2
@@ -3912,6 +3913,9 @@ refused where the constant is declared (`N0623`), and so is one that depends on 
 every use is the value, written as a literal. A constant is its own module's in Gate 2: `pub
 const` is refused (`N0101`), because a module's published interface does not carry values yet.
 `const` is a word only at the start of an item, so a binding may still be named `const`.
+
+*Corrected 2026-10-12, R1a (L8)* — see *Constant tables and exported constants*: a constant may
+be a record, an enum value, a tuple or an array, and `pub const` exports one.
 
 ### Bytes: a buffer and its views — Gate 2
 <!-- id: bytes -->
@@ -4522,6 +4526,49 @@ a declaration. A type with a written impl keeps it: derivation applies only wher
 requirement: inside `fn f[T: Hash](x: Pair[T])`, `Pair[T]` is not derived — only a concrete type
 is. There is no ordering requirement on a type parameter yet (`T: Ordered` waits for
 `@std/ordmap`, S3), and no customised order: a type cannot define its own `<`.
+
+### Constant tables and exported constants — R1
+<!-- id: const-tables -->
+
+Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L8).
+
+```nazm
+struct Keyword { text: Str, code: Int, }
+
+pub const KEYWORDS: [Keyword; 3] = [
+    Keyword(text: "fn", code: 1),
+    Keyword(text: "let", code: 2),
+    Keyword(text: "match", code: 3),
+];
+pub const ORIGIN: (Int, Int) = (0, 0);
+
+fn code_of(word: Str) -> Int {
+    let mut i = 0;
+    while i < 3 {
+        if KEYWORDS[i].text == word { return KEYWORDS[i].code; }
+        i = i + 1;
+    }
+    ORIGIN.0
+}
+```
+
+**Aggregate constants.** A constant's type may also be a record, an enum, a tuple or an array
+(*Arrays*, which may hold strings since L8), and its value is then built from those: a
+construction `R(f: v, …)`, a variant `E.V(f: v, …)`, a tuple `(v, …)`, or an array `[v, …]` or
+`[v; n]`, each `v` again such a value or a scalar constant expression as *Constants* allows —
+literals, constants, operators and numeric conversions. Nothing else: no call, binding or effect
+(`N0622`). The checker computes it once, where the module's types are known; a scalar part that
+would trap is refused where the constant is declared (`N0623`), as before. Every use is that
+value, built where it is used: a constant holds no storage of its own, so a use of a table is a
+copy of it and no two uses share one. An aggregate constant is not an array's length.
+
+**Exported constants.** `pub const NAME: T = value;` publishes the constant's value in the
+module's interface, and an importer uses it by its name — `NAME`, or `m::NAME` after `use "…" as
+m;` — exactly as a constant of its own: the value, written where it is used. (A function imported under
+a name is then a value as `m::f` too, as an unqualified one is, *Function values*.) Every record and
+enum `T` mentions must be public, as for an exported function's signature. Changing an exported
+constant's value changes the interface, so every importer is checked and built again. `pub
+static` is still refused (`N0101`): a static is storage, and storage is its module's.
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

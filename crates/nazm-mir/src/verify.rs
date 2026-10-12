@@ -891,9 +891,12 @@ fn ownership(types: &Types, f: &Function, out: &mut Vec<String>) {
                     read(&st, *value, "moves", &mut report);
                     set(&mut st, *value, One::Empty);
                 }
+                // The value moves in, as a field's does (L8); a failed index leaves by the
+                // unwind edge, whose cleanup still holds it.
                 StatementKind::SetElement { base, value, .. } => {
                     read(&st, *base, "writes an element of", &mut report);
-                    read(&st, *value, "copies", &mut report);
+                    read(&st, *value, "moves", &mut report);
+                    set(&mut st, *value, One::Empty);
                 }
                 StatementKind::Drop(l) => set(&mut st, *l, One::Empty),
                 StatementKind::ScopeOpen { list, .. } => {

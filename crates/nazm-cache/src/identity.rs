@@ -301,7 +301,9 @@ use crate::digest::{self, Framed};
 /// `56` — R1a, 2026-10-12. Ordering and hashing derived: `<` on `Bool`, `Str`, records, enums
 /// and tuples, `==` on `Box` and `List`, and `@std/hash`'s `Hash` satisfied without an impl,
 /// each moved from refused to accepted; a tuple of more than eight moved to refused.
-pub const SEMANTIC_EPOCH: u32 = 56;
+/// `57` — R1a, 2026-10-12. Arrays of strings, constants of record, enum, tuple and array types,
+/// `pub const` and `m::NAME` moved from refused to accepted.
+pub const SEMANTIC_EPOCH: u32 = 57;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

@@ -139,6 +139,16 @@ pub struct EnumExport {
     pub nameable: bool,
 }
 
+/// An exported constant (R1a, L8): its name, its type, and the value the checker computed, which
+/// an importer writes where it uses one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstExport {
+    pub name: String,
+    pub ty: Type,
+    pub value: crate::numeric::ConstValue,
+    pub name_span: Span,
+}
+
 /// A module's outward face: what it is, what it offers, and what it depends on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitInterface {
@@ -156,6 +166,8 @@ pub struct UnitInterface {
     /// A type re-exported under another name (N103): the name an importer writes, and the type
     /// it means — the defining module's, never a copy.
     renamed: Vec<(String, Type)>,
+    /// Its exported constants, by name (L8).
+    consts: Vec<ConstExport>,
     imports: Vec<Dependency>,
 }
 
@@ -176,6 +188,7 @@ impl UnitInterface {
             records,
             enums,
             renamed: Vec::new(),
+            consts: Vec::new(),
             imports,
         }
     }
@@ -225,6 +238,19 @@ impl UnitInterface {
     #[must_use]
     pub fn renamed(&self) -> &[(String, Type)] {
         &self.renamed
+    }
+
+    /// The same interface, offering these constants (L8).
+    #[must_use]
+    pub fn with_consts(mut self, consts: Vec<ConstExport>) -> Self {
+        self.consts = consts;
+        self
+    }
+
+    /// Its exported constants (L8).
+    #[must_use]
+    pub fn consts(&self) -> &[ConstExport] {
+        &self.consts
     }
 
     /// The same interface, offering these traits and impls (N78).

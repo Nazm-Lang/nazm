@@ -1,8 +1,9 @@
 //! Fixed-size arrays (Gate 2, `docs/spec.md`, *Arrays*), as instructions.
 //!
-//! An array is held in memory, its elements contiguous at a stride of the element's size, and
-//! it holds plain data — numbers, `Bool`s, and records and enums of them — so building, copying
-//! and writing one move bytes and take no reference. Every index is checked against the length
+//! An array is held in memory, its elements contiguous at a stride of the element's size. It
+//! holds values — numbers, `Bool`s, strings since R1a (L8), and records and enums of them — so
+//! building and copying one copy bytes and take a reference to every string an element holds,
+//! and writing one releases the element it replaces. Every index is checked against the length
 //! the type states, unsigned, so a negative index is outside too (`N0405`).
 
 use nazm_mir as mir;
@@ -42,7 +43,8 @@ impl Fx<'_, '_> {
         self.guard(outside, "N0405", OUTSIDE);
     }
 
-    /// Write operand `o`, an element of type `t`, at `at`: its bytes.
+    /// Write operand `o`, an element of type `t`, at `at`: its bytes, and a reference of its
+    /// own to what it holds — the operand is borrowed (L8).
     fn put_element(&mut self, at: V, o: &mir::Operand, t: Ty) {
         if in_memory(t) {
             let src = self.place(o);
@@ -52,6 +54,7 @@ impl Fx<'_, '_> {
             let v = self.value(o);
             self.store(at, 0, v);
         }
+        self.retain_at(at, t);
     }
 
     /// `dst = [elems…]`, `[value; count]` or `base[index]`; `false` for any other rvalue.
@@ -100,6 +103,8 @@ impl Fx<'_, '_> {
                     (_, Some(v)) => self.store(at, 0, v),
                     _ => {}
                 }
+                // A reference per copy (L8).
+                self.retain_at(at, elem);
                 let next = self.add_imm(iv, 1);
                 self.set_var(i, next);
                 self.jump(head);
@@ -120,6 +125,8 @@ impl Fx<'_, '_> {
                     let d = self.addr(dst);
                     let n = self.size(elem);
                     self.copy(d, at, n);
+                    // The copy out is a new reference to what it holds (L8).
+                    self.retain_at(d, elem);
                 } else {
                     let v = self.load(class(elem), at, 0);
                     self.set(dst, v);
@@ -130,7 +137,8 @@ impl Fx<'_, '_> {
         }
     }
 
-    /// `base.path = value` through array elements: each index checked, then the value's bytes.
+    /// `base.path = value` through array elements: each index checked, the old value released
+    /// (L8), then the value's bytes moved in.
     pub(crate) fn set_element(
         &mut self,
         base: mir::LocalId,
@@ -158,6 +166,7 @@ impl Fx<'_, '_> {
                 }
             }
         }
+        self.release_at(a, t);
         self.move_into(a, value);
     }
 }

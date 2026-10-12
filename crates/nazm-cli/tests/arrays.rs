@@ -256,8 +256,11 @@ fn main(out: OutCap) -> Int ! {io} {
 #[test]
 fn array_and_constant_misuse_is_refused_before_anything_runs() {
     let main = |body: &str| format!("fn main() -> Int {{ {body} }}\n");
-    // Plain data only, and at most 64 KiB.
-    assert_eq!(refused(&main("let a = [\"x\", \"y\"]; 0")), ["N0621"]);
+    // Values only — no handle, since R1a (L8) strings included — and at most 64 KiB.
+    assert_eq!(
+        refused(&main("let a = [vec_new[Int](), vec_new[Int]()]; 0")),
+        ["N0621"]
+    );
     assert_eq!(
         refused(
             "struct S { v: Vec[Int], }\nfn f(a: [S; 2]) -> Int { 0 }\nfn main() -> Int { 0 }\n"
@@ -301,8 +304,9 @@ fn array_and_constant_misuse_is_refused_before_anything_runs() {
         refused("fn f() -> Int { 1 }\nconst X: Int = f();\nfn main() -> Int { X }\n"),
         ["N0622"]
     );
+    // A static is its module's storage (a constant is exported since R1a, L8).
     assert_eq!(
-        refused("pub const X: Int = 1;\nfn main() -> Int { X }\n"),
+        refused("pub static X: Int = 1;\nfn main() -> Int { X }\n"),
         ["N0101"]
     );
     assert_eq!(

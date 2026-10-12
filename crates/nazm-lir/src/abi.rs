@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use crate::backend::{Arch, Target};
-use crate::ir::{EnumLayout, EnumTy, Owns, RecordLayout, RecordTy, Ty, Unit};
+use crate::ir::{ArrayLayout, ArrayTy, EnumLayout, EnumTy, Owns, RecordLayout, RecordTy, Ty, Unit};
 
 /// The offset of an enum's payload area: after its tag word, which is 8 bytes, and every
 /// payload's alignment divides 8.
@@ -112,7 +112,7 @@ pub struct Sum {
 /// Whether a value of `t` owns anything a drop must give back, over `records` and `enums` —
 /// the one answer both backends read (N81).
 #[must_use]
-pub fn owns(records: &[RecordLayout], enums: &[EnumLayout], t: Ty) -> bool {
+pub fn owns(records: &[RecordLayout], enums: &[EnumLayout], arrays: &[ArrayLayout], t: Ty) -> bool {
     let mut seen: Vec<Ty> = Vec::new();
     let mut work = vec![t];
     while let Some(next) = work.pop() {
@@ -131,6 +131,11 @@ pub fn owns(records: &[RecordLayout], enums: &[EnumLayout], t: Ty) -> bool {
                 .iter()
                 .find(|e| e.id == id)
                 .map(|l| l.variants.iter().flat_map(|v| v.fields.clone()).collect())
+                .unwrap_or_default(),
+            Some(Owns::Array(id)) => arrays
+                .iter()
+                .find(|a| a.id == id)
+                .map(|a| vec![a.elem])
                 .unwrap_or_default(),
             Some(_) => return true,
         };
@@ -166,12 +171,22 @@ impl ByteLayouts {
             owning_records: unit
                 .records
                 .iter()
-                .map(|r| (r.id.0, owns(&unit.records, &unit.enums, Ty::Record(r.id))))
+                .map(|r| {
+                    (
+                        r.id.0,
+                        owns(&unit.records, &unit.enums, &unit.arrays, Ty::Record(r.id)),
+                    )
+                })
                 .collect(),
             owning_enums: unit
                 .enums
                 .iter()
-                .map(|e| (e.id.0, owns(&unit.records, &unit.enums, Ty::Enum(e.id))))
+                .map(|e| {
+                    (
+                        e.id.0,
+                        owns(&unit.records, &unit.enums, &unit.arrays, Ty::Enum(e.id)),
+                    )
+                })
                 .collect(),
             arrays: unit
                 .arrays
@@ -276,7 +291,9 @@ impl ByteLayouts {
     #[must_use]
     pub fn owns(&self, t: Ty) -> bool {
         match t {
-            Ty::Int | Ty::Bool | Ty::Num(_) | Ty::Array(_) => false,
+            Ty::Int | Ty::Bool | Ty::Num(_) => false,
+            // What its element owns (L8).
+            Ty::Array(ArrayTy(id)) => self.arrays.get(&id).is_some_and(|(e, _)| self.owns(*e)),
             Ty::Str | Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) | Ty::ChanOf(_) => {
                 true
             }

@@ -48,6 +48,7 @@ pub fn declared_interfaces(
         })
         .collect();
     apply_reexports(units, &mut interfaces, res, errors, true);
+    declare_all_consts(units, &mut interfaces, res, errors);
     validate_new_arrays(res, errors);
     interfaces
 }
@@ -63,7 +64,10 @@ pub fn declare_unit(
     res: &mut Resolution,
     errors: &mut Vec<Diagnostic>,
 ) -> UnitInterface {
-    let types = type_environment(unit, deps, res, errors, Collisions::Silent);
+    let mut types = type_environment(unit, deps, res, errors, Collisions::Silent);
+    // Its aggregate constants (L8), as far as they can be computed before the imports' values
+    // are known: `declare_consts` computes and reports them, in dependency order.
+    super::written::compute_aggregates(unit, deps, &mut types, res, errors, false);
     let mut exports = Vec::new();
 
     // Each impl's header, resolved once (N78): its trait and its type, or `None` when either
@@ -390,6 +394,18 @@ pub fn declare_unit(
         });
         roots.push(Type::Enum(id));
     }
+    // Its exported constants' types (L8), among the roots the closure starts from, since an
+    // importer builds the value where it uses it. The values are `declare_consts`'s.
+    for c in unit
+        .consts
+        .iter()
+        .filter(|c| c.pub_span.is_some() && !c.is_static)
+    {
+        let ty = resolve_written(&types, res, &c.ty, &[], None, &mut Vec::new());
+        report_private_type(ty, c.ty.span, c.name_span, "constant", &c.name, res, errors);
+        roots.push(ty);
+    }
+
     // Closed over what the public surface mentions: an importer that projects through an
     // exported record or matches an exported enum needs every shape it can reach, and
     // cannot go and read the module that declared one. `RecordExport` says why this is not
@@ -457,6 +473,34 @@ pub fn declare_unit(
         .with_traits(traits, impls)
 }
 
+/// Stage 1b for one module (R1a, L8): its constants, now that `deps` — its imports' full
+/// interfaces — carry theirs, every refusal reported; and the ones it exports, by name.
+pub(super) fn declare_consts(
+    unit: &Unit<'_>,
+    deps: &[&UnitInterface],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<nazm_sema::ConstExport> {
+    let mut types = type_environment(unit, deps, res, errors, Collisions::Silent);
+    super::written::compute_aggregates(unit, deps, &mut types, res, errors, true);
+    let mut consts: Vec<nazm_sema::ConstExport> = unit
+        .consts
+        .iter()
+        .filter(|c| c.pub_span.is_some() && !c.is_static)
+        .filter_map(|c| {
+            let (ty, value) = types.consts.values.get(&c.name)?;
+            Some(nazm_sema::ConstExport {
+                name: c.name.clone(),
+                ty: *ty,
+                value: value.clone(),
+                name_span: c.name_span,
+            })
+        })
+        .collect();
+    consts.sort_by(|a, b| a.name.cmp(&b.name));
+    consts
+}
+
 /// Report a public item that names a private user-defined type.
 ///
 /// `kind` and `name` describe the **public** item, so the message says what is leaking
@@ -479,6 +523,10 @@ fn report_private_type(
     let mut found: Option<(String, Span)> = None;
     while let Some(t) = work.pop() {
         work.extend(res.types().type_args(t));
+        // An array's element (L8): `[Secret; 2]` exposes `Secret`.
+        if let Type::Array(a) = t {
+            work.extend(res.types().array_info(a).map(|(e, _)| e));
+        }
         let private = match res.types().definition_of(t) {
             Some(TypeNode::Record(id)) => res
                 .records()
@@ -528,7 +576,8 @@ pub fn check_unit(
     errors: &mut Vec<Diagnostic>,
 ) {
     let env = environment(unit, deps, res, errors);
-    let types = type_environment(unit, deps, res, errors, Collisions::Silent);
+    let mut types = type_environment(unit, deps, res, errors, Collisions::Silent);
+    super::written::compute_aggregates(unit, deps, &mut types, res, errors, false);
     record_module_names(res, unit.module, &env, &types);
     // Built from `deps` rather than from a graph, so the one path that checks a module
     // against persisted interfaces resolves type names by exactly the rule the
@@ -860,4 +909,76 @@ fn environment(
         refused,
         aliases,
     }
+}
+
+/// The units' positions with every module after the modules it imports (L8), where the imports
+/// allow it: a cycle's members come in the order first reached. Iterative, as every walk of the
+/// module graph is.
+fn dependency_order(units: &[Unit<'_>]) -> Vec<usize> {
+    let mut state = vec![0_u8; units.len()];
+    let mut out = Vec::with_capacity(units.len());
+    for start in 0..units.len() {
+        if state.get(start).copied() != Some(0) {
+            continue;
+        }
+        let mut stack = vec![(start, 0_usize)];
+        if let Some(s) = state.get_mut(start) {
+            *s = 1;
+        }
+        while let Some((n, next)) = stack.pop() {
+            let dep = units
+                .get(n)
+                .and_then(|u| u.imports.get(next))
+                .map(|d| d.on.index());
+            match dep {
+                Some(d) => {
+                    stack.push((n, next + 1));
+                    if state.get(d).copied() == Some(0) {
+                        if let Some(s) = state.get_mut(d) {
+                            *s = 1;
+                        }
+                        stack.push((d, 0));
+                    }
+                }
+                None => {
+                    if let Some(s) = state.get_mut(n) {
+                        *s = 2;
+                    }
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Stage 1b (R1a, L8): every module's constants, in dependency order, so a constant may be
+/// computed from one an import exports; each module's interface then carries its own exported
+/// values. The positions of the units that reported a refusal.
+pub(super) fn declare_all_consts(
+    units: &[Unit<'_>],
+    interfaces: &mut [UnitInterface],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<usize> {
+    let mut unclean = Vec::new();
+    for n in dependency_order(units) {
+        let Some(u) = units.get(n) else {
+            continue;
+        };
+        let deps: Vec<&UnitInterface> = u
+            .imports
+            .iter()
+            .filter_map(|d| interfaces.get(d.on.index()))
+            .collect();
+        let before = errors.len();
+        let consts = declare_consts(u, &deps, res, errors);
+        if errors.len() != before {
+            unclean.push(n);
+        }
+        if let Some(i) = interfaces.get_mut(n) {
+            *i = i.clone().with_consts(consts);
+        }
+    }
+    unclean
 }

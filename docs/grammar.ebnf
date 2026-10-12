@@ -52,8 +52,13 @@ attribute_arg = STRING
  * number or a `Bool` read-only, or an `Atomic` started by `atomic_new` of a constant. `static`
  * is a word only where `const` is. See `docs/spec.md`, *Statics*.
  *)
+(* R1a (L8): a constant may be a record, enum value, tuple or array built of constant parts, and
+ * `pub const` exports one; an importer under a name reads it as `m::NAME`. See `docs/spec.md`,
+ * *Constant tables and exported constants*.
+ *)
 (* @example const MASK: UInt8 = 0xF0; fn main() -> Int { Int(MASK) } *)
 (* @example static TICKS: Atomic = atomic_new(0); fn main() -> Int { atomic_add(TICKS, 1) } *)
+(* @example struct K { s: Str, n: Int, } pub const TABLE: [K; 2] = [K(s: "a", n: 1), K(s: "b", n: 2)]; fn main() -> Int { TABLE[1].n } *)
 constant = [ visibility ] , ( "const" | "static" ) , IDENT , ":" , type , "=" , expression , ";" ;
 
 (* A trait (N78): a named set of methods a type may implement. Each method is a signature
@@ -444,6 +449,7 @@ atom = INTEGER
      | "true"
      | "false"
      | IDENT
+     | qualifier , IDENT
      | call
      | construction
      | variant_construction
