@@ -8311,10 +8311,11 @@ Repointed by R1a a fourth time, which moved it to 55 for tuples: an entry that r
 Repointed by R1a a fifth time, which moved it to 56 for derived ordering: an entry that refused `"a" < "b"` must not be reused.
 Repointed by R1a a sixth time, which moved it to 57 for constant tables: an entry that refused `[\"a\"; 2]` must not be reused.
 Repointed by R1a a seventh time, which moved it to 58 for raw strings: an entry that refused `r\"x\"` must not be reused.
-Repointed by R1a an eighth time, which moved it to 59 for interpolation: an entry that refused `f\"{x}\"` must not be reused."""
+Repointed by R1a an eighth time, which moved it to 59 for interpolation: an entry that refused `f\"{x}\"` must not be reused.
+Repointed by R1b, which moved it to 60 for `Cell[T]`: an entry that refused `cell_new` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 59;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 58;"
+find = "pub const SEMANTIC_EPOCH: u32 = 60;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 59;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -16766,3 +16767,105 @@ file = "crates/nazm-lir/src/op/prims.rs"
 find = "                let wider = self.cmp(Cmp::Gt, width, ls);"
 replace = "                let wider = self.cmp(Cmp::Lt, width, ls);"
 killers = [{ package = "nazm-cli", test = "interpolation", name = "interpolation_means_the_same_everywhere_and_is_reclaimed" }]
+
+# --- R1b L7: a mutable cell (`docs/spec.md`, *A mutable cell*) ------------------------------------
+
+[[mutation]]
+name = "r1b-a-cell-owns-nothing"
+why = "an ownership edge through a Cell is not counted, so `struct Node { next: Option[Cell[Node]] }` is accepted and a node set to hold itself is never reclaimed"
+file = "crates/nazm-sema/src/udt.rs"
+find = '''
+            Type::Vec(v) | Type::Cell(v) => {
+                if let Some(e) = self.vec_element(v) {
+                    self.owned_by(e, COUNTED'''
+replace = '''
+            Type::Vec(v) => {
+                if let Some(e) = self.vec_element(v) {
+                    self.owned_by(e, COUNTED'''
+killers = [{ package = "nazm-cli", test = "cell", name = "the_ownership_rule_counts_a_cell_as_it_counts_a_vec" }]
+
+[[mutation]]
+name = "r1b-a-cell-reaches-no-parameter"
+why = "a generic definition's Cell of its parameter is not a use of it, so a cycle through `W[Node]` closes unseen"
+file = "crates/nazm-sema/src/udt.rs"
+find = "            Type::Vec(v) | Type::Cell(v) => match self.vec_element(v) {"
+replace = "            Type::Vec(v) => match self.vec_element(v) {"
+killers = [{ package = "nazm-cli", test = "cell", name = "the_ownership_rule_counts_a_cell_as_it_counts_a_vec" }]
+
+[[mutation]]
+name = "r1b-a-cell-holds-no-function"
+why = "a closure may capture a Cell that can hold a function value, which can then be set to the closure itself"
+file = "crates/nazm-sema/src/udt.rs"
+find = '''
+                Type::Vec(v) | Type::Cell(v) => {
+                    if let Some(e) = self.vec_element(v) {
+                        work.push((e, holder.or(Some(ty))));'''
+replace = '''
+                Type::Vec(v) => {
+                    if let Some(e) = self.vec_element(v) {
+                        work.push((e, holder.or(Some(ty))));'''
+killers = [{ package = "nazm-cli", test = "cell", name = "a_cell_is_neither_compared_nor_given_to_a_task_nor_written_bare" }]
+
+[[mutation]]
+name = "r1b-a-cell-crosses-into-a-task"
+why = "a Cell may be passed to a task, so two threads write one value and adjust its count without synchronisation"
+file = "crates/nazm-sema/src/types.rs"
+find = "            && !matches!(self, Self::Cell(_))"
+replace = "            && true"
+killers = [{ package = "nazm-cli", test = "cell", name = "a_cell_is_neither_compared_nor_given_to_a_task_nor_written_bare" }]
+
+[[mutation]]
+name = "r1b-cell-new-forgets-what-it-holds"
+why = "provenance loses the value a cell is made with, so a file's contents reach a written path through `cell_new`"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::CellNew => ContainerUse::Make { value: 0 },"
+replace = "            Intrinsic::CellNew => ContainerUse::None,"
+killers = [{ package = "nazm-cli", test = "cell", name = "what_a_cell_holds_carries_its_provenance" }]
+
+[[mutation]]
+name = "r1b-cell-get-reads-no-cell"
+why = "what `cell_get` returns carries none of what was stored, so a file's contents set into a cell are clean when read back"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::CellGet => ContainerUse::Read { handle: 0 },"
+replace = "            Intrinsic::CellGet => ContainerUse::None,"
+killers = [{ package = "nazm-cli", test = "cell", name = "what_a_cell_holds_carries_its_provenance" }]
+
+[[mutation]]
+name = "r1b-a-cells-cell-is-every-cell"
+why = "provenance names no cell for a Cell's element type, so every container's origins are mixed into it"
+file = "crates/nazm-core/src/provenance.rs"
+find = '''            Some(Shape::CellT) => elem().map(|t| format!("Cell[{t}]")),'''
+replace = '''            Some(Shape::CellT) => None,'''
+killers = [{ package = "nazm-cli", test = "cell", name = "what_a_cell_holds_carries_its_provenance" }]
+
+[[mutation]]
+name = "r1b-a-cell-substitutes-to-a-vec"
+why = "a generic built-in's Cell[T] becomes Vec[T] when T is known, so `cell_new(0)` is a Vec and every Cell field refuses it"
+file = "crates/nazm-sema/src/generic.rs"
+find = "                    Type::Cell(_) => self.cell_of(elem),"
+replace = "                    Type::Cell(_) => self.vec_of(elem),"
+killers = [{ package = "nazm-cli", test = "cell", name = "a_cell_means_the_same_everywhere_and_everything_in_it_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-cell-is-no-type-name"
+why = "`Cell[T]` written in a program is an unknown type"
+file = "crates/nazm-core/src/check/written.rs"
+find = '''        && (written.name == "Box" || written.name == "List" || written.name == "Cell")'''
+replace = '''        && (written.name == "Box" || written.name == "List")'''
+killers = [{ package = "nazm-cli", test = "cell", name = "a_cell_means_the_same_everywhere_and_everything_in_it_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-native-a-cell-is-not-its-vec"
+why = "MIR's validator refuses a Cell where the Vec it is lowered to is wanted, so no program with a cell builds natively"
+file = "crates/nazm-mir/src/verify.rs"
+find = "        (Type::Cell(c), Type::Vec(v)) => c == v,"
+replace = "        (Type::Cell(c), Type::Vec(v)) => false,"
+killers = [{ package = "nazm-cli", test = "cell", name = "a_cell_means_the_same_everywhere_and_everything_in_it_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-cell-get-is-cell-set"
+why = "Core IR lowers `cell_get` as a `vec_set`, which neither reads nor takes the arguments it is given"
+file = "crates/nazm-core/src/lower.rs"
+find = "                    op: if op == nazm_sema::Intrinsic::CellGet {"
+replace = "                    op: if op != nazm_sema::Intrinsic::CellGet {"
+killers = [{ package = "nazm-cli", test = "cell", name = "a_cell_means_the_same_everywhere_and_everything_in_it_is_reclaimed" }]

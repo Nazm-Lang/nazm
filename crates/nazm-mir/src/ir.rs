@@ -756,6 +756,11 @@ impl Types {
         if let (Type::Cap(_), Type::Cap(_)) = (a, b) {
             return true;
         }
+        // A `Cell[T]` is its `Vec[T]` of one element below the checker (R1b): Core IR lowering
+        // writes its operations as the `Vec` ones they mean.
+        if let (Type::Cell(x), Type::Vec(y)) | (Type::Vec(y), Type::Cell(x)) = (a, b) {
+            return x == y;
+        }
         let (Type::Fn(x), Type::Fn(y)) = (a, b) else {
             return false;
         };
@@ -819,6 +824,7 @@ impl Types {
             | Type::Vec(_)
             | Type::Box(_)
             | Type::List(_)
+            | Type::Cell(_)
             | Type::Bytes
             | Type::Text
             | Type::Atomic

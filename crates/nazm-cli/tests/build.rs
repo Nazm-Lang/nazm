@@ -3322,6 +3322,8 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
             // Immutable indirection (R1a).
             Shape::BoxT => "box_new(0)",
             Shape::ListT => "list_empty[Int]()",
+            // A mutable cell (R1b).
+            Shape::CellT => "cell_new(0)",
         })
         .collect();
     // `vec_new` is the one built-in whose type argument nothing else could say.
@@ -3330,7 +3332,13 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         && !i.params().iter().any(|p| {
             matches!(
                 p,
-                Shape::T | Shape::VecT | Shape::ChanT | Shape::ChansT | Shape::BoxT | Shape::ListT
+                Shape::T
+                    | Shape::VecT
+                    | Shape::ChanT
+                    | Shape::ChansT
+                    | Shape::BoxT
+                    | Shape::ListT
+                    | Shape::CellT
             )
         }) {
         format!("{}[Int]", i.name())
@@ -3366,6 +3374,7 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         Shape::ChansT => format!("vec_len({call})"),
         Shape::BoxT => format!("box_get({call})"),
         Shape::ListT => format!("list_len({call})"),
+        Shape::CellT => format!("cell_get({call})"),
     };
     // Opening a handle names a path, which needs an `IoCap` (Gate 2).
     if i.params().contains(&Shape::OsHandle) {

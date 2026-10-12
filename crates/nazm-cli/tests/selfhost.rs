@@ -2853,6 +2853,10 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("list_empty", "List[T]"),
         ("list_len", "List[T]"),
         ("list_get", "List[T]"),
+        // R1b: a mutable cell, likewise.
+        ("cell_new", "Cell[T]"),
+        ("cell_get", "Cell[T]"),
+        ("cell_set", "Cell[T]"),
         // Gate 2 (numbers): the Nazm checker's type table has `Int` alone, so these, generic over
         // the widths and floats, are unknown functions there and refused by name.
         ("wrapping_add", "Gate 2 numbers"),

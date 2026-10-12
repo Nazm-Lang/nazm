@@ -790,6 +790,7 @@ impl Law {
                 | Type::Chan
                 | Type::ChanOf(_)
                 | Type::Vec(_)
+                | Type::Cell(_)
                 | Type::Bytes
                 | Type::Cap(_)
                 | Type::OsHandle

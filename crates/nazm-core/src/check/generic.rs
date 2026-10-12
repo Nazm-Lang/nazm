@@ -76,6 +76,7 @@ fn inferred_from(
         Type::Vec(_)
         | Type::Box(_)
         | Type::List(_)
+        | Type::Cell(_)
         | Type::ChanOf(_)
         | Type::Record(_)
         | Type::Enum(_) => types
@@ -587,8 +588,8 @@ impl Checker<'_> {
                     }),
                 }
             }
-            // `Box` and `List` (R1a) as a `Vec` is, each only with its own kind.
-            Type::Vec(_) | Type::Box(_) | Type::List(_) => {
+            // `Box` and `List` (R1a) and `Cell` (R1b) as a `Vec` is, each only with its own kind.
+            Type::Vec(_) | Type::Box(_) | Type::List(_) | Type::Cell(_) => {
                 let (Some(fe), Some(ae)) = (
                     types.type_args(formal).first().copied(),
                     types.type_args(actual).first().copied(),

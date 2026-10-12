@@ -705,6 +705,7 @@ fn environment(
             }
             None if s == Shape::BoxT => res.types_mut().box_of(t),
             None if s == Shape::ListT => res.types_mut().list_of(t),
+            None if s == Shape::CellT => res.types_mut().cell_of(t),
             None => res.types_mut().vec_of(t),
         };
         let params: Vec<Type> = i.params().iter().map(|s| shape(*s)).collect();

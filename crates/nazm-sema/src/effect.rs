@@ -292,6 +292,9 @@ impl Effect {
             | Intrinsic::BoxFresh
             | Intrinsic::BoxFill
             | Intrinsic::ListPush
+            | Intrinsic::CellNew
+            | Intrinsic::CellGet
+            | Intrinsic::CellSet
             // The call these belong to performs `foreign` already (N85).
             | Intrinsic::ForeignNonNull
             | Intrinsic::CStrCopy

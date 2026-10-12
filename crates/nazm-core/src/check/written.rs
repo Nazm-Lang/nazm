@@ -627,9 +627,10 @@ fn resolve_written_inner(
             return chan;
         }
     }
-    // `Box[T]` and `List[T]` (R1a), prelude names: a module's own type of the name keeps it.
+    // `Box[T]` and `List[T]` (R1a) and `Cell[T]` (R1b), prelude names: a module's own type of
+    // the name keeps it.
     if !qualified
-        && (written.name == "Box" || written.name == "List")
+        && (written.name == "Box" || written.name == "List" || written.name == "Cell")
         && !types.names.contains_key(written.name.as_str())
     {
         let Some(args) = args else {
@@ -641,7 +642,11 @@ fn resolve_written_inner(
                 )
                 .help(format!(
                     "a {} of `Int` is `{}[Int]`; `{}` alone is not a type",
-                    if written.name == "Box" { "box" } else { "list" },
+                    match written.name.as_str() {
+                        "Box" => "box",
+                        "Cell" => "cell",
+                        _ => "list",
+                    },
                     written.name,
                     written.name
                 )),
@@ -652,10 +657,10 @@ fn resolve_written_inner(
             errors.push(wrong_arity(&written.name, 1, args.len(), written.span));
         }
         let elem = args.first().copied().unwrap_or(Type::Int);
-        let t = if written.name == "Box" {
-            res.types_mut().box_of(elem)
-        } else {
-            res.types_mut().list_of(elem)
+        let t = match written.name.as_str() {
+            "Box" => res.types_mut().box_of(elem),
+            "Cell" => res.types_mut().cell_of(elem),
+            _ => res.types_mut().list_of(elem),
         };
         res.record_written_type(written.name_span, WrittenType::Builtin(t));
         return t;

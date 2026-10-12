@@ -193,6 +193,11 @@ impl Origin {
                 BuiltinFlow::Derive
             }
             Intrinsic::ListEmpty | Intrinsic::BoxFresh => BuiltinFlow::Fresh,
+            // A mutable cell (R1b) is a container, as a `Vec` is: a new handle, a store whose
+            // result is a constant, and a read out of its cell.
+            Intrinsic::CellNew => BuiltinFlow::Fresh,
+            Intrinsic::CellSet => BuiltinFlow::Derive,
+            Intrinsic::CellGet => BuiltinFlow::Read,
             // Made by lowering only, after this analysis has run on the program as written.
             Intrinsic::BoxFill | Intrinsic::ListPush => BuiltinFlow::Derive,
             Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),
@@ -469,6 +474,13 @@ impl Origin {
             | Intrinsic::BoxFresh
             | Intrinsic::BoxFill
             | Intrinsic::ListPush => ContainerUse::None,
+            // A mutable cell (R1b): its value lives in its cell, as a `Vec`'s elements do.
+            Intrinsic::CellNew => ContainerUse::Make { value: 0 },
+            Intrinsic::CellGet => ContainerUse::Read { handle: 0 },
+            Intrinsic::CellSet => ContainerUse::Write {
+                handle: 0,
+                value: 1,
+            },
             Intrinsic::IntsSum => ContainerUse::Read { handle: 1 },
             Intrinsic::AtomicNew => ContainerUse::None,
             Intrinsic::AtomicLoad => ContainerUse::Read { handle: 0 },
@@ -566,6 +578,11 @@ pub enum ContainerUse {
     /// Argument `value` is written into the cell of argument `handle`'s container.
     Write {
         handle: usize,
+        value: usize,
+    },
+    /// Argument `value` is written into the cell of the container the call returns (R1b:
+    /// `cell_new`, a handle made holding its first value).
+    Make {
         value: usize,
     },
     /// Argument `value` is written into the cell of argument `handle`'s container, and the

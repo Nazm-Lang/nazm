@@ -307,7 +307,9 @@ use crate::digest::{self, Framed};
 /// from refused to accepted; `N0005`.
 /// `59` — R1a, 2026-10-12. Interpolation (`f"…"`) and `float_to_str_fixed`, `str_pad_start`
 /// and `str_pad_end` moved from refused to accepted; `N0006`.
-pub const SEMANTIC_EPOCH: u32 = 59;
+/// `60` — R1b, 2026-10-12. `Cell[T]` and `cell_new`, `cell_get` and `cell_set` moved from refused
+/// to accepted, as prelude names.
+pub const SEMANTIC_EPOCH: u32 = 60;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

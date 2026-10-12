@@ -1430,7 +1430,37 @@ impl<'a> Lower<'a> {
         let kind = match checked.callee {
             // Made out of the `Box` and `List` operations a program cannot name (R1a).
             Callee::Builtin(nazm_sema::Intrinsic::BoxNew) => {
-                return self.box_new(type_args(true)?, args, ty, callee_at, at);
+                let (fresh, fill) = (
+                    nazm_sema::Intrinsic::BoxFresh,
+                    nazm_sema::Intrinsic::BoxFill,
+                );
+                return self.made_holding(fresh, fill, type_args(true)?, args, ty, callee_at, at);
+            }
+            // A `Cell[T]` is a `Vec[T]` of one element (R1b): made with it, read and replaced at 0.
+            Callee::Builtin(nazm_sema::Intrinsic::CellNew) => {
+                let (fresh, fill) = (nazm_sema::Intrinsic::VecNew, nazm_sema::Intrinsic::VecPush);
+                return self.made_holding(fresh, fill, type_args(true)?, args, ty, callee_at, at);
+            }
+            Callee::Builtin(
+                op @ (nazm_sema::Intrinsic::CellGet | nazm_sema::Intrinsic::CellSet),
+            ) => {
+                let zero = Expr {
+                    kind: ExprKind::Const(self.constant(Const::Int(0))),
+                    ty: Some(Type::Int),
+                    at: callee_at,
+                };
+                let mut args = args.into_iter();
+                let cell: Vec<Expr> = args.next().into_iter().collect();
+                ExprKind::Builtin {
+                    op: if op == nazm_sema::Intrinsic::CellGet {
+                        nazm_sema::Intrinsic::VecGet
+                    } else {
+                        nazm_sema::Intrinsic::VecSet
+                    },
+                    type_args: type_args(true)?,
+                    args: cell.into_iter().chain([zero]).chain(args).collect(),
+                    callee_at,
+                }
             }
             Callee::Builtin(nazm_sema::Intrinsic::ListFromVec) => {
                 return self.list_from_vec(type_args(true)?, args, ty, callee_at, at);
@@ -1484,8 +1514,12 @@ impl<'a> Lower<'a> {
 
     /// `box_new(v)` (R1a), as `{ let made = <a fresh box>; <fill made with v>; made }`: the box
     /// is the lowering's alone until it is the result, which is what lets it be written once.
-    fn box_new(
+    /// `cell_new(v)` (R1b) likewise, with `vec_new` and `vec_push`.
+    #[allow(clippy::too_many_arguments)]
+    fn made_holding(
         &mut self,
+        fresh: nazm_sema::Intrinsic,
+        fill: nazm_sema::Intrinsic,
         type_args: Vec<Type>,
         mut args: Vec<Expr>,
         ty: Type,
@@ -1493,7 +1527,7 @@ impl<'a> Lower<'a> {
         at: Span,
     ) -> Lowered<Expr> {
         let Some(value) = args.pop() else {
-            return defect(callee_at, "a `box_new` with no value");
+            return defect(callee_at, "a `box_new` or `cell_new` with no value");
         };
         let made = self.temp(Temp::Made, ty, at);
         let read = Expr {
@@ -1506,7 +1540,7 @@ impl<'a> Lower<'a> {
                 local: made,
                 value: Expr {
                     kind: ExprKind::Builtin {
-                        op: nazm_sema::Intrinsic::BoxFresh,
+                        op: fresh,
                         type_args: type_args.clone(),
                         args: Vec::new(),
                         callee_at,
@@ -1517,7 +1551,7 @@ impl<'a> Lower<'a> {
             },
             Stmt::Eval(Expr {
                 kind: ExprKind::Builtin {
-                    op: nazm_sema::Intrinsic::BoxFill,
+                    op: fill,
                     type_args,
                     args: vec![read.clone(), value],
                     callee_at,

@@ -102,6 +102,10 @@ impl Ctx<'_> {
                 Some(Type::Vec(v)) => Some(Type::List(v)),
                 _ => None,
             },
+            Shape::CellT => match elem.and_then(|e| self.program.types.vec_of(e)) {
+                Some(Type::Vec(v)) => Some(Type::Cell(v)),
+                _ => None,
+            },
             other => other.monomorphic(),
         }
     }
@@ -629,7 +633,13 @@ fn primitive(
         .any(|s| {
             matches!(
                 s,
-                Shape::T | Shape::VecT | Shape::ChanT | Shape::ChansT | Shape::BoxT | Shape::ListT
+                Shape::T
+                    | Shape::VecT
+                    | Shape::ChanT
+                    | Shape::ChansT
+                    | Shape::BoxT
+                    | Shape::ListT
+                    | Shape::CellT
             )
         });
     if generic != elem.is_some() {
@@ -651,15 +661,26 @@ fn primitive(
                 op.name()
             ));
         };
-        if cx.operand(a) != Some(p) {
+        if !cx.operand(a).is_some_and(|g| represented_as(g, p)) {
             return Some(format!(
                 "`{}` given argument {i} of the wrong type",
                 op.name()
             ));
         }
     }
-    (cx.shape(op.ret(), elem) != Some(want))
-        .then(|| format!("`{}` written into a local of another type", op.name()))
+    (!cx.shape(op.ret(), elem)
+        .is_some_and(|r| represented_as(want, r)))
+    .then(|| format!("`{}` written into a local of another type", op.name()))
+}
+
+/// Whether a value of `got` is one a primitive over `want` takes: the same type, or a `Cell[T]`
+/// where its `Vec[T]` is wanted — Core IR lowering writes a cell's operations as the `Vec` ones
+/// they mean (R1b).
+fn represented_as(got: Type, want: Type) -> bool {
+    match (got, want) {
+        (Type::Cell(c), Type::Vec(v)) => c == v,
+        _ => got == want,
+    }
 }
 
 // --- ownership ----------------------------------------------------------------------------------

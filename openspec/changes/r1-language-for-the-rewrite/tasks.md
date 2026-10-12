@@ -25,7 +25,7 @@ each new construct by name until R2 carries it.
 
 ## 4. R1b — functions, traits, arithmetic
 
-- [ ] 4.1 L7 `Cell[T]`
+- [x] 4.1 L7 `Cell[T]`
 - [ ] 4.2 L10 closures in generic functions; non-escaping `let mut` capture
 - [ ] 4.3 L11 impls for generic types; default methods
 - [ ] 4.4 L12 `defer`

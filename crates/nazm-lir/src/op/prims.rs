@@ -179,7 +179,12 @@ impl Fx<'_, '_> {
             | Intrinsic::ListGet
             | Intrinsic::BoxFresh
             | Intrinsic::BoxFill
-            | Intrinsic::ListPush => {
+            | Intrinsic::ListPush
+            // A mutable cell (R1b): Core IR lowering writes each as the `Box` or `Vec` operation
+            // it means, so none reaches LIR.
+            | Intrinsic::CellNew
+            | Intrinsic::CellGet
+            | Intrinsic::CellSet => {
                 let at = self.at;
                 self.lw.defect(
                     at,
