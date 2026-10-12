@@ -137,6 +137,7 @@ pub(super) fn lowered(
                 }),
                 choice.runtime.is_some(),
                 &mut reached,
+                choice.stack_size,
             );
             clock.mark("codegen");
             made
@@ -272,6 +273,7 @@ fn emit_artefacts(
     freestanding: Option<Freestanding<'_>>,
     prebuilt: bool,
     reached: &mut nazm_lir::Needs,
+    stack: Option<u64>,
 ) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
     let mut needs = backend.baseline();
@@ -517,6 +519,7 @@ fn emit_artefacts(
             native.entry_roots,
             entry_needs,
             switch_target(backend.target()).and_then(nazm_lir::runtime::platform::args_hook),
+            stack,
         )),
         instance: false,
         key: None,

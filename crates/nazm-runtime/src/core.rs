@@ -90,6 +90,9 @@ pub fn emit_runtime(needs: Needs) -> String {
     let _ = writeln!(out, "@nz.failed = hidden thread_local global i1 false");
     let _ = writeln!(out, "@nz.errmsg = hidden thread_local global ptr null");
     let _ = writeln!(out, "@nz.errlen = hidden thread_local global i64 0");
+    // The stack the program was built to run on (R1b, L14): `nazm build --stack-size`, stored by
+    // the platform entry before `main`; 0 where none was asked for, which keeps each default.
+    let _ = writeln!(out, "@nz.stack_bytes = hidden global i64 0");
     // The lowest frame address this thread may reach before `nz.stack_check` reports
     // (N49); zero until the thread's first check sets it. Only where something checks.
     if needs.stack {
@@ -495,9 +498,12 @@ init:
   ; stack, so a thread C started is budgeted from what it has (Q1-A1-04); 0 is unknown.
   %cur = call i64 @nz_os_stack_size()
   %ok = icmp ne i64 %cur, 0
-  %cap = select i1 %ok, i64 %cur, i64 8388608
-  %small = icmp ult i64 %cap, 8388608
-  %size = select i1 %small, i64 %cap, i64 8388608
+  %sbc = load i64, ptr @nz.stack_bytes
+  %sbcset = icmp ne i64 %sbc, 0
+  %want = select i1 %sbcset, i64 %sbc, i64 8388608
+  %cap = select i1 %ok, i64 %cur, i64 %want
+  %small = icmp ult i64 %cap, %want
+  %size = select i1 %small, i64 %cap, i64 %want
   %quarter = lshr i64 %size, 2
   %budget = sub i64 %size, %quarter
   %under = icmp ult i64 %sp, %budget
@@ -1242,7 +1248,10 @@ record:
   %next = add i64 %len, 1
   store i64 %next, ptr %h
   %ai = call i32 @pthread_attr_init(ptr %attr)
-  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 8388608)
+  %sbt = load i64, ptr @nz.stack_bytes
+  %sbtset = icmp ne i64 %sbt, 0
+  %sbtsize = select i1 %sbtset, i64 %sbt, i64 8388608
+  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 %sbtsize)
   %rc = call i32 @pthread_create(ptr %blk, ptr %attr, ptr %fn, ptr %blk)
   %ad = call i32 @pthread_attr_destroy(ptr %attr)
   %bad = icmp ne i32 %rc, 0
@@ -2108,7 +2117,10 @@ entry:
   %wanted = call i64 @nz.pool_env(ptr @.pool.env.workers, i64 4)
   %big = icmp sgt i64 %wanted, 64
   %count = select i1 %big, i64 64, i64 %wanted
-  %asked = call i64 @nz.pool_env(ptr @.pool.env.stack, i64 262144)
+  %sbp = load i64, ptr @nz.stack_bytes
+  %sbpset = icmp ne i64 %sbp, 0
+  %sbpsize = select i1 %sbpset, i64 %sbp, i64 262144
+  %asked = call i64 @nz.pool_env(ptr @.pool.env.stack, i64 %sbpsize)
   %min = mul i64 %pg, 4
   %small = icmp slt i64 %asked, %min
   %raw = select i1 %small, i64 %min, i64 %asked

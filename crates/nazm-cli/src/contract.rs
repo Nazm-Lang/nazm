@@ -512,6 +512,7 @@ fn wasm_build(
             shared: false,
             objects: Some(dir),
             stack_watermark: false,
+            stack_size: None,
             layout: "aos",
             adapter: Some(shape),
             timings: false,

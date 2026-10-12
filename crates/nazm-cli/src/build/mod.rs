@@ -349,6 +349,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) objects: Option<&'a Path>,
     /// Measure the board's stack on the board (N63).
     pub(crate) stack_watermark: bool,
+    /// `--stack-size` (R1b, L14): the bytes of stack `main` and every task run on.
+    pub(crate) stack_size: Option<u64>,
     /// `aos` or `soa`: how a `Vec` of records is laid out (N68).
     pub(crate) layout: &'a str,
     /// A contract's WebAssembly adapter (N71).

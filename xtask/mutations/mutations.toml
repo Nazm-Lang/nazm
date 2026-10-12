@@ -9742,7 +9742,7 @@ killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursi
 name = "n49-a-task-gets-the-platform-default-stack"
 why = "task threads are started without the 8 MiB the check budgets for, so on a host whose default is smaller (macOS, 512 KiB) a recursive task overruns its stack before the check fires"
 file = "crates/nazm-runtime/src/core.rs"
-find = "  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 8388608)"
+find = "  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 %sbtsize)"
 replace = ""
 killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_task_thread_has_the_stack_the_check_budgets_for_on_every_host" }]
 
@@ -10516,11 +10516,12 @@ Repointed by Gate 3's Cortex-M board, which moved it to 25.
 Repointed by the v1 stack fixes, which moved it to 27 for the frame check.
 Repointed by the v1 monotonic deadlines, which moved it to 28.
 Repointed by R1a's release queue, which moved it to 29.
-Repointed by R1a's fixed-point floats, which moved it to 30."""
+Repointed by R1a's fixed-point floats, which moved it to 30.
+Repointed by R1b's stack size, which moved it to 31."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 30;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 29;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 31;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 30;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_one_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -17144,3 +17145,53 @@ file = "crates/nazm-core/src/check/unit.rs"
 find = "                Some(o) => res.types_mut().apply_enum(o, vec![t]),"
 replace = "                Some(_) => t,"
 killers = [{ package = "nazm-cli", test = "checked", name = "checked_arithmetic_finds_every_edge_everywhere" }]
+
+# --- R1b L14: `--stack-size` (`docs/spec.md`, *Native recursion, and the stack it runs on*) ---------
+
+[[mutation]]
+name = "r1b-a-task-thread-ignores-the-stack"
+why = "a task started on a thread of its own gets 8 MiB whatever stack the program was built to run on"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %sbtsize = select i1 %sbtset, i64 %sbt, i64 8388608"
+replace = "  %sbtsize = select i1 %sbtset, i64 8388608, i64 8388608"
+killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
+
+[[mutation]]
+name = "r1b-the-pool-ignores-the-stack"
+why = "a task on the pool gets 256 KiB whatever stack the program was built to run on"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %sbpsize = select i1 %sbpset, i64 %sbp, i64 262144"
+replace = "  %sbpsize = select i1 %sbpset, i64 262144, i64 262144"
+killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
+
+[[mutation]]
+name = "r1b-the-stack-check-caps-at-eight-mib"
+why = "the native stack check budgets at most 8 MiB, so a program built for more meets N0408 anyway"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %want = select i1 %sbcset, i64 %sbc, i64 8388608"
+replace = "  %want = select i1 %sbcset, i64 8388608, i64 8388608"
+killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
+
+[[mutation]]
+name = "r1b-main-runs-on-the-process-stack"
+why = "`main` never gets the thread it was built for and runs on the process's stack"
+file = "crates/nazm-runtime/src/entry.rs"
+find = '''"  %mrc = call i32 @pthread_create(ptr %mtid, ptr %mattr, ptr @nz.main_thread, ptr null)"'''
+replace = '''"  %mrc = add i32 1, 0"'''
+killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
+
+[[mutation]]
+name = "r1b-the-entry-stores-no-stack"
+why = "the entry does not store the stack size, so the runtime's threads and stack check keep their defaults"
+file = "crates/nazm-runtime/src/entry.rs"
+find = '''            let _ = writeln!(out, "  store i64 {bytes}, ptr @nz.stack_bytes");'''
+replace = '''            let _ = writeln!(out, "  store i64 0, ptr @nz.stack_bytes ; {bytes}");'''
+killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
+
+[[mutation]]
+name = "r1b-a-megabyte-is-a-kilobyte"
+why = "`--stack-size 512M` is read as 512 KiB"
+file = "crates/nazm-cli/src/cli.rs"
+find = "        Some((i, 'M' | 'm')) => (&raw[..i], 1u64 << 20),"
+replace = "        Some((i, 'M' | 'm')) => (&raw[..i], 1u64 << 10),"
+killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]

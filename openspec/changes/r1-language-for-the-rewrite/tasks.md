@@ -30,7 +30,7 @@ each new construct by name until R2 carries it.
 - [x] 4.3 L11 impls for generic types; default methods (L11a default methods, L11b impls of generic types, 2026-10-13)
 - [x] 4.4 L12 `defer`
 - [ ] 4.5 L13 checked arithmetic, widening multiply, `Int128`/`UInt128` — checked arithmetic done (L13a, 2026-10-13); `Int128`/`UInt128` and the widening multiply (L13b) open
-- [ ] 4.6 L14 stack size
+- [x] 4.6 L14 stack size (`nazm build --stack-size`; the interpreter keeps `--max-depth`)
 - [ ] 4.8 L15 a warning severity, `--deny-warnings`; L3's covering warning on `_`
 - [ ] 4.7 D2 linear `s = str_concat(s, t)`
 

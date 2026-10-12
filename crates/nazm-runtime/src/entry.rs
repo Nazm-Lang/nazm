@@ -36,14 +36,23 @@ pub const fn policy(needs: Needs) -> i64 {
 /// authority was checked when the program was, and the word is all that is left of it.
 #[must_use]
 pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
-    emit_entry_for(entry, roots, needs, None)
+    emit_entry_for(entry, roots, needs, None, None)
 }
 
 /// [`emit_entry`] for a target whose arguments are not `main`'s as they stand (Gate 3): `args`,
 /// when given, is the platform function (`platform::args_hook`) that `main` hands `argc` and
 /// `argv` to, with where `@nz.argc` and `@nz.argv` are, and that stores them itself.
 #[must_use]
-pub fn emit_entry_for(entry: &str, roots: usize, needs: Needs, args: Option<&str>) -> String {
+///
+/// `stack`, when given (R1b, L14: `nazm build --stack-size`), is the bytes of stack the program
+/// runs on: stored for the runtime's threads, and `main` itself run on a thread that size.
+pub fn emit_entry_for(
+    entry: &str,
+    roots: usize,
+    needs: Needs,
+    args: Option<&str>,
+    stack: Option<u64>,
+) -> String {
     let needs = needs.settled();
     let mut out = String::new();
     preamble(&mut out, "<nazm entry>");
@@ -103,6 +112,18 @@ pub fn emit_entry_for(entry: &str, roots: usize, needs: Needs, args: Option<&str
     if let (true, Some(hook)) = (needs.io, args) {
         let _ = writeln!(out, "declare void {hook}(i32, ptr, ptr, ptr)");
     }
+    // `main` on a thread of the stack asked for (R1b, L14): what it returns is read back after
+    // the join.
+    if stack.is_some() {
+        let _ = writeln!(out, "@nz.main_result = internal global i64 0");
+        let _ = writeln!(out, "define internal ptr @nz.main_thread(ptr %unused) {{");
+        let _ = writeln!(out, "entry:");
+        let _ = writeln!(out, "  %r = call i64 {entry}({root_args})");
+        let _ = writeln!(out, "  store i64 %r, ptr @nz.main_result");
+        let _ = writeln!(out, "  ret ptr null");
+        let _ = writeln!(out, "}}");
+        out.push('\n');
+    }
     let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
     let _ = writeln!(out, "entry:");
     // The scheduler's default for this program (N106, §7.107): the runtime's is the pool; a
@@ -124,7 +145,40 @@ pub fn emit_entry_for(entry: &str, roots: usize, needs: Needs, args: Option<&str
         let _ = writeln!(out, "  store i64 %nargs, ptr @nz.argc");
         let _ = writeln!(out, "  store ptr %argv, ptr @nz.argv");
     }
-    let _ = writeln!(out, "  %result = call i64 {entry}({root_args})");
+    match stack {
+        None => {
+            let _ = writeln!(out, "  %result = call i64 {entry}({root_args})");
+        }
+        // `main` on a thread with the stack asked for (L14), the result read back once it is
+        // joined. A thread that cannot start runs `main` here, on the stack the process has.
+        Some(bytes) => {
+            let _ = writeln!(out, "  store i64 {bytes}, ptr @nz.stack_bytes");
+            let _ = writeln!(out, "  %mattr = alloca [128 x i8], align 16");
+            let _ = writeln!(out, "  %mtid = alloca ptr, align 8");
+            let _ = writeln!(out, "  %mai = call i32 @pthread_attr_init(ptr %mattr)");
+            let _ = writeln!(
+                out,
+                "  %mas = call i32 @pthread_attr_setstacksize(ptr %mattr, i64 {bytes})"
+            );
+            let _ = writeln!(
+                out,
+                "  %mrc = call i32 @pthread_create(ptr %mtid, ptr %mattr, ptr @nz.main_thread, ptr null)"
+            );
+            let _ = writeln!(out, "  %mad = call i32 @pthread_attr_destroy(ptr %mattr)");
+            let _ = writeln!(out, "  %mbad = icmp ne i32 %mrc, 0");
+            let _ = writeln!(out, "  br i1 %mbad, label %nz.inline, label %nz.join");
+            let _ = writeln!(out, "nz.inline:");
+            let _ = writeln!(out, "  %minline = call i64 {entry}({root_args})");
+            let _ = writeln!(out, "  store i64 %minline, ptr @nz.main_result");
+            let _ = writeln!(out, "  br label %nz.ran");
+            let _ = writeln!(out, "nz.join:");
+            let _ = writeln!(out, "  %mt = load ptr, ptr %mtid");
+            let _ = writeln!(out, "  %mjn = call i32 @pthread_join(ptr %mt, ptr null)");
+            let _ = writeln!(out, "  br label %nz.ran");
+            let _ = writeln!(out, "nz.ran:");
+            let _ = writeln!(out, "  %result = load i64, ptr @nz.main_result");
+        }
+    }
     {
         // Before the failure is reported, not after: `@nz.report` ends the process and
         // never returns, so a report emitted on the success path alone would say nothing

@@ -173,6 +173,18 @@ pub(super) fn preflight(
         );
         return Err(ExitCode::from(exit::USAGE));
     }
+    // A stack size is a hosted program's (R1b, L14): a board's stack is its manifest's, and a
+    // WebAssembly module's its host's.
+    if choice.stack_size.is_some() && (target.is_board() || target.is_wasm()) {
+        if summary {
+            return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+        }
+        eprintln!(
+            "nazm: `--stack-size` sizes a hosted program's threads; a board's stack is its \
+             manifest's, and a WebAssembly module's is its host's"
+        );
+        return Err(ExitCode::from(exit::USAGE));
+    }
     // A target other than the host (N57): clang is told it, and where the host cannot link it
     // the build writes objects instead, or is refused by name before compiling anything.
     let host = nazm_lir::backend::Target::host().ok();
