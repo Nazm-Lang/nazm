@@ -32,7 +32,7 @@ A core program is one expression, the body of `fn main() -> T`. It is printed to
 | T-Bool | Γ ⊢ true : Bool, Γ ⊢ false : Bool |
 | T-Var | Γ(x) = τ ⟹ Γ ⊢ x : τ |
 | T-Arith | Γ ⊢ a : Int, Γ ⊢ b : Int ⟹ Γ ⊢ a ⊕ b : Int, ⊕ ∈ {+,-,*,/,%} |
-| T-Lt | Γ ⊢ a : Int, Γ ⊢ b : Int ⟹ Γ ⊢ a < b : Bool |
+| T-Lt | Γ ⊢ a : τ, Γ ⊢ b : τ, τ ∈ {Int, Bool} ⟹ Γ ⊢ a < b : Bool (Bool since R1a, L6) |
 | T-Eq | Γ ⊢ a : τ, Γ ⊢ b : τ ⟹ Γ ⊢ a == b : Bool |
 | T-Not | Γ ⊢ a : Bool ⟹ Γ ⊢ !a : Bool |
 | T-And | Γ ⊢ a : Bool, Γ ⊢ b : Bool ⟹ Γ ⊢ a && b : Bool |
@@ -50,7 +50,7 @@ values. Evaluation is left to right; a trap propagates.
 | E-Var | ρ ⊢ x ⇓ ρ(x) |
 | E-Arith | ρ ⊢ a ⇓ m, ρ ⊢ b ⇓ k ⟹ ρ ⊢ a ⊕ b ⇓ m ⊕ k when the mathematical result is in range, else trap(N0400) |
 | E-Div | `/` and `%` truncate toward zero; k = 0 is trap(N0401); `i64::MIN / -1` is trap(N0400); `i64::MIN % -1` is 0, which is representable (`docs/spec.md`) |
-| E-Lt, E-Eq | compare; `==` on Bool is equality of truth values |
+| E-Lt, E-Eq | compare; `<` on Bool puts `false` first (L6); `==` on Bool is equality of truth values |
 | E-Not | ρ ⊢ a ⇓ b ⟹ ρ ⊢ !a ⇓ ¬b |
 | E-And | ρ ⊢ a ⇓ false ⟹ ρ ⊢ a && b ⇓ false (b not evaluated); ρ ⊢ a ⇓ true, ρ ⊢ b ⇓ v ⟹ ρ ⊢ a && b ⇓ v |
 | E-If | ρ ⊢ c ⇓ true ⟹ the then branch; false ⟹ the else branch; only one branch is evaluated |

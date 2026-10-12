@@ -446,7 +446,8 @@ pub fn lower_as(
                                 used.push(*e);
                                 used.extend(program.types.vec_of(*e));
                             }
-                            mir::Rvalue::Compare { operand, .. } => used.push(*operand),
+                            mir::Rvalue::Compare { operand, .. }
+                            | mir::Rvalue::Hash { operand, .. } => used.push(*operand),
                             mir::Rvalue::Closure { func, .. } => used.extend(
                                 program
                                     .function(*func)

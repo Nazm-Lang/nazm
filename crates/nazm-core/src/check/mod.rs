@@ -657,6 +657,14 @@ pub fn check_reusing(
     // Every trait's method signatures (N78), before any module declares an impl of one.
     let before = errors.len();
     declare_trait_methods(&units, &type_interfaces, &mut res, &mut errors);
+    // The trait a record, enum or tuple derives (L6): `@std/hash`'s `Hash`, if it is here.
+    let hash_key = nazm_sema::stdlib::key("hash");
+    let derived = res
+        .traits()
+        .iter()
+        .find(|(_, d)| d.name == "Hash" && graph.key(d.module) == Some(&hash_key))
+        .map(|(t, _)| t);
+    res.traits_mut().set_derived_hash(derived);
     if errors.len() != before {
         declared_cleanly.iter_mut().for_each(|c| *c = false);
     }

@@ -1551,9 +1551,9 @@ fn a_builtin_may_not_be_redefined_or_miscalled() {
         sole_error("fn main() -> Int { str_slice(\"abc\", 0, 1) }"),
         codes::TYPE_MISMATCH
     );
-    // Ordering strings is still refused.
+    // Strings order by their bytes since R1a (L6); a string and a number still do not compare.
     assert_eq!(
-        sole_error("fn main() -> Int { if \"a\" < \"b\" { 1 } else { 0 } }"),
+        sole_error("fn main() -> Int { if \"a\" < 1 { 1 } else { 0 } }"),
         codes::INVALID_OPERANDS
     );
 }

@@ -24,11 +24,14 @@ found only by reading all of it.
 - Patterns (R1a, EXPERIMENTAL until R1 closes): no guards, range, record or `@` patterns, no `..`
   in a payload; a `_` that covers enum variants draws no warning until L15 adds a warning
   severity; the compiler written in Nazm parses only the plain variant pattern until R2.
-- Tuples (R1a, EXPERIMENTAL until R1 closes): two elements or more, no unit type `()`, no tuple
-  structs; no derived hashing or ordering until L6, so a tuple is not yet a map's key; the compiler
-  written in Nazm does not carry tuples until R2.
-- `Box[T]` and `List[T]` (R1a, EXPERIMENTAL until R1 closes) have no equality yet (`N0304`;
-  structural equality arrives with L6) and do not cross into a task (`N0321`); a `List` is built
+- Derived ordering and hashing (R1a, EXPERIMENTAL until R1 closes): no `T: Ordered` requirement on
+  a type parameter until `@std/ordmap` (S3); no customised `<`; inside a generic body `Pair[T]` does
+  not derive `Hash`, only a concrete type does; a record holding a type with a written `Hash` impl
+  needs its own impl, which a generic instance or a tuple cannot have until L11.
+- Tuples (R1a, EXPERIMENTAL until R1 closes): two to eight elements, no unit type `()`, no tuple
+  structs; the compiler written in Nazm does not carry tuples until R2.
+- `Box[T]` and `List[T]` (R1a, EXPERIMENTAL until R1 closes) compare by what they hold (L6) but
+  have no order or derived hash, and do not cross into a task (`N0321`); a `List` is built
   only from a `Vec` (`list_from_vec`) or empty — there is no functional push, by design, since one
   would copy. The compiler written in Nazm does not carry either until R2.
 - Arrays (Gate 2) hold plain data only — numbers, `Bool`s, and records, enums and arrays of them —

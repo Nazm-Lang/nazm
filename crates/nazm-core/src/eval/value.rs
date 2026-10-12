@@ -184,6 +184,11 @@ impl Rec {
         self.fields.get(at as usize)
     }
 
+    /// Which record this is a value of.
+    pub(super) const fn def(&self) -> RecordId {
+        self.def
+    }
+
     pub(super) fn field_mut(&mut self, at: u32) -> Option<&mut Value> {
         self.fields.get_mut(at as usize)
     }
@@ -212,6 +217,12 @@ impl EnumVal {
             variant,
             fields,
         }
+    }
+
+    #[must_use]
+    /// Which enum this is a value of.
+    pub(super) const fn def(&self) -> EnumId {
+        self.def
     }
 
     #[must_use]

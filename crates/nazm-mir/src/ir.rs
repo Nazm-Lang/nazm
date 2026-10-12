@@ -327,7 +327,8 @@ impl Rvalue {
             | Self::Neg(o)
             | Self::Complement(o)
             | Self::Convert { operand: o, .. }
-            | Self::Fits { operand: o, .. } => operand_locals(o, &mut out),
+            | Self::Fits { operand: o, .. }
+            | Self::Hash { value: o, .. } => operand_locals(o, &mut out),
             Self::Copy(l) | Self::Move(l) | Self::Capture { env: l, .. } => out.push(*l),
             Self::Array { elems } => {
                 for a in elems {
@@ -557,6 +558,9 @@ pub enum Rvalue {
         lhs: Operand,
         rhs: Operand,
     },
+    /// The derived hash of a value of type `operand` (L6), a `UInt64`: total, the value
+    /// borrowed. `docs/spec.md`, *Ordering and hashing are derived*.
+    Hash { operand: Type, value: Operand },
     /// A call. The arguments are borrowed; the result is owned. The callee may have failed.
     Call { callee: FuncId, args: Vec<Operand> },
     /// A call through a function value (N50): its code is handed the closure object, then

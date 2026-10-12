@@ -350,12 +350,15 @@ impl Checker<'_> {
             if let Some(tr) = self.res.traits().bound_of(param) {
                 let satisfied = match t {
                     Type::Param(q) => self.res.traits().bound_of(q) == Some(tr),
-                    _ => self
-                        .res
-                        .traits()
-                        .find(tr, t)
-                        .and_then(|imp| self.res.traits().impl_def(imp))
-                        .is_some_and(|d| self.impl_modules.contains(&d.module)),
+                    _ => {
+                        self.res
+                            .traits()
+                            .find(tr, t)
+                            .and_then(|imp| self.res.traits().impl_def(imp))
+                            .is_some_and(|d| self.impl_modules.contains(&d.module))
+                            // Or derived (L6): `Hash` of a record, enum or tuple of keys.
+                            || self.res.traits().derives(tr, t, self.res.types())
+                    }
                 };
                 if !satisfied {
                     let p = self.res.types().param_name(param);
@@ -370,13 +373,34 @@ impl Checker<'_> {
                     } else {
                         args.get(from).map_or(at, Expr::span)
                     };
+                    // Where `Hash` is derived (L6), why this type does not derive it: the
+                    // component responsible, as a refused `==` names it.
+                    let underived = if self.res.traits().derived_hash() == Some(tr)
+                        && !matches!(t, Type::Param(_))
+                    {
+                        self.res
+                            .types()
+                            .hashing(t, |c| self.res.traits().find(tr, c).is_some())
+                            .err()
+                            .filter(|w| !w.path.is_empty())
+                            .map(|w| {
+                                format!(
+                                    ", and does not derive one: its `{}` is a `{}`",
+                                    w.path.join("."),
+                                    self.show(w.ty)
+                                )
+                            })
+                    } else {
+                        None
+                    };
                     self.errors.push(
                         Diagnostic::error(
                             codes::UNSATISFIED_REQUIREMENT,
                             place,
                             format!(
                                 "`{name}` requires `{p}: {tname}`, and `{p}` is `{shown}` here, \
-                                 which has no impl of `{tname}` in this module's scope"
+                                 which has no impl of `{tname}` in this module's scope{}",
+                                underived.unwrap_or_default()
                             ),
                         )
                         .secondary(sig.name_span, "declared here")

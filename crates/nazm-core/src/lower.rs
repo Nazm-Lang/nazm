@@ -115,11 +115,43 @@ pub(crate) fn lower(program: &Program, res: &Resolution) -> Result<cir::Program,
             })
         })
         .collect();
+    let orders = cir::Orders {
+        records: (0..res.records().len())
+            .map(|i| {
+                res.records()
+                    .get(nazm_sema::RecordId::from_index(i))
+                    .map(|d| d.layout.clone())
+                    .unwrap_or_default()
+            })
+            .collect(),
+        enums: (0..res.enums().len())
+            .map(|i| {
+                res.enums()
+                    .get(nazm_sema::EnumId::from_index(i))
+                    .map(|d| cir::EnumOrder {
+                        variants: d.order.clone(),
+                        payloads: d.variants.iter().map(|v| v.layout.clone()).collect(),
+                        names: d.variants.iter().map(|v| v.name.clone()).collect(),
+                    })
+                    .unwrap_or_default()
+            })
+            .collect(),
+    };
+    let derived_hash = res.traits().derived_hash().and_then(|t| {
+        let d = res.traits().get(t)?;
+        Some(cir::DerivedHash {
+            trait_id: t,
+            hash: d.method("hash")?,
+            same: d.method("same")?,
+        })
+    });
     let core = cir::Program {
         functions,
         entry: res.entry(),
         impls,
         statics: res.statics().to_vec(),
+        orders,
+        derived_hash,
     };
     let problems = cir::verify(&core, res);
     if problems.is_empty() {

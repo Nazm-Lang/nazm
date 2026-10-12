@@ -573,7 +573,6 @@ impl UserTypes {
     ///
     /// [`NoEquality`] naming the field path and the type that has no equality.
     pub fn equality(&self, t: Type) -> Result<(), NoEquality> {
-        let t = self.strip_array(t);
         // A type parameter has equality exactly when its declaration requires it (N14):
         // that is what the body may assume, and every argument is checked against it where
         // the definition is used. One rule, so `T`, `Box[T]` and `Result[T, E]` all answer
@@ -586,6 +585,84 @@ impl UserTypes {
             Type::Param(p) => self.requires_equality(p),
             _ => false,
         };
+        // A `Box` or `List` compares by what it holds (L6), so a recursive type through one
+        // compares, and the walk below meets each definition once.
+        self.derived(t, leaf, true, |_| false)
+    }
+
+    /// Whether `<`, `<=`, `>` and `>=` are defined for this type (L6), and if not, why:
+    /// integers, `Bool` and `Str`, and records, enums and tuples of them. A float orders
+    /// numerically on its own but makes no structure ordered — an IEEE 754 comparison is not a
+    /// total order — and nothing reached through an indirection orders. `docs/spec.md`,
+    /// *Ordering and hashing are derived*.
+    ///
+    /// # Errors
+    ///
+    /// [`NoEquality`] naming the field path and the component that has no order.
+    pub fn ordering(&self, t: Type) -> Result<(), NoEquality> {
+        if matches!(t, Type::Num(n) if n.is_float()) {
+            return Ok(());
+        }
+        self.derived(t, Self::ordered_leaf, false, |_| false)
+    }
+
+    /// Whether a concrete type's `Hash` is derived (L6) — every component an integer, `Bool`,
+    /// `Str`, or a record, enum or tuple of them none of which has an impl of its own
+    /// (`written` says which do). The type itself is asked by the caller, which prefers a
+    /// written impl where there is one.
+    ///
+    /// # Errors
+    ///
+    /// [`NoEquality`] naming the field path and the component that has no derived hash.
+    pub fn hashing(&self, t: Type, written: impl Fn(Type) -> bool) -> Result<(), NoEquality> {
+        if TypeNode::of(t).is_none() {
+            return Err(NoEquality {
+                path: Vec::new(),
+                ty: t,
+            });
+        }
+        self.derived(t, Self::ordered_leaf, false, written)
+    }
+
+    /// An integer, `Bool` or `Str`: what orders and hashes on its own (L6).
+    fn ordered_leaf(t: Type) -> bool {
+        match t {
+            Type::Int | Type::Bool | Type::Str => true,
+            Type::Num(n) => !n.is_float(),
+            _ => false,
+        }
+    }
+
+    /// The walk every derived property shares: `Ok(())` when every component of `t` is a
+    /// `leaf` or a record or enum whose components are, or the **field path** to the first one
+    /// that is not. `through` lets a `Box` or `List` stand for what it holds; `stop` refuses a
+    /// definition met inside `t` (a written impl, for hashing).
+    ///
+    /// Depth-first over declaration order, so the path reported is the first one a reader
+    /// would find. A definition already visited is not walked again, which bounds the walk
+    /// by the number of definitions even in a program whose containment cycle is being
+    /// refused in the same run.
+    fn derived(
+        &self,
+        t: Type,
+        leaf: impl Fn(Type) -> bool,
+        through: bool,
+        stop: impl Fn(Type) -> bool,
+    ) -> Result<(), NoEquality> {
+        let open = |t: Type| {
+            let mut t = self.strip_array(t);
+            while through {
+                match t {
+                    Type::Box(v) | Type::List(v) => match self.vec_element(v) {
+                        Some(e) => t = self.strip_array(e),
+                        None => break,
+                    },
+                    _ => break,
+                }
+            }
+            t
+        };
+        let t = open(t);
         let Some(root) = TypeNode::of(t) else {
             return if leaf(t) {
                 Ok(())
@@ -618,8 +695,9 @@ impl UserTypes {
                 continue;
             };
             stack.push((node, at + 1, pushed));
+            let ty = open(ty);
             match TypeNode::of(ty) {
-                Some(inner) if self.opaque(inner) => {
+                Some(inner) if self.opaque(inner) || stop(ty) => {
                     path.extend(self.names_of(node, variant, field));
                     return Err(NoEquality { path, ty });
                 }
