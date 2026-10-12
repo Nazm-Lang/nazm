@@ -343,8 +343,9 @@ impl Checker<'_> {
             Expr::Match {
                 scrutinee,
                 arms,
+                source,
                 span,
-            } => self.check_match(scrutinee, arms, *span, expected),
+            } => self.check_match(scrutinee, arms, *source, *span, expected),
 
             Expr::Field {
                 base,

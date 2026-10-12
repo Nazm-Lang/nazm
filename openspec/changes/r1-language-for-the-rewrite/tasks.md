@@ -16,7 +16,7 @@ each new construct by name until R2 carries it.
 
 - [x] 3.1 D3 `for x in xs` and `for i in a..b` (EXPERIMENTAL until 8.1)
 - [x] 3.2 L1 `Box[T]`, `List[T]` and the ownership rule (D1); release by worklist (runtime ABI 29)
-- [ ] 3.3 L3 patterns: `_` (with the covering warning), or-patterns, nested and literal patterns, `if let`, `let … else`
+- [x] 3.3 L3 patterns: `_`, or-patterns, nested and literal patterns, `if let`, `let … else` (the covering warning with L15)
 - [ ] 3.4 L5 tuples
 - [ ] 3.5 L6 derived `Hash` and `Ord`
 - [ ] 3.6 L8 `pub const` and constant arrays of `Str` and records

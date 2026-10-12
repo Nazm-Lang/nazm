@@ -834,7 +834,14 @@ impl<'a> Lower<'a> {
                 scrutinee,
                 arms,
                 span,
-            } => Stmt::Match(Box::new(self.matching(scrutinee, arms, *span, false)?)),
+                ..
+            } => {
+                if arms.iter().all(plain_arm) {
+                    Stmt::Match(Box::new(self.matching(scrutinee, arms, *span, false)?))
+                } else {
+                    Stmt::Block(self.matching_general(scrutinee, arms, *span, false)?)
+                }
+            }
             AstExpr::Block(b) => Stmt::Block(self.statement_block(b, Vec::new())?),
             other => Stmt::Eval(self.expr(other)?),
         })
@@ -1214,6 +1221,17 @@ impl<'a> Lower<'a> {
                 scrutinee,
                 arms,
                 span,
+                ..
+            } if !arms.iter().all(plain_arm) => {
+                let b = self.matching_general(scrutinee, arms, *span, true)?;
+                let ty = b.ty();
+                node(ExprKind::Block(b), ty, *span)
+            }
+            AstExpr::Match {
+                scrutinee,
+                arms,
+                span,
+                ..
             } => {
                 let m = self.matching(scrutinee, arms, *span, true)?;
                 // The type its arms produce; checking made them agree, and one that transfers
@@ -2106,26 +2124,32 @@ impl<'a> Lower<'a> {
             _ => None,
         };
         for arm in arms {
-            let Some(to) = self.res.variant(arm.variant_span) else {
+            let nazm_syntax::Pattern::Variant(vp) = &arm.pattern else {
                 return defect(
-                    arm.variant_span,
+                    arm.span,
+                    "a plain `match` arm that is not a variant pattern",
+                );
+            };
+            let Some(to) = self.res.variant(vp.variant_span) else {
+                return defect(
+                    vp.variant_span,
                     "an arm whose variant the checker did not resolve",
                 );
             };
             enumeration.get_or_insert(to.enumeration);
             let mut bindings = Vec::new();
-            for f in &arm.fields {
+            for f in &vp.fields {
                 // A discard binds nothing; the field is still the scrutinee's, and goes with it.
-                if f.binding.is_none() {
+                let nazm_syntax::Pattern::Bind { span: bound, .. } = &f.pattern else {
                     continue;
-                }
+                };
                 let Some(p) = self.res.payload(f.name_span) else {
                     return defect(f.name_span, "a pattern field the checker did not resolve");
                 };
                 bindings.push(Binding {
                     field: p.field,
-                    local: self.local_at(f.binding_span)?,
-                    at: f.binding_span,
+                    local: self.local_at(*bound)?,
+                    at: *bound,
                 });
             }
             let seed: Vec<LocalId> = bindings.iter().map(|b| b.local).collect();
@@ -2151,6 +2175,488 @@ impl<'a> Lower<'a> {
             origin: MatchOrigin::Written,
             at,
         })
+    }
+
+    /// A `match` with any pattern (R1a, `docs/spec.md`, *Patterns*), as
+    /// `{ let scrutinee = e; let arm = <the first arm whose pattern matches>; <arm `arm`> }`:
+    /// each pattern's test is a `Bool` of the plain matches and comparisons it means, and each
+    /// arm, once chosen, binds its names out of the scrutinee and runs its body — written once.
+    fn matching_general(
+        &mut self,
+        scrutinee: &AstExpr,
+        arms: &[AstArm],
+        at: Span,
+        value: bool,
+    ) -> Lowered<Block> {
+        let sval = self.expr(scrutinee)?;
+        let Some(sty) = sval.ty else {
+            return defect(at, "a `match` scrutinee the checker gave no type");
+        };
+        self.open(Vec::new());
+        let lowered = self.matching_general_in(sval, sty, arms, at, value);
+        let owns = self.close();
+        let (stmts, tail) = lowered?;
+        let ends = if tail.as_ref().is_some_and(|t| t.ty.is_none())
+            || stmts.last().is_some_and(|s| s.ends() == Ends::Transfers)
+        {
+            Ends::Transfers
+        } else {
+            Ends::FallsThrough
+        };
+        Ok(Block {
+            stmts,
+            tail: tail.map(Box::new),
+            ends,
+            owns,
+            at,
+        })
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn matching_general_in(
+        &mut self,
+        sval: Expr,
+        sty: Type,
+        arms: &[AstArm],
+        at: Span,
+        value: bool,
+    ) -> Lowered<(Vec<Stmt>, Option<Expr>)> {
+        let s = self.temp(Temp::Scrutinee, sty, at);
+        self.bind(s);
+        let mut stmts = vec![Stmt::Let {
+            local: s,
+            value: sval,
+        }];
+        let read = Expr {
+            kind: ExprKind::Local(s),
+            ty: Some(sty),
+            at,
+        };
+        // Which arm: the first whose test holds; the last needs none — exhaustiveness.
+        let k = self.temp(Temp::Arm, Type::Int, at);
+        self.bind(k);
+        let n = arms.len();
+        let mut choose = self.int_const(i64::try_from(n.saturating_sub(1)).unwrap_or(0), at);
+        for (i, arm) in arms.iter().enumerate().rev().skip(1) {
+            let test = self.pattern_test(&arm.pattern, &read)?;
+            let here = self.int_const(i64::try_from(i).unwrap_or(0), at);
+            choose = self.value_if(test, here, choose, Type::Int, at);
+        }
+        stmts.push(Stmt::Let {
+            local: k,
+            value: choose,
+        });
+        // Each arm, chosen by `arm`: its bindings, then its body.
+        let mut regions = Vec::with_capacity(n);
+        for arm in arms {
+            regions.push(self.arm_region(arm, &read, value)?);
+        }
+        let read_k = Expr {
+            kind: ExprKind::Local(k),
+            ty: Some(Type::Int),
+            at,
+        };
+        let mut chosen = regions.pop().ok_or(Defect {
+            at,
+            what: "a `match` with no arms".to_owned(),
+        })?;
+        for (i, region) in regions.into_iter().enumerate().rev() {
+            let here = self.int_const(i64::try_from(i).unwrap_or(0), at);
+            let cond = Expr {
+                kind: ExprKind::Compare {
+                    op: cir::CmpOp::Eq,
+                    operand: Type::Int,
+                    law: Law::Int,
+                    lhs: Box::new(read_k.clone()),
+                    rhs: Box::new(here),
+                },
+                ty: Some(Type::Bool),
+                at,
+            };
+            chosen = if value {
+                let ty = region.ty().or(chosen.ty());
+                Block {
+                    stmts: Vec::new(),
+                    tail: Some(Box::new(Expr {
+                        kind: ExprKind::If {
+                            cond: Box::new(cond),
+                            then: region,
+                            otherwise: chosen,
+                        },
+                        ty,
+                        at,
+                    })),
+                    ends: Ends::FallsThrough,
+                    owns: Vec::new(),
+                    at,
+                }
+            } else {
+                let stmt = Stmt::If {
+                    cond,
+                    then: region,
+                    otherwise: Some(chosen),
+                    at,
+                };
+                let ends = stmt.ends();
+                Block {
+                    stmts: vec![stmt],
+                    tail: None,
+                    ends,
+                    owns: Vec::new(),
+                    at,
+                }
+            };
+        }
+        if value {
+            let ty = chosen.ty();
+            let tail = Expr {
+                kind: ExprKind::Block(chosen),
+                ty,
+                at,
+            };
+            Ok((stmts, Some(tail)))
+        } else {
+            stmts.push(Stmt::Block(chosen));
+            Ok((stmts, None))
+        }
+    }
+
+    fn int_const(&mut self, v: i64, at: Span) -> Expr {
+        Expr {
+            kind: ExprKind::Const(self.constant(Const::Int(v))),
+            ty: Some(Type::Int),
+            at,
+        }
+    }
+
+    fn bool_const(&mut self, v: bool, at: Span) -> Expr {
+        Expr {
+            kind: ExprKind::Const(self.constant(Const::Bool(v))),
+            ty: Some(Type::Bool),
+            at,
+        }
+    }
+
+    /// `if cond { then } else { otherwise }` as a value of `ty`.
+    fn value_if(&mut self, cond: Expr, then: Expr, otherwise: Expr, ty: Type, at: Span) -> Expr {
+        let region = |e: Expr| Block {
+            stmts: Vec::new(),
+            ends: Ends::FallsThrough,
+            tail: Some(Box::new(e)),
+            owns: Vec::new(),
+            at,
+        };
+        Expr {
+            kind: ExprKind::If {
+                cond: Box::new(cond),
+                then: region(then),
+                otherwise: region(otherwise),
+            },
+            ty: Some(ty),
+            at,
+        }
+    }
+
+    /// Whether `v` matches `p`: a `Bool` of plain matches and comparisons.
+    fn pattern_test(&mut self, p: &nazm_syntax::Pattern, v: &Expr) -> Lowered<Expr> {
+        use nazm_syntax::Pattern as P;
+        let at = p.span();
+        match p {
+            P::Wildcard { .. } | P::Bind { .. } => Ok(self.bool_const(true, at)),
+            P::Literal(e) => {
+                let lit = self.expr(e)?;
+                let Some(ty) = v.ty else {
+                    return defect(at, "a literal pattern against a value of no type");
+                };
+                let Some(law) = Law::of(cir::CmpOp::Eq, ty) else {
+                    return defect(at, "a literal pattern against a type with no equality");
+                };
+                Ok(Expr {
+                    kind: ExprKind::Compare {
+                        op: cir::CmpOp::Eq,
+                        operand: ty,
+                        law,
+                        lhs: Box::new(v.clone()),
+                        rhs: Box::new(lit),
+                    },
+                    ty: Some(Type::Bool),
+                    at,
+                })
+            }
+            P::Or { alts, .. } => {
+                let mut tests = Vec::with_capacity(alts.len());
+                for alt in alts {
+                    tests.push(self.pattern_test(alt, v)?);
+                }
+                let mut acc = tests.pop().ok_or(Defect {
+                    at,
+                    what: "an or-pattern with no alternatives".to_owned(),
+                })?;
+                while let Some(t) = tests.pop() {
+                    let yes = self.bool_const(true, at);
+                    acc = self.value_if(t, yes, acc, Type::Bool, at);
+                }
+                Ok(acc)
+            }
+            P::Variant(vp) => {
+                let (id, chosen, n) = self.variant_of(vp, v)?;
+                let mut arms_out = Vec::with_capacity(n);
+                for w in 0..n {
+                    let wv = u32::try_from(w).unwrap_or(u32::MAX);
+                    self.open(Vec::new());
+                    let mut bindings = Vec::new();
+                    let mut test: Option<Expr> = None;
+                    if wv == chosen {
+                        // Each field whose pattern tests something, read into a local.
+                        let mut parts = Vec::new();
+                        for f in &vp.fields {
+                            if matches!(f.pattern, P::Wildcard { .. } | P::Bind { .. }) {
+                                continue;
+                            }
+                            let (field, local, ty) = self.payload_local(id, chosen, f)?;
+                            bindings.push(Binding {
+                                field,
+                                local,
+                                at: f.name_span,
+                            });
+                            let read = Expr {
+                                kind: ExprKind::Local(local),
+                                ty: Some(ty),
+                                at: f.name_span,
+                            };
+                            parts.push(self.pattern_test(&f.pattern, &read)?);
+                        }
+                        while let Some(part) = parts.pop() {
+                            test = Some(match test {
+                                None => part,
+                                Some(rest) => {
+                                    let no = self.bool_const(false, at);
+                                    self.value_if(part, rest, no, Type::Bool, at)
+                                }
+                            });
+                        }
+                    }
+                    let _ = self.close();
+                    let tail = match test {
+                        Some(t) => t,
+                        None => self.bool_const(wv == chosen, at),
+                    };
+                    arms_out.push(Arm {
+                        variant: wv,
+                        body: Block {
+                            stmts: Vec::new(),
+                            tail: Some(Box::new(tail)),
+                            ends: Ends::FallsThrough,
+                            owns: bindings.iter().map(|b| b.local).collect(),
+                            at,
+                        },
+                        bindings,
+                        at,
+                    });
+                }
+                Ok(Expr {
+                    kind: ExprKind::Match(Box::new(Match {
+                        scrutinee: v.clone(),
+                        enumeration: id,
+                        arms: arms_out,
+                        origin: MatchOrigin::Written,
+                        at,
+                    })),
+                    ty: Some(Type::Bool),
+                    at,
+                })
+            }
+        }
+    }
+
+    /// The enum a variant pattern matches `v` of, the variant it names, and how many the
+    /// enum has.
+    fn variant_of(
+        &mut self,
+        vp: &nazm_syntax::VariantPattern,
+        v: &Expr,
+    ) -> Lowered<(nazm_sema::EnumId, u32, usize)> {
+        let Some(Type::Enum(id)) = v.ty else {
+            return defect(
+                vp.ty_span,
+                "a variant pattern against a value that is not an enum",
+            );
+        };
+        let Some(to) = self.res.variant(vp.variant_span) else {
+            return defect(
+                vp.variant_span,
+                "a variant pattern the checker did not resolve",
+            );
+        };
+        let n = self.res.enums().get(id).map_or(0, |d| d.variants.len());
+        Ok((id, to.variant, n))
+    }
+
+    /// A payload field of `variant` read into a local of its own, for a test or an extraction.
+    fn payload_local(
+        &mut self,
+        id: nazm_sema::EnumId,
+        variant: u32,
+        f: &nazm_syntax::PatternField,
+    ) -> Lowered<(u32, LocalId, Type)> {
+        let Some(p) = self.res.payload(f.name_span) else {
+            return defect(f.name_span, "a pattern field the checker did not resolve");
+        };
+        let Some(ty) = self
+            .res
+            .enums()
+            .get(id)
+            .and_then(|d| d.variants.get(variant as usize))
+            .and_then(|v| v.fields.get(p.field as usize))
+            .map(|fd| fd.ty)
+        else {
+            return defect(f.name_span, "a payload field with no type");
+        };
+        let local = self.temp(Temp::Payload, ty, f.name_span);
+        Ok((p.field, local, ty))
+    }
+
+    /// The value `name` (bound at `bound`) takes when `v` matches `p`, out of `p`'s structure;
+    /// `None` when `p` does not bind it. A branch exhaustiveness rules out ends the process
+    /// without a value, so it needs none.
+    fn extract(&mut self, p: &nazm_syntax::Pattern, v: &Expr, name: &str) -> Lowered<Option<Expr>> {
+        use nazm_syntax::Pattern as P;
+        let at = p.span();
+        Ok(match p {
+            P::Bind { name: n, .. } if n == name => Some(v.clone()),
+            P::Bind { .. } | P::Wildcard { .. } | P::Literal(_) => None,
+            P::Or { alts, .. } => {
+                let mut options = Vec::new();
+                for alt in alts {
+                    if let Some(x) = self.extract(alt, v, name)? {
+                        options.push((alt, x));
+                    }
+                }
+                let Some((_, mut acc)) = options.pop() else {
+                    return Ok(None);
+                };
+                let ty = acc.ty;
+                while let Some((alt, x)) = options.pop() {
+                    let test = self.pattern_test(alt, v)?;
+                    let region = |e: Expr| Block {
+                        stmts: Vec::new(),
+                        ends: Ends::FallsThrough,
+                        tail: Some(Box::new(e)),
+                        owns: Vec::new(),
+                        at,
+                    };
+                    acc = Expr {
+                        kind: ExprKind::If {
+                            cond: Box::new(test),
+                            then: region(x),
+                            otherwise: region(acc),
+                        },
+                        ty,
+                        at,
+                    };
+                }
+                Some(acc)
+            }
+            P::Variant(vp) => {
+                let Some(f) = vp
+                    .fields
+                    .iter()
+                    .find(|f| f.pattern.bindings().iter().any(|(n, _)| *n == name))
+                else {
+                    return Ok(None);
+                };
+                let (id, chosen, n) = self.variant_of(vp, v)?;
+                let mut arms_out = Vec::with_capacity(n);
+                let mut ty = None;
+                for w in 0..n {
+                    let wv = u32::try_from(w).unwrap_or(u32::MAX);
+                    if wv == chosen {
+                        let (field, local, fty) = self.payload_local(id, chosen, f)?;
+                        let read = Expr {
+                            kind: ExprKind::Local(local),
+                            ty: Some(fty),
+                            at: f.name_span,
+                        };
+                        let Some(x) = self.extract(&f.pattern, &read, name)? else {
+                            return defect(f.name_span, "a binding its field's pattern lost");
+                        };
+                        ty = x.ty;
+                        arms_out.push(Arm {
+                            variant: wv,
+                            bindings: vec![Binding {
+                                field,
+                                local,
+                                at: f.name_span,
+                            }],
+                            body: Block {
+                                stmts: Vec::new(),
+                                tail: Some(Box::new(x)),
+                                ends: Ends::FallsThrough,
+                                owns: vec![local],
+                                at,
+                            },
+                            at,
+                        });
+                    } else {
+                        let code = self.int_const(70, at);
+                        arms_out.push(Arm {
+                            variant: wv,
+                            bindings: Vec::new(),
+                            body: Block {
+                                stmts: vec![Stmt::Eval(Expr {
+                                    kind: ExprKind::Builtin {
+                                        op: nazm_sema::Intrinsic::ExitWith,
+                                        type_args: Vec::new(),
+                                        args: vec![code],
+                                        callee_at: at,
+                                    },
+                                    ty: Some(Type::Int),
+                                    at,
+                                })],
+                                tail: None,
+                                ends: Ends::Transfers,
+                                owns: Vec::new(),
+                                at,
+                            },
+                            at,
+                        });
+                    }
+                }
+                Some(Expr {
+                    kind: ExprKind::Match(Box::new(Match {
+                        scrutinee: v.clone(),
+                        enumeration: id,
+                        arms: arms_out,
+                        origin: MatchOrigin::Written,
+                        at,
+                    })),
+                    ty,
+                    at,
+                })
+            }
+        })
+    }
+
+    /// One arm of a general `match`: its bindings, each extracted from the scrutinee, then its
+    /// body — a value region or a statement region.
+    fn arm_region(&mut self, arm: &AstArm, read: &Expr, value: bool) -> Lowered<Block> {
+        let mut lets = Vec::new();
+        let mut seed = Vec::new();
+        for (name, bound) in arm.pattern.bindings() {
+            let local = self.local_at(bound)?;
+            let Some(x) = self.extract(&arm.pattern, read, name)? else {
+                return defect(bound, "a binding its pattern does not bind");
+            };
+            lets.push(Stmt::Let { local, value: x });
+            seed.push(local);
+        }
+        let mut body = match (&arm.body, value) {
+            (AstExpr::Block(b), true) => self.value_block(b, seed)?,
+            (AstExpr::Block(b), false) => self.statement_block(b, seed)?,
+            (e, value) => self.expr_region(e, seed, value)?,
+        };
+        body.stmts.splice(0..0, lets);
+        Ok(body)
     }
 
     /// `operand?`, as the `match` it means:
@@ -2379,4 +2885,14 @@ mod tests {
         assert_eq!(core.functions.len(), 2);
         assert!(cir::verify(&core, &res).is_empty());
     }
+}
+
+/// Whether an arm is a plain variant pattern — each payload field a name or `_` — which the
+/// `match` before R1a took, and which lowers to one Core IR `match` arm.
+fn plain_arm(arm: &AstArm) -> bool {
+    matches!(&arm.pattern, nazm_syntax::Pattern::Variant(v)
+    if v.fields.iter().all(|f| matches!(
+        f.pattern,
+        nazm_syntax::Pattern::Bind { .. } | nazm_syntax::Pattern::Wildcard { .. }
+    )))
 }

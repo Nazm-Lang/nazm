@@ -37,9 +37,9 @@ use nazm_span::{FileId, Span};
 use crate::ast::{
     Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, For, ForIter, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import,
-    Let, MatchArm, MethodOf, Param, PatternField, Place, PlaceField, PlaceStep, Program, Qualifier,
-    Record, Reexport, ReexportName, Requirement, Return, Scope, Spawn, Stmt, Trait, TraitMethod,
-    TypeName, TypeParam, Variant, While,
+    Let, MatchArm, MatchSource, MethodOf, Param, Pattern, PatternField, Place, PlaceField,
+    PlaceStep, Program, Qualifier, Record, Reexport, ReexportName, Requirement, Return, Scope,
+    Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, VariantPattern, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -265,6 +265,13 @@ enum Parsed {
     Stmt(Stmt),
     /// An expression with no `;`, followed by the block's `}`: the block's value.
     Tail(Expr),
+    /// `let P = e else { D };` (R1a): the rest of the block is its success arm.
+    LetElse {
+        pattern: Pattern,
+        value: Expr,
+        otherwise: Block,
+        span: Span,
+    },
 }
 
 /// Parse one file's lossless scan into both trees: the abstract [`Program`] and the
@@ -2599,20 +2606,70 @@ impl<'a> Parser<'a> {
     fn block_inner(&mut self) -> Option<Block> {
         let at = self.checkpoint();
         let open = self.expect(&TokenKind::LBrace, "to start a block")?;
+        let mut deepest = 0;
+        let (statements, tail) = self.block_items(&mut deepest)?;
+        let close = self.expect(&TokenKind::RBrace, "to close the block")?;
+        self.built(deepest + 1)?;
+        self.wrap(at, SyntaxKind::Block);
+        Some(Block {
+            statements,
+            tail,
+            span: open.join(close),
+        })
+    }
+
+    /// A block's statements and tail, up to its `}` and not including it. A `let … else`
+    /// (R1a) takes the rest as its success arm: the block's tail becomes the `match` it
+    /// means, whose first arm is a block of what followed it.
+    fn block_items(&mut self, deepest: &mut usize) -> Option<(Vec<Stmt>, Option<Box<Expr>>)> {
         let mut statements = Vec::new();
         let mut tail = None;
-        let mut deepest = 0;
-
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
             let stmt = self.checkpoint();
             let start = self.pos;
-            let parsed = self.statement(&mut deepest);
+            let parsed = self.statement(deepest);
             // A probe's hole ends with the statement holding it (N26).
             self.hole_open = false;
             match parsed {
                 Some(Parsed::Stmt(s)) => statements.push(s),
                 Some(Parsed::Tail(e)) => {
                     tail = Some(Box::new(e));
+                    break;
+                }
+                Some(Parsed::LetElse {
+                    pattern,
+                    value,
+                    otherwise,
+                    span,
+                }) => {
+                    let rest_start = self.peek_span().start;
+                    let (rest, rest_tail) = self.block_items(deepest)?;
+                    let rest_end = self.peek_span().start;
+                    let rest = Block {
+                        statements: rest,
+                        tail: rest_tail,
+                        span: Span::new(self.file, rest_start, rest_end),
+                    };
+                    let wild = Pattern::Wildcard {
+                        span: Span::new(self.file, otherwise.span.start, otherwise.span.start),
+                    };
+                    tail = Some(Box::new(Expr::Match {
+                        scrutinee: Box::new(value),
+                        arms: vec![
+                            MatchArm {
+                                span: pattern.span().join(rest.span),
+                                pattern,
+                                body: Expr::Block(Box::new(rest)),
+                            },
+                            MatchArm {
+                                span: otherwise.span,
+                                pattern: wild,
+                                body: Expr::Block(Box::new(otherwise)),
+                            },
+                        ],
+                        source: MatchSource::LetElse,
+                        span: span.join(Span::new(self.file, rest_end, rest_end)),
+                    }));
                     break;
                 }
                 None => {
@@ -2644,15 +2701,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-
-        let close = self.expect(&TokenKind::RBrace, "to close the block")?;
-        self.built(deepest + 1)?;
-        self.wrap(at, SyntaxKind::Block);
-        Some(Block {
-            statements,
-            tail,
-            span: open.join(close),
-        })
+        Some((statements, tail))
     }
 
     /// One statement of a block, or the block's tail expression.
@@ -2660,6 +2709,13 @@ impl<'a> Parser<'a> {
     /// `deepest` is the block's running depth: a statement is not itself a node, so its
     /// depth is its deepest sub-expression.
     fn statement(&mut self, deepest: &mut usize) -> Option<Parsed> {
+        // `let P = e else { D };` (R1a): a `let` whose next word is not a name followed by
+        // `=` (or `mut`) is a pattern's.
+        if self.at(&TokenKind::Let) && !self.plain_let_ahead() {
+            let parsed = self.let_else()?;
+            *deepest = (*deepest).max(self.child());
+            return Some(parsed);
+        }
         if self.at(&TokenKind::Let) {
             let s = Stmt::Let(self.let_stmt()?);
             *deepest = (*deepest).max(self.child());
@@ -2867,6 +2923,37 @@ impl<'a> Parser<'a> {
         self.wrap(at, SyntaxKind::ReturnStmt);
         Some(Return {
             value,
+            span: start.join(semi),
+        })
+    }
+
+    /// Whether the `let` at the cursor binds one name — `let x =` or `let mut` — rather than
+    /// matching a pattern.
+    fn plain_let_ahead(&self) -> bool {
+        let at = |k: usize| self.tokens.get(self.pos + k).map(|t| &t.kind);
+        matches!(at(1), Some(TokenKind::Mut))
+            || (matches!(at(1), Some(TokenKind::Ident(_))) && matches!(at(2), Some(TokenKind::Eq)))
+    }
+
+    /// `let P = e else { D };` (R1a).
+    fn let_else(&mut self) -> Option<Parsed> {
+        let at = self.checkpoint();
+        let start = self.peek_span();
+        self.advance();
+        let pattern = self.pattern()?;
+        self.expect(&TokenKind::Eq, "between a `let` pattern and its value")?;
+        let value = self.expr()?;
+        self.expect(
+            &TokenKind::Else,
+            "after a `let` pattern's value: `let P = e else { … };`",
+        )?;
+        let otherwise = self.block()?;
+        let semi = self.expect(&TokenKind::Semi, "after a `let … else`")?;
+        self.wrap(at, SyntaxKind::LetElseStmt);
+        Some(Parsed::LetElse {
+            pattern,
+            value,
+            otherwise,
             span: start.join(semi),
         })
     }
@@ -3278,6 +3365,99 @@ impl<'a> Parser<'a> {
     /// unfinished arm (N26).
     fn match_arm(&mut self) -> Option<(MatchArm, bool)> {
         let arm = self.checkpoint();
+        let holed = self.hole.is_some();
+        let pattern = self.pattern()?;
+        // A probe's hole in this pattern, with no `=>` written yet: the arm has no body
+        // to read, and is given a zero-width `0` so the pattern can be checked (N26).
+        let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);
+        let end = pattern.span().end;
+        let body = if hole_arm {
+            Expr::Int {
+                value: 0,
+                span: Span::new(self.file, end, end),
+            }
+        } else {
+            self.expect(&TokenKind::FatArrow, "between a pattern and its arm")?;
+            self.expr()?
+        };
+        self.wrap(arm, SyntaxKind::MatchArm);
+        Some((
+            MatchArm {
+                span: pattern.span().join(body.span()),
+                pattern,
+                body,
+            },
+            hole_arm,
+        ))
+    }
+
+    /// A pattern: one, or several separated by `|` (R1a, `docs/spec.md`, *Patterns*).
+    fn pattern(&mut self) -> Option<Pattern> {
+        let at = self.checkpoint();
+        let first = self.pattern_one()?;
+        if !self.at(&TokenKind::Pipe) {
+            return Some(first);
+        }
+        let mut alts = vec![first];
+        while self.eat(&TokenKind::Pipe) {
+            alts.push(self.pattern_one()?);
+        }
+        self.wrap(at, SyntaxKind::OrPattern);
+        let first = alts.first().map(Pattern::span)?;
+        let last = alts.last().map_or(first, Pattern::span);
+        Some(Pattern::Or {
+            alts,
+            span: first.join(last),
+        })
+    }
+
+    /// One pattern of an or-pattern: `_`, a name, a literal, or a variant pattern.
+    fn pattern_one(&mut self) -> Option<Pattern> {
+        let span = self.peek_span();
+        match self.peek().clone() {
+            // A literal (R1a), negated or not, read as the literal an expression reads — and
+            // only that: `|` after it separates alternatives, never a bit operator.
+            TokenKind::Int(_)
+            | TokenKind::IntTooLarge(_)
+            | TokenKind::Float(_)
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::Str(_)
+            | TokenKind::Minus => Some(Pattern::Literal(self.primary()?)),
+            TokenKind::Ident(name) => {
+                let next = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+                if matches!(next, Some(TokenKind::Dot | TokenKind::ColonColon)) {
+                    return self.variant_pattern().map(Pattern::Variant);
+                }
+                self.advance();
+                if name == "_" {
+                    return Some(Pattern::Wildcard { span });
+                }
+                if self.reserved(&name, span) {
+                    return None;
+                }
+                Some(Pattern::Bind { name, span })
+            }
+            other => {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        span,
+                        format!("expected a pattern, found {}", other.describe()),
+                    )
+                    .help(
+                        "a pattern is `_`, a name, a literal, `Enum.Variant(field: pattern)`, \
+                         or several of them separated by `|`",
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// `Enum.Variant(field: pattern, …)`, qualified by a module's alias if written so.
+    fn variant_pattern(&mut self) -> Option<VariantPattern> {
+        let at = self.checkpoint();
         let qualifier = self.qualifier_before_name();
         let ty_span = self.peek_span();
         let ty = match self.advance() {
@@ -3290,7 +3470,7 @@ impl<'a> Parser<'a> {
                         format!("expected an enum name, found {}", other.describe()),
                     )
                     .help(
-                        "every arm names the variant it selects, qualified by its \
+                        "a variant pattern names the variant it selects, qualified by its \
                          enum: `State.Ready() => 0,`",
                     ),
                 );
@@ -3308,40 +3488,22 @@ impl<'a> Parser<'a> {
                         variant_span,
                         format!("expected a variant name, found {}", other.describe()),
                     )
-                    .help("an arm selects one variant: `State.Failed(code: c) => c,`"),
+                    .help("a variant pattern selects one variant: `State.Failed(code: c) => c,`"),
                 );
                 return None;
             }
         };
-        let holed = self.hole.is_some();
-        let fields = self.pattern_fields(variant_span)?;
-        self.wrap(arm, SyntaxKind::Pattern);
-        // A probe's hole in this pattern, with no `=>` written yet: the arm has no body
-        // to read, and is given a zero-width `0` so the pattern can be checked (N26).
-        let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);
-        let body = if hole_arm {
-            Expr::Int {
-                value: 0,
-                span: Span::new(self.file, variant_span.end, variant_span.end),
-            }
-        } else {
-            self.expect(&TokenKind::FatArrow, "between a pattern and its arm")?;
-            self.expr()?
-        };
-        self.wrap(arm, SyntaxKind::MatchArm);
-        Some((
-            MatchArm {
-                qualifier,
-                ty,
-                ty_span,
-                variant,
-                variant_span,
-                fields,
-                span: ty_span.join(body.span()),
-                body,
-            },
-            hole_arm,
-        ))
+        let (fields, close) = self.pattern_fields(variant_span)?;
+        self.wrap(at, SyntaxKind::Pattern);
+        Some(VariantPattern {
+            qualifier,
+            ty,
+            ty_span,
+            variant,
+            variant_span,
+            fields,
+            span: ty_span.join(close),
+        })
     }
 
     /// `match scrutinee { Enum.Variant(field: binding) => body, … }`
@@ -3382,16 +3544,17 @@ impl<'a> Parser<'a> {
         Some(Expr::Match {
             scrutinee: Box::new(scrutinee),
             arms,
+            source: MatchSource::Written,
             span: start.join(close),
         })
     }
 
-    /// `( field: binding, … )` — a pattern's payload list.
+    /// `( field: pattern, … )` — a variant pattern's payload list, and its `)`.
     ///
     /// Each field is named and bound to an identifier, or discarded with `_`. Whether every
     /// field of the variant is present, and whether two bindings share a name, are the
     /// checker's questions: both are about a variant the parser has not resolved.
-    fn pattern_fields(&mut self, variant: Span) -> Option<Vec<PatternField>> {
+    fn pattern_fields(&mut self, variant: Span) -> Option<(Vec<PatternField>, Span)> {
         let list = self.checkpoint();
         let open = self.pos;
         self.expect(&TokenKind::LParen, "to start the payload")?;
@@ -3423,42 +3586,21 @@ impl<'a> Parser<'a> {
                 }
             };
             self.expect(&TokenKind::Colon, "after a payload field name")?;
-            let binding_span = self.peek_span();
-            let binding = match self.advance() {
-                TokenKind::Ident(n) => n,
-                other => {
-                    self.report(
-                        Diagnostic::error(
-                            codes::UNEXPECTED_TOKEN,
-                            binding_span,
-                            format!("expected a binding or `_`, found {}", other.describe()),
-                        )
-                        .help(
-                            "a payload field is bound to a name or discarded with `_`; \
-                             `_` still leaves the value to the enum, it only declines to \
-                             name it",
-                        ),
-                    );
-                    return None;
-                }
-            };
+            // `name: pattern` since R1a; `name: binding` and `name: _` are two of them.
+            let pattern = self.pattern()?;
             self.wrap(field, SyntaxKind::PatternField);
             fields.push(PatternField {
                 name,
                 name_span,
-                // `_` is an ordinary identifier to the lexer and a discard here. One
-                // spelling, decided by position: `docs/spec.md` gives `_` its meaning
-                // inside a pattern and nowhere else.
-                binding: (binding != "_").then_some(binding),
-                binding_span,
+                pattern,
             });
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
         }
-        self.expect(&TokenKind::RParen, "to close the payload")?;
+        let close = self.expect(&TokenKind::RParen, "to close the payload")?;
         self.wrap(list, SyntaxKind::PatternFieldList);
-        Some(fields)
+        Some((fields, close))
     }
 
     fn expr(&mut self) -> Option<Expr> {
@@ -4036,6 +4178,57 @@ impl<'a> Parser<'a> {
                 self.built(1)?;
                 self.wrap(at, SyntaxKind::Literal);
                 Some(Expr::Str { value, span })
+            }
+            // `if let P = e { … } else { … }` (R1a): the `match` it means.
+            TokenKind::If
+                if matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Let)
+                ) =>
+            {
+                self.advance();
+                self.advance();
+                let pattern = self.pattern()?;
+                self.expect(&TokenKind::Eq, "between an `if let` pattern and its value")?;
+                let scrutinee = self.expr()?;
+                let mut deepest = self.child();
+                let then_block = self.block()?;
+                deepest = deepest.max(self.child());
+                let else_block = if self.eat(&TokenKind::Else) {
+                    let b = self.block()?;
+                    deepest = deepest.max(self.child());
+                    Some(b)
+                } else {
+                    None
+                };
+                self.built(deepest + 1)?;
+                self.wrap(at, SyntaxKind::IfLetExpr);
+                let end = else_block.as_ref().map_or(then_block.span, |b| b.span);
+                let otherwise = else_block.unwrap_or(Block {
+                    statements: Vec::new(),
+                    tail: None,
+                    span: Span::new(self.file, then_block.span.end, then_block.span.end),
+                });
+                let wild = Pattern::Wildcard {
+                    span: Span::new(self.file, otherwise.span.start, otherwise.span.start),
+                };
+                Some(Expr::Match {
+                    scrutinee: Box::new(scrutinee),
+                    arms: vec![
+                        MatchArm {
+                            span: pattern.span().join(then_block.span),
+                            pattern,
+                            body: Expr::Block(Box::new(then_block)),
+                        },
+                        MatchArm {
+                            span: otherwise.span,
+                            pattern: wild,
+                            body: Expr::Block(Box::new(otherwise)),
+                        },
+                    ],
+                    source: MatchSource::IfLet,
+                    span: span.join(end),
+                })
             }
             TokenKind::If => {
                 self.advance();

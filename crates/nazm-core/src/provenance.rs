@@ -644,6 +644,36 @@ impl<'b> Walk<'_, 'b> {
         name.unwrap_or_else(|| WILD_CELL.to_owned())
     }
 
+    /// What each name a pattern binds carries: a payload field's part of the value's shape, or
+    /// the whole value's flow where its shape is not kept (R1a for nesting, alternatives and
+    /// names at the top; a payload field's binding before).
+    fn bind_pattern(&mut self, p: &'b nazm_syntax::Pattern, v: &Shaped) {
+        match p {
+            nazm_syntax::Pattern::Bind { span, .. } => self.assign(*span, v),
+            nazm_syntax::Pattern::Variant(vp) => {
+                for f in &vp.fields {
+                    let part = match &v.parts {
+                        Some(parts) => parts
+                            .get(&(vp.variant.clone(), f.name.clone()))
+                            .cloned()
+                            .unwrap_or_default(),
+                        None => Shaped::whole(v.flow.clone()),
+                    };
+                    self.bind_pattern(&f.pattern, &part);
+                }
+            }
+            nazm_syntax::Pattern::Or { alts, .. } => {
+                for alt in alts {
+                    self.bind_pattern(alt, v);
+                }
+            }
+            nazm_syntax::Pattern::Literal(e) => {
+                self.expr(e);
+            }
+            nazm_syntax::Pattern::Wildcard { .. } => {}
+        }
+    }
+
     fn expr_var(&mut self, span: Span) -> Shaped {
         let Some(s) = self.res.var(span).map(|s| s as usize) else {
             // A named function written as a value (N80): which indirect calls may run it.
@@ -811,16 +841,7 @@ impl<'b> Walk<'_, 'b> {
                 let s = self.shaped(scrutinee);
                 let mut out = Shaped::default();
                 for arm in arms {
-                    for p in &arm.fields {
-                        let v = match &s.parts {
-                            Some(parts) => parts
-                                .get(&(arm.variant.clone(), p.name.clone()))
-                                .cloned()
-                                .unwrap_or_default(),
-                            None => Shaped::whole(s.flow.clone()),
-                        };
-                        self.assign(p.binding_span, &v);
-                    }
+                    self.bind_pattern(&arm.pattern, &s);
                     let v = self.shaped(&arm.body);
                     out.join(&v);
                 }

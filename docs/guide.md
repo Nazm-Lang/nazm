@@ -538,8 +538,9 @@ accepts.
 | `function_type` | `"fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ]` |
 | `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
-| `statement` | `let_statement \| assignment \| while_statement \| for_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
+| `statement` | `let_statement \| assignment \| while_statement \| for_statement \| let_else_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
 | `let_statement` | `"let" , [ "mut" ] , IDENT , "=" , expression , ";"` |
+| `let_else_statement` | `"let" , pattern , "=" , expression , "else" , block , ";"` |
 | `assignment` | `place , "=" , expression , ";"` |
 | `place` | `IDENT , { "." , IDENT \| "[" , expression , "]" }` |
 | `while_statement` | `"while" , expression , block` |
@@ -562,7 +563,7 @@ accepts.
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" \| "~" ] , primary` |
 | `primary` | `atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] \| "?" \| "[" , expression , "]" }` |
-| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| closure \| array \| "(" , expression , ")"` |
+| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| "(" , expression , ")"` |
 | `array` | `"[" , expression , ( { "," , expression } , [ "," ] \| ";" , expression ) , "]"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
@@ -572,11 +573,15 @@ accepts.
 | `variant_construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")"` |
 | `arguments` | `expression , { "," , expression }` |
 | `if_expression` | `"if" , expression , block , [ "else" , ( block \| if_expression ) ]` |
+| `if_let_expression` | `"if" , "let" , pattern , "=" , expression , block , [ "else" , block ]` |
 | `match_expression` | `"match" , expression , "{" , [ match_arms ] , "}"` |
 | `match_arms` | `match_arm , { "," , match_arm } , [ "," ]` |
-| `match_arm` | `[ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression` |
+| `match_arm` | `pattern , "=>" , expression` |
+| `pattern` | `pattern_one , { "\|" , pattern_one }` |
+| `pattern_one` | `"_" \| IDENT \| [ "-" ] , INT \| STRING \| "true" \| "false" \| variant_pattern` |
+| `variant_pattern` | `[ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")"` |
 | `pattern_fields` | `pattern_field , { "," , pattern_field } , [ "," ]` |
-| `pattern_field` | `IDENT , ":" , IDENT` |
+| `pattern_field` | `IDENT , ":" , pattern` |
 
 ### `program`
 
@@ -1168,7 +1173,7 @@ fn main() -> Int { 1 }
 ### `statement`
 
 ```ebnf
-statement = let_statement | assignment | while_statement | for_statement | return_statement | break_statement | continue_statement | scope_statement | spawn_statement | expression_statement ;
+statement = let_statement | assignment | while_statement | for_statement | let_else_statement | return_statement | break_statement | continue_statement | scope_statement | spawn_statement | expression_statement ;
 ```
 
 ```nazm
@@ -1187,6 +1192,18 @@ fn main() -> Int { let a = 1; a }
 
 ```nazm
 fn main() -> Int { let mut a = 1; a = 2; a }
+```
+
+### `let_else_statement`
+
+```ebnf
+let_else_statement = "let" , pattern , "=" , expression , "else" , block , ";" ;
+```
+
+R1a: `let P = e else { … };` — the `else` must leave; `P`'s names are in scope after it.
+
+```nazm
+fn f(o: Option[Int]) -> Int { let Option.Some(value: x) = o else { return 0; }; x } fn main() -> Int { f(Option[Int].Some(value: 2)) }
 ```
 
 ### `assignment`
@@ -1514,7 +1531,7 @@ fn main() -> Int { let xs = [1, 2, 3]; xs[1] }
 ### `atom`
 
 ```ebnf
-atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | match_expression | closure | array | "(" , expression , ")" ;
+atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | array | "(" , expression , ")" ;
 ```
 
 A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
@@ -1663,6 +1680,18 @@ fn main() -> Int { if true { 1 } else { 2 } }
 fn main() -> Int { let mut n = 0; if true { n = 1; } n }
 ```
 
+### `if_let_expression`
+
+```ebnf
+if_let_expression = "if" , "let" , pattern , "=" , expression , block , [ "else" , block ] ;
+```
+
+R1a: `if let P = e { … } else { … }` means `match e { P => …, _ => … }`.
+
+```nazm
+fn main() -> Int { if let 3 = 3 { 1 } else { 0 } }
+```
+
 ### `match_expression`
 
 ```ebnf
@@ -1672,9 +1701,9 @@ match_expression = "match" , expression , "{" , [ match_arms ] , "}" ;
 The one elimination form for an enum. An expression, so it composes wherever one may
 appear, and its arms reuse the existing block and completion rules rather than
 introducing a second set.
-Every variant gets exactly one arm — there is no `_` arm, deliberately, so that adding
-a variant breaks the matches that believed they had handled the whole enum. See
-`docs/spec.md`, *Exhaustiveness*.
+Every value is matched by some arm and no arm is unreachable (`docs/spec.md`, *Patterns*).
+Since R1a an arm's pattern may be `_`, a name, a literal or several alternatives; a `match`
+written variant by variant still breaks when a variant is added, as *Exhaustiveness* says.
 
 ```nazm
 enum E { A, B(x: Int), } fn main() -> Int { match E.A() { E.A() => 1, E.B(x: n) => n, } }
@@ -1697,7 +1726,7 @@ enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } }
 ### `match_arm`
 
 ```ebnf
-match_arm = [ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
+match_arm = pattern , "=>" , expression ;
 ```
 
 A pattern names the enum and never its type arguments: the value being matched already
@@ -1706,6 +1735,41 @@ has one concrete type, and `Maybe.Some(value: v)` matches a `Maybe[Int]` and a
 
 ```nazm
 enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } }
+```
+
+### `pattern`
+
+```ebnf
+pattern = pattern_one , { "|" , pattern_one } ;
+```
+
+R1a: a pattern is one alternative or several separated by `|`.
+
+```nazm
+fn main() -> Int { match 2 { 0 => 10, 1 | 2 => 20, n => n, } }
+```
+
+### `pattern_one`
+
+```ebnf
+pattern_one = "_" | IDENT | [ "-" ] , INT | STRING | "true" | "false" | variant_pattern ;
+```
+
+`_`, a name, a literal (an integer, perhaps negated, a string, `true` or `false`), or a
+variant pattern.
+
+```nazm
+enum E { A, B(x: Int), } fn main() -> Int { match E.B(x: 3) { E.B(x: 3) => 1, E.B(x: _) => 2, _ => 0, } }
+```
+
+### `variant_pattern`
+
+```ebnf
+variant_pattern = [ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" ;
+```
+
+```nazm
+enum E { V(x: Int, y: Bool), } fn main() -> Int { match E.V(x: 1, y: true) { E.V(x: 1, y: _) => 1, E.V(x: n, y: _) => n, } }
 ```
 
 ### `pattern_fields`
@@ -1721,11 +1785,11 @@ enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: 
 ### `pattern_field`
 
 ```ebnf
-pattern_field = IDENT , ":" , IDENT ;
+pattern_field = IDENT , ":" , pattern ;
 ```
 
-A payload field is bound to a name, or discarded with `_`. `_` declines to name the
-value; it does not mean the field is absent and does not mean it is not released.
+A payload field matches a pattern — a name binds it, `_` discards it. `_` declines to name
+the value; it does not mean the field is absent and does not mean it is not released.
 
 ```nazm
 enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: _) => 0, } }

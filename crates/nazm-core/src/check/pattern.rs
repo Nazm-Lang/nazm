@@ -2,24 +2,29 @@
 
 use super::generic::quoted;
 use super::unit::written_key;
+use super::usefulness;
 use super::*;
 
 impl Checker<'_> {
-    /// Check `match scrutinee { … }`.
+    /// Check `match scrutinee { … }` — written, or what `if let` or `let … else` means (R1a).
     ///
-    /// The scrutinee is checked once, the arms are checked against the enum it named, and
-    /// exhaustiveness is decided here rather than deferred: `docs/spec.md` gives the
-    /// checker the language's meaning, and a `match` whose coverage were settled at
-    /// lowering would have two answers to one question.
+    /// The scrutinee is checked once, each arm's pattern against its type and its body with
+    /// the pattern's bindings, and exhaustiveness and reachability are decided here rather
+    /// than deferred: `docs/spec.md` gives the checker the language's meaning, and a `match`
+    /// whose coverage were settled at lowering would have two answers to one question.
     pub(super) fn check_match(
         &mut self,
         scrutinee: &Expr,
         arms: &[MatchArm],
+        source: nazm_syntax::MatchSource,
         span: Span,
         expected: Option<Type>,
     ) -> Completion {
         let sty = self.value_type(scrutinee, None);
-        let Type::Enum(id) = sty else {
+        // A variant pattern needs an enum; before R1a every `match` did.
+        // An empty `match` of anything else matches nothing, and is refused as before R1a.
+        let wants_enum = arms.is_empty() || arms.iter().any(|a| has_variant_pattern(&a.pattern));
+        if wants_enum && !matches!(sty, Type::Enum(_)) {
             let shown = self.show(sty);
             self.errors.push(
                 Diagnostic::error(
@@ -28,86 +33,92 @@ impl Checker<'_> {
                     format!("`match` needs an enum, but this is `{shown}`"),
                 )
                 .help(
-                    "`match` selects one variant of an enum. There is no literal, record \
-                     or range pattern",
+                    "a variant pattern selects one variant of an enum. A `Bool`, an integer or \
+                     a string is matched by literals, and any value by `_` or a name",
                 ),
             );
             return Completion::Value(expected.unwrap_or(Type::Int));
-        };
+        }
 
-        // One slot per variant, in declaration order: where the arm that covers it was
-        // written. That is both the duplicate check and the exhaustiveness check, and
-        // keeping them as one structure is what stops the two disagreeing.
-        let count = self.res.enums().get(id).map_or(0, |d| d.variants.len());
-        let mut covered: Vec<Option<Span>> = vec![None; count];
-        // Whether some arm named a variant this enum does not have, or another enum's.
-        // Coverage is not reported when one did: the checker does not know which variant
-        // the author meant, so "does not cover `B`" would be a second diagnostic about the
-        // one mistake already reported. `docs/spec.md`, *One mistake, one error*.
+        // Whether some pattern named a variant this enum does not have, or another enum's, or
+        // was otherwise refused: coverage is not reported then — the checker does not know
+        // what the author meant, so "does not cover `B`" would be a second diagnostic about
+        // the one mistake already reported. `docs/spec.md`, *One mistake, one error*.
         let mut unresolved = false;
+        let mut rows: Vec<Vec<usefulness::Pat>> = Vec::new();
         let mut result: Option<Completion> = None;
         let mut first_value: Option<(Type, Span)> = None;
 
-        for arm in arms {
-            let Some(named) =
-                self.resolve_enum(&written_key(arm.qualifier.as_ref(), &arm.ty), arm.ty_span)
-            else {
+        for (index, arm) in arms.iter().enumerate() {
+            self.open_scope(arm.span);
+            let mut binds: Vec<(String, Span, Type)> = Vec::new();
+            let mut aliases: Vec<(String, Span)> = Vec::new();
+            let before = self.errors.len();
+            let pat = self.check_pattern(&arm.pattern, sty, scrutinee, &mut binds, &mut aliases);
+            if self.errors.len() > before {
+                // The pattern is the mistake: its arm's body would only repeat it, naming
+                // bindings that were never made (`docs/spec.md`, *One mistake, one error*).
                 unresolved = true;
-                continue;
-            };
-            // The enum a pattern names is a **definition**: `Maybe.Some(…)` against a
-            // `Maybe[Int]` names the enum it is an instance of, and the scrutinee supplies
-            // the arguments. A different definition is still another enum's variant.
-            if self.res.types().definition_of(sty) != Some(TypeNode::Enum(named)) {
-                let (want, got) = (self.show(sty), self.show(Type::Enum(named)));
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::WRONG_ENUM_IN_PATTERN,
-                        arm.ty_span,
-                        format!("this pattern is a `{got}`, but the value is a `{want}`"),
-                    )
-                    .secondary(scrutinee.span(), format!("this is a `{want}`"))
-                    .help(
-                        "a variant belongs to its enum, so a pattern names the scrutinee's \
-                         own enum. There is no structural matching between two enums that \
-                         happen to have a variant of the same name",
-                    ),
-                );
-                unresolved = true;
+                self.close_scope();
                 continue;
             }
-            let Some(at) = self.find_variant(id, &arm.variant, arm.variant_span) else {
-                unresolved = true;
-                continue;
-            };
-            if let Some(Some(first)) = covered.get(at as usize).copied() {
-                let owner = self.variant_path(id, at);
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::DUPLICATE_MATCH_ARM,
-                        arm.variant_span,
-                        format!("`{owner}` already has an arm"),
-                    )
-                    .secondary(first, "first covered here")
-                    .help(
-                        "the discriminant selects exactly one arm, so a second one for the \
-                         same variant can never run",
-                    ),
-                );
-                continue;
+            // Bindings, each immutable: a borrowed view of what the scrutinee holds. That is
+            // a statement about the *name* — a binding that names a sequence still reaches
+            // shared mutable storage, which `docs/spec.md` says in as many words.
+            let mut slots: Vec<(String, u32)> = Vec::new();
+            for (name, at, ty) in &binds {
+                if self.scopes.defined_here(name) {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::ALREADY_DEFINED_IN_SCOPE,
+                            *at,
+                            format!("`{name}` is bound twice by this pattern"),
+                        )
+                        .help("each part of a pattern binds a name of its own, or is `_`"),
+                    );
+                    continue;
+                }
+                let slot = self.allocate(name, *at, *ty, false);
+                self.record_var(*at, slot);
+                self.define(name, *ty, false, Some(*at), slot, at.end);
+                slots.push((name.clone(), slot));
             }
-            if let Some(slot) = covered.get_mut(at as usize) {
-                *slot = Some(arm.variant_span);
+            // An or-pattern's later alternatives bind the same names: the same bindings.
+            for (name, at) in &aliases {
+                if let Some((_, slot)) = slots.iter().find(|(n, _)| n == name) {
+                    self.record_var(*at, *slot);
+                }
             }
-            self.res.record_variant(
-                arm.variant_span,
-                VariantRef {
-                    enumeration: id,
-                    variant: at,
-                },
-            );
 
-            let completion = self.check_arm(id, at, arm, expected.or(first_value.map(|(t, _)| t)));
+            // Reachable: something the arms above do not match.
+            if !unresolved {
+                let sig = Sigs(self);
+                if !usefulness::useful(&rows, std::slice::from_ref(&pat), &[sty], &sig) {
+                    self.unreachable_arm(arms, index, &rows, &pat);
+                }
+            }
+            rows.push(vec![pat]);
+
+            let completion = self.check_expr(&arm.body, expected.or(first_value.map(|(t, _)| t)));
+            self.close_scope();
+            // `let … else`: the second arm is the `else`, which must leave (R1a).
+            if source == nazm_syntax::MatchSource::LetElse
+                && index == 1
+                && completion != Completion::Diverges
+            {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::LET_ELSE_COMPLETES,
+                        arm.span,
+                        "a `let … else`'s `else` must leave, and this one can finish",
+                    )
+                    .help(
+                        "end it with `return`, `break` or `continue`: the names the pattern \
+                         binds do not exist when it does not match",
+                    ),
+                );
+                continue;
+            }
             if let Completion::Value(t) = completion {
                 match first_value {
                     None => first_value = Some((t, arm.body.span())),
@@ -136,19 +147,100 @@ impl Checker<'_> {
             });
         }
 
-        let missing: Vec<String> = covered
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.is_none())
-            .filter_map(|(i, _)| {
-                self.res
-                    .enums()
-                    .get(id)
-                    .and_then(|d| d.variants.get(i))
-                    .map(|v| v.name.clone())
-            })
-            .collect();
-        if !missing.is_empty() && !unresolved {
+        if !unresolved {
+            self.report_uncovered(sty, &rows, span);
+        }
+        result.unwrap_or(Completion::Value(expected.unwrap_or(Type::Int)))
+    }
+
+    /// `N0344` for an arm whose every value an earlier arm matches — said as before R1a when
+    /// both are one variant's plain pattern.
+    fn unreachable_arm(
+        &mut self,
+        arms: &[MatchArm],
+        index: usize,
+        rows: &[Vec<usefulness::Pat>],
+        pat: &usefulness::Pat,
+    ) {
+        let Some(arm) = arms.get(index) else { return };
+        let plain = |p: &usefulness::Pat| match p {
+            usefulness::Pat::Ctor {
+                enumeration,
+                variant,
+                args,
+            } if args.iter().all(|a| *a == usefulness::Pat::Wild) => Some((*enumeration, *variant)),
+            _ => None,
+        };
+        if let (Some((id, at)), nazm_syntax::Pattern::Variant(v)) = (plain(pat), &arm.pattern) {
+            let first = rows
+                .iter()
+                .zip(arms)
+                .find(|(r, _)| r.first().and_then(plain) == Some((id, at)))
+                .and_then(|(_, a)| match &a.pattern {
+                    nazm_syntax::Pattern::Variant(w) => Some(w.variant_span),
+                    _ => None,
+                });
+            if let Some(first) = first {
+                let owner = self.variant_path(id, at);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_MATCH_ARM,
+                        v.variant_span,
+                        format!("`{owner}` already has an arm"),
+                    )
+                    .secondary(first, "first covered here")
+                    .help(
+                        "the discriminant selects exactly one arm, so a second one for the \
+                         same variant can never run",
+                    ),
+                );
+                return;
+            }
+        }
+        self.errors.push(
+            Diagnostic::error(
+                codes::DUPLICATE_MATCH_ARM,
+                arm.pattern.span(),
+                "this arm can never run: the arms above match every value it does",
+            )
+            .help("arms are tried in order, and the first that matches runs"),
+        );
+    }
+
+    /// `N0343` for a `match` some value of `sty` escapes — said as before R1a, listing the
+    /// variants no arm names, when every arm is one variant's plain pattern.
+    fn report_uncovered(&mut self, sty: Type, rows: &[Vec<usefulness::Pat>], span: Span) {
+        let witness = {
+            let sig = Sigs(self);
+            usefulness::witness(rows, &[sty], &sig)
+                .map(|w| w.first().map_or_else(|| "_".to_owned(), |x| x.show(&sig)))
+        };
+        let Some(shown_witness) = witness else { return };
+        let all_plain = rows.iter().all(|r| {
+            matches!(r.first(), Some(usefulness::Pat::Ctor { args, .. })
+                if args.iter().all(|a| *a == usefulness::Pat::Wild))
+        });
+        if let (Type::Enum(id), true) = (sty, all_plain) {
+            let covered: Vec<u32> = rows
+                .iter()
+                .filter_map(|r| match r.first() {
+                    Some(usefulness::Pat::Ctor { variant, .. }) => Some(*variant),
+                    _ => None,
+                })
+                .collect();
+            let missing: Vec<String> = self
+                .res
+                .enums()
+                .get(id)
+                .map(|d| {
+                    d.variants
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| !covered.contains(&u32::try_from(*i).unwrap_or(u32::MAX)))
+                        .map(|(_, v)| v.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
             let name = self.res.types().show(sty).to_owned();
             let list = quoted(&missing);
             let declared = self.res.enums().get(id).map(|d| d.name_span);
@@ -158,17 +250,271 @@ impl Checker<'_> {
                 format!("this `match` does not cover {list}"),
             )
             .help(format!(
-                "an enum is closed, so every variant of `{name}` gets an arm. There is no \
-                 `_` arm: adding a variant is meant to break the matches that believed \
-                 they had handled all of them"
+                "an enum is closed, so every variant of `{name}` gets an arm — or a `_` covers \
+                 the rest, which gives up being told when a variant is added"
             ));
             if let Some(at) = declared {
                 d = d.secondary(at, "declared here");
             }
             self.errors.push(d);
+            return;
         }
+        let help = if matches!(sty, Type::Enum(_) | Type::Bool) {
+            "add an arm for it, or end with `_` or a name to cover the rest"
+        } else {
+            "an integer or a string has more values than any list of literals: end with `_` \
+             or a name to cover the rest"
+        };
+        self.errors.push(
+            Diagnostic::error(
+                codes::NON_EXHAUSTIVE_MATCH,
+                span,
+                format!("this `match` does not cover `{shown_witness}`"),
+            )
+            .help(help),
+        );
+    }
 
-        result.unwrap_or(Completion::Value(expected.unwrap_or(Type::Int)))
+    /// Check one pattern against a value of type `ty`, collecting what it binds — and, for an
+    /// or-pattern's later alternatives, where they bind the same names — and returning what it
+    /// matches, for exhaustiveness.
+    fn check_pattern(
+        &mut self,
+        pattern: &nazm_syntax::Pattern,
+        ty: Type,
+        scrutinee: &Expr,
+        binds: &mut Vec<(String, Span, Type)>,
+        aliases: &mut Vec<(String, Span)>,
+    ) -> usefulness::Pat {
+        use nazm_syntax::Pattern as P;
+        use usefulness::Pat;
+        match pattern {
+            P::Wildcard { .. } => Pat::Wild,
+            P::Bind { name, span } => {
+                binds.push((name.clone(), *span, ty));
+                Pat::Wild
+            }
+            P::Literal(e) => self.check_literal_pattern(e, ty),
+            P::Variant(v) => self.check_variant_pattern(v, ty, scrutinee, binds, aliases),
+            P::Or { alts, span } => {
+                let mut out = Vec::new();
+                let mut first: Option<Vec<(String, Span, Type)>> = None;
+                for alt in alts {
+                    let mut own = Vec::new();
+                    out.push(self.check_pattern(alt, ty, scrutinee, &mut own, aliases));
+                    match &first {
+                        None => first = Some(own),
+                        Some(f) => {
+                            let names = |b: &[(String, Span, Type)]| {
+                                let mut v: Vec<(String, Type)> =
+                                    b.iter().map(|(n, _, t)| (n.clone(), *t)).collect();
+                                v.sort_by(|a, b| a.0.cmp(&b.0));
+                                v
+                            };
+                            if names(f) == names(&own) {
+                                aliases.extend(own.into_iter().map(|(n, at, _)| (n, at)));
+                            } else {
+                                self.errors.push(
+                                    Diagnostic::error(
+                                        codes::OR_PATTERN_BINDINGS,
+                                        alt.span(),
+                                        "this alternative binds other names, or other types, \
+                                         than the first",
+                                    )
+                                    .secondary(*span, "in this or-pattern")
+                                    .help(
+                                        "the arm's body sees the same names whichever \
+                                         alternative matched, so each binds them all, with one \
+                                         type each",
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+                binds.extend(first.unwrap_or_default());
+                Pat::Or(out)
+            }
+        }
+    }
+
+    /// A literal pattern (R1a): an integer (perhaps negated), a string, `true` or `false`, of
+    /// the scrutinee's type.
+    fn check_literal_pattern(&mut self, e: &Expr, ty: Type) -> usefulness::Pat {
+        use usefulness::Pat;
+        let key = match e {
+            Expr::Int { value, .. } => Some(value.to_string()),
+            Expr::WideInt { value, .. } => Some(value.to_string()),
+            Expr::Neg { operand, .. } => match operand.as_ref() {
+                Expr::Int { value, .. } => Some(format!("-{value}")),
+                Expr::WideInt { value, .. } => Some(format!("-{value}")),
+                _ => None,
+            },
+            Expr::Str { value, .. } => Some(format!("{value:?}")),
+            Expr::Bool { value, .. } => Some(value.to_string()),
+            _ => None,
+        };
+        let literal_type = ty.is_integer() || matches!(ty, Type::Bool | Type::Str | Type::Text);
+        let Some(key) = key.filter(|_| literal_type) else {
+            let shown = self.show(ty);
+            self.errors.push(
+                Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    e.span(),
+                    if literal_type {
+                        "a literal pattern is an integer, a string, `true` or `false`".to_owned()
+                    } else {
+                        format!("a `{shown}` has no literal pattern")
+                    },
+                )
+                .help(
+                    "a `Bool`, an integer or a string is matched by literals; a float's \
+                     equality is not what a literal reads as, so it has none",
+                ),
+            );
+            return Pat::Wild;
+        };
+        let t = self.value_type(e, Some(ty));
+        if t != ty {
+            let (want, got) = (self.show(ty), self.show(t));
+            self.errors.push(Diagnostic::error(
+                codes::TYPE_MISMATCH,
+                e.span(),
+                format!("this pattern is a `{got}`, but the value is a `{want}`"),
+            ));
+            return Pat::Wild;
+        }
+        match e {
+            Expr::Bool { value, .. } => Pat::Bool(*value),
+            _ => Pat::Lit(key),
+        }
+    }
+
+    /// `Enum.Variant(field: pattern, …)` against a value of type `ty`.
+    fn check_variant_pattern(
+        &mut self,
+        v: &nazm_syntax::VariantPattern,
+        ty: Type,
+        scrutinee: &Expr,
+        binds: &mut Vec<(String, Span, Type)>,
+        aliases: &mut Vec<(String, Span)>,
+    ) -> usefulness::Pat {
+        use usefulness::Pat;
+        let Type::Enum(id) = ty else {
+            let shown = self.show(ty);
+            self.errors.push(Diagnostic::error(
+                codes::MATCH_ON_NON_ENUM,
+                v.ty_span,
+                format!("a variant pattern needs an enum, but this is a `{shown}`"),
+            ));
+            return Pat::Wild;
+        };
+        let Some(named) = self.resolve_enum(&written_key(v.qualifier.as_ref(), &v.ty), v.ty_span)
+        else {
+            return Pat::Wild;
+        };
+        // The enum a pattern names is a **definition**: `Maybe.Some(…)` against a
+        // `Maybe[Int]` names the enum it is an instance of, and the value supplies the
+        // arguments. A different definition is still another enum's variant.
+        if self.res.types().definition_of(ty) != Some(TypeNode::Enum(named)) {
+            let (want, got) = (self.show(ty), self.show(Type::Enum(named)));
+            self.errors.push(
+                Diagnostic::error(
+                    codes::WRONG_ENUM_IN_PATTERN,
+                    v.ty_span,
+                    format!("this pattern is a `{got}`, but the value is a `{want}`"),
+                )
+                .secondary(scrutinee.span(), format!("this is a `{want}`"))
+                .help(
+                    "a variant belongs to its enum, so a pattern names the value's own enum. \
+                     There is no structural matching between two enums that happen to have a \
+                     variant of the same name",
+                ),
+            );
+            return Pat::Wild;
+        }
+        let Some(at) = self.find_variant(id, &v.variant, v.variant_span) else {
+            return Pat::Wild;
+        };
+        self.res.record_variant(
+            v.variant_span,
+            VariantRef {
+                enumeration: id,
+                variant: at,
+            },
+        );
+        let arity = self.variant_def(id, at).map_or(0, |d| d.fields.len());
+        let mut args = vec![Pat::Wild; arity];
+        let mut named: Vec<(String, Span)> = Vec::new();
+        for f in &v.fields {
+            let declared = self
+                .variant_def(id, at)
+                .and_then(|d| d.field(&f.name).map(|(i, fd)| (i, fd.ty)));
+            let Some((index, fty)) = declared else {
+                let owner = self.variant_path(id, at);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNKNOWN_FIELD,
+                        f.name_span,
+                        format!("`{owner}` has no payload field `{}`", f.name),
+                    )
+                    .secondary(
+                        self.variant_span(id, at).unwrap_or(v.variant_span),
+                        "declared here",
+                    ),
+                );
+                continue;
+            };
+            if let Some((_, first)) = named.iter().find(|(g, _)| *g == f.name) {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_FIELD,
+                        f.name_span,
+                        format!("this pattern names `{}` twice", f.name),
+                    )
+                    .secondary(*first, "first named here"),
+                );
+                continue;
+            }
+            named.push((f.name.clone(), f.name_span));
+            self.res.record_payload(
+                f.name_span,
+                PayloadRef {
+                    enumeration: id,
+                    variant: at,
+                    field: index,
+                },
+            );
+            // `_` names nothing. The field is still resolved above, because it still exists
+            // and is still released with the value — `docs/spec.md` is explicit that a
+            // discard declines to name a payload rather than forgetting it.
+            let sub = self.check_pattern(&f.pattern, fty, scrutinee, binds, aliases);
+            if let Some(slot) = args.get_mut(index as usize) {
+                *slot = sub;
+            }
+        }
+        let missing = self.missing_payload_fields(id, at, &named);
+        if !missing.is_empty() {
+            let owner = self.variant_path(id, at);
+            let list = quoted(&missing);
+            self.errors.push(
+                Diagnostic::error(
+                    codes::MISSING_FIELD,
+                    v.variant_span,
+                    format!("this pattern does not name {list} of `{owner}`"),
+                )
+                .help(
+                    "a pattern names every payload field, matching it or discarding it with \
+                     `_`. There is no rest pattern, so adding a payload field breaks the \
+                     patterns that did not know about it rather than ignoring it",
+                ),
+            );
+        }
+        Pat::Ctor {
+            enumeration: id,
+            variant: at,
+            args,
+        }
     }
 
     /// Whether `t` is an instance of the core prelude's `Result`, and if so its success
@@ -315,108 +661,6 @@ impl Checker<'_> {
     }
 
     /// One arm: its payload bindings, then its body, in a scope of their own.
-    fn check_arm(
-        &mut self,
-        id: EnumId,
-        at: u32,
-        arm: &MatchArm,
-        expected: Option<Type>,
-    ) -> Completion {
-        self.open_scope(arm.span);
-        let mut named: Vec<(String, Span)> = Vec::new();
-        for f in &arm.fields {
-            let declared = self
-                .variant_def(id, at)
-                .and_then(|v| v.field(&f.name).map(|(i, fd)| (i, fd.ty)));
-            let Some((index, ty)) = declared else {
-                let owner = self.variant_path(id, at);
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::UNKNOWN_FIELD,
-                        f.name_span,
-                        format!("`{owner}` has no payload field `{}`", f.name),
-                    )
-                    .secondary(
-                        self.variant_span(id, at).unwrap_or(arm.variant_span),
-                        "declared here",
-                    ),
-                );
-                continue;
-            };
-            if let Some((_, first)) = named.iter().find(|(g, _)| *g == f.name) {
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::DUPLICATE_FIELD,
-                        f.name_span,
-                        format!("this pattern names `{}` twice", f.name),
-                    )
-                    .secondary(*first, "first named here"),
-                );
-                continue;
-            }
-            named.push((f.name.clone(), f.name_span));
-            self.res.record_payload(
-                f.name_span,
-                PayloadRef {
-                    enumeration: id,
-                    variant: at,
-                    field: index,
-                },
-            );
-            // `_` names nothing. The field is still resolved above, because it still
-            // exists and is still released with the value — `docs/spec.md` is explicit
-            // that a discard declines to name a payload rather than forgetting it.
-            let Some(binding) = &f.binding else { continue };
-            if self.scopes.defined_here(binding) {
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::ALREADY_DEFINED_IN_SCOPE,
-                        f.binding_span,
-                        format!("`{binding}` is bound twice by this pattern"),
-                    )
-                    .help("each payload field binds a name of its own, or is discarded with `_`"),
-                );
-                continue;
-            }
-            // Not mutable: a pattern binding is a borrowed, immutable view of the payload
-            // the match's scrutinee holds. That is a statement about the *name* — a
-            // binding that names a sequence still reaches shared mutable storage, which
-            // `docs/spec.md` says in as many words.
-            let slot = self.allocate(binding, f.binding_span, ty, false);
-            self.record_var(f.binding_span, slot);
-            self.define(
-                binding,
-                ty,
-                false,
-                Some(f.binding_span),
-                slot,
-                f.binding_span.end,
-            );
-        }
-
-        let missing = self.missing_payload_fields(id, at, &named);
-        if !missing.is_empty() {
-            let owner = self.variant_path(id, at);
-            let list = quoted(&missing);
-            self.errors.push(
-                Diagnostic::error(
-                    codes::MISSING_FIELD,
-                    arm.variant_span,
-                    format!("this pattern does not name {list} of `{owner}`"),
-                )
-                .help(
-                    "a pattern names every payload field, binding it or discarding it with \
-                     `_`. There is no rest pattern, so adding a payload field breaks the \
-                     patterns that did not know about it rather than ignoring it",
-                ),
-            );
-        }
-
-        let completion = self.check_expr(&arm.body, expected);
-        self.close_scope();
-        completion
-    }
-
     /// The variant of this name, reported if the enum does not have one.
     pub(super) fn find_variant(&mut self, id: EnumId, name: &str, at: Span) -> Option<u32> {
         if let Some((i, _)) = self.res.enums().get(id).and_then(|d| d.variant(name)) {
@@ -568,5 +812,41 @@ impl Checker<'_> {
             },
         );
         Some(ty)
+    }
+}
+
+/// Whether a pattern names a variant anywhere at its top: what needs an enum scrutinee.
+fn has_variant_pattern(p: &nazm_syntax::Pattern) -> bool {
+    match p {
+        nazm_syntax::Pattern::Variant(_) => true,
+        nazm_syntax::Pattern::Or { alts, .. } => alts.iter().any(has_variant_pattern),
+        _ => false,
+    }
+}
+
+/// The checker's answer to what a type's constructors are, for [`usefulness`].
+struct Sigs<'c, 'a>(&'c Checker<'a>);
+
+impl usefulness::Signatures for Sigs<'_, '_> {
+    fn variants(&self, t: Type) -> Option<(EnumId, Vec<Vec<Type>>)> {
+        let Type::Enum(id) = t else { return None };
+        let d = self.0.res.enums().get(id)?;
+        Some((
+            id,
+            d.variants
+                .iter()
+                .map(|v| v.fields.iter().map(|f| f.ty).collect())
+                .collect(),
+        ))
+    }
+
+    fn spell(&self, enumeration: EnumId, variant: u32) -> (String, Vec<String>) {
+        let name = self.0.variant_path(enumeration, variant);
+        let fields = self
+            .0
+            .variant_def(enumeration, variant)
+            .map(|v| v.fields.iter().map(|f| f.name.clone()).collect())
+            .unwrap_or_default();
+        (name, fields)
     }
 }

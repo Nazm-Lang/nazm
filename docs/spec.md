@@ -127,6 +127,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `boards` | EXPERIMENTAL | Gate 3: manifests, sections, interrupts, the arena and the failure hook, emulator-verified |
 | `for` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; each form means its `while` loop |
 | `box-list` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; recursive types through immutable indirection |
+| `patterns` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; supersedes the N10 limits on patterns where it says so |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -756,7 +757,9 @@ Every `match` must name **every variant of its enum, exactly once**.
 
 - a missing variant is `N0343`, and the diagnostic lists the variants that are missing;
 - a repeated variant is `N0344`, reported at the second arm;
-- there is **no `_ => …` catch-all arm** in N10.
+- there is **no `_ => …` catch-all arm** in N10. *Corrected 2026-10-12, R1a:* `_` and a name are
+  patterns now (*Patterns*, below); a `match` written variant by variant keeps everything this
+  section says.
 
 No runtime trap substitutes for the check. A valid program's discriminant always has a
 statically known arm, so an unreachable default exists in the generated code as a structural
@@ -846,6 +849,9 @@ offers no built-in like it. No typed errors, no `throw`, no `?`, no `try`: an en
 a result by hand, and that is not an error-handling feature. *(N12 added `Result`, `Option`
 and `?` — as ordinary generic enums and a `match` — in* Typed error values *below; there is
 still no `throw` and no `try`.)*
+
+*Corrected 2026-10-12, R1a:* literal, or- and nested patterns, `_` and a name at the top level,
+`if let` and `let … else` exist (*Patterns*, below). What follows was N10's list.
 
 No literal, record, tuple, range or or-patterns; no guards; no top-level wildcard; no `let`
 destructuring; no by-move or mutable patterns; no match ergonomics inferred from ownership.
@@ -4331,6 +4337,66 @@ replaced, so the closure that captures one cannot be inside it.
 module that declares a type named `Box` or `List`, or a function named like one of the built-ins,
 keeps its own, and the built-in is hidden in that module. No program valid under 1.0 changes
 meaning. The built-in names of 1.0 (`Int`, `Vec`, `Result` and the rest) stay unshadowable (`N0331`).
+
+### Patterns: wildcards, alternatives, nesting and literals — R1
+<!-- id: patterns -->
+
+Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L3).
+
+```nazm
+fn describe(e: Expr) -> Str {
+    match e {
+        Expr.Num(v: 0) => "zero",
+        Expr.Num(v: n) => num_to_str(n),
+        Expr.Add(l: _, r: _) | Expr.Neg(e: _) => "compound",
+    }
+}
+
+fn or_zero(o: Option[Int]) -> Int {
+    let Option.Some(value: x) = o else { return 0; };
+    x
+}
+```
+
+A pattern is one of:
+
+| Pattern | Matches | Binds |
+| --- | --- | --- |
+| `_` | anything | nothing |
+| `name` | anything | `name`, immutable, to the value (by its type's own law, as a payload binding is) |
+| a literal — an integer (with a leading `-` allowed), a string, `true`, `false` | a value equal to it by the type's equality (*Equality is derived*) | nothing |
+| `Enum.Variant(field: pattern, …)` | that variant, with every payload field matching its pattern | what its fields' patterns bind |
+| `p \| q \| …` | anything one alternative matches | the same names, of the same types, in every alternative (`N0629`) |
+
+Every payload field of a variant pattern is still named exactly once (*Enums*), so adding a
+field still breaks the patterns that did not account for it; `field: _` declines it.
+
+**`match`.** The scrutinee is evaluated once; the arms are tried in the order written and the first
+whose pattern matches runs, with its bindings in scope in its body only. A `match` may now have any
+scrutinee type a pattern fits: an enum, `Bool`, an integer type, `Str`, `Text` — and any type at all
+with only `_` and names. A float has no literal pattern (`N0300`): its equality is not what a
+literal reads as.
+
+- **Exhaustive.** Every value must be matched by some arm — `N0343`, naming a value no arm matches
+  (for an enum, the variants and the payloads still uncovered; for an integer or a string, that a
+  `_` or a name is needed).
+- **Nothing unreachable.** An arm every value of which an earlier arm already matches is `N0344`.
+- **`_` over an enum.** `_` and a name may cover variants the arms above do not name, so adding a
+  variant no longer breaks such a `match`. That gives up the protection *Exhaustiveness* (*Enums*)
+  describes, where it is written; L15 adds a warning for it. An enum matched variant by variant
+  keeps the protection.
+
+**`if let`.** `if let P = e { A } else { B }` is `match e { P => A, _ => B }`; without `else` it is a
+statement and `B` is empty. `P`'s bindings are in scope in `A` only.
+
+**`let … else`.** `let P = e else { D };` is a statement: `e` is evaluated, and if `P` matches its
+bindings are in scope for the rest of the block; otherwise `D` runs, and `D` must leave — `return`,
+`break`, `continue`, or a call that does not return (`N0630` when it can complete). A pattern no value
+can fail, such as a name, is refused as pointless only by being ordinary: write `let` instead.
+
+**What is unchanged.** Matching evaluates nothing but the scrutinee and compares by equality laws
+already specified; releasing the scrutinee and the payloads follows *Enums* exactly. There are still
+no guards, no range patterns, no record patterns, no `..` in a payload and no `@` bindings.
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

@@ -1763,8 +1763,8 @@ default was only ever a structural requirement. `docs/spec.md` gives the checker
 language's meaning precisely so that this cannot be deferred to the backend
 """
 file = "crates/nazm-core/src/check/pattern.rs"
-find = "        if !missing.is_empty() && !unresolved {"
-replace = "        if false {"
+find = "        if !unresolved {\n            self.report_uncovered(sty, &rows, span);"
+replace = "        if false {\n            self.report_uncovered(sty, &rows, span);"
 killers = [{ package = "nazm-core", test = "enums", name = "a_match_that_misses_a_variant_is_refused_and_names_it" }]
 
 [[mutation]]
@@ -1775,11 +1775,8 @@ exactly one, so the later arm can never run — and coverage now counts an arm t
 towards a variant that is uncovered, which is how a non-exhaustive match passes the check
 """
 file = "crates/nazm-core/src/check/pattern.rs"
-find = """            if let Some(Some(first)) = covered.get(at as usize).copied() {"""
-replace = """            if let Some(None) = covered.get(at as usize).copied() {
-                let _ = arm.variant_span;
-            }
-            if let Some(Some(first)) = None::<Option<Span>> {"""
+find = "                if !usefulness::useful(&rows, std::slice::from_ref(&pat), &[sty], &sig) {"
+replace = "                if false {"
 killers = [{ package = "nazm-core", test = "enums", name = "a_match_that_names_one_variant_twice_is_refused" }]
 
 [[mutation]]
@@ -1791,8 +1788,8 @@ identically shaped enums two types, and structural matching would undo it silent
 arm would bind payload fields of a variant the value does not have
 """
 file = "crates/nazm-core/src/check/pattern.rs"
-find = "            if self.res.types().definition_of(sty) != Some(TypeNode::Enum(named)) {"
-replace = "            if false {"
+find = "        if self.res.types().definition_of(ty) != Some(TypeNode::Enum(named)) {"
+replace = "        if false {"
 killers = [{ package = "nazm-core", test = "enums", name = "a_pattern_naming_another_enums_variant_is_refused" }]
 
 [[mutation]]
@@ -8299,10 +8296,11 @@ Repointed by Gate 3's sections, which moved it to 47: an entry that refused `@se
 Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@interrupt` must not be reused.
 Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused `@on_failure` must not be reused.
 Repointed by R1a, which moved it to 52 for `for` loops: an entry that refused `for x in xs` must not be reused.
-Repointed by R1a again, which moved it to 53 for `Box` and `List`: an entry that refused a type reaching itself through one must not be reused."""
+Repointed by R1a again, which moved it to 53 for `Box` and `List`: an entry that refused a type reaching itself through one must not be reused.
+Repointed by R1a a third time, which moved it to 54 for patterns: an entry that refused a `_` arm must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 53;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 52;"
+find = "pub const SEMANTIC_EPOCH: u32 = 54;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 53;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -13159,8 +13157,8 @@ killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_null_where_the_dec
 name = "n85-null-is-some"
 why = "a nullable result's test is inverted, so a null is `Some` and a pointer `None`"
 file = "crates/nazm-core/src/lower.rs"
-find = "                        op: cir::CmpOp::Eq,"
-replace = "                        op: cir::CmpOp::NotEq,"
+find = "                        op: cir::CmpOp::Eq,\n                        operand: Type::Int,\n                        law: Law::Int,\n                        lhs: Box::new(read.clone()),"
+replace = "                        op: cir::CmpOp::NotEq,\n                        operand: Type::Int,\n                        law: Law::Int,\n                        lhs: Box::new(read.clone()),"
 killers = [{ package = "nazm-cli", test = "ffi_v3", name = "a_handle_a_c_struct_a_c_string_errno_and_a_callback_cross_under_both_backends" }]
 
 [[mutation]]
@@ -16338,3 +16336,85 @@ file = "crates/nazm-core/src/check/written.rs"
 find = "        && !types.names.contains_key(written.name.as_str())"
 replace = "        && true"
 killers = [{ package = "nazm-cli", test = "box_list", name = "the_new_names_are_prelude_names_a_1_0_program_keeps" }]
+
+# --- R1a: patterns (docs/spec.md, *Patterns*) ---
+
+[[mutation]]
+name = "r1a-or-alternatives-may-bind-differently"
+why = "an or-pattern whose alternatives bind other names is accepted, so the arm's body names a binding one alternative never made"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "                            if names(f) == names(&own) {"
+replace = "                            if true {"
+killers = [{ package = "nazm-cli", test = "patterns", name = "what_a_pattern_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-a-let-else-may-finish"
+why = "a let ... else whose else can finish is accepted, so the rest of the block runs with names its pattern never bound"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "                && completion != Completion::Diverges"
+replace = "                && false"
+killers = [{ package = "nazm-cli", test = "patterns", name = "what_a_pattern_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-a-literal-of-another-type-matches"
+why = "a literal pattern of another type than the value's is accepted, so a Str literal is compared with an Int"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "        if t != ty {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "patterns", name = "what_a_pattern_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-an-empty-match-of-a-number-is-accepted"
+why = "an empty match of something not an enum is reported as uncovered (N0343) instead of refused as before R1a (N0342)"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "arms.is_empty() || arms"
+replace = "false || arms"
+killers = [{ package = "nazm-cli", test = "patterns", name = "what_a_pattern_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-a-wrong-pattern-cascades"
+why = "an arm whose pattern failed is checked anyway, so its bindings are reported again as unknown names"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "                unresolved = true;\n                self.close_scope();\n                continue;\n            }"
+replace = "                unresolved = true;\n            }"
+killers = [{ package = "nazm-cli", test = "patterns", name = "a_wrong_pattern_is_one_error_not_a_cascade" }]
+
+[[mutation]]
+name = "r1a-a-literal-pattern-tests-inequality"
+why = "a literal pattern matches every value but its own, so the first literal arm runs for the wrong values"
+file = "crates/nazm-core/src/lower.rs"
+find = "                        op: cir::CmpOp::Eq,\n                        operand: ty,\n                        law,\n                        lhs: Box::new(v.clone()),"
+replace = "                        op: cir::CmpOp::NotEq,\n                        operand: ty,\n                        law,\n                        lhs: Box::new(v.clone()),"
+killers = [{ package = "nazm-cli", test = "patterns", name = "every_kind_of_pattern_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-the-wrong-arm-runs"
+why = "a general match runs every arm but the one chosen"
+file = "crates/nazm-core/src/lower.rs"
+find = "                    op: cir::CmpOp::Eq,\n                    operand: Type::Int,\n                    law: Law::Int,\n                    lhs: Box::new(read_k.clone()),"
+replace = "                    op: cir::CmpOp::NotEq,\n                    operand: Type::Int,\n                    law: Law::Int,\n                    lhs: Box::new(read_k.clone()),"
+killers = [{ package = "nazm-cli", test = "patterns", name = "every_kind_of_pattern_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-an-or-binding-comes-from-the-wrong-alternative"
+why = "a name an or-pattern binds is read out of the alternative that did not match"
+file = "crates/nazm-core/src/lower.rs"
+find = "                            then: region(x),\n                            otherwise: region(acc),"
+replace = "                            then: region(acc),\n                            otherwise: region(x),"
+killers = [{ package = "nazm-cli", test = "patterns", name = "every_kind_of_pattern_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-underscore-is-a-name"
+why = "the parser reads `_` as a name, so two `_` in one pattern bind one name twice"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                if name == \"_\" {"
+replace = "                if name == \"__\" {"
+killers = [{ package = "nazm-cli", test = "patterns", name = "every_kind_of_pattern_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1a-every-let-is-a-let-else"
+why = "the parser reads `let x = e;` as a let ... else, so every ordinary binding is a syntax error"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "            || (matches!(at(1), Some(TokenKind::Ident(_))) && matches!(at(2), Some(TokenKind::Eq)))"
+replace = "            || false"
+killers = [{ package = "nazm-cli", test = "patterns", name = "every_kind_of_pattern_means_the_same_everywhere_and_is_reclaimed" }]

@@ -145,9 +145,10 @@ fn bad_field_initialisers_cost_the_field() {
 
 #[test]
 fn a_bad_arm_costs_the_arm() {
-    let text = "fn main() -> Int { match e { E.A() => , E.B() => 2, 3 => 4, } }\n";
+    // `3 => 4` is an arm since R1a (a literal pattern); `+` begins none.
+    let text = "fn main() -> Int { match e { E.A() => , E.B() => 2, + => 4, } }\n";
     let (_, cst, d) = parse(text);
-    assert_eq!(at(text, &d), [",", "3"], "{d:?}");
+    assert_eq!(at(text, &d), [",", "+"], "{d:?}");
     assert_eq!(
         child_kinds(&cst, SyntaxKind::MatchArmList),
         [SyntaxKind::Error, SyntaxKind::MatchArm, SyntaxKind::Error]

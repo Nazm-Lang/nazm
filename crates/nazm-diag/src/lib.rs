@@ -507,6 +507,11 @@ pub mod codes {
     /// A `for` loop over something that is not an `Ints`, `Strs`, `Vec[T]` or `Bytes` (R1a,
     /// `docs/spec.md`, *`for` loops*).
     pub const NOT_ITERABLE: Code = Code::new("N0628");
+    /// An or-pattern's alternatives that bind different names, or one name with different
+    /// types (R1a, `docs/spec.md`, *Patterns*).
+    pub const OR_PATTERN_BINDINGS: Code = Code::new("N0629");
+    /// A `let … else` whose `else` can finish (R1a, `docs/spec.md`, *Patterns*).
+    pub const LET_ELSE_COMPLETES: Code = Code::new("N0630");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");
