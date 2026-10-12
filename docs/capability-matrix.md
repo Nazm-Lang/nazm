@@ -200,6 +200,16 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1a (2026-10-12)** · *Multi-line and raw strings* (`spec.md`; `openspec/changes/
+r1-language-for-the-rewrite`, L9). `"""` strings whose closing delimiter's indentation comes off
+every line (`N0005` for a line short of it, or text after the opening delimiter), escapes as an
+ordinary literal's and a backslash ending a line joining it; raw `r"…"`/`r#"…"#` with any number of
+`#`s, no escape, line breaks as written; CR LF read as LF in both. The lexer decides each from the
+literal's own bytes, so incremental relexing is unchanged; an ordinary literal stays one line.
+Semantic epoch 58; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/
+string_literals.rs` — the bytes by hand on the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and
+Cranelift; the formatter keeping each as written; refusals by code.
+
 **R1a (2026-10-12)** · *Constant tables and exported constants* (`spec.md`;
 `openspec/changes/r1-language-for-the-rewrite`, L8). An array may hold `Str`, `Text` and records,
 enums and arrays of them (`N0621` names a handle): MIR counts an array managed by its element,

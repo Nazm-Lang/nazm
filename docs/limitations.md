@@ -24,6 +24,9 @@ found only by reading all of it.
 - Patterns (R1a, EXPERIMENTAL until R1 closes): no guards, range, record or `@` patterns, no `..`
   in a payload; a `_` that covers enum variants draws no warning until L15 adds a warning
   severity; the compiler written in Nazm parses only the plain variant pattern until R2.
+- Multi-line and raw strings (R1a, EXPERIMENTAL until R1 closes): an escape refused inside a
+  multi-line string is reported at its opening delimiter rather than at the escape; the compiler
+  written in Nazm does not read either form until R2.
 - Constant tables (R1a, EXPERIMENTAL until R1 closes): every use of an aggregate constant builds
   it where it is used, so indexing a large table in a loop builds the table each time — a
   read-only table in the binary is an optimisation not yet made; an imported constant is not an

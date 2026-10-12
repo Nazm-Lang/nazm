@@ -400,6 +400,184 @@ fn unicode_escape(bytes: &[u8], k: usize) -> Result<(char, usize), usize> {
         .ok_or(width)
 }
 
+/// A raw string starting at `start` (R1a, L9): `r`, some `#`s, a quote, the text as written —
+/// no escape, any line break — and a quote followed by as many `#`s. A line break written as
+/// CR LF is one LF, as in every string. Returns the lexeme and the offset past it.
+fn raw_string(
+    file: FileId,
+    text: &str,
+    start: usize,
+    errors: &mut Vec<Diagnostic>,
+) -> (Lexeme, usize) {
+    let bytes = text.as_bytes();
+    let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
+    let hashes = bytes
+        .get(start + 1..)
+        .unwrap_or_default()
+        .iter()
+        .take_while(|b| **b == b'#')
+        .count();
+    let open = start + 1 + hashes;
+    if bytes.get(open) != Some(&b'"') {
+        errors.push(
+            Diagnostic::error(
+                codes::UNTERMINATED_STRING,
+                Span::new(file, at(start), at(open)),
+                "a raw string's `#`s are followed by its opening quote",
+            )
+            .help("a raw string is `r\"…\"` or `r#\"…\"#`, with as many `#`s at each end"),
+        );
+        return (Lexeme::Invalid(Span::new(file, at(start), at(open))), open);
+    }
+    let closing: Vec<u8> = std::iter::once(b'"')
+        .chain(std::iter::repeat_n(b'#', hashes))
+        .collect();
+    let body = open + 1;
+    let found = bytes
+        .get(body..)
+        .unwrap_or_default()
+        .windows(closing.len())
+        .position(|w| w == closing.as_slice());
+    let Some(len) = found else {
+        errors.push(Diagnostic::error(
+            codes::UNTERMINATED_STRING,
+            Span::new(file, at(start), at(text.len())),
+            "this raw string has no closing quote",
+        ));
+        return (
+            Lexeme::Invalid(Span::new(file, at(start), at(text.len()))),
+            text.len(),
+        );
+    };
+    let value = text
+        .get(body..body + len)
+        .unwrap_or_default()
+        .replace("\r\n", "\n");
+    let end = body + len + closing.len();
+    (
+        Lexeme::Token(Token {
+            kind: TokenKind::Str(value),
+            span: Span::new(file, at(start), at(end)),
+        }),
+        end,
+    )
+}
+
+/// A multi-line string starting at `start` (R1a, L9): `"""` and a line break; lines; and a
+/// line holding only indentation and `"""`. That indentation is taken off every line, each of
+/// which must begin with it (`N0005`) unless it is blank; the line breaks between the lines
+/// are the value's, the first and the last not. Escapes are an ordinary string's, and a
+/// backslash ending a line joins it to the next.
+fn multi_line_string(
+    file: FileId,
+    text: &str,
+    start: usize,
+    errors: &mut Vec<Diagnostic>,
+) -> (Lexeme, usize) {
+    let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
+    let after = start + 3;
+    let rest = text.get(after..).unwrap_or_default();
+    let line_end = rest.find('\n').map(|n| after + n);
+    // Nothing but blanks after the opening delimiter.
+    let opening_tail = text
+        .get(after..line_end.unwrap_or(text.len()))
+        .unwrap_or_default();
+    if line_end.is_none() || !opening_tail.trim_end_matches('\r').trim().is_empty() {
+        let stop = line_end.unwrap_or(text.len());
+        errors.push(
+            Diagnostic::error(
+                codes::STRING_LAYOUT,
+                Span::new(file, at(after), at(stop)),
+                "a multi-line string's text begins on the line after its `\"\"\"`",
+            )
+            .help("write `\"\"\"`, a line break, the lines, and `\"\"\"` on a line of its own"),
+        );
+        // Read on as if the line broke after the delimiter, so its closing `"""` is not
+        // taken for a second opening one: one mistake, one error.
+        if line_end.is_none() {
+            return (Lexeme::Invalid(Span::new(file, at(start), at(stop))), stop);
+        }
+    }
+    let first = line_end.unwrap_or(text.len()) + 1;
+    // The lines, each with its offset, up to the one that is only indentation and `"""`.
+    let mut lines: Vec<(usize, &str)> = Vec::new();
+    let mut pos = first;
+    let mut close: Option<(usize, &str)> = None;
+    while pos <= text.len() {
+        let end = text
+            .get(pos..)
+            .and_then(|r| r.find('\n'))
+            .map_or(text.len(), |n| pos + n);
+        let line = text.get(pos..end).unwrap_or_default();
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+        if line
+            .get(indent_len..)
+            .is_some_and(|r| r.starts_with("\"\"\""))
+        {
+            close = Some((pos, line.get(..indent_len).unwrap_or_default()));
+            break;
+        }
+        lines.push((pos, line));
+        if end >= text.len() {
+            break;
+        }
+        pos = end + 1;
+    }
+    let Some((close_at, indent)) = close else {
+        errors.push(Diagnostic::error(
+            codes::UNTERMINATED_STRING,
+            Span::new(file, at(start), at(text.len())),
+            "this multi-line string has no closing `\"\"\"`",
+        ));
+        return (
+            Lexeme::Invalid(Span::new(file, at(start), at(text.len()))),
+            text.len(),
+        );
+    };
+    let end = close_at + indent.len() + 3;
+    let mut body = String::new();
+    for (n, (offset, line)) in lines.iter().enumerate() {
+        if n > 0 {
+            body.push('\n');
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        match line.strip_prefix(indent) {
+            Some(kept) => body.push_str(kept),
+            None => {
+                errors.push(
+                    Diagnostic::error(
+                        codes::STRING_LAYOUT,
+                        Span::new(file, at(*offset), at(*offset + line.len())),
+                        "this line of a multi-line string does not begin with its closing \
+                         `\"\"\"`'s indentation",
+                    )
+                    .help(
+                        "every line is indented at least as far as the closing `\"\"\"`, \
+                         which is taken off each; indent this line, or the delimiter less",
+                    ),
+                );
+                body.push_str(line.trim_start_matches([' ', '\t']));
+            }
+        }
+    }
+    // Escapes over the whole text; a span inside it is reported at the literal's start.
+    let value = decode_escapes(
+        &body,
+        |_, _| Span::new(file, at(start), at(start + 3)),
+        errors,
+    );
+    (
+        Lexeme::Token(Token {
+            kind: TokenKind::Str(value),
+            span: Span::new(file, at(start), at(end)),
+        }),
+        end,
+    )
+}
+
 fn decode_escapes(
     raw: &str,
     span: impl Fn(usize, usize) -> Span,
@@ -418,6 +596,13 @@ fn decode_escapes(
             continue;
         }
         let one = |v: u8| Some((v, 2usize));
+        // A backslash ending a line of a multi-line string (L9) joins it to the next: the
+        // line break is not in the value, and nor is the next line's indentation, already
+        // taken off.
+        if bytes.get(k + 1) == Some(&b'\n') {
+            k += 2;
+            continue;
+        }
         let decoded = match bytes.get(k + 1) {
             Some(b'n') => one(b'\n'),
             Some(b't') => one(b'\t'),
@@ -761,6 +946,12 @@ pub(crate) fn scan_one(
         }
     }
 
+    // Raw strings (R1a, L9): `r"…"` or `r#"…"#` with any number of `#`s, decided by the
+    // byte after the `r` — a quote, or a `#`, which begins no other token.
+    if c == b'r' && matches!(byte(i + 1), Some(b'"' | b'#')) {
+        return raw_string(file, text, start, errors);
+    }
+
     // Identifiers and keywords
     if c.is_ascii_alphabetic() || c == b'_' {
         while byte(i).is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
@@ -794,6 +985,12 @@ pub(crate) fn scan_one(
             kind,
             span: Span::new(file, at(start), at(i)),
         }));
+    }
+
+    // Multi-line strings (R1a, L9): `"""`, a line break, lines, and `"""` on a line of its
+    // own, whose indentation is taken off every line.
+    if c == b'"' && byte(i + 1) == Some(b'"') && byte(i + 2) == Some(b'"') {
+        return multi_line_string(file, text, start, errors);
     }
 
     // Strings, with the escapes `docs/spec.md` lists (N49). The scan skips the byte

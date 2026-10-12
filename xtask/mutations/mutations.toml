@@ -8309,10 +8309,11 @@ Repointed by R1a again, which moved it to 53 for `Box` and `List`: an entry that
 Repointed by R1a a third time, which moved it to 54 for patterns: an entry that refused a `_` arm must not be reused.
 Repointed by R1a a fourth time, which moved it to 55 for tuples: an entry that refused `(1, 2)` must not be reused.
 Repointed by R1a a fifth time, which moved it to 56 for derived ordering: an entry that refused `"a" < "b"` must not be reused.
-Repointed by R1a a sixth time, which moved it to 57 for constant tables: an entry that refused `[\"a\"; 2]` must not be reused."""
+Repointed by R1a a sixth time, which moved it to 57 for constant tables: an entry that refused `[\"a\"; 2]` must not be reused.
+Repointed by R1a a seventh time, which moved it to 58 for raw strings: an entry that refused `r\"x\"` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 57;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 56;"
+find = "pub const SEMANTIC_EPOCH: u32 = 58;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 57;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -16658,3 +16659,49 @@ file = "crates/nazm-syntax/src/parser.rs"
 find = "                    name: format!(\"{}::{name}\", q.name),"
 replace = "                    name: name.clone(),"
 killers = [{ package = "nazm-cli", test = "const_tables", name = "an_exported_constant_crosses_a_module_plainly_and_under_a_name" }]
+
+# --- R1a: multi-line and raw strings (docs/spec.md, *Multi-line and raw strings*) ---
+
+[[mutation]]
+name = "r1a-a-raw-string-ends-at-any-quote"
+why = "a raw string's closing quote needs none of its `#`s, so `r#\"say \"hi\"\"#` ends at the first quote inside it"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "        .chain(std::iter::repeat_n(b'#', hashes))"
+replace = "        .chain(std::iter::repeat_n(b'#', 0))"
+killers = [{ package = "nazm-cli", test = "string_literals", name = "multi_line_and_raw_strings_are_the_same_bytes_everywhere" }]
+
+[[mutation]]
+name = "r1a-a-multi-line-string-keeps-its-indentation"
+why = "the closing delimiter's indentation is not taken off the lines, so an indented template carries the code's indentation"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "        match line.strip_prefix(indent) {"
+replace = "        match Some(*line) {"
+killers = [{ package = "nazm-cli", test = "string_literals", name = "multi_line_and_raw_strings_are_the_same_bytes_everywhere" }]
+
+[[mutation]]
+name = "r1a-a-multi-line-string-keeps-its-first-break"
+why = "the line break after the opening delimiter is the value's, so every template starts with an empty line"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = '''        if n > 0 {
+            body.push('\n');'''
+replace = '''        if n > 0 || true {
+            body.push('\n');'''
+killers = [{ package = "nazm-cli", test = "string_literals", name = "multi_line_and_raw_strings_are_the_same_bytes_everywhere" }]
+
+[[mutation]]
+name = "r1a-a-joined-line-keeps-its-break"
+why = "a backslash ending a line drops only itself, so the line break it was written to remove stays in the value"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = '''        if bytes.get(k + 1) == Some(&b'\n') {
+            k += 2;'''
+replace = '''        if bytes.get(k + 1) == Some(&b'\n') {
+            k += 1;'''
+killers = [{ package = "nazm-cli", test = "string_literals", name = "multi_line_and_raw_strings_are_the_same_bytes_everywhere" }]
+
+[[mutation]]
+name = "r1a-every-r-begins-a-raw-string"
+why = "an `r` followed by anything begins a raw string, so a binding named `r` is a lexical error"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = "    if c == b'r' && matches!(byte(i + 1), Some(b'\"' | b'#')) {"
+replace = "    if c == b'r' && byte(i + 1).is_some_and(|b| !b.is_ascii_alphanumeric() && b != b'_') {"
+killers = [{ package = "nazm-cli", test = "string_literals", name = "what_a_literal_refuses_and_by_which_code" }]
