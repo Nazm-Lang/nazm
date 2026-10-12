@@ -57,6 +57,9 @@ pub mod codes {
     /// A line of a multi-line string that does not begin with its closing delimiter's
     /// indentation, or text after an opening `"""` (R1a, L9).
     pub const STRING_LAYOUT: Code = Code::new("N0005");
+    /// An interpolated string's hole that is not one (R1a, L4): empty, unclosed, a lone `}`,
+    /// or a format interpolation does not have.
+    pub const INTERPOLATION: Code = Code::new("N0006");
 
     // Parsing
     /// An expression or block nested past the parser's limit. A parse-time bound, so

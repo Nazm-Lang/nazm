@@ -199,6 +199,7 @@ fn ends_a_value(k: &TokenKind) -> bool {
             | TokenKind::IntTooLarge(_)
             | TokenKind::Float(_)
             | TokenKind::Str(_)
+            | TokenKind::FStr(_)
             | TokenKind::Ident(_)
             | TokenKind::True
             | TokenKind::False

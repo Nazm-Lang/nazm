@@ -715,6 +715,20 @@ impl Machine<'_> {
                 self.put(arg(0), text.as_bytes())?;
                 Some(text.len() as u64)
             }
+            // Fixed-point (R1a, L4): the interpreter's function too.
+            "nz.format_fixed" => {
+                let x = f64::from_bits(arg(1));
+                let digits = usize::try_from(arg(2)).unwrap_or(0);
+                let text = nazm_sema::numeric::to_fixed(
+                    nazm_sema::numeric::NumVal {
+                        kind: nazm_sema::NumKind::F64,
+                        bits: x.to_bits(),
+                    },
+                    digits,
+                );
+                self.put(arg(0), text.as_bytes())?;
+                Some(text.len() as u64)
+            }
             "nz.format_u64" => {
                 let text = arg(1).to_string();
                 self.put(arg(0), text.as_bytes())?;

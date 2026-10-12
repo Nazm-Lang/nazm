@@ -314,6 +314,16 @@ impl Checker<'_> {
                 ))
             }
 
+            // `f"…"` (L4): a `Str`, each hole a value interpolation writes.
+            Expr::Interp { parts, .. } => {
+                for p in parts {
+                    if let nazm_syntax::InterpPart::Hole { expr, spec, span } = p {
+                        self.check_hole(expr, *spec, *span);
+                    }
+                }
+                Completion::Value(Type::Str)
+            }
+
             Expr::MethodCall {
                 qualifier,
                 receiver,
@@ -494,6 +504,54 @@ impl Checker<'_> {
             }
 
             Expr::Block(b) => self.check_block(b, expected),
+        }
+    }
+
+    /// An interpolation's hole (R1a, L4, `docs/spec.md`, *String interpolation*): a `Str`, an
+    /// integer, a float, a `Bool`, or a value whose `Show` is in scope — its `show()` checked as
+    /// the method call at the hole's braces it lowers to. A precision is a float's.
+    fn check_hole(&mut self, expr: &Expr, spec: nazm_syntax::FormatSpec, at: Span) {
+        let ty = self.value_type(expr, None);
+        let float = matches!(ty, Type::Num(k) if k.is_float());
+        if spec.precision.is_some() && !float {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::INTERPOLATION,
+                    at,
+                    format!("a precision is a float's, and this is `{}`", self.show(ty)),
+                )
+                .help("write the hole without `.precision`, or convert the value to a float"),
+            );
+        }
+        let primitive = matches!(ty, Type::Str | Type::Int | Type::Bool | Type::Num(_));
+        if primitive {
+            return;
+        }
+        // Anything else is written by its `Show`, if it has one in scope.
+        if self.lookup_method(ty, "show", at).is_err() {
+            let shown = self.show(ty);
+            self.errors.push(
+                Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    expr.span(),
+                    format!("an interpolation writes a `Str`, a number, a `Bool` or a `Show`, and this is `{shown}`"),
+                )
+                .help(format!(
+                    "implement `Show` (`@std/show`) for `{shown}`, or write the value's text yourself"
+                )),
+            );
+            return;
+        }
+        let ret = self.check_method_call_on(None, expr, Some(ty), "show", at, &[], at, None);
+        if ret != Type::Str {
+            self.errors.push(Diagnostic::error(
+                codes::TYPE_MISMATCH,
+                at,
+                format!(
+                    "this value's `show` gives `{}`, not a `Str`",
+                    self.show(ret)
+                ),
+            ));
         }
     }
 }

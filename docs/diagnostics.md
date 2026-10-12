@@ -431,6 +431,7 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0002` | `UNTERMINATED_STRING` | Unterminated string |
 | `N0003` | `INTEGER_TOO_LARGE` | Integer too large |
 | `N0004` | `INVALID_ESCAPE` | A backslash in a string literal that is not one of the escapes `docs/spec.md` lists (N49) |
+| `N0006` | `INTERPOLATION` | An interpolation's hole that is not one: empty, unclosed on its line, a lone `}`, a format interpolation does not have, a precision on something not a float, or not one expression (R1a, `docs/spec.md`, *String interpolation*) |
 | `N0005` | `STRING_LAYOUT` | A multi-line string with text after its opening `"""`, or a line not indented as its closing `"""` is (R1a, `docs/spec.md`, *Multi-line and raw strings*) |
 | `N0100` | `UNEXPECTED_TOKEN` | Unexpected token |
 | `N0101` | `UNSUPPORTED_CONSTRUCT` | Unsupported construct — **the umbrella code** for a construct this implementation refuses; its message names the construct, and a more specific code replaces it where one exists (Q1-D-13) |

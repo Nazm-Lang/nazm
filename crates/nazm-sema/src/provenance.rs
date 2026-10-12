@@ -148,6 +148,9 @@ impl Origin {
             | Intrinsic::FloatIsInfinite
             | Intrinsic::FloatIsFinite
             | Intrinsic::NumToStr
+            | Intrinsic::FloatToStrFixed
+            | Intrinsic::StrPadStart
+            | Intrinsic::StrPadEnd
             | Intrinsic::Float64ToBits
             | Intrinsic::Float64FromBits
             | Intrinsic::Float32ToBits
@@ -405,6 +408,9 @@ impl Origin {
             | Intrinsic::FloatIsInfinite
             | Intrinsic::FloatIsFinite
             | Intrinsic::NumToStr
+            | Intrinsic::FloatToStrFixed
+            | Intrinsic::StrPadStart
+            | Intrinsic::StrPadEnd
             | Intrinsic::Float64ToBits
             | Intrinsic::Float64FromBits
             | Intrinsic::Float32ToBits

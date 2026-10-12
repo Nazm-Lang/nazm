@@ -448,9 +448,14 @@ primary = atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] | INTEGER ) | "
 (* @example fn main() -> Int { 1 } *)
 (* @example fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 } *)
 (* @example fn main() -> Int { str_len(r#"say "hi""#) + str_len(r"C:\path") } *)
+(* An `FSTRING` (R1a, L4) is `f"…"` or `f"""…"""` whose `{expr}` and `{expr:spec}` holes are
+ * expressions (`docs/spec.md`, *String interpolation*).
+ *)
+(* @example fn main() -> Int { let n = 4; str_len(f"n = {n:>3}, half = {Float64(n) / 2.0:.1}") } *)
 atom = INTEGER
      | FLOAT
      | STRING
+     | FSTRING
      | "true"
      | "false"
      | IDENT

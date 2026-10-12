@@ -37,12 +37,12 @@ use nazm_span::{FileId, Span};
 use crate::ast::{
     Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, For, ForIter, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import,
-    Let, MatchArm, MatchSource, MethodOf, Param, Pattern, PatternField, Place, PlaceField,
-    PlaceStep, Program, Qualifier, Record, Reexport, ReexportName, Requirement, Return, Scope,
-    Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, VariantPattern, While,
+    InterpPart, Let, MatchArm, MatchSource, MethodOf, Param, Pattern, PatternField, Place,
+    PlaceField, PlaceStep, Program, Qualifier, Record, Reexport, ReexportName, Requirement, Return,
+    Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, VariantPattern, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
-use crate::lexer::{Lexeme, Token, TokenKind};
+use crate::lexer::{FPiece, Lexeme, Token, TokenKind};
 
 /// Constructs that are deliberately absent from the language, so they can be refused by name.
 const RESERVED: &[(&str, &str)] = &[
@@ -2422,6 +2422,43 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// An interpolation's hole (R1a, L4): `text`, written at byte `from`, parsed as the tail of a
+    /// function of its own and moved to where it is written. One that is not one expression is
+    /// one error, at its braces.
+    fn hole(&mut self, text: &str, from: u32, braces: Span) -> Option<(Expr, usize)> {
+        const PREFIX: &str = "fn hole() -> Int { ";
+        let wrapped = format!("{PREFIX}{text}\n}}\n");
+        let (program, errors) = crate::parse_file(self.file, &wrapped);
+        let tail = match program.functions.as_slice() {
+            [f] if errors.is_empty() => f
+                .body
+                .as_ref()
+                .filter(|b| b.statements.is_empty())
+                .and_then(|b| b.tail.clone()),
+            _ => None,
+        };
+        let Some(mut expr) = tail.map(|t| *t) else {
+            self.report(
+                Diagnostic::error(
+                    codes::INTERPOLATION,
+                    braces,
+                    "this hole is not one expression",
+                )
+                .help("a hole holds one expression: `{count}`, `{a + b}`, `{name.show()}`"),
+            );
+            return None;
+        };
+        let by = i64::from(from) - i64::try_from(PREFIX.len()).unwrap_or(0);
+        crate::incremental::shift_expr(&mut expr, self.file, by);
+        // Its depth in the tree, bounded from above by what in its text can nest: a bracket,
+        // a projection or an operator each adds at most one level.
+        let nests = text
+            .bytes()
+            .filter(|b| b"([{.+-*/%<>=!&|^~?".contains(b))
+            .count();
+        Some((expr, nests + 2))
+    }
+
     /// A tuple has two to eight elements (L5): `(x,)` is refused by name, since `(x)` is `x`
     /// parenthesised and there is no tuple of one to write instead; past eight, the elements
     /// want names, and a record gives them. Eight also keeps a tuple's derived order (L6), by
@@ -4403,6 +4440,36 @@ impl<'a> Parser<'a> {
                 self.wrap(at, SyntaxKind::Literal);
                 Some(Expr::Str { value, span })
             }
+            // `f"…"` (R1a, L4): each hole parsed on its own, then placed where it is written.
+            TokenKind::FStr(pieces) => {
+                self.advance();
+                let mut parts = Vec::with_capacity(pieces.len());
+                let mut deepest = 0;
+                for piece in pieces {
+                    match piece {
+                        FPiece::Text(t) => parts.push(InterpPart::Text(t)),
+                        FPiece::Hole {
+                            text,
+                            at: from,
+                            spec,
+                            span: braces,
+                        } => {
+                            let Some((expr, depth)) = self.hole(&text, from, braces) else {
+                                continue;
+                            };
+                            deepest = deepest.max(depth);
+                            parts.push(InterpPart::Hole {
+                                expr,
+                                spec,
+                                span: braces,
+                            });
+                        }
+                    }
+                }
+                self.built(deepest + 1)?;
+                self.wrap(at, SyntaxKind::Literal);
+                Some(Expr::Interp { parts, span })
+            }
             // `if let P = e { … } else { … }` (R1a): the `match` it means.
             TokenKind::If
                 if matches!(
@@ -4910,6 +4977,13 @@ mod ast_depth_tests {
                         stack.push((Node::Expr(receiver), d + 1));
                         for a in args {
                             stack.push((Node::Expr(a), d + 1));
+                        }
+                    }
+                    Expr::Interp { parts, .. } => {
+                        for p in parts {
+                            if let crate::ast::InterpPart::Hole { expr, .. } = p {
+                                stack.push((Node::Expr(expr), d + 1));
+                            }
                         }
                     }
                 },

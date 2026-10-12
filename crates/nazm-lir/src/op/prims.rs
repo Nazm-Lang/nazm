@@ -158,6 +158,7 @@ impl Fx<'_, '_> {
             | Intrinsic::FloatIsInfinite
             | Intrinsic::FloatIsFinite
             | Intrinsic::NumToStr
+            | Intrinsic::FloatToStrFixed
             | Intrinsic::Float64ToBits
             | Intrinsic::Float64FromBits
             | Intrinsic::Float32ToBits
@@ -283,6 +284,49 @@ impl Fx<'_, '_> {
                 self.rt("memcpy", &[buf, pa, la]);
                 let rest = self.ptr_add(buf, la);
                 self.rt("memcpy", &[rest, pb, lb]);
+                self.write_str(dst, buf, n, owner);
+            }
+            // Padding (R1a, L4): a new string of `max(width, len)` bytes, the fill's one byte
+            // written in a loop before or after the text.
+            Intrinsic::StrPadStart | Intrinsic::StrPadEnd => {
+                let s = self.arg_place(args, 0);
+                let (ps, ls) = self.str_parts(s);
+                let width = self.arg(args, 1);
+                let fill = self.arg_place(args, 2);
+                let (pf, lf) = self.str_parts(fill);
+                let wrong = self.cmp_imm(Cmp::Ne, lf, Class::I64, 1);
+                self.guard(wrong, "N0405", "a padding's fill is one byte");
+                let byte = self.load(Class::I8, pf, 0);
+                let wider = self.cmp(Cmp::Gt, width, ls);
+                let n = self.select(wider, width, ls);
+                let pad = self.bin(BinOp::Sub, n, ls);
+                let room = self.add_imm(n, 1);
+                let (owner, buf) = self.string_backing(room);
+                let (fill_at, text_at) = if op == Intrinsic::StrPadStart {
+                    (buf, self.ptr_add(buf, pad))
+                } else {
+                    (self.ptr_add(buf, ls), buf)
+                };
+                self.rt("memcpy", &[text_at, ps, ls]);
+                let i = self.b.var(Class::I64);
+                let zero = self.iconst(0);
+                self.set_var(i, zero);
+                let head = self.b.block();
+                let body = self.b.block();
+                let done = self.b.block();
+                self.jump(head);
+                self.b.switch(head);
+                let iv = self.get_var(i);
+                let more = self.cmp(Cmp::Lt, iv, pad);
+                self.branch(more, body, done);
+                self.b.switch(body);
+                let iv = self.get_var(i);
+                let at = self.ptr_add(fill_at, iv);
+                self.store(at, 0, byte);
+                let step = self.add_imm(iv, 1);
+                self.set_var(i, step);
+                self.jump(head);
+                self.b.switch(done);
                 self.write_str(dst, buf, n, owner);
             }
             Intrinsic::IntToStr => {
@@ -894,6 +938,26 @@ impl Fx<'_, '_> {
                     };
                     self.rt_v("nz.format_int", &[buf, wide], Class::I64)
                 };
+                self.write_str(dst, buf, n, owner);
+                true
+            }
+            // Fixed-point (R1a, L4): 0 to 30 decimals, into room for the widest double.
+            Intrinsic::FloatToStrFixed => {
+                let k = elem
+                    .and_then(super::numeric::kind_of)
+                    .unwrap_or(NumKind::F64);
+                let x = self.arg(args, 0);
+                let digits = self.arg(args, 1);
+                let outside = self.cmp_imm(Cmp::UGt, digits, Class::I64, 30);
+                self.guard(outside, "N0405", "a float is written with 0 to 30 decimals");
+                let room = self.iconst(360);
+                let (owner, buf) = self.string_backing(room);
+                let d = if k == NumKind::F32 {
+                    self.conv(super::ir::ConvOp::FExt, Class::F64, x)
+                } else {
+                    x
+                };
+                let n = self.rt_v("nz.format_fixed", &[buf, d, digits], Class::I64);
                 self.write_str(dst, buf, n, owner);
                 true
             }

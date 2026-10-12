@@ -261,7 +261,9 @@ pub fn escape(s: &str) -> String {
 /// wall-clock nap a timed wait measures. 29 is R1a's release queue: `nz.vec_release` takes the
 /// queue of the release in progress, and an element's release function takes it too, so a
 /// release nested in another queues instead of recursing (`nz.vec_drain`, `nz.vec_enqueue`).
-pub const RUNTIME_ABI_REVISION: u32 = 29;
+/// 30 is R1a's fixed-point floats: `nz.format_fixed`, C's `%.*f`, for `float_to_str_fixed` and
+/// an interpolation's `.precision`.
+pub const RUNTIME_ABI_REVISION: u32 = 30;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -481,6 +483,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.os_wait", [I64], Some(Word::I64), Net, "a child's exit, or a status (Gate 2)"),
     import!("nz.os_kill", [I64], Some(Word::I64), Net, "0, or a status (Gate 2)"),
     import!("nz.format_float", [Ptr, F64, Bit], Some(Word::I64), Numbers, "writes a float's shortest round-trip text, as a Float32 when the flag is set, into 40 bytes the caller owns and returns how many (Gate 2)"),
+    import!("nz.format_fixed", [Ptr, F64, I64], Some(Word::I64), Numbers, "writes a float with exactly so many decimals, C's `%.*f`, into 360 bytes the caller owns and returns how many (R1a, L4)"),
     import!("nz.format_u64", [Ptr, I64], Some(Word::I64), Numbers, "writes a UInt64's decimal digits into 21 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.float_parses", [Ptr, I64], Some(Word::Bit), Numbers, "borrows the bytes; whether they are a floating-point number as `float_parses` reads one (Gate 2)"),
     import!("nz.float_parse", [Ptr, I64], Some(Word::F64), Numbers, "borrows the bytes; the Float64 they write, or NaN (Gate 2)"),
@@ -766,6 +769,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_wait", "i64" ("i64") "", false, Net, "io", Status, Any, "wait for a child's exit (Gate 2)", "none"),
     rt!("nz.os_kill", "i64" ("i64") "", false, Net, "io", Status, Any, "kill a child (Gate 2)", "none"),
     rt!("nz.format_float", "i64" ("ptr", "double", "i1") "", false, Numbers, "", Never, Any, "a float's shortest round-trip text, by ECMAScript's layout (Gate 2)", "writes into the caller's buffer"),
+    rt!("nz.format_fixed", "i64" ("ptr", "double", "i64") "", false, Numbers, "", Never, Any, "a float with exactly so many decimals, C's `%.*f` (R1a, L4)", "writes into the caller's buffer"),
     rt!("nz.fmt_layout", "i64" ("ptr", "ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "lay out a float's digits and exponent by ECMAScript's rule (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.format_u64", "i64" ("ptr", "i64") "", false, Numbers, "", Never, Any, "a UInt64's decimal digits into a 21-byte buffer (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.float_parses", "i1" ("ptr", "i64") "", false, Numbers, "", Never, Any, "whether bytes are a floating-point number as `float_parses` reads one (Gate 2)", "borrows the bytes"),
@@ -1184,10 +1188,12 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_twenty_nine_and_reaches_the_system_only_through_its_platform_layer()
-    {
+    fn the_runtime_is_revision_thirty_and_reaches_the_system_only_through_its_platform_layer() {
         // R1a's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 29);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 30);
+        // Fixed-point floats (R1a, L4), in the numbers part.
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.format_fixed("));
+        assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.format_fixed("));
         // The release queue (R1a): a nested release queues on it rather than recursing.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.vec_enqueue("));
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.os_random_bytes("));

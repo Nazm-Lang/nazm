@@ -431,6 +431,42 @@ impl Interpreter {
                 out.extend_from_slice(b.bytes());
                 Ok(Value::Str(Str::heap(out)))
             }
+            // Fixed-point (R1a, L4): from 0 to 30 decimals.
+            (Intrinsic::FloatToStrFixed, [Value::Num(x), Value::Int(d)]) => {
+                let Some(digits) = usize::try_from(*d).ok().filter(|d| *d <= 30) else {
+                    return Err(out_of_bounds(
+                        "a float is written with 0 to 30 decimals",
+                        format!("asked for {d}"),
+                    ));
+                };
+                Ok(Value::Str(Str::heap(
+                    numeric::to_fixed(*x, digits).into_bytes(),
+                )))
+            }
+            // Padding (L4): copies of a one-byte fill, before or after, to a width in bytes —
+            // always a new string, as the compiled program's is.
+            (
+                Intrinsic::StrPadStart | Intrinsic::StrPadEnd,
+                [Value::Str(s), Value::Int(w), Value::Str(fill)],
+            ) => {
+                let [byte] = fill.bytes() else {
+                    return Err(out_of_bounds(
+                        "a padding's fill is one byte",
+                        format!("the fill is {} bytes long", fill.len()),
+                    ));
+                };
+                let want = usize::try_from(*w).unwrap_or(0).max(s.len());
+                let pad = vec![*byte; want - s.len()];
+                let mut out = Vec::with_capacity(want);
+                if i == Intrinsic::StrPadStart {
+                    out.extend_from_slice(&pad);
+                    out.extend_from_slice(s.bytes());
+                } else {
+                    out.extend_from_slice(s.bytes());
+                    out.extend_from_slice(&pad);
+                }
+                Ok(Value::Str(Str::heap(out)))
+            }
             (Intrinsic::IntToStr, [Value::Int(n)]) => {
                 Ok(Value::Str(Str::heap(n.to_string().into_bytes())))
             }

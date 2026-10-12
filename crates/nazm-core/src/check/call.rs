@@ -38,6 +38,23 @@ impl Checker<'_> {
         span: Span,
         expected: Option<Type>,
     ) -> Type {
+        self.check_method_call_on(qualifier, receiver, None, method, at, args, span, expected)
+    }
+
+    /// As [`Self::check_method_call`], with the receiver's type already known — an
+    /// interpolation's hole (L4) — so the receiver is not checked a second time.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn check_method_call_on(
+        &mut self,
+        qualifier: Option<&nazm_syntax::Qualifier>,
+        receiver: &Expr,
+        known: Option<Type>,
+        method: &str,
+        at: Span,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Type {
         // What an unresolved call continues as: what was wanted, so one mistake is one
         // diagnostic.
         let fallback = expected.unwrap_or(Type::Int);
@@ -87,7 +104,10 @@ impl Checker<'_> {
             }
             None => (receiver, args),
         };
-        let recv_ty = self.value_type(recv, None);
+        let recv_ty = match known {
+            Some(t) => t,
+            None => self.value_type(recv, None),
+        };
 
         // Which trait's method this is.
         let chosen: Result<(TraitId, u32), Diagnostic> = if let Some((t, _)) = ufcs {
@@ -257,7 +277,7 @@ impl Checker<'_> {
     /// bound, or among the traits in scope with an impl for `ty` this module may use.
     // One diagnostic, built only when the lookup fails: not worth a box.
     #[allow(clippy::result_large_err)]
-    fn lookup_method(
+    pub(super) fn lookup_method(
         &self,
         ty: Type,
         method: &str,
