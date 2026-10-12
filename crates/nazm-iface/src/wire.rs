@@ -200,6 +200,11 @@ pub enum PersistentType {
     List {
         list: Box<PersistentType>,
     },
+    /// A tuple (L5), written `{"tuple":[A,B,…]}`, likewise: a tuple's record has no name to
+    /// write as a definition.
+    Tuple {
+        tuple: Vec<PersistentType>,
+    },
     /// `[T; N]` (Gate 2), written `{"array":T,"len":N}`.
     Array {
         array: Box<PersistentType>,
@@ -388,6 +393,14 @@ fn is_zero(n: &u32) -> bool {
 /// spelling may name a different record in every module. An application writes its
 /// definition's identity and its arguments; a parameter writes its position.
 fn persist(t: Type, types: &UserTypes, graph: &ModuleGraph) -> Option<PersistentType> {
+    if let Some(elems) = types.tuple_elements(t) {
+        return Some(PersistentType::Tuple {
+            tuple: elems
+                .into_iter()
+                .map(|e| persist(e, types, graph))
+                .collect::<Option<Vec<_>>>()?,
+        });
+    }
     match t {
         Type::Param(p) => Some(PersistentType::Param { param: p.index }),
         Type::Vec(v) => Some(PersistentType::Vec {
@@ -666,6 +679,11 @@ fn validate_type(
         }
         PersistentType::Boxed { boxed: inner } | PersistentType::List { list: inner } => {
             validate_type(inner, params, defined, depth + 1, owner)?;
+        }
+        PersistentType::Tuple { tuple } => {
+            for e in tuple {
+                validate_type(e, params, defined, depth + 1, owner)?;
+            }
         }
         PersistentType::Array { array, .. } => {
             validate_type(array, params, defined, depth + 1, owner)?;
@@ -1547,6 +1565,13 @@ fn read_type(
         PersistentType::List { list } => {
             let elem = read_type(list, ids, types, owner);
             types.list_of(elem)
+        }
+        PersistentType::Tuple { tuple } => {
+            let elems = tuple
+                .iter()
+                .map(|e| read_type(e, ids, types, owner))
+                .collect();
+            types.tuple_of(elems)
         }
         PersistentType::Array { array, len } => {
             let elem = read_type(array, ids, types, owner);

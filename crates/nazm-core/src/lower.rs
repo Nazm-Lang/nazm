@@ -1239,6 +1239,34 @@ impl<'a> Lower<'a> {
                 let ty = m.arms.iter().rev().find_map(|a| a.body.ty());
                 node(ExprKind::Match(Box::new(m)), ty, *span)
             }
+            // `(a, b, …)` (L5): the tuple record of its elements' types, built in order.
+            AstExpr::Tuple { elems, span } => {
+                let values = self.exprs(elems)?;
+                let tys: Option<Vec<Type>> = values.iter().map(|v| v.ty).collect();
+                let Some(Type::Record(record)) = tys.and_then(|t| self.res.types().find_tuple(&t))
+                else {
+                    return defect(*span, "a tuple the checker did not intern");
+                };
+                let arity = u32::try_from(values.len()).unwrap_or(u32::MAX);
+                let fields = values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, value)| Init {
+                        field: u32::try_from(i).unwrap_or(u32::MAX),
+                        at: value.at,
+                        value,
+                    })
+                    .collect();
+                node(
+                    ExprKind::Record {
+                        record,
+                        arity,
+                        fields,
+                    },
+                    Some(Type::Record(record)),
+                    *span,
+                )
+            }
             AstExpr::Field {
                 base, name_span, ..
             } => {
@@ -2363,6 +2391,22 @@ impl<'a> Lower<'a> {
         let at = p.span();
         match p {
             P::Wildcard { .. } | P::Bind { .. } => Ok(self.bool_const(true, at)),
+            // A tuple (L5): every element matches, read out of the record by position.
+            P::Tuple { elems, .. } => {
+                let mut acc: Option<Expr> = None;
+                for (i, sub) in elems.iter().enumerate().rev() {
+                    let element = self.tuple_element(v, i, at)?;
+                    let test = self.pattern_test(sub, &element)?;
+                    acc = Some(match acc {
+                        None => test,
+                        Some(rest) => {
+                            let no = self.bool_const(false, at);
+                            self.value_if(test, rest, no, Type::Bool, at)
+                        }
+                    });
+                }
+                Ok(acc.unwrap_or_else(|| self.bool_const(true, at)))
+            }
             P::Literal(e) => {
                 let lit = self.expr(e)?;
                 let Some(ty) = v.ty else {
@@ -2469,6 +2513,30 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// Element `i` of the tuple `v` (L5): a projection of its record.
+    fn tuple_element(&self, v: &Expr, i: usize, at: Span) -> Lowered<Expr> {
+        let Some(t @ Type::Record(record)) = v.ty else {
+            return defect(at, "a tuple pattern against a value that is not a tuple");
+        };
+        let Some(ty) = self
+            .res
+            .types()
+            .tuple_elements(t)
+            .and_then(|e| e.get(i).copied())
+        else {
+            return defect(at, "a tuple pattern with more elements than its tuple");
+        };
+        Ok(Expr {
+            kind: ExprKind::Field {
+                base: Box::new(v.clone()),
+                record,
+                field: u32::try_from(i).unwrap_or(u32::MAX),
+            },
+            ty: Some(ty),
+            at,
+        })
+    }
+
     /// The enum a variant pattern matches `v` of, the variant it names, and how many the
     /// enum has.
     fn variant_of(
@@ -2525,6 +2593,17 @@ impl<'a> Lower<'a> {
         Ok(match p {
             P::Bind { name: n, .. } if n == name => Some(v.clone()),
             P::Bind { .. } | P::Wildcard { .. } | P::Literal(_) => None,
+            P::Tuple { elems, .. } => {
+                let Some((i, sub)) = elems
+                    .iter()
+                    .enumerate()
+                    .find(|(_, e)| e.bindings().iter().any(|(n, _)| *n == name))
+                else {
+                    return Ok(None);
+                };
+                let element = self.tuple_element(v, i, at)?;
+                self.extract(sub, &element, name)?
+            }
             P::Or { alts, .. } => {
                 let mut options = Vec::new();
                 for alt in alts {

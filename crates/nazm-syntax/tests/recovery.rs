@@ -255,7 +255,8 @@ fn a_refused_construct_points_at_the_current_language() {
 
 /// `1.5` is one floating-point literal since Gate 2 (it was refused by name as floating point
 /// in Gate 1, and read as a field whose name is a number before that); written apart, `1 . 5`
-/// is still the field read it looks like, and refused as one.
+/// is the element read it looks like — since L5 a tuple's `t.5` — which the parser takes and the
+/// checker refuses, `Int` having no element `5`.
 #[test]
 fn a_floating_point_literal_is_one_literal() {
     let text = "fn main() -> Int { let x = 1.5; 0 }\n";
@@ -264,5 +265,5 @@ fn a_floating_point_literal_is_one_literal() {
 
     let text = "fn main() -> Int { let x = 1 . 5; 0 }\n";
     let (_, _, d) = parse(text);
-    assert_eq!(d[0].code, codes::UNEXPECTED_TOKEN, "{d:?}");
+    assert!(d.is_empty(), "{d:?}");
 }

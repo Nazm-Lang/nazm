@@ -210,6 +210,10 @@ impl UserTypes {
                     .records
                     .get(id)
                     .map_or("<unknown record>", |r| r.name.as_str());
+                // A tuple (L5) spells its elements.
+                if name == crate::generic::TUPLE_NAME {
+                    return format!("({})", shown(self));
+                }
                 if args.is_empty() {
                     name.to_owned()
                 } else {

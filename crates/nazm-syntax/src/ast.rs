@@ -453,6 +453,8 @@ impl TypeName {
 
     /// The name an array type is written under in a [`TypeName`]: `[T; N]`.
     pub const ARRAY: &'static str = "[]";
+    /// The name of a tuple type, `(A, B, …)` (R1a), whose arguments are its elements.
+    pub const TUPLE: &'static str = "()";
 }
 
 /// One declared type parameter: `T` in `fn identity[T](…)`, or `T: Equality` in
@@ -547,7 +549,7 @@ impl Block {
                 | Expr::Not { operand, .. }
                 | Expr::BitNot { operand, .. }
                 | Expr::Propagate { operand, .. } => exprs.push(operand),
-                Expr::Array { elems, .. } => exprs.extend(elems.iter()),
+                Expr::Array { elems, .. } | Expr::Tuple { elems, .. } => exprs.extend(elems.iter()),
                 Expr::ArrayRepeat { value, count, .. } => {
                     exprs.push(value);
                     exprs.push(count);
@@ -744,13 +746,18 @@ pub enum Pattern {
     Variant(VariantPattern),
     /// `p | q | …` (R1a): matches what any alternative matches; each binds the same names.
     Or { alts: Vec<Pattern>, span: Span },
+    /// `(p, q, …)` (R1a, L5): a tuple whose elements match.
+    Tuple { elems: Vec<Pattern>, span: Span },
 }
 
 impl Pattern {
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Self::Wildcard { span } | Self::Bind { span, .. } | Self::Or { span, .. } => *span,
+            Self::Wildcard { span }
+            | Self::Bind { span, .. }
+            | Self::Or { span, .. }
+            | Self::Tuple { span, .. } => *span,
             Self::Literal(e) => e.span(),
             Self::Variant(v) => v.span,
         }
@@ -766,6 +773,7 @@ impl Pattern {
             match p {
                 Self::Bind { name, span } => out.push((name.as_str(), *span)),
                 Self::Variant(v) => work.extend(v.fields.iter().rev().map(|f| &f.pattern)),
+                Self::Tuple { elems, .. } => work.extend(elems.iter().rev()),
                 Self::Or { alts, .. } => work.extend(alts.first()),
                 Self::Wildcard { .. } | Self::Literal(_) => {}
             }
@@ -816,6 +824,8 @@ pub enum MatchSource {
     IfLet,
     /// `let P = e else { D }; rest`: arms `P => { rest }` and `_ => D`, where `D` must leave.
     LetElse,
+    /// `let P = e; rest` (L5): one arm `P => { rest }`, so `P` must match every value.
+    Let,
 }
 
 /// One field of a construction: `name: value`.
@@ -1054,6 +1064,11 @@ pub enum Expr {
         else_block: Option<Block>,
         span: Span,
     },
+    /// `(a, b, …)` (R1a, L5): a tuple of two or more values, evaluated in order.
+    Tuple {
+        elems: Vec<Expr>,
+        span: Span,
+    },
     Block(Box<Block>),
     /// `receiver.method(args)`, or `Trait.method(receiver, args)` written with a trait's
     /// name as the receiver (N78). Which it is, and which function it calls, is the
@@ -1092,6 +1107,7 @@ impl Expr {
             | Self::Construct { span, .. }
             | Self::Variant { span, .. }
             | Self::Match { span, .. }
+            | Self::Tuple { span, .. }
             | Self::Field { span, .. }
             | Self::Propagate { span, .. }
             | Self::If { span, .. }
@@ -1121,6 +1137,7 @@ impl Expr {
             | Self::Construct { span, .. }
             | Self::Variant { span, .. }
             | Self::Match { span, .. }
+            | Self::Tuple { span, .. }
             | Self::Field { span, .. }
             | Self::Propagate { span, .. }
             | Self::If { span, .. }

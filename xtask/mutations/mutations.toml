@@ -1763,8 +1763,8 @@ default was only ever a structural requirement. `docs/spec.md` gives the checker
 language's meaning precisely so that this cannot be deferred to the backend
 """
 file = "crates/nazm-core/src/check/pattern.rs"
-find = "        if !unresolved {\n            self.report_uncovered(sty, &rows, span);"
-replace = "        if false {\n            self.report_uncovered(sty, &rows, span);"
+find = "        if !unresolved {\n            self.report_uncovered(sty, &rows, span, source);"
+replace = "        if false {\n            self.report_uncovered(sty, &rows, span, source);"
 killers = [{ package = "nazm-core", test = "enums", name = "a_match_that_misses_a_variant_is_refused_and_names_it" }]
 
 [[mutation]]
@@ -8297,10 +8297,11 @@ Repointed by Gate 3's interrupts, which moved it to 48: an entry that refused `@
 Repointed by Gate 3's failure hook, which moved it to 49: an entry that refused `@on_failure` must not be reused.
 Repointed by R1a, which moved it to 52 for `for` loops: an entry that refused `for x in xs` must not be reused.
 Repointed by R1a again, which moved it to 53 for `Box` and `List`: an entry that refused a type reaching itself through one must not be reused.
-Repointed by R1a a third time, which moved it to 54 for patterns: an entry that refused a `_` arm must not be reused."""
+Repointed by R1a a third time, which moved it to 54 for patterns: an entry that refused a `_` arm must not be reused.
+Repointed by R1a a fourth time, which moved it to 55 for tuples: an entry that refused `(1, 2)` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 54;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 53;"
+find = "pub const SEMANTIC_EPOCH: u32 = 55;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 54;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -16415,6 +16416,72 @@ killers = [{ package = "nazm-cli", test = "patterns", name = "every_kind_of_patt
 name = "r1a-every-let-is-a-let-else"
 why = "the parser reads `let x = e;` as a let ... else, so every ordinary binding is a syntax error"
 file = "crates/nazm-syntax/src/parser.rs"
-find = "            || (matches!(at(1), Some(TokenKind::Ident(_))) && matches!(at(2), Some(TokenKind::Eq)))"
-replace = "            || false"
+find = "            || (matches!(at(1), Some(TokenKind::Ident(n)) if n != \"_\")"
+replace = "            || (false"
 killers = [{ package = "nazm-cli", test = "patterns", name = "every_kind_of_pattern_means_the_same_everywhere_and_is_reclaimed" }]
+
+# --- R1a: tuples (docs/spec.md, *Tuples*) ---
+
+[[mutation]]
+name = "r1a-a-tuple-element-reads-its-neighbour"
+why = "a tuple pattern reads element 1 for element 0 and the other way round, so `let (q, r) = div_mod(…)` swaps them"
+file = "crates/nazm-core/src/lower.rs"
+find = "                field: u32::try_from(i).unwrap_or(u32::MAX),\n            },\n            ty: Some(ty),"
+replace = "                field: u32::try_from(i ^ 1).unwrap_or(u32::MAX),\n            },\n            ty: Some(ty),"
+killers = [{ package = "nazm-cli", test = "tuples", name = "tuples_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-tuple-pattern-tests-only-its-last-element"
+why = "a tuple pattern's test is its last element's alone, so `((0, 0), _)` matches every pair"
+file = "crates/nazm-core/src/lower.rs"
+find = "                            self.value_if(test, rest, no, Type::Bool, at)"
+replace = "                            {\n                                let _ = (test, no);\n                                rest\n                            }"
+killers = [{ package = "nazm-cli", test = "tuples", name = "tuples_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-a-tuple-pattern-of-fewer-elements-fits"
+why = "a tuple pattern of more elements than the tuple is accepted against its first ones, and the rest bind nothing"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "                    Some(fields) if fields.len() == elems.len() => {"
+replace = "                    Some(fields) if fields.len() <= elems.len() => {"
+killers = [{ package = "nazm-cli", test = "tuples", name = "what_a_tuple_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-a-refutable-let-needs-no-else"
+why = "a `let` whose pattern can fail is accepted without an `else`, and a value it does not match runs on with bindings never made"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = "        if source == nazm_syntax::MatchSource::Let {\n            self.errors.push("
+replace = "        if source == nazm_syntax::MatchSource::Let {\n            return;\n        }\n        if false {\n            self.errors.push("
+killers = [{ package = "nazm-cli", test = "tuples", name = "what_a_tuple_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-a-tuple-type-has-no-constructor"
+why = "exhaustiveness does not know a tuple's one constructor, so it names `_` instead of the element values no arm covers"
+file = "crates/nazm-core/src/check/usefulness.rs"
+find = "            sig.tuple(*ty).map(|elems| vec![(Head::Tuple, elems, None)])"
+replace = "            None"
+killers = [{ package = "nazm-cli", test = "tuples", name = "what_a_tuple_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-a-tuple-of-one-is-accepted"
+why = "`(x,)` is accepted as a tuple of one, a type diagnostics spell `(Int)` — the spelling of a parenthesised `Int`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        if len >= 2 {\n            return Some(());"
+replace = "        if len >= 1 {\n            return Some(());"
+killers = [{ package = "nazm-cli", test = "tuples", name = "what_a_tuple_refuses_and_by_which_code" }]
+
+[[mutation]]
+name = "r1a-a-tuple-element-is-not-a-place"
+why = "the assignment parser does not take `t.1 = e`, so replacing a tuple's element is a syntax error"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                        Some(TokenKind::Ident(_) | TokenKind::Int(_))"
+replace = "                        Some(TokenKind::Ident(_))"
+killers = [{ package = "nazm-cli", test = "tuples", name = "tuples_mean_the_same_everywhere_and_are_reclaimed" }]
+
+[[mutation]]
+name = "r1a-for-is-glued-to-its-pattern"
+why = "the formatter writes `for(a, b) in xs`, gluing the keyword to the pattern as if `for` were a function's name"
+file = "crates/nazm-syntax/src/format.rs"
+find = "            return matches!(previous, TokenKind::Ident(w) if w == \"for\")"
+replace = "            return matches!(previous, TokenKind::Ident(w) if w == \"rof\")"
+killers = [{ package = "nazm-cli", test = "tuples", name = "a_tuple_is_written_and_formatted_as_the_specification_spells_it" }]
