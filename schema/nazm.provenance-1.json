@@ -171,6 +171,11 @@
         "stack_watermark": {
           "type": "boolean"
         },
+        "stack_size": {
+          "description": "R1b, L14: `nazm build --stack-size`, in bytes; null where none was asked for",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "cranelift": {
           "type": "string"
         }

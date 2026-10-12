@@ -200,6 +200,18 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-13)** · *The stack asked for: `--stack-size`* (`spec.md`, *Native recursion, and
+the stack it runs on*; `openspec/changes/r1-language-for-the-rewrite`, L14). `nazm build
+--stack-size N` (bytes or `K`/`M`/`G`, 64 KiB to 4 GiB; refused for a board or WebAssembly) runs
+`main` on a thread of `N` bytes — the platform entry starts it and joins it, and runs `main` in place
+if it cannot start — and stores `N` in the runtime's `nz.stack_bytes`, which a task's thread, the
+pool's task stacks (under `NAZM_TASK_STACK`) and `nz.stack_check`'s limit read in place of 8 MiB,
+256 KiB and 8 MiB. Runtime ABI 31; build provenance records the size. The interpreter's threads
+follow `--max-depth`, as before. EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/stack_size.rs` — a million-deep recursion in `main` and in a task that
+meets `N0408` by default and finishes with `--stack-size`, under LLVM and Cranelift, on the pool
+and a thread per task; the refusals.
+
 **R1b (2026-10-13)** · *Checked arithmetic* (`spec.md`, *Numbers*, **Functions**;
 `openspec/changes/r1-language-for-the-rewrite`, L13a). `checked_add`, `checked_sub` and
 `checked_mul`, over every integer type, return `Option[T]` — `Some` of the exact result, `None`

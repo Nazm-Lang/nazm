@@ -263,7 +263,10 @@ pub fn escape(s: &str) -> String {
 /// release nested in another queues instead of recursing (`nz.vec_drain`, `nz.vec_enqueue`).
 /// 30 is R1a's fixed-point floats: `nz.format_fixed`, C's `%.*f`, for `float_to_str_fixed` and
 /// an interpolation's `.precision`.
-pub const RUNTIME_ABI_REVISION: u32 = 30;
+/// 31 is R1b's stack size (L14): `nz.stack_bytes`, which the platform entry stores before `main`
+/// and which a task's thread, a pool's task stacks and `nz.stack_check` read in place of their
+/// defaults.
+pub const RUNTIME_ABI_REVISION: u32 = 31;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -797,6 +800,7 @@ pub struct RuntimeGlobal {
 pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.pool_mode", ty: "i64", thread_local: false, writers: "`nz.pool_mode_get`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_policy", ty: "i64", thread_local: false, writers: "the platform entry, once, before `main`, for a program that calls C (N106)" },
+    RuntimeGlobal { symbol: "nz.stack_bytes", ty: "i64", thread_local: false, writers: "the platform entry, once, before `main`, for `nazm build --stack-size` (R1b, L14)" },
     RuntimeGlobal { symbol: "nz.pool_workers", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_count", ty: "i64", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_next", ty: "i64", thread_local: false, writers: "`nz.task_start`, atomically (N83)" },
@@ -1188,9 +1192,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_and_reaches_the_system_only_through_its_platform_layer() {
+    fn the_runtime_is_revision_thirty_one_and_reaches_the_system_only_through_its_platform_layer() {
         // R1a's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 30);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 31);
         // Fixed-point floats (R1a, L4), in the numbers part.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.format_fixed("));
         assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.format_fixed("));
@@ -1276,8 +1280,10 @@ mod tests {
         // Read from the text, so a host whose default happens to be 8 MiB (Linux) still sees
         // the size go missing (N49).
         let text = emit_runtime(all());
+        // 8 MiB unless the program was built for another size (R1b, L14).
         assert!(
-            text.contains("call i32 @pthread_attr_setstacksize(ptr %attr, i64 8388608)"),
+            text.contains("%sbtsize = select i1 %sbtset, i64 %sbt, i64 8388608")
+                && text.contains("call i32 @pthread_attr_setstacksize(ptr %attr, i64 %sbtsize)"),
             "{text}"
         );
         assert!(
@@ -1285,7 +1291,11 @@ mod tests {
             "{text}"
         );
         // And the budget is the smaller of RLIMIT_STACK and that same 8 MiB.
-        assert!(text.contains("icmp ult i64 %cap, 8388608"), "{text}");
+        assert!(
+            text.contains("%want = select i1 %sbcset, i64 %sbc, i64 8388608")
+                && text.contains("icmp ult i64 %cap, %want"),
+            "{text}"
+        );
         // Nothing checks the stack in a program with no call cycle.
         let none = emit_runtime(crate::Needs {
             stack: false,

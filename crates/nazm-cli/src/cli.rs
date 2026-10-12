@@ -148,6 +148,8 @@ pub(crate) enum PatchOperation {
 }
 
 #[derive(Subcommand, Debug)]
+// Parsed once per process and matched at once: boxing a command's arguments would buy nothing.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
     /// Type-check and evaluate a program, printing the value of `main`.
     Run {
@@ -847,6 +849,12 @@ pub(crate) enum Command {
         /// `thumbv7m-none-eabi`.
         #[arg(long)]
         stack_watermark: bool,
+        /// The stack `main` and every task run on (R1b, L14), in bytes or with a `K`, `M` or `G`
+        /// suffix (KiB, MiB, GiB): `--stack-size 64M` for a program that recurses deeply. Hosted
+        /// targets only. Without it, `main` has the process's stack, a task 8 MiB on its own
+        /// thread or 256 KiB in the pool, and `NAZM_TASK_STACK` still overrides the pool's.
+        #[arg(long, value_name = "BYTES", value_parser = stack_size)]
+        stack_size: Option<u64>,
         /// A board's manifest (Gate 3, `docs/spec.md`, *Boards*): load address, stack, UART, how
         /// the machine stops, a heap. A board's target only; without it, the target's built-in
         /// board, which `nazm inspect` prints as a manifest.
@@ -984,6 +992,29 @@ pub(crate) enum Command {
         #[arg(long)]
         undo: bool,
     },
+}
+
+/// Parse `--stack-size` (R1b, L14): bytes, or a number with a `K`, `M` or `G` suffix, from
+/// 64 KiB to 4 GiB.
+fn stack_size(raw: &str) -> Result<u64, String> {
+    let (digits, unit) = match raw.char_indices().last() {
+        Some((i, 'K' | 'k')) => (&raw[..i], 1u64 << 10),
+        Some((i, 'M' | 'm')) => (&raw[..i], 1u64 << 20),
+        Some((i, 'G' | 'g')) => (&raw[..i], 1u64 << 30),
+        _ => (raw, 1),
+    };
+    let n: u64 = digits
+        .parse()
+        .map_err(|_| format!("`{raw}` is not a size: bytes, or a number with `K`, `M` or `G`"))?;
+    let bytes = n
+        .checked_mul(unit)
+        .ok_or_else(|| format!("`{raw}` is too large"))?;
+    if !((64 << 10)..=(4 << 30)).contains(&bytes) {
+        return Err(format!(
+            "`{raw}` is {bytes} bytes; a stack is from 64K to 4G"
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Parse `--max-depth`, refusing a budget no machine would grant the stack for.

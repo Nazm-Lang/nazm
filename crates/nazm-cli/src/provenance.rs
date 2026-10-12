@@ -31,6 +31,8 @@ pub(crate) struct Request<'a> {
     pub library: bool,
     pub objects: Option<&'a Path>,
     pub stack_watermark: bool,
+    /// `--stack-size` (R1b, L14).
+    pub stack_size: Option<u64>,
     pub link: &'a [PathBuf],
     pub profile: Option<&'a str>,
     /// The runtime artifact linked instead of a generated runtime (N82), if one was.
@@ -195,6 +197,7 @@ fn record(r: &Request<'_>) -> Result<Value, String> {
             "layout": r.layout,
             "debug": r.debug,
             "stack_watermark": r.stack_watermark,
+            "stack_size": r.stack_size,
             "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
         },
         "linked": link,
