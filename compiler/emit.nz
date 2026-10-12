@@ -3391,9 +3391,12 @@ fn stack_runtime() -> Str {
     strs_push(r, "  ; stack, so a thread C started is budgeted from what it has (Q1-A1-04); 0 is unknown.");
     strs_push(r, "  %cur = call i64 @nz_os_stack_size()");
     strs_push(r, "  %ok = icmp ne i64 %cur, 0");
-    strs_push(r, "  %cap = select i1 %ok, i64 %cur, i64 8388608");
-    strs_push(r, "  %small = icmp ult i64 %cap, 8388608");
-    strs_push(r, "  %size = select i1 %small, i64 %cap, i64 8388608");
+    strs_push(r, "  %sbc = load i64, ptr @nz.stack_bytes");
+    strs_push(r, "  %sbcset = icmp ne i64 %sbc, 0");
+    strs_push(r, "  %want = select i1 %sbcset, i64 %sbc, i64 8388608");
+    strs_push(r, "  %cap = select i1 %ok, i64 %cur, i64 %want");
+    strs_push(r, "  %small = icmp ult i64 %cap, %want");
+    strs_push(r, "  %size = select i1 %small, i64 %cap, i64 %want");
     strs_push(r, "  %quarter = lshr i64 %size, 2");
     strs_push(r, "  %budget = sub i64 %size, %quarter");
     strs_push(r, "  %under = icmp ult i64 %sp, %budget");
@@ -5148,6 +5151,9 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     }
     add_line(head, "@nz.errmsg = internal thread_local global ptr null");
     add_line(head, "@nz.errlen = internal thread_local global i64 0");
+    // The stack the program was built to run on (R1b, L14): this compiler builds with none,
+    // so 0, which keeps each default.
+    add_line(head, "@nz.stack_bytes = internal global i64 0");
     add_line(head, "define internal void @nz.fail(ptr %m, i64 %n) {");
     add_line(head, "entry:");
     add_line(head, "  %had = load i1, ptr @nz.failed");
@@ -5809,7 +5815,10 @@ fn task_runtime() -> Str {
     strs_push(r, "  %next = add i64 %len, 1");
     strs_push(r, "  store i64 %next, ptr %h");
     strs_push(r, "  %ai = call i32 @pthread_attr_init(ptr %attr)");
-    strs_push(r, "  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 8388608)");
+    strs_push(r, "  %sbt = load i64, ptr @nz.stack_bytes");
+    strs_push(r, "  %sbtset = icmp ne i64 %sbt, 0");
+    strs_push(r, "  %sbtsize = select i1 %sbtset, i64 %sbt, i64 8388608");
+    strs_push(r, "  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 %sbtsize)");
     strs_push(r, "  %rc = call i32 @pthread_create(ptr %blk, ptr %attr, ptr %fn, ptr %blk)");
     strs_push(r, "  %ad = call i32 @pthread_attr_destroy(ptr %attr)");
     strs_push(r, "  %bad = icmp ne i32 %rc, 0");

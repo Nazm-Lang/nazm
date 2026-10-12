@@ -81,8 +81,9 @@ pub fn emit_entry_for(
     roots: usize,
     needs: Needs,
     args: Option<&str>,
+    stack: Option<u64>,
 ) -> String {
-    nazm_runtime::emit_entry_for(&entry.to_string(), roots, needs, args)
+    nazm_runtime::emit_entry_for(&entry.to_string(), roots, needs, args, stack)
 }
 pub use symbol::{Linkage, NativeSymbol};
 
