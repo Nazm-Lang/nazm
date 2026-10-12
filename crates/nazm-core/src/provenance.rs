@@ -816,6 +816,24 @@ impl<'b> Walk<'_, 'b> {
                 };
                 Shaped::whole(self.method(*variant_span, flows))
             }
+            // An interpolation (L4) carries what its holes carry: each one's value, or what its
+            // `show` makes of it.
+            Expr::Interp { parts, .. } => {
+                let mut flow: Option<Flow> = None;
+                for p in parts {
+                    if let nazm_syntax::InterpPart::Hole { expr, span, .. } = p {
+                        let mut f = self.expr(expr);
+                        if self.res.callee(*span).is_some() {
+                            f = self.method(*span, vec![f]);
+                        }
+                        flow = Some(match flow {
+                            Some(acc) => acc.joined(&f),
+                            None => f,
+                        });
+                    }
+                }
+                flow.map_or_else(Shaped::default, Shaped::whole)
+            }
             Expr::MethodCall {
                 receiver,
                 method_span,

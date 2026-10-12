@@ -610,6 +610,21 @@ pub fn binary(f: Binary, a: NumVal, b: NumVal) -> NumVal {
     })
 }
 
+/// A float with exactly `digits` decimals (R1a, L4): correctly rounded from its exact binary
+/// value, ties to even — C's `%.*f`, which the native runtime calls (`nz.format_fixed`) — and
+/// `nan`, `inf` and `-inf` spelled as [`to_str`] spells them.
+#[must_use]
+pub fn to_fixed(a: NumVal, digits: usize) -> String {
+    let x = a.as_f64();
+    if x.is_nan() {
+        return "nan".to_owned();
+    }
+    if x.is_infinite() {
+        return if x < 0.0 { "-inf" } else { "inf" }.to_owned();
+    }
+    format!("{x:.digits$}")
+}
+
 /// The decimal text of a number. Integers are written in full, with `-` when negative. A float
 /// is written by ECMAScript's `Number::toString` rule over the shortest digits that read back to
 /// the same value in its own precision: `100`, `1.5`, `0.001`, `1e+21`, `1.5e-7`, `-0`,

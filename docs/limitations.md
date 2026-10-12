@@ -24,6 +24,11 @@ found only by reading all of it.
 - Patterns (R1a, EXPERIMENTAL until R1 closes): no guards, range, record or `@` patterns, no `..`
   in a payload; a `_` that covers enum variants draws no warning until L15 adds a warning
   severity; the compiler written in Nazm parses only the plain variant pattern until R2.
+- Interpolation (R1a, EXPERIMENTAL until R1 closes): a hole stays on one line; a format is
+  alignment, width in bytes and a float's precision — no fill character, no zero padding, no
+  hexadecimal (`@std/fmt` has `fmt_int_zero` and `fmt_hex`); a hole's own parse errors are one
+  `N0006` at its braces rather than the parser's own diagnostic; the compiler written in Nazm does
+  not read `f"…"` until R2.
 - Multi-line and raw strings (R1a, EXPERIMENTAL until R1 closes): an escape refused inside a
   multi-line string is reported at its opening delimiter rather than at the escape; the compiler
   written in Nazm does not read either form until R2.

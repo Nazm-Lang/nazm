@@ -209,6 +209,7 @@ fn every_token_the_lexer_has_is_written_in_the_grammar() {
                     TokenKind::Int(_) => "INTEGER",
                     TokenKind::Float(_) => "FLOAT",
                     TokenKind::Str(_) => "STRING",
+                    TokenKind::FStr(_) => "FSTRING",
                     TokenKind::Ident(_) => "IDENT",
                     other => panic!("{other:?} has no spelling and is not a class"),
                 };
@@ -281,6 +282,7 @@ fn the_examples_between_them_use_every_token() {
                     TokenKind::Int(_) => "INTEGER".to_owned(),
                     TokenKind::Float(_) => "FLOAT".to_owned(),
                     TokenKind::Str(_) => "STRING".to_owned(),
+                    TokenKind::FStr(_) => "FSTRING".to_owned(),
                     TokenKind::Ident(_) => "IDENT".to_owned(),
                     other => other.written().unwrap_or("?").to_owned(),
                 });
@@ -294,6 +296,7 @@ fn the_examples_between_them_use_every_token() {
             TokenKind::Int(_) => "INTEGER".to_owned(),
             TokenKind::Float(_) => "FLOAT".to_owned(),
             TokenKind::Str(_) => "STRING".to_owned(),
+            TokenKind::FStr(_) => "FSTRING".to_owned(),
             TokenKind::Ident(_) => "IDENT".to_owned(),
             other => other.written().unwrap_or("?").to_owned(),
         };

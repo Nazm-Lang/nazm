@@ -65,6 +65,8 @@ pub enum SyntaxKind {
     /// A floating-point literal (Gate 2).
     Float,
     Str,
+    /// An interpolated string (R1a, L4).
+    FStr,
     Ident,
     // --- tokens: keywords ---
     FnKw,
@@ -237,6 +239,7 @@ impl SyntaxKind {
         Self::Int,
         Self::Float,
         Self::Str,
+        Self::FStr,
         Self::Ident,
         Self::FnKw,
         Self::LetKw,
@@ -382,6 +385,7 @@ impl SyntaxKind {
             TokenKind::Int(_) | TokenKind::IntTooLarge(_) => Self::Int,
             TokenKind::Float(_) => Self::Float,
             TokenKind::Str(_) => Self::Str,
+            TokenKind::FStr(_) => Self::FStr,
             TokenKind::Ident(_) => Self::Ident,
             TokenKind::Fn => Self::FnKw,
             TokenKind::Let => Self::LetKw,

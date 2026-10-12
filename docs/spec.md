@@ -75,6 +75,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `strings` | STABLE 1.0 | |
 | `string-escapes` | STABLE 1.0 | |
 | `string-forms` | EXPERIMENTAL | R1a: multi-line and raw strings, a 1.x addition, experimental until R1 closes |
+| `interpolation` | EXPERIMENTAL | R1a: `f"…"`, fixed-point floats and padding, a 1.x addition, experimental until R1 closes |
 | `sequences` | STABLE 1.0 | its *Destruction* row is superseded by `memory`: storage is reclaimed |
 | `memory` | STABLE 1.0 | *Cycles* covers closure environments since Gate 1-C1 (`N0616`) |
 | `outside-world` | STABLE 1.0 | *Authority is explicit where a contract is written, and ambient elsewhere* is HISTORICAL: `capabilities` (N104) governs |
@@ -1768,7 +1769,7 @@ two implementations end up disagreeing:
 | **Conversion** | `int_to_str(n)` is the decimal form, with a leading `-` when negative. `int_to_str(0)` is `"0"`, and the full `Int` range round-trips |
 | **Construction** | `str_from_byte(b)` is a one-byte `Str`, and fails with `N0405` unless `0 <= b <= 255`. Since N49 a literal may write a byte below 128 with an escape (*String escapes*, below); `str_from_byte` remains the way to make one above 127 that UTF-8 source does not already spell |
 | **Declassification** | `str_vouch(s)` is `s` with no origin, needing a `VouchCap` held (N52, *Declassification*) |
-| **Allocation** | `str_concat`, `int_to_str` and `str_from_byte` allocate; `str_slice` and `str_vouch` do not. A compiled program reports `N0406` if the allocator refuses. The interpreter cannot: its host aborts on allocation failure, and that difference is stated rather than papered over |
+| **Allocation** | `str_concat`, `int_to_str` and `str_from_byte` allocate (and since R1a `str_pad_start`, `str_pad_end`, `float_to_str_fixed` and an interpolation, *String interpolation*); `str_slice` and `str_vouch` do not. A compiled program reports `N0406` if the allocator refuses. The interpreter cannot: its host aborts on allocation failure, and that difference is stated rather than papered over |
 | **Ownership** | Values, not references. Passing, returning, binding and copying a `Str` produce a string with the same bytes, and there is no way to observe whether a copy was made |
 | **Mutation** | There is none. No operation changes an existing `Str` |
 
@@ -1845,6 +1846,54 @@ editor — and the bytes are otherwise the source's, exactly as an ordinary lite
 formatter keeps either as written. An ordinary literal stays on one line: a quote with no closing
 one on its line is still refused there (`N0002`), so an unclosed string cannot swallow the rest of
 a file.
+
+#### String interpolation — R1
+<!-- id: interpolation -->
+
+Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L4).
+
+```nazm
+use "@std/show";
+
+struct Point { x: Int, y: Int, }
+impl Show for Point { fn show(self: Point) -> Str { f"({self.x}, {self.y})" } }
+
+fn report(name: Str, count: Int, ratio: Float64, at: Point) -> Str {
+    f"{name:<8}|{count:>5}|{ratio:.2}|{at}|{{literal braces}}"
+}
+```
+
+**Form.** `f"…"`, or `f"""…"""` laid out as *Multi-line and raw strings* says: the text between holes
+is an ordinary literal's, escapes and all; `{{` and `}}` are one brace each; and `{expr}` or
+`{expr:spec}` is a **hole**. A hole's expression is any expression, its braces and string
+literals nested freely; a lone `}` in the text, a `{` with no closing `}`, or an empty hole is
+refused (`N0006`). The `f` is a prefix only when a quote follows it at once, so a name `f` is
+unchanged — as `r`'s is.
+
+**What a hole may hold**, and how it is written:
+
+| Value | Written as |
+| --- | --- |
+| `Str` | itself |
+| an integer type | its decimal digits, `-` first when negative (`num_to_str`) |
+| a float type | the shortest digits that read back to it (`num_to_str`), or exactly `p` decimals with `.p` |
+| `Bool` | `true` or `false` |
+| a type with a `Show` impl in scope, or a type parameter bound by `Show` | its `show` (`@std/show`) |
+
+Anything else is refused at the hole (`N0300`), naming its type: interpolation chooses no
+rendering a program did not ask for.
+
+**Spec.** `spec` is `[<|>][width][.precision]`. `width` is the fewest **bytes** the hole writes —
+the value's text, then spaces, after it with `<`, before it with `>`; without either, a number goes
+right and anything else left. `.precision` is for a float only (`N0006` otherwise): exactly that
+many decimals, correctly rounded from the value's exact binary value, ties to even — C's `%.*f`.
+A hole's text is computed as if by `str_concat`, left to right, each expression evaluated once, in
+order; an interpolation is a `Str` like any other and allocates as `str_concat` does.
+
+**New built-ins**, usable directly: `float_to_str_fixed(x, digits)` — `x` any float type,
+`0 <= digits <= 30` (`N0405` otherwise) — and `str_pad_start(s, width, fill)` and
+`str_pad_end(s, width, fill)`, which add copies of the one-byte `fill` (`N0405` otherwise) before
+or after `s` until it is `width` bytes; a `s` already as long is returned as it is.
 
 #### What an implementation may not infer from its host
 
@@ -3891,7 +3940,7 @@ nothing, and free to cross into a task.
 | **Comparison** | `< <= > >=` on two numbers of one type; unsigned types compare as unsigned. `==` and `!=` on every numeric type, and so on records and enums holding them (*Equality is derived*). On floats both are IEEE 754's: every comparison with a NaN is false except `!=`, and `-0.0 == 0.0` — so a record holding a NaN is not equal to itself. *(R1a: `Bool`, `Str`, records, enums and tuples order too — see* Ordering and hashing are derived*; a float makes no structure ordered.)* |
 | **Bits** | `&`, `\|`, `^` on two integers of one type; prefix `~`; `<<` and `>>` with an `Int` amount. Precedence, loosest first: `\|\|`, `&&`, comparisons, `\|`, `^`, `&`, shifts, `+ -`, `* / %`, unary — so `a & m == 0` is `(a & m) == 0`. `>>` is arithmetic on a signed type and logical on an unsigned one; `<<` drops the bits shifted out and never traps on them. An amount below 0 or not below the width traps, `N0412`, and a constant one is refused, `N0617`: no amount is masked and none is left to the machine |
 | **Conversions** | `T(x)`, `T` a numeric type's name, from any numeric value: the same value or a trap (`N0400`). Integer to float rounds to nearest, ties to even; `Float64` to `Float32` rounds the same way and may become an infinity; float to integer truncates toward zero and traps on a NaN, an infinity or a result outside `T`. `try_convert[T](x)` gives `Option[T]`: `Some` of the exact conversion, `None` where `T(x)` would trap. `wrap_convert[T](x)` is two's complement modulo `2^n`, between integer types only. `saturate_convert[T](x)` clamps to `T`'s range, a NaN to 0. `T(x)` of a literal is the literal written at `T` |
-| **Functions** | Integers: `wrapping_add`/`_sub`/`_mul`, `saturating_add`/`_sub`/`_mul`, `count_ones`, `leading_zeros`, `trailing_zeros`, `rotate_left`, `rotate_right` (amount modulo the width; negative traps, `N0412`), `swap_bytes`, `to_big_endian`, `from_big_endian`, `to_little_endian`, `from_little_endian` — each generic over every integer type, `T` inferred. Floats: `float_sqrt`, `float_abs`, `float_floor`, `float_ceil`, `float_trunc`, `float_round` (half away from zero), `float_min`, `float_max` (a NaN loses), `float_is_nan`, `float_is_infinite`, `float_is_finite`, and from the C library `float_sin`, `float_cos`, `float_tan`, `float_exp`, `float_ln`, `float_log2`, `float_log10`, `float_pow`, `float_atan2`. Bits: `float64_to_bits`, `float64_from_bits`, `float32_to_bits`, `float32_from_bits`. Text: `num_to_str` for every numeric type, `float_parses` and `float_parse_raw`. A built-in applied outside its class is refused, `N0300` |
+| **Functions** | Integers: `wrapping_add`/`_sub`/`_mul`, `saturating_add`/`_sub`/`_mul`, `count_ones`, `leading_zeros`, `trailing_zeros`, `rotate_left`, `rotate_right` (amount modulo the width; negative traps, `N0412`), `swap_bytes`, `to_big_endian`, `from_big_endian`, `to_little_endian`, `from_little_endian` — each generic over every integer type, `T` inferred. Floats: `float_sqrt`, `float_abs`, `float_floor`, `float_ceil`, `float_trunc`, `float_round` (half away from zero), `float_min`, `float_max` (a NaN loses), `float_is_nan`, `float_is_infinite`, `float_is_finite`, and from the C library `float_sin`, `float_cos`, `float_tan`, `float_exp`, `float_ln`, `float_log2`, `float_log10`, `float_pow`, `float_atan2`. Bits: `float64_to_bits`, `float64_from_bits`, `float32_to_bits`, `float32_from_bits`. Text: `num_to_str` for every numeric type, `float_parses` and `float_parse_raw`; since R1a (L4) `float_to_str_fixed` for a float (*String interpolation*). A built-in applied outside its class is refused, `N0300` |
 | **Text** | `num_to_str` writes an integer in decimal, and a float by ECMAScript's `Number::toString` layout over the shortest digits that read back to the same value in its own type: `100`, `1.5`, `0.001`, `1e+21`, `1.5e-7`, `-0`, `inf`, `-inf`, `nan`. `float_parses(s)` accepts exactly `[+-]? (D+ (. D*)? \| . D+) ([eE] [+-]? D+)?` or `[+-]? (inf \| nan)`; `float_parse_raw(s)` is the correctly rounded `Float64` it writes, or NaN |
 
 **What is exact, and what is not.** The basic operations, `float_sqrt`, `float_floor` and its kin,

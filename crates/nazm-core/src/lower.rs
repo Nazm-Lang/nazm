@@ -1145,6 +1145,8 @@ impl<'a> Lower<'a> {
                 ..
             } => self.call(*callee_span, args, *span)?,
             // A method call (N78), and `x.m()` the checker read as one.
+            // `f"…"` (L4): the text and each hole's, joined by `str_concat` left to right.
+            AstExpr::Interp { parts, span } => self.interpolation(parts, *span)?,
             AstExpr::MethodCall {
                 receiver,
                 method_span,
@@ -2365,6 +2367,115 @@ impl<'a> Lower<'a> {
             stmts.push(Stmt::Block(chosen));
             Ok((stmts, None))
         }
+    }
+
+    /// A string literal's value as an expression.
+    fn str_const(&mut self, v: &str, at: Span) -> Expr {
+        Expr {
+            kind: ExprKind::Const(self.constant(Const::Str(v.as_bytes().to_vec()))),
+            ty: Some(Type::Str),
+            at,
+        }
+    }
+
+    /// A built-in returning a `Str`, at `at`.
+    fn str_builtin(
+        op: nazm_sema::Intrinsic,
+        type_args: Vec<Type>,
+        args: Vec<Expr>,
+        at: Span,
+    ) -> Expr {
+        Expr {
+            kind: ExprKind::Builtin {
+                op,
+                type_args,
+                args,
+                callee_at: at,
+            },
+            ty: Some(Type::Str),
+            at,
+        }
+    }
+
+    /// An interpolation (R1a, L4, `docs/spec.md`, *String interpolation*): each piece's text,
+    /// joined left to right by `str_concat`, so each hole is evaluated once and in order.
+    fn interpolation(&mut self, parts: &[nazm_syntax::InterpPart], at: Span) -> Lowered<Expr> {
+        let mut acc: Option<Expr> = None;
+        for p in parts {
+            let piece = match p {
+                nazm_syntax::InterpPart::Text(t) => self.str_const(t, at),
+                nazm_syntax::InterpPart::Hole { expr, spec, span } => {
+                    self.hole_text(expr, *spec, *span)?
+                }
+            };
+            acc = Some(match acc {
+                None => piece,
+                Some(a) => Self::str_builtin(
+                    nazm_sema::Intrinsic::StrConcat,
+                    Vec::new(),
+                    vec![a, piece],
+                    at,
+                ),
+            });
+        }
+        Ok(acc.unwrap_or_else(|| self.str_const("", at)))
+    }
+
+    /// One hole's text (L4): its `show()` where the checker resolved one at its braces, and
+    /// otherwise the value's own text; then its padding.
+    fn hole_text(
+        &mut self,
+        expr: &AstExpr,
+        spec: nazm_syntax::FormatSpec,
+        at: Span,
+    ) -> Lowered<Expr> {
+        use nazm_sema::Intrinsic;
+        let (text, numeric) = if self.res.callee(at).is_some() {
+            (self.method_call(Some(expr), at, &[], at)?, false)
+        } else {
+            let v = self.expr(expr)?;
+            match v.ty {
+                Some(Type::Str) => (v, false),
+                Some(Type::Bool) => {
+                    let yes = self.str_const("true", at);
+                    let no = self.str_const("false", at);
+                    (self.value_if(v, yes, no, Type::Str, at), false)
+                }
+                Some(t @ Type::Num(k)) if k.is_float() && spec.precision.is_some() => {
+                    let digits = self.int_const(i64::from(spec.precision.unwrap_or(0)), at);
+                    (
+                        Self::str_builtin(Intrinsic::FloatToStrFixed, vec![t], vec![v, digits], at),
+                        true,
+                    )
+                }
+                Some(t @ (Type::Int | Type::Num(_))) => (
+                    Self::str_builtin(Intrinsic::NumToStr, vec![t], vec![v], at),
+                    true,
+                ),
+                _ => return defect(at, "a hole the checker gave no text"),
+            }
+        };
+        let Some(width) = spec.width else {
+            return Ok(text);
+        };
+        let start = match spec.align {
+            Some(nazm_syntax::Align::Right) => true,
+            Some(nazm_syntax::Align::Left) => false,
+            None => numeric,
+        };
+        let width = self.int_const(i64::from(width), at);
+        let fill = self.str_const(" ", at);
+        let op = if start {
+            Intrinsic::StrPadStart
+        } else {
+            Intrinsic::StrPadEnd
+        };
+        Ok(Self::str_builtin(
+            op,
+            Vec::new(),
+            vec![text, width, fill],
+            at,
+        ))
     }
 
     fn int_const(&mut self, v: i64, at: Span) -> Expr {

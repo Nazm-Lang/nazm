@@ -564,7 +564,7 @@ accepts.
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" \| "~" ] , primary` |
 | `primary` | `atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] \| INTEGER ) \| "?" \| "[" , expression , "]" }` |
-| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| qualifier , IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| tuple \| "(" , expression , ")"` |
+| `atom` | `INTEGER \| FLOAT \| STRING \| FSTRING \| "true" \| "false" \| IDENT \| qualifier , IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| tuple \| "(" , expression , ")"` |
 | `tuple` | `"(" , expression , "," , expression , { "," , expression } , [ "," ] , ")"` |
 | `array` | `"[" , expression , ( { "," , expression } , [ "," ] \| ";" , expression ) , "]"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
@@ -1572,7 +1572,7 @@ fn main() -> Int { let t = ((1, 2), 3); t.0.1 + t.1 }
 ### `atom`
 
 ```ebnf
-atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | qualifier , IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | array | tuple | "(" , expression , ")" ;
+atom = INTEGER | FLOAT | STRING | FSTRING | "true" | "false" | IDENT | qualifier , IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | array | tuple | "(" , expression , ")" ;
 ```
 
 A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
@@ -1580,6 +1580,8 @@ A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). 
 A `STRING` is an ordinary literal, or since R1a a raw one — `r"…"`, `r#"…"#` — or a multi-line
 one between `"""` lines (`docs/spec.md`, *Multi-line and raw strings*): one token class, as the
 lexer reads them.
+An `FSTRING` (R1a, L4) is `f"…"` or `f"""…"""` whose `{expr}` and `{expr:spec}` holes are
+expressions (`docs/spec.md`, *String interpolation*).
 
 ```nazm
 fn main() -> Int { 1 }
@@ -1591,6 +1593,10 @@ fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 }
 
 ```nazm
 fn main() -> Int { str_len(r#"say "hi""#) + str_len(r"C:\path") }
+```
+
+```nazm
+fn main() -> Int { let n = 4; str_len(f"n = {n:>3}, half = {Float64(n) / 2.0:.1}") }
 ```
 
 ### `tuple`

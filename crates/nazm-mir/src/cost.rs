@@ -327,6 +327,9 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::ChanSelectUntil
         | Intrinsic::CStrCopy
         | Intrinsic::NumToStr
+        | Intrinsic::FloatToStrFixed
+        | Intrinsic::StrPadStart
+        | Intrinsic::StrPadEnd
         | Intrinsic::BytesNew
         | Intrinsic::BytesFromStr
         | Intrinsic::BytesToStr

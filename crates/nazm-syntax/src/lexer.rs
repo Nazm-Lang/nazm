@@ -35,6 +35,8 @@ pub enum TokenKind {
     /// type is, so the lexer does not round it. `docs/general-purpose.md` §1.
     Float(String),
     Str(String),
+    /// An interpolated string (R1a, L4): its text and holes, in order.
+    FStr(Vec<FPiece>),
     Ident(String),
 
     // Keywords
@@ -148,6 +150,7 @@ impl TokenKind {
         Self::Int(0),
         Self::Float(String::new()),
         Self::Str(String::new()),
+        Self::FStr(Vec::new()),
         Self::Ident(String::new()),
         Self::Fn,
         Self::Let,
@@ -223,6 +226,7 @@ impl TokenKind {
             | Self::IntTooLarge(_)
             | Self::Float(_)
             | Self::Str(_)
+            | Self::FStr(_)
             | Self::Ident(_)
             | Self::Eof => None,
             Self::Fn => Some("fn"),
@@ -293,6 +297,7 @@ impl TokenKind {
             Self::IntTooLarge(d) => format!("integer `{d}`"),
             Self::Float(d) => format!("number `{d}`"),
             Self::Str(_) => "string literal".to_owned(),
+            Self::FStr(_) => "interpolated string".to_owned(),
             Self::Ident(n) => format!("`{n}`"),
             Self::Fn => "`fn`".to_owned(),
             Self::Let => "`let`".to_owned(),
@@ -475,7 +480,45 @@ fn multi_line_string(
     errors: &mut Vec<Diagnostic>,
 ) -> (Lexeme, usize) {
     let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
-    let after = start + 3;
+    let (lines, end) = match multi_line_layout(file, text, start, 3, errors) {
+        Ok(laid) => laid,
+        Err(stop) => return stop,
+    };
+    let mut body = String::new();
+    for (n, (_, kept)) in lines.iter().enumerate() {
+        if n > 0 {
+            body.push('\n');
+        }
+        body.push_str(kept);
+    }
+    // Escapes over the whole text; a span inside it is reported at the literal's start.
+    let value = decode_escapes(
+        &body,
+        |_, _| Span::new(file, at(start), at(start + 3)),
+        errors,
+    );
+    (
+        Lexeme::Token(Token {
+            kind: TokenKind::Str(value),
+            span: Span::new(file, at(start), at(end)),
+        }),
+        end,
+    )
+}
+
+/// A multi-line literal's lines (L9), its opening delimiter `open` bytes long at `start`: each
+/// line's kept text — its indentation taken off — with the offset that text starts at, and the
+/// offset past the closing `"""`. `Err` holds the lexeme to return when there is no literal to
+/// read: no line break after the delimiter, or no closing one.
+fn multi_line_layout<'t>(
+    file: FileId,
+    text: &'t str,
+    start: usize,
+    open: usize,
+    errors: &mut Vec<Diagnostic>,
+) -> Result<(Vec<(usize, &'t str)>, usize), (Lexeme, usize)> {
+    let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
+    let after = start + open;
     let rest = text.get(after..).unwrap_or_default();
     let line_end = rest.find('\n').map(|n| after + n);
     // Nothing but blanks after the opening delimiter.
@@ -495,7 +538,7 @@ fn multi_line_string(
         // Read on as if the line broke after the delimiter, so its closing `"""` is not
         // taken for a second opening one: one mistake, one error.
         if line_end.is_none() {
-            return (Lexeme::Invalid(Span::new(file, at(start), at(stop))), stop);
+            return Err((Lexeme::Invalid(Span::new(file, at(start), at(stop))), stop));
         }
     }
     let first = line_end.unwrap_or(text.len()) + 1;
@@ -530,27 +573,25 @@ fn multi_line_string(
             Span::new(file, at(start), at(text.len())),
             "this multi-line string has no closing `\"\"\"`",
         ));
-        return (
+        return Err((
             Lexeme::Invalid(Span::new(file, at(start), at(text.len()))),
             text.len(),
-        );
+        ));
     };
     let end = close_at + indent.len() + 3;
-    let mut body = String::new();
-    for (n, (offset, line)) in lines.iter().enumerate() {
-        if n > 0 {
-            body.push('\n');
-        }
+    let mut kept_lines = Vec::with_capacity(lines.len());
+    for (offset, line) in lines {
         if line.trim().is_empty() {
+            kept_lines.push((offset, ""));
             continue;
         }
         match line.strip_prefix(indent) {
-            Some(kept) => body.push_str(kept),
+            Some(kept) => kept_lines.push((offset + indent.len(), kept)),
             None => {
                 errors.push(
                     Diagnostic::error(
                         codes::STRING_LAYOUT,
-                        Span::new(file, at(*offset), at(*offset + line.len())),
+                        Span::new(file, at(offset), at(offset + line.len())),
                         "this line of a multi-line string does not begin with its closing \
                          `\"\"\"`'s indentation",
                     )
@@ -559,23 +600,356 @@ fn multi_line_string(
                          which is taken off each; indent this line, or the delimiter less",
                     ),
                 );
-                body.push_str(line.trim_start_matches([' ', '\t']));
+                let kept = line.trim_start_matches([' ', '\t']);
+                kept_lines.push((offset + line.len() - kept.len(), kept));
             }
         }
     }
-    // Escapes over the whole text; a span inside it is reported at the literal's start.
-    let value = decode_escapes(
-        &body,
-        |_, _| Span::new(file, at(start), at(start + 3)),
-        errors,
-    );
+    Ok((kept_lines, end))
+}
+
+/// Where an interpolation's text is laid out (R1a, L4): `"…"` on one line, or the lines of a
+/// `"""…"""`.
+enum FLayout<'t> {
+    Line(usize, &'t str),
+    Lines(Vec<(usize, &'t str)>),
+}
+
+/// An interpolated string starting at `start` (R1a, L4): `f"…"`, or `f"""` laid out as a
+/// multi-line string is. Text between holes is an ordinary literal's; `{{` and `}}` are one
+/// brace each; `{expr}` or `{expr:spec}` is a hole, which stays on one line.
+fn interpolated(
+    file: FileId,
+    text: &str,
+    start: usize,
+    errors: &mut Vec<Diagnostic>,
+) -> (Lexeme, usize) {
+    let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
+    let bytes = text.as_bytes();
+    let multi = bytes.get(start + 1..start + 4) == Some(b"\"\"\"".as_slice());
+    let (layout, end) = if multi {
+        match multi_line_layout(file, text, start, 4, errors) {
+            Ok((lines, end)) => (FLayout::Lines(lines), end),
+            Err(stop) => return stop,
+        }
+    } else {
+        // One line, to the closing quote: a quote inside a hole is the hole's.
+        let content = start + 2;
+        let mut i = content;
+        loop {
+            match bytes.get(i) {
+                None | Some(b'\n') => {
+                    errors.push(Diagnostic::error(
+                        codes::UNTERMINATED_STRING,
+                        Span::new(file, at(start), at(i)),
+                        "this string has no closing quote",
+                    ));
+                    return (Lexeme::Invalid(Span::new(file, at(start), at(i))), i);
+                }
+                Some(b'\\') => i += 2,
+                Some(b'{') if bytes.get(i + 1) == Some(&b'{') => i += 2,
+                Some(b'{') => match hole_end(bytes, i + 1) {
+                    Some(close) => i = close + 1,
+                    None => i += 1,
+                },
+                Some(b'"') => break,
+                Some(_) => i += 1,
+            }
+        }
+        let line = text.get(content..i).unwrap_or_default();
+        (FLayout::Line(content, line), i + 1)
+    };
+    let lines = match layout {
+        FLayout::Line(offset, line) => vec![(offset, line)],
+        FLayout::Lines(lines) => lines,
+    };
+    let mut pieces: Vec<FPiece> = Vec::new();
+    let mut raw = String::new();
+    let mut raw_at = lines.first().map_or(start, |(o, _)| *o);
+    for (n, (offset, line)) in lines.iter().enumerate() {
+        if n > 0 {
+            raw.push('\n');
+        }
+        split_pieces(
+            file,
+            line,
+            *offset,
+            &mut raw,
+            &mut raw_at,
+            &mut pieces,
+            errors,
+        );
+    }
+    flush_text(file, &mut raw, raw_at, &mut pieces, errors);
     (
         Lexeme::Token(Token {
-            kind: TokenKind::Str(value),
+            kind: TokenKind::FStr(pieces),
             span: Span::new(file, at(start), at(end)),
         }),
         end,
     )
+}
+
+/// One line of an interpolation's text (L4), its kept text `line` starting at `offset`: text
+/// gathered into `raw`, each hole a piece of its own after the text before it.
+fn split_pieces(
+    file: FileId,
+    line: &str,
+    offset: usize,
+    raw: &mut String,
+    raw_at: &mut usize,
+    pieces: &mut Vec<FPiece>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        match b {
+            b'\\' => {
+                raw.push_str(line.get(i..(i + 2).min(line.len())).unwrap_or_default());
+                i += 2;
+            }
+            b'{' if bytes.get(i + 1) == Some(&b'{') => {
+                raw.push('{');
+                i += 2;
+            }
+            b'}' if bytes.get(i + 1) == Some(&b'}') => {
+                raw.push('}');
+                i += 2;
+            }
+            b'}' => {
+                errors.push(
+                    Diagnostic::error(
+                        codes::INTERPOLATION,
+                        Span::new(file, at(offset + i), at(offset + i + 1)),
+                        "a `}` in an interpolation's text closes nothing",
+                    )
+                    .help("write `}}` for a brace in the text"),
+                );
+                i += 1;
+            }
+            b'{' => {
+                let Some(close) = hole_end(bytes, i + 1) else {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::INTERPOLATION,
+                            Span::new(file, at(offset + i), at(offset + line.len())),
+                            "this hole has no closing `}` on its line",
+                        )
+                        .help("a hole is `{expr}` on one line; write `{{` for a brace in the text"),
+                    );
+                    return;
+                };
+                flush_text(file, raw, *raw_at, pieces, errors);
+                let inside = line.get(i + 1..close).unwrap_or_default();
+                let span = Span::new(file, at(offset + i), at(offset + close + 1));
+                match hole(inside) {
+                    Some((expr, spec)) if !expr.trim().is_empty() => pieces.push(FPiece::Hole {
+                        text: expr.to_owned(),
+                        at: at(offset + i + 1),
+                        spec,
+                        span,
+                    }),
+                    Some(_) => errors.push(Diagnostic::error(
+                        codes::INTERPOLATION,
+                        span,
+                        "this hole holds no expression",
+                    )),
+                    None => errors.push(
+                        Diagnostic::error(
+                            codes::INTERPOLATION,
+                            span,
+                            "this hole's format is not one interpolation has",
+                        )
+                        .help("a format is `[<|>][width][.precision]`: `{x:>8}`, `{ratio:.2}`"),
+                    ),
+                }
+                i = close + 1;
+                *raw_at = offset + i;
+            }
+            _ => {
+                let len = utf8_len(b);
+                raw.push_str(line.get(i..i + len).unwrap_or_default());
+                i += len;
+            }
+        }
+    }
+}
+
+/// The bytes a UTF-8 sequence starting with `b` takes, so text is copied whole characters at a
+/// time.
+fn utf8_len(b: u8) -> usize {
+    match b {
+        0xF0..=0xFF => 4,
+        0xE0..=0xEF => 3,
+        0xC0..=0xDF => 2,
+        _ => 1,
+    }
+}
+
+/// The text gathered so far, its escapes decoded, as one piece (L4).
+fn flush_text(
+    file: FileId,
+    raw: &mut String,
+    raw_at: usize,
+    pieces: &mut Vec<FPiece>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if raw.is_empty() {
+        return;
+    }
+    let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
+    let value = decode_escapes(
+        raw,
+        |a, b| Span::new(file, at(raw_at + a), at(raw_at + b)),
+        errors,
+    );
+    pieces.push(FPiece::Text(value));
+    raw.clear();
+}
+
+/// The offset of the `}` closing a hole whose text starts at `from` (L4): braces balanced, and a
+/// string inside — ordinary or raw — skipped whole; `None` at a line break or the end.
+fn hole_end(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut i = from;
+    loop {
+        match *bytes.get(i)? {
+            b'\n' => return None,
+            b'{' => depth += 1,
+            b'}' if depth == 0 => return Some(i),
+            b'}' => depth -= 1,
+            b'"' => {
+                i += 1;
+                while *bytes.get(i)? != b'"' {
+                    if *bytes.get(i)? == b'\n' {
+                        return None;
+                    }
+                    if bytes.get(i) == Some(&b'\\') {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
+/// A hole's text split into its expression and its format (L4): the last `:` outside brackets
+/// and strings and not half of a `::` begins the format, when what follows it is one; `None`
+/// when it is not.
+fn hole(inside: &str) -> Option<(&str, FormatSpec)> {
+    let bytes = inside.as_bytes();
+    let mut depth = 0i32;
+    let mut colon: Option<usize> = None;
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        match b {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'"' => {
+                i += 1;
+                while bytes.get(i).is_some_and(|c| *c != b'"') {
+                    if bytes.get(i) == Some(&b'\\') {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b':' if depth == 0
+                && bytes.get(i + 1) != Some(&b':')
+                && (i == 0 || bytes.get(i - 1) != Some(&b':')) =>
+            {
+                colon = Some(i);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let Some(c) = colon else {
+        return Some((inside, FormatSpec::default()));
+    };
+    let spec = FormatSpec::parse(inside.get(c + 1..).unwrap_or_default())?;
+    Some((inside.get(..c).unwrap_or_default(), spec))
+}
+
+/// A piece of an interpolated string (R1a, L4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FPiece {
+    /// Text, its escapes decoded and each `{{` or `}}` one brace.
+    Text(String),
+    /// A hole: its expression's source, the offset that source starts at in the file, its
+    /// format, and the span of the braces around it.
+    Hole {
+        text: String,
+        at: u32,
+        spec: FormatSpec,
+        span: Span,
+    },
+}
+
+/// A hole's format (L4): `[<|>][width][.precision]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FormatSpec {
+    /// `<` or `>`, where one is written.
+    pub align: Option<Align>,
+    /// The fewest bytes the hole writes.
+    pub width: Option<u32>,
+    /// A float's decimals.
+    pub precision: Option<u32>,
+}
+
+/// Which side of a hole's text its padding goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    /// `<`: the text first, the padding after it.
+    Left,
+    /// `>`: the padding first.
+    Right,
+}
+
+impl FormatSpec {
+    /// A format as written after a hole's `:`, or `None` when it is not one: an optional `<` or
+    /// `>`, optional width digits, and an optional `.` and precision digits, not all absent.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut rest = text;
+        let align = match rest.as_bytes().first() {
+            Some(b'<') => Some(Align::Left),
+            Some(b'>') => Some(Align::Right),
+            _ => None,
+        };
+        if align.is_some() {
+            rest = rest.get(1..)?;
+        }
+        let digits = |s: &str| s.bytes().take_while(u8::is_ascii_digit).count();
+        let w = digits(rest);
+        let width = if w > 0 {
+            Some(rest.get(..w)?.parse().ok()?)
+        } else {
+            None
+        };
+        rest = rest.get(w..)?;
+        let precision = if let Some(p) = rest.strip_prefix('.') {
+            let n = digits(p);
+            if n == 0 || n != p.len() {
+                return None;
+            }
+            rest = "";
+            Some(p.parse().ok()?)
+        } else {
+            None
+        };
+        let spec = Self {
+            align,
+            width,
+            precision,
+        };
+        (rest.is_empty() && spec != Self::default()).then_some(spec)
+    }
 }
 
 fn decode_escapes(
@@ -944,6 +1318,11 @@ pub(crate) fn scan_one(
                 span: Span::new(file, at(start), at(i)),
             })),
         }
+    }
+
+    // Interpolated strings (R1a, L4): `f"…"` or `f"""`, decided by the quote after the `f`.
+    if c == b'f' && byte(i + 1) == Some(b'"') {
+        return interpolated(file, text, start, errors);
     }
 
     // Raw strings (R1a, L9): `r"…"` or `r#"…"#` with any number of `#`s, decided by the

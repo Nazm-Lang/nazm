@@ -186,7 +186,8 @@ impl Checker<'_> {
             | Expr::BitNot { operand, .. } => self.impure_clause(operand),
             Expr::Array { span, .. }
             | Expr::ArrayRepeat { span, .. }
-            | Expr::Tuple { span, .. } => Some((*span, "build a value")),
+            | Expr::Tuple { span, .. }
+            | Expr::Interp { span, .. } => Some((*span, "build a value")),
             Expr::Index { base, index, .. } => self
                 .impure_clause(base)
                 .or_else(|| self.impure_clause(index)),

@@ -628,6 +628,9 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                 | Expr::Float { .. }
                 | Expr::Bool { .. }
                 | Expr::Str { .. } => {}
+                // One token in the concrete tree (L4): its holes are parsed apart and have no
+                // nodes there.
+                Expr::Interp { .. } => {}
                 Expr::Var { span, .. } => spans.push((SyntaxKind::NameRef, *span)),
                 Expr::Neg {
                     operand, op_span, ..

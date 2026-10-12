@@ -305,7 +305,9 @@ use crate::digest::{self, Framed};
 /// `pub const` and `m::NAME` moved from refused to accepted.
 /// `58` — R1a, 2026-10-12. Multi-line (`"""`) and raw (`r"…"`, `r#"…"#`) string literals moved
 /// from refused to accepted; `N0005`.
-pub const SEMANTIC_EPOCH: u32 = 58;
+/// `59` — R1a, 2026-10-12. Interpolation (`f"…"`) and `float_to_str_fixed`, `str_pad_start`
+/// and `str_pad_end` moved from refused to accepted; `N0006`.
+pub const SEMANTIC_EPOCH: u32 = 59;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -361,6 +363,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "IMPL_TYPE_REFUSED",
     "IMPORT_COLLIDES_WITH_DEFINITION",
     "INTEGER_TOO_LARGE",
+    "INTERPOLATION",
     "INTERRUPT_HANDLER",
     "INVALID_OPERANDS",
     "INVALID_PROJECTION",
