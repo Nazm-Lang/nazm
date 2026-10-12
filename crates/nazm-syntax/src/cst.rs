@@ -160,6 +160,8 @@ pub enum SyntaxKind {
     /// The left side of an assignment: `name` or `name.field.field`.
     Place,
     WhileStmt,
+    /// `let P = e else { … };` (R1a).
+    LetElseStmt,
     /// `for NAME in e { … }` or `for NAME in a..b { … }` (R1a).
     ForStmt,
     ReturnStmt,
@@ -187,10 +189,14 @@ pub enum SyntaxKind {
     FieldExpr,
     PropagateExpr,
     IfExpr,
+    /// `if let P = e { … } else { … }` (R1a).
+    IfLetExpr,
     MatchExpr,
     MatchArmList,
     MatchArm,
     Pattern,
+    /// `p | q | …` (R1a).
+    OrPattern,
     PatternFieldList,
     PatternField,
     /// `trait Name { … }` (N78).
@@ -309,6 +315,7 @@ impl SyntaxKind {
         Self::AssignStmt,
         Self::Place,
         Self::WhileStmt,
+        Self::LetElseStmt,
         Self::ForStmt,
         Self::ReturnStmt,
         Self::BreakStmt,
@@ -334,10 +341,12 @@ impl SyntaxKind {
         Self::FieldExpr,
         Self::PropagateExpr,
         Self::IfExpr,
+        Self::IfLetExpr,
         Self::MatchExpr,
         Self::MatchArmList,
         Self::MatchArm,
         Self::Pattern,
+        Self::OrPattern,
         Self::PatternFieldList,
         Self::PatternField,
         Self::TraitItem,

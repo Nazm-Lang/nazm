@@ -47,6 +47,7 @@ mod scope;
 mod stmt;
 mod traits;
 mod unit;
+mod usefulness;
 mod written;
 
 pub use declare::{declare_types, resolve_type_fields, EQUALITY};

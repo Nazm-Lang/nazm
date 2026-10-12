@@ -21,6 +21,9 @@ found only by reading all of it.
   the 64-bit `Int` exist (`spec.md`, *Numbers*). *Narrowed in R1a:* `for x in e` and `for x in a..b`
   exist (`spec.md`, *`for` loops*); a `for` of any other shape is still refused by name. The
   compiler written in Nazm (`compiler/*.nz`) does not carry `for` until R2 of the rewrite.
+- Patterns (R1a, EXPERIMENTAL until R1 closes): no guards, range, record or `@` patterns, no `..`
+  in a payload; a `_` that covers enum variants draws no warning until L15 adds a warning
+  severity; the compiler written in Nazm parses only the plain variant pattern until R2.
 - `Box[T]` and `List[T]` (R1a, EXPERIMENTAL until R1 closes) have no equality yet (`N0304`;
   structural equality arrives with L6) and do not cross into a task (`N0321`); a `List` is built
   only from a `Vec` (`list_from_vec`) or empty — there is no functional push, by design, since one

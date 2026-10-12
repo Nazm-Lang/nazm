@@ -293,7 +293,10 @@ use crate::digest::{self, Framed};
 /// `53` — R1a, 2026-10-12. `Box[T]` and `List[T]`: a definition reaching itself through one moved
 /// from refused (`N0359`) to accepted, the two types and six built-ins became prelude names, and
 /// `for` iterates a `List`.
-pub const SEMANTIC_EPOCH: u32 = 53;
+/// `54` — R1a, 2026-10-12. Patterns: `_`, names, literals, or-patterns and nesting in a `match`,
+/// a `match` of any type a pattern fits, `if let` and `let … else` moved from refused to
+/// accepted; `N0629` and `N0630`.
+pub const SEMANTIC_EPOCH: u32 = 54;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -352,6 +355,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "INTERRUPT_HANDLER",
     "INVALID_OPERANDS",
     "INVALID_PROJECTION",
+    "LET_ELSE_COMPLETES",
     "MAIN_PARAMETER",
     "MATCH_ON_NON_ENUM",
     "METHOD_NOT_A_VALUE",
@@ -367,6 +371,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "NOT_ITERABLE",
     "NO_METHOD",
     "OPAQUE_HANDLE",
+    "OR_PATTERN_BINDINGS",
     "OWNERSHIP_CYCLE",
     "PRECONDITION_REFUTED",
     "PRELUDE_TYPE_REDECLARED",

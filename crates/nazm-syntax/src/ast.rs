@@ -720,9 +720,63 @@ pub struct PlaceField {
     pub name_span: Span,
 }
 
-/// One arm of a `match`: a variant pattern and the expression it selects.
+/// One arm of a `match`: a pattern and the expression it selects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expr,
+    pub span: Span,
+}
+
+/// A pattern (`docs/spec.md`, *Enums* and, since R1a, *Patterns*).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pattern {
+    /// `_`: matches anything and binds nothing. It declines to *name* a value; the value is
+    /// still there and still released with what holds it.
+    Wildcard { span: Span },
+    /// `name`: matches anything and binds it, immutably (R1a at the top level and nested; a
+    /// payload field's binding before R1a).
+    Bind { name: String, span: Span },
+    /// An integer (perhaps negated), a string, `true` or `false` (R1a): matches a value equal
+    /// to it by its type's equality.
+    Literal(Expr),
+    /// `Enum.Variant(field: pattern, …)`.
+    Variant(VariantPattern),
+    /// `p | q | …` (R1a): matches what any alternative matches; each binds the same names.
+    Or { alts: Vec<Pattern>, span: Span },
+}
+
+impl Pattern {
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Wildcard { span } | Self::Bind { span, .. } | Self::Or { span, .. } => *span,
+            Self::Literal(e) => e.span(),
+            Self::Variant(v) => v.span,
+        }
+    }
+
+    /// Every name this pattern binds, with where, in the order written — the first
+    /// alternative's, for an or-pattern, whose alternatives bind the same names.
+    #[must_use]
+    pub fn bindings(&self) -> Vec<(&str, Span)> {
+        let mut out = Vec::new();
+        let mut work = vec![self];
+        while let Some(p) = work.pop() {
+            match p {
+                Self::Bind { name, span } => out.push((name.as_str(), *span)),
+                Self::Variant(v) => work.extend(v.fields.iter().rev().map(|f| &f.pattern)),
+                Self::Or { alts, .. } => work.extend(alts.first()),
+                Self::Wildcard { .. } | Self::Literal(_) => {}
+            }
+        }
+        out
+    }
+}
+
+/// `Enum.Variant(field: pattern, …)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariantPattern {
     /// The enum named before the `.`. Resolved against the type namespace, and required to
     /// be the scrutinee's own enum — there is no structural variant matching.
     /// `m::` before the enum's name (N49).
@@ -730,30 +784,38 @@ pub struct MatchArm {
     pub ty: String,
     pub ty_span: Span,
     pub variant: String,
-    /// Where the variant name is written — the span resolution keys this arm by.
+    /// Where the variant name is written — the span resolution keys this pattern by.
     pub variant_span: Span,
     /// Every payload field of the variant, exactly once. `docs/spec.md` requires the
     /// pattern to account for all of them, so that adding a payload field breaks old
     /// patterns instead of letting them ignore new state.
     pub fields: Vec<PatternField>,
-    pub body: Expr,
     pub span: Span,
 }
 
-/// One field of a pattern: `name: binding` or `name: _`.
+/// One field of a variant pattern: `name: pattern` — before R1a, `name: binding` or `name: _`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatternField {
     /// The payload field's name, which is how it is identified.
     pub name: String,
     /// Where the field name is written — the span resolution keys this access by.
     pub name_span: Span,
-    /// The name the payload is bound to, or `None` for `_`.
+    /// What the payload must match.
     ///
     /// `_` means *introduce no binding*; it does not mean the field is not there and does
     /// not mean it is not released. `docs/spec.md` says so, because the opposite reading
     /// is the one that leaks.
-    pub binding: Option<String>,
-    pub binding_span: Span,
+    pub pattern: Pattern,
+}
+
+/// Where a `match` came from (R1a): written, or what `if let` or `let … else` means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchSource {
+    Written,
+    /// `if let P = e { A } else { B }`: arms `P => A` and `_ => B`.
+    IfLet,
+    /// `let P = e else { D }; rest`: arms `P => { rest }` and `_ => D`, where `D` must leave.
+    LetElse,
 }
 
 /// One field of a construction: `name: value`.
@@ -956,6 +1018,8 @@ pub enum Expr {
     Match {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
+        /// Written, or what `if let` or `let … else` means (R1a).
+        source: MatchSource,
         span: Span,
     },
     /// `expr.name` — project a field out of a record.

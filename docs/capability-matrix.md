@@ -200,6 +200,23 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1a (2026-10-12)** · *Patterns* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`, L3).
+`_`, a name, a literal (an integer, perhaps negated, a string, `true`, `false`), a variant pattern
+whose fields are patterns, and `|` alternatives — in a `match` of any type a pattern fits, in
+`if let`, and in `let … else`, which the parser writes as the `match` each means (a
+`MatchSource`). Exhaustiveness and reachability are the standard usefulness algorithm
+(`check/usefulness.rs`), naming a value no arm matches; a `match` written variant by variant is
+refused with the words it was before R1a. A `match` of plain variant patterns lowers to one Core
+IR `match` as before; any other is `{ scrutinee; which arm; that arm }`, each pattern's test a
+`Bool` of plain matches and comparisons and each arm's body written once, its bindings read out of
+the scrutinee (a branch exhaustiveness rules out is an `exit_with`, which Core IR now counts as a
+transfer). `N0629`, `N0630`; semantic epoch 54; EXPERIMENTAL until R1 closes; no warning for a `_`
+over variants until L15. Evidence: `crates/nazm-cli/tests/patterns.rs` — every kind of pattern by
+hand-worked output in the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing
+live; exhaustiveness witnesses; ten refusals by code; one error, not a cascade, for a wrong
+pattern; the syntax, core and service suites unchanged but for three tests whose examples the
+language now accepts.
+
 **R1a (2026-10-11)** · *`for` loops* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`,
 D3). `for x in e` over an `Ints`, `Strs`, `Vec[T]` or `Bytes`, and `for x in a..b`; `..` a token, `in`
 a word only after a `for` loop's name, and a `for` of any other shape still refused by name

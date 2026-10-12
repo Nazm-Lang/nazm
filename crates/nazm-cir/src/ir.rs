@@ -243,6 +243,12 @@ pub enum Temp {
     /// The `Box` or `List` `box_new` or `list_from_vec` is making, before anything else can see
     /// it (R1a).
     Made,
+    /// A general `match`'s scrutinee, evaluated once (R1a).
+    Scrutinee,
+    /// Which arm of a general `match` runs (R1a).
+    Arm,
+    /// A payload field a general `match`'s test or extraction reads (R1a).
+    Payload,
 }
 
 impl Temp {
@@ -258,6 +264,9 @@ impl Temp {
             Self::ForIndex => "i",
             Self::ForEnd => "end",
             Self::Made => "made",
+            Self::Scrutinee => "scrutinee",
+            Self::Arm => "arm",
+            Self::Payload => "payload",
         }
     }
 }
@@ -790,6 +799,16 @@ impl Stmt {
                 Ends::Transfers
             }
             Self::Scope { body, .. } | Self::Block(body) => body.ends,
+            // `exit_with` ends the process (R1a uses it where exhaustiveness makes a branch
+            // impossible, so the branch needs no value).
+            Self::Eval(Expr {
+                kind:
+                    ExprKind::Builtin {
+                        op: nazm_sema::Intrinsic::ExitWith,
+                        ..
+                    },
+                ..
+            }) => Ends::Transfers,
             _ => Ends::FallsThrough,
         }
     }
