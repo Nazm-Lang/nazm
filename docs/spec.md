@@ -74,6 +74,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `native-recursion` | STABLE 1.0 | stack sizes are the implementation's |
 | `strings` | STABLE 1.0 | |
 | `string-escapes` | STABLE 1.0 | |
+| `string-forms` | EXPERIMENTAL | R1a: multi-line and raw strings, a 1.x addition, experimental until R1 closes |
 | `sequences` | STABLE 1.0 | its *Destruction* row is superseded by `memory`: storage is reclaimed |
 | `memory` | STABLE 1.0 | *Cycles* covers closure environments since Gate 1-C1 (`N0616`) |
 | `outside-world` | STABLE 1.0 | *Authority is explicit where a contract is written, and ambient elsewhere* is HISTORICAL: `capabilities` (N104) governs |
@@ -1806,6 +1807,44 @@ surrogate (`D800`–`DFFF`) and a value above `10FFFF`. `\xHH` keeps its limit o
 meaning one byte would contradict `\u{80}` meaning the two bytes `C2 80`, so a lone byte above 127 is
 still made only by `str_from_byte`. The compiler written in Nazm refuses every escape, this one
 included (its subset, *Bootstrap*).
+
+#### Multi-line and raw strings — R1
+<!-- id: string-forms -->
+
+Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L9).
+
+```nazm
+fn template() -> Str {
+    """
+    define i64 @answer() {
+      ret i64 42
+    }
+    """
+}
+
+fn pattern() -> Str { r#"a "quoted" \d+"# }
+```
+
+**Multi-line strings.** `"""`, a line break, the lines, and `"""` alone on a line (after any
+indentation). The closing delimiter's indentation — the spaces and tabs before it — is taken off
+every line, each of which must begin with exactly that indentation unless it is blank (`N0005`);
+the line breaks between the lines are the value's, and the one after the opening delimiter and the
+one before the closing one are not. So an indented template is written indented with the code
+around it. Escapes are an ordinary literal's (*String escapes*), and a backslash ending a line
+joins it to the next: neither the line break nor the next line's indentation is in the value. Text
+after the opening `"""` on its line is refused (`N0005`), and a `"""` that is not alone on its line
+is three quotes of the text.
+
+**Raw strings.** `r"…"`, or `r#"…"#` with any number of `#`s, the same number at each end: the
+text as written, with no escape — a backslash is a backslash — ending at the first quote followed
+by that many `#`s, so `r#"say "hi""#` holds quotes. A raw string may span lines. `r` begins a raw
+string only when a quote or a `#` follows it at once, so a name `r` is unchanged.
+
+**In both**, a line break written CR LF is one LF — a literal means the same bytes from every
+editor — and the bytes are otherwise the source's, exactly as an ordinary literal's are. The
+formatter keeps either as written. An ordinary literal stays on one line: a quote with no closing
+one on its line is still refused there (`N0002`), so an unclosed string cannot swallow the rest of
+a file.
 
 #### What an implementation may not infer from its host
 
