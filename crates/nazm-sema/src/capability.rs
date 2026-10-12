@@ -348,6 +348,9 @@ impl CapabilityKind {
             | Intrinsic::BoxFresh
             | Intrinsic::BoxFill
             | Intrinsic::ListPush
+            | Intrinsic::CellNew
+            | Intrinsic::CellGet
+            | Intrinsic::CellSet
             | Intrinsic::ForeignNonNull
             | Intrinsic::CStrCopy
             | Intrinsic::CallbackAddress

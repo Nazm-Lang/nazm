@@ -319,6 +319,9 @@ pub enum Type {
     /// `List[T]` (R1a): a sequence of `T`, an immutable shared value, by the id of `Vec[T]`,
     /// its representation.
     List(VecId),
+    /// `Cell[T]` (R1b): one `T` that can be replaced, a mutable handle — the kind `Vec[T]` is —
+    /// by the id of `Vec[T]`, its representation: a `Vec[T]` that always holds one element.
+    Cell(VecId),
     /// A type parameter, inside the declaration that owns it.
     Param(TypeParam),
     /// A capability: authority of one compiler-owned kind (N37). A value, freely copied,
@@ -427,6 +430,7 @@ impl Type {
             | Self::Vec(_)
             | Self::Box(_)
             | Self::List(_)
+            | Self::Cell(_)
             | Self::Param(_)
             | Self::Fn(_)
             | Self::ChanOf(_)
@@ -505,12 +509,12 @@ impl Type {
         matches!(self, Self::Box(_) | Self::List(_))
     }
 
-    /// The `Vec[T]` a `Box[T]` or `List[T]` is represented as, and every other type as it is: what
-    /// every layer below the checker sees (R1a).
+    /// The `Vec[T]` a `Box[T]`, `List[T]` or `Cell[T]` is represented as, and every other type as
+    /// it is: what every layer below the checker sees (R1a, R1b).
     #[must_use]
     pub const fn represented(self) -> Self {
         match self {
-            Self::Box(v) | Self::List(v) => Self::Vec(v),
+            Self::Box(v) | Self::List(v) | Self::Cell(v) => Self::Vec(v),
             t => t,
         }
     }
@@ -540,8 +544,10 @@ impl Type {
     #[must_use]
     pub fn may_cross_into_a_task(self) -> bool {
         // Nor a function value (N50): its type does not say what it captured.
+        // Nor a `Cell` (R1b): a mutable handle, as a sequence is.
         !self.is_sequence()
             && !self.is_indirection()
+            && !matches!(self, Self::Cell(_))
             && !self.is_param()
             && !matches!(self, Self::Fn(_))
     }

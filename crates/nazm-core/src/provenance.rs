@@ -603,6 +603,11 @@ impl<'b> Walk<'_, 'b> {
     /// The cell of a built-in's argument `arg`: its container's type (N80). A type the call
     /// site does not settle, or one that mentions a type parameter, is the wild cell.
     fn cell(&self, b: nazm_sema::Intrinsic, at: Span, arg: usize) -> String {
+        self.cell_of_shape(b.params().get(arg).copied(), at)
+    }
+
+    /// The cell of a container of shape `shape`, the call at `at` deciding its element type.
+    fn cell_of_shape(&self, shape: Option<nazm_sema::intrinsic::Shape>, at: Span) -> String {
         use nazm_sema::intrinsic::Shape;
         let elem = || -> Option<String> {
             let t = *self.elems.get(&(at.start, at.end))?;
@@ -611,7 +616,7 @@ impl<'b> Walk<'_, 'b> {
                 .is_concrete(t)
                 .then(|| self.res.types().show(t))
         };
-        let name = match b.params().get(arg) {
+        let name = match shape.as_ref() {
             Some(Shape::Ints) => Some("Ints".to_owned()),
             Some(Shape::Strs) => Some("Strs".to_owned()),
             Some(Shape::Chan) => Some("Chan".to_owned()),
@@ -620,6 +625,8 @@ impl<'b> Walk<'_, 'b> {
             // Every atomic cell (Gate 3).
             Some(Shape::Atomic) => Some("Atomic".to_owned()),
             Some(Shape::VecT) => elem().map(|t| format!("Vec[{t}]")),
+            // Every cell of one element type (R1b).
+            Some(Shape::CellT) => elem().map(|t| format!("Cell[{t}]")),
             // A select's channels: the cell is their elements', `Chan[T]`.
             Some(Shape::ChanT | Shape::ChansT) => elem().map(|t| format!("Chan[{t}]")),
             _ => None,
@@ -954,6 +961,12 @@ impl<'b> Walk<'_, 'b> {
                     }
                     ContainerUse::Write { handle, value } => {
                         let cell = self.cell(b, callee_span, handle);
+                        let v = flows.get(value).cloned().unwrap_or_default();
+                        self.store(cell, callee_span, &v);
+                        None
+                    }
+                    ContainerUse::Make { value } => {
+                        let cell = self.cell_of_shape(Some(b.ret()), callee_span);
                         let v = flows.get(value).cloned().unwrap_or_default();
                         self.store(cell, callee_span, &v);
                         None

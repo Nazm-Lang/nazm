@@ -313,6 +313,8 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::BoxFresh
         | Intrinsic::BoxFill
         | Intrinsic::ListPush
+        // Likewise `cell_new` (R1b), a vector of one element.
+        | Intrinsic::CellNew
         | Intrinsic::ChanNew
         | Intrinsic::ChanNewOf
         | Intrinsic::AtomicNew
@@ -435,6 +437,8 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::BoxGet
         | Intrinsic::ListLen
         | Intrinsic::ListGet
+        | Intrinsic::CellGet
+        | Intrinsic::CellSet
         | Intrinsic::WrappingAdd
         | Intrinsic::WrappingSub
         | Intrinsic::WrappingMul

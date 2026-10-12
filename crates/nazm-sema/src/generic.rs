@@ -276,6 +276,14 @@ impl UserTypes {
         }
     }
 
+    /// `Cell[elem]`, interned with the `Vec[elem]` it is represented as (R1b).
+    pub fn cell_of(&mut self, elem: Type) -> Type {
+        match self.vec_of(elem) {
+            Type::Vec(v) => Type::Cell(v),
+            t => t,
+        }
+    }
+
     /// `List[elem]`, interned with the `Vec[elem]` it is represented as (R1a).
     pub fn list_of(&mut self, elem: Type) -> Type {
         match self.vec_of(elem) {
@@ -288,7 +296,7 @@ impl UserTypes {
     #[must_use]
     pub fn element(&self, t: Type) -> Option<Type> {
         match t {
-            Type::Vec(v) | Type::Box(v) | Type::List(v) => self.vec_element(v),
+            Type::Vec(v) | Type::Box(v) | Type::List(v) | Type::Cell(v) => self.vec_element(v),
             _ => None,
         }
     }
@@ -581,7 +589,7 @@ impl UserTypes {
             Type::Param(p) if p.owner == owner => {
                 args.get(p.index as usize).copied().unwrap_or(Type::Int)
             }
-            Type::Vec(v) | Type::Box(v) | Type::List(v) => {
+            Type::Vec(v) | Type::Box(v) | Type::List(v) | Type::Cell(v) => {
                 let Some(elem) = self.vec_element(v) else {
                     return t;
                 };
@@ -592,6 +600,7 @@ impl UserTypes {
                 match t {
                     Type::Box(_) => self.box_of(elem),
                     Type::List(_) => self.list_of(elem),
+                    Type::Cell(_) => self.cell_of(elem),
                     _ => self.vec_of(elem),
                 }
             }
@@ -664,7 +673,7 @@ impl UserTypes {
     pub fn substituted(&self, t: Type, owner: ParamOwner, args: &[Type]) -> Option<Type> {
         match t {
             Type::Param(p) if p.owner == owner => args.get(p.index as usize).copied(),
-            Type::Vec(v) | Type::Box(v) | Type::List(v) => {
+            Type::Vec(v) | Type::Box(v) | Type::List(v) | Type::Cell(v) => {
                 let elem = self.vec_element(v)?;
                 if !self.mentions(elem, owner) {
                     return Some(t);
@@ -676,6 +685,7 @@ impl UserTypes {
                 Some(match t {
                     Type::Box(_) => Type::Box(w),
                     Type::List(_) => Type::List(w),
+                    Type::Cell(_) => Type::Cell(w),
                     _ => Type::Vec(w),
                 })
             }
@@ -758,7 +768,9 @@ impl UserTypes {
                         return true;
                     }
                 }
-                Type::Vec(v) | Type::Box(v) | Type::List(v) => work.extend(self.vec_element(v)),
+                Type::Vec(v) | Type::Box(v) | Type::List(v) | Type::Cell(v) => {
+                    work.extend(self.vec_element(v))
+                }
                 Type::ChanOf(c) => work.extend(self.chan_element(c)),
                 Type::Record(_) | Type::Enum(_) | Type::Fn(_) => {
                     work.extend(self.type_args(t).iter().copied());
@@ -785,7 +797,7 @@ impl UserTypes {
                 .and_then(|d| d.instance.as_ref())
                 .map(|i| i.args.clone())
                 .unwrap_or_default(),
-            Type::Vec(v) | Type::Box(v) | Type::List(v) => {
+            Type::Vec(v) | Type::Box(v) | Type::List(v) | Type::Cell(v) => {
                 self.vec_element(v).into_iter().collect()
             }
             Type::ChanOf(c) => self.chan_element(c).into_iter().collect(),
