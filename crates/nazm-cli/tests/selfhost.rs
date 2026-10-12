@@ -609,6 +609,8 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         E::Array { span, .. } | E::ArrayRepeat { span, .. } | E::Index { span, .. } => {
             push_node(out, "array", 0, span.start, span.end, "");
         }
+        // A tuple (L5), outside the Nazm-written compiler's subset until R2.
+        E::Tuple { span, .. } => push_node(out, "tuple", 0, span.start, span.end, ""),
         // Gate 2's numbers, outside the Nazm-written compiler's subset: no agreement corpus
         // holds one.
         E::WideInt { value, span } => {

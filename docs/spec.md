@@ -128,6 +128,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `for` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; each form means its `while` loop |
 | `box-list` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; recursive types through immutable indirection |
 | `patterns` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; supersedes the N10 limits on patterns where it says so |
+| `tuples` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; a tuple is an anonymous record |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -851,7 +852,8 @@ and `?` — as ordinary generic enums and a `match` — in* Typed error values *
 still no `throw` and no `try`.)*
 
 *Corrected 2026-10-12, R1a:* literal, or- and nested patterns, `_` and a name at the top level,
-`if let` and `let … else` exist (*Patterns*, below). What follows was N10's list.
+`if let` and `let … else` exist (*Patterns*, below); tuple patterns and `let (a, b) = e;` too
+(*Tuples*). What follows was N10's list.
 
 No literal, record, tuple, range or or-patterns; no guards; no top-level wildcard; no `let`
 destructuring; no by-move or mutable patterns; no match ergonomics inferred from ownership.
@@ -4393,10 +4395,61 @@ statement and `B` is empty. `P`'s bindings are in scope in `A` only.
 bindings are in scope for the rest of the block; otherwise `D` runs, and `D` must leave — `return`,
 `break`, `continue`, or a call that does not return (`N0630` when it can complete). A pattern no value
 can fail, such as a name, is refused as pointless only by being ordinary: write `let` instead.
+*(L5 added `let P = e;`, a `let` whose pattern must match every value — see* Tuples*.)*
 
 **What is unchanged.** Matching evaluates nothing but the scrutinee and compares by equality laws
 already specified; releasing the scrutinee and the payloads follows *Enums* exactly. There are still
 no guards, no range patterns, no record patterns, no `..` in a payload and no `@` bindings.
+
+### Tuples — R1
+<!-- id: tuples -->
+
+Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L5).
+
+```nazm
+fn div_mod(a: Int, b: Int) -> (Int, Int) { (a / b, a % b) }
+
+fn total(pairs: Vec[(Str, Int)]) -> Int {
+    let mut t = 0;
+    for (name, n) in pairs { t = t + str_len(name) * n; }
+    t
+}
+
+fn main() -> Int {
+    let (q, r) = div_mod(17, 5);
+    let p = (q, "x");
+    p.0 * 10 + r
+}
+```
+
+**Type and value.** `(A, B, …)` is the type of a tuple of two or more elements, in order; `(a, b,
+…)` is a tuple, each element evaluated left to right. A trailing comma is allowed. `(T)` and `(e)`
+are `T` and `e`, parenthesised, as they always were; `(T,)` and `(e,)` are refused (`N0101`) —
+there is no tuple of one, and none of none.
+
+**What a tuple is.** A tuple is an anonymous record: one generic definition per arity, whose
+fields are named `0`, `1`, … and whose type parameters are the element types. So everything
+*Records* says holds of it — it is a value; equality is element by element where every element has
+equality (*Equality is derived*), and `N0304` otherwise; it is released, element by element, by
+its type's own law; it crosses into a task when every element may; a binding's mutability reaches
+every element. Two tuples of the same element types are the same type wherever they are written,
+in any module: an interface writes a tuple as its elements, not as a definition. Diagnostics spell
+the type `(Int, Str)`.
+
+**Element access.** `t.0`, `t.1`, … reads an element (`N0333` for a position the tuple does not
+have); `t.0.1` is the second element of the first. `t.1 = e;` replaces one, when `t` is `let mut`
+(`N0310` otherwise).
+
+**Patterns.** `(p, q, …)` matches a tuple of as many elements whose every element matches its
+pattern (`N0300` for another arity or a value that is not a tuple); it nests in and around the
+other patterns (*Patterns*), and exhaustiveness considers every combination of the elements.
+`let P = e;` is a `let` whose pattern must match every value of `e`'s type — `N0343`, naming a value
+it does not match, otherwise; its bindings are in scope for the rest of the block.
+`for P in e { … }` with a tuple pattern is `for x in e { let P = x; … }`.
+
+**What is unchanged.** There is no unit type `()`, no tuple struct and no indexing by a computed
+position. A tuple is not a `Vec`: it is not iterable. Derived hashing and ordering wait for L6,
+and with them a tuple as a map's key.
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

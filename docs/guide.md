@@ -533,18 +533,19 @@ accepts.
 | `payload` | `field , { "," , field } , [ "," ]` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
-| `type` | `function_type \| array_type \| [ qualifier ] , IDENT , [ type_arguments ]` |
+| `type` | `function_type \| array_type \| tuple_type \| [ qualifier ] , IDENT , [ type_arguments ]` |
+| `tuple_type` | `"(" , type , "," , type , { "," , type } , [ "," ] , ")"` |
 | `array_type` | `"[" , type , ";" , ( INTEGER \| IDENT ) , "]"` |
 | `function_type` | `"fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ]` |
 | `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
 | `statement` | `let_statement \| assignment \| while_statement \| for_statement \| let_else_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
 | `let_statement` | `"let" , [ "mut" ] , IDENT , "=" , expression , ";"` |
-| `let_else_statement` | `"let" , pattern , "=" , expression , "else" , block , ";"` |
+| `let_else_statement` | `"let" , pattern , "=" , expression , [ "else" , block ] , ";"` |
 | `assignment` | `place , "=" , expression , ";"` |
-| `place` | `IDENT , { "." , IDENT \| "[" , expression , "]" }` |
+| `place` | `IDENT , { "." , ( IDENT \| INTEGER ) \| "[" , expression , "]" }` |
 | `while_statement` | `"while" , expression , block` |
-| `for_statement` | `"for" , IDENT , "in" , ( expression , ".." , expression \| expression ) , block` |
+| `for_statement` | `"for" , ( IDENT \| tuple_pattern ) , "in" , ( expression , ".." , expression \| expression ) , block` |
 | `return_statement` | `"return" , expression , ";"` |
 | `break_statement` | `"break" , ";"` |
 | `continue_statement` | `"continue" , ";"` |
@@ -562,8 +563,9 @@ accepts.
 | `sum` | `product , { ( "+" \| "-" ) , product }` |
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" \| "~" ] , primary` |
-| `primary` | `atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] \| "?" \| "[" , expression , "]" }` |
-| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| "(" , expression , ")"` |
+| `primary` | `atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] \| INTEGER ) \| "?" \| "[" , expression , "]" }` |
+| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| tuple \| "(" , expression , ")"` |
+| `tuple` | `"(" , expression , "," , expression , { "," , expression } , [ "," ] , ")"` |
 | `array` | `"[" , expression , ( { "," , expression } , [ "," ] \| ";" , expression ) , "]"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
@@ -578,7 +580,8 @@ accepts.
 | `match_arms` | `match_arm , { "," , match_arm } , [ "," ]` |
 | `match_arm` | `pattern , "=>" , expression` |
 | `pattern` | `pattern_one , { "\|" , pattern_one }` |
-| `pattern_one` | `"_" \| IDENT \| [ "-" ] , INT \| STRING \| "true" \| "false" \| variant_pattern` |
+| `pattern_one` | `"_" \| IDENT \| [ "-" ] , INT \| STRING \| "true" \| "false" \| variant_pattern \| tuple_pattern` |
+| `tuple_pattern` | `"(" , pattern , "," , pattern , { "," , pattern } , [ "," ] , ")"` |
 | `variant_pattern` | `[ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")"` |
 | `pattern_fields` | `pattern_field , { "," , pattern_field } , [ "," ]` |
 | `pattern_field` | `IDENT , ":" , pattern` |
@@ -1080,7 +1083,7 @@ fn f(n: Int) -> Int { n } fn main() -> Int { f(1) }
 ### `type`
 
 ```ebnf
-type = function_type | array_type | [ qualifier ] , IDENT , [ type_arguments ] ;
+type = function_type | array_type | tuple_type | [ qualifier ] , IDENT , [ type_arguments ] ;
 ```
 
 A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
@@ -1109,6 +1112,19 @@ fn say(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int
 
 ```nazm
 fn f(xs: [Int; 4]) -> Int { xs[0] } fn main() -> Int { f([1, 2, 3, 4]) }
+```
+
+### `tuple_type`
+
+```ebnf
+tuple_type = "(" , type , "," , type , { "," , type } , [ "," ] , ")" ;
+```
+
+R1a: a tuple type, two elements or more; `(T)` is `T`, parenthesised, and `(T,)` is refused
+(`N0101`). See `docs/spec.md`, *Tuples*.
+
+```nazm
+fn f(p: (Int, Str)) -> (Str, Int) { (p.1, p.0) } fn main() -> Int { f((1, "a")).1 }
 ```
 
 ### `array_type`
@@ -1197,13 +1213,18 @@ fn main() -> Int { let mut a = 1; a = 2; a }
 ### `let_else_statement`
 
 ```ebnf
-let_else_statement = "let" , pattern , "=" , expression , "else" , block , ";" ;
+let_else_statement = "let" , pattern , "=" , expression , [ "else" , block ] , ";" ;
 ```
 
 R1a: `let P = e else { … };` — the `else` must leave; `P`'s names are in scope after it.
+Without `else` (L5), `P` must match every value (`N0343`): `let (a, b) = pair;`.
 
 ```nazm
 fn f(o: Option[Int]) -> Int { let Option.Some(value: x) = o else { return 0; }; x } fn main() -> Int { f(Option[Int].Some(value: 2)) }
+```
+
+```nazm
+fn main() -> Int { let (a, _) = (1, "b"); a }
 ```
 
 ### `assignment`
@@ -1227,7 +1248,7 @@ struct P { x: Int, } fn main() -> Int { let mut p = P(x: 1); p.x = 2; p.x }
 ### `place`
 
 ```ebnf
-place = IDENT , { "." , IDENT | "[" , expression , "]" } ;
+place = IDENT , { "." , ( IDENT | INTEGER ) | "[" , expression , "]" } ;
 ```
 
 ```nazm
@@ -1236,6 +1257,10 @@ struct I { n: Int, } struct O { i: I, } fn main() -> Int { let mut o = O(i: I(n:
 
 ```nazm
 fn main() -> Int { let mut g = [[0; 2]; 2]; g[1][0] = 5; g[1][0] }
+```
+
+```nazm
+fn main() -> Int { let mut t = ((1, 2), 3); t.0.1 = 5; t.0.1 }
 ```
 
 ### `while_statement`
@@ -1251,7 +1276,7 @@ fn main() -> Int { let mut i = 0; while i < 3 { i = i + 1; } i }
 ### `for_statement`
 
 ```ebnf
-for_statement = "for" , IDENT , "in" , ( expression , ".." , expression | expression ) , block ;
+for_statement = "for" , ( IDENT | tuple_pattern ) , "in" , ( expression , ".." , expression | expression ) , block ;
 ```
 
 R1a. `in` is a word only here; `..` only between a range's bounds. Each form means the
@@ -1259,6 +1284,10 @@ R1a. `in` is a word only here; `..` only between a range's bounds. Each form mea
 
 ```nazm
 fn main() -> Int { let xs = ints_new(); ints_push(xs, 2); let mut t = 0; for x in xs { t = t + x; } for i in 0..3 { t = t + i; } t }
+```
+
+```nazm
+fn main() -> Int { let ps = vec_new[(Int, Int)](); vec_push(ps, (2, 3)); let mut t = 0; for (a, b) in ps { t = t + a * b; } t }
 ```
 
 ### `return_statement`
@@ -1478,7 +1507,7 @@ fn main() -> Int { ~0 }
 ### `primary`
 
 ```ebnf
-primary = atom , { "." , IDENT , [ "(" , [ arguments ] , ")" ] | "?" | "[" , expression , "]" } ;
+primary = atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] | INTEGER ) | "?" | "[" , expression , "]" } ;
 ```
 
 `?` is a postfix beside projection, in any order and any number: `r?`, `make()?.x`,
@@ -1491,6 +1520,7 @@ argument is the receiver.
 `[index]` after an operand reads an array's element (Gate 2): `xs[i]`, `grid[r][c]`,
 `points[i].x`. After a name, a `[` followed by types and then `(` is type arguments instead,
 as it always was: `vec_new[Int]()`; a method call on an element is written `(xs[i]).m()`.
+`.0` after an operand is a tuple's element (R1a, L5); `t.0.1` is two of them.
 
 ```nazm
 fn main() -> Int { (1 + 2) * 3 }
@@ -1528,10 +1558,14 @@ trait Size { fn size(self: Self) -> Int; } fn f[T: Size](x: T) -> Int { x.size()
 fn main() -> Int { let xs = [1, 2, 3]; xs[1] }
 ```
 
+```nazm
+fn main() -> Int { let t = ((1, 2), 3); t.0.1 + t.1 }
+```
+
 ### `atom`
 
 ```ebnf
-atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | array | "(" , expression , ")" ;
+atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | array | tuple | "(" , expression , ")" ;
 ```
 
 A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
@@ -1543,6 +1577,18 @@ fn main() -> Int { 1 }
 
 ```nazm
 fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 }
+```
+
+### `tuple`
+
+```ebnf
+tuple = "(" , expression , "," , expression , { "," , expression } , [ "," ] , ")" ;
+```
+
+R1a: a tuple, two elements or more (`docs/spec.md`, *Tuples*).
+
+```nazm
+fn main() -> Int { let t = (1, "two", true); t.0 }
 ```
 
 ### `array`
@@ -1752,7 +1798,7 @@ fn main() -> Int { match 2 { 0 => 10, 1 | 2 => 20, n => n, } }
 ### `pattern_one`
 
 ```ebnf
-pattern_one = "_" | IDENT | [ "-" ] , INT | STRING | "true" | "false" | variant_pattern ;
+pattern_one = "_" | IDENT | [ "-" ] , INT | STRING | "true" | "false" | variant_pattern | tuple_pattern ;
 ```
 
 `_`, a name, a literal (an integer, perhaps negated, a string, `true` or `false`), or a
@@ -1760,6 +1806,18 @@ variant pattern.
 
 ```nazm
 enum E { A, B(x: Int), } fn main() -> Int { match E.B(x: 3) { E.B(x: 3) => 1, E.B(x: _) => 2, _ => 0, } }
+```
+
+### `tuple_pattern`
+
+```ebnf
+tuple_pattern = "(" , pattern , "," , pattern , { "," , pattern } , [ "," ] , ")" ;
+```
+
+R1a: a tuple pattern, as many elements as the tuple; `(p)` is `p`, parenthesised.
+
+```nazm
+fn main() -> Int { match (1, true) { (0, _) => 0, (n, true) => n, (_, false) => 2, } }
 ```
 
 ### `variant_pattern`
