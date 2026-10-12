@@ -220,6 +220,9 @@ kind, totals by count) and `nazm.flow/1` (`nazm explain-flow --json`: each sink'
 of an existing field. The check artefact's sink facts gain an optional `class`, unread by an older
 checker whose entries the semantic epoch already keeps apart.
 
+**Applied to R1b, L11 (default trait methods).** `N0602` narrowed compatibly: an impl may leave
+out a method its trait gives a default body. No code appeared; no schema moved.
+
 **Applied to R1b, L10 (closures in generic functions, a shared `let mut`).** Two codes narrowed,
 both compatibly — each now refuses less: `N0387` no longer covers a closure or a named function's
 value written inside a generic function, and `N0386` no longer covers a captured `let mut` binding,
@@ -562,7 +565,7 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0514` | `PACKAGE_UNSAFE` | A registry package holding a symbolic link or anything but files and directories |
 | `N0600` | `IMPL_CONFLICT` | Two impls of one trait for one type in one compilation |
 | `N0601` | `IMPL_ORPHAN` | An impl in a module that declares neither the trait nor the type |
-| `N0602` | `IMPL_MISSING_METHOD` | An impl that does not define every method of its trait |
+| `N0602` | `IMPL_MISSING_METHOD` | An impl that does not define every method of its trait that has no default body (narrowed by R1b) |
 | `N0603` | `IMPL_METHOD_MISMATCH` | An impl method its trait does not declare, or one whose signature is not the trait's with `Self` replaced by the impl's type, effects included |
 | `N0604` | `IMPL_TYPE_REFUSED` | An impl for a type that cannot have one |
 | `N0605` | `NO_METHOD` | A method call no trait in scope provides for the receiver's type |

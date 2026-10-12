@@ -802,12 +802,14 @@ impl Shift for crate::ast::TraitMethod {
             params,
             return_type,
             effects,
+            body,
             span,
         } = self;
         name_span.shift(file, by);
         params.shift(file, by);
         return_type.shift(file, by);
         effects.shift(file, by);
+        body.shift(file, by);
         span.shift(file, by);
     }
 }

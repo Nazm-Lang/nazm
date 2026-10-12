@@ -64,7 +64,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `equality` | STABLE 1.0 | |
 | `equality-requirement` | STABLE 1.0 | traits widened bounds (`traits`) |
 | `v0-2` | STABLE 1.0 | heading of the sections below |
-| `traits` | STABLE 1.0 | nominal and static; trait objects are not in 1.0 |
+| `traits` | STABLE 1.0 | nominal and static; trait objects are not in 1.0; R1b's default bodies (L11) are EXPERIMENTAL until R1 closes |
 | `mutation` | STABLE 1.0 | |
 | `while` | STABLE 1.0 | |
 | `blocks` | STABLE 1.0 | |
@@ -1444,8 +1444,9 @@ fn twice[T: Show](x: T) -> Str { str_concat(x.show(), Show.show(x)) }
 
 | Rule | |
 | --- | --- |
-| **Declaring** | A trait is a list of signatures, each ended by `;`, whose first parameter is `self: Self` (`N0609`). There are no default bodies: a body in a trait is a syntax error. A trait shares the type namespace with records and enums, and `pub` exports it |
-| **Implementing** | `impl Trait for Type { fn … }` defines every method of the trait exactly once (`N0602`), each with the trait's signature with `Self` replaced by `Type`, effects included, and its first parameter named `self` (`N0603`). `Self` may be written for the type inside the impl. A method that writes no effect set has its trait's. `Type` is a non-generic record or enum, a numeric type, `Bool` or `Str` (`N0604`) |
+| **Declaring** | A trait is a list of signatures, each ended by `;`, whose first parameter is `self: Self` (`N0609`). Since R1b a signature may instead end in a default body (below); until R1b a body in a trait was a syntax error. A trait shares the type namespace with records and enums, and `pub` exports it |
+| **Default bodies** (R1b, L11) | `fn m(self: Self, …) -> R ! {e} { … }` in a trait: what an impl that defines no `m` gets. The body is checked **once**, as a function generic over `Self` that requires the trait — so it may call the trait's other methods on `self`, and nothing else about `Self` — against the signature's declared effects (none written is none). An impl may still define `m`, which then replaces it for that type. A call on a type whose impl leaves `m` to the default, directly, by UFCS or through a bound, runs the default at that type |
+| **Implementing** | `impl Trait for Type { fn … }` defines every method of the trait that has no default body exactly once, and any that has one at most once (`N0602`), each with the trait's signature with `Self` replaced by `Type`, effects included, and its first parameter named `self` (`N0603`). `Self` may be written for the type inside the impl. A method that writes no effect set has its trait's. `Type` is a non-generic record or enum, a numeric type, `Bool` or `Str` (`N0604`) |
 | **Coherence** | A compilation has at most one impl of a trait for a type (`N0600`). An impl is in the module declaring the trait or the one declaring the type, and for `Int`, `Bool` and `Str` only the trait's (`N0601`) |
 | **Calling** | `recv.m(args)` finds the traits **in scope** — declared in this module, or exported by a module it imports — that declare `m`, keeps those with an impl for the receiver's type in this module or a module it imports directly, and needs exactly one (`N0605` for none, `N0606` for several). `Trait.m(recv, args)` names the trait (UFCS), and may be qualified, `alias::Trait.m(recv)`. An impl's methods are not in the function namespace: `show(p)` is not a call of one |
 | **Bounds** | `[T: Trait]` lets a generic body call the trait's methods on a `T`, and every call site's argument for `T` must have an impl, as for `Equality`. One requirement per parameter |

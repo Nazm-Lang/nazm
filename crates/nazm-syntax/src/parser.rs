@@ -333,7 +333,46 @@ impl Item {
             Self::Record(r) => program.records.push(r),
             Self::Enum(e) => program.enums.push(e),
             Self::Import(i) => program.imports.push(i),
-            Self::Trait(t) => program.traits.push(t),
+            Self::Trait(t) => {
+                // Each default body (R1b, L11) is a function generic over `Self`, required to
+                // implement the trait, checked once and instantiated per impl that uses it.
+                for m in &t.methods {
+                    let Some(body) = &m.body else {
+                        continue;
+                    };
+                    program.functions.push(Function {
+                        attrs: Vec::new(),
+                        name: crate::ast::default_method_name(&t.name, &m.name),
+                        name_span: m.name_span,
+                        pub_span: None,
+                        type_params: vec![crate::ast::TypeParam {
+                            name: "Self".to_owned(),
+                            span: m.name_span,
+                            effect: false,
+                            requires: Some(crate::ast::Requirement {
+                                name: t.name.clone(),
+                                span: t.name_span,
+                            }),
+                        }],
+                        effect_params: Vec::new(),
+                        params: m.params.clone(),
+                        return_type: m.return_type.clone(),
+                        // A trait's signature is a promise: none written is the empty set, never
+                        // an inference.
+                        effects: Some(m.effects.clone().unwrap_or(crate::ast::EffectDecl {
+                            span: m.return_type.span,
+                            names: Vec::new(),
+                        })),
+                        contracts: Vec::new(),
+                        body: Some(body.clone()),
+                        foreign: None,
+                        export: None,
+                        method_of: None,
+                        span: m.span,
+                    });
+                }
+                program.traits.push(t);
+            }
             Self::Const(c) => program.consts.push(c),
             Self::Impl(decl, methods) => {
                 program.impls.push(decl);
@@ -1535,6 +1574,21 @@ impl<'a> Parser<'a> {
         let return_type = self.type_name()?;
         self.wrap(ret, SyntaxKind::RetType);
         let effects = self.effect_set()?;
+        // A default body (R1b, L11), or `;`.
+        if self.at(&TokenKind::LBrace) {
+            let body = self.block()?;
+            let end = body.span;
+            self.wrap(at, SyntaxKind::TraitMethod);
+            return Some(TraitMethod {
+                name,
+                name_span,
+                params,
+                return_type,
+                effects,
+                body: Some(body),
+                span: start.join(end),
+            });
+        }
         let end = self.peek_span();
         if !self.at(&TokenKind::Semi) {
             self.report(
@@ -1542,13 +1596,13 @@ impl<'a> Parser<'a> {
                     codes::UNEXPECTED_TOKEN,
                     end,
                     format!(
-                        "expected `;` after a trait method's signature, found {}",
+                        "expected `;` or a default body after a trait method's signature, found {}",
                         self.peek().describe()
                     ),
                 )
                 .help(
-                    "a trait method has no body: each `impl` of the trait writes one. \
-                     There are no default methods",
+                    "a trait method is a signature ended by `;`, which each `impl` of the trait \
+                     writes, or one with a body, which an `impl` that writes none gets",
                 ),
             );
             return None;
@@ -1561,6 +1615,7 @@ impl<'a> Parser<'a> {
             params,
             return_type,
             effects,
+            body: None,
             span: start.join(end),
         })
     }

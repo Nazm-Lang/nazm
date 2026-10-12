@@ -62,7 +62,8 @@ attribute_arg = STRING
 constant = [ visibility ] , ( "const" | "static" ) , IDENT , ":" , type , "=" , expression , ";" ;
 
 (* A trait (N78): a named set of methods a type may implement. Each method is a signature
- * ended by `;` — there are no default bodies — whose first parameter is `self: Self`. A trait
+ * ended by `;`, or since R1b a default body an impl that writes none gets, whose first
+ * parameter is `self: Self`. A trait
  * is in the type namespace and is not a type: it is written as a type parameter's bound,
  * `[T: Show]`, and never as the type of a value. See `docs/spec.md`, *Traits and methods*.
  *)
@@ -70,7 +71,8 @@ constant = [ visibility ] , ( "const" | "static" ) , IDENT , ":" , type , "=" , 
 trait_item = [ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}" ;
 
 (* @example trait Size { fn size(self: Self) -> Int; } fn main() -> Int { 0 } *)
-trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";" ;
+(* @example trait Size { fn size(self: Self) -> Int; fn big(self: Self) -> Bool { self.size() > 9 } } fn main() -> Int { 0 } *)
+trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ( ";" | block ) ;
 
 (* `impl Trait for Type`: every method of the trait, once, with `Self` written as the type.
  * `for` is a word here and nowhere else. At most one impl of a trait for a type, in the

@@ -1635,7 +1635,10 @@ impl Fx<'_> {
                 callee_at,
             } => {
                 let concrete = self.ty(*self_ty, at);
-                let Some(callee) = self.res.traits().method_fn(*trait_id, concrete, *method) else {
+                // The impl's function, or the trait's default body at this type (L11).
+                let Some((callee, defaulted)) =
+                    self.res.method_target(*trait_id, concrete, *method)
+                else {
                     // A derived `Hash` (L6): the type's own walk, or its `==`.
                     if self
                         .res
@@ -1651,7 +1654,11 @@ impl Fx<'_> {
                 let call = cir::Expr {
                     kind: cir::ExprKind::Call {
                         callee,
-                        type_args: Vec::new(),
+                        type_args: if defaulted {
+                            vec![concrete]
+                        } else {
+                            Vec::new()
+                        },
                         args: args.clone(),
                         callee_at: *callee_at,
                     },

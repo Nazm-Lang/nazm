@@ -129,6 +129,35 @@ pub fn plan_instances(
         }
     }
 
+    // A trait's default body at every type whose impl leaves the method to it (R1b, L11): a
+    // call through a bound reaches it at the instance's type, which nothing else records.
+    let traits: Vec<(nazm_sema::traits::TraitId, Type, usize)> = res
+        .traits()
+        .impls()
+        .map(|(_, imp)| (imp.trait_id, imp.self_ty, imp.methods.len()))
+        .collect();
+    for (trait_id, ty, n) in traits {
+        for m in 0..n {
+            let Some((d, true)) = res.method_target(trait_id, ty, u32::try_from(m).unwrap_or(0))
+            else {
+                continue;
+            };
+            if !res.types().is_concrete(ty) {
+                continue;
+            }
+            let key = InstanceKey {
+                def: d,
+                args: vec![ty],
+            };
+            if !seen.contains_key(&key) {
+                let at = res.function(d).map_or(Span::synthetic(), |f| f.name_span);
+                seen.insert(key.clone(), order.len());
+                order.push((key.clone(), at));
+                work.push_back((key, at));
+            }
+        }
+    }
+
     // The roots: what the non-generic functions call, in definition order and then in the
     // order each body makes its calls.
     for (i, f) in res.functions().iter().enumerate() {

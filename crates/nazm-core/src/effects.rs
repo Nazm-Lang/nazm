@@ -604,16 +604,29 @@ fn set_text(set: EffectSet, param: &str) -> String {
     format!("{{ {} }}", names.join(", "))
 }
 
-/// The declared effects of `id` when it is a method of an impl: its trait method's.
+/// The declared effects of `id` when it is a method of an impl, or a trait's default body
+/// (R1b, L11): its trait method's.
 fn impl_method_contract(res: &Resolution, id: FnId) -> Option<EffectSet> {
-    res.traits().impls().find_map(|(_, i)| {
-        let at = i.methods.iter().position(|m| *m == Some(id))?;
-        res.traits()
-            .get(i.trait_id)?
-            .methods
-            .get(at)
-            .map(|m| m.effects)
-    })
+    res.traits()
+        .impls()
+        .find_map(|(_, i)| {
+            let at = i.methods.iter().position(|m| *m == Some(id))?;
+            res.traits()
+                .get(i.trait_id)?
+                .methods
+                .get(at)
+                .map(|m| m.effects)
+        })
+        .or_else(|| {
+            res.traits().iter().find_map(|(tid, tr)| {
+                (0..tr.methods.len()).find_map(|m| {
+                    let m32 = u32::try_from(m).ok()?;
+                    (res.default_method(tid, m32) == Some(id))
+                        .then(|| tr.methods.get(m).map(|d| d.effects))
+                        .flatten()
+                })
+            })
+        })
 }
 
 /// One hop of a witness, in words.

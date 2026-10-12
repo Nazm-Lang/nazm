@@ -101,8 +101,8 @@ pub struct Trait {
     pub span: Span,
 }
 
-/// One method a trait requires: a signature, no body. Its first parameter is `self: Self`,
-/// which the checker holds.
+/// One method a trait requires: a signature, and since R1b (L11) perhaps a default body. Its
+/// first parameter is `self: Self`, which the checker holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitMethod {
     pub name: String,
@@ -110,7 +110,17 @@ pub struct TraitMethod {
     pub params: Vec<Param>,
     pub return_type: TypeName,
     pub effects: Option<EffectDecl>,
+    /// The default body (R1b, L11): what an impl that does not define the method gets. The
+    /// parser also writes it as a generic function over `Self`, [`default_method_name`].
+    pub body: Option<Block>,
     pub span: Span,
+}
+
+/// The name a trait's default method is declared under (R1b, L11): `Trait/default/m`, which no
+/// written name can be — a function generic over `Self: Trait`.
+#[must_use]
+pub fn default_method_name(trait_name: &str, method: &str) -> String {
+    format!("{trait_name}/default/{method}")
 }
 
 /// The header of `impl Trait for Type { … }` (N78). The methods are functions.
