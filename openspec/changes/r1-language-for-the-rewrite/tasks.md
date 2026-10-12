@@ -21,7 +21,7 @@ each new construct by name until R2 carries it.
 - [x] 3.5 L6 derived `Hash` and `Ord`
 - [x] 3.6 L8 `pub const` and constant arrays of `Str` and records
 - [x] 3.7 L9 multi-line and raw string literals
-- [ ] 3.8 L4 string interpolation and float formatting
+- [x] 3.8 L4 string interpolation and float formatting
 
 ## 4. R1b — functions, traits, arithmetic
 

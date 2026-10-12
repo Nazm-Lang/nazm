@@ -649,6 +649,12 @@ trait Shift {
     fn shift(&mut self, file: FileId, by: i64);
 }
 
+/// Move every span of `e` in `file` by `by` bytes (L4): an interpolation's hole is parsed on its
+/// own and then placed where it is written.
+pub(crate) fn shift_expr(e: &mut Expr, file: FileId, by: i64) {
+    e.shift(file, by);
+}
+
 impl Shift for Span {
     fn shift(&mut self, file: FileId, by: i64) {
         if self.file == file {
@@ -1246,6 +1252,15 @@ impl Shift for FieldInit {
 impl Shift for Expr {
     fn shift(&mut self, file: FileId, by: i64) {
         match self {
+            Self::Interp { parts, span } => {
+                for p in parts {
+                    if let crate::ast::InterpPart::Hole { expr, span, .. } = p {
+                        expr.shift(file, by);
+                        span.shift(file, by);
+                    }
+                }
+                span.shift(file, by);
+            }
             Self::Array { elems, span } | Self::Tuple { elems, span } => {
                 elems.shift(file, by);
                 span.shift(file, by);

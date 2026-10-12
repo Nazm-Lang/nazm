@@ -200,6 +200,18 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1a (2026-10-12)** · *String interpolation* (`spec.md`; `openspec/changes/
+r1-language-for-the-rewrite`, L4). `f"…"` and `f"""…"""`: holes `{expr}` and `{expr:spec}`
+(`[<|>][width][.precision]`), `{{`/`}}` for braces; a hole holds a `Str`, a number, a `Bool` or a
+value with `Show` in scope (its `show()` resolved as the method call at the hole's braces, through a
+bound too). The lexer reads an `FSTRING` token whose holes the parser parses on their own and
+places; lowering joins the pieces with `str_concat`. New prelude built-ins `float_to_str_fixed`
+(runtime `nz.format_fixed`, C's `%.*f`; runtime ABI 30) and `str_pad_start`/`str_pad_end` (a
+loop in LIR). `N0006`; semantic epoch 59; EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/interpolation.rs` — every kind of hole by hand-worked output on the
+interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; ties to even and
+`-0.0`; refusals by code.
+
 **R1a (2026-10-12)** · *Multi-line and raw strings* (`spec.md`; `openspec/changes/
 r1-language-for-the-rewrite`, L9). `"""` strings whose closing delimiter's indentation comes off
 every line (`N0005` for a line short of it, or text after the opening delimiter), escapes as an

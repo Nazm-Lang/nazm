@@ -421,6 +421,15 @@ pub enum Intrinsic {
     /// `num_to_str[T: numeric](x: T) -> Str` — decimal; for a float, the shortest `%g`-style
     /// text that reads back to the same value.
     NumToStr,
+    /// `float_to_str_fixed[T: float](x: T, digits: Int) -> Str` (R1a, L4) — exactly `digits`
+    /// decimals, correctly rounded, ties to even, as C's `%.*f`; `N0405` unless
+    /// `0 <= digits <= 30`.
+    FloatToStrFixed,
+    /// `str_pad_start(s: Str, width: Int, fill: Str) -> Str` (R1a, L4) — copies of the one-byte
+    /// `fill` before `s` until it is `width` bytes; `N0405` unless `fill` is one byte.
+    StrPadStart,
+    /// `str_pad_end(s: Str, width: Int, fill: Str) -> Str` (R1a, L4) — the same, after `s`.
+    StrPadEnd,
     /// `float64_to_bits(x: Float64) -> UInt64`, and the inverse and `Float32` forms.
     Float64ToBits,
     Float64FromBits,
@@ -562,7 +571,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 175] = [
+    pub const ALL: [Self; 178] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -659,6 +668,9 @@ impl Intrinsic {
         Self::FloatIsInfinite,
         Self::FloatIsFinite,
         Self::NumToStr,
+        Self::FloatToStrFixed,
+        Self::StrPadStart,
+        Self::StrPadEnd,
         Self::Float64ToBits,
         Self::Float64FromBits,
         Self::Float32ToBits,
@@ -843,6 +855,9 @@ impl Intrinsic {
             Self::FloatIsInfinite => "float_is_infinite",
             Self::FloatIsFinite => "float_is_finite",
             Self::NumToStr => "num_to_str",
+            Self::FloatToStrFixed => "float_to_str_fixed",
+            Self::StrPadStart => "str_pad_start",
+            Self::StrPadEnd => "str_pad_end",
             Self::Float64ToBits => "float64_to_bits",
             Self::Float64FromBits => "float64_from_bits",
             Self::Float32ToBits => "float32_to_bits",
@@ -1001,7 +1016,8 @@ impl Intrinsic {
             | Self::FloatMax
             | Self::FloatIsNan
             | Self::FloatIsInfinite
-            | Self::FloatIsFinite => Some(NumClass::Float),
+            | Self::FloatIsFinite
+            | Self::FloatToStrFixed => Some(NumClass::Float),
             Self::NumToStr
             | Self::BytesReadLe
             | Self::BytesReadBe
@@ -1018,6 +1034,8 @@ impl Intrinsic {
             Self::StrByte => &[Shape::Str, Shape::Int],
             Self::StrSlice => &[Shape::Str, Shape::Int, Shape::Int],
             Self::StrConcat => &[Shape::Str, Shape::Str],
+            Self::StrPadStart | Self::StrPadEnd => &[Shape::Str, Shape::Int, Shape::Str],
+            Self::FloatToStrFixed => &[Shape::T, Shape::Int],
             Self::IntToStr | Self::StrFromByte => &[Shape::Int],
             Self::IntsNew | Self::StrsNew => &[],
             Self::IntsLen | Self::IntsPop => &[Shape::Ints],
@@ -1273,7 +1291,9 @@ impl Intrinsic {
             Self::FloatIsNan | Self::FloatIsInfinite | Self::FloatIsFinite | Self::FloatParses => {
                 Shape::Bool
             }
-            Self::NumToStr => Shape::Str,
+            Self::NumToStr | Self::FloatToStrFixed | Self::StrPadStart | Self::StrPadEnd => {
+                Shape::Str
+            }
             Self::Float64ToBits => Shape::U64,
             Self::Float64FromBits | Self::FloatParseRaw => Shape::F64,
             Self::Float32ToBits => Shape::U32,
@@ -1365,6 +1385,9 @@ impl Intrinsic {
                 | Self::ListEmpty
                 | Self::ListLen
                 | Self::ListGet
+                | Self::FloatToStrFixed
+                | Self::StrPadStart
+                | Self::StrPadEnd
         )
     }
 

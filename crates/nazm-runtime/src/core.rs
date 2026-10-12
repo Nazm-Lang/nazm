@@ -3351,12 +3351,53 @@ entry:
 /// which is what the interpreter's shortest digits are too.
 const NUMBER_RUNTIME: &str = r#"
 @.fmt.e = private unnamed_addr constant [5 x i8] c"%.*e\00"
+@.fmt.f = private unnamed_addr constant [5 x i8] c"%.*f\00"
 @.fmt.lld = private unnamed_addr constant [5 x i8] c"%lld\00"
 @.fmt.llu = private unnamed_addr constant [5 x i8] c"%llu\00"
 
 define hidden i64 @nz.format_u64(ptr %buf, i64 %v) {
 entry:
   %w = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 21, ptr @.fmt.llu, i64 %v)
+  %n = sext i32 %w to i64
+  ret i64 %n
+}
+
+; A float with exactly `digits` decimals (R1a, L4), C's `%.*f`, into 360 bytes the caller owns:
+; `nan`, `inf` and `-inf` as `nz.format_float` spells them, so neither depends on a C library's.
+define hidden i64 @nz.format_fixed(ptr %buf, double %x, i64 %digits) {
+entry:
+  %isnan = fcmp uno double %x, %x
+  br i1 %isnan, label %nan, label %number
+nan:
+  store i8 110, ptr %buf
+  %a1 = getelementptr i8, ptr %buf, i64 1
+  store i8 97, ptr %a1
+  %a2 = getelementptr i8, ptr %buf, i64 2
+  store i8 110, ptr %a2
+  ret i64 3
+number:
+  %ax = call double @llvm.fabs.f64(double %x)
+  %isinf = fcmp oeq double %ax, 0x7FF0000000000000
+  br i1 %isinf, label %inf, label %finite
+inf:
+  %neg = fcmp olt double %x, 0.0
+  %signlen = zext i1 %neg to i64
+  br i1 %neg, label %minus, label %word
+minus:
+  store i8 45, ptr %buf
+  br label %word
+word:
+  %out = getelementptr i8, ptr %buf, i64 %signlen
+  store i8 105, ptr %out
+  %b1 = getelementptr i8, ptr %out, i64 1
+  store i8 110, ptr %b1
+  %b2 = getelementptr i8, ptr %out, i64 2
+  store i8 102, ptr %b2
+  %li = add i64 %signlen, 3
+  ret i64 %li
+finite:
+  %d = trunc i64 %digits to i32
+  %w = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 360, ptr @.fmt.f, i32 %d, double %x)
   %n = sext i32 %w to i64
   ret i64 %n
 }

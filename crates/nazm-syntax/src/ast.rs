@@ -559,6 +559,14 @@ impl Block {
                     exprs.push(index);
                 }
                 Expr::Field { base, .. } => exprs.push(base),
+                // An interpolation's holes (L4).
+                Expr::Interp { parts, .. } => {
+                    for p in parts {
+                        if let InterpPart::Hole { expr, .. } = p {
+                            exprs.push(expr);
+                        }
+                    }
+                }
                 Expr::Binary { lhs, rhs, .. } => {
                     exprs.push(lhs);
                     exprs.push(rhs);
@@ -1082,6 +1090,25 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// `f"…{x}…"` — an interpolated string (R1a, L4): its text and holes, in order.
+    Interp {
+        parts: Vec<InterpPart>,
+        span: Span,
+    },
+}
+
+/// A piece of an interpolated string (L4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterpPart {
+    /// Text, as it reads.
+    Text(String),
+    /// A hole: its expression, its format, and the span of its braces — which the checker keys
+    /// what it decides about the hole by.
+    Hole {
+        expr: Expr,
+        spec: crate::lexer::FormatSpec,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -1111,6 +1138,7 @@ impl Expr {
             | Self::Field { span, .. }
             | Self::Propagate { span, .. }
             | Self::If { span, .. }
+            | Self::Interp { span, .. }
             | Self::MethodCall { span, .. } => span,
             Self::Block(b) => &b.span,
         }
@@ -1141,6 +1169,7 @@ impl Expr {
             | Self::Field { span, .. }
             | Self::Propagate { span, .. }
             | Self::If { span, .. }
+            | Self::Interp { span, .. }
             | Self::MethodCall { span, .. } => *span,
             Self::Block(b) => b.span,
         }

@@ -15,15 +15,16 @@ pub mod parser;
 pub use ast::{
     Assign, BinOp, Block, Const, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, For, ForIter, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import,
-    Let, MatchArm, MatchSource, MethodOf, Param, Pattern, PatternField, Place, PlaceField,
-    PlaceStep, Program, Qualifier, Record, Reexport, ReexportName, Requirement, Return, Scope,
-    Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, VariantPattern, While,
+    InterpPart, Let, MatchArm, MatchSource, MethodOf, Param, Pattern, PatternField, Place,
+    PlaceField, PlaceStep, Program, Qualifier, Record, Reexport, ReexportName, Requirement, Return,
+    Scope, Spawn, Stmt, Trait, TraitMethod, TypeName, TypeParam, Variant, VariantPattern, While,
 };
 pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;
 pub use incremental::{EditError, ParseStats, Revision, TextEdit};
 pub use lexer::{
-    lex, lex_in, lex_lossless_in, lex_with_comments, lex_with_comments_in, Lexeme, Token, TokenKind,
+    lex, lex_in, lex_lossless_in, lex_with_comments, lex_with_comments_in, Align, FPiece,
+    FormatSpec, Lexeme, Token, TokenKind,
 };
 pub use parser::{MAX_NESTING, PARSE_STACK_BYTES};
 

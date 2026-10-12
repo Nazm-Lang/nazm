@@ -123,6 +123,8 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 // compiler's subset until R2; no source this test reads writes one.
                 T::DotDot => 68,
                 T::Str(_) => 2,
+                // An interpolated string (L4), outside the Nazm-written compiler's subset until R2.
+                T::FStr(_) => 69,
                 T::Ident(_) => 3,
                 T::Fn => 10,
                 T::Let => 11,
@@ -611,6 +613,8 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         }
         // A tuple (L5), outside the Nazm-written compiler's subset until R2.
         E::Tuple { span, .. } => push_node(out, "tuple", 0, span.start, span.end, ""),
+        // An interpolation (L4), outside the Nazm-written compiler's subset until R2.
+        E::Interp { span, .. } => push_node(out, "interp", 0, span.start, span.end, ""),
         // Gate 2's numbers, outside the Nazm-written compiler's subset: no agreement corpus
         // holds one.
         E::WideInt { value, span } => {
@@ -2885,6 +2889,9 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("float_is_infinite", "Gate 2 numbers"),
         ("float_is_finite", "Gate 2 numbers"),
         ("num_to_str", "Gate 2 numbers"),
+        ("float_to_str_fixed", "R1a interpolation (L4)"),
+        ("str_pad_start", "R1a interpolation (L4)"),
+        ("str_pad_end", "R1a interpolation (L4)"),
         ("float64_to_bits", "Gate 2 numbers"),
         ("float64_from_bits", "Gate 2 numbers"),
         ("float32_to_bits", "Gate 2 numbers"),
