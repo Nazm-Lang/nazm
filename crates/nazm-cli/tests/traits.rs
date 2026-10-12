@@ -391,10 +391,14 @@ fn a_trait_is_not_a_type_and_a_method_is_not_a_value() {
 }
 
 #[test]
-fn a_trait_method_must_take_self_first_and_has_no_body() {
+fn a_trait_method_must_take_self_first_and_may_have_a_default_body() {
     let src = "trait T { fn a(x: Int) -> Int; }\nfn main() -> Int { 0 }\n";
     assert_eq!(check_codes(&[("p.nz", src)]), ["N0609"]);
+    // A default body since R1b (L11); until then a syntax error (`N0100`).
     let src = "trait T { fn a(self: Self) -> Int { 1 } }\nfn main() -> Int { 0 }\n";
+    assert_eq!(check_codes(&[("p.nz", src)]), Vec::<String>::new());
+    // Neither `;` nor a body is still one.
+    let src = "trait T { fn a(self: Self) -> Int }\nfn main() -> Int { 0 }\n";
     assert_eq!(check_codes(&[("p.nz", src)]), ["N0100"]);
 }
 

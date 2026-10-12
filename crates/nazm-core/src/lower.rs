@@ -101,13 +101,20 @@ pub(crate) fn lower(program: &Program, res: &Resolution) -> Result<cir::Program,
         return Err(errors);
     }
     // The impl table (N78): each impl that is the coherence table's answer, with every
-    // method defined. One the checker refused is not here, and nothing calls through it.
+    // method defined or defaulted. One the checker refused is not here, and nothing calls through it.
     let impls = res
         .traits()
         .impls()
         .filter(|(id, d)| res.traits().find(d.trait_id, d.self_ty) == Some(*id))
         .filter_map(|(_, d)| {
-            let methods: Option<Vec<FnId>> = d.methods.iter().copied().collect();
+            // A method the impl leaves to its trait's default body (R1b, L11) is that body: the
+            // interpreter calls it at the receiver's type, which needs no type argument.
+            let methods: Option<Vec<FnId>> = (0..d.methods.len())
+                .map(|m| {
+                    let m = u32::try_from(m).unwrap_or(u32::MAX);
+                    res.method_target(d.trait_id, d.self_ty, m).map(|(f, _)| f)
+                })
+                .collect();
             methods.map(|methods| cir::ImplRow {
                 trait_id: d.trait_id,
                 self_ty: d.self_ty,
@@ -2294,7 +2301,12 @@ impl<'a> Lower<'a> {
         } else if let Callee::Function(callee) = checked.callee {
             ExprKind::Call {
                 callee,
-                type_args: Vec::new(),
+                // A trait's default body is called at the receiver's type (L11).
+                type_args: self
+                    .res
+                    .type_args(at)
+                    .map(<[Type]>::to_vec)
+                    .unwrap_or_default(),
                 args: lowered,
                 callee_at: at,
             }

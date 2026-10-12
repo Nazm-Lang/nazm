@@ -165,6 +165,7 @@ pub fn declare_trait_methods(
                     params: resolved.into_iter().skip(1).collect(),
                     ret,
                     effects,
+                    has_default: m.body.is_some(),
                 });
             }
             if let Some(def) = res.traits_mut().get_mut(id) {
@@ -369,7 +370,8 @@ pub(super) fn register_impl(
         .methods
         .iter()
         .zip(&methods)
-        .filter(|(_, m)| m.is_none())
+        // A method with a default body (R1b, L11) may be left out.
+        .filter(|(t, m)| m.is_none() && !t.has_default)
         .map(|(m, _)| m.name.as_str())
         .collect();
     if !missing.is_empty() {
@@ -384,7 +386,7 @@ pub(super) fn register_impl(
                 ),
             )
             .secondary(tr.name_span, "the trait is declared here")
-            .help("an impl defines every method of its trait; there are no default methods"),
+            .help("an impl defines every method of its trait that has no default body"),
         );
     }
     let filed = res.traits_mut().implement(ImplDef {

@@ -605,6 +605,35 @@ impl Resolution {
         self.functions.get(id.index())
     }
 
+    /// A trait method's default body (R1b, L11): the function `Trait/default/m`, generic over
+    /// `Self`, in the trait's module.
+    #[must_use]
+    pub fn default_method(&self, trait_id: crate::traits::TraitId, method: u32) -> Option<FnId> {
+        let tr = self.traits().get(trait_id)?;
+        let m = tr.methods.get(method as usize)?;
+        if !m.has_default {
+            return None;
+        }
+        self.definition(tr.module, &format!("{}/default/{}", tr.name, m.name))
+    }
+
+    /// What a call of method `method` of `trait_id` on a `ty` runs (N78, R1b): the impl's own
+    /// function, `false`; or, where the impl leaves the method to its default, the default — a
+    /// generic function to be called with `ty` as its one type argument — `true`.
+    #[must_use]
+    pub fn method_target(
+        &self,
+        trait_id: crate::traits::TraitId,
+        ty: Type,
+        method: u32,
+    ) -> Option<(FnId, bool)> {
+        let imp = self.traits().impl_def(self.traits().find(trait_id, ty)?)?;
+        match imp.methods.get(method as usize).copied().flatten() {
+            Some(f) => Some((f, false)),
+            None => self.default_method(trait_id, method).map(|d| (d, true)),
+        }
+    }
+
     /// The generic function whose type parameters `id`'s body is written over (R1b, L10): `id`
     /// itself if it is generic, the generic function a closure is written in — through every
     /// closure between — and `None` for a body with no type parameters. A closure in a generic

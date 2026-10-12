@@ -312,7 +312,9 @@ use crate::digest::{self, Framed};
 /// `61` — R1b, 2026-10-13. A closure, and a named function's value, in a generic function moved
 /// from refused (`N0387`) to accepted; a captured `let mut` binding is shared, where it was
 /// refused (`N0386`), unless it can hold a function value.
-pub const SEMANTIC_EPOCH: u32 = 61;
+/// `62` — R1b, 2026-10-13. A trait method's default body, and an impl leaving such a method to
+/// it, moved from refused to accepted.
+pub const SEMANTIC_EPOCH: u32 = 62;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
