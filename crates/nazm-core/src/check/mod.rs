@@ -444,6 +444,9 @@ pub struct Checker<'a> {
     /// costs nothing and means a loop inside a loop does not lose the outer one's count
     /// when it finishes.
     loop_depth: u32,
+    /// The loop depth where the `defer` body being checked begins (R1b, L12), or `None` outside
+    /// one: a `break` or `continue` at that depth, a `return` or a `?` would leave it.
+    defer_floor: Option<u32>,
     /// The type parameters in scope — the current function's — by name, for a type
     /// written inside its body. Empty outside a generic function.
     type_scope: Vec<(String, Type)>,

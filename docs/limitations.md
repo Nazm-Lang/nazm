@@ -43,6 +43,9 @@ found only by reading all of it.
   not derive `Hash`, only a concrete type does; a record holding a type with a written `Hash` impl
   needs its own impl, which a generic type has through an impl of the generic type (L11b) and a
   tuple cannot have.
+- `defer` (R1b, EXPERIMENTAL until R1 closes) runs on the ways a block is left, not on a failure
+  that stops the program — there is no unwinding. The compiler written in Nazm does not carry it
+  until R2.
 - Impls of generic types (R1b, EXPERIMENTAL until R1 closes) are for a generic record or enum
   applied to exactly the impl's parameters: no impl for one instance (`Pair[Int, Str]`), none for
   `Vec[T]` or the other built-in generic types, and no specialisation. The compiler written in Nazm

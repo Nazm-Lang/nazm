@@ -1148,6 +1148,16 @@ impl Shift for Stmt {
                 body.shift(file, by);
                 span.shift(file, by);
             }
+            Self::Defer(df) => {
+                let crate::ast::Defer {
+                    keyword_span,
+                    body,
+                    span,
+                } = df;
+                keyword_span.shift(file, by);
+                body.shift(file, by);
+                span.shift(file, by);
+            }
             Self::Spawn(sp) => {
                 let crate::ast::Spawn {
                     callee: _,
