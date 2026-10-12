@@ -51,6 +51,10 @@ too.
 
 ## Compatibility within 1.x
 
+*The 0.9.0 preview is the 1.0 draft: external contributions are not accepted yet — the contributor
+licence agreement awaits legal review (`docs/licensing.md`) — and what follows is the rule 1.0 will
+hold, held already inside the project.*
+
 Nazm 1.x promises that a program valid under stable Nazm 1.0, using only stable public surfaces,
 does not silently change meaning ([`docs/stability.md`](docs/stability.md)). A change that would
 alter what a stable program means is a 2.0 change, or the fix of a recorded defect against the

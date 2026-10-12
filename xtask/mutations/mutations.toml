@@ -7182,8 +7182,8 @@ Repointed by M1, whose entry list gained `tests` and the governance files and so
 Repointed by the licence decision, which added `NOTICE` to the entry list.
 Repointed again by the specification's licence, which added `LICENSE-CC-BY-4.0`."""
 file = "scripts/source-digest.sh"
-find = "Cargo.lock Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md _typos.toml bench compiler corpus crates"
-replace = "Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md _typos.toml bench compiler corpus crates"
+find = "Cargo.lock Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md THIRD-PARTY-NOTICES.md _typos.toml bench compiler corpus crates"
+replace = "Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md THIRD-PARTY-NOTICES.md _typos.toml bench compiler corpus crates"
 killers = [{ package = "xtask", test = "release", name = "every_build_input_moves_the_digest_and_nothing_git_ignores_does" }]
 
 [[mutation]]
@@ -14047,17 +14047,18 @@ killers = [{ package = "nazm-cli", test = "debugging", name = "the_prologue_carr
 
 [[mutation]]
 name = "g1-the-help-names-the-pre-1-0-release"
-why = "`nazm --help` goes on calling the release language v0.3, toolchain 0.3.0, an experimental release"
+why = """`nazm --help` goes on calling the release language v0.3, toolchain 0.3.0, an experimental release
+Repointed by the 0.9.0 preview (release-0-9-preview): the help names the 1.0 draft and toolchain 0.9.0."""
 file = "crates/nazm-cli/src/cli.rs"
-find = "long_about = \"Nazm language 1.0, toolchain 1.0.0 — the first stable release. Records, \\"
-replace = "long_about = \"Nazm language v0.3, toolchain 0.3.0 — an experimental release. Records, \\"
+find = "long_about = \"Nazm language 1.0 draft, toolchain 0.9.0 — a public preview for macOS on \\"
+replace = "long_about = \"Nazm language v0.3, toolchain 0.3.0 — an experimental release, for macOS on \\"
 killers = [{ package = "nazm-cli", test = "ecosystem", name = "the_help_and_version_name_the_release" }]
 
 [[mutation]]
 name = "g1-the-refusal-help-is-the-v0-1-subset"
 why = "a refused construct's help still says the language is the v0.1 subset, with none of what came after it"
 file = "crates/nazm-syntax/src/parser.rs"
-find = "\"Nazm 1.0 has functions and `let`/`let mut`, `while` with `break` and `continue`, \","
+find = "\"Nazm (the 1.0 draft) has functions and `let`/`let mut`, `while` with `break` and `continue`, \","
 replace = "\"the supported subset is functions, `let` and `let mut`, assignment, `while` with \","
 killers = [{ package = "nazm-syntax", test = "recovery", name = "a_refused_construct_points_at_the_current_language" }]
 

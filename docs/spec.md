@@ -1,7 +1,9 @@
 # Nazm language specification
 
-**Status: the specification of Nazm language 1.0, the executable language of the toolchain
-1.0.0 release, and the stable contract of the 1.x line.** It is normative for what it settles:
+**Status: the 1.0 draft of the Nazm language, the executable language of the toolchain 0.9.0
+public preview, and the draft of the 1.x line's stable contract** — in force from 1.0, and until
+then a target a 0.x release may still change, saying so in its release notes. It is normative for
+what it settles:
 a program's meaning under 1.0 is what the sections classified STABLE 1.0 say, and where the
 reference implementation disagrees with one, that is a defect in one of them, not a second
 meaning. What 1.x promises across releases, and what may change, is in

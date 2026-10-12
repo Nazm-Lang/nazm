@@ -36,7 +36,8 @@ pub(crate) enum RuntimeAction {
 #[command(
     name = "nazm",
     about = "The Nazm programming language.",
-    long_about = "Nazm language 1.0, toolchain 1.0.0 — the first stable release. Records, \
+    long_about = "Nazm language 1.0 draft, toolchain 0.9.0 — a public preview for macOS on \
+                  Apple Silicon, with no compatibility promise until 1.0. Records, \
                   enums and `match`, first-order generics, traits and methods, `Result`, \
                   `Option` and `?`, closures, modules and packages, declared effects, \
                   capabilities and provenance, structured concurrency (scope, spawn, \

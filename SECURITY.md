@@ -4,9 +4,10 @@
 
 | Release | Supported |
 | --- | --- |
-| the latest 1.x release | yes — a fix lands in the next patch release of the latest 1.x minor |
-| an older 1.x minor | no — upgrade to the latest 1.x, which the 1.x compatibility promise keeps compatible for programs on stable surfaces (`docs/stability.md`) |
-| 0.3.x, and anything before 1.0.0 | no |
+| the latest 0.9.x preview (macOS on Apple Silicon) | yes — a fix lands in the next preview release; a preview makes no compatibility promise |
+| from 1.0: the latest 1.x release | yes — a fix lands in the next patch release of the latest 1.x minor |
+| from 1.0: an older 1.x minor | no — upgrade to the latest 1.x, which the 1.x compatibility promise keeps compatible for programs on stable surfaces (`docs/stability.md`) |
+| the internal 0.3.x candidates, and anything older | no |
 
 No maintenance branch is kept for an older minor release, and none is promised. A security fix
 may refuse a program that was accepted only because of the defect it fixes; it is then refused

@@ -510,9 +510,9 @@ fn every_command_has_its_own_help_naming_the_schema_it_prints() {
     }
 }
 
-/// `nazm --version` and `nazm --help` name the release they are: toolchain 1.0.0, language 1.0
-/// (`docs/stability.md`). The crate version is the toolchain version; the help's sentence is
-/// written by hand and is held to it here.
+/// `nazm --version` and `nazm --help` name the release they are: toolchain 0.9.0, the language a
+/// 1.0 draft (`docs/stability.md`). The crate version is the toolchain version; the help's
+/// sentence is written by hand and is held to it here.
 #[test]
 fn the_help_and_version_name_the_release() {
     let d = tempfile::tempdir().unwrap();
@@ -522,13 +522,9 @@ fn the_help_and_version_name_the_release() {
         format!("nazm {}", env!("CARGO_PKG_VERSION"))
     );
     let help = ok(d.path(), &["--help"]);
-    let language = env!("CARGO_PKG_VERSION")
-        .rsplit_once('.')
-        .map(|(major_minor, _)| major_minor)
-        .unwrap();
     assert!(
         help.contains(&format!(
-            "Nazm language {language}, toolchain {}",
+            "Nazm language 1.0 draft, toolchain {}",
             env!("CARGO_PKG_VERSION")
         )),
         "{help}"
