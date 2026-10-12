@@ -201,8 +201,15 @@ fn every_artifact_that_does_not_fit_is_refused_by_name_and_nothing_is_written() 
     refused("ABI revision 1");
     edit(m["runtime"].as_str().unwrap(), &"0".repeat(64));
     refused("was built from runtime 0000");
-    edit(m["target"].as_str().unwrap(), "x86_64-unknown-linux-gnu");
-    refused("the runtime is for x86_64-unknown-linux-gnu");
+    // A target that is not this host's, whichever host runs the suite.
+    let host = m["target"].as_str().unwrap();
+    let other = if host == "x86_64-unknown-linux-gnu" {
+        "aarch64-unknown-linux-gnu"
+    } else {
+        "x86_64-unknown-linux-gnu"
+    };
+    edit(host, other);
+    refused(&format!("the runtime is for {other}"));
     edit("\"tasks\",", "");
     refused("the program reaches tasks of the runtime");
     edit("\"tasks\",", "\"teleport\",");
