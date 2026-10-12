@@ -510,7 +510,7 @@ accepts.
 | `attribute_arg` | `STRING \| IDENT , [ "=" , STRING \| "(" , [ attribute_arg , { "," , attribute_arg } , [ "," ] ] , ")" ]` |
 | `constant` | `[ visibility ] , ( "const" \| "static" ) , IDENT , ":" , type , "=" , expression , ";"` |
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
-| `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";"` |
+| `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ( ";" \| block )` |
 | `impl_item` | `"impl" , type , IDENT , type , "{" , { function } , "}"` |
 | `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";" \| visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";"` |
 | `reexport_name` | `IDENT , [ IDENT , IDENT ]` |
@@ -692,7 +692,8 @@ trait_item = [ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}" ;
 ```
 
 A trait (N78): a named set of methods a type may implement. Each method is a signature
-ended by `;` — there are no default bodies — whose first parameter is `self: Self`. A trait
+ended by `;`, or since R1b a default body an impl that writes none gets, whose first
+parameter is `self: Self`. A trait
 is in the type namespace and is not a type: it is written as a type parameter's bound,
 `[T: Show]`, and never as the type of a value. See `docs/spec.md`, *Traits and methods*.
 
@@ -703,11 +704,15 @@ pub trait Show { fn show(self: Self) -> Str; fn shout(self: Self, n: Int) -> Str
 ### `trait_method`
 
 ```ebnf
-trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ";" ;
+trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ( ";" | block ) ;
 ```
 
 ```nazm
 trait Size { fn size(self: Self) -> Int; } fn main() -> Int { 0 }
+```
+
+```nazm
+trait Size { fn size(self: Self) -> Int; fn big(self: Self) -> Bool { self.size() > 9 } } fn main() -> Int { 0 }
 ```
 
 ### `impl_item`

@@ -200,6 +200,23 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-13)** · *Default trait methods* (`spec.md`, *Traits and methods*, **Default bodies**;
+`openspec/changes/r1-language-for-the-rewrite`, L11a). A trait method may end in a body, which an
+impl that writes none gets; an impl may still write its own. The parser writes each body as a
+function `Trait/default/m` generic over `Self: Trait`, so the checker checks it once, through the
+bound, against the signature's declared effects (none written is none); `N0602` spares a method
+with a body. A call on a type whose impl leaves the method to it — direct, UFCS, or through a bound
+— resolves to the default at that type (`Resolution::method_target`): the checker records the
+receiver's type as the call's type argument, MIR's bound dispatch passes the instance's type, the
+instance planner plans the default at every type whose impl relies on it, and Core IR's impl
+table, which the interpreter dispatches through, fills the slot with the default. A default called
+from another module is held to its trait method's effects, as an impl's method is (M1). Semantic
+epoch 62; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/default_methods.rs` —
+defaults called directly, by UFCS and through a bound, one overridden, one performing `io`, under
+the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; a trait and its
+impl in different modules built by both backends; a body checked once, generic over `Self`, held
+to its effects; a method with no body still required.
+
 **R1b (2026-10-13)** · *Closures in generic functions; a shared `let mut`* (`spec.md`, *Function
 values and closures*; `openspec/changes/r1-language-for-the-rewrite`, L10). A closure, and a named
 function's value, may be written in a generic function, the closure's types naming the function's

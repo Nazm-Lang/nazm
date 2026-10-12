@@ -166,6 +166,8 @@ impl Checker<'_> {
                 .traits()
                 .derives(trait_id, recv_ty, self.res.types());
         let through_bound = matches!(recv_ty, Type::Param(_)) || derived;
+        // A default body's call carries the receiver's type as its type argument (L11).
+        let mut site_args: Vec<Type> = Vec::new();
         if through_bound {
             let fty = self.res.types_mut().fn_of(nazm_sema::FnSignature {
                 params: std::iter::once(recv_ty)
@@ -185,10 +187,10 @@ impl Checker<'_> {
             );
             self.res.record_call(at, Callee::Indirect(fty));
         } else {
+            // The impl's own function, or the trait's default body at the receiver's type (L11).
             let imp = self
                 .res
-                .traits()
-                .method_fn(trait_id, recv_ty, index)
+                .method_target(trait_id, recv_ty, index)
                 .filter(|_| {
                     self.res
                         .traits()
@@ -215,9 +217,14 @@ impl Checker<'_> {
                 }
                 return ret;
             };
+            let (f, defaulted) = f;
             self.res.record_call(at, Callee::Function(f));
+            if defaulted {
+                self.res.record_type_args(at, vec![recv_ty]);
+                site_args = vec![recv_ty];
+            }
         }
-        self.record_site(at, Vec::new(), false);
+        self.record_site(at, site_args, false);
 
         if rest.len() != params.len() {
             self.errors.push(Diagnostic::error(

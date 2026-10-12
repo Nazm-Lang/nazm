@@ -68,6 +68,9 @@ pub struct TraitMethodDef {
     /// The declared effect set; `None` was written as none, which for a trait method means
     /// the empty set — a trait's signature is a promise, never an inference.
     pub effects: EffectSet,
+    /// Whether the trait writes a default body (R1b, L11), declared as the function
+    /// `Trait/default/m` generic over `Self` ([`crate::Resolution::default_method`]).
+    pub has_default: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
