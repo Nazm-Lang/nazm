@@ -1267,9 +1267,11 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
         // Arithmetic on a non-`Int`, both ways round.
         "fn m() -> Int { 1 + true }",
         "fn m() -> Int { let s = \"a\"; 1 + s }",
-        // Ordering is `Int` only; equality works on one type but not across two.
-        "fn m() -> Bool { \"a\" < \"b\" }",
-        "fn m() -> Bool { true < false }",
+        // Ordering across two types; equality works on one type but not across two. (Ordering
+        // two strings or two `Bool`s is the 1.0 draft's since R1a, L6, and outside this
+        // compiler's subset until R2.)
+        "fn m() -> Bool { \"a\" < 1 }",
+        "fn m() -> Bool { true < 1 }",
         "fn m() -> Bool { 1 == true }",
         // Sequences are not comparable: identity or contents, and neither is chosen.
         "fn m() -> Int { let a = ints_new(); let b = ints_new(); if a == b { 1 } else { 0 } }",
@@ -2079,9 +2081,10 @@ fn the_nazm_checker_agrees_with_the_reference_on_equality() {
         "fn same[T](a: T, b: T) -> Bool { a == b }\nfn main() -> Int { 0 }",
         "struct Box[T] { value: T, }\nfn same_box[T](a: Box[T], b: Box[T]) -> Bool { a == b }\nfn main() -> Int { 0 }",
         "fn same[T](a: Option[T], b: Option[T]) -> Bool { a != b }\nfn main() -> Int { 0 }",
-        // Refused: handles, and ordering on anything that now compares.
+        // Refused: handles, and a record ordered against a number (ordering two records is the
+        // 1.0 draft's since R1a, L6, and outside this compiler's subset until R2).
         "fn main() -> Int { let a = vec_new[Int](); if a == a { 1 } else { 0 } }",
-        "struct Point { x: Int, }\nfn main() -> Int { if Point(x: 1) < Point(x: 2) { 1 } else { 0 } }",
+        "struct Point { x: Int, }\nfn main() -> Int { if Point(x: 1) < 2 { 1 } else { 0 } }",
     ];
 
     let mut refusals = 0;
