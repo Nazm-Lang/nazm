@@ -19,7 +19,7 @@ today, the matrix decides.*
 | Source | `nazm-span` | files, `FileId`-carrying spans, the source map |
 | Syntax | `nazm-syntax` | lexer, error-tolerant parser, the lossless CST and the AST |
 | Meaning | `nazm-sema`, `nazm-core` | one resolution, types, generics, traits, effects, capabilities, provenance, contracts — the checker, and the interpreter `nazm run` uses |
-| Modules and reuse | `nazm-iface`, `nazm-cache`, `nazm-package` | persisted interfaces (`nazm.interface/11`), keyed semantic and object caches, packages, locks and local registries |
+| Modules and reuse | `nazm-iface`, `nazm-cache`, `nazm-package` | persisted interfaces (`nazm.interface/12`), keyed semantic and object caches, packages, locks and local registries |
 | Core IR | `nazm-cir` | what each position of a checked program means, decided once (`nazm.core-ir/2`) |
 | MIR | `nazm-mir` | every copy, move and drop explicit and validated; monomorphisation for the native path |
 | LIR | `nazm-lir` | the instruction-level IR both native backends translate (`nazm.lir/2`) |

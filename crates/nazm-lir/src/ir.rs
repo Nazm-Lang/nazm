@@ -313,6 +313,9 @@ pub enum Owns {
     /// element's law. N11. Releasing the last reference releases each element and then
     /// the storage, through a helper generated once per element type.
     Vec(VecTy),
+    /// Whatever each element owns (R1a, L8): an array holds strings, and records, enums and
+    /// arrays of them, inline.
+    Array(ArrayTy),
     /// A reference to a closure object, which releases its captures on the last one (N50).
     Closure,
     /// A reference to a generic channel, which releases what it still holds on the last one
@@ -329,7 +332,9 @@ impl Ty {
     #[must_use]
     pub fn owns(self) -> Option<Owns> {
         match self {
-            Self::Int | Self::Bool | Self::Num(_) | Self::Array(_) => None,
+            Self::Int | Self::Bool | Self::Num(_) => None,
+            // Unconditional for the reason a record's is: what its elements own (L8).
+            Self::Array(id) => Some(Owns::Array(id)),
             Self::Str => Some(Owns::Backing),
             Self::Ints => Some(Owns::Ints),
             Self::Strs => Some(Owns::Strs),

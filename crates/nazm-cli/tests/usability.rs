@@ -473,7 +473,8 @@ fn a_qualified_name_that_names_nothing_is_refused_by_what_is_missing() {
         let codes = check_codes(&[("main.nz", main), ("geometry.nz", GEOMETRY)]);
         assert!(codes.contains(&"N0210".to_owned()), "{main}: {codes:?}");
     }
-    // A qualified name is never a value: Nazm has no module-level ones.
+    // A qualified name is a value since R1a (L8) — an exported constant, or a function named
+    // as a value (N50) as an unqualified one is — and one that names nothing is still refused.
     let codes = check_codes(&[
         (
             "main.nz",
@@ -481,10 +482,15 @@ fn a_qualified_name_that_names_nothing_is_refused_by_what_is_missing() {
         ),
         ("geometry.nz", GEOMETRY),
     ]);
-    assert!(
-        codes.contains(&"N0001".to_owned()) || !codes.is_empty(),
-        "{codes:?}"
-    );
+    assert!(codes.is_empty(), "{codes:?}");
+    let codes = check_codes(&[
+        (
+            "main.nz",
+            "use \"geometry.nz\" as g;\nfn main() -> Int { let a = g::nothing; 0 }\n",
+        ),
+        ("geometry.nz", GEOMETRY),
+    ]);
+    assert_eq!(codes, ["N0200"], "{codes:?}");
 }
 
 #[test]

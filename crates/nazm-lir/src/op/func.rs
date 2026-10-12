@@ -734,7 +734,7 @@ impl<'l, 'a> Fx<'l, 'a> {
                 let o = self.load(Class::Ptr, addr, offset(owner));
                 self.rt("nz.str_retain", &[o]);
             }
-            Ty::Record(_) | Ty::Enum(_) => {
+            Ty::Record(_) | Ty::Enum(_) | Ty::Array(_) => {
                 let h = self.lw.helper(Helper::Retain(t));
                 self.call(h, vec![addr]);
             }
@@ -773,7 +773,7 @@ impl<'l, 'a> Fx<'l, 'a> {
                 let o = self.load(Class::Ptr, addr, offset(owner));
                 self.rt("nz.str_release", &[o]);
             }
-            Ty::Record(_) | Ty::Enum(_) => {
+            Ty::Record(_) | Ty::Enum(_) | Ty::Array(_) => {
                 let h = self.lw.helper(Helper::Release(t));
                 let q = self.release_queue();
                 self.call(h, vec![addr, q]);

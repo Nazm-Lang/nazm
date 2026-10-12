@@ -564,7 +564,7 @@ accepts.
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" \| "~" ] , primary` |
 | `primary` | `atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] \| INTEGER ) \| "?" \| "[" , expression , "]" }` |
-| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| tuple \| "(" , expression , ")"` |
+| `atom` | `INTEGER \| FLOAT \| STRING \| "true" \| "false" \| IDENT \| qualifier , IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| tuple \| "(" , expression , ")"` |
 | `tuple` | `"(" , expression , "," , expression , { "," , expression } , [ "," ] , ")"` |
 | `array` | `"[" , expression , ( { "," , expression } , [ "," ] \| ";" , expression ) , "]"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
@@ -669,6 +669,9 @@ so it remains an ordinary name everywhere else. See `docs/spec.md`, *Constants*.
 A static (Gate 3) is written the same way with `static`: storage with one address, a
 number or a `Bool` read-only, or an `Atomic` started by `atomic_new` of a constant. `static`
 is a word only where `const` is. See `docs/spec.md`, *Statics*.
+R1a (L8): a constant may be a record, enum value, tuple or array built of constant parts, and
+`pub const` exports one; an importer under a name reads it as `m::NAME`. See `docs/spec.md`,
+*Constant tables and exported constants*.
 
 ```nazm
 const MASK: UInt8 = 0xF0; fn main() -> Int { Int(MASK) }
@@ -676,6 +679,10 @@ const MASK: UInt8 = 0xF0; fn main() -> Int { Int(MASK) }
 
 ```nazm
 static TICKS: Atomic = atomic_new(0); fn main() -> Int { atomic_add(TICKS, 1) }
+```
+
+```nazm
+struct K { s: Str, n: Int, } pub const TABLE: [K; 2] = [K(s: "a", n: 1), K(s: "b", n: 2)]; fn main() -> Int { TABLE[1].n }
 ```
 
 ### `trait_item`
@@ -1565,7 +1572,7 @@ fn main() -> Int { let t = ((1, 2), 3); t.0.1 + t.1 }
 ### `atom`
 
 ```ebnf
-atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | array | tuple | "(" , expression , ")" ;
+atom = INTEGER | FLOAT | STRING | "true" | "false" | IDENT | qualifier , IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | array | tuple | "(" , expression , ")" ;
 ```
 
 A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An

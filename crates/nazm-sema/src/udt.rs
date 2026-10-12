@@ -376,14 +376,15 @@ impl UserTypes {
     }
 
     /// Why `[elem; len]` is not an array the language has, if it is not (Gate 2): its elements
-    /// must be plain data — numbers, `Bool`, and records, enums and arrays of them, which own
-    /// nothing — and the whole at most [`MAX_ARRAY_BYTES`] by [`Self::data_bytes`].
+    /// must be values — numbers, `Bool`, strings since R1a (L8), and records, enums and arrays
+    /// of them, which hold no handle — and the whole at most [`MAX_ARRAY_BYTES`] by
+    /// [`Self::data_bytes`].
     #[must_use]
     pub fn array_problem(&self, elem: Type, len: u32) -> Option<ArrayProblem> {
         if len == 0 {
             return Some(ArrayProblem::Empty);
         }
-        if let Some(owner) = self.not_plain(elem) {
+        if let Some(owner) = self.not_value(elem, true) {
             return Some(ArrayProblem::NotPlain(owner));
         }
         let bytes = self.data_bytes(elem).saturating_mul(u64::from(len));
@@ -395,6 +396,13 @@ impl UserTypes {
     /// is copied by its bytes.
     #[must_use]
     pub fn not_plain(&self, t: Type) -> Option<Type> {
+        self.not_value(t, false)
+    }
+
+    /// As [`Self::not_plain`], admitting `Str` and `Text` too where `strings` (L8): what an
+    /// array may hold, values whose only owned parts are immutable strings.
+    #[must_use]
+    pub fn not_value(&self, t: Type, strings: bool) -> Option<Type> {
         let mut seen: Vec<Type> = Vec::new();
         let mut work = vec![self.strip_array(t)];
         while let Some(ty) = work.pop() {
@@ -404,6 +412,7 @@ impl UserTypes {
             seen.push(ty);
             match ty {
                 Type::Int | Type::Bool | Type::Num(_) => {}
+                Type::Str | Type::Text if strings => {}
                 Type::Record(_) | Type::Enum(_) => {
                     let Some(node) = TypeNode::of(ty) else {
                         return Some(ty);
@@ -437,6 +446,8 @@ impl UserTypes {
             Type::Int => 8,
             Type::Bool => 1,
             Type::Num(k) => u64::from(k.bytes()),
+            // Its pointer, length and owner (L8).
+            Type::Str | Type::Text => 24,
             Type::Array(a) => self.array_info(a).map_or(0, |(e, n)| {
                 self.data_bytes_within(e, depth + 1)
                     .saturating_mul(u64::from(n))
@@ -936,7 +947,7 @@ pub const MAX_ARRAY_BYTES: u64 = 65_536;
 pub enum ArrayProblem {
     /// No elements.
     Empty,
-    /// An element type that owns something, by the first component that does.
+    /// An element type that holds a handle, by the first component that does.
     NotPlain(Type),
     /// Over [`MAX_ARRAY_BYTES`], by how many bytes it would hold.
     TooLarge(u64),

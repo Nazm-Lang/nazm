@@ -150,6 +150,41 @@ fn each_owned(fx: &mut Fx<'_, '_>, a: V, t: Ty, retain: bool) {
             }
             fx.b.switch(done);
         }
+        // Each element, in a loop (R1a, L8): a length is up to 65,536.
+        Ty::Array(crate::ir::ArrayTy(id)) => {
+            let Some((elem, len)) = fx.lw.lay.arrays.get(&id).copied() else {
+                let at = fx.at;
+                fx.lw.defect(at, "an array with no layout");
+                return;
+            };
+            if !fx.lw.lay.owns(elem) {
+                return;
+            }
+            let stride = fx.size(elem);
+            let count = fx.iconst(i64::from(len));
+            let i = fx.b.var(Class::I64);
+            let zero = fx.iconst(0);
+            fx.set_var(i, zero);
+            let head = fx.b.block();
+            let body = fx.b.block();
+            let done = fx.b.block();
+            fx.jump(head);
+            fx.b.switch(head);
+            let iv = fx.get_var(i);
+            let more = fx.cmp(Cmp::Lt, iv, count);
+            fx.branch(more, body, done);
+            fx.b.switch(body);
+            let iv = fx.get_var(i);
+            let k = fx.iconst(i64::from(stride));
+            let off = fx.bin(super::ir::BinOp::Mul, iv, k);
+            let at = fx.ptr_add(a, off);
+            one(fx, at, elem, retain);
+            let iv = fx.get_var(i);
+            let step = fx.add_imm(iv, 1);
+            fx.set_var(i, step);
+            fx.jump(head);
+            fx.b.switch(done);
+        }
         _ => one(fx, a, t, retain),
     }
 }

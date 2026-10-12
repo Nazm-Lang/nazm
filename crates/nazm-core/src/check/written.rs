@@ -218,20 +218,77 @@ pub(super) fn type_environment(
         }
     }
     // Constants are computed here, where every type position can read them; their refusals
-    // are reported by the pass that reports collisions, once.
-    let mut scratch = Vec::new();
-    let sink = if matches!(collisions, Collisions::Report) {
-        errors
-    } else {
-        &mut scratch
-    };
-    let consts = crate::constants::evaluate(&unit.consts, sink);
+    // are reported once, by stage 1 (`compute_aggregates`), which is the first pass that has
+    // every import's constants (L8).
+    let consts =
+        crate::constants::evaluate(&unit.consts, imported_consts(unit, deps), &mut Vec::new());
     Types {
         names,
         refused,
         aliases,
         consts,
     }
+}
+
+/// The constants a module's imports export (L8), under the name it writes for each: `NAME` from
+/// a plain import, `m::NAME` from one under a name.
+fn imported_consts(
+    unit: &Unit<'_>,
+    deps: &[&UnitInterface],
+) -> Vec<(String, (Type, crate::constants::ConstValue))> {
+    let mut imported = Vec::new();
+    for d in unit.imports {
+        let Some(iface) = deps.iter().find(|i| i.module() == d.on) else {
+            continue;
+        };
+        for c in iface.consts() {
+            for (alias, _) in &d.aliases {
+                imported.push((qualified_key(alias, &c.name), (c.ty, c.value.clone())));
+            }
+            if d.plain {
+                imported.push((c.name.clone(), (c.ty, c.value.clone())));
+            }
+        }
+    }
+    imported
+}
+
+/// Each constant of a record, enum, tuple or array type (R1a, L8), computed where the module's
+/// types are known; every constant's refusals reported only where `report`, the one pass that
+/// does — stage 1, which runs for every module and has every import's constants.
+pub(super) fn compute_aggregates(
+    unit: &Unit<'_>,
+    deps: &[&UnitInterface],
+    types: &mut Types,
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+    report: bool,
+) {
+    let aggregates: Vec<&nazm_syntax::Const> = unit
+        .consts
+        .iter()
+        .copied()
+        .filter(|c| crate::constants::is_aggregate(c))
+        .collect();
+    let mut scratch = Vec::new();
+    let sink = if report { errors } else { &mut scratch };
+    if report {
+        // The scalars' refusals, once (the environment computed them silently).
+        let _ = crate::constants::evaluate(&unit.consts, imported_consts(unit, deps), sink);
+    }
+    if aggregates.is_empty() {
+        return;
+    }
+    let mut tys = Vec::new();
+    for c in aggregates {
+        let before = sink.len();
+        let t = resolve_written(types, res, &c.ty, &[], None, sink);
+        // A type that did not resolve is one error, not a second about the value.
+        if sink.len() == before {
+            tys.push((c.name.clone(), t));
+        }
+    }
+    crate::constants::evaluate_aggregates(&mut types.consts, &unit.consts, &tys, res.types(), sink);
 }
 
 /// Record what a module may name, as its checker is about to use it (N19): every function

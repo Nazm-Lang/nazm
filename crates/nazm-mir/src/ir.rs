@@ -249,7 +249,8 @@ pub enum StatementKind {
     },
     /// `base.path = value` where the path passes through an array element (Gate 2): each
     /// index is a local read before anything is written, checked against its array's length,
-    /// and a failure leaves by `unwind`. Arrays hold plain data, so nothing is released.
+    /// and a failure leaves by `unwind`. The element's old value is released and `value` moved
+    /// in, as [`Self::SetField`] does (an element may hold strings since R1a, L8).
     SetElement {
         base: LocalId,
         path: Vec<PathRef>,
@@ -822,14 +823,16 @@ impl Types {
             | Type::Text
             | Type::Atomic
             | Type::Fn(_) => true,
-            // An array holds plain data (Gate 2).
             Type::Int
             | Type::Bool
             | Type::Cap(_)
             | Type::OsHandle
             | Type::Param(_)
-            | Type::Num(_)
-            | Type::Array(_) => false,
+            | Type::Num(_) => false,
+            // An array owns what its elements do: strings, since R1a (L8).
+            Type::Array(a) => self
+                .array(a)
+                .is_some_and(|(e, _)| self.managed_within(e, depth + 1)),
             Type::Record(id) => self.record(id).is_some_and(|r| {
                 r.fields
                     .iter()
