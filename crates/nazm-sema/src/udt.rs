@@ -662,13 +662,12 @@ impl UserTypes {
     ) -> Result<(), NoEquality> {
         let open = |t: Type| {
             let mut t = self.strip_array(t);
-            while through {
-                match t {
-                    Type::Box(v) | Type::List(v) => match self.vec_element(v) {
+            if through {
+                while let Type::Box(v) | Type::List(v) = t {
+                    match self.vec_element(v) {
                         Some(e) => t = self.strip_array(e),
                         None => break,
-                    },
-                    _ => break,
+                    }
                 }
             }
             t

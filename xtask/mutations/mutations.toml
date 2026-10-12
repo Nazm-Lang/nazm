@@ -16477,7 +16477,7 @@ killers = [{ package = "nazm-cli", test = "tuples", name = "what_a_tuple_refuses
 name = "r1a-a-tuple-type-has-no-constructor"
 why = "exhaustiveness does not know a tuple's one constructor, so it names `_` instead of the element values no arm covers"
 file = "crates/nazm-core/src/check/usefulness.rs"
-find = "            sig.tuple(*ty).map(|elems| vec![(Head::Tuple, elems, None)])"
+find = "        sig.tuple(*ty).map(|elems| vec![(Head::Tuple, elems, None)])"
 replace = "            None"
 killers = [{ package = "nazm-cli", test = "tuples", name = "what_a_tuple_refuses_and_by_which_code" }]
 

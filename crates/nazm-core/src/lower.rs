@@ -3123,6 +3123,16 @@ fn comparison(op: BinOp) -> cir::CmpOp {
     }
 }
 
+/// Whether an arm is a plain variant pattern — each payload field a name or `_` — which the
+/// `match` before R1a took, and which lowers to one Core IR `match` arm.
+fn plain_arm(arm: &AstArm) -> bool {
+    matches!(&arm.pattern, nazm_syntax::Pattern::Variant(v)
+    if v.fields.iter().all(|f| matches!(
+        f.pattern,
+        nazm_syntax::Pattern::Bind { .. } | nazm_syntax::Pattern::Wildcard { .. }
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -3162,14 +3172,4 @@ mod tests {
         assert_eq!(core.functions.len(), 2);
         assert!(cir::verify(&core, &res).is_empty());
     }
-}
-
-/// Whether an arm is a plain variant pattern — each payload field a name or `_` — which the
-/// `match` before R1a took, and which lowers to one Core IR `match` arm.
-fn plain_arm(arm: &AstArm) -> bool {
-    matches!(&arm.pattern, nazm_syntax::Pattern::Variant(v)
-    if v.fields.iter().all(|f| matches!(
-        f.pattern,
-        nazm_syntax::Pattern::Bind { .. } | nazm_syntax::Pattern::Wildcard { .. }
-    )))
 }

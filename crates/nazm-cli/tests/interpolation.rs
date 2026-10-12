@@ -81,16 +81,6 @@ fn nothing_live(r: &Ran) -> bool {
         })
 }
 
-fn run_everywhere(src: &str, expected: &str) {
-    for (label, r) in everywhere(src) {
-        assert_eq!(r.code, Some(0), "{label}: {r:?}");
-        assert!(r.stdout.starts_with(expected), "{label}: {}", r.stdout);
-        if label != "lir oracle" {
-            assert!(nothing_live(&r), "{label}: {}", r.stderr);
-        }
-    }
-}
-
 const INTERP: &str = r###"use "@std/show";
 
 struct Point { x: Int, y: Int, }
