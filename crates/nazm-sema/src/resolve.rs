@@ -617,20 +617,22 @@ impl Resolution {
         self.definition(tr.module, &format!("{}/default/{}", tr.name, m.name))
     }
 
-    /// What a call of method `method` of `trait_id` on a `ty` runs (N78, R1b): the impl's own
-    /// function, `false`; or, where the impl leaves the method to its default, the default — a
-    /// generic function to be called with `ty` as its one type argument — `true`.
+    /// What a call of method `method` of `trait_id` on a `ty` runs (N78, R1b), and the type
+    /// arguments the call passes it: the impl's own function, with none — or, for an impl of a
+    /// generic type (L11b), with `ty`'s arguments; or, where the impl leaves the method to its
+    /// default (L11a), the default, generic over `Self`, with `ty` as its one argument.
     #[must_use]
     pub fn method_target(
         &self,
         trait_id: crate::traits::TraitId,
         ty: Type,
         method: u32,
-    ) -> Option<(FnId, bool)> {
-        let imp = self.traits().impl_def(self.traits().find(trait_id, ty)?)?;
+    ) -> Option<(FnId, Vec<Type>)> {
+        let (imp, args) = self.traits().applying(trait_id, ty, self.types())?;
+        let imp = self.traits().impl_def(imp)?;
         match imp.methods.get(method as usize).copied().flatten() {
-            Some(f) => Some((f, false)),
-            None => self.default_method(trait_id, method).map(|d| (d, true)),
+            Some(f) => Some((f, args)),
+            None => self.default_method(trait_id, method).map(|d| (d, vec![ty])),
         }
     }
 

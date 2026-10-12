@@ -200,6 +200,25 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-13)** · *Impls of generic types* (`spec.md`, *Traits and methods*, **Impls of generic
+types**; `openspec/changes/r1-language-for-the-rewrite`, L11b). `impl[A: Show, B] Show for Pair[A,
+B]` implements a trait for every instance whose arguments meet the impl's requirements. The parser
+writes the impl's parameters first into each method, so each is a generic function; the checker
+files the impl under the generic definition (`generic_impl_type`; `N0604` unless the header is the
+definition applied to exactly the parameters), gives each method `Self` as the definition applied
+to its own parameters, and records each parameter's requirement on the impl. A lookup for an
+instance falls back to its definition's impl with the instance's arguments
+(`Traits::applying`, `Resolution::method_target`), and is usable only where those arguments meet
+the requirements, recursively (`Checker::satisfies`); a direct call records the arguments, MIR's
+bound dispatch passes them, the instance planner follows each call through a bound inside an
+instance to the impl or default it reaches, and Core IR carries each instance's definition for the
+interpreter's impl table. Coherence and the orphan rule are the definition's. Semantic epoch 63;
+EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/generic_impls.rs` — a pair and an
+option of nested instances shown directly, by UFCS, through a bound and by a default, under the
+interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; across modules by
+both backends; the header's form, unmet requirements by a call and by a bound, coherence, the
+orphan rule.
+
 **R1b (2026-10-13)** · *Default trait methods* (`spec.md`, *Traits and methods*, **Default bodies**;
 `openspec/changes/r1-language-for-the-rewrite`, L11a). A trait method may end in a body, which an
 impl that writes none gets; an impl may still write its own. The parser writes each body as a

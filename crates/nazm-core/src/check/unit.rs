@@ -85,6 +85,23 @@ pub fn declare_unit(
                 None
             }
         };
+        // An impl of a generic type (R1b, L11b): filed under the generic definition.
+        if !imp.type_params.is_empty() {
+            let ty = match super::traits::generic_impl_type(&types.names, res, imp) {
+                Ok(ty) => Some(ty),
+                Err(why) => {
+                    errors.push(
+                        Diagnostic::error(codes::IMPL_TYPE_REFUSED, imp.self_ty.span, why).help(
+                            "an impl with type parameters is written \
+                             `impl[T: Show] Show for Pair[T]`, for a generic record or enum",
+                        ),
+                    );
+                    None
+                }
+            };
+            headers.push((imp.impl_span, trait_id.zip(ty)));
+            continue;
+        }
         let before = errors.len();
         let ty = resolve_written(&types, res, &imp.self_ty, &[], None, errors);
         let ty =
@@ -137,7 +154,30 @@ pub fn declare_unit(
         let generics = declared_type_params(&f.type_params, errors);
         let mut scope = param_scope(&f.type_params, ParamOwner::Function(id));
         if let Some((_, ty)) = method {
-            scope.push(("Self".to_owned(), ty));
+            // An impl of a generic type (L11b): `Self` is its definition applied to this
+            // method's own parameters, the impl's, which the parser wrote first.
+            let own = |n: usize| -> Vec<Type> {
+                (0..n)
+                    .map(|i| {
+                        Type::Param(nazm_sema::TypeParam {
+                            owner: ParamOwner::Function(id),
+                            index: u32::try_from(i).unwrap_or(u32::MAX),
+                        })
+                    })
+                    .collect()
+            };
+            let me = match ty {
+                Type::Record(r) => match res.records().get(r).map(|d| d.params.len()) {
+                    Some(n) if n > 0 => res.types_mut().apply_record(r, own(n)),
+                    _ => ty,
+                },
+                Type::Enum(e) => match res.enums().get(e).map(|d| d.params.len()) {
+                    Some(n) if n > 0 => res.types_mut().apply_enum(e, own(n)),
+                    _ => ty,
+                },
+                _ => ty,
+            };
+            scope.push(("Self".to_owned(), me));
         }
         let effect = declared_effect_param(f, errors).map(|n| (n, ParamOwner::Function(id)));
         let params: Vec<Type> = f

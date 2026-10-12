@@ -221,6 +221,63 @@ pub(super) fn named_trait(
 
 /// Whether `ty` may have an impl (N78, `architecture.md` §7.79), and the module that
 /// declares it — `None` for a built-in.
+/// An impl for a generic type's header (R1b, L11b): `D[T1, …]`, a generic record or enum applied
+/// to exactly the impl's parameters, in order. Its answer is the generic definition the impl is
+/// filed under, as `Type::Record`/`Type::Enum` of its template.
+pub(super) fn generic_impl_type(
+    names: &HashMap<String, Type>,
+    res: &Resolution,
+    imp: &ImplDecl,
+) -> Result<Type, String> {
+    let written = &imp.self_ty;
+    let key = super::unit::written_key(written.qualifier.as_ref(), &written.name);
+    let template = names
+        .get(&key)
+        .copied()
+        .ok_or_else(|| format!("`{}` is not a generic record or enum", written.name))?;
+    let params = match template {
+        Type::Record(id) => res
+            .records()
+            .get(id)
+            .filter(|d| d.instance.is_none())
+            .map(|d| d.params.len()),
+        Type::Enum(id) => res
+            .enums()
+            .get(id)
+            .filter(|d| d.instance.is_none())
+            .map(|d| d.params.len()),
+        _ => None,
+    }
+    .filter(|n| *n > 0)
+    .ok_or_else(|| format!("`{}` is not a generic record or enum", written.name))?;
+    let args = written.args.as_deref().unwrap_or_default();
+    let exact = params == imp.type_params.len()
+        && args.len() == params
+        && args.iter().zip(&imp.type_params).all(|(a, p)| {
+            a.qualifier.is_none() && a.args.is_none() && a.function.is_none() && a.name == p.name
+        });
+    if !exact {
+        let wanted: Vec<&str> = imp.type_params.iter().map(|p| p.name.as_str()).collect();
+        return Err(format!(
+            "an impl with type parameters is for `{}[{}]`: the type applied to exactly its \
+             parameters, in order",
+            written.name,
+            wanted.join(", ")
+        ));
+    }
+    Ok(template)
+}
+
+/// The module a generic definition's impl may be in besides its trait's (R1b, L11b): the
+/// definition's.
+pub(super) fn template_home(res: &Resolution, ty: Type) -> Option<ModuleId> {
+    match ty {
+        Type::Record(id) => res.records().get(id).map(|d| d.module),
+        Type::Enum(id) => res.enums().get(id).map(|d| d.module),
+        _ => None,
+    }
+}
+
 pub(super) fn implementable(res: &Resolution, ty: Type) -> Result<Option<ModuleId>, &'static str> {
     match ty {
         Type::Int | Type::Num(_) | Type::Bool | Type::Str => Ok(None),
@@ -277,7 +334,12 @@ pub(super) fn register_impl(
     };
     let ty_name = res.types().show(ty);
     // The orphan rule: the trait's module, or the type's.
-    let home = implementable(res, ty).ok().flatten();
+    let generic = !imp.type_params.is_empty();
+    let home = if generic {
+        template_home(res, ty)
+    } else {
+        implementable(res, ty).ok().flatten()
+    };
     if tr.module != unit.module && home != Some(unit.module) {
         errors.push(
             Diagnostic::error(
@@ -325,6 +387,26 @@ pub(super) fn register_impl(
         let Some(def) = res.function(id).cloned() else {
             continue;
         };
+        // An impl of a generic type (L11b): `Self` is the definition applied to this method's
+        // own copies of the impl's parameters, which the parser wrote first.
+        let n = imp.type_params.len();
+        let ty = if generic {
+            let own: Vec<Type> = (0..n)
+                .map(|i| {
+                    Type::Param(nazm_sema::TypeParam {
+                        owner: ParamOwner::Function(id),
+                        index: u32::try_from(i).unwrap_or(u32::MAX),
+                    })
+                })
+                .collect();
+            match ty {
+                Type::Record(r) => res.types_mut().apply_record(r, own),
+                Type::Enum(e) => res.types_mut().apply_enum(e, own),
+                other => other,
+            }
+        } else {
+            ty
+        };
         let types = res.types_mut();
         let owner = ParamOwner::Trait(trait_id);
         let params: Vec<Type> = std::iter::once(ty)
@@ -341,7 +423,7 @@ pub(super) fn register_impl(
             || def.ret != ret
             || !self_named
             || !effects_match
-            || !def.type_params.is_empty()
+            || def.type_params.len() != n
         {
             let wanted: Vec<String> = params.iter().map(|t| types.show(*t)).collect();
             errors.push(
@@ -389,12 +471,32 @@ pub(super) fn register_impl(
             .help("an impl defines every method of its trait that has no default body"),
         );
     }
+    // What each parameter of an impl of a generic type requires (L11b), resolved as a
+    // function's requirements are; an unknown name was reported on the methods.
+    let names = trait_scope(unit, res);
+    let requires = imp
+        .type_params
+        .iter()
+        .map(|p| {
+            let req = p.requires.as_ref()?;
+            if req.name == super::declare::EQUALITY {
+                Some(nazm_sema::traits::Require::Equality)
+            } else {
+                names
+                    .get(&req.name)
+                    .copied()
+                    .flatten()
+                    .map(nazm_sema::traits::Require::Trait)
+            }
+        })
+        .collect();
     let filed = res.traits_mut().implement(ImplDef {
         trait_id,
         self_ty: ty,
         module: unit.module,
         impl_span: imp.impl_span,
         methods,
+        requires,
     });
     if let Err(first) = filed {
         let at = res
