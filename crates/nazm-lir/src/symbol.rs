@@ -534,14 +534,17 @@ mod tests {
         let short = NativeSymbol::of_instance(&base, &["Int".to_owned()]);
         assert!(short.as_str().ends_with(".g.Int"), "{short}");
         let long_arg = "P[".repeat(200) + "Int" + &"]".repeat(200);
-        let long = NativeSymbol::of_instance(&base, &[long_arg.clone()]);
+        let long = NativeSymbol::of_instance(&base, std::slice::from_ref(&long_arg));
         assert!(long.as_str().contains(".d."), "{long}");
         assert!(
             long.as_str().len() <= base.as_str().len() + 3 + 64,
             "{long}"
         );
         // Deterministic, and a different spelling is a different digest.
-        assert_eq!(long, NativeSymbol::of_instance(&base, &[long_arg.clone()]));
+        assert_eq!(
+            long,
+            NativeSymbol::of_instance(&base, std::slice::from_ref(&long_arg))
+        );
         let other = NativeSymbol::of_instance(&base, &[long_arg + "x"]);
         assert_ne!(long, other);
         // Exactly at the cap it is still spelled.

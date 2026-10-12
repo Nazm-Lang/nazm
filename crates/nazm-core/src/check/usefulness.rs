@@ -164,6 +164,9 @@ pub(super) fn witness(
     witness_at(rows, tys, sig, 0)
 }
 
+/// One constructor of a finite type: its head, its fields' types, and the enum it belongs to.
+type Constructor = (Head, Vec<Type>, Option<EnumId>);
+
 fn witness_at(
     rows: &[Vec<Pat>],
     tys: &[Type],
@@ -178,29 +181,28 @@ fn witness_at(
     }
     let rows = spread(rows);
     // The constructors of a finite type: every variant, or `true` and `false`.
-    let finite: Option<Vec<(Head, Vec<Type>, Option<EnumId>)>> =
-        if let Some((id, variants)) = sig.variants(*ty) {
-            Some(
-                variants
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, f)| {
-                        (
-                            Head::Variant(u32::try_from(i).unwrap_or(u32::MAX)),
-                            f,
-                            Some(id),
-                        )
-                    })
-                    .collect(),
-            )
-        } else if *ty == Type::Bool {
-            Some(vec![
-                (Head::Bool(true), Vec::new(), None),
-                (Head::Bool(false), Vec::new(), None),
-            ])
-        } else {
-            sig.tuple(*ty).map(|elems| vec![(Head::Tuple, elems, None)])
-        };
+    let finite: Option<Vec<Constructor>> = if let Some((id, variants)) = sig.variants(*ty) {
+        Some(
+            variants
+                .into_iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    (
+                        Head::Variant(u32::try_from(i).unwrap_or(u32::MAX)),
+                        f,
+                        Some(id),
+                    )
+                })
+                .collect(),
+        )
+    } else if *ty == Type::Bool {
+        Some(vec![
+            (Head::Bool(true), Vec::new(), None),
+            (Head::Bool(false), Vec::new(), None),
+        ])
+    } else {
+        sig.tuple(*ty).map(|elems| vec![(Head::Tuple, elems, None)])
+    };
     let present: Vec<Head> = rows
         .iter()
         .filter_map(|r| r.first().and_then(head_of))

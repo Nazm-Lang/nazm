@@ -604,6 +604,9 @@ impl Block {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Sized by its largest variant on purpose, like the parser's `Item`: a statement is built once
+// and moved into its block, so boxing a variant would be one allocation more and nothing saved.
+#[allow(clippy::large_enum_variant)]
 pub enum Stmt {
     Let(Let),
     /// `name = value;`
@@ -871,6 +874,8 @@ pub struct For {
 
 /// What a `for` loop iterates.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Sized by its largest variant on purpose: a loop has exactly one, built once.
+#[allow(clippy::large_enum_variant)]
 pub enum ForIter {
     /// `in e`: an `Ints`, `Strs`, `Vec[T]` or `Bytes`, evaluated once.
     Each(Expr),
@@ -1099,6 +1104,8 @@ pub enum Expr {
 
 /// A piece of an interpolated string (L4).
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Sized by its largest variant on purpose: a part is built once, in place, in its string.
+#[allow(clippy::large_enum_variant)]
 pub enum InterpPart {
     /// Text, as it reads.
     Text(String),

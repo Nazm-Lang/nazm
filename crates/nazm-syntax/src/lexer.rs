@@ -506,6 +506,9 @@ fn multi_line_string(
     )
 }
 
+/// A multi-line literal's content lines: each line's byte offset and its text.
+type Lines<'t> = Vec<(usize, &'t str)>;
+
 /// A multi-line literal's lines (L9), its opening delimiter `open` bytes long at `start`: each
 /// line's kept text — its indentation taken off — with the offset that text starts at, and the
 /// offset past the closing `"""`. `Err` holds the lexeme to return when there is no literal to
@@ -516,7 +519,7 @@ fn multi_line_layout<'t>(
     start: usize,
     open: usize,
     errors: &mut Vec<Diagnostic>,
-) -> Result<(Vec<(usize, &'t str)>, usize), (Lexeme, usize)> {
+) -> Result<(Lines<'t>, usize), (Lexeme, usize)> {
     let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
     let after = start + open;
     let rest = text.get(after..).unwrap_or_default();
