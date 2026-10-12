@@ -152,6 +152,9 @@ impl CapabilityKind {
         match i {
             // Numbers (Gate 2): computed from their arguments, and from nothing else.
             Intrinsic::WrappingAdd
+            | Intrinsic::CheckedAdd
+            | Intrinsic::CheckedSub
+            | Intrinsic::CheckedMul
             | Intrinsic::WrappingSub
             | Intrinsic::WrappingMul
             | Intrinsic::SaturatingAdd

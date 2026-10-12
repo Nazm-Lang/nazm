@@ -726,6 +726,10 @@ fn environment(
     errors: &mut Vec<Diagnostic>,
 ) -> Env {
     let mut names: HashMap<String, Visible> = HashMap::new();
+    // The prelude's `Option` (L13): what a checked operation returns.
+    let option = unit
+        .prelude
+        .and_then(|m| res.enums().declared(m, nazm_sema::prelude::OPTION));
 
     // Built-ins first, so a user definition of one collides with it rather than
     // shadowing it. They share the ordinary function namespace deliberately: a call is a
@@ -747,6 +751,10 @@ fn environment(
             None if s == Shape::BoxT => res.types_mut().box_of(t),
             None if s == Shape::ListT => res.types_mut().list_of(t),
             None if s == Shape::CellT => res.types_mut().cell_of(t),
+            None if s == Shape::OptionT => match option {
+                Some(o) => res.types_mut().apply_enum(o, vec![t]),
+                None => t,
+            },
             None => res.types_mut().vec_of(t),
         };
         let params: Vec<Type> = i.params().iter().map(|s| shape(*s)).collect();

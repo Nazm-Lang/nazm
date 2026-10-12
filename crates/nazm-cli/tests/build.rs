@@ -3324,6 +3324,8 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
             Shape::ListT => "list_empty[Int]()",
             // A mutable cell (R1b).
             Shape::CellT => "cell_new(0)",
+            // Checked arithmetic's result (R1b); no built-in takes one.
+            Shape::OptionT => "Option[Int].None()",
         })
         .collect();
     // `vec_new` is the one built-in whose type argument nothing else could say.
@@ -3375,6 +3377,9 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         Shape::BoxT => format!("box_get({call})"),
         Shape::ListT => format!("list_len({call})"),
         Shape::CellT => format!("cell_get({call})"),
+        Shape::OptionT => {
+            format!("match {call} {{ Option.Some(value: v) => v, Option.None() => 0, }}")
+        }
     };
     // Opening a handle names a path, which needs an `IoCap` (Gate 2).
     if i.params().contains(&Shape::OsHandle) {

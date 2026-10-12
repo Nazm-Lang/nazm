@@ -1657,6 +1657,14 @@ impl<'a> Lower<'a> {
                     callee_at,
                 }
             }
+            // Checked arithmetic (L13): written from wrapping, saturating and dividing operations.
+            Callee::Builtin(
+                op @ (nazm_sema::Intrinsic::CheckedAdd
+                | nazm_sema::Intrinsic::CheckedSub
+                | nazm_sema::Intrinsic::CheckedMul),
+            ) => {
+                return self.checked(op, type_args(true)?, args, ty, callee_at, at);
+            }
             Callee::Builtin(nazm_sema::Intrinsic::ListFromVec) => {
                 return self.list_from_vec(type_args(true)?, args, ty, callee_at, at);
             }
@@ -1702,6 +1710,185 @@ impl<'a> Lower<'a> {
         };
         Ok(Expr {
             kind,
+            ty: Some(ty),
+            at,
+        })
+    }
+
+    /// `checked_add(a, b)`, `checked_sub(a, b)` or `checked_mul(a, b)` (R1b, L13), as the
+    /// operations it means. An addition or subtraction overflows exactly when its wrapping and
+    /// saturating results differ — the wrapped value is never the bound the saturating one stops
+    /// at. A product overflows exactly when, `a` being neither `0` nor (signed) `-1`, dividing the
+    /// wrapped product by `a` does not give `b` back; `-1 * MIN` is the one signed product that
+    /// division cannot test, and is tested by name.
+    #[allow(clippy::too_many_lines)]
+    fn checked(
+        &mut self,
+        op: nazm_sema::Intrinsic,
+        type_args: Vec<Type>,
+        mut args: Vec<Expr>,
+        ty: Type,
+        callee_at: Span,
+        at: Span,
+    ) -> Lowered<Expr> {
+        use nazm_sema::Intrinsic as I;
+        let (Some(b), Some(a)) = (args.pop(), args.pop()) else {
+            return defect(callee_at, "a checked operation without two operands");
+        };
+        let elem = type_args.first().copied().unwrap_or(Type::Int);
+        let (Some(kind), Type::Enum(option)) = (elem.num(), ty) else {
+            return defect(
+                callee_at,
+                "a checked operation not over an integer, or not to an `Option`",
+            );
+        };
+        let Some(law) = Law::of(cir::CmpOp::Eq, elem) else {
+            return defect(callee_at, "an integer with no equality");
+        };
+        let x = self.temp(Temp::Convert, elem, at);
+        let y = self.temp(Temp::Convert, elem, at);
+        let w = self.temp(Temp::Convert, elem, at);
+        let local = |l: LocalId| Expr {
+            kind: ExprKind::Local(l),
+            ty: Some(elem),
+            at,
+        };
+        let konst = |me: &mut Self, v: i128| -> Expr {
+            let c = if kind == NumKind::I64 {
+                Const::Int(i64::try_from(v).unwrap_or(0))
+            } else {
+                Const::Num {
+                    kind,
+                    bits: nazm_sema::numeric::NumVal::int(kind, v).map_or(0, |n| n.bits),
+                }
+            };
+            Expr {
+                kind: ExprKind::Const(me.constant(c)),
+                ty: Some(elem),
+                at,
+            }
+        };
+        let builtin = |op: I, args: Vec<Expr>| Expr {
+            kind: ExprKind::Builtin {
+                op,
+                type_args: vec![elem],
+                args,
+                callee_at,
+            },
+            ty: Some(elem),
+            at,
+        };
+        let eq = |l: Expr, r: Expr| Expr {
+            kind: ExprKind::Compare {
+                op: cir::CmpOp::Eq,
+                operand: elem,
+                law,
+                lhs: Box::new(l),
+                rhs: Box::new(r),
+            },
+            ty: Some(Type::Bool),
+            at,
+        };
+        let region = |e: Expr| Block {
+            stmts: Vec::new(),
+            tail: Some(Box::new(e)),
+            ends: Ends::FallsThrough,
+            owns: Vec::new(),
+            at,
+        };
+        let choose = |c: Expr, then: Expr, otherwise: Expr| Expr {
+            kind: ExprKind::If {
+                cond: Box::new(c),
+                then: region(then),
+                otherwise: region(otherwise),
+            },
+            ty: Some(ty),
+            at,
+        };
+        let some = |e: Expr| Expr {
+            kind: ExprKind::Variant {
+                enumeration: option,
+                variant: 1,
+                arity: 1,
+                fields: vec![Init {
+                    field: 0,
+                    value: e,
+                    at,
+                }],
+            },
+            ty: Some(ty),
+            at,
+        };
+        let none = || Expr {
+            kind: ExprKind::Variant {
+                enumeration: option,
+                variant: 0,
+                arity: 0,
+                fields: Vec::new(),
+            },
+            ty: Some(ty),
+            at,
+        };
+        let mut stmts = vec![
+            Stmt::Let { local: x, value: a },
+            Stmt::Let { local: y, value: b },
+        ];
+        let mut owns = vec![x, y, w];
+        let tail = if op == I::CheckedMul {
+            stmts.push(Stmt::Let {
+                local: w,
+                value: builtin(I::WrappingMul, vec![local(x), local(y)]),
+            });
+            let quotient = Expr {
+                kind: ExprKind::Arith {
+                    op: cir::ArithOp::Div,
+                    lhs: Box::new(local(w)),
+                    rhs: Box::new(local(x)),
+                },
+                ty: Some(elem),
+                at,
+            };
+            let divided = choose(eq(quotient, local(y)), some(local(w)), none());
+            let past_minus_one = if kind.is_signed() {
+                let min = -(1_i128 << (kind.bits() - 1));
+                let minus_one = konst(self, -1);
+                let min = konst(self, min);
+                choose(
+                    eq(local(x), minus_one),
+                    choose(eq(local(y), min), none(), some(local(w))),
+                    divided,
+                )
+            } else {
+                divided
+            };
+            let zero = konst(self, 0);
+            choose(eq(local(x), zero), some(local(w)), past_minus_one)
+        } else {
+            let (wrapping, saturating) = if op == I::CheckedAdd {
+                (I::WrappingAdd, I::SaturatingAdd)
+            } else {
+                (I::WrappingSub, I::SaturatingSub)
+            };
+            let s = self.temp(Temp::Convert, elem, at);
+            owns.push(s);
+            stmts.push(Stmt::Let {
+                local: w,
+                value: builtin(wrapping, vec![local(x), local(y)]),
+            });
+            stmts.push(Stmt::Let {
+                local: s,
+                value: builtin(saturating, vec![local(x), local(y)]),
+            });
+            choose(eq(local(w), local(s)), some(local(w)), none())
+        };
+        Ok(Expr {
+            kind: ExprKind::Block(Block {
+                stmts,
+                tail: Some(Box::new(tail)),
+                ends: Ends::FallsThrough,
+                owns,
+                at,
+            }),
             ty: Some(ty),
             at,
         })
