@@ -6,7 +6,7 @@ moves a row by itself: the matrix is the authority, and where this audit propose
 the matrix's. The objective — no row PARTIAL, RESEARCH, BLOCKED or MISSING — **is not met**, and the
 table says where and why.
 
-**Candidate.** `56ddf13`, through the combined gate below, with the test fixes of `c38da8b`.
+**Candidate.** `e2de242`, through the combined gate below, with the test fixes of `7245862`.
 
 ## The table
 
@@ -56,13 +56,13 @@ formal evidence (proofs, N97). **The zero-partial objective fails.**
 
 ## The combined gate
 
-**First run, candidate `15b6529`.** The contained workspace suite failed four tests, each a finding:
+**First run, candidate `42cb90e`.** The contained workspace suite failed four tests, each a finding:
 three whole-repository oracles (`cst.rs`, `symbols.rs`, `semantic.rs`) that did not know a foreign
 declaration or a trait named where a type is written — constructs N98's parity probes were the first
 repository sources to hold — and N95's CPU check, which held a Linux clang to Apple clang's choices.
-Fixed forward (`0950cc6`, `56ddf13`). The run's continuation then filled the disk and was stopped.
+Fixed forward (`2f2d5c2`, `e2de242`). The run's continuation then filled the disk and was stopped.
 
-**Second run, candidate `56ddf13`**, contained (`target/gates/n100/logs`):
+**Second run, candidate `e2de242`**, contained (`target/gates/n100/logs`):
 
 | Step | Result |
 | --- | --- |
@@ -75,7 +75,7 @@ The 17 left were the mutants whose declared killers need macOS (lldb, `sample`, 
 `ssh-keygen`) or have no declared killer; the Linux container skips the former and runs a full suite
 for each. They and the two non-catches were checked on the macOS host instead
 (`target/gates/precheck.py`: apply, run the declared killers, restore byte for byte), after the
-fixes of `c38da8b`:
+fixes of `7245862`:
 
 | Verdict | Count | Mutants |
 | --- | ---: | --- |
@@ -92,7 +92,7 @@ in a fresh directory. The four without a verdict are caught by focused killers (
 §7.102). The table stands as what N100 observed.
 
 Five mutants were caught only after the tests or the mutant changed — each is a finding, recorded in
-`c38da8b`. Zero survivors is not claimed: one survives and four were not run to a verdict.
+`7245862`. Zero survivors is not claimed: one survives and four were not run to a verdict.
 
 **Container-backed runs** on the final tree, all passed: live gdb on both backends (N58, N91), the
 QEMU AArch64 image (N62) and both boards (N86), WebAssembly (N64, N71), the EVM (N70), the contract

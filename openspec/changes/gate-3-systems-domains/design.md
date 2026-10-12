@@ -1,6 +1,6 @@
 ## Context
 
-`docs/systems-domains.md` is the design: what Gate 3 starts from at `5caa642`, the rules every part
+`docs/systems-domains.md` is the design: what Gate 3 starts from at `3a2e3ba`, the rules every part
 follows (one semantic language, platform behaviour only in the runtime's platform layer, evidence
 labelled by where it ran), and a decision per part with the reason it is not a second mechanism.
 

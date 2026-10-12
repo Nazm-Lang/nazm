@@ -11,9 +11,9 @@ Decisions (the copyright holder, 2026-10-12):
 
 | | Decision |
 | --- | --- |
-| (a) Version | toolchain `0.9.0` (first proposed as 0.3.0, a number an earlier internal candidate used, `docs/releases/7a16a40.md`); the language a **1.0 draft** — no compatibility promise until 1.0 |
+| (a) Version | toolchain `0.9.0` (first proposed as 0.3.0, a number an earlier internal candidate used, `docs/releases/996984f.md`); the language a **1.0 draft** — no compatibility promise until 1.0 |
 | (b) Target | macOS, Apple Silicon (`aarch64-apple-darwin`) only |
-| (c) History | the two prompt-pack directories committed in `4850431` are removed from the history before the repository is made public |
+| (c) History | the two prompt-pack directories committed in `191b092` are removed from the history before the repository is made public |
 | (d) Publication | a public GitHub repository, a binary release, and `nazm.dev`; external contributions are not accepted yet (the CLA's legal review is open) |
 | (e) Mutation testing | the full release mutation catalogue is waived for the preview and named in the release notes; it stays outstanding for 1.0 |
 | (f) Signing | no Apple Developer ID: the binary is ad-hoc signed; the notes say how to clear the quarantine a browser download gets |

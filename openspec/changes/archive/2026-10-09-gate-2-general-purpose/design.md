@@ -1,6 +1,6 @@
 ## Context
 
-The design record is `docs/general-purpose.md` (Gate 2A, `2a584c4`). It is not repeated here.
+The design record is `docs/general-purpose.md` (Gate 2A, `f29a23c`). It is not repeated here.
 
 ## Decisions
 

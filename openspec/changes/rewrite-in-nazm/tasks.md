@@ -1,6 +1,6 @@
 ## 1. R0 — decisions and design
 
-- [x] 1.1 Survey the toolchain, the Nazm compiler and the language's readiness (2026-10-11, `c06dcd2`)
+- [x] 1.1 Survey the toolchain, the Nazm compiler and the language's readiness (2026-10-11, `91ccda5`)
 - [x] 1.2 Record the copyright holder's decisions (this change's `design.md`, *Decisions* 1–4)
 - [ ] 1.3 Propose R1's language and library design (`r1-language-for-the-rewrite`) and have it approved
 - [ ] 1.4 Set the performance budgets' method (measured in R2)

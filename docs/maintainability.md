@@ -2,7 +2,7 @@
 
 M1 (2026-10-08) asked whether the codebase can absorb the v1 breadth — Gates 2 and 3 — without
 semantic duplication, platform sprawl, test fragility, ownership ambiguity or architecture
-erosion. This is the answer, with its evidence. It is an audit of the tree at `f0023cd` and the
+erosion. This is the answer, with its evidence. It is an audit of the tree at `28e54f8` and the
 M1 commits after it; counts are signals, never proofs (`docs/master-architecture.md`, law 4).
 
 **Method.** Five read-only inventories over `crates/` and `xtask/` (platform and OS; unsafe, FFI,
@@ -24,7 +24,7 @@ footprints are this document's best evidence for §9 and §10.
 | Syntax / parser | WATCH | one coherent responsibility (4,549 lines); stack-frame growth on the recursive path nearly broke the 255-level bound in Gate 2E (§14) |
 | Checker | WATCH | `check.rs` holds ~15 concerns in 8,776 lines; Gate 2 slices landed beside it (`constants.rs`, `nazm_sema::numeric`) without duplication, but it is the file Gate 2 will most want to grow (§14) |
 | Memory / ownership | HEALTHY | area 4 VERIFIED; arrays are plain data, `Bytes` a counted handle on the existing rules |
-| Effects / capabilities / provenance | WATCH | an M1 defect (imported impl methods' effects) found and fixed narrowly, `f0023cd`; the classifications are exhaustive per built-in |
+| Effects / capabilities / provenance | WATCH | an M1 defect (imported impl methods' effects) found and fixed narrowly, `28e54f8`; the classifications are exhaustive per built-in |
 | IR / lowering | HEALTHY | one semantic owner per rule (`nazm_sema::numeric` for every number); exhaustive CIR/MIR matches force each new form to be decided |
 | Backends (interpreter, LLVM, Cranelift) | WATCH | lowering is shared through LIR; the interpreter's built-in dispatch ends in a wildcard — now guarded by a coverage test (§6); a Linux-only link defect from Gate 2C was found by M1's contained run and fixed (§19) |
 | Runtime | WATCH | one file of per-feature LLVM-text constants with POSIX numbers inline; the parity-checked texts are protected (§8) |
@@ -216,10 +216,10 @@ Measured from Gate 2's commits, not estimated:
 
 | Change | Files | Where |
 | --- | --- | --- |
-| A family of scalar types, operators and conversions (2C, `d7feb20`) | 83 | lir 13, tests 10, cli 10, syntax 9, sema 9, core 6, mir 5, cir 5, service 4, runtime 3, docs 3, clif 2, diag, cache, schema, xtask |
-| A type form, index expressions, constants (2E, `0693c1d`) | 67 | tests 10, lir 9, core 8, syntax 7, sema 6, mir 6, cli 6, cir 5, service 4, xtask 2, iface, diag, cache, docs |
-| Two built-in types and 25 built-ins (2G, `8f691e2`) | 38 | tests 8, sema 6, lir 5, core 4, cli 4, runtime 3, mir 2, syntax, diag, cir, cache, xtask, docs |
-| A checker rule fix (M1-1, `f0023cd`) | 6 | core, cache, cli tests, xtask, docs |
+| A family of scalar types, operators and conversions (2C, `cd75d71`) | 83 | lir 13, tests 10, cli 10, syntax 9, sema 9, core 6, mir 5, cir 5, service 4, runtime 3, docs 3, clif 2, diag, cache, schema, xtask |
+| A type form, index expressions, constants (2E, `5ce5e59`) | 67 | tests 10, lir 9, core 8, syntax 7, sema 6, mir 6, cli 6, cir 5, service 4, xtask 2, iface, diag, cache, docs |
+| Two built-in types and 25 built-ins (2G, `b2e2985`) | 38 | tests 8, sema 6, lir 5, core 4, cli 4, runtime 3, mir 2, syntax, diag, cir, cache, xtask, docs |
+| A checker rule fix (M1-1, `28e54f8`) | 6 | core, cache, cli tests, xtask, docs |
 
 - **One built-in** touches, at minimum: `intrinsic.rs` (name, params, ret, and `requires`),
   `effect.rs`, `capability.rs`, `provenance.rs` (twice), `nazm-lir/src/op/prims.rs` or a sibling,
@@ -385,20 +385,20 @@ Defects, each fixed narrowly with a regression test and, where it is behaviour, 
 
 | Found by | Defect | Since | Fix |
 | --- | --- | --- | --- |
-| Gate 2 §7's design, reproduced at `3ba27ee` | a direct or UFCS call of an impl method in another module was checked as an undeclared function's — every effect assumed, a pure caller refused (`N0366`) | N78 | `f0023cd`: the trait method's contract; epoch 34 |
-| the inventory audit | `--profile` help named 4 of 8 profiles | the four profiles added after N47 | `5b6a624`, guarded |
-| the inventory audit | the spec's capability table and wasm row named only the 32-bit `mmio` built-ins | N86 | `5b6a624` |
-| the test audit | ten suites could hang on a full pipe and report a timeout | the first copy | `5b6a624`, one draining harness |
-| the test audit | Docker-backed tests passed by skipping | the suites' creation | `5b6a624`, `integration-external` |
-| `xtask`'s release test | the compatibility corpus was outside the release source digest | Gate 1B, `4830170` | `5b6a624` |
-| M1's contained run | a Linux link named no libm, so float built-ins failed to link | Gate 2C | `7a74cd6`, mutant |
-| M1's contained run | Gate 2's 66 built-ins missing from the self-hosted checker's not-carried list | Gate 2C, 2G | `531769a` |
-| M1's own gate | two mutants lost their lines to M1's edits (`mutations apply` failed at `5b6a624` and `7a74cd6`) | M1 | `9a50b59` |
+| Gate 2 §7's design, reproduced at `b5f7506` | a direct or UFCS call of an impl method in another module was checked as an undeclared function's — every effect assumed, a pure caller refused (`N0366`) | N78 | `28e54f8`: the trait method's contract; epoch 34 |
+| the inventory audit | `--profile` help named 4 of 8 profiles | the four profiles added after N47 | `f6f67d5`, guarded |
+| the inventory audit | the spec's capability table and wasm row named only the 32-bit `mmio` built-ins | N86 | `f6f67d5` |
+| the test audit | ten suites could hang on a full pipe and report a timeout | the first copy | `f6f67d5`, one draining harness |
+| the test audit | Docker-backed tests passed by skipping | the suites' creation | `f6f67d5`, `integration-external` |
+| `xtask`'s release test | the compatibility corpus was outside the release source digest | Gate 1B, `e6222ca` | `f6f67d5` |
+| M1's contained run | a Linux link named no libm, so float built-ins failed to link | Gate 2C | `2916f12`, mutant |
+| M1's contained run | Gate 2's 66 built-ins missing from the self-hosted checker's not-carried list | Gate 2C, 2G | `8190cca` |
+| M1's own gate | two mutants lost their lines to M1's edits (`mutations apply` failed at `f6f67d5` and `2916f12`) | M1 | `327dc3c` |
 
 The last three are why M1 requires the contained run: the host suites run on macOS and exclude
 selfhost, so a Linux link and the self-hosted checker's table are invisible to them.
 
-Validation, at `531769a`:
+Validation, at `8190cca`:
 
 | | Outcome |
 | --- | --- |

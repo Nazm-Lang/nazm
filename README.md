@@ -197,8 +197,8 @@ does **not** establish as carefully as by what it does:
 - **Mutation testing:** a catalogue of deliberately injected defects, 1,285 entries, each required
   to be caught by a named test; all 1,268 it held at the core release gate were caught there, and
   the seventeen added since in their own responsibility-mapped campaigns
-  ([`docs/releases/82936f6.md`](docs/releases/82936f6.md),
-  [`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)). Zero survivors describes the
+  ([`docs/releases/920a2a5.md`](docs/releases/920a2a5.md),
+  [`docs/releases/996984f.md`](docs/releases/996984f.md)). Zero survivors describes the
   catalogue, not the absence of bugs.
 - **Fuzzing:** coverage-guided fuzzing of five targets with a replayed corpus.
 - **Contained gates:** the heavy work runs only inside a bounded container (memory, swap, pids,
@@ -207,7 +207,7 @@ does **not** establish as carefully as by what it does:
 - **Artifacts:** a release is assembled by `scripts/release-candidate.sh` with a SHA-256 manifest
   of every file, a provenance record, and a BLAKE3-indexed evidence bundle with an SBOM. The v0.3.0
   candidate was assembled twice from one commit, in one image on one host, and the two archives
-  were byte-identical ([`docs/releases/7a16a40.md`](docs/releases/7a16a40.md)).
+  were byte-identical ([`docs/releases/996984f.md`](docs/releases/996984f.md)).
 
 | Mechanism | Does **not** establish |
 | --- | --- |

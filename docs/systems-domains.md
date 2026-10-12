@@ -1,6 +1,6 @@
 # Systems, platforms and domains — Gate 3 decision record
 
-*Gate 3 of the v1 programme, 2026-10-10, from the accepted baseline `5caa642` (toolchain 1.0.0,
+*Gate 3 of the v1 programme, 2026-10-10, from the accepted baseline `3a2e3ba` (toolchain 1.0.0,
 semantic epoch 43, `nazm.interface/11`, runtime ABI 20, standard library API 1.1). This file is the
 design written before the code, as `general-purpose.md` was for Gate 2: each part states the problem,
 what Nazm already has, the mechanism chosen and why it is not a second mechanism for something the
@@ -11,9 +11,9 @@ is where every v1 domain claim points.*
 
 ## What Gate 3 starts from
 
-A survey of the tree at `5caa642` (sources cited in each row):
+A survey of the tree at `3a2e3ba` (sources cited in each row):
 
-| Area | At `5caa642` |
+| Area | At `3a2e3ba` |
 | --- | --- |
 | Hosts | run-verified, both backends: aarch64-apple-darwin, x86_64-apple-darwin **under Rosetta**, aarch64-unknown-linux-gnu (container); x86_64-unknown-linux-gnu **compile-only**; Windows **unsupported** — no PE/COFF, linker, SDK, runtime port or machine (`nazm_lir::backend::SUPPORT`, `support.md`, `cross.rs`); no per-target prebuilt toolchain (the release candidate archives one host) |
 | Freestanding | two emulated boards — AArch64 virt Cortex-A53, RV64GC M-mode — from the `BOARDS` table: generated `_start`, `link.ld`, UART output, a stop mechanism, a static stack bound (`board.rs`, `freestanding.rs`, `boards.rs`, N62, N86); LLVM only |

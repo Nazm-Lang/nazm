@@ -382,7 +382,7 @@ why = "measured once on the host with the debug binary by the method its prose d
 heading = "Build time across Gate 2 — measured 2026-10-09"
 status = "reproducible"
 how = "cargo xtask contained bench"
-metric = "min and median build, check, interpret and run time per benchmark program, against bench/baseline-linux-aarch64.json; the before-Gate-2 column is the same command at 3ba27ee"
+metric = "min and median build, check, interpret and run time per benchmark program, against bench/baseline-linux-aarch64.json; the before-Gate-2 column is the same command at b5f7506"
 
 [[claim]]
 heading = "The default scheduler and the two regressions — N106, measured 2026-10-05"

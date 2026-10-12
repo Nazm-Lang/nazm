@@ -4,8 +4,8 @@
 
 Two things are kept apart here. **Frozen candidates** are commits a release candidate was tested
 at, each with an immutable record in `releases/` that nothing later updates: the latest is
-**`7a16a40640b44f93713f8209d714f1fd20f45420`** ([`releases/7a16a40.md`](releases/7a16a40.md), the
-v0.3.0 candidate, R1), before it `82936f6` ([`releases/82936f6.md`](releases/82936f6.md), the core
+**`996984f7063a5b9590443c81fb027a7de75c11c4`** ([`releases/996984f.md`](releases/996984f.md), the
+v0.3.0 candidate, R1), before it `920a2a5` ([`releases/920a2a5.md`](releases/920a2a5.md), the core
 closure, N101–N108) and `84d3c80` ([`releases/84d3c80.md`](releases/84d3c80.md), the v1 foundation,
 N40–N48), and the first was `4fb15542dfbf9af0bf34c42fe52783637b3daed4`
 ([`releases/4fb1554.md`](releases/4fb1554.md)). **The claims below are current-tree claims**: they
@@ -42,11 +42,11 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 ## Summary
 
 **Current suite: 2,570 passed, 0 failed, 69 ignored** across 205 test binaries, run contained at
-`869ddcd` (Q1-C1, 2026-10-08: the v1 exit contract frozen — 0–5, `docs/stability.md`; the four new
+`c8dc395` (Q1-C1, 2026-10-08: the v1 exit contract frozen — 0–5, `docs/stability.md`; the four new
 ignored tests are the macOS-only host-refusal tests; `target/gates/q1c1/contained-tests.log`),
 selfhost 43 of 43 with the bootstrap fixpoint. *Before Q1-C1:* 2,560 passed, 0 failed, 65 ignored
 across 203 test binaries, run contained at
-`f043087` (Q1 of the v4 programme, 2026-10-08; toolchain 1.0.0, semantic epoch 34, runtime ABI 15,
+`fd90b06` (Q1 of the v4 programme, 2026-10-08; toolchain 1.0.0, semantic epoch 34, runtime ABI 15,
 check entries `nazm.check/5`, not yet a release candidate; `target/gates/q1/contained-tests.log`),
 selfhost 43 of 43 with the bootstrap chain's fixpoint test passing. Over M1: Q1's fixes and their
 tests (`docs/security-qualification.md`); the seven more ignored tests are platform-bound ones Q1
@@ -58,10 +58,10 @@ it showed no observable difference in output or memory counts — Gate 2's conta
 verdict (`target/gates/q1/probe-mutants-2.log`).
 
 *Historical, not current:* 2,538 passed, 0 failed, 58 ignored across 203 test binaries, run contained at
-`531769a` (M1, 2026-10-08), selfhost 43 of 43 with the fixpoint; M1's two new mutants caught at tier 1.
+`8190cca` (M1, 2026-10-08), selfhost 43 of 43 with the fixpoint; M1's two new mutants caught at tier 1.
 
 *Historical, not current:* 2,509 passed, 0 failed, 47 ignored across 180 test binaries, run contained and
-offline at `ea4741f` (Gate 1-C1 of the v1 programme, 2026-10-07; toolchain 1.0.0, semantic epoch
+offline at `6ab6319` (Gate 1-C1 of the v1 programme, 2026-10-07; toolchain 1.0.0, semantic epoch
 30, not yet a release candidate), with selfhost 43 of 43 and the bootstrap's fixpoint, C2 = C3 =
 `178a799c…`, 34 conformance cases and 30 refusals agreeing. The catalogue holds 1,285 entries:
 Gate 1-C1's six and the fifty responsibility-mapped entries beside them (closures, the ownership
@@ -70,15 +70,15 @@ campaign `ee2ea936f8cb26ad`, 55 of 56 at tier 1 with every killer verified (pris
 fails, restored passes); the 56th, made equivalent by Gate 1-C1's shared type list, was retargeted
 and caught in `9f505c6cde2715d7`. Area 4 is VERIFIED again since Gate 1-C1.
 
-*Historical, not current:* 2,505 passed, 0 failed, 47 ignored at `07e44a6` (Gate 1), selfhost 43
+*Historical, not current:* 2,505 passed, 0 failed, 47 ignored at `709960c` (Gate 1), selfhost 43
 of 43, C2 = C3 = `18481f2a…`, 29 refusals; the catalogue held 1,279 entries and Gate 1's six were
 caught in `b05c9651bed81041`. Area 4 was PARTIAL — a recorded cycle defect, open for decision.
 
 *Historical, not current:* 2,492 passed, 0 failed, 47 ignored, run contained and offline at the v0.3.0
-candidate `7a16a40` inside both release assemblies (2026-10-07), with selfhost 43 of 43, the
-bootstrap's fixpoint and the lifecycle tests 19 of 19 (`releases/7a16a40.md`). The mutation
+candidate `996984f` inside both release assemblies (2026-10-07), with selfhost 43 of 43, the
+bootstrap's fixpoint and the lifecycle tests 19 of 19 (`releases/996984f.md`). The mutation
 catalogue holds 1,273 entries: the 1,268 present at N108's gate were all caught there
-(`releases/82936f6.md`), and R1-C1's two and R1's three were caught in their own
+(`releases/920a2a5.md`), and R1-C1's two and R1's three were caught in their own
 responsibility-mapped campaigns. Each release record under `releases/` is the frozen account of its
 own candidate, and the latest one supersedes this line.
 
@@ -3500,7 +3500,7 @@ no crash; 36 `run` inputs blocked past two seconds and were counted, not kept (Q
 recorded below its fixes (`docs/security-qualification.md`, *Mutation*).
 
 *N108, 2026-10-06: the whole catalogue at the release gate — 1,268 of 1,268 caught.* Contained,
-targeted with every killer verified (`releases/82936f6.md`). Thirty-four entries were first undecidable
+targeted with every killer verified (`releases/920a2a5.md`). Thirty-four entries were first undecidable
 on Linux — killers verified on macOS only, and nine whose code N90, N104 and N105 had moved — and were
 repaired; eight are observable only with macOS tools and are verified there. Every fuzz target ran 300 s
 at the gate, 0 crashes.
@@ -4478,10 +4478,10 @@ records embedded their own run date, which made bit-reproducibility impossible, 
 declared set was digested.*
 
 *R1, 2026-10-07: two assemblies, one archive — on one host and one image.* `cargo xtask contained
---profile p4t4 release`, run twice at `7a16a40` in `nazm-contained:1.98.1` on one macOS host, gave
+--profile p4t4 release`, run twice at `996984f` in `nazm-contained:1.98.1` on one macOS host, gave
 byte-identical archives (`a5e2ee97…`) with identical `MANIFEST.txt` and `PROVENANCE.txt`, every date
 inside the commit's; the manifest was redigested independently, 220 of 220
-(`releases/7a16a40.md`). The archive was signed by nobody, and nothing is claimed across hosts.
+(`releases/996984f.md`). The archive was signed by nobody, and nothing is claimed across hosts.
 
 **Next dependency** · A comparison across two independent hosts, which needs a second machine.
 
@@ -4494,7 +4494,7 @@ machines.*
 
 **Ignored tests, run and kept (v1, 2026-10-11, Q1-D-04)** · Every cell and sub-claim here and in
 areas 18, 19, 21, 27 and 34 that rests on an `#[ignore]`d test — one that starts a container,
-QEMU, a WebAssembly engine, Wine, py-evm, gdb or the GPU — was run at `af57a42`, one at a time:
+QEMU, a WebAssembly engine, Wine, py-evm, gdb or the GPU — was run at `6b3b85c`, one at a time:
 **38 run, 38 passed**, `target/gates/v1/ignored.log` (08:47–08:58 UTC). They are: both boards and
 the Cortex-M board booting, their interrupts, sections, manifests, the heap arena and the kernel
 workload; the six domain workloads and the traffic light; the realtime scheduler and stack bound;

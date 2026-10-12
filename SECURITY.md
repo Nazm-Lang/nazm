@@ -30,7 +30,7 @@ GitHub offers private vulnerability reporting only for public repositories (its 
 for this one), so the preferred channel **is not available yet** and the email fallback is the
 only one. Making the repository public, enabling private vulnerability reporting and confirming
 the fallback address receives mail are required before any public release
-(`docs/releases/7a16a40.md`, step 7; `docs/vulnerability-process.md`, *Intake*). The fallback
+(`docs/releases/996984f.md`, step 7; `docs/vulnerability-process.md`, *Intake*). The fallback
 address is present in `Cargo.toml`.
 
 Include the toolchain version (`nazm --version`), the host and target, a minimal program or

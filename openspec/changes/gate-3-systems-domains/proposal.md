@@ -3,7 +3,7 @@
 Gate 3 of the v1 programme (`04_GATE_3_SYSTEMS_AND_DOMAIN_COVERAGE`) makes every target area v1
 intends to claim real enough to deserve its claim: hosts with prebuilt toolchains, a systems and
 embedded foundation, a stronger realtime contract, domain profiles with reference workloads, and a
-domain matrix every claim points to. Gate 2 is closed at `5caa642`; this change starts there.
+domain matrix every claim points to. Gate 2 is closed at `3a2e3ba`; this change starts there.
 
 ## What Changes
 
