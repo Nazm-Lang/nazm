@@ -321,9 +321,27 @@ fn a_function_type_crosses_a_module_boundary_and_its_interface() {
 // --- refusals ---------------------------------------------------------------------------
 
 #[test]
-fn a_closure_may_not_capture_a_mutable_binding() {
+fn a_closure_shares_a_mutable_binding_unless_it_can_hold_a_function() {
+    // Shared since R1b (L10): the closure and the function name one variable.
     assert_eq!(
         codes("fn main() -> Int { let mut n = 1; let f = fn(x: Int) -> Int { x + n }; f(1) }\n"),
+        Vec::<String>::new()
+    );
+    // A binding that can hold a function value is still refused: the closure could be stored
+    // into it and own itself (`N0386`).
+    assert_eq!(
+        codes(
+            "fn main() -> Int { let mut g = fn(x: Int) -> Int { x }; \
+             let f = fn(x: Int) -> Int { g(x) }; f(1) }\n"
+        ),
+        ["N0386"]
+    );
+    assert_eq!(
+        codes(
+            "struct H { f: fn() -> Int, }\n\
+             fn main() -> Int { let mut h = H(f: fn() -> Int { 1 }); \
+             let f = fn() -> Int { 0 }; let k = fn() -> Int { let x = h; f() }; k() }\n"
+        ),
         ["N0386"]
     );
     // A capability may be captured since N51 (`effect_params.rs`).
@@ -358,12 +376,14 @@ fn only_a_monomorphic_nazm_function_is_a_value() {
         ),
         ["N0387"]
     );
+    // Inside a generic function, a closure and a named function's value are both accepted
+    // since R1b (L10): each is instantiated with the function.
     assert_eq!(
         codes(
             "fn g[T](x: T) -> T { let f = fn(y: Int) -> Int { y }; x }\n\
              fn main() -> Int { g(1) }\n"
         ),
-        ["N0387"]
+        Vec::<String>::new()
     );
     assert_eq!(
         codes(
@@ -371,7 +391,7 @@ fn only_a_monomorphic_nazm_function_is_a_value() {
              fn g[T](x: T) -> T { let f = inc; x }\n\
              fn main() -> Int { g(1) }\n"
         ),
-        ["N0387"]
+        Vec::<String>::new()
     );
 }
 

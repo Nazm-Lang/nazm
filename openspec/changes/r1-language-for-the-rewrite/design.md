@@ -172,6 +172,13 @@ names are `Box` and `List`; L3 includes `_` with a warning when it covers varian
 | L13 | `checked_add/sub/mul -> Option[T]`, a widening multiply, `Int128`/`UInt128` | 160 checked/overflowing calls; constant folding | HEAVY (local) |
 | L14 | Stack size: `--stack-size` for the main thread and tasks | 13 deep-stack threads (up to 1 GiB) | CONVENIENCE |
 
+**L10 as carried out (2026-10-13).** The approved wording lifts `N0386` "where the closure cannot
+outlive the binding". Nazm cannot say that of a parameter — a callee may store any closure it is
+given — so a non-escaping rule would need an escape analysis over every function value. L10 shares
+the binding instead (the design Swift uses): it lives in a `Cell` the function and its closures
+name, so a closure outliving its scope leaves nothing dangling, and the cycle argument holds by
+refusing a binding that can hold a function value (`N0386`), as `N0616` refuses such a `Vec`.
+
 **Found while carrying it out (2026-10-12):**
 
 | # | Proposal | Why |

@@ -94,7 +94,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `one-error` | EXPERIMENTAL | diagnostic recovery: codes are stable, which further errors are reported is not |
 | `logical-operators` | STABLE 1.0 | |
 | `qualified-names` | STABLE 1.0 | |
-| `function-values` | STABLE 1.0 | its capability-capture row is superseded by `effect-parameters` (N51): a closure may capture a capability |
+| `function-values` | STABLE 1.0 | its capability-capture row is superseded by `effect-parameters` (N51): a closure may capture a capability; R1b's rows (L10: a shared `let mut`, closures and function values in a generic function) are EXPERIMENTAL until R1 closes |
 | `effect-parameters` | STABLE 1.0 | more than one effect parameter would be an extension |
 | `declassification` | STABLE 1.0 | |
 | `generic-channels` | STABLE 1.0 | |
@@ -2189,9 +2189,11 @@ copy of a value, a share of a handle, a share of another function value's enviro
 facts make the rule small:
 
 1. **An environment never changes after it is made.** What a closure captures is copied in when
-   it is created, a `let mut` binding is never captured (`N0386`), and nothing can be stored into
-   an environment later. Its edges point only at values that already existed — so environments
-   alone can never close a cycle.
+   it is created, and nothing can be stored into an environment later. Its edges point only at
+   values that already existed — so environments alone can never close a cycle. *R1b (L10):* a
+   captured `let mut` binding is shared, not copied — the environment holds a `Cell` the binding
+   lives in, a counted handle like any other, so fact 3 and the rule below cover it, and a binding
+   whose type can hold a function value is still refused (`N0386`).
 2. **An edge into an existing value is made only by storing into a counted handle** — `vec_push`,
    `vec_set`, a channel send. Records and enums are values: storing into one stores into a copy.
 3. **A counted handle whose elements cannot be or contain a function value holds no
@@ -3573,14 +3575,15 @@ fn main() -> Int {
 | **Type** | `fn(T1, …, Tn) -> R`, with `! { e… }` after `R` for a function that performs effects. Unwritten effects are none. Two function types are one exactly when their parameters, result and effects are equal |
 | **Effect subsumption** (N79) | Where a function value is passed as an argument or returned — never to a task (`N0321`) — a value whose effects are a **subset** of the expected type's is accepted: `fn(Int) -> Int ! {}` where `fn(Int) -> Int ! { io }` is expected. Parameters and results stay invariant, a type with an effect parameter is matched only by binding, and inside another type (`Vec[fn() -> Int]`) nothing is converted. A value with more effects than expected is `N0300` |
 | **Equality** | None. `==` on a function value is refused, as on a capability |
-| **A named function as a value** | A non-generic function that is not foreign, written without a call: `double`. Its type is its signature's. A generic function, a built-in and a foreign function are not values (`N0387`); write a closure that calls one |
+| **A named function as a value** | A non-generic function that is not foreign, written without a call: `double`. Its type is its signature's. A generic function, a built-in and a foreign function are not values (`N0387`); write a closure that calls one. Since R1b (L10) one may be made inside a generic function too |
 | **A closure** | `fn(x: Int) -> Int { … }` in expression position, its parameters and result written in full, its effects `! { … }` declared or none. Its body is checked against its declared effects as a declared function's is |
-| **Capture** | A closure may name the bindings of the functions and closures around it. Each it names is **copied** into the closure when the closure is created: a value is a copy, a handle (`Ints`, `Vec`, `Chan`) is the same storage. A `let mut` binding may not be captured (`N0386`). A capability may, since N51 (*Effect parameters*, **Capture**, below); until N51 it could not, and Q1 corrected this row, which still said so |
+| **Capture** | A closure may name the bindings of the functions and closures around it. Each it names is **copied** into the closure when the closure is created: a value is a copy, a handle (`Ints`, `Vec`, `Chan`) is the same storage. A capability may be captured, since N51 (*Effect parameters*, **Capture**, below); until N51 it could not, and Q1 corrected this row, which still said so |
+| **Capture of a `let mut` binding** (R1b, L10) | **Shared**, not copied: the function and every closure that names it read and write one variable, kept in a `Cell` (*A mutable cell*) — a write through either is seen through both, before and after the closure is made, and the closure may outlive the binding's scope, since the cell is counted. A binding whose type can hold a function value may not be captured (`N0386`): the closure could be stored into it and own itself. Until R1b every `let mut` capture was refused, because a copy would silently stop tracking the binding |
 | **Capture of a function-value container** (Gate 1-C1) | A closure may not capture a value that can hold a function value behind a counted handle — a `Vec[fn(…) -> R]`, a `Vec` of records or enums with a function field, a record or enum holding either (`N0616`). Such a capture is the only way a closure could come to own itself; *The memory constitution*'s *Cycles* gives the argument. Storing a function value into a `Vec` is never refused |
 | **Call** | `f(a, b)`, where `f` is a parameter or binding of function type: the arguments must match its parameters, the result is its result, and the call performs its type's effects. Such a binding hides a function of the same name for calls in its scope. A function stored in a field is called by binding it first: `let g = r.f; g(1)` |
 | **Ownership** | A function value is a handle to its closure; copies share it, and what it captured is released when the last copy goes |
 | **Tasks** | A function value may not be passed to a task (`N0321`) |
-| **In a generic function** | Neither a closure nor a named function as a value may be written in the body of a generic function (`N0387`); a function value may be passed into one as an argument, and called there |
+| **In a generic function** | Since R1b (L10) a closure, and a named function as a value, may be written in the body of a generic function, and a closure's types may name the function's type parameters: `nazm run` is parametric, and `nazm build` instantiates each closure with the function it is written in, through every closure between. Until R1b both were refused (`N0387`) |
 | **Recursion through a value** | A native function that calls through a function value checks its stack first, as a recursive one does (`N0408`, *Native recursion*) |
 | **Not here** | Traits, methods, generic function values, a closure that names itself, effect-polymorphic function types — see `architecture.md` §7.52 |
 
@@ -3604,7 +3607,7 @@ fn main(io: IoCap) -> Int ! { io } {
 | **Declaring one** | `fn name[T…, effects E](…)`: at most one effect parameter, after the type parameters. Its name may be written in the effect sets of the function's own signature and of closures in its body. `main` may not have one |
 | **In the body** | Opaque. Calling something whose type has `E` performs `E`, so the declared set must include it; `E` needs no capability |
 | **At a call** | Bound from the arguments: a parameter typed `fn(…) -> R ! { k…, E }` given a value of type `fn(…) -> R ! { a… }` binds `E` to `a…` without `k…` (and `k…` must be within `a…`). Bound to two different sets is `N0389`; bound by nothing, it is empty. The call performs the callee's declared set with `E` replaced |
-| **Capture** | A closure may capture a capability; its body then holds that authority as well as its own capability parameters'. Its type still declares what it does. A `let mut` binding still may not be captured (`N0386`) |
+| **Capture** | A closure may capture a capability; its body then holds that authority as well as its own capability parameters'. Its type still declares what it does. A `let mut` binding is shared since R1b, unless it can hold a function value (`N0386`; *Function values and closures*) |
 | **Values of undeclared functions** | Making one needs, where it is made, the capabilities its type's effects need, as calling the function would (`N0369`) |
 | **Not here** | Two effect parameters, effect subtyping, attenuated capabilities, revocation — see `architecture.md` §7.53 |
 

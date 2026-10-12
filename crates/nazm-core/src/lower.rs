@@ -193,6 +193,9 @@ struct Lower<'a> {
     /// The slot its clauses read as `result`, and the local a return site holds it in.
     result_slot: Option<u32>,
     result_here: Option<LocalId>,
+    /// A shared binding's field assignment in progress (R1b, L10): its cell, the copy being
+    /// changed, and the read that fills the copy.
+    pending_cell: Option<(LocalId, LocalId, Expr)>,
 }
 
 impl<'a> Lower<'a> {
@@ -208,15 +211,21 @@ impl<'a> Lower<'a> {
         let shift = u32::from(env.is_some());
         let locals = env
             .into_iter()
-            .chain(def.locals.iter().enumerate().map(|(i, l)| Local {
-                ty: l.ty,
-                name: l.name.clone(),
-                origin: if i < params {
-                    LocalOrigin::Param
-                } else {
-                    LocalOrigin::Binding { mutable: l.mutable }
-                },
-                at: l.span,
+            .chain(def.locals.iter().enumerate().map(|(i, l)| {
+                Local {
+                    // A `let mut` a closure shares lives in a cell (R1b, L10).
+                    ty: u32::try_from(i)
+                        .ok()
+                        .and_then(|s| res.shared(id, s))
+                        .unwrap_or(l.ty),
+                    name: l.name.clone(),
+                    origin: if i < params {
+                        LocalOrigin::Param
+                    } else {
+                        LocalOrigin::Binding { mutable: l.mutable }
+                    },
+                    at: l.span,
+                }
             }))
             .collect();
         Self {
@@ -233,6 +242,7 @@ impl<'a> Lower<'a> {
             ensures: Vec::new(),
             result_slot: None,
             result_here: None,
+            pending_cell: None,
         }
     }
 
@@ -260,11 +270,19 @@ impl<'a> Lower<'a> {
             .collect();
         let body = self.value_block(body, captures.clone())?;
         let def = self.def;
+        // A closure in a generic function is generic over that function's parameters (L10).
+        let type_params = self
+            .res
+            .type_owner(self.id)
+            .and_then(|g| self.res.function(g))
+            .map_or(0, |g| {
+                u32::try_from(g.type_params.len()).unwrap_or(u32::MAX)
+            });
         Ok(cir::Function {
             def: self.id,
             module: def.module,
             name: def.name.clone(),
-            type_params: 0,
+            type_params,
             params: u32::try_from(def.params.len() + 1).unwrap_or(u32::MAX),
             locals: self.locals,
             ret: def.ret,
@@ -413,6 +431,43 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// The type a shared binding holds, if local `id` is one a closure shares and so a cell
+    /// (R1b, L10); `None` for every other local.
+    fn shared(&self, id: LocalId) -> Option<Type> {
+        let slot = id.0.checked_sub(self.shift)?;
+        self.res.shared(self.id, slot)?;
+        self.def.locals.get(slot as usize).map(|l| l.ty)
+    }
+
+    /// `vec_get(cell, 0)` or `vec_set(cell, 0, value)` on shared local `cell` holding `elem`.
+    fn through_cell(&mut self, cell: LocalId, elem: Type, value: Option<Expr>, at: Span) -> Expr {
+        let ty = self.locals.get(cell.index()).map_or(elem, |l| l.ty);
+        let zero = Expr {
+            kind: ExprKind::Const(self.constant(Const::Int(0))),
+            ty: Some(Type::Int),
+            at,
+        };
+        let read = Expr {
+            kind: ExprKind::Local(cell),
+            ty: Some(ty),
+            at,
+        };
+        let (op, result) = match value {
+            Some(_) => (nazm_sema::Intrinsic::VecSet, Type::Int),
+            None => (nazm_sema::Intrinsic::VecGet, elem),
+        };
+        Expr {
+            kind: ExprKind::Builtin {
+                op,
+                type_args: vec![elem],
+                args: [read, zero].into_iter().chain(value).collect(),
+                callee_at: at,
+            },
+            ty: Some(result),
+            at,
+        }
+    }
+
     fn local_ty(&self, id: LocalId) -> Lowered<Type> {
         match self.locals.get(id.index()) {
             Some(l) => Ok(l.ty),
@@ -558,14 +613,50 @@ impl<'a> Lower<'a> {
         Ok(match s {
             AstStmt::Let(l) => {
                 // The value first: `let x = x;` reads the outer `x`, as the checker says.
-                let value = self.expr(&l.value)?;
+                let mut value = self.expr(&l.value)?;
                 let local = self.local_at(l.name_span)?;
+                // Shared with a closure (R1b, L10): a cell made holding the value.
+                if let Some(elem) = self.shared(local) {
+                    let cell = self.local_ty(local)?;
+                    let (fresh, fill) =
+                        (nazm_sema::Intrinsic::VecNew, nazm_sema::Intrinsic::VecPush);
+                    value = self.made_holding(
+                        fresh,
+                        fill,
+                        vec![elem],
+                        vec![value],
+                        cell,
+                        l.span,
+                        l.span,
+                    )?;
+                }
                 self.bind(local);
                 Stmt::Let { local, value }
             }
-            AstStmt::Assign(a) => {
+            AstStmt::Assign(a)
+                if a.place.path.is_empty() && {
+                    let local = self.local_at(a.place.name_span)?;
+                    self.shared(local).is_some()
+                } =>
+            {
+                // `x = v` on a shared binding (R1b, L10): the cell's one value replaced.
                 let value = self.expr(&a.value)?;
                 let local = self.local_at(a.place.name_span)?;
+                let elem = self.shared(local).unwrap_or(Type::Int);
+                Stmt::Eval(self.through_cell(local, elem, Some(value), a.span))
+            }
+            AstStmt::Assign(a) => {
+                let value = self.expr(&a.value)?;
+                let mut local = self.local_at(a.place.name_span)?;
+                // `x.f = v` on a shared binding (R1b, L10): its value copied out, changed, and
+                // set back.
+                let shared = self.shared(local).map(|elem| (local, elem));
+                if let Some((cell, elem)) = shared {
+                    let copy = self.temp(Temp::Made, elem, a.span);
+                    let read = self.through_cell(cell, elem, None, a.span);
+                    self.pending_cell = Some((cell, copy, read));
+                    local = copy;
+                }
                 let mut path = Vec::with_capacity(a.place.path.len());
                 let mut target = self.local_ty(local)?;
                 for step in &a.place.path {
@@ -603,11 +694,37 @@ impl<'a> Lower<'a> {
                         at: step.name_span,
                     }));
                 }
-                Stmt::Assign {
+                let assign = Stmt::Assign {
                     local,
                     path,
                     value,
                     at: a.span,
+                };
+                match self.pending_cell.take() {
+                    None => assign,
+                    Some((cell, copy, read)) => {
+                        let back = Expr {
+                            kind: ExprKind::Local(copy),
+                            ty: self.local_ty(copy).ok(),
+                            at: a.span,
+                        };
+                        let elem = self.local_ty(copy)?;
+                        let set = self.through_cell(cell, elem, Some(back), a.span);
+                        Stmt::Block(Block {
+                            stmts: vec![
+                                Stmt::Let {
+                                    local: copy,
+                                    value: read,
+                                },
+                                assign,
+                                Stmt::Eval(set),
+                            ],
+                            tail: None,
+                            ends: Ends::FallsThrough,
+                            owns: vec![copy],
+                            at: a.span,
+                        })
+                    }
                 }
             }
             AstStmt::While(w) => {
@@ -957,6 +1074,10 @@ impl<'a> Lower<'a> {
             }
             AstExpr::Var { span, .. } => {
                 let l = self.local_at(*span)?;
+                // A shared binding is read out of its cell (R1b, L10).
+                if let Some(elem) = self.shared(l) {
+                    return Ok(self.through_cell(l, elem, None, *span));
+                }
                 node(ExprKind::Local(l), Some(self.local_ty(l)?), *span)
             }
             AstExpr::Closure { span, .. } => {

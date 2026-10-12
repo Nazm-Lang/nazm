@@ -120,10 +120,19 @@ pub fn plan_instances(
     let mut seen: HashMap<InstanceKey, usize> = HashMap::new();
     let mut order: Vec<(InstanceKey, Span)> = Vec::new();
 
+    // A generic function's closures (R1b, L10), each instantiated with it.
+    let mut closures_of: HashMap<FnId, Vec<FnId>> = HashMap::new();
+    for i in 0..res.functions().len() {
+        let c = FnId::from_index(i);
+        if let Some(root) = res.type_owner(c).filter(|r| *r != c) {
+            closures_of.entry(root).or_default().push(c);
+        }
+    }
+
     // The roots: what the non-generic functions call, in definition order and then in the
     // order each body makes its calls.
-    for f in res.functions() {
-        if !f.type_params.is_empty() {
+    for (i, f) in res.functions().iter().enumerate() {
+        if res.type_owner(FnId::from_index(i)).is_some() {
             continue;
         }
         for site in &f.call_sites {
@@ -173,7 +182,19 @@ pub fn plan_instances(
                 "the bound is on what `nazm build` generates; `nazm run` has none",
             )]);
         }
-        let owner = ParamOwner::Function(key.def);
+        let owner = ParamOwner::Function(res.type_owner(key.def).unwrap_or(key.def));
+        // Its closures, under its substitution (L10).
+        for c in closures_of.get(&key.def).cloned().unwrap_or_default() {
+            let next = InstanceKey {
+                def: c,
+                args: key.args.clone(),
+            };
+            if !seen.contains_key(&next) {
+                seen.insert(next.clone(), order.len());
+                order.push((next.clone(), at));
+                work.push_back((next, at));
+            }
+        }
         let (sites, mentions) = match res.function(key.def) {
             Some(d) => (d.call_sites.clone(), d.mentions.clone()),
             None => continue,
@@ -205,7 +226,7 @@ pub fn plan_instances(
     // Each instance's signature, and its identity.
     let mut planned: Vec<Planned> = Vec::with_capacity(order.len());
     for (key, _) in order {
-        let owner = ParamOwner::Function(key.def);
+        let owner = ParamOwner::Function(res.type_owner(key.def).unwrap_or(key.def));
         let Some(def) = res.function(key.def).cloned() else {
             continue;
         };
@@ -265,19 +286,23 @@ fn expanding_cycles(res: &Resolution) -> Vec<Diagnostic> {
     let mut edges: ParamEdges = HashMap::new();
     let mut nodes: Vec<(FnId, u32)> = Vec::new();
     for (i, f) in res.functions().iter().enumerate() {
-        let from = FnId::from_index(i);
+        let me = FnId::from_index(i);
         for p in 0..f.type_params.len() {
-            nodes.push((from, u32::try_from(p).unwrap_or(u32::MAX)));
+            nodes.push((me, u32::try_from(p).unwrap_or(u32::MAX)));
         }
-        if f.type_params.is_empty() {
+        // A closure's calls are its generic function's (L10): written over its parameters.
+        let Some(from) = res.type_owner(me) else {
             continue;
-        }
+        };
+        let Some(params) = res.function(from).map(|d| d.type_params.len()) else {
+            continue;
+        };
         for site in &f.call_sites {
             let Callee::Function(to) = site.callee else {
                 continue;
             };
             for (j, t) in site.type_args.iter().enumerate() {
-                for p in 0..f.type_params.len() {
+                for p in 0..params {
                     let param = TypeParam {
                         owner: ParamOwner::Function(from),
                         index: u32::try_from(p).unwrap_or(u32::MAX),

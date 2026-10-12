@@ -200,6 +200,26 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-13)** · *Closures in generic functions; a shared `let mut`* (`spec.md`, *Function
+values and closures*; `openspec/changes/r1-language-for-the-rewrite`, L10). A closure, and a named
+function's value, may be written in a generic function, the closure's types naming the function's
+type parameters (`N0387` narrowed): `nazm run` is parametric, and the instance planner instantiates
+each closure with the generic function it is written in — through every closure between —
+substituting under that function's parameters (`Resolution::type_owner`); a thunk a generic body
+makes a value of is bindable across objects, as what a generic body calls is. A captured `let mut`
+binding is shared, not copied (`N0386` narrowed to one that can hold a function value): the
+checker records it and every closure's copy as shared, and Core IR lowering keeps it in a `Cell` —
+`let mut x = e` makes the cell, a read is `vec_get(x, 0)`, `x = v` is `vec_set(x, 0, v)` and
+`x.f = v` copies out, changes and sets back — so nothing below Core IR is new. Provenance reads and
+writes a shared binding through its cell, so a closure's write reaches its function's read.
+Semantic epoch 61; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/
+generic_closures.rs` — generic closures (nested, over `Int` and `Str`, with a named function's
+value) and shared bindings (a closure's writes, a field through a closure, a write after the closure
+is made, nested closures, a generic function's) by hand-worked output under the interpreter, the LIR
+oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; a generic closure and a thunk built
+across modules by both backends; provenance through a shared binding. The compat case
+`refuse/capture-let-mut.nz` is SUPERSEDED.
+
 **R1b (2026-10-12)** · *A mutable cell: `Cell[T]`* (`spec.md`; `openspec/changes/
 r1-language-for-the-rewrite`, L7). One value that can be replaced, reached through a handle, so a
 callee's `cell_set` is its caller's: `cell_new`, `cell_get` and `cell_set` as prelude names. The
@@ -800,15 +820,16 @@ remains is deliberate, and each is refused by name: no trait objects or dynamic 
 default methods, no associated types or constants, no generic traits or methods, no supertraits,
 no impls with bounds or for generic types, no inherent impls without a trait, no methods as values,
 one requirement per type parameter. Calling a field of function type as `r.f(1)` stays refused.
-Generic function values and closures inside generic functions (`N0387`) are outside the supported
-model: each would need a thunk per instance, and a bound covers the programs that wanted one. No
+Generic function values (`N0387`) are outside the supported model: each would need a thunk per
+instance, and a bound covers the programs that wanted one. A closure, and a named function's value,
+inside a generic function are accepted since R1b (L10). No
 higher kinds, const generics, defaults, variance or specialisation. A persisted interface's traits
 are not rehydrated, so a module checked against one (rather than its source) cannot use them. The
 compiler written in Nazm has traits, closures and function values since N102. A requirement cannot be written on a record's or an enum's parameter (`N0101`).
 `Option` has no `?`, `Result` no
 methods and no conversion between error types, and `main` cannot return one; no
 indexing syntax on a `Vec`; no `spawn` of a generic function. Function values and closures
-exist (N50) but not inside a generic function (`N0387`); no unit type, no `Never`.
+exist (N50), inside a generic function too since R1b (L10); no unit type, no `Never`.
 Since N78 a generic definition can require a trait of `T`, and a program can declare traits of its
 own; nothing can say "`T` can be passed to a task". No ordering, hashing or custom equality on any user type, and no
 equality at all on a sequence, a `Vec` or a `Chan`. No field-level or per-variant visibility, no

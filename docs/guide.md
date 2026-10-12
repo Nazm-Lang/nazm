@@ -1631,8 +1631,9 @@ closure = "fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , blo
 
 A closure (N50): a function written where a value is, its parameters and result in
 full, its effects declared or none. Its body may name the bindings around it, each
-copied in when the closure is made; a `let mut` binding may not be (`N0386`). A
-capability may be (N51): the closure holds it, and its type says what it does.
+copied in when the closure is made; a `let mut` binding is shared instead (R1b), unless
+it can hold a function value (`N0386`). A capability may be (N51): the closure holds
+it, and its type says what it does. One may be written in a generic function (R1b).
 
 ```nazm
 fn main() -> Int { let k = 2; let f = fn(x: Int) -> Int { x * k }; f(3) }

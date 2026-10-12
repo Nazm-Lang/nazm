@@ -108,8 +108,20 @@ impl Checker<'_> {
 
     /// The binding `name` reaches here, captured into every closure between it and here
     /// (N50): a binding of a frame below a closure's boundary is copied into that closure
-    /// when the closure is made, so inside it the name means the closure's copy. A
-    /// `let mut` binding or a capability may not be captured (`N0386`).
+    /// when the closure is made, so inside it the name means the closure's copy. A capability
+    /// may be (N51). A `let mut` binding is shared instead (R1b, L10): it is kept in a cell the
+    /// function and every closure between name, unless its type can hold a function value
+    /// (`N0386`).
+    /// The closures between frame `frame` and here, outermost first.
+    fn closures_crossing(&self, frame: usize) -> Vec<usize> {
+        self.closures
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| frame < c.boundary)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     pub(super) fn lookup_var(&mut self, name: &str, at: Span) -> Option<Binding> {
         let (frame, b) = self.scopes.lookup_at(name)?;
         let crossing: Vec<usize> = self
@@ -123,25 +135,45 @@ impl Checker<'_> {
             return Some(b);
         }
         // A capability may be captured since N51: the closure holds it, and its type says
-        // what it does. A mutable binding still may not be: its copy would stop tracking it.
-        if b.mutable {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::CAPTURE_REFUSED,
-                    at,
-                    format!("a closure cannot capture `{name}`, a `let mut` binding"),
-                )
-                .help(
-                    "a closure copies what it captures, so a mutable binding would silently \
-                     stop being tracked; bind a copy with `let`, or share a sequence or a \
-                     channel",
-                ),
-            );
-            return Some(Binding {
-                mutable: false,
-                declared_at: None,
-                ..b
-            });
+        // what it does. A mutable binding is shared since R1b (L10): a closure's copy of it would
+        // stop tracking it, so the function and its closures name one cell instead. A cell that
+        // can hold a function value could come to hold the closure that holds it, so such a
+        // binding is still refused, as a `Vec` of them is (`N0616`).
+        let cell = b.mutable.then(|| self.res.types_mut().cell_of(b.ty));
+        if let Some(cell) = cell {
+            if self.res.types().function_holder(cell).is_some() {
+                let ty = self.res.types().show(b.ty);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::CAPTURE_REFUSED,
+                        at,
+                        format!(
+                            "a closure cannot capture `{name}`, a `let mut` binding of `{ty}`, \
+                             which can hold a function value"
+                        ),
+                    )
+                    .help(
+                        "a captured `let mut` binding is shared with the closure, so the closure \
+                         could be stored into it and own itself, which reference counting never \
+                         reclaims; bind a copy with `let`, or pass the value as an argument",
+                    ),
+                );
+                return Some(Binding {
+                    mutable: false,
+                    declared_at: None,
+                    ..b
+                });
+            }
+            // The binding's own function: the one the outermost crossing closure is written in.
+            let owner = crossing
+                .first()
+                .and_then(|i| self.closures.get(*i))
+                .and_then(|c| self.res.function(c.id))
+                .and_then(|d| d.closure.as_ref())
+                .map(|info| info.enclosing);
+            if let Some(owner) = owner {
+                self.res.record_shared(owner, b.slot, cell);
+            }
         }
         // Gate 1-C1: a closure's environment owns what it captures, so capturing a container
         // that can hold a function value is the one way it could come to own itself
@@ -216,6 +248,25 @@ impl Checker<'_> {
             }
             slot = inner;
         }
+        // Every closure's copy of a shared binding names the same cell (R1b, L10).
+        if let Some(cell) = cell {
+            let mut at_slot = b.slot;
+            for i in self.closures_crossing(frame) {
+                let Some(c) = self.closures.get(i) else {
+                    continue;
+                };
+                if let Some(inner) = c.captured.get(&at_slot).copied() {
+                    self.res.record_shared(c.id, inner, cell);
+                    at_slot = inner;
+                }
+            }
+            return Some(Binding {
+                mutable: true,
+                declared_at: b.declared_at,
+                slot,
+                ty: b.ty,
+            });
+        }
         Some(Binding {
             mutable: false,
             declared_at: None,
@@ -256,11 +307,6 @@ impl Checker<'_> {
         }
         if v.sig.generics > 0 {
             return refuse(self, "generic");
-        }
-        // Its thunk is the using module's; an instance of a generic body is an artefact of its
-        // own, which could not reach it (N50).
-        if !self.type_scope.is_empty() {
-            return refuse(self, "named inside a generic function");
         }
         // Undeclared: another module's may do anything the bridge covers; this module's is
         // assumed to do nothing, which effects analysis then holds it to.

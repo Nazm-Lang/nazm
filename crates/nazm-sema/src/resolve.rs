@@ -453,6 +453,10 @@ pub struct Resolution {
     unresolved_members: HashMap<Span, Type>,
     /// Each closure expression's definition, by the expression's span (N50).
     closures: HashMap<Span, FnId>,
+    /// The `let mut` bindings a closure captures (R1b, L10), by function and slot, with the
+    /// `Cell` type each is kept in: the binding in the function that declared it and its copy in
+    /// every closure between. One variable, shared, where any other capture is a copy.
+    shared: HashMap<(FnId, u32), Type>,
     /// What the checker decided about each numeric literal whose type is not the default, and
     /// each conversion, by the literal's or the callee's span (Gate 2).
     numeric: HashMap<Span, NumericFact>,
@@ -599,6 +603,23 @@ impl Resolution {
     #[must_use]
     pub fn function(&self, id: FnId) -> Option<&FnDef> {
         self.functions.get(id.index())
+    }
+
+    /// The generic function whose type parameters `id`'s body is written over (R1b, L10): `id`
+    /// itself if it is generic, the generic function a closure is written in — through every
+    /// closure between — and `None` for a body with no type parameters. A closure in a generic
+    /// function is instantiated with it, under its substitution.
+    #[must_use]
+    pub fn type_owner(&self, id: FnId) -> Option<FnId> {
+        let mut at = id;
+        for _ in 0..=self.functions.len() {
+            let d = self.function(at)?;
+            if !d.type_params.is_empty() {
+                return Some(at);
+            }
+            at = d.closure.as_ref()?.enclosing;
+        }
+        None
     }
 
     /// The definition this module makes under this name — public or private, since a
@@ -895,6 +916,18 @@ impl Resolution {
     }
 
     /// Record a capture a closure's body just made (N50).
+    /// Keep `slot` of `function` in a cell of type `cell` (R1b, L10): a `let mut` binding a
+    /// closure captures, or a closure's copy of one.
+    pub fn record_shared(&mut self, function: FnId, slot: u32, cell: Type) {
+        self.shared.insert((function, slot), cell);
+    }
+
+    /// The `Cell` type `slot` of `function` is kept in, if a closure shares it (R1b, L10).
+    #[must_use]
+    pub fn shared(&self, function: FnId, slot: u32) -> Option<Type> {
+        self.shared.get(&(function, slot)).copied()
+    }
+
     pub fn record_capture(&mut self, closure: FnId, capture: Capture) {
         if let Some(info) = self
             .functions
