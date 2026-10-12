@@ -1955,7 +1955,7 @@ nothing in the tree imports a standard module.
 
 ### The formal core's check — N61, measured 2026-10-02
 
-`cargo test -p nazm-formal`, debug, M1 Pro: 94,352 programs enumerated, 27,680 well-typed, each
+`cargo test -p nazm-formal`, debug, M1 Pro: 94,352 programs enumerated, 28,238 well-typed (27,680 before R1a, L6), each
 typed program checked and run in-process by the interpreter and each program checked by the
 checker — 54 s for the five properties. The bound is five nodes; six would be roughly twenty times
 as many programs.

@@ -129,6 +129,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `box-list` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; recursive types through immutable indirection |
 | `patterns` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; supersedes the N10 limits on patterns where it says so |
 | `tuples` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; a tuple is an anonymous record |
+| `order-hash` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; widens *Equality is derived*'s "not ordering, not hashing" |
 | `networking` | STABLE 1.0 | Gate 2: TCP and UDP over literal addresses, a deadline per handle, waits that park on the pool; no TLS, no Unix-domain sockets |
 | `arrays` | STABLE 1.0 | plain-data elements and the 64 KiB bound are the rule; a wider element class or bound would be an extension |
 | `constants` | STABLE 1.0 | module-private; exporting a constant would be an extension |
@@ -1366,7 +1367,9 @@ compared is not observable, and an implementation may stop at the first unequal 
 
 **What equality is not.** Not declared: there is no `derive`, no `Eq` and no trait. Not
 customisable: a type cannot define its own `==`. Not identity: no value's address, owner or
-handle is compared. Not ordering: `< <= > >=` remain `Int`-only. Not hashing. And not
+handle is compared. Not ordering: `< <= > >=` remain `Int`-only. Not hashing. *(Corrected
+2026-10-12, R1a: ordering and hashing are derived too — see* Ordering and hashing are derived*;
+`Box` and `List` compare by what they hold.)* And not
 defined on sequences, vectors or channels, deliberately, by the rule that stops a record
 containing one from comparing.
 
@@ -3845,7 +3848,7 @@ nothing, and free to cross into a task.
 | **Integer literals** | Decimal, `0x`, `0o` or `0b`, with `_` between digits. A literal is an `Int` unless a numeric type is **expected** where it is written — an argument's parameter type, a function's result, the other operand of a binary operator, an element of a `Vec` being pushed, a conversion's target — and then it is that type. A literal outside the range of the type it is written at is refused, `N0003`, naming the type and its range. `-128` written as an `Int8` is one literal |
 | **Float literals** | `1.5`, `0.25`, `2e9`, `2.5e-3`: digits, a `.` and digits, and/or an exponent. A `Float64`, or a `Float32` where one is expected; the decimal text is rounded once, to the nearest value of that type. `1.` and `.5` are not literals, and `1 . 5` is a field read |
 | **Arithmetic** | `+ - * / %` and unary `-` on two operands of **one** numeric type, never two: nothing converts implicitly, and `Int + UInt8` is refused, `N0304`. On an integer type, `Int`'s rules at that width: a result outside the type traps (`N0400`), a zero divisor traps (`N0401`), `MIN / -1` traps and `MIN % -1` is 0, and `-x` of an unsigned value other than 0 traps. On a float type: IEEE 754, round to nearest, ties to even, never trapping — overflow is an infinity and an invalid operation a NaN; `%` is the remainder of truncated division, C's `fmod` |
-| **Comparison** | `< <= > >=` on two numbers of one type; unsigned types compare as unsigned. `==` and `!=` on every numeric type, and so on records and enums holding them (*Equality is derived*). On floats both are IEEE 754's: every comparison with a NaN is false except `!=`, and `-0.0 == 0.0` — so a record holding a NaN is not equal to itself |
+| **Comparison** | `< <= > >=` on two numbers of one type; unsigned types compare as unsigned. `==` and `!=` on every numeric type, and so on records and enums holding them (*Equality is derived*). On floats both are IEEE 754's: every comparison with a NaN is false except `!=`, and `-0.0 == 0.0` — so a record holding a NaN is not equal to itself. *(R1a: `Bool`, `Str`, records, enums and tuples order too — see* Ordering and hashing are derived*; a float makes no structure ordered.)* |
 | **Bits** | `&`, `\|`, `^` on two integers of one type; prefix `~`; `<<` and `>>` with an `Int` amount. Precedence, loosest first: `\|\|`, `&&`, comparisons, `\|`, `^`, `&`, shifts, `+ -`, `* / %`, unary — so `a & m == 0` is `(a & m) == 0`. `>>` is arithmetic on a signed type and logical on an unsigned one; `<<` drops the bits shifted out and never traps on them. An amount below 0 or not below the width traps, `N0412`, and a constant one is refused, `N0617`: no amount is masked and none is left to the machine |
 | **Conversions** | `T(x)`, `T` a numeric type's name, from any numeric value: the same value or a trap (`N0400`). Integer to float rounds to nearest, ties to even; `Float64` to `Float32` rounds the same way and may become an infinity; float to integer truncates toward zero and traps on a NaN, an infinity or a result outside `T`. `try_convert[T](x)` gives `Option[T]`: `Some` of the exact conversion, `None` where `T(x)` would trap. `wrap_convert[T](x)` is two's complement modulo `2^n`, between integer types only. `saturate_convert[T](x)` clamps to `T`'s range, a NaN to 0. `T(x)` of a literal is the literal written at `T` |
 | **Functions** | Integers: `wrapping_add`/`_sub`/`_mul`, `saturating_add`/`_sub`/`_mul`, `count_ones`, `leading_zeros`, `trailing_zeros`, `rotate_left`, `rotate_right` (amount modulo the width; negative traps, `N0412`), `swap_bytes`, `to_big_endian`, `from_big_endian`, `to_little_endian`, `from_little_endian` — each generic over every integer type, `T` inferred. Floats: `float_sqrt`, `float_abs`, `float_floor`, `float_ceil`, `float_trunc`, `float_round` (half away from zero), `float_min`, `float_max` (a NaN loses), `float_is_nan`, `float_is_infinite`, `float_is_finite`, and from the C library `float_sin`, `float_cos`, `float_tan`, `float_exp`, `float_ln`, `float_log2`, `float_log10`, `float_pow`, `float_atan2`. Bits: `float64_to_bits`, `float64_from_bits`, `float32_to_bits`, `float32_from_bits`. Text: `num_to_str` for every numeric type, `float_parses` and `float_parse_raw`. A built-in applied outside its class is refused, `N0300` |
@@ -4293,7 +4296,7 @@ after it is made, and that is what makes them safe.
 | Read by | `box_get(b) -> T`, a copy by `T`'s own law | `list_len(l) -> Int`; `list_get(l, i) -> T`, `N0405` outside `0..list_len(l)`; `for x in l` (*`for` loops*) |
 | Changed by | nothing | nothing |
 | Assignment | shares: another reference to the same immutable value | shares |
-| Equality | none yet (`N0304`), as for a sequence; structural equality arrives with L6 | none yet (`N0304`) |
+| Equality | what it holds, by that type's equality (L6) | element by element, the lengths first (L6) |
 | Into a task | refused (`N0321`), as a handle is | refused (`N0321`) |
 
 **The kind.** Both are **shared immutable values** (*The memory constitution*), the kind `Str`
@@ -4422,10 +4425,11 @@ fn main() -> Int {
 }
 ```
 
-**Type and value.** `(A, B, …)` is the type of a tuple of two or more elements, in order; `(a, b,
-…)` is a tuple, each element evaluated left to right. A trailing comma is allowed. `(T)` and `(e)`
-are `T` and `e`, parenthesised, as they always were; `(T,)` and `(e,)` are refused (`N0101`) —
-there is no tuple of one, and none of none.
+**Type and value.** `(A, B, …)` is the type of a tuple of two to eight elements, in order; `(a,
+b, …)` is a tuple, each element evaluated left to right. A trailing comma is allowed. `(T)` and
+`(e)` are `T` and `e`, parenthesised, as they always were; `(T,)` and `(e,)` are refused (`N0101`)
+— there is no tuple of one, and none of none — and so is a ninth element: past eight, the elements
+want names, which a record gives them.
 
 **What a tuple is.** A tuple is an anonymous record: one generic definition per arity, whose
 fields are named `0`, `1`, … and whose type parameters are the element types. So everything
@@ -4450,6 +4454,74 @@ it does not match, otherwise; its bindings are in scope for the rest of the bloc
 **What is unchanged.** There is no unit type `()`, no tuple struct and no indexing by a computed
 position. A tuple is not a `Vec`: it is not iterable. Derived hashing and ordering wait for L6,
 and with them a tuple as a map's key.
+
+### Ordering and hashing are derived — R1
+<!-- id: order-hash -->
+
+Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L6).
+
+```nazm
+use "@std/hash";
+use "@std/hashmap";
+
+struct Point { x: Int, y: Int, }
+
+fn main() -> Int {
+    let m = hashmap_new[(Str, Point), Int]();
+    hashmap_set(m, ("a", Point(x: 1, y: 2)), 7);
+    let first = if "apple" < "banana" && (1, "b") < (2, "a") { 1 } else { 0 };
+    first + if Point(x: 1, y: 9) < Point(x: 2, y: 0) { 10 } else { 0 }
+}
+```
+
+Like equality, ordering and hashing are not declared, written or opted into: they are **derived**
+from what a type contains, and a type has them exactly when every component does.
+
+**Ordered types.** `< <= > >=` apply to two operands of one type that is:
+
+| type | order |
+| --- | --- |
+| an integer type | numeric, as before |
+| `Bool` | `false` before `true` |
+| `Str` | by bytes, lexicographically: the first differing byte decides, and a prefix comes first |
+| a tuple | lexicographically, by position |
+| a record | lexicographically, by its fields **in the byte order of their names** |
+| an enum | by its variants **in the byte order of their names**, then, within one variant, its payload fields in the byte order of their names |
+| a concrete instance of a generic record or enum | as above, over its fields after substitution |
+
+A float compares numerically, as before, but a record, enum or tuple holding one has no order: an
+IEEE 754 comparison is not a total order, and a derived order must be. A sequence, `Vec`, `Box`,
+`List`, channel or function value has none, nor does an unconstrained type parameter; `N0304`
+names the component responsible, as for equality.
+
+**Why names, not declaration order.** *Equality is derived* holds that the order in which fields
+and variants are declared is not part of what a type means. The derived order keeps that law:
+reordering a declaration never changes a comparison, a sort or a map's order. An order that means
+something particular — `Low` before `High` — is written as a key: an integer, or a tuple of them.
+The derived order is consistent with equality: `a == b` exactly when neither is less than the
+other.
+
+**Hashing.** `Hash` (`@std/hash`) is satisfied, without an impl, by a concrete record, enum or
+tuple type whose every component is an integer type, `Bool`, `Str`, or itself such a type. So
+`hashmap_new[(Str, Int), V]()` and a map keyed by a record need no impl. A component whose type
+has a written `Hash` impl of its own makes the container need one too: that impl's `same` may mean
+more than `==`, and a derived `same` is `==`. For a derived type:
+
+- `same(a, b)` is `a == b`;
+- `hash` of a record or tuple starts from `hash_u64(0)` and folds each component's hash into it
+  with `hash_combine`, the fields in the byte order of their names (a tuple's by position);
+- `hash` of an enum value starts from `hash_bytes` of its variant's name and folds its payload
+  fields the same way;
+- a component's hash is its type's: `hash_u64` of an integer's 64-bit pattern (sign-extended),
+  `hash_u64` of 0 or 1 for a `Bool`, `hash_bytes` for a `Str` — exactly the library's impls.
+
+So a derived hash is the same in every implementation and every run, and unchanged by reordering
+a declaration. A type with a written impl keeps it: derivation applies only where there is none.
+
+**What is unchanged.** Equality is as *Equality is derived* says. A generic body still needs a
+requirement: inside `fn f[T: Hash](x: Pair[T])`, `Pair[T]` is not derived — only a concrete type
+is. There is no ordering requirement on a type parameter yet (`T: Ordered` waits for
+`@std/ordmap`, S3), and no customised order: a type cannot define its own `<`.
 
 ### Not in Nazm 1.0, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->

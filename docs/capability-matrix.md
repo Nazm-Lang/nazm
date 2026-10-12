@@ -200,6 +200,22 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1a (2026-10-12)** · *Ordering and hashing are derived* (`spec.md`; `openspec/changes/
+r1-language-for-the-rewrite`, L6). `< <= > >=` on `Bool`, `Str` (bytes) and records, enums and
+tuples of ordered components, by the **names** of fields and variants (the canonical order the
+layout already used, so reordering a declaration changes no comparison), a tuple by position (at
+most eight elements, so its field names sort as its positions); `==` on `Box` and `List` by what
+they hold; `@std/hash`'s `Hash` satisfied without an impl by a concrete record, enum or tuple of
+integers, `Bool`s and `Str`s, `hash` folding `hash_combine` from `hash_u64(0)` (or the variant's
+name) in the canonical order and `same` being `==`. The interpreter computes both from Core IR's
+new canonical-order table; MIR lowers a derived trait call to `Rvalue::Hash` or a comparison; LIR
+generates `ord.*` and `hash.*` helpers (FNV-1a and SplitMix64 as instructions, constants folded at
+build time). Semantic epoch 56; EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/order_hash.rs` — orders and hashes by hand-worked output, and against the
+library's own functions, in the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with
+nothing live; reordering a declaration changes no order and no hash; refusals by code, naming the
+component; a written impl keeps its meaning.
+
 **R1a (2026-10-12)** · *Tuples* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`, L5).
 `(A, B, …)` types, `(a, b, …)` values, `t.0` (and `t.0.1`, which the lexer reads as a float and the
 parser splits), `t.0 = e` on a `let mut`, tuple patterns, `let P = e;` (a `let` whose pattern must
@@ -2267,7 +2283,7 @@ are not modelled. Two mutants of the model's own rules, each caught by the corre
 states integers and booleans with traps, comparison, short-circuit `&&`, `if` and `let` by typing and
 big-step rules; `crates/nazm-formal` transcribes them with no dependency on the compiler, and
 `crates/nazm-formal/tests/exhaustive.rs` checks five properties over **every** program of the core
-up to five nodes — 94,352 programs, 27,680 well-typed: soundness (never stuck, the right type),
+up to five nodes — 94,352 programs, 28,238 well-typed (27,680 before R1a made `<` on `Bool` well typed): soundness (never stuck, the right type),
 determinism, checked arithmetic against 128-bit integers, the interpreter's outcome equal to the
 rules' for every typed program, and the checker accepting exactly what the rules type. The check's
 first run found an error in the formal transcription, not the compiler — `i64::MIN % -1` is 0 by

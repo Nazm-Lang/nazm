@@ -161,6 +161,9 @@ pub fn rvalue(program: &Program, v: &Rvalue) -> String {
             law.name(),
             ty(program, *t)
         ),
+        Rvalue::Hash { operand: t, value } => {
+            format!("hash {} ({})", operand(value), ty(program, *t))
+        }
         Rvalue::Call { callee: c, args } => {
             format!("call {}({})", callee(program, *c), operands(args))
         }

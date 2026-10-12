@@ -130,9 +130,36 @@ pub struct Traits {
     /// Which modules each module re-exports from (N103): their impls are usable wherever the
     /// re-exporting module is imported, as the module's own are.
     sources: Vec<(crate::module::ModuleId, crate::module::ModuleId)>,
+    /// `@std/hash`'s `Hash`, when the compilation has it (L6): the trait a record, enum or
+    /// tuple satisfies without an impl when its components do.
+    derived_hash: Option<TraitId>,
 }
 
 impl Traits {
+    /// Name `@std/hash`'s `Hash` as the derivable trait (L6).
+    pub fn set_derived_hash(&mut self, id: Option<TraitId>) {
+        self.derived_hash = id;
+    }
+
+    /// `@std/hash`'s `Hash`, when the compilation has it (L6).
+    #[must_use]
+    pub const fn derived_hash(&self) -> Option<TraitId> {
+        self.derived_hash
+    }
+
+    /// Whether `ty` satisfies `trait_id` by derivation rather than by an impl (L6,
+    /// `docs/spec.md`, *Ordering and hashing are derived*): the trait is `@std/hash`'s `Hash`,
+    /// `ty` has no impl of its own, and every component is an integer, `Bool`, `Str`, or a
+    /// record, enum or tuple of them none of which has an impl.
+    #[must_use]
+    pub fn derives(&self, trait_id: TraitId, ty: Type, types: &crate::UserTypes) -> bool {
+        self.derived_hash == Some(trait_id)
+            && self.find(trait_id, ty).is_none()
+            && types
+                .hashing(ty, |c| self.find(trait_id, c).is_some())
+                .is_ok()
+    }
+
     pub fn declare(&mut self, def: TraitDef) -> TraitId {
         let id = TraitId::from_index(self.traits.len());
         self.traits.push(def);

@@ -308,9 +308,14 @@ fn the_ownership_rule_accepts_immutable_cycles_and_refuses_counted_ones() {
 }
 
 #[test]
-fn a_box_or_list_is_neither_compared_nor_given_to_a_task_nor_written_bare() {
+fn a_box_or_list_is_neither_ordered_nor_given_to_a_task_nor_written_bare() {
+    // Equal by what it holds since L6, but not ordered.
     assert_eq!(
         codes("fn main() -> Int { let a = box_new(1); if a == a { 1 } else { 0 } }"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        codes("fn main() -> Int { let a = box_new(1); if a < a { 1 } else { 0 } }"),
         ["N0304"]
     );
     assert_eq!(

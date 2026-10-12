@@ -1151,7 +1151,41 @@ impl<'l, 'a> Fx<'l, 'a> {
                 ..
             } => {
                 let t = Ty::of(*operand);
+                let ordering = !matches!(op, mir::CmpOp::Eq | mir::CmpOp::NotEq);
                 let r = match t {
+                    // The derived order (L6): -1, 0 or 1 from the type's helper, against 0.
+                    Ty::Str | Ty::Record(_) | Ty::Enum(_) if ordering => {
+                        let a = self.place(lhs);
+                        let b = self.place(rhs);
+                        let h = self.lw.helper(Helper::Order(t));
+                        let o = match self.call(h, vec![a, b]) {
+                            Some(v) => v,
+                            None => self.iconst(0),
+                        };
+                        let cc = match op {
+                            mir::CmpOp::Lt => Cmp::Lt,
+                            mir::CmpOp::LtEq => Cmp::Le,
+                            mir::CmpOp::Gt => Cmp::Gt,
+                            _ => Cmp::Ge,
+                        };
+                        self.cmp_imm(cc, o, Class::I64, 0)
+                    }
+                    // A `Box` or `List` compares by what it holds (L6), through the helper.
+                    // A handle is a scalar: each is spilled, so the helper reads it through a
+                    // pointer as it reads every value it compares.
+                    Ty::Vec(_) => {
+                        let (x, y) = (self.value(lhs), self.value(rhs));
+                        let a = self.scratch(8);
+                        self.store(a, 0, x);
+                        let b = self.scratch(8);
+                        self.store(b, 0, y);
+                        let h = self.lw.helper(Helper::Equal(t));
+                        let eq = match self.call(h, vec![a, b]) {
+                            Some(v) => v,
+                            None => self.bit(false),
+                        };
+                        self.negate_if(eq, *op == mir::CmpOp::NotEq)
+                    }
                     Ty::Str => {
                         let a = self.place(lhs);
                         let b = self.place(rhs);
@@ -1176,9 +1210,15 @@ impl<'l, 'a> Fx<'l, 'a> {
                     _ => {
                         let a = self.value(lhs);
                         let b = self.value(rhs);
+                        // A `Bool` orders `false` before `true` (L6): unsigned, as a bit is.
+                        let bit = t == Ty::Bool;
                         let cc = match op {
                             mir::CmpOp::Eq => Cmp::Eq,
                             mir::CmpOp::NotEq => Cmp::Ne,
+                            mir::CmpOp::Lt if bit => Cmp::ULt,
+                            mir::CmpOp::LtEq if bit => Cmp::ULe,
+                            mir::CmpOp::Gt if bit => Cmp::UGt,
+                            mir::CmpOp::GtEq if bit => Cmp::UGe,
                             mir::CmpOp::Lt => Cmp::Lt,
                             mir::CmpOp::LtEq => Cmp::Le,
                             mir::CmpOp::Gt => Cmp::Gt,
@@ -1186,6 +1226,24 @@ impl<'l, 'a> Fx<'l, 'a> {
                         };
                         self.cmp(cc, a, b)
                     }
+                };
+                self.set(dst, r);
+            }
+            // The derived hash (L6), from the type's helper, of the value where it is held.
+            mir::Rvalue::Hash { operand, value } => {
+                let t = Ty::of(*operand);
+                let a = if in_memory(t) {
+                    self.place(value)
+                } else {
+                    let v = self.value(value);
+                    let s = self.scratch(8);
+                    self.store(s, 0, v);
+                    s
+                };
+                let h = self.lw.helper(Helper::Hash(t));
+                let r = match self.call(h, vec![a]) {
+                    Some(v) => v,
+                    None => self.iconst(0),
                 };
                 self.set(dst, r);
             }

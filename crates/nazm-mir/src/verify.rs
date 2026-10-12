@@ -450,6 +450,13 @@ fn rvalue(cx: &Ctx<'_>, value: &Rvalue, want: Type, arm: Option<(LocalId, u32)>)
             (nazm_cir::Law::of(*op, *operand) != Some(*law))
                 .then(|| "a comparison under the wrong law for its type".to_owned())
         }
+        Rvalue::Hash { operand, value } => {
+            if want != Type::of_num(nazm_sema::NumKind::U64) {
+                return Some("a hash written into something that is not a `UInt64`".to_owned());
+            }
+            (cx.operand(value) != Some(*operand))
+                .then(|| "a hash of an operand not of its operand type".to_owned())
+        }
         Rvalue::Call { callee, args } => match cx.program.function(*callee) {
             None => Some("a call to a function that does not exist".to_owned()),
             Some(g) => {
@@ -957,7 +964,8 @@ fn rvalue_reads(v: &Rvalue) -> Vec<LocalId> {
         | Rvalue::Neg(o)
         | Rvalue::Complement(o)
         | Rvalue::Convert { operand: o, .. }
-        | Rvalue::Fits { operand: o, .. } => vec![o],
+        | Rvalue::Fits { operand: o, .. }
+        | Rvalue::Hash { value: o, .. } => vec![o],
         Rvalue::Arith(_, a, b) | Rvalue::Bits(_, a, b) | Rvalue::Index { base: a, index: b } => {
             vec![a, b]
         }

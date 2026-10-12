@@ -41,6 +41,7 @@
 pub mod capability;
 pub mod effect;
 pub mod enums;
+pub mod fnv;
 pub mod generic;
 pub mod interface;
 pub mod intrinsic;

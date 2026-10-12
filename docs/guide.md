@@ -1120,8 +1120,8 @@ fn f(xs: [Int; 4]) -> Int { xs[0] } fn main() -> Int { f([1, 2, 3, 4]) }
 tuple_type = "(" , type , "," , type , { "," , type } , [ "," ] , ")" ;
 ```
 
-R1a: a tuple type, two elements or more; `(T)` is `T`, parenthesised, and `(T,)` is refused
-(`N0101`). See `docs/spec.md`, *Tuples*.
+R1a: a tuple type, two to eight elements; `(T)` is `T`, parenthesised, and `(T,)` or a ninth
+element is refused (`N0101`). See `docs/spec.md`, *Tuples*.
 
 ```nazm
 fn f(p: (Int, Str)) -> (Str, Int) { (p.1, p.0) } fn main() -> Int { f((1, "a")).1 }
@@ -1585,7 +1585,7 @@ fn main() -> Int { Int(2.5e1) + 0xff + 0b1_0 + 0o7 }
 tuple = "(" , expression , "," , expression , { "," , expression } , [ "," ] , ")" ;
 ```
 
-R1a: a tuple, two elements or more (`docs/spec.md`, *Tuples*).
+R1a: a tuple, two to eight elements (`docs/spec.md`, *Tuples*).
 
 ```nazm
 fn main() -> Int { let t = (1, "two", true); t.0 }

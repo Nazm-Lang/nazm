@@ -1204,6 +1204,12 @@ impl BinOp {
         matches!(self, Self::And | Self::Or)
     }
 
+    /// `==` or `!=`.
+    #[must_use]
+    pub fn is_equality(self) -> bool {
+        matches!(self, Self::Eq | Self::NotEq)
+    }
+
     /// Whether the operator produces a `Bool` regardless of its operand type.
     #[must_use]
     pub fn is_comparison(self) -> bool {

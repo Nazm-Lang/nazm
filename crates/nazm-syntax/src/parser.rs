@@ -2422,9 +2422,22 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// A tuple has two elements or more (L5): `(x,)` is refused by name, since `(x)` is `x`
-    /// parenthesised and there is no tuple of one to write instead.
+    /// A tuple has two to eight elements (L5): `(x,)` is refused by name, since `(x)` is `x`
+    /// parenthesised and there is no tuple of one to write instead; past eight, the elements
+    /// want names, and a record gives them. Eight also keeps a tuple's derived order (L6), by
+    /// its fields' names `0` … `7`, the order of its positions.
     fn two_or_more(&mut self, len: usize, span: Span) -> Option<()> {
+        if len > MAX_TUPLE {
+            self.report(
+                Diagnostic::error(
+                    codes::UNSUPPORTED_CONSTRUCT,
+                    span,
+                    "a tuple has at most eight elements",
+                )
+                .help("past eight, the elements want names: declare a `struct`"),
+            );
+            return None;
+        }
         if len >= 2 {
             return Some(());
         }
@@ -5284,3 +5297,6 @@ fn positions(text: &str) -> Option<(String, String)> {
 /// The name a `for` loop over a pattern binds each element to before matching it (L5): not an
 /// identifier, so no program can write it.
 pub(crate) const FOR_ITEM: &str = "for#item";
+
+/// The most elements a tuple has (L5).
+pub const MAX_TUPLE: usize = 8;

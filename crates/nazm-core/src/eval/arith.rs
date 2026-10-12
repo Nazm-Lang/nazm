@@ -2,6 +2,7 @@
 
 use super::value::Value;
 use super::*;
+use nazm_sema::fnv;
 
 /// A condition's value, once something has established it produced one.
 ///
@@ -171,13 +172,15 @@ pub(super) fn num_failure(err: NumError, at: Span, what: &str, kind: NumKind) ->
     }
 }
 
-/// A comparison. Ordering is `Int`'s; equality is [`equal`], the language's law, and `!=` is
-/// its negation rather than a second walk that could drift from it.
+/// A comparison. Ordering is a number's, or the derived order (L6) of anything else that has
+/// one; equality is [`equal`], the language's law, and `!=` is its negation rather than a
+/// second walk that could drift from it.
 pub(super) fn compare(
     op: cir::CmpOp,
     l: &Value,
     r: &Value,
     at: Span,
+    orders: &cir::Orders,
 ) -> Result<Value, RuntimeError> {
     use cir::CmpOp::{Eq, Gt, GtEq, Lt, LtEq, NotEq};
     use Value::{Bool, Int};
@@ -197,6 +200,15 @@ pub(super) fn compare(
         (LtEq, Int(a), Int(b)) => Ok(Bool(a <= b)),
         (Gt, Int(a), Int(b)) => Ok(Bool(a > b)),
         (GtEq, Int(a), Int(b)) => Ok(Bool(a >= b)),
+        (Lt | LtEq | Gt | GtEq, a, b) if order(a, b, orders).is_some() => {
+            let o = order(a, b, orders).unwrap_or(std::cmp::Ordering::Equal);
+            Ok(Bool(match op {
+                Lt => o.is_lt(),
+                LtEq => o.is_le(),
+                Gt => o.is_gt(),
+                _ => o.is_ge(),
+            }))
+        }
         (Eq, _, _) if same.is_some() => Ok(Bool(same == Some(true))),
         (NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(false))),
         // Unreachable after checking. A diagnostic rather than a panic.
@@ -210,6 +222,91 @@ pub(super) fn compare(
                 type_name(b)
             ),
         )),
+    }
+}
+
+/// The derived order (L6, `docs/spec.md`, *Ordering and hashing are derived*): integers by
+/// value, `false` before `true`, a `Str` by its bytes, a record by its fields in the canonical
+/// order — by name, which for a tuple is its positions — and an enum by its variants in the
+/// canonical order, then that variant's payload likewise. `None` for what has none, which
+/// checking refuses before a program runs.
+///
+/// Recursive, and bounded: a type nests at most [`nazm_sema::MAX_TYPE_DEPTH`] deep, and nothing
+/// reached through an indirection orders.
+fn order(a: &Value, b: &Value, orders: &cir::Orders) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    let fields = |canon: &[u32], xs: &[Value], ys: &[Value]| -> Option<Ordering> {
+        for i in canon {
+            let o = order(xs.get(*i as usize)?, ys.get(*i as usize)?, orders)?;
+            if o != Ordering::Equal {
+                return Some(o);
+            }
+        }
+        Some(Ordering::Equal)
+    };
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Some(x.cmp(y)),
+        (Value::Num(x), Value::Num(y)) if x.kind.is_integer() => {
+            if numeric::compare(numeric::Cmp::Lt, *x, *y) {
+                Some(Ordering::Less)
+            } else if numeric::compare(numeric::Cmp::Eq, *x, *y) {
+                Some(Ordering::Equal)
+            } else {
+                Some(Ordering::Greater)
+            }
+        }
+        (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),
+        (Value::Str(x), Value::Str(y)) => Some(x.bytes().cmp(y.bytes())),
+        (Value::Record(x), Value::Record(y)) => {
+            let canon = orders.records.get(x.def().index())?;
+            fields(canon, &x.fields, &y.fields)
+        }
+        (Value::Enum(x), Value::Enum(y)) => {
+            let e = orders.enums.get(x.def().index())?;
+            let rank = |v: u32| e.variants.iter().position(|d| *d == v);
+            let (rx, ry) = (rank(x.variant)?, rank(y.variant)?);
+            if rx != ry {
+                return Some(rx.cmp(&ry));
+            }
+            fields(e.payloads.get(x.variant as usize)?, &x.fields, &y.fields)
+        }
+        _ => None,
+    }
+}
+
+/// The derived hash (L6, `docs/spec.md`, *Ordering and hashing are derived*): an integer's
+/// 64-bit pattern, a `Bool` as 0 or 1, a `Str`'s bytes — the library's impls — and a record or
+/// tuple from `hash_u64(0)`, an enum value from its variant's name, folding each component in
+/// the canonical order with `hash_combine`. `None` for what has none, which checking refuses.
+pub(super) fn derived_hash(v: &Value, orders: &cir::Orders) -> Option<u64> {
+    let fold = |mut h: u64, canon: &[u32], xs: &[Value]| -> Option<u64> {
+        for i in canon {
+            h = fnv::combine(h, derived_hash(xs.get(*i as usize)?, orders)?);
+        }
+        Some(h)
+    };
+    match v {
+        #[allow(clippy::cast_sign_loss)]
+        Value::Int(x) => Some(fnv::word(*x as u64)),
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        Value::Num(n) if n.kind.is_integer() => Some(fnv::word(n.as_i128() as u64)),
+        Value::Bool(b) => Some(fnv::word(u64::from(*b))),
+        Value::Str(s) => Some(fnv::bytes(s.bytes())),
+        Value::Record(r) => fold(
+            fnv::word(0),
+            orders.records.get(r.def().index())?,
+            &r.fields,
+        ),
+        Value::Enum(e) => {
+            let o = orders.enums.get(e.def().index())?;
+            let name = o.names.get(e.variant as usize)?;
+            fold(
+                fnv::bytes(name.as_bytes()),
+                o.payloads.get(e.variant as usize)?,
+                &e.fields,
+            )
+        }
+        _ => None,
     }
 }
 
@@ -253,6 +350,19 @@ fn equal(a: &Value, b: &Value) -> Option<bool> {
                 return Some(false);
             }
             all(&x.fields, &y.fields)
+        }
+        // A `Box` or `List` (L6), which the interpreter holds as a `Vec`: by what it holds.
+        // Checking refuses `==` on a `Vec` itself, so only those two reach here. One storage
+        // is equal to itself, and is not locked twice.
+        (Value::Vec(x), Value::Vec(y)) => {
+            if std::sync::Arc::ptr_eq(x, y) {
+                return Some(true);
+            }
+            let (xs, ys) = (x.lock().ok()?.clone(), y.lock().ok()?.clone());
+            if xs.len() != ys.len() {
+                return Some(false);
+            }
+            all(&xs, &ys)
         }
         _ => None,
     }

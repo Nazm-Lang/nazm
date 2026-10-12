@@ -88,10 +88,8 @@ pub fn type_of(e: &Expr, env: &[(&'static str, Ty)]) -> Option<Ty> {
         Expr::Arith(_, a, b) => {
             (type_of(a, env)? == Ty::Int && type_of(b, env)? == Ty::Int).then_some(Ty::Int)
         }
-        // T-Lt
-        Expr::Lt(a, b) => {
-            (type_of(a, env)? == Ty::Int && type_of(b, env)? == Ty::Int).then_some(Ty::Bool)
-        }
+        // T-Lt: two operands of one ordered type — `Int`, or `Bool` since R1a (L6).
+        Expr::Lt(a, b) => (type_of(a, env)? == type_of(b, env)?).then_some(Ty::Bool),
         // T-Eq
         Expr::Eq(a, b) => (type_of(a, env)? == type_of(b, env)?).then_some(Ty::Bool),
         // T-Not
@@ -150,15 +148,16 @@ pub fn eval(e: &Expr, rho: &[(&'static str, Value)]) -> Option<Outcome> {
             };
             arith(*op, m, k)
         }
-        // E-Lt
+        // E-Lt: `Int` by value, `Bool` with `false` first (L6).
         Expr::Lt(a, b) => {
-            let m = match int(eval(a, rho)?)? {
-                Ok(m) => m,
-                Err(c) => return Some(Outcome::Trap(c)),
-            };
-            match int(eval(b, rho)?)? {
-                Ok(k) => Outcome::Value(Value::Bool(m < k)),
-                Err(c) => Outcome::Trap(c),
+            let x = eval(a, rho)?;
+            let Outcome::Value(x) = x else { return Some(x) };
+            let y = eval(b, rho)?;
+            let Outcome::Value(y) = y else { return Some(y) };
+            match (x, y) {
+                (Value::Int(m), Value::Int(k)) => Outcome::Value(Value::Bool(m < k)),
+                (Value::Bool(m), Value::Bool(k)) => Outcome::Value(Value::Bool(!m & k)),
+                _ => return None,
             }
         }
         // E-Eq

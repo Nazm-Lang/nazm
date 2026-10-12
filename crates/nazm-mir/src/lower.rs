@@ -1623,6 +1623,15 @@ impl Fx<'_> {
             } => {
                 let concrete = self.ty(*self_ty, at);
                 let Some(callee) = self.res.traits().method_fn(*trait_id, concrete, *method) else {
+                    // A derived `Hash` (L6): the type's own walk, or its `==`.
+                    if self
+                        .res
+                        .traits()
+                        .derives(*trait_id, concrete, self.res.types())
+                    {
+                        self.derived_hash_call(*trait_id, *method, concrete, args, dst, at);
+                        return;
+                    }
                     self.fail(at, "a trait call with no impl for this instance's type");
                     return;
                 };
@@ -1815,6 +1824,49 @@ impl Fx<'_> {
 
     /// Write `value` into `dst`. With no destination the value is unread, which Core IR allows
     /// only for an expression that never produces one — so arriving here with none is a defect.
+    /// A call of a derived `Hash`'s method (L6): `hash` is the type's [`Rvalue::Hash`], and
+    /// `same` its `==`, which is what a derived `same` means.
+    fn derived_hash_call(
+        &mut self,
+        trait_id: nazm_sema::traits::TraitId,
+        method: u32,
+        ty: Type,
+        args: &[cir::Expr],
+        dst: Option<LocalId>,
+        at: Span,
+    ) {
+        let def = self.res.traits().get(trait_id);
+        let is_hash = def.and_then(|d| d.method("hash")) == Some(method);
+        let Some((ops, held)) = self.operands(args) else {
+            return;
+        };
+        let value = match (is_hash, ops.as_slice()) {
+            (true, [v]) => Rvalue::Hash {
+                operand: ty,
+                value: v.clone(),
+            },
+            (false, [a, b]) => {
+                let Some(law) = cir::Law::of(cir::CmpOp::Eq, ty) else {
+                    self.fail(at, "a derived `same` of a type with no equality");
+                    return;
+                };
+                Rvalue::Compare {
+                    op: cir::CmpOp::Eq,
+                    law,
+                    operand: ty,
+                    lhs: a.clone(),
+                    rhs: b.clone(),
+                }
+            }
+            _ => {
+                self.fail(at, "a derived `Hash` method of the wrong arity");
+                return;
+            }
+        };
+        self.write(dst, value, at);
+        self.release_all(held, at);
+    }
+
     fn write(&mut self, dst: Option<LocalId>, value: Rvalue, at: Span) {
         match dst {
             Some(d) => self.assign(d, value, at),
@@ -2104,7 +2156,9 @@ fn collect_types(res: &Resolution, graph: &ModuleGraph, functions: &[Function]) 
                                 work.push(c);
                             }
                         }
-                        Rvalue::Compare { operand, .. } => work.push(*operand),
+                        Rvalue::Compare { operand, .. } | Rvalue::Hash { operand, .. } => {
+                            work.push(*operand);
+                        }
                         Rvalue::Closure { func, .. } => {
                             if let Some(g) = functions.get(func.index()) {
                                 work.extend(g.closure.iter().flatten().copied());

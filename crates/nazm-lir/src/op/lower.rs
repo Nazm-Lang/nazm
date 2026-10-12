@@ -51,6 +51,10 @@ pub(crate) enum Helper {
     Release(Ty),
     /// Whether the values at two pointers are equal.
     Equal(Ty),
+    /// How the values at two pointers order (L6): -1, 0 or 1, by the derived order.
+    Order(Ty),
+    /// The derived hash of the value at a pointer (L6).
+    Hash(Ty),
     /// Release one element of a `Vec`, or a generic channel's queued slot, for the runtime's
     /// walk.
     ReleaseElement(Ty),
@@ -581,6 +585,8 @@ impl<'a> Lw<'a> {
             // A release takes the queue of the release in progress, too (R1a).
             Helper::Release(t) => ("rel", self.type_name(t), 2, None),
             Helper::Equal(t) => ("eq", self.type_name(t), 2, Some(Class::Bit)),
+            Helper::Order(t) => ("ord", self.type_name(t), 2, Some(Class::I64)),
+            Helper::Hash(t) => ("hash", self.type_name(t), 1, Some(Class::I64)),
             Helper::ReleaseElement(t) => ("vel", self.type_name(t), 2, None),
             Helper::ClosureRelease(f) => ("clo", format!("{}", f.0), 1, None),
         };

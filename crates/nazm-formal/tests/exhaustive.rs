@@ -118,7 +118,8 @@ fn the_bound_covers_what_it_says() {
     // The counts are part of the claim: a change to the enumeration that covered less would
     // otherwise pass every property vacuously.
     assert_eq!(programs().len(), 94_352);
-    assert_eq!(typed().len(), 27_680);
+    // 28,238 since R1a (L6): `<` on two `Bool`s is well typed.
+    assert_eq!(typed().len(), 28_238);
 }
 
 #[test]

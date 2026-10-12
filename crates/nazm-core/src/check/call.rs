@@ -138,7 +138,14 @@ impl Checker<'_> {
             .collect();
         let ret = self.res.types_mut().substitute(want.ret, owner, &[recv_ty]);
 
-        let through_bound = matches!(recv_ty, Type::Param(_));
+        // A derived `Hash` (L6) is dispatched as a call through a bound is: the type's own
+        // walk, chosen where the type is known, by the interpreter and by MIR alike.
+        let derived = !matches!(recv_ty, Type::Param(_))
+            && self
+                .res
+                .traits()
+                .derives(trait_id, recv_ty, self.res.types());
+        let through_bound = matches!(recv_ty, Type::Param(_)) || derived;
         if through_bound {
             let fty = self.res.types_mut().fn_of(nazm_sema::FnSignature {
                 params: std::iter::once(recv_ty)
@@ -285,10 +292,14 @@ impl Checker<'_> {
             let Some(i) = def.method(method) else {
                 continue;
             };
+            let in_scope = self.trait_names.values().any(|v| *v == Some(t));
             let Some(imp) = self.res.traits().find(t, ty) else {
+                // A derived `Hash` (L6) has no impl to find, and no module it belongs to.
+                if in_scope && self.res.traits().derives(t, ty, self.res.types()) {
+                    found.push((t, i));
+                }
                 continue;
             };
-            let in_scope = self.trait_names.values().any(|v| *v == Some(t));
             let usable = self
                 .res
                 .traits()
