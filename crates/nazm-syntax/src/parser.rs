@@ -1625,6 +1625,8 @@ impl<'a> Parser<'a> {
     fn impl_decl(&mut self) -> Option<(ImplDecl, Vec<Function>)> {
         let at = self.checkpoint();
         let impl_span = self.expect(&TokenKind::Impl, "to start an impl")?;
+        // An impl for a generic type (R1b, L11b): `impl[T: Show] Show for Option[T]`.
+        let type_params = self.only_type_params()?;
         let trait_name = self.type_name()?;
         // `for` is a word here and nowhere else: a reserved name everywhere a name may be
         // declared, so no program can mean anything else by it.
@@ -1665,6 +1667,10 @@ impl<'a> Parser<'a> {
             self.drop_item = false;
             let mut f = self.function()?;
             recovered |= self.drop_item;
+            // Generic over the impl's parameters, before any it writes of its own.
+            if !type_params.is_empty() {
+                f.type_params.splice(0..0, type_params.iter().cloned());
+            }
             f.method_of = Some(Box::new(MethodOf {
                 trait_name: trait_name.clone(),
                 self_ty: self_ty.clone(),
@@ -1678,6 +1684,7 @@ impl<'a> Parser<'a> {
         Some((
             ImplDecl {
                 attrs: Vec::new(),
+                type_params,
                 trait_name,
                 self_ty,
                 impl_span,

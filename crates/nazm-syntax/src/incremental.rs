@@ -818,12 +818,14 @@ impl Shift for crate::ast::ImplDecl {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
             attrs,
+            type_params,
             trait_name,
             self_ty,
             impl_span,
             span,
         } = self;
         attrs.shift(file, by);
+        type_params.shift(file, by);
         trait_name.shift(file, by);
         self_ty.shift(file, by);
         impl_span.shift(file, by);

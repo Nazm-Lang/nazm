@@ -128,6 +128,9 @@ pub fn default_method_name(trait_name: &str, method: &str) -> String {
 pub struct ImplDecl {
     /// The attributes written before it (Gate 2).
     pub attrs: Vec<Attribute>,
+    /// `impl[T: Show] …` (R1b, L11b): an impl for a generic type, over these parameters. Each
+    /// method is generic over them too, and the parser writes them into each.
+    pub type_params: Vec<TypeParam>,
     pub trait_name: TypeName,
     pub self_ty: TypeName,
     /// The `impl` keyword: what the impl is identified by in diagnostics, and what each of

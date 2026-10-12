@@ -27,6 +27,10 @@ pub struct Program {
     /// implementing each of the trait's methods. The one table a [`ExprKind::CallTrait`] is
     /// resolved in — per instance by MIR, per frame by the interpreter.
     pub impls: Vec<ImplRow>,
+    /// Each generic record and enum instance, with the definition it instantiates (R1b, L11b):
+    /// an impl of a generic type is filed under the definition, and a lookup for an instance
+    /// falls back to it. Sorted by the instance.
+    pub templates: Vec<(Type, Type)>,
     /// Every static of the program (Gate 3), as the checker recorded them: storage each
     /// module's unit defines.
     pub statics: Vec<nazm_sema::StaticDef>,
@@ -82,9 +86,21 @@ impl Program {
     /// The function implementing method `method` of `trait_id` for `ty`, from the impl table.
     #[must_use]
     pub fn method_fn(&self, trait_id: TraitId, ty: Type, method: u32) -> Option<FnId> {
-        self.impls
-            .iter()
-            .find(|r| r.trait_id == trait_id && r.self_ty == ty)
+        let row = |t: Type| {
+            self.impls
+                .iter()
+                .find(|r| r.trait_id == trait_id && r.self_ty == t)
+        };
+        // An instance of a generic type finds the impl of its definition (L11b).
+        let template = || {
+            self.templates
+                .binary_search_by(|(i, _)| i.cmp(&ty))
+                .ok()
+                .and_then(|at| self.templates.get(at))
+                .and_then(|(_, t)| row(*t))
+        };
+        row(ty)
+            .or_else(template)
             .and_then(|r| r.methods.get(method as usize).copied())
     }
 

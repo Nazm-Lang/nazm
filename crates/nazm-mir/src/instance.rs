@@ -137,18 +137,28 @@ pub fn plan_instances(
         .map(|(_, imp)| (imp.trait_id, imp.self_ty, imp.methods.len()))
         .collect();
     for (trait_id, ty, n) in traits {
+        // An impl of a generic type (L11b) is filed under its definition, which no value has:
+        // its defaults are planned where a call reaches one of its instances.
+        let generic = match ty {
+            Type::Record(id) => res.records().get(id).is_some_and(|d| !d.params.is_empty()),
+            Type::Enum(id) => res.enums().get(id).is_some_and(|d| !d.params.is_empty()),
+            _ => false,
+        };
+        if generic {
+            continue;
+        }
         for m in 0..n {
-            let Some((d, true)) = res.method_target(trait_id, ty, u32::try_from(m).unwrap_or(0))
+            let Some((d, args)) = res.method_target(trait_id, ty, u32::try_from(m).unwrap_or(0))
             else {
                 continue;
             };
+            if args.is_empty() {
+                continue;
+            }
             if !res.types().is_concrete(ty) {
                 continue;
             }
-            let key = InstanceKey {
-                def: d,
-                args: vec![ty],
-            };
+            let key = InstanceKey { def: d, args };
             if !seen.contains_key(&key) {
                 let at = res.function(d).map_or(Span::synthetic(), |f| f.name_span);
                 seen.insert(key.clone(), order.len());
@@ -238,6 +248,23 @@ pub fn plan_instances(
                 .iter()
                 .map(|t| res.types_mut().substitute(*t, owner, &key.args))
                 .collect();
+            // A call through a bound (N78), at this instance's type: an impl of a generic type's
+            // method, or a default body, is an instance too (L11).
+            if let Some(call) = res.traits().call(site.span) {
+                let concrete = res.types_mut().substitute(call.self_ty, owner, &key.args);
+                if let Some((g, targs)) = res.method_target(call.trait_id, concrete, call.method) {
+                    let next = InstanceKey {
+                        def: g,
+                        args: targs,
+                    };
+                    if !next.args.is_empty() && !seen.contains_key(&next) {
+                        seen.insert(next.clone(), order.len());
+                        order.push((next.clone(), site.span));
+                        work.push_back((next, site.span));
+                    }
+                }
+                continue;
+            }
             if let Callee::Function(g) = site.callee {
                 if !is_generic(res, g) {
                     continue;

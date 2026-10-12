@@ -191,13 +191,7 @@ impl Checker<'_> {
             let imp = self
                 .res
                 .method_target(trait_id, recv_ty, index)
-                .filter(|_| {
-                    self.res
-                        .traits()
-                        .find(trait_id, recv_ty)
-                        .and_then(|i| self.res.traits().impl_def(i))
-                        .is_some_and(|d| self.impl_modules.contains(&d.module))
-                });
+                .filter(|_| self.satisfies(trait_id, recv_ty));
             let Some(f) = imp else {
                 self.errors.push(
                     Diagnostic::error(
@@ -217,11 +211,12 @@ impl Checker<'_> {
                 }
                 return ret;
             };
-            let (f, defaulted) = f;
+            let (f, args) = f;
             self.res.record_call(at, Callee::Function(f));
-            if defaulted {
-                self.res.record_type_args(at, vec![recv_ty]);
-                site_args = vec![recv_ty];
+            // A default body, or an impl of a generic type (L11): called with type arguments.
+            if !args.is_empty() {
+                self.res.record_type_args(at, args.clone());
+                site_args = args;
             }
         }
         self.record_site(at, site_args, false);
@@ -320,18 +315,15 @@ impl Checker<'_> {
                 continue;
             };
             let in_scope = self.trait_names.values().any(|v| *v == Some(t));
-            let Some(imp) = self.res.traits().find(t, ty) else {
+            let Some((imp, _)) = self.res.traits().applying(t, ty, self.res.types()) else {
                 // A derived `Hash` (L6) has no impl to find, and no module it belongs to.
                 if in_scope && self.res.traits().derives(t, ty, self.res.types()) {
                     found.push((t, i));
                 }
                 continue;
             };
-            let usable = self
-                .res
-                .traits()
-                .impl_def(imp)
-                .is_some_and(|d| self.impl_modules.contains(&d.module));
+            // In scope, and — for an impl of a generic type (L11b) — its requirements met.
+            let usable = self.res.traits().impl_def(imp).is_some() && self.satisfies(t, ty);
             if in_scope && usable {
                 found.push((t, i));
             } else {

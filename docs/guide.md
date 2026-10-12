@@ -511,7 +511,7 @@ accepts.
 | `constant` | `[ visibility ] , ( "const" \| "static" ) , IDENT , ":" , type , "=" , expression , ";"` |
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
 | `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ( ";" \| block )` |
-| `impl_item` | `"impl" , type , IDENT , type , "{" , { function } , "}"` |
+| `impl_item` | `"impl" , [ type_parameters ] , type , IDENT , type , "{" , { function } , "}"` |
 | `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";" \| visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";"` |
 | `reexport_name` | `IDENT , [ IDENT , IDENT ]` |
 | `qualifier` | `IDENT , "::"` |
@@ -718,15 +718,20 @@ trait Size { fn size(self: Self) -> Int; fn big(self: Self) -> Bool { self.size(
 ### `impl_item`
 
 ```ebnf
-impl_item = "impl" , type , IDENT , type , "{" , { function } , "}" ;
+impl_item = "impl" , [ type_parameters ] , type , IDENT , type , "{" , { function } , "}" ;
 ```
 
-`impl Trait for Type`: every method of the trait, once, with `Self` written as the type.
-`for` is a word here and nowhere else. At most one impl of a trait for a type, in the
-trait's module or the type's.
+`impl Trait for Type`: every method of the trait without a default body, once, with
+`Self` written as the type. `for` is a word here and nowhere else. At most one impl of a
+trait for a type, in the trait's module or the type's. Since R1b, `impl[T…] Trait for
+D[T…]` implements it for every instance of a generic record or enum.
 
 ```nazm
 trait Size { fn size(self: Self) -> Int; } struct P { x: Int, } impl Size for P { fn size(self: P) -> Int { 1 } } fn main() -> Int { 0 }
+```
+
+```nazm
+trait Size { fn size(self: Self) -> Int; } struct W[T] { v: T, } impl[T] Size for W[T] { fn size(self: W[T]) -> Int { 1 } } fn main() -> Int { 0 }
 ```
 
 ### `use_item`

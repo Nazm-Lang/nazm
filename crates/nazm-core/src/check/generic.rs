@@ -122,6 +122,38 @@ pub(super) fn quoted(names: &[String]) -> String {
 }
 
 impl Checker<'_> {
+    /// Whether `ty` satisfies `T: tr` here (N78, R1b): an impl in this module's scope for `ty`,
+    /// or for the generic definition it instantiates whose parameters' requirements its
+    /// arguments meet (L11b); a type parameter bound by `tr`; or a derived `Hash` (L6).
+    pub(super) fn satisfies(&self, tr: TraitId, ty: Type) -> bool {
+        self.satisfies_within(tr, ty, 0)
+    }
+
+    fn satisfies_within(&self, tr: TraitId, ty: Type, depth: usize) -> bool {
+        if depth > nazm_sema::MAX_TYPE_DEPTH {
+            return false;
+        }
+        if let Type::Param(q) = ty {
+            return self.res.traits().bound_of(q) == Some(tr);
+        }
+        if let Some((imp, args)) = self.res.traits().applying(tr, ty, self.res.types()) {
+            let Some(d) = self.res.traits().impl_def(imp) else {
+                return false;
+            };
+            return self.impl_modules.contains(&d.module)
+                && d.requires.iter().zip(&args).all(|(req, a)| match req {
+                    None => true,
+                    Some(nazm_sema::traits::Require::Equality) => {
+                        self.res.types().equality(*a).is_ok()
+                    }
+                    Some(nazm_sema::traits::Require::Trait(t)) => {
+                        self.satisfies_within(*t, *a, depth + 1)
+                    }
+                });
+        }
+        self.res.traits().derives(tr, ty, self.res.types())
+    }
+
     /// A call to a generic function: settle its type arguments, check its arguments
     /// against them, and return what it produces.
     ///
@@ -349,18 +381,8 @@ impl Checker<'_> {
             // A trait bound (N78): the argument has a usable impl, or is a caller's own
             // parameter bound by the same trait.
             if let Some(tr) = self.res.traits().bound_of(param) {
-                let satisfied = match t {
-                    Type::Param(q) => self.res.traits().bound_of(q) == Some(tr),
-                    _ => {
-                        self.res
-                            .traits()
-                            .find(tr, t)
-                            .and_then(|imp| self.res.traits().impl_def(imp))
-                            .is_some_and(|d| self.impl_modules.contains(&d.module))
-                            // Or derived (L6): `Hash` of a record, enum or tuple of keys.
-                            || self.res.traits().derives(tr, t, self.res.types())
-                    }
-                };
+                // Or an impl of the generic definition `t` instantiates (L11b), or derived (L6).
+                let satisfied = self.satisfies(tr, t);
                 if !satisfied {
                     let p = self.res.types().param_name(param);
                     let shown = self.show(t);

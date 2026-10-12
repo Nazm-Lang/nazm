@@ -41,7 +41,12 @@ found only by reading all of it.
 - Derived ordering and hashing (R1a, EXPERIMENTAL until R1 closes): no `T: Ordered` requirement on
   a type parameter until `@std/ordmap` (S3); no customised `<`; inside a generic body `Pair[T]` does
   not derive `Hash`, only a concrete type does; a record holding a type with a written `Hash` impl
-  needs its own impl, which a generic instance or a tuple cannot have until L11.
+  needs its own impl, which a generic type has through an impl of the generic type (L11b) and a
+  tuple cannot have.
+- Impls of generic types (R1b, EXPERIMENTAL until R1 closes) are for a generic record or enum
+  applied to exactly the impl's parameters: no impl for one instance (`Pair[Int, Str]`), none for
+  `Vec[T]` or the other built-in generic types, and no specialisation. The compiler written in Nazm
+  carries neither L11 part until R2.
 - Tuples (R1a, EXPERIMENTAL until R1 closes): two to eight elements, no unit type `()`, no tuple
   structs; the compiler written in Nazm does not carry tuples until R2.
 - `Box[T]` and `List[T]` (R1a, EXPERIMENTAL until R1 closes) compare by what they hold (L6) but

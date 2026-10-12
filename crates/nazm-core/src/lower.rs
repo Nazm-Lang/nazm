@@ -152,10 +152,25 @@ pub(crate) fn lower(program: &Program, res: &Resolution) -> Result<cir::Program,
             same: d.method("same")?,
         })
     });
+    // Every generic instance's definition (L11b), for the impl table's fallback.
+    let mut templates: Vec<(Type, Type)> = (0..res.records().len())
+        .filter_map(|i| {
+            let id = nazm_sema::RecordId::from_index(i);
+            let inst = res.records().get(id)?.instance.as_ref()?;
+            Some((Type::Record(id), Type::Record(inst.template)))
+        })
+        .chain((0..res.enums().len()).filter_map(|i| {
+            let id = nazm_sema::EnumId::from_index(i);
+            let inst = res.enums().get(id)?.instance.as_ref()?;
+            Some((Type::Enum(id), Type::Enum(inst.template)))
+        }))
+        .collect();
+    templates.sort();
     let core = cir::Program {
         functions,
         entry: res.entry(),
         impls,
+        templates,
         statics: res.statics().to_vec(),
         orders,
         derived_hash,

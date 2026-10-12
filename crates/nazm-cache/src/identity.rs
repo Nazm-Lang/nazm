@@ -314,7 +314,9 @@ use crate::digest::{self, Framed};
 /// refused (`N0386`), unless it can hold a function value.
 /// `62` — R1b, 2026-10-13. A trait method's default body, and an impl leaving such a method to
 /// it, moved from refused to accepted.
-pub const SEMANTIC_EPOCH: u32 = 62;
+/// `63` — R1b, 2026-10-13. An impl with type parameters for a generic record or enum moved from
+/// refused to accepted.
+pub const SEMANTIC_EPOCH: u32 = 63;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
