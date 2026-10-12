@@ -12,7 +12,7 @@ and `clang`, which `nazm build` uses to compile and link. On macOS, the Xcode co
 provide `clang`; on Linux, install your distribution's `clang` package.
 
 ```sh
-git clone https://github.com/mdferdousalam/nazm
+git clone https://github.com/Nazm-Lang/nazm
 cd nazm
 cargo build --release -p nazm-cli
 export PATH="$PWD/target/release:$PATH"
