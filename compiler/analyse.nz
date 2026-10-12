@@ -4698,6 +4698,12 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                 str_concat(str_concat(str_concat(str_concat("`",
                                 strs_get(rnames, v)), "` has no payload field `"),
                                 fname), "`"));
+                        // The binding is still made, of the unknown type, so the body's use of
+                        // it repeats nothing: one mistake, one error, as the reference checker
+                        // has it since R1a.
+                        if binding != "_" {
+                            bind(names, ntypes, nmut, nslotof, binding, 0, 0, base);
+                        }
                     } else {
                         if ints_get(bound, at) == 1 {
                             report(diags, "N0332", ints_get(nst, entry),
