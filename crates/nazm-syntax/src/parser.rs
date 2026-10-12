@@ -3304,19 +3304,17 @@ impl<'a> Parser<'a> {
                     }
                     at += 1;
                 }
-                Some(TokenKind::Dot) => {
-                    // A field's name, or a tuple's position (`t.0`, and `t.0.1` lexed as `0.1`).
+                // A field's name, or a tuple's position (`t.0`, and `t.0.1` lexed as `0.1`).
+                Some(TokenKind::Dot)
                     if matches!(
                         self.tokens.get(at + 1).map(|t| &t.kind),
                         Some(TokenKind::Ident(_) | TokenKind::Int(_))
                     ) || matches!(
                         self.tokens.get(at + 1).map(|t| &t.kind),
                         Some(TokenKind::Float(text)) if positions(text).is_some()
-                    ) {
-                        at += 2;
-                    } else {
-                        return Some(None);
-                    }
+                    ) =>
+                {
+                    at += 2;
                 }
                 _ => return Some(None),
             }

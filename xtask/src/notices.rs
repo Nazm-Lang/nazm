@@ -15,10 +15,10 @@ use serde_json::Value;
 
 /// The binaries a release ships, by package.
 const SHIPPED: &[&str] = &["nazm-cli", "nazm-mcp"];
-/// The one target the 0.3.0 preview supports.
+/// The one target the 0.9.0 preview supports.
 const TARGET: &str = "aarch64-apple-darwin";
 
-pub fn run(args: &[String]) -> ExitCode {
+pub(crate) fn run(args: &[String]) -> ExitCode {
     let out = args
         .iter()
         .position(|a| a == "--out")
@@ -44,7 +44,7 @@ pub fn run(args: &[String]) -> ExitCode {
 
 /// `cargo xtask check`'s step: the committed `THIRD-PARTY-NOTICES.md` is what the lockfile
 /// generates, so a dependency changed without regenerating it is caught before a release ships it.
-pub fn check(root: &Path) -> Result<(), Vec<String>> {
+pub(crate) fn check(root: &Path) -> Result<(), Vec<String>> {
     let want = generate().map_err(|e| vec![e])?;
     let have = std::fs::read_to_string(root.join("THIRD-PARTY-NOTICES.md"))
         .map_err(|e| vec![format!("THIRD-PARTY-NOTICES.md: {e}")])?;
@@ -68,7 +68,7 @@ struct Crate {
 }
 
 /// The whole document.
-pub fn generate() -> Result<String, String> {
+pub(crate) fn generate() -> Result<String, String> {
     let meta = metadata()?;
     let linked = linked(&meta)?;
     let mut crates: Vec<Crate> = linked.into_iter().map(|p| describe(&p)).collect();
@@ -152,8 +152,10 @@ fn linked(meta: &Value) -> Result<Vec<Value>, String> {
         .iter()
         .filter_map(|p| Some((p["id"].as_str()?, p)))
         .collect();
-    let nodes: BTreeMap<&str, &Value> = meta["resolve"]["nodes"]
-        .as_array()
+    let nodes: BTreeMap<&str, &Value> = meta
+        .get("resolve")
+        .and_then(|r| r.get("nodes"))
+        .and_then(Value::as_array)
         .ok_or("no resolve graph")?
         .iter()
         .filter_map(|n| Some((n["id"].as_str()?, n)))
