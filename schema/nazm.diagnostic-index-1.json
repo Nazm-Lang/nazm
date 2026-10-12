@@ -80,7 +80,7 @@
       "properties": {
         "id": { "type": "string", "description": "`code@file:start-end#n`: `n` counts earlier entries with the same code and primary place. Meaningful only within `state.source`." },
         "code": { "type": "string", "pattern": "^N[0-9]{4}$" },
-        "severity": { "enum": ["error"] },
+        "severity": { "enum": ["error", "warning"] },
         "primary": { "type": ["object", "null"], "$ref": "#/$defs/span", "description": "Null for a diagnostic with no place." },
         "owner": { "type": ["object", "null"], "$ref": "#/$defs/owner", "description": "The durable function, record or enum whose declaration contains the primary span, in a compilation that needed no syntax recovery; null otherwise." },
         "fixes": {

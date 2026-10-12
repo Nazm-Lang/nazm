@@ -191,6 +191,16 @@ pub struct ClosureInfo {
     pub captures: Vec<Capture>,
 }
 
+/// A warning (R1b, L15), as resolution keeps it: what `nazm-diag` makes a diagnostic of at the
+/// warning severity. Its code is a diagnostic code's text, `N0632`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Warning {
+    pub code: &'static str,
+    pub span: Span,
+    pub message: String,
+    pub help: Option<String>,
+}
+
 /// One captured binding (N50).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capture {
@@ -457,6 +467,10 @@ pub struct Resolution {
     /// `Cell` type each is kept in: the binding in the function that declared it and its copy in
     /// every closure between. One variable, shared, where any other capture is a copy.
     shared: HashMap<(FnId, u32), Type>,
+    /// What the checker warns of (R1b, L15): a program that checks, with something its author
+    /// should know. Here, where a front end that checked can read them, rather than among the
+    /// errors a stage stops on.
+    warnings: Vec<Warning>,
     /// What the checker decided about each numeric literal whose type is not the default, and
     /// each conversion, by the literal's or the callee's span (Gate 2).
     numeric: HashMap<Span, NumericFact>,
@@ -947,6 +961,17 @@ impl Resolution {
     }
 
     /// Record a capture a closure's body just made (N50).
+    /// Warn of something in a program that checks (R1b, L15).
+    pub fn warn(&mut self, w: Warning) {
+        self.warnings.push(w);
+    }
+
+    /// Every warning the checker gave, in the order it gave them (R1b, L15).
+    #[must_use]
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
+    }
+
     /// Keep `slot` of `function` in a cell of type `cell` (R1b, L10): a `let mut` binding a
     /// closure captures, or a closure's copy of one.
     pub fn record_shared(&mut self, function: FnId, slot: u32, cell: Type) {

@@ -4576,7 +4576,9 @@ literal reads as.
 - **Nothing unreachable.** An arm every value of which an earlier arm already matches is `N0344`.
 - **`_` over an enum.** `_` and a name may cover variants the arms above do not name, so adding a
   variant no longer breaks such a `match`. That gives up the protection *Exhaustiveness* (*Enums*)
-  describes, where it is written; L15 adds a warning for it. An enum matched variant by variant
+  describes, where it is written — and so, since R1b (L15), a `_` or a name in a `match` of an
+  enum that covers variants no arm names is a **warning**, `N0632`, listing them: the program is
+  accepted, builds and runs, and `--deny-warnings` refuses it. An enum matched variant by variant
   keeps the protection.
 
 **`if let`.** `if let P = e { A } else { B }` is `match e { P => A, _ => B }`; without `else` it is a

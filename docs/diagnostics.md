@@ -220,6 +220,13 @@ kind, totals by count) and `nazm.flow/1` (`nazm explain-flow --json`: each sink'
 of an existing field. The check artefact's sink facts gain an optional `class`, unread by an older
 checker whose entries the semantic epoch already keeps apart.
 
+**Applied to R1b, L15 (warnings).** A severity appeared, compatibly: `"warning"` beside
+`"error"`, in `nazm.diagnostic/1`'s `severity` — a consumer that knows only `"error"` reads a
+diagnostic it does not recognise, as the rule above requires it to tolerate. A warning is a
+program the checker accepts, with something its author should know: `nazm check` and `nazm build`
+report it and succeed, and refuse under `--deny-warnings`; the language service publishes it at
+the warning severity. One code appeared, `N0632`, the first warning. No schema's major moved.
+
 **Applied to R1b, L12 (`defer`).** One code appeared, compatibly: `N0631`, a `defer` body that
 would leave it. No schema moved.
 
@@ -601,6 +608,7 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0629` | `OR_PATTERN_BINDINGS` | An or-pattern's alternatives that bind different names, or one name with different types (R1a, `docs/spec.md`, *Patterns*) |
 | `N0630` | `LET_ELSE_COMPLETES` | A `let … else` whose `else` can finish (R1a, `docs/spec.md`, *Patterns*) |
 | `N0631` | `DEFER_LEAVES` | A `defer` body that would leave it: `return`, `?`, or `break`/`continue` out of it (R1b, `docs/spec.md`, *`defer`*) |
+| `N0632` | `WILDCARD_COVERS_VARIANTS` | A **warning**: a `_` or a name in a `match` of an enum covers variants no arm names (R1b, `docs/spec.md`, *Patterns*) |
 | `N0900` | `COMPILER_DEFECT` | The compiler contradicted itself (N39) |
 <!-- registry:end -->
 

@@ -358,6 +358,7 @@ pub(crate) fn run(
     summary: bool,
     profile: Option<&str>,
     features: &[String],
+    deny_warnings: bool,
 ) -> ExitCode {
     // `--summary-json` (N31): the same outcome at every exit below, reported as one
     // `nazm.command-summary/1` in place of the rendering. The exit status is the same.
@@ -414,15 +415,15 @@ pub(crate) fn run(
     loaded.graph = std::mem::take(&mut loaded.graph).with_config(config);
     let map = &loaded.map;
 
-    let (diagnostics, tally) = if cache {
+    let ((diagnostics, warnings), tally) = if cache {
         let mut c = Cache::new(map, crate::derived::checks(source_root.path()));
-        let d = nazm_core::check_map_reusing(map, &loaded.graph, &mut c);
+        let d = nazm_core::check_map_reusing_with_warnings(map, &loaded.graph, &mut c);
         (d, c.tally)
     } else {
         // The route every other caller takes, unchanged since before there was a cache.
         // It is what the equivalence tests compare against, which is the only reason a
         // compiler needs a way to turn its cache off.
-        let d = nazm_core::check_map(map, &loaded.graph);
+        let d = nazm_core::check_map_with_warnings(map, &loaded.graph);
         (
             d,
             Tally {
@@ -431,23 +432,38 @@ pub(crate) fn run(
             },
         )
     };
+    // Warnings (R1b, L15): reported beside the errors, and refused under `--deny-warnings`.
+    let denied = deny_warnings && !warnings.is_empty();
 
     if summary {
-        let (status, code) = if diagnostics.is_empty() {
+        let (status, code) = if diagnostics.is_empty() && !denied {
             (Status::Success, exit::OK)
         } else {
             (Status::Rejected, exit::CHECK_FAILED)
         };
-        return summarized(status, code, &diagnostics, Some(map));
+        let all: Vec<nazm_diag::Diagnostic> =
+            diagnostics.iter().chain(&warnings).cloned().collect();
+        return summarized(status, code, &all, Some(map));
     }
 
     if with_report {
         println!("{}", report(source_root.how(), tally));
     }
 
-    if diagnostics.is_empty() {
+    if !warnings.is_empty() {
+        crate::emit(&warnings, map, json);
+    }
+    if diagnostics.is_empty() && !denied {
         println!("ok");
         return ExitCode::from(exit::OK);
+    }
+    if diagnostics.is_empty() {
+        let w = warnings.len();
+        eprintln!(
+            "nazm: {w} warning{}, refused by --deny-warnings",
+            if w == 1 { "" } else { "s" }
+        );
+        return ExitCode::from(exit::CHECK_FAILED);
     }
     let n = diagnostics.len();
     crate::emit(&diagnostics, map, json);

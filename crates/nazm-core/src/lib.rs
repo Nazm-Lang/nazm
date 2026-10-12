@@ -277,6 +277,16 @@ pub fn check_map_reusing(
     graph: &sema::ModuleGraph,
     reuse: &mut (dyn Reuse + Send),
 ) -> Vec<nazm_diag::Diagnostic> {
+    check_map_reusing_with_warnings(map, graph, reuse).0
+}
+
+/// As [`check_map_reusing`], with the check's warnings beside its errors (R1b, L15).
+#[must_use]
+pub fn check_map_reusing_with_warnings(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+    reuse: &mut (dyn Reuse + Send),
+) -> (Vec<nazm_diag::Diagnostic>, Vec<nazm_diag::Diagnostic>) {
     let run = || {
         let (program, mut diagnostics) = nazm_syntax::parse_map(map);
         let program = check::attributes::configure(program, graph, &mut diagnostics);
@@ -290,7 +300,7 @@ pub fn check_map_reusing(
             .filter_map(|d| graph.module_of(d.primary.span.file))
             .collect();
 
-        let (_, check_errors) = check_reusing(&program, graph, reuse, &unparsable);
+        let (res, check_errors) = check_reusing(&program, graph, reuse, &unparsable);
         // A function that failed to parse was never registered, so "this program has no
         // `main`" would be reported for a file whose first line is `fn main`.
         diagnostics.extend(
@@ -298,15 +308,18 @@ pub fn check_map_reusing(
                 .into_iter()
                 .filter(|d| !(parse_failed && d.code == nazm_diag::codes::MISSING_MAIN)),
         );
-        diagnostics
+        (diagnostics, warnings(&res))
     };
 
     eval::on_interpreter_stack(0, run).unwrap_or_else(|e| {
-        vec![nazm_diag::Diagnostic::error(
-            nazm_diag::codes::INTERPRETER_UNAVAILABLE,
-            nazm_span::Span::synthetic(),
-            format!("could not start the checker: {e}"),
-        )]
+        (
+            vec![nazm_diag::Diagnostic::error(
+                nazm_diag::codes::INTERPRETER_UNAVAILABLE,
+                nazm_span::Span::synthetic(),
+                format!("could not start the checker: {e}"),
+            )],
+            Vec::new(),
+        )
     })
 }
 
@@ -316,12 +329,23 @@ pub fn check_map(
     map: &nazm_span::SourceMap,
     graph: &sema::ModuleGraph,
 ) -> Vec<nazm_diag::Diagnostic> {
+    check_map_with_warnings(map, graph).0
+}
+
+/// As [`check_map`], with the check's warnings beside its errors (R1b, L15).
+#[must_use]
+pub fn check_map_with_warnings(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+) -> (Vec<nazm_diag::Diagnostic>, Vec<nazm_diag::Diagnostic>) {
     // `()` as the result, so the tree is built, walked and **dropped** inside the closure.
     // Returning it would move a recursive structure onto whatever stack the caller
     // happens to have, which is the thing this function exists to avoid.
-    match on_checked_map(map, graph, |_, _| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
-        Ok(()) => Vec::new(),
-        Err(d) => d,
+    match on_checked_map(map, graph, |_, res| {
+        Ok::<_, Vec<nazm_diag::Diagnostic>>(warnings(res))
+    }) {
+        Ok(w) => (Vec::new(), w),
+        Err(d) => (d, Vec::new()),
     }
 }
 
@@ -419,6 +443,26 @@ pub struct Analysis {
     /// The files whose text had a syntax error, each once, in file order (N19): where the
     /// tree is a recovery, what the checker saw of it may be missing a declaration.
     pub syntax_errors: Vec<nazm_span::FileId>,
+}
+
+/// The warnings a check gave (R1b, L15), as diagnostics at [`nazm_diag::Severity::Warning`]: what a
+/// front end reports after a program checks, and refuses on under `--deny-warnings`.
+#[must_use]
+pub fn warnings(res: &Resolution) -> Vec<nazm_diag::Diagnostic> {
+    res.warnings()
+        .iter()
+        .map(|w| {
+            let d = nazm_diag::Diagnostic::warning(
+                nazm_diag::Code::new(w.code),
+                w.span,
+                w.message.clone(),
+            );
+            match &w.help {
+                Some(h) => d.help(h.clone()),
+                None => d,
+            }
+        })
+        .collect()
 }
 
 /// Parse and check `map`, keeping the tree, the resolution and every diagnostic.

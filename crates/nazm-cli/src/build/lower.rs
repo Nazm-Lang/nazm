@@ -53,6 +53,20 @@ pub(super) fn lowered(
         },
         |core, resolution| {
             clock.mark("front_end");
+            // The checker's warnings (R1b, L15): reported, or the build refused under
+            // `--deny-warnings`.
+            let warnings = nazm_core::warnings(resolution);
+            if !warnings.is_empty() {
+                if choice.deny_warnings {
+                    let w = warnings.len();
+                    eprintln!(
+                        "nazm: {w} warning{}, refused by --deny-warnings",
+                        if w == 1 { "" } else { "s" }
+                    );
+                    return Err(warnings);
+                }
+                crate::emit(&warnings, map, json);
+            }
             // A device register exists only on a board (N62): not on a hosted target, and not
             // in a WebAssembly module, whose only outside is its imports (N64).
             if !target.is_board() {

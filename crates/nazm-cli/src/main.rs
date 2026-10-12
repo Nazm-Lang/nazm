@@ -189,6 +189,7 @@ fn dispatch(command: Command) -> ExitCode {
             objects,
             stack_watermark,
             stack_size,
+            deny_warnings,
             board,
             layout,
             timings,
@@ -233,6 +234,7 @@ fn dispatch(command: Command) -> ExitCode {
                     objects: objects.as_deref(),
                     stack_watermark,
                     stack_size,
+                    deny_warnings,
                     layout: &layout,
                     adapter: None,
                     timings,
@@ -280,6 +282,7 @@ fn dispatch(command: Command) -> ExitCode {
             profile,
             features,
             profile_report: _,
+            deny_warnings,
         } => checking::run(
             &file,
             json,
@@ -289,6 +292,7 @@ fn dispatch(command: Command) -> ExitCode {
             summary_json,
             profile.as_deref(),
             &features,
+            deny_warnings,
         ),
         Command::Fix { file, apply, json } => fix::run(&file, apply, json),
         Command::Interface {
