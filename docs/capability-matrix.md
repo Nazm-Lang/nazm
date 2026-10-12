@@ -200,6 +200,21 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-12)** · *A mutable cell: `Cell[T]`* (`spec.md`; `openspec/changes/
+r1-language-for-the-rewrite`, L7). One value that can be replaced, reached through a handle, so a
+callee's `cell_set` is its caller's: `cell_new`, `cell_get` and `cell_set` as prelude names. The
+kind `Vec` is — a mutable handle — so an ownership edge through it is counted (`N0359`), it has no
+equality (`N0304`), it does not cross into a task (`N0321`), and a closure may not capture one that
+can hold a function value (`N0616`). A `Vec[T]` of one element underneath and a distinct type to the
+checker only: Core IR lowering writes the three as `vec_new` with `vec_push`, `vec_get(c, 0)` and
+`vec_set(c, 0, v)`, so the interpreter, MIR, LIR and both backends need nothing new, and no runtime
+ABI moved. Provenance follows what a cell holds, from `cell_new` and from every `cell_set`.
+Semantic epoch 60; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/cell.rs` — a
+context record updated by callees, sharing, replacement releasing what it replaced (a string, a
+record, a vector) and a cell inside a box, by hand-worked output under the interpreter, the LIR
+oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; the ownership rule; the refusals; the
+prelude names; provenance; a `Cell` type crossing a module's interface.
+
 **R1a (2026-10-12)** · *String interpolation* (`spec.md`; `openspec/changes/
 r1-language-for-the-rewrite`, L4). `f"…"` and `f"""…"""`: holes `{expr}` and `{expr:spec}`
 (`[<|>][width][.precision]`), `{{`/`}}` for braces; a hole holds a `Str`, a number, a `Bool` or a

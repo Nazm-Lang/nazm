@@ -58,11 +58,12 @@ impl<'a> Names<'a> {
     pub fn ty(&self, t: Type) -> String {
         let types = self.res.types();
         match t {
-            Type::Vec(v) | Type::Box(v) | Type::List(v) => format!(
+            Type::Vec(v) | Type::Box(v) | Type::List(v) | Type::Cell(v) => format!(
                 "{}[{}]",
                 match t {
                     Type::Box(_) => "Box",
                     Type::List(_) => "List",
+                    Type::Cell(_) => "Cell",
                     _ => "Vec",
                 },
                 types

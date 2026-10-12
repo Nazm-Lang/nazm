@@ -131,6 +131,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `boards` | EXPERIMENTAL | Gate 3: manifests, sections, interrupts, the arena and the failure hook, emulator-verified |
 | `for` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; each form means its `while` loop |
 | `box-list` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; recursive types through immutable indirection |
+| `cell` | EXPERIMENTAL | R1b: a 1.x addition, experimental until R1 closes; a mutable handle of one value, the kind `Vec` is |
 | `patterns` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; supersedes the N10 limits on patterns where it says so |
 | `tuples` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; a tuple is an anonymous record |
 | `const-tables` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; widens *Constants* and *Arrays* |
@@ -4400,7 +4401,7 @@ through whatever reaches it — immutability is of the `Box`, not of what a hand
 
 **The ownership rule.** An edge of the ownership graph of definitions (*Generics*, *What may not be
 expressed: an ownership cycle*) through a `Box` or a `List` is labelled **immutable**, and one
-through a mutable handle — `Vec`, `Ints`, `Strs`, `Bytes`, `Chan[T]` — **counted**, as before. A path's
+through a mutable handle — `Vec`, `Ints`, `Strs`, `Bytes`, `Chan[T]`, and since R1b `Cell[T]` — **counted**, as before. A path's
 label is the strongest along it: counted over immutable over inline. Then:
 
 - a cycle whose every edge is inline is an impossible layout — `N0336`, unchanged;
@@ -4436,6 +4437,57 @@ replaced, so the closure that captures one cannot be inside it.
 module that declares a type named `Box` or `List`, or a function named like one of the built-ins,
 keeps its own, and the built-in is hidden in that module. No program valid under 1.0 changes
 meaning. The built-in names of 1.0 (`Int`, `Vec`, `Result` and the rest) stay unshadowable (`N0331`).
+
+### A mutable cell: `Cell[T]` — R1
+<!-- id: cell -->
+
+Settled by R1b, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L7). EXPERIMENTAL until
+R1 closes.
+
+```nazm
+struct Counter { seen: Cell[Int], }
+
+fn note(c: Counter) -> Int {
+    cell_set(c.seen, cell_get(c.seen) + 1)
+}
+
+fn main() -> Int {
+    let c = Counter(seen: cell_new(0));
+    note(c);
+    note(c);
+    cell_get(c.seen)          // 2: both calls wrote the one cell
+}
+```
+
+One value that can be replaced, reached through a handle: the place a callee writes so that its
+caller sees the change — a context record's counters, a compiler's next fresh name.
+
+| | `Cell[T]` |
+| --- | --- |
+| Holds | one `T` |
+| Made by | `cell_new(v: T) -> Cell[T]` |
+| Read by | `cell_get(c) -> T`, a copy by `T`'s own law |
+| Changed by | `cell_set(c, v) -> Int`: stores a copy of `v` and returns 0. The new value is taken before the old one is released |
+| Assignment | shares: `let d = c;` makes `d` the same cell, and a `cell_set` through either is seen through both |
+| Equality | refused (`N0304`), as on `Vec` |
+| Into a task | refused (`N0321`), as a `Vec` is |
+| Destruction | when the last reference dies, what it holds is released by `T`'s law, then the storage |
+
+**The kind.** A `Cell[T]` is an **owned mutable handle** (*The memory constitution*), the kind
+`Vec[T]` is, and follows the sequence law: it is a `Vec[T]` that always holds exactly one element, and
+every implementation may represent it as one.
+
+**The ownership rule.** An edge of the ownership graph through a `Cell` is **counted**, as one through a
+`Vec` is (*Immutable indirection*). So `struct Node { next: Cell[Node] }` and
+`struct A { b: Cell[B] } struct B { a: Box[A] }` are ownership cycles (`N0359`) — a cell could be set
+to hold the value that holds it — and a `Cell` inside a `Box` stays a handle: `Box[Cell[Int]]` is a
+box whose one value is a cell, and the cell can still be written.
+
+**Closures.** A `Cell` is a mutable handle for `N0616` (*Cycles*): a closure may not capture a `Cell`
+that can hold a function value.
+
+**Names.** `Cell`, `cell_new`, `cell_get` and `cell_set` are **prelude names**, like `Box`'s: a module
+that declares a type named `Cell`, or a function named like one of the three, keeps its own.
 
 ### Patterns: wildcards, alternatives, nesting and literals — R1
 <!-- id: patterns -->

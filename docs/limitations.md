@@ -48,6 +48,9 @@ found only by reading all of it.
   have no order or derived hash, and do not cross into a task (`N0321`); a `List` is built
   only from a `Vec` (`list_from_vec`) or empty — there is no functional push, by design, since one
   would copy. The compiler written in Nazm does not carry either until R2.
+- `Cell[T]` (R1b, EXPERIMENTAL until R1 closes) has no equality and does not cross into a task, as
+  a `Vec` does not; there is no swap or update-in-place, only `cell_get` and `cell_set`. The
+  compiler written in Nazm does not carry it until R2.
 - Arrays (Gate 2) hold plain data only — numbers, `Bool`s, and records, enums and arrays of them —
   at most 64 KiB, and do not cross the C boundary; there are no slices or views of an array, no
   iteration form beyond `while`, and a method call on an element is written `(xs[i]).m()` —

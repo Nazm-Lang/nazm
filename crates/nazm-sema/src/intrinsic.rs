@@ -48,6 +48,8 @@ pub enum Shape {
     BoxT,
     /// `List[T]` (R1a).
     ListT,
+    /// `Cell[T]` (R1b).
+    CellT,
     /// `Vec[Chan[T]]`: the channels a select waits on (N54).
     ChansT,
     /// `Float64`, `Float32`, `UInt64` and `UInt32` (Gate 2): the monomorphic numeric shapes the
@@ -120,7 +122,13 @@ impl Shape {
             Self::Text => Some(Type::Text),
             Self::OsHandle => Some(Type::OsHandle),
             Self::Atomic => Some(Type::Atomic),
-            Self::T | Self::VecT | Self::ChanT | Self::ChansT | Self::BoxT | Self::ListT => None,
+            Self::T
+            | Self::VecT
+            | Self::ChanT
+            | Self::ChansT
+            | Self::BoxT
+            | Self::ListT
+            | Self::CellT => None,
         }
     }
 
@@ -140,6 +148,7 @@ impl Shape {
             Self::ChansT => "Vec[Chan[T]]",
             Self::BoxT => "Box[T]",
             Self::ListT => "List[T]",
+            Self::CellT => "Cell[T]",
             Self::F64 => "Float64",
             Self::F32 => "Float32",
             Self::U64 => "UInt64",
@@ -567,11 +576,22 @@ pub enum Intrinsic {
     /// Internal (R1a): `v` appended to a `List[T]` that is still the lowering's alone. Made by
     /// Core IR lowering for `list_from_vec`; no program can name it.
     ListPush,
+
+    // --- a mutable cell, R1b (`docs/spec.md`, *A mutable cell*) ------------------------------
+    //
+    // Prelude built-ins, as R1a's are. Core IR lowering writes each as the `Vec[T]` operation it
+    // means on a vector of one element, so no layer below the checker sees one.
+    /// `cell_new[T](v: T) -> Cell[T]` — one `T`, which `cell_set` replaces.
+    CellNew,
+    /// `cell_get[T](c: Cell[T]) -> T` — a copy of it, by `T`'s law.
+    CellGet,
+    /// `cell_set[T](c: Cell[T], v: T) -> Int` — `v` stored in place of what was there; 0.
+    CellSet,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 178] = [
+    pub const ALL: [Self; 181] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -750,6 +770,9 @@ impl Intrinsic {
         Self::ListEmpty,
         Self::ListLen,
         Self::ListGet,
+        Self::CellNew,
+        Self::CellGet,
+        Self::CellSet,
     ];
 
     #[must_use]
@@ -940,6 +963,9 @@ impl Intrinsic {
             Self::BoxFresh => "box_fresh",
             Self::BoxFill => "box_fill",
             Self::ListPush => "list_push",
+            Self::CellNew => "cell_new",
+            Self::CellGet => "cell_get",
+            Self::CellSet => "cell_set",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -970,7 +996,10 @@ impl Intrinsic {
             | Self::ListGet
             | Self::BoxFresh
             | Self::BoxFill
-            | Self::ListPush => 1,
+            | Self::ListPush
+            | Self::CellNew
+            | Self::CellGet
+            | Self::CellSet => 1,
             other if other.requires().is_some() => 1,
             _ => 0,
         }
@@ -1197,6 +1226,9 @@ impl Intrinsic {
             Self::BoxFresh => &[],
             Self::BoxFill => &[Shape::BoxT, Shape::T],
             Self::ListPush => &[Shape::ListT, Shape::T],
+            Self::CellNew => &[Shape::T],
+            Self::CellGet => &[Shape::CellT],
+            Self::CellSet => &[Shape::CellT, Shape::T],
             Self::TextFromStr => &[Shape::Str],
             Self::TextAssume => &[Shape::Str],
         }
@@ -1365,7 +1397,9 @@ impl Intrinsic {
             Self::BoxNew => Shape::BoxT,
             Self::BoxGet | Self::ListGet => Shape::T,
             Self::ListFromVec | Self::ListEmpty => Shape::ListT,
-            Self::ListLen | Self::BoxFill | Self::ListPush => Shape::Int,
+            Self::ListLen | Self::BoxFill | Self::ListPush | Self::CellSet => Shape::Int,
+            Self::CellNew => Shape::CellT,
+            Self::CellGet => Shape::T,
             Self::BoxFresh => Shape::BoxT,
             Self::TextFromStr => Shape::Text,
             Self::TextAssume => Shape::Text,
@@ -1385,6 +1419,9 @@ impl Intrinsic {
                 | Self::ListEmpty
                 | Self::ListLen
                 | Self::ListGet
+                | Self::CellNew
+                | Self::CellGet
+                | Self::CellSet
                 | Self::FloatToStrFixed
                 | Self::StrPadStart
                 | Self::StrPadEnd

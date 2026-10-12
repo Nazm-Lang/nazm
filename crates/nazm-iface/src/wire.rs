@@ -212,6 +212,10 @@ pub enum PersistentType {
     List {
         list: Box<PersistentType>,
     },
+    /// `Cell[T]` (R1b), written `{"cell":T}`, likewise.
+    Cell {
+        cell: Box<PersistentType>,
+    },
     /// A tuple (L5), written `{"tuple":[A,B,…]}`, likewise: a tuple's record has no name to
     /// write as a definition.
     Tuple {
@@ -426,6 +430,9 @@ fn persist(t: Type, types: &UserTypes, graph: &ModuleGraph) -> Option<Persistent
         }),
         Type::List(v) => Some(PersistentType::List {
             list: Box::new(persist(types.vec_element(v)?, types, graph)?),
+        }),
+        Type::Cell(v) => Some(PersistentType::Cell {
+            cell: Box::new(persist(types.vec_element(v)?, types, graph)?),
         }),
         Type::Array(a) => {
             let (elem, len) = types.array_info(a)?;
@@ -887,7 +894,9 @@ fn validate_type(
         PersistentType::Chan { chan } => {
             validate_type(chan, params, defined, depth + 1, owner)?;
         }
-        PersistentType::Boxed { boxed: inner } | PersistentType::List { list: inner } => {
+        PersistentType::Boxed { boxed: inner }
+        | PersistentType::List { list: inner }
+        | PersistentType::Cell { cell: inner } => {
             validate_type(inner, params, defined, depth + 1, owner)?;
         }
         PersistentType::Tuple { tuple } => {
@@ -1818,6 +1827,10 @@ fn read_type(
         PersistentType::List { list } => {
             let elem = read_type(list, ids, types, owner);
             types.list_of(elem)
+        }
+        PersistentType::Cell { cell } => {
+            let elem = read_type(cell, ids, types, owner);
+            types.cell_of(elem)
         }
         PersistentType::Tuple { tuple } => {
             let elems = tuple

@@ -234,6 +234,7 @@ impl UserTypes {
             Type::Vec(_) => format!("Vec[{}]", shown(self)),
             Type::Box(_) => format!("Box[{}]", shown(self)),
             Type::List(_) => format!("List[{}]", shown(self)),
+            Type::Cell(_) => format!("Cell[{}]", shown(self)),
             Type::Array(a) => match self.array_info(a) {
                 Some((e, n)) => format!("[{}; {n}]", self.show(e)),
                 None => "[?; ?]".to_owned(),
@@ -345,7 +346,8 @@ impl UserTypes {
                         return holder;
                     }
                 }
-                Type::Vec(v) => {
+                // A `Cell` (R1b) is a mutable handle, as a `Vec` is.
+                Type::Vec(v) | Type::Cell(v) => {
                     if let Some(e) = self.vec_element(v) {
                         work.push((e, holder.or(Some(ty))));
                     }
@@ -997,7 +999,8 @@ impl UserTypes {
     ) -> u8 {
         match t {
             Type::Param(q) if q == p => INLINE,
-            Type::Vec(v) => match self.vec_element(v) {
+            // A `Cell` (R1b) holds its value behind a counted handle, as a `Vec` does.
+            Type::Vec(v) | Type::Cell(v) => match self.vec_element(v) {
                 Some(e) => compose(COUNTED, self.reaches_param(e, p, uses)),
                 None => 0,
             },
@@ -1081,7 +1084,8 @@ impl UserTypes {
         out: &mut Vec<Owns>,
     ) {
         match t {
-            Type::Vec(v) => {
+            // A `Cell` (R1b) is counted, as a `Vec` is: it could be set to what holds it.
+            Type::Vec(v) | Type::Cell(v) => {
                 if let Some(e) = self.vec_element(v) {
                     self.owned_by(e, COUNTED, via, uses, out);
                 }
