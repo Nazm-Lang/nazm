@@ -46,7 +46,7 @@ fi
 # Every top-level entry the repository tracks. A file here that is absent is skipped, so a
 # fixture tree may hold a subset.
 entries='.agent .cargo .dockerignore .github .gitignore AGENTS.md CLAUDE.md CONTRIBUTING.md
-Cargo.lock Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md _typos.toml bench compiler corpus crates
+Cargo.lock Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md THIRD-PARTY-NOTICES.md _typos.toml bench compiler corpus crates
 deny.toml docker docs editors examples fuzz library openspec review rust-toolchain.toml
 rustfmt.toml schema scripts tests tools xtask'
 

@@ -80,7 +80,7 @@ const RESERVED: &[(&str, &str)] = &[
 /// saying so through traits, generics and concurrency, which is why a test now holds it to
 /// the constructs it names.
 const SUPPORTED: &str = concat!(
-    "Nazm 1.0 has functions and `let`/`let mut`, `while` with `break` and `continue`, ",
+    "Nazm (the 1.0 draft) has functions and `let`/`let mut`, `while` with `break` and `continue`, ",
     "`return`, `if`/`else`, `Int`, `Bool` and `Str`, fixed-width integers, `Float32` and ",
     "`Float64` with bit operators, `struct` records, `enum` and `match`, ",
     "generics and `Vec[T]`, `Result`, `Option` and `?`, function values and closures, ",

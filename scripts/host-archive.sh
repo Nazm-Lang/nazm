@@ -17,7 +17,10 @@ trap 'rm -rf "$stage"' EXIT
 dir="$stage/nazm-$triple"
 mkdir -p "$dir/bin" "$dir/docs" "$outdir"
 cp "$binary" "$dir/bin/nazm"
-cp "$root/README.md" "$root"/LICENSE* "$root/NOTICE" "$dir/" 2>/dev/null || cp "$root/README.md" "$dir/"
+# The MCP server, where it was built beside it (0.9.0): THIRD-PARTY-NOTICES.md covers both.
+mcp="$(dirname -- "$binary")/nazm-mcp"
+[ -x "$mcp" ] && cp "$mcp" "$dir/bin/nazm-mcp"
+cp "$root/README.md" "$root"/LICENSE* "$root/NOTICE" "$root/THIRD-PARTY-NOTICES.md" "$dir/"
 cp "$root/docs/getting-started.md" "$root/docs/support.md" "$dir/docs/"
 version=$("$dir/bin/nazm" --version 2>/dev/null || echo unknown)
 cat > "$dir/INSTALL.txt" <<TXT

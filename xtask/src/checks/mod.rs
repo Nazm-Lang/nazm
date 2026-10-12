@@ -49,6 +49,7 @@ pub(crate) fn run_checks() -> ExitCode {
         ("performance claims", claims::check(&guide::root())),
         ("agent governance", governance::check(&guide::root())),
         ("dependency sources", supply::check(&guide::root())),
+        ("third-party notices", crate::notices::check(&guide::root())),
         ("module boundaries", check_module_boundaries(&guide::root())),
     ])
 }

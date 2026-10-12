@@ -235,7 +235,7 @@ fn a_refused_construct_points_at_the_current_language() {
         .and_then(|d| d.help.clone())
         .unwrap_or_else(|| panic!("`for` is refused with help: {d:?}"));
     for construct in [
-        "Nazm 1.0",
+        "Nazm (the 1.0 draft)",
         "generics",
         "`Result`, `Option` and `?`",
         "closures",

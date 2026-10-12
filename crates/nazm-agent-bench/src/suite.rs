@@ -654,7 +654,10 @@ pub fn build() -> Result<Suite, String> {
             },
             Field {
                 name: "current_version",
-                truth: text("1.0", &["1.0", "v1.0", "version 1.0", "nazm 1.0", "1.0.0"]),
+                truth: text(
+                    "0.9.0",
+                    &["0.9.0", "v0.9.0", "nazm 0.9", "0.9", "1.0 draft"],
+                ),
             },
             Field {
                 name: "return_leaves",

@@ -222,6 +222,11 @@ fn toolchain_failure(said: &str) -> bool {
         "ld: framework",
         "unable to find sdk",
         "cannot find -l",
+        // With Xcode.app selected rather than the command line tools, the shim reports a
+        // missing SDK through `xcode-select` and `xcodebuild` instead (0.9.0 preview).
+        "xcode-select:",
+        "Failed to determine realpath",
+        "xcodebuild -sdk",
     ]
     .iter()
     .any(|m| said.contains(m))
