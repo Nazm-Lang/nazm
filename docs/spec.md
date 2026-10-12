@@ -132,6 +132,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `for` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; each form means its `while` loop |
 | `box-list` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; recursive types through immutable indirection |
 | `cell` | EXPERIMENTAL | R1b: a 1.x addition, experimental until R1 closes; a mutable handle of one value, the kind `Vec` is |
+| `defer` | EXPERIMENTAL | R1b: a 1.x addition, experimental until R1 closes; `defer` is a word only at a statement's start before `{` |
 | `patterns` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; supersedes the N10 limits on patterns where it says so |
 | `tuples` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; a tuple is an anonymous record |
 | `const-tables` | EXPERIMENTAL | R1a: a 1.x addition, experimental until R1 closes; widens *Constants* and *Arrays* |
@@ -4493,6 +4494,41 @@ that can hold a function value.
 
 **Names.** `Cell`, `cell_new`, `cell_get` and `cell_set` are **prelude names**, like `Box`'s: a module
 that declares a type named `Cell`, or a function named like one of the three, keeps its own.
+
+### Scope-exit cleanup: `defer` — R1
+<!-- id: defer -->
+
+Settled by R1b, 2026-10-13 (`openspec/changes/r1-language-for-the-rewrite`, L12). EXPERIMENTAL until
+R1 closes.
+
+```nazm
+fn total(out: OutCap, xs: Vec[Int]) -> Result[Int, Str] ! {io} {
+    print("start\n");
+    defer { print("done\n"); }      // on every way out, the early one included
+    let mut sum = 0;
+    for x in xs {
+        if x < 0 { return Result[Int, Str].Err(error: "negative"); }
+        sum = sum + x;
+    }
+    Result[Int, Str].Ok(value: sum)
+}
+```
+
+`defer { … }` registers a block to run when the block it is written in is **left** — by reaching its
+end, or by `return`, `?`, `break` or `continue` out of it. Every way out runs it; nothing else does.
+
+| | |
+| --- | --- |
+| **When** | Each time its block is left after the `defer` statement was reached. A `defer` not yet reached — written after a `return` that runs first — does not run |
+| **Order** | The last registered first. Several in one block run in reverse; a block's run before the blocks around it, so leaving several blocks at once — a `return` — runs the innermost block's first |
+| **With a value** | A `return e` or a block's final expression is computed **before** the deferred blocks run, and is what is returned or produced; a deferred block cannot change it |
+| **`break` and `continue`** | Run the deferred blocks registered inside the loop body they leave, not those around the loop |
+| **What it sees** | The bindings in scope where it is written, as they are when it runs: a `let mut` assigned after the `defer` is seen with its new value |
+| **Its body** | A statement block: no value (`N0300`), and nothing that leaves it — `return`, `?`, or a `break` or `continue` out of it (`N0631`). A loop inside it may `break`; a closure inside it may `return` |
+| **What it is not** | Unwinding. A failure that stops the program (`N04xx`, an exit) runs no deferred block. A `scope` waits for its tasks before its own deferred blocks run, since they are the block's |
+
+**The word.** `defer` is a word only at the start of a statement and before `{`; everywhere else it
+is a name a 1.0 program may use, and no program valid under 1.0 changes meaning.
 
 ### Patterns: wildcards, alternatives, nesting and literals — R1
 <!-- id: patterns -->

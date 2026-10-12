@@ -424,7 +424,10 @@ impl Checker<'_> {
 
             Expr::Propagate {
                 operand, op_span, ..
-            } => self.check_propagate(operand, *op_span, expected),
+            } => {
+                self.refuse_leaving_defer("`?`", *op_span);
+                self.check_propagate(operand, *op_span, expected)
+            }
 
             Expr::If {
                 cond,

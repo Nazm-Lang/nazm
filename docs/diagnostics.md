@@ -220,6 +220,9 @@ kind, totals by count) and `nazm.flow/1` (`nazm explain-flow --json`: each sink'
 of an existing field. The check artefact's sink facts gain an optional `class`, unread by an older
 checker whose entries the semantic epoch already keeps apart.
 
+**Applied to R1b, L12 (`defer`).** One code appeared, compatibly: `N0631`, a `defer` body that
+would leave it. No schema moved.
+
 **Applied to R1b, L11 (default trait methods; impls of generic types).** `N0602` narrowed
 compatibly: an impl may leave out a method its trait gives a default body. `N0604` gained a case —
 an impl with type parameters whose header is not a generic record or enum applied to exactly them —
@@ -597,6 +600,7 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0628` | `NOT_ITERABLE` | A `for` loop over something that is not an `Ints`, `Strs`, `Vec[T]` or `Bytes` (R1a, `docs/spec.md`, *`for` loops*) |
 | `N0629` | `OR_PATTERN_BINDINGS` | An or-pattern's alternatives that bind different names, or one name with different types (R1a, `docs/spec.md`, *Patterns*) |
 | `N0630` | `LET_ELSE_COMPLETES` | A `let … else` whose `else` can finish (R1a, `docs/spec.md`, *Patterns*) |
+| `N0631` | `DEFER_LEAVES` | A `defer` body that would leave it: `return`, `?`, or `break`/`continue` out of it (R1b, `docs/spec.md`, *`defer`*) |
 | `N0900` | `COMPILER_DEFECT` | The compiler contradicted itself (N39) |
 <!-- registry:end -->
 

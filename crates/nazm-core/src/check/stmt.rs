@@ -94,6 +94,7 @@ impl Checker<'_> {
                 false
             }
             Stmt::Return(r) => {
+                self.refuse_leaving_defer("`return`", r.span);
                 self.check_return(r);
                 true
             }
@@ -123,6 +124,27 @@ impl Checker<'_> {
                             ),
                         )
                         .help("add `;` to discard it, or send it through a channel"),
+                    );
+                }
+                false
+            }
+            Stmt::Defer(d) => {
+                // Run at every exit of the enclosing block (R1b, L12): it completes there, and
+                // leaves nothing — no value, and no `return`, `?`, `break` or `continue` out.
+                let saved = self.defer_floor.replace(self.loop_depth);
+                let completion = self.check_block(&d.body, None);
+                self.defer_floor = saved;
+                if let (Completion::Value(t), Some(tail)) = (completion, &d.body.tail) {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::TYPE_MISMATCH,
+                            tail.span(),
+                            format!(
+                                "a `defer` has no value, but this produces `{}`",
+                                self.show(t)
+                            ),
+                        )
+                        .help("add `;` to discard it"),
                     );
                 }
                 false
@@ -573,7 +595,29 @@ impl Checker<'_> {
         }
     }
 
+    /// `what` at `at` would leave the `defer` body being checked, if there is one (R1b, L12):
+    /// the body runs as its block is left, and leaving it from there has nowhere to go.
+    pub(super) fn refuse_leaving_defer(&mut self, what: &str, at: Span) {
+        if self.defer_floor.is_some() {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::DEFER_LEAVES,
+                    at,
+                    format!("{what} cannot leave a `defer` body"),
+                )
+                .help(
+                    "a `defer` body runs while its block is being left, by its end or by a \
+                     `return`, `?`, `break` or `continue`; it finishes, and the leaving goes on",
+                ),
+            );
+        }
+    }
+
     fn check_loop_control(&mut self, word: &str, span: Span) {
+        if self.defer_floor == Some(self.loop_depth) {
+            self.refuse_leaving_defer(&format!("`{word}`"), span);
+            return;
+        }
         if self.loop_depth == 0 {
             self.errors.push(
                 Diagnostic::error(

@@ -536,6 +536,8 @@ impl Checker<'_> {
         let saved_span = self.return_span.replace(return_type.span);
         let saved_scope_depth = std::mem::replace(&mut self.scope_depth, 0);
         let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+        // A closure in a `defer` body is a function of its own, which may return (L12).
+        let saved_defer = self.defer_floor.take();
         self.closures.push(ClosureFrame {
             id,
             boundary: self.scopes.depth(),
@@ -587,6 +589,7 @@ impl Checker<'_> {
         self.return_span = saved_span;
         self.scope_depth = saved_scope_depth;
         self.loop_depth = saved_loop_depth;
+        self.defer_floor = saved_defer;
 
         self.res.record_mention(enclosing, ty);
         ty

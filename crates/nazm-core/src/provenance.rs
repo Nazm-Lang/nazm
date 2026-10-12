@@ -327,6 +327,7 @@ fn walk<'b>(
         elems,
         read: vec![false; n],
         stale: false,
+        defers: Vec::new(),
         slots,
         shapes,
         calls: Vec::new(),
@@ -371,6 +372,9 @@ fn walk<'b>(
 struct Walk<'a, 'b> {
     res: &'a Resolution,
     id: FnId,
+    /// The `defer` bodies registered in the blocks being walked (R1b, L12): each is walked
+    /// where it is written and again as its block ends, where it runs.
+    defers: Vec<&'b Block>,
     /// Each call site's first type argument, by the callee's span: what a container's cell is
     /// named by. Indexed once, so a body with many container calls is not quadratic.
     elems: HashMap<(u32, u32), Type>,
@@ -468,10 +472,17 @@ impl<'b> Walk<'_, 'b> {
     }
 
     fn block(&mut self, b: &'b Block) -> Shaped {
+        let mark = self.defers.len();
         for s in &b.statements {
             self.stmt(s);
         }
-        b.tail.as_ref().map(|e| self.shaped(e)).unwrap_or_default()
+        let tail = b.tail.as_ref().map(|e| self.shaped(e)).unwrap_or_default();
+        // What this block deferred runs as it ends, after everything written in it (L12).
+        let ran: Vec<&'b Block> = self.defers.drain(mark..).collect();
+        for d in ran.into_iter().rev() {
+            self.block(d);
+        }
+        tail
     }
 
     fn stmt(&mut self, s: &'b Stmt) {
@@ -531,6 +542,10 @@ impl<'b> Walk<'_, 'b> {
             }
             Stmt::Scope(sc) => {
                 self.block(&sc.body);
+            }
+            Stmt::Defer(df) => {
+                self.block(&df.body);
+                self.defers.push(&df.body);
             }
             Stmt::Spawn(sp) => {
                 let args: Vec<Flow> = sp.args.iter().map(|a| self.expr(a)).collect();

@@ -35,7 +35,7 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 
 use crate::ast::{
-    Assign, BinOp, Block, Contract, ContractKind, EffectDecl, Enum, Expr, Field, FieldInit,
+    Assign, BinOp, Block, Contract, ContractKind, Defer, EffectDecl, Enum, Expr, Field, FieldInit,
     FnTypeName, For, ForIter, ForeignDecl, ForeignStruct, Function, HoleSite, ImplDecl, Import,
     InterpPart, Let, MatchArm, MatchSource, MethodOf, Param, Pattern, PatternField, Place,
     PlaceField, PlaceStep, Program, Qualifier, Record, Reexport, ReexportName, Requirement, Return,
@@ -1263,6 +1263,20 @@ impl<'a> Parser<'a> {
             alias,
             reexport,
             span: start.join(end),
+        })
+    }
+
+    /// `defer { … }` (R1b, L12).
+    fn defer(&mut self) -> Option<Defer> {
+        let at = self.checkpoint();
+        let keyword_span = self.peek_span();
+        self.advance();
+        let body = self.block()?;
+        self.wrap(at, SyntaxKind::DeferStmt);
+        Some(Defer {
+            keyword_span,
+            span: keyword_span.join(body.span),
+            body,
         })
     }
 
@@ -2915,6 +2929,17 @@ impl<'a> Parser<'a> {
         }
         if self.at(&TokenKind::Scope) {
             let s = Stmt::Scope(self.scope()?);
+            *deepest = (*deepest).max(self.child());
+            return Some(Parsed::Stmt(s));
+        }
+        // `defer { … }` (R1b, L12): a word here only, before `{`, so no 1.0 program changes.
+        if matches!(self.peek(), TokenKind::Ident(w) if w == "defer")
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::LBrace)
+            )
+        {
+            let s = Stmt::Defer(self.defer()?);
             *deepest = (*deepest).max(self.child());
             return Some(Parsed::Stmt(s));
         }
@@ -4958,6 +4983,7 @@ mod ast_depth_tests {
                             }
                             Stmt::Expr(e) => stack.push((Node::Expr(e), d + 1)),
                             Stmt::Scope(sc) => stack.push((Node::Block(&sc.body), d + 1)),
+                            Stmt::Defer(df) => stack.push((Node::Block(&df.body), d + 1)),
                             Stmt::Spawn(sp) => {
                                 for a in &sp.args {
                                     stack.push((Node::Expr(a), d + 1));

@@ -200,6 +200,21 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-13)** · *Scope-exit cleanup: `defer`* (`spec.md`; `openspec/changes/
+r1-language-for-the-rewrite`, L12). `defer { … }` runs a block whenever its block is left — at its
+end, or by `return`, `?`, `break` or `continue` — the last registered first, after a returned value
+or a block's final value is computed. `defer` is a word only at a statement's start before `{`. The
+checker refuses a body that would leave (`N0631`: `return`, `?`, or a `break`/`continue` out of it)
+and a body with a value; a loop inside one may leave itself, a closure inside one may return.
+Lowering only: Core IR registers each body with its loop depth and emits it — lowered afresh —
+where its block falls through, in `leave` before every `return` (and so every `?` and `ensures`),
+and before a `break`/`continue` for the bodies registered inside the loop it leaves; nothing below
+Core IR is new. Provenance walks a body where it is written and again where its block ends.
+Semantic epoch 64; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/defer.rs` —
+order, nesting, an early return, a loop's `break` and `continue`, `?` on success and failure,
+under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; the
+refusals and what stays accepted; provenance reaching a body from after it.
+
 **R1b (2026-10-13)** · *Impls of generic types* (`spec.md`, *Traits and methods*, **Impls of generic
 types**; `openspec/changes/r1-language-for-the-rewrite`, L11b). `impl[A: Show, B] Show for Pair[A,
 B]` implements a trait for every instance whose arguments meet the impl's requirements. The parser

@@ -606,6 +606,10 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                             spans.push((SyntaxKind::ScopeStmt, sc.span));
                             stack.push(Node::Block(&sc.body));
                         }
+                        Stmt::Defer(df) => {
+                            spans.push((SyntaxKind::DeferStmt, df.span));
+                            stack.push(Node::Block(&df.body));
+                        }
                         Stmt::Spawn(sp) => {
                             spans.push((SyntaxKind::SpawnStmt, sp.span));
                             for a in &sp.args {

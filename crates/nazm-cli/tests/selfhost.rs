@@ -581,6 +581,11 @@ fn dump_stmt(s: &nazm_core::__syntax::Stmt, out: &mut String) {
             dump_block(&sc.body, out);
             push_node(out, "scope", 1, sc.span.start, sc.span.end, "");
         }
+        // R1b: the Nazm parser does not carry `defer` until R2, so no differential input has one.
+        S::Defer(df) => {
+            dump_block(&df.body, out);
+            push_node(out, "defer", 1, df.span.start, df.span.end, "");
+        }
         S::Spawn(sp) => {
             for a in &sp.args {
                 dump_expr(a, out);

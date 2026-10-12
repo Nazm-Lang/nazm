@@ -170,6 +170,8 @@ pub enum SyntaxKind {
     BreakStmt,
     ContinueStmt,
     ScopeStmt,
+    /// `defer { … }` (R1b, L12).
+    DeferStmt,
     SpawnStmt,
     ExprStmt,
     Literal,
@@ -330,6 +332,7 @@ impl SyntaxKind {
         Self::BreakStmt,
         Self::ContinueStmt,
         Self::ScopeStmt,
+        Self::DeferStmt,
         Self::SpawnStmt,
         Self::ExprStmt,
         Self::Literal,

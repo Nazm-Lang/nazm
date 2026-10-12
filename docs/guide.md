@@ -539,7 +539,7 @@ accepts.
 | `function_type` | `"fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ]` |
 | `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
-| `statement` | `let_statement \| assignment \| while_statement \| for_statement \| let_else_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
+| `statement` | `let_statement \| assignment \| while_statement \| for_statement \| let_else_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| defer_statement \| spawn_statement \| expression_statement` |
 | `let_statement` | `"let" , [ "mut" ] , IDENT , "=" , expression , ";"` |
 | `let_else_statement` | `"let" , pattern , "=" , expression , [ "else" , block ] , ";"` |
 | `assignment` | `place , "=" , expression , ";"` |
@@ -550,6 +550,7 @@ accepts.
 | `break_statement` | `"break" , ";"` |
 | `continue_statement` | `"continue" , ";"` |
 | `scope_statement` | `"scope" , block` |
+| `defer_statement` | `"defer" , block` |
 | `spawn_statement` | `"spawn" , IDENT , "(" , [ arguments ] , ")" , ";"` |
 | `expression_statement` | `expression , ";"` |
 | `expression` | `disjunction` |
@@ -1206,7 +1207,7 @@ fn main() -> Int { 1 }
 ### `statement`
 
 ```ebnf
-statement = let_statement | assignment | while_statement | for_statement | let_else_statement | return_statement | break_statement | continue_statement | scope_statement | spawn_statement | expression_statement ;
+statement = let_statement | assignment | while_statement | for_statement | let_else_statement | return_statement | break_statement | continue_statement | scope_statement | defer_statement | spawn_statement | expression_statement ;
 ```
 
 ```nazm
@@ -1345,6 +1346,21 @@ scope_statement = "scope" , block ;
 
 ```nazm
 fn w(c: Chan) -> Int { 0 } fn main(t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c); } 0 }
+```
+
+### `defer_statement`
+
+```ebnf
+defer_statement = "defer" , block ;
+```
+
+R1b: a block run when the enclosing block is left — at its end, or by `return`, `?`,
+`break` or `continue` — the last registered first. `defer` is a word only here, before
+`{`. Its body leaves nothing: no value, and no `return`, `?`, `break` or `continue` out of
+it (`N0631`).
+
+```nazm
+fn main() -> Int { let mut n = 0; { defer { n = n + 1; } n = 10; } n }
 ```
 
 ### `spawn_statement`
