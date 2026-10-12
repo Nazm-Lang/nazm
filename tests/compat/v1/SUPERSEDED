@@ -1,3 +1,4 @@
 refuse/float-literal.nz  Gate 2 added floating point (docs/general-purpose.md section 1); docs/stability.md makes adding a construct 1.0 refused by name a 1.x minor addition, since no valid program changes meaning
 refuse/array-of-strings.nz  R1a (L8) admits strings as array elements (docs/spec.md, Arrays and Constant tables and exported constants); a refusal lifted is a 1.x minor addition, since no valid program changes meaning
 refuse/public-constant.nz  R1a (L8) exports a constant through its module's interface (docs/spec.md, Constant tables and exported constants); a refusal lifted is a 1.x minor addition
+refuse/capture-let-mut.nz  R1b (L10) shares a captured `let mut` binding with the closure through a cell (docs/spec.md, Function values and closures); a refusal lifted is a 1.x minor addition, since no valid program changes meaning

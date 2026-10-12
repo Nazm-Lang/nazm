@@ -89,9 +89,8 @@ found only by reading all of it.
   without the module's source, cannot use its traits (a cached check can: N107 checked it). *Narrowed in N78:* until then, no traits or methods. Function values and
   closures exist since N50, and effect parameters since N51 — one per function, named only in
   function types (`N0388`), with effect subsumption only where a function value is passed or
-  returned (N79); no closure or
-    named function value inside a generic function (`N0387`); a closure captures by copy and
-  never a `let mut` binding (`N0386`); no attenuation beyond `OutCap` (N79) and no revocation
+  returned (N79); a closure captures by copy, except a `let mut` binding, which it shares
+  (R1b, EXPERIMENTAL), and never one whose type can hold a function value (`N0386`); no attenuation beyond `OutCap` (N79) and no revocation
   (`architecture.md` §7.53); a field of function type is called by
   binding it first; no function value crosses into a task (`N0321`); a path that went through a
   function value carries what every function value of its type may return, and a call through a

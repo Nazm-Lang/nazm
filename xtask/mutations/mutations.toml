@@ -8312,10 +8312,11 @@ Repointed by R1a a fifth time, which moved it to 56 for derived ordering: an ent
 Repointed by R1a a sixth time, which moved it to 57 for constant tables: an entry that refused `[\"a\"; 2]` must not be reused.
 Repointed by R1a a seventh time, which moved it to 58 for raw strings: an entry that refused `r\"x\"` must not be reused.
 Repointed by R1a an eighth time, which moved it to 59 for interpolation: an entry that refused `f\"{x}\"` must not be reused.
-Repointed by R1b, which moved it to 60 for `Cell[T]`: an entry that refused `cell_new` must not be reused."""
+Repointed by R1b, which moved it to 60 for `Cell[T]`: an entry that refused `cell_new` must not be reused.
+Repointed by R1b again, which moved it to 61 for L10: an entry that refused a closure in a generic function must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 60;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 59;"
+find = "pub const SEMANTIC_EPOCH: u32 = 61;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 60;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -9816,11 +9817,12 @@ killers = [{ package = "nazm-cli", test = "usability", name = "the_formatter_glu
 
 [[mutation]]
 name = "n50-a-mutable-binding-may-be-captured"
-why = "a closure copies a `let mut` binding, which then silently stops tracking it"
+why = """a closure shares a `let mut` binding that can hold a function value, which the closure can then be stored into and own itself
+Repointed by R1b (L10), which shares every other captured `let mut` binding through a cell: the refusal that remains is this one."""
 file = "crates/nazm-core/src/check/scope.rs"
-find = "        if b.mutable {\n            self.errors.push("
-replace = "        if false {\n            self.errors.push("
-killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_may_not_capture_a_mutable_binding" }]
+find = "            if self.res.types().function_holder(cell).is_some() {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "closures", name = "a_closure_shares_a_mutable_binding_unless_it_can_hold_a_function" }]
 
 [[mutation]]
 name = "n50-a-generic-function-is-a-value"
@@ -9830,31 +9832,7 @@ find = "        if v.sig.generics > 0 {"
 replace = "        if v.sig.generics > 99 {"
 killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic_nazm_function_is_a_value" }]
 
-[[mutation]]
-name = "n50-a-function-value-may-be-named-in-a-generic-body"
-why = "a generic body names a function as a value, whose thunk its instances cannot reach"
-file = "crates/nazm-core/src/check/scope.rs"
-find = """
-        // own, which could not reach it (N50).
-        if !self.type_scope.is_empty() {"""
-replace = """
-        // own, which could not reach it (N50).
-        if false {"""
-killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic_nazm_function_is_a_value" }]
-
-[[mutation]]
-name = "n50-a-closure-may-be-written-in-a-generic-body"
-why = "a closure is accepted inside a generic function, which N50 does not instantiate"
-file = "crates/nazm-core/src/check/call.rs"
-find = """
-            return expected.unwrap_or(Type::Int);
-        };
-        if !self.type_scope.is_empty() {"""
-replace = """
-            return expected.unwrap_or(Type::Int);
-        };
-        if false {"""
-killers = [{ package = "nazm-cli", test = "closures", name = "only_a_monomorphic_nazm_function_is_a_value" }]
+# `n50-a-function-value-may-be-named-in-a-generic-body` and `n50-a-closure-may-be-written-in-a-generic-body` are retired by R1b (L10): both refusals are lifted — a closure in a generic function is instantiated with it, and a thunk a generic body makes a value of is bindable across objects. `r1b-a-generic-closure-is-a-plain-function` and `r1b-a-generic-bodys-thunk-is-internal` attack what replaced them.
 
 [[mutation]]
 name = "n50-a-closure-copies-from-its-own-slots"
@@ -16869,3 +16847,61 @@ file = "crates/nazm-core/src/lower.rs"
 find = "                    op: if op == nazm_sema::Intrinsic::CellGet {"
 replace = "                    op: if op != nazm_sema::Intrinsic::CellGet {"
 killers = [{ package = "nazm-cli", test = "cell", name = "a_cell_means_the_same_everywhere_and_everything_in_it_is_reclaimed" }]
+
+# --- R1b L10: closures in generic functions; a shared `let mut` (`docs/spec.md`, *Function values and closures*) ---
+
+[[mutation]]
+name = "r1b-a-generic-closure-is-a-plain-function"
+why = "a closure in a generic function is never instantiated with it, so no program with one builds natively"
+file = "crates/nazm-mir/src/instance.rs"
+find = "        if let Some(root) = res.type_owner(c).filter(|r| *r != c) {"
+replace = "        if let Some(root) = res.type_owner(c).filter(|_| false) {"
+killers = [{ package = "nazm-cli", test = "generic_closures", name = "a_closure_in_a_generic_function_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-a-closure-is-substituted-under-itself"
+why = "a closure's instance substitutes under its own (empty) parameter list rather than its generic function's, so its types stay generic"
+file = "crates/nazm-mir/src/lower.rs"
+find = "            ParamOwner::Function(res.type_owner(planned.key.def).unwrap_or(planned.key.def)),"
+replace = "            ParamOwner::Function(planned.key.def),"
+killers = [{ package = "nazm-cli", test = "generic_closures", name = "a_closure_in_a_generic_function_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-a-generic-closure-is-made-from-the-plain-table"
+why = "making a closure in a generic instance looks it up among the plain functions, where it is not"
+file = "crates/nazm-mir/src/lower.rs"
+find = "                let generic = self.res.type_owner(*func).is_some();"
+replace = "                let generic = false;"
+killers = [{ package = "nazm-cli", test = "generic_closures", name = "a_closure_in_a_generic_function_means_the_same_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-a-generic-bodys-thunk-is-internal"
+why = "a thunk a generic body makes a value of keeps internal linkage, which the body's instance, an artefact of its own, cannot bind"
+file = "crates/nazm-mir/src/lower.rs"
+find = "        if use_.within.and_then(|w| res.type_owner(w)).is_some() {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "generic_closures", name = "a_generic_closure_and_a_function_value_are_built_across_modules" }]
+
+[[mutation]]
+name = "r1b-a-shared-binding-is-a-plain-local"
+why = "Core IR lowering treats no binding as shared, so a captured `let mut` is a copy again and the closure's writes are lost"
+file = "crates/nazm-core/src/lower.rs"
+find = "        self.res.shared(self.id, slot)?;"
+replace = "        self.res.shared(self.id, slot).filter(|_| false)?;"
+killers = [{ package = "nazm-cli", test = "generic_closures", name = "a_shared_binding_is_one_variable_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-a-closures-copy-is-not-shared"
+why = "a closure's copy of a shared binding is not recorded as shared, so it is read as the value where it holds the cell"
+file = "crates/nazm-core/src/check/scope.rs"
+find = "                    self.res.record_shared(c.id, inner, cell);"
+replace = "                    let _ = (c.id, inner, cell);"
+killers = [{ package = "nazm-cli", test = "generic_closures", name = "a_shared_binding_is_one_variable_everywhere_and_is_reclaimed" }]
+
+[[mutation]]
+name = "r1b-a-shared-write-stays-where-it-is-made"
+why = "provenance does not store a write to a shared binding into its cell, so a file's contents a closure writes reach its function's write path unseen"
+file = "crates/nazm-core/src/provenance.rs"
+find = "            self.store(cell, name_span, &v.flow);"
+replace = "            let _ = (cell, &v.flow);"
+killers = [{ package = "nazm-cli", test = "generic_closures", name = "what_a_shared_binding_holds_carries_its_provenance" }]

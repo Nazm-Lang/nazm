@@ -220,6 +220,12 @@ kind, totals by count) and `nazm.flow/1` (`nazm explain-flow --json`: each sink'
 of an existing field. The check artefact's sink facts gain an optional `class`, unread by an older
 checker whose entries the semantic epoch already keeps apart.
 
+**Applied to R1b, L10 (closures in generic functions, a shared `let mut`).** Two codes narrowed,
+both compatibly — each now refuses less: `N0387` no longer covers a closure or a named function's
+value written inside a generic function, and `N0386` no longer covers a captured `let mut` binding,
+which is shared through a cell, except one whose type can hold a function value. No code appeared
+and none moved; no schema moved.
+
 **Applied to N51, effect parameters.** Two codes appeared, both compatible: `N0388` (an effect
 parameter where none may be: a second one, on a foreign function, on `main`, on a function with
 no declared effect set, or named inside a type's arguments) and `N0389` (a call binding one effect
@@ -508,8 +514,8 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0383` | `FOREIGN_CONFLICT` | Two foreign declarations of one symbol disagree about its signature (N42) |
 | `N0384` | `FOREIGN_SHAPE` | A foreign declaration has type parameters or a written effect set (N42) |
 | `N0385` | `FOREIGN_NOT_INTERPRETED` | `nazm run` was asked to run a program that calls a foreign function (N42) |
-| `N0386` | `CAPTURE_REFUSED` | A closure captures a `let mut` binding or a capability (N50) |
-| `N0387` | `NOT_A_FUNCTION_VALUE` | A function that cannot be a value — generic, foreign or built-in — is used as one, or a closure is written inside a generic function (N50) |
+| `N0386` | `CAPTURE_REFUSED` | A closure captures a `let mut` binding whose type can hold a function value (N50; narrowed by N51 and R1b) |
+| `N0387` | `NOT_A_FUNCTION_VALUE` | A function that cannot be a value — generic, foreign or built-in — is used as one (N50; narrowed by R1b) |
 | `N0388` | `EFFECT_PARAMETER` | An effect parameter where none may be |
 | `N0389` | `CONFLICTING_EFFECT_ARGUMENT` | A call binds its callee's effect parameter to two different sets (N51) |
 | `N0390` | `CHANNEL_ELEMENT` | A `Chan[T]` whose `T` may not cross into a task (N53) |

@@ -26,7 +26,7 @@ each new construct by name until R2 carries it.
 ## 4. R1b — functions, traits, arithmetic
 
 - [x] 4.1 L7 `Cell[T]`
-- [ ] 4.2 L10 closures in generic functions; non-escaping `let mut` capture
+- [x] 4.2 L10 closures in generic functions; `let mut` capture (shared, see design.md)
 - [ ] 4.3 L11 impls for generic types; default methods
 - [ ] 4.4 L12 `defer`
 - [ ] 4.5 L13 checked arithmetic, widening multiply, `Int128`/`UInt128`
