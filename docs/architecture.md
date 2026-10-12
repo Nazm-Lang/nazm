@@ -7293,7 +7293,7 @@ replaced, on any program in the repository.
 - **Reach is per sink class.** Which parameters reach a sink is solved for every class, so a rule
   of the policy over any class and scope uses one solver. The published summary's `reaches` stays
   the path's, as `nazm.context/3` documents it.
-- **The falsifier was run.** N79 (`38d8755`) and N80 checked all 237 `.nz` files in the repository
+- **The falsifier was run.** N79 (`8daf107`) and N80 checked all 237 `.nz` files in the repository
   with identical codes on every one. A cold check of `compiler/emit.nz` costs 1.125×, measured in
   `performance.md`; later rounds re-solve only the functions that read a grown cell.
 
@@ -8752,7 +8752,7 @@ record:
 
 What the inventory deleted: `nazm-lir/src/emit.rs` (4,405 lines) and Cranelift's `func.rs`,
 `prims.rs`, `helpers.rs`, `unit.rs` and `layout.rs` (2,963; their deletion was committed by mistake
-in the N104 gate fix `edc31b5`, which does not build on its own). What replaced them: `op/` (5,982
+in the N104 gate fix `388d11b`, which does not build on its own). What replaced them: `op/` (5,982
 lines, the interpreter's 960 and the validator's tests included) and `translate.rs` (645). Of the
 mutation catalogue's 93 entries on the deleted files, 76 were repointed at the LIR line that now
 carries their rule, 16 retired as one of an LLVM/Cranelift pair that is now one rule, one
@@ -8908,7 +8908,7 @@ ACCEPTED and says so. Nothing is tagged, pushed or published; the release proced
 runtime ABI 14, `nazm.lir/2`, `nazm.cost/2` — recorded, not moved.
 
 **As run (N108, 2026-10-05/06).** The gate ran in the order written, and found four things, each fixed
-in a commit of its own and gated again where it reached (`releases/82936f6.md`).
+in a commit of its own and gated again where it reached (`releases/920a2a5.md`).
 
 - *Thirty-four catalogue entries no contained run could decide.* A targeted session defers a mutant
   every declared killer passed on, and retries it in every later session, so these consumed most of

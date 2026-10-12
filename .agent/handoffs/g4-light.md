@@ -2,13 +2,13 @@
 
 | | |
 | --- | --- |
-| Starting HEAD | `841208d` (Gate 3 complete, awaiting review) |
+| Starting HEAD | `8f76323` (Gate 3 complete, awaiting review) |
 | Final HEAD | the commit adding this file |
-| Commits | `b1b48f2` the three Q1 crash and ABI blockers · this commit, Gate 4 light |
+| Commits | `734443e` the three Q1 crash and ABI blockers · this commit, Gate 4 light |
 | Working tree | clean but for `docs/prompts-from-chatgpt/` (user-owned, untracked) |
 | Order | the user chose "fix blockers first", then Gate 4 **light** — not the full Gate 4 of the v4 programme |
 
-## 1. The blockers fixed first (`b1b48f2`)
+## 1. The blockers fixed first (`734443e`)
 
 | Finding | Before | Now | Evidence |
 | --- | --- | --- | --- |
@@ -70,7 +70,7 @@ Evidence: `target/gates/v1/bench/cross.json`, `cross.md`.
   program. Not absent; undecided.
 - **Security reporting.** `SECURITY.md` exists: private reporting by email; GitHub's private
   vulnerability reporting is unavailable while the repository is private.
-- **Prompt files in history.** `4850431` added 47 planning-prompt files (`docs/Nazm_N40-N48_FULL_Exhaustive_Prompts/`,
+- **Prompt files in history.** `191b092` added 47 planning-prompt files (`docs/Nazm_N40-N48_FULL_Exhaustive_Prompts/`,
   `docs/nazm_N49_N75_FULL_prompts/`); `d720fbb` removed them from the tree; they remain in history. Read
   for publication concerns: planning text, no credentials, keys, personal addresses or tokens found. A
   history rewrite needs the user's explicit authorisation and has not been done.

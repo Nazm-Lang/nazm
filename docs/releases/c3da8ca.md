@@ -1,7 +1,7 @@
-# Release-candidate notes — `cf664fd` (post-v1, N49–N75)
+# Release-candidate notes — `c3da8ca` (post-v1, N49–N75)
 
 **Frozen evidence for one tested commit.** This file records what was verified at
-`cf664fd45e4920913550f21a10130f34c5c45a6f` and is not updated as the project moves. Current
+`c3da8ca3423f7909a41733c456ca9a5f32e1ab8d` and is not updated as the project moves. Current
 implementation truth is [`../capability-matrix.md`](../capability-matrix.md); what is not done is
 [`../limitations.md`](../limitations.md).
 
@@ -26,7 +26,7 @@ bundle (N73), and project templates, API docs, C-header bindings and an editor c
 
 | | |
 | --- | --- |
-| Commit | `cf664fd45e4920913550f21a10130f34c5c45a6f` — differs from `34e2380`, where the gate's stages ran, by one declared killer in the mutation catalogue (`53c6ef7`) and the release script's copy of the conformance corpus (`cf664fd`); no compiler, runtime or test source |
+| Commit | `c3da8ca3423f7909a41733c456ca9a5f32e1ab8d` — differs from `054efc1`, where the gate's stages ran, by one declared killer in the mutation catalogue (`1582f58`) and the release script's copy of the conformance corpus (`c3da8ca`); no compiler, runtime or test source |
 | Toolchain | rustc 1.98.1, pinned in `rust-toolchain.toml` |
 | Semantic epoch | 20 (`crates/nazm-cache/src/identity.rs`) |
 | Interface schema | `nazm.interface/7` |
@@ -61,8 +61,8 @@ at `-O2` (N73's measurement).
 ## The gate
 
 Contained (Docker, offline, `nazm-contained:1.98.1`, the runner image's compatibility key
-`6a1d76f8…`), 2026-10-02/03, from a clean worktree: every stage at `34e2380`; at `53c6ef7`, whose only change is one mutant's declared
-killer, that mutant and the checks; at `cf664fd`, whose only further change is the release script, the
+`6a1d76f8…`), 2026-10-02/03, from a clean worktree: every stage at `054efc1`; at `1582f58`, whose only change is one mutant's declared
+killer, that mutant and the checks; at `c3da8ca`, whose only further change is the release script, the
 release assembly — which itself runs formatting, lints, the architectural gates, the whole workspace
 suite, the release build and the bootstrap chain again at that commit.
 
@@ -74,8 +74,8 @@ suite, the release build and the bootstrap chain again at that commit.
 | Bootstrap C1 → C2 → C3 | passed, 37 s |
 | Compiler benchmark (`contained bench`) | measured, 396 s; see *Performance* |
 | Mutation, full catalogue | composed, below: 1,089 of 1,089 caught |
-| `xtask check`, the docs and counts tests | passed at `53c6ef7` |
-| Release assembly (`contained release`) | passed at `cf664fd`, 2,303 s: fmt, lints, `xtask check`, `cargo test --workspace`, release build, bootstrap C1 → C2 → C3 byte-identical, 188 files verified against `MANIFEST.txt` |
+| `xtask check`, the docs and counts tests | passed at `1582f58` |
+| Release assembly (`contained release`) | passed at `c3da8ca`, 2,303 s: fmt, lints, `xtask check`, `cargo test --workspace`, release build, bootstrap C1 → C2 → C3 byte-identical, 188 files verified against `MANIFEST.txt` |
 
 Beside it, on the host at this commit: the nine platform runs of the table above (all passed); the
 seeded fuzzers at release scale — the front end over 20,000 mutated sources, the differential tiers
@@ -84,12 +84,12 @@ their bound. These are separate classes of evidence and are reported apart.
 
 **What the gate and the audit found, every item fixed before the candidate** (commit, then what):
 
-- `cf664fd` — **the release script could not assemble a candidate**: `compiler/conformance` has held the
+- `c3da8ca` — **the release script could not assemble a candidate**: `compiler/conformance` has held the
   directories `modules/` and `refused/` since N14E, and the script's plain `cp` of its entries fails
   under GNU `cp` with `set -e` — found by the first assembly to reach that step. Copied with `tar`,
   recursively and without `.nazm` caches: 107 files, as tracked.
 
-- `53c6ef7` — the full catalogue's one non-verdict: `a-channel-goes-while-another-reference-remains`
+- `1582f58` — the full catalogue's one non-verdict: `a-channel-goes-while-another-reference-remains`
   (a channel's storage released while a task still holds it) had no declared killer; in the workspace
   suite a task waited for ever and the tier timed out at 2,400 s. The runtime harness test
   `the_runtime_s_services_keep_their_contract_when_called_directly` observes the early release under
@@ -98,24 +98,24 @@ their bound. These are separate classes of evidence and are reported apart.
 - The harness, not the tree: the last sessions needed more than the runner's fixed 3,000 s — each
   began with the verification cache over its 16 GiB cap and emptied, a cold build and the pristine
   suite, and the next mutant needed the whole suite — so the same mutant was restarted every session.
-  Sessions 24 on ran under a supervisor built from `34e2380`'s `xtask` with two constants changed (a
+  Sessions 24 on ran under a supervisor built from `054efc1`'s `xtask` with two constants changed (a
   7,200 s deadline, a 40 GiB cap) and the unmodified tree mounted, so the campaign's identity and
   journal carried over; the release assembly likewise ran with a 4,800 s deadline and
   `--skip-bench` (its benchmark is the gate's own stage), after the stock 2,400 s run reached its
   deadline in that step having passed the suite, the release build and the bootstrap chain.
 
-- `34e2380` — the release audit: the capability matrix's summary still counted N48's rows (one
+- `054efc1` — the release audit: the capability matrix's summary still counted N48's rows (one
   MISSING); `limitations.md` said "no `select`" beside N54's select, "four targets" beside six, and
   "eleven rules, no bounded-loop rule" beside fourteen with one; N73's and N74's four schemas were not
   documented in `docs/diagnostics.md` — found first by the N74 workspace run's docs suite.
 - Earlier in the programme, each composed gate's survivors and the fixes they forced are recorded in
   the milestone reports (Gate C 163/163; Gate D's one survivor, `n46-a-cycle-is-not-noticed`, killed by
-  `18eb20e`; Gate E 99/99).
+  `3e79f70`; Gate E 99/99).
 
 ## Results
 
-`cargo test --workspace`, run through `cargo xtask contained` on Linux at `34e2380`, the gate's
-workspace stage (and again, passing, inside the release assembly at `cf664fd`):
+`cargo test --workspace`, run through `cargo xtask contained` on Linux at `054efc1`, the gate's
+workspace stage (and again, passing, inside the release assembly at `c3da8ca`):
 **2249 passed, 0 failed, 38 ignored.** Across 172 suites.
 
 | | count | what it establishes |
@@ -144,13 +144,13 @@ Every one of the catalogue's **1,089** entries has a verdict, and every verdict 
 | survived | 0 |
 | unusable | 0 |
 | mutant crash | 0 |
-| timed out | 0 (one at `34e2380`, given a killer and caught at `53c6ef7`) |
+| timed out | 0 (one at `054efc1`, given a killer and caught at `1582f58`) |
 | not injected | 0 |
 | runner error | 0 |
 | unexecuted | 0 |
 
-**Composed, and how.** 1,088 verdicts at `34e2380`, one campaign (journal `db2d0899a035bcb8`) across
-24 resumed sessions, each verdict decided once and reused thereafter; and 1 at `53c6ef7`, the mutant
+**Composed, and how.** 1,088 verdicts at `054efc1`, one campaign (journal `db2d0899a035bcb8`) across
+24 resumed sessions, each verdict decided once and reused thereafter; and 1 at `1582f58`, the mutant
 that timed out, with its killer verified in that session. Every killer that decided a verdict was
 verified — pristine passes, mutant fails, restored passes — in the session that decided it. No
 verdict was reclassified. The journals are kept with the gate's logs.
@@ -197,7 +197,7 @@ mismatched, missing or unlisted.
 Every step is a person's, in this order, from a clean checkout of exactly this commit. Stop at the
 first step that does not pass.
 
-1. **Check out the commit.** `git checkout cf664fd45e4920913550f21a10130f34c5c45a6f` and confirm
+1. **Check out the commit.** `git checkout c3da8ca3423f7909a41733c456ca9a5f32e1ab8d` and confirm
    `git status --porcelain` prints nothing.
 2. **Build the images** (network needed here and nowhere after): `docker build -f
    docker/contained.Dockerfile -t nazm-contained:1.98.1 .`, and for the platform runs
@@ -222,5 +222,5 @@ first step that does not pass.
 6. **Verify independently on the host:** extract the artefact and compare every file's SHA-256 with
    `MANIFEST.txt` (counts must match both ways); then `cargo xtask evidence --verify DIR` over the
    evidence bundle, which recomputes every BLAKE3 digest of `index.json`.
-7. **Decide.** Only then, and only by a person: tag (`git tag -a v2.0.0-rc.1 cf664fd -m "…"`), push the
+7. **Decide.** Only then, and only by a person: tag (`git tag -a v2.0.0-rc.1 c3da8ca -m "…"`), push the
    branch and the tag, and publish the artefact with this file beside it. None of this has been done.

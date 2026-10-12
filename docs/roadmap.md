@@ -450,9 +450,9 @@ behind a counted handle (`N0616`), decided by the captured type where the closur
 both compilers; storing a function value is never refused. Semantic epoch 29 → 30. `Type::ALL`
 holds all seven capability types, so completion offers them. `architecture.md` §7.111.
 
-### R1 — public release readiness — **complete, 2026-10-07; candidate `7a16a40`**
+### R1 — public release readiness — **complete, 2026-10-07; candidate `996984f`**
 
-`releases/7a16a40.md` the record. No language or runtime semantics changed intentionally. The
+`releases/996984f.md` the record. No language or runtime semantics changed intentionally. The
 version is settled — language v0.3, toolchain 0.3.0, tag `v0.3.0` — and `docs/stability.md` keeps the
 six identities apart; `docs/spec.md` opens as the v0.3 specification with each section's kind
 stated. CI runs the host-safe subset and leaves the contained stages out by reading the guard; it is
@@ -465,9 +465,9 @@ fixed the one defect R1 found — a function written as a value was missing from
 assemblies of the candidate were byte-identical; the manifest redigested independently, 220 of 220;
 five catalogue entries added and caught in their own campaigns. Nothing tagged, pushed or published.
 
-### N108 — the core release gate — **complete, 2026-10-06; candidate `82936f6`**
+### N108 — the core release gate — **complete, 2026-10-06; candidate `920a2a5`**
 
-`architecture.md` §7.109 first; `releases/82936f6.md` the record. The whole catalogue, contained:
+`architecture.md` §7.109 first; `releases/920a2a5.md` the record. The whole catalogue, contained:
 1,268 of 1,268 caught, after 34 entries the campaign could not decide were repaired — killers chosen on
 macOS that Linux does not see, and nine whose code N90, N104 and N105 had moved. The platform runs
 found a debugger regression from N105, fixed. Workspace, selfhost, bootstrap, lifecycle, fuzzing,
@@ -736,15 +736,15 @@ and at a broken `use`'s `;`; the abstract tree's contract unchanged. `\u{…}` e
 hole-tolerant checker, incremental parsing outside an editor's open document, the compiler written
 in Nazm (N98). Next: N77, resolution and modules.
 
-### N75 — production-readiness audit and release gate — **complete: candidate `cf664fd`, not released, 2026-10-03**
+### N75 — production-readiness audit and release gate — **complete: candidate `c3da8ca`, not released, 2026-10-03**
 
 An audit, not a feature: every matrix status against its evidence, `limitations.md` line by line, the
 security wording of every current document, the schemas against their documentation — four documentation
 defects fixed. The gate at one commit, contained: the workspace suite, lifecycle, selfhost, bootstrap,
 the benchmark and the **full mutation catalogue, 1,089 of 1,089 caught** (one timeout given a killer); nine
 platform runs and the fuzzers and formal core at release scale on the host. The release assembly found
-that its script could not copy the conformance corpus's directories, fixed in `cf664fd`, which it then
-assembled and verified; the artefact re-digested independently. `docs/releases/cf664fd.md` holds the
+that its script could not copy the conformance corpus's directories, fixed in `c3da8ca`, which it then
+assembled and verified; the artefact re-digested independently. `docs/releases/c3da8ca.md` holds the
 identities, the target table, the accounting, the evidence index and the human release procedure.
 Nothing is tagged, pushed or published: that is a person's decision. N49–N75's programme ends here.
 

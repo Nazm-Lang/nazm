@@ -143,7 +143,7 @@ blockers and heavy workarounds are closed or explicitly accepted.
 
 ### D8. The capability audit's findings — approved 2026-10-11
 
-Three read-only audits of the Rust toolchain (2026-10-11, at `4816d58`): the compiler crates
+Three read-only audits of the Rust toolchain (2026-10-11, at `18d1c19`): the compiler crates
 (~62k lines), the tool and service crates (~128k with tests), and the runtime, code generator and
 harness. Each idiom the Rust relies on was classed BLOCKER (no sensible expression in Nazm), HEAVY (a
 workaround repeated hundreds of times) or CONVENIENCE. Counts are grep counts over source.
