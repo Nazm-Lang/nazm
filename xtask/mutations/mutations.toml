@@ -8323,10 +8323,11 @@ Repointed by R1b a fourth time, which moved it to 63 for L11b: an entry that ref
 Repointed by R1b a fifth time, which moved it to 64 for L12: an entry that refused `defer` must not be reused.
 Repointed by R1b a sixth time, which moved it to 65 for L13: an entry that refused `checked_add` must not be reused.
 Repointed by R1b a seventh time, which moved it to 66 for L15: an entry kept before warnings existed must not be reused.
-Repointed by R1b an eighth time, which moved it to 67 for L13b: an entry that refused `Int128` must not be reused."""
+Repointed by R1b an eighth time, which moved it to 67 for L13b: an entry that refused `Int128` must not be reused.
+Repointed by R1c, which moved it to 68 for `@derive(json)`: an entry that refused `@derive` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 67;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 66;"
+find = "pub const SEMANTIC_EPOCH: u32 = 68;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 67;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -17503,3 +17504,53 @@ file = "crates/nazm-syntax/src/incremental.rs"
 find = "            kind: shift_kind(&t.kind, delta),"
 replace = "            kind: t.kind.clone(),"
 killers = [{ package = "nazm-syntax", test = "incremental", name = "seeded_edit_sequences_converge_to_a_fresh_parse_over_the_whole_repository" }]
+
+# --- R1c L2a: `@derive(json)` (`docs/spec.md`, *Derived serialisation*) -------------------------
+
+[[mutation]]
+name = "r1c-a-generated-literal-keeps-its-quotes-bare"
+why = "a `\"` in generated string text is not escaped, so the schema's text ends early and the file does not parse"
+file = "crates/nazm-core/src/derive.rs"
+find = '''            '"' => out.push_str("\\\""),'''
+replace = '''            '"' => out.push('"'),'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_derived_codec_and_schema_agree_everywhere" }]
+
+[[mutation]]
+name = "r1c-a-wide-integer-is-not-named"
+why = "a `UInt64` field is refused only as a built-in with no JSON form, without saying why its values do not fit"
+file = "crates/nazm-core/src/derive.rs"
+find = '''        if matches!(n, "UInt64" | "Int128" | "UInt128") {'''
+replace = '''        if false {'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "what_a_derive_cannot_carry_is_refused_where_it_is_written" }]
+
+[[mutation]]
+name = "r1c-a-missing-optional-member-is-an-error"
+why = "decoding treats a missing member of an `Option` field as an error rather than `None`"
+file = "crates/nazm-core/src/derive.rs"
+find = '''            let optional = plain(&f.ty) && f.ty.name == "Option";'''
+replace = '''            let optional = false;'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_derived_codec_and_schema_agree_everywhere" }]
+
+[[mutation]]
+name = "r1c-the-loader-does-not-expand-derives"
+why = "the loader reads a file without expanding its derives, so no derived function exists"
+file = "crates/nazm-service/src/load.rs"
+find = '''            Ok(t) if standard.is_none() => nazm_core::derive::expand(&t),'''
+replace = '''            Ok(t) if false => nazm_core::derive::expand(&t),'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_derived_codec_and_schema_agree_everywhere" }]
+
+[[mutation]]
+name = "r1c-a-field-a-derive-cannot-carry-is-silent"
+why = "a field the derive cannot carry is not reported, and since nothing is generated for its type the derive silently does nothing"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = '''                if let Some(why) = crate::derive::refusal(&f.ty) {'''
+replace = '''                if let Some(why) = None::<String> {'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "what_a_derive_cannot_carry_is_refused_where_it_is_written" }]
+
+[[mutation]]
+name = "r1c-a-decoded-integer-wraps-into-its-field"
+why = "a decoded integer outside a narrow field's type wraps into it instead of being an `Err`, so 300 reads as 44 in a `UInt8`"
+file = "crates/nazm-core/src/derive.rs"
+find = '''                        "match try_convert[{n}](i) {{ Option.Some(value: x) => {}, Option.None() => {}, }}",'''
+replace = '''                        "match Option[{n}].Some(value: wrap_convert[{n}](i)) {{ Option.Some(value: x) => {}, Option.None() => {}, }}",'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_derived_codec_and_schema_agree_everywhere" }]

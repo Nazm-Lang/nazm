@@ -7,6 +7,7 @@
 
 pub mod check;
 pub mod constants;
+pub mod derive;
 mod effects;
 /// What a caller must assume of a function that declares no effect set (N37, N42).
 pub use effects::assumed as assumed_effects;

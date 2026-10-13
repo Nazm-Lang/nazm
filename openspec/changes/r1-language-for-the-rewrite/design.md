@@ -179,6 +179,17 @@ the binding instead (the design Swift uses): it lives in a `Cell` the function a
 name, so a closure outliving its scope leaves nothing dangling, and the cycle argument holds by
 refusing a binding that can hold a function value (`N0386`), as `N0616` refuses such a `Vec`.
 
+**L2 as carried out (2026-10-13).** Derived serialisation is ordinary Nazm, generated: the loader
+expands a file whose `struct` or `enum` carries `@derive(json)` by appending the functions it means,
+as `nazm test`'s harness already appends its `main` (`crates/nazm-cli/src/harness.rs`). So every
+implementation runs the same functions, nothing below the front end changes, every span is real and
+unique — the checker keys its tables by span — and the generated text imports `@std/json` itself,
+which a `use` after items and a repeated `use` both allow. Derived equality and hashing are walked
+structurally by each backend instead; a codec as a fourth such walk would be three implementations
+of one function. L2 lands in parts: L2a the codec and schema; L2b the closed attribute set (`rename`,
+`default`, `omit_none`, `tag`, `untagged`, `rename_all`, `deny_unknown`), which needs attributes
+before a field; L2c `@derive(toml)` over `@std/toml`.
+
 **L13b as carried out (2026-10-13).** The widening multiply is `widening_mul(a: UInt64, b:
 UInt64) -> UInt128`, monomorphic: a generic one's result is twice `T`'s width, which a built-in's
 signature — `T` and shapes of it — cannot say, and the products a rewrite needs (hashing, bignum

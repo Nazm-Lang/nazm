@@ -247,6 +247,21 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1c (2026-10-13)** · *`@derive(json)`* (`spec.md`, *Derived serialisation*;
+`openspec/changes/r1-language-for-the-rewrite`, L2a). Before a `struct` or `enum` that is not
+generic, it gives the type `t_to_json`, `t_from_json`, `t_json_schema` and the helpers a derived
+type of another module calls — ordinary Nazm the loader appends to the file
+(`crates/nazm-core/src/derive.rs`), with the `use` of `@std/json` it needs, so every implementation
+runs the same functions and nothing below the front end is new. Decoding never traps: an `Err`
+names the path. The schema is JSON Schema 2020-12 with `$defs`, so a recursive type's is finite. A
+generic type, an unknown format, a field of a type the format cannot carry, or of a type the program
+declares without the derive, is `N0619` at the attribute or the field. Semantic epoch 68;
+EXPERIMENTAL until R1 closes; the attribute set (L2b) and `@derive(toml)` (L2c) remain. Evidence:
+`crates/nazm-cli/tests/derive_json.rs` — every carried field kind, out-of-range and mistyped
+members refused at their path, under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and
+Cranelift with nothing live; a derived type of another module, plain and qualified; each refusal
+alone. The schema also passed an independent 2020-12 validator when written. Six mutants.
+
 **R1c (2026-10-13)** · *`@std/toml`* (`spec.md`, *The standard library*; `openspec/changes/r1-language-
 for-the-rewrite`, S1). TOML 1.0, in Nazm: `pub enum Toml`, recursive through `List`, and
 `toml_parse`, `toml_encode`, `toml_get`. A document is built in an arena of mutable nodes — where a

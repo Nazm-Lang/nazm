@@ -333,6 +333,9 @@ pub fn load_packaged(
             None => sources.read(&path),
         };
         let text = match read {
+            // A project file's derives, expanded (R1c, L2): the generated functions are part of
+            // the module from here on, its imports included.
+            Ok(t) if standard.is_none() => nazm_core::derive::expand(&t),
             Ok(t) => t,
             Err(e) => {
                 // No text to point into: this file could not be read. It gets an empty entry
