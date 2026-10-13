@@ -320,6 +320,7 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::AtomicNew
         | Intrinsic::StrConcat
         | Intrinsic::StrAppend
+        | Intrinsic::StrConcatNum
         | Intrinsic::IntToStr
         | Intrinsic::StrFromByte
         | Intrinsic::StrJoin

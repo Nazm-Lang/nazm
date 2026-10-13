@@ -295,6 +295,16 @@ fn numeric_intrinsic(
         Intrinsic::FloatIsInfinite => return predicate(f64::is_infinite),
         Intrinsic::FloatIsFinite => return predicate(f64::is_finite),
         Intrinsic::NumToStr => Ok(Value::Str(Str::heap(numeric::to_str(a?).into_bytes()))),
+        // An interpolation's `s` then an integer (R1, 5b.9): the bytes `str_concat` of `s` and
+        // `num_to_str` would give.
+        Intrinsic::StrConcatNum => {
+            let Some(Value::Str(s)) = args.first() else {
+                return None;
+            };
+            let mut out = s.bytes().to_vec();
+            out.extend_from_slice(numeric::to_str(b?).as_bytes());
+            Ok(Value::Str(Str::heap(out)))
+        }
         Intrinsic::Float64ToBits => return bits_of(NumKind::U64, a?.bits),
         // Exact (R1b, L13b): a 64-by-64-bit product always fits 128 bits.
         Intrinsic::WideningMul => return bits_of(NumKind::U128, a?.bits.wrapping_mul(b?.bits)),
