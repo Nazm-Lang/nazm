@@ -186,6 +186,7 @@ impl Effect {
             | Intrinsic::OsDirOpen
             | Intrinsic::OsStdin
             | Intrinsic::OsRead
+            | Intrinsic::OsReadLine
             | Intrinsic::OsWrite
             | Intrinsic::OsSeek
             | Intrinsic::OsSync
@@ -550,6 +551,7 @@ mod tests {
                 "os_dir_open",
                 "os_stdin",
                 "os_read",
+                "os_read_line",
                 "os_write",
                 "os_seek",
                 "os_sync",

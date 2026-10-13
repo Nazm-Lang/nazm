@@ -513,6 +513,7 @@ fn wasm_build(
             objects: Some(dir),
             stack_watermark: false,
             stack_size: None,
+            heap_limit: None,
             deny_warnings: false,
             layout: "aos",
             adapter: Some(shape),

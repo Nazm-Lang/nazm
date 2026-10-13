@@ -371,6 +371,7 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::OsStdin
         | Intrinsic::OsStatus
         | Intrinsic::OsRead
+        | Intrinsic::OsReadLine
         | Intrinsic::OsWrite
         | Intrinsic::OsSeek
         | Intrinsic::OsSync

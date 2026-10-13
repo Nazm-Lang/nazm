@@ -17,6 +17,7 @@ pub(super) fn lowered(
     clif_store: &Option<ObjectStore>,
     clif_key: &(dyn Fn(&str) -> ObjectKey + Sync),
     clock: &Clock,
+    heap_limit: Option<u64>,
     summary: bool,
     summarized: &Summarize<'_>,
 ) -> Result<Lowered, ExitCode> {
@@ -155,6 +156,7 @@ pub(super) fn lowered(
                 choice.runtime.is_some(),
                 &mut reached,
                 choice.stack_size,
+                heap_limit,
             );
             clock.mark("codegen");
             made
@@ -291,6 +293,7 @@ fn emit_artefacts(
     prebuilt: bool,
     reached: &mut nazm_lir::Needs,
     stack: Option<u64>,
+    heap_limit: Option<u64>,
 ) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
     let mut needs = backend.baseline();
@@ -520,6 +523,23 @@ fn emit_artefacts(
             }
         }
     }
+    // A heap limit (R1d, D5): every part of the runtime allocates through the counted heap as the
+    // units already do — all but the stack unit, whose task stacks are not heap — and the counted
+    // heap's own unit holds the limit.
+    if let Some(limit) = heap_limit {
+        for a in &mut out {
+            if let (false, nazm_lir::backend::Code::Llvm(text)) = (a.name == "stack", &mut a.code) {
+                *text = nazm_lir::runtime::heap::count_heap(text);
+            }
+        }
+        out.push(Artefact {
+            name: "heap".to_owned(),
+            code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::heap::emit_heap(limit)),
+            instance: false,
+            key: None,
+            reused: false,
+        });
+    }
     // A library has no process entry: C's `main` is the caller's (N55).
     if library {
         return Ok(out);
@@ -533,15 +553,22 @@ fn emit_artefacts(
         foreign: calls_c,
         ..needs
     };
+    let entry = nazm_lir::emit_entry_for(
+        &native.entry,
+        native.entry_roots,
+        entry_needs,
+        switch_target(backend.target()).and_then(nazm_lir::runtime::platform::args_hook),
+        stack,
+    );
+    // The entry's allocator, under a heap limit, is the counted heap's as every unit's is (D5).
+    let entry = if heap_limit.is_some() {
+        nazm_lir::runtime::heap::count_heap(&entry)
+    } else {
+        entry
+    };
     out.push(Artefact {
         name: "entry".to_owned(),
-        code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_entry_for(
-            &native.entry,
-            native.entry_roots,
-            entry_needs,
-            switch_target(backend.target()).and_then(nazm_lir::runtime::platform::args_hook),
-            stack,
-        )),
+        code: nazm_lir::backend::Code::Llvm(entry),
         instance: false,
         key: None,
         reused: false,

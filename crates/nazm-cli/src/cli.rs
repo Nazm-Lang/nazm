@@ -859,6 +859,12 @@ pub(crate) enum Command {
         /// thread or 256 KiB in the pool, and `NAZM_TASK_STACK` still overrides the pool's.
         #[arg(long, value_name = "BYTES", value_parser = stack_size)]
         stack_size: Option<u64>,
+        /// The most heap the program may hold live (R1d, D5), in bytes or with a `K`, `M` or `G`
+        /// suffix, from 64K to 1024G: an allocation that would pass it ends the program with
+        /// `N0406` and status 2. A hosted program's only; a package's manifest may give it as
+        /// `heap-limit`, and this overrides that. Without either, the heap is the host's.
+        #[arg(long, value_name = "BYTES", value_parser = nazm_package::heap_size)]
+        heap_limit: Option<u64>,
         /// Refuse a program the checker warns of (R1b, L15), as `nazm check --deny-warnings`.
         #[arg(long)]
         deny_warnings: bool,

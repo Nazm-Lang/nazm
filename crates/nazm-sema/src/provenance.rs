@@ -215,6 +215,7 @@ impl Origin {
             | Intrinsic::OsDirOpen
             | Intrinsic::OsStdin
             | Intrinsic::OsRead
+            | Intrinsic::OsReadLine
             | Intrinsic::OsDirNext
             | Intrinsic::OsStat
             // A socket is a descriptor: what arrives through one is the outside world's, as
@@ -342,9 +343,10 @@ impl Origin {
     pub const fn container(i: Intrinsic) -> ContainerUse {
         match i {
             // Files and handles (Gate 2): what is read lands in the buffer handed in.
-            Intrinsic::OsRead | Intrinsic::OsDirNext | Intrinsic::OsStat => {
-                ContainerUse::Fill { into: &[1] }
-            }
+            Intrinsic::OsRead
+            | Intrinsic::OsReadLine
+            | Intrinsic::OsDirNext
+            | Intrinsic::OsStat => ContainerUse::Fill { into: &[1] },
             // Networking (Gate 2): a datagram and its sender's address, and a name's addresses.
             Intrinsic::OsUdpRecvFrom => ContainerUse::Fill { into: &[1, 2] },
             Intrinsic::OsEnvGet
@@ -1127,6 +1129,7 @@ mod tests {
                 ("os_dir_open", Origin::File),
                 ("os_stdin", Origin::File),
                 ("os_read", Origin::File),
+                ("os_read_line", Origin::File),
                 ("os_dir_next", Origin::File),
                 ("os_stat", Origin::File),
                 // A socket's data, its peer and a name's addresses (Gate 2).

@@ -505,6 +505,8 @@ pub enum Intrinsic {
     OsStdin,
     OsStatus,
     OsRead,
+    /// A line of standard input (R1d, P3): up to and including its newline.
+    OsReadLine,
     OsWrite,
     OsSeek,
     OsSync,
@@ -623,7 +625,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 185] = [
+    pub const ALL: [Self; 186] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -759,6 +761,7 @@ impl Intrinsic {
         Self::OsStdin,
         Self::OsStatus,
         Self::OsRead,
+        Self::OsReadLine,
         Self::OsWrite,
         Self::OsSeek,
         Self::OsSync,
@@ -953,6 +956,7 @@ impl Intrinsic {
             Self::OsStdin => "os_stdin",
             Self::OsStatus => "os_status",
             Self::OsRead => "os_read",
+            Self::OsReadLine => "os_read_line",
             Self::OsWrite => "os_write",
             Self::OsSeek => "os_seek",
             Self::OsSync => "os_sync",
@@ -1228,7 +1232,7 @@ impl Intrinsic {
             Self::OsDirOpen => &[Shape::Str],
             Self::OsStdin => &[],
             Self::OsStatus => &[Shape::OsHandle],
-            Self::OsRead => &[Shape::OsHandle, Shape::Bytes],
+            Self::OsRead | Self::OsReadLine => &[Shape::OsHandle, Shape::Bytes],
             Self::OsWrite => &[Shape::OsHandle, Shape::Bytes],
             Self::OsSeek => &[Shape::OsHandle, Shape::Int, Shape::Int],
             Self::OsSync => &[Shape::OsHandle],
@@ -1411,7 +1415,7 @@ impl Intrinsic {
             Self::OsDirOpen => Shape::OsHandle,
             Self::OsStdin => Shape::OsHandle,
             Self::OsStatus => Shape::Int,
-            Self::OsRead => Shape::Int,
+            Self::OsRead | Self::OsReadLine => Shape::Int,
             Self::OsWrite => Shape::Int,
             Self::OsSeek => Shape::Int,
             Self::OsSync => Shape::Int,

@@ -118,17 +118,21 @@ pub(crate) fn run(
         target,
         soa,
         cross,
+        heap_limit,
     } = match preflight(input, choice, summary, &summarized) {
         Ok(s) => s,
         Err(code) => return code,
     };
     let llvm = nazm_lir::backend::LlvmText::new(target.clone())
         .with_debug(choice.debug)
-        .with_soa(soa);
-    // Both backends write debug information (N48; Cranelift's since N91).
+        .with_soa(soa)
+        .with_counted_heap(heap_limit.is_some());
+    // Both backends write debug information (N48; Cranelift's since N91), and both allocate
+    // through the counted heap under a heap limit (R1d, D5).
     let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
         .with_debug(choice.debug)
-        .with_soa(soa);
+        .with_soa(soa)
+        .with_counted_heap(heap_limit.is_some());
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
         nazm_lir::backend::BackendId::Llvm => &llvm,
         nazm_lir::backend::BackendId::Cranelift => &cranelift,
@@ -174,6 +178,7 @@ pub(crate) fn run(
         &clif_store,
         &clif_key,
         &clock,
+        heap_limit,
         summary,
         &summarized,
     ) {
@@ -351,6 +356,9 @@ pub(crate) struct Choice<'a> {
     pub(crate) stack_watermark: bool,
     /// `--stack-size` (R1b, L14): the bytes of stack `main` and every task run on.
     pub(crate) stack_size: Option<u64>,
+    /// `--heap-limit` (R1d, D5): the most heap the program may hold live. The root package's
+    /// `heap-limit` stands where this is not given ([`Settled`]'s is the one built with).
+    pub(crate) heap_limit: Option<u64>,
     /// `--deny-warnings` (R1b, L15): refuse a program the checker warns of.
     pub(crate) deny_warnings: bool,
     /// `aos` or `soa`: how a `Vec` of records is laid out (N68).

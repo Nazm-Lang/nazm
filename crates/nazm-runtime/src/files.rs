@@ -25,6 +25,10 @@ pub(crate) const FILES_RUNTIME: &str = r#"
 @nz.os_slots = hidden global ptr null
 @nz.os_cap = hidden global i64 0
 @nz.os_stdin_h = hidden global i64 0
+@nz.os_in_buf = hidden global ptr null
+@nz.os_in_at = hidden global i64 0
+@nz.os_in_end = hidden global i64 0
+@nz.os_in_lock = hidden global i32 0
 
 declare i32 @nz_os_open(ptr, i64)
 declare i32 @nz_os_mkdir(ptr)
@@ -403,6 +407,7 @@ fail:
 pinned:
   switch i64 %k, label %read [
     i64 2, label %isdir
+    i64 3, label %stdin
     i64 4, label %socket
     i64 5, label %einval
     i64 6, label %einval
@@ -416,6 +421,10 @@ isdir:
 einval:
   call void @nz.os_unpin(i64 %h)
   ret i64 -22
+stdin:
+  %ir = call i64 @nz.os_in_read(ptr %buf, i64 %n)
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %ir
 socket:
   %sr = call i64 @nz.net_recv(i64 %h, ptr %buf, i64 %n)
   call void @nz.os_unpin(i64 %h)
@@ -428,6 +437,166 @@ read:
   %failed = icmp slt i64 %r, 0
   %out = select i1 %failed, i64 %e, i64 %r
   ret i64 %out
+}
+
+; A line of standard input (R1d, P3) into the caller's buffer: `nz.os_in_line`'s answer. Any other
+; handle is -EINVAL, a directory -EISDIR, as a read of one is.
+define hidden i64 @nz.os_read_line(i64 %h, ptr %buf, i64 %n) {
+entry:
+  %k = call i64 @nz.os_pin(i64 %h)
+  %bad = icmp slt i64 %k, 0
+  br i1 %bad, label %fail, label %pinned
+fail:
+  ret i64 %k
+pinned:
+  %stdin = icmp eq i64 %k, 3
+  br i1 %stdin, label %line, label %other
+other:
+  %dir = icmp eq i64 %k, 2
+  %code = select i1 %dir, i64 -21, i64 -22
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %code
+line:
+  %r = call i64 @nz.os_in_line(ptr %buf, i64 %n)
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %r
+}
+
+; Standard input's buffer (R1d, P3), 16 KiB: bytes read from descriptor 0 and not yet handed
+; out, shared by `os_read` and `os_read_line`, so a line read never loses what follows its line.
+; Made on the first line read; its lock is held across the system call, so standard input has
+; one reader at a time.
+define hidden void @nz.os_in_acquire() {
+entry:
+  br label %spin
+spin:
+  %old = atomicrmw xchg ptr @nz.os_in_lock, i32 1 acquire
+  %free = icmp eq i32 %old, 0
+  br i1 %free, label %held, label %spin
+held:
+  ret void
+}
+
+define hidden void @nz.os_in_release() {
+entry:
+  store atomic i32 0, ptr @nz.os_in_lock release, align 4
+  ret void
+}
+
+; At most `n` bytes of standard input into `buf`: what the buffer holds first, and only when it
+; holds nothing one read of the descriptor straight into `buf`. A count, 0 at the end, or -errno.
+define hidden i64 @nz.os_in_read(ptr %buf, i64 %n) {
+entry:
+  call void @nz.os_in_acquire()
+  %at = load i64, ptr @nz.os_in_at
+  %end = load i64, ptr @nz.os_in_end
+  %held = sub i64 %end, %at
+  %some = icmp sgt i64 %held, 0
+  br i1 %some, label %take, label %direct
+take:
+  %less = icmp slt i64 %n, %held
+  %k = select i1 %less, i64 %n, i64 %held
+  %base = load ptr, ptr @nz.os_in_buf
+  %from = getelementptr i8, ptr %base, i64 %at
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %from, i64 %k, i1 false)
+  %next = add i64 %at, %k
+  store i64 %next, ptr @nz.os_in_at
+  call void @nz.os_in_release()
+  ret i64 %k
+direct:
+  %r = call i64 @nz_os_read(i32 0, ptr %buf, i64 %n)
+  %e = call i64 @nz.os_errno()
+  call void @nz.os_in_release()
+  %failed = icmp slt i64 %r, 0
+  %out = select i1 %failed, i64 %e, i64 %r
+  ret i64 %out
+}
+
+; Standard input up to and including its next newline into `buf`, stopping sooner at `n` bytes or
+; at the end; what follows stays in the buffer. The count, 0 at the end; a failure of the system
+; (or -ENOMEM for the buffer) is answered only when nothing was read, and otherwise met again by
+; the next read.
+define hidden i64 @nz.os_in_line(ptr %buf, i64 %n) {
+entry:
+  %gotp = alloca i64, align 8
+  store i64 0, ptr %gotp
+  call void @nz.os_in_acquire()
+  br label %loop
+loop:
+  %got = load i64, ptr %gotp
+  %full = icmp sge i64 %got, %n
+  br i1 %full, label %done, label %have
+have:
+  %at = load i64, ptr @nz.os_in_at
+  %end = load i64, ptr @nz.os_in_end
+  %empty = icmp sge i64 %at, %end
+  br i1 %empty, label %fill, label %scan
+fill:
+  %old = load ptr, ptr @nz.os_in_buf
+  %none = icmp eq ptr %old, null
+  br i1 %none, label %make, label %refill
+make:
+  %fresh = call ptr @malloc(i64 16384)
+  %oom = icmp eq ptr %fresh, null
+  br i1 %oom, label %nomem, label %keep
+keep:
+  store ptr %fresh, ptr @nz.os_in_buf
+  br label %refill
+refill:
+  %into = load ptr, ptr @nz.os_in_buf
+  %r = call i64 @nz_os_read(i32 0, ptr %into, i64 16384)
+  %e = call i64 @nz.os_errno()
+  %bad = icmp slt i64 %r, 0
+  br i1 %bad, label %failed, label %read
+read:
+  store i64 0, ptr @nz.os_in_at
+  store i64 %r, ptr @nz.os_in_end
+  %eof = icmp eq i64 %r, 0
+  br i1 %eof, label %done, label %loop
+scan:
+  %base = load ptr, ptr @nz.os_in_buf
+  %held = sub i64 %end, %at
+  %room = sub i64 %n, %got
+  %less = icmp slt i64 %room, %held
+  %k = select i1 %less, i64 %room, i64 %held
+  br label %look
+look:
+  %j = phi i64 [ 0, %scan ], [ %j1, %next ]
+  %stop = icmp sge i64 %j, %k
+  br i1 %stop, label %copy, label %test
+test:
+  %pos = add i64 %at, %j
+  %bp = getelementptr i8, ptr %base, i64 %pos
+  %b = load i8, ptr %bp
+  %nl = icmp eq i8 %b, 10
+  %j1 = add i64 %j, 1
+  br i1 %nl, label %copy, label %next
+next:
+  br label %look
+copy:
+  %len = phi i64 [ %k, %look ], [ %j1, %test ]
+  %ended = phi i1 [ false, %look ], [ true, %test ]
+  %from = getelementptr i8, ptr %base, i64 %at
+  %to = getelementptr i8, ptr %buf, i64 %got
+  call void @llvm.memcpy.p0.p0.i64(ptr %to, ptr %from, i64 %len, i1 false)
+  %after = add i64 %at, %len
+  store i64 %after, ptr @nz.os_in_at
+  %more = add i64 %got, %len
+  store i64 %more, ptr %gotp
+  br i1 %ended, label %done, label %loop
+nomem:
+  br label %failed
+failed:
+  %status = phi i64 [ -12, %nomem ], [ %e, %refill ]
+  %some = icmp sgt i64 %got, 0
+  br i1 %some, label %done, label %refused
+refused:
+  call void @nz.os_in_release()
+  ret i64 %status
+done:
+  call void @nz.os_in_release()
+  %total = load i64, ptr %gotp
+  ret i64 %total
 }
 
 define hidden i64 @nz.os_write(i64 %h, ptr %buf, i64 %n) {

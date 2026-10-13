@@ -226,6 +226,9 @@
 @std/io pub fn io_read(io: IoCap, path: Str) -> Result[Str, Str] ! { io }
 @std/io pub fn io_stdin_read_all(io: IoCap) -> Result[Bytes, IoError] ! { io }
 @std/io pub fn io_stdin_lines(io: IoCap) -> Result[Strs, IoError] ! { io }
+@std/io pub fn io_stdin_read(io: IoCap, buf: Bytes) -> Result[Int, IoError] ! { io }
+@std/io pub fn io_stdin_read_exact(io: IoCap, buf: Bytes) -> Result[Int, IoError] ! { io }
+@std/io pub fn io_stdin_read_line(io: IoCap) -> Result[Option[Str], IoError] ! { io }
 @std/ioerror pub enum IoErrorKind
 @std/ioerror pub struct IoError
 @std/ioerror pub fn io_kind_of(status: Int) -> IoErrorKind ! {}

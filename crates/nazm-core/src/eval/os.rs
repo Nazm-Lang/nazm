@@ -278,6 +278,22 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 }
             }
         }),
+        // A line of standard input (R1d, P3): through the same buffer `os_read` reads standard
+        // input through, so what follows the line is still there for either.
+        (Intrinsic::OsReadLine, [Value::OsHandle(h), Value::Bytes(buf)]) => int(match object(*h) {
+            Err(s) => s,
+            Ok(o) => match &*o {
+                Object::Stdin => read_line(buf),
+                Object::Dir { .. } => -EISDIR,
+                Object::File(_)
+                | Object::Tcp(_)
+                | Object::Listener(_)
+                | Object::Udp(_)
+                | Object::Child(_)
+                | Object::PipeIn(_)
+                | Object::PipeOut(_) => -EINVAL,
+            },
+        }),
         (Intrinsic::OsWrite, [Value::OsHandle(h), Value::Bytes(data)]) => int(match object(*h) {
             Err(s) => s,
             Ok(o) => match &*o {
@@ -437,6 +453,40 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
         }
         _ => super::net::net_value(op, args).or_else(|| super::process::process_value(op, args)),
     }
+}
+
+/// Standard input up to and including its next newline into `view`, stopping sooner at the
+/// view's length or at the end (R1d, P3): the count, `0` at the end. What follows the newline
+/// stays in the process's buffer. A failure is answered only when nothing was read; otherwise the
+/// next read meets it again, as natively.
+fn read_line(view: &BytesView) -> i64 {
+    use std::io::BufRead as _;
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let mut got: Vec<u8> = Vec::new();
+    while got.len() < view.len {
+        let held = match input.fill_buf() {
+            Ok(held) => held,
+            Err(e) if got.is_empty() => return status(&e),
+            Err(_) => break,
+        };
+        if held.is_empty() {
+            break;
+        }
+        let room = view.len - got.len();
+        let window = held.get(..room.min(held.len())).unwrap_or_default();
+        let (take, ended) = match window.iter().position(|b| *b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (window.len(), false),
+        };
+        got.extend_from_slice(window.get(..take).unwrap_or_default());
+        input.consume(take);
+        if ended {
+            break;
+        }
+    }
+    write(view, &got);
+    i64::try_from(got.len()).unwrap_or(-EINVAL)
 }
 
 /// `bytes` over the start of `view`.

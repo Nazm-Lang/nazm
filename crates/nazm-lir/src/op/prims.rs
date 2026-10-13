@@ -88,6 +88,7 @@ impl Fx<'_, '_> {
             | Intrinsic::OsStdin
             | Intrinsic::OsStatus
             | Intrinsic::OsRead
+            | Intrinsic::OsReadLine
             | Intrinsic::OsWrite
             | Intrinsic::OsSeek
             | Intrinsic::OsSync

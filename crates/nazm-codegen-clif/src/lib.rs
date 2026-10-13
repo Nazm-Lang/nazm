@@ -40,6 +40,8 @@ pub struct Cranelift {
     debug: bool,
     /// Whether an eligible `Vec[R]` is laid out field by field (N68), as LIR decides it.
     soa: bool,
+    /// Whether every object allocates through the counted heap (R1d, D5: `--heap-limit`).
+    counted_heap: bool,
 }
 
 impl Cranelift {
@@ -52,7 +54,16 @@ impl Cranelift {
             verify: true,
             debug: false,
             soa: false,
+            counted_heap: false,
         }
+    }
+
+    /// The same backend, every object allocating through the counted heap (R1d, D5): its LIR's
+    /// imports of C's allocator renamed, which the object's key then covers.
+    #[must_use]
+    pub const fn with_counted_heap(mut self, counted: bool) -> Self {
+        self.counted_heap = counted;
+        self
     }
 
     /// The same backend, laying out every eligible `Vec[R]` field by field (N68).
@@ -108,7 +119,7 @@ impl Cranelift {
         names: &SourceNames<'_>,
     ) -> Result<nazm_lir::op::Module, Vec<Diagnostic>> {
         let data = nazm_lir::abi::DataLayout::of(&self.target);
-        let m = nazm_lir::op::lower_unit(native, unit, names, data, self.debug, self.soa)?;
+        let mut m = nazm_lir::op::lower_unit(native, unit, names, data, self.debug, self.soa)?;
         nazm_lir::op::validate::module(&m).map_err(|e| {
             vec![Diagnostic::error(
                 codes::COMPILER_DEFECT,
@@ -116,6 +127,9 @@ impl Cranelift {
                 format!("LIR does not validate: {}", e.join("; ")),
             )]
         })?;
+        if self.counted_heap {
+            nazm_lir::op::count_heap(&mut m);
+        }
         Ok(m)
     }
 

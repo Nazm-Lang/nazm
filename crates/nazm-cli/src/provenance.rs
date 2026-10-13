@@ -33,6 +33,8 @@ pub(crate) struct Request<'a> {
     pub stack_watermark: bool,
     /// `--stack-size` (R1b, L14).
     pub stack_size: Option<u64>,
+    /// `--heap-limit` (R1d, D5); the root package's `heap-limit` where it is not given.
+    pub heap_limit: Option<u64>,
     pub link: &'a [PathBuf],
     pub profile: Option<&'a str>,
     /// The runtime artifact linked instead of a generated runtime (N82), if one was.
@@ -198,6 +200,9 @@ fn record(r: &Request<'_>) -> Result<Value, String> {
             "debug": r.debug,
             "stack_watermark": r.stack_watermark,
             "stack_size": r.stack_size,
+            "heap_limit": r.heap_limit.or_else(|| {
+                graph_of.as_ref().and_then(|g| g.packages.get(g.root)).and_then(|p| p.heap_limit)
+            }),
             "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
         },
         "linked": link,

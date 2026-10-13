@@ -116,6 +116,10 @@ struct RawPackage {
     root: Option<String>,
     main: Option<String>,
     profile: Option<String>,
+    /// The bytes of heap the package's program may hold live (R1d, D5): `nazm build
+    /// --heap-limit`'s, from the root package's manifest only.
+    #[serde(rename = "heap-limit")]
+    heap_limit: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,6 +162,37 @@ pub struct Manifest {
     pub features: BTreeMap<String, Vec<String>>,
     /// The features each dependency is asked for, by the dependency's name.
     pub dependency_features: BTreeMap<String, Vec<String>>,
+    /// `heap-limit` (R1d, D5): the bytes of heap a program built from this package may hold
+    /// live, when it is the root package. Validated by [`heap_size`].
+    pub heap_limit: Option<u64>,
+}
+
+/// A heap limit as written (R1d, D5): bytes, or a number with a `K`, `M` or `G` suffix (KiB, MiB,
+/// GiB), from 64 KiB to 1 TiB. The one reading of `nazm build --heap-limit` and a manifest's
+/// `heap-limit`.
+///
+/// # Errors
+///
+/// What is wrong with it, in a sentence.
+pub fn heap_size(raw: &str) -> Result<u64, String> {
+    let (digits, unit) = match raw.char_indices().last() {
+        Some((i, 'K' | 'k')) => (raw.get(..i).unwrap_or_default(), 1u64 << 10),
+        Some((i, 'M' | 'm')) => (raw.get(..i).unwrap_or_default(), 1u64 << 20),
+        Some((i, 'G' | 'g')) => (raw.get(..i).unwrap_or_default(), 1u64 << 30),
+        _ => (raw, 1),
+    };
+    let n: u64 = digits
+        .parse()
+        .map_err(|_| format!("`{raw}` is not a size: bytes, or a number with `K`, `M` or `G`"))?;
+    let bytes = n
+        .checked_mul(unit)
+        .ok_or_else(|| format!("`{raw}` is too large"))?;
+    if !((64 << 10)..=(1 << 40)).contains(&bytes) {
+        return Err(format!(
+            "`{raw}` is {bytes} bytes; a heap limit is from 64K to 1024G"
+        ));
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn error(code: Code, message: String) -> Diagnostic {
@@ -278,7 +313,12 @@ impl Manifest {
                 )));
             }
         }
+        let heap_limit = match &raw.package.heap_limit {
+            None => None,
+            Some(h) => Some(heap_size(h).map_err(|why| bad(format!("`heap-limit`: {why}")))?),
+        };
         Ok(Self {
+            heap_limit,
             name: raw.package.name,
             version,
             root,
@@ -312,6 +352,9 @@ pub struct Package {
     pub digest: String,
     /// The restriction profile its manifest requires, if any (N47).
     pub profile: Option<String>,
+    /// The heap limit its manifest gives (R1d, D5), which a build of it as the root package
+    /// takes unless `--heap-limit` gives another.
+    pub heap_limit: Option<u64>,
     /// Its features as its manifest declares them (Gate 2, §22).
     pub feature_table: BTreeMap<String, Vec<String>>,
     /// The features it asks of each dependency, by the dependency's name.
@@ -995,6 +1038,7 @@ fn resolve_preferring(dir: &Path, dropping: Option<&[String]>) -> Result<Graph, 
                 format!("path+{}", relative(&root_dir, dir))
             },
             profile: m.profile.clone(),
+            heap_limit: m.heap_limit,
             feature_table: m.features.clone(),
             requests: m.dependency_features.clone(),
             features: Vec::new(),

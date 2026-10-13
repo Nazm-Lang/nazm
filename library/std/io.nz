@@ -77,3 +77,63 @@ pub fn io_stdin_lines(io: IoCap) -> Result[Strs, IoError] ! { io } {
     }
     Result[Strs, IoError].Ok(value: out)
 }
+
+/// What standard input holds, at most `bytes_len(buf)` bytes into `buf` (R1d, P3): how many, `0`
+/// at the end. This and the line reads below take from one buffer, so neither loses what the
+/// other leaves.
+pub fn io_stdin_read(io: IoCap, buf: Bytes) -> Result[Int, IoError] ! { io } {
+    let n = os_read(os_stdin(), buf);
+    if n < 0 {
+        return Result[Int, IoError].Err(error: io_context(io_error_from(n), "standard input"));
+    }
+    Result[Int, IoError].Ok(value: n)
+}
+
+/// Exactly `bytes_len(buf)` bytes of standard input into `buf` (R1d, P3) — a frame whose length a
+/// header gave; `UnexpectedEof` if standard input ends first.
+pub fn io_stdin_read_exact(io: IoCap, buf: Bytes) -> Result[Int, IoError] ! { io } {
+    let h = os_stdin();
+    let mut at = 0;
+    while at < bytes_len(buf) {
+        let n = os_read(h, bytes_slice(buf, at, bytes_len(buf)));
+        if n < 0 {
+            return Result[Int, IoError].Err(error: io_context(io_error_from(n), "standard input"));
+        }
+        if n == 0 {
+            return Result[Int, IoError].Err(error: io_error_new(IoErrorKind.UnexpectedEof(), "standard input ended"));
+        }
+        at = at + n;
+    }
+    Result[Int, IoError].Ok(value: at)
+}
+
+/// Standard input's next line, without its newline (R1d, P3); `None` at the end. A last line
+/// without a newline is still a line, and a carriage return before the newline is kept. Nothing
+/// after the line is taken, so a frame that follows a header is still there to read.
+pub fn io_stdin_read_line(io: IoCap) -> Result[Option[Str], IoError] ! { io } {
+    let h = os_stdin();
+    let chunk = bytes_new(4096);
+    let mut line = "";
+    let mut read = 0;
+    let mut going = true;
+    while going {
+        let n = os_read_line(h, chunk);
+        if n < 0 {
+            return Result[Option[Str], IoError].Err(error: io_context(io_error_from(n), "standard input"));
+        }
+        if n == 0 {
+            going = false;
+        } else {
+            read = read + n;
+            if bytes_get(chunk, n - 1) == 10 {
+                line = str_concat(line, bytes_to_str(bytes_slice(chunk, 0, n - 1)));
+                return Result[Option[Str], IoError].Ok(value: Option[Str].Some(value: line));
+            }
+            line = str_concat(line, bytes_to_str(bytes_slice(chunk, 0, n)));
+        }
+    }
+    if read == 0 {
+        return Result[Option[Str], IoError].Ok(value: Option[Str].None());
+    }
+    Result[Option[Str], IoError].Ok(value: Option[Str].Some(value: line))
+}

@@ -185,6 +185,31 @@ pub(super) fn preflight(
         );
         return Err(ExitCode::from(exit::USAGE));
     }
+    // A heap limit (R1d, D5): `--heap-limit`, or the root package's `heap-limit`. A hosted
+    // program's: a board's heap is its manifest's arena, a WebAssembly module's its host's, a
+    // library's its C host's; and a runtime artifact (N82) was built without the count.
+    let heap_limit = choice.heap_limit.or_else(|| {
+        crate::package::profile_graph(input)
+            .and_then(|g| g.packages.get(g.root).and_then(|p| p.heap_limit))
+    });
+    if heap_limit.is_some() {
+        let why = if target.is_board() || target.is_wasm() {
+            Some("a board's heap is its manifest's, and a WebAssembly module's is its host's")
+        } else if choice.library {
+            Some("a library's heap is its C host's")
+        } else if choice.runtime.is_some() {
+            Some("a runtime artifact (`--runtime`) was built without the count")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            if summary {
+                return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+            }
+            eprintln!("nazm: a heap limit bounds a hosted program's heap; {why}");
+            return Err(ExitCode::from(exit::USAGE));
+        }
+    }
     // A target other than the host (N57): clang is told it, and where the host cannot link it
     // the build writes objects instead, or is refused by name before compiling anything.
     let host = nazm_lir::backend::Target::host().ok();
@@ -212,6 +237,7 @@ pub(super) fn preflight(
         target,
         soa,
         cross,
+        heap_limit,
     })
 }
 
@@ -223,6 +249,9 @@ pub(super) struct Settled {
     pub(super) soa: bool,
     /// The target's triple, when it is not the host's.
     pub(super) cross: Option<String>,
+    /// The heap limit the program is built with (R1d, D5): `--heap-limit`'s, or the root
+    /// package's `heap-limit`.
+    pub(super) heap_limit: Option<u64>,
 }
 
 /// The program loaded, and the output path it may be written to: never over its own source or
