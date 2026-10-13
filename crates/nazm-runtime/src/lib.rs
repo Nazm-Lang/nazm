@@ -16,6 +16,7 @@ pub mod board;
 pub(crate) mod core;
 pub(crate) mod entry;
 pub(crate) mod files;
+pub mod heap;
 pub(crate) mod net;
 pub(crate) mod os;
 pub mod platform;
@@ -315,6 +316,7 @@ pub fn digest() -> &'static str {
         h.update(&RUNTIME_ABI_REVISION.to_le_bytes());
         h.update(emit_runtime(EVERYTHING).as_bytes());
         h.update(emit_entry("@nz_main", 1, EVERYTHING).as_bytes());
+        h.update(heap::emit_heap(1 << 30).as_bytes());
         for t in switch::SwitchTarget::ALL {
             h.update(switch::emit_switch(t).as_bytes());
             h.update(switch::emit_errno(t).as_bytes());
@@ -368,6 +370,8 @@ pub enum Part {
     Net,
     /// `Int128` and `UInt128` (R1b, L13b).
     Wide,
+    /// The counted heap (R1d, D5): its own unit, linked only by `nazm build --heap-limit`.
+    Heap,
     /// The C library the runtime itself links against.
     Libc,
 }
@@ -475,6 +479,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.os_stdin", [], Some(Word::I64), Files, "standard input's handle (Gate 2)"),
     import!("nz.os_status", [I64], Some(Word::I64), Files, "0 for a live handle, its status otherwise (Gate 2)"),
     import!("nz.os_read", [I64, Ptr, I64], Some(Word::I64), Files, "fills the caller's buffer; a count or -errno (Gate 2)"),
+    import!("nz.os_read_line", [I64, Ptr, I64], Some(Word::I64), Files, "a line of standard input into the caller's buffer, its newline included; a count, 0 at the end, or -errno (R1d, P3)"),
     import!("nz.os_write", [I64, Ptr, I64], Some(Word::I64), Files, "borrows the bytes; a count or -errno (Gate 2)"),
     import!("nz.os_seek", [I64, I64, I64], Some(Word::I64), Files, "a position or -errno (Gate 2)"),
     import!("nz.os_sync", [I64], Some(Word::I64), Files, "0 or -errno (Gate 2)"),
@@ -750,6 +755,15 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_stdin", "i64" () "", false, Files, "io", Status, Any, "standard input's handle (Gate 2)", "none"),
     rt!("nz.os_status", "i64" ("i64") "", false, Files, "", Status, Any, "whether a handle is live (Gate 2)", "none"),
     rt!("nz.os_read", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "read into a buffer (Gate 2)", "writes the caller's buffer"),
+    rt!("nz.heap_reserve", "void" ("i64") "", false, Heap, "", Ends, Any, "count bytes as live, or end the process past the heap limit (R1d, D5)", "none"),
+    rt!("nz.heap_malloc", "ptr" ("i64") "", false, Heap, "", Null, Any, "C's `malloc`, counted against the heap limit (R1d, D5)", "memory the caller owns, or null"),
+    rt!("nz.heap_free", "void" ("ptr") "", false, Heap, "", Never, Any, "C's `free` of a counted block (R1d, D5)", "takes the memory; null is a no-op"),
+    rt!("nz.heap_realloc", "ptr" ("ptr", "i64") "", false, Heap, "", Null, Any, "C's `realloc` of a counted block, its growth counted first (R1d, D5)", "takes the memory and returns memory the caller owns, or null with it unchanged"),
+    rt!("nz.os_read_line", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "read a line of standard input into a buffer (R1d, P3)", "writes the caller's buffer"),
+    rt!("nz.os_in_acquire", "void" () "", false, Files, "", Never, Any, "take standard input's spin lock (R1d, P3)", "none"),
+    rt!("nz.os_in_release", "void" () "", false, Files, "", Never, Any, "give standard input's spin lock back (R1d, P3)", "none"),
+    rt!("nz.os_in_read", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "read standard input, its buffer first (R1d, P3)", "writes the caller's buffer; takes standard input's lock"),
+    rt!("nz.os_in_line", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "read standard input to its next newline, keeping what follows (R1d, P3)", "writes the caller's buffer; makes standard input's buffer, which the process owns; takes standard input's lock"),
     rt!("nz.os_write", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "write bytes (Gate 2)", "borrows the bytes"),
     rt!("nz.os_seek", "i64" ("i64", "i64", "i64") "", false, Files, "io", Status, Any, "move a file's position (Gate 2)", "none"),
     rt!("nz.os_sync", "i64" ("i64") "", false, Files, "io", Status, Any, "a file's data on storage (Gate 2)", "none"),
@@ -847,6 +861,10 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.os_slots", ty: "ptr", thread_local: false, writers: "`nz.os_slot`, under the handle table's lock (Gate 2)" },
     RuntimeGlobal { symbol: "nz.os_cap", ty: "i64", thread_local: false, writers: "`nz.os_slot`, under the handle table's lock (Gate 2)" },
     RuntimeGlobal { symbol: "nz.os_stdin_h", ty: "i64", thread_local: false, writers: "`nz.os_stdin`, once, under the handle table's lock (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.os_in_buf", ty: "ptr", thread_local: false, writers: "`nz.os_in_line`, once, under standard input's lock (R1d, P3)" },
+    RuntimeGlobal { symbol: "nz.os_in_at", ty: "i64", thread_local: false, writers: "`nz.os_in_read` and `nz.os_in_line`, under standard input's lock (R1d, P3)" },
+    RuntimeGlobal { symbol: "nz.os_in_end", ty: "i64", thread_local: false, writers: "`nz.os_in_line`, under standard input's lock (R1d, P3)" },
+    RuntimeGlobal { symbol: "nz.os_in_lock", ty: "i32", thread_local: false, writers: "`nz.os_in_acquire` and `nz.os_in_release`, atomically (R1d, P3)" },
     RuntimeGlobal { symbol: "nz.net_state", ty: "i64", thread_local: false, writers: "`nz.net_start`, atomically, once (Gate 2)" },
     RuntimeGlobal { symbol: "nz.net_poller", ty: "i64", thread_local: false, writers: "`nz.net_start`, once, before the reactor runs (Gate 2)" },
     RuntimeGlobal { symbol: "nz.net_thread", ty: "i64", thread_local: false, writers: "`pthread_create`, once (Gate 2)" },
@@ -1104,7 +1122,8 @@ mod tests {
 
     #[test]
     fn every_runtime_definition_is_inventoried_with_its_exact_signature() {
-        let text = crate::emit_runtime(all());
+        // The counted heap's unit too (R1d, D5), which only a build with a limit links.
+        let text = crate::emit_runtime(all()) + &crate::heap::emit_heap(1 << 20);
         let defs = definitions(&text);
         for (name, sig) in &defs {
             let f =

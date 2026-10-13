@@ -200,6 +200,38 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1d (2026-10-14)** · *A bounded heap: `--heap-limit`* (`spec.md`, *A bounded heap*;
+`openspec/changes/r1-language-for-the-rewrite`, D5). `nazm build --heap-limit N` (bytes or
+`K`/`M`/`G`, 64 KiB to 1024 GiB), or `heap-limit = "N"` in the root package's manifest, which the
+flag overrides, builds a program whose every allocation — its units', the runtime's and the
+platform unit's — goes through the counted heap: `nz.heap_malloc`, `nz.heap_realloc` and
+`nz.heap_free`, a new runtime unit holding the limit, which keep the bytes asked for in a 16-byte
+header and one atomic live count. An allocation that would pass the limit writes `nazm: error[N0406]:
+out of memory: the heap limit of N bytes is reached` and exits 2 at once, from any task; the stack
+unit's task stacks are not heap and keep C's allocator. LLVM units are renamed in their text, a
+Cranelift unit's LIR imports before its object is keyed; refused for a board, WebAssembly, a library
+and a runtime artifact. Without a limit the program's text is what it was. Build provenance records
+the limit. EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/heap_limit.rs` — 3,000 live
+strings print what the interpreter and the LIR oracle print, with the same memory report and nothing
+live, under a 4 MiB limit at LLVM `-O0`/`-O2` and Cranelift, and end with the fixed line, status 2
+and what was printed before under 64 KiB; four pool tasks five times over allocate millions of bytes
+through 64 KiB; the manifest's limit and the flag over it; the refusals; and without a limit no unit
+names the counted heap, while with one no unit but the heap's and the stack's reaches C's allocator.
+
+**R1d (2026-10-14)** · *Streaming standard input* (`spec.md`, *Files and handles*, **Lines of
+standard input**, and *The standard library*; `openspec/changes/r1-language-for-the-rewrite`, P3).
+`os_read_line(h, buf) -> Int`: standard input to and including its next newline, at most the buffer,
+never past the line; `os_read` of standard input now reads the same 16 KiB buffer first, so lines
+and frames mix — LSP's headers then the body they announce, MCP's lines. Any other handle is a
+status (`InvalidInput`, a directory `IsADirectory`). `@std/io` gains `io_stdin_read`,
+`io_stdin_read_exact` and `io_stdin_read_line`. EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/stdin_lines.rs` — two `\r\n` header lines, a five-byte frame, a line read
+three bytes at a time, a byte, whole lines, a last line without a newline, the end and an
+`UnexpectedEof`, alike in the interpreter, LLVM `-O0`/`-O2` and Cranelift, fed whole and a byte at a
+time, with the same memory report and nothing live; another handle's statuses alike everywhere;
+`os_read`'s authority, effect and provenance. The LIR oracle runs no `os_` built-in, so it has no
+answer here.
+
 **R1e (2026-10-13)** · *`@std/regex`* (`spec.md`, *The standard library*; `openspec/changes/r1-language-
 for-the-rewrite`, S5). Regular expressions in Nazm, matched in time linear in the text: a pattern is
 parsed into a tree, compiled into a Thompson NFA, and every search runs it as a Pike VM — all states

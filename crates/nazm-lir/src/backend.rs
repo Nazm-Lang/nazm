@@ -300,6 +300,8 @@ pub struct LlvmText {
     debug: bool,
     /// Whether an eligible `Vec[R]` is laid out field by field (N68, §7.70).
     soa: bool,
+    /// Whether every unit allocates through the counted heap (R1d, D5: `--heap-limit`).
+    counted_heap: bool,
 }
 
 impl LlvmText {
@@ -309,7 +311,15 @@ impl LlvmText {
             target,
             debug: false,
             soa: false,
+            counted_heap: false,
         }
+    }
+
+    /// The same backend, every unit allocating through the counted heap (R1d, D5).
+    #[must_use]
+    pub const fn with_counted_heap(mut self, counted: bool) -> Self {
+        self.counted_heap = counted;
+        self
     }
 
     /// The same backend, laying out every eligible `Vec[R]` as one array per field (N68).
@@ -427,6 +437,13 @@ impl Backend for LlvmText {
             ir
         } else {
             nazm_runtime::inline_reference_counting(&ir)
+        };
+        // A build with a heap limit (R1d, D5): the unit's allocations, the copies above included,
+        // are the counted heap's.
+        let ir = if self.counted_heap {
+            nazm_runtime::heap::count_heap(&ir)
+        } else {
+            ir
         };
         Ok(Generated {
             code: Code::Llvm(ir),
