@@ -307,31 +307,70 @@ impl Gen<'_> {
         )
     }
 
-    /// A field list's members, encoded into `keys` and `values` from the bindings `f_<name>`.
-    fn write_fields(&mut self, fields: &[Field], from: &str) -> String {
+    /// The members of a field list, written into `keys` and `values`; each field read as
+    /// `{from}{name}`.
+    fn write_fields(&mut self, members: &[Member<'_>], from: &str) -> String {
         let mut s = String::from("    let keys = strs_new();\n    let values = ints_new();\n");
-        for f in fields {
-            let k = self.helper(&f.ty);
+        for m in members {
+            let k = self.helper(&m.field.ty);
             let base = &self.base;
-            let _ = writeln!(
-                s,
-                "    strs_push(keys, {});\n    ints_push(values, {base}_json_w{k}(doc, {from}{}));",
-                literal(&f.name),
-                f.name
-            );
+            let name = &m.field.name;
+            let key = literal(&m.key);
+            if m.codec.omit_none {
+                let _ = writeln!(
+                    s,
+                    "    if let Option.Some(value: x) = {from}{name} {{\n        strs_push(keys, {key});\n        \
+                     ints_push(values, {base}_json_w{k}(doc, {from}{name}));\n    }}"
+                );
+            } else {
+                let _ = writeln!(
+                    s,
+                    "    strs_push(keys, {key});\n    ints_push(values, {base}_json_w{k}(doc, {from}{name}));"
+                );
+            }
         }
         s
     }
 
     /// A field list read out of the object `obj` at path `at`, into bindings `f_<name>`; a
-    /// failure returns `Err` as a `Result[owner, Str]`.
-    fn read_fields(&mut self, fields: &[Field], owner: &str, obj: &str, at: &str) -> String {
+    /// failure returns `Err` as a `Result[owner, Str]`. `known` adds the names besides the
+    /// members' that `deny_unknown` lets through (an enum's tag).
+    fn read_fields(
+        &mut self,
+        members: &[Member<'_>],
+        owner: &str,
+        obj: &str,
+        at: &str,
+        deny: Option<&[String]>,
+    ) -> String {
         let mut s = String::new();
-        for f in fields {
+        if let Some(extra) = deny {
+            let mut names: Vec<String> = members.iter().map(|m| m.key.clone()).collect();
+            names.extend(extra.iter().cloned());
+            let test = if names.is_empty() {
+                "false".to_owned()
+            } else {
+                names
+                    .iter()
+                    .map(|n| format!("k == {}", literal(n)))
+                    .collect::<Vec<_>>()
+                    .join(" || ")
+            };
+            let _ = writeln!(
+                s,
+                "    for i in 0..json_len(doc, {obj}) {{\n        \
+                 let k = match json_key_at(doc, {obj}, i) {{ Option.Some(value: x) => x, Option.None() => \"\", }};\n        \
+                 if !({test}) {{ return Result[{owner}, Str].Err(error: f\"{{{at}}}: unknown member `{{k}}`\"); }}\n    }}"
+            );
+        }
+        for m in members {
+            let f = m.field;
             let k = self.helper(&f.ty);
             let base = &self.base;
-            let optional = plain(&f.ty) && f.ty.name == "Option";
-            let missing = if optional {
+            let missing = if let Some(empty) = m.codec.default.then(|| empty_value(&f.ty)).flatten()
+            {
+                empty
+            } else if plain(&f.ty) && f.ty.name == "Option" {
                 format!(
                     "Option[{}].None()",
                     text(args(&f.ty).first().unwrap_or(&f.ty))
@@ -339,22 +378,170 @@ impl Gen<'_> {
             } else {
                 format!(
                     "{{ return Result[{owner}, Str].Err(error: f\"{{{at}}}: no member `{}`\"); }}",
-                    f.name
+                    m.key
                 )
             };
             let _ = writeln!(
                 s,
                 "    let f_{name} = match json_get(doc, {obj}, {key}) {{\n        \
-                 Option.Some(value: n) => match {base}_json_r{k}(doc, n, f\"{{{at}}}.{name}\") {{\n            \
+                 Option.Some(value: n) => match {base}_json_r{k}(doc, n, f\"{{{at}}}.{path}\") {{\n            \
                  Result.Ok(value: x) => x,\n            \
                  Result.Err(error: e) => {{ return Result[{owner}, Str].Err(error: e); }},\n        }},\n        \
                  Option.None() => {missing},\n    }};",
                 name = f.name,
-                key = literal(&f.name),
+                key = literal(&m.key),
+                path = m.key,
             );
         }
         s
     }
+}
+
+/// What `@codec(…)` says of a type (R1c, L2b).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypeCodec {
+    pub rename_all: Option<String>,
+    pub deny_unknown: bool,
+    pub tag: Option<String>,
+    pub untagged: bool,
+}
+
+/// What `@codec(…)` says of a field or a variant (R1c, L2b).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FieldCodec {
+    pub rename: Option<String>,
+    pub default: bool,
+    pub omit_none: bool,
+}
+
+/// The cases `rename_all` names.
+pub const CASES: &[&str] = &[
+    "camelCase",
+    "snake_case",
+    "kebab-case",
+    "PascalCase",
+    "SCREAMING_SNAKE_CASE",
+];
+
+fn codec_args(attrs: &[Attribute]) -> impl Iterator<Item = &AttrArg> {
+    attrs
+        .iter()
+        .filter(|a| a.name == "codec")
+        .flat_map(|a| a.args.as_deref().unwrap_or(&[]))
+}
+
+/// A type's `@codec(…)`.
+#[must_use]
+pub fn type_codec(attrs: &[Attribute]) -> TypeCodec {
+    let mut c = TypeCodec::default();
+    for a in codec_args(attrs) {
+        match a {
+            AttrArg::Pair { key, value, .. } if key == "rename_all" => {
+                c.rename_all = Some(value.clone());
+            }
+            AttrArg::Pair { key, value, .. } if key == "tag" => c.tag = Some(value.clone()),
+            AttrArg::Word { name, .. } if name == "deny_unknown" => c.deny_unknown = true,
+            AttrArg::Word { name, .. } if name == "untagged" => c.untagged = true,
+            _ => {}
+        }
+    }
+    c
+}
+
+/// A field's or a variant's `@codec(…)`.
+#[must_use]
+pub fn field_codec(attrs: &[Attribute]) -> FieldCodec {
+    let mut c = FieldCodec::default();
+    for a in codec_args(attrs) {
+        match a {
+            AttrArg::Pair { key, value, .. } if key == "rename" => c.rename = Some(value.clone()),
+            AttrArg::Word { name, .. } if name == "default" => c.default = true,
+            AttrArg::Word { name, .. } if name == "omit_none" => c.omit_none = true,
+            _ => {}
+        }
+    }
+    c
+}
+
+/// `name` — snake case or Pascal case — written in `case`.
+#[must_use]
+pub fn recase(name: &str, case: &str) -> String {
+    let words: Vec<String> = snake(name)
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let capital = |w: &str| {
+        let mut c = w.chars();
+        c.next().map_or(String::new(), |f| {
+            f.to_ascii_uppercase().to_string() + c.as_str()
+        })
+    };
+    match case {
+        "camelCase" => words
+            .iter()
+            .enumerate()
+            .map(|(i, w)| if i == 0 { w.clone() } else { capital(w) })
+            .collect(),
+        "PascalCase" => words.iter().map(|w| capital(w)).collect(),
+        "kebab-case" => words.join("-"),
+        "SCREAMING_SNAKE_CASE" => words.join("_").to_ascii_uppercase(),
+        _ => words.join("_"),
+    }
+}
+
+/// The empty value `default` gives a field of type `t`, as Nazm text; `None` for a type that
+/// has none.
+#[must_use]
+pub fn empty_value(t: &TypeName) -> Option<String> {
+    if !plain(t) {
+        return None;
+    }
+    let n = t.name.as_str();
+    match (n, args(t)) {
+        ("Int", []) => Some("0".to_owned()),
+        (_, []) if INTEGERS.contains(&n) => Some(format!("{n}(0)")),
+        ("Float64", []) => Some("0.0".to_owned()),
+        ("Float32", []) => Some("Float32(0.0)".to_owned()),
+        ("Bool", []) => Some("false".to_owned()),
+        ("Str", []) => Some("\"\"".to_owned()),
+        ("Option", [inner]) => Some(format!("Option[{}].None()", text(inner))),
+        ("Vec", [inner]) => Some(format!("vec_new[{}]()", text(inner))),
+        ("List", [inner]) => Some(format!("list_empty[{}]()", text(inner))),
+        _ => None,
+    }
+}
+
+/// One field as its encoding sees it: its name in the document and its `@codec`.
+struct Member<'a> {
+    field: &'a Field,
+    key: String,
+    codec: FieldCodec,
+}
+
+/// A field list's members, `rename_all` applied where no `rename` is.
+fn members<'a>(fields: &'a [Field], rename_all: Option<&str>) -> Vec<Member<'a>> {
+    fields
+        .iter()
+        .map(|f| {
+            let codec = field_codec(&f.attrs);
+            let key = codec.rename.clone().unwrap_or_else(|| {
+                rename_all.map_or_else(|| f.name.clone(), |c| recase(&f.name, c))
+            });
+            Member {
+                field: f,
+                key,
+                codec,
+            }
+        })
+        .collect()
+}
+
+/// A variant's name in the document.
+fn variant_key(attrs: &[Attribute], name: &str, rename_all: Option<&str>) -> String {
+    field_codec(attrs)
+        .rename
+        .unwrap_or_else(|| rename_all.map_or_else(|| name.to_owned(), |c| recase(name, c)))
 }
 
 /// A field's JSON Schema, as JSON text.
@@ -389,19 +576,29 @@ fn schema_of(t: &TypeName) -> String {
     format!("{{\"$ref\":\"#/$defs/{n}\"}}")
 }
 
-/// A field list's schema: an object of its members, those not optional required.
-fn object_schema(fields: &[Field]) -> String {
-    let props: Vec<String> = fields
-        .iter()
-        .map(|f| format!("\"{}\":{}", f.name, schema_of(&f.ty)))
-        .collect();
-    let required: Vec<String> = fields
-        .iter()
-        .filter(|f| !(plain(&f.ty) && f.ty.name == "Option"))
-        .map(|f| format!("\"{}\"", f.name))
-        .collect();
+/// An object schema of `members`, with `before` — a tag's property — first; those neither
+/// optional nor defaulted required.
+fn object_schema(members: &[Member<'_>], before: Option<(&str, &str)>, closed: bool) -> String {
+    let mut props: Vec<String> = Vec::new();
+    let mut required: Vec<String> = Vec::new();
+    if let Some((tag, value)) = before {
+        props.push(format!("\"{tag}\":{{\"const\":\"{value}\"}}"));
+        required.push(format!("\"{tag}\""));
+    }
+    for m in members {
+        props.push(format!("\"{}\":{}", m.key, schema_of(&m.field.ty)));
+        let optional = plain(&m.field.ty) && m.field.ty.name == "Option";
+        if !optional && !m.codec.default {
+            required.push(format!("\"{}\"", m.key));
+        }
+    }
+    let close = if closed {
+        ",\"additionalProperties\":false"
+    } else {
+        ""
+    };
     format!(
-        "{{\"type\":\"object\",\"properties\":{{{}}},\"required\":[{}]}}",
+        "{{\"type\":\"object\",\"properties\":{{{}}},\"required\":[{}]{close}}}",
         props.join(","),
         required.join(",")
     )
@@ -410,10 +607,11 @@ fn object_schema(fields: &[Field]) -> String {
 /// One derived type: its kind, name, whether it is public, and its fields or variants.
 enum Shape<'a> {
     Record(&'a [Field]),
-    Enum(Vec<(&'a str, &'a [Field])>),
+    Enum(Vec<(&'a str, &'a [Attribute], &'a [Field])>),
 }
 
-fn generate(name: &str, public: bool, shape: &Shape<'_>) -> String {
+#[allow(clippy::too_many_lines)]
+fn generate(name: &str, public: bool, codec: &TypeCodec, shape: &Shape<'_>) -> String {
     let mut g = Gen {
         base: snake(name),
         vis: if public { "pub " } else { "" },
@@ -423,10 +621,13 @@ fn generate(name: &str, public: bool, shape: &Shape<'_>) -> String {
     };
     let base = g.base.clone();
     let vis = g.vis;
+    let rename_all = codec.rename_all.as_deref();
+    let deny: Option<&[String]> = codec.deny_unknown.then_some(&[]);
     let (node, read, def) = match shape {
         Shape::Record(fields) => {
-            let w = g.write_fields(fields, "v.");
-            let r = g.read_fields(fields, name, "node", "at");
+            let ms = members(fields, rename_all);
+            let w = g.write_fields(&ms, "v.");
+            let r = g.read_fields(&ms, name, "node", "at", deny);
             let inits: Vec<String> = fields
                 .iter()
                 .map(|f| format!("{0}: f_{0}", f.name))
@@ -438,70 +639,145 @@ fn generate(name: &str, public: bool, shape: &Shape<'_>) -> String {
                      {r}    Result[{name}, Str].Ok(value: {name}({}))",
                     inits.join(", ")
                 ),
-                object_schema(fields),
+                object_schema(&ms, None, codec.deny_unknown),
             )
         }
         Shape::Enum(variants) => {
+            let tag = codec.tag.as_deref();
             let mut arms = String::new();
             let mut units = String::new();
-            let mut payloads = String::new();
+            let mut tries = String::new();
             let mut one_of = Vec::new();
-            for (v, fields) in variants {
-                if fields.is_empty() {
-                    let _ = writeln!(
-                        arms,
-                        "        {name}.{v}() => json_add_str(doc, {}),",
-                        literal(v)
-                    );
-                    let _ = writeln!(
-                        units,
-                        "        if tag == {} {{ return Result[{name}, Str].Ok(value: {name}.{v}()); }}",
-                        literal(v)
-                    );
-                    one_of.push(format!("{{\"const\":\"{v}\"}}"));
-                } else {
-                    let binds: Vec<String> = fields
-                        .iter()
-                        .map(|f| format!("{0}: f_{0}", f.name))
-                        .collect();
-                    let w = g.write_fields(fields, "f_");
-                    let _ = writeln!(
-                        arms,
-                        "        {name}.{v}({}) => {{\n{w}        let outer = strs_new();\n        strs_push(outer, {});\n        \
-                         let inner = ints_new();\n        ints_push(inner, json_add_object(doc, keys, values));\n        \
-                         json_add_object(doc, outer, inner)\n        }},",
-                        binds.join(", "),
-                        literal(v)
-                    );
-                    let r = g.read_fields(fields, name, "body", "path");
-                    let _ = writeln!(
-                        payloads,
-                        "    if tag == {} {{\n        \
-                         if json_kind(doc, body) != \"object\" {{ return Result[{name}, Str].Err(error: f\"{{path}}: expected an object\"); }}\n\
-                         {r}        return Result[{name}, Str].Ok(value: {name}.{v}({}));\n    }}",
-                        literal(v),
-                        binds.join(", ")
-                    );
-                    one_of.push(format!(
-                        "{{\"type\":\"object\",\"properties\":{{\"{v}\":{}}},\"required\":[\"{v}\"],\"additionalProperties\":false}}",
-                        object_schema(fields)
-                    ));
+            for (j, (v, attrs, fields)) in variants.iter().enumerate() {
+                let key = variant_key(attrs, v, rename_all);
+                let lit = literal(&key);
+                let ms = members(fields, None);
+                let binds: Vec<String> = fields
+                    .iter()
+                    .map(|f| format!("{0}: f_{0}", f.name))
+                    .collect();
+                let pattern = format!("{name}.{v}({})", binds.join(", "));
+                // How a value of this variant is written.
+                let arm = match (tag, codec.untagged, fields.is_empty()) {
+                    (Some(t), _, true) => format!(
+                        "    let keys = strs_new();\n    let values = ints_new();\n    \
+                         strs_push(keys, {});\n    ints_push(values, json_add_str(doc, {lit}));\n    \
+                         json_add_object(doc, keys, values)",
+                        literal(t)
+                    ),
+                    (Some(t), _, false) => {
+                        let w = g.write_fields(&ms, "f_");
+                        let w = w.replacen(
+                            "    let values = ints_new();\n",
+                            &format!(
+                                "    let values = ints_new();\n    strs_push(keys, {});\n    ints_push(values, json_add_str(doc, {lit}));\n",
+                                literal(t)
+                            ),
+                            1,
+                        );
+                        format!("{w}    json_add_object(doc, keys, values)")
+                    }
+                    (None, _, true) => format!("    json_add_str(doc, {lit})"),
+                    (None, true, false) => {
+                        let w = g.write_fields(&ms, "f_");
+                        format!("{w}    json_add_object(doc, keys, values)")
+                    }
+                    (None, false, false) => {
+                        let w = g.write_fields(&ms, "f_");
+                        format!(
+                            "{w}    let outer = strs_new();\n    strs_push(outer, {lit});\n    \
+                             let inner = ints_new();\n    ints_push(inner, json_add_object(doc, keys, values));\n    \
+                             json_add_object(doc, outer, inner)"
+                        )
+                    }
+                };
+                let _ = writeln!(arms, "        {pattern} => {{\n{arm}\n        }},");
+                // How it is read: a helper per variant, from the object holding its fields.
+                let extra: Vec<String> = tag.map(|t| vec![t.to_owned()]).unwrap_or_default();
+                let r = g.read_fields(
+                    &ms,
+                    name,
+                    "obj",
+                    "at",
+                    codec.deny_unknown.then_some(extra.as_slice()),
+                );
+                let _ = write!(
+                    g.out,
+                    "fn {base}_json_v{j}(doc: JsonDoc, obj: Int, at: Str) -> Result[{name}, Str] ! {{}} {{\n    \
+                     if json_kind(doc, obj) != \"object\" {{ return Result[{name}, Str].Err(error: f\"{{at}}: expected an object\"); }}\n\
+                     {r}    Result[{name}, Str].Ok(value: {pattern})\n}}\n\n"
+                );
+                match (tag, codec.untagged, fields.is_empty()) {
+                    (Some(_), _, _) => {
+                        let _ = writeln!(
+                            tries,
+                            "    if tag == {lit} {{ return {base}_json_v{j}(doc, node, at); }}"
+                        );
+                    }
+                    (None, _, true) => {
+                        let _ = writeln!(
+                            units,
+                            "        if tag == {lit} {{ return Result[{name}, Str].Ok(value: {pattern}); }}"
+                        );
+                    }
+                    (None, true, false) => {
+                        let _ = writeln!(
+                            tries,
+                            "    match {base}_json_v{j}(doc, node, at) {{ Result.Ok(value: x) => {{ return Result[{name}, Str].Ok(value: x); }}, Result.Err(error: e) => {{}}, }};"
+                        );
+                    }
+                    (None, false, false) => {
+                        let _ = writeln!(
+                            tries,
+                            "    if tag == {lit} {{ return {base}_json_v{j}(doc, body, f\"{{at}}.{{tag}}\"); }}"
+                        );
+                    }
                 }
+                one_of.push(match (tag, codec.untagged, fields.is_empty()) {
+                    (Some(t), _, _) => object_schema(&ms, Some((t, &key)), codec.deny_unknown),
+                    (None, _, true) => format!("{{\"const\":\"{key}\"}}"),
+                    (None, true, false) => object_schema(&ms, None, codec.deny_unknown),
+                    (None, false, false) => format!(
+                        "{{\"type\":\"object\",\"properties\":{{\"{key}\":{}}},\"required\":[\"{key}\"],\"additionalProperties\":false}}",
+                        object_schema(&ms, None, codec.deny_unknown)
+                    ),
+                });
             }
-            (
-                format!("    match v {{\n{arms}    }}"),
-                format!(
-                    "    if json_kind(doc, node) == \"string\" {{\n        \
-                     let tag = match json_str(doc, node) {{ Option.Some(value: s) => s, Option.None() => \"\", }};\n\
-                     {units}        return Result[{name}, Str].Err(error: f\"{{at}}: `{{tag}}` is not a variant of `{name}` without a payload\");\n    }}\n    \
-                     if json_kind(doc, node) != \"object\" || json_len(doc, node) != 1 {{\n        \
+            let strings = format!(
+                "    if json_kind(doc, node) == \"string\" {{\n        \
+                 let tag = match json_str(doc, node) {{ Option.Some(value: s) => s, Option.None() => \"\", }};\n\
+                 {units}        return Result[{name}, Str].Err(error: f\"{{at}}: `{{tag}}` is not a variant of `{name}` without a payload\");\n    }}\n"
+            );
+            let read = match (tag, codec.untagged) {
+                (Some(t), _) => format!(
+                    "    if json_kind(doc, node) != \"object\" {{ return Result[{name}, Str].Err(error: f\"{{at}}: expected an object\"); }}\n    \
+                     let tag = match json_get(doc, node, {tl}) {{\n        \
+                     Option.Some(value: n) => match json_str(doc, n) {{ Option.Some(value: s) => s, Option.None() => \"\", }},\n        \
+                     Option.None() => {{ return Result[{name}, Str].Err(error: f\"{{at}}: no member `{t}`\"); }},\n    }};\n\
+                     {tries}    Result[{name}, Str].Err(error: f\"{{at}}: `{{tag}}` is not a variant of `{name}`\")",
+                    tl = literal(t)
+                ),
+                (None, true) => format!(
+                    "{strings}{tries}    Result[{name}, Str].Err(error: f\"{{at}}: matches no variant of `{name}`\")"
+                ),
+                (None, false) => format!(
+                    "{strings}    if json_kind(doc, node) != \"object\" || json_len(doc, node) != 1 {{\n        \
                      return Result[{name}, Str].Err(error: f\"{{at}}: expected a variant's name, or an object of one member\");\n    }}\n    \
                      let tag = match json_key_at(doc, node, 0) {{ Option.Some(value: s) => s, Option.None() => \"\", }};\n    \
-                     let body = match json_value_at(doc, node, 0) {{ Option.Some(value: n) => n, Option.None() => 0 - 1, }};\n    \
-                     let path = f\"{{at}}.{{tag}}\";\n\
-                     {payloads}    Result[{name}, Str].Err(error: f\"{{at}}: `{{tag}}` is not a variant of `{name}` with a payload\")"
+                     let body = match json_value_at(doc, node, 0) {{ Option.Some(value: n) => n, Option.None() => 0 - 1, }};\n\
+                     {tries}    Result[{name}, Str].Err(error: f\"{{at}}: `{{tag}}` is not a variant of `{name}` with a payload\")"
                 ),
-                format!("{{\"oneOf\":[{}]}}", one_of.join(",")),
+            };
+            (
+                format!("    match v {{\n{arms}    }}"),
+                read,
+                // Untagged, the first variant that decodes is taken, so the schema is `anyOf`:
+                // `oneOf` would refuse a document two variants accept.
+                format!(
+                    "{{\"{}\":[{}]}}",
+                    if codec.untagged { "anyOf" } else { "oneOf" },
+                    one_of.join(",")
+                ),
             )
         }
     };
@@ -558,16 +834,24 @@ pub fn expand(text: &str) -> String {
                 .any(|e| e.name == t.name && derives(&e.attrs, "json"));
         declared && !derived
     };
+    // A field whose `@codec` its type does not allow is refused by the checker too: an
+    // `omit_none` on what is not an `Option`, a `default` on a type with no empty value.
+    let codec_ok = |f: &Field| {
+        let c = field_codec(&f.attrs);
+        let optional = plain(&f.ty) && f.ty.name == "Option";
+        !(c.omit_none && !optional) && !(c.default && empty_value(&f.ty).is_none())
+    };
     let fields_ok = |fields: &[Field]| {
-        fields
-            .iter()
-            .all(|f| refusal(&f.ty).is_none() && !named(&f.ty).into_iter().any(underived))
+        fields.iter().all(|f| {
+            refusal(&f.ty).is_none() && !named(&f.ty).into_iter().any(underived) && codec_ok(f)
+        })
     };
     for r in &program.records {
         if derives(&r.attrs, "json") && r.type_params.is_empty() && fields_ok(&r.fields) {
             generated.push_str(&generate(
                 &r.name,
                 r.pub_span.is_some(),
+                &type_codec(&r.attrs),
                 &Shape::Record(&r.fields),
             ));
         }
@@ -580,11 +864,12 @@ pub fn expand(text: &str) -> String {
             let variants = e
                 .variants
                 .iter()
-                .map(|v| (v.name.as_str(), v.fields.as_slice()))
+                .map(|v| (v.name.as_str(), v.attrs.as_slice(), v.fields.as_slice()))
                 .collect();
             generated.push_str(&generate(
                 &e.name,
                 e.pub_span.is_some(),
+                &type_codec(&e.attrs),
                 &Shape::Enum(variants),
             ));
         }

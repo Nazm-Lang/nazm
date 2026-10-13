@@ -283,9 +283,11 @@ struct Printer<'a> {
     /// level in, and the body's `{` back at the function's own level, so a reader sees the
     /// clauses as the header's and the body as the function's.
     contract: bool,
-    /// Inside a declaration's attribute (Gate 2): whether its name has been printed, and how
-    /// deep in its arguments' parentheses the printer is. An attribute ends its own line.
-    attribute: Option<(bool, usize)>,
+    /// Inside an attribute (Gate 2): whether its name has been printed, how deep in its
+    /// arguments' parentheses the printer is, and whether it ends its own line — before a
+    /// declaration, or a field or variant of a list one to a line (R1c, L2b) — or is followed by
+    /// what it marks, inside a list kept on one line or a payload's parentheses.
+    attribute: Option<(bool, usize, bool)>,
 }
 
 fn print<'a>(text: &'a str, pieces: &'a [Piece<'a>], layout: &'a Layout) -> String {
@@ -470,24 +472,37 @@ impl<'a> Printer<'a> {
         // An attribute ends at its name, or at the `)` that closes its arguments, and the
         // declaration it belongs to starts the next line at the same level (Gate 2).
         match (self.attribute, kind) {
-            (None, TokenKind::At) if self.indent == 0 => self.attribute = Some((false, 0)),
-            (Some((false, _)), TokenKind::Ident(_)) => {
+            (None, TokenKind::At) => {
+                // Before a declaration (outside every bracket), or before a field or a variant
+                // of a list one to a line; inside a list kept on one line, at the top level
+                // too, it is followed by what it marks.
+                let own_line = self.brackets.is_empty()
+                    || (self.brackets.last().copied().unwrap_or(false) && !self.in_inline());
+                self.attribute = Some((false, 0, own_line));
+            }
+            (Some((false, _, own_line)), TokenKind::Ident(_)) => {
                 if matches!(next, Some(TokenKind::LParen)) {
-                    self.attribute = Some((true, 0));
+                    self.attribute = Some((true, 0, own_line));
                 } else {
                     self.attribute = None;
+                    if own_line {
+                        self.continuing = false;
+                        self.break_line();
+                    }
+                }
+            }
+            (Some((true, d, own_line)), TokenKind::LParen) => {
+                self.attribute = Some((true, d + 1, own_line));
+            }
+            (Some((true, 1, own_line)), TokenKind::RParen) => {
+                self.attribute = None;
+                if own_line {
                     self.continuing = false;
                     self.break_line();
                 }
             }
-            (Some((true, d)), TokenKind::LParen) => self.attribute = Some((true, d + 1)),
-            (Some((true, 1)), TokenKind::RParen) => {
-                self.attribute = None;
-                self.continuing = false;
-                self.break_line();
-            }
-            (Some((true, d)), TokenKind::RParen) => {
-                self.attribute = Some((true, d.saturating_sub(1)));
+            (Some((true, d, own_line)), TokenKind::RParen) => {
+                self.attribute = Some((true, d.saturating_sub(1), own_line));
             }
             _ => {}
         }
