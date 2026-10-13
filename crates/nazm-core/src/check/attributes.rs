@@ -828,7 +828,7 @@ pub fn configure(
                         ));
                     }
                 }
-                if let Some(why) = crate::derive::refusal(&f.ty) {
+                if let Some(why) = crate::derive::refusal_for(format, &f.ty) {
                     errors.push(refuse(
                         f.ty.span,
                         format!(

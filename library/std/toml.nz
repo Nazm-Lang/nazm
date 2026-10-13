@@ -43,6 +43,11 @@ pub fn toml_get(t: Toml, key: Str) -> Option[Toml] ! {} {
     found
 }
 
+/// Whether `t` is a table (R1c, L2c: what a derived type's record is read from).
+pub fn toml_is_table(t: Toml) -> Bool ! {} {
+    if let Toml.Table(keys: k, values: v) = t { true } else { false }
+}
+
 // --- the parse arena ---------------------------------------------------------------------------
 //
 // A document is built in an arena, where a table can still be extended by a later header or

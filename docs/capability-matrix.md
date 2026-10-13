@@ -247,6 +247,19 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1c (2026-10-13)** · *`@derive(toml)`* (`spec.md`, *Derived serialisation*, **TOML**;
+`openspec/changes/r1-language-for-the-rewrite`, L2c). The same shape over `@std/toml`'s `Toml` tree,
+alone or beside `json`: `t_toml_value` and `t_toml_read` for a record or an enum, and for a record —
+a document is a table — `t_to_toml` and `t_from_toml`. `@codec` shapes it as it shapes JSON. TOML
+has no `null`: a `None` is left out and a missing key read as `None`, so an `Option` inside another
+type is refused (`N0619`). The generator is per format (`crates/nazm-core/src/derive.rs`), the text
+importing each format it used; `@std/toml` gained `toml_is_table`. Semantic epoch 70. Evidence:
+`crates/nazm-cli/tests/derive_toml.rs` — a deployment of nested records, an array of tables and
+both enum encodings, written, read back to the same text, read from hand-written TOML and refused
+at its path, under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing
+live; the repository's own package manifest read through a derived record; what TOML cannot
+carry. Five mutants.
+
 **R1c (2026-10-13)** · *`@codec(…)`* (`spec.md`, *Derived serialisation*, **Shaping it**;
 `openspec/changes/r1-language-for-the-rewrite`, L2b). The closed attribute set: on a derived type
 `rename_all` (five cases), `deny_unknown`, and for an enum `tag` (internally tagged) or `untagged`

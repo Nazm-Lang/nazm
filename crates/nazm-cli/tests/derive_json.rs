@@ -286,7 +286,7 @@ fn what_a_derive_cannot_carry_is_refused_where_it_is_written() {
     for (src, want) in [
         (
             "@derive(json)\nstruct A { n: UInt64, }\n",
-            "error[N0619]: `@derive(json)` cannot carry the field `n`: `UInt64` has values no JSON integer here carries",
+            "error[N0619]: `@derive(json)` cannot carry the field `n`: `UInt64` has values past `Int`",
         ),
         (
             "@derive(json)\nstruct B[T] { v: T, }\n",

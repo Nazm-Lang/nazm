@@ -4193,7 +4193,7 @@ and no macros.
 | **`@interrupt("NAME")`** (Gate 3) | Makes a function a board's interrupt handler (*Boards*, below); before anything else, `N0619`, and a function of another shape `N0627` |
 | **`@on_failure`** (Gate 3) | Makes a function a board's failure hook (*Boards*, below); before anything else, `N0619`, and a function of another shape `N0627` |
 | **`@task(priority = "N", period = "P")`** (Gate 3) | Makes a function a periodic task of a board's fixed-priority scheduler (*Boards*, below); before anything else, or with a priority or period out of range, `N0619`, and a function of another shape `N0627` |
-| **`@derive(json)`** (R1c, L2; EXPERIMENTAL until R1 closes) | Before a `struct` or `enum` that is not generic: gives it a JSON encoding, decoding and schema (*Derived serialisation*, below); before anything else, or with a field of a type it cannot carry, `N0619` |
+| **`@derive(json)`, `@derive(toml)`, `@derive(json, toml)`** (R1c, L2; EXPERIMENTAL until R1 closes) | Before a `struct` or `enum` that is not generic: gives it a JSON encoding, decoding and schema, a TOML encoding and decoding, or both (*Derived serialisation*, below); before anything else, or with a field of a type it cannot carry, `N0619` |
 | **`@codec(…)`** (R1c, L2b; EXPERIMENTAL) | Shapes a derived encoding (*Derived serialisation*, **Shaping it**): before a type that derives one, `rename_all`, `deny_unknown`, and for an enum `tag` or `untagged`; **before a field**, `rename`, `default`, `omit_none`; **before a variant**, `rename`. The one attribute written inside a declaration. Elsewhere, or with an argument it does not take, `N0619` |
 | **Refused** | An attribute not in this list, one on a declaration it does not mark, one with arguments it does not take, or one other than `@cfg` written twice is `N0619`. A malformed argument is a syntax error (`N0100`), reported once; the attribute is then not checked again |
 
@@ -4282,6 +4282,22 @@ pub enum Event { Started, Moved(x: Int, y: Int), }   // {"kind":"Moved","x":1,"y
 
 `tag` with `untagged`, an argument written twice, two members or variants given one name, `@codec`
 before a type that derives nothing, and any other argument are `N0619`.
+
+**TOML** (L2c). `@derive(toml)` — alone or beside `json` — gives a type the same shape over
+`@std/toml`'s `Toml` tree, imported by deriving:
+
+| Function | |
+| --- | --- |
+| `point_to_toml(v: Point) -> Str` | The document `toml_encode` writes. A record only: a TOML document is a table |
+| `point_from_toml(text: Str) -> Result[Point, Str]` | The value, or an `Err` naming the path — or `toml_parse`'s `line:column: what`. A record only |
+| `point_toml_value(v: Point) -> Toml`, `point_toml_read(t: Toml, at: Str) -> Result[Point, Str]` | The value as a tree and back, for a record or an enum: what a field of this type is written and read with |
+
+A record is a table, an enum value a string or a table as the JSON encoding has it — `@codec` shapes
+both alike — an integer a TOML integer, a float a TOML float (an integer reads as one too), `Vec`
+and `List` arrays. TOML has no `null`: an `Option` that is `None` is always left out, and a missing
+key decodes as `None`; so an `Option` may only be a field's whole type, and one inside a `Vec`, a
+`List`, a `Box` or another `Option` is refused, `N0619`. There is no TOML schema: the JSON Schema of
+`@derive(json)` describes the JSON form.
 
 ### Conditional compilation — Gate 2
 <!-- id: conditional-compilation -->

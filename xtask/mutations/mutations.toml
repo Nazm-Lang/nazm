@@ -8325,10 +8325,11 @@ Repointed by R1b a sixth time, which moved it to 65 for L13: an entry that refus
 Repointed by R1b a seventh time, which moved it to 66 for L15: an entry kept before warnings existed must not be reused.
 Repointed by R1b an eighth time, which moved it to 67 for L13b: an entry that refused `Int128` must not be reused.
 Repointed by R1c, which moved it to 68 for `@derive(json)`: an entry that refused `@derive` must not be reused.
-Repointed by R1c again, which moved it to 69 for `@codec`: an entry that refused an attribute before a field must not be reused."""
+Repointed by R1c again, which moved it to 69 for `@codec`: an entry that refused an attribute before a field must not be reused.
+Repointed by R1c a third time, which moved it to 70 for `@derive(toml)`: an entry that refused it must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 69;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 68;"
+find = "pub const SEMANTIC_EPOCH: u32 = 70;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 69;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -17544,7 +17545,7 @@ killers = [{ package = "nazm-cli", test = "derive_json", name = "a_derived_codec
 name = "r1c-a-field-a-derive-cannot-carry-is-silent"
 why = "a field the derive cannot carry is not reported, and since nothing is generated for its type the derive silently does nothing"
 file = "crates/nazm-core/src/check/attributes.rs"
-find = '''                if let Some(why) = crate::derive::refusal(&f.ty) {'''
+find = '''                if let Some(why) = crate::derive::refusal_for(format, &f.ty) {'''
 replace = '''                if let Some(why) = None::<String> {'''
 killers = [{ package = "nazm-cli", test = "derive_json", name = "what_a_derive_cannot_carry_is_refused_where_it_is_written" }]
 
@@ -17570,8 +17571,12 @@ killers = [{ package = "nazm-cli", test = "derive_json", name = "a_shaped_encodi
 name = "r1c-deny-unknown-lets-a-member-through"
 why = "a type that says `deny_unknown` decodes a member it has no field for"
 file = "crates/nazm-core/src/derive.rs"
-find = '''    let deny: Option<&[String]> = codec.deny_unknown.then_some(&[]);'''
-replace = '''    let deny: Option<&[String]> = None;'''
+find = '''
+    let deny: Option<&[String]> = codec.deny_unknown.then_some(&[]);
+    let (node, read, def) = match shape {'''
+replace = '''
+    let deny: Option<&[String]> = None;
+    let (node, read, def) = match shape {'''
 killers = [{ package = "nazm-cli", test = "derive_json", name = "a_shaped_encoding_agrees_everywhere" }]
 
 [[mutation]]
@@ -17610,6 +17615,54 @@ killers = [{ package = "nazm-cli", test = "derive_json", name = "every_misuse_of
 name = "r1c-default-is-ignored"
 why = "a `default` field missing from the document is an error rather than its type's empty value"
 file = "crates/nazm-core/src/derive.rs"
-find = '''            let missing = if let Some(empty) = m.codec.default.then(|| empty_value(&f.ty)).flatten()'''
-replace = '''            let missing = if let Some(empty) = None::<String>'''
+find = '''
+            let k = self.helper(&f.ty);
+            let base = &self.base;
+            let missing = if let Some(empty) = m.codec.default.then(|| empty_value(&f.ty)).flatten()'''
+replace = '''
+            let k = self.helper(&f.ty);
+            let base = &self.base;
+            let missing = if let Some(empty) = None::<String>'''
 killers = [{ package = "nazm-cli", test = "derive_json", name = "a_shaped_encoding_agrees_everywhere" }]
+
+# --- R1c L2c: `@derive(toml)` (`docs/spec.md`, *Derived serialisation*, **TOML**) ---------------
+
+[[mutation]]
+name = "r1c-toml-carries-an-option-in-an-array"
+why = "an `Option` inside a `Vec` is accepted under `@derive(toml)`, though TOML has no `null` to write a `None` with"
+file = "crates/nazm-core/src/derive.rs"
+find = '''        if inner_option(t) {'''
+replace = '''        if false {'''
+killers = [{ package = "nazm-cli", test = "derive_toml", name = "what_toml_cannot_carry_is_refused" }]
+
+[[mutation]]
+name = "r1c-a-toml-integer-is-no-float"
+why = "a TOML integer read into a `Float64` field is not its value"
+file = "crates/nazm-core/src/derive.rs"
+find = '''                    "Float64(i)".to_owned()'''
+replace = '''                    "0.0".to_owned()'''
+killers = [{ package = "nazm-cli", test = "derive_toml", name = "a_derived_toml_codec_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1c-a-derive-imports-nothing"
+why = "the generated code does not import the format's module, so none of its functions exist"
+file = "crates/nazm-core/src/derive.rs"
+find = '''        let _ = writeln!(out, "use \"@std/{format}\";");'''
+replace = '''        let _ = format;'''
+killers = [{ package = "nazm-cli", test = "derive_toml", name = "a_derived_toml_codec_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1c-a-tagged-toml-value-has-no-tag"
+why = "an internally tagged enum is written to TOML without its tag key, so it cannot be read back"
+file = "crates/nazm-core/src/derive.rs"
+find = '''                    (Some(t), _, _) => g.write_fields(&ms, "f_", Some((t, &key))),'''
+replace = '''                    (Some(_), _, _) => g.write_fields(&ms, "f_", None),'''
+killers = [{ package = "nazm-cli", test = "derive_toml", name = "a_derived_toml_codec_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1c-every-derive-is-json"
+why = "`@derive(toml)` generates the JSON codec, so no `_to_toml` exists"
+file = "crates/nazm-core/src/derive.rs"
+find = '''            if *format == "json" {'''
+replace = '''            if true {'''
+killers = [{ package = "nazm-cli", test = "derive_toml", name = "a_package_manifest_reads_through_a_derived_record" }]

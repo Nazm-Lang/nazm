@@ -26,7 +26,7 @@ pub fn derives(attrs: &[Attribute], format: &str) -> bool {
 }
 
 /// The formats there are to derive.
-pub const FORMATS: &[&str] = &["json"];
+pub const FORMATS: &[&str] = &["json", "toml"];
 
 /// The integers a JSON number here carries: every one `Int` holds.
 const INTEGERS: &[&str] = &["Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32"];
@@ -55,7 +55,8 @@ pub fn refusal(t: &TypeName) -> Option<String> {
         }
         if matches!(n, "UInt64" | "Int128" | "UInt128") {
             return Some(format!(
-                "`{n}` has values no JSON integer here carries; convert it to a type that has"
+                "`{n}` has values past `Int`, which every derived integer is read through; convert \
+                 it to a type that has none"
             ));
         }
         if nazm_sema::Type::from_name(n).is_some() {
@@ -77,6 +78,29 @@ pub fn refusal(t: &TypeName) -> Option<String> {
         return Some("a tuple has no JSON form here; a record has".to_owned());
     }
     // A record or an enum: its own derive carries it.
+    None
+}
+
+/// Why a field of type `t` cannot be carried in `format`, or `None` when it can: TOML has no
+/// `null`, so an `Option` there is a field's whole type or nothing (L2c).
+#[must_use]
+pub fn refusal_for(format: &str, t: &TypeName) -> Option<String> {
+    if let Some(why) = refusal(t) {
+        return Some(why);
+    }
+    if format == "toml" {
+        let inner_option = |x: &TypeName| {
+            fn has(x: &TypeName) -> bool {
+                (plain(x) && x.name == "Option") || args(x).iter().any(has)
+            }
+            args(x).iter().any(has)
+        };
+        if inner_option(t) {
+            return Some(
+                "TOML has no `null`, so an `Option` may only be a field's whole type".to_owned(),
+            );
+        }
+    }
     None
 }
 
@@ -811,6 +835,409 @@ fn generate(name: &str, public: bool, codec: &TypeCodec, shape: &Shape<'_>) -> S
     s
 }
 
+// --- `@derive(toml)` (L2c) -------------------------------------------------------------------
+
+/// One derived type's TOML text, its helpers numbered within it.
+struct TomlGen {
+    base: String,
+    out: String,
+    helpers: Vec<String>,
+}
+
+impl TomlGen {
+    /// The number of the helper pair for `t`, written on first use: `w` makes a `Toml` of a
+    /// value, `r` reads one back.
+    fn helper(&mut self, t: &TypeName) -> usize {
+        let key = text(t);
+        if let Some(k) = self.helpers.iter().position(|h| *h == key) {
+            return k;
+        }
+        let k = self.helpers.len();
+        self.helpers.push(key.clone());
+        let ty = key;
+        let (write, read) = self.bodies(t, &ty);
+        let base = &self.base;
+        let _ = write!(
+            self.out,
+            "fn {base}_toml_w{k}(v: {ty}) -> Toml ! {{}} {{\n{write}\n}}\n\n\
+             fn {base}_toml_r{k}(x: Toml, at: Str) -> Result[{ty}, Str] ! {{}} {{\n{read}\n}}\n\n"
+        );
+        k
+    }
+
+    fn bodies(&mut self, t: &TypeName, ty: &str) -> (String, String) {
+        let ok = |v: &str| format!("Result[{ty}, Str].Ok(value: {v})");
+        let err = |what: &str| format!("Result[{ty}, Str].Err(error: f\"{{at}}: {what}\")");
+        let n = t.name.as_str();
+        let base = self.base.clone();
+        if plain(t) && args(t).is_empty() {
+            if INTEGERS.contains(&n) {
+                let w = if n == "Int" {
+                    "    Toml.Int(value: v)"
+                } else {
+                    "    Toml.Int(value: Int(v))"
+                };
+                let fit = if n == "Int" {
+                    ok("i")
+                } else {
+                    format!(
+                        "match try_convert[{n}](i) {{ Option.Some(value: y) => {}, Option.None() => {}, }}",
+                        ok("y"),
+                        err(&format!("{{i}} is outside `{n}`"))
+                    )
+                };
+                let r = format!(
+                    "    if let Toml.Int(value: i) = x {{ {fit} }} else {{ {} }}",
+                    err("expected an integer")
+                );
+                return (w.to_owned(), r);
+            }
+            if n == "Float64" || n == "Float32" {
+                let (w, cast) = if n == "Float64" {
+                    ("    Toml.Float(value: v)", "f")
+                } else {
+                    ("    Toml.Float(value: Float64(v))", "Float32(f)")
+                };
+                let from_int = if n == "Float64" {
+                    "Float64(i)".to_owned()
+                } else {
+                    "Float32(Float64(i))".to_owned()
+                };
+                let r = format!(
+                    "    if let Toml.Float(value: f) = x {{ return {}; }}\n    \
+                     if let Toml.Int(value: i) = x {{ return {}; }}\n    {}",
+                    ok(cast),
+                    ok(&from_int),
+                    err("expected a number")
+                );
+                return (w.to_owned(), r);
+            }
+            if n == "Bool" || n == "Str" {
+                let (variant, what) = if n == "Bool" {
+                    ("Bool", "expected `true` or `false`")
+                } else {
+                    ("Str", "expected a string")
+                };
+                return (
+                    format!("    Toml.{variant}(value: v)"),
+                    format!(
+                        "    if let Toml.{variant}(value: y) = x {{ {} }} else {{ {} }}",
+                        ok("y"),
+                        err(what)
+                    ),
+                );
+            }
+        }
+        if plain(t) && matches!(n, "Vec" | "List" | "Box") {
+            let inner = args(t).first().cloned().unwrap_or_else(|| t.clone());
+            let it = text(&inner);
+            let k = self.helper(&inner);
+            let w = format!("{base}_toml_w{k}");
+            let r = format!("{base}_toml_r{k}");
+            if n == "Box" {
+                return (
+                    format!("    {w}(box_get(v))"),
+                    format!(
+                        "    match {r}(x, at) {{\n        Result.Ok(value: y) => {},\n        Result.Err(error: e) => Result[{ty}, Str].Err(error: e),\n    }}",
+                        ok("box_new(y)")
+                    ),
+                );
+            }
+            let done = if n == "List" {
+                ok("list_from_vec(out)")
+            } else {
+                ok("out")
+            };
+            return (
+                format!(
+                    "    let items = vec_new[Toml]();\n    for y in v {{ vec_push(items, {w}(y)); }}\n    \
+                     Toml.Array(items: list_from_vec(items))"
+                ),
+                format!(
+                    "    if let Toml.Array(items: items) = x {{\n        \
+                     let out = vec_new[{it}]();\n        \
+                     for i in 0..list_len(items) {{\n            \
+                     match {r}(list_get(items, i), f\"{{at}}[{{i}}]\") {{\n                \
+                     Result.Ok(value: y) => {{ vec_push(out, y); }},\n                \
+                     Result.Err(error: e) => {{ return Result[{ty}, Str].Err(error: e); }},\n            }};\n        }}\n        \
+                     {done}\n    }} else {{ {} }}",
+                    err("expected an array")
+                ),
+            );
+        }
+        (
+            format!("    {}(v)", named_fn(t, "toml_value")),
+            format!("    {}(x, at)", named_fn(t, "toml_read")),
+        )
+    }
+
+    /// The members of a field list as a table's keys and values; each field read as
+    /// `{from}{name}`. An `Option` that is `None` is left out.
+    fn write_fields(
+        &mut self,
+        members: &[Member<'_>],
+        from: &str,
+        first: Option<(&str, &str)>,
+    ) -> String {
+        let mut s =
+            String::from("    let keys = vec_new[Str]();\n    let values = vec_new[Toml]();\n");
+        if let Some((tag, value)) = first {
+            let _ = writeln!(
+                s,
+                "    vec_push(keys, {});\n    vec_push(values, Toml.Str(value: {}));",
+                literal(tag),
+                literal(value)
+            );
+        }
+        for m in members {
+            let name = &m.field.name;
+            let key = literal(&m.key);
+            let optional = plain(&m.field.ty) && m.field.ty.name == "Option";
+            if optional {
+                let inner = args(&m.field.ty)
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| m.field.ty.clone());
+                let k = self.helper(&inner);
+                let base = &self.base;
+                let _ = writeln!(
+                    s,
+                    "    if let Option.Some(value: y) = {from}{name} {{\n        vec_push(keys, {key});\n        \
+                     vec_push(values, {base}_toml_w{k}(y));\n    }}"
+                );
+            } else {
+                let k = self.helper(&m.field.ty);
+                let base = &self.base;
+                let _ = writeln!(
+                    s,
+                    "    vec_push(keys, {key});\n    vec_push(values, {base}_toml_w{k}({from}{name}));"
+                );
+            }
+        }
+        s.push_str("    Toml.Table(keys: list_from_vec(keys), values: list_from_vec(values))");
+        s
+    }
+
+    /// A field list read out of the table `obj` at path `at`, into bindings `f_<name>`.
+    fn read_fields(
+        &mut self,
+        members: &[Member<'_>],
+        owner: &str,
+        obj: &str,
+        at: &str,
+        deny: Option<&[String]>,
+    ) -> String {
+        let mut s = String::new();
+        if let Some(extra) = deny {
+            let mut names: Vec<String> = members.iter().map(|m| m.key.clone()).collect();
+            names.extend(extra.iter().cloned());
+            let test = if names.is_empty() {
+                "false".to_owned()
+            } else {
+                names
+                    .iter()
+                    .map(|n| format!("k == {}", literal(n)))
+                    .collect::<Vec<_>>()
+                    .join(" || ")
+            };
+            let _ = writeln!(
+                s,
+                "    if let Toml.Table(keys: ks, values: vs) = {obj} {{\n        \
+                 for i in 0..list_len(ks) {{\n            let k = list_get(ks, i);\n            \
+                 if !({test}) {{ return Result[{owner}, Str].Err(error: f\"{{{at}}}: unknown key `{{k}}`\"); }}\n        }}\n    }}"
+            );
+        }
+        for m in members {
+            let f = m.field;
+            let optional = plain(&f.ty) && f.ty.name == "Option";
+            let (k, present) = if optional {
+                let inner = args(&f.ty).first().cloned().unwrap_or_else(|| f.ty.clone());
+                (self.helper(&inner), true)
+            } else {
+                (self.helper(&f.ty), false)
+            };
+            let base = &self.base;
+            let missing = if let Some(empty) = m.codec.default.then(|| empty_value(&f.ty)).flatten()
+            {
+                empty
+            } else if optional {
+                format!(
+                    "Option[{}].None()",
+                    text(args(&f.ty).first().unwrap_or(&f.ty))
+                )
+            } else {
+                format!(
+                    "{{ return Result[{owner}, Str].Err(error: f\"{{{at}}}: no key `{}`\"); }}",
+                    m.key
+                )
+            };
+            let got = if present {
+                format!(
+                    "Option[{}].Some(value: y)",
+                    text(args(&f.ty).first().unwrap_or(&f.ty))
+                )
+            } else {
+                "y".to_owned()
+            };
+            let _ = writeln!(
+                s,
+                "    let f_{name} = match toml_get({obj}, {key}) {{\n        \
+                 Option.Some(value: n) => match {base}_toml_r{k}(n, f\"{{{at}}}.{path}\") {{\n            \
+                 Result.Ok(value: y) => {got},\n            \
+                 Result.Err(error: e) => {{ return Result[{owner}, Str].Err(error: e); }},\n        }},\n        \
+                 Option.None() => {missing},\n    }};",
+                name = f.name,
+                key = literal(&m.key),
+                path = m.key,
+            );
+        }
+        s
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn generate_toml(name: &str, public: bool, codec: &TypeCodec, shape: &Shape<'_>) -> String {
+    let mut g = TomlGen {
+        base: snake(name),
+        out: String::new(),
+        helpers: Vec::new(),
+    };
+    let base = g.base.clone();
+    let vis = if public { "pub " } else { "" };
+    let rename_all = codec.rename_all.as_deref();
+    let deny: Option<&[String]> = codec.deny_unknown.then_some(&[]);
+    let (value, read, record) = match shape {
+        Shape::Record(fields) => {
+            let ms = members(fields, rename_all);
+            let w = g.write_fields(&ms, "v.", None);
+            let r = g.read_fields(&ms, name, "x", "at", deny);
+            let inits: Vec<String> = fields
+                .iter()
+                .map(|f| format!("{0}: f_{0}", f.name))
+                .collect();
+            (
+                w,
+                format!(
+                    "    if !toml_is_table(x) {{ return Result[{name}, Str].Err(error: f\"{{at}}: expected a table\"); }}\n\
+                     {r}    Result[{name}, Str].Ok(value: {name}({}))",
+                    inits.join(", ")
+                ),
+                true,
+            )
+        }
+        Shape::Enum(variants) => {
+            let tag = codec.tag.as_deref();
+            let mut arms = String::new();
+            let mut units = String::new();
+            let mut tries = String::new();
+            for (j, (v, attrs, fields)) in variants.iter().enumerate() {
+                let key = variant_key(attrs, v, rename_all);
+                let lit = literal(&key);
+                let ms = members(fields, None);
+                let binds: Vec<String> = fields
+                    .iter()
+                    .map(|f| format!("{0}: f_{0}", f.name))
+                    .collect();
+                let pattern = format!("{name}.{v}({})", binds.join(", "));
+                let arm = match (tag, codec.untagged, fields.is_empty()) {
+                    (Some(t), _, _) => g.write_fields(&ms, "f_", Some((t, &key))),
+                    (None, _, true) => format!("    Toml.Str(value: {lit})"),
+                    (None, true, false) => g.write_fields(&ms, "f_", None),
+                    (None, false, false) => {
+                        let w = g.write_fields(&ms, "f_", None);
+                        format!(
+                            "    let body = {{\n{w}\n    }};\n    let outer = vec_new[Str]();\n    vec_push(outer, {lit});\n    \
+                             let inner = vec_new[Toml]();\n    vec_push(inner, body);\n    \
+                             Toml.Table(keys: list_from_vec(outer), values: list_from_vec(inner))"
+                        )
+                    }
+                };
+                let _ = writeln!(arms, "        {pattern} => {{\n{arm}\n        }},");
+                let extra: Vec<String> = tag.map(|t| vec![t.to_owned()]).unwrap_or_default();
+                let r = g.read_fields(
+                    &ms,
+                    name,
+                    "obj",
+                    "at",
+                    codec.deny_unknown.then_some(extra.as_slice()),
+                );
+                let _ = write!(
+                    g.out,
+                    "fn {base}_toml_v{j}(obj: Toml, at: Str) -> Result[{name}, Str] ! {{}} {{\n    \
+                     if !toml_is_table(obj) {{ return Result[{name}, Str].Err(error: f\"{{at}}: expected a table\"); }}\n\
+                     {r}    Result[{name}, Str].Ok(value: {pattern})\n}}\n\n"
+                );
+                match (tag, codec.untagged, fields.is_empty()) {
+                    (Some(_), _, _) => {
+                        let _ = writeln!(
+                            tries,
+                            "    if tag == {lit} {{ return {base}_toml_v{j}(x, at); }}"
+                        );
+                    }
+                    (None, _, true) => {
+                        let _ = writeln!(
+                            units,
+                            "        if s == {lit} {{ return Result[{name}, Str].Ok(value: {pattern}); }}"
+                        );
+                    }
+                    (None, true, false) => {
+                        let _ = writeln!(
+                            tries,
+                            "    match {base}_toml_v{j}(x, at) {{ Result.Ok(value: y) => {{ return Result[{name}, Str].Ok(value: y); }}, Result.Err(error: e) => {{}}, }};"
+                        );
+                    }
+                    (None, false, false) => {
+                        let _ = writeln!(
+                            tries,
+                            "    if tag == {lit} {{ return {base}_toml_v{j}(body, f\"{{at}}.{{tag}}\"); }}"
+                        );
+                    }
+                }
+            }
+            let strings = format!(
+                "    if let Toml.Str(value: s) = x {{\n{units}        return Result[{name}, Str].Err(error: f\"{{at}}: `{{s}}` is not a variant of `{name}` without a payload\");\n    }}\n"
+            );
+            let read = match (tag, codec.untagged) {
+                (Some(t), _) => format!(
+                    "    let tag = match toml_get(x, {tl}) {{\n        \
+                     Option.Some(value: n) => if let Toml.Str(value: s) = n {{ s }} else {{ \"\" }},\n        \
+                     Option.None() => {{ return Result[{name}, Str].Err(error: f\"{{at}}: no key `{t}`\"); }},\n    }};\n\
+                     {tries}    Result[{name}, Str].Err(error: f\"{{at}}: `{{tag}}` is not a variant of `{name}`\")",
+                    tl = literal(t)
+                ),
+                (None, true) => format!(
+                    "{strings}{tries}    Result[{name}, Str].Err(error: f\"{{at}}: matches no variant of `{name}`\")"
+                ),
+                (None, false) => format!(
+                    "{strings}    let mut tag = \"\";\n    let mut body = x;\n    let mut one = false;\n    \
+                     if let Toml.Table(keys: ks, values: vs) = x {{\n        \
+                     if list_len(ks) == 1 {{ tag = list_get(ks, 0); body = list_get(vs, 0); one = true; }}\n    }}\n    \
+                     if !one {{ return Result[{name}, Str].Err(error: f\"{{at}}: expected a variant's name, or a table of one key\"); }}\n\
+                     {tries}    Result[{name}, Str].Err(error: f\"{{at}}: `{{tag}}` is not a variant of `{name}` with a payload\")"
+                ),
+            };
+            (format!("    match v {{\n{arms}    }}"), read, false)
+        }
+    };
+    let mut s = std::mem::take(&mut g.out);
+    let _ = write!(
+        s,
+        "{vis}fn {base}_toml_value(v: {name}) -> Toml ! {{}} {{\n{value}\n}}\n\n\
+         {vis}fn {base}_toml_read(x: Toml, at: Str) -> Result[{name}, Str] ! {{}} {{\n{read}\n}}\n\n"
+    );
+    if record {
+        let _ = write!(
+            s,
+            "{vis}fn {base}_to_toml(v: {name}) -> Str ! {{}} {{\n    toml_encode({base}_toml_value(v))\n}}\n\n\
+             {vis}fn {base}_from_toml(text: Str) -> Result[{name}, Str] ! {{}} {{\n    \
+             match toml_parse(text) {{\n        \
+             Result.Ok(value: t) => {base}_toml_read(t, \"$\"),\n        \
+             Result.Err(error: e) => Result[{name}, Str].Err(error: e),\n    }}\n}}\n\n"
+        );
+    }
+    s
+}
+
 /// `text` with the functions its derives mean appended, or unchanged when it derives nothing.
 #[must_use]
 pub fn expand(text: &str) -> String {
@@ -819,59 +1246,75 @@ pub fn expand(text: &str) -> String {
     }
     let (program, _) = nazm_syntax::parse_source(text);
     let mut generated = String::new();
-    // A type the program declares without this derive is refused at the field (the checker);
-    // nothing is generated for a type with such a field, so the report is that one.
-    let underived = |t: &TypeName| {
-        let declared = program.records.iter().any(|r| r.name == t.name)
-            || program.enums.iter().any(|e| e.name == t.name);
-        let derived = program
-            .records
-            .iter()
-            .any(|r| r.name == t.name && derives(&r.attrs, "json"))
-            || program
-                .enums
+    let mut used: Vec<&str> = Vec::new();
+    for format in FORMATS {
+        // A type the program declares without this derive is refused at the field (the
+        // checker); nothing is generated for a type with such a field, so the report is that one.
+        let underived = |t: &TypeName| {
+            let declared = program.records.iter().any(|r| r.name == t.name)
+                || program.enums.iter().any(|e| e.name == t.name);
+            let derived = program
+                .records
                 .iter()
-                .any(|e| e.name == t.name && derives(&e.attrs, "json"));
-        declared && !derived
-    };
-    // A field whose `@codec` its type does not allow is refused by the checker too: an
-    // `omit_none` on what is not an `Option`, a `default` on a type with no empty value.
-    let codec_ok = |f: &Field| {
-        let c = field_codec(&f.attrs);
-        let optional = plain(&f.ty) && f.ty.name == "Option";
-        !(c.omit_none && !optional) && !(c.default && empty_value(&f.ty).is_none())
-    };
-    let fields_ok = |fields: &[Field]| {
-        fields.iter().all(|f| {
-            refusal(&f.ty).is_none() && !named(&f.ty).into_iter().any(underived) && codec_ok(f)
-        })
-    };
-    for r in &program.records {
-        if derives(&r.attrs, "json") && r.type_params.is_empty() && fields_ok(&r.fields) {
-            generated.push_str(&generate(
-                &r.name,
-                r.pub_span.is_some(),
-                &type_codec(&r.attrs),
-                &Shape::Record(&r.fields),
-            ));
+                .any(|r| r.name == t.name && derives(&r.attrs, format))
+                || program
+                    .enums
+                    .iter()
+                    .any(|e| e.name == t.name && derives(&e.attrs, format));
+            declared && !derived
+        };
+        // A field whose `@codec` its type does not allow is refused by the checker too: an
+        // `omit_none` on what is not an `Option`, a `default` on a type with no empty value.
+        let codec_ok = |f: &Field| {
+            let c = field_codec(&f.attrs);
+            let optional = plain(&f.ty) && f.ty.name == "Option";
+            !(c.omit_none && !optional) && !(c.default && empty_value(&f.ty).is_none())
+        };
+        let fields_ok = |fields: &[Field]| {
+            fields.iter().all(|f| {
+                refusal_for(format, &f.ty).is_none()
+                    && !named(&f.ty).into_iter().any(underived)
+                    && codec_ok(f)
+            })
+        };
+        let gen = |name: &str, public: bool, codec: &TypeCodec, shape: &Shape<'_>| {
+            if *format == "json" {
+                generate(name, public, codec, shape)
+            } else {
+                generate_toml(name, public, codec, shape)
+            }
+        };
+        let before = generated.len();
+        for r in &program.records {
+            if derives(&r.attrs, format) && r.type_params.is_empty() && fields_ok(&r.fields) {
+                generated.push_str(&gen(
+                    &r.name,
+                    r.pub_span.is_some(),
+                    &type_codec(&r.attrs),
+                    &Shape::Record(&r.fields),
+                ));
+            }
         }
-    }
-    for e in &program.enums {
-        if derives(&e.attrs, "json")
-            && e.type_params.is_empty()
-            && e.variants.iter().all(|v| fields_ok(&v.fields))
-        {
-            let variants = e
-                .variants
-                .iter()
-                .map(|v| (v.name.as_str(), v.attrs.as_slice(), v.fields.as_slice()))
-                .collect();
-            generated.push_str(&generate(
-                &e.name,
-                e.pub_span.is_some(),
-                &type_codec(&e.attrs),
-                &Shape::Enum(variants),
-            ));
+        for e in &program.enums {
+            if derives(&e.attrs, format)
+                && e.type_params.is_empty()
+                && e.variants.iter().all(|v| fields_ok(&v.fields))
+            {
+                let variants = e
+                    .variants
+                    .iter()
+                    .map(|v| (v.name.as_str(), v.attrs.as_slice(), v.fields.as_slice()))
+                    .collect();
+                generated.push_str(&gen(
+                    &e.name,
+                    e.pub_span.is_some(),
+                    &type_codec(&e.attrs),
+                    &Shape::Enum(variants),
+                ));
+            }
+        }
+        if generated.len() > before {
+            used.push(format);
         }
     }
     if generated.is_empty() {
@@ -881,10 +1324,11 @@ pub fn expand(text: &str) -> String {
     if !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str(
-        "\n// --- generated by `@derive(json)` (docs/spec.md, *Derived serialisation*) ---\n\n",
-    );
-    out.push_str("use \"@std/json\";\n\n");
+    out.push_str("\n// --- generated by `@derive` (docs/spec.md, *Derived serialisation*) ---\n\n");
+    for format in used {
+        let _ = writeln!(out, "use \"@std/{format}\";");
+    }
+    out.push('\n');
     out.push_str(&generated);
     out
 }
