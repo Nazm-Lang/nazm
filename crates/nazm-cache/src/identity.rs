@@ -328,7 +328,9 @@ use crate::digest::{self, Framed};
 /// (`N0619`) to accepted, generating its codec and schema; a field it cannot carry is `N0619`.
 /// `69` — R1c, 2026-10-13. `@codec(…)` before a derived type, a field or a variant, and an
 /// attribute before a field or a variant at all, moved from refused to accepted.
-pub const SEMANTIC_EPOCH: u32 = 69;
+/// `70` — R1c, 2026-10-13. `@derive(toml)` moved from refused (`N0619`) to accepted, and an
+/// `Option` inside another type under it to refused.
+pub const SEMANTIC_EPOCH: u32 = 70;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

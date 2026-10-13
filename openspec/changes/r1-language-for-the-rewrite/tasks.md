@@ -43,7 +43,7 @@ each new construct by name until R2 carries it.
 ## 5. R1c — serialisation
 
 - [x] 5.1 S1 `@std/toml` (2026-10-13; `toml-test` 1.0, 553 of 553, LLVM and Cranelift)
-- [ ] 5.2 L2 `@derive(json)` and `@derive(toml)`, with JSON Schema output — L2a, `@derive(json)` with its codec and schema, and L2b, `@codec(…)`, done 2026-10-13; L2c (`@derive(toml)`) open
+- [x] 5.2 L2 `@derive(json)` and `@derive(toml)`, with JSON Schema output — L2a `@derive(json)` with its codec and schema, L2b `@codec(…)`, L2c `@derive(toml)`, 2026-10-13
 
 ## 6. R1d — the platform
 
