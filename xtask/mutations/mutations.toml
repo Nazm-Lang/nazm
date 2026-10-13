@@ -17771,3 +17771,125 @@ file = "library/std/file.nz"
 find = "    Result[Strs, IoError].Ok(value: sorted_all(found))"
 replace = "    Result[Strs, IoError].Ok(value: found)"
 killers = [{ package = "nazm-cli", test = "file_walk", name = "a_walk_lists_every_file_and_directory_sorted" }]
+
+# --- R1e S5: `@std/regex` (`docs/spec.md`, *The standard library*) -----------------------------
+
+[[mutation]]
+name = "r1e-a-lazy-repetition-never-stops"
+why = "a lazy repetition's split prefers the loop on both branches, so it can never leave it"
+file = "library/std/regex.nz"
+find = '''    ints_set(prog, 4 * at + 1, if greedy { at + 1 } else { out });'''
+replace = '''    ints_set(prog, 4 * at + 1, at + 1);'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-a-less-preferred-thread-outlives-a-match"
+why = "the threads after a matching one are not cut, so a less preferred alternative's longer match replaces the leftmost-first one"
+file = "library/std/regex.nz"
+find = '''                    cut = true;'''
+replace = '''                    cut = false;'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-a-state-is-followed-twice-in-a-step"
+why = "an instruction already reached in this step is followed again, so an empty loop such as `(a*)*` never ends"
+file = "library/std/regex.nz"
+find = '''            if ints_get(vm.mark, at) != stamp {'''
+replace = '''            if true {'''
+killers = [{ package = "nazm-cli", test = "regex", name = "pathological_patterns_take_linear_time" }]
+
+[[mutation]]
+name = "r1e-an-empty-match-follows-a-match"
+why = "`find_all` keeps an empty match right where the one before it ended, which Rust's `find_iter` skips"
+file = "library/std/regex.nz"
+find = '''                if !(empty && m.end == last) {'''
+replace = '''                if true {'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-a-negated-class-is-not"
+why = "`[^...]` matches what its items name instead of the rest"
+file = "library/std/regex.nz"
+find = '''    let negated = peek(p) == 94;'''
+replace = '''    let negated = false;'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-every-byte-is-a-scalar"
+why = "the text is read a byte at a time, so `.` matches half of `é`"
+file = "library/std/regex.nz"
+find = '''    if ok { need } else { 1 }'''
+replace = '''    if ok { 1 } else { 1 }'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-a-negative-lookahead-is-positive"
+why = "`(?!C)` holds where the next scalar value is in `C`"
+file = "library/std/regex.nz"
+find = '''    if kind == a_ahead() { next } else { !next }'''
+replace = '''    if kind == a_ahead() { next } else { next }'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-an-unmatched-paren-is-accepted"
+why = "a `)` with no `(` ends the pattern instead of being refused"
+file = "library/std/regex.nz"
+find = '''    if !failed(p) && peek(p) == 41 { fail(p, "an unmatched `)`"); }'''
+replace = '''    let unmatched = 0;'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_malformed_pattern_is_refused_with_its_offset" }]
+
+[[mutation]]
+name = "r1e-a-non-capturing-group-is-numbered"
+why = "`(?:...)` takes a group number, so every later group's number is one too high"
+file = "library/std/regex.nz"
+find = '''    if capture { ints_set(p.groups, 0, index); }'''
+replace = '''    ints_set(p.groups, 0, index);'''
+killers = [{ package = "nazm-cli", test = "regex", name = "capture_groups_report_what_each_matched" }]
+
+[[mutation]]
+name = "r1e-case-folding-misses-upper-case"
+why = "`(?i)` adds no upper-case letter for a lower-case one"
+file = "library/std/regex.nz"
+find = '''        if llo <= lhi { put(extra, llo - 32, lhi - 32); }'''
+replace = '''        let lower = llo;'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-a-word-boundary-is-inverted"
+why = "`\\b` holds between two word characters and `\\B` at a word's edge"
+file = "library/std/regex.nz"
+find = '''        return (before != after) == (kind == a_word());'''
+replace = '''        return (before == after) == (kind == a_word());'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-a-counted-repetition-runs-over"
+why = "`{n,m}` matches up to `m + 1` times"
+file = "library/std/regex.nz"
+find = '''            for i in b..max {'''
+replace = '''            for i in b..max + 1 {'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+[[mutation]]
+name = "r1e-a-repetition-has-no-size-limit"
+why = "a counted repetition is written out however large, and refused only later or not at all"
+file = "library/std/regex.nz"
+find = '''    if size > max_size() { return fail_at(p, start, "a repetition too large once written out"); }'''
+replace = '''    let unchecked = size;'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_malformed_pattern_is_refused_with_its_offset" }]
+
+[[mutation]]
+name = "r1e-a-continuation-byte-keeps-its-marker"
+why = "a multi-byte scalar value is decoded with each continuation byte's top bits, so no letter past ASCII is one"
+file = "library/std/regex.nz"
+find = '''            c = c * 64 + str_byte(text, i + k) - 128;'''
+replace = '''            c = c * 64 + str_byte(text, i + k);'''
+killers = [{ package = "nazm-cli", test = "regex", name = "a_tokeniser_split_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-unicode-table-drifts"
+why = "after the first range of a Unicode table each starts one scalar value early, so `\\p{L}` misses letters and takes others"
+file = "library/std/regex.nz"
+find = '''            prev = lo + v + 1;'''
+replace = '''            prev = lo + v;'''
+killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
