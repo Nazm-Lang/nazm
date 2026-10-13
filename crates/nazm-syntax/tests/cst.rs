@@ -819,6 +819,7 @@ fn the_abstract_and_concrete_trees_agree_on_every_construct() {
                         SyntaxKind::BinaryExpr
                             | SyntaxKind::NegExpr
                             | SyntaxKind::NotExpr
+                            | SyntaxKind::BitNotExpr
                             | SyntaxKind::PropagateExpr
                     )
                 })
