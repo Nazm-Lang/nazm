@@ -74,6 +74,43 @@
 @std/blake3 pub fn blake3_finish(h: Blake3) -> Bytes ! {}
 @std/blake3 pub fn blake3(data: Bytes) -> Bytes ! {}
 @std/blake3 pub fn blake3_hex(data: Bytes) -> Str ! {}
+@std/bitset pub struct BitSet
+@std/bitset pub fn bitset_new() -> BitSet ! {}
+@std/bitset pub fn bitset_add(s: BitSet, i: Int) -> Bool ! {}
+@std/bitset pub fn bitset_remove(s: BitSet, i: Int) -> Bool ! {}
+@std/bitset pub fn bitset_has(s: BitSet, i: Int) -> Bool ! {}
+@std/bitset pub fn bitset_count(s: BitSet) -> Int ! {}
+@std/bitset pub fn bitset_clear(s: BitSet) -> Int ! {}
+@std/bitset pub fn bitset_next(s: BitSet, from: Int) -> Option[Int] ! {}
+@std/bitset pub fn bitset_items(s: BitSet) -> Ints ! {}
+@std/bitset pub fn bitset_union(a: BitSet, b: BitSet) -> BitSet ! {}
+@std/bitset pub fn bitset_intersection(a: BitSet, b: BitSet) -> BitSet ! {}
+@std/bitset pub fn bitset_difference(a: BitSet, b: BitSet) -> BitSet ! {}
+@std/bitset pub fn bitset_equal(a: BitSet, b: BitSet) -> Bool ! {}
+@std/bytebuf pub struct ByteBuf
+@std/bytebuf pub fn bytebuf_new() -> ByteBuf ! {}
+@std/bytebuf pub fn bytebuf_with_capacity(n: Int) -> ByteBuf ! {}
+@std/bytebuf pub fn bytebuf_len(b: ByteBuf) -> Int ! {}
+@std/bytebuf pub fn bytebuf_clear(b: ByteBuf) -> Int ! {}
+@std/bytebuf pub fn bytebuf_push(b: ByteBuf, v: UInt8) -> Int ! {}
+@std/bytebuf pub fn bytebuf_push_bytes(b: ByteBuf, data: Bytes) -> Int ! {}
+@std/bytebuf pub fn bytebuf_push_str(b: ByteBuf, s: Str) -> Int ! {}
+@std/bytebuf pub fn bytebuf_put_u16_le(b: ByteBuf, v: UInt16) -> Int ! {}
+@std/bytebuf pub fn bytebuf_put_u16_be(b: ByteBuf, v: UInt16) -> Int ! {}
+@std/bytebuf pub fn bytebuf_put_u32_le(b: ByteBuf, v: UInt32) -> Int ! {}
+@std/bytebuf pub fn bytebuf_put_u32_be(b: ByteBuf, v: UInt32) -> Int ! {}
+@std/bytebuf pub fn bytebuf_put_u64_le(b: ByteBuf, v: UInt64) -> Int ! {}
+@std/bytebuf pub fn bytebuf_put_u64_be(b: ByteBuf, v: UInt64) -> Int ! {}
+@std/bytebuf pub fn bytebuf_put_uleb128(b: ByteBuf, v: UInt64) -> Int ! {}
+@std/bytebuf pub fn bytebuf_put_sleb128(b: ByteBuf, v: Int) -> Int ! {}
+@std/bytebuf pub fn bytebuf_align_to(b: ByteBuf, n: Int) -> Int ! {}
+@std/bytebuf pub fn bytebuf_get(b: ByteBuf, i: Int) -> Option[UInt8] ! {}
+@std/bytebuf pub fn bytebuf_set(b: ByteBuf, i: Int, v: UInt8) -> Bool ! {}
+@std/bytebuf pub fn bytebuf_patch_u32_le(b: ByteBuf, at: Int, v: UInt32) -> Bool ! {}
+@std/bytebuf pub fn bytebuf_patch_u32_be(b: ByteBuf, at: Int, v: UInt32) -> Bool ! {}
+@std/bytebuf pub fn bytebuf_patch_u64_le(b: ByteBuf, at: Int, v: UInt64) -> Bool ! {}
+@std/bytebuf pub fn bytebuf_patch_u64_be(b: ByteBuf, at: Int, v: UInt64) -> Bool ! {}
+@std/bytebuf pub fn bytebuf_to_bytes(b: ByteBuf) -> Bytes ! {}
 @std/chan pub fn chan_take(c: Chan) -> Option[Int] ! {}
 @std/chan pub fn chan_send_all_ints(c: Chan[Int], xs: Vec[Int]) -> Int ! {}
 @std/chan pub fn chan_collect_ints(c: Chan[Int], n: Int) -> Vec[Int] ! {}
@@ -305,6 +342,23 @@
 @std/option pub fn option_is_some[T](o: Option[T]) -> Bool ! {}
 @std/option pub fn option_is_none[T](o: Option[T]) -> Bool ! {}
 @std/option pub fn option_unwrap_or[T](o: Option[T], fallback: T) -> T ! {}
+@std/ordmap pub trait Ord
+@std/ordmap pub struct OrdEntry[K, V]
+@std/ordmap pub struct OrdMap[K, V]
+@std/ordmap pub fn ordmap_new[K: Ord, V]() -> OrdMap[K, V] ! {}
+@std/ordmap pub fn ordmap_len[K: Ord, V](m: OrdMap[K, V]) -> Int ! {}
+@std/ordmap pub fn ordmap_get[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[V] ! {}
+@std/ordmap pub fn ordmap_has[K: Ord, V](m: OrdMap[K, V], key: K) -> Bool ! {}
+@std/ordmap pub fn ordmap_set[K: Ord, V](m: OrdMap[K, V], key: K, value: V) -> Bool ! {}
+@std/ordmap pub fn ordmap_remove[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[V] ! {}
+@std/ordmap pub fn ordmap_first[K: Ord, V](m: OrdMap[K, V]) -> Option[K] ! {}
+@std/ordmap pub fn ordmap_last[K: Ord, V](m: OrdMap[K, V]) -> Option[K] ! {}
+@std/ordmap pub fn ordmap_floor[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[K] ! {}
+@std/ordmap pub fn ordmap_ceiling[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[K] ! {}
+@std/ordmap pub fn ordmap_keys[K: Ord, V](m: OrdMap[K, V]) -> Vec[K] ! {}
+@std/ordmap pub fn ordmap_values[K: Ord, V](m: OrdMap[K, V]) -> Vec[V] ! {}
+@std/ordmap pub fn ordmap_entries[K: Ord, V](m: OrdMap[K, V]) -> Vec[OrdEntry[K, V]] ! {}
+@std/ordmap pub fn ordmap_range[K: Ord, V](m: OrdMap[K, V], lo: K, hi: K) -> Vec[OrdEntry[K, V]] ! {}
 @std/path pub fn path_join(base: Str, rest: Str) -> Str ! {}
 @std/path pub fn path_base(p: Str) -> Str ! {}
 @std/path pub fn path_dir(p: Str) -> Str ! {}
@@ -369,6 +423,9 @@
 @std/sort pub fn vec_sort_by[T, effects E](xs: Vec[T], less: fn(T, T) -> Bool ! { E }) -> Vec[T] ! { E }
 @std/sort pub fn ints_sort(xs: Ints) -> Ints ! {}
 @std/sort pub fn strs_sort(xs: Strs) -> Strs ! {}
+@std/sort pub fn vec_sort_in_place_by[T, effects E](xs: Vec[T], less: fn(T, T) -> Bool ! { E }) -> Int ! { E }
+@std/sort pub fn ints_sort_in_place(xs: Ints) -> Int ! {}
+@std/sort pub fn strs_sort_in_place(xs: Strs) -> Int ! {}
 @std/test pub fn test_int(what: Str, actual: Int, expected: Int) -> Result[Int, Str] ! {}
 @std/test pub fn test_str(what: Str, actual: Str, expected: Str) -> Result[Str, Str] ! {}
 @std/test pub fn test_true(what: Str, cond: Bool) -> Result[Bool, Str] ! {}

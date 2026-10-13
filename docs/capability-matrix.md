@@ -312,6 +312,29 @@ message) and the help of three commands, alike under the interpreter, the LIR or
 `-O0`/`-O2` and Cranelift with nothing live; and executables built by LLVM and Cranelift parsing the
 arguments they were started with (spaces and non-ASCII in values, `--`, help on standard output,
 an error on standard error with status 2).
+**R1e (2026-10-13)** · *`@std/bytebuf`, `@std/ordmap`, `@std/bitset` and the in-place sorts*
+(`spec.md`, *The standard library*; `openspec/changes/r1-language-for-the-rewrite`, S2 and S3). In
+Nazm, each a handle like the other collections. `ByteBuf`: one buffer doubling as it fills, numbers
+in either byte order, ULEB128 and SLEB128, padding to an alignment, patching a field written
+earlier, and indexed reads and writes that answer `None` or `false` outside the bytes written.
+`@std/ordmap`: the `Ord` trait, implemented for every integer type, `Bool` and `Str`, and
+`OrdMap[K: Ord, V]`, an AVL tree in parallel vectors — insertion, lookup and removal in `O(log n)`
+comparisons, a removed node's slot taken by the last so nothing removed stays alive — with its ends,
+floor and ceiling, a half-open range, and keys, values and entries in ascending order.
+`@std/bitset`: a growable set of non-negative `Int`s in 64-bit words, with a walk by `bitset_next`
+and union, intersection and difference. `@std/sort` gained `vec_sort_in_place_by` (stable,
+effect-polymorphic: insertion runs of sixteen, merged bottom-up through one scratch vector),
+`ints_sort_in_place` and `strs_sort_in_place`. API-1.0 gains 57 lines. EXPERIMENTAL until R1
+closes. Evidence: `crates/nazm-cli/tests/collections_r1e.rs` — one program, the same output under
+the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live: LEB128 at its
+edges and at both ends of `Int` and `UInt64`, and six hundred fixed-seed values written alike by a
+`ByteBuf` and `@std/binary`'s `Writer`; an `OrdMap` over `Str`, a program's own `Ord` key and `Int`,
+the last under three thousand fixed-seed insertions, removals and lookups checked against a sorted
+vector, its keys, values, ends, neighbours and ranges compared as it goes, then ascending and
+descending runs; a `BitSet` against a vector of flags; the in-place sorts against the copying ones,
+stability checked by original positions, at lengths around the insertion runs. Three hundred
+thousand ascending keys, half removed, finish natively within twenty seconds; a key type with no
+`Ord` is refused. Not measured: speed against the Rust containers the rewrite replaces.
 
 **R1c (2026-10-13)** · *`@derive(toml)`* (`spec.md`, *Derived serialisation*, **TOML**;
 `openspec/changes/r1-language-for-the-rewrite`, L2c). The same shape over `@std/toml`'s `Toml` tree,

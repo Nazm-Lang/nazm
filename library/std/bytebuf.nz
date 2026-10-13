@@ -1,0 +1,231 @@
+// `@std/bytebuf`: a growable byte buffer, for building binary output (R1e, S2).
+//
+// Imported with `use "@std/bytebuf";`. A `ByteBuf` holds its bytes in one buffer it shares like
+// any handle: copies of a `ByteBuf` are the same buffer. Appending takes amortised constant time
+// a byte — the storage doubles when it is full — and reading or overwriting a byte, or patching a
+// number already written, constant time. It is the object writer's and DWARF's buffer: numbers in
+// either byte order, ULEB128 and SLEB128, padding to an alignment, and a field written now and
+// filled in later. Its own module rather than `@std/binary`'s: a `Writer` gathers pieces and is
+// read back by a `Reader`, where a `ByteBuf` is one buffer written in place. An index outside the
+// bytes written is ordinary failure — `None` or `false` — never a trap.
+
+/// Bytes being built: `store` holds one buffer, its capacity, of which the first `meta[0]` bytes
+/// are written.
+pub struct ByteBuf {
+    store: Vec[Bytes],
+    meta: Ints,
+}
+
+/// An empty buffer.
+pub fn bytebuf_new() -> ByteBuf ! {} {
+    bytebuf_with_capacity(16)
+}
+
+/// An empty buffer with room for `n` bytes before it first grows (at least one).
+pub fn bytebuf_with_capacity(n: Int) -> ByteBuf ! {} {
+    let store = vec_new[Bytes]();
+    vec_push(store, bytes_new(if n < 1 { 1 } else { n }));
+    let meta = ints_new();
+    ints_push(meta, 0);
+    ByteBuf(store: store, meta: meta)
+}
+
+/// How many bytes `b` holds.
+pub fn bytebuf_len(b: ByteBuf) -> Int ! {} {
+    ints_get(b.meta, 0)
+}
+
+/// Empty `b`, keeping its storage; returns `0`.
+pub fn bytebuf_clear(b: ByteBuf) -> Int ! {} {
+    ints_set(b.meta, 0, 0);
+    0
+}
+
+// Room for `n` more bytes, growing to twice the storage or to what is needed, whichever is more;
+// where they start.
+fn reserve(b: ByteBuf, n: Int) -> Int ! {} {
+    let len = ints_get(b.meta, 0);
+    let old = vec_get(b.store, 0);
+    let cap = bytes_len(old);
+    if len + n > cap {
+        let want = if cap * 2 > len + n { cap * 2 } else { len + n };
+        let fresh = bytes_new(want);
+        bytes_copy(fresh, bytes_slice(old, 0, len));
+        vec_set(b.store, 0, fresh);
+    }
+    ints_set(b.meta, 0, len + n);
+    len
+}
+
+// The storage, as it is now.
+fn storage(b: ByteBuf) -> Bytes ! {} {
+    vec_get(b.store, 0)
+}
+
+/// Append the byte `v`; returns `0`.
+pub fn bytebuf_push(b: ByteBuf, v: UInt8) -> Int ! {} {
+    let at = reserve(b, 1);
+    bytes_set(storage(b), at, v);
+    0
+}
+
+/// Append `data`'s bytes; returns `0`.
+pub fn bytebuf_push_bytes(b: ByteBuf, data: Bytes) -> Int ! {} {
+    let at = reserve(b, bytes_len(data));
+    bytes_copy(bytes_slice(storage(b), at, at + bytes_len(data)), data);
+    0
+}
+
+/// Append `s`'s bytes, with no length; returns `0`.
+pub fn bytebuf_push_str(b: ByteBuf, s: Str) -> Int ! {} {
+    let n = str_len(s);
+    let at = reserve(b, n);
+    let st = storage(b);
+    let mut i = 0;
+    while i < n {
+        bytes_set(st, at + i, UInt8(str_byte(s, i)));
+        i = i + 1;
+    }
+    0
+}
+
+/// Append a `UInt16`, least significant byte first; returns `0`.
+pub fn bytebuf_put_u16_le(b: ByteBuf, v: UInt16) -> Int ! {} {
+    let at = reserve(b, 2);
+    bytes_write_le(storage(b), at, v)
+}
+
+/// Append a `UInt16`, most significant byte first; returns `0`.
+pub fn bytebuf_put_u16_be(b: ByteBuf, v: UInt16) -> Int ! {} {
+    let at = reserve(b, 2);
+    bytes_write_be(storage(b), at, v)
+}
+
+/// Append a `UInt32`, least significant byte first; returns `0`.
+pub fn bytebuf_put_u32_le(b: ByteBuf, v: UInt32) -> Int ! {} {
+    let at = reserve(b, 4);
+    bytes_write_le(storage(b), at, v)
+}
+
+/// Append a `UInt32`, most significant byte first; returns `0`.
+pub fn bytebuf_put_u32_be(b: ByteBuf, v: UInt32) -> Int ! {} {
+    let at = reserve(b, 4);
+    bytes_write_be(storage(b), at, v)
+}
+
+/// Append a `UInt64`, least significant byte first; returns `0`.
+pub fn bytebuf_put_u64_le(b: ByteBuf, v: UInt64) -> Int ! {} {
+    let at = reserve(b, 8);
+    bytes_write_le(storage(b), at, v)
+}
+
+/// Append a `UInt64`, most significant byte first; returns `0`.
+pub fn bytebuf_put_u64_be(b: ByteBuf, v: UInt64) -> Int ! {} {
+    let at = reserve(b, 8);
+    bytes_write_be(storage(b), at, v)
+}
+
+/// Append an unsigned LEB128: seven bits a byte, least significant first, the top bit set on
+/// every byte but the last; returns how many bytes it took.
+pub fn bytebuf_put_uleb128(b: ByteBuf, v: UInt64) -> Int ! {} {
+    let mut x = v;
+    let mut n = 0;
+    let mut more = true;
+    while more {
+        let low = UInt8(x & UInt64(127));
+        x = x >> 7;
+        more = x != UInt64(0);
+        bytebuf_push(b, if more { low | UInt8(128) } else { low });
+        n = n + 1;
+    }
+    n
+}
+
+/// Append a signed LEB128: seven bits a byte of the two's complement, least significant first,
+/// until what is left is all copies of the sign bit just written; returns how many bytes it took.
+pub fn bytebuf_put_sleb128(b: ByteBuf, v: Int) -> Int ! {} {
+    let mut x = v;
+    let mut n = 0;
+    let mut more = true;
+    while more {
+        let low = UInt8(wrap_convert[UInt64](x) & UInt64(127));
+        x = x >> 7;
+        let sign = (low & UInt8(64)) != UInt8(0);
+        more = !((x == 0 && !sign) || (x == 0 - 1 && sign));
+        bytebuf_push(b, if more { low | UInt8(128) } else { low });
+        n = n + 1;
+    }
+    n
+}
+
+/// Append zero bytes until the length is a multiple of `n` (nothing when `n < 2`); returns the
+/// new length.
+pub fn bytebuf_align_to(b: ByteBuf, n: Int) -> Int ! {} {
+    if n > 1 {
+        let pad = (n - bytebuf_len(b) % n) % n;
+        let at = reserve(b, pad);
+        let st = storage(b);
+        let mut i = 0;
+        while i < pad {
+            bytes_set(st, at + i, UInt8(0));
+            i = i + 1;
+        }
+    }
+    bytebuf_len(b)
+}
+
+/// The byte at `i`, or `None` outside `0..bytebuf_len(b)`.
+pub fn bytebuf_get(b: ByteBuf, i: Int) -> Option[UInt8] ! {} {
+    if i < 0 || i >= bytebuf_len(b) {
+        Option[UInt8].None()
+    } else {
+        Option[UInt8].Some(value: bytes_get(storage(b), i))
+    }
+}
+
+/// Overwrite the byte at `i` with `v`; whether `i` was inside `0..bytebuf_len(b)` (nothing is
+/// written when it was not).
+pub fn bytebuf_set(b: ByteBuf, i: Int, v: UInt8) -> Bool ! {} {
+    if i < 0 || i >= bytebuf_len(b) {
+        false
+    } else {
+        bytes_set(storage(b), i, v);
+        true
+    }
+}
+
+// Whether `n` bytes from `at` are all written.
+fn inside(b: ByteBuf, at: Int, n: Int) -> Bool ! {} {
+    at >= 0 && at + n <= bytebuf_len(b)
+}
+
+/// Overwrite the four bytes at `at` with a `UInt32`, least significant first: a field written
+/// before its value was known. Whether they were all inside the bytes written.
+pub fn bytebuf_patch_u32_le(b: ByteBuf, at: Int, v: UInt32) -> Bool ! {} {
+    if inside(b, at, 4) { bytes_write_le(storage(b), at, v); true } else { false }
+}
+
+/// Overwrite the four bytes at `at` with a `UInt32`, most significant first; whether they were
+/// all inside the bytes written.
+pub fn bytebuf_patch_u32_be(b: ByteBuf, at: Int, v: UInt32) -> Bool ! {} {
+    if inside(b, at, 4) { bytes_write_be(storage(b), at, v); true } else { false }
+}
+
+/// Overwrite the eight bytes at `at` with a `UInt64`, least significant first; whether they were
+/// all inside the bytes written.
+pub fn bytebuf_patch_u64_le(b: ByteBuf, at: Int, v: UInt64) -> Bool ! {} {
+    if inside(b, at, 8) { bytes_write_le(storage(b), at, v); true } else { false }
+}
+
+/// Overwrite the eight bytes at `at` with a `UInt64`, most significant first; whether they were
+/// all inside the bytes written.
+pub fn bytebuf_patch_u64_be(b: ByteBuf, at: Int, v: UInt64) -> Bool ! {} {
+    if inside(b, at, 8) { bytes_write_be(storage(b), at, v); true } else { false }
+}
+
+/// The bytes written, as a new buffer of exactly that length: later writes to `b` do not change it.
+pub fn bytebuf_to_bytes(b: ByteBuf) -> Bytes ! {} {
+    let out = bytes_new(bytebuf_len(b));
+    bytes_copy(out, bytes_slice(storage(b), 0, bytebuf_len(b)));
+    out
+}
