@@ -374,12 +374,42 @@ fn admitted(
                     )),
                 }
             }
+            // Derived serialisation (R1c, L2): before a type, naming formats.
+            "derive" => {
+                if target != Target::Type {
+                    errors.push(refuse(
+                        a.span,
+                        format!("`@derive` marks a `struct` or an `enum`, not {}", target.named()),
+                        "write it before the type whose encoding it derives",
+                    ));
+                }
+                let formats = crate::derive::FORMATS;
+                match a.args.as_deref() {
+                    Some(args) if !args.is_empty() => {
+                        for x in args {
+                            let known = matches!(x, AttrArg::Word { name, .. } if formats.contains(&name.as_str()));
+                            if !known {
+                                errors.push(refuse(
+                                    x.span(),
+                                    "`@derive` takes the formats it derives".to_owned(),
+                                    "`@derive(json)`",
+                                ));
+                            }
+                        }
+                    }
+                    _ => errors.push(refuse(
+                        a.span,
+                        "`@derive` takes the formats it derives".to_owned(),
+                        "`@derive(json)`",
+                    )),
+                }
+            }
             other => errors.push(refuse(
                 a.name_span,
                 format!("`@{other}` is not an attribute Nazm has"),
                 "the attributes are `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated`, \
-                 `@section`, `@interrupt`, `@on_failure` and `@task`; there are no user-defined \
-                 attributes",
+                 `@section`, `@interrupt`, `@on_failure`, `@task` and `@derive`; there are no \
+                 user-defined attributes",
             )),
         }
     }
@@ -522,6 +552,73 @@ pub fn configure(
             errors,
         )
     });
+    // What a derive cannot carry (R1c, L2): a generic type, or a field of a type with no form in
+    // the format. Nothing is generated for it (`crate::derive::expand`), so this is the report.
+    for format in crate::derive::FORMATS {
+        let mut held: Vec<(&[nazm_syntax::ast::Field], &str, Span, bool)> = Vec::new();
+        for r in &program.records {
+            if crate::derive::derives(&r.attrs, format) {
+                held.push((&r.fields, &r.name, r.name_span, r.type_params.is_empty()));
+            }
+        }
+        for e in &program.enums {
+            if crate::derive::derives(&e.attrs, format) {
+                for v in &e.variants {
+                    held.push((&v.fields, &e.name, e.name_span, e.type_params.is_empty()));
+                }
+            }
+        }
+        for (fields, name, at, plain) in held {
+            if !plain {
+                errors.push(refuse(
+                    at,
+                    format!(
+                        "`{name}` is generic, and `@derive({format})` is for a type that is not"
+                    ),
+                    "derive it for a type with no type parameters",
+                ));
+                continue;
+            }
+            for f in fields {
+                // A record or enum of the program that does not derive the format: said here,
+                // where the field is, rather than as the function the generated code names.
+                for t in crate::derive::named(&f.ty) {
+                    let known = program.records.iter().any(|r| r.name == t.name)
+                        || program.enums.iter().any(|e| e.name == t.name);
+                    let derived = program
+                        .records
+                        .iter()
+                        .any(|r| r.name == t.name && crate::derive::derives(&r.attrs, format))
+                        || program
+                            .enums
+                            .iter()
+                            .any(|e| e.name == t.name && crate::derive::derives(&e.attrs, format));
+                    if known && !derived {
+                        errors.push(refuse(
+                            t.span,
+                            format!(
+                                "`@derive({format})` cannot carry the field `{}`: `{}` does not derive `{format}`",
+                                f.name, t.name
+                            ),
+                            "write `@derive(json)` before that type too",
+                        ));
+                    }
+                }
+                if let Some(why) = crate::derive::refusal(&f.ty) {
+                    errors.push(refuse(
+                        f.ty.span,
+                        format!(
+                            "`@derive({format})` cannot carry the field `{}`: {why}",
+                            f.name
+                        ),
+                        "give the field a type the format has: an integer `Int` holds, a float, \
+                         `Bool`, `Str`, `Option`, `Vec`, `List` or `Box` of one, or a type that \
+                         derives it too",
+                    ));
+                }
+            }
+        }
+    }
     program.traits.retain(|t| {
         admitted(
             &t.attrs,
