@@ -121,7 +121,7 @@ pub fn run(
     let (module, function) = m
         .find_code(entry)
         .ok_or_else(|| Stop::Defect(format!("no definition of the entry `{entry}`")))?;
-    let roots = vec![0u64; roots];
+    let roots = vec![0u128; roots];
     let result = m.call(module, function, &roots)?;
     if let Some(code) = m.exited {
         return Ok(m.outcome(code));
@@ -188,6 +188,25 @@ impl Machine<'_> {
             self.mem[(a + i) as usize] = (v >> (8 * i)) as u8;
         }
         Ok(())
+    }
+
+    /// A load of up to 16 bytes: an `I128` (R1b, L13b) is two words, low first.
+    fn read_wide(&self, a: u64, n: u64) -> Result<u128, Stop> {
+        if n <= 8 {
+            return Ok(u128::from(self.read(a, n)?));
+        }
+        let lo = self.read(a, 8)?;
+        let hi = self.read(a + 8, n - 8)?;
+        Ok(u128::from(lo) | (u128::from(hi) << 64))
+    }
+
+    /// A store of up to 16 bytes.
+    fn write_wide(&mut self, a: u64, n: u64, v: u128) -> Result<(), Stop> {
+        if n <= 8 {
+            return self.write(a, n, v as u64);
+        }
+        self.write(a, 8, v as u64)?;
+        self.write(a + 8, n - 8, (v >> 64) as u64)
     }
 
     fn bytes(&self, a: u64, n: u64) -> Result<Vec<u8>, Stop> {
@@ -348,7 +367,7 @@ impl Machine<'_> {
     // --- execution -----------------------------------------------------------------------
 
     /// Call a function at a code address.
-    fn call_address(&mut self, addr: u64, args: &[u64]) -> Result<Option<u64>, Stop> {
+    fn call_address(&mut self, addr: u64, args: &[u128]) -> Result<Option<u128>, Stop> {
         let i = addr
             .checked_sub(FN_BASE)
             .map(|d| (d / 16) as usize)
@@ -362,7 +381,7 @@ impl Machine<'_> {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn call(&mut self, mi: usize, fi: usize, args: &[u64]) -> Result<Option<u64>, Stop> {
+    fn call(&mut self, mi: usize, fi: usize, args: &[u128]) -> Result<Option<u128>, Stop> {
         let modules = self.modules;
         let m = &modules[mi];
         let f = &m.functions[fi];
@@ -378,8 +397,9 @@ impl Machine<'_> {
                 c
             }
         };
-        let mut vals = vec![0u64; f.values as usize];
-        let mut vars = vec![0u64; f.vars.len()];
+        // A value is 128 bits (R1b, L13b): an `I128` fills it, every other class its low bits.
+        let mut vals = vec![0u128; f.values as usize];
+        let mut vars = vec![0u128; f.vars.len()];
         let slots: Vec<u64> = f
             .slots
             .iter()
@@ -391,6 +411,7 @@ impl Machine<'_> {
                 Class::I16 => 2,
                 Class::I32 | Class::F32 => 4,
                 Class::I64 | Class::F64 => 8,
+                Class::I128 => 16,
                 Class::Ptr => u64::from(p),
             }
         };
@@ -409,11 +430,14 @@ impl Machine<'_> {
                         vals[dst.index()] = args.get(*index as usize).copied().unwrap_or(0);
                     }
                     Inst::Const { dst, class, value } => {
-                        vals[dst.index()] = norm(*class, *value as u64);
+                        vals[dst.index()] = norm(*class, *value as u128);
                     }
-                    Inst::Addr { dst, sym } => vals[dst.index()] = self.address(mi, sym.index())?,
+                    Inst::Addr { dst, sym } => {
+                        vals[dst.index()] = u128::from(self.address(mi, sym.index())?);
+                    }
                     Inst::SlotAddr { dst, slot } => {
-                        vals[dst.index()] = slots.get(slot.0 as usize).copied().unwrap_or(0);
+                        vals[dst.index()] =
+                            u128::from(slots.get(slot.0 as usize).copied().unwrap_or(0));
                     }
                     Inst::Load {
                         dst,
@@ -421,8 +445,8 @@ impl Machine<'_> {
                         addr,
                         offset,
                     } => {
-                        let a = vals[addr.index()].wrapping_add(*offset as i64 as u64);
-                        let v = self.read(a, width(*class, m.pointer))?;
+                        let a = (vals[addr.index()] as u64).wrapping_add(*offset as i64 as u64);
+                        let v = self.read_wide(a, width(*class, m.pointer))?;
                         vals[dst.index()] = norm(*class, v);
                     }
                     Inst::Store {
@@ -430,12 +454,12 @@ impl Machine<'_> {
                         offset,
                         value,
                     } => {
-                        let a = vals[addr.index()].wrapping_add(*offset as i64 as u64);
+                        let a = (vals[addr.index()] as u64).wrapping_add(*offset as i64 as u64);
                         let n = width(
                             classes.get(value.index()).copied().unwrap_or(Class::I64),
                             m.pointer,
                         );
-                        self.write(a, n, vals[value.index()])?;
+                        self.write_wide(a, n, vals[value.index()])?;
                     }
                     Inst::Bin { dst, op, a, b: y } => {
                         let cl = classes.get(a.index()).copied().unwrap_or(Class::I64);
@@ -451,12 +475,12 @@ impl Machine<'_> {
                         let cl = classes.get(a.index()).copied().unwrap_or(Class::I64);
                         let (r, o) = ovf_op(*op, cl, vals[a.index()], vals[y.index()]);
                         vals[dst.index()] = r;
-                        vals[ovf.index()] = u64::from(o);
+                        vals[ovf.index()] = u128::from(o);
                     }
                     Inst::Cmp { dst, op, a, b: y } => {
                         let cl = classes.get(a.index()).copied().unwrap_or(Class::I64);
                         let r = cmp_op(*op, cl, vals[a.index()], vals[y.index()]);
-                        vals[dst.index()] = u64::from(r);
+                        vals[dst.index()] = u128::from(r);
                     }
                     Inst::Select { dst, cond, a, b: y } => {
                         vals[dst.index()] = if vals[cond.index()] & 1 == 1 {
@@ -473,7 +497,7 @@ impl Machine<'_> {
                     } => {
                         let from = classes.get(src.index()).copied().unwrap_or(Class::I64);
                         let v = vals[src.index()];
-                        let r = if *sign { signed(from, v) as u64 } else { v };
+                        let r = if *sign { signed(from, v) as u128 } else { v };
                         vals[dst.index()] = norm(*to, r);
                     }
                     Inst::Un { dst, op, a } => {
@@ -488,7 +512,10 @@ impl Machine<'_> {
                         vals[dst.index()] = norm(*to, vals[src.index()]);
                     }
                     Inst::PtrAdd { dst, base, offset } => {
-                        vals[dst.index()] = vals[base.index()].wrapping_add(vals[offset.index()]);
+                        vals[dst.index()] = norm(
+                            Class::Ptr,
+                            vals[base.index()].wrapping_add(vals[offset.index()]),
+                        );
                     }
                     Inst::PtrToInt { dst, src } | Inst::IntToPtr { dst, src } => {
                         vals[dst.index()] = vals[src.index()];
@@ -496,13 +523,17 @@ impl Machine<'_> {
                     Inst::GetVar { dst, var } => vals[dst.index()] = vars[var.0 as usize],
                     Inst::SetVar { var, src } => vars[var.0 as usize] = vals[src.index()],
                     Inst::Call { dst, callee, args } => {
-                        let a: Vec<u64> = args.iter().map(|v| vals[v.index()]).collect();
+                        let a: Vec<u128> = args.iter().map(|v| vals[v.index()]).collect();
                         let target = self.resolved[mi].get(callee.index()).copied().flatten();
                         let r = match target {
                             Some(Target::Code { module, function }) => {
                                 self.call(module, function, &a)?
                             }
-                            Some(Target::Runtime(name)) => self.runtime(name, &a)?,
+                            // The runtime takes words: a 128-bit value goes to it by address.
+                            Some(Target::Runtime(name)) => {
+                                let words: Vec<u64> = a.iter().map(|v| *v as u64).collect();
+                                self.runtime(name, &words)?.map(u128::from)
+                            }
                             Some(Target::Data(_)) => {
                                 return Err(Stop::Defect("a call to data".to_owned()))
                             }
@@ -525,8 +556,8 @@ impl Machine<'_> {
                     Inst::CallIndirect {
                         dst, addr, args, ..
                     } => {
-                        let a: Vec<u64> = args.iter().map(|v| vals[v.index()]).collect();
-                        let r = self.call_address(vals[addr.index()], &a)?;
+                        let a: Vec<u128> = args.iter().map(|v| vals[v.index()]).collect();
+                        let r = self.call_address(vals[addr.index()] as u64, &a)?;
                         if self.exited.is_some() {
                             self.depth -= 1;
                             return Ok(None);
@@ -536,12 +567,12 @@ impl Machine<'_> {
                         }
                     }
                     Inst::Copy { dst, src, size } => {
-                        let bytes = self.bytes(vals[src.index()], u64::from(*size))?;
-                        self.put(vals[dst.index()], &bytes)?;
+                        let bytes = self.bytes(vals[src.index()] as u64, u64::from(*size))?;
+                        self.put(vals[dst.index()] as u64, &bytes)?;
                     }
                     Inst::Zero { dst, size } => {
                         let n = u64::from(*size);
-                        let a = vals[dst.index()];
+                        let a = vals[dst.index()] as u64;
                         self.check(a, n)?;
                         for k in 0..n {
                             self.mem[(a + k) as usize] = 0;
@@ -686,7 +717,7 @@ impl Machine<'_> {
                 if self.release_count(c) {
                     let release = self.read(c + 16, 8)?;
                     if release != 0 {
-                        self.call_address(release, &[c])?;
+                        self.call_address(release, &[u128::from(c)])?;
                     }
                 }
                 None
@@ -708,10 +739,72 @@ impl Machine<'_> {
                 let x = f64::from_bits(arg(1));
                 #[allow(clippy::cast_possible_truncation)]
                 let bits = match kind {
-                    nazm_sema::NumKind::F32 => u64::from((x as f32).to_bits()),
-                    _ => arg(1),
+                    nazm_sema::NumKind::F32 => u128::from((x as f32).to_bits()),
+                    _ => u128::from(arg(1)),
                 };
                 let text = nazm_sema::numeric::to_str(nazm_sema::numeric::NumVal { kind, bits });
+                self.put(arg(0), text.as_bytes())?;
+                Some(text.len() as u64)
+            }
+            // 128-bit integers (R1b, L13b), by address, as the runtime takes them.
+            "nz.i128_divrem" => {
+                let (x, y) = (self.read_wide(arg(1), 16)?, self.read_wide(arg(2), 16)?);
+                if y == 0 {
+                    return Err(Stop::Defect(
+                        "a 128-bit division LIR did not guard".to_owned(),
+                    ));
+                }
+                let (sx, sy) = (x as i128, y as i128);
+                let r = match arg(3) {
+                    0 => sx.wrapping_div(sy) as u128,
+                    1 => sx.wrapping_rem(sy) as u128,
+                    2 => x / y,
+                    _ => x % y,
+                };
+                self.write_wide(arg(0), 16, r)?;
+                None
+            }
+            "nz.i128_mul" => {
+                let (x, y) = (self.read_wide(arg(1), 16)?, self.read_wide(arg(2), 16)?);
+                self.write_wide(arg(0), 16, x.wrapping_mul(y))?;
+                let over = if arg(3) != 0 {
+                    (x as i128).checked_mul(y as i128).is_none()
+                } else {
+                    x.checked_mul(y).is_none()
+                };
+                Some(u64::from(over))
+            }
+            // Rounded once, as the runtime's `sitofp`/`uitofp` round.
+            #[allow(clippy::cast_precision_loss)]
+            "nz.i128_to_f64" | "nz.i128_to_f32" => {
+                let x = self.read_wide(arg(0), 16)?;
+                let signed = arg(1) != 0;
+                Some(if name == "nz.i128_to_f32" {
+                    u64::from(if signed { x as i128 as f32 } else { x as f32 }.to_bits())
+                } else if signed {
+                    (x as i128 as f64).to_bits()
+                } else {
+                    (x as f64).to_bits()
+                })
+            }
+            "nz.f64_to_i128" => {
+                // Rust's casts saturate, a NaN to 0, as the runtime's `fptosi.sat` does.
+                let x = f64::from_bits(arg(1));
+                let r = if arg(2) != 0 {
+                    x as i128 as u128
+                } else {
+                    x as u128
+                };
+                self.write_wide(arg(0), 16, r)?;
+                None
+            }
+            "nz.format_i128" => {
+                let x = self.read_wide(arg(1), 16)?;
+                let text = if arg(2) != 0 {
+                    (x as i128).to_string()
+                } else {
+                    x.to_string()
+                };
                 self.put(arg(0), text.as_bytes())?;
                 Some(text.len() as u64)
             }
@@ -722,7 +815,7 @@ impl Machine<'_> {
                 let text = nazm_sema::numeric::to_fixed(
                     nazm_sema::numeric::NumVal {
                         kind: nazm_sema::NumKind::F64,
-                        bits: x.to_bits(),
+                        bits: u128::from(x.to_bits()),
                     },
                     digits,
                 );
@@ -780,7 +873,7 @@ impl Machine<'_> {
                             let len = self.read(h, 8)?;
                             let data = self.read(h + 16, 8)?;
                             for i in 0..len {
-                                self.call_address(f, &[data + stride * i, 1])?;
+                                self.call_address(f, &[u128::from(data + stride * i), 1])?;
                             }
                             next = if self.releasing.len() > mark {
                                 self.releasing.pop()
@@ -998,44 +1091,46 @@ impl Machine<'_> {
 }
 
 /// A value of `class`, as the oracle holds it: a bit is 0 or 1, a narrow integer zero-extended.
-fn norm(class: Class, v: u64) -> u64 {
+fn norm(class: Class, v: u128) -> u128 {
     match class {
         Class::Bit => v & 1,
         Class::I8 => v & 0xff,
         Class::I16 => v & 0xffff,
         Class::I32 | Class::F32 => v & 0xffff_ffff,
-        Class::I64 | Class::F64 | Class::Ptr => v,
+        Class::I64 | Class::F64 | Class::Ptr => v & u128::from(u64::MAX),
+        Class::I128 => v,
     }
 }
 
 /// A value of an integer class read as signed.
-fn signed(class: Class, v: u64) -> i64 {
+fn signed(class: Class, v: u128) -> i128 {
     match class {
-        Class::Bit => (v & 1) as i64,
-        Class::I8 => i64::from(v as u8 as i8),
-        Class::I16 => i64::from(v as u16 as i16),
-        Class::I32 => i64::from(v as u32 as i32),
-        _ => v as i64,
+        Class::Bit => (v & 1) as i128,
+        Class::I8 => i128::from(v as u8 as i8),
+        Class::I16 => i128::from(v as u16 as i16),
+        Class::I32 => i128::from(v as u32 as i32),
+        Class::I128 => v as i128,
+        _ => i128::from(v as u64 as i64),
     }
 }
 
-fn f32_of(v: u64) -> f32 {
+fn f32_of(v: u128) -> f32 {
     f32::from_bits(v as u32)
 }
 
-fn f64_of(v: u64) -> f64 {
-    f64::from_bits(v)
+fn f64_of(v: u128) -> f64 {
+    f64::from_bits(v as u64)
 }
 
 /// A wrapping or float operation on two values of `class` (Gate 2 widened this to every class).
-fn bin_op(op: BinOp, class: Class, x: u64, y: u64) -> Result<u64, Stop> {
+fn bin_op(op: BinOp, class: Class, x: u128, y: u128) -> Result<u128, Stop> {
     let w = class.bits();
     let unguarded = |what: &str| Err(Stop::Defect(format!("a {what} LIR did not guard")));
     let float = |f: fn(f64, f64) -> f64, g: fn(f32, f32) -> f32| {
         if class == Class::F32 {
-            u64::from(g(f32_of(x), f32_of(y)).to_bits())
+            u128::from(g(f32_of(x), f32_of(y)).to_bits())
         } else {
-            f(f64_of(x), f64_of(y)).to_bits()
+            u128::from(f(f64_of(x), f64_of(y)).to_bits())
         }
     };
     let r = match op {
@@ -1051,7 +1146,7 @@ fn bin_op(op: BinOp, class: Class, x: u64, y: u64) -> Result<u64, Stop> {
                 a.wrapping_div(b)
             } else {
                 a.wrapping_rem(b)
-            }) as u64
+            }) as u128
         }
         BinOp::UDiv | BinOp::URem => {
             let (a, b) = (norm(class, x), norm(class, y));
@@ -1069,18 +1164,19 @@ fn bin_op(op: BinOp, class: Class, x: u64, y: u64) -> Result<u64, Stop> {
         BinOp::Xor => x ^ y,
         BinOp::Shl | BinOp::LShr | BinOp::AShr => {
             let n = norm(class, y);
-            if n >= u64::from(w) {
+            if n >= u128::from(w) {
                 return unguarded("shift out of range");
             }
+            let n = n as u32;
             match op {
                 BinOp::Shl => x << n,
                 BinOp::LShr => norm(class, x) >> n,
-                _ => (signed(class, x) >> n) as u64,
+                _ => (signed(class, x) >> n) as u128,
             }
         }
         BinOp::Rotl | BinOp::Rotr => {
             let v = norm(class, x);
-            let n = (norm(class, y) % u64::from(w)) as u32;
+            let n = (norm(class, y) % u128::from(w)) as u32;
             if n == 0 {
                 v
             } else if op == BinOp::Rotl {
@@ -1097,26 +1193,33 @@ fn bin_op(op: BinOp, class: Class, x: u64, y: u64) -> Result<u64, Stop> {
     Ok(norm(class, r))
 }
 
-/// An overflow-checked operation on two values of an integer class.
-fn ovf_op(op: OvfOp, class: Class, x: u64, y: u64) -> (u64, bool) {
+/// An overflow-checked operation on two values of an integer class: the wrapped result, and
+/// whether the exact one left the class's signed or unsigned range.
+fn ovf_op(op: OvfOp, class: Class, x: u128, y: u128) -> (u128, bool) {
     let w = class.bits();
-    let (lo, hi) = (-(1i128 << (w - 1)), (1i128 << (w - 1)) - 1);
-    let umax = (1i128 << w) - 1;
-    let (sa, sb) = (i128::from(signed(class, x)), i128::from(signed(class, y)));
-    let (ua, ub) = (i128::from(norm(class, x)), i128::from(norm(class, y)));
-    let (r, ok) = match op {
-        OvfOp::Add => (sa + sb, (lo..=hi).contains(&(sa + sb))),
-        OvfOp::Sub => (sa - sb, (lo..=hi).contains(&(sa - sb))),
-        OvfOp::Mul => (sa * sb, (lo..=hi).contains(&(sa * sb))),
-        OvfOp::UAdd => (ua + ub, ua + ub <= umax),
-        OvfOp::USub => (ua - ub, ua >= ub),
-        // `u64` by `u64` can pass `i128` (Q1-B-03): the low bits are the wrapped result either way.
-        OvfOp::UMul => (
-            ua.wrapping_mul(ub),
-            ua.checked_mul(ub).is_some_and(|p| p <= umax),
-        ),
+    let (lo, hi) = if w == 128 {
+        (i128::MIN, i128::MAX)
+    } else {
+        (-(1i128 << (w - 1)), (1i128 << (w - 1)) - 1)
     };
-    (norm(class, r as u64), !ok)
+    let umax = if w == 128 {
+        u128::MAX
+    } else {
+        (1u128 << w) - 1
+    };
+    let (sa, sb) = (signed(class, x), signed(class, y));
+    let (ua, ub) = (norm(class, x), norm(class, y));
+    let s = |exact: Option<i128>| exact.is_some_and(|v| (lo..=hi).contains(&v));
+    let u = |exact: Option<u128>| exact.is_some_and(|v| v <= umax);
+    let (r, ok) = match op {
+        OvfOp::Add => (sa.wrapping_add(sb) as u128, s(sa.checked_add(sb))),
+        OvfOp::Sub => (sa.wrapping_sub(sb) as u128, s(sa.checked_sub(sb))),
+        OvfOp::Mul => (sa.wrapping_mul(sb) as u128, s(sa.checked_mul(sb))),
+        OvfOp::UAdd => (ua.wrapping_add(ub), u(ua.checked_add(ub))),
+        OvfOp::USub => (ua.wrapping_sub(ub), ua >= ub),
+        OvfOp::UMul => (ua.wrapping_mul(ub), u(ua.checked_mul(ub))),
+    };
+    (norm(class, r), !ok)
 }
 
 /// A comparison of two values of `class`.
@@ -1126,7 +1229,7 @@ fn ovf_op(op: OvfOp, class: Class, x: u64, y: u64) -> (u64, bool) {
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-fn cmp_op(op: Cmp, class: Class, x: u64, y: u64) -> bool {
+fn cmp_op(op: Cmp, class: Class, x: u128, y: u128) -> bool {
     let (sa, sb) = (signed(class, x), signed(class, y));
     let (ua, ub) = (norm(class, x), norm(class, y));
     let (fa, fb) = if class == Class::F32 {
@@ -1155,13 +1258,13 @@ fn cmp_op(op: Cmp, class: Class, x: u64, y: u64) -> bool {
 }
 
 /// An operation of one operand.
-fn un_op(op: UnOp, class: Class, x: u64) -> u64 {
+fn un_op(op: UnOp, class: Class, x: u128) -> u128 {
     let w = class.bits();
     let float = |f: fn(f64) -> f64, g: fn(f32) -> f32| {
         if class == Class::F32 {
-            u64::from(g(f32_of(x)).to_bits())
+            u128::from(g(f32_of(x)).to_bits())
         } else {
-            f(f64_of(x)).to_bits()
+            u128::from(f(f64_of(x)).to_bits())
         }
     };
     let v = norm(class, x);
@@ -1174,16 +1277,16 @@ fn un_op(op: UnOp, class: Class, x: u64) -> u64 {
             UnOp::FFloor => float(f64::floor, f32::floor),
             UnOp::FCeil => float(f64::ceil, f32::ceil),
             UnOp::FTrunc => float(f64::trunc, f32::trunc),
-            UnOp::Popcnt => u64::from(v.count_ones()),
-            UnOp::Clz => u64::from(v.leading_zeros() - (64 - w)),
+            UnOp::Popcnt => u128::from(v.count_ones()),
+            UnOp::Clz => u128::from(v.leading_zeros() - (128 - w)),
             UnOp::Ctz => {
                 if v == 0 {
-                    u64::from(w)
+                    u128::from(w)
                 } else {
-                    u64::from(v.trailing_zeros())
+                    u128::from(v.trailing_zeros())
                 }
             }
-            UnOp::Bswap => v.swap_bytes() >> (64 - w),
+            UnOp::Bswap => v.swap_bytes() >> (128 - w),
         },
     )
 }
@@ -1195,7 +1298,7 @@ fn un_op(op: UnOp, class: Class, x: u64) -> u64 {
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-fn conv_op(op: ConvOp, from: Class, to: Class, x: u64) -> u64 {
+fn conv_op(op: ConvOp, from: Class, to: Class, x: u128) -> u128 {
     let fval = || {
         if from == Class::F32 {
             f64::from(f32_of(x))
@@ -1205,19 +1308,21 @@ fn conv_op(op: ConvOp, from: Class, to: Class, x: u64) -> u64 {
     };
     let float_out = |v: f64| {
         if to == Class::F32 {
-            u64::from((v as f32).to_bits())
+            u128::from((v as f32).to_bits())
         } else {
-            v.to_bits()
+            u128::from(v.to_bits())
         }
     };
     let r = match op {
         // Directly to `f32` from the integer, so it is rounded once.
-        ConvOp::SToF if to == Class::F32 => u64::from((signed(from, x) as f32).to_bits()),
-        ConvOp::UToF if to == Class::F32 => u64::from((norm(from, x) as f32).to_bits()),
+        ConvOp::SToF if to == Class::F32 => u128::from((signed(from, x) as f32).to_bits()),
+        ConvOp::UToF if to == Class::F32 => u128::from((norm(from, x) as f32).to_bits()),
         ConvOp::SToF => float_out(signed(from, x) as f64),
         ConvOp::UToF => float_out(norm(from, x) as f64),
-        ConvOp::FToS => fval() as i64 as u64,
-        ConvOp::FToU => fval() as u64,
+        ConvOp::FToS if to == Class::I128 => fval() as i128 as u128,
+        ConvOp::FToU if to == Class::I128 => fval() as u128,
+        ConvOp::FToS => u128::from(fval() as i64 as u64),
+        ConvOp::FToU => u128::from(fval() as u64),
         ConvOp::FExt | ConvOp::FTrunc => float_out(fval()),
         ConvOp::Bits => x,
     };

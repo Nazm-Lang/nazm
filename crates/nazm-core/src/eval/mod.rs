@@ -147,8 +147,11 @@ pub const DEFAULT_MAX_ITERATIONS: u64 = 10_000_000;
 ///
 /// Measured rather than guessed. On a debug build the deepest observed cost was about
 /// 17 KB per nested call, for frames made deliberately heavy — nested calls and
-/// arithmetic in the recursive position. This is that, doubled.
-pub const STACK_BYTES_PER_CALL: usize = 32 * 1024;
+/// arithmetic in the recursive position. This was that, doubled: 32 KiB. Re-measured for R1b
+/// (L13b), whose 128-bit numbers widened the evaluator's frames: a plain recursive call costs
+/// about 34.9 KB on a debug build (33.6 KB had been the most 32 KiB carried at 15,000 calls),
+/// so 40 KiB.
+pub const STACK_BYTES_PER_CALL: usize = 40 * 1024;
 
 /// Reserved on top of the per-call budget, for everything not proportional to call depth.
 ///

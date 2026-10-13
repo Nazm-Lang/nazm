@@ -63,7 +63,7 @@ pub(super) fn bytes_text_intrinsic(
             if within(*i, 1, b.len) {
                 Ok(Value::Num(NumVal::wrapped(
                     NumKind::U8,
-                    u64::from(b.read().get(index(*i)).copied().unwrap_or(0)),
+                    u128::from(b.read().get(index(*i)).copied().unwrap_or(0)),
                 )))
             } else {
                 Err(outside(
@@ -121,7 +121,7 @@ pub(super) fn bytes_text_intrinsic(
                 )));
             }
             let all = b.read();
-            let mut raw = [0u8; 8];
+            let mut raw = [0u8; 16];
             let at = index(*i);
             for j in 0..w {
                 let byte = all.get(at + j).copied().unwrap_or(0);
@@ -134,7 +134,7 @@ pub(super) fn bytes_text_intrinsic(
                     *slot = byte;
                 }
             }
-            Ok(from_num(NumVal::wrapped(kind, u64::from_le_bytes(raw))))
+            Ok(from_num(NumVal::wrapped(kind, u128::from_le_bytes(raw))))
         }
         (
             Intrinsic::BytesWriteLe | Intrinsic::BytesWriteBe,
@@ -246,7 +246,7 @@ fn numeric_intrinsic(
         Some(Value::Str(s)) => Some(String::from_utf8_lossy(s.bytes()).into_owned()),
         _ => None,
     };
-    let bits_of = |k: NumKind, bits: u64| Some(Ok(from_num(NumVal { kind: k, bits })));
+    let bits_of = |k: NumKind, bits: u128| Some(Ok(from_num(NumVal { kind: k, bits })));
     Some(match i {
         Intrinsic::WrappingAdd => Ok(from_num(numeric::wrapping(Arith::Add, a?, b?))),
         Intrinsic::WrappingSub => Ok(from_num(numeric::wrapping(Arith::Sub, a?, b?))),
@@ -296,6 +296,8 @@ fn numeric_intrinsic(
         Intrinsic::FloatIsFinite => return predicate(f64::is_finite),
         Intrinsic::NumToStr => Ok(Value::Str(Str::heap(numeric::to_str(a?).into_bytes()))),
         Intrinsic::Float64ToBits => return bits_of(NumKind::U64, a?.bits),
+        // Exact (R1b, L13b): a 64-by-64-bit product always fits 128 bits.
+        Intrinsic::WideningMul => return bits_of(NumKind::U128, a?.bits.wrapping_mul(b?.bits)),
         Intrinsic::Float64FromBits => return bits_of(NumKind::F64, a?.bits),
         Intrinsic::Float32ToBits => return bits_of(NumKind::U32, a?.bits),
         Intrinsic::Float32FromBits => return bits_of(NumKind::F32, a?.bits),

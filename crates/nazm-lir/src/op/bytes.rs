@@ -101,17 +101,23 @@ impl Fx<'_, '_> {
                 let (p, len) = self.str_parts(b);
                 self.within(i, w, len, "this read is outside the `Bytes`");
                 let base = self.ptr_add(p, i);
-                let mut acc = self.iconst(0);
+                // Assembled in a word, or in 128 bits for a 128-bit integer (R1b, L13b).
+                let ac = if num_class(k) == Class::I128 {
+                    Class::I128
+                } else {
+                    Class::I64
+                };
+                let mut acc = self.iconst_c(ac, 0);
                 for j in 0..w {
                     let byte = self.load(Class::I8, base, i32::try_from(j).unwrap_or(0));
-                    let mut wide = self.ext(Class::I64, byte, false);
+                    let mut wide = self.ext(ac, byte, false);
                     let shift = if op == Intrinsic::BytesReadLe {
                         j
                     } else {
                         w - 1 - j
                     } * 8;
                     if shift > 0 {
-                        let s = self.iconst(shift);
+                        let s = self.iconst_c(ac, shift);
                         wide = self.bin(BinOp::Shl, wide, s);
                     }
                     acc = self.bin(BinOp::Or, acc, wide);
@@ -122,7 +128,7 @@ impl Fx<'_, '_> {
                         let narrow = self.trunc(Class::I32, acc);
                         self.conv(ConvOp::Bits, Class::F32, narrow)
                     }
-                    other if num_class(other) == Class::I64 => acc,
+                    other if num_class(other) == ac => acc,
                     other => self.trunc(num_class(other), acc),
                 };
                 self.set(dst, v);
@@ -141,8 +147,13 @@ impl Fx<'_, '_> {
                         let narrow = self.conv(ConvOp::Bits, Class::I32, v);
                         self.ext(Class::I64, narrow, false)
                     }
-                    other if num_class(other) == Class::I64 => v,
+                    other if matches!(num_class(other), Class::I64 | Class::I128) => v,
                     _ => self.ext(Class::I64, v, false),
+                };
+                let ac = if num_class(k) == Class::I128 {
+                    Class::I128
+                } else {
+                    Class::I64
                 };
                 let base = self.ptr_add(p, i);
                 for j in 0..w {
@@ -152,7 +163,7 @@ impl Fx<'_, '_> {
                         w - 1 - j
                     } * 8;
                     let part = if shift > 0 {
-                        let s = self.iconst(shift);
+                        let s = self.iconst_c(ac, shift);
                         self.bin(BinOp::LShr, bits, s)
                     } else {
                         bits

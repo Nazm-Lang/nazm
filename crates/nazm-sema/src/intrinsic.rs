@@ -60,6 +60,8 @@ pub enum Shape {
     F32,
     U64,
     U32,
+    /// `UInt128` (R1b, L13b): what `widening_mul` returns.
+    U128,
     /// `UInt8`, `Bytes` and `Text` (Gate 2, `docs/general-purpose.md` §5–§6).
     U8,
     Bytes,
@@ -118,6 +120,7 @@ impl Shape {
             Self::F64 => Some(Type::Num(NumKind::F64)),
             Self::F32 => Some(Type::Num(NumKind::F32)),
             Self::U64 => Some(Type::Num(NumKind::U64)),
+            Self::U128 => Some(Type::Num(NumKind::U128)),
             Self::U32 => Some(Type::Num(NumKind::U32)),
             Self::U8 => Some(Type::Num(NumKind::U8)),
             Self::Bytes => Some(Type::Bytes),
@@ -156,6 +159,7 @@ impl Shape {
             Self::F64 => "Float64",
             Self::F32 => "Float32",
             Self::U64 => "UInt64",
+            Self::U128 => "UInt128",
             Self::U32 => "UInt32",
             Self::U8 => "UInt8",
             Self::Bytes => "Bytes",
@@ -445,6 +449,9 @@ pub enum Intrinsic {
     StrPadEnd,
     /// `float64_to_bits(x: Float64) -> UInt64`, and the inverse and `Float32` forms.
     Float64ToBits,
+    /// `widening_mul(a: UInt64, b: UInt64) -> UInt128` (R1b, L13b): the exact product, which
+    /// never traps.
+    WideningMul,
     Float64FromBits,
     Float32ToBits,
     Float32FromBits,
@@ -611,7 +618,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 184] = [
+    pub const ALL: [Self; 185] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -712,6 +719,7 @@ impl Intrinsic {
         Self::StrPadStart,
         Self::StrPadEnd,
         Self::Float64ToBits,
+        Self::WideningMul,
         Self::Float64FromBits,
         Self::Float32ToBits,
         Self::Float32FromBits,
@@ -905,6 +913,7 @@ impl Intrinsic {
             Self::StrPadStart => "str_pad_start",
             Self::StrPadEnd => "str_pad_end",
             Self::Float64ToBits => "float64_to_bits",
+            Self::WideningMul => "widening_mul",
             Self::Float64FromBits => "float64_from_bits",
             Self::Float32ToBits => "float32_to_bits",
             Self::Float32FromBits => "float32_from_bits",
@@ -1178,6 +1187,7 @@ impl Intrinsic {
             | Self::FloatIsFinite
             | Self::NumToStr => &[Shape::T],
             Self::Float64ToBits => &[Shape::F64],
+            Self::WideningMul => &[Shape::U64, Shape::U64],
             Self::Float64FromBits => &[Shape::U64],
             Self::Float32ToBits => &[Shape::F32],
             Self::Float32FromBits => &[Shape::U32],
@@ -1359,6 +1369,7 @@ impl Intrinsic {
                 Shape::Str
             }
             Self::Float64ToBits => Shape::U64,
+            Self::WideningMul => Shape::U128,
             Self::Float64FromBits | Self::FloatParseRaw => Shape::F64,
             Self::Float32ToBits => Shape::U32,
             Self::Float32FromBits => Shape::F32,

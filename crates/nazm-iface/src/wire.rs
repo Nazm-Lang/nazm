@@ -591,8 +591,15 @@ fn persist_value(v: &ConstValue, types: &UserTypes) -> PersistentValue {
         out
     };
     match v {
+        // The low 64 bits, as before R1b, for every kind but a 128-bit integer (L13b), which
+        // needs all of them; reading canonicalises by the kind either way.
+        #[allow(clippy::cast_possible_truncation)]
         ConstValue::Num(n) => PersistentValue::Bits {
-            bits: n.bits.to_string(),
+            bits: if n.kind.bits() == 128 {
+                { n.bits }.to_string()
+            } else {
+                (n.bits as u64).to_string()
+            },
         },
         ConstValue::Bool(b) => PersistentValue::Bool { bool: *b },
         ConstValue::Str(s) => PersistentValue::Bytes {
@@ -654,14 +661,13 @@ fn read_value(p: &PersistentValue, ty: Type, types: &UserTypes) -> Option<ConstV
             .collect::<Option<Vec<_>>>()
     };
     match (ty, p) {
-        (Type::Int, PersistentValue::Bits { bits }) => Some(ConstValue::Num(NumVal {
-            kind: NumKind::I64,
-            bits: bits.parse().ok()?,
-        })),
-        (Type::Num(kind), PersistentValue::Bits { bits }) => Some(ConstValue::Num(NumVal {
-            kind,
-            bits: bits.parse().ok()?,
-        })),
+        (Type::Int, PersistentValue::Bits { bits }) => Some(ConstValue::Num(NumVal::wrapped(
+            NumKind::I64,
+            bits.parse().ok()?,
+        ))),
+        (Type::Num(kind), PersistentValue::Bits { bits }) => {
+            Some(ConstValue::Num(NumVal::wrapped(kind, bits.parse().ok()?)))
+        }
         (Type::Bool, PersistentValue::Bool { bool }) => Some(ConstValue::Bool(*bool)),
         (Type::Str, PersistentValue::Bytes { bytes }) => {
             if bytes.len() % 2 != 0 {

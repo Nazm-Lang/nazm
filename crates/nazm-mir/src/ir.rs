@@ -481,7 +481,7 @@ pub enum Const {
     /// A number of any numeric type but `Int` (Gate 2), by its canonical bits.
     Num {
         kind: NumKind,
-        bits: u64,
+        bits: u128,
     },
     /// A static `Atomic`'s cell (Gate 3), by its module and name: [`Program::statics`] says
     /// what it is called and what it starts as. Immortal, as a literal's storage is.

@@ -4392,7 +4392,7 @@ impl<'a> Parser<'a> {
     fn number(&mut self, at: Checkpoint, span: Span) -> Option<Expr> {
         let e = match self.advance() {
             TokenKind::IntTooLarge(digits) => Expr::WideInt {
-                value: digits.parse::<u64>().unwrap_or(u64::MAX),
+                value: digits.parse::<u128>().unwrap_or(u128::MAX),
                 span,
             },
             TokenKind::Float(text) => Expr::Float { text, span },
@@ -4454,6 +4454,22 @@ impl<'a> Parser<'a> {
                             span: full,
                         })
                     }
+                    // Past `Int`'s magnitude and within `UInt128`'s (R1b, L13b): a negated wide
+                    // literal, which the checker judges whole where an `Int128` is expected and
+                    // refuses as too large everywhere else.
+                    _ if digits.parse::<u128>().is_ok() => {
+                        self.built(1)?;
+                        self.wrap(lit, SyntaxKind::Literal);
+                        self.wrap(at, SyntaxKind::NegExpr);
+                        Some(Expr::Neg {
+                            operand: Box::new(Expr::WideInt {
+                                value: digits.parse::<u128>().unwrap_or(u128::MAX),
+                                span: lit_span,
+                            }),
+                            op_span,
+                            span: full,
+                        })
+                    }
                     _ => {
                         self.report(
                             Diagnostic::error(
@@ -4486,9 +4502,9 @@ impl<'a> Parser<'a> {
                 self.wrap(at, SyntaxKind::Literal);
                 Some(Expr::Int { value, span })
             }
-            // Above `Int` and within `UInt64`, and floating point (Gate 2): the checker decides
-            // each one's type by the type expected.
-            TokenKind::IntTooLarge(digits) if digits.parse::<u64>().is_ok() => {
+            // Above `Int` and within `UInt128`, and floating point (Gate 2; R1b, L13b): the
+            // checker decides each one's type by the type expected.
+            TokenKind::IntTooLarge(digits) if digits.parse::<u128>().is_ok() => {
                 self.number(at, span)
             }
             TokenKind::Float(_) => self.number(at, span),

@@ -66,6 +66,7 @@ impl Tr {
             Class::F32 => types::F32,
             Class::F64 => types::F64,
             Class::Ptr => self.ptr,
+            Class::I128 => types::I128,
         }
     }
 
@@ -430,7 +431,7 @@ fn inst(
             let x = fx.b.ins().f32const(Ieee32::with_bits(*value as u32));
             fx.def(*dst, x, Class::F32);
         }
-        #[allow(clippy::cast_sign_loss)]
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Inst::Const {
             dst,
             class: Class::F64,
@@ -439,9 +440,23 @@ fn inst(
             let x = fx.b.ins().f64const(Ieee64::with_bits(*value as u64));
             fx.def(*dst, x, Class::F64);
         }
+        // An `I128` (R1b, L13b) has no immediate form: its two halves, joined.
+        #[allow(clippy::cast_possible_truncation)]
+        Inst::Const {
+            dst,
+            class: Class::I128,
+            value,
+        } => {
+            let lo = fx.b.ins().iconst(types::I64, *value as i64);
+            let hi = fx.b.ins().iconst(types::I64, (*value >> 64) as i64);
+            let x = fx.b.ins().iconcat(lo, hi);
+            fx.def(*dst, x, Class::I128);
+        }
+        // Sign-extended from the class's width, so its low 64 bits are all of it.
+        #[allow(clippy::cast_possible_truncation)]
         Inst::Const { dst, class, value } => {
             let ty = fx.t.ty(*class);
-            let x = fx.b.ins().iconst(ty, *value);
+            let x = fx.b.ins().iconst(ty, *value as i64);
             fx.def(*dst, x, *class);
         }
         Inst::Addr { dst, sym } => {

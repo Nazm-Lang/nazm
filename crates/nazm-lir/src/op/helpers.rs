@@ -534,6 +534,14 @@ fn hash(fx: &mut Fx<'_, '_>, a: V, t: Ty) -> V {
             let x = fx.ext(Class::I64, x, false);
             word(fx, x)
         }
+        // A 128-bit integer (R1b, L13b): its low word's hash and its high word's, combined.
+        Ty::Num(_) if class(t) == Class::I128 => {
+            let lo = fx.load(Class::I64, a, 0);
+            let hi = fx.load(Class::I64, a, 8);
+            let lo = word(fx, lo);
+            let hi = word(fx, hi);
+            combine(fx, lo, hi)
+        }
         Ty::Num(k) => {
             let x = fx.load(class(t), a, 0);
             let x = if class(t) == Class::I64 {

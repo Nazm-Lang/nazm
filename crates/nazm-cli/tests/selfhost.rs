@@ -2866,6 +2866,9 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("checked_add", "Option[T]"),
         ("checked_sub", "Option[T]"),
         ("checked_mul", "Option[T]"),
+        // R1b (L13b): `UInt64` and `UInt128` are Gate 2 numbers, which the Nazm checker's type
+        // table does not have, so this is refused by name there too.
+        ("widening_mul", "Gate 2 numbers"),
         // Gate 2 (numbers): the Nazm checker's type table has `Int` alone, so these, generic over
         // the widths and floats, are unknown functions there and refused by name.
         ("wrapping_add", "Gate 2 numbers"),

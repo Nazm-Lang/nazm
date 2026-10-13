@@ -140,6 +140,7 @@ impl Effect {
             | Intrinsic::StrPadStart
             | Intrinsic::StrPadEnd
             | Intrinsic::Float64ToBits
+            | Intrinsic::WideningMul
             | Intrinsic::Float64FromBits
             | Intrinsic::Float32ToBits
             | Intrinsic::Float32FromBits

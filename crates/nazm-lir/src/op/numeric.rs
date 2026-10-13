@@ -14,6 +14,7 @@
 )]
 
 use nazm_mir as mir;
+use nazm_sema::numeric::Wide;
 use nazm_sema::{ConvertMode, Intrinsic, NumKind};
 
 use super::func::Fx;
@@ -61,17 +62,62 @@ impl Fx<'_, '_> {
     }
 
     /// A constant of a numeric kind, from its canonical bits.
-    pub(crate) fn num_const(&mut self, kind: NumKind, bits: u64) -> V {
+    pub(crate) fn num_const(&mut self, kind: NumKind, bits: u128) -> V {
         let c = num_class(kind);
         // A narrow integer is written sign-extended, which every backend reads as its low bits.
-        #[allow(clippy::cast_possible_wrap)]
         let value = match c {
-            Class::I8 => i64::from(bits as u8 as i8),
-            Class::I16 => i64::from(bits as u16 as i16),
-            Class::I32 | Class::F32 => i64::from(bits as u32 as i32),
-            _ => bits as i64,
+            Class::I8 => i128::from(bits as u8 as i8),
+            Class::I16 => i128::from(bits as u16 as i16),
+            Class::I32 | Class::F32 => i128::from(bits as u32 as i32),
+            Class::I128 => bits as i128,
+            _ => i128::from(bits as u64 as i64),
         };
-        self.iconst_c(c, value)
+        self.iconst_wide(c, value)
+    }
+
+    /// A bound of an integer kind as a constant of `class`: its two's complement there.
+    fn bound(&mut self, class: Class, v: Wide) -> V {
+        self.iconst_wide(class, v.bits() as i128)
+    }
+
+    /// `x` and `y` stored to fresh slots, for a runtime entry that takes 128-bit values by
+    /// address (R1b, L13b); and a slot for its result.
+    fn wide_operands(&mut self, x: V, y: Option<V>) -> (V, V, V) {
+        let out = self.scratch(16);
+        let px = self.scratch(16);
+        self.store(px, 0, x);
+        let py = match y {
+            Some(y) => {
+                let py = self.scratch(16);
+                self.store(py, 0, y);
+                py
+            }
+            None => px,
+        };
+        (out, px, py)
+    }
+
+    /// `x / y` or `x % y` at 128 bits, guarded already: `nz.i128_divrem`.
+    fn wide_divrem(&mut self, op: BinOp, x: V, y: V) -> V {
+        let (out, px, py) = self.wide_operands(x, Some(y));
+        let code = self.iconst(match op {
+            BinOp::SDiv => 0,
+            BinOp::SRem => 1,
+            BinOp::UDiv => 2,
+            _ => 3,
+        });
+        self.rt("nz.i128_divrem", &[out, px, py, code]);
+        self.load(Class::I128, out, 0)
+    }
+
+    /// `x * y` at 128 bits, wrapped, and whether the exact product overflowed `kind`:
+    /// `nz.i128_mul`.
+    fn wide_mul(&mut self, kind: NumKind, x: V, y: V) -> (V, V) {
+        let (out, px, py) = self.wide_operands(x, Some(y));
+        let signed = self.iconst(i64::from(kind.is_signed()));
+        let flag = self.rt_v("nz.i128_mul", &[out, px, py, signed], Class::I32);
+        let over = self.cmp_imm(Cmp::Ne, flag, Class::I32, 0);
+        (self.load(Class::I128, out, 0), over)
     }
 
     fn overflows(kind: NumKind, what: &str) -> String {
@@ -123,6 +169,11 @@ impl Fx<'_, '_> {
                 y,
                 &Self::overflows(kind, "subtraction"),
             ),
+            mir::ArithOp::Mul if c == Class::I128 => {
+                let (product, over) = self.wide_mul(kind, x, y);
+                self.guard(over, "N0400", &Self::overflows(kind, "multiplication"));
+                product
+            }
             mir::ArithOp::Mul => self.checked(
                 ovf(OvfOp::Mul, OvfOp::UMul),
                 x,
@@ -132,27 +183,34 @@ impl Fx<'_, '_> {
             mir::ArithOp::Div | mir::ArithOp::Rem => {
                 let zero = self.cmp_imm(Cmp::Eq, y, c, 0);
                 self.guard(zero, "N0401", "division by zero");
+                let divide = |fx: &mut Self, o: BinOp, x: V, y: V| {
+                    if c == Class::I128 {
+                        fx.wide_divrem(o, x, y)
+                    } else {
+                        fx.bin(o, x, y)
+                    }
+                };
                 if !signed {
                     let o = if op == mir::ArithOp::Div {
                         BinOp::UDiv
                     } else {
                         BinOp::URem
                     };
-                    return self.bin(o, x, y);
+                    return divide(self, o, x, y);
                 }
-                let (lo, _) = kind.int_range().unwrap_or((0, 0));
-                #[allow(clippy::cast_possible_truncation)]
-                let is_min = self.cmp_imm(Cmp::Eq, x, c, lo as i64);
+                let (lo, _) = kind.int_range().unwrap_or((Wide::ZERO, Wide::ZERO));
+                let min = self.bound(c, lo);
+                let is_min = self.cmp(Cmp::Eq, x, min);
                 let is_m1 = self.cmp_imm(Cmp::Eq, y, c, -1);
                 let special = self.bin(BinOp::And, is_min, is_m1);
                 if op == mir::ArithOp::Div {
                     self.guard(special, "N0400", &Self::overflows(kind, "division"));
-                    self.bin(BinOp::SDiv, x, y)
+                    divide(self, BinOp::SDiv, x, y)
                 } else {
                     // `MIN % -1` is 0: divided by 1 instead, which the machine does not fault on.
                     let one = self.iconst_c(c, 1);
                     let divisor = self.select(special, one, y);
-                    self.bin(BinOp::SRem, x, divisor)
+                    divide(self, BinOp::SRem, x, divisor)
                 }
             }
         }
@@ -179,10 +237,10 @@ impl Fx<'_, '_> {
         } else {
             n
         };
-        if c == Class::I64 {
-            n
-        } else {
-            self.trunc(c, n)
+        match c {
+            Class::I64 => n,
+            Class::I128 => self.ext(c, n, false),
+            _ => self.trunc(c, n),
         }
     }
 
@@ -275,11 +333,78 @@ impl Fx<'_, '_> {
         }
     }
 
+    /// An integer of `from` widened to `I128` exactly — not for `UInt128`, which has no wider
+    /// class (R1b, L13b).
+    fn widen_wide(&mut self, from: NumKind, x: V) -> V {
+        if num_class(from) == Class::I128 {
+            x
+        } else {
+            self.ext(Class::I128, x, from.is_signed())
+        }
+    }
+
+    /// [`Self::int_fits`] where either side is 128 bits wide.
+    fn wide_fits(&mut self, from: NumKind, to: NumKind, x: V) -> V {
+        let (lo, hi) = to.int_range().unwrap_or((Wide::ZERO, Wide::ZERO));
+        if from == NumKind::U128 {
+            if to == NumKind::U128 {
+                return self.bit(true);
+            }
+            let max = self.bound(Class::I128, hi);
+            return self.cmp(Cmp::ULe, x, max);
+        }
+        let w = self.widen_wide(from, x);
+        let zero = self.iconst_c(Class::I128, 0);
+        if to == NumKind::U128 {
+            return self.cmp(Cmp::Ge, w, zero);
+        }
+        let (min, max) = (self.bound(Class::I128, lo), self.bound(Class::I128, hi));
+        let above = self.cmp(Cmp::Ge, w, min);
+        let below = self.cmp(Cmp::Le, w, max);
+        self.bin(BinOp::And, above, below)
+    }
+
+    /// [`Self::int_saturate`] where either side is 128 bits wide.
+    fn wide_saturate(&mut self, from: NumKind, to: NumKind, x: V) -> V {
+        let (lo, hi) = to.int_range().unwrap_or((Wide::ZERO, Wide::ZERO));
+        let tc = num_class(to);
+        if from == NumKind::U128 {
+            if to == NumKind::U128 {
+                return x;
+            }
+            let max = self.bound(Class::I128, hi);
+            let over = self.cmp(Cmp::UGt, x, max);
+            let clamped = self.select(over, max, x);
+            return self.resize(NumKind::U128, to, clamped);
+        }
+        let w = self.widen_wide(from, x);
+        let zero = self.iconst_c(Class::I128, 0);
+        if to == NumKind::U128 {
+            let neg = self.cmp(Cmp::Lt, w, zero);
+            return self.select(neg, zero, w);
+        }
+        let (min, max) = (self.bound(Class::I128, lo), self.bound(Class::I128, hi));
+        let under = self.cmp(Cmp::Lt, w, min);
+        let over = self.cmp(Cmp::Gt, w, max);
+        let a = self.select(under, min, w);
+        let b = self.select(over, max, a);
+        if tc == Class::I128 {
+            b
+        } else {
+            self.trunc(tc, b)
+        }
+    }
+
     /// Whether integer `x` of `from` is a value of integer kind `to`.
     fn int_fits(&mut self, from: NumKind, to: NumKind, x: V) -> V {
-        let (lo, hi) = to.int_range().unwrap_or((0, 0));
-        #[allow(clippy::cast_possible_truncation)]
-        let (lo64, hi64) = (lo as i64, hi as i64);
+        if from.bits() == 128 || to.bits() == 128 {
+            return self.wide_fits(from, to, x);
+        }
+        let (lo, hi) = to.int_range().unwrap_or((Wide::ZERO, Wide::ZERO));
+        let (lo64, hi64) = (
+            lo.to_i128().unwrap_or(0) as i64,
+            hi.to_i128().unwrap_or(0) as i64,
+        );
         if from == NumKind::U64 {
             // Read unsigned: in range below the target's maximum.
             if to == NumKind::U64 {
@@ -315,15 +440,15 @@ impl Fx<'_, '_> {
         } else {
             (-1.0, pow2(w))
         };
-        // A signed lower bound is inclusive at 64 bits, where `MIN - 1` is not a double, and
-        // exclusive of `MIN - 1` below: `-128.5` truncates to `-128`.
+        // A signed lower bound is inclusive at 64 bits and wider, where `MIN - 1` is not a
+        // double, and exclusive of `MIN - 1` below: `-128.5` truncates to `-128`.
         let lo = if to.is_signed() && w < 64 {
             self.fconst(Class::F64, lower - 1.0)
         } else {
             self.fconst(Class::F64, lower)
         };
         let hi = self.fconst(Class::F64, upper);
-        let above = if to.is_signed() && w == 64 {
+        let above = if to.is_signed() && w >= 64 {
             self.cmp(Cmp::FGe, d, lo)
         } else {
             self.cmp(Cmp::FGt, d, lo)
@@ -344,12 +469,19 @@ impl Fx<'_, '_> {
     /// A float truncated toward zero to an integer of `to`, saturating — which the caller has
     /// either range-checked or wants.
     fn float_to_int(&mut self, from: NumKind, to: NumKind, x: V) -> V {
+        if num_class(to) == Class::I128 {
+            // By the runtime (R1b, L13b), saturating as the instruction does: `nz.f64_to_i128`.
+            let d = self.as_f64(from, x);
+            let out = self.scratch(16);
+            let signed = self.iconst(i64::from(to.is_signed()));
+            self.rt("nz.f64_to_i128", &[out, d, signed]);
+            return self.load(Class::I128, out, 0);
+        }
         let op = if to.is_signed() {
             ConvOp::FToS
         } else {
             ConvOp::FToU
         };
-        let _ = from;
         self.conv(op, num_class(to), x)
     }
 
@@ -357,6 +489,17 @@ impl Fx<'_, '_> {
     pub(crate) fn num_convert(&mut self, mode: ConvertMode, from: NumKind, to: NumKind, x: V) -> V {
         let tc = num_class(to);
         match (from.is_float(), to.is_float()) {
+            (false, true) if num_class(from) == Class::I128 => {
+                // Rounded once, from the exact value, by the runtime (R1b, L13b).
+                let (_, px, _) = self.wide_operands(x, None);
+                let signed = self.iconst(i64::from(from.is_signed()));
+                let f = if tc == Class::F32 {
+                    "nz.i128_to_f32"
+                } else {
+                    "nz.i128_to_f64"
+                };
+                self.rt_v(f, &[px, signed], tc)
+            }
             (false, true) => {
                 let op = if from.is_signed() {
                     ConvOp::SToF
@@ -398,9 +541,14 @@ impl Fx<'_, '_> {
 
     /// An integer clamped into `to`'s range.
     fn int_saturate(&mut self, from: NumKind, to: NumKind, x: V) -> V {
-        let (lo, hi) = to.int_range().unwrap_or((0, 0));
-        #[allow(clippy::cast_possible_truncation)]
-        let (lo64, hi64) = (lo as i64, hi as i64);
+        if from.bits() == 128 || to.bits() == 128 {
+            return self.wide_saturate(from, to, x);
+        }
+        let (lo, hi) = to.int_range().unwrap_or((Wide::ZERO, Wide::ZERO));
+        let (lo64, hi64) = (
+            lo.to_i128().unwrap_or(0) as i64,
+            hi.to_i128().unwrap_or(0) as i64,
+        );
         let tc = num_class(to);
         if from == NumKind::U64 {
             if to == NumKind::U64 {
@@ -475,10 +623,10 @@ impl Fx<'_, '_> {
                     _ => UnOp::Ctz,
                 };
                 let r = self.un(u, x);
-                if c == Class::I64 {
-                    r
-                } else {
-                    self.ext(Class::I64, r, false)
+                match c {
+                    Class::I64 => r,
+                    Class::I128 => self.trunc(Class::I64, r),
+                    _ => self.ext(Class::I64, r, false),
                 }
             }
             Intrinsic::RotateLeft | Intrinsic::RotateRight => {
@@ -564,6 +712,13 @@ impl Fx<'_, '_> {
                     self.cmp(Cmp::FLt, a, inf)
                 }
             }
+            // Exact (R1b, L13b): both widened unsigned, and a product that cannot overflow.
+            Intrinsic::WideningMul => {
+                let (x, y) = (arg(self, 0), arg(self, 1));
+                let x = self.ext(Class::I128, x, false);
+                let y = self.ext(Class::I128, y, false);
+                self.bin(BinOp::Mul, x, y)
+            }
             Intrinsic::Float64ToBits | Intrinsic::Float32ToBits => {
                 let x = arg(self, 0);
                 let to = if op == Intrinsic::Float64ToBits {
@@ -589,9 +744,8 @@ impl Fx<'_, '_> {
     /// `saturating_add` and its kin: the checked result, or the bound it overflowed past.
     fn saturating(&mut self, op: Intrinsic, kind: NumKind, x: V, y: V) -> V {
         let c = num_class(kind);
-        let (lo, hi) = kind.int_range().unwrap_or((0, 0));
-        #[allow(clippy::cast_possible_truncation)]
-        let (min, max) = (self.iconst_c(c, lo as i64), self.iconst_c(c, hi as i64));
+        let (lo, hi) = kind.int_range().unwrap_or((Wide::ZERO, Wide::ZERO));
+        let (min, max) = (self.bound(c, lo), self.bound(c, hi));
         let signed = kind.is_signed();
         let ovf_op = match (op, signed) {
             (Intrinsic::SaturatingAdd, true) => OvfOp::Add,
@@ -601,15 +755,20 @@ impl Fx<'_, '_> {
             (_, true) => OvfOp::Mul,
             (_, false) => OvfOp::UMul,
         };
-        let dst = self.b.value();
-        let ovf = self.b.value();
-        self.b.push(Inst::Ovf {
-            dst,
-            ovf,
-            op: ovf_op,
-            a: x,
-            b: y,
-        });
+        let (dst, ovf) = if c == Class::I128 && matches!(ovf_op, OvfOp::Mul | OvfOp::UMul) {
+            self.wide_mul(kind, x, y)
+        } else {
+            let dst = self.b.value();
+            let ovf = self.b.value();
+            self.b.push(Inst::Ovf {
+                dst,
+                ovf,
+                op: ovf_op,
+                a: x,
+                b: y,
+            });
+            (dst, ovf)
+        };
         // Which bound: unsigned, the maximum but for a subtraction's zero; signed, the sign of
         // the exact result — `y`'s for an addition, `-y`'s for a subtraction, `x * y`'s for a
         // product.

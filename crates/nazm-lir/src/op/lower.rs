@@ -96,6 +96,7 @@ pub(crate) const fn num_class(k: nazm_sema::NumKind) -> Class {
         NumKind::I16 | NumKind::U16 => Class::I16,
         NumKind::I32 | NumKind::U32 => Class::I32,
         NumKind::I64 | NumKind::U64 => Class::I64,
+        NumKind::I128 | NumKind::U128 => Class::I128,
         NumKind::F32 => Class::F32,
         NumKind::F64 => Class::F64,
     }
@@ -387,6 +388,7 @@ impl<'a> Lw<'a> {
             Part::Numbers => self.needs.numbers = true,
             Part::Files => self.needs.files = true,
             Part::Net => self.needs.net = true,
+            Part::Wide => self.needs.wide = true,
             Part::Base | Part::Libc => {}
         }
         // The word-level entries this lowering calls are the second compiler's shims (N41).

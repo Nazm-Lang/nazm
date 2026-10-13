@@ -8322,10 +8322,11 @@ Repointed by R1b a third time, which moved it to 62 for L11: an entry that refus
 Repointed by R1b a fourth time, which moved it to 63 for L11b: an entry that refused an impl of a generic type must not be reused.
 Repointed by R1b a fifth time, which moved it to 64 for L12: an entry that refused `defer` must not be reused.
 Repointed by R1b a sixth time, which moved it to 65 for L13: an entry that refused `checked_add` must not be reused.
-Repointed by R1b a seventh time, which moved it to 66 for L15: an entry kept before warnings existed must not be reused."""
+Repointed by R1b a seventh time, which moved it to 66 for L15: an entry kept before warnings existed must not be reused.
+Repointed by R1b an eighth time, which moved it to 67 for L13b: an entry that refused `Int128` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 66;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 65;"
+find = "pub const SEMANTIC_EPOCH: u32 = 67;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 66;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10522,11 +10523,12 @@ Repointed by the v1 stack fixes, which moved it to 27 for the frame check.
 Repointed by the v1 monotonic deadlines, which moved it to 28.
 Repointed by R1a's release queue, which moved it to 29.
 Repointed by R1a's fixed-point floats, which moved it to 30.
-Repointed by R1b's stack size, which moved it to 31."""
+Repointed by R1b's stack size, which moved it to 31.
+Repointed by R1b's 128-bit integers, which moved it to 32 for the wide part."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 31;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 30;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_one_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 32;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 31;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_two_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -13919,10 +13921,11 @@ killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_the
 [[mutation]]
 name = "n105-the-oracle-checks-addition-as-unsigned"
 why = """the oracle computes a checked addition's overflow as unsigned, so it reports an overflow where Nazm has none and misses the one it has
-Repointed by Gate 2, whose oracle checks every width's operation in one function."""
+Repointed by Gate 2, whose oracle checks every width's operation in one function.
+Repointed by R1b's 128-bit oracle (L13b), whose operations are checked in `i128` and `u128`."""
 file = "crates/nazm-lir/src/op/interp.rs"
-find = '        OvfOp::Add => (sa + sb, (lo..=hi).contains(&(sa + sb))),'
-replace = '        OvfOp::Add => (sa + sb, ua + ub <= umax),'
+find = '        OvfOp::Add => (sa.wrapping_add(sb) as u128, s(sa.checked_add(sb))),'
+replace = '        OvfOp::Add => (sa.wrapping_add(sb) as u128, u(ua.checked_add(ub))),'
 killers = [{ package = "nazm-cli", test = "lir_oracle", name = "integers_and_their_failures_agree_with_the_oracle" }]
 
 [[mutation]]
@@ -14238,8 +14241,8 @@ killers = [{ package = "nazm-cli", test = "compat_v1", name = "every_run_case_pr
 name = "g2-a-zero-divisor-is-not-checked"
 why = "the interpreter divides an integer of any width by zero without its check, and stops by a host panic instead of `N0401`"
 file = "crates/nazm-sema/src/numeric.rs"
-find = "        Arith::Div | Arith::Rem if y == 0 => return Err(NumError::DivideByZero),"
-replace = "        Arith::Div | Arith::Rem if y == 0 && false => return Err(NumError::DivideByZero),"
+find = "        Arith::Div | Arith::Rem if y == Wide::ZERO => return Err(NumError::DivideByZero),"
+replace = "        Arith::Div | Arith::Rem if y == Wide::ZERO && false => return Err(NumError::DivideByZero),"
 killers = [{ package = "nazm-cli", test = "numbers", name = "every_integer_failure_traps_with_its_code_everywhere" }]
 
 [[mutation]]
@@ -14607,10 +14610,11 @@ killers = [{ package = "nazm-cli", test = "simd", name = "a_counter_written_afte
 
 [[mutation]]
 name = "q1-an-unsigned-product-may-pass-i128"
-why = "the 64-by-64-bit product is taken in `i128` unchecked, so `UInt64::MAX * UInt64::MAX` panics the compiler. (`wrapping_mul` is not this mutant: a wrapped unsigned product is always negative, so still an overflow — an equivalent mutant, found by the Q1 campaign)"
+why = """the 64-by-64-bit product is taken in `i128` unchecked, so `UInt64::MAX * UInt64::MAX` panics the compiler. (`wrapping_mul` is not this mutant: a wrapped unsigned product is always negative, so still an overflow — an equivalent mutant, found by the Q1 campaign)
+Repointed by R1b (L13b), whose exact values are `Wide`: a product past `Wide` wraps instead of overflowing, so `UInt128::MAX * 2` is a value."""
 file = "crates/nazm-sema/src/numeric.rs"
-find = '        Arith::Mul => x.checked_mul(y).ok_or(NumError::Overflow)?,'
-replace = '        Arith::Mul => x * y,'
+find = '        Arith::Mul => x.checked_mul(y),'
+replace = '        Arith::Mul => Some(Wide::from_u128(x.bits().wrapping_mul(y.bits()))),'
 killers = [{ package = "nazm-sema", lib = true, name = "numeric::tests::the_largest_unsigned_products_overflow_rather_than_panic" }]
 
 [[mutation]]
@@ -14984,8 +14988,8 @@ killers = [{ package = "nazm-cli", test = "c_foundation", name = "the_header_nam
 name = "g2-an-export-may-not-carry-a-number"
 why = "an export of a fixed-width integer or a float is refused again (N0391), so no binding generator can read a float from the header"
 file = "crates/nazm-core/src/check/foreign.rs"
-find = "    let scalar = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Num(_));"
-replace = "    let scalar = |t: Type| matches!(t, Type::Int | Type::Bool);"
+find = "        matches!(t, Type::Int | Type::Bool) || matches!(t, Type::Num(k) if k.bits() <= 64)"
+replace = "        matches!(t, Type::Int | Type::Bool)"
 killers = [{ package = "nazm-cli", test = "c_foundation", name = "the_header_names_every_numbers_c_type" }]
 
 # --- Gate 2: attributes and conditional compilation (§16, §17) ---------------------------------
@@ -17327,3 +17331,93 @@ file = "crates/nazm-runtime/src/entry.rs"
 find = '            let _ = writeln!(out, "  store i1 %jf, ptr @nz.failed");'
 replace = ""
 killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
+
+# --- R1b L13b: `Int128`, `UInt128` and `widening_mul` (`docs/spec.md`, *Numbers*) ---------------
+
+[[mutation]]
+name = "r1b-a-wide-sum-wraps"
+why = "an exact sum past `Wide` wraps instead of overflowing, so `UInt128::MAX + 1` is 0 in the interpreter"
+file = "crates/nazm-sema/src/numeric.rs"
+find = "            Self::new(self.neg, self.mag.checked_add(o.mag)?)"
+replace = "            Self::new(self.neg, self.mag.wrapping_add(o.mag))"
+killers = [{ package = "nazm-cli", test = "wide", name = "every_128_bit_failure_traps_with_its_code_everywhere" }]
+
+[[mutation]]
+name = "r1b-a-signed-wide-product-is-checked-unsigned"
+why = "an `Int128` product is checked as unsigned, so `-3 * 5` traps natively"
+file = "crates/nazm-lir/src/op/numeric.rs"
+find = "        let signed = self.iconst(i64::from(kind.is_signed()));"
+replace = "        let signed = self.iconst(i64::from(!kind.is_signed()));"
+killers = [{ package = "nazm-cli", test = "wide", name = "every_operation_at_128_bits_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1b-the-signed-wide-limits-swap"
+why = "the runtime bounds a negative product by `2^127 - 1`, so a product that is exactly `Int128`'s minimum traps"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  %limit = select i1 %neg, i128 170141183460469231731687303715884105728, i128 170141183460469231731687303715884105727"
+replace = "  %limit = select i1 %neg, i128 170141183460469231731687303715884105727, i128 170141183460469231731687303715884105728"
+killers = [{ package = "nazm-cli", test = "wide", name = "every_operation_at_128_bits_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1b-a-wide-integer-is-aligned-to-sixteen"
+why = "a 128-bit integer takes its C alignment, 16, which no enum payload area has, so `Option[Int128]` fails the layout tables"
+file = "crates/nazm-lir/src/abi.rs"
+find = "            Ty::Num(k) => Some(Lay::new(k.bits() / 8, (k.bits() / 8).min(8))),"
+replace = "            Ty::Num(k) => Some(Lay::new(k.bits() / 8, k.bits() / 8)),"
+killers = [{ package = "nazm-cli", test = "wide", name = "every_operation_at_128_bits_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1b-a-compiled-wide-hash-swaps-its-words"
+why = "the compiled derived hash of a 128-bit integer combines its high word first, so it is not the library's"
+file = "crates/nazm-lir/src/op/helpers.rs"
+find = "            combine(fx, lo, hi)"
+replace = "            combine(fx, hi, lo)"
+killers = [{ package = "nazm-cli", test = "wide", name = "a_128_bit_key_hashes_as_its_two_words_combined" }]
+
+[[mutation]]
+name = "r1b-the-interpreters-wide-hash-drops-its-high-word"
+why = "the interpreter's derived hash of a 128-bit integer reads its low word twice, so it is not the library's"
+file = "crates/nazm-core/src/eval/arith.rs"
+find = "            fnv::word((n.bits >> 64) as u64),"
+replace = "            fnv::word(n.bits as u64),"
+killers = [{ package = "nazm-cli", test = "wide", name = "a_128_bit_key_hashes_as_its_two_words_combined" }]
+
+[[mutation]]
+name = "r1b-a-wide-constant-is-kept-in-a-word"
+why = "a 128-bit constant is written to the interface as its low word, so a module reading it back from the cache sees another value"
+file = "crates/nazm-iface/src/wire.rs"
+find = "            bits: if n.kind.bits() == 128 {"
+replace = "            bits: if false {"
+killers = [{ package = "nazm-cli", test = "wide", name = "a_128_bit_constant_crosses_modules_and_the_cache" }]
+
+[[mutation]]
+name = "r1b-widening-mul-sign-extends"
+why = "`widening_mul` widens its first operand signed, so `UInt64::MAX` squared is wrong natively"
+file = "crates/nazm-lir/src/op/numeric.rs"
+find = "                let x = self.ext(Class::I128, x, false);"
+replace = "                let x = self.ext(Class::I128, x, true);"
+killers = [{ package = "nazm-cli", test = "wide", name = "every_operation_at_128_bits_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1b-a-negated-wide-literal-is-refused"
+why = "a negated literal past `Int`'s magnitude is refused by the parser, so `Int128`'s minimum cannot be written"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                    _ if digits.parse::<u128>().is_ok() => {"
+replace = "                    _ if false => {"
+killers = [{ package = "nazm-cli", test = "wide", name = "literals_and_bytes_reach_the_whole_width" }]
+
+[[mutation]]
+name = "r1b-a-wide-integer-is-written-unsigned"
+why = "a native `num_to_str` writes every 128-bit integer as unsigned, so a negative `Int128` prints as a large positive number"
+file = "crates/nazm-lir/src/op/prims.rs"
+find = "                    let signed = self.iconst(i64::from(k.is_signed()));"
+replace = "                    let signed = self.iconst(i64::from(false));"
+killers = [{ package = "nazm-cli", test = "wide", name = "every_operation_at_128_bits_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1b-a-wide-integer-crosses-into-c"
+why = "an export of an `Int128` is accepted, with no C type to name in the header"
+file = "crates/nazm-core/src/check/foreign.rs"
+find = "        matches!(t, Type::Int | Type::Bool) || matches!(t, Type::Num(k) if k.bits() <= 64)"
+replace = "        matches!(t, Type::Int | Type::Bool) || matches!(t, Type::Num(_))"
+killers = [{ package = "nazm-cli", test = "wide", name = "what_128_bits_cannot_do_is_refused" }]

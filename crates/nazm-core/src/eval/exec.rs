@@ -22,7 +22,7 @@ impl Interpreter {
             (Some(d), [v]) if method == d.hash => derived_hash(v, &self.core.orders).map(|h| {
                 Value::Num(nazm_sema::numeric::NumVal::wrapped(
                     nazm_sema::NumKind::U64,
-                    h,
+                    u128::from(h),
                 ))
             }),
             (Some(d), [a, b]) if method == d.same => {

@@ -14,10 +14,10 @@ impl Checker<'_> {
     pub(super) fn check_expr(&mut self, e: &Expr, expected: Option<Type>) -> Completion {
         match e {
             Expr::Int { value, span } => {
-                Completion::Value(self.integer_literal(i128::from(*value), *span, expected))
+                Completion::Value(self.integer_literal((*value).into(), *span, expected))
             }
             Expr::WideInt { value, span } => {
-                Completion::Value(self.integer_literal(i128::from(*value), *span, expected))
+                Completion::Value(self.integer_literal((*value).into(), *span, expected))
             }
             // `Float32` where one is expected, `Float64` everywhere else (Gate 2).
             Expr::Float { span, .. } => Completion::Value(self.float_literal(*span, expected)),
