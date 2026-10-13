@@ -200,6 +200,25 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1e (2026-10-13)** · *`@std/regex`* (`spec.md`, *The standard library*; `openspec/changes/r1-language-
+for-the-rewrite`, S5). Regular expressions in Nazm, matched in time linear in the text: a pattern is
+parsed into a tree, compiled into a Thompson NFA, and every search runs it as a Pike VM — all states
+advancing together a scalar value at a time, each held by at most one thread, preferred threads first —
+so a search is O(m·n) and nothing backtracks. Leftmost-first, as Rust's `regex` and Perl; capture groups;
+`find_all` with Rust's empty-match rule. Rust's syntax less what an automaton cannot do (backreferences,
+lookbehind, lookahead past one scalar value — each refused by name); a one-scalar lookahead `(?!C)` is
+kept, which the GPT-2 and `cl100k_base` pre-tokenisers' `\s+(?!\S)` needs. UTF-8 aware: `.` and a class
+match one scalar value. Unicode 16.0's general categories `L`, `M`, `N`, their subcategories and `Pc`
+are carried as compact range tables; `\d`, `\s`, `\w` are Unicode's (`\w` but for a few
+`Other_Alphabetic` scalar values); `(?i)` folds ASCII letters only. Errors are `what at byte N`.
+EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/regex.rs` — 77 patterns on their texts,
+the first part's expectations checked against Python's `re` searched as Rust's `find_iter` searches,
+the Unicode classes and both pre-tokenisers' patterns by hand; nine captures; 26 malformed patterns
+refused at their offset; five patterns exponential under backtracking (`(a*)*b`, `(a|aa)*c`, …) failing
+at once on 40 `a`s interpreted and on 200,000 compiled; a `cl100k_base` pre-split, captures, a search
+from an offset and an error alike under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and
+Cranelift with nothing live.
+
 **R1b (2026-10-13)** · *Linear-time string building* (`spec.md`, *Strings*, **Building**, and
 *What this costs*; `openspec/changes/r1-language-for-the-rewrite`, D2). Core IR lowering writes `s =
 str_concat(s, t)` on a `let mut` binding — not one a closure shares — as the internal `str_append`.

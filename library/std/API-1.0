@@ -304,6 +304,14 @@
 @std/random pub fn random_shuffle[T](r: Rng, xs: Vec[T]) -> Int ! {}
 @std/random pub fn random_bytes(rc: RandomCap, buf: Bytes) -> Result[Int, Str] ! {}
 @std/random pub fn random_seed(rc: RandomCap) -> UInt64 ! {}
+@std/regex pub struct Match
+@std/regex pub struct Regex
+@std/regex pub fn regex_compile(pattern: Str) -> Result[Regex, Str] ! {}
+@std/regex pub fn regex_groups(r: Regex) -> Int ! {}
+@std/regex pub fn regex_is_match(r: Regex, text: Str) -> Bool ! {}
+@std/regex pub fn regex_find(r: Regex, text: Str, from: Int) -> Option[Match] ! {}
+@std/regex pub fn regex_find_all(r: Regex, text: Str) -> Vec[Match] ! {}
+@std/regex pub fn regex_captures(r: Regex, text: Str, from: Int) -> Option[Vec[Option[Match]]] ! {}
 @std/result pub fn result_is_ok[T, E](r: Result[T, E]) -> Bool ! {}
 @std/result pub fn result_is_err[T, E](r: Result[T, E]) -> Bool ! {}
 @std/result pub fn result_unwrap_or[T, E](r: Result[T, E], fallback: T) -> T ! {}

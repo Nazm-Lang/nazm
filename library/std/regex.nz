@@ -1,0 +1,1131 @@
+// `@std/regex`: regular expressions, matched in time linear in the text (R1e, S5).
+//
+// Imported with `use "@std/regex";`. A pattern is compiled once, by `regex_compile`, into a
+// Thompson NFA, and every search runs it as a Pike VM: all the automaton's states advance together
+// one scalar value at a time, each state held by at most one thread, so a search reads each byte of
+// the text once and does at most work proportional to the pattern's size there — O(m·n) for a
+// pattern of m instructions and a text of n bytes, never exponential. Nothing backtracks, so a
+// backreference, a lookbehind or a lookahead longer than one scalar value — which cannot be matched
+// so — is refused when the pattern is compiled.
+//
+// Matching is leftmost-first, as in Perl and in Rust's `regex` crate: the match starting earliest
+// in the text, and among those the one the pattern prefers — an alternation's earlier branch, a
+// greedy repetition's longer run, a lazy one's shorter. Offsets are bytes; the text is read as
+// UTF-8, `.` and a class matching one whole scalar value (a byte that does not begin a valid
+// sequence is read as U+FFFD, one byte at a time).
+//
+// The syntax is Rust's `regex`, less what an automaton cannot do and what a pre-tokeniser does not
+// need:
+//
+//   literals; `\` before any ASCII character that is not a letter or a digit; `\n \t \r \f \v`,
+//     `\xHH`, `\x{H...}`, `\uHHHH`, `\u{H...}`, `\UHHHHHHHH`
+//   `.` (any scalar value but `\n`; any at all under `s`)
+//   `[...]`, `[^...]`, ranges `a-z`, and the escapes below inside them; `-` first or last, and `]`
+//     first, are literal
+//   `\d \D` (`\p{Nd}`), `\s \S` (Unicode `White_Space`), `\w \W` (`\p{L}`, `\p{M}`, `\p{Nd}`,
+//     `\p{Nl}`, `\p{Pc}`, U+200C, U+200D and the circled letters: Unicode's `\w` but for the
+//     few other `Other_Alphabetic` scalar values)
+//   `\p{..}`, `\P{..}`, `\pX`: the general categories `L` (`Letter`), `Lu`, `Ll`, `Lt`, `Lm`, `Lo`,
+//     `M` (`Mark`), `Mn`, `Mc`, `Me`, `N` (`Number`), `Nd`, `Nl`, `No`, `Pc` — Unicode 16.0
+//   `^ $` (the text's ends; a line's under `m`), `\A \z`, `\b \B` (a `\w` boundary)
+//   `|`, `(...)`, `(?:...)`, `(?<name>...)` and `(?P<name>...)` (numbered like any group; the name
+//     is not kept), `(?flags)` and `(?flags:...)` with `i` (ASCII letters only), `m`, `s` and `-`
+//   `* + ? {n} {n,} {n,m}`, each greedy, or lazy with a `?` after it
+//   `(?=C)` and `(?!C)` where `C` is one literal, `.`, escape or class: whether the next scalar
+//     value is (is not) in it — `(?!C)` at the end of the text holds. Enough for `\s+(?!\S)`
+//
+// Not supported, each refused by name: backreferences, lookbehind, longer lookaheads, nested
+// classes and class set operations (`&&`), POSIX classes, other Unicode properties and scripts,
+// the `x` and `U` flags. A pattern is at most 100,000 instructions once its counted repetitions
+// are written out.
+
+/// Where a match, or a capture group, was found: byte offsets into the text, `start` inclusive and
+/// `end` exclusive.
+pub struct Match {
+    start: Int,
+    end: Int,
+}
+
+/// A compiled pattern: its text, its program, the character classes the program reads, and how
+/// many capture groups it has.
+pub struct Regex {
+    pattern: Str,
+    prog: Ints,
+    sets: Ints,
+    groups: Int,
+}
+
+// --- sets of scalar values ----------------------------------------------------------------------
+//
+// A set is an `Ints` of ranges, `lo, hi` pairs, ascending, neither overlapping nor adjacent.
+
+fn max_scalar() -> Int ! {} { 1114111 }
+
+fn set_range(lo: Int, hi: Int) -> Ints ! {} {
+    let s = ints_new();
+    ints_push(s, lo);
+    ints_push(s, hi);
+    s
+}
+
+/// `lo..=hi` added at the end of `out`, merged with the last range where they touch.
+fn put(out: Ints, lo: Int, hi: Int) -> Int ! {} {
+    let n = ints_len(out);
+    if n > 0 && lo <= ints_get(out, n - 1) + 1 {
+        if hi > ints_get(out, n - 1) { ints_set(out, n - 1, hi); }
+    } else {
+        ints_push(out, lo);
+        ints_push(out, hi);
+    }
+    0
+}
+
+fn set_union(a: Ints, b: Ints) -> Ints ! {} {
+    let out = ints_new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < ints_len(a) || j < ints_len(b) {
+        if j >= ints_len(b) || (i < ints_len(a) && ints_get(a, i) <= ints_get(b, j)) {
+            put(out, ints_get(a, i), ints_get(a, i + 1));
+            i = i + 2;
+        } else {
+            put(out, ints_get(b, j), ints_get(b, j + 1));
+            j = j + 2;
+        }
+    }
+    out
+}
+
+/// Every scalar value not in `a`.
+fn set_negate(a: Ints) -> Ints ! {} {
+    let out = ints_new();
+    let mut next = 0;
+    for k in 0..ints_len(a) / 2 {
+        let lo = ints_get(a, 2 * k);
+        if lo > next { put(out, next, lo - 1); }
+        next = ints_get(a, 2 * k + 1) + 1;
+    }
+    if next <= max_scalar() { put(out, next, max_scalar()); }
+    out
+}
+
+/// `a` with the other case of each ASCII letter in it.
+fn set_fold(a: Ints) -> Ints ! {} {
+    let extra = ints_new();
+    for k in 0..ints_len(a) / 2 {
+        let lo = ints_get(a, 2 * k);
+        let hi = ints_get(a, 2 * k + 1);
+        // Upper-case letters, then lower-case ones, each mapped to the other case.
+        let ulo = if lo > 65 { lo } else { 65 };
+        let uhi = if hi < 90 { hi } else { 90 };
+        if ulo <= uhi { put(extra, ulo + 32, uhi + 32); }
+        let llo = if lo > 97 { lo } else { 97 };
+        let lhi = if hi < 122 { hi } else { 122 };
+        if llo <= lhi { put(extra, llo - 32, lhi - 32); }
+    }
+    // `extra` is ascending except where both cases occur: union it a range at a time.
+    let mut out = a;
+    for k in 0..ints_len(extra) / 2 {
+        out = set_union(out, set_range(ints_get(extra, 2 * k), ints_get(extra, 2 * k + 1)));
+    }
+    out
+}
+
+/// Whether `c` is in the set of `count` ranges stored from range `start` of `sets`.
+fn in_set(sets: Ints, start: Int, count: Int, c: Int) -> Bool ! {} {
+    let mut lo = 0;
+    let mut hi = count;
+    let mut found = false;
+    while lo < hi && !found {
+        let mid = (lo + hi) / 2;
+        if c < ints_get(sets, 2 * (start + mid)) {
+            hi = mid;
+        } else {
+            if c > ints_get(sets, 2 * (start + mid) + 1) { lo = mid + 1; } else { found = true; }
+        }
+    }
+    found
+}
+
+// --- Unicode ------------------------------------------------------------------------------------
+
+/// A range table as the constants below spell one: each range is the gap from the end of the one
+/// before it and its width less one, each number in base 32 — its leading digits `a`-`z`, `!`,
+/// `#`, `$`, `%`, `&`, `*`, its last digit `0`-`9`, `A`-`V`.
+fn table(t: Str) -> Ints ! {} {
+    let out = ints_new();
+    let mut prev = 0;
+    let mut i = 0;
+    let mut first = true;
+    let mut lo = 0;
+    while i < str_len(t) {
+        let mut v = 0;
+        let mut more = true;
+        while more {
+            let b = str_byte(t, i);
+            i = i + 1;
+            if b >= 97 && b <= 122 { v = v * 32 + b - 97; } else {
+            if b == 33 { v = v * 32 + 26; } else {
+            if b == 35 { v = v * 32 + 27; } else {
+            if b == 36 { v = v * 32 + 28; } else {
+            if b == 37 { v = v * 32 + 29; } else {
+            if b == 38 { v = v * 32 + 30; } else {
+            if b == 42 { v = v * 32 + 31; } else {
+                let d = if b <= 57 { b - 48 } else { b - 55 };
+                v = v * 32 + d;
+                more = false;
+            } } } } } } }
+        }
+        if first {
+            lo = prev + v;
+            first = false;
+        } else {
+            ints_push(out, lo);
+            ints_push(out, lo + v);
+            prev = lo + v + 1;
+            first = true;
+        }
+    }
+    out
+}
+
+/// Unicode's `White_Space`.
+fn white_space() -> Ints ! {} {
+    let s = ints_new();
+    put(s, 9, 13);
+    put(s, 32, 32);
+    put(s, 133, 133);
+    put(s, 160, 160);
+    put(s, 5760, 5760);
+    put(s, 8192, 8202);
+    put(s, 8232, 8233);
+    put(s, 8239, 8239);
+    put(s, 8287, 8287);
+    put(s, 12288, 12288);
+    s
+}
+
+fn letters() -> Ints ! {} {
+    set_union(set_union(set_union(table(U_LU), table(U_LL)), set_union(table(U_LT), table(U_LM))), table(U_LO))
+}
+
+fn marks() -> Ints ! {} { set_union(set_union(table(U_MN), table(U_MC)), table(U_ME)) }
+
+fn numbers() -> Ints ! {} { set_union(set_union(table(U_ND), table(U_NL)), table(U_NO)) }
+
+/// `\w`: letters, marks, decimal digits, letter numbers, connector punctuation, the joiners and the
+/// circled letters.
+fn word() -> Ints ! {} {
+    let mut s = set_union(set_union(letters(), marks()), set_union(table(U_ND), table(U_NL)));
+    s = set_union(s, table(U_PC));
+    s = set_union(s, set_range(8204, 8205));
+    s = set_union(s, set_range(9398, 9449));
+    s = set_union(s, set_range(127280, 127305));
+    s = set_union(s, set_range(127312, 127337));
+    set_union(s, set_range(127344, 127369))
+}
+
+/// The general category, or group of them, a `\p{...}` names.
+fn category(name: Str) -> Option[Ints] ! {} {
+    if name == "L" || name == "Letter" { return Option[Ints].Some(value: letters()); }
+    if name == "Lu" { return Option[Ints].Some(value: table(U_LU)); }
+    if name == "Ll" { return Option[Ints].Some(value: table(U_LL)); }
+    if name == "Lt" { return Option[Ints].Some(value: table(U_LT)); }
+    if name == "Lm" { return Option[Ints].Some(value: table(U_LM)); }
+    if name == "Lo" { return Option[Ints].Some(value: table(U_LO)); }
+    if name == "M" || name == "Mark" { return Option[Ints].Some(value: marks()); }
+    if name == "Mn" { return Option[Ints].Some(value: table(U_MN)); }
+    if name == "Mc" { return Option[Ints].Some(value: table(U_MC)); }
+    if name == "Me" { return Option[Ints].Some(value: table(U_ME)); }
+    if name == "N" || name == "Number" { return Option[Ints].Some(value: numbers()); }
+    if name == "Nd" { return Option[Ints].Some(value: table(U_ND)); }
+    if name == "Nl" { return Option[Ints].Some(value: table(U_NL)); }
+    if name == "No" { return Option[Ints].Some(value: table(U_NO)); }
+    if name == "Pc" { return Option[Ints].Some(value: table(U_PC)); }
+    Option[Ints].None()
+}
+
+// --- UTF-8 --------------------------------------------------------------------------------------
+
+/// The length of the scalar value at byte `i`: 1 for a byte that does not begin a valid sequence.
+fn width(text: Str, i: Int) -> Int ! {} {
+    let b = str_byte(text, i);
+    let need = if b < 192 { 1 } else { if b < 224 { 2 } else { if b < 240 { 3 } else { if b < 248 { 4 } else { 1 } } } };
+    let mut ok = i + need <= str_len(text);
+    let mut k = 1;
+    while ok && k < need {
+        let c = str_byte(text, i + k);
+        if c < 128 || c > 191 { ok = false; }
+        k = k + 1;
+    }
+    if ok { need } else { 1 }
+}
+
+/// The scalar value at byte `i`; U+FFFD for a byte that does not begin a valid sequence.
+fn scalar(text: Str, i: Int) -> Int ! {} {
+    let b = str_byte(text, i);
+    let w = width(text, i);
+    if w == 1 {
+        if b < 128 { b } else { 65533 }
+    } else {
+        let mut c = if w == 2 { b - 192 } else { if w == 3 { b - 224 } else { b - 240 } };
+        for k in 1..w {
+            c = c * 64 + str_byte(text, i + k) - 128;
+        }
+        c
+    }
+}
+
+/// The scalar value ending just before byte `i`, which is more than 0.
+fn scalar_before(text: Str, i: Int) -> Int ! {} {
+    let mut j = i - 1;
+    while j > 0 && i - j < 4 && str_byte(text, j) >= 128 && str_byte(text, j) < 192 {
+        j = j - 1;
+    }
+    if j + width(text, j) == i { scalar(text, j) } else { scalar(text, i - 1) }
+}
+
+// --- the parser ---------------------------------------------------------------------------------
+//
+// The pattern is parsed into a tree held in an arena of parallel `Ints`, one entry per node, and
+// the tree is compiled into the program.
+
+// Node kinds.
+// A set: `a` its first range in `sets`, `b` how many.
+fn n_set() -> Int ! {} { 0 }
+fn n_empty() -> Int ! {} { 1 }
+// An assertion: `a` its kind, `b` and `c` a set as for `n_set`.
+fn n_assert() -> Int ! {} { 2 }
+// A concatenation or an alternation: `a` its first child in `kids`, `b` how many.
+fn n_cat() -> Int ! {} { 3 }
+fn n_alt() -> Int ! {} { 4 }
+// A repetition: `a` its child, `b` the least, `c` the most (-1 for no bound), `d` 1 if greedy.
+fn n_rep() -> Int ! {} { 5 }
+// A capture group: `a` its child, `b` its number.
+fn n_group() -> Int ! {} { 6 }
+
+// Assertion kinds.
+fn a_text_start() -> Int ! {} { 0 }
+fn a_text_end() -> Int ! {} { 1 }
+fn a_line_start() -> Int ! {} { 2 }
+fn a_line_end() -> Int ! {} { 3 }
+fn a_word() -> Int ! {} { 4 }
+fn a_not_word() -> Int ! {} { 5 }
+fn a_ahead() -> Int ! {} { 6 }
+fn a_not_ahead() -> Int ! {} { 7 }
+
+// Flags, as bits.
+fn f_fold() -> Int ! {} { 1 }
+fn f_lines() -> Int ! {} { 2 }
+fn f_dot_all() -> Int ! {} { 4 }
+
+/// The most instructions a program may have.
+fn max_size() -> Int ! {} { 100000 }
+
+/// The parser: the pattern, the position (one cell), the first error, the tree's arena, the sets
+/// and the number of groups so far (one cell).
+struct Px {
+    pat: Str,
+    pos: Ints,
+    err: Strs,
+    kind: Ints,
+    a: Ints,
+    b: Ints,
+    c: Ints,
+    d: Ints,
+    size: Ints,
+    kids: Ints,
+    sets: Ints,
+    groups: Ints,
+}
+
+fn at(p: Px) -> Int ! {} { ints_get(p.pos, 0) }
+
+fn advance(p: Px, n: Int) -> Int ! {} {
+    ints_set(p.pos, 0, at(p) + n);
+    0
+}
+
+fn byte_at(p: Px, i: Int) -> Int ! {} {
+    if i < str_len(p.pat) { str_byte(p.pat, i) } else { 0 - 1 }
+}
+
+fn peek(p: Px) -> Int ! {} { byte_at(p, at(p)) }
+
+fn failed(p: Px) -> Bool ! {} { strs_len(p.err) > 0 }
+
+/// The first failure is kept: what was wrong, and the byte offset where.
+fn fail_at(p: Px, offset: Int, what: Str) -> Int ! {} {
+    if !failed(p) { strs_push(p.err, f"{what} at byte {offset}"); }
+    0 - 1
+}
+
+fn fail(p: Px, what: Str) -> Int ! {} { fail_at(p, at(p), what) }
+
+fn add(p: Px, kind: Int, a: Int, b: Int, c: Int, d: Int, size: Int) -> Int ! {} {
+    ints_push(p.kind, kind);
+    ints_push(p.a, a);
+    ints_push(p.b, b);
+    ints_push(p.c, c);
+    ints_push(p.d, d);
+    ints_push(p.size, size);
+    ints_len(p.kind) - 1
+}
+
+/// A node matching one scalar value of `set`.
+fn add_set(p: Px, set: Ints) -> Int ! {} {
+    let start = ints_len(p.sets) / 2;
+    for i in 0..ints_len(set) { ints_push(p.sets, ints_get(set, i)); }
+    add(p, n_set(), start, ints_len(set) / 2, 0, 0, 1)
+}
+
+fn add_assert(p: Px, kind: Int, set: Ints) -> Int ! {} {
+    let start = ints_len(p.sets) / 2;
+    for i in 0..ints_len(set) { ints_push(p.sets, ints_get(set, i)); }
+    add(p, n_assert(), kind, start, ints_len(set) / 2, 0, 1)
+}
+
+/// `set`, with both cases of each ASCII letter when the flags say so.
+fn folded(set: Ints, flags: Int) -> Ints ! {} {
+    if flags & f_fold() != 0 { set_fold(set) } else { set }
+}
+
+/// The scalar value at the position, which is past it.
+fn literal_scalar(p: Px) -> Int ! {} {
+    let c = scalar(p.pat, at(p));
+    advance(p, width(p.pat, at(p)));
+    c
+}
+
+fn hex_digit(b: Int) -> Int ! {} {
+    if b >= 48 && b <= 57 { b - 48 } else { if b >= 97 && b <= 102 { b - 87 } else {
+        if b >= 65 && b <= 70 { b - 55 } else { 0 - 1 } } }
+}
+
+/// `digits` hex digits, or with `digits` 0 `{H...}`, from the position; the scalar value they
+/// name.
+fn hex_escape(p: Px, start: Int, digits: Int) -> Int ! {} {
+    let mut v = 0;
+    if digits == 0 {
+        if peek(p) != 123 { return fail_at(p, start, "an escape needs `{` and hex digits"); }
+        advance(p, 1);
+        let mut n = 0;
+        while hex_digit(peek(p)) >= 0 && n < 8 {
+            v = v * 16 + hex_digit(peek(p));
+            advance(p, 1);
+            n = n + 1;
+        }
+        if n == 0 || peek(p) != 125 { return fail_at(p, start, "an escape needs hex digits and `}`"); }
+        advance(p, 1);
+    } else {
+        for k in 0..digits {
+            let d = hex_digit(peek(p));
+            if d < 0 { return fail_at(p, start, f"an escape needs {digits} hex digits"); }
+            v = v * 16 + d;
+            advance(p, 1);
+        }
+    }
+    if v > max_scalar() || (v >= 55296 && v <= 57343) {
+        return fail_at(p, start, "an escape that is not a Unicode scalar value");
+    }
+    v
+}
+
+/// Whether the letter after a `\` names a class.
+fn class_escape(e: Int) -> Bool ! {} {
+    e == 100 || e == 68 || e == 119 || e == 87 || e == 115 || e == 83 || e == 112 || e == 80
+}
+
+/// The class a `\d`, `\w`, `\s`, `\p{..}` or a negation of one names; the position is at its
+/// letter, `start` at its `\`, and is left past it. Folded before it is negated.
+fn escape_class(p: Px, start: Int, flags: Int) -> Ints ! {} {
+    let e = peek(p);
+    advance(p, 1);
+    let negated = e == 68 || e == 87 || e == 83 || e == 80;
+    let mut set = ints_new();
+    if e == 100 || e == 68 { set = table(U_ND); }
+    if e == 119 || e == 87 { set = word(); }
+    if e == 115 || e == 83 { set = white_space(); }
+    if e == 112 || e == 80 {
+        let mut name = "";
+        if peek(p) == 123 {
+            let from = at(p) + 1;
+            while peek(p) >= 0 && peek(p) != 125 { advance(p, 1); }
+            if peek(p) < 0 { fail_at(p, start, "an unclosed `\\p{`"); return set; }
+            name = str_slice(p.pat, from, at(p));
+            advance(p, 1);
+        } else {
+            if peek(p) < 0 { fail_at(p, start, "a `\\p` needs a class name"); return set; }
+            name = str_slice(p.pat, at(p), at(p) + width(p.pat, at(p)));
+            advance(p, width(p.pat, at(p)));
+        }
+        match category(name) {
+            Option.Some(value: s) => { set = s; },
+            Option.None() => { fail_at(p, start, f"an unknown Unicode class `{name}`"); },
+        };
+    }
+    set = folded(set, flags);
+    if negated { set_negate(set) } else { set }
+}
+
+/// The scalar value an escape that is not a class stands for; the position is at the character
+/// after the `\`, `start` at the `\`, and is left past it.
+fn escape_scalar(p: Px, start: Int) -> Int ! {} {
+    let e = peek(p);
+    if e < 0 { return fail_at(p, start, "a `\\` at the end of the pattern"); }
+    advance(p, 1);
+    if e == 110 { return 10; }
+    if e == 116 { return 9; }
+    if e == 114 { return 13; }
+    if e == 102 { return 12; }
+    if e == 118 { return 11; }
+    if e == 120 {
+        return if peek(p) == 123 { hex_escape(p, start, 0) } else { hex_escape(p, start, 2) };
+    }
+    if e == 117 {
+        return if peek(p) == 123 { hex_escape(p, start, 0) } else { hex_escape(p, start, 4) };
+    }
+    if e == 85 { return hex_escape(p, start, 8); }
+    if e >= 48 && e <= 57 { return fail_at(p, start, "backreferences are not supported"); }
+    let letter = (e >= 65 && e <= 90) || (e >= 97 && e <= 122);
+    if e < 128 && !letter { return e; }
+    let shown = str_slice(p.pat, at(p) - 1, at(p) - 1 + width(p.pat, at(p) - 1));
+    fail_at(p, start, f"an unknown escape `\\{shown}`")
+}
+
+/// One endpoint of a range in a class: a literal or an escape that is one scalar value.
+fn class_scalar(p: Px) -> Int ! {} {
+    if peek(p) == 92 {
+        let start = at(p);
+        advance(p, 1);
+        if class_escape(peek(p)) { return fail_at(p, start, "a class cannot end a range"); }
+        if peek(p) == 98 { return fail_at(p, start, "`\\b` inside a class"); }
+        escape_scalar(p, start)
+    } else {
+        literal_scalar(p)
+    }
+}
+
+/// `[...]`; the position is at its `[`.
+fn class(p: Px, flags: Int) -> Ints ! {} {
+    let start = at(p);
+    advance(p, 1);
+    let negated = peek(p) == 94;
+    if negated { advance(p, 1); }
+    let mut set = ints_new();
+    let mut first = true;
+    let mut done = false;
+    while !done && !failed(p) {
+        let b = peek(p);
+        if b < 0 {
+            fail_at(p, start, "an unclosed class");
+        } else {
+            if b == 93 && !first {
+                advance(p, 1);
+                done = true;
+            } else {
+                if b == 91 {
+                    if byte_at(p, at(p) + 1) == 58 { fail(p, "POSIX classes are not supported"); } else {
+                        fail(p, "a `[` inside a class must be escaped");
+                    }
+                }
+                if b == 38 && byte_at(p, at(p) + 1) == 38 { fail(p, "class set operations are not supported"); }
+                if b == 92 && class_escape(byte_at(p, at(p) + 1)) {
+                    let from = at(p);
+                    advance(p, 1);
+                    set = set_union(set, escape_class(p, from, flags));
+                    if peek(p) == 45 && byte_at(p, at(p) + 1) != 93 && byte_at(p, at(p) + 1) >= 0 {
+                        fail(p, "a class cannot begin a range");
+                    }
+                } else {
+                    let from = at(p);
+                    let lo = class_scalar(p);
+                    let mut hi = lo;
+                    if peek(p) == 45 && byte_at(p, at(p) + 1) != 93 && byte_at(p, at(p) + 1) >= 0 {
+                        advance(p, 1);
+                        hi = class_scalar(p);
+                        if !failed(p) && hi < lo { fail_at(p, from, "a range whose end is before its start"); }
+                    }
+                    if !failed(p) { set = set_union(set, folded(set_range(lo, hi), flags)); }
+                }
+                first = false;
+            }
+        }
+    }
+    if negated { set_negate(set) } else { set }
+}
+
+/// `.`: every scalar value, or every one but `\n`.
+fn dot(flags: Int) -> Ints ! {} {
+    if flags & f_dot_all() != 0 { set_range(0, max_scalar()) } else { set_negate(set_range(10, 10)) }
+}
+
+/// A lookahead's one character or class, after `(?=` or `(?!`.
+fn lookahead_set(p: Px, start: Int, flags: Int) -> Ints ! {} {
+    let b = peek(p);
+    let mut set = ints_new();
+    if b == 91 { set = class(p, flags); } else {
+        if b == 46 { advance(p, 1); set = dot(flags); } else {
+            if b == 92 {
+                let from = at(p);
+                advance(p, 1);
+                if class_escape(peek(p)) { set = escape_class(p, from, flags); } else {
+                    let c = escape_scalar(p, from);
+                    set = folded(set_range(c, c), flags);
+                }
+            } else {
+                if b < 0 || b == 40 || b == 41 || b == 124 || b == 42 || b == 43 || b == 63 || b == 123
+                    || b == 94 || b == 36 {
+                    fail_at(p, start, "a lookahead holds one character or class");
+                } else {
+                    let c = literal_scalar(p);
+                    set = folded(set_range(c, c), flags);
+                }
+            }
+        }
+    }
+    if !failed(p) && peek(p) != 41 { fail_at(p, start, "a lookahead holds one character or class"); }
+    advance(p, 1);
+    set
+}
+
+/// A group, after its `(`, which is at `start`; -2 for flags alone, `(?i)`, which set `cell`.
+fn group(p: Px, start: Int, cell: Ints) -> Int ! {} {
+    let flags = ints_get(cell, 0);
+    let mut capture = true;
+    let mut inner = flags;
+    if peek(p) == 63 {
+        advance(p, 1);
+        let b = peek(p);
+        if b == 61 || b == 33 {
+            advance(p, 1);
+            let set = lookahead_set(p, start, flags);
+            return if failed(p) { 0 - 1 } else { add_assert(p, if b == 61 { a_ahead() } else { a_not_ahead() }, set) };
+        }
+        if b == 60 && (byte_at(p, at(p) + 1) == 61 || byte_at(p, at(p) + 1) == 33) {
+            return fail_at(p, start, "lookbehind is not supported");
+        }
+        if b == 60 || (b == 80 && byte_at(p, at(p) + 1) == 60) {
+            advance(p, if b == 60 { 1 } else { 2 });
+            let from = at(p);
+            while peek(p) == 95 || (peek(p) >= 48 && peek(p) <= 57) || (peek(p) >= 65 && peek(p) <= 90)
+                || (peek(p) >= 97 && peek(p) <= 122) {
+                advance(p, 1);
+            }
+            if at(p) == from || peek(p) != 62 { return fail_at(p, start, "a group name is letters, digits and `_`, then `>`"); }
+            advance(p, 1);
+        } else {
+            capture = false;
+            let mut on = true;
+            let mut more = true;
+            while more {
+                let f = peek(p);
+                if f == 105 || f == 109 || f == 115 {
+                    let bit = if f == 105 { f_fold() } else { if f == 109 { f_lines() } else { f_dot_all() } };
+                    inner = if on { inner | bit } else { inner & (7 - bit) };
+                    advance(p, 1);
+                } else {
+                    if f == 45 && on {
+                        on = false;
+                        advance(p, 1);
+                    } else {
+                        more = false;
+                    }
+                }
+            }
+            if peek(p) == 41 {
+                advance(p, 1);
+                ints_set(cell, 0, inner);
+                return 0 - 2;
+            }
+            if peek(p) != 58 { return fail(p, "an unknown group flag"); }
+            advance(p, 1);
+        }
+    }
+    let index = ints_get(p.groups, 0) + 1;
+    if capture { ints_set(p.groups, 0, index); }
+    let body_cell = ints_new();
+    ints_push(body_cell, inner);
+    let body = alternation(p, body_cell);
+    if failed(p) { return 0 - 1; }
+    if peek(p) != 41 { return fail_at(p, start, "an unclosed group"); }
+    advance(p, 1);
+    if capture { add(p, n_group(), body, index, 0, 0, ints_get(p.size, body) + 2) } else { body }
+}
+
+/// One atom; -2 for one that is only flags.
+fn atom(p: Px, cell: Ints) -> Int ! {} {
+    let flags = ints_get(cell, 0);
+    let b = peek(p);
+    let start = at(p);
+    if b == 40 {
+        advance(p, 1);
+        return group(p, start, cell);
+    }
+    if b == 91 { return add_set(p, class(p, flags)); }
+    if b == 46 {
+        advance(p, 1);
+        return add_set(p, dot(flags));
+    }
+    if b == 94 {
+        advance(p, 1);
+        return add_assert(p, if flags & f_lines() != 0 { a_line_start() } else { a_text_start() }, ints_new());
+    }
+    if b == 36 {
+        advance(p, 1);
+        return add_assert(p, if flags & f_lines() != 0 { a_line_end() } else { a_text_end() }, ints_new());
+    }
+    if b == 42 || b == 43 || b == 63 || b == 123 {
+        return fail(p, "a repetition with nothing to repeat");
+    }
+    if b == 92 {
+        advance(p, 1);
+        let e = peek(p);
+        if e == 98 { advance(p, 1); return add_assert(p, a_word(), word()); }
+        if e == 66 { advance(p, 1); return add_assert(p, a_not_word(), word()); }
+        if e == 65 { advance(p, 1); return add_assert(p, a_text_start(), ints_new()); }
+        if e == 122 { advance(p, 1); return add_assert(p, a_text_end(), ints_new()); }
+        if class_escape(e) { return add_set(p, escape_class(p, start, flags)); }
+        let c = escape_scalar(p, start);
+        return if failed(p) { 0 - 1 } else { add_set(p, folded(set_range(c, c), flags)) };
+    }
+    let c = literal_scalar(p);
+    add_set(p, folded(set_range(c, c), flags))
+}
+
+/// A count in `{...}`, at most six digits; -1 where there is none.
+fn count(p: Px) -> Int ! {} {
+    let from = at(p);
+    let mut v = 0;
+    while peek(p) >= 48 && peek(p) <= 57 && at(p) - from < 6 {
+        v = v * 10 + peek(p) - 48;
+        advance(p, 1);
+    }
+    if at(p) == from { 0 - 1 } else { v }
+}
+
+/// `node` and any repetition after it.
+fn repeated(p: Px, node: Int) -> Int ! {} {
+    let b = peek(p);
+    let start = at(p);
+    let mut min = 0;
+    let mut max = 0 - 1;
+    if b == 42 { advance(p, 1); } else {
+    if b == 43 { advance(p, 1); min = 1; } else {
+    if b == 63 { advance(p, 1); max = 1; } else {
+    if b == 123 {
+        advance(p, 1);
+        min = count(p);
+        if min < 0 { return fail_at(p, start, "a counted repetition needs a count"); }
+        if peek(p) == 44 {
+            advance(p, 1);
+            max = if peek(p) == 125 { 0 - 1 } else { count(p) };
+            if peek(p) != 125 { return fail_at(p, start, "an unclosed counted repetition"); }
+        } else {
+            max = min;
+        }
+        if peek(p) != 125 { return fail_at(p, start, "an unclosed counted repetition"); }
+        advance(p, 1);
+        if max >= 0 && max < min { return fail_at(p, start, "a counted repetition whose most is below its least"); }
+    } else {
+        return node;
+    } } } }
+    let mut greedy = 1;
+    if peek(p) == 63 {
+        advance(p, 1);
+        greedy = 0;
+    }
+    let after = peek(p);
+    if after == 42 || after == 43 || after == 63 || after == 123 {
+        return fail(p, "a repetition of a repetition");
+    }
+    let s = ints_get(p.size, node);
+    let size = if max < 0 { s * min + s + 2 } else { s * max + max - min };
+    if size > max_size() { return fail_at(p, start, "a repetition too large once written out"); }
+    add(p, n_rep(), node, min, max, greedy, size)
+}
+
+/// A concatenation: atoms, each perhaps repeated, to a `|`, a `)` or the end.
+fn concatenation(p: Px, cell: Ints) -> Int ! {} {
+    let items = ints_new();
+    let mut size = 0;
+    while !failed(p) && peek(p) >= 0 && peek(p) != 124 && peek(p) != 41 {
+        let a = atom(p, cell);
+        if a >= 0 && !failed(p) {
+            let r = repeated(p, a);
+            if !failed(p) {
+                ints_push(items, r);
+                size = size + ints_get(p.size, r);
+            }
+        }
+    }
+    if size > max_size() { return fail(p, "a pattern too large once its repetitions are written out"); }
+    if ints_len(items) == 0 { return add(p, n_empty(), 0, 0, 0, 0, 0); }
+    if ints_len(items) == 1 { return ints_get(items, 0); }
+    let start = ints_len(p.kids);
+    for i in 0..ints_len(items) { ints_push(p.kids, ints_get(items, i)); }
+    add(p, n_cat(), start, ints_len(items), 0, 0, size)
+}
+
+/// An alternation: concatenations between `|`s.
+fn alternation(p: Px, cell: Ints) -> Int ! {} {
+    let branches = ints_new();
+    ints_push(branches, concatenation(p, cell));
+    while !failed(p) && peek(p) == 124 {
+        advance(p, 1);
+        ints_push(branches, concatenation(p, cell));
+    }
+    if failed(p) { return 0 - 1; }
+    if ints_len(branches) == 1 { return ints_get(branches, 0); }
+    let start = ints_len(p.kids);
+    let mut size = 0;
+    for i in 0..ints_len(branches) {
+        ints_push(p.kids, ints_get(branches, i));
+        size = size + ints_get(p.size, ints_get(branches, i)) + 2;
+    }
+    if size > max_size() { return fail(p, "a pattern too large once its repetitions are written out"); }
+    add(p, n_alt(), start, ints_len(branches), 0, 0, size)
+}
+
+// --- the program --------------------------------------------------------------------------------
+//
+// Four `Int`s an instruction: its operation and three operands.
+
+// Match one scalar value of the set `x`, `y` ranges.
+fn op_set() -> Int ! {} { 0 }
+// Continue at `x`, and, less preferred, at `y`.
+fn op_split() -> Int ! {} { 1 }
+// Continue at `x`.
+fn op_jump() -> Int ! {} { 2 }
+// Record the position in slot `x`.
+fn op_save() -> Int ! {} { 3 }
+// Continue if assertion `x` holds, `y` and `z` its set.
+fn op_assert() -> Int ! {} { 4 }
+fn op_match() -> Int ! {} { 5 }
+
+fn emit(prog: Ints, op: Int, x: Int, y: Int, z: Int) -> Int ! {} {
+    ints_push(prog, op);
+    ints_push(prog, x);
+    ints_push(prog, y);
+    ints_push(prog, z);
+    ints_len(prog) / 4 - 1
+}
+
+fn pc(prog: Ints) -> Int ! {} { ints_len(prog) / 4 }
+
+/// The split at `at`, its preferred branch the next instruction or, lazy, `out`.
+fn patch_split(prog: Ints, at: Int, out: Int, greedy: Bool) -> Int ! {} {
+    ints_set(prog, 4 * at + 1, if greedy { at + 1 } else { out });
+    ints_set(prog, 4 * at + 2, if greedy { out } else { at + 1 });
+    0
+}
+
+fn compile(p: Px, prog: Ints, n: Int) -> Int ! {} {
+    let kind = ints_get(p.kind, n);
+    let a = ints_get(p.a, n);
+    let b = ints_get(p.b, n);
+    if kind == n_set() { emit(prog, op_set(), a, b, 0); }
+    if kind == n_assert() { emit(prog, op_assert(), a, b, ints_get(p.c, n)); }
+    if kind == n_cat() {
+        for i in 0..b { compile(p, prog, ints_get(p.kids, a + i)); }
+    }
+    if kind == n_alt() {
+        let jumps = ints_new();
+        for i in 0..b {
+            if i < b - 1 {
+                let s = emit(prog, op_split(), 0, 0, 0);
+                compile(p, prog, ints_get(p.kids, a + i));
+                ints_push(jumps, emit(prog, op_jump(), 0, 0, 0));
+                patch_split(prog, s, pc(prog), true);
+            } else {
+                compile(p, prog, ints_get(p.kids, a + i));
+            }
+        }
+        for j in 0..ints_len(jumps) { ints_set(prog, 4 * ints_get(jumps, j) + 1, pc(prog)); }
+    }
+    if kind == n_group() {
+        emit(prog, op_save(), 2 * b, 0, 0);
+        compile(p, prog, a);
+        emit(prog, op_save(), 2 * b + 1, 0, 0);
+    }
+    if kind == n_rep() {
+        let max = ints_get(p.c, n);
+        let greedy = ints_get(p.d, n) == 1;
+        for i in 0..b { compile(p, prog, a); }
+        if max < 0 {
+            let s = emit(prog, op_split(), 0, 0, 0);
+            compile(p, prog, a);
+            emit(prog, op_jump(), s, 0, 0);
+            patch_split(prog, s, pc(prog), greedy);
+        } else {
+            let splits = ints_new();
+            for i in b..max {
+                ints_push(splits, emit(prog, op_split(), 0, 0, 0));
+                compile(p, prog, a);
+            }
+            for i in 0..ints_len(splits) { patch_split(prog, ints_get(splits, i), pc(prog), greedy); }
+        }
+    }
+    0
+}
+
+/// `pattern` compiled, or an `Err` naming what was wrong and the byte offset where.
+pub fn regex_compile(pattern: Str) -> Result[Regex, Str] ! {} {
+    let p = Px(pat: pattern, pos: ints_new(), err: strs_new(), kind: ints_new(), a: ints_new(), b: ints_new(),
+        c: ints_new(), d: ints_new(), size: ints_new(), kids: ints_new(), sets: ints_new(), groups: ints_new());
+    ints_push(p.pos, 0);
+    ints_push(p.groups, 0);
+    let cell = ints_new();
+    ints_push(cell, 0);
+    let root = alternation(p, cell);
+    if !failed(p) && peek(p) == 41 { fail(p, "an unmatched `)`"); }
+    if failed(p) {
+        Result[Regex, Str].Err(error: strs_get(p.err, 0))
+    } else {
+        let prog = ints_new();
+        emit(prog, op_save(), 0, 0, 0);
+        compile(p, prog, root);
+        emit(prog, op_save(), 1, 0, 0);
+        emit(prog, op_match(), 0, 0, 0);
+        Result[Regex, Str].Ok(value: Regex(pattern: pattern, prog: prog, sets: p.sets, groups: ints_get(p.groups, 0)))
+    }
+}
+
+/// How many capture groups `r` has, not counting the whole match.
+pub fn regex_groups(r: Regex) -> Int ! {} {
+    r.groups
+}
+
+// --- the Pike VM --------------------------------------------------------------------------------
+
+/// A search's state: the stamp each instruction was last reached under, the work stack, and the
+/// capture slots of the thread being followed.
+struct Vm {
+    re: Regex,
+    text: Str,
+    slots: Int,
+    mark: Ints,
+    stack: Ints,
+    scratch: Ints,
+}
+
+fn holds(vm: Vm, kind: Int, start: Int, count: Int, pos: Int) -> Bool ! {} {
+    let n = str_len(vm.text);
+    if kind == a_text_start() { return pos == 0; }
+    if kind == a_text_end() { return pos == n; }
+    if kind == a_line_start() { return pos == 0 || str_byte(vm.text, pos - 1) == 10; }
+    if kind == a_line_end() { return pos == n || str_byte(vm.text, pos) == 10; }
+    if kind == a_word() || kind == a_not_word() {
+        let before = pos > 0 && in_set(vm.re.sets, start, count, scalar_before(vm.text, pos));
+        let after = pos < n && in_set(vm.re.sets, start, count, scalar(vm.text, pos));
+        return (before != after) == (kind == a_word());
+    }
+    let next = pos < n && in_set(vm.re.sets, start, count, scalar(vm.text, pos));
+    if kind == a_ahead() { next } else { !next }
+}
+
+fn push3(s: Ints, k: Int, a: Int, b: Int) -> Int ! {} {
+    ints_push(s, k);
+    ints_push(s, a);
+    ints_push(s, b);
+    0
+}
+
+/// A thread at `pc0`, at byte `pos`, with the scratch slots, followed through every jump, split,
+/// save and assertion — preferred branches first — to the sets and the match it reaches, which
+/// join the list in that order. An instruction already reached under `stamp` is not followed
+/// again: a higher-priority thread holds it.
+fn follow(vm: Vm, list: Ints, caps: Ints, pc0: Int, pos: Int, stamp: Int) -> Int ! {} {
+    let prog = vm.re.prog;
+    push3(vm.stack, 0, pc0, 0);
+    while ints_len(vm.stack) > 0 {
+        let v = ints_pop(vm.stack);
+        let at = ints_pop(vm.stack);
+        let k = ints_pop(vm.stack);
+        if k == 1 {
+            ints_set(vm.scratch, at, v);
+        } else {
+            if ints_get(vm.mark, at) != stamp {
+                ints_set(vm.mark, at, stamp);
+                let op = ints_get(prog, 4 * at);
+                let x = ints_get(prog, 4 * at + 1);
+                if op == op_jump() { push3(vm.stack, 0, x, 0); } else {
+                if op == op_split() {
+                    push3(vm.stack, 0, ints_get(prog, 4 * at + 2), 0);
+                    push3(vm.stack, 0, x, 0);
+                } else {
+                if op == op_save() {
+                    push3(vm.stack, 1, x, ints_get(vm.scratch, x));
+                    ints_set(vm.scratch, x, pos);
+                    push3(vm.stack, 0, at + 1, 0);
+                } else {
+                if op == op_assert() {
+                    if holds(vm, x, ints_get(prog, 4 * at + 2), ints_get(prog, 4 * at + 3), pos) {
+                        push3(vm.stack, 0, at + 1, 0);
+                    }
+                } else {
+                    ints_push(list, at);
+                    for s in 0..vm.slots { ints_push(caps, ints_get(vm.scratch, s)); }
+                } } } }
+            }
+        }
+    }
+    0
+}
+
+fn clear(xs: Ints) -> Int ! {} {
+    while ints_len(xs) > 0 { ints_pop(xs); }
+    0
+}
+
+/// The capture slots of the leftmost-first match at or after `from`, or none; with `quick`, of
+/// the first match found, whichever it is.
+fn run(r: Regex, text: Str, from: Int, quick: Bool) -> Ints ! {} {
+    let best = ints_new();
+    let n = str_len(text);
+    if from < 0 || from > n { return best; }
+    let slots = 2 * (r.groups + 1);
+    let vm = Vm(re: r, text: text, slots: slots, mark: ints_new(), stack: ints_new(), scratch: ints_new());
+    for i in 0..ints_len(r.prog) / 4 { ints_push(vm.mark, 0); }
+    for i in 0..slots { ints_push(vm.scratch, 0 - 1); }
+    let mut list = ints_new();
+    let mut caps = ints_new();
+    let mut next = ints_new();
+    let mut next_caps = ints_new();
+    let mut matched = false;
+    let mut stamp = 1;
+    let mut pos = from;
+    let mut done = false;
+    while !done {
+        if !matched {
+            // A new thread, starting here, less preferred than every one already running.
+            for s in 0..slots { ints_set(vm.scratch, s, 0 - 1); }
+            follow(vm, list, caps, 0, pos, stamp);
+        }
+        if matched && ints_len(list) == 0 {
+            done = true;
+        } else {
+            let c = if pos < n { scalar(text, pos) } else { 0 - 1 };
+            let w = if pos < n { width(text, pos) } else { 0 };
+            stamp = stamp + 1;
+            let mut i = 0;
+            let mut cut = false;
+            while i < ints_len(list) && !cut {
+                let at = ints_get(list, i);
+                if ints_get(r.prog, 4 * at) == op_match() {
+                    // Every thread after this one is less preferred than this match.
+                    matched = true;
+                    clear(best);
+                    for s in 0..slots { ints_push(best, ints_get(caps, i * slots + s)); }
+                    cut = true;
+                    if quick { done = true; }
+                } else {
+                    if c >= 0 && in_set(r.sets, ints_get(r.prog, 4 * at + 1), ints_get(r.prog, 4 * at + 2), c) {
+                        for s in 0..slots { ints_set(vm.scratch, s, ints_get(caps, i * slots + s)); }
+                        follow(vm, next, next_caps, at + 1, pos + w, stamp);
+                    }
+                }
+                i = i + 1;
+            }
+            clear(list);
+            clear(caps);
+            let t = list;
+            list = next;
+            next = t;
+            let tc = caps;
+            caps = next_caps;
+            next_caps = tc;
+            if pos >= n { done = true; } else { pos = pos + w; }
+        }
+    }
+    best
+}
+
+/// Whether `r` matches anywhere in `text`.
+pub fn regex_is_match(r: Regex, text: Str) -> Bool ! {} {
+    ints_len(run(r, text, 0, true)) > 0
+}
+
+/// The leftmost-first match of `r` in `text` starting at or after byte `from`; `None` where there
+/// is none, or `from` is outside `0..=str_len(text)`.
+pub fn regex_find(r: Regex, text: Str, from: Int) -> Option[Match] ! {} {
+    let best = run(r, text, from, false);
+    if ints_len(best) == 0 { Option[Match].None() } else {
+        Option[Match].Some(value: Match(start: ints_get(best, 0), end: ints_get(best, 1)))
+    }
+}
+
+/// Every match of `r` in `text`, left to right, none overlapping. After a match the search goes on
+/// from its end — one scalar value later after an empty match — and an empty match right where the
+/// one before it ended is skipped, as in Rust's `regex`.
+pub fn regex_find_all(r: Regex, text: Str) -> Vec[Match] ! {} {
+    let out = vec_new[Match]();
+    let n = str_len(text);
+    let mut pos = 0;
+    let mut last = 0 - 1;
+    let mut more = true;
+    while more {
+        match regex_find(r, text, pos) {
+            Option.Some(value: m) => {
+                let empty = m.start == m.end;
+                if !(empty && m.end == last) {
+                    vec_push(out, m);
+                    last = m.end;
+                }
+                if empty {
+                    if m.end >= n { more = false; } else { pos = m.end + width(text, m.end); }
+                } else {
+                    pos = m.end;
+                }
+            },
+            Option.None() => { more = false; },
+        };
+    }
+    out
+}
+
+/// The leftmost-first match at or after `from`, as `regex_find` finds it, with its capture groups:
+/// item 0 the whole match, item `k` group `k` — `None` for a group that took no part. `None` where
+/// there is no match.
+pub fn regex_captures(r: Regex, text: Str, from: Int) -> Option[Vec[Option[Match]]] ! {} {
+    let best = run(r, text, from, false);
+    if ints_len(best) == 0 { return Option[Vec[Option[Match]]].None(); }
+    let out = vec_new[Option[Match]]();
+    for k in 0..r.groups + 1 {
+        let s = ints_get(best, 2 * k);
+        let e = ints_get(best, 2 * k + 1);
+        if s < 0 || e < 0 {
+            vec_push(out, Option[Match].None());
+        } else {
+            vec_push(out, Option[Match].Some(value: Match(start: s, end: e)));
+        }
+    }
+    Option[Vec[Option[Match]]].Some(value: out)
+}
+
+// --- Unicode 16.0 general categories, as `table` reads them --------------------------------------
+
+// General_Category=Lu: 651 ranges.
+const U_LU: Str = "c1Pd5M16b101010101010101010101010101010101010101010101010101010102010101010101010201010101010101010101010101010101010101010101011101031101112231112311110101110201112101130702020201010101010101020101010101010101020201210101010101010101010101010101010101010101010101010101010107111201310101010j10103080601210111G18b30223010101010101010101010105020112bIbG010101010101010101010101010101010901010101010101010101010101010101010101010101010101010111010101010102010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010102b5c!9b51050wIcLceJ06bA22k001010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010901010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010109785A78785B010101087c83C3C3C4B3i6040322220346010101323A150bT0ctSbFbG0122010101310208210101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010801040&kD010101010101010101010101010101010101010101010J010101010101010101010101010e7010101010101030101010101010101010101010101010101010101010101010101010101010A010111010101040102010301010101010101010101414101010101010101310113050101010O0vzBPbg5b7e8b3eSA1E1611bxAbIeTLczQVvm0Vzn0PQPQPQ01120212317QPQ1132716R113141036RPQPQPQPQPQPUOb1Ob1Ob1Ob1Ob10ejLb1";
+// General_Category=Ll: 662 ranges.
+const U_LL: Str = "d1PbQ0b9N1710101010101010101010101010101010101010101010101010101011101010101010101110101010101010101010101010101010101010101010102010122010203140203220201010201110203010212260202010101010101010111010101010101010112010301010101010101010101010101010101010101010101010101010101016202110401010101c41Qg10103032I0Rb21132101010101010101010101014102021bJbF101010101010101010101010101010101090101010101010101010101010101010101010101010101010101020101010101011101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010bGb8c!7bA22xO5ce2810dLbBbVC1b1d6010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010181010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101885A78785A7878D2787878411603211832187A211iI03130R04040218340bL0cvBbF10311010104011155010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101011701040Cb51050&iJ010101010101010101010101010101010101010101010J010101010101010101010101010e701010101010121010101010101010101010101010101010101010101010101010101010101017101020101010104010201210101010101010101010505010101010101010401020301010101010Q030zLbA587cFt!06C4bb9PbgDb7e8b3eRA1E1611by3bIdTLczQVvm0VzmQPQ61HQPQ310161AQPQPQPQPQPQPQPQPQRSO15QO15QO15QO15QO1510bzK91J65cpNb1";
+// General_Category=Lt: 10 ranges.
+const U_LT: Str = "o502020b60hmL78787C0F0bF0";
+// General_Category=Lm: 75 ranges.
+const U_LM: Str = "vGH4BE47010e5050oU0h60f41iD140V09030f00f70bgK0dV0rL0bwQ0dB0t30oG5fEbUD0b2b4vH0D0GCc&V1hH0fV0oL0bB450d11cT2#yM0bh25iE0dI0S1dP8cG0N0d9231oL0M0e90dC0L1d7390va60bD1b*051b918bmJ0b00xoG3pS2b81r6Cc0110qaC31611mbHbTg96%D0bcV0";
+// General_Category=Lo: 528 ranges.
+const U_LO: Str = "fA0F0i0043gG0zRQ43bDV19b311d210O1A220G01TTcOB0Ob0LLbAO7A5N15Hb8bRbL30I079GE47212L16103330G0D112E1A085412L16111111V310J2G8121L16111430I0F1N0B7212L16111430U112F0H015321331101131323BM0bK7121M1F30Q22021U047121M191430V111F1H8121b820G05282O55H3N181026bQbF11C5bR110141N1019119024N3b00bV71b3R4dJbAK0G5433031724CC0dHk8132610132b8132b0132610132E1bO132c2b5FdHtB2G1P5cA677HDIEHEC12FbJb80c3b21bK742b1105c5AUbHT24BbB4PbMM9bKfGbEH7bMTD1AbBQb3b92ATdH3151130bbQ3c*NbNOM9616161616161616r70bL04cL801cP405bA1cTHVbGFq0gnVc0uqK1bdMc3b78iB4FA1c20bHc5f90d703612131MTbJEbHbU53011BRAMPS7bEbD428A41b8N217KF15303bH1031242010O13A70E525259616eHb2Tk%3CM4bGii4lD2d9c30191C141011111dBb1lAIbV2bLb8BdK41e6d991bC2U35252522b3B1P1I111E2Db2dQm5S3bGbFVDJ176b5AT2b347e0cDd2b78bJcSbJCjM9LA7eO5201bB11302MAM9Uc1I11ALAPc6bN61c00F3121SbAS3Sb371RRbLALAIDHdEc8fNb3b6310jGb961G2bRSA08LbAHbEKRMCbKbP120DbCb0OQb3T0208b230CbFE3L010b3H1OJ1bV610131E197bEb67212L16111430I0C4U910201b510P010bCbKI3K2UbFK110fObEb93b4bFK0bRbAD0c7Qb56fPbBgJ72027111NF010cU72b6G010S0Ab770L0BbDJ0Ic8g7b0V81b4H0bHTdG6111b5L0P5111VE0k7IF01C1b1dS0cF$Ph6g3csCd0FbbFH5Pd$Q5s6gvPTbx2rO7UHcEHTIbFbJK5InJb7mLcA50fFf*N8bgLb99ixNj2F0T220E38mBci4dA5C3879itG0pLbCb10k1TIbBp4Qh5T20pF613111E1g4bjR31Q1110201913101060401010121110201010101011102316131310191G52141Gek4bjwVb0ebP6gT2fu1EhjGFtDcn2qTbp2e!A5ecV";
+// General_Category=Mn: 357 ranges.
+const U_MN: Str = "y0dFiJ4i9bC10111110c8AbGKG0d56252113b30UQcRAbQ890O3181214bB2bR8bAN1VbN010474036A1T0bQ04380K1Q021bP041412230U130B1bP0441140K1M510bQ020138071B1U0bT0C0bI030bN012521371B1T0bQ0206051K1S1bP14380K1T0c807210cQ026C7d2028B6c91R01010bND14115A1b390d63151121P142G3D02160F0vV2%I2T1U1U1c0116802A90bD210dL1b20dM2419062gR120bQ0161010276920bGD1FbH3bG0141050b88C1b032112bO0113012bQ721eO21C16406031g6bVwGC403Bc*U2eD0d0VrA3dB1%oK049b01cG1iG03040P150eN1QHD0b67PAbE2bG02321b70c352121C080bF0bJ012215110bA180hE02040tzG0x1FGF&D0h20eL4bu621153b8240f51rT3c14jT1cF3c6AbH3dR0bMEb9021A2bH32170bT2b4417bU0C1bK8A320cV220116020eT037L1bP130b5634c65D01010E1cL72210N0cK5104111hE36111R1cL72011dA0102510d50102314i3811i011040eG32140b09b8523809522bEC11mM61510cIL261111dQ530111610c813010kR1B1bK45010N0fh506Elg8B32co04bR6baO0bV3cH0tfO1et1bD2Mr02H726U3eK2b%RbM4bH80E0M41EbkG61G261114d40f06lN0bT3pS3hU1x06dD6yf%LhF";
+// General_Category=Mc: 190 ranges.
+const U_MC: Str = "ci30bN0228311bI1bQ26121A0bB0bQ2c20bQ28011bL1bQ0106121A0d61113212A0b92bT3bT1bQ014211191S0E1bQ25212A0bA1cB267I1kA1bV0fB1406021P1A226L12520A2btO0U0e107711kQ3224115h01bQ010901185eH0bG0501411bT0U04120bS0221031bG781fB0L0ezM1%*J120cO1bIFeE1bF0bG14122dE121O0bD010dD02150hD1111110zaJ010dV0bD241dJ0O1bR0bG291D0cT23110fA2V1bQ113212290A1cK27020131110d528130dA2601320hD26320dH28110dD01160d701140i5290hN511402010eE28340cK0T1bU0mN0E0dA07020gL44110kU1C0bG18110qp82dr4bMd81ylJ165";
+// General_Category=Me: 5 ranges.
+const U_ME: Str = "be81frK0bqU312bbmB2";
+// General_Category=Nd: 71 ranges.
+const U_ND: Str = "bG9br69e69g69mS9dM9dM9dM9dM9dM9dM9dM9dM9dM9d09dM9c69iM9c69b!69b69jC9e09f6969fM9cM9e6969bco69v69b69g69M9cM9mM9uyM9bm69ce6969yS9e09bS9eG9iM9kM9dM9lM9d696JcC9n69d69uM9cM9hM9c69n69qoM9cj69cM9e69qM9x#M9cwKbHck09n69pM9hN9!L9euM9";
+// General_Category=Nl: 12 ranges.
+const U_NL: Str = "fxE2ctFb223dtU0P8E2%vB9wsGbKoC080e64ibAdE";
+// General_Category=No: 72 ranges.
+const U_NO: Str = "fI15022cjL5lO5dO2e56gP6H8nH9bbLJbdJ9p00buL03569g6Fb90wMbRcELtMTbl90beK3eA9U71Eb09b7E%lG5wgHbCc13H1kLQb43bjK7P6b78cB4M5f012F2bDc08bK1U2cB4d87O7b96kA5l0UeU9bA3dG6e6JlRJbk51nE8#7I!JKs$66yUMzb9JCJdCOfkE8%1bQ1213cCbC1E&2C";
+// General_Category=Pc: 6 ranges.
+const U_PC: Str = "cV0h&V1J0bxoU1O2hF0";
