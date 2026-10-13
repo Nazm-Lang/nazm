@@ -315,7 +315,7 @@ fn a_device_register_of_any_width_is_a_board_s_and_needs_an_mmio_cap() {
 /// Builds `nazm` from a copy of this tree inside the `nazm-qemu:n86` image, then builds, links
 /// and boots programs on both boards at `-O0` and `-O2` (`docs/performance.md`, N86). Needs Docker
 /// and the image: `docker build -t nazm-qemu:n86 -f docker/qemu.Dockerfile docker`, then
-/// `cargo test -p nazm-cli --test boards -- --ignored`.
+/// `cargo test -p nazm-cli --test cli_a_b -- --ignored boards::`.
 #[test]
 #[ignore = "starts a container"]
 fn both_boards_boot_and_agree_under_qemu() {

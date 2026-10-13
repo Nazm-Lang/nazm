@@ -13,8 +13,7 @@
     clippy::indexing_slicing
 )]
 
-mod common;
-mod differential;
+use crate::differential;
 
 use differential::{agrees, agrees_on, check_codes, codes, nazm};
 

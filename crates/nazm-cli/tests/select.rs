@@ -14,8 +14,8 @@
     clippy::indexing_slicing
 )]
 
-mod common;
-mod differential;
+use crate::common;
+use crate::differential;
 
 use common::{run_bounded, Ran};
 use differential::{codes, memory_line, nazm, NAZM};

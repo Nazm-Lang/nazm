@@ -265,7 +265,7 @@ fn auto_runs_where_it_can_and_says_where() {
     }
 }
 
-/// Needs macOS's OpenCL and a GPU: `cargo test -p nazm-cli --test accel_providers -- --ignored`.
+/// Needs macOS's OpenCL and a GPU: `cargo test -p nazm-cli --test cli_a_b -- --ignored accel_providers::`.
 #[test]
 #[ignore = "runs on the GPU"]
 fn on_the_gpu_the_cpu_provider_is_the_second_oracle_and_float64_falls_back() {
