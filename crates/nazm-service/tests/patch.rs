@@ -415,8 +415,9 @@ fn a_rename_that_n18_refuses_is_no_patch() {
 // ---------------------------------------------------------------------------------------
 
 const IMMUTABLE: &str = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n";
-const LOOP: &str =
-    "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 {\n        i = i + 1;\n        i\n    }\n    i\n}\n";
+// A contract narrower than its body (N0366): widening it needs review. (Until R1 this was a loop
+// body's value, which a line's end now discards.)
+const LOOP: &str = "fn f(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\nfn main(out: OutCap) -> Int ! {io} { f(out) }\n";
 
 #[test]
 fn an_automatic_fix_is_the_compilers_edit_with_its_applicability_and_precondition() {
@@ -453,13 +454,16 @@ fn a_needs_review_fix_stays_needs_review_with_its_precondition() {
     let p = Project::new(&[("main.nz", LOOP)]);
     let before = codes(&p.root());
     assert_eq!(before.len(), 1, "{before:?}");
-    let offset = at(LOOP, "i\n    }", 0);
+    let offset = at(LOOP, "print", 0);
     let patch = fix(&p, "main.nz", offset, 0);
     assert_eq!(patch["status"], "available", "{patch}");
     let op = &patch["operation"];
     assert_eq!(op["applicability"], "needs_review");
     let precondition = op["precondition"].as_str().unwrap();
-    assert!(precondition.contains("discarded"), "{precondition}");
+    assert!(
+        precondition.contains("Widening a contract"),
+        "{precondition}"
+    );
     assert_ne!(op["applicability"], "automatic");
     apply_to(&p, &patch);
     assert_eq!(codes(&p.root()), Vec::<String>::new());

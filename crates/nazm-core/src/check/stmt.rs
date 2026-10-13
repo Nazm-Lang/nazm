@@ -12,6 +12,7 @@ impl Checker<'_> {
     }
 
     fn check_block_inner(&mut self, b: &Block, expected: Option<Type>) -> Completion {
+        let discard = std::mem::take(&mut self.discard_tail);
         let mut diverged_at: Option<nazm_span::Span> = None;
 
         for stmt in &b.statements {
@@ -45,7 +46,10 @@ impl Checker<'_> {
         }
 
         match &b.tail {
-            Some(tail) => self.check_expr(tail, expected),
+            Some(tail) => {
+                self.unwanted_if = discard && matches!(**tail, Expr::If { .. });
+                self.check_expr(tail, expected)
+            }
             None => Completion::Unit,
         }
     }
@@ -153,7 +157,11 @@ impl Checker<'_> {
                 self.check_spawn(s);
                 false
             }
-            Stmt::Expr(e) => self.check_expr(e, None).diverges(),
+            Stmt::Expr(e) => {
+                // An `if` as a statement: nobody wants its value (R1, 5b.19).
+                self.unwanted_if = matches!(e, Expr::If { .. });
+                self.check_expr(e, None).diverges()
+            }
         }
     }
 
@@ -485,32 +493,12 @@ impl Checker<'_> {
             );
         }
         self.loop_depth += 1;
-        let body = self.check_block(&w.body, None);
+        // A loop body is run for its effect, and a value its last line produces is discarded
+        // (R1, 5b.19), as `;` would: where a line break ends statements, `print(x)` before the
+        // `}` is the ordinary last line of a body. Until R1 it was refused as a missing `;`.
+        self.discard_tail = true;
+        let _ = self.check_block(&w.body, None);
         self.loop_depth -= 1;
-
-        // A loop body is run for its effect. A tail value there is silently discarded,
-        // which is almost always a missing `;` or a missing assignment.
-        if let (Completion::Value(t), Some(tail)) = (body, &w.body.tail) {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::TYPE_MISMATCH,
-                    tail.span(),
-                    format!(
-                        "a loop body has no value, but this produces `{}`",
-                        self.show(t)
-                    ),
-                )
-                .help("add `;` to discard it, or assign it to something")
-                .fix_with_review(
-                    nazm_span::Span::new(tail.span().file, tail.span().end, tail.span().end),
-                    ";",
-                    "discard the value",
-                    "the value was meant to be discarded rather than used — assigning \
-                     it to something is the other repair, and this cannot tell which \
-                     was meant",
-                ),
-            );
-        }
     }
 
     /// A `for` loop (R1a, `docs/spec.md`, *`for` loops*): what it iterates, then its body with
@@ -577,22 +565,11 @@ impl Checker<'_> {
             slot,
             f.body.span.start,
         );
-        let body = self.check_block_inner(&f.body, None);
+        // Its last line's value is discarded, as a `while` body's is (R1, 5b.19).
+        self.discard_tail = true;
+        let _ = self.check_block_inner(&f.body, None);
         self.close_scope();
         self.loop_depth -= 1;
-        if let (Completion::Value(t), Some(tail)) = (body, &f.body.tail) {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::TYPE_MISMATCH,
-                    tail.span(),
-                    format!(
-                        "a loop body has no value, but this produces `{}`",
-                        self.show(t)
-                    ),
-                )
-                .help("add `;` to discard it, or assign it to something"),
-            );
-        }
     }
 
     /// `what` at `at` would leave the `defer` body being checked, if there is one (R1b, L12):

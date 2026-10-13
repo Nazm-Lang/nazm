@@ -295,12 +295,9 @@ fn what_a_for_loop_refuses_and_by_which_code() {
             "fn main() -> Int { let xs = ints_new(); for x in xs { } x }",
             "N0200",
         ),
-        // A range's bounds are `Int`s; a loop body has no value.
+        // A range's bounds are `Int`s. (A loop body's last value was refused here until R1,
+        // 5b.19, which discards it.)
         ("fn main() -> Int { for i in 0..\"a\" { } 0 }", "N0300"),
-        (
-            "fn main() -> Int { let xs = ints_new(); for x in xs { x } 0 }",
-            "N0300",
-        ),
         // `a..b` is written only in a `for` loop.
         ("fn main() -> Int { let r = 0..3; 0 }", "N0100"),
         // `break` outside a loop, after one.

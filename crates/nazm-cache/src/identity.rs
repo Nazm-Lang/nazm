@@ -330,7 +330,11 @@ use crate::digest::{self, Framed};
 /// attribute before a field or a variant at all, moved from refused to accepted.
 /// `70` — R1c, 2026-10-13. `@derive(toml)` moved from refused (`N0619`) to accepted, and an
 /// `Option` inside another type under it to refused.
-pub const SEMANTIC_EPOCH: u32 = 70;
+/// `71` — R1, 2026-10-13. `else if`, and a line break or a block's `}` for a statement's `;`,
+/// moved from refused to accepted; a value a loop body's last line produces, and an `if` as a
+/// statement whose branches end differently, moved from refused (`N0300`, `N0302`) to accepted;
+/// a member's name on the line after its `.` moved to refused.
+pub const SEMANTIC_EPOCH: u32 = 71;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

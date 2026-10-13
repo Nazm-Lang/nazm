@@ -168,7 +168,7 @@ fn a_hole_leaves_every_other_mistake_a_mistake_inner() {
     assert!(probe.functions[0].body.is_none());
     // A `;` missing from a later statement is not the hole's to forgive.
     let text = format!(
-        "{DEFS}fn f(p: Point) -> Int {{\n    let n = p.\n    let z = 1\n    let w = 2;\n    w\n}}\n"
+        "{DEFS}fn f(p: Point) -> Int {{\n    let n = p.\n    let z = 1 let w = 2;\n    w\n}}\n"
     );
     let (probe, _, errors) = parse_both_at(FileId::ROOT, &text, Some(at_end_of(&text, "p.")));
     assert_eq!(errors.len(), 1, "{errors:?}");

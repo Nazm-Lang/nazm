@@ -8326,10 +8326,11 @@ Repointed by R1b a seventh time, which moved it to 66 for L15: an entry kept bef
 Repointed by R1b an eighth time, which moved it to 67 for L13b: an entry that refused `Int128` must not be reused.
 Repointed by R1c, which moved it to 68 for `@derive(json)`: an entry that refused `@derive` must not be reused.
 Repointed by R1c again, which moved it to 69 for `@codec`: an entry that refused an attribute before a field must not be reused.
-Repointed by R1c a third time, which moved it to 70 for `@derive(toml)`: an entry that refused it must not be reused."""
+Repointed by R1c a third time, which moved it to 70 for `@derive(toml)`: an entry that refused it must not be reused.
+Repointed by R1 (5b.11, 5b.19), which moved it to 71 for `else if` and lines without `;`: an entry that refused them must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 70;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 69;"
+find = "pub const SEMANTIC_EPOCH: u32 = 71;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 70;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -18161,3 +18162,73 @@ file = "crates/nazm-lir/src/backend.rs"
 find = '''            nazm_runtime::inline_reference_counting(&ir)'''
 replace = '''            ir'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::a_hosted_unit_inlines_the_runtime_s_reference_counting" }]
+
+# --- R1 5b.11 and 5b.19: `else if`, a line break for `;`, a value nobody wants --------------
+
+[[mutation]]
+name = "r1-else-if-is-still-refused"
+why = "`else` is followed only by a block, so `else if` is a syntax error again"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        if !self.at(&TokenKind::If) {
+            return self.block();'''
+replace = '''        if true {
+            return self.block();'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::else_if_chains_mean_nested_ifs_everywhere" }]
+
+[[mutation]]
+name = "r1-a-line-break-ends-no-statement"
+why = "a line break no longer stands for a statement's `;`, so only `;` and `}` end one"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''            && (self.line_break_before() || self.at(&TokenKind::RBrace))'''
+replace = '''            && self.at(&TokenKind::RBrace)'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_program_without_semicolons_runs_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-closing-brace-ends-no-statement"
+why = "a statement before its block's `}` on the same line needs its `;` again, so `{ break }` is refused"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''            && (self.line_break_before() || self.at(&TokenKind::RBrace))'''
+replace = '''            && self.line_break_before()'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_program_without_semicolons_runs_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-an-expression-line-runs-into-the-next"
+why = "an expression statement's line break is not its end, so the next line is refused as more after it"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        } else if block_like || self.hole_open || self.line_break_before() {'''
+replace = '''        } else if block_like || self.hole_open {'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_program_without_semicolons_runs_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-member-name-is-taken-from-the-next-line"
+why = "a line ending in `.` takes its member's name from the next line, so an unfinished line is joined to the one after"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''            if self.line_break_before() {
+                let found = self.peek().describe();'''
+replace = '''            if false {
+                let found = self.peek().describe();'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::what_a_line_break_does_not_end_is_still_refused" }]
+
+[[mutation]]
+name = "r1-the-formatter-continues-every-line"
+why = "the formatter reads every line break inside a statement as its continuation, indenting each line of a program without semicolons"
+file = "crates/nazm-syntax/src/format.rs"
+find = '''            self.continuing = !self.line_ends_a_statement(kind);'''
+replace = '''            self.continuing = true;'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::the_formatter_lays_out_a_program_without_semicolons_and_keeps_it" }]
+
+[[mutation]]
+name = "r1-an-if-statement-s-branches-must-agree"
+why = "an `if` as a statement must have branches of one type again, so `if a { print(x) } else { name(y) }` is refused"
+file = "crates/nazm-core/src/check/expr.rs"
+find = '''                    (Completion::Value(a), Completion::Value(b)) if unwanted && a != b => {'''
+replace = '''                    (Completion::Value(a), Completion::Value(b)) if false && a != b => {'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_value_nobody_wants_is_discarded_and_reclaimed_everywhere" }]
+
+[[mutation]]
+name = "r1-no-statement-if-is-unwanted"
+why = "an `if` as a statement is checked as if its value were wanted"
+file = "crates/nazm-core/src/check/stmt.rs"
+find = '''                self.unwanted_if = matches!(e, Expr::If { .. });'''
+replace = '''                self.unwanted_if = false;'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_value_nobody_wants_is_discarded_and_reclaimed_everywhere" }]
