@@ -310,7 +310,7 @@ fn a_dependent_checks_against_a_deserialised_interface_with_the_dependency_delet
     // And the negative half, so the pass above is not something else succeeding: with an
     // interface that offers nothing, the same source is refused.
     let empty = PersistentUnitInterface::from_json(
-        r#"{"schema":"nazm.interface/12","module":"b.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
+        r#"{"schema":"nazm.interface/13","module":"b.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
     )
     .expect("valid");
     let mut errors = Vec::new();
@@ -498,7 +498,7 @@ fn an_exported_record_is_published_with_its_fields_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/12\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
+        "{\"schema\":\"nazm.interface/13\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[{\"def\":\"m.nz::record Point\",\"name\":\"Point\",\"generics\":0,\
          \"fields\":[{\"name\":\"x\",\"ty\":\"Str\"},{\"name\":\"y\",\"ty\":\"Int\"}]}],\
          \"enums\":[],\
@@ -725,7 +725,7 @@ fn an_exported_enum_is_published_with_its_variants_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/12\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
+        "{\"schema\":\"nazm.interface/13\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[],\
          \"enums\":[{\"def\":\"m.nz::enum State\",\"name\":\"State\",\"generics\":0,\"variants\":[\
          {\"name\":\"Done\",\"fields\":[{\"name\":\"code\",\"ty\":\"Int\"}]},\
@@ -920,7 +920,7 @@ fn a_generic_interface_carries_positions_and_no_parameter_names() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/12\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
+        "{\"schema\":\"nazm.interface/13\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[{\"def\":\"m.nz::record Pair\",\"name\":\"Pair\",\"generics\":2,\
          \"fields\":[{\"name\":\"first\",\"ty\":{\"param\":0}},{\"name\":\"second\",\"ty\":{\"param\":1}}]}],\
          \"enums\":[{\"def\":\"m.nz::enum Maybe\",\"name\":\"Maybe\",\"generics\":1,\"variants\":[\

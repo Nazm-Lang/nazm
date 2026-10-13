@@ -207,7 +207,7 @@ fn the_persisted_interface_names_the_defining_identity_and_suffices_alone() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let facade_json = stdout(&o).trim().to_owned();
     let v: Value = serde_json::from_str(&facade_json).unwrap();
-    assert_eq!(v["schema"], "nazm.interface/12");
+    assert_eq!(v["schema"], "nazm.interface/13");
     let twice = v["exports"]
         .as_array()
         .unwrap()

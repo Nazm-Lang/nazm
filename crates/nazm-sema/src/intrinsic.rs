@@ -543,6 +543,46 @@ pub enum Intrinsic {
     OsChildPipe,
     OsWait,
     OsKill,
+
+    // --- the platform, further, R1d (`docs/spec.md`, *The platform, further*) --------------
+    //
+    // Each answers a status as Gate 2's do, and each is a prelude name (R1a's rule): a module
+    // that declares a function of the same name keeps its own.
+    /// `os_stdout() -> OsHandle` — standard output, the same handle every call.
+    OsStdout,
+    /// `os_stderr() -> OsHandle` — standard errors, likewise.
+    OsStderr,
+    /// `os_spawn_in(program, args, dir, env) -> OsHandle` — a child in `dir` with exactly `env`.
+    OsSpawnIn,
+    /// `os_spawn_with(program, args, dir, env, flags) -> OsHandle` — and a new process group
+    /// (`1`), a null standard input (`2`).
+    OsSpawnWith,
+    /// `os_pid() -> Int` — this process's id.
+    OsPid,
+    /// `os_child_pid(h) -> Int` — a child's process id.
+    OsChildPid,
+    /// `os_kill_group(pgid, sig) -> Int` — a signal to a process group.
+    OsKillGroup,
+    /// `os_try_wait(h) -> Int` — `os_wait`'s answer, or `WouldBlock` while the child runs.
+    OsTryWait,
+    /// `os_wait_until(h, deadline) -> Int` — `os_wait`'s answer, or `TimedOut` at `deadline`.
+    OsWaitUntil,
+    /// `os_child_rusage(h) -> Int` — a waited child's peak resident memory in bytes.
+    OsChildRusage,
+    /// `os_lstat(path, out) -> Int` — six words about `path` itself, a link not followed.
+    OsLstat,
+    /// `os_chmod(path, mode) -> Int`.
+    OsChmod,
+    /// `os_realpath(path, out) -> Int` — the canonical path's length.
+    OsRealpath,
+    /// `os_mkdtemp(parent) -> Str` — a new private directory's path, or `""`.
+    OsMkdtemp,
+    /// `os_lock(h, exclusive) -> Int` — an advisory whole-file lock, waited for.
+    OsLock,
+    /// `os_try_lock(h, exclusive) -> Int` — the same, or `WouldBlock`.
+    OsTryLock,
+    /// `os_unlock(h) -> Int`.
+    OsUnlock,
     /// `os_random_bytes(buf: Bytes) -> Int` (Gate 2, §21): `buf` filled from the operating system's
     /// entropy; its length. Behind `RandomCap`, with no effect.
     OsRandomBytes,
@@ -625,7 +665,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 186] = [
+    pub const ALL: [Self; 203] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -793,6 +833,23 @@ impl Intrinsic {
         Self::OsChildPipe,
         Self::OsWait,
         Self::OsKill,
+        Self::OsStdout,
+        Self::OsStderr,
+        Self::OsSpawnIn,
+        Self::OsSpawnWith,
+        Self::OsPid,
+        Self::OsChildPid,
+        Self::OsKillGroup,
+        Self::OsTryWait,
+        Self::OsWaitUntil,
+        Self::OsChildRusage,
+        Self::OsLstat,
+        Self::OsChmod,
+        Self::OsRealpath,
+        Self::OsMkdtemp,
+        Self::OsLock,
+        Self::OsTryLock,
+        Self::OsUnlock,
         Self::OsRandomBytes,
         Self::AtomicNew,
         Self::AtomicLoad,
@@ -988,6 +1045,23 @@ impl Intrinsic {
             Self::OsChildPipe => "os_child_pipe",
             Self::OsWait => "os_wait",
             Self::OsKill => "os_kill",
+            Self::OsStdout => "os_stdout",
+            Self::OsStderr => "os_stderr",
+            Self::OsSpawnIn => "os_spawn_in",
+            Self::OsSpawnWith => "os_spawn_with",
+            Self::OsPid => "os_pid",
+            Self::OsChildPid => "os_child_pid",
+            Self::OsKillGroup => "os_kill_group",
+            Self::OsTryWait => "os_try_wait",
+            Self::OsWaitUntil => "os_wait_until",
+            Self::OsChildRusage => "os_child_rusage",
+            Self::OsLstat => "os_lstat",
+            Self::OsChmod => "os_chmod",
+            Self::OsRealpath => "os_realpath",
+            Self::OsMkdtemp => "os_mkdtemp",
+            Self::OsLock => "os_lock",
+            Self::OsTryLock => "os_try_lock",
+            Self::OsUnlock => "os_unlock",
             Self::OsRandomBytes => "os_random_bytes",
             Self::AtomicNew => "atomic_new",
             Self::AtomicLoad => "atomic_load",
@@ -1264,6 +1338,18 @@ impl Intrinsic {
             Self::OsChildPipe => &[Shape::OsHandle, Shape::Int],
             Self::OsWait => &[Shape::OsHandle],
             Self::OsKill => &[Shape::OsHandle],
+            Self::OsStdout | Self::OsStderr | Self::OsPid => &[],
+            Self::OsSpawnIn => &[Shape::Str, Shape::Strs, Shape::Str, Shape::Strs],
+            Self::OsSpawnWith => &[Shape::Str, Shape::Strs, Shape::Str, Shape::Strs, Shape::Int],
+            Self::OsChildPid | Self::OsTryWait | Self::OsChildRusage | Self::OsUnlock => {
+                &[Shape::OsHandle]
+            }
+            Self::OsKillGroup => &[Shape::Int, Shape::Int],
+            Self::OsWaitUntil => &[Shape::OsHandle, Shape::Int],
+            Self::OsLstat | Self::OsRealpath => &[Shape::Str, Shape::Bytes],
+            Self::OsMkdtemp => &[Shape::Str],
+            Self::OsChmod => &[Shape::Str, Shape::Int],
+            Self::OsLock | Self::OsTryLock => &[Shape::OsHandle, Shape::Bool],
             Self::OsRandomBytes => &[Shape::Bytes],
             Self::AtomicNew => &[Shape::Int],
             Self::AtomicLoad => &[Shape::Atomic],
@@ -1447,6 +1533,22 @@ impl Intrinsic {
             Self::OsChildPipe => Shape::OsHandle,
             Self::OsWait => Shape::Int,
             Self::OsKill => Shape::Int,
+            Self::OsStdout | Self::OsStderr | Self::OsSpawnIn | Self::OsSpawnWith => {
+                Shape::OsHandle
+            }
+            Self::OsPid
+            | Self::OsChildPid
+            | Self::OsKillGroup
+            | Self::OsTryWait
+            | Self::OsWaitUntil
+            | Self::OsChildRusage
+            | Self::OsLstat
+            | Self::OsChmod
+            | Self::OsRealpath
+            | Self::OsLock
+            | Self::OsTryLock
+            | Self::OsUnlock => Shape::Int,
+            Self::OsMkdtemp => Shape::Str,
             Self::OsRandomBytes => Shape::Int,
             Self::AtomicNew => Shape::Atomic,
             Self::AtomicLoad | Self::AtomicStore | Self::AtomicAdd | Self::AtomicSwap => Shape::Int,
@@ -1486,6 +1588,24 @@ impl Intrinsic {
                 | Self::FloatToStrFixed
                 | Self::StrPadStart
                 | Self::StrPadEnd
+                // R1d: the platform, further.
+                | Self::OsStdout
+                | Self::OsStderr
+                | Self::OsSpawnIn
+                | Self::OsSpawnWith
+                | Self::OsPid
+                | Self::OsChildPid
+                | Self::OsKillGroup
+                | Self::OsTryWait
+                | Self::OsWaitUntil
+                | Self::OsChildRusage
+                | Self::OsLstat
+                | Self::OsChmod
+                | Self::OsRealpath
+                | Self::OsMkdtemp
+                | Self::OsLock
+                | Self::OsTryLock
+                | Self::OsUnlock
         )
     }
 

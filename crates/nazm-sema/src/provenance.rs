@@ -240,6 +240,27 @@ impl Origin {
             Intrinsic::OsSpawn => BuiltinFlow::WritePath,
             Intrinsic::OsChildPipe | Intrinsic::OsWait | Intrinsic::OsKill => BuiltinFlow::Derive,
             Intrinsic::OsRandomBytes => BuiltinFlow::Derive,
+            // The platform, further (R1d). Which program runs, and where, is the restricted
+            // sink; so is a path whose permissions change or under which a directory is made.
+            // What a path is, and where it leads, is the file system's, as `os_stat`'s answer
+            // is; this process's id is its surroundings, as the environment is. A standard
+            // stream's handle, a child's id and state, and a lock are made from the arguments.
+            Intrinsic::OsSpawnIn
+            | Intrinsic::OsSpawnWith
+            | Intrinsic::OsChmod
+            | Intrinsic::OsMkdtemp => BuiltinFlow::WritePath,
+            Intrinsic::OsLstat | Intrinsic::OsRealpath => BuiltinFlow::Source(Self::File),
+            Intrinsic::OsPid => BuiltinFlow::Source(Self::Argument),
+            Intrinsic::OsStdout
+            | Intrinsic::OsStderr
+            | Intrinsic::OsChildPid
+            | Intrinsic::OsKillGroup
+            | Intrinsic::OsTryWait
+            | Intrinsic::OsWaitUntil
+            | Intrinsic::OsChildRusage
+            | Intrinsic::OsLock
+            | Intrinsic::OsTryLock
+            | Intrinsic::OsUnlock => BuiltinFlow::Derive,
             // An atomic is a container of one `Int` (Gate 3): made from its value, which the
             // handle carries; written; and read, alone or as an exchange.
             Intrinsic::AtomicNew | Intrinsic::AtomicStore => BuiltinFlow::Derive,
@@ -359,6 +380,24 @@ impl Origin {
             | Intrinsic::OsKill
             | Intrinsic::OsRandomBytes => ContainerUse::None,
             Intrinsic::OsResolve => ContainerUse::Fill { into: &[2] },
+            // The platform, further (R1d): what a path is lands in the buffer handed in; a
+            // temporary directory's path is a string made from its parent, not read.
+            Intrinsic::OsLstat | Intrinsic::OsRealpath => ContainerUse::Fill { into: &[1] },
+            Intrinsic::OsStdout
+            | Intrinsic::OsStderr
+            | Intrinsic::OsSpawnIn
+            | Intrinsic::OsSpawnWith
+            | Intrinsic::OsPid
+            | Intrinsic::OsChildPid
+            | Intrinsic::OsKillGroup
+            | Intrinsic::OsTryWait
+            | Intrinsic::OsWaitUntil
+            | Intrinsic::OsChildRusage
+            | Intrinsic::OsChmod
+            | Intrinsic::OsMkdtemp
+            | Intrinsic::OsLock
+            | Intrinsic::OsTryLock
+            | Intrinsic::OsUnlock => ContainerUse::None,
             Intrinsic::OsTcpListen
             | Intrinsic::OsTcpAccept
             | Intrinsic::OsTcpConnect
@@ -705,6 +744,9 @@ impl SinkClass {
             Intrinsic::OsWrite => &[(1, Self::FileData)],
             Intrinsic::OsUdpSendTo => &[(1, Self::FileData)],
             Intrinsic::OsSpawn => &[(0, Self::Path)],
+            // Which program runs and in which directory (R1d).
+            Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith => &[(0, Self::Path), (2, Self::Path)],
+            Intrinsic::OsChmod | Intrinsic::OsMkdtemp => &[(0, Self::Path)],
             Intrinsic::Print | Intrinsic::EPrint => &[(0, Self::Output)],
             Intrinsic::StrVouch => &[(0, Self::Vouch)],
             _ => &[],
@@ -1140,7 +1182,12 @@ mod tests {
                 ("os_env_get", Origin::Argument),
                 ("os_env_has", Origin::Argument),
                 ("os_env_count", Origin::Argument),
-                ("os_env_at", Origin::Argument)
+                ("os_env_at", Origin::Argument),
+                // The platform, further (R1d): a path's facts and where it leads, and this
+                // process's id.
+                ("os_pid", Origin::Argument),
+                ("os_lstat", Origin::File),
+                ("os_realpath", Origin::File)
             ]
         );
         // Every container built-in names its handle, and no other built-in claims one (N80).

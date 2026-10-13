@@ -352,6 +352,26 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::OsWait
         | Intrinsic::OsKill
         | Intrinsic::OsRandomBytes => false,
+        // The platform, further (R1d): a temporary directory's path is a new string; the rest are
+        // words and the system's storage, a path's facts and a canonical path filling a buffer
+        // the program already made.
+        Intrinsic::OsMkdtemp => true,
+        Intrinsic::OsStdout
+        | Intrinsic::OsStderr
+        | Intrinsic::OsSpawnIn
+        | Intrinsic::OsSpawnWith
+        | Intrinsic::OsPid
+        | Intrinsic::OsChildPid
+        | Intrinsic::OsKillGroup
+        | Intrinsic::OsTryWait
+        | Intrinsic::OsWaitUntil
+        | Intrinsic::OsChildRusage
+        | Intrinsic::OsLstat
+        | Intrinsic::OsChmod
+        | Intrinsic::OsRealpath
+        | Intrinsic::OsLock
+        | Intrinsic::OsTryLock
+        | Intrinsic::OsUnlock => false,
         // Networking (Gate 2): the system's storage, and words; a receive fills a buffer the
         // program already made.
         Intrinsic::OsTcpListen
