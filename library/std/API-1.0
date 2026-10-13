@@ -43,6 +43,12 @@
 @std/binary pub fn binary_get_raw(r: Reader, n: Int) -> Result[Bytes, Str] ! {}
 @std/binary pub fn binary_get_bytes(r: Reader) -> Result[Bytes, Str] ! {}
 @std/binary pub fn binary_get_str(r: Reader) -> Result[Str, Str] ! {}
+@std/blake3 pub struct Blake3
+@std/blake3 pub fn blake3_new() -> Blake3 ! {}
+@std/blake3 pub fn blake3_update(h: Blake3, data: Bytes) -> Int ! {}
+@std/blake3 pub fn blake3_finish(h: Blake3) -> Bytes ! {}
+@std/blake3 pub fn blake3(data: Bytes) -> Bytes ! {}
+@std/blake3 pub fn blake3_hex(data: Bytes) -> Str ! {}
 @std/chan pub fn chan_take(c: Chan) -> Option[Int] ! {}
 @std/chan pub fn chan_send_all_ints(c: Chan[Int], xs: Vec[Int]) -> Int ! {}
 @std/chan pub fn chan_collect_ints(c: Chan[Int], n: Int) -> Vec[Int] ! {}
@@ -98,6 +104,7 @@
 @std/file pub fn file_metadata(io: IoCap, path: Str) -> Result[Metadata, IoError] ! { io }
 @std/file pub fn file_exists_at(io: IoCap, path: Str) -> Bool ! { io }
 @std/file pub fn dir_list(io: IoCap, path: Str) -> Result[Strs, IoError] ! { io }
+@std/file pub fn file_walk(io: IoCap, dir: Str) -> Result[Strs, IoError] ! { io }
 @std/file pub fn dir_create(io: IoCap, path: Str) -> Result[Int, IoError] ! { io }
 @std/file pub fn dir_create_all(io: IoCap, path: Str) -> Result[Int, IoError] ! { io }
 @std/file pub fn dir_remove(io: IoCap, path: Str) -> Result[Int, IoError] ! { io }
@@ -318,6 +325,12 @@
 @std/seq pub fn vec_concat[T](a: Vec[T], b: Vec[T]) -> Vec[T] ! {}
 @std/seq pub fn vec_any[T, effects E](xs: Vec[T], test: fn(T) -> Bool ! { E }) -> Bool ! { E }
 @std/seq pub fn vec_all[T, effects E](xs: Vec[T], test: fn(T) -> Bool ! { E }) -> Bool ! { E }
+@std/sha256 pub struct Sha256
+@std/sha256 pub fn sha256_new() -> Sha256 ! {}
+@std/sha256 pub fn sha256_update(h: Sha256, data: Bytes) -> Int ! {}
+@std/sha256 pub fn sha256_finish(h: Sha256) -> Bytes ! {}
+@std/sha256 pub fn sha256(data: Bytes) -> Bytes ! {}
+@std/sha256 pub fn sha256_hex(data: Bytes) -> Str ! {}
 @std/show pub trait Show
 @std/show pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {}
 @std/sort pub fn vec_sort_by[T, effects E](xs: Vec[T], less: fn(T, T) -> Bool ! { E }) -> Vec[T] ! { E }
