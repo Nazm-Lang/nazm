@@ -1151,6 +1151,9 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                             )
                             // `impl Trait for Type`: `for` is its syntax (N78).
                             || (node.kind() == K::ImplItem && leaf.text == "for")
+                            // `for x in xs`: `for` and `in` are a loop's syntax (L5), met in
+                            // the corpus first by R1e's `file_walk`.
+                            || (node.kind() == K::ForStmt && (leaf.text == "for" || leaf.text == "in"))
                             // `const NAME: T = …;`: `const` is its syntax (Gate 2).
                             || (node.kind() == K::ConstItem && leaf.text == "const")
                             // `static`, likewise (Gate 3).

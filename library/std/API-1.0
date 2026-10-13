@@ -68,12 +68,6 @@
 @std/binary pub fn binary_get_raw(r: Reader, n: Int) -> Result[Bytes, Str] ! {}
 @std/binary pub fn binary_get_bytes(r: Reader) -> Result[Bytes, Str] ! {}
 @std/binary pub fn binary_get_str(r: Reader) -> Result[Str, Str] ! {}
-@std/blake3 pub struct Blake3
-@std/blake3 pub fn blake3_new() -> Blake3 ! {}
-@std/blake3 pub fn blake3_update(h: Blake3, data: Bytes) -> Int ! {}
-@std/blake3 pub fn blake3_finish(h: Blake3) -> Bytes ! {}
-@std/blake3 pub fn blake3(data: Bytes) -> Bytes ! {}
-@std/blake3 pub fn blake3_hex(data: Bytes) -> Str ! {}
 @std/bitset pub struct BitSet
 @std/bitset pub fn bitset_new() -> BitSet ! {}
 @std/bitset pub fn bitset_add(s: BitSet, i: Int) -> Bool ! {}
@@ -87,6 +81,12 @@
 @std/bitset pub fn bitset_intersection(a: BitSet, b: BitSet) -> BitSet ! {}
 @std/bitset pub fn bitset_difference(a: BitSet, b: BitSet) -> BitSet ! {}
 @std/bitset pub fn bitset_equal(a: BitSet, b: BitSet) -> Bool ! {}
+@std/blake3 pub struct Blake3
+@std/blake3 pub fn blake3_new() -> Blake3 ! {}
+@std/blake3 pub fn blake3_update(h: Blake3, data: Bytes) -> Int ! {}
+@std/blake3 pub fn blake3_finish(h: Blake3) -> Bytes ! {}
+@std/blake3 pub fn blake3(data: Bytes) -> Bytes ! {}
+@std/blake3 pub fn blake3_hex(data: Bytes) -> Str ! {}
 @std/bytebuf pub struct ByteBuf
 @std/bytebuf pub fn bytebuf_new() -> ByteBuf ! {}
 @std/bytebuf pub fn bytebuf_with_capacity(n: Int) -> ByteBuf ! {}
