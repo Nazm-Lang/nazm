@@ -247,6 +247,19 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1 (2026-10-13)** · *Speed: a program of one thread, and the inlined stack check*
+(`openspec/changes/r1-language-for-the-rewrite`, 5b.8). The stack check (N49) is three instructions
+in the function — this frame against the thread's limit — calling the runtime only on a thread's
+first check or past the limit (LLVM; Cranelift still calls it). A program whose `main` holds no
+`SpawnCap`, `NetCap` or `ForeignCap` and is not a library has one thread, and its failure state and
+stack limit are plain globals rather than thread-local ones, in every unit, the entry and the
+runtime (`Native::single_thread`, `Needs::single`); a program linked to a prebuilt runtime keeps
+them thread-local. `fib(35)` under LLVM `-O2`: 141.6 ms before, 68.3 ms after (C 36.8, Go 41.0, the
+same machine); word frequency 453 → 392 ms. Evidence: `crates/nazm-cli/tests/single_thread.rs` —
+the state plain for a `main` of output alone, thread-local for one with `SpawnCap`, `NetCap` or
+`ForeignCap` and for a library, the check inlined; a stack overflow and an overflow still reported
+by a program of one thread under LLVM and Cranelift. Five mutants.
+
 **R1c (2026-10-13)** · *`@derive(toml)`* (`spec.md`, *Derived serialisation*, **TOML**;
 `openspec/changes/r1-language-for-the-rewrite`, L2c). The same shape over `@std/toml`'s `Toml` tree,
 alone or beside `json`: `t_toml_value` and `t_toml_read` for a record or an enum, and for a record —
