@@ -1,0 +1,585 @@
+// `@std/args`: a program's command line, parsed against a specification (R1e, S4).
+//
+// Imported with `use "@std/args";`. A specification is built by functions: `args_program` makes
+// the top command, `args_command` a sub-command under one, and `args_flag`, `args_option` and their
+// kin declare what each command accepts. `args_parse` reads the arguments — `process_args(io)` of
+// `@std/process`, or any `Strs` — into an `Args`, which is read by name: `args_has`, `args_times`,
+// `args_get`, `args_get_all`, and `args_subcommand` for the sub-command chosen.
+//
+// The command line is read as POSIX and GNU tools read it: `--name`, `--name value` and
+// `--name=value`; `-n`, `-n value` and `-nvalue`; flags bundled as `-abc`, the last of them able
+// to take a value; `--` ending the options, so that every argument after it is positional; `-`
+// alone a positional argument. An option that takes a value takes the next argument whatever it
+// is. A command's options are also accepted after any of its sub-commands is named. `--help` (and
+// `-h`, unless a command takes `-h` for itself) asks for help: parsing stops there, nothing is
+// required, and `args_help_text` is the help of the command reached. Every other mistake is an
+// `Err` naming the command and the argument at fault ("nazm build: unknown option `--frob`");
+// nothing traps.
+
+// Kinds of argument, by number.
+fn k_flag() -> Int ! {} { 0 }
+fn k_option() -> Int ! {} { 1 }
+fn k_positional() -> Int ! {} { 2 }
+fn k_rest() -> Int ! {} { 3 }
+
+/// One command: its name, what it does, and the command it is under (-1 for the top one).
+pub struct ArgCmd {
+    name: Str,
+    about: Str,
+    parent: Int,
+}
+
+/// One argument a command accepts. `name` is its long name (a positional argument's name);
+/// `short` is one byte or empty.
+pub struct ArgDecl {
+    cmd: Int,
+    kind: Int,
+    name: Str,
+    short: Str,
+    value_name: Str,
+    help: Str,
+    default: Str,
+    has_default: Bool,
+    required: Bool,
+}
+
+/// Two arguments of a command that cannot both be given.
+pub struct ArgConflict {
+    cmd: Int,
+    a: Str,
+    b: Str,
+}
+
+/// A specification: every command and every argument, in one arena that the commands share.
+pub struct ArgSpec {
+    cmds: Vec[ArgCmd],
+    decls: Vec[ArgDecl],
+    conflicts: Vec[ArgConflict],
+}
+
+/// A command of a specification, which further arguments and sub-commands are declared on.
+pub struct ArgCommand {
+    spec: ArgSpec,
+    id: Int,
+}
+
+/// A parsed command line: the command reached, whether help was asked for, and each argument
+/// given, by name, in the order given (a flag's value is empty).
+pub struct Args {
+    spec: ArgSpec,
+    top: Int,
+    cmd: Int,
+    help: Bool,
+    names: Strs,
+    values: Strs,
+}
+
+/// A new specification whose top command is `name` (the program's name, as help shows it), with
+/// `about` saying what it does.
+pub fn args_program(name: Str, about: Str) -> ArgCommand ! {} {
+    let spec = ArgSpec(cmds: vec_new[ArgCmd](), decls: vec_new[ArgDecl](), conflicts: vec_new[ArgConflict]());
+    vec_push(spec.cmds, ArgCmd(name: name, about: about, parent: 0 - 1));
+    ArgCommand(spec: spec, id: 0)
+}
+
+/// A sub-command `name` of `parent`, chosen by naming it where `parent`'s first positional
+/// argument would be.
+pub fn args_command(parent: ArgCommand, name: Str, about: Str) -> ArgCommand ! {} {
+    vec_push(parent.spec.cmds, ArgCmd(name: name, about: about, parent: parent.id));
+    ArgCommand(spec: parent.spec, id: vec_len(parent.spec.cmds) - 1)
+}
+
+fn declare(c: ArgCommand, kind: Int, name: Str, short: Str, value_name: Str, default: Str, has_default: Bool, required: Bool, help: Str) -> ArgCommand ! {} {
+    vec_push(c.spec.decls, ArgDecl(cmd: c.id, kind: kind, name: name, short: short, value_name: value_name, help: help, default: default, has_default: has_default, required: required));
+    c
+}
+
+/// A flag `--name` (and `-short`, unless `short` is empty), which takes no value and may be given
+/// any number of times.
+pub fn args_flag(c: ArgCommand, name: Str, short: Str, help: Str) -> ArgCommand ! {} {
+    declare(c, k_flag(), name, short, "", "", false, false, help)
+}
+
+/// An option `--name VALUE` (and `-short VALUE`, unless `short` is empty), which may be given any
+/// number of times; `value_name` is what help calls its value.
+pub fn args_option(c: ArgCommand, name: Str, short: Str, value_name: Str, help: Str) -> ArgCommand ! {} {
+    declare(c, k_option(), name, short, value_name, "", false, false, help)
+}
+
+/// As `args_option`, with the value `default` when it is not given.
+pub fn args_option_default(c: ArgCommand, name: Str, short: Str, value_name: Str, default: Str, help: Str) -> ArgCommand ! {} {
+    declare(c, k_option(), name, short, value_name, default, true, false, help)
+}
+
+/// As `args_option`, and an error when it is not given.
+pub fn args_option_required(c: ArgCommand, name: Str, short: Str, value_name: Str, help: Str) -> ArgCommand ! {} {
+    declare(c, k_option(), name, short, value_name, "", false, true, help)
+}
+
+/// The next positional argument of `c`, read by `name`; when `required`, an error if it is not
+/// given. A required one must be declared before every one that is not.
+pub fn args_positional(c: ArgCommand, name: Str, required: Bool, help: Str) -> ArgCommand ! {} {
+    declare(c, k_positional(), name, "", "", "", false, required, help)
+}
+
+/// Every positional argument of `c` after those it declares one by one, read by `name` with
+/// `args_get_all`.
+pub fn args_rest(c: ArgCommand, name: Str, help: Str) -> ArgCommand ! {} {
+    declare(c, k_rest(), name, "", "", "", false, false, help)
+}
+
+/// The arguments `a` and `b` of `c` (or of a command above it), which cannot both be given.
+pub fn args_conflict(c: ArgCommand, a: Str, b: Str) -> ArgCommand ! {} {
+    vec_push(c.spec.conflicts, ArgConflict(cmd: c.id, a: a, b: b));
+    c
+}
+
+// --- looking things up -------------------------------------------------------------------------
+
+fn cmd_of(spec: ArgSpec, id: Int) -> ArgCmd ! {} { vec_get(spec.cmds, id) }
+
+fn decl_of(spec: ArgSpec, i: Int) -> ArgDecl ! {} { vec_get(spec.decls, i) }
+
+/// Whether command `inner` is `outer` or under it.
+fn within(spec: ArgSpec, inner: Int, outer: Int) -> Bool ! {} {
+    let mut c = inner;
+    let mut found = false;
+    while c >= 0 {
+        if c == outer { found = true; break; }
+        c = cmd_of(spec, c).parent;
+    }
+    found
+}
+
+/// The declaration a command `cmd` reads as an option or a flag: long name `name` when `short`
+/// is false, short name `name` when it is true; -1 when there is none. The innermost wins.
+fn find_option(spec: ArgSpec, cmd: Int, name: Str, short: Bool) -> Int ! {} {
+    let mut found = 0 - 1;
+    let mut c = cmd;
+    while c >= 0 && found < 0 {
+        for i in 0..vec_len(spec.decls) {
+            let d = decl_of(spec, i);
+            if d.cmd == c && (d.kind == k_flag() || d.kind == k_option()) {
+                let key = if short { d.short } else { d.name };
+                if key == name && key != "" { found = i; break; }
+            }
+        }
+        c = cmd_of(spec, c).parent;
+    }
+    found
+}
+
+/// Any declaration named `name` that command `cmd` reads; -1 when there is none.
+fn find_named(spec: ArgSpec, cmd: Int, name: Str) -> Int ! {} {
+    let mut found = 0 - 1;
+    let mut c = cmd;
+    while c >= 0 && found < 0 {
+        for i in 0..vec_len(spec.decls) {
+            let d = decl_of(spec, i);
+            if d.cmd == c && d.name == name { found = i; break; }
+        }
+        c = cmd_of(spec, c).parent;
+    }
+    found
+}
+
+/// The `slot`th positional declaration of `cmd`, the rest if it has run out of single ones; -1.
+fn positional_at(spec: ArgSpec, cmd: Int, slot: Int) -> Int ! {} {
+    let mut seen = 0;
+    let mut found = 0 - 1;
+    let mut rest = 0 - 1;
+    for i in 0..vec_len(spec.decls) {
+        let d = decl_of(spec, i);
+        if d.cmd == cmd && d.kind == k_positional() {
+            if seen == slot { found = i; break; }
+            seen = seen + 1;
+        }
+        if d.cmd == cmd && d.kind == k_rest() && rest < 0 { rest = i; }
+    }
+    if found >= 0 { found } else { rest }
+}
+
+/// The sub-command of `cmd` named `name`; -1.
+fn find_sub(spec: ArgSpec, cmd: Int, name: Str) -> Int ! {} {
+    let mut found = 0 - 1;
+    for i in 0..vec_len(spec.cmds) {
+        let c = cmd_of(spec, i);
+        if c.parent == cmd && c.name == name { found = i; break; }
+    }
+    found
+}
+
+fn has_subs(spec: ArgSpec, cmd: Int) -> Bool ! {} {
+    let mut found = false;
+    for i in 0..vec_len(spec.cmds) {
+        if cmd_of(spec, i).parent == cmd { found = true; break; }
+    }
+    found
+}
+
+/// `cmd`'s name, after the names of the commands above it: `nazm build`.
+fn full_name(spec: ArgSpec, cmd: Int) -> Str ! {} {
+    let c = cmd_of(spec, cmd);
+    if c.parent < 0 { c.name } else { f"{full_name(spec, c.parent)} {c.name}" }
+}
+
+/// How an error or help shows declaration `i`: `--name`, or `<name>` for a positional one.
+fn shown(spec: ArgSpec, i: Int) -> Str ! {} {
+    let d = decl_of(spec, i);
+    if d.kind == k_positional() || d.kind == k_rest() { f"<{d.name}>" } else { f"--{d.name}" }
+}
+
+/// What is wrong with the declarations `cmd` reads, or "": a name or a short name given twice, a
+/// short name that is not one byte, a required positional argument after one that is not.
+fn check_spec(spec: ArgSpec, cmd: Int) -> Str ! {} {
+    let mut wrong = "";
+    let mut optional_seen = false;
+    for i in 0..vec_len(spec.decls) {
+        let d = decl_of(spec, i);
+        if !within(spec, cmd, d.cmd) { continue; }
+        if d.name == "" { wrong = "an argument with no name"; break; }
+        if d.short != "" && (str_len(d.short) != 1 || d.short == "-") {
+            wrong = f"`-{d.short}` is not a one-letter short name";
+            break;
+        }
+        if d.cmd == cmd && d.kind == k_positional() {
+            if d.required && optional_seen { wrong = f"the required `<{d.name}>` follows an optional one"; break; }
+            if !d.required { optional_seen = true; }
+        }
+        for j in 0..i {
+            let e = decl_of(spec, j);
+            if !within(spec, cmd, e.cmd) { continue; }
+            if e.name == d.name { wrong = f"`{d.name}` is declared twice"; break; }
+            if d.short != "" && e.short == d.short { wrong = f"`-{d.short}` is declared twice"; break; }
+        }
+        if wrong != "" { break; }
+    }
+    wrong
+}
+
+fn starts_with(s: Str, prefix: Str) -> Bool ! {} {
+    str_len(s) >= str_len(prefix) && str_slice(s, 0, str_len(prefix)) == prefix
+}
+
+/// The offset of the first `=` in `s`, or -1.
+fn find_eq(s: Str) -> Int ! {} {
+    let mut found = 0 - 1;
+    for i in 0..str_len(s) {
+        if str_byte(s, i) == 61 { found = i; break; }
+    }
+    found
+}
+
+fn record(names: Strs, values: Strs, name: Str, value: Str) -> Int ! {} {
+    strs_push(names, name);
+    strs_push(values, value);
+    strs_len(names)
+}
+
+fn given(names: Strs, name: Str) -> Bool ! {} {
+    let mut found = false;
+    for i in 0..strs_len(names) {
+        if strs_get(names, i) == name { found = true; break; }
+    }
+    found
+}
+
+fn failed(spec: ArgSpec, cmd: Int, what: Str) -> Result[Args, Str] ! {} {
+    Result[Args, Str].Err(error: f"{full_name(spec, cmd)}: {what}")
+}
+
+// --- parsing -----------------------------------------------------------------------------------
+
+/// `argv` (without the program's name, as `process_args` gives it) read against command `c` and
+/// its sub-commands; an `Err` names the command and the argument at fault.
+pub fn args_parse(c: ArgCommand, argv: Strs) -> Result[Args, Str] ! {} {
+    let spec = c.spec;
+    let mut cmd = c.id;
+    let names = strs_new();
+    let values = strs_new();
+    let mut help = false;
+    let mut options_end = false;
+    let mut slot = 0;
+    let mut i = 0;
+    let n = strs_len(argv);
+    let wrong = check_spec(spec, cmd);
+    if wrong != "" { return failed(spec, cmd, f"the specification is wrong: {wrong}"); }
+    while i < n {
+        let a = strs_get(argv, i);
+        i = i + 1;
+        if !options_end && a == "--" {
+            options_end = true;
+            continue;
+        }
+        if !options_end && starts_with(a, "--") {
+            let body = str_slice(a, 2, str_len(a));
+            let eq = find_eq(body);
+            let name = if eq >= 0 { str_slice(body, 0, eq) } else { body };
+            let d = find_option(spec, cmd, name, false);
+            if d < 0 && name == "help" { help = true; break; }
+            if d < 0 { return failed(spec, cmd, f"unknown option `--{name}`"); }
+            let decl = decl_of(spec, d);
+            if decl.kind == k_flag() {
+                if eq >= 0 { return failed(spec, cmd, f"`--{name}` takes no value, and was given `{a}`"); }
+                record(names, values, decl.name, "");
+            } else {
+                if eq >= 0 {
+                    record(names, values, decl.name, str_slice(body, eq + 1, str_len(body)));
+                } else {
+                    if i >= n { return failed(spec, cmd, f"`--{name}` needs a value `<{decl.value_name}>`"); }
+                    record(names, values, decl.name, strs_get(argv, i));
+                    i = i + 1;
+                }
+            }
+            continue;
+        }
+        if !options_end && str_len(a) > 1 && str_byte(a, 0) == 45 {
+            let mut j = 1;
+            let mut wrong_here = "";
+            while j < str_len(a) {
+                let b = str_byte(a, j);
+                if b >= 128 { wrong_here = f"unknown option `{a}`"; break; }
+                let s = str_slice(a, j, j + 1);
+                j = j + 1;
+                let d = find_option(spec, cmd, s, true);
+                if d < 0 && s == "h" { help = true; break; }
+                if d < 0 {
+                    wrong_here = if str_len(a) > 2 { f"unknown option `-{s}` in `{a}`" } else { f"unknown option `-{s}`" };
+                    break;
+                }
+                let decl = decl_of(spec, d);
+                if decl.kind == k_flag() {
+                    record(names, values, decl.name, "");
+                } else {
+                    if j < str_len(a) {
+                        record(names, values, decl.name, str_slice(a, j, str_len(a)));
+                        j = str_len(a);
+                    } else {
+                        if i >= n { wrong_here = f"`-{s}` needs a value `<{decl.value_name}>`"; break; }
+                        record(names, values, decl.name, strs_get(argv, i));
+                        i = i + 1;
+                    }
+                }
+            }
+            if wrong_here != "" { return failed(spec, cmd, wrong_here); }
+            if help { break; }
+            continue;
+        }
+        if !options_end && slot == 0 && has_subs(spec, cmd) {
+            let sub = find_sub(spec, cmd, a);
+            if sub >= 0 {
+                cmd = sub;
+                let wrong_sub = check_spec(spec, cmd);
+                if wrong_sub != "" { return failed(spec, cmd, f"the specification is wrong: {wrong_sub}"); }
+                continue;
+            }
+            if positional_at(spec, cmd, 0) < 0 { return failed(spec, cmd, f"unknown command `{a}`"); }
+        }
+        let p = positional_at(spec, cmd, slot);
+        if p < 0 { return failed(spec, cmd, f"unexpected argument `{a}`"); }
+        let decl = decl_of(spec, p);
+        record(names, values, decl.name, a);
+        if decl.kind == k_positional() { slot = slot + 1; }
+    }
+    if !help {
+        for k in 0..vec_len(spec.decls) {
+            let d = decl_of(spec, k);
+            if !within(spec, cmd, d.cmd) || !d.required || given(names, d.name) { continue; }
+            if d.kind == k_positional() {
+                if d.cmd == cmd { return failed(spec, cmd, f"missing the argument `<{d.name}>`"); }
+            } else {
+                return failed(spec, cmd, f"missing the option `--{d.name} <{d.value_name}>`");
+            }
+        }
+        for k in 0..vec_len(spec.conflicts) {
+            let x = vec_get(spec.conflicts, k);
+            if within(spec, cmd, x.cmd) && given(names, x.a) && given(names, x.b) {
+                let sa = shown(spec, find_named(spec, cmd, x.a));
+                let sb = shown(spec, find_named(spec, cmd, x.b));
+                return failed(spec, cmd, f"`{sa}` and `{sb}` cannot be used together");
+            }
+        }
+    }
+    Result[Args, Str].Ok(value: Args(spec: spec, top: c.id, cmd: cmd, help: help, names: names, values: values))
+}
+
+// --- reading a parse ---------------------------------------------------------------------------
+
+/// Whether `name` was given at least once.
+pub fn args_has(a: Args, name: Str) -> Bool ! {} {
+    given(a.names, name)
+}
+
+/// How many times `name` was given: `-vvv` is three.
+pub fn args_times(a: Args, name: Str) -> Int ! {} {
+    let mut count = 0;
+    for i in 0..strs_len(a.names) {
+        if strs_get(a.names, i) == name { count = count + 1; }
+    }
+    count
+}
+
+/// The last value given for `name`; else its default; else `None`.
+pub fn args_get(a: Args, name: Str) -> Option[Str] ! {} {
+    let mut found = Option[Str].None();
+    for i in 0..strs_len(a.names) {
+        if strs_get(a.names, i) == name { found = Option[Str].Some(value: strs_get(a.values, i)); }
+    }
+    if let Option.None() = found {
+        let d = find_named(a.spec, a.cmd, name);
+        if d >= 0 && decl_of(a.spec, d).has_default {
+            found = Option[Str].Some(value: decl_of(a.spec, d).default);
+        }
+    }
+    found
+}
+
+/// Every value given for `name`, in order; else its default alone; else none.
+pub fn args_get_all(a: Args, name: Str) -> Strs ! {} {
+    let out = strs_new();
+    for i in 0..strs_len(a.names) {
+        if strs_get(a.names, i) == name { strs_push(out, strs_get(a.values, i)); }
+    }
+    if strs_len(out) == 0 {
+        let d = find_named(a.spec, a.cmd, name);
+        if d >= 0 && decl_of(a.spec, d).has_default { strs_push(out, decl_of(a.spec, d).default); }
+    }
+    out
+}
+
+/// The sub-commands chosen, outermost first, separated by spaces: `""` when none was, `"pkg add"`
+/// for `prog pkg add`.
+pub fn args_subcommand(a: Args) -> Str ! {} {
+    let mut path = "";
+    let mut c = a.cmd;
+    while c != a.top && c >= 0 {
+        let cc = cmd_of(a.spec, c);
+        path = if path == "" { cc.name } else { f"{cc.name} {path}" };
+        c = cc.parent;
+    }
+    path
+}
+
+/// Whether `--help` or `-h` was given; parsing stopped there.
+pub fn args_help_wanted(a: Args) -> Bool ! {} {
+    a.help
+}
+
+/// The help of the command the parse reached.
+pub fn args_help_text(a: Args) -> Str ! {} {
+    args_help(ArgCommand(spec: a.spec, id: a.cmd))
+}
+
+// --- help --------------------------------------------------------------------------------------
+
+/// The one-line usage of `c`: `Usage: nazm build [options] --target <T> <input> [<files>...]`.
+pub fn args_usage(c: ArgCommand) -> Str ! {} {
+    let spec = c.spec;
+    let parts = strs_new();
+    strs_push(parts, f"Usage: {full_name(spec, c.id)} [options]");
+    for i in 0..vec_len(spec.decls) {
+        let d = decl_of(spec, i);
+        if d.kind == k_option() && d.required && within(spec, c.id, d.cmd) { strs_push(parts, f"--{d.name} <{d.value_name}>"); }
+    }
+    for i in 0..vec_len(spec.decls) {
+        let d = decl_of(spec, i);
+        if d.cmd != c.id { continue; }
+        if d.kind == k_positional() { strs_push(parts, if d.required { f"<{d.name}>" } else { f"[<{d.name}>]" }); }
+        if d.kind == k_rest() { strs_push(parts, f"[<{d.name}>...]"); }
+    }
+    if has_subs(spec, c.id) { strs_push(parts, "<command>"); }
+    str_join(parts, " ")
+}
+
+/// The left column of declaration `d` in help.
+fn left(d: ArgDecl) -> Str ! {} {
+    if d.kind == k_positional() || d.kind == k_rest() {
+        if d.kind == k_rest() { f"  <{d.name}>..." } else { f"  <{d.name}>" }
+    } else {
+        let short = if d.short == "" { "    " } else { f"-{d.short}, " };
+        let value = if d.kind == k_option() { f" <{d.value_name}>" } else { "" };
+        f"  {short}--{d.name}{value}"
+    }
+}
+
+fn right(d: ArgDecl) -> Str ! {} {
+    let mut text = d.help;
+    if d.required && d.kind == k_option() { text = f"{text} (required)"; }
+    if d.has_default { text = f"{text} [default: {d.default}]"; }
+    text
+}
+
+/// Rows of two columns, the second aligned.
+fn table(lefts: Strs, rights: Strs) -> Str ! {} {
+    let mut width = 0;
+    for i in 0..strs_len(lefts) {
+        if str_len(strs_get(lefts, i)) > width { width = str_len(strs_get(lefts, i)); }
+    }
+    let rows = strs_new();
+    for i in 0..strs_len(lefts) {
+        let r = strs_get(rights, i);
+        if r == "" { strs_push(rows, strs_get(lefts, i)); } else {
+            strs_push(rows, f"{str_pad_end(strs_get(lefts, i), width + 2, " ")}{r}");
+        }
+    }
+    str_join(rows, "\n")
+}
+
+/// The help of `c`: what it does, its usage, then its arguments, its options (its own, then those
+/// of the commands above it, then `--help`) and its sub-commands, each with what it does.
+pub fn args_help(c: ArgCommand) -> Str ! {} {
+    let spec = c.spec;
+    let me = cmd_of(spec, c.id);
+    let name = full_name(spec, c.id);
+    let out = strs_new();
+    strs_push(out, if me.about == "" { name } else { f"{name}: {me.about}" });
+    strs_push(out, "");
+    strs_push(out, args_usage(c));
+    let pl = strs_new();
+    let pr = strs_new();
+    for i in 0..vec_len(spec.decls) {
+        let d = decl_of(spec, i);
+        if d.cmd == c.id && (d.kind == k_positional() || d.kind == k_rest()) {
+            strs_push(pl, left(d));
+            strs_push(pr, right(d));
+        }
+    }
+    if strs_len(pl) > 0 {
+        strs_push(out, "");
+        strs_push(out, "Arguments:");
+        strs_push(out, table(pl, pr));
+    }
+    let ol = strs_new();
+    let or = strs_new();
+    let mut level = c.id;
+    while level >= 0 {
+        for i in 0..vec_len(spec.decls) {
+            let d = decl_of(spec, i);
+            if d.cmd == level && (d.kind == k_flag() || d.kind == k_option()) {
+                strs_push(ol, left(d));
+                strs_push(or, right(d));
+            }
+        }
+        level = cmd_of(spec, level).parent;
+    }
+    strs_push(ol, if find_option(spec, c.id, "h", true) < 0 { "  -h, --help" } else { "      --help" });
+    strs_push(or, "Print this help");
+    strs_push(out, "");
+    strs_push(out, "Options:");
+    strs_push(out, table(ol, or));
+    if has_subs(spec, c.id) {
+        let cl = strs_new();
+        let cr = strs_new();
+        for i in 0..vec_len(spec.cmds) {
+            let s = cmd_of(spec, i);
+            if s.parent == c.id {
+                strs_push(cl, f"  {s.name}");
+                strs_push(cr, s.about);
+            }
+        }
+        strs_push(out, "");
+        strs_push(out, "Commands:");
+        strs_push(out, table(cl, cr));
+    }
+    f"{str_join(out, "\n")}\n"
+}
