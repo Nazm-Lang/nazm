@@ -32,6 +32,7 @@ mod packages;
 mod patterns;
 mod platform_matrix;
 mod prelude;
+mod printing;
 mod process;
 mod profiles;
 mod profiles_v2;

@@ -53,7 +53,7 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 - [ ] 5b.1 Option C: `OutCap` implicit in `main`; every other authority still written
 - [ ] 5b.2 A function with no `-> T` returns nothing
 - [ ] 5b.3 `main`'s `Int` result is the exit status, not printed
-- [ ] 5b.4 `println`
+- [x] 5b.4 `println`
 - [ ] 5b.5 Effects inferred for a function that is not `pub`
 - [ ] 5b.6 `s + t` on strings
 - [ ] 5b.7 `m[k]`, `m[k] = v` and `m[k] += 1` on maps
@@ -67,9 +67,9 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 - [ ] 5b.10 The benchmark in the repository, re-run for each publication, and its results on nazm.dev
 - [x] 5b.11 `else if` — the grammar and the guide have promised it since 2026-09-21 and the parser
       never accepted it; a grammar `@example` of it, so the two cannot drift again
-- [ ] 5b.12 Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` and the bit operators'
-- [ ] 5b.13 `print` and `println` of any value with a text (a number, a `Bool`, a `Show`)
-- [ ] 5b.14 `Some(x)`, `None`, `Ok(x)`, `Err(e)` where the type is known; a variant with no payload
+- [x] 5b.12 Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` and the bit operators'
+- [x] 5b.13 `print` and `println` of any value with a text (a number, a `Bool`, a `Show`)
+- [x] 5b.14 `Some(x)`, `None`, `Ok(x)`, `Err(e)` where the type is known; a variant with no payload
       without `()` (`C.R`)
 - [ ] 5b.15 `v[i]` and `v[i] = x` on `Vec`; methods on built-in types (`v.len()`, `s.len()`,
       `s.split(" ")`, …) as names for the existing functions
@@ -89,9 +89,9 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 
 ## 7. R1e — libraries in Nazm
 
-- [ ] 7.1 S1 `@std/blake3`, `@std/sha256` (official vectors), `file_walk`
-- [ ] 7.2 S2 `ByteBuf`; S3 `@std/ordmap`, `@std/bitset`, in-place sort
-- [ ] 7.3 S4 `@std/args`; S5 `@std/regex`
+- [x] 7.1 S1 `@std/blake3`, `@std/sha256` (official vectors), `file_walk`
+- [x] 7.2 S2 `ByteBuf`; S3 `@std/ordmap`, `@std/bitset`, in-place sort
+- [x] 7.3 S4 `@std/args`; S5 `@std/regex`
 
 ## 8. Close
 

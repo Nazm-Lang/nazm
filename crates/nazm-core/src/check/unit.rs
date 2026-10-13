@@ -209,7 +209,9 @@ pub fn declare_unit(
         // A prelude built-in (R1a) is hidden by a module's own function of its name instead.
         if method.is_none()
             && (Intrinsic::by_name(&f.name).is_some_and(|i| !i.is_prelude())
-                || CONVERSIONS.contains(&f.name.as_str()))
+                || CONVERSIONS.contains(&f.name.as_str())
+                // Written as `print` with a newline by the parser (R1, 5b.13).
+                || matches!(f.name.as_str(), "println" | "eprintln"))
         {
             errors.push(
                 Diagnostic::error(

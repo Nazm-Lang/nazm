@@ -8327,10 +8327,11 @@ Repointed by R1b an eighth time, which moved it to 67 for L13b: an entry that re
 Repointed by R1c, which moved it to 68 for `@derive(json)`: an entry that refused `@derive` must not be reused.
 Repointed by R1c again, which moved it to 69 for `@codec`: an entry that refused an attribute before a field must not be reused.
 Repointed by R1c a third time, which moved it to 70 for `@derive(toml)`: an entry that refused it must not be reused.
-Repointed by R1 (5b.11, 5b.19), which moved it to 71 for `else if` and lines without `;`: an entry that refused them must not be reused."""
+Repointed by R1 (5b.11, 5b.19), which moved it to 71 for `else if` and lines without `;`: an entry that refused them must not be reused.
+Repointed by R1 again (5b.12), which moved it to 72 for compound assignment: an entry that refused `+=` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 71;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 70;"
+find = "pub const SEMANTIC_EPOCH: u32 = 72;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 71;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -18232,3 +18233,151 @@ file = "crates/nazm-core/src/check/stmt.rs"
 find = '''                self.unwanted_if = matches!(e, Expr::If { .. });'''
 replace = '''                self.unwanted_if = false;'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_value_nobody_wants_is_discarded_and_reclaimed_everywhere" }]
+
+# --- R1 5b.12: compound assignment ----------------------------------------------------------
+
+[[mutation]]
+name = "r1-plus-equals-subtracts"
+why = "`+=` applies `-`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        TokenKind::PlusEq => BinOp::Add,'''
+replace = '''        TokenKind::PlusEq => BinOp::Sub,'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "compound_assign::every_operator_writes_what_its_long_form_writes_everywhere" }]
+
+[[mutation]]
+name = "r1-shift-equals-is-two-tokens"
+why = "`<<=` lexes as `<<` then `=`, so `a <<= 3` does not parse"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = '''        (b'<', Some(b'<'), Some(b'=')) => Some(TokenKind::ShlEq),'''
+replace = '''        (b'<', Some(b'<'), Some(b'+')) => Some(TokenKind::ShlEq),'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "compound_assign::each_operator_is_one_token_and_the_formatter_keeps_it" }]
+
+[[mutation]]
+name = "r1-a-computed-index-is-read-twice"
+why = "an index with a call in it is accepted, and computed once to read and once to write"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        Expr::Var { .. } | Expr::Int { .. } => true,
+        Expr::Field { base, .. } => simple_index(base),
+        _ => false,'''
+replace = '''        Expr::Var { .. } | Expr::Int { .. } => true,
+        Expr::Field { base, .. } => simple_index(base),
+        _ => true,'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "compound_assign::what_a_compound_assignment_cannot_mean_is_refused_by_name" }]
+
+[[mutation]]
+name = "r1-a-compound-assignment-only-assigns"
+why = "`x op= e` writes `e` itself, as `x = e` would"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        let op = compound(self.peek()).map(|op| (op, self.peek_span()));'''
+replace = '''        let op = compound(self.peek()).map(|op| (op, self.peek_span())).filter(|_| false);'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "compound_assign::every_operator_writes_what_its_long_form_writes_everywhere" }]
+
+[[mutation]]
+name = "r1-a-field-step-is-left-out"
+why = "the place `p.x` is read as `p` itself on the right of its operator"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''                        PlaceStep::Field(f) => Expr::Field {
+                            span: lhs.span().join(f.name_span),
+                            base: Box::new(lhs),'''
+replace = '''                        PlaceStep::Field(f) => Expr::Field {
+                            span: lhs.span().join(f.name_span),
+                            base: Box::new(Expr::Var { name: String::new(), span: f.name_span }),'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "compound_assign::every_operator_writes_what_its_long_form_writes_everywhere" }]
+
+[[mutation]]
+name = "r1-percent-equals-is-not-a-token"
+why = "`%=` is not lexed, so `a %= 7` does not parse"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = '''        Some((b'%', b'=')) => (Some(TokenKind::PercentEq), 2),'''
+replace = '''        Some((b'%', b'+')) => (Some(TokenKind::PercentEq), 2),'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "compound_assign::every_operator_writes_what_its_long_form_writes_everywhere" }]
+
+# --- R1 5b.4 and 5b.13: printing any value, println -------------------------------------------
+
+[[mutation]]
+name = "r1-println-adds-no-newline"
+why = "`println(x)` writes what `print(x)` does, with no newline"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        "println" => ("print", true),'''
+replace = '''        "println" => ("print", false),'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "printing::every_kind_of_value_prints_its_text_everywhere" }]
+
+[[mutation]]
+name = "r1-print-takes-only-a-str"
+why = "`print(x)` of a value that is not a `Str` is not given its text, so `print(5)` is refused"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''    let arg = if !newline && matches!(value, Expr::Str { .. }) {'''
+replace = '''    let arg = if !newline {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "printing::every_kind_of_value_prints_its_text_everywhere" }]
+
+[[mutation]]
+name = "r1-println-can-be-redefined"
+why = "a function named `println` is accepted, and every `println` call then means something else"
+file = "crates/nazm-core/src/check/unit.rs"
+find = '''                || matches!(f.name.as_str(), "println" | "eprintln"))'''
+replace = '''                || matches!(f.name.as_str(), "println_" | "eprintln"))'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "printing::what_has_no_text_or_takes_the_name_is_refused" }]
+
+# --- R1 5b.14: short variants and inferred enum arguments --------------------------------------
+
+[[mutation]]
+name = "r1-err-s-payload-is-a-value"
+why = "`Err(e)` names its payload `value`, which `Result.Err` does not have"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        "Err" => Some(("Result", "error")),'''
+replace = '''        "Err" => Some(("Result", "value")),'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::short_variants_build_and_match_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-none-is-a-name"
+why = "a bare `None` in an expression is an ordinary name, unknown"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''            if name == "None" {
+                return Some(Expr::Variant {'''
+replace = '''            if name == "None_" {
+                return Some(Expr::Variant {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::short_variants_build_and_match_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-the-wanted-type-is-not-used"
+why = "an enum construction ignores the type it is wanted as, so `None` returned as an `Option[Int]` is `N0352`"
+file = "crates/nazm-core/src/check/construct.rs"
+find = '''            if self.res.types().definition_of(e) == Some(node) {
+                return Some(e);'''
+replace = '''            if self.res.types().definition_of(e) == Some(node) && false {
+                return Some(e);'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::short_variants_build_and_match_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-the-payload-decides-nothing"
+why = "a payload does not give the enum's parameter its type, so `let o = Some(\"x\")` is `N0352`"
+file = "crates/nazm-core/src/check/construct.rs"
+find = '''                        a.get_or_insert(t);'''
+replace = '''                        let _ = t;'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::short_variants_build_and_match_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-capitalised-member-is-a-field"
+why = "`Color.Green` without `()` is read as a field of a binding named `Color`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''                if capitalised(ty) && capitalised(&name) {'''
+replace = '''                if capitalised(ty) && capitalised(&name) && false {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::short_variants_build_and_match_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-variant-pattern-needs-its-parentheses"
+why = "a variant pattern without `()` is refused even when the variant has no payload"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        let (fields, close) = if self.at(&TokenKind::LParen) {
+            self.pattern_fields(variant_span)?'''
+replace = '''        let (fields, close) = if true {
+            self.pattern_fields(variant_span)?'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::short_variants_build_and_match_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-short-variant-is-inferred-from-anything"
+why = "a construction whose parameter nothing decides is given one anyway"
+file = "crates/nazm-core/src/check/construct.rs"
+find = '''        let args: Vec<Type> = args.into_iter().collect::<Option<_>>()?;'''
+replace = '''        let args: Vec<Type> = args.into_iter().map(|a| a.unwrap_or(Type::Int)).collect();'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::what_nothing_decides_is_still_written" }]

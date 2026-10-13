@@ -27,6 +27,7 @@ mod closures;
 mod codes;
 mod collections_r1e;
 mod compat_v1;
+mod compound_assign;
 mod concurrent;
 mod const_tables;
 mod constraints;

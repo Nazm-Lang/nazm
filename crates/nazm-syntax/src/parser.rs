@@ -569,6 +569,90 @@ pub(crate) fn parse_region(
     }
 }
 
+/// `print`, `eprint`, `println` and `eprintln` of a value (R1, 5b.13): the value's text, as an
+/// interpolation's hole writes it — `print(x)` is `print(f"{x}")` and `println(x)` is
+/// `print(f"{x}\n")` — so a number, a `Bool` or a `Show` prints as it interpolates, and a `Str`
+/// unchanged. `parens`, the argument list's span, is the hole's: no other node is keyed by it.
+/// Anything else, and any other number of arguments, is left for the checker to judge.
+fn printed(name: String, mut args: Vec<Expr>, parens: Span) -> (String, Vec<Expr>) {
+    let (target, newline) = match name.as_str() {
+        "print" => ("print", false),
+        "eprint" => ("eprint", false),
+        "println" => ("print", true),
+        "eprintln" => ("eprint", true),
+        _ => return (name, args),
+    };
+    if newline && args.is_empty() {
+        let text = Expr::Str {
+            value: "\n".to_owned(),
+            span: parens,
+        };
+        return (target.to_owned(), vec![text]);
+    }
+    if args.len() != 1 {
+        return (name, args);
+    }
+    let Some(value) = args.pop() else {
+        return (name, args);
+    };
+    let arg = if !newline && matches!(value, Expr::Str { .. }) {
+        value
+    } else {
+        let span = value.span();
+        let mut parts = vec![InterpPart::Hole {
+            expr: value,
+            spec: crate::lexer::FormatSpec::default(),
+            span: parens,
+        }];
+        if newline {
+            parts.push(InterpPart::Text("\n".to_owned()));
+        }
+        Expr::Interp { parts, span }
+    };
+    (target.to_owned(), vec![arg])
+}
+
+/// Whether a name begins with a capital letter, as a type's and a variant's do (R1, 5b.14).
+fn capitalised(name: &str) -> bool {
+    name.bytes().next().is_some_and(|b| b.is_ascii_uppercase())
+}
+
+/// The prelude enum and payload label of `Some`, `Ok` and `Err` (R1, 5b.14).
+fn short_variant(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "Some" => Some(("Option", "value")),
+        "Ok" => Some(("Result", "value")),
+        "Err" => Some(("Result", "error")),
+        _ => None,
+    }
+}
+
+/// The operator a compound assignment's token applies (R1, 5b.12).
+fn compound(k: &TokenKind) -> Option<BinOp> {
+    Some(match k {
+        TokenKind::PlusEq => BinOp::Add,
+        TokenKind::MinusEq => BinOp::Sub,
+        TokenKind::StarEq => BinOp::Mul,
+        TokenKind::SlashEq => BinOp::Div,
+        TokenKind::PercentEq => BinOp::Rem,
+        TokenKind::AmpEq => BinOp::BitAnd,
+        TokenKind::PipeEq => BinOp::BitOr,
+        TokenKind::CaretEq => BinOp::BitXor,
+        TokenKind::ShlEq => BinOp::Shl,
+        TokenKind::ShrEq => BinOp::Shr,
+        _ => return None,
+    })
+}
+
+/// Whether reading an index twice reads the same element: a name, a field of one, a number.
+fn simple_index(e: &Expr) -> bool {
+    match e {
+        Expr::Var { .. } | Expr::Int { .. } => true,
+        Expr::Field { base, .. } => simple_index(base),
+        _ => false,
+    }
+}
+
 /// How deep the syntax tree may be.
 ///
 /// Call depth is not the only way to run out of stack: `((((1))))`, `- - - - 1` and
@@ -3437,7 +3521,7 @@ impl<'a> Parser<'a> {
         let mut at = self.pos + 1;
         loop {
             match self.tokens.get(at).map(|t| &t.kind) {
-                Some(TokenKind::Eq) => break,
+                Some(k) if *k == TokenKind::Eq || compound(k).is_some() => break,
                 // `[index]` (Gate 2): skipped, balanced, to see what follows.
                 Some(TokenKind::LBracket) => {
                     let mut depth = 0usize;
@@ -3532,8 +3616,59 @@ impl<'a> Parser<'a> {
         // The place is its own node: the name and its field path, without the `=`.
         // Wrapped after the fact, at the same checkpoint the statement will use.
         self.wrap(at, SyntaxKind::Place);
-        self.advance(); // `=`
-        let value = self.expr()?;
+        let op = compound(self.peek()).map(|op| (op, self.peek_span()));
+        self.advance(); // `=`, or `+=` and its kin
+        let rhs = self.expr()?;
+        // `x op= e` is `x = x op e` (R1, 5b.12), the place read as an expression. Its index is a
+        // name or a number, so reading the place twice reads the same element.
+        let value = match op {
+            None => rhs,
+            Some((op, op_span)) => {
+                if let Some(bad) = path.iter().find_map(|step| match step {
+                    PlaceStep::Index { index, .. } if !simple_index(index) => Some(index.span()),
+                    _ => None,
+                }) {
+                    self.report(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            bad,
+                            "a compound assignment's index is a name or a number",
+                        )
+                        .primary_label("computed here, and it would be computed twice")
+                        .help("bind the index first: `let i = …;`, then `v[i] += …`"),
+                    );
+                    return None;
+                }
+                let mut lhs = Expr::Var {
+                    name: name.clone(),
+                    span: name_span,
+                };
+                for step in &path {
+                    lhs = match step {
+                        PlaceStep::Field(f) => Expr::Field {
+                            span: lhs.span().join(f.name_span),
+                            base: Box::new(lhs),
+                            name: f.name.clone(),
+                            name_span: f.name_span,
+                        },
+                        PlaceStep::Index { index, span } => Expr::Index {
+                            span: lhs.span().join(*span),
+                            base: Box::new(lhs),
+                            index: index.clone(),
+                            bracket_span: *span,
+                        },
+                    };
+                }
+                let span = name_span.join(rhs.span());
+                Expr::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    op_span,
+                    span,
+                }
+            }
+        };
         let semi = self.expect(&TokenKind::Semi, "after an assignment")?;
         self.wrap(at, SyntaxKind::AssignStmt);
         Some(Some(Assign {
@@ -3820,6 +3955,45 @@ impl<'a> Parser<'a> {
                 if matches!(next, Some(TokenKind::Dot | TokenKind::ColonColon)) {
                     return self.variant_pattern().map(Pattern::Variant);
                 }
+                // `Some(p)`, `Ok(p)`, `Err(p)` and `None` (R1, 5b.14): the prelude's variants.
+                if let Some((ty, label)) = short_variant(&name) {
+                    if matches!(next, Some(TokenKind::LParen)) {
+                        let at = self.checkpoint();
+                        self.advance();
+                        let open = self.peek_span();
+                        self.advance();
+                        let inner = self.pattern()?;
+                        let close = self.expect(&TokenKind::RParen, "to close the payload")?;
+                        self.wrap(at, SyntaxKind::Pattern);
+                        return Some(Pattern::Variant(VariantPattern {
+                            qualifier: None,
+                            ty: ty.to_owned(),
+                            ty_span: span,
+                            variant: name,
+                            variant_span: span,
+                            fields: vec![PatternField {
+                                name: label.to_owned(),
+                                name_span: open,
+                                pattern: inner,
+                            }],
+                            span: span.join(close),
+                        }));
+                    }
+                }
+                if name == "None" {
+                    let at = self.checkpoint();
+                    self.advance();
+                    self.wrap(at, SyntaxKind::Pattern);
+                    return Some(Pattern::Variant(VariantPattern {
+                        qualifier: None,
+                        ty: "Option".to_owned(),
+                        ty_span: span,
+                        variant: name,
+                        variant_span: span,
+                        fields: Vec::new(),
+                        span,
+                    }));
+                }
                 self.advance();
                 if name == "_" {
                     return Some(Pattern::Wildcard { span });
@@ -3884,7 +4058,12 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
-        let (fields, close) = self.pattern_fields(variant_span)?;
+        // A variant with no payload may be written without `()` (R1, 5b.14): `State.Ready`.
+        let (fields, close) = if self.at(&TokenKind::LParen) {
+            self.pattern_fields(variant_span)?
+        } else {
+            (Vec::new(), variant_span)
+        };
         self.wrap(at, SyntaxKind::Pattern);
         Some(VariantPattern {
             qualifier,
@@ -4220,6 +4399,28 @@ impl<'a> Parser<'a> {
             depth += 1;
             self.built(depth)?;
             self.wrap(at, SyntaxKind::FieldExpr);
+            // `Enum.Variant` with no payload and no `()` (R1, 5b.14): a capitalised name then a
+            // capitalised member is a variant, as types and variants are spelled; a record's
+            // field and a binding are not.
+            if let Expr::Var {
+                name: ty,
+                span: ty_span,
+            } = &out
+            {
+                if capitalised(ty) && capitalised(&name) {
+                    out = Expr::Variant {
+                        qualifier: None,
+                        ty: ty.clone(),
+                        ty_span: *ty_span,
+                        type_args: None,
+                        span: ty_span.join(name_span),
+                        variant: name,
+                        variant_span: name_span,
+                        fields: Vec::new(),
+                    };
+                    continue;
+                }
+            }
             out = Expr::Field {
                 span: out.span().join(name_span),
                 base: Box::new(out),
@@ -4421,6 +4622,36 @@ impl<'a> Parser<'a> {
             self.wrap(args_at, SyntaxKind::ArgList);
             self.built(deepest + 1)?;
             self.wrap(at, SyntaxKind::CallExpr);
+            let parens = Span::new(self.file, span.end, close.end);
+            let (name, mut args) = if qualifier.is_none() && type_args.is_none() {
+                printed(name, args, parens)
+            } else {
+                (name, args)
+            };
+            // `Some(x)`, `Ok(x)`, `Err(e)` (R1, 5b.14): the prelude's variants, their payload
+            // written without its label; the checker infers `Option`'s or `Result`'s arguments.
+            if let (None, None, Some((ty, label)), 1) =
+                (&qualifier, &type_args, short_variant(&name), args.len())
+            {
+                if let Some(value) = args.pop() {
+                    let field = FieldInit {
+                        name: label.to_owned(),
+                        name_span: parens,
+                        span: value.span(),
+                        value,
+                    };
+                    return Some(Expr::Variant {
+                        qualifier: None,
+                        ty: ty.to_owned(),
+                        ty_span: span,
+                        type_args: None,
+                        variant: name,
+                        variant_span: span,
+                        fields: vec![field],
+                        span: span.join(close),
+                    });
+                }
+            }
             Some(Expr::Call {
                 qualifier,
                 callee: name,
@@ -4444,6 +4675,19 @@ impl<'a> Parser<'a> {
             }
             self.built(1)?;
             self.wrap(at, SyntaxKind::NameRef);
+            // `None` (R1, 5b.14): the prelude's `Option.None()`.
+            if name == "None" {
+                return Some(Expr::Variant {
+                    qualifier: None,
+                    ty: "Option".to_owned(),
+                    ty_span: span,
+                    type_args: None,
+                    variant: name,
+                    variant_span: span,
+                    fields: Vec::new(),
+                    span,
+                });
+            }
             Some(Expr::Var { name, span })
         }
     }

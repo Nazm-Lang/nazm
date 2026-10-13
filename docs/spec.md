@@ -69,6 +69,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `while` | STABLE 1.0 | |
 | `blocks` | STABLE 1.0 | |
 | `line-breaks` | EXPERIMENTAL | R1, 5b.11 and 5b.19: `else if`, and a line break or a block's `}` for a statement's `;`; EXPERIMENTAL until R1 closes |
+| `short-variants` | EXPERIMENTAL | R1, 5b.14: an enum construction infers its type arguments; `Some`, `None`, `Ok`, `Err`; a variant without `()`; EXPERIMENTAL until R1 closes |
 | `break-continue` | STABLE 1.0 | |
 | `return` | STABLE 1.0 | |
 | `unreachable-code` | STABLE 1.0 | |
@@ -991,7 +992,9 @@ else:
 - The wrong number of type arguments is `N0353` wherever it is written — `Pair[Int]`,
   `Vec[Int, Str]`, `identity[Int, Str](…)`; type arguments on a definition that has no
   parameters are `N0351`; a generic type written without its arguments where a concrete type
-  is needed — a field, a parameter, a construction — is `N0352`.
+  is needed — a field, a parameter, a construction — is `N0352`; since R1 (5b.14) an enum's
+  construction written without them takes them from the type it is wanted as, or from its payload
+  (*Short variants*, below), and is `N0352` only where neither says.
 - An argument that never produces a value (every path `return`s, `break`s or `continue`s)
   contributes nothing to inference.
 
@@ -1093,7 +1096,7 @@ No traits, interfaces or protocols; no `impl` and no methods; no constraints or 
 associated types or constants; no higher-kinded parameters; no const generics; no defaults;
 no variance or subtyping; no specialisation or overloading; no reflection. No closures, no
 function values, no `Never`, no unit type. Construction infers nothing: its type arguments
-are written.
+are written. *(R1, 5b.14: an enum's construction now infers them — *Short variants*, below.)*
 
 **Corrected 2026-09-24, N12.** This paragraph said there was no built-in `Option` or
 `Result`. There still is none built into the checker: both are now ordinary generic enums
@@ -1495,6 +1498,14 @@ ambiguity.
 
 Assignment does not change a binding's type: `n` declared from an `Int` stays `Int`.
 
+**Compound assignment (R1, 5b.12; EXPERIMENTAL until R1 closes).** `place op= e`, for `op` one of
+`+ - * / % & | ^ << >>`, means `place = place op e`, with every rule of the operator and of the
+assignment: `n += 1` needs `let mut n`, overflows as `n + 1` does, and is a statement. Each of
+`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` is one token, so `n + = 1` is not
+one. The place is read as an expression, so an index in it is a name, a field of one or a
+number — `v[i] += 1` — and one that would be computed twice (`v[next()] += 1`) is refused by
+name: bind it first.
+
 ### `while` is a statement, and there is no loop value
 <!-- id: while -->
 
@@ -1562,6 +1573,42 @@ refused as a missing `;`, which with lines ending statements is no longer a mist
 which `else if` makes of every link of a chain — may have branches that end differently, in
 values of different types or one in none: it produces nothing, as an `if` without `else` does.
 Where a value is wanted the rule above is unchanged, and so is its error.
+
+### Short variants
+<!-- id: short-variants -->
+
+*R1, 5b.14; EXPERIMENTAL until R1 closes.*
+
+**An enum's construction infers its type arguments.** `Option.Some(value: 3)` is an
+`Option[Int]`: where none are written, a construction of a generic enum takes them from the
+type it is wanted as — a parameter's, a function's result, a typed binding's — and otherwise
+from its payload, each field declared as one of the enum's parameters giving that parameter its
+value's type. Where neither decides one, as for `Option.None()` with nothing around it, it is
+`N0352` as before, and writing them stays correct everywhere.
+
+**The prelude's variants have short spellings.** `Some(x)` is `Option.Some(value: x)`, `None` is
+`Option.None()`, `Ok(x)` is `Result.Ok(value: x)` and `Err(e)` is `Result.Err(error: e)` — in an
+expression and, with a pattern for `x` or `e`, in a pattern:
+
+```nazm
+fn half(n: Int) -> Option[Int] {
+    if n % 2 == 0 { Some(n / 2) } else { None }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    match half(8) {
+        Some(h) => print(f"{h}\n"),
+        None => print("odd\n"),
+    }
+    0
+}
+```
+
+`Some`, `None`, `Ok` and `Err` are read so wherever a name is, as `print` is a built-in's.
+
+**A variant with no payload needs no `()`.** `Color.Red` is `Color.Red()`, in an expression and
+in a pattern. In an expression a capitalised name followed by `.` and a capitalised name is read
+so — as types and variants are spelled, and bindings and fields are not.
 
 ### `else if`, and a line break for `;`
 <!-- id: line-breaks -->
@@ -2334,7 +2381,7 @@ standard error, and end the process. That is enough for a compiler, and it is al
 | **Reading** | `read_file(path) -> Str` — the file's bytes, whatever they are. Fails with `N0407` |
 | **Writing** | `write_file(path, data) -> Int` — truncating; returns the byte count. Fails with `N0407` |
 | **Existence** | `file_exists(path) -> Bool` — whether it can be *opened for reading*, which is the question a program actually asks |
-| **Output** | `print(s)` and `eprint(s)` write bytes to descriptors 1 and 2 and return the count. Neither adds a newline: `str_from_byte(10)` is how you ask for one |
+| **Output** | `print(s)` and `eprint(s)` write bytes to descriptors 1 and 2 and return the count. Neither adds a newline: `str_from_byte(10)` is how you ask for one. *(R1, 5b.4 and 5b.13; EXPERIMENTAL until R1 closes:* `print(x)` and `eprint(x)` take any value an interpolation's hole takes — a `Str`, a number, a `Bool`, a `Show` — and write its text, `print(x)` meaning `print(f"{x}")`; `println(x)` and `eprintln(x)` add a newline, `println(x)` meaning `print(f"{x}\n")`, and `println()` writes one. `println` and `eprintln` are built-in names, as `print` is.*) |
 | **Ending** | `exit_with(code)` ends the process. It never returns, which the type system cannot express, so it is written `Int` and the value never arrives. **The status** (v1, Q1-B-05): the language's exit status is `0..=255`, and the host observes exactly that value — every host reports those unchanged. A `code` outside that range is not truncated by the host: it fails with `N0416`, *this exit status is outside 0 to 255*, and the process ends with status 2, as any failure does, in the interpreter and in every compiled program alike. Status 2 is therefore both a failure's and `exit_with(2)`'s; standard error tells them apart |
 
 Excluding the program name from `arg(i)` is deliberate: a compiled program's `argv[0]` is

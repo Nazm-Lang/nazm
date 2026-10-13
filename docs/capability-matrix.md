@@ -266,6 +266,33 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1 (2026-10-14)** · *Short variants and inferred enum arguments* (`spec.md`, *Short variants*;
+`openspec/changes/r1-language-for-the-rewrite`, 5b.14). An enum's construction written without type
+arguments takes them from the type it is wanted as, or from payload fields declared as its
+parameters (`check/construct.rs`, `inferred_enum`), each payload value checked once; where neither
+decides, `N0352` as before. The parser reads `Some(x)`, `Ok(x)`, `Err(e)` and `None` as the
+prelude's variants in expressions and patterns, `Enum.Variant` without `()` in a pattern, and a
+capitalised `Name.Member` without `()` in an expression as a variant. Evidence:
+`crates/nazm-cli/tests/short_variants.rs` — a program of them alike under the interpreter and each
+backend, nothing live; what nothing decides still `N0352`. Seven mutants.
+
+**R1 (2026-10-14)** · *`print` of any value, and `println`* (`spec.md`, *Output*; 5b.4 and 5b.13).
+The parser reads `print(x)` and `eprint(x)` of anything but a string literal as `print(f"{x}")`,
+and `println(x)`/`eprintln(x)` as `print(f"{x}\n")` — the hole keyed by the argument list's span,
+so a `Show` resolves as an interpolation's does; `println` and `eprintln` are built-in names.
+Evidence: `crates/nazm-cli/tests/printing.rs` — every kind of value on both streams alike
+everywhere, nothing live; what has no text, a function named `println`, and printing without
+`OutCap` refused. Three mutants.
+
+**R1 (2026-10-13)** · *Compound assignment* (`spec.md`, *Mutation is opt-in and visible at the
+binding*; `openspec/changes/r1-language-for-the-rewrite`, 5b.12). `+=`, `-=`, `*=`, `/=`, `%=`,
+`&=`, `|=`, `^=`, `<<=` and `>>=`, each one token, parse as `place = place op e`, so nothing below
+the parser changed; an index in the place is a name, a field of one or a number, and one with a
+call is refused by name rather than computed twice. Epoch 72. Evidence:
+`crates/nazm-cli/tests/compound_assign.rs` — every operator on a binding, a field and an element,
+alike under the interpreter and each backend; overflow failing as the operator does; what it cannot
+mean refused; the formatter keeping each token. Six mutants.
+
 **R1 (2026-10-13)** · *`else if`, a line break for `;`, and a value nobody wants*
 (`spec.md`, *`else if`, and a line break for `;`* and *One block*;
 `openspec/changes/r1-language-for-the-rewrite`, 5b.11 and 5b.19). `else if` (and `else if let`)
