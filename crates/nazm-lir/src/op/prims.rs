@@ -162,6 +162,7 @@ impl Fx<'_, '_> {
             | Intrinsic::FloatIsInfinite
             | Intrinsic::FloatIsFinite
             | Intrinsic::NumToStr
+            | Intrinsic::StrConcatNum
             | Intrinsic::FloatToStrFixed
             | Intrinsic::Float64ToBits
             | Intrinsic::WideningMul
@@ -974,6 +975,35 @@ pub(crate) fn element(op: Intrinsic, elem: Option<Ty>) -> Ty {
 }
 
 impl Fx<'_, '_> {
+    /// A number of kind `k`'s text written at `buf`, which has 48 bytes: how many.
+    fn digits_into(&mut self, k: nazm_sema::NumKind, x: V, buf: V) -> V {
+        use nazm_sema::NumKind;
+        if k.is_float() {
+            let d = if k == NumKind::F32 {
+                self.conv(super::ir::ConvOp::FExt, Class::F64, x)
+            } else {
+                x
+            };
+            let single = self.bit(k == NumKind::F32);
+            self.rt_v("nz.format_float", &[buf, d, single], Class::I64)
+        } else if k == NumKind::U64 {
+            self.rt_v("nz.format_u64", &[buf, x], Class::I64)
+        } else if super::lower::num_class(k) == Class::I128 {
+            // By address (R1b, L13b): 39 digits and a sign fit the 48 bytes.
+            let px = self.scratch(16);
+            self.store(px, 0, x);
+            let signed = self.iconst(i64::from(k.is_signed()));
+            self.rt_v("nz.format_i128", &[buf, px, signed], Class::I64)
+        } else {
+            let wide = if super::lower::num_class(k) == Class::I64 {
+                x
+            } else {
+                self.ext(Class::I64, x, k.is_signed())
+            };
+            self.rt_v("nz.format_int", &[buf, wide], Class::I64)
+        }
+    }
+
     /// `num_to_str`, `float_parses` and `float_parse_raw` (Gate 2): the runtime's numbers part.
     fn num_text(
         &mut self,
@@ -991,30 +1021,25 @@ impl Fx<'_, '_> {
                 let x = self.arg(args, 0);
                 let room = self.iconst(48);
                 let (owner, buf) = self.string_backing(room);
-                let n = if k.is_float() {
-                    let d = if k == NumKind::F32 {
-                        self.conv(super::ir::ConvOp::FExt, Class::F64, x)
-                    } else {
-                        x
-                    };
-                    let single = self.bit(k == NumKind::F32);
-                    self.rt_v("nz.format_float", &[buf, d, single], Class::I64)
-                } else if k == NumKind::U64 {
-                    self.rt_v("nz.format_u64", &[buf, x], Class::I64)
-                } else if super::lower::num_class(k) == Class::I128 {
-                    // By address (R1b, L13b): 39 digits and a sign fit the 48 bytes.
-                    let px = self.scratch(16);
-                    self.store(px, 0, x);
-                    let signed = self.iconst(i64::from(k.is_signed()));
-                    self.rt_v("nz.format_i128", &[buf, px, signed], Class::I64)
-                } else {
-                    let wide = if super::lower::num_class(k) == Class::I64 {
-                        x
-                    } else {
-                        self.ext(Class::I64, x, k.is_signed())
-                    };
-                    self.rt_v("nz.format_int", &[buf, wide], Class::I64)
-                };
+                let n = self.digits_into(k, x, buf);
+                self.write_str(dst, buf, n, owner);
+                true
+            }
+            // An interpolation's text then an integer (R1, 5b.9): one allocation, the digits
+            // written after the text's bytes.
+            Intrinsic::StrConcatNum => {
+                let k = elem
+                    .and_then(super::numeric::kind_of)
+                    .unwrap_or(NumKind::I64);
+                let a = self.arg_place(args, 0);
+                let x = self.arg(args, 1);
+                let (pa, la) = self.str_parts(a);
+                let room = self.add_imm(la, 48);
+                let (owner, buf) = self.string_backing(room);
+                self.rt("memcpy", &[buf, pa, la]);
+                let rest = self.ptr_add(buf, la);
+                let d = self.digits_into(k, x, rest);
+                let n = self.bin(BinOp::Add, la, d);
                 self.write_str(dst, buf, n, owner);
                 true
             }

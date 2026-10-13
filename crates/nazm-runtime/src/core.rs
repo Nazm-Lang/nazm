@@ -57,6 +57,74 @@ pub fn runtime_declarations(out: &mut String, single: bool) {
     }
 }
 
+/// The reference counting a program does most, which a unit may inline (R1, 5b.9).
+const INLINABLE: [&str; 5] = [
+    "nz.arr_retain",
+    "nz.arr_release",
+    "nz.seq_release",
+    "nz.str_retain",
+    "nz.str_release",
+];
+
+/// One runtime function's definition, as the runtime holds it.
+fn definition(name: &str) -> Option<&'static str> {
+    for text in [SEQUENCE_RUNTIME, STRING_RUNTIME] {
+        let Some(at) = text.find(&format!(" @{name}(")) else {
+            continue;
+        };
+        let start = text.get(..at)?.rfind("define ")?;
+        let end = at + text.get(at..)?.find("\n}\n")? + 3;
+        return text.get(start..end);
+    }
+    None
+}
+
+/// A hosted unit's text, its declarations of the reference counting replaced by copies of the
+/// runtime's own definitions that the optimiser may inline and discards after (R1, 5b.9):
+/// `available_externally`, so the runtime's stays the one definition the program links. A
+/// retain and the release that follows it then cost a few instructions, not two calls, and an
+/// optimised build may drop the pair. What the copies use is declared once.
+#[must_use]
+pub fn inline_reference_counting(unit: &str) -> String {
+    let declared = |name: &str| {
+        unit.lines()
+            .any(|l| l.starts_with("declare ") && l.contains(&format!(" @{name}(")))
+    };
+    if !INLINABLE.iter().any(|n| declared(n)) {
+        return unit.to_owned();
+    }
+    // A copy of `nz.seq_release` calls `nz.arr_release`, which is then copied too.
+    let wanted: Vec<&str> = INLINABLE
+        .iter()
+        .copied()
+        .filter(|n| declared(n) || (*n == "nz.arr_release" && declared("nz.seq_release")))
+        .collect();
+    let mut out = String::with_capacity(unit.len() + 2048);
+    for line in unit.lines() {
+        let copied = line.starts_with("declare ")
+            && wanted.iter().any(|n| line.contains(&format!(" @{n}(")));
+        if !copied {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    let has = |needle: &str| unit.lines().any(|l| l.starts_with(needle));
+    if !has("declare void @free(") {
+        out.push_str("declare void @free(ptr)\n");
+    }
+    for g in ["nz.seq_reclaimed", "nz.str_reclaimed"] {
+        if !has(&format!("@{g} = ")) {
+            let _ = writeln!(out, "@{g} = external global i64");
+        }
+    }
+    for n in wanted {
+        if let Some(d) = definition(n) {
+            out.push_str(&d.replacen("define hidden ", "define available_externally hidden ", 1));
+        }
+    }
+    out
+}
+
 /// Emit the program's runtime support: defined once, for the whole executable.
 ///
 /// # Ownership, as a rule rather than as a sequence of renamings
@@ -552,7 +620,6 @@ entry:
 /// second compiler generated. Each is a thin wrapper over an entry the LLVM text calls
 /// directly; none allocates, frees or counts anything the wrapped one does not.
 const SHIM_RUNTIME: &str = r#"
-@.dec.rt = private unnamed_addr constant [5 x i8] c"%lld\00"
 
 define hidden i32 @nz.failed_now() {
 entry:
@@ -561,11 +628,52 @@ entry:
   ret i32 %r
 }
 
+; An Int's decimal digits, a `-` first when negative, into 21 bytes the caller owns: how many.
+; Written here rather than through `snprintf` (R1, 5b.9): a C library's formatting parses its
+; format and takes a lock on every call, and a program printing numbers spent a quarter of its
+; time there. The magnitude is unsigned, so the most negative Int is exact.
 define hidden i64 @nz.format_int(ptr %buf, i64 %v) {
 entry:
-  %w = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 21, ptr @.dec.rt, i64 %v)
-  %n = sext i32 %w to i64
-  ret i64 %n
+  %tmp = alloca [24 x i8], align 1
+  %neg = icmp slt i64 %v, 0
+  %nv = sub i64 0, %v
+  %m = select i1 %neg, i64 %nv, i64 %v
+  %xs = alloca i64
+  %ks = alloca i64
+  %ss = alloca i64
+  store i64 %m, ptr %xs
+  store i64 24, ptr %ks
+  br label %digit
+digit:
+  %x = load i64, ptr %xs
+  %k = load i64, ptr %ks
+  %q = udiv i64 %x, 10
+  %qt = mul i64 %q, 10
+  %r = sub i64 %x, %qt
+  %ch = add i64 %r, 48
+  %c8 = trunc i64 %ch to i8
+  %k1 = sub i64 %k, 1
+  %slot = getelementptr i8, ptr %tmp, i64 %k1
+  store i8 %c8, ptr %slot
+  store i64 %q, ptr %xs
+  store i64 %k1, ptr %ks
+  store i64 %k1, ptr %ss
+  %more = icmp ne i64 %q, 0
+  br i1 %more, label %digit, label %sign
+sign:
+  %km = sub i64 %k1, 1
+  br i1 %neg, label %minus, label %copy
+minus:
+  %ms = getelementptr i8, ptr %tmp, i64 %km
+  store i8 45, ptr %ms
+  store i64 %km, ptr %ss
+  br label %copy
+copy:
+  %start = load i64, ptr %ss
+  %len = sub i64 24, %start
+  %from = getelementptr i8, ptr %tmp, i64 %start
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %from, i64 %len, i1 false)
+  ret i64 %len
 }
 "#;
 
@@ -3529,13 +3637,49 @@ const NUMBER_RUNTIME: &str = r#"
 @.fmt.e = private unnamed_addr constant [5 x i8] c"%.*e\00"
 @.fmt.f = private unnamed_addr constant [5 x i8] c"%.*f\00"
 @.fmt.lld = private unnamed_addr constant [5 x i8] c"%lld\00"
-@.fmt.llu = private unnamed_addr constant [5 x i8] c"%llu\00"
 
+; A UInt64's decimal digits into 21 bytes the caller owns: how many (as `nz.format_int`).
 define hidden i64 @nz.format_u64(ptr %buf, i64 %v) {
 entry:
-  %w = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 21, ptr @.fmt.llu, i64 %v)
-  %n = sext i32 %w to i64
-  ret i64 %n
+  %tmp = alloca [24 x i8], align 1
+  %neg = icmp ne i64 0, 0
+  %m = add i64 %v, 0
+  %xs = alloca i64
+  %ks = alloca i64
+  %ss = alloca i64
+  store i64 %m, ptr %xs
+  store i64 24, ptr %ks
+  br label %digit
+digit:
+  %x = load i64, ptr %xs
+  %k = load i64, ptr %ks
+  %q = udiv i64 %x, 10
+  %qt = mul i64 %q, 10
+  %r = sub i64 %x, %qt
+  %ch = add i64 %r, 48
+  %c8 = trunc i64 %ch to i8
+  %k1 = sub i64 %k, 1
+  %slot = getelementptr i8, ptr %tmp, i64 %k1
+  store i8 %c8, ptr %slot
+  store i64 %q, ptr %xs
+  store i64 %k1, ptr %ks
+  store i64 %k1, ptr %ss
+  %more = icmp ne i64 %q, 0
+  br i1 %more, label %digit, label %sign
+sign:
+  %km = sub i64 %k1, 1
+  br i1 %neg, label %minus, label %copy
+minus:
+  %ms = getelementptr i8, ptr %tmp, i64 %km
+  store i8 45, ptr %ms
+  store i64 %km, ptr %ss
+  br label %copy
+copy:
+  %start = load i64, ptr %ss
+  %len = sub i64 24, %start
+  %from = getelementptr i8, ptr %tmp, i64 %start
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %from, i64 %len, i1 false)
+  ret i64 %len
 }
 
 ; A float with exactly `digits` decimals (R1a, L4), C's `%.*f`, into 360 bytes the caller owns:

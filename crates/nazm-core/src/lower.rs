@@ -2920,9 +2920,14 @@ impl<'a> Lower<'a> {
                     self.hole_text(expr, *spec, *span)?
                 }
             };
-            acc = Some(match acc {
-                None => piece,
-                Some(a) => Self::str_builtin(
+            acc = Some(match (acc, Self::integer_text(&piece)) {
+                (None, _) => piece,
+                // An integer's digits written straight after the text before them (R1, 5b.9):
+                // one string, not one for the number and another for the two together.
+                (Some(a), Some((t, v))) => {
+                    Self::str_builtin(nazm_sema::Intrinsic::StrConcatNum, vec![t], vec![a, v], at)
+                }
+                (Some(a), None) => Self::str_builtin(
                     nazm_sema::Intrinsic::StrConcat,
                     Vec::new(),
                     vec![a, piece],
@@ -2931,6 +2936,29 @@ impl<'a> Lower<'a> {
             });
         }
         Ok(acc.unwrap_or_else(|| self.str_const("", at)))
+    }
+
+    /// `num_to_str[T](v)` for an integer `T` of at most 64 bits: its type and its operand.
+    fn integer_text(piece: &Expr) -> Option<(Type, Expr)> {
+        let ExprKind::Builtin {
+            op: nazm_sema::Intrinsic::NumToStr,
+            type_args,
+            args,
+            ..
+        } = &piece.kind
+        else {
+            return None;
+        };
+        let t = *type_args.first()?;
+        let narrow = match t {
+            Type::Int => true,
+            Type::Num(k) => !k.is_float() && k.bits() <= 64,
+            _ => false,
+        };
+        match (narrow, args.as_slice()) {
+            (true, [v]) => Some((t, v.clone())),
+            _ => None,
+        }
     }
 
     /// One hole's text (L4): its `show()` where the checker resolved one at its braces, and

@@ -29,6 +29,7 @@ mod simd;
 mod single_thread;
 mod source_identity;
 mod source_root;
+mod speed_text;
 mod stack_size;
 mod statics;
 mod stdlib;

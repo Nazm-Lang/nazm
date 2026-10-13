@@ -421,6 +421,13 @@ impl Backend for LlvmText {
         } else {
             ir
         };
+        // A hosted unit inlines the runtime's reference counting where it optimises (R1, 5b.9); a
+        // board's runtime defines its own.
+        let ir = if self.target.os == Os::None {
+            ir
+        } else {
+            nazm_runtime::inline_reference_counting(&ir)
+        };
         Ok(Generated {
             code: Code::Llvm(ir),
             needs,

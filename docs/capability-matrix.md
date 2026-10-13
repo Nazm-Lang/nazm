@@ -266,6 +266,22 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1 (2026-10-13)** · *Speed: integer text, the map's table, one string per interpolated
+integer, inlined reference counting* (`openspec/changes/r1-language-for-the-rewrite`, 5b.9). An
+integer's text is the runtime's own digit loop (`nz.format_int`, `nz.format_u64`), not `snprintf`.
+`@std/hashmap`'s table holds positions into dense arrays of hashes, keys and values, a power of two
+long: a probe compares hashes, a replaced value allocates nothing, a removal moves the last entry
+into the freed place; the slots, and so the iteration order, are as before. An interpolation's hole
+of an integer type of at most 64 bits after other text lowers to the internal `str_concat_num`: one
+string, the digits written after the text. A hosted unit carries `available_externally` copies of
+`nz.arr_retain`, `nz.arr_release`, `nz.seq_release`, `nz.str_retain` and `nz.str_release`, inlined
+where it is optimised; a board's runtime defines its own and is left alone. Word frequency over
+2,000,000 words under LLVM `-O2`: 392 → 222 ms; `fib(35)` unchanged at 68 ms. Evidence:
+`crates/nazm-cli/tests/speed_text.rs` — every integer type's extremes, alone and after text, alike
+under the interpreter and each backend; a thousand `f"w{i}"` allocating one string each,
+everywhere; the map against a model of itself over 3,000 operations; a hosted unit's copies. Seven
+mutants.
+
 **R1 (2026-10-13)** · *Speed: a program of one thread, and the inlined stack check*
 (`openspec/changes/r1-language-for-the-rewrite`, 5b.8). The stack check (N49) is three instructions
 in the function — this frame against the thread's limit — calling the runtime only on a thread's

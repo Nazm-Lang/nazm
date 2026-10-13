@@ -614,6 +614,11 @@ pub enum Intrinsic {
     /// is its own and has room, and otherwise copies into storage with room to grow, so a string
     /// built by repeated appends costs linear time. No program can name it.
     StrAppend,
+    /// Internal (R1, 5b.9): `str_concat(s, num_to_str[T](n))` for an integer `T`, as an
+    /// interpolation's lowering writes it. The same bytes; natively one allocation, the digits
+    /// written straight after `s`'s, rather than a string for the number and then a copy of it.
+    /// No program can name it.
+    StrConcatNum,
 }
 
 impl Intrinsic {
@@ -1002,6 +1007,7 @@ impl Intrinsic {
             Self::CheckedSub => "checked_sub",
             Self::CheckedMul => "checked_mul",
             Self::StrAppend => "str_append",
+            Self::StrConcatNum => "str_concat_num",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -1087,6 +1093,7 @@ impl Intrinsic {
             | Self::FloatIsFinite
             | Self::FloatToStrFixed => Some(NumClass::Float),
             Self::NumToStr
+            | Self::StrConcatNum
             | Self::BytesReadLe
             | Self::BytesReadBe
             | Self::BytesWriteLe
@@ -1186,6 +1193,7 @@ impl Intrinsic {
             | Self::FloatIsInfinite
             | Self::FloatIsFinite
             | Self::NumToStr => &[Shape::T],
+            Self::StrConcatNum => &[Shape::Str, Shape::T],
             Self::Float64ToBits => &[Shape::F64],
             Self::WideningMul => &[Shape::U64, Shape::U64],
             Self::Float64FromBits => &[Shape::U64],
@@ -1365,9 +1373,11 @@ impl Intrinsic {
             Self::FloatIsNan | Self::FloatIsInfinite | Self::FloatIsFinite | Self::FloatParses => {
                 Shape::Bool
             }
-            Self::NumToStr | Self::FloatToStrFixed | Self::StrPadStart | Self::StrPadEnd => {
-                Shape::Str
-            }
+            Self::NumToStr
+            | Self::StrConcatNum
+            | Self::FloatToStrFixed
+            | Self::StrPadStart
+            | Self::StrPadEnd => Shape::Str,
             Self::Float64ToBits => Shape::U64,
             Self::WideningMul => Shape::U128,
             Self::Float64FromBits | Self::FloatParseRaw => Shape::F64,
