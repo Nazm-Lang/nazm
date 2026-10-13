@@ -131,6 +131,18 @@ pub enum TokenKind {
     Tilde,
     Shl,
     Shr,
+    /// `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` — compound assignment (R1,
+    /// 5b.12): each one token, so `x + = 1` is not one and a formatter cannot split one.
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    PercentEq,
+    AmpEq,
+    PipeEq,
+    CaretEq,
+    ShlEq,
+    ShrEq,
     /// `@` — the start of a declaration's attribute (Gate 2, `docs/general-purpose.md` §16).
     At,
 
@@ -208,6 +220,16 @@ impl TokenKind {
         Self::Tilde,
         Self::Shl,
         Self::Shr,
+        Self::PlusEq,
+        Self::MinusEq,
+        Self::StarEq,
+        Self::SlashEq,
+        Self::PercentEq,
+        Self::AmpEq,
+        Self::PipeEq,
+        Self::CaretEq,
+        Self::ShlEq,
+        Self::ShrEq,
         Self::At,
     ];
 
@@ -285,6 +307,16 @@ impl TokenKind {
             Self::Tilde => Some("~"),
             Self::Shl => Some("<<"),
             Self::Shr => Some(">>"),
+            Self::PlusEq => Some("+="),
+            Self::MinusEq => Some("-="),
+            Self::StarEq => Some("*="),
+            Self::SlashEq => Some("/="),
+            Self::PercentEq => Some("%="),
+            Self::AmpEq => Some("&="),
+            Self::PipeEq => Some("|="),
+            Self::CaretEq => Some("^="),
+            Self::ShlEq => Some("<<="),
+            Self::ShrEq => Some(">>="),
             Self::At => Some("@"),
         }
     }
@@ -355,6 +387,16 @@ impl TokenKind {
             Self::Tilde => "`~`".to_owned(),
             Self::Shl => "`<<`".to_owned(),
             Self::Shr => "`>>`".to_owned(),
+            Self::PlusEq => "`+=`".to_owned(),
+            Self::MinusEq => "`-=`".to_owned(),
+            Self::StarEq => "`*=`".to_owned(),
+            Self::SlashEq => "`/=`".to_owned(),
+            Self::PercentEq => "`%=`".to_owned(),
+            Self::AmpEq => "`&=`".to_owned(),
+            Self::PipeEq => "`|=`".to_owned(),
+            Self::CaretEq => "`^=`".to_owned(),
+            Self::ShlEq => "`<<=`".to_owned(),
+            Self::ShrEq => "`>>=`".to_owned(),
             Self::At => "`@`".to_owned(),
             Self::Eof => "end of file".to_owned(),
         }
@@ -1418,6 +1460,20 @@ pub(crate) fn scan_one(
         }));
     }
 
+    // Three-character operators (R1, 5b.12), checked before their two-character prefixes.
+    let three = match (c, byte(i + 1), byte(i + 2)) {
+        (b'<', Some(b'<'), Some(b'=')) => Some(TokenKind::ShlEq),
+        (b'>', Some(b'>'), Some(b'=')) => Some(TokenKind::ShrEq),
+        _ => None,
+    };
+    if let Some(kind) = three {
+        i += 3;
+        emit!(Lexeme::Token(Token {
+            kind,
+            span: Span::new(file, at(start), at(i)),
+        }));
+    }
+
     // Two-character operators, checked before their one-character prefixes.
     let two = byte(i + 1).map(|n| (c, n));
     let (kind, width) = match two {
@@ -1433,6 +1489,14 @@ pub(crate) fn scan_one(
         Some((b'|', b'|')) => (Some(TokenKind::PipePipe), 2),
         Some((b'<', b'<')) => (Some(TokenKind::Shl), 2),
         Some((b'>', b'>')) => (Some(TokenKind::Shr), 2),
+        Some((b'+', b'=')) => (Some(TokenKind::PlusEq), 2),
+        Some((b'-', b'=')) => (Some(TokenKind::MinusEq), 2),
+        Some((b'*', b'=')) => (Some(TokenKind::StarEq), 2),
+        Some((b'/', b'=')) => (Some(TokenKind::SlashEq), 2),
+        Some((b'%', b'=')) => (Some(TokenKind::PercentEq), 2),
+        Some((b'&', b'=')) => (Some(TokenKind::AmpEq), 2),
+        Some((b'|', b'=')) => (Some(TokenKind::PipeEq), 2),
+        Some((b'^', b'=')) => (Some(TokenKind::CaretEq), 2),
         _ => (None, 0),
     };
     if let Some(kind) = kind {

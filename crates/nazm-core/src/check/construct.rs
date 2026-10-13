@@ -153,24 +153,37 @@ impl Checker<'_> {
         variant_span: Span,
         fields: &[FieldInit],
         span: Span,
+        expected: Option<Type>,
     ) -> Option<Type> {
+        // A payload value checked while inferring the enum's arguments, so it is checked once.
+        let mut pre: Vec<Option<Type>> = vec![None; fields.len()];
         let applied = if self.refused(ty) {
             None
         } else {
-            self.resolve_enum(ty, ty_span)
-                .and_then(|def| self.applied(Type::Enum(def), type_args, ty_span))
+            self.resolve_enum(ty, ty_span).and_then(|def| {
+                let inferred = if type_args.is_none() {
+                    self.inferred_enum(def, variant, fields, expected, &mut pre)
+                } else {
+                    None
+                };
+                inferred.or_else(|| self.applied(Type::Enum(def), type_args, ty_span))
+            })
         };
         let Some(Type::Enum(id)) = applied else {
             // Still check the initialisers: one unknown type should not silence every
             // error inside it.
-            for f in fields {
-                self.check_expr(&f.value, None);
+            for (f, done) in fields.iter().zip(&pre) {
+                if done.is_none() {
+                    self.check_expr(&f.value, None);
+                }
             }
             return None;
         };
         let Some(at) = self.find_variant(id, variant, variant_span) else {
-            for f in fields {
-                self.check_expr(&f.value, None);
+            for (f, done) in fields.iter().zip(&pre) {
+                if done.is_none() {
+                    self.check_expr(&f.value, None);
+                }
             }
             return Some(Type::Enum(id));
         };
@@ -183,7 +196,7 @@ impl Checker<'_> {
         );
 
         let mut given: Vec<(String, Span)> = Vec::new();
-        for f in fields {
+        for (f, done) in fields.iter().zip(pre) {
             let declared = self
                 .variant_def(id, at)
                 .and_then(|v| v.field(&f.name).map(|(i, fd)| (i, fd.ty, fd.name_span)));
@@ -200,7 +213,9 @@ impl Checker<'_> {
                         "declared here",
                     ),
                 );
-                self.check_expr(&f.value, None);
+                if done.is_none() {
+                    self.check_expr(&f.value, None);
+                }
                 continue;
             };
             if let Some((_, first)) = given.iter().find(|(g, _)| *g == f.name) {
@@ -213,7 +228,9 @@ impl Checker<'_> {
                     .secondary(*first, "first given here")
                     .help("every payload field is given exactly one value"),
                 );
-                self.check_expr(&f.value, None);
+                if done.is_none() {
+                    self.check_expr(&f.value, None);
+                }
                 continue;
             }
             given.push((f.name.clone(), f.name_span));
@@ -225,7 +242,10 @@ impl Checker<'_> {
                     field: index,
                 },
             );
-            let got = self.value_type(&f.value, Some(want));
+            let got = match done {
+                Some(t) => t,
+                None => self.value_type(&f.value, Some(want)),
+            };
             if got != want {
                 let (swant, sgot) = (self.show(want), self.show(got));
                 self.errors.push(
@@ -260,5 +280,59 @@ impl Checker<'_> {
             );
         }
         Some(Type::Enum(id))
+    }
+}
+
+impl Checker<'_> {
+    /// A generic enum's arguments where none are written (R1, 5b.14): the type the
+    /// construction is wanted as, when it is this enum; otherwise each payload field declared
+    /// as one of its parameters says that parameter is its value's type. `None` where that
+    /// leaves one undecided — then `N0352`, as before. A payload value checked here is recorded
+    /// in `pre` and not checked again.
+    fn inferred_enum(
+        &mut self,
+        def: EnumId,
+        variant: &str,
+        fields: &[FieldInit],
+        expected: Option<Type>,
+        pre: &mut [Option<Type>],
+    ) -> Option<Type> {
+        let node = nazm_sema::TypeNode::of(Type::Enum(def))?;
+        let n = self.res.types().declared_params(node);
+        if n == 0 {
+            return None;
+        }
+        if let Some(e) = expected {
+            if self.res.types().definition_of(e) == Some(node) {
+                return Some(e);
+            }
+        }
+        let at = self
+            .res
+            .enums()
+            .get(def)?
+            .variants
+            .iter()
+            .position(|v| v.name == variant)?;
+        let at = u32::try_from(at).ok()?;
+        let mut args: Vec<Option<Type>> = vec![None; n];
+        for (f, slot) in fields.iter().zip(pre.iter_mut()) {
+            let declared = self
+                .variant_def(def, at)
+                .and_then(|v| v.field(&f.name).map(|(_, fd)| fd.ty));
+            if let Some(Type::Param(p)) = declared {
+                if p.owner == nazm_sema::ParamOwner::Enum(def) {
+                    let t = self.value_type(&f.value, None);
+                    *slot = Some(t);
+                    if let Some(a) = args.get_mut(p.index as usize) {
+                        a.get_or_insert(t);
+                    }
+                }
+            }
+        }
+        let args: Vec<Type> = args.into_iter().collect::<Option<_>>()?;
+        let t = super::written::apply(self.res, node, args);
+        self.mention(t);
+        Some(t)
     }
 }

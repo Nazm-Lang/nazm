@@ -358,6 +358,7 @@ impl Checker<'_> {
                 *variant_span,
                 fields,
                 *span,
+                expected,
             ) {
                 Some(t) => Completion::Value(t),
                 None => Completion::Value(expected.unwrap_or(Type::Int)),
@@ -557,7 +558,7 @@ impl Checker<'_> {
                 Diagnostic::error(
                     codes::TYPE_MISMATCH,
                     expr.span(),
-                    format!("an interpolation writes a `Str`, a number, a `Bool` or a `Show`, and this is `{shown}`"),
+                    format!("a value printed or interpolated is a `Str`, a number, a `Bool` or a `Show`, and this is `{shown}`"),
                 )
                 .help(format!(
                     "implement `Show` (`@std/show`) for `{shown}`, or write the value's text yourself"

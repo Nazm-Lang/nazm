@@ -633,8 +633,18 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                 | Expr::Bool { .. }
                 | Expr::Str { .. } => {}
                 // One token in the concrete tree (L4): its holes are parsed apart and have no
-                // nodes there.
-                Expr::Interp { .. } => {}
+                // nodes there. What `print(x)` and `println(x)` are read as (R1, 5b.13) is no
+                // token at all: an interpolation over exactly its value, whose nodes are the
+                // value's.
+                Expr::Interp { parts, span } => {
+                    for p in parts {
+                        if let nazm_syntax::InterpPart::Hole { expr, .. } = p {
+                            if expr.span() == *span {
+                                stack.push(Node::Expr(expr));
+                            }
+                        }
+                    }
+                }
                 Expr::Var { span, .. } => spans.push((SyntaxKind::NameRef, *span)),
                 Expr::Neg {
                     operand, op_span, ..
@@ -667,6 +677,34 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                         spans.push((SyntaxKind::FieldInit, f.span));
                         stack.push(Node::Expr(&f.value));
                     }
+                }
+                // `Some(x)` and `None` (R1, 5b.14) are written as a call and a name, and
+                // `Color.Red` as a field: the concrete tree holds what was written.
+                Expr::Variant {
+                    fields,
+                    span,
+                    ty_span,
+                    variant_span,
+                    ..
+                } if ty_span == variant_span => {
+                    if fields.is_empty() {
+                        spans.push((SyntaxKind::NameRef, *span));
+                    } else {
+                        spans.push((SyntaxKind::CallExpr, *span));
+                        for f in fields {
+                            stack.push(Node::Expr(&f.value));
+                        }
+                    }
+                }
+                Expr::Variant {
+                    fields,
+                    span,
+                    ty_span,
+                    variant_span,
+                    ..
+                } if fields.is_empty() && span.end == variant_span.end => {
+                    spans.push((SyntaxKind::FieldExpr, *span));
+                    spans.push((SyntaxKind::NameRef, *ty_span));
                 }
                 Expr::Variant { fields, span, .. } => {
                     spans.push((SyntaxKind::VariantExpr, *span));

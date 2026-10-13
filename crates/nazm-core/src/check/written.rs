@@ -750,7 +750,7 @@ fn resolve_written_inner(
 }
 
 /// A generic definition applied to its arguments, interned.
-fn apply(res: &mut Resolution, node: TypeNode, args: Vec<Type>) -> Type {
+pub(super) fn apply(res: &mut Resolution, node: TypeNode, args: Vec<Type>) -> Type {
     match node {
         TypeNode::Record(id) => res.types_mut().apply_record(id, args),
         TypeNode::Enum(id) => res.types_mut().apply_enum(id, args),
@@ -993,8 +993,8 @@ impl Checker<'_> {
                         ),
                     )
                     .help(format!(
-                        "write them after the name: `{shown}[…]`. A construction infers \
-                         nothing"
+                        "write them after the name: `{shown}[…]`, or use it where its type is \
+                         known, or give it a payload that says (R1, 5b.14)"
                     )),
                 );
                 None

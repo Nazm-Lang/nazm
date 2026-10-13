@@ -330,7 +330,12 @@ let_else_statement = "let" , pattern , "=" , expression , [ "else" , block ] , "
  *)
 (* @example fn main() -> Int { let mut a = 1; a = 2; a } *)
 (* @example struct P { x: Int, } fn main() -> Int { let mut p = P(x: 1); p.x = 2; p.x } *)
-assignment = place , "=" , expression , ";" ;
+(* R1, 5b.12: `place op= e` is `place = place op e`; an index in the place is a name or a number. *)
+(* @example fn main() -> Int { let mut n = 1; n += 2; n *= 3; n <<= 1; n } *)
+assignment = place , ( "=" | compound_operator ) , expression , ";" ;
+
+(* @example fn main() -> Int { let mut n = 100; n -= 1; n /= 3; n %= 7; n &= 6; n |= 1; n ^= 2; n >>= 1; n } *)
+compound_operator = "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 
 (* @example struct I { n: Int, } struct O { i: I, } fn main() -> Int { let mut o = O(i: I(n: 1)); o.i.n = 2; o.i.n } *)
 (* @example fn main() -> Int { let mut g = [[0; 2]; 2]; g[1][0] = 5; g[1][0] } *)
@@ -592,7 +597,13 @@ pattern_one = "_" | IDENT | [ "-" ] , INT | STRING | "true" | "false" | variant_
 tuple_pattern = "(" , pattern , "," , pattern , { "," , pattern } , [ "," ] , ")" ;
 
 (* @example enum E { V(x: Int, y: Bool), } fn main() -> Int { match E.V(x: 1, y: true) { E.V(x: 1, y: _) => 1, E.V(x: n, y: _) => n, } } *)
-variant_pattern = [ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" ;
+(* R1, 5b.14: a variant with no payload needs no `()`; `Some(p)`, `Ok(p)`, `Err(p)` and `None` name the
+   prelude's variants. *)
+(* @example enum C { R, G, } fn main() -> Int { match C.G { C.R => 1, C.G => 2, } } *)
+(* @example fn main() -> Int { match Some(3) { Some(n) => n, None => 0, } } *)
+variant_pattern = [ qualifier ] , IDENT , "." , IDENT , [ "(" , [ pattern_fields ] , ")" ]
+                | ( "Some" | "Ok" | "Err" ) , "(" , pattern , ")"
+                | "None" ;
 
 (* @example enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: a, y: _) => a, } } *)
 pattern_fields = pattern_field , { "," , pattern_field } , [ "," ] ;

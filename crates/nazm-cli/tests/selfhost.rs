@@ -122,6 +122,18 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 // `..` (R1a), between a `for` range's bounds — outside the Nazm-written
                 // compiler's subset until R2; no source this test reads writes one.
                 T::DotDot => 68,
+                // Compound assignment (R1, 5b.12), outside the Nazm-written compiler's subset
+                // until R2; no source this test reads writes one.
+                T::PlusEq
+                | T::MinusEq
+                | T::StarEq
+                | T::SlashEq
+                | T::PercentEq
+                | T::AmpEq
+                | T::PipeEq
+                | T::CaretEq
+                | T::ShlEq
+                | T::ShrEq => 70,
                 T::Str(_) => 2,
                 // An interpolated string (L4), outside the Nazm-written compiler's subset until R2.
                 T::FStr(_) => 69,
