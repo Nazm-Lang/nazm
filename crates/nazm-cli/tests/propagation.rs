@@ -23,7 +23,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod memory_report;
+use crate::memory_report;
 
 use memory_report::{counts, Class, Ran};
 

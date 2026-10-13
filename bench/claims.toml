@@ -183,13 +183,13 @@ why = "measured on the tree of its date by the method its prose describes, befor
 [[claim]]
 heading = "Packages — N46, measured 2026-10-01"
 status = "reproducible"
-how = "cargo test --release -p nazm-cli --test packages -- --ignored --nocapture what_packages_cost"
+how = "cargo test --release -p nazm-cli --test cli_m_r -- --ignored --nocapture packages::what_packages_cost"
 metric = "resolution, a clean build and an incremental one of the diamond"
 
 [[claim]]
 heading = "The standard library — N45, measured 2026-10-01"
 status = "reproducible"
-how = "cargo test --release -p nazm-cli --test stdlib -- --ignored --nocapture what_the_standard_library_costs"
+how = "cargo test --release -p nazm-cli --test cli_s_z -- --ignored --nocapture stdlib::what_the_standard_library_costs"
 metric = "the standard library's check and run costs"
 
 [[claim]]
@@ -240,7 +240,7 @@ why = "measured on the tree of its date by the method its prose describes, befor
 [[claim]]
 heading = "Tasks and channels — N44, measured 2026-10-01"
 status = "reproducible"
-how = "cargo test --release -p nazm-cli --test scheduler -- --ignored --nocapture what_tasks_and_channels_cost"
+how = "cargo test --release -p nazm-cli --test cli_s_z -- --ignored --nocapture scheduler::what_tasks_and_channels_cost"
 metric = "spawn, join and channel costs"
 
 [[claim]]
@@ -261,13 +261,13 @@ why = "measured on the tree of its date by the method its prose describes, befor
 [[claim]]
 heading = "MIR — N40, measured 2026-10-01"
 status = "reproducible"
-how = "cargo test --release -p nazm-cli --test core_ir -- --ignored --nocapture what_each_phase_costs_on_the_compiler"
+how = "cargo test --release -p nazm-cli --test cli_c_d -- --ignored --nocapture core_ir::what_each_phase_costs_on_the_compiler"
 metric = "each phase's time on the compiler written in Nazm"
 
 [[claim]]
 heading = "Core IR — N39, measured 2026-09-30"
 status = "reproducible"
-how = "cargo test --release -p nazm-cli --test core_ir -- --ignored --nocapture what_each_phase_costs_on_the_compiler"
+how = "cargo test --release -p nazm-cli --test cli_c_d -- --ignored --nocapture core_ir::what_each_phase_costs_on_the_compiler"
 metric = "each phase's time on the compiler written in Nazm"
 
 [[claim]]
@@ -310,7 +310,7 @@ metric = "nazm.bench/2: every program's runs per stage, their spread, sizes, the
 [[claim]]
 heading = "Debugging and sampling — N91, measured 2026-10-04"
 status = "reproducible"
-how = "cargo test -p nazm-cli --test debugger_v3 -- --ignored --nocapture what_debugging_and_sampling_cost"
+how = "cargo test -p nazm-cli --test cli_c_d -- --ignored --nocapture debugger_v3::what_debugging_and_sampling_cost"
 metric = "a sampled run's wall time at two intervals against the run alone; a Cranelift build with and without --debug"
 
 [[claim]]
@@ -387,7 +387,7 @@ metric = "min and median build, check, interpret and run time per benchmark prog
 [[claim]]
 heading = "The default scheduler and the two regressions — N106, measured 2026-10-05"
 status = "reproducible"
-how = "cargo test --release -p nazm-cli --test scheduler_default -- --ignored --nocapture what_the_default_scheduler_costs"
+how = "cargo test --release -p nazm-cli --test cli_s_z -- --ignored --nocapture scheduler_default::what_the_default_scheduler_costs"
 metric = "spawn and join, a round trip, a parked receive woken, and resident memory per live task, on the pool and on threads; the regressions' contained numbers are `cargo xtask contained bench`'s"
 
 [[claim]]

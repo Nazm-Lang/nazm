@@ -17,7 +17,7 @@
     clippy::indexing_slicing
 )]
 
-mod common;
+use crate::common;
 
 use common::{run_bounded, Ran};
 

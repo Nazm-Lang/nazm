@@ -12,8 +12,8 @@
     clippy::indexing_slicing
 )]
 
-mod common;
-mod differential;
+use crate::common;
+use crate::differential;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

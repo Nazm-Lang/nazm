@@ -317,7 +317,7 @@ fn a_board_image_needs_objects() {
 }
 
 /// Boots the image on QEMU's `virt` machine. Needs Docker and the `nazm-qemu:n62` image
-/// (`docs/performance.md`, N62): `cargo test -p nazm-cli --test freestanding -- --ignored`.
+/// (`docs/performance.md`, N62): `cargo test -p nazm-cli --test cli_e_l -- --ignored freestanding::`.
 #[test]
 #[ignore = "starts a container"]
 fn the_image_boots_on_qemu_and_reports_on_the_uart() {

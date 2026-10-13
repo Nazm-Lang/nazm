@@ -13,7 +13,7 @@
     clippy::indexing_slicing
 )]
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -214,7 +214,7 @@ fn median_ms(n: usize, f: &dyn Fn()) -> f64 {
 /// What each phase costs, cumulatively, on compiler-scale sources: parse; parse and check; to
 /// Core IR (lowering and verifying it); to LIR (the native backend's lowering, with instance
 /// planning); to LLVM text. Release only, by hand and in the release-benchmark stage:
-/// `cargo test --release -p nazm-cli --test core_ir -- --ignored --nocapture`.
+/// `cargo test --release -p nazm-cli --test cli_c_d -- --ignored --nocapture core_ir::`.
 #[test]
 #[ignore = "a measurement: run in release, by hand or in the release-benchmark stage"]
 fn what_each_phase_costs_on_the_compiler() {

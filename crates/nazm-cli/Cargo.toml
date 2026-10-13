@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish.workspace = true
+# The integration tests are five executables, not one per file: see `tests/cli_a_b.rs`.
+autotests = false
 
 [package.metadata.nazm]
 # The sections that are this package's authority, as N32 identifies them (N33).
@@ -66,3 +68,27 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "cli_a_b"
+path = "tests/cli_a_b.rs"
+
+[[test]]
+name = "cli_c_d"
+path = "tests/cli_c_d.rs"
+
+[[test]]
+name = "cli_e_l"
+path = "tests/cli_e_l.rs"
+
+[[test]]
+name = "cli_m_r"
+path = "tests/cli_m_r.rs"
+
+[[test]]
+name = "cli_s_z"
+path = "tests/cli_s_z.rs"
+
+[[test]]
+name = "selfhost"
+path = "tests/selfhost.rs"

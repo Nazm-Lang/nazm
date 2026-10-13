@@ -146,7 +146,7 @@ fn report(o: &Output) -> serde_json::Value {
     })
 }
 
-/// Needs macOS's OpenCL and a GPU: `cargo test -p nazm-cli --test accel -- --ignored`.
+/// Needs macOS's OpenCL and a GPU: `cargo test -p nazm-cli --test cli_a_b -- --ignored accel::`.
 #[test]
 #[ignore = "runs on the GPU"]
 fn a_kernel_runs_on_the_gpu_and_agrees_with_the_interpreter() {

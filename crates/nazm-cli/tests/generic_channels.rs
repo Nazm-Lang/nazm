@@ -14,8 +14,8 @@
     clippy::indexing_slicing
 )]
 
-mod common;
-mod differential;
+use crate::common;
+use crate::differential;
 
 use common::Ran;
 use differential::{agrees, agrees_on, codes, nazm};
