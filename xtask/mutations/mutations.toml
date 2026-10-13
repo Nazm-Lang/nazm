@@ -17713,3 +17713,61 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''    let tls = if needs.single { "" } else { "thread_local " };'''
 replace = '''    let tls = "thread_local ";'''
 killers = [{ package = "nazm-cli", test = "single_thread", name = "main_s_authority_decides_whether_the_state_is_thread_local" }]
+
+# --- R1e S1: `@std/sha256`, `@std/blake3`, `file_walk` (`docs/spec.md`, *The standard library*) --
+
+[[mutation]]
+name = "r1e-a-sha256-schedule-rotates-by-eight"
+why = "the message schedule's small sigma rotates by 8 where FIPS 180-4 says 7, so every digest of more than nothing is wrong"
+file = "library/std/sha256.nz"
+find = "        let s0 = rotate_right(x, 7) ^ rotate_right(x, 18) ^ (x >> 3);"
+replace = "        let s0 = rotate_right(x, 8) ^ rotate_right(x, 18) ^ (x >> 3);"
+killers = [{ package = "nazm-cli", test = "hash_vectors", name = "the_short_vectors_agree_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-sha256-round-constant-is-off-by-one"
+why = "the first round constant is one more than FIPS 180-4's"
+file = "library/std/sha256.nz"
+find = "    0x428a2f98, 0x71374491,"
+replace = "    0x428a2f99, 0x71374491,"
+killers = [{ package = "nazm-cli", test = "hash_vectors", name = "the_short_vectors_agree_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-sha256-length-overwrites-its-one-bit"
+why = "a message of 56 bytes mod 64 is padded in one block, so its length is written over the one bit"
+file = "library/std/sha256.nz"
+find = "    let blocks = if held < 56 { 1 } else { 2 };"
+replace = "    let blocks = if held <= 56 { 1 } else { 2 };"
+killers = [{ package = "nazm-cli", test = "hash_vectors", name = "the_short_vectors_agree_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-blake3-root-has-no-root-flag"
+why = "the last compression is not flagged `ROOT`, so the output is the root's chaining value, not the hash"
+file = "library/std/blake3.nz"
+find = "    let s = compress(o.cv, o.m, UInt64(0), o.len, o.flags | ROOT);"
+replace = "    let s = compress(o.cv, o.m, UInt64(0), o.len, o.flags);"
+killers = [{ package = "nazm-cli", test = "hash_vectors", name = "the_short_vectors_agree_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-blake3-quarter-round-rotates-by-fifteen"
+why = "the quarter-round's first rotation is 15 where BLAKE3 says 16"
+file = "library/std/blake3.nz"
+find = "    v[d] = rotate_right(v[d] ^ v[a], 16);"
+replace = "    v[d] = rotate_right(v[d] ^ v[a], 15);"
+killers = [{ package = "nazm-cli", test = "hash_vectors", name = "the_short_vectors_agree_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-blake3-subtree-merges-late"
+why = "a completed chunk merges only every fourth chunk, so the tree over two or three chunks is the wrong shape"
+file = "library/std/blake3.nz"
+find = "    while t & 1 == 0 {"
+replace = "    while t & 3 == 0 {"
+killers = [{ package = "nazm-cli", test = "hash_vectors", name = "the_short_vectors_agree_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-walk-is-not-sorted"
+why = "`file_walk` answers its depth-first order, where `a/x` comes before `a.txt`"
+file = "library/std/file.nz"
+find = "    Result[Strs, IoError].Ok(value: sorted_all(found))"
+replace = "    Result[Strs, IoError].Ok(value: found)"
+killers = [{ package = "nazm-cli", test = "file_walk", name = "a_walk_lists_every_file_and_directory_sorted" }]

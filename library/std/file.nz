@@ -194,6 +194,79 @@ pub fn dir_list(io: IoCap, path: Str) -> Result[Strs, IoError] ! { io } {
     Result[Strs, IoError].Ok(value: sorted(names))
 }
 
+/// Every regular file and directory under the directory `dir`, at any depth, as `dir` joined to
+/// its path below it with `/`, sorted by their bytes; never `dir` itself. An entry that is neither
+/// (a socket, a device) is left out, as is one gone between being listed and being looked at.
+/// There is no way yet to ask whether a name is a symbolic link (`file_metadata` follows links),
+/// so a link is walked as what it names: a link to a file is listed as a file, and a link to a
+/// directory is listed and walked into; a dangling link is left out. A link that reaches its own
+/// ancestor is walked until the system refuses the path, and that failure is the `Err`.
+pub fn file_walk(io: IoCap, dir: Str) -> Result[Strs, IoError] ! { io } {
+    let found = strs_new();
+    let base = if str_len(dir) > 0 && str_byte(dir, str_len(dir) - 1) == 47 { str_slice(dir, 0, str_len(dir) - 1) } else { dir };
+    walk_into(io, base, found)?;
+    Result[Strs, IoError].Ok(value: sorted_all(found))
+}
+
+fn walk_into(io: IoCap, dir: Str, found: Strs) -> Result[Int, IoError] ! { io } {
+    let names = dir_list(io, dir)?;
+    let out = bytes_new(32);
+    for name in names {
+        let path = f"{dir}/{name}";
+        let s = os_stat(path, out);
+        if s < 0 {
+            if io_kind_of(s) != IoErrorKind.NotFound() {
+                return Result[Int, IoError].Err(error: io_context(io_error_from(s), path));
+            }
+        } else {
+            let kind = bytes_read_le[Int](out, 8);
+            if kind == 0 {
+                strs_push(found, path);
+            }
+            if kind == 1 {
+                strs_push(found, path);
+                walk_into(io, path, found)?;
+            }
+        }
+    }
+    Result[Int, IoError].Ok(value: 0)
+}
+
+// A merge sort by bytes, for a walk's many paths.
+fn sorted_all(xs: Strs) -> Strs ! {} {
+    let mut from = xs;
+    let mut to = strs_new();
+    let n = strs_len(xs);
+    for i in 0..n {
+        strs_push(to, strs_get(xs, i));
+    }
+    let mut width = 1;
+    while width < n {
+        let mut lo = 0;
+        while lo < n {
+            let mid = if lo + width < n { lo + width } else { n };
+            let hi = if lo + 2 * width < n { lo + 2 * width } else { n };
+            let mut i = lo;
+            let mut j = mid;
+            for k in lo..hi {
+                if i < mid && (j >= hi || !before(strs_get(from, j), strs_get(from, i))) {
+                    strs_set(to, k, strs_get(from, i));
+                    i = i + 1;
+                } else {
+                    strs_set(to, k, strs_get(from, j));
+                    j = j + 1;
+                }
+            }
+            lo = hi;
+        }
+        let t = from;
+        from = to;
+        to = t;
+        width = 2 * width;
+    }
+    from
+}
+
 // An insertion sort by bytes: a directory is listed once, and `@std/sort` is not imported so
 // this module stays importable where that one is refused.
 fn sorted(xs: Strs) -> Strs ! {} {

@@ -260,6 +260,25 @@ the state plain for a `main` of output alone, thread-local for one with `SpawnCa
 `ForeignCap` and for a library, the check inlined; a stack overflow and an overflow still reported
 by a program of one thread under LLVM and Cranelift. Five mutants.
 
+**R1e (2026-10-13)** · *`@std/sha256`, `@std/blake3` and `file_walk`* (`spec.md`, *The standard
+library*; `openspec/changes/r1-language-for-the-rewrite`, D4 and S1). Two digests in Nazm, over
+32-bit wrapping arithmetic and rotations: SHA-256 (FIPS 180-4) and BLAKE3's unkeyed 32-byte output
+(the reference algorithm: 1024-byte chunks, seven-round compression, a stack of subtree chaining
+values, `ROOT` on the last compression). Each is a one-shot function, a hex form and an incremental
+hasher — a handle whose finish leaves it unchanged. Digests for identity and integrity, not the
+cryptography 1.0 leaves out: no constant-time claim, no audit. `@std/file` gained `file_walk(io,
+dir)`: every regular file and directory under `dir`, sorted by bytes. With no `lstat` built-in yet
+(P2), a symbolic link is walked as what it names; a dangling one is left out, and one reaching its
+own ancestor ends in the system's `Err`. EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/hash_vectors.rs` — FIPS 180-4's examples and messages on each side of the
+padding's boundaries, and the BLAKE3 team's `test_vectors.json` lengths up to 3,073 bytes, each
+whole and in uneven pieces, alike under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and
+Cranelift with nothing live; a million `a`s and every official BLAKE3 length to 102,400 bytes under
+LLVM `-O2` and Cranelift; the embedded BLAKE3 vectors checked against the `blake3` crate.
+`crates/nazm-cli/tests/file_walk.rs` — a tree sorted as bytes, not as a depth-first listing, under
+the interpreter and LLVM; on Unix, links to a file, to a directory, dangling and looping. Seven
+mutants.
+
 **R1c (2026-10-13)** · *`@derive(toml)`* (`spec.md`, *Derived serialisation*, **TOML**;
 `openspec/changes/r1-language-for-the-rewrite`, L2c). The same shape over `@std/toml`'s `Toml` tree,
 alone or beside `json`: `t_toml_value` and `t_toml_read` for a record or an enum, and for a record —

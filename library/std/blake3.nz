@@ -1,0 +1,263 @@
+// `@std/blake3`: BLAKE3's hash, as its reference implementation computes it (R1e, S1).
+//
+// Imported with `use "@std/blake3";`. `blake3(data)` is the 32-byte default output of a whole
+// buffer; `blake3_new`, `blake3_update` and `blake3_finish` give the same output of data that
+// arrives in pieces, whatever the pieces. The input is split into chunks of 1024 bytes, each
+// compressed block by block (64 bytes, seven rounds) into a chaining value, and the chunks' values
+// are merged pairwise up a binary tree as they complete — a stack of at most 54 subtree values —
+// whose root is compressed with `ROOT`. A hasher is a handle, shared like a `Vec`; `blake3_finish`
+// leaves it as it was. Unkeyed hashing only: no keyed mode, no key derivation, no longer output.
+// Pure Nazm over 32-bit wrapping arithmetic and rotations; held to the official test vectors
+// (`crates/nazm-cli/tests/hash_vectors.rs`).
+
+/// An incremental BLAKE3 hasher.
+pub struct Blake3 {
+    // The current chunk's chaining value: eight little-endian words.
+    cv: Bytes,
+    // The current chunk's block being filled; zero past what it holds.
+    block: Bytes,
+    // The completed subtrees' chaining values, 32 bytes each, oldest first.
+    stack: Bytes,
+    // The block's length, the blocks of this chunk compressed, the chunk's index, the stack's depth.
+    counts: Ints,
+}
+
+const IV: [UInt32; 8] = [
+    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
+];
+
+const PERMUTATION: [Int; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
+
+const CHUNK_START: UInt32 = 1;
+const CHUNK_END: UInt32 = 2;
+const PARENT: UInt32 = 4;
+const ROOT: UInt32 = 8;
+
+// What a compression is given, before it is decided whether it is the root.
+struct Output {
+    cv: [UInt32; 8],
+    m: [UInt32; 16],
+    counter: UInt64,
+    len: UInt32,
+    flags: UInt32,
+}
+
+// The quarter-round, on state words `a`, `b`, `c`, `d` with message words `x` and `y`.
+fn g(s: [UInt32; 16], a: Int, b: Int, c: Int, d: Int, x: UInt32, y: UInt32) -> [UInt32; 16] ! {} {
+    let mut v = s;
+    v[a] = wrapping_add(wrapping_add(v[a], v[b]), x);
+    v[d] = rotate_right(v[d] ^ v[a], 16);
+    v[c] = wrapping_add(v[c], v[d]);
+    v[b] = rotate_right(v[b] ^ v[c], 12);
+    v[a] = wrapping_add(wrapping_add(v[a], v[b]), y);
+    v[d] = rotate_right(v[d] ^ v[a], 8);
+    v[c] = wrapping_add(v[c], v[d]);
+    v[b] = rotate_right(v[b] ^ v[c], 7);
+    v
+}
+
+fn round(s: [UInt32; 16], m: [UInt32; 16]) -> [UInt32; 16] ! {} {
+    // The columns, then the diagonals.
+    let s1 = g(s, 0, 4, 8, 12, m[0], m[1]);
+    let s2 = g(s1, 1, 5, 9, 13, m[2], m[3]);
+    let s3 = g(s2, 2, 6, 10, 14, m[4], m[5]);
+    let s4 = g(s3, 3, 7, 11, 15, m[6], m[7]);
+    let s5 = g(s4, 0, 5, 10, 15, m[8], m[9]);
+    let s6 = g(s5, 1, 6, 11, 12, m[10], m[11]);
+    let s7 = g(s6, 2, 7, 8, 13, m[12], m[13]);
+    g(s7, 3, 4, 9, 14, m[14], m[15])
+}
+
+fn permute(m: [UInt32; 16]) -> [UInt32; 16] ! {} {
+    let p = PERMUTATION;
+    let mut out = m;
+    for i in 0..16 {
+        out[i] = m[p[i]];
+    }
+    out
+}
+
+fn compress(cv: [UInt32; 8], block: [UInt32; 16], counter: UInt64, len: UInt32, flags: UInt32) -> [UInt32; 16] ! {} {
+    let iv = IV;
+    let mut s = [UInt32(0); 16];
+    for i in 0..8 {
+        s[i] = cv[i];
+    }
+    for i in 0..4 {
+        s[8 + i] = iv[i];
+    }
+    s[12] = wrap_convert[UInt32](counter);
+    s[13] = UInt32(counter >> 32);
+    s[14] = len;
+    s[15] = flags;
+    let mut m = block;
+    for r in 0..7 {
+        s = round(s, m);
+        m = permute(m);
+    }
+    for i in 0..8 {
+        s[i] = s[i] ^ s[i + 8];
+        s[i + 8] = s[i + 8] ^ cv[i];
+    }
+    s
+}
+
+fn chaining_value(o: Output) -> [UInt32; 8] ! {} {
+    let s = compress(o.cv, o.m, o.counter, o.len, o.flags);
+    let mut out = [UInt32(0); 8];
+    for i in 0..8 {
+        out[i] = s[i];
+    }
+    out
+}
+
+fn words8(b: Bytes, at: Int) -> [UInt32; 8] ! {} {
+    let mut out = [UInt32(0); 8];
+    for i in 0..8 {
+        out[i] = bytes_read_le[UInt32](b, at + 4 * i);
+    }
+    out
+}
+
+fn words16(b: Bytes) -> [UInt32; 16] ! {} {
+    let mut out = [UInt32(0); 16];
+    for i in 0..16 {
+        out[i] = bytes_read_le[UInt32](b, 4 * i);
+    }
+    out
+}
+
+fn put8(b: Bytes, at: Int, w: [UInt32; 8]) -> Int ! {} {
+    for i in 0..8 {
+        bytes_write_le(b, at + 4 * i, w[i]);
+    }
+    0
+}
+
+fn parent(left: [UInt32; 8], right: [UInt32; 8]) -> Output ! {} {
+    let mut m = [UInt32(0); 16];
+    for i in 0..8 {
+        m[i] = left[i];
+        m[8 + i] = right[i];
+    }
+    Output(cv: IV, m: m, counter: UInt64(0), len: UInt32(64), flags: PARENT)
+}
+
+// The current chunk's last block, as what it would be compressed with.
+fn chunk_output(h: Blake3) -> Output ! {} {
+    let start = if ints_get(h.counts, 1) == 0 { CHUNK_START } else { UInt32(0) };
+    Output(
+        cv: words8(h.cv, 0),
+        m: words16(h.block),
+        counter: UInt64(ints_get(h.counts, 2)),
+        len: UInt32(ints_get(h.counts, 0)),
+        flags: start | CHUNK_END,
+    )
+}
+
+// A chunk begins: its index, the key as its chaining value, an empty block.
+fn start_chunk(h: Blake3, index: Int) -> Int ! {} {
+    put8(h.cv, 0, IV);
+    bytes_copy(h.block, bytes_new(64));
+    ints_set(h.counts, 0, 0);
+    ints_set(h.counts, 1, 0);
+    ints_set(h.counts, 2, index);
+    0
+}
+
+// A completed chunk's value, `total` chunks done: merged with every subtree it completes.
+fn add_chunk(h: Blake3, value: [UInt32; 8], total: Int) -> Int ! {} {
+    let mut cv = value;
+    let mut t = total;
+    let mut depth = ints_get(h.counts, 3);
+    while t & 1 == 0 {
+        depth = depth - 1;
+        cv = chaining_value(parent(words8(h.stack, 32 * depth), cv));
+        t = t >> 1;
+    }
+    put8(h.stack, 32 * depth, cv);
+    ints_set(h.counts, 3, depth + 1);
+    0
+}
+
+/// A new hasher, given nothing yet.
+pub fn blake3_new() -> Blake3 ! {} {
+    let counts = ints_new();
+    for i in 0..4 {
+        ints_push(counts, 0);
+    }
+    let h = Blake3(cv: bytes_new(32), block: bytes_new(64), stack: bytes_new(54 * 32), counts: counts);
+    start_chunk(h, 0);
+    h
+}
+
+/// Give the hasher `data`, after whatever it was given before: `0`.
+pub fn blake3_update(h: Blake3, data: Bytes) -> Int ! {} {
+    let n = bytes_len(data);
+    let mut at = 0;
+    while at < n {
+        let held = ints_get(h.counts, 0);
+        let done = ints_get(h.counts, 1);
+        // A full chunk, with more to come, is complete.
+        if 64 * done + held == 1024 {
+            let value = chaining_value(chunk_output(h));
+            let total = ints_get(h.counts, 2) + 1;
+            add_chunk(h, value, total);
+            start_chunk(h, total);
+        } else {
+            // A full block, with more to come, is compressed.
+            if held == 64 {
+                let start = if done == 0 { CHUNK_START } else { UInt32(0) };
+                let s = compress(words8(h.cv, 0), words16(h.block), UInt64(ints_get(h.counts, 2)), UInt32(64), start);
+                for i in 0..8 {
+                    bytes_write_le(h.cv, 4 * i, s[i]);
+                }
+                bytes_copy(h.block, bytes_new(64));
+                ints_set(h.counts, 0, 0);
+                ints_set(h.counts, 1, done + 1);
+            } else {
+                let take = if n - at < 64 - held { n - at } else { 64 - held };
+                bytes_copy(bytes_slice(h.block, held, held + take), bytes_slice(data, at, at + take));
+                ints_set(h.counts, 0, held + take);
+                at = at + take;
+            }
+        }
+    }
+    0
+}
+
+/// The 32-byte output for everything the hasher has been given. The hasher is unchanged.
+pub fn blake3_finish(h: Blake3) -> Bytes ! {} {
+    let mut o = chunk_output(h);
+    let mut depth = ints_get(h.counts, 3);
+    while depth > 0 {
+        depth = depth - 1;
+        o = parent(words8(h.stack, 32 * depth), chaining_value(o));
+    }
+    let s = compress(o.cv, o.m, UInt64(0), o.len, o.flags | ROOT);
+    let out = bytes_new(32);
+    for i in 0..8 {
+        bytes_write_le(out, 4 * i, s[i]);
+    }
+    out
+}
+
+/// The BLAKE3 hash of `data`: 32 bytes.
+pub fn blake3(data: Bytes) -> Bytes ! {} {
+    let h = blake3_new();
+    blake3_update(h, data);
+    blake3_finish(h)
+}
+
+/// The BLAKE3 hash of `data` as 64 lower-case hexadecimal digits.
+pub fn blake3_hex(data: Bytes) -> Str ! {} {
+    let digest = blake3(data);
+    let digits = "0123456789abcdef";
+    let out = bytes_new(64);
+    for i in 0..32 {
+        let b = Int(bytes_get(digest, i));
+        bytes_set(out, 2 * i, UInt8(str_byte(digits, b >> 4)));
+        bytes_set(out, 2 * i + 1, UInt8(str_byte(digits, b & 15)));
+    }
+    bytes_to_str(out)
+}

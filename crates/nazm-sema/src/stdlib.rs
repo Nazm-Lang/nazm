@@ -23,6 +23,7 @@ pub const PREFIX: &str = "@std/";
 pub const MODULES: &[(&str, &str)] = &[
     ("audit", include_str!("../../../library/std/audit.nz")),
     ("binary", include_str!("../../../library/std/binary.nz")),
+    ("blake3", include_str!("../../../library/std/blake3.nz")),
     ("chan", include_str!("../../../library/std/chan.nz")),
     ("deque", include_str!("../../../library/std/deque.nz")),
     ("dist", include_str!("../../../library/std/dist.nz")),
@@ -49,6 +50,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("random", include_str!("../../../library/std/random.nz")),
     ("result", include_str!("../../../library/std/result.nz")),
     ("seq", include_str!("../../../library/std/seq.nz")),
+    ("sha256", include_str!("../../../library/std/sha256.nz")),
     ("show", include_str!("../../../library/std/show.nz")),
     ("sort", include_str!("../../../library/std/sort.nz")),
     ("test", include_str!("../../../library/std/test.nz")),
