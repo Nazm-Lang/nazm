@@ -1,0 +1,1028 @@
+// `@std/toml`: TOML 1.0 text, parsed into a tree of values and encoded back (R1c, S1).
+//
+// Imported with `use "@std/toml";`. A document is a `Toml.Table`: its keys in the order they were
+// first defined, and its values, each a `Toml` — a recursive enum, through `List` (*Immutable
+// indirection*). Every rule of TOML 1.0 is checked: a key or table defined twice, a table defined
+// by a header after dotted keys made it, an inline table extended, an integer past `Int`, a date
+// that is not one. Parsing never traps: malformed text is an `Err` naming the line and column
+// where it went wrong, `line:column: what`. Encoding writes a table's plain values first, then
+// each sub-table under its header and each array of tables as `[[...]]`, as TOML requires: the
+// text parses back to the same values, each table's keys reordered so, and encoding that again
+// gives the same text.
+
+/// A TOML value. A date-time is its RFC 3339 text, with `T` and `Z` written upper-case; which of
+/// TOML's four kinds it is, is which variant holds it.
+pub enum Toml {
+    Str(value: Str),
+    Int(value: Int),
+    Float(value: Float64),
+    Bool(value: Bool),
+    /// `1979-05-27T07:32:00Z`, `1979-05-27T00:32:00.999-07:00`.
+    OffsetDatetime(value: Str),
+    /// `1979-05-27T07:32:00`.
+    LocalDatetime(value: Str),
+    /// `1979-05-27`.
+    LocalDate(value: Str),
+    /// `07:32:00.999`.
+    LocalTime(value: Str),
+    Array(items: List[Toml]),
+    Table(keys: List[Str], values: List[Toml]),
+}
+
+/// The value of `key` in table `t`, or `None` when `t` is not a table or has no such key.
+pub fn toml_get(t: Toml, key: Str) -> Option[Toml] ! {} {
+    let mut found = Option[Toml].None();
+    if let Toml.Table(keys: keys, values: values) = t {
+        for i in 0..list_len(keys) {
+            if list_get(keys, i) == key {
+                found = Option[Toml].Some(value: list_get(values, i));
+                break;
+            }
+        }
+    }
+    found
+}
+
+// --- the parse arena ---------------------------------------------------------------------------
+//
+// A document is built in an arena, where a table can still be extended by a later header or
+// dotted key, and turned into the immutable tree once it is complete.
+
+// Kinds, by number.
+fn k_str() -> Int ! {} { 0 }
+fn k_int() -> Int ! {} { 1 }
+fn k_float() -> Int ! {} { 2 }
+fn k_bool() -> Int ! {} { 3 }
+fn k_odt() -> Int ! {} { 4 }
+fn k_ldt() -> Int ! {} { 5 }
+fn k_ld() -> Int ! {} { 6 }
+fn k_lt() -> Int ! {} { 7 }
+fn k_array() -> Int ! {} { 8 }
+fn k_table() -> Int ! {} { 9 }
+
+// How a table or an array came to be, as bits of its flags.
+// Defined by its own `[header]`.
+fn f_explicit() -> Int ! {} { 1 }
+// Made as a header's prefix: `[a.b]` makes `a`.
+fn f_implicit() -> Int ! {} { 2 }
+// Made by a dotted key: `a.b = 1` makes `a`.
+fn f_dotted() -> Int ! {} { 4 }
+// An inline table or an array value, which nothing may extend.
+fn f_frozen() -> Int ! {} { 8 }
+// An array of tables, `[[a]]`.
+fn f_aot() -> Int ! {} { 16 }
+
+/// One value in the arena. A table's keys are in `keys` and its values, by node, in `kids`; an
+/// array's items are in `kids`. `flags` is one cell, so that a copy read out of the arena still
+/// changes the node.
+struct Node {
+    kind: Int,
+    text: Str,
+    num: Int,
+    real: Float64,
+    keys: Strs,
+    kids: Ints,
+    flags: Ints,
+}
+
+/// The parser: the text, the position (one cell), the first error, and the arena.
+struct P {
+    text: Str,
+    pos: Ints,
+    err: Strs,
+    nodes: Vec[Node],
+}
+
+fn add(p: P, kind: Int, text: Str, num: Int, real: Float64, flags: Int) -> Int ! {} {
+    let f = ints_new();
+    ints_push(f, flags);
+    vec_push(p.nodes, Node(kind: kind, text: text, num: num, real: real, keys: strs_new(), kids: ints_new(), flags: f));
+    vec_len(p.nodes) - 1
+}
+
+fn node(p: P, id: Int) -> Node ! {} { vec_get(p.nodes, id) }
+
+fn flags(p: P, id: Int) -> Int ! {} { ints_get(node(p, id).flags, 0) }
+
+fn has(p: P, id: Int, flag: Int) -> Bool ! {} { flags(p, id) & flag != 0 }
+
+fn mark(p: P, id: Int, flag: Int) -> Int ! {} {
+    let n = node(p, id);
+    ints_set(n.flags, 0, ints_get(n.flags, 0) | flag);
+    0
+}
+
+/// The child of table `t` named `key`, or -1.
+fn child(p: P, t: Int, key: Str) -> Int ! {} {
+    let n = node(p, t);
+    let mut found = 0 - 1;
+    for i in 0..strs_len(n.keys) {
+        if strs_get(n.keys, i) == key {
+            found = ints_get(n.kids, i);
+            break;
+        }
+    }
+    found
+}
+
+fn attach(p: P, t: Int, key: Str, kid: Int) -> Int ! {} {
+    let n = node(p, t);
+    strs_push(n.keys, key);
+    ints_push(n.kids, kid);
+    kid
+}
+
+/// Every table under `id`, and `id`, frozen: an inline table is complete when it closes.
+fn freeze(p: P, id: Int) -> Int ! {} {
+    mark(p, id, f_frozen());
+    let n = node(p, id);
+    if n.kind == k_table() || n.kind == k_array() {
+        for i in 0..ints_len(n.kids) {
+            freeze(p, ints_get(n.kids, i));
+        }
+    }
+    0
+}
+
+/// The arena's node `id` as a value.
+fn tree(p: P, id: Int) -> Toml ! {} {
+    let n = node(p, id);
+    if n.kind == k_table() {
+        let values = vec_new[Toml]();
+        for i in 0..ints_len(n.kids) {
+            vec_push(values, tree(p, ints_get(n.kids, i)));
+        }
+        let keys = vec_new[Str]();
+        for i in 0..strs_len(n.keys) {
+            vec_push(keys, strs_get(n.keys, i));
+        }
+        Toml.Table(keys: list_from_vec(keys), values: list_from_vec(values))
+    } else {
+        if n.kind == k_array() {
+            let items = vec_new[Toml]();
+            for i in 0..ints_len(n.kids) {
+                vec_push(items, tree(p, ints_get(n.kids, i)));
+            }
+            Toml.Array(items: list_from_vec(items))
+        } else {
+            if n.kind == k_str() { Toml.Str(value: n.text) } else {
+            if n.kind == k_int() { Toml.Int(value: n.num) } else {
+            if n.kind == k_float() { Toml.Float(value: n.real) } else {
+            if n.kind == k_bool() { Toml.Bool(value: n.num != 0) } else {
+            if n.kind == k_odt() { Toml.OffsetDatetime(value: n.text) } else {
+            if n.kind == k_ldt() { Toml.LocalDatetime(value: n.text) } else {
+            if n.kind == k_ld() { Toml.LocalDate(value: n.text) } else {
+                Toml.LocalTime(value: n.text)
+            } } } } } } }
+        }
+    }
+}
+
+// --- reading text ------------------------------------------------------------------------------
+
+fn at(p: P) -> Int ! {} { ints_get(p.pos, 0) }
+
+fn advance(p: P, n: Int) -> Int ! {} {
+    ints_set(p.pos, 0, at(p) + n);
+    at(p)
+}
+
+fn byte_at(p: P, i: Int) -> Int ! {} {
+    if i < str_len(p.text) { str_byte(p.text, i) } else { 0 - 1 }
+}
+
+fn peek(p: P) -> Int ! {} { byte_at(p, at(p)) }
+
+fn failed(p: P) -> Bool ! {} { strs_len(p.err) > 0 }
+
+/// The first failure is kept, with where it happened: `line:column: what`, both from 1.
+fn fail(p: P, what: Str) -> Int ! {} {
+    if !failed(p) {
+        let mut line = 1;
+        let mut column = 1;
+        let stop = if at(p) < str_len(p.text) { at(p) } else { str_len(p.text) };
+        for i in 0..stop {
+            if str_byte(p.text, i) == 10 {
+                line = line + 1;
+                column = 1;
+            } else {
+                column = column + 1;
+            }
+        }
+        strs_push(p.err, f"{line}:{column}: {what}");
+    }
+    0
+}
+
+fn is_digit(b: Int) -> Bool ! {} { b >= 48 && b <= 57 }
+
+fn is_hex(b: Int) -> Bool ! {} { is_digit(b) || (b >= 97 && b <= 102) || (b >= 65 && b <= 70) }
+
+fn hex_value(b: Int) -> Int ! {} {
+    if is_digit(b) { b - 48 } else { if b >= 97 { b - 87 } else { b - 55 } }
+}
+
+fn is_bare(b: Int) -> Bool ! {} {
+    is_digit(b) || (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95 || b == 45
+}
+
+/// Spaces and tabs.
+fn spaces(p: P) -> Int ! {} {
+    while peek(p) == 32 || peek(p) == 9 {
+        advance(p, 1);
+    }
+    0
+}
+
+/// A comment, to the end of its line: tab and every byte but the other controls.
+fn comment(p: P) -> Int ! {} {
+    if peek(p) == 35 {
+        advance(p, 1);
+        let mut more = true;
+        while more && !failed(p) {
+            let b = peek(p);
+            if b < 0 || b == 10 || (b == 13 && byte_at(p, at(p) + 1) == 10) {
+                more = false;
+            } else {
+                if (b < 32 && b != 9) || b == 127 {
+                    fail(p, "a control character in a comment");
+                } else {
+                    advance(p, 1);
+                }
+            }
+        }
+    }
+    0
+}
+
+/// A newline, `\n` or `\r\n`, if one is next; whether it was.
+fn newline(p: P) -> Bool ! {} {
+    if peek(p) == 10 {
+        advance(p, 1);
+        true
+    } else {
+        if peek(p) == 13 && byte_at(p, at(p) + 1) == 10 {
+            advance(p, 2);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Spaces, then a comment, then the end of the line or of the text.
+fn end_of_line(p: P) -> Int ! {} {
+    spaces(p);
+    comment(p);
+    if !failed(p) && peek(p) >= 0 && !newline(p) {
+        fail(p, "expected the end of the line");
+    }
+    0
+}
+
+/// Inside an array: spaces, newlines and comments, any number.
+fn array_space(p: P) -> Int ! {} {
+    let mut more = true;
+    while more && !failed(p) {
+        spaces(p);
+        comment(p);
+        if !newline(p) { more = false; }
+    }
+    0
+}
+
+// --- strings -----------------------------------------------------------------------------------
+
+// The UTF-8 bytes of the scalar value `c`.
+fn utf8(c: Int) -> Str ! {} {
+    if c < 128 { str_from_byte(c) } else {
+        if c < 2048 { str_concat(str_from_byte(192 + c / 64), str_from_byte(128 + c % 64)) } else {
+            if c < 65536 {
+                str_concat(str_concat(str_from_byte(224 + c / 4096), str_from_byte(128 + (c / 64) % 64)), str_from_byte(128 + c % 64))
+            } else {
+                str_concat(str_concat(str_concat(str_from_byte(240 + c / 262144), str_from_byte(128 + (c / 4096) % 64)),
+                    str_from_byte(128 + (c / 64) % 64)), str_from_byte(128 + c % 64))
+            }
+        }
+    }
+}
+
+/// A byte a string may not hold as itself: a control character other than tab.
+fn forbidden(b: Int) -> Bool ! {} { (b < 32 && b != 9) || b == 127 }
+
+/// An escape after a `\` in a basic string, its text; the position is past it. A failure where
+/// it is not one.
+fn escape(p: P) -> Str ! {} {
+    let e = byte_at(p, at(p) + 1);
+    if e == 98 { advance(p, 2); str_from_byte(8) } else {
+    if e == 116 { advance(p, 2); str_from_byte(9) } else {
+    if e == 110 { advance(p, 2); str_from_byte(10) } else {
+    if e == 102 { advance(p, 2); str_from_byte(12) } else {
+    if e == 114 { advance(p, 2); str_from_byte(13) } else {
+    if e == 34 { advance(p, 2); "\"" } else {
+    if e == 92 { advance(p, 2); "\\" } else {
+    if e == 117 || e == 85 {
+        let width = if e == 117 { 4 } else { 8 };
+        let mut code = 0;
+        let mut ok = true;
+        for k in 0..width {
+            let h = byte_at(p, at(p) + 2 + k);
+            if is_hex(h) { code = code * 16 + hex_value(h); } else { ok = false; }
+        }
+        if !ok || code > 1114111 || (code >= 55296 && code <= 57343) {
+            fail(p, "an escape that is not a Unicode scalar value");
+            ""
+        } else {
+            advance(p, 2 + width);
+            utf8(code)
+        }
+    } else {
+        fail(p, "an escape TOML does not have");
+        ""
+    } } } } } } } }
+}
+
+/// A basic string, `"..."`, after its opening quote.
+fn basic(p: P) -> Str ! {} {
+    let mut out = "";
+    let mut done = false;
+    while !done && !failed(p) {
+        let b = peek(p);
+        if b < 0 || b == 10 || b == 13 {
+            fail(p, "a string that does not end on its line");
+        } else {
+            if b == 34 {
+                advance(p, 1);
+                done = true;
+            } else {
+                if b == 92 {
+                    out = str_concat(out, escape(p));
+                } else {
+                    if forbidden(b) { fail(p, "a control character in a string"); } else {
+                        out = str_concat(out, str_slice(p.text, at(p), at(p) + 1));
+                        advance(p, 1);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A literal string, `'...'`, after its opening quote.
+fn literal(p: P) -> Str ! {} {
+    let start = at(p);
+    let mut done = false;
+    while !done && !failed(p) {
+        let b = peek(p);
+        if b < 0 || b == 10 || b == 13 {
+            fail(p, "a string that does not end on its line");
+        } else {
+            if b == 39 { done = true; } else {
+                if forbidden(b) { fail(p, "a control character in a string"); } else { advance(p, 1); }
+            }
+        }
+    }
+    let s = str_slice(p.text, start, at(p));
+    if !failed(p) { advance(p, 1); }
+    s
+}
+
+/// A multi-line string, after its three opening quotes `q`: a newline right after them is not
+/// part of it, and in a basic one a `\` ending a line removes it and the whitespace after. Up to
+/// two quotes may end it before the closing three.
+fn multiline(p: P, q: Int) -> Str ! {} {
+    newline(p);
+    let mut out = "";
+    let mut done = false;
+    while !done && !failed(p) {
+        let b = peek(p);
+        if b < 0 {
+            fail(p, "a multi-line string that does not end");
+        } else {
+            if b == q && byte_at(p, at(p) + 1) == q && byte_at(p, at(p) + 2) == q {
+                // Up to two more quotes belong to the string.
+                let mut extra = 0;
+                while extra < 2 && byte_at(p, at(p) + 3 + extra) == q { extra = extra + 1; }
+                out = str_concat(out, str_slice(p.text, at(p), at(p) + extra));
+                advance(p, 3 + extra);
+                done = true;
+            } else {
+                if q == 34 && b == 92 {
+                    // A line-ending backslash: whitespace to the newline, then every space and
+                    // newline after it.
+                    let mut j = at(p) + 1;
+                    while byte_at(p, j) == 32 || byte_at(p, j) == 9 { j = j + 1; }
+                    if byte_at(p, j) == 10 || (byte_at(p, j) == 13 && byte_at(p, j + 1) == 10) {
+                        advance(p, j - at(p));
+                        let mut more = true;
+                        while more {
+                            if peek(p) == 32 || peek(p) == 9 { advance(p, 1); } else {
+                                if !newline(p) { more = false; }
+                            }
+                        }
+                    } else {
+                        out = str_concat(out, escape(p));
+                    }
+                } else {
+                    if b == 13 && byte_at(p, at(p) + 1) == 10 {
+                        out = str_concat(out, "\n");
+                        advance(p, 2);
+                    } else {
+                        if b == 10 || !forbidden(b) {
+                            out = str_concat(out, str_slice(p.text, at(p), at(p) + 1));
+                            advance(p, 1);
+                        } else {
+                            fail(p, "a control character in a string");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A string value of any of the four forms; the position is at its first quote.
+fn string(p: P) -> Str ! {} {
+    let q = peek(p);
+    if byte_at(p, at(p) + 1) == q && byte_at(p, at(p) + 2) == q {
+        advance(p, 3);
+        multiline(p, q)
+    } else {
+        advance(p, 1);
+        if q == 34 { basic(p) } else { literal(p) }
+    }
+}
+
+// --- keys --------------------------------------------------------------------------------------
+
+/// One key: bare, or a basic or literal string on one line.
+fn simple_key(p: P) -> Str ! {} {
+    let b = peek(p);
+    if b == 34 || b == 39 {
+        if byte_at(p, at(p) + 1) == b && byte_at(p, at(p) + 2) == b {
+            fail(p, "a multi-line string as a key");
+            ""
+        } else {
+            advance(p, 1);
+            if b == 34 { basic(p) } else { literal(p) }
+        }
+    } else {
+        let start = at(p);
+        while is_bare(peek(p)) { advance(p, 1); }
+        if at(p) == start { fail(p, "expected a key"); }
+        str_slice(p.text, start, at(p))
+    }
+}
+
+/// A dotted key, `a.b."c"`, with spaces around its dots.
+fn key(p: P) -> Strs ! {} {
+    let parts = strs_new();
+    strs_push(parts, simple_key(p));
+    spaces(p);
+    while peek(p) == 46 && !failed(p) {
+        advance(p, 1);
+        spaces(p);
+        strs_push(parts, simple_key(p));
+        spaces(p);
+    }
+    parts
+}
+
+// --- numbers and dates -------------------------------------------------------------------------
+
+/// Digits of base `base` with single underscores between them, from `i`; their end, or -1.
+fn digits_end(p: P, i: Int, base: Int) -> Int ! {} {
+    let mut j = i;
+    let mut ok = digit(base, byte_at(p, j));
+    while ok && digit(base, byte_at(p, j)) {
+        j = j + 1;
+        if byte_at(p, j) == 95 {
+            if digit(base, byte_at(p, j + 1)) { j = j + 1; } else { ok = false; }
+        }
+    }
+    if ok { j } else { 0 - 1 }
+}
+
+fn digit(base: Int, b: Int) -> Bool ! {} {
+    if base == 16 { is_hex(b) } else { if base == 8 { b >= 48 && b <= 55 } else {
+        if base == 2 { b == 48 || b == 49 } else { is_digit(b) } } }
+}
+
+/// The value of the digits from `i` to `j`, skipping underscores, in `base`; `None` past `Int`.
+fn digits_value(p: P, i: Int, j: Int, base: Int, negative: Bool) -> Option[Int] ! {} {
+    let mut v = Option[Int].Some(value: 0);
+    for k in i..j {
+        let b = byte_at(p, k);
+        if b != 95 {
+            v = match v {
+                Option.Some(value: x) => match checked_mul(x, base) {
+                    Option.Some(value: y) => if negative { checked_sub(y, hex_value(b)) } else { checked_add(y, hex_value(b)) },
+                    Option.None() => Option[Int].None(),
+                },
+                Option.None() => Option[Int].None(),
+            };
+        }
+    }
+    v
+}
+
+fn two(p: P, i: Int) -> Int ! {} {
+    if is_digit(byte_at(p, i)) && is_digit(byte_at(p, i + 1)) {
+        (byte_at(p, i) - 48) * 10 + byte_at(p, i + 1) - 48
+    } else {
+        0 - 1
+    }
+}
+
+/// `HH:MM:SS` and an optional fraction from `i`; its end, or -1.
+fn time_end(p: P, i: Int) -> Int ! {} {
+    let h = two(p, i);
+    let m = two(p, i + 3);
+    let s = two(p, i + 6);
+    if h < 0 || h > 23 || byte_at(p, i + 2) != 58 || m < 0 || m > 59 || byte_at(p, i + 5) != 58 || s < 0 || s > 60 {
+        0 - 1
+    } else {
+        let mut j = i + 8;
+        if byte_at(p, j) == 46 {
+            j = j + 1;
+            let start = j;
+            while is_digit(byte_at(p, j)) { j = j + 1; }
+            if j == start { j = 0 - 1; }
+        }
+        j
+    }
+}
+
+/// `YYYY-MM-DD` from `i`, a real day of a real month; whether it is one.
+fn date_ok(p: P, i: Int) -> Bool ! {} {
+    let mut year = 0;
+    let mut ok = true;
+    for k in 0..4 {
+        let b = byte_at(p, i + k);
+        if is_digit(b) { year = year * 10 + b - 48; } else { ok = false; }
+    }
+    let month = two(p, i + 5);
+    let day = two(p, i + 8);
+    if !ok || byte_at(p, i + 4) != 45 || byte_at(p, i + 7) != 45 || month < 1 || month > 12 || day < 1 {
+        false
+    } else {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let days = if month == 2 { if leap { 29 } else { 28 } } else {
+            if month == 4 || month == 6 || month == 9 || month == 11 { 30 } else { 31 } };
+        day <= days
+    }
+}
+
+/// A date, a time or a date-time at the position, as a node; -1 where the text is not one.
+fn datetime(p: P) -> Int ! {} {
+    let i = at(p);
+    if byte_at(p, i + 2) == 58 {
+        let j = time_end(p, i);
+        if j < 0 { return 0 - 1; }
+        let text = str_slice(p.text, i, j);
+        advance(p, j - i);
+        return add(p, k_lt(), text, 0, 0.0, 0);
+    }
+    if !date_ok(p, i) { return 0 - 1; }
+    let sep = byte_at(p, i + 10);
+    let has_time = (sep == 84 || sep == 116 || sep == 32) && time_end(p, i + 11) > 0;
+    if !has_time {
+        let text = str_slice(p.text, i, i + 10);
+        advance(p, 10);
+        return add(p, k_ld(), text, 0, 0.0, 0);
+    }
+    let j = time_end(p, i + 11);
+    let mut text = f"{str_slice(p.text, i, i + 10)}T{str_slice(p.text, i + 11, j)}";
+    let o = byte_at(p, j);
+    if o == 90 || o == 122 {
+        advance(p, j + 1 - i);
+        return add(p, k_odt(), f"{text}Z", 0, 0.0, 0);
+    }
+    if o == 43 || o == 45 {
+        let oh = two(p, j + 1);
+        let om = two(p, j + 4);
+        if oh < 0 || oh > 23 || byte_at(p, j + 3) != 58 || om < 0 || om > 59 {
+            return 0 - 1;
+        }
+        text = f"{text}{str_slice(p.text, j, j + 6)}";
+        advance(p, j + 6 - i);
+        return add(p, k_odt(), text, 0, 0.0, 0);
+    }
+    advance(p, j - i);
+    add(p, k_ldt(), text, 0, 0.0, 0)
+}
+
+/// A decimal integer's digits from `i` as TOML writes them: no leading zero but `0` itself.
+fn decimal_end(p: P, i: Int) -> Int ! {} {
+    let j = digits_end(p, i, 10);
+    if j > i + 1 && byte_at(p, i) == 48 { 0 - 1 } else { j }
+}
+
+/// An integer or a float at the position, as a node; a failure where it is neither.
+fn number(p: P) -> Int ! {} {
+    let i = at(p);
+    let sign = peek(p);
+    let signed = sign == 43 || sign == 45;
+    let s = if signed { i + 1 } else { i };
+    // `inf` and `nan`.
+    let word = if s + 3 <= str_len(p.text) { str_slice(p.text, s, s + 3) } else { "" };
+    if word == "inf" || word == "nan" {
+        advance(p, s + 3 - i);
+        let x = float_parse_raw(str_slice(p.text, i, s + 3));
+        return add(p, k_float(), "", 0, x, 0);
+    }
+    // A prefixed integer: no sign.
+    let x = byte_at(p, s + 1);
+    if !signed && byte_at(p, s) == 48 && (x == 120 || x == 111 || x == 98) {
+        let base = if x == 120 { 16 } else { if x == 111 { 8 } else { 2 } };
+        let j = digits_end(p, s + 2, base);
+        if j < 0 { fail(p, "a malformed integer"); return 0 - 1; }
+        advance(p, j - i);
+        return match digits_value(p, s + 2, j, base, false) {
+            Option.Some(value: v) => add(p, k_int(), "", v, 0.0, 0),
+            Option.None() => { fail(p, "an integer past `Int`"); 0 - 1 }
+        };
+    }
+    let j = decimal_end(p, s);
+    if j < 0 { fail(p, "a malformed number"); return 0 - 1; }
+    let mut k = j;
+    let mut float = false;
+    if byte_at(p, k) == 46 {
+        let f = digits_end(p, k + 1, 10);
+        if f < 0 { fail(p, "a fraction needs a digit on each side of its `.`"); return 0 - 1; }
+        k = f;
+        float = true;
+    }
+    if byte_at(p, k) == 101 || byte_at(p, k) == 69 {
+        let mut e = k + 1;
+        if byte_at(p, e) == 43 || byte_at(p, e) == 45 { e = e + 1; }
+        let f = digits_end(p, e, 10);
+        if f < 0 { fail(p, "an exponent needs digits"); return 0 - 1; }
+        k = f;
+        float = true;
+    }
+    advance(p, k - i);
+    if float {
+        let text = text_without_underscores(str_slice(p.text, i, k));
+        add(p, k_float(), "", 0, float_parse_raw(text), 0)
+    } else {
+        match digits_value(p, s, j, 10, sign == 45) {
+            Option.Some(value: v) => add(p, k_int(), "", v, 0.0, 0),
+            Option.None() => { fail(p, "an integer past `Int`"); 0 - 1 }
+        }
+    }
+}
+
+fn text_without_underscores(s: Str) -> Str ! {} {
+    let mut out = "";
+    let mut start = 0;
+    for i in 0..str_len(s) {
+        if str_byte(s, i) == 95 {
+            out = str_concat(out, str_slice(s, start, i));
+            start = i + 1;
+        }
+    }
+    str_concat(out, str_slice(s, start, str_len(s)))
+}
+
+// --- values ------------------------------------------------------------------------------------
+
+/// A value at the position, as a node; -1 after a failure.
+fn value(p: P) -> Int ! {} {
+    let b = peek(p);
+    if b == 34 || b == 39 {
+        let s = string(p);
+        return add(p, k_str(), s, 0, 0.0, 0);
+    }
+    if b == 116 && at(p) + 4 <= str_len(p.text) && str_slice(p.text, at(p), at(p) + 4) == "true" {
+        advance(p, 4);
+        return add(p, k_bool(), "", 1, 0.0, 0);
+    }
+    if b == 102 && at(p) + 5 <= str_len(p.text) && str_slice(p.text, at(p), at(p) + 5) == "false" {
+        advance(p, 5);
+        return add(p, k_bool(), "", 0, 0.0, 0);
+    }
+    if b == 91 { return array(p); }
+    if b == 123 { return inline_table(p); }
+    // A date is four digits and a `-`; a time, two digits and a `:`.
+    let i = at(p);
+    let date = is_digit(b) && is_digit(byte_at(p, i + 1)) && is_digit(byte_at(p, i + 2))
+        && is_digit(byte_at(p, i + 3)) && byte_at(p, i + 4) == 45;
+    let time = is_digit(b) && is_digit(byte_at(p, i + 1)) && byte_at(p, i + 2) == 58;
+    if date || time {
+        let d = datetime(p);
+        if d < 0 { fail(p, "a malformed date or time"); }
+        return d;
+    }
+    if is_digit(b) || b == 43 || b == 45 || b == 105 || b == 110 {
+        return number(p);
+    }
+    fail(p, "expected a value");
+    0 - 1
+}
+
+fn array(p: P) -> Int ! {} {
+    advance(p, 1);
+    let a = add(p, k_array(), "", 0, 0.0, f_frozen());
+    let items = node(p, a).kids;
+    array_space(p);
+    let mut done = false;
+    while !done && !failed(p) {
+        if peek(p) == 93 {
+            advance(p, 1);
+            done = true;
+        } else {
+            let v = value(p);
+            if !failed(p) { ints_push(items, v); }
+            array_space(p);
+            if peek(p) == 44 {
+                advance(p, 1);
+                array_space(p);
+            } else {
+                if peek(p) == 93 { advance(p, 1); done = true; } else {
+                    if !failed(p) { fail(p, "expected `,` or `]` in an array"); }
+                }
+            }
+        }
+    }
+    a
+}
+
+fn inline_table(p: P) -> Int ! {} {
+    advance(p, 1);
+    let t = add(p, k_table(), "", 0, 0.0, 0);
+    spaces(p);
+    if peek(p) == 125 {
+        advance(p, 1);
+    } else {
+        let mut done = false;
+        while !done && !failed(p) {
+            key_value(p, t);
+            spaces(p);
+            if peek(p) == 44 {
+                advance(p, 1);
+                spaces(p);
+                if peek(p) == 125 { fail(p, "a trailing `,` in an inline table"); }
+            } else {
+                if peek(p) == 125 { advance(p, 1); done = true; } else {
+                    if !failed(p) { fail(p, "expected `,` or `}` in an inline table"); }
+                }
+            }
+        }
+    }
+    freeze(p, t);
+    t
+}
+
+/// `key = value` into table `t`: a dotted key's prefix is tables, made or extended here.
+fn key_value(p: P, t: Int) -> Int ! {} {
+    let parts = key(p);
+    if failed(p) { return 0; }
+    if peek(p) != 61 { fail(p, "expected `=` after a key"); return 0; }
+    advance(p, 1);
+    spaces(p);
+    let mut table = t;
+    let last = strs_len(parts) - 1;
+    for i in 0..last {
+        let name = strs_get(parts, i);
+        let c = child(p, table, name);
+        if c < 0 {
+            table = attach(p, table, name, add(p, k_table(), "", 0, 0.0, f_dotted()));
+        } else {
+            if node(p, c).kind != k_table() || !has(p, c, f_dotted()) || has(p, c, f_frozen()) {
+                fail(p, f"`{name}` is already defined, and a dotted key cannot extend it");
+                return 0;
+            }
+            table = c;
+        }
+    }
+    let name = strs_get(parts, last);
+    if child(p, table, name) >= 0 {
+        fail(p, f"`{name}` is defined twice");
+        return 0;
+    }
+    let v = value(p);
+    if !failed(p) { attach(p, table, name, v); }
+    0
+}
+
+/// `[a.b]` or, with `aot`, `[[a.b]]`: the table the lines after it fill.
+fn header(p: P, aot: Bool) -> Int ! {} {
+    advance(p, if aot { 2 } else { 1 });
+    spaces(p);
+    let parts = key(p);
+    if failed(p) { return 0; }
+    if aot {
+        if peek(p) != 93 || byte_at(p, at(p) + 1) != 93 { fail(p, "expected `]]`"); return 0; }
+        advance(p, 2);
+    } else {
+        if peek(p) != 93 { fail(p, "expected `]`"); return 0; }
+        advance(p, 1);
+    }
+    let mut table = 0;
+    let last = strs_len(parts) - 1;
+    for i in 0..last {
+        let name = strs_get(parts, i);
+        let c = child(p, table, name);
+        if c < 0 {
+            table = attach(p, table, name, add(p, k_table(), "", 0, 0.0, f_implicit()));
+        } else {
+            if has(p, c, f_aot()) {
+                let kids = node(p, c).kids;
+                table = ints_get(kids, ints_len(kids) - 1);
+            } else {
+                if node(p, c).kind != k_table() || has(p, c, f_frozen()) {
+                    fail(p, f"`{name}` is already defined as a value");
+                    return 0;
+                }
+                table = c;
+            }
+        }
+    }
+    let name = strs_get(parts, last);
+    let c = child(p, table, name);
+    if aot {
+        let a = if c < 0 { attach(p, table, name, add(p, k_array(), "", 0, 0.0, f_aot())) } else {
+            if !has(p, c, f_aot()) {
+                fail(p, f"`{name}` is already defined, and not as an array of tables");
+                return 0;
+            }
+            c
+        };
+        let fresh = add(p, k_table(), "", 0, 0.0, f_explicit());
+        ints_push(node(p, a).kids, fresh);
+        fresh
+    } else {
+        if c < 0 {
+            attach(p, table, name, add(p, k_table(), "", 0, 0.0, f_explicit()))
+        } else {
+            if node(p, c).kind != k_table() || flags(p, c) != f_implicit() {
+                fail(p, f"the table `{name}` is defined twice");
+                return 0;
+            }
+            mark(p, c, f_explicit());
+            c
+        }
+    }
+}
+
+/// The document `text` spells, a `Toml.Table`, or an `Err` naming the line, the column and what
+/// was wrong there.
+pub fn toml_parse(text: Str) -> Result[Toml, Str] ! {} {
+    let p = P(text: text, pos: ints_new(), err: strs_new(), nodes: vec_new[Node]());
+    ints_push(p.pos, 0);
+    add(p, k_table(), "", 0, 0.0, f_explicit());
+    if !utf8_valid(text) { fail(p, "the text is not UTF-8"); }
+    let mut current = 0;
+    while !failed(p) && peek(p) >= 0 {
+        spaces(p);
+        let b = peek(p);
+        if b == 35 || b == 10 || b == 13 || b < 0 {
+            end_of_line(p);
+        } else {
+            if b == 91 {
+                current = header(p, byte_at(p, at(p) + 1) == 91);
+                if !failed(p) { end_of_line(p); }
+            } else {
+                key_value(p, current);
+                if !failed(p) { end_of_line(p); }
+            }
+        }
+    }
+    if failed(p) {
+        Result[Toml, Str].Err(error: strs_get(p.err, 0))
+    } else {
+        Result[Toml, Str].Ok(value: tree(p, 0))
+    }
+}
+
+// --- encoding ----------------------------------------------------------------------------------
+
+/// A key as TOML writes it: bare where it can be, otherwise quoted.
+fn encode_key(k: Str) -> Str ! {} {
+    let mut bare = str_len(k) > 0;
+    for i in 0..str_len(k) {
+        if !is_bare(str_byte(k, i)) { bare = false; }
+    }
+    if bare { k } else { encode_str(k) }
+}
+
+/// A basic string, every control character escaped.
+fn encode_str(s: Str) -> Str ! {} {
+    let mut out = "\"";
+    let mut start = 0;
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i);
+        let e = if b == 34 { "\\\"" } else { if b == 92 { "\\\\" } else { if b == 10 { "\\n" } else {
+            if b == 9 { "\\t" } else { if b == 13 { "\\r" } else { if forbidden(b) {
+                let h = "0123456789ABCDEF";
+                f"\\u00{str_slice(h, b / 16, b / 16 + 1)}{str_slice(h, b % 16, b % 16 + 1)}"
+            } else { "" } } } } } };
+        if str_len(e) > 0 {
+            out = str_concat(out, str_slice(s, start, i));
+            out = str_concat(out, e);
+            start = i + 1;
+        }
+    }
+    out = str_concat(out, str_slice(s, start, str_len(s)));
+    str_concat(out, "\"")
+}
+
+fn encode_float(x: Float64) -> Str ! {} {
+    if float_is_nan(x) { return "nan"; }
+    if float_is_infinite(x) { return if x > 0.0 { "inf" } else { "-inf" }; }
+    let s = num_to_str(x);
+    let mut plain = true;
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i);
+        if b == 46 || b == 101 { plain = false; }
+    }
+    if plain { str_concat(s, ".0") } else { s }
+}
+
+/// A value written inline: a table as `{ ... }`.
+fn encode_inline(v: Toml) -> Str ! {} {
+    match v {
+        Toml.Str(value: s) => encode_str(s),
+        Toml.Int(value: n) => int_to_str(n),
+        Toml.Float(value: x) => encode_float(x),
+        Toml.Bool(value: b) => if b { "true" } else { "false" },
+        Toml.OffsetDatetime(value: s) => s,
+        Toml.LocalDatetime(value: s) => s,
+        Toml.LocalDate(value: s) => s,
+        Toml.LocalTime(value: s) => s,
+        Toml.Array(items: items) => {
+            let parts = strs_new();
+            for i in 0..list_len(items) { strs_push(parts, encode_inline(list_get(items, i))); }
+            f"[{str_join(parts, ", ")}]"
+        },
+        Toml.Table(keys: keys, values: values) => {
+            if list_len(keys) == 0 { return "{}"; }
+            let parts = strs_new();
+            for i in 0..list_len(keys) {
+                strs_push(parts, f"{encode_key(list_get(keys, i))} = {encode_inline(list_get(values, i))}");
+            }
+            f"{{ {str_join(parts, ", ")} }}"
+        }
+    }
+}
+
+fn is_table(v: Toml) -> Bool ! {} {
+    if let Toml.Table(keys: k, values: x) = v { true } else { false }
+}
+
+/// An array written as `[[...]]` sections: one of tables only, not empty.
+fn is_aot(v: Toml) -> Bool ! {} {
+    let mut all = false;
+    if let Toml.Array(items: items) = v {
+        all = list_len(items) > 0;
+        for i in 0..list_len(items) { if !is_table(list_get(items, i)) { all = false; } }
+    }
+    all
+}
+
+/// A table's lines under the header path `path`: its plain values, then its sub-tables, then
+/// its arrays of tables.
+fn encode_table(out: Strs, path: Str, keys: List[Str], values: List[Toml]) -> Int ! {} {
+    for i in 0..list_len(keys) {
+        let v = list_get(values, i);
+        if !is_table(v) && !is_aot(v) {
+            strs_push(out, f"{encode_key(list_get(keys, i))} = {encode_inline(v)}\n");
+        }
+    }
+    for i in 0..list_len(keys) {
+        let v = list_get(values, i);
+        let name = encode_key(list_get(keys, i));
+        let full = if str_len(path) == 0 { name } else { f"{path}.{name}" };
+        if let Toml.Table(keys: k, values: x) = v {
+            strs_push(out, f"\n[{full}]\n");
+            encode_table(out, full, k, x);
+        }
+        if let Toml.Array(items: items) = v {
+            if is_aot(v) {
+                for j in 0..list_len(items) {
+                    if let Toml.Table(keys: k, values: x) = list_get(items, j) {
+                        strs_push(out, f"\n[[{full}]]\n");
+                        encode_table(out, full, k, x);
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
+/// `t` as TOML text: a table's, each line ending in a newline; any other value, inline.
+pub fn toml_encode(t: Toml) -> Str ! {} {
+    if let Toml.Table(keys: keys, values: values) = t {
+        let out = strs_new();
+        encode_table(out, "", keys, values);
+        let text = str_join(out, "");
+        // No blank line before the first header of a document without plain values.
+        if str_len(text) > 0 && str_byte(text, 0) == 10 { str_slice(text, 1, str_len(text)) } else { text }
+    } else {
+        encode_inline(t)
+    }
+}
