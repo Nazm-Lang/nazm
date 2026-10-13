@@ -457,6 +457,22 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// Whether `value` is `str_concat(x, t)` with `x` the binding `local` (R1b, D2): an assignment
+    /// of it to `local` appends to `local`'s own string.
+    fn appends_to(&self, local: LocalId, value: &AstExpr) -> bool {
+        let AstExpr::Call {
+            callee_span, args, ..
+        } = value
+        else {
+            return false;
+        };
+        if self.res.callee(*callee_span) != Some(Callee::Builtin(nazm_sema::Intrinsic::StrConcat)) {
+            return false;
+        }
+        matches!(args.first(), Some(AstExpr::Var { span, .. })
+            if self.res.var(*span).is_some() && self.local_at(*span).ok() == Some(local))
+    }
+
     /// The type a shared binding holds, if local `id` is one a closure shares and so a cell
     /// (R1b, L10); `None` for every other local.
     fn shared(&self, id: LocalId) -> Option<Type> {
@@ -703,8 +719,14 @@ impl<'a> Lower<'a> {
                 Stmt::Eval(self.through_cell(local, elem, Some(value), a.span))
             }
             AstStmt::Assign(a) => {
-                let value = self.expr(&a.value)?;
+                let mut value = self.expr(&a.value)?;
                 let mut local = self.local_at(a.place.name_span)?;
+                // `s = str_concat(s, t)` (R1b, D2): an append, which may reuse `s`'s storage.
+                if a.place.path.is_empty() && self.appends_to(local, &a.value) {
+                    if let ExprKind::Builtin { op, .. } = &mut value.kind {
+                        *op = nazm_sema::Intrinsic::StrAppend;
+                    }
+                }
                 // `x.f = v` on a shared binding (R1b, L10): its value copied out, changed, and
                 // set back.
                 let shared = self.shared(local).map(|elem| (local, elem));

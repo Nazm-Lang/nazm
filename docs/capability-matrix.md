@@ -200,6 +200,24 @@ current account.
 
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
+**R1b (2026-10-13)** · *Linear-time string building* (`spec.md`, *Strings*, **Building**, and
+*What this costs*; `openspec/changes/r1-language-for-the-rewrite`, D2). Core IR lowering writes `s =
+str_concat(s, t)` on a `let mut` binding — not one a closure shares — as the internal `str_append`.
+LIR appends `t` in place when `s`'s storage has one reference (the binding's), was made by an
+append — its capacity carries a mark no other allocation's can — and has room after `s`'s bytes,
+taking a reference for the new value that the old value's release gives back; otherwise it copies
+into storage of twice the length (at least 16), marked. A literal has no storage of its own and is
+copied. The interpreter applies the same rule to a backing an append made, taking the binding's
+string out before it appends, so the two allocate the same strings. No checker rule moved, so no
+epoch.
+EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/string_append.rs` — two names for
+one string each appended to, a slice kept across an append, a string appended to itself and a
+literal, under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live;
+100,000 appends allocating fewer than 64 strings under LLVM and Cranelift (200,000 allocated one
+each before); `memory.rs`, sixteen appends filling one allocation exactly and a padded string's
+spare byte left alone, counted the same by both implementations. The memory tests whose loops were
+allocator churn or a count of concatenations now prepend, which still allocates each time.
+
 **R1b (2026-10-13)** · *Warnings* (`spec.md`, *Patterns*; `diagnostics.md`;
 `openspec/changes/r1-language-for-the-rewrite`, L15). A warning severity: `nazm.diagnostic/1`'s
 `severity` takes `"warning"`, and the first warning is `N0632` — a `_` or a name in a written

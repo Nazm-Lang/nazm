@@ -425,6 +425,12 @@ impl Interpreter {
                 // property `getelementptr` gives the compiled program.
                 Ok(Value::Str(s.slice(a, b)))
             }
+            // `str_append` (D2) reached here has a second reference to its string — the
+            // assignment it lowers from takes the binding's own (`exec.rs`, `assign`) — so it
+            // copies, as the compiled program's does.
+            (Intrinsic::StrAppend, [Value::Str(a), Value::Str(b)]) => {
+                Ok(Value::Str(a.clone().append(b.bytes())))
+            }
             (Intrinsic::StrConcat, [Value::Str(a), Value::Str(b)]) => {
                 let mut out = Vec::with_capacity(a.len() + b.len());
                 out.extend_from_slice(a.bytes());

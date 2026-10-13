@@ -202,6 +202,32 @@ impl Interpreter {
         }
     }
 
+    /// `local = str_append(local, tail);` (R1b, D2): the tail, then the binding's string taken
+    /// out of it, so that the binding's reference is the one the append weighs — as the
+    /// compiled program's count of one is. A tail that shares the string's storage (`s = s + s`)
+    /// is copied out first, because the compiled program reads it in place.
+    fn append(
+        &mut self,
+        f: &cir::Function,
+        local: cir::LocalId,
+        tail: &cir::Expr,
+        env: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        let Value::Str(t) = take!(self, f, tail, env) else {
+            return Err(no_value(tail));
+        };
+        let t = t.bytes().to_vec();
+        match env.get_mut(local.index()).and_then(Option::take) {
+            Some(Value::Str(s)) => {
+                if let Some(slot) = env.get_mut(local.index()) {
+                    *slot = Some(Value::Str(s.append(&t)));
+                }
+                Ok(Flow::Fell(None))
+            }
+            _ => Err(no_value(tail)),
+        }
+    }
+
     /// `local.path = value;`.
     ///
     /// **The new value first, always.** `docs/spec.md` requires a replacement to be secured
@@ -223,6 +249,11 @@ impl Interpreter {
         at: Span,
         env: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
+        if path.is_empty() {
+            if let Some(tail) = appended(local, value) {
+                return self.append(f, local, tail, env);
+            }
+        }
         let v = take!(self, f, value, env);
         // The value, then each index, outermost first (Gate 2), before anything is written.
         let mut indexes = Vec::new();
@@ -723,5 +754,28 @@ impl Interpreter {
             ExprKind::Block(b) => return self.block(f, b, env),
         };
         Ok(Flow::Fell(Some(value)))
+    }
+}
+
+/// The tail of `local = str_append(local, tail)`, the shape `lower.rs` gives an append.
+fn appended(local: cir::LocalId, value: &cir::Expr) -> Option<&cir::Expr> {
+    let ExprKind::Builtin {
+        op: nazm_sema::Intrinsic::StrAppend,
+        args,
+        ..
+    } = &value.kind
+    else {
+        return None;
+    };
+    match args.as_slice() {
+        [cir::Expr {
+            kind: ExprKind::Local(l),
+            ..
+        }, tail]
+            if *l == local =>
+        {
+            Some(tail)
+        }
+        _ => None,
     }
 }

@@ -319,6 +319,7 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::ChanNewOf
         | Intrinsic::AtomicNew
         | Intrinsic::StrConcat
+        | Intrinsic::StrAppend
         | Intrinsic::IntToStr
         | Intrinsic::StrFromByte
         | Intrinsic::StrJoin

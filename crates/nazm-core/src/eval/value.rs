@@ -288,19 +288,23 @@ pub enum Backing {
     Immortal(Vec<u8>),
     /// Storage the program allocated. Counted, and released when the last view dies.
     Heap(Vec<u8>),
+    /// Storage an append made (R1b, D2): counted like `Heap`, with `room` bytes the compiled
+    /// program's allocation has, so a later append can grow it in place exactly when the
+    /// compiled program's would.
+    Grown { bytes: Vec<u8>, room: usize },
 }
 
 impl Backing {
     fn bytes(&self) -> &[u8] {
         match self {
-            Self::Immortal(b) | Self::Heap(b) => b,
+            Self::Immortal(b) | Self::Heap(b) | Self::Grown { bytes: b, .. } => b,
         }
     }
 }
 
 impl Drop for Backing {
     fn drop(&mut self) {
-        if matches!(self, Self::Heap(_)) {
+        if matches!(self, Self::Heap(_) | Self::Grown { .. }) {
             STRINGS_RECLAIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
@@ -363,6 +367,30 @@ impl Str {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// `str_append` (R1b, D2): this string followed by `tail`, written in place when this
+    /// view is the only reference to storage an append made and the result fits its room —
+    /// the compiled program's rule, so the two allocate the same strings. Otherwise a copy
+    /// into a new allocation of `max(2n, 16)` bytes, which the next append can grow.
+    #[must_use]
+    pub fn append(mut self, tail: &[u8]) -> Self {
+        let n = self.len + tail.len();
+        let end = self.start + self.len;
+        if let Some(Backing::Grown { bytes, room }) = Arc::get_mut(&mut self.backing) {
+            if self.start + n <= *room {
+                bytes.truncate(end);
+                bytes.extend_from_slice(tail);
+                self.len = n;
+                return self;
+            }
+        }
+        let room = (2 * n).max(16);
+        let mut bytes = Vec::with_capacity(room);
+        bytes.extend_from_slice(self.bytes());
+        bytes.extend_from_slice(tail);
+        STRINGS_ALLOCATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self::whole(Backing::Grown { bytes, room })
     }
 
     /// `str_slice`: a new view of the **same** backing, which is what keeps the backing

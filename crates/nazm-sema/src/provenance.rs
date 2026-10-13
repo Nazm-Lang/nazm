@@ -262,6 +262,7 @@ impl Origin {
             | Intrinsic::StrByte
             | Intrinsic::StrSlice
             | Intrinsic::StrConcat
+            | Intrinsic::StrAppend
             | Intrinsic::IntToStr
             | Intrinsic::StrFromByte
             | Intrinsic::Print
@@ -528,6 +529,7 @@ impl Origin {
             | Intrinsic::StrByte
             | Intrinsic::StrSlice
             | Intrinsic::StrConcat
+            | Intrinsic::StrAppend
             | Intrinsic::IntToStr
             | Intrinsic::StrFromByte
             | Intrinsic::Print

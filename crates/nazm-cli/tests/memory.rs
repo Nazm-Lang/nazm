@@ -437,10 +437,13 @@ fn a_string_heavy_loop_holds_one_string_at_a_time() {
     // report at all, and this exact loop — fifty concatenations for one live result — was
     // the thing the constitution said it could not account for. It accounts for it now:
     // fifty backings created, fifty reclaimed, nothing live at the end.
+    //
+    // Prepended, so that each step is a fresh concatenation: an append (`s = str_concat(s,
+    // …)`) grows one allocation in place since R1b's D2, and `string_append.rs` counts that.
     let r = strings(
         50,
         "fn main() -> Int {\n    let mut s = \"\";\n    let mut i = 0;\n    \
-         while i < 50 {\n        s = str_concat(s, \"x\");\n        i = i + 1;\n    }\n    \
+         while i < 50 {\n        s = str_concat(\"x\", s);\n        i = i + 1;\n    }\n    \
          str_len(s)\n}\n",
     );
     assert_eq!(r.value, "50");
@@ -485,7 +488,7 @@ fn a_slice_keeps_its_backing_alive_after_the_original_is_gone() {
          str_slice(s, 1, 3)\n}\n\
          fn main() -> Int {\n    let x = make();\n    let mut i = 0;\n    \
          let mut noise = \"\";\n    while i < 20 {\n        \
-         noise = str_concat(noise, \"zz\");\n        i = i + 1;\n    }\n    \
+         noise = str_concat(\"zz\", noise);\n        i = i + 1;\n    }\n    \
          str_byte(x, 0) * 1000 + str_byte(x, 1)\n}\n",
     );
     // `bc`, still, after the buffer it points into lost its only binding.
@@ -558,7 +561,7 @@ fn a_string_stored_in_a_sequence_outlives_the_binding_it_came_from() {
         "fn main() -> Int {\n    let xs = strs_new();\n    \
          let mut s = str_concat(\"ab\", \"cd\");\n    strs_push(xs, s);\n    \
          s = \"\";\n    let mut i = 0;\n    while i < 20 {\n        \
-         s = str_concat(s, \"z\");\n        i = i + 1;\n    }\n    \
+         s = str_concat(\"z\", s);\n        i = i + 1;\n    }\n    \
          str_len(strs_get(xs, 0)) + str_byte(strs_get(xs, 0), 0)\n}\n",
     );
     assert_eq!(r.value, "101");
@@ -577,7 +580,7 @@ fn a_string_read_out_of_a_sequence_survives_being_overwritten() {
          strs_push(xs, str_concat(\"ab\", \"cd\"));\n    let s = strs_get(xs, 0);\n    \
          strs_set(xs, 0, str_concat(\"wx\", \"yz\"));\n    let mut i = 0;\n    \
          let mut noise = \"\";\n    while i < 20 {\n        \
-         noise = str_concat(noise, \"q\");\n        i = i + 1;\n    }\n    \
+         noise = str_concat(\"q\", noise);\n        i = i + 1;\n    }\n    \
          str_byte(s, 0)\n}\n",
     );
     assert_eq!(r.value, "97");
@@ -604,7 +607,7 @@ fn a_string_read_out_of_a_temporary_sequence_outlives_it() {
          strs_push(xs, str_concat(\"ab\", \"cd\"));\n    xs\n}\n\
          fn main() -> Int {\n    let s = strs_get(one(), 0);\n    let mut i = 0;\n    \
          let mut noise = \"\";\n    while i < 20 {\n        \
-         noise = str_concat(noise, \"qq\");\n        i = i + 1;\n    }\n    \
+         noise = str_concat(\"qq\", noise);\n        i = i + 1;\n    }\n    \
          str_len(s) * 100 + str_byte(s, 0)\n}\n",
     );
     assert_eq!(r.value, "497");
@@ -1063,12 +1066,15 @@ fn a_field_replaced_by_itself_survives_the_allocator_reusing_the_block() {
     // reference inside the built-in, so it would survive the wrong order by accident. A
     // projection out of a borrowed record holds none, which is exactly the case where the
     // replacement has to take one.
+    //
+    // The noise is prepended: `noise = str_concat(noise, …)` is an append, which grows one
+    // allocation in place (R1b, D2) and so would not churn the allocator.
     let r = strings(
         301,
         "struct Holder {\n    name: Str,\n}\n\
          fn main() -> Int {\n    let mut h = Holder(name: str_concat(\"abcdefgh\", \"\"));\n    \
          h.name = h.name;\n    let mut noise = \"\";\n    let mut i = 0;\n    \
-         while i < 300 {\n        noise = str_concat(noise, \"z\");\n        i = i + 1;\n    }\n    \
+         while i < 300 {\n        noise = str_concat(\"z\", noise);\n        i = i + 1;\n    }\n    \
          str_byte(h.name, 0) * 100 + str_len(h.name) * 10 + str_len(noise) % 10\n}\n",
     );
     assert_eq!(r.value, "9780");
@@ -1662,7 +1668,7 @@ fn a_transfer_gives_back_only_what_the_loop_it_leaves_was_holding() {
          while j < 3 {\n            j = j + 1;\n            \
          if j == 2 {\n                continue;\n            }\n        }\n        \
          let mut k = 0;\n        let mut noise = \"\";\n        \
-         while k < 30 {\n            noise = str_concat(noise, \"wxyz\");\n            \
+         while k < 30 {\n            noise = str_concat(\"wxyz\", noise);\n            \
          k = k + 1;\n        }\n        \
          j + str_len(noise) - 120\n    } else {\n        0\n    })\n}\n",
     );
@@ -1812,7 +1818,7 @@ fn a_vec_of_str_owns_each_string_by_the_string_law() {
     let popped = vec_pop(xs);
     let mut noise = "";
     let mut k = 0;
-    while k < 30 { noise = str_concat(noise, "z"); k = k + 1; }
+    while k < 30 { noise = str_concat("z", noise); k = k + 1; }
     str_len(got) * 1000 + str_len(popped) * 100 + str_len(vec_get(xs, 5)) * 10 + vec_len(xs)
         + str_len(noise) - 30
 }
@@ -2175,4 +2181,20 @@ fn main() -> Int {
     assert_eq!(r.value, "792");
     assert_eq!(r.sequences, expected(300), "{r:?}");
     assert_eq!(r.strings.live, 0, "{r:?}");
+}
+
+#[test]
+fn only_storage_an_append_made_grows_in_place_and_it_fills_to_its_room() {
+    // R1b, D2 (`docs/spec.md`, *Strings*, **Building**). Sixteen one-byte appends to a literal:
+    // the first copies into sixteen bytes of room and the other fifteen fill it exactly — one
+    // allocation, in both implementations. A padded string's allocation has a spare byte, but
+    // no append made it, so the append after it copies: two more.
+    let r = strings(
+        3,
+        "fn main() -> Int {\n    let mut s = \"\";\n    let mut i = 0;\n    \
+         while i < 16 {\n        s = str_concat(s, \"a\");\n        i = i + 1;\n    }\n    \
+         let mut p = str_pad_end(\"ab\", 3, \".\");\n    p = str_concat(p, \"x\");\n    \
+         str_len(s) * 100 + str_len(p) * 10 + str_byte(p, 3) - 120\n}\n",
+    );
+    assert_eq!(r.value, "1640");
 }
