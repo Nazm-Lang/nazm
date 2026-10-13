@@ -7,6 +7,10 @@
 //! Cranelift with nothing live; a derived type of another module, plain and qualified; and every
 //! refusal at the attribute or the field.
 //!
+//! R1c, L2b: `@codec(…)` — `rename_all`, `deny_unknown`, an enum's `tag` and `untagged`, a field's
+//! `rename`, `default` and `omit_none`, a variant's `rename` — encoded, decoded and described alike
+//! everywhere, every misuse refused alone, and a field's attribute formatted on its own line.
+//!
 //! The schema was also checked, when the derive was written, by an independent JSON Schema
 //! (2020-12) validator: it is one, the encoding satisfies it, and a value out of a field's range,
 //! a member of the wrong type and a missing member each fail it.
@@ -75,6 +79,88 @@ fn main(out: OutCap) -> Int ! {io} {
 }
 "#####;
 
+const CODEC: &str = r#####"@derive(json)
+@codec(rename_all = "camelCase", deny_unknown)
+pub struct User {
+    @codec(rename = "id")
+    user_id: Int,
+    display_name: Str,
+    @codec(omit_none)
+    email: Option[Str],
+    @codec(default)
+    tags: Vec[Str],
+}
+
+@derive(json)
+@codec(tag = "kind")
+pub enum Event { Started, Moved(x: Int, y: Int), }
+
+@derive(json)
+@codec(untagged)
+pub enum Value { Nothing, Num(n: Int), Text(s: Str, @codec(default) lang: Str), }
+
+@derive(json)
+@codec(rename_all = "SCREAMING_SNAKE_CASE")
+pub enum Level { LowPower, @codec(rename = "hi") High, }
+
+fn show(out: OutCap, s: Str) -> Int ! { io } { print(str_concat(s, "\n")) }
+
+fn user(out: OutCap, text: Str) -> Int ! { io } {
+    match user_from_json(text) {
+        Result.Ok(value: u) => show(out, f"ok: {user_to_json(u)}"),
+        Result.Err(error: e) => show(out, f"err: {e}"),
+    }
+}
+
+fn main(out: OutCap) -> Int ! { io } {
+    let u = User(user_id: 7, display_name: "Ann", email: Option[Str].None(), tags: vec_new[Str]());
+    show(out, user_to_json(u));
+    user(out, "{\"id\": 1, \"displayName\": \"B\"}");
+    user(out, "{\"id\": 1, \"displayName\": \"B\", \"email\": \"b@x\", \"tags\": [\"t\"]}");
+    user(out, "{\"id\": 1, \"displayName\": \"B\", \"extra\": 1}");
+    user(out, "{\"id\": 1}");
+    show(out, event_to_json(Event.Started()));
+    show(out, event_to_json(Event.Moved(x: 1, y: 2)));
+    match event_from_json("{\"kind\": \"Moved\", \"x\": 3, \"y\": 4}") { Result.Ok(value: e) => show(out, event_to_json(e)), Result.Err(error: e) => show(out, e), };
+    match event_from_json("{\"kind\": \"Jumped\"}") { Result.Ok(value: e) => show(out, "WRONG"), Result.Err(error: e) => show(out, e), };
+    show(out, value_to_json(Value.Num(n: 5)));
+    show(out, value_to_json(Value.Text(s: "hi", lang: "en")));
+    show(out, value_to_json(Value.Nothing()));
+    match value_from_json("{\"s\": \"yo\"}") { Result.Ok(value: v) => show(out, value_to_json(v)), Result.Err(error: e) => show(out, e), };
+    match value_from_json("{\"n\": 9}") { Result.Ok(value: v) => show(out, value_to_json(v)), Result.Err(error: e) => show(out, e), };
+    match value_from_json("{\"q\": true}") { Result.Ok(value: v) => show(out, "WRONG"), Result.Err(error: e) => show(out, e), };
+    show(out, level_to_json(Level.LowPower()));
+    show(out, level_to_json(Level.High()));
+    show(out, user_json_schema());
+    show(out, event_json_schema());
+    show(out, value_json_schema());
+    0
+}
+"#####;
+
+const CODEC_EXPECTED: &str = r#####"{"id":7,"displayName":"Ann","tags":[]}
+ok: {"id":1,"displayName":"B","tags":[]}
+ok: {"id":1,"displayName":"B","email":"b@x","tags":["t"]}
+err: $: unknown member `extra`
+err: $: no member `displayName`
+{"kind":"Started"}
+{"kind":"Moved","x":1,"y":2}
+{"kind":"Moved","x":3,"y":4}
+$: `Jumped` is not a variant of `Event`
+{"n":5}
+{"s":"hi","lang":"en"}
+"Nothing"
+{"s":"yo","lang":""}
+{"n":9}
+$: matches no variant of `Value`
+"LOW_POWER"
+"hi"
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/User","$defs":{"User":{"type":"object","properties":{"id":{"type":"integer"},"displayName":{"type":"string"},"email":{"anyOf":[{"type":"string"},{"type":"null"}]},"tags":{"type":"array","items":{"type":"string"}}},"required":["id","displayName"],"additionalProperties":false}}}
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/Event","$defs":{"Event":{"oneOf":[{"type":"object","properties":{"kind":{"const":"Started"}},"required":["kind"]},{"type":"object","properties":{"kind":{"const":"Moved"},"x":{"type":"integer"},"y":{"type":"integer"}},"required":["kind","x","y"]}]}}}
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"#/$defs/Value","$defs":{"Value":{"anyOf":[{"const":"Nothing"},{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]},{"type":"object","properties":{"s":{"type":"string"},"lang":{"type":"string"}},"required":["s"]}]}}}
+0
+"#####;
+
 const EXPECTED: &str = r#####"{"x":-1,"small":255,"label":null,"tags":["a","b\"q"],"shape":{"Rect":{"w":3,"h":4}},"kids":[{"x":2,"small":7,"label":"leaf","tags":[],"shape":"Empty","kids":[],"ok":false}],"ok":true}
 decoded: same text
 error: $.small: 300 is outside `UInt8`
@@ -90,8 +176,18 @@ fn nazm(dir: &Path, args: &[&str]) -> Ran {
 
 #[test]
 fn a_derived_codec_and_schema_agree_everywhere() {
+    everywhere(PROGRAM, EXPECTED);
+}
+
+#[test]
+fn a_shaped_encoding_agrees_everywhere() {
+    everywhere(CODEC, CODEC_EXPECTED);
+}
+
+/// `program` under every implementation prints `expected`, leaving nothing live.
+fn everywhere(program: &str, expected: &str) {
     let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("d.nz"), PROGRAM).unwrap();
+    std::fs::write(d.path().join("d.nz"), program).unwrap();
     let mut runs = Vec::new();
     for (label, args) in [
         ("interpreter", &["run", "d.nz"][..]),
@@ -139,7 +235,7 @@ fn a_derived_codec_and_schema_agree_everywhere() {
     }
     for (label, r) in runs {
         assert_eq!(r.code, Some(0), "{label}: {r:?}");
-        assert_eq!(r.stdout, EXPECTED, "{label}");
+        assert_eq!(r.stdout, expected, "{label}");
         if label != "lir oracle" {
             let line = r
                 .stderr
@@ -224,4 +320,94 @@ fn what_a_derive_cannot_carry_is_refused_where_it_is_written() {
         assert_eq!(errors.len(), 1, "{src}: {errors:?}");
         assert!(errors[0].starts_with(want), "{src}: {errors:?}");
     }
+}
+
+#[test]
+fn every_misuse_of_codec_is_refused_alone() {
+    let d = tempfile::tempdir().unwrap();
+    for (src, want) in [
+        (
+            "@codec(deny_unknown)\nstruct A { n: Int, }\n",
+            "error[N0619]: `@codec` shapes a derived encoding, and `A` derives none",
+        ),
+        (
+            "@derive(json)\n@codec(tag = \"k\")\nstruct B { n: Int, }\n",
+            "error[N0619]: `tag` and `untagged` shape an enum",
+        ),
+        (
+            "@derive(json)\n@codec(tag = \"k\", untagged)\nenum C { X, }\n",
+            "error[N0619]: an enum is tagged or untagged, not both",
+        ),
+        (
+            "@derive(json)\n@codec(rename_all = \"Title Case\")\nstruct D { n: Int, }\n",
+            "error[N0619]: `@codec` does not take this here",
+        ),
+        (
+            "@derive(json)\nstruct E { @codec(omit_none) n: Int, }\n",
+            "error[N0619]: `omit_none` leaves out a `None`, and `n` is not an `Option`",
+        ),
+        (
+            "@derive(json)\nstruct F { @codec(default) p: Box[Int], }\n",
+            "error[N0619]: `default` gives a missing `p` its type's empty value, and this type has none",
+        ),
+        (
+            "@derive(json)\nstruct G { @codec(rename = \"a\") x: Int, a: Int, }\n",
+            "error[N0619]: `a` names two members of one object",
+        ),
+        (
+            "@derive(json)\n@codec(tag = \"x\")\nenum H { V(x: Int), }\n",
+            "error[N0619]: `x` names two members of one object",
+        ),
+        (
+            "@derive(json)\nstruct I { @cfg(os = \"linux\") n: Int, }\n",
+            "error[N0619]: `@cfg` is not written before a field",
+        ),
+        (
+            "@derive(json)\nenum J { @codec(default) X, }\n",
+            "error[N0619]: `@codec` does not take this here",
+        ),
+        (
+            "@derive(json)\nstruct K { @codec(rename = \"a\", rename = \"b\") n: Int, }\n",
+            "error[N0619]: `rename` is written twice",
+        ),
+        (
+            "@derive(json)\n@codec(rename_all = \"camelCase\")\nenum L { FooBar, @codec(rename = \"fooBar\") Other, }\n",
+            "error[N0619]: two variants of `L` are both named `fooBar`",
+        ),
+        (
+            "@codec(untagged)\nfn g() -> Int { 0 }\n",
+            "error[N0619]: `@codec` shapes a derived encoding: it marks a type, a field or a variant, not a function",
+        ),
+    ] {
+        std::fs::write(d.path().join("r.nz"), format!("{src}fn main() -> Int {{ 0 }}\n")).unwrap();
+        let r = nazm(d.path(), &["check", "r.nz"]);
+        assert_ne!(r.code, Some(0), "{src}");
+        let errors: Vec<&str> = r.stderr.lines().filter(|l| l.starts_with("error")).collect();
+        assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+        assert!(errors[0].starts_with(want), "{src}: {errors:?}");
+    }
+}
+
+#[test]
+fn a_fields_attribute_is_formatted_on_its_own_line_and_inline_where_its_list_is() {
+    let d = tempfile::tempdir().unwrap();
+    let written = "@derive(json)\nstruct S {\n    @codec(rename = \"a\") x: Int,\n    \
+                   @codec(omit_none)   y: Option[Int],\n}\n\n@derive(json)\n\
+                   enum E { A, @codec(rename = \"b\")   B, C(n: Int, @codec(default) m: Int), }\n";
+    let want = "@derive(json)\nstruct S {\n    @codec(rename = \"a\")\n    x: Int,\n    \
+                @codec(omit_none)\n    y: Option[Int],\n}\n\n@derive(json)\n\
+                enum E { A, @codec(rename = \"b\") B, C(n: Int, @codec(default) m: Int), }\n";
+    std::fs::write(d.path().join("f.nz"), written).unwrap();
+    let r = nazm(d.path(), &["fmt", "f.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("f.nz")).unwrap(),
+        want
+    );
+    let r = nazm(d.path(), &["fmt", "--check", "f.nz"]);
+    assert_eq!(
+        r.code,
+        Some(0),
+        "formatting it again changes nothing: {r:?}"
+    );
 }

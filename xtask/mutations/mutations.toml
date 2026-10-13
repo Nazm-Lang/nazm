@@ -8324,10 +8324,11 @@ Repointed by R1b a fifth time, which moved it to 64 for L12: an entry that refus
 Repointed by R1b a sixth time, which moved it to 65 for L13: an entry that refused `checked_add` must not be reused.
 Repointed by R1b a seventh time, which moved it to 66 for L15: an entry kept before warnings existed must not be reused.
 Repointed by R1b an eighth time, which moved it to 67 for L13b: an entry that refused `Int128` must not be reused.
-Repointed by R1c, which moved it to 68 for `@derive(json)`: an entry that refused `@derive` must not be reused."""
+Repointed by R1c, which moved it to 68 for `@derive(json)`: an entry that refused `@derive` must not be reused.
+Repointed by R1c again, which moved it to 69 for `@codec`: an entry that refused an attribute before a field must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 68;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 67;"
+find = "pub const SEMANTIC_EPOCH: u32 = 69;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 68;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -15068,8 +15069,8 @@ killers = [{ package = "nazm-cli", test = "attributes", name = "every_attribute_
 name = "g2-an-attribute-shares-its-declarations-line"
 why = "the formatter no longer ends an attribute's line at its `)`, so `@cfg(…) fn f` stays on one line and two formatters disagree"
 file = "crates/nazm-syntax/src/format.rs"
-find = "            (Some((true, 1)), TokenKind::RParen) => {\n                self.attribute = None;\n                self.continuing = false;\n                self.break_line();\n            }"
-replace = "            (Some((true, 1)), TokenKind::RParen) => {\n                self.attribute = None;\n            }"
+find = "            (Some((true, 1, own_line)), TokenKind::RParen) => {\n                self.attribute = None;\n                if own_line {"
+replace = "            (Some((true, 1, own_line)), TokenKind::RParen) => {\n                self.attribute = None;\n                if false {"
 killers = [{ package = "nazm-cli", test = "attributes", name = "the_formatter_puts_each_attribute_on_its_own_line" }]
 
 [[mutation]]
@@ -17527,8 +17528,8 @@ killers = [{ package = "nazm-cli", test = "derive_json", name = "what_a_derive_c
 name = "r1c-a-missing-optional-member-is-an-error"
 why = "decoding treats a missing member of an `Option` field as an error rather than `None`"
 file = "crates/nazm-core/src/derive.rs"
-find = '''            let optional = plain(&f.ty) && f.ty.name == "Option";'''
-replace = '''            let optional = false;'''
+find = '''            } else if plain(&f.ty) && f.ty.name == "Option" {'''
+replace = '''            } else if false {'''
 killers = [{ package = "nazm-cli", test = "derive_json", name = "a_derived_codec_and_schema_agree_everywhere" }]
 
 [[mutation]]
@@ -17554,3 +17555,61 @@ file = "crates/nazm-core/src/derive.rs"
 find = '''                        "match try_convert[{n}](i) {{ Option.Some(value: x) => {}, Option.None() => {}, }}",'''
 replace = '''                        "match Option[{n}].Some(value: wrap_convert[{n}](i)) {{ Option.Some(value: x) => {}, Option.None() => {}, }}",'''
 killers = [{ package = "nazm-cli", test = "derive_json", name = "a_derived_codec_and_schema_agree_everywhere" }]
+
+# --- R1c L2b: `@codec(…)` (`docs/spec.md`, *Derived serialisation*, **Shaping it**) -----------
+
+[[mutation]]
+name = "r1c-omit-none-writes-null"
+why = "an `omit_none` field that is `None` is written `null` instead of left out"
+file = "crates/nazm-core/src/derive.rs"
+find = '''            if m.codec.omit_none {'''
+replace = '''            if false {'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_shaped_encoding_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1c-deny-unknown-lets-a-member-through"
+why = "a type that says `deny_unknown` decodes a member it has no field for"
+file = "crates/nazm-core/src/derive.rs"
+find = '''    let deny: Option<&[String]> = codec.deny_unknown.then_some(&[]);'''
+replace = '''    let deny: Option<&[String]> = None;'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_shaped_encoding_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1c-an-untagged-schema-is-oneof"
+why = "an untagged enum's schema is `oneOf`, refusing a document two variants accept while the decoder takes the first"
+file = "crates/nazm-core/src/derive.rs"
+find = '''                    if codec.untagged { "anyOf" } else { "oneOf" },'''
+replace = '''                    "oneOf",'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_shaped_encoding_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1c-camel-case-is-pascal-case"
+why = "`rename_all = \"camelCase\"` capitalises the first word too"
+file = "crates/nazm-core/src/derive.rs"
+find = '''            .map(|(i, w)| if i == 0 { w.clone() } else { capital(w) })'''
+replace = '''            .map(|(_, w)| capital(w))'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_shaped_encoding_agrees_everywhere" }]
+
+[[mutation]]
+name = "r1c-an-attribute-in-a-one-line-list-breaks-it"
+why = "the formatter ends the line after an attribute inside an enum kept on one line, as if it marked a declaration"
+file = "crates/nazm-syntax/src/format.rs"
+find = '''                let own_line = self.brackets.is_empty()'''
+replace = '''                let own_line = self.indent == 0'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_fields_attribute_is_formatted_on_its_own_line_and_inline_where_its_list_is" }]
+
+[[mutation]]
+name = "r1c-omit-none-on-a-plain-field-is-silent"
+why = "`omit_none` on a field that is not an `Option` is not reported, and the derive silently generates nothing"
+file = "crates/nazm-core/src/check/attributes.rs"
+find = '''            if c.omit_none && !optional {'''
+replace = '''            if false {'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "every_misuse_of_codec_is_refused_alone" }]
+
+[[mutation]]
+name = "r1c-default-is-ignored"
+why = "a `default` field missing from the document is an error rather than its type's empty value"
+file = "crates/nazm-core/src/derive.rs"
+find = '''            let missing = if let Some(empty) = m.codec.default.then(|| empty_value(&f.ty)).flatten()'''
+replace = '''            let missing = if let Some(empty) = None::<String>'''
+killers = [{ package = "nazm-cli", test = "derive_json", name = "a_shaped_encoding_agrees_everywhere" }]
