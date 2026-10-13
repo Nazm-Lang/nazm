@@ -326,7 +326,9 @@ use crate::digest::{self, Framed};
 /// integer at a C export moved to refused.
 /// `68` — R1c, 2026-10-13. `@derive(json)` before a `struct` or `enum` moved from refused
 /// (`N0619`) to accepted, generating its codec and schema; a field it cannot carry is `N0619`.
-pub const SEMANTIC_EPOCH: u32 = 68;
+/// `69` — R1c, 2026-10-13. `@codec(…)` before a derived type, a field or a variant, and an
+/// attribute before a field or a variant at all, moved from refused to accepted.
+pub const SEMANTIC_EPOCH: u32 = 69;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

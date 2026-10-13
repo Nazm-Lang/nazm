@@ -247,6 +247,19 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1c (2026-10-13)** · *`@codec(…)`* (`spec.md`, *Derived serialisation*, **Shaping it**;
+`openspec/changes/r1-language-for-the-rewrite`, L2b). The closed attribute set: on a derived type
+`rename_all` (five cases), `deny_unknown`, and for an enum `tag` (internally tagged) or `untagged`
+(the first variant that decodes, so its schema is `anyOf`); on a field `rename`, `default` (a
+number's zero, `false`, `""`, `None`, an empty `Vec` or `List`), `omit_none`; on a variant
+`rename`. An attribute may now stand before a field or a variant — the parser, the incremental
+tree, and the formatter (its own line in a list one to a line, inline in one kept on one line) —
+and only `@codec` is one there. Every misuse is `N0619`, and nothing is generated for a type it
+refuses. Semantic epoch 69. Evidence: `crates/nazm-cli/tests/derive_json.rs` — every argument
+under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; thirteen
+misuses refused alone; the formatting, and its stability. The three schemas passed an independent
+2020-12 validator, valid documents accepted and each malformed one refused. Seven mutants.
+
 **R1c (2026-10-13)** · *`@derive(json)`* (`spec.md`, *Derived serialisation*;
 `openspec/changes/r1-language-for-the-rewrite`, L2a). Before a `struct` or `enum` that is not
 generic, it gives the type `t_to_json`, `t_from_json`, `t_json_schema` and the helpers a derived

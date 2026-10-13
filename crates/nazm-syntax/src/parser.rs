@@ -1711,6 +1711,12 @@ impl<'a> Parser<'a> {
     /// One variant of an enum declaration: `Name` or `Name(field: Type, …)`.
     fn variant_decl(&mut self) -> Option<Variant> {
         let variant = self.checkpoint();
+        // `@codec(…)` before a variant (R1c, L2b).
+        let attrs = if self.at(&TokenKind::At) {
+            self.attributes()
+        } else {
+            Vec::new()
+        };
         let variant_span = self.peek_span();
         let variant_name = match self.advance() {
             TokenKind::Ident(n) => n,
@@ -1779,6 +1785,7 @@ impl<'a> Parser<'a> {
         }
         self.wrap(variant, SyntaxKind::Variant);
         Some(Variant {
+            attrs,
             name: variant_name,
             name_span: variant_span,
             fields,
@@ -1789,6 +1796,12 @@ impl<'a> Parser<'a> {
     /// One field of a record or a payload: `name: Type`. `help` and `after` name which.
     fn field_decl(&mut self, help: &str, after: &str) -> Option<Field> {
         let field = self.checkpoint();
+        // `@codec(…)` before a field (R1c, L2b): its attributes, inside its node.
+        let attrs = if self.at(&TokenKind::At) {
+            self.attributes()
+        } else {
+            Vec::new()
+        };
         let field_span = self.peek_span();
         let field_name = match self.advance() {
             TokenKind::Ident(n) => n,
@@ -1808,6 +1821,7 @@ impl<'a> Parser<'a> {
         let ty = self.type_name()?;
         self.wrap(field, SyntaxKind::Field);
         Some(Field {
+            attrs,
             name: field_name,
             name_span: field_span,
             span: field_span.join(ty.span),

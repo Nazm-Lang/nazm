@@ -374,6 +374,21 @@ fn admitted(
                     )),
                 }
             }
+            // Shaping a derived encoding (R1c, L2b): before a type, its type-wide arguments;
+            // a field's and a variant's are checked with the type (`codec_members`).
+            "codec" => {
+                if target != Target::Type {
+                    errors.push(refuse(
+                        a.span,
+                        format!(
+                            "`@codec` shapes a derived encoding: it marks a type, a field or a variant, not {}",
+                            target.named()
+                        ),
+                        "write it before the type, or before one of its fields",
+                    ));
+                }
+                codec_args(a, CodecAt::Type, errors);
+            }
             // Derived serialisation (R1c, L2): before a type, naming formats.
             "derive" => {
                 if target != Target::Type {
@@ -414,6 +429,195 @@ fn admitted(
         }
     }
     keep
+}
+
+/// Where a `@codec` is written (R1c, L2b): what it may say there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodecAt {
+    Type,
+    Field,
+    Variant,
+}
+
+/// One `@codec(…)`'s arguments held to what `at` takes, each once.
+fn codec_args(a: &Attribute, at: CodecAt, errors: &mut Vec<Diagnostic>) {
+    let help = match at {
+        CodecAt::Type => {
+            "a type takes `rename_all = \"camelCase\"`, `deny_unknown`, and for an enum \
+             `tag = \"kind\"` or `untagged`"
+        }
+        CodecAt::Field => "a field takes `rename = \"name\"`, `default` and `omit_none`",
+        CodecAt::Variant => "a variant takes `rename = \"name\"`",
+    };
+    let Some(args) = a.args.as_deref().filter(|x| !x.is_empty()) else {
+        errors.push(refuse(
+            a.span,
+            "`@codec` says how; it takes arguments".to_owned(),
+            help,
+        ));
+        return;
+    };
+    let mut seen: Vec<&str> = Vec::new();
+    for x in args {
+        let (word, ok) = match x {
+            AttrArg::Pair { key, value, .. } => (
+                key.as_str(),
+                match (at, key.as_str()) {
+                    (CodecAt::Type, "rename_all") => crate::derive::CASES.contains(&value.as_str()),
+                    (CodecAt::Type, "tag") | (CodecAt::Field | CodecAt::Variant, "rename") => {
+                        !value.is_empty()
+                    }
+                    _ => false,
+                },
+            ),
+            AttrArg::Word { name, .. } => (
+                name.as_str(),
+                matches!(
+                    (at, name.as_str()),
+                    (CodecAt::Type, "deny_unknown" | "untagged")
+                        | (CodecAt::Field, "default" | "omit_none")
+                ),
+            ),
+            _ => ("", false),
+        };
+        if !ok {
+            errors.push(refuse(
+                x.span(),
+                "`@codec` does not take this here".to_owned(),
+                help,
+            ));
+        } else if seen.contains(&word) {
+            errors.push(refuse(
+                x.span(),
+                format!("`{word}` is written twice"),
+                "say each thing once",
+            ));
+        }
+        seen.push(word);
+    }
+    if seen.contains(&"tag") && seen.contains(&"untagged") {
+        errors.push(refuse(
+            a.span,
+            "an enum is tagged or untagged, not both".to_owned(),
+            "keep `tag = \"…\"` or `untagged`",
+        ));
+    }
+}
+
+/// The attributes inside a type — before its fields and variants — held to `@codec`, and every
+/// `@codec` to the type it shapes (R1c, L2b): one the type derives, names that stay distinct, a
+/// `default` or `omit_none` its field's type allows, a tag no payload field shadows.
+fn codec_members(
+    attrs: &[Attribute],
+    name: &str,
+    at: Span,
+    variants: &[(&[Attribute], &str, &[nazm_syntax::ast::Field])],
+    is_enum: bool,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let derived = crate::derive::FORMATS
+        .iter()
+        .any(|f| crate::derive::derives(attrs, f));
+    let ty = crate::derive::type_codec(attrs);
+    if !derived {
+        if let Some(a) = attrs.iter().find(|a| a.name == "codec") {
+            errors.push(refuse(
+                a.span,
+                format!("`@codec` shapes a derived encoding, and `{name}` derives none"),
+                "write `@derive(json)` before the type, or remove the `@codec`",
+            ));
+        }
+    }
+    if !is_enum && (ty.tag.is_some() || ty.untagged) {
+        if let Some(a) = attrs.iter().find(|a| a.name == "codec") {
+            errors.push(refuse(
+                a.span,
+                "`tag` and `untagged` shape an enum".to_owned(),
+                "a record is an object already",
+            ));
+        }
+    }
+    let mut variant_keys: Vec<String> = Vec::new();
+    for (vattrs, vname, fields) in variants {
+        for a in vattrs.iter() {
+            if a.name == "codec" {
+                codec_args(a, CodecAt::Variant, errors);
+            } else {
+                errors.push(refuse(
+                    a.name_span,
+                    format!("`@{}` is not written before a variant", a.name),
+                    "only `@codec(…)` is",
+                ));
+            }
+        }
+        // Names collide only in an encoding: a type that derives none has the checker's own
+        // rules for its fields and variants.
+        if is_enum && derived {
+            let key = crate::derive::field_codec(vattrs)
+                .rename
+                .unwrap_or_else(|| {
+                    ty.rename_all
+                        .as_deref()
+                        .map_or_else(|| (*vname).to_owned(), |c| crate::derive::recase(vname, c))
+                });
+            if variant_keys.contains(&key) {
+                errors.push(refuse(
+                    at,
+                    format!("two variants of `{name}` are both named `{key}`"),
+                    "rename one of them",
+                ));
+            }
+            variant_keys.push(key);
+        }
+        let mut keys: Vec<String> = Vec::new();
+        for f in fields.iter() {
+            for a in &f.attrs {
+                if a.name == "codec" {
+                    codec_args(a, CodecAt::Field, errors);
+                } else {
+                    errors.push(refuse(
+                        a.name_span,
+                        format!("`@{}` is not written before a field", a.name),
+                        "only `@codec(…)` is",
+                    ));
+                }
+            }
+            let c = crate::derive::field_codec(&f.attrs);
+            let optional = f.ty.qualifier.is_none() && f.ty.name == "Option";
+            if c.omit_none && !optional {
+                errors.push(refuse(
+                    f.ty.span,
+                    format!(
+                        "`omit_none` leaves out a `None`, and `{}` is not an `Option`",
+                        f.name
+                    ),
+                    "use it on an `Option` field",
+                ));
+            }
+            if c.default && crate::derive::empty_value(&f.ty).is_none() {
+                errors.push(refuse(
+                    f.ty.span,
+                    format!("`default` gives a missing `{}` its type's empty value, and this type has none", f.name),
+                    "a number, `Bool`, `Str`, `Option`, `Vec` or `List` has one",
+                ));
+            }
+            let key = c.rename.unwrap_or_else(|| {
+                // A record's fields follow `rename_all`; a payload's do not.
+                match (&ty.rename_all, is_enum) {
+                    (Some(case), false) => crate::derive::recase(&f.name, case),
+                    _ => f.name.clone(),
+                }
+            });
+            if derived && (keys.contains(&key) || ty.tag.as_deref() == Some(key.as_str())) {
+                errors.push(refuse(
+                    f.name_span,
+                    format!("`{key}` names two members of one object"),
+                    "rename one of them",
+                ));
+            }
+            keys.push(key);
+        }
+    }
 }
 
 /// A marked function's shape (Gate 2, §18–§19): one the generated entry can hand its authority
@@ -552,6 +756,26 @@ pub fn configure(
             errors,
         )
     });
+    // `@codec` inside a type, and against the type it shapes (R1c, L2b).
+    for r in &program.records {
+        let fields: &[nazm_syntax::ast::Field] = &r.fields;
+        codec_members(
+            &r.attrs,
+            &r.name,
+            r.name_span,
+            &[(&[], "", fields)],
+            false,
+            errors,
+        );
+    }
+    for e in &program.enums {
+        let variants: Vec<(&[Attribute], &str, &[nazm_syntax::ast::Field])> = e
+            .variants
+            .iter()
+            .map(|v| (v.attrs.as_slice(), v.name.as_str(), v.fields.as_slice()))
+            .collect();
+        codec_members(&e.attrs, &e.name, e.name_span, &variants, true, errors);
+    }
     // What a derive cannot carry (R1c, L2): a generic type, or a field of a type with no form in
     // the format. Nothing is generated for it (`crate::derive::expand`), so this is the report.
     for format in crate::derive::FORMATS {

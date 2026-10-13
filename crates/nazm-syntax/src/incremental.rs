@@ -931,11 +931,13 @@ impl Shift for Record {
 impl Shift for Field {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
+            attrs,
             name: _,
             name_span,
             ty,
             span,
         } = self;
+        attrs.shift(file, by);
         name_span.shift(file, by);
         ty.shift(file, by);
         span.shift(file, by);
@@ -965,11 +967,13 @@ impl Shift for Enum {
 impl Shift for Variant {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
+            attrs,
             name: _,
             name_span,
             fields,
             span,
         } = self;
+        attrs.shift(file, by);
         name_span.shift(file, by);
         fields.shift(file, by);
         span.shift(file, by);

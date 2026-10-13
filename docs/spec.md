@@ -4194,6 +4194,7 @@ and no macros.
 | **`@on_failure`** (Gate 3) | Makes a function a board's failure hook (*Boards*, below); before anything else, `N0619`, and a function of another shape `N0627` |
 | **`@task(priority = "N", period = "P")`** (Gate 3) | Makes a function a periodic task of a board's fixed-priority scheduler (*Boards*, below); before anything else, or with a priority or period out of range, `N0619`, and a function of another shape `N0627` |
 | **`@derive(json)`** (R1c, L2; EXPERIMENTAL until R1 closes) | Before a `struct` or `enum` that is not generic: gives it a JSON encoding, decoding and schema (*Derived serialisation*, below); before anything else, or with a field of a type it cannot carry, `N0619` |
+| **`@codec(…)`** (R1c, L2b; EXPERIMENTAL) | Shapes a derived encoding (*Derived serialisation*, **Shaping it**): before a type that derives one, `rename_all`, `deny_unknown`, and for an enum `tag` or `untagged`; **before a field**, `rename`, `default`, `omit_none`; **before a variant**, `rename`. The one attribute written inside a declaration. Elsewhere, or with an argument it does not take, `N0619` |
 | **Refused** | An attribute not in this list, one on a declaration it does not mark, one with arguments it does not take, or one other than `@cfg` written twice is `N0619`. A malformed argument is a syntax error (`N0100`), reported once; the attribute is then not checked again |
 
 Attributes change no expression's meaning. The formatter writes each on its own line, `@` against
@@ -4244,7 +4245,43 @@ payload as a record's fields are. A field's type decides its value:
 
 Any other field type — `UInt64` and the 128-bit integers, which a JSON integer here does not carry,
 `Bytes`, `Text`, a handle, a function, an array or a tuple — is refused at the attribute, `N0619`,
-naming the field. Decoding ignores members the type has no field for.
+naming the field. Decoding ignores members the type has no field for, unless the type says
+`deny_unknown`.
+
+**Shaping it** (L2b). `@codec(…)` changes the encoding and nothing else — the decoding, the schema
+and the encoding always agree:
+
+```nazm
+@derive(json)
+@codec(rename_all = "camelCase", deny_unknown)
+pub struct User {
+    @codec(rename = "id")
+    user_id: Int,
+    display_name: Str,                 // "displayName"
+    @codec(omit_none)
+    email: Option[Str],                // absent rather than null when `None`
+    @codec(default)
+    tags: Vec[Str],                    // a missing member decodes as empty
+}
+
+@derive(json)
+@codec(tag = "kind")
+pub enum Event { Started, Moved(x: Int, y: Int), }   // {"kind":"Moved","x":1,"y":2}
+```
+
+| Where | Argument | Meaning |
+| --- | --- | --- |
+| A type | `rename_all = "…"` | Every member of a record — every variant of an enum — named in `camelCase`, `snake_case`, `kebab-case`, `PascalCase` or `SCREAMING_SNAKE_CASE`, from its snake-case or Pascal-case name; a `rename` wins over it |
+| A type | `deny_unknown` | Decoding a member the type has no field for is an `Err`; the schema says `"additionalProperties": false` |
+| An enum | `tag = "…"` | Internally tagged: a value is one object, the tag member naming its variant beside the payload's fields; a variant with no payload is the tag alone. A payload field of the tag's name is refused |
+| An enum | `untagged` | A payload's fields alone, and a variant with no payload its name as a string; decoding tries the variants in the order written and takes the first that decodes |
+| A field | `rename = "…"` | The member's name |
+| A field | `default` | A missing member decodes as the type's empty value: `0`, `0.0`, `false`, `""`, `None`, an empty `Vec` or `List`; on a field of any other type, `N0619` |
+| A field | `omit_none` | An `Option` field that is `None` is left out rather than written `null`; on another type, `N0619` |
+| A variant | `rename = "…"` | The variant's name |
+
+`tag` with `untagged`, an argument written twice, two members or variants given one name, `@codec`
+before a type that derives nothing, and any other argument are `N0619`.
 
 ### Conditional compilation — Gate 2
 <!-- id: conditional-compilation -->

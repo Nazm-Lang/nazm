@@ -283,6 +283,8 @@ pub struct ForeignStruct {
 /// One declared field: `name: Type`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
+    /// The attributes written before it (R1c, L2b): only `@codec(…)` is one.
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub name_span: Span,
     pub ty: TypeName,
@@ -316,6 +318,8 @@ pub struct Enum {
 /// One declared variant: `Name` or `Name(field: Type, …)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Variant {
+    /// The attributes written before it (R1c, L2b): only `@codec(…)` is one.
+    pub attrs: Vec<Attribute>,
     pub name: String,
     pub name_span: Span,
     /// The payload fields, in the order written. Empty for a zero-payload variant, which
