@@ -42,3 +42,16 @@ pub fn fs_write_lines(io: IoCap, path: Str, lines: Strs) -> Result[Int, Str] ! {
     let body = if strs_len(lines) == 0 { "" } else { str_concat(str_join(lines, nl), nl) };
     fs_write(io, path, body)
 }
+
+/// A new directory that only this call made, readable and writable by its owner only, under
+/// `TMPDIR` — or `/tmp` where that is unset or empty (R1d): its path, or an `Err` saying why.
+/// Nothing removes it.
+pub fn fs_temp_dir(io: IoCap) -> Result[Str, Str] ! { io } {
+    let given = os_env_get("TMPDIR");
+    let parent = if str_len(given) > 0 { given } else { "/tmp" };
+    let made = os_mkdtemp(parent);
+    if str_len(made) == 0 {
+        return Result[Str, Str].Err(error: str_concat("no temporary directory could be made in ", parent));
+    }
+    Result[Str, Str].Ok(value: made)
+}

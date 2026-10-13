@@ -310,6 +310,8 @@ pub fn emit_runtime(needs: Needs) -> String {
     }
     if needs.files {
         out.push_str(super::files::FILES_RUNTIME);
+        // The file system, further (R1d): a hosted runtime's, beside the files part.
+        out.push_str(super::files::FS_RUNTIME);
         // The network, or the three entries the files part calls for a socket.
         if needs.net {
             out.push_str(super::net::NET_RUNTIME);

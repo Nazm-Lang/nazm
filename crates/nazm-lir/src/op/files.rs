@@ -1,7 +1,7 @@
 //! Files and handles (Gate 2, `docs/spec.md`, *Files and handles*): each `os_` built-in as the
 //! runtime call it means. A handle is a word, a path a `Str`'s pointer and length, a buffer a
 //! `Bytes`'s; every failure the system reports comes back as a status, so nothing here traps
-//! but `os_stat` handed a buffer too short for its answer (`N0405`).
+//! but `os_stat` or `os_lstat` handed a buffer too short for its answer (`N0405`).
 
 use nazm_mir as mir;
 use nazm_sema::Intrinsic;
@@ -13,6 +13,8 @@ use super::ir::{Class, Cmp};
 const MESSAGE_ROOM: i64 = 256;
 /// The room an address gets: `[` an IPv6 address `]:` a port is at most 47 bytes.
 const ADDRESS_ROOM: i64 = 80;
+/// What a temporary directory's path adds to its parent's (R1d): a `/`, `nazm-` and twelve.
+const MKDTEMP_ROOM: i64 = 18;
 
 impl Fx<'_, '_> {
     /// `dst = op(args)` for an `os_` built-in; `false` for any other.
@@ -222,6 +224,96 @@ impl Fx<'_, '_> {
                     "nz.os_kill"
                 };
                 self.rt_v(name, &[h], Class::I64)
+            }
+            // The platform, further (R1d).
+            Intrinsic::OsStdout | Intrinsic::OsStderr => {
+                let which = self.iconst(if op == Intrinsic::OsStdout { 1 } else { 2 });
+                self.rt_v("nz.os_std_stream", &[which], Class::I64)
+            }
+            Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith => {
+                let prog = self.arg_place(args, 0);
+                let list = self.arg(args, 1);
+                let dir = self.arg_place(args, 2);
+                let env = self.arg(args, 3);
+                let flags = if op == Intrinsic::OsSpawnWith {
+                    self.arg(args, 4)
+                } else {
+                    self.iconst(0)
+                };
+                let (pp, pn) = self.str_parts(prog);
+                let (dp, dn) = self.str_parts(dir);
+                self.rt_v(
+                    "nz.os_spawn_in",
+                    &[pp, pn, list, dp, dn, env, flags],
+                    Class::I64,
+                )
+            }
+            Intrinsic::OsPid => self.rt_v("nz.os_pid", &[], Class::I64),
+            Intrinsic::OsChildPid
+            | Intrinsic::OsTryWait
+            | Intrinsic::OsChildRusage
+            | Intrinsic::OsUnlock => {
+                let h = self.arg(args, 0);
+                let name = match op {
+                    Intrinsic::OsChildPid => "nz.os_child_pid",
+                    Intrinsic::OsTryWait => "nz.os_try_wait",
+                    Intrinsic::OsChildRusage => "nz.os_child_rusage",
+                    _ => "nz.os_file_unlock",
+                };
+                self.rt_v(name, &[h], Class::I64)
+            }
+            Intrinsic::OsKillGroup => {
+                let group = self.arg(args, 0);
+                let sig = self.arg(args, 1);
+                self.rt_v("nz.os_kill_group", &[group, sig], Class::I64)
+            }
+            Intrinsic::OsWaitUntil => {
+                let h = self.arg(args, 0);
+                let deadline = self.arg(args, 1);
+                self.rt_v("nz.os_wait_until", &[h, deadline], Class::I64)
+            }
+            Intrinsic::OsLstat => {
+                let p = self.arg_place(args, 0);
+                let b = self.arg_place(args, 1);
+                let (pp, pn) = self.str_parts(p);
+                let (bp, bn) = self.str_parts(b);
+                let short = self.cmp_imm(Cmp::Lt, bn, Class::I64, 48);
+                self.guard(short, "N0405", "this buffer is too short for the answer");
+                self.rt_v("nz.os_lstat", &[pp, pn, bp], Class::I64)
+            }
+            Intrinsic::OsChmod => {
+                let p = self.arg_place(args, 0);
+                let mode = self.arg(args, 1);
+                let (pp, pn) = self.str_parts(p);
+                self.rt_v("nz.os_chmod", &[pp, pn, mode], Class::I64)
+            }
+            Intrinsic::OsRealpath => {
+                let p = self.arg_place(args, 0);
+                let b = self.arg_place(args, 1);
+                let (pp, pn) = self.str_parts(p);
+                let (bp, bn) = self.str_parts(b);
+                self.rt_v("nz.os_realpath", &[pp, pn, bp, bn], Class::I64)
+            }
+            // A new string, `parent`'s length and eighteen bytes, holding the path — or nothing,
+            // when no directory could be made.
+            Intrinsic::OsMkdtemp => {
+                let p = self.arg_place(args, 0);
+                let (pp, pn) = self.str_parts(p);
+                let extra = self.iconst(MKDTEMP_ROOM);
+                let room = self.bin(super::ir::BinOp::Add, pn, extra);
+                let (owner, buf) = self.string_backing(room);
+                let n = self.rt_v("nz.os_mkdtemp", &[pp, pn, buf, room], Class::I64);
+                let zero = self.iconst(0);
+                let failed = self.cmp_imm(Cmp::Lt, n, Class::I64, 0);
+                let len = self.select(failed, zero, n);
+                self.write_str(dst, buf, len, owner);
+                return true;
+            }
+            Intrinsic::OsLock | Intrinsic::OsTryLock => {
+                let h = self.arg(args, 0);
+                let exclusive = self.arg(args, 1);
+                let wait = self.iconst(i64::from(op == Intrinsic::OsLock));
+                self.rt_v("nz.os_file_lock", &[h, exclusive, wait], Class::I64)
             }
             _ => return false,
         };

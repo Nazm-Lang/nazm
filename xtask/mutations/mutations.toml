@@ -7869,7 +7869,7 @@ Repointed by N87, whose `/10` adds preconditions: a `/9` file must not be read a
 Repointed by N103, whose `/11` adds re-exports: a `/10` file must not be read as an `/11` one.
 Repointed by R1a (L8), whose `/12` adds exported constants: an `/11` file must not be read as a `/12` one."""
 file = "crates/nazm-iface/src/wire.rs"
-find = """pub const SCHEMA: &str = "nazm.interface/12";"""
+find = """pub const SCHEMA: &str = "nazm.interface/13";"""
 replace = """pub const SCHEMA: &str = "nazm.interface/11";"""
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
 
@@ -8328,10 +8328,11 @@ Repointed by R1c, which moved it to 68 for `@derive(json)`: an entry that refuse
 Repointed by R1c again, which moved it to 69 for `@codec`: an entry that refused an attribute before a field must not be reused.
 Repointed by R1c a third time, which moved it to 70 for `@derive(toml)`: an entry that refused it must not be reused.
 Repointed by R1 (5b.11, 5b.19), which moved it to 71 for `else if` and lines without `;`: an entry that refused them must not be reused.
-Repointed by R1 again (5b.12), which moved it to 72 for compound assignment: an entry that refused `+=` must not be reused."""
+Repointed by R1 again (5b.12), which moved it to 72 for compound assignment: an entry that refused `+=` must not be reused.
+Repointed by R1 a third time (5b.1–5b.3 and R1d), which moved it to 73: an entry that refused a `main` printing with nothing written must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 72;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 71;"
+find = "pub const SEMANTIC_EPOCH: u32 = 73;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 72;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10529,11 +10530,12 @@ Repointed by the v1 monotonic deadlines, which moved it to 28.
 Repointed by R1a's release queue, which moved it to 29.
 Repointed by R1a's fixed-point floats, which moved it to 30.
 Repointed by R1b's stack size, which moved it to 31.
-Repointed by R1b's 128-bit integers, which moved it to 32 for the wide part."""
+Repointed by R1b's 128-bit integers, which moved it to 32 for the wide part.
+Repointed by R1d, which moved it to 33 for the counted heap, lines of input, process control and the file-system part."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 32;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 31;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_two_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 33;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 32;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_three_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -14901,12 +14903,14 @@ find = "  %bysig = add i64 %sigw, 256"
 replace = "  %bysig = add i64 %sigw, 0"
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process::a_program_runs_with_input_and_its_output_errors_and_status_come_back_everywhere" }]
 
+# Repointed by R1d (2026-10-14): the decoding moved, unchanged, into `decoded`, which `os_wait`,
+# `os_try_wait` and `os_wait_until` share.
 [[mutation]]
 name = "g2-the-interpreter-reports-a-signal-as-a-code"
 why = "the interpreter reports a child ended by a signal as exiting with the signal's number, where every native build says 256 and the signal"
 file = "crates/nazm-core/src/eval/process.rs"
-find = "                .or_else(|| st.signal().map(|g| 256 + i64::from(g)))"
-replace = "                .or_else(|| st.signal().map(i64::from))"
+find = "        .or_else(|| st.signal().map(|g| 256 + i64::from(g)))"
+replace = "        .or_else(|| st.signal().map(i64::from))"
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process::a_program_runs_with_input_and_its_output_errors_and_status_come_back_everywhere" }]
 
 [[mutation]]
@@ -18230,8 +18234,8 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_valu
 name = "r1-no-statement-if-is-unwanted"
 why = "an `if` as a statement is checked as if its value were wanted"
 file = "crates/nazm-core/src/check/stmt.rs"
-find = '''                self.unwanted_if = matches!(e, Expr::If { .. });'''
-replace = '''                self.unwanted_if = false;'''
+find = '''                self.unwanted = true;'''
+replace = '''                self.unwanted = false;'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_value_nobody_wants_is_discarded_and_reclaimed_everywhere" }]
 
 # --- R1 5b.12: compound assignment ----------------------------------------------------------
@@ -18515,3 +18519,285 @@ file = "library/std/io.nz"
 find = "            if bytes_get(chunk, n - 1) == 10 {"
 replace = "            if bytes_get(chunk, n - 1) == 0 {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::headers_frames_and_lines_read_alike_everywhere" }]
+
+# --- R1d: the platform, further (`docs/spec.md`, *The platform, further*; D4's built-ins, P1, P2) ---
+
+[[mutation]]
+name = "r1d-a-child-s-environment-is-reversed"
+why = "a child's environment is handed over in reverse order of its names"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  %later = icmp sgt i64 %o, 0'''
+replace = '''  %later = icmp slt i64 %o, 0'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-name-given-twice-is-accepted"
+why = "an environment naming a variable twice is started rather than refused"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  br i1 %same, label %twice, label %after'''
+replace = '''  br i1 false, label %twice, label %after'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-an-unknown-spawn-flag-is-accepted"
+why = "a flag other than 1 and 2 starts the child rather than being refused"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  %unknown = icmp ne i64 %extra, 0'''
+replace = '''  %unknown = icmp ne i64 %extra, %extra'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-file-is-taken-for-a-child-s-directory"
+why = "a file named as a child's directory is not refused as one, so the system's own folding answers"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  %dirkind = icmp eq i64 %k, 1'''
+replace = '''  %dirkind = icmp ne i64 %k, 2'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-relative-program-is-not-made-absolute"
+why = "a relative program with a `/` is not put beside its directory, so where it is looked for is the system's choice"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  br i1 %rooted, label %go, label %join'''
+replace = '''  br i1 true, label %go, label %join'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-try-wait-times-out"
+why = "a wait that is not to wait at all is taken for one with a deadline already passed, answering `TimedOut` for `WouldBlock`"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  %once = icmp eq i64 %mode, 1'''
+replace = '''  %once = icmp eq i64 %mode, 7'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-deadline-has-always-passed"
+why = "a bounded wait gives up at once, before its deadline"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  %passed = icmp sge i64 %now, %deadline'''
+replace = '''  %passed = icmp sge i64 %now, %now'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-child-s-id-is-its-handle-s"
+why = "a child's id is not asked of the system, so its group is signalled by a wrong number"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  %id = call i64 @nz_os_child_id(i64 %pidw)'''
+replace = '''  %id = add i64 %pidw, 1'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-group-past-the-pid-range-is-signalled"
+why = "a group id past 2^31 is truncated and sent a signal rather than refused"
+file = "crates/nazm-runtime/src/net.rs"
+find = '''  %small = icmp slt i64 %pgid, 2147483648'''
+replace = '''  %small = icmp slt i64 %pgid, 9223372036854775807'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-new-group-is-not-made"
+why = "the child does not lead a new process group, so signalling its group finds none"
+file = "crates/nazm-runtime/src/platform.rs"
+find = '''  %sf = call i32 @posix_spawnattr_setflags(ptr %attr, i16 2)'''
+replace = '''  %sf = call i32 @posix_spawnattr_setflags(ptr %attr, i16 0)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-peak-memory-is-not-kept"
+why = "`wait4`'s peak resident memory is scaled to nothing"
+file = "crates/nazm-runtime/src/platform.rs"
+find = '''  %bytes = mul i64 %max, {RSS_SCALE}'''
+replace = '''  %bytes = mul i64 %max, 0'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }, { package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_s_peak_memory_is_known_natively_once_it_has_ended" }]
+
+[[mutation]]
+name = "r1d-lstat-follows-a-link"
+why = "`os_lstat` calls `stat`, following a final link"
+file = "crates/nazm-runtime/src/platform.rs"
+find = '''            .replace("{LSTAT}", f.lstat)'''
+replace = '''            .replace("{LSTAT}", f.stat)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-link-is-another-kind"
+why = "a symbolic link's kind is `2`, anything else, not `3`"
+file = "crates/nazm-runtime/src/platform.rs"
+find = '''  %k2 = select i1 %islink, i64 3, i64 2'''
+replace = '''  %k2 = select i1 %islink, i64 2, i64 2'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-chmod-takes-a-file-type-bit"
+why = "a mode past 0o7777 reaches `chmod`, whose kernel masks it to nothing"
+file = "crates/nazm-runtime/src/files.rs"
+find = '''  %bits = icmp ult i64 %mode, 4096'''
+replace = '''  %bits = icmp ult i64 %mode, 8192'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-canonical-path-too-long-is-a-length"
+why = "a canonical path longer than its buffer answers its length, copied nowhere, rather than `InvalidInput`"
+file = "crates/nazm-runtime/src/files.rs"
+find = '''  %long = icmp sgt i64 %r, %cap'''
+replace = '''  %long = icmp sgt i64 %r, 9223372036854775807'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-temporary-directory-is-open-to-all"
+why = "a temporary directory is made `0o777`, not private"
+file = "crates/nazm-runtime/src/files.rs"
+find = '''  %pm = call i32 @nz_os_chmod(ptr %buf, i64 448)'''
+replace = '''  %pm = call i32 @nz_os_chmod(ptr %buf, i64 511)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-an-exclusive-lock-is-shared"
+why = "an exclusive lock is taken shared, so another shared holder is let in"
+file = "crates/nazm-runtime/src/files.rs"
+find = '''  %kind = select i1 %exclusive, i32 2, i32 1'''
+replace = '''  %kind = select i1 %exclusive, i32 1, i32 1'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::an_advisory_lock_belongs_to_the_open_file_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-closing-standard-output-closes-the-stream"
+why = "closing standard output's handle closes descriptor 1, so `print` writes nothing after"
+file = "crates/nazm-runtime/src/files.rs"
+find = '''  br i1 %stream, label %ok, label %which'''
+replace = '''  br i1 false, label %ok, label %which'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::standard_output_is_a_handle_in_order_with_print_and_closing_it_keeps_the_stream" }]
+
+[[mutation]]
+name = "r1d-a-short-lstat-buffer-is-accepted"
+why = "`os_lstat` traps only below 32 bytes, so 47 are written 48"
+file = "crates/nazm-lir/src/op/files.rs"
+find = '''                let short = self.cmp_imm(Cmp::Lt, bn, Class::I64, 48);'''
+replace = '''                let short = self.cmp_imm(Cmp::Lt, bn, Class::I64, 32);'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_buffer_too_short_for_an_lstat_stops_the_program_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-accepts-a-name-twice"
+why = "the interpreter starts a child whose environment names a variable twice, the last winning"
+file = "crates/nazm-core/src/eval/process.rs"
+find = '''    if pairs.windows(2).any(|w| matches!(w, [a, b] if a.0 == b.0)) {'''
+replace = '''    if false {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-gives-a-null-input-a-pipe"
+why = "the interpreter gives a child with a null standard input a pipe instead"
+file = "crates/nazm-core/src/eval/process.rs"
+find = '''        .stdin(if null_input {'''
+replace = '''        .stdin(if false {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-s-try-wait-times-out"
+why = "the interpreter's wait that is not to wait answers `TimedOut` for `WouldBlock`"
+file = "crates/nazm-core/src/eval/process.rs"
+find = '''        Ok(None) => -super::os::EAGAIN,'''
+replace = '''        Ok(None) => -ETIMEDOUT,'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-s-peak-is-invalid-after-the-end"
+why = "the interpreter answers `InvalidInput` for a child that has ended, as if it had not, rather than saying it cannot ask"
+file = "crates/nazm-core/src/eval/process.rs"
+find = '''                        -ENOSYS
+'''
+replace = '''                        -EINVAL
+'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-signals-a-group-past-the-pid-range"
+why = "the interpreter hands a group id past 2^31 to `kill` rather than refusing it"
+file = "crates/nazm-core/src/eval/process.rs"
+find = '''    if group < 2 || group > i64::from(i32::MAX) || !(0..32).contains(&sig) {'''
+replace = '''    if group < 2 || !(0..32).contains(&sig) {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-s-lstat-misses-a-link"
+why = "the interpreter's `os_lstat` never reports a symbolic link"
+file = "crates/nazm-core/src/eval/os.rs"
+find = '''                    let kind = if ft.is_symlink() {'''
+replace = '''                    let kind = if false {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-s-temporary-directory-is-open"
+why = "the interpreter makes a temporary directory `0o755`, not private"
+file = "crates/nazm-core/src/eval/os.rs"
+find = '''std::fs::Permissions::from_mode(0o700)'''
+replace = '''std::fs::Permissions::from_mode(0o755)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-tries-an-exclusive-lock-shared"
+why = "the interpreter tries an exclusive lock as a shared one"
+file = "crates/nazm-core/src/eval/os.rs"
+find = '''        (true, false) => tried(f.try_lock()),'''
+replace = '''        (true, false) => tried(f.try_lock_shared()),'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::an_advisory_lock_belongs_to_the_open_file_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-spawning-anywhere-needs-no-process-cap"
+why = "`os_spawn_in`, `os_spawn_with` and `os_kill_group` need nothing held"
+file = "crates/nazm-sema/src/capability.rs"
+find = '''            Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith | Intrinsic::OsKillGroup => {
+                CapabilitySet::of(Self::Process)
+            }'''
+replace = '''            Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith | Intrinsic::OsKillGroup => {
+                CapabilitySet::EMPTY
+            }'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::starting_a_child_anywhere_and_signalling_a_group_need_a_process_cap" }]
+
+[[mutation]]
+name = "r1d-a-child-s-directory-is-no-sink"
+why = "which directory a child starts in may come from a file's contents"
+file = "crates/nazm-sema/src/provenance.rs"
+find = '''            Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith => &[(0, Self::Path), (2, Self::Path)],'''
+replace = '''            Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith => &[(0, Self::Path)],'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::starting_a_child_anywhere_and_signalling_a_group_need_a_process_cap" }]
+
+[[mutation]]
+name = "r1d-chmod-and-mkdtemp-are-no-sink"
+why = "the paths of `os_chmod` and `os_mkdtemp` may come from a file's contents"
+file = "crates/nazm-sema/src/provenance.rs"
+find = '''            Intrinsic::OsChmod | Intrinsic::OsMkdtemp => &[(0, Self::Path)],'''
+replace = '''            Intrinsic::OsChmod | Intrinsic::OsMkdtemp => &[],'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::naming_a_path_needs_an_io_cap_and_a_file_does_not_choose_one" }]
+
+[[mutation]]
+name = "r1d-lstat-is-not-a-prelude-name"
+why = "`os_lstat` is a 1.0 built-in's name, so a program that declares one is refused"
+file = "crates/nazm-sema/src/intrinsic.rs"
+find = '''                | Self::OsLstat
+'''
+replace = '''
+'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_program_that_names_a_function_like_one_keeps_its_own" }]
+
+[[mutation]]
+name = "r1d-a-walk-leaves-out-a-link"
+why = "`file_walk` leaves out a symbolic link rather than listing it"
+file = "library/std/file.nz"
+find = '''            if kind == 0 || kind == 3 {'''
+replace = '''            if kind == 0 {'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "file_walk::a_symbolic_link_is_listed_and_never_followed" }]
+
+[[mutation]]
+name = "r1d-the-library-s-try-wait-is-an-error"
+why = "`process_try_wait` takes `TimedOut` for a running child, so `WouldBlock` is an error"
+file = "library/std/process.nz"
+find = '''    ended(os_try_wait(c.handle), IoErrorKind.WouldBlock())'''
+replace = '''    ended(os_try_wait(c.handle), IoErrorKind.TimedOut())'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::the_process_library_wraps_them_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-library-s-held-lock-is-an-error"
+why = "`file_try_lock` answers an error, not `false`, while another holds the lock"
+file = "library/std/file.nz"
+find = '''    if io_kind_of(s) == IoErrorKind.WouldBlock() {'''
+replace = '''    if io_kind_of(s) == IoErrorKind.TimedOut() {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::an_advisory_lock_belongs_to_the_open_file_alike_everywhere" }]

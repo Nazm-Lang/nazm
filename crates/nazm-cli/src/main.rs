@@ -583,26 +583,6 @@ pub(crate) fn report_ok(text: &str, _extra: Option<&str>) -> ExitCode {
     ExitCode::from(exit::OK)
 }
 
-/// How a program ends with `main`'s result (R1, 5b.3): with it as the exit status — written to
-/// no stream — unless the result report is asked for (`NAZM_RESULT_REPORT`), which prints it and
-/// ends with `0` as every program did before. A result outside `0..=255` is `N0416`'s failure,
-/// as `exit_with` of one is, and status 2: what a compiled program does.
-pub(crate) fn end_with_result(v: &nazm_core::Value) -> ExitCode {
-    if std::env::var_os(nazm_lir::RESULT_VARIABLE).is_some() {
-        return report_ok(&v.to_string(), None);
-    }
-    match v {
-        nazm_core::Value::Int(n) => match u8::try_from(*n) {
-            Ok(code) => ExitCode::from(code),
-            Err(_) => {
-                eprintln!("{}", nazm_lir::RESULT_STATUS);
-                ExitCode::from(2)
-            }
-        },
-        other => report_ok(&other.to_string(), None),
-    }
-}
-
 pub(crate) fn emit(diagnostics: &[nazm_diag::Diagnostic], map: &SourceMap, json: bool) {
     for d in diagnostics {
         if json {

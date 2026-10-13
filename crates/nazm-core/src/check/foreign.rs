@@ -194,6 +194,30 @@ pub const RESERVED_C_SYMBOLS: &[&str] = &[
     "nz_net_recvfrom",
     "nz_net_shutdown",
     "nz_net_name",
+    // And R1d's (the platform, further): what the runtime calls, and what each target's `os` unit
+    // defines and calls.
+    "nz_os_spawn_in",
+    "nz_os_child_id",
+    "nz_os_pid",
+    "nz_os_signal_group",
+    "nz_os_nap",
+    "nz_os_lstat",
+    "nz_os_chmod",
+    "nz_os_realpath",
+    "nz_os_flock",
+    "posix_spawn_file_actions_addopen",
+    "posix_spawn_file_actions_addchdir_np",
+    "posix_spawnattr_init",
+    "posix_spawnattr_setflags",
+    "posix_spawnattr_setpgroup",
+    "posix_spawnattr_destroy",
+    "wait4",
+    "getpid",
+    "nanosleep",
+    "lstat",
+    "chmod",
+    "realpath",
+    "flock",
 ];
 
 /// The rules a foreign declaration must meet (N42, `docs/architecture.md` §7.44).

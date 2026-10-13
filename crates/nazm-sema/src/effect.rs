@@ -216,7 +216,25 @@ impl Effect {
             | Intrinsic::OsSpawn
             | Intrinsic::OsChildPipe
             | Intrinsic::OsWait
-            | Intrinsic::OsKill => Some(Self::Io),
+            | Intrinsic::OsKill
+            // The platform, further (R1d): the operating system's as well.
+            | Intrinsic::OsStdout
+            | Intrinsic::OsStderr
+            | Intrinsic::OsSpawnIn
+            | Intrinsic::OsSpawnWith
+            | Intrinsic::OsPid
+            | Intrinsic::OsChildPid
+            | Intrinsic::OsKillGroup
+            | Intrinsic::OsTryWait
+            | Intrinsic::OsWaitUntil
+            | Intrinsic::OsChildRusage
+            | Intrinsic::OsLstat
+            | Intrinsic::OsChmod
+            | Intrinsic::OsRealpath
+            | Intrinsic::OsMkdtemp
+            | Intrinsic::OsLock
+            | Intrinsic::OsTryLock
+            | Intrinsic::OsUnlock => Some(Self::Io),
             // A handle's own state and a status's meaning are values the program holds.
             Intrinsic::OsStatus | Intrinsic::OsFamily | Intrinsic::OsErrorText => None,
             // Entropy changes nothing outside the program; its authority is a `RandomCap`, held.
@@ -581,6 +599,23 @@ mod tests {
                 "os_child_pipe",
                 "os_wait",
                 "os_kill",
+                "os_stdout",
+                "os_stderr",
+                "os_spawn_in",
+                "os_spawn_with",
+                "os_pid",
+                "os_child_pid",
+                "os_kill_group",
+                "os_try_wait",
+                "os_wait_until",
+                "os_child_rusage",
+                "os_lstat",
+                "os_chmod",
+                "os_realpath",
+                "os_mkdtemp",
+                "os_lock",
+                "os_try_lock",
+                "os_unlock",
             ]
         );
         assert!(Intrinsic::ALL
