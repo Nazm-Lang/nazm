@@ -289,13 +289,14 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                 }
             }
         };
-        let ints: &[Class] = &[Class::I8, Class::I16, Class::I32, Class::I64];
+        let ints: &[Class] = &[Class::I8, Class::I16, Class::I32, Class::I64, Class::I128];
         let floats: &[Class] = &[Class::F32, Class::F64];
         let numbers: &[Class] = &[
             Class::I8,
             Class::I16,
             Class::I32,
             Class::I64,
+            Class::I128,
             Class::F32,
             Class::F64,
         ];
@@ -311,9 +312,14 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                 }
                 Inst::Bin { op, a, b: y, .. } => {
                     let allowed: &[Class] = match op {
-                        BinOp::And | BinOp::Or | BinOp::Xor => {
-                            &[Class::Bit, Class::I8, Class::I16, Class::I32, Class::I64]
-                        }
+                        BinOp::And | BinOp::Or | BinOp::Xor => &[
+                            Class::Bit,
+                            Class::I8,
+                            Class::I16,
+                            Class::I32,
+                            Class::I64,
+                            Class::I128,
+                        ],
                         BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::FDiv => floats,
                         _ => ints,
                     };

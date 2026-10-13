@@ -1101,8 +1101,8 @@ impl<'a> Lower<'a> {
     fn expr(&mut self, e: &AstExpr) -> Lowered<Expr> {
         let node = |kind: ExprKind, ty: Option<Type>, at: Span| Expr { kind, ty, at };
         Ok(match e {
-            AstExpr::Int { value, span } => self.integer(i128::from(*value), *span)?,
-            AstExpr::WideInt { value, span } => self.integer(i128::from(*value), *span)?,
+            AstExpr::Int { value, span } => self.integer((*value).into(), *span)?,
+            AstExpr::WideInt { value, span } => self.integer((*value).into(), *span)?,
             // Rounded once, from the decimal text, in the literal's own type (Gate 2).
             AstExpr::Float { text, span } => {
                 let kind = match self.res.numeric(*span) {
@@ -1201,7 +1201,17 @@ impl<'a> Lower<'a> {
                 let AstExpr::Int { value, span } = &**operand else {
                     return defect(operand.span(), "a negated literal that is not one");
                 };
-                self.integer(-i128::from(*value), *span)?
+                self.integer((-i128::from(*value)).into(), *span)?
+            }
+            // And past `Int`'s digits (R1b, L13b).
+            AstExpr::Neg { operand, .. }
+                if matches!(&**operand, AstExpr::WideInt { span, .. }
+                    if matches!(self.res.numeric(*span), Some(NumericFact::Literal(_)))) =>
+            {
+                let AstExpr::WideInt { value, span } = &**operand else {
+                    return defect(operand.span(), "a negated literal that is not one");
+                };
+                self.integer(nazm_sema::numeric::Wide::from_u128(*value).negate(), *span)?
             }
             AstExpr::Neg {
                 operand, op_span, ..
@@ -1872,7 +1882,11 @@ impl<'a> Lower<'a> {
             };
             let divided = choose(eq(quotient, local(y)), some(local(w)), none());
             let past_minus_one = if kind.is_signed() {
-                let min = -(1_i128 << (kind.bits() - 1));
+                // The kind's minimum; `Int128`'s is `i128::MIN` itself (R1b, L13b).
+                let min = kind
+                    .int_range()
+                    .and_then(|(lo, _)| lo.to_i128())
+                    .unwrap_or(0);
                 let minus_one = konst(self, -1);
                 let min = konst(self, min);
                 choose(
@@ -2278,7 +2292,7 @@ impl<'a> Lower<'a> {
 
     /// An integer literal of the type the checker gave it (Gate 2): an `Int` constant, or a
     /// numeric one by its canonical bits.
-    fn integer(&mut self, v: i128, span: Span) -> Lowered<Expr> {
+    fn integer(&mut self, v: nazm_sema::numeric::Wide, span: Span) -> Lowered<Expr> {
         let ty = match self.res.numeric(span) {
             Some(NumericFact::Literal(t)) => t,
             _ => Type::Int,
@@ -2291,7 +2305,7 @@ impl<'a> Lower<'a> {
             );
         };
         let c = if kind == NumKind::I64 {
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
             Const::Int(value.bits as i64)
         } else {
             Const::Num {
@@ -3161,7 +3175,7 @@ impl<'a> Lower<'a> {
         let kind = match value {
             V::Num(n) if n.kind == NumKind::I64 =>
             {
-                #[allow(clippy::cast_possible_wrap)]
+                #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
                 ExprKind::Const(self.constant(Const::Int(n.bits as i64)))
             }
             V::Num(n) => ExprKind::Const(self.constant(Const::Num {

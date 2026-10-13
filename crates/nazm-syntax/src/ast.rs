@@ -927,10 +927,10 @@ pub enum Expr {
         value: i64,
         span: Span,
     },
-    /// An integer literal above `Int`'s range and within `UInt64`'s (Gate 2): valid only where a
-    /// `UInt64` is expected, and refused as too large for `Int` everywhere else.
+    /// An integer literal above `Int`'s range and within `UInt128`'s (Gate 2; R1b, L13b): valid
+    /// only where a type that holds it is expected, and refused as too large everywhere else.
     WideInt {
-        value: u64,
+        value: u128,
         span: Span,
     },
     /// A floating-point literal (Gate 2), as written with any `_` removed. Its type — `Float64`,

@@ -12,6 +12,7 @@
 use crate::capability::CapabilityKind;
 use crate::enums::EnumId;
 use crate::intrinsic::Intrinsic;
+use crate::numeric::Wide;
 use crate::record::RecordId;
 use crate::resolve::FnId;
 
@@ -152,19 +153,24 @@ pub enum NumKind {
     U64,
     F32,
     F64,
+    /// `Int128` and `UInt128` (R1b, L13b), last so that every earlier kind keeps its place.
+    I128,
+    U128,
 }
 
 impl NumKind {
     /// Every kind, `I64` (`Int`) included, in a reader's order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::I8,
         Self::I16,
         Self::I32,
         Self::I64,
+        Self::I128,
         Self::U8,
         Self::U16,
         Self::U32,
         Self::U64,
+        Self::U128,
         Self::F32,
         Self::F64,
     ];
@@ -181,6 +187,8 @@ impl NumKind {
             Self::U16 => "UInt16",
             Self::U32 => "UInt32",
             Self::U64 => "UInt64",
+            Self::I128 => "Int128",
+            Self::U128 => "UInt128",
             Self::F32 => "Float32",
             Self::F64 => "Float64",
         }
@@ -194,6 +202,7 @@ impl NumKind {
             Self::I16 | Self::U16 => 16,
             Self::I32 | Self::U32 | Self::F32 => 32,
             Self::I64 | Self::U64 | Self::F64 => 64,
+            Self::I128 | Self::U128 => 128,
         }
     }
 
@@ -205,6 +214,7 @@ impl NumKind {
             Self::I16 | Self::U16 => 2,
             Self::I32 | Self::U32 | Self::F32 => 4,
             Self::I64 | Self::U64 | Self::F64 => 8,
+            Self::I128 | Self::U128 => 16,
         }
     }
 
@@ -221,21 +231,28 @@ impl NumKind {
     /// Whether an integer kind is signed; floats are signed too.
     #[must_use]
     pub const fn is_signed(self) -> bool {
-        !matches!(self, Self::U8 | Self::U16 | Self::U32 | Self::U64)
+        !matches!(
+            self,
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::U128
+        )
     }
 
     /// The smallest and largest value of an integer kind; `None` for a float.
     #[must_use]
-    pub const fn int_range(self) -> Option<(i128, i128)> {
+    pub const fn int_range(self) -> Option<(Wide, Wide)> {
+        let s = Wide::from_i128;
+        let u = Wide::from_u128;
         Some(match self {
-            Self::I8 => (i8::MIN as i128, i8::MAX as i128),
-            Self::I16 => (i16::MIN as i128, i16::MAX as i128),
-            Self::I32 => (i32::MIN as i128, i32::MAX as i128),
-            Self::I64 => (i64::MIN as i128, i64::MAX as i128),
-            Self::U8 => (0, u8::MAX as i128),
-            Self::U16 => (0, u16::MAX as i128),
-            Self::U32 => (0, u32::MAX as i128),
-            Self::U64 => (0, u64::MAX as i128),
+            Self::I8 => (s(i8::MIN as i128), s(i8::MAX as i128)),
+            Self::I16 => (s(i16::MIN as i128), s(i16::MAX as i128)),
+            Self::I32 => (s(i32::MIN as i128), s(i32::MAX as i128)),
+            Self::I64 => (s(i64::MIN as i128), s(i64::MAX as i128)),
+            Self::I128 => (s(i128::MIN), s(i128::MAX)),
+            Self::U8 => (Wide::ZERO, u(u8::MAX as u128)),
+            Self::U16 => (Wide::ZERO, u(u16::MAX as u128)),
+            Self::U32 => (Wide::ZERO, u(u32::MAX as u128)),
+            Self::U64 => (Wide::ZERO, u(u64::MAX as u128)),
+            Self::U128 => (Wide::ZERO, u(u128::MAX)),
             Self::F32 | Self::F64 => return None,
         })
     }
@@ -401,6 +418,9 @@ impl Type {
         Self::Text,
         Self::OsHandle,
         Self::Atomic,
+        // R1b, L13b: last, so every earlier entry keeps its place.
+        Self::Num(NumKind::I128),
+        Self::Num(NumKind::U128),
     ];
 
     /// The written name of a **built-in** type, which is also how it is spelled in

@@ -164,6 +164,7 @@ impl Fx<'_, '_> {
             | Intrinsic::NumToStr
             | Intrinsic::FloatToStrFixed
             | Intrinsic::Float64ToBits
+            | Intrinsic::WideningMul
             | Intrinsic::Float64FromBits
             | Intrinsic::Float32ToBits
             | Intrinsic::Float32FromBits
@@ -1000,6 +1001,12 @@ impl Fx<'_, '_> {
                     self.rt_v("nz.format_float", &[buf, d, single], Class::I64)
                 } else if k == NumKind::U64 {
                     self.rt_v("nz.format_u64", &[buf, x], Class::I64)
+                } else if super::lower::num_class(k) == Class::I128 {
+                    // By address (R1b, L13b): 39 digits and a sign fit the 48 bytes.
+                    let px = self.scratch(16);
+                    self.store(px, 0, x);
+                    let signed = self.iconst(i64::from(k.is_signed()));
+                    self.rt_v("nz.format_i128", &[buf, px, signed], Class::I64)
                 } else {
                     let wide = if super::lower::num_class(k) == Class::I64 {
                         x

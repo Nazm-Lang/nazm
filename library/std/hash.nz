@@ -92,6 +92,22 @@ impl Hash for UInt64 {
     fn same(self: UInt64, other: UInt64) -> Bool ! {} { self == other }
 }
 
+// A 128-bit integer (R1b, L13b): its low word's hash and its high word's, combined — as the
+// derived hash of one is.
+impl Hash for Int128 {
+    fn hash(self: Int128) -> UInt64 ! {} {
+        hash_combine(hash_u64(wrap_convert[UInt64](self)), hash_u64(wrap_convert[UInt64](self >> 64)))
+    }
+    fn same(self: Int128, other: Int128) -> Bool ! {} { self == other }
+}
+
+impl Hash for UInt128 {
+    fn hash(self: UInt128) -> UInt64 ! {} {
+        hash_combine(hash_u64(wrap_convert[UInt64](self)), hash_u64(UInt64(self >> 64)))
+    }
+    fn same(self: UInt128, other: UInt128) -> Bool ! {} { self == other }
+}
+
 impl Hash for Bool {
     fn hash(self: Bool) -> UInt64 ! {} { hash_u64(if self { UInt64(1) } else { UInt64(0) }) }
     fn same(self: Bool, other: Bool) -> Bool ! {} { self == other }

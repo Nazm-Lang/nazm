@@ -342,6 +342,7 @@ fn all() -> nazm_lir::Needs {
         numbers: true,
         files: true,
         net: true,
+        wide: true,
     }
 }
 

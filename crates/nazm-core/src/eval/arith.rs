@@ -139,7 +139,7 @@ pub(super) fn as_num(v: &Value) -> Option<NumVal> {
 /// A number as a value: an `Int` for that kind, a [`Value::Num`] for every other.
 pub(super) fn from_num(n: NumVal) -> Value {
     if n.kind == NumKind::I64 {
-        #[allow(clippy::cast_possible_wrap)]
+        #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
         Value::Int(n.bits as i64)
     } else {
         Value::Num(n)
@@ -288,6 +288,12 @@ pub(super) fn derived_hash(v: &Value, orders: &cir::Orders) -> Option<u64> {
     match v {
         #[allow(clippy::cast_sign_loss)]
         Value::Int(x) => Some(fnv::word(*x as u64)),
+        // A 128-bit integer (R1b, L13b): its low word's hash and its high word's, combined.
+        #[allow(clippy::cast_possible_truncation)]
+        Value::Num(n) if n.kind.bits() == 128 => Some(fnv::combine(
+            fnv::word(n.bits as u64),
+            fnv::word((n.bits >> 64) as u64),
+        )),
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Value::Num(n) if n.kind.is_integer() => Some(fnv::word(n.as_i128() as u64)),
         Value::Bool(b) => Some(fnv::word(u64::from(*b))),

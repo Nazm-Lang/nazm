@@ -306,7 +306,16 @@ impl Checker<'_> {
         if let Expr::Int { value, span } = operand {
             if let Some(k) = expected.and_then(Type::num).filter(|k| k.is_integer()) {
                 if k != NumKind::I64 {
-                    return self.integer_literal(-i128::from(*value), *span, expected);
+                    return self.integer_literal((-i128::from(*value)).into(), *span, expected);
+                }
+            }
+        }
+        // And past `Int`'s digits, for an `Int128` (R1b, L13b).
+        if let Expr::WideInt { value, span } = operand {
+            if let Some(k) = expected.and_then(Type::num).filter(|k| k.is_integer()) {
+                if k != NumKind::I64 {
+                    let v = nazm_sema::numeric::Wide::from_u128(*value).negate();
+                    return self.integer_literal(v, *span, expected);
                 }
             }
         }
@@ -426,14 +435,22 @@ impl Checker<'_> {
     /// An integer literal's type (Gate 2): the integer type expected, where one is, and `Int`
     /// everywhere else — refused, by name, when its value does not fit that type.
     #[inline(never)]
-    pub(super) fn integer_literal(&mut self, v: i128, span: Span, expected: Option<Type>) -> Type {
+    pub(super) fn integer_literal(
+        &mut self,
+        v: nazm_sema::numeric::Wide,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Type {
         let ty = match expected.and_then(Type::num) {
             Some(k) if k.is_integer() => Type::of_num(k),
             _ => Type::Int,
         };
         let k = ty.num().unwrap_or(NumKind::I64);
         if NumVal::int(k, v).is_none() {
-            let (lo, hi) = k.int_range().unwrap_or((0, 0));
+            let (lo, hi) = k.int_range().unwrap_or((
+                nazm_sema::numeric::Wide::ZERO,
+                nazm_sema::numeric::Wide::ZERO,
+            ));
             self.errors.push(
                 Diagnostic::error(
                     codes::INTEGER_TOO_LARGE,

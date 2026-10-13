@@ -481,6 +481,7 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::FloatIsInfinite
         | Intrinsic::FloatIsFinite
         | Intrinsic::Float64ToBits
+        | Intrinsic::WideningMul
         | Intrinsic::Float64FromBits
         | Intrinsic::Float32ToBits
         | Intrinsic::Float32FromBits

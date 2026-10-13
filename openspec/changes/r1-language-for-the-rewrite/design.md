@@ -179,6 +179,15 @@ the binding instead (the design Swift uses): it lives in a `Cell` the function a
 name, so a closure outliving its scope leaves nothing dangling, and the cycle argument holds by
 refusing a binding that can hold a function value (`N0386`), as `N0616` refuses such a `Vec`.
 
+**L13b as carried out (2026-10-13).** The widening multiply is `widening_mul(a: UInt64, b:
+UInt64) -> UInt128`, monomorphic: a generic one's result is twice `T`'s width, which a built-in's
+signature — `T` and shapes of it — cannot say, and the products a rewrite needs (hashing, bignum
+digits, fixed point) are 64-by-64 unsigned. A narrower or signed widening product is `T2(a) *
+T2(b)`, exact by the same argument. A 128-bit value is aligned to 8, as every enum payload is, and
+crosses no C boundary; the operations neither backend makes an instruction of on every target —
+division, a signed checked product, float conversions, text — are a runtime part of their own,
+taking their values by address, which a board or WebAssembly build refuses by name.
+
 **Found while carrying it out (2026-10-12):**
 
 | # | Proposal | Why |

@@ -231,6 +231,9 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.numbers {
         out.push_str(NUMBER_RUNTIME);
     }
+    if needs.wide {
+        out.push_str(WIDE_RUNTIME);
+    }
     if needs.closures {
         out.push_str(CLOSURE_RUNTIME);
     }
@@ -3352,6 +3355,156 @@ entry:
   %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %u = call i32 @pthread_mutex_unlock(ptr %m)
   ret void
+}
+";
+
+/// R1b's 128-bit integers (L13b): what neither backend makes an instruction of on every target —
+/// division, a signed checked product, float conversions — and the decimal text, each taking its
+/// 128-bit values by address, so no 128-bit value crosses a call between code two compilers
+/// made. The unsigned checked product is LLVM's own; the signed one is the unsigned product of
+/// the magnitudes, bounded by `2^127 - 1`, or `2^127` when exactly one sign is negative.
+const WIDE_RUNTIME: &str = r"
+define hidden void @nz.i128_divrem(ptr %out, ptr %pa, ptr %pb, i64 %op) {
+entry:
+  %a = load i128, ptr %pa, align 8
+  %b = load i128, ptr %pb, align 8
+  switch i64 %op, label %urem [ i64 0, label %sdiv i64 1, label %srem i64 2, label %udiv ]
+sdiv:
+  %q = sdiv i128 %a, %b
+  store i128 %q, ptr %out, align 8
+  ret void
+srem:
+  %r = srem i128 %a, %b
+  store i128 %r, ptr %out, align 8
+  ret void
+udiv:
+  %uq = udiv i128 %a, %b
+  store i128 %uq, ptr %out, align 8
+  ret void
+urem:
+  %ur = urem i128 %a, %b
+  store i128 %ur, ptr %out, align 8
+  ret void
+}
+
+define hidden i32 @nz.i128_mul(ptr %out, ptr %pa, ptr %pb, i64 %signed) {
+entry:
+  %a = load i128, ptr %pa, align 8
+  %b = load i128, ptr %pb, align 8
+  %p = mul i128 %a, %b
+  store i128 %p, ptr %out, align 8
+  %s = icmp ne i64 %signed, 0
+  br i1 %s, label %sgn, label %uns
+uns:
+  %u = call {i128, i1} @llvm.umul.with.overflow.i128(i128 %a, i128 %b)
+  %uo = extractvalue {i128, i1} %u, 1
+  %ur = zext i1 %uo to i32
+  ret i32 %ur
+sgn:
+  %an = icmp slt i128 %a, 0
+  %na = sub i128 0, %a
+  %ma = select i1 %an, i128 %na, i128 %a
+  %bn = icmp slt i128 %b, 0
+  %nb = sub i128 0, %b
+  %mb = select i1 %bn, i128 %nb, i128 %b
+  %m = call {i128, i1} @llvm.umul.with.overflow.i128(i128 %ma, i128 %mb)
+  %mo = extractvalue {i128, i1} %m, 1
+  %mv = extractvalue {i128, i1} %m, 0
+  %neg = xor i1 %an, %bn
+  %limit = select i1 %neg, i128 170141183460469231731687303715884105728, i128 170141183460469231731687303715884105727
+  %past = icmp ugt i128 %mv, %limit
+  %bad = or i1 %mo, %past
+  %r = zext i1 %bad to i32
+  ret i32 %r
+}
+
+define hidden double @nz.i128_to_f64(ptr %pa, i64 %signed) {
+entry:
+  %a = load i128, ptr %pa, align 8
+  %s = icmp ne i64 %signed, 0
+  br i1 %s, label %sgn, label %uns
+sgn:
+  %f = sitofp i128 %a to double
+  ret double %f
+uns:
+  %g = uitofp i128 %a to double
+  ret double %g
+}
+
+define hidden float @nz.i128_to_f32(ptr %pa, i64 %signed) {
+entry:
+  %a = load i128, ptr %pa, align 8
+  %s = icmp ne i64 %signed, 0
+  br i1 %s, label %sgn, label %uns
+sgn:
+  %f = sitofp i128 %a to float
+  ret float %f
+uns:
+  %g = uitofp i128 %a to float
+  ret float %g
+}
+
+define hidden void @nz.f64_to_i128(ptr %out, double %x, i64 %signed) {
+entry:
+  %s = icmp ne i64 %signed, 0
+  br i1 %s, label %sgn, label %uns
+sgn:
+  %a = call i128 @llvm.fptosi.sat.i128.f64(double %x)
+  store i128 %a, ptr %out, align 8
+  ret void
+uns:
+  %b = call i128 @llvm.fptoui.sat.i128.f64(double %x)
+  store i128 %b, ptr %out, align 8
+  ret void
+}
+
+; Digits from the right into 40 bytes of its own — `UInt128::MAX` has 39 — then a sign and a
+; copy to the front of the caller's.
+define hidden i64 @nz.format_i128(ptr %buf, ptr %pa, i64 %signed) {
+entry:
+  %v = load i128, ptr %pa, align 8
+  %s = icmp ne i64 %signed, 0
+  %lt = icmp slt i128 %v, 0
+  %neg = and i1 %s, %lt
+  %nv = sub i128 0, %v
+  %mag = select i1 %neg, i128 %nv, i128 %v
+  %tmp = alloca [40 x i8], align 1
+  br label %loop
+loop:
+  %m = phi i128 [ %mag, %entry ], [ %q, %loop ]
+  %i = phi i64 [ 40, %entry ], [ %j, %loop ]
+  %q = udiv i128 %m, 10
+  %r = urem i128 %m, 10
+  %d = trunc i128 %r to i8
+  %c = add i8 %d, 48
+  %j = sub i64 %i, 1
+  %at = getelementptr i8, ptr %tmp, i64 %j
+  store i8 %c, ptr %at
+  %more = icmp ne i128 %q, 0
+  br i1 %more, label %loop, label %done
+done:
+  %len = sub i64 40, %j
+  %sl = zext i1 %neg to i64
+  br i1 %neg, label %minus, label %copy
+minus:
+  store i8 45, ptr %buf
+  br label %copy
+copy:
+  %dst = getelementptr i8, ptr %buf, i64 %sl
+  %src = getelementptr i8, ptr %tmp, i64 %j
+  br label %byte
+byte:
+  %k = phi i64 [ 0, %copy ], [ %k1, %byte ]
+  %from = getelementptr i8, ptr %src, i64 %k
+  %ch = load i8, ptr %from
+  %to = getelementptr i8, ptr %dst, i64 %k
+  store i8 %ch, ptr %to
+  %k1 = add i64 %k, 1
+  %again = icmp ult i64 %k1, %len
+  br i1 %again, label %byte, label %end
+end:
+  %total = add i64 %len, %sl
+  ret i64 %total
 }
 ";
 
