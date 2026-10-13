@@ -17893,3 +17893,101 @@ file = "library/std/regex.nz"
 find = '''            prev = lo + v + 1;'''
 replace = '''            prev = lo + v;'''
 killers = [{ package = "nazm-cli", test = "regex", name = "every_pattern_finds_its_leftmost_first_matches" }]
+
+# --- R1e S4: `@std/args` (`docs/spec.md`, *The standard library*) ------------------------------
+
+[[mutation]]
+name = "r1e-options-are-not-inherited"
+why = "a command's options are not accepted after one of its sub-commands is named, so `tool build -v` is refused"
+file = "library/std/args.nz"
+find = "            if d.cmd == c && (d.kind == k_flag() || d.kind == k_option()) {"
+replace = "            if d.cmd == cmd && (d.kind == k_flag() || d.kind == k_option()) {"
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-short-name-may-be-declared-twice"
+why = "a specification declaring `-x` for two arguments is accepted, and the second can never be given"
+file = "library/std/args.nz"
+find = '''            if d.short != "" && e.short == d.short {'''
+replace = '''            if false {'''
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-double-dash-ends-nothing"
+why = "`--` is not the end of the options, so an argument after it that begins with `-` is read as one"
+file = "library/std/args.nz"
+find = '''        if !options_end && a == "--" {'''
+replace = '''        if false && a == "--" {'''
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-long-option-ignores-its-equals"
+why = "`--name=value` is looked up as an option named `name=value`, so it is unknown"
+file = "library/std/args.nz"
+find = "            let name = if eq >= 0 { str_slice(body, 0, eq) } else { body };"
+replace = "            let name = body;"
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-short-h-is-no-help"
+why = "`-h` does not ask for help when the command has not declared it, so it is an unknown option"
+file = "library/std/args.nz"
+find = '''                if d < 0 && s == "h" { help = true; break; }'''
+replace = '''                if false { help = true; break; }'''
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-attached-short-value-is-lost"
+why = "`-O2` does not take `2` as its value, but the next argument"
+file = "library/std/args.nz"
+find = "                    if j < str_len(a) {"
+replace = "                    if false {"
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-positional-slots-never-advance"
+why = "every positional argument fills the first slot again, so the second is lost and none reaches the rest"
+file = "library/std/args.nz"
+find = "        if decl.kind == k_positional() { slot = slot + 1; }"
+replace = "        if decl.kind == k_rest() { slot = slot + 1; }"
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-a-required-option-may-be-missing"
+why = "a required option left out is not an error"
+file = "library/std/args.nz"
+find = "            if !within(spec, cmd, d.cmd) || !d.required || given(names, d.name) { continue; }"
+replace = "            if !within(spec, cmd, d.cmd) || !d.required || given(names, d.name) || d.kind == k_option() { continue; }"
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-conflicts-are-not-checked"
+why = "two arguments declared in conflict may both be given"
+file = "library/std/args.nz"
+find = "            if within(spec, cmd, x.cmd) && given(names, x.a) && given(names, x.b) {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-an-option-default-is-not-read"
+why = "an option not given reads as `None` although it has a default"
+file = "library/std/args.nz"
+find = "            found = Option[Str].Some(value: decl_of(a.spec, d).default);"
+replace = "            found = Option[Str].None();"
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+[[mutation]]
+name = "r1e-subcommand-path-is-only-the-last"
+why = "`args_subcommand` answers `add` for `tool pkg add`, losing the commands above it"
+file = "library/std/args.nz"
+find = "    while c != a.top && c >= 0 {"
+replace = '''    while c != a.top && c >= 0 && path == "" {'''
+killers = [{ package = "nazm-cli", test = "args", name = "a_built_executable_parses_the_arguments_it_was_started_with" }]
+
+[[mutation]]
+name = "r1e-help-columns-touch"
+why = "help's second column starts one byte closer, so the generated text is not what is documented"
+file = "library/std/args.nz"
+find = '''            strs_push(rows, f"{str_pad_end(strs_get(lefts, i), width + 2, " ")}{r}");'''
+replace = '''            strs_push(rows, f"{str_pad_end(strs_get(lefts, i), width + 1, " ")}{r}");'''
+killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
