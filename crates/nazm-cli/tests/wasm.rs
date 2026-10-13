@@ -271,7 +271,7 @@ fn link_and_run(root: &Path) {
     assert!(o.status.success(), "{}", err(&o));
 }
 
-/// Needs Docker and `nazm-wasm:n64`: `cargo test -p nazm-cli --test wasm -- --ignored`.
+/// Needs Docker and `nazm-wasm:n64`: `cargo test -p nazm-cli --test cli_s_z -- --ignored wasm::`.
 #[test]
 #[ignore = "starts a container"]
 fn absent_authority_is_an_absent_import() {

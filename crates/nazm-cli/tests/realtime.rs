@@ -371,7 +371,7 @@ fn the_watermark_is_the_board_s() {
 
 /// Programs of different shapes, at `-O0` and `-O2`, each booted on QEMU's `virt` machine with
 /// the stack painted: what the run touched never exceeds the bound the build stated. Needs Docker
-/// and `nazm-qemu:n62`: `cargo test -p nazm-cli --test realtime -- --ignored`.
+/// and `nazm-qemu:n62`: `cargo test -p nazm-cli --test cli_m_r -- --ignored realtime::`.
 #[test]
 #[ignore = "starts a container"]
 fn a_run_stays_inside_the_stated_stack_bound() {

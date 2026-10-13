@@ -16,7 +16,7 @@
     clippy::indexing_slicing
 )]
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::process::{Command, Output};

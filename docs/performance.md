@@ -2875,8 +2875,8 @@ in 1.0. Sorting is a merge sort through `vec_sort_by`, its comparison an indirec
 regressions N92 recorded have causes inside the milestones that introduced them, which can be named,
 and — where they are not the price of a feature — removed.
 
-**The scheduler.** `cargo test --release -p nazm-cli --test scheduler_default -- --ignored --nocapture
-what_the_default_scheduler_costs`: each program built at `-O2`, five runs, median, resident set from
+**The scheduler.** `cargo test --release -p nazm-cli --test cli_s_z -- --ignored --nocapture
+scheduler_default::what_the_default_scheduler_costs`: each program built at `-O2`, five runs, median, resident set from
 `/usr/bin/time`; Apple M1 Pro, macOS 27.2, page size 16 KiB. Per operation, process start included:
 
 | | Pool (the default, 4 workers) | Threads (`NAZM_SCHEDULER=threads`) |

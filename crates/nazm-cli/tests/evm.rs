@@ -245,7 +245,7 @@ fn the_upgrade_check_allows_an_added_field_and_refuses_a_removed_or_retyped_one(
     );
 }
 
-/// Needs Docker and `nazm-evm:n70`: `cargo test -p nazm-cli --test evm -- --ignored`.
+/// Needs Docker and `nazm-evm:n70`: `cargo test -p nazm-cli --test cli_e_l -- --ignored evm::`.
 #[test]
 #[ignore = "starts a container"]
 fn the_evm_agrees_with_the_simulator_and_stays_inside_its_gas_bounds() {

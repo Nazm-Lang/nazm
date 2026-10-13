@@ -179,7 +179,7 @@ fn link_and_run(dir: &Path, args: &[&str]) -> (String, String, i32) {
 const TOUR: &str = "args 3\nbuilt 215\nwritten under WASI\nseek 456\nsize 10\nclock ok\n\
 outside refused\nmissing refused\n0\n";
 
-/// Needs Docker and `nazm-wasm:n64`: `cargo test -p nazm-cli --test wasi -- --ignored`.
+/// Needs Docker and `nazm-wasm:n64`: `cargo test -p nazm-cli --test cli_s_z -- --ignored wasi::`.
 #[test]
 #[ignore = "starts a container"]
 fn a_wasi_module_has_a_heap_streams_arguments_files_and_clocks() {

@@ -15,8 +15,7 @@
     clippy::indexing_slicing
 )]
 
-mod common;
-mod differential;
+use crate::differential;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

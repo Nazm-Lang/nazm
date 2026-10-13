@@ -254,7 +254,7 @@ fn the_adapter_leaves_the_ordinary_build_alone() {
     assert!(has(&adapted, b"nazm_call_transfer"));
 }
 
-/// Needs Docker and `nazm-wasm:n64`: `cargo test -p nazm-cli --test wasm_contract -- --ignored`.
+/// Needs Docker and `nazm-wasm:n64`: `cargo test -p nazm-cli --test cli_s_z -- --ignored wasm_contract::`.
 #[test]
 #[ignore = "starts a container"]
 fn the_webassembly_contract_agrees_with_the_simulator() {

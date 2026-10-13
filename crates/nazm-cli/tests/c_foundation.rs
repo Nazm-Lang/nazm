@@ -14,8 +14,8 @@
     clippy::indexing_slicing
 )]
 
-mod common;
-mod differential;
+use crate::common;
+use crate::differential;
 
 use std::process::Command;
 

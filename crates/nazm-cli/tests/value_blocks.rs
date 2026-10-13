@@ -31,7 +31,7 @@
     clippy::indexing_slicing
 )]
 
-mod memory_report;
+use crate::memory_report;
 
 use memory_report::{counts, Ran};
 

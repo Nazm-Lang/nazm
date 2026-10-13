@@ -16,7 +16,7 @@
     clippy::integer_division
 )]
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
