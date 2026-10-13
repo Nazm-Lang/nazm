@@ -1404,6 +1404,7 @@ mod tests {
                 kind: TargetKind::Test("t".to_owned()),
             },
             exact: exact.map(str::to_owned),
+            module: None,
         }
     }
 
