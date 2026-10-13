@@ -444,6 +444,14 @@ pub struct Checker<'a> {
     /// costs nothing and means a loop inside a loop does not lose the outer one's count
     /// when it finishes.
     loop_depth: u32,
+    /// Whether the next block checked is one whose last value nobody wants (R1, 5b.19): a loop
+    /// body, or a branch of an `if` whose own value nobody wants. Taken by the block it is
+    /// for, so a block nested anywhere inside starts without it.
+    discard_tail: bool,
+    /// Whether the next `if` checked is one whose value nobody wants: an expression
+    /// statement, or the last line of a block whose value nobody wants. Its branches may then
+    /// end differently — one in a value, one in another or none — and it produces nothing.
+    unwanted_if: bool,
     /// The loop depth where the `defer` body being checked begins (R1b, L12), or `None` outside
     /// one: a `break` or `continue` at that depth, a `return` or a `?` would leave it.
     defer_floor: Option<u32>,

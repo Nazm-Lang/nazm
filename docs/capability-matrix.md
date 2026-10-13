@@ -266,6 +266,24 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1 (2026-10-13)** · *`else if`, a line break for `;`, and a value nobody wants*
+(`spec.md`, *`else if`, and a line break for `;`* and *One block*;
+`openspec/changes/r1-language-for-the-rewrite`, 5b.11 and 5b.19). `else if` (and `else if let`)
+parses as `else { if … }`, so nothing below the parser changed; `docs/grammar.ebnf` and the guide
+had written it since 2026-09-21 while the parser refused it, which no example caught — two
+examples now do. A missing statement `;` is taken as written where a line break or the block's
+`}` follows; an expression still continues over a line wherever the parser can continue it; a
+member's name must be on its `.`'s line. `nazm fmt` reads the same rule, so a program without
+semicolons is laid out as one with them is. A loop body's last value is discarded, and an `if` as
+a statement — or the last line of a loop body, or of such an `if`'s branch — may end its branches
+differently and produces nothing; where a value is wanted, `N0302` stands. Epoch 71. Eight test
+fixtures that relied on a line break not ending a statement were put on one line, and an
+`incomplete.rs` expectation that existed only because its fixture lacked a `;` now offers the
+variants. Evidence: `crates/nazm-cli/tests/line_breaks.rs` — `else if` and `else if let` chains as
+values and as statements, a program without semicolons and the discarded values reclaimed, alike
+under the interpreter and each backend; what still needs a `;` refused by name; the formatter's
+layout of such a program, kept. Eight mutants.
+
 **R1 (2026-10-13)** · *Speed: integer text, the map's table, one string per interpolated
 integer, inlined reference counting* (`openspec/changes/r1-language-for-the-rewrite`, 5b.9). An
 integer's text is the runtime's own digit loop (`nz.format_int`, `nz.format_u64`), not `snprintf`.

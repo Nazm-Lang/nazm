@@ -68,6 +68,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `mutation` | STABLE 1.0 | |
 | `while` | STABLE 1.0 | |
 | `blocks` | STABLE 1.0 | |
+| `line-breaks` | EXPERIMENTAL | R1, 5b.11 and 5b.19: `else if`, and a line break or a block's `}` for a statement's `;`; EXPERIMENTAL until R1 closes |
 | `break-continue` | STABLE 1.0 | |
 | `return` | STABLE 1.0 | |
 | `unreachable-code` | STABLE 1.0 | |
@@ -1554,6 +1555,53 @@ A function body must complete with a value of the declared type, or diverge. An 
 where a value is wanted must have both branches, and they must agree — unless one diverges,
 in which case the other decides. Unreachable code is a statement after one that diverges.
 
+**Where nobody wants a value (R1, 5b.19; EXPERIMENTAL until R1 closes).** A loop body's last
+line may produce a value, which is discarded as `;` would discard it — until R1 that was
+refused as a missing `;`, which with lines ending statements is no longer a mistake. And an
+`if` that is a statement — or the last line of a loop body, or of a branch of such an `if`,
+which `else if` makes of every link of a chain — may have branches that end differently, in
+values of different types or one in none: it produces nothing, as an `if` without `else` does.
+Where a value is wanted the rule above is unchanged, and so is its error.
+
+### `else if`, and a line break for `;`
+<!-- id: line-breaks -->
+
+*R1, 5b.11 and 5b.19; EXPERIMENTAL until R1 closes.*
+
+**`else if`.** `else` may be followed by another `if` (or `if let`) instead of a block:
+
+```nazm
+let size = if n < 10 { "small" } else if n < 100 { "medium" } else { "large" };
+```
+
+It means exactly `else { if … }` — the inner `if` is the else-block's tail — so its value,
+its completion and every rule about it are that block's. The grammar and the guide had
+written this form since 2026-09-21 while the parser refused it; a chain no longer costs two
+levels of nesting an arm.
+
+**A line break may stand for `;`.** Where a statement must end with `;` — after a `let`, an
+assignment, an expression statement, `return`, `break`, `continue`, `spawn`, an import and a
+constant — a line break before the next token ends it instead:
+
+```nazm
+fn main(out: OutCap) -> Int ! {io} {
+    let total = 12 * 3
+    let message = f"total: {total}"
+    if total > 30 { print("large\n") } else if total > 10 { print("medium\n") }
+    print(message)
+    0
+}
+```
+
+The rule is only that: a missing `;` is accepted when the next token begins a new line. A
+line break is not a token and ends nothing the parser can continue, so an expression may
+still span lines — `let x = a` followed by `+ b` on the next line is one statement, `x = a + b`
+— and the tail of a block is still *an expression not followed by `;`*: the last line before
+`}` is the block's value, as it is with `;` written out. A statement before its block's `}` on
+the same line needs no `;` either (`if done { break }`). A member's name is on its `.`'s line, so
+a line ending in `.` is unfinished rather than joined to the next. Writing `;` stays correct
+everywhere, and the two may be mixed; `nazm fmt` keeps whichever was written.
+
 ### `break` and `continue`, and the `if` they force
 <!-- id: break-continue -->
 
@@ -1711,8 +1759,9 @@ compounded it further. The bound is now exact because it is taken from the nodes
 themselves; the tests check the deepest tree accepted for every pairing of seven shapes,
 each pair probed at its own edge rather than somewhere comfortably inside it.
 
-512 is far past anything written by hand. It is not far past what a generator emits: Nazm
-has no `else if`, so a dispatch chain written as `else { if … }` costs two levels an arm.
+512 is far past anything written by hand. It is not far past what a generator emits: a
+dispatch chain written as `else { if … }` — or, since R1, as `else if`, which means the same —
+costs two levels an arm.
 A limit tight enough for a 2 MiB stack would have been about 64, which is a real constraint
 on real code — so the stack is raised instead, and `parse_source` states the requirement it
 cannot enforce. The worst shape measured is nested blocks, at about 14 KB per level; the

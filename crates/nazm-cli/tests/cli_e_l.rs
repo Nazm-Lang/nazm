@@ -48,6 +48,7 @@ mod interpolation;
 mod interrupts;
 mod kernel;
 mod layout;
+mod line_breaks;
 mod lir;
 mod lir_oracle;
 mod live;

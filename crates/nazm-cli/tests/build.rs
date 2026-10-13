@@ -1928,12 +1928,11 @@ fn assignment_and_loop_condition_errors_belong_to_the_checker() {
             "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; missing = 1; }\n    i\n}\n",
             "N0200",
         ),
-        // A loop body whose tail produces a value is the checker's `N0300`, not the
-        // backend's refusal of a tail — so a reader is told the value is discarded rather
-        // than that the compiler cannot do loops.
+        // A loop body whose tail produced a value was the checker's `N0300` until R1 (5b.19),
+        // which discards it; a body that cannot be a statement still is the checker's.
         (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; i }\n    i\n}\n",
-            "N0300",
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + \"a\"; }\n    i\n}\n",
+            "N0304",
         ),
     ] {
         let (dir, path) = write_program(src);

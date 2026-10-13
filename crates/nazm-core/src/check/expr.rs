@@ -435,6 +435,7 @@ impl Checker<'_> {
                 else_block,
                 ..
             } => {
+                let unwanted = std::mem::take(&mut self.unwanted_if);
                 let ct = self.value_type(cond, Some(Type::Bool));
                 if ct != Type::Bool {
                     self.errors.push(
@@ -450,6 +451,7 @@ impl Checker<'_> {
                     );
                 }
 
+                self.discard_tail = unwanted;
                 let then_c = self.check_block(then_block, expected);
                 let Some(else_block) = else_block else {
                     // No `else`. Unit whatever the branch does — even when it returns on
@@ -458,7 +460,12 @@ impl Checker<'_> {
                     // value, which is where the context to say so lives.
                     return Completion::Unit;
                 };
-                let else_c = self.check_block(else_block, expected.or(then_c.ty()));
+                self.discard_tail = unwanted;
+                let else_c = if unwanted {
+                    self.check_block(else_block, None)
+                } else {
+                    self.check_block(else_block, expected.or(then_c.ty()))
+                };
 
                 match (then_c, else_c) {
                     // One branch leaving means the other decides. Without this,
@@ -466,6 +473,19 @@ impl Checker<'_> {
                     // "different" branches, which is exactly the shape `return` is for.
                     (Completion::Diverges, other) | (other, Completion::Diverges) => other,
                     (Completion::Value(a), Completion::Value(b)) if a == b => Completion::Value(a),
+                    // Where nobody wants the `if`'s value (R1, 5b.19), its branches may end
+                    // differently — in values of two types, or one in none — and it produces
+                    // nothing, as an `if` without `else` does. So `if a { print(x) } else if b {
+                    // name(y) }` is a statement however its branches end.
+                    (Completion::Value(a), Completion::Value(b)) if unwanted && a != b => {
+                        Completion::Unit
+                    }
+                    (Completion::Value(_), Completion::Unit)
+                    | (Completion::Unit, Completion::Value(_))
+                        if unwanted =>
+                    {
+                        Completion::Unit
+                    }
                     (Completion::Value(a), Completion::Value(b)) => {
                         let (sa, sb) = (self.show(a), self.show(b));
                         self.errors.push(

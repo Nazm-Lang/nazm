@@ -77,22 +77,22 @@ const CASES: [Case; 5] = [
         replacement: "",
     },
     Case {
-        name: "a loop body with a value: `;` after it, reviewed",
-        text:
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; i }\n    i\n}\n",
-        at: ("i }", 0),
-        code: "N0300",
+        name: "a contract narrower than its body: widened, reviewed",
+        text: "fn f(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\nfn main(out: OutCap) -> Int ! {io} { f(out) }\n",
+        at: ("print", 0),
+        code: "N0366",
         applicability: Applicability::NeedsReview,
-        edit_at: (" }", 0, 0),
-        replacement: ";",
+        edit_at: ("! {}", 0, 4),
+        replacement: "! { io }",
     },
     Case {
         name: "an expression with more after it: `;`, reviewed",
-        text: "fn f() -> Int { 1 }\nfn main() -> Int {\n    f()\n    f()\n}\n",
+        // On one line: a line break would end the first (R1, 5b.19).
+        text: "fn f() -> Int { 1 }\nfn main() -> Int {\n    f() f()\n}\n",
         at: ("f()", 2),
         code: "N0100",
         applicability: Applicability::NeedsReview,
-        edit_at: ("\n    f()\n}", 0, 0),
+        edit_at: (" f()\n}", 0, 0),
         replacement: ";",
     },
     Case {
@@ -322,7 +322,7 @@ fn a_plan_is_current_only_at_its_generation_version_and_bytes() {
 fn fixes_follow_the_buffers_and_never_come_back_from_an_earlier_analysis() {
     const BROKEN: &str = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n";
     const CLEAN: &str = "fn main() -> Int {\n    let mut x = 1;\n    x = 2;\n    x\n}\n";
-    const OTHER: &str = "fn main() -> Int {\n    let x = 1;\n    x = 2\n}\n";
+    const OTHER: &str = "fn main() -> Int {\n    let x = 1;\n    x = 2 x\n}\n";
     let p = Project::new(&[("main.nz", CLEAN)]);
     let main = p.path("main.nz");
     on_the_service_stack(move || {
@@ -353,12 +353,13 @@ fn an_unsaved_dependency_is_what_the_fixes_are_computed_against_and_close_restor
     // No fix the compiler attaches today depends on another file, so what is pinned is that
     // the plans are those of the current diagnostics, computed with the unsaved `lib.nz`:
     // with `step` gone from it, `main.nz` gains an unknown-function diagnostic — which has
-    // no fix, and gets none — beside the loop's, whose fix stays. Closing `lib.nz` restores
+    // no fix, and gets none — beside the contract's, whose fix stays. Closing `lib.nz` restores
     // the disk's diagnostics.
     const LIB: &str = "pub fn step(n: Int) -> Int { n + 1 }\n";
     const LIB_EDITED: &str = "pub fn stride(n: Int) -> Int { n + 1 }\n";
     const MAIN: &str =
-        "use \"lib.nz\";\nfn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; step(i) }\n    i\n}\n";
+        "use \"lib.nz\";\nfn f(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    step(1)\n}\n\
+                        fn main(out: OutCap) -> Int ! {io} { f(out) }\n";
     let p = Project::new(&[("lib.nz", LIB), ("main.nz", MAIN)]);
     let (lib, main) = (p.path("lib.nz"), p.path("main.nz"));
     on_the_service_stack(move || {
@@ -380,24 +381,24 @@ fn an_unsaved_dependency_is_what_the_fixes_are_computed_against_and_close_restor
             c
         };
         let opened = s.open(&main, 1, MAIN.to_owned());
-        assert_eq!(codes(&opened), ["N0300"]);
-        assert_eq!(fixes(&s), ["N0300"]);
+        assert_eq!(codes(&opened), ["N0366"]);
+        assert_eq!(fixes(&s), ["N0366"]);
         let edited = s.open(&lib, 1, LIB_EDITED.to_owned());
         let now = codes(&edited);
         assert_eq!(now.len(), 2, "{now:?}");
-        assert!(now.contains(&"N0300".to_owned()));
-        assert_eq!(fixes(&s), ["N0300"], "the unknown function has no fix");
-        let step = offset(MAIN, "step(i)", 0);
+        assert!(now.contains(&"N0366".to_owned()));
+        assert_eq!(fixes(&s), ["N0366"], "the unknown function has no fix");
+        let step = offset(MAIN, "step(1)", 0);
         let at_step: Vec<String> = s
             .fix_plans(&main, 1, step, step)
             .unwrap()
             .iter()
             .map(|p| p.diagnostic.code.to_string())
             .collect();
-        assert!(!at_step.iter().any(|c| c != "N0300"), "{at_step:?}");
+        assert!(!at_step.iter().any(|c| c != "N0366"), "{at_step:?}");
         let closed = s.close(&lib);
-        assert_eq!(codes(&closed), ["N0300"]);
-        assert_eq!(fixes(&s), ["N0300"]);
+        assert_eq!(codes(&closed), ["N0366"]);
+        assert_eq!(fixes(&s), ["N0366"]);
     });
 }
 

@@ -870,7 +870,8 @@ fn fixtures() -> Vec<Fixture> {
         },
         Fixture {
             what: "a missing semicolon",
-            text: "fn main() -> Int {\n    let a = 1\n    let b = 2;\n    b\n}\n",
+            // On one line: a line break would end the `let` (R1, 5b.19).
+            text: "fn main() -> Int {\n    let a = 1 let b = 2;\n    b\n}\n",
             code: codes::UNEXPECTED_TOKEN,
             at: "let b",
             after: (SyntaxKind::LetStmt, "let b = 2;"),

@@ -253,11 +253,10 @@ fn lines(text: &str) -> Vec<Value> {
 /// no fix and no help, so the optional fields are exercised in both states.
 const BROKEN: &str = "\
 fn f(mut n: Int) -> Int { n }
+fn g(out: OutCap) -> Int ! {} { print(\"x\"); 0 }
 fn main() -> Int {
     let x = 1;
     x = 2;
-    let mut i = 0;
-    while i < 3 { i = i + 1; i }
     y
 }
 ";
@@ -655,7 +654,8 @@ fn a_patch_is_nazm_patch_1_available_or_not() {
     std::fs::write(&main, text).unwrap();
     std::fs::write(&lib, "pub fn far() -> Int { 1 }\n").unwrap();
     let broken = dir.path().join("broken.nz");
-    let broken_text = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    let mut i = 0;\n    while i < 3 {\n        i = i + 1;\n        i\n    }\n    x\n}\n";
+    let broken_text = "fn g(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\n\
+                       fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n";
     std::fs::write(&broken, broken_text).unwrap();
     let run = |args: &[&std::ffi::OsStr]| -> (Value, Option<i32>) {
         let out = Command::new(NAZM).args(args).output().expect("run nazm");
@@ -705,7 +705,7 @@ fn a_patch_is_nazm_patch_1_available_or_not() {
         automatic["operation"]["applicability"], "automatic",
         "{automatic}"
     );
-    let (review, _) = fix(at(broken_text, "i\n    }"), 0);
+    let (review, _) = fix(at(broken_text, "print"), 0);
     assert_eq!(
         review["operation"]["applicability"], "needs_review",
         "{review}"

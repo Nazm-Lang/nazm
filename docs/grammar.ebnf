@@ -297,6 +297,9 @@ type_arguments = "[" , [ type , { "," , type } ] , "]" ;
 block = "{" , { statement } , [ expression ] , "}" ;
 
 (* @example fn main() -> Int { let a = 1; a } *)
+(* R1, 5b.19: a statement's closing ";" may be left out where a line break or its block's
+   "}" follows it; see spec.md, "else if, and a line break for ;". *)
+(* @example fn main() -> Int { let mut n = 0; while n < 5 { n = n + 1; if n == 3 { break } } n } *)
 statement = let_statement
           | assignment
           | while_statement
@@ -543,11 +546,14 @@ arguments = expression , { "," , expression } ;
 
 (* @example fn main() -> Int { if true { 1 } else { 2 } } *)
 (* @example fn main() -> Int { let mut n = 0; if true { n = 1; } n } *)
-if_expression = "if" , expression , block , [ "else" , ( block | if_expression ) ] ;
+(* R1, 5b.11: "else if" is "else { if … }". *)
+(* @example fn main() -> Int { let n = 50; if n < 10 { 1 } else if n < 100 { 2 } else { 3 } } *)
+if_expression = "if" , expression , block , [ "else" , ( block | if_expression | if_let_expression ) ] ;
 
 (* R1a: `if let P = e { … } else { … }` means `match e { P => …, _ => … }`. *)
 (* @example fn main() -> Int { if let 3 = 3 { 1 } else { 0 } } *)
-if_let_expression = "if" , "let" , pattern , "=" , expression , block , [ "else" , block ] ;
+(* @example fn main() -> Int { if let 3 = 4 { 1 } else if true { 2 } else { 0 } } *)
+if_let_expression = "if" , "let" , pattern , "=" , expression , block , [ "else" , ( block | if_expression | if_let_expression ) ] ;
 
 (* The one elimination form for an enum. An expression, so it composes wherever one may
  * appear, and its arms reuse the existing block and completion rules rather than

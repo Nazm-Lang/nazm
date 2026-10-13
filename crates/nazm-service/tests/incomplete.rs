@@ -854,9 +854,11 @@ fn a_thousand_edits_leave_only_the_current_hole() {
             &["Done", "Ready"],
         ),
         (
+            // The cursor before a name being written offers what the name may be, now that the
+            // line's end ends its statement (R1, 5b.19).
             "fn f() -> Int {\n    let s = State.Re\n    0\n}\n",
             "State.",
-            &[],
+            &["Done", "Ready"],
         ),
         (
             "fn f() -> Int {\n    let p = Point(\n    0\n}\n",

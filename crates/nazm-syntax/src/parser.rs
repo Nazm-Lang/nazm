@@ -126,6 +126,8 @@ pub struct Parser<'a> {
     /// or `)` the unfinished construct leaves unwritten is taken as written — only then,
     /// and only those — so the statement ends where the author has not yet ended it.
     hole_open: bool,
+    /// The file's text, for whether a line break separates two tokens (R1, 5b.19).
+    text: &'a str,
 }
 
 /// The parser's view of the token list: every read goes through it, and it remembers the
@@ -417,6 +419,7 @@ pub(crate) fn parse_region(
         hole,
         hole_site: None,
         hole_open: false,
+        text,
     };
     let mut chunks = Vec::new();
     let mut landings = region.landings.iter().peekable();
@@ -584,8 +587,8 @@ pub(crate) fn parse_region(
 /// of 512, and nesting the composition would have compounded it further.
 ///
 /// 512 is far past anything written by hand. It is not far past what a generator emits:
-/// Nazm has no `else if`, so a dispatch chain written as `else { if … }` costs two levels
-/// an arm, and a limit tight enough for a 2 MiB stack would have been about 64 — which is
+/// a dispatch chain written as `else { if … }` — or as `else if`, which means the same —
+/// costs two levels an arm, and a limit tight enough for a 2 MiB stack would have been about 64 — which is
 /// a real constraint on real code. Raising the stack is the cheaper side of that trade,
 /// so [`PARSE_STACK_BYTES`] does, and `parse_source` says so.
 pub const MAX_NESTING: usize = 512;
@@ -786,6 +789,15 @@ impl<'a> Parser<'a> {
             let at = self.peek_span().start;
             return Some(Span::new(self.file, at, at));
         }
+        // A line break stands for a statement's `;` (R1, 5b.19): the statement ends where
+        // its line does, and the `;` is taken as written there — as it is before the `}`
+        // that closes its block (`if done { break }`).
+        if matches!(kind, TokenKind::Semi)
+            && (self.line_break_before() || self.at(&TokenKind::RBrace))
+        {
+            let at = self.previous_end();
+            return Some(Span::new(self.file, at, at));
+        }
         let found = self.peek().describe();
         let span = self.peek_span();
         self.report(
@@ -797,6 +809,26 @@ impl<'a> Parser<'a> {
             .primary_label(format!("expected {}", kind.describe())),
         );
         None
+    }
+
+    /// Whether a line break separates the token at the cursor from the one before it.
+    fn line_break_before(&self) -> bool {
+        let Some(prev) = self.pos.checked_sub(1).and_then(|i| self.tokens.get(i)) else {
+            return false;
+        };
+        let from = prev.span.end as usize;
+        let to = self.peek_span().start as usize;
+        self.text
+            .get(from..to)
+            .is_some_and(|gap| gap.contains('\n'))
+    }
+
+    /// Where the token before the cursor ends.
+    fn previous_end(&self) -> u32 {
+        self.pos
+            .checked_sub(1)
+            .and_then(|i| self.tokens.get(i))
+            .map_or(0, |t| t.span.end)
     }
 
     /// Whether the token at `index` ends exactly at the probe's hole (N26).
@@ -2787,6 +2819,28 @@ impl<'a> Parser<'a> {
     /// The tail is an expression with no `;` after it. That one rule replaces the forward
     /// brace-scanner the previous design needed to guess whether an `if` was a statement
     /// or a value — and unlike the scanner it has no case it gets wrong.
+    /// What follows `else`: a block, or (R1, 5b.11) another `if`, which is then the tail of a
+    /// block of its own — `else if c { … }` is `else { if c { … } }`, so nothing below the
+    /// parser sees a new form. Only the `if` is taken: nothing after its last block joins it.
+    fn else_branch(&mut self) -> Option<Block> {
+        if !self.at(&TokenKind::If) {
+            return self.block();
+        }
+        if !self.enter() {
+            return None;
+        }
+        let at = self.checkpoint();
+        let inner = self.primary_inner(at);
+        self.leave();
+        let inner = inner?;
+        let span = inner.span();
+        Some(Block {
+            statements: Vec::new(),
+            tail: Some(Box::new(inner)),
+            span,
+        })
+    }
+
     fn block(&mut self) -> Option<Block> {
         if !self.enter() {
             return None;
@@ -2978,7 +3032,7 @@ impl<'a> Parser<'a> {
             Some(Parsed::Stmt(Stmt::Expr(e)))
         } else if self.at(&TokenKind::RBrace) {
             Some(Parsed::Tail(e))
-        } else if block_like || self.hole_open {
+        } else if block_like || self.hole_open || self.line_break_before() {
             // `if c { … }` followed by more statements needs no `;`, the same rule
             // every block-like expression follows — and neither does a probe's unfinished
             // statement (N26).
@@ -4099,6 +4153,20 @@ impl<'a> Parser<'a> {
             }
             self.advance();
             let name_span = self.peek_span();
+            // A member's name is on its `.`'s line (R1, 5b.19): a line ending in `.` is
+            // unfinished, not joined to the next one, now that a line break ends statements.
+            if self.line_break_before() {
+                let found = self.peek().describe();
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        name_span,
+                        format!("expected a field name after `.` on its line, found {found}"),
+                    )
+                    .primary_label("expected a field name"),
+                );
+                return None;
+            }
             let name = match self.advance() {
                 TokenKind::Ident(n) => n,
                 // `t.0` (R1a, L5): a tuple's element, by position.
@@ -4601,7 +4669,7 @@ impl<'a> Parser<'a> {
                 let then_block = self.block()?;
                 deepest = deepest.max(self.child());
                 let else_block = if self.eat(&TokenKind::Else) {
-                    let b = self.block()?;
+                    let b = self.else_branch()?;
                     deepest = deepest.max(self.child());
                     Some(b)
                 } else {
@@ -4645,7 +4713,7 @@ impl<'a> Parser<'a> {
                 // Optional. Whether a missing `else` is an error depends on whether a
                 // value is wanted from the `if`, and that is a checking question.
                 let else_block = if self.eat(&TokenKind::Else) {
-                    let b = self.block()?;
+                    let b = self.else_branch()?;
                     deepest = deepest.max(self.child());
                     Some(b)
                 } else {

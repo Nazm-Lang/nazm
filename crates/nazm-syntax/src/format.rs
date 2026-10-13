@@ -318,6 +318,28 @@ fn print<'a>(text: &'a str, pieces: &'a [Piece<'a>], layout: &'a Layout) -> Stri
 }
 
 impl<'a> Printer<'a> {
+    /// Whether the line break before `next` ends a statement, as the parser reads it (R1,
+    /// 5b.19): in a block or at the top level, after a token that can end a value or a
+    /// `break` or `continue`, before a token that cannot continue what came before. Then the
+    /// next line begins a statement of its own rather than continuing one.
+    fn line_ends_a_statement(&self, next: &TokenKind) -> bool {
+        self.brackets.last().copied().unwrap_or(true)
+            && self.previous.is_some_and(|k| {
+                ends_a_value(k)
+                    || matches!(
+                        k,
+                        TokenKind::RBracket | TokenKind::Break | TokenKind::Continue
+                    )
+            })
+            && !continues_the_line(Some(next))
+            && !matches!(
+                next,
+                TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket | TokenKind::Eq
+            )
+            // A function's contract clauses continue its header (N87).
+            && !matches!(next, TokenKind::Ident(w) if w == "requires" || w == "ensures")
+    }
+
     /// A comment stays where it was written: after the code it sits beside, or on a line
     /// of its own. Moving one is the fastest way to make a formatter distrusted, because
     /// the reader can no longer tell what it refers to.
@@ -379,7 +401,7 @@ impl<'a> Printer<'a> {
             && breaks(self.text, self.previous_end, piece.start) >= 1
         {
             self.break_line();
-            self.continuing = true;
+            self.continuing = !self.line_ends_a_statement(kind);
         }
 
         if self.fresh_line {

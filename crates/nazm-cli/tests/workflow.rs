@@ -86,16 +86,17 @@ fn a_repair_that_reveals_another_error_still_finishes() {
 
 #[test]
 fn what_needs_review_is_reported_and_not_applied() {
-    // A missing `;` has a fix, and it is `needs_review`: adding one discards a value
-    // that may have been meant as the block's. The workflow must leave it, and must say
-    // so rather than silently doing nothing.
+    // A contract narrower than its body has a fix, and it is `needs_review`: widening it can
+    // break a caller. The workflow must leave it, and must say so rather than silently doing
+    // nothing.
     let (dir, path) = write(
-        "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; i }\n    i\n}\n",
+        "fn f(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\n\
+         fn main(out: OutCap) -> Int ! {io} { f(out) }\n",
     );
     let (code, out, text) = repair(&path);
     assert_eq!(code, Some(1), "an unrepairable file must report:\n{text}");
     assert!(
-        out.contains("\"code\":\"N0300\"") || out.contains("N0300"),
+        out.contains("\"code\":\"N0366\"") || out.contains("N0366"),
         "the remaining diagnostic should be reported as JSON: {out}"
     );
 
