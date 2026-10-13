@@ -335,7 +335,7 @@ pub enum Const {
     /// ([`nazm_sema::numeric::NumVal`]).
     Num {
         kind: NumKind,
-        bits: u64,
+        bits: u128,
     },
     /// A static `Atomic`'s cell (Gate 3), by its module and name: every use is the one cell
     /// the module's [`Program::statics`] entry starts.

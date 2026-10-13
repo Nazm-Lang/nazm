@@ -77,6 +77,10 @@ pub fn declarations(out: &mut String) {
         "declare double @strtod(ptr, ptr)",
         "declare float @strtof(ptr, ptr)",
         "declare double @llvm.fabs.f64(double)",
+        // 128-bit integers (R1b, L13b): the wide part's checked product and float conversions.
+        "declare {i128, i1} @llvm.umul.with.overflow.i128(i128, i128)",
+        "declare i128 @llvm.fptosi.sat.i128.f64(double)",
+        "declare i128 @llvm.fptoui.sat.i128.f64(double)",
     ] {
         let _ = writeln!(out, "{d}");
     }

@@ -243,7 +243,7 @@ impl Evaluator<'_, '_> {
                 match v {
                     Some(ConstValue::Num(n)) if n.kind == NumKind::I64 =>
                     {
-                        #[allow(clippy::cast_possible_wrap)]
+                        #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
                         Some(n.bits as i64)
                     }
                     Some(_) => {
@@ -587,8 +587,8 @@ impl Evaluator<'_, '_> {
     fn value(&mut self, e: &Expr, expected: Type) -> Result<ConstValue, Refused> {
         let want = expected.num();
         match e {
-            Expr::Int { value, span } => self.integer(i128::from(*value), want, *span),
-            Expr::WideInt { value, span } => self.integer(i128::from(*value), want, *span),
+            Expr::Int { value, span } => self.integer((*value).into(), want, *span),
+            Expr::WideInt { value, span } => self.integer((*value).into(), want, *span),
             Expr::Float { text, .. } => {
                 let k = if want == Some(NumKind::F32) {
                     NumKind::F32
@@ -622,7 +622,13 @@ impl Evaluator<'_, '_> {
             Expr::Neg { operand, span, .. } => {
                 if let Expr::Int { value, span: lit } = operand.as_ref() {
                     if want.is_some_and(|k| k != NumKind::I64 && k.is_integer()) {
-                        return self.integer(-i128::from(*value), want, *lit);
+                        return self.integer((-i128::from(*value)).into(), want, *lit);
+                    }
+                }
+                if let Expr::WideInt { value, span: lit } = operand.as_ref() {
+                    if want.is_some_and(|k| k != NumKind::I64 && k.is_integer()) {
+                        let v = nazm_sema::numeric::Wide::from_u128(*value).negate();
+                        return self.integer(v, want, *lit);
                     }
                 }
                 match self.value(operand, expected)? {
@@ -674,7 +680,7 @@ impl Evaluator<'_, '_> {
 
     fn integer(
         &mut self,
-        v: i128,
+        v: nazm_sema::numeric::Wide,
         want: Option<NumKind>,
         at: nazm_span::Span,
     ) -> Result<ConstValue, Refused> {
@@ -682,7 +688,10 @@ impl Evaluator<'_, '_> {
         match NumVal::int(k, v) {
             Some(n) => Ok(ConstValue::Num(n)),
             None => {
-                let (lo, hi) = k.int_range().unwrap_or((0, 0));
+                let (lo, hi) = k.int_range().unwrap_or((
+                    nazm_sema::numeric::Wide::ZERO,
+                    nazm_sema::numeric::Wide::ZERO,
+                ));
                 self.errors.push(
                     Diagnostic::error(
                         codes::INTEGER_TOO_LARGE,

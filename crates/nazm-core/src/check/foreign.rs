@@ -463,8 +463,12 @@ pub(super) fn check_export(
         ));
     }
     // Every number crosses as its C type since Gate 2 (§23): `int8_t` … `uint64_t`, `float`,
-    // `double` — what a binding generator for any other language reads from the header.
-    let scalar = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Num(_));
+    // `double` — what a binding generator for any other language reads from the header. A
+    // 128-bit integer does not (R1b, L13b): C has no standard type for one, and the platforms'
+    // `__int128` disagree about how it is passed.
+    let scalar = |t: Type| {
+        matches!(t, Type::Int | Type::Bool) || matches!(t, Type::Num(k) if k.bits() <= 64)
+    };
     for (t, p) in params.iter().zip(&f.params) {
         if !scalar(*t) {
             errors.push(shape(

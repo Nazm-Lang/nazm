@@ -350,11 +350,11 @@ fn value(bits: u64, elem: Elem) -> nazm_core::Value {
         Elem::Int => nazm_core::Value::Int(bits as i64),
         Elem::F32 => nazm_core::Value::Num(nazm_core::sema::numeric::NumVal {
             kind: nazm_core::sema::NumKind::F32,
-            bits,
+            bits: u128::from(bits),
         }),
         Elem::F64 => nazm_core::Value::Num(nazm_core::sema::numeric::NumVal {
             kind: nazm_core::sema::NumKind::F64,
-            bits,
+            bits: u128::from(bits),
         }),
     }
 }
@@ -518,7 +518,9 @@ pub(crate) fn run(
                         match interpreter.call(id, args) {
                             #[allow(clippy::cast_sign_loss)]
                             Ok(nazm_core::Value::Int(v)) => out.push(v as u64),
-                            Ok(nazm_core::Value::Num(n)) => out.push(n.bits),
+                            // An element is a float's bits, at most 64 of them.
+                            #[allow(clippy::cast_possible_truncation)]
+                            Ok(nazm_core::Value::Num(n)) => out.push(n.bits as u64),
                             Ok(_) => out.push(0),
                             Err(e) => {
                                 failed = Some((i, e.diagnostic.code));

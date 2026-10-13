@@ -247,6 +247,23 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1b (2026-10-13)** · *128-bit integers and the widening multiply* (`spec.md`, *Numbers*;
+`openspec/changes/r1-language-for-the-rewrite`, L13b). `Int128` and `UInt128` under every rule of
+*Numbers* at their width; literals up to `UInt128`'s maximum, and a negated one past `Int`'s
+magnitude judged whole where an `Int128` is expected; `widening_mul(a: UInt64, b: UInt64) ->
+UInt128`, exact. A value's exact integer is `nazm_sema::numeric::Wide` (`[-2^127, 2^128 - 1]`) and
+its bits 128 wide; LIR has a class `i128`, laid out in 16 bytes aligned to 8 (stated on every LLVM
+load and store); LLVM and Cranelift make instructions of the rest, and division, remainder, the
+signed checked product, float conversions and text are the runtime's wide part, taking values by
+address (runtime ABI 32), which a board or WebAssembly build that reaches it refuses by name. A
+derived hash is `hash_combine` of the two words' `hash_u64`, as `@std/hash`'s new impls are. No C
+export of one (`N0391`). Semantic epoch 67; EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/wide.rs` — every operation at each bound, the conversions by every mode, a
+`Vec` and an `Option` of one, `Bytes` at sixteen, literals, under the interpreter, the LIR oracle,
+LLVM `-O0`/`-O2` and Cranelift with nothing live; each failure with its code everywhere; a hash map
+keyed by one and derived hashes; a constant across modules and the cache; the refusals. Eleven
+mutants; six earlier ones repointed.
+
 **R1b (2026-10-13)** · *Checked arithmetic* (`spec.md`, *Numbers*, **Functions**;
 `openspec/changes/r1-language-for-the-rewrite`, L13a). `checked_add`, `checked_sub` and
 `checked_mul`, over every integer type, return `Option[T]` — `Some` of the exact result, `None`

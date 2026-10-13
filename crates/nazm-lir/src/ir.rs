@@ -406,6 +406,7 @@ impl Ty {
                 nazm_sema::NumKind::I16 | nazm_sema::NumKind::U16 => "i16",
                 nazm_sema::NumKind::I32 | nazm_sema::NumKind::U32 => "i32",
                 nazm_sema::NumKind::I64 | nazm_sema::NumKind::U64 => "i64",
+                nazm_sema::NumKind::I128 | nazm_sema::NumKind::U128 => "i128",
                 nazm_sema::NumKind::F32 => "float",
                 nazm_sema::NumKind::F64 => "double",
             },

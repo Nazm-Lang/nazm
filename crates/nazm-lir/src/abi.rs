@@ -267,9 +267,11 @@ impl ByteLayouts {
         let p = self.data.pointer;
         match t {
             Ty::Int => Some(Lay::new(8, 8)),
-            // Its own width and C's alignment for it (Gate 2): bits over eight, exactly.
+            // Its own width and C's alignment for it (Gate 2): bits over eight, exactly — but a
+            // 128-bit integer (R1b, L13b) is aligned to 8, as every payload is (`PAYLOAD`); it
+            // never crosses into C, and its loads and stores state the alignment.
             #[allow(clippy::integer_division)]
-            Ty::Num(k) => Some(Lay::new(k.bits() / 8, k.bits() / 8)),
+            Ty::Num(k) => Some(Lay::new(k.bits() / 8, (k.bits() / 8).min(8))),
             Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) | Ty::ChanOf(_) => {
                 Some(Lay::new(p, p))
             }

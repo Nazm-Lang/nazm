@@ -337,6 +337,11 @@ impl<'l, 'a> Fx<'l, 'a> {
     }
 
     pub(crate) fn iconst_c(&mut self, class: Class, value: i64) -> V {
+        self.iconst_wide(class, i128::from(value))
+    }
+
+    /// A constant past 64 bits, for an `I128` (R1b, L13b).
+    pub(crate) fn iconst_wide(&mut self, class: Class, value: i128) -> V {
         let dst = self.b.value();
         self.b.push(Inst::Const { dst, class, value });
         dst

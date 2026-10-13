@@ -2,10 +2,11 @@
 //! implementation both interpreters call.
 //!
 //! The native backends implement the same operations in machine instructions and the runtime,
-//! and the differential tests hold them to this. A value is its kind and 64 bits: an integer
-//! sign- or zero-extended to 64 bits by its kind, a `Float64` as its IEEE bits, a `Float32` as
-//! its IEEE bits in the low half. Canonical by construction — every function here returns a
-//! value in that form — so two equal values have equal bits, NaNs aside.
+//! and the differential tests hold them to this. A value is its kind and 128 bits: an integer
+//! sign- or zero-extended to 128 bits by its kind, a `Float64` as its IEEE bits, a `Float32` as
+//! its IEEE bits in the low 32. Canonical by construction — every function here returns a
+//! value in that form — so two equal values have equal bits, NaNs aside. Since R1b (L13b) an
+//! integer's exact value is a [`Wide`], which holds every kind's range, `UInt128`'s included.
 
 // Numbers are what this module is about: exact float comparison is IEEE 754's equality, the casts
 // are the conversions it defines with their ranges checked, and a width's byte count is its bits
@@ -71,10 +72,187 @@ impl ConstValue {
 }
 
 /// A numeric value: its kind and its canonical bits.
+///
+/// Aligned to 8, not to `u128`'s 16 (R1b, L13b): 24 bytes rather than 32, so a `Value` holding
+/// one is no larger than before 128-bit integers, nor is every interpreter frame that holds
+/// values — which `STACK_BYTES_PER_CALL` budgets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(Rust, packed(8))]
 pub struct NumVal {
     pub kind: NumKind,
-    pub bits: u64,
+    pub bits: u128,
+}
+
+/// An exact integer in `[-2^127, 2^128 - 1]`: every value of every integer kind, `Int128`'s and
+/// `UInt128`'s together (R1b, L13b), as a sign and a magnitude. An operation past that range
+/// is past every kind's range too, and gives `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Wide {
+    neg: bool,
+    mag: u128,
+}
+
+impl Wide {
+    pub const ZERO: Self = Self { neg: false, mag: 0 };
+
+    /// Zero is never negative, so equal values are equal structs.
+    const fn new(neg: bool, mag: u128) -> Self {
+        Self {
+            neg: neg && mag != 0,
+            mag,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_i128(v: i128) -> Self {
+        Self::new(v < 0, v.unsigned_abs())
+    }
+
+    #[must_use]
+    pub const fn from_u128(v: u128) -> Self {
+        Self::new(false, v)
+    }
+
+    /// The value as an `i128`, if it is one.
+    #[must_use]
+    pub fn to_i128(self) -> Option<i128> {
+        if self.neg {
+            // `2^127` itself is `i128::MIN`, which `wrapping_neg` leaves alone.
+            (self.mag <= 1 << 127).then(|| (self.mag as i128).wrapping_neg())
+        } else {
+            i128::try_from(self.mag).ok()
+        }
+    }
+
+    /// The value as a `u128`, if it is one.
+    #[must_use]
+    pub const fn to_u128(self) -> Option<u128> {
+        if self.neg {
+            None
+        } else {
+            Some(self.mag)
+        }
+    }
+
+    #[must_use]
+    pub const fn is_negative(self) -> bool {
+        self.neg
+    }
+
+    /// The low 128 bits of the value in two's complement.
+    #[must_use]
+    pub const fn bits(self) -> u128 {
+        if self.neg {
+            self.mag.wrapping_neg()
+        } else {
+            self.mag
+        }
+    }
+
+    #[must_use]
+    pub const fn negate(self) -> Self {
+        Self::new(!self.neg, self.mag)
+    }
+
+    #[must_use]
+    pub fn checked_add(self, o: Self) -> Option<Self> {
+        Some(if self.neg == o.neg {
+            Self::new(self.neg, self.mag.checked_add(o.mag)?)
+        } else if self.mag >= o.mag {
+            Self::new(self.neg, self.mag - o.mag)
+        } else {
+            Self::new(o.neg, o.mag - self.mag)
+        })
+    }
+
+    #[must_use]
+    pub fn checked_sub(self, o: Self) -> Option<Self> {
+        self.checked_add(o.negate())
+    }
+
+    #[must_use]
+    pub fn checked_mul(self, o: Self) -> Option<Self> {
+        Some(Self::new(self.neg != o.neg, self.mag.checked_mul(o.mag)?))
+    }
+
+    /// Truncating division; `o` is not zero.
+    #[must_use]
+    pub fn quotient(self, o: Self) -> Self {
+        Self::new(self.neg != o.neg, self.mag / o.mag)
+    }
+
+    /// The remainder of truncating division, with the dividend's sign; `o` is not zero.
+    #[must_use]
+    pub fn remainder(self, o: Self) -> Self {
+        Self::new(self.neg, self.mag % o.mag)
+    }
+
+    /// Rounded to nearest, ties to even — once, from the exact value.
+    #[must_use]
+    pub fn to_f64(self) -> f64 {
+        let m = self.mag as f64;
+        if self.neg {
+            -m
+        } else {
+            m
+        }
+    }
+
+    /// Rounded to nearest, ties to even — once, from the exact value, never through `f64`.
+    #[must_use]
+    pub fn to_f32(self) -> f32 {
+        let m = self.mag as f32;
+        if self.neg {
+            -m
+        } else {
+            m
+        }
+    }
+}
+
+impl From<i128> for Wide {
+    fn from(v: i128) -> Self {
+        Self::from_i128(v)
+    }
+}
+
+impl From<u128> for Wide {
+    fn from(v: u128) -> Self {
+        Self::from_u128(v)
+    }
+}
+
+impl From<i64> for Wide {
+    fn from(v: i64) -> Self {
+        Self::from_i128(i128::from(v))
+    }
+}
+
+impl Ord for Wide {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        match (self.neg, o.neg) {
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, false) => std::cmp::Ordering::Less,
+            (false, false) => self.mag.cmp(&o.mag),
+            (true, true) => o.mag.cmp(&self.mag),
+        }
+    }
+}
+
+impl PartialOrd for Wide {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
+impl std::fmt::Display for Wide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.neg {
+            write!(f, "-{}", self.mag)
+        } else {
+            write!(f, "{}", self.mag)
+        }
+    }
 }
 
 /// Why a numeric operation stops the program.
@@ -127,16 +305,18 @@ fn pow2(bits: u32) -> f64 {
 impl NumVal {
     /// An integer value of `kind`, or `None` when `v` is outside its range.
     #[must_use]
-    pub fn int(kind: NumKind, v: i128) -> Option<Self> {
+    pub fn int(kind: NumKind, v: impl Into<Wide>) -> Option<Self> {
+        let v = v.into();
         let (lo, hi) = kind.int_range()?;
         if v < lo || v > hi {
             return None;
         }
-        // Two's complement in 64 bits: the low 64 bits of an in-range value, which for a signed
-        // kind is its sign extension and for an unsigned one its zero extension.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let bits = v as u64;
-        Some(Self { kind, bits })
+        // Two's complement in 128 bits: for a signed kind its sign extension, and for an
+        // unsigned one, never negative in range, its zero extension.
+        Some(Self {
+            kind,
+            bits: v.bits(),
+        })
     }
 
     /// A `Float64`.
@@ -144,7 +324,7 @@ impl NumVal {
     pub fn f64(v: f64) -> Self {
         Self {
             kind: NumKind::F64,
-            bits: v.to_bits(),
+            bits: u128::from(v.to_bits()),
         }
     }
 
@@ -153,21 +333,30 @@ impl NumVal {
     pub fn f32(v: f32) -> Self {
         Self {
             kind: NumKind::F32,
-            bits: u64::from(v.to_bits()),
+            bits: u128::from(v.to_bits()),
         }
     }
 
-    /// An integer's value; `0` for a float.
+    /// An integer's exact value; zero for a float.
+    #[must_use]
+    pub fn value(self) -> Wide {
+        if self.kind.is_float() {
+            Wide::ZERO
+        } else if self.kind.is_signed() {
+            Wide::from_i128(self.bits as i128)
+        } else {
+            Wide::from_u128(self.bits)
+        }
+    }
+
+    /// An integer's value as an `i128`; `0` for a float. Every kind's but `UInt128`'s fits, and
+    /// a `UInt128` past `i128::MAX` reads as its two's complement.
     #[must_use]
     pub fn as_i128(self) -> i128 {
         if self.kind.is_float() {
-            return 0;
-        }
-        if self.kind.is_signed() {
-            #[allow(clippy::cast_possible_wrap)]
-            i128::from(self.bits as i64)
+            0
         } else {
-            i128::from(self.bits)
+            self.bits as i128
         }
     }
 
@@ -175,11 +364,9 @@ impl NumVal {
     #[must_use]
     pub fn as_f64(self) -> f64 {
         match self.kind {
-            NumKind::F64 => f64::from_bits(self.bits),
-            #[allow(clippy::cast_possible_truncation)]
+            NumKind::F64 => f64::from_bits(self.bits as u64),
             NumKind::F32 => f64::from(f32::from_bits(self.bits as u32)),
-            #[allow(clippy::cast_precision_loss)]
-            _ => self.as_i128() as f64,
+            _ => self.value().to_f64(),
         }
     }
 
@@ -193,14 +380,16 @@ impl NumVal {
     /// The value `bits` hold as `kind`, put into canonical form — the low `width` bits,
     /// extended by the kind's signedness. For a wrapping result.
     #[must_use]
-    pub fn wrapped(kind: NumKind, bits: u64) -> Self {
+    pub fn wrapped(kind: NumKind, bits: u128) -> Self {
         let w = kind.bits();
-        let bits = if w == 64 || kind.is_float() {
+        let bits = if w == 128 {
             bits
+        } else if kind.is_float() {
+            bits & ((1u128 << w) - 1)
         } else {
-            let low = bits & ((1u64 << w) - 1);
+            let low = bits & ((1u128 << w) - 1);
             if kind.is_signed() && low >> (w - 1) == 1 {
-                low | !((1u64 << w) - 1)
+                low | !((1u128 << w) - 1)
             } else {
                 low
             }
@@ -209,8 +398,8 @@ impl NumVal {
     }
 
     /// An integer result: the value if it fits, else [`NumError::Overflow`].
-    fn checked(kind: NumKind, v: i128) -> Result<Self, NumError> {
-        Self::int(kind, v).ok_or(NumError::Overflow)
+    fn checked(kind: NumKind, v: Option<Wide>) -> Result<Self, NumError> {
+        v.and_then(|v| Self::int(kind, v)).ok_or(NumError::Overflow)
     }
 }
 
@@ -242,18 +431,18 @@ pub fn arith(op: Arith, a: NumVal, b: NumVal) -> Result<NumVal, NumError> {
             Arith::Rem => x % y,
         }));
     }
-    let (x, y) = (a.as_i128(), b.as_i128());
+    let (x, y) = (a.value(), b.value());
+    // A result past `Wide` is past every range (Q1-B-03: `UInt64::MAX` squared no longer
+    // escapes, and `UInt128::MAX` squared is out of `Wide` too).
     let v = match op {
-        Arith::Add => x + y,
-        Arith::Sub => x - y,
-        // A signed 64-by-64-bit product fits in `i128`; an unsigned one may not — `UInt64::MAX`
-        // squared is near 2^128 — and is out of every range when it does not (Q1-B-03).
-        Arith::Mul => x.checked_mul(y).ok_or(NumError::Overflow)?,
-        Arith::Div | Arith::Rem if y == 0 => return Err(NumError::DivideByZero),
-        // Truncating, as Rust's `/` and `%` on `i128` are; `MIN / -1` is out of range and so
-        // is reported as overflow, and `MIN % -1` is 0.
-        Arith::Div => x / y,
-        Arith::Rem => x % y,
+        Arith::Add => x.checked_add(y),
+        Arith::Sub => x.checked_sub(y),
+        Arith::Mul => x.checked_mul(y),
+        Arith::Div | Arith::Rem if y == Wide::ZERO => return Err(NumError::DivideByZero),
+        // Truncating; `MIN / -1` is out of range and so is reported as overflow, and
+        // `MIN % -1` is 0.
+        Arith::Div => Some(x.quotient(y)),
+        Arith::Rem => Some(x.remainder(y)),
     };
     NumVal::checked(k, v)
 }
@@ -267,7 +456,7 @@ pub fn neg(a: NumVal) -> Result<NumVal, NumError> {
     match a.kind {
         NumKind::F64 => Ok(NumVal::f64(-a.as_f64())),
         NumKind::F32 => Ok(NumVal::f32(-a.as_f32())),
-        k => NumVal::checked(k, -a.as_i128()),
+        k => NumVal::checked(k, Some(a.value().negate())),
     }
 }
 
@@ -288,13 +477,12 @@ pub fn bit(op: Bit, a: NumVal, b: NumVal) -> Result<NumVal, NumError> {
             if n < 0 || n >= i128::from(w) {
                 return Err(NumError::ShiftRange);
             }
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let n = n as u32;
             Ok(if op == Bit::Shl {
                 NumVal::wrapped(k, a.bits << n)
             } else if k.is_signed() {
-                #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
-                NumVal::wrapped(k, ((a.bits as i64) >> n) as u64)
+                // Canonical signed bits are sign-extended to 128, so this shift is exact.
+                NumVal::wrapped(k, ((a.bits as i128) >> n) as u128)
             } else {
                 // Canonical unsigned bits are zero-extended, so a logical shift is exact.
                 NumVal::wrapped(k, a.bits >> n)
@@ -324,7 +512,7 @@ pub fn compare(op: Cmp, a: NumVal, b: NumVal) -> bool {
             Cmp::GtEq => x >= y,
         };
     }
-    let (x, y) = (a.as_i128(), b.as_i128());
+    let (x, y) = (a.value(), b.value());
     match op {
         Cmp::Eq => x == y,
         Cmp::NotEq => x != y,
@@ -336,7 +524,7 @@ pub fn compare(op: Cmp, a: NumVal, b: NumVal) -> bool {
 }
 
 /// The integer a float truncates to, if `to` can hold it.
-fn truncated(to: NumKind, x: f64) -> Option<i128> {
+fn truncated(to: NumKind, x: f64) -> Option<Wide> {
     if !x.is_finite() {
         return None;
     }
@@ -351,8 +539,11 @@ fn truncated(to: NumKind, x: f64) -> Option<i128> {
     if t < lo || t >= hi {
         return None;
     }
-    #[allow(clippy::cast_possible_truncation)]
-    Some(t as i128)
+    Some(if t < 0.0 {
+        Wide::from_i128(t as i128)
+    } else {
+        Wide::from_u128(t as u128)
+    })
 }
 
 /// Whether `v` converts to `to` exactly — what `try_convert` asks.
@@ -376,41 +567,37 @@ pub fn convert(to: NumKind, mode: ConvertMode, v: NumVal) -> Result<NumVal, NumE
             (NumKind::F64, true) => NumVal::f64(v.as_f64()),
             #[allow(clippy::cast_possible_truncation)]
             (NumKind::F32, true) => NumVal::f32(v.as_f64() as f32),
-            #[allow(clippy::cast_precision_loss)]
-            (NumKind::F64, false) => NumVal::f64(v.as_i128() as f64),
-            #[allow(clippy::cast_precision_loss)]
-            (_, false) => NumVal::f32(v.as_i128() as f32),
+            (NumKind::F64, false) => NumVal::f64(v.value().to_f64()),
+            (_, false) => NumVal::f32(v.value().to_f32()),
             (_, true) => NumVal::f64(v.as_f64()),
         });
     }
-    let (lo, hi) = to.int_range().unwrap_or((0, 0));
+    let (lo, hi) = to.int_range().unwrap_or((Wide::ZERO, Wide::ZERO));
     if from.is_float() {
         let x = v.as_f64();
         return match mode {
-            ConvertMode::Exact | ConvertMode::Try | ConvertMode::Wrap => truncated(to, x)
-                .and_then(|t| NumVal::int(to, t))
-                .ok_or(NumError::Overflow),
+            ConvertMode::Exact | ConvertMode::Try | ConvertMode::Wrap => {
+                NumVal::checked(to, truncated(to, x))
+            }
             ConvertMode::Saturate => {
                 let t = if x.is_nan() {
-                    0
-                } else if x <= -pow2(127) {
+                    Wide::ZERO
+                } else if let Some(t) = truncated(to, x) {
+                    t
+                } else if x < 0.0 {
                     lo
-                } else if x >= pow2(127) {
-                    hi
                 } else {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let t = x.trunc() as i128;
-                    t.clamp(lo, hi)
+                    hi
                 };
-                NumVal::checked(to, t)
+                NumVal::checked(to, Some(t))
             }
         };
     }
-    let x = v.as_i128();
+    let x = v.value();
     match mode {
-        ConvertMode::Exact | ConvertMode::Try => NumVal::checked(to, x),
+        ConvertMode::Exact | ConvertMode::Try => NumVal::checked(to, Some(x)),
         ConvertMode::Wrap => Ok(NumVal::wrapped(to, v.bits)),
-        ConvertMode::Saturate => NumVal::checked(to, x.clamp(lo, hi)),
+        ConvertMode::Saturate => NumVal::checked(to, Some(x.clamp(lo, hi))),
     }
 }
 
@@ -428,26 +615,27 @@ pub fn wrapping(op: Arith, a: NumVal, b: NumVal) -> NumVal {
 /// `saturating_add`, `saturating_sub` and `saturating_mul`.
 #[must_use]
 pub fn saturating(op: Arith, a: NumVal, b: NumVal) -> NumVal {
-    let (lo, hi) = a.kind.int_range().unwrap_or((0, 0));
-    let (x, y) = (a.as_i128(), b.as_i128());
+    let (lo, hi) = a.kind.int_range().unwrap_or((Wide::ZERO, Wide::ZERO));
+    let (x, y) = (a.value(), b.value());
+    // Past `Wide` the result is past either bound, on the side its sign says (Q1-B-03).
+    let past = |negative: bool| if negative { lo } else { hi };
     let v = match op {
-        Arith::Add => x + y,
-        Arith::Sub => x - y,
-        // Past `i128` the product is past either bound, on the side its sign says (Q1-B-03).
+        Arith::Add => x.checked_add(y).unwrap_or_else(|| past(x.is_negative())),
+        Arith::Sub => x.checked_sub(y).unwrap_or_else(|| past(x.is_negative())),
         _ => x
             .checked_mul(y)
-            .unwrap_or(if (x < 0) == (y < 0) { hi } else { lo }),
+            .unwrap_or_else(|| past(x.is_negative() != y.is_negative())),
     };
     NumVal::int(a.kind, v.clamp(lo, hi)).unwrap_or(a)
 }
 
 /// The value's bits as an unsigned integer of its width.
-fn raw(a: NumVal) -> u64 {
+fn raw(a: NumVal) -> u128 {
     let w = a.kind.bits();
-    if w == 64 {
+    if w == 128 {
         a.bits
     } else {
-        a.bits & ((1u64 << w) - 1)
+        a.bits & ((1u128 << w) - 1)
     }
 }
 
@@ -458,7 +646,7 @@ pub fn count(which: Count, a: NumVal) -> i64 {
     let r = raw(a);
     i64::from(match which {
         Count::Ones => r.count_ones(),
-        Count::LeadingZeros => r.leading_zeros() - (64 - w),
+        Count::LeadingZeros => r.leading_zeros() - (128 - w),
         Count::TrailingZeros => {
             if r == 0 {
                 w
@@ -487,10 +675,13 @@ pub fn rotate(left: bool, a: NumVal, n: i64) -> Result<NumVal, NumError> {
         return Err(NumError::ShiftRange);
     }
     let w = a.kind.bits();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let n = (n as u64 % u64::from(w)) as u32;
     let r = raw(a);
-    let mask = if w == 64 { u64::MAX } else { (1u64 << w) - 1 };
+    let mask = if w == 128 {
+        u128::MAX
+    } else {
+        (1u128 << w) - 1
+    };
     let out = if n == 0 {
         r
     } else if left {
@@ -505,7 +696,7 @@ pub fn rotate(left: bool, a: NumVal, n: i64) -> Result<NumVal, NumError> {
 #[must_use]
 pub fn swap_bytes(a: NumVal) -> NumVal {
     let w = a.kind.bits();
-    let r = raw(a).swap_bytes() >> (64 - w);
+    let r = raw(a).swap_bytes() >> (128 - w);
     NumVal::wrapped(a.kind, r)
 }
 
@@ -632,7 +823,7 @@ pub fn to_fixed(a: NumVal, digits: usize) -> String {
 #[must_use]
 pub fn to_str(a: NumVal) -> String {
     if !a.kind.is_float() {
-        return a.as_i128().to_string();
+        return a.value().to_string();
     }
     let x = a.as_f64();
     if x.is_nan() {
@@ -798,6 +989,24 @@ mod tests {
                 i(NumKind::I64, i128::from(i64::MIN))
             ),
             Err(NumError::Overflow)
+        );
+        // Past `Wide` itself (R1b, L13b): `UInt128::MAX` times 2 overflows, and so do the two
+        // `Int128` products whose magnitudes pass 2^128.
+        let umax = NumVal::int(NumKind::U128, u128::MAX).unwrap();
+        let two = i(NumKind::U128, 2);
+        assert_eq!(arith(Arith::Mul, umax, two), Err(NumError::Overflow));
+        assert_eq!(saturating(Arith::Mul, umax, two), umax);
+        let imin = i(NumKind::I128, i128::MIN);
+        assert_eq!(arith(Arith::Mul, imin, imin), Err(NumError::Overflow));
+        assert_eq!(
+            saturating(Arith::Mul, imin, imin),
+            i(NumKind::I128, i128::MAX)
+        );
+        // And what fits, exactly: 2^127 is `UInt128`'s, one past `Int128`'s.
+        let half = i(NumKind::U128, 1i128 << 126);
+        assert_eq!(
+            arith(Arith::Mul, half, two),
+            Ok(NumVal::int(NumKind::U128, 1u128 << 127).unwrap())
         );
     }
 

@@ -21,6 +21,16 @@ const fn ty(c: Class) -> &'static str {
         Class::F32 => "float",
         Class::F64 => "double",
         Class::Ptr => "ptr",
+        Class::I128 => "i128",
+    }
+}
+
+/// An `I128`'s explicit alignment: the layout gives it 8 (`abi.rs`), less than LLVM's own, so
+/// every load and store of one says so (R1b, L13b).
+const fn align(c: Class) -> &'static str {
+    match c {
+        Class::I128 => ", align 8",
+        _ => "",
     }
 }
 
@@ -428,7 +438,9 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
                 Class::Bit => if *value != 0 { "true" } else { "false" }.to_owned(),
                 Class::Ptr if *value == 0 => "null".to_owned(),
                 Class::Ptr => format!("inttoptr (i64 {value} to ptr)"),
-                Class::F32 | Class::F64 => float_text(*class, *value),
+                // A float constant is its bits, at most 64 of them.
+                #[allow(clippy::cast_possible_truncation)]
+                Class::F32 | Class::F64 => float_text(*class, *value as i64),
                 _ => value.to_string(),
             };
             p.alias(*dst, text, *class);
@@ -443,7 +455,7 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
         } => {
             let a = p.at(out, *addr, *offset);
             let d = p.named(*dst, *class);
-            let _ = writeln!(out, "  {d} = load {}, ptr {a}", ty(*class));
+            let _ = writeln!(out, "  {d} = load {}, ptr {a}{}", ty(*class), align(*class));
         }
         Inst::Store {
             addr,
@@ -451,7 +463,12 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
             value,
         } => {
             let a = p.at(out, *addr, *offset);
-            let _ = writeln!(out, "  store {}, ptr {a}", p.tv(*value));
+            let _ = writeln!(
+                out,
+                "  store {}, ptr {a}{}",
+                p.tv(*value),
+                align(p.c(*value))
+            );
         }
         Inst::Bin { dst, op, a, b } => {
             let c = p.c(*a);

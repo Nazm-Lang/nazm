@@ -547,6 +547,7 @@ fn a_reserved_c_symbol_is_every_one_the_runtime_calls() {
         numbers: true,
         files: true,
         net: true,
+        wide: true,
     };
     let text = nazm_lir::emit_runtime(all);
     let mut found = Vec::new();

@@ -908,6 +908,7 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
         (Part::Numbers, "numbers"),
         (Part::Files, "files and handles"),
         (Part::Net, "networking"),
+        (Part::Wide, "128-bit integers"),
         (
             Part::Foreign,
             "`c_errno()` (N0613: no C library keeps an `errno`)",

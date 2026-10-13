@@ -30,6 +30,9 @@ pub enum Class {
     F32,
     F64,
     Ptr,
+    /// `Int128` and `UInt128` (R1b, L13b). Division, remainder, a signed checked product, float
+    /// conversions and formatting at this width are runtime calls, by address (`prims.rs`).
+    I128,
 }
 
 impl Class {
@@ -45,13 +48,17 @@ impl Class {
             Self::F32 => "f32",
             Self::F64 => "f64",
             Self::Ptr => "ptr",
+            Self::I128 => "i128",
         }
     }
 
     /// Whether this is an integer class arithmetic applies to.
     #[must_use]
     pub const fn integer(self) -> bool {
-        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
+        matches!(
+            self,
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128
+        )
     }
 
     /// Whether this is a float class (Gate 2).
@@ -68,6 +75,7 @@ impl Class {
             Self::I16 => 16,
             Self::I32 | Self::F32 => 32,
             Self::I64 | Self::F64 | Self::Ptr => 64,
+            Self::I128 => 128,
         }
     }
 }
@@ -308,7 +316,8 @@ pub enum Inst {
     Const {
         dst: V,
         class: Class,
-        value: i64,
+        /// Sign-extended from the class's width; only an `I128` uses more than 64 bits.
+        value: i128,
     },
     /// A symbol's address.
     Addr {

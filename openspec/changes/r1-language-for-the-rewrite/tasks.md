@@ -29,7 +29,13 @@ each new construct by name until R2 carries it.
 - [x] 4.2 L10 closures in generic functions; `let mut` capture (shared, see design.md)
 - [x] 4.3 L11 impls for generic types; default methods (L11a default methods, L11b impls of generic types, 2026-10-13)
 - [x] 4.4 L12 `defer`
-- [ ] 4.5 L13 checked arithmetic, widening multiply, `Int128`/`UInt128` — checked arithmetic done (L13a, 2026-10-13); `Int128`/`UInt128` and the widening multiply (L13b) open
+- [ ] 4.9 Open finding (2026-10-13, found measuring L13b's stack): on a **debug** build a call
+  nested in an expression in the recursive position (`1 + f(g(down(n - 1)))`) costs several
+  evaluator frames per Nazm call, so it overflows the host stack at about 361 calls, below the
+  default `--max-depth` of 512, where it should report `N0403`. Present before L13b (`ee7ce87`
+  measures the same); a release build carries 15,000. The budget must bound the frames per Nazm
+  call, or the evaluator must not recurse per nested call. Fix before R1 closes.
+- [x] 4.5 L13 checked arithmetic, widening multiply, `Int128`/`UInt128` — checked arithmetic (L13a), `Int128`/`UInt128` and `widening_mul` (L13b), 2026-10-13
 - [x] 4.6 L14 stack size (`nazm build --stack-size`; the interpreter keeps `--max-depth`)
 - [x] 4.8 L15 a warning severity, `--deny-warnings`; L3's covering warning on `_` (`nazm check`, `nazm build`, the service; `nazm run`/`test` and a `@deprecated` use remain)
 - [x] 4.7 D2 linear `s = str_concat(s, t)` (native and interpreter; only storage an append made grows)

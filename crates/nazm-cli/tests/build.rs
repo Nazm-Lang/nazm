@@ -3308,6 +3308,8 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
             Shape::F64 => "1.5",
             Shape::F32 => "Float32(1.5)",
             Shape::U64 => "UInt64(1)",
+            // No built-in takes one (R1b, L13b).
+            Shape::U128 => "UInt128(1)",
             Shape::U32 => "UInt32(1)",
             Shape::U8 => "UInt8(1)",
             Shape::Bytes => "bytes_new(4)",
@@ -3355,7 +3357,7 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         Shape::T if i.requires() == Some(nazm_core::sema::NumClass::Float) => {
             format!("Int({call})")
         }
-        Shape::F64 | Shape::F32 | Shape::U64 | Shape::U32 | Shape::U8 => {
+        Shape::F64 | Shape::F32 | Shape::U64 | Shape::U128 | Shape::U32 | Shape::U8 => {
             format!("Int({call})")
         }
         Shape::Bytes => format!("bytes_len({call})"),

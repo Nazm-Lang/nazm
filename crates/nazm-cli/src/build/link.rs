@@ -288,6 +288,9 @@ fn c_header(output: &Path, exported: &[(String, Vec<nazm_lir::Ty>, nazm_lir::Ty)
             nazm_core::sema::NumKind::F32 => "float",
             nazm_core::sema::NumKind::F64 => "double",
             nazm_core::sema::NumKind::I64 => "int64_t",
+            // Never exported: the C boundary refuses them (R1b, L13b).
+            nazm_core::sema::NumKind::I128 => "__int128",
+            nazm_core::sema::NumKind::U128 => "unsigned __int128",
         },
         _ => "int64_t",
     };

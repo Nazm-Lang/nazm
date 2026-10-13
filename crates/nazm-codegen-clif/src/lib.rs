@@ -219,6 +219,7 @@ impl Backend for Cranelift {
             numbers: true,
             files: true,
             net: true,
+            wide: true,
         }
     }
 }

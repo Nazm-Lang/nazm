@@ -72,6 +72,9 @@ pub struct Needs {
     /// Sockets and the reactor (Gate 2), over the files part's handle table and the task part's
     /// waits.
     pub net: bool,
+    /// `Int128` and `UInt128`'s division, signed product, float conversions and text (R1b,
+    /// L13b), which take the C toolchain's 128-bit helpers.
+    pub wide: bool,
 }
 
 impl Needs {
@@ -92,6 +95,7 @@ impl Needs {
             numbers: self.numbers || other.numbers,
             files: self.files || other.files,
             net: self.net || other.net,
+            wide: self.wide || other.wide,
         }
     }
 
@@ -113,6 +117,7 @@ impl Needs {
             (self.numbers, "numbers"),
             (self.files, "files"),
             (self.net, "net"),
+            (self.wide, "wide"),
         ]
         .into_iter()
         .filter_map(|(on, n)| on.then_some(n))
@@ -138,6 +143,7 @@ impl Needs {
                 "numbers" => n.numbers = true,
                 "files" => n.files = true,
                 "net" => n.net = true,
+                "wide" => n.wide = true,
                 _ => return None,
             }
         }
@@ -265,8 +271,10 @@ pub fn escape(s: &str) -> String {
 /// an interpolation's `.precision`.
 /// 31 is R1b's stack size (L14): `nz.stack_bytes`, which the platform entry stores before `main`
 /// and which a task's thread, a pool's task stacks and `nz.stack_check` read in place of their
-/// defaults.
-pub const RUNTIME_ABI_REVISION: u32 = 31;
+/// defaults. 32 is R1b's 128-bit integers (L13b): the wide part — `nz.i128_divrem`,
+/// `nz.i128_mul`, `nz.i128_to_f64`, `nz.i128_to_f32`, `nz.f64_to_i128` and `nz.format_i128`,
+/// each taking its 128-bit values by address.
+pub const RUNTIME_ABI_REVISION: u32 = 32;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -285,6 +293,7 @@ pub const EVERYTHING: Needs = Needs {
     numbers: true,
     files: true,
     net: true,
+    wide: true,
 };
 
 /// The runtime's identity as text: blake3 over the whole runtime, the platform entry and the
@@ -350,6 +359,8 @@ pub enum Part {
     Files,
     /// Sockets and the reactor (Gate 2).
     Net,
+    /// `Int128` and `UInt128` (R1b, L13b).
+    Wide,
     /// The C library the runtime itself links against.
     Libc,
 }
@@ -490,6 +501,12 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.format_u64", [Ptr, I64], Some(Word::I64), Numbers, "writes a UInt64's decimal digits into 21 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.float_parses", [Ptr, I64], Some(Word::Bit), Numbers, "borrows the bytes; whether they are a floating-point number as `float_parses` reads one (Gate 2)"),
     import!("nz.float_parse", [Ptr, I64], Some(Word::F64), Numbers, "borrows the bytes; the Float64 they write, or NaN (Gate 2)"),
+    import!("nz.i128_divrem", [Ptr, Ptr, Ptr, I64], None, Wide, "writes the quotient or remainder of two 128-bit values it reads, signed or unsigned by the code, the divisor already checked (R1b, L13b)"),
+    import!("nz.i128_mul", [Ptr, Ptr, Ptr, I64], Some(Word::I32), Wide, "writes the wrapped product of two 128-bit values it reads and returns nonzero when the exact one leaves the signed or unsigned range (R1b, L13b)"),
+    import!("nz.i128_to_f64", [Ptr, I64], Some(Word::F64), Wide, "reads a 128-bit value; the Float64 nearest it, ties to even (R1b, L13b)"),
+    import!("nz.i128_to_f32", [Ptr, I64], Some(Word::F32), Wide, "reads a 128-bit value; the Float32 nearest it, ties to even, rounded once (R1b, L13b)"),
+    import!("nz.f64_to_i128", [Ptr, F64, I64], None, Wide, "writes a Float64 truncated to a 128-bit value, saturating, a NaN as 0 (R1b, L13b)"),
+    import!("nz.format_i128", [Ptr, Ptr, I64], Some(Word::I64), Wide, "reads a 128-bit value and writes its decimal digits into 48 bytes the caller owns; returns how many (R1b, L13b)"),
     import!("nz.utf8_valid", [Ptr, I64], Some(Word::Bit), Strings, "borrows the bytes; whether they are UTF-8 (Gate 2)"),
     import!("nz.utf8_count", [Ptr, I64], Some(Word::I64), Strings, "borrows the bytes, which are UTF-8; how many scalar values they encode (Gate 2)"),
     import!("nz.utf8_decode", [Ptr, I64, I64], Some(Word::I64), Strings, "borrows the bytes, which are UTF-8; the scalar value starting at a boundary (Gate 2)"),
@@ -778,6 +795,12 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.float_parses", "i1" ("ptr", "i64") "", false, Numbers, "", Never, Any, "whether bytes are a floating-point number as `float_parses` reads one (Gate 2)", "borrows the bytes"),
     rt!("nz.digits_from", "i64" ("ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "the index after a run of decimal digits (Gate 2)", "borrows the bytes"),
     rt!("nz.float_parse", "double" ("ptr", "i64") "", false, Numbers, "", Null, Any, "the Float64 bytes write, or NaN (Gate 2)", "borrows the bytes"),
+    rt!("nz.i128_divrem", "void" ("ptr", "ptr", "ptr", "i64") "", false, Wide, "", Never, Any, "a 128-bit quotient or remainder, the divisor already checked (R1b, L13b)", "reads two values, writes the caller's"),
+    rt!("nz.i128_mul", "i32" ("ptr", "ptr", "ptr", "i64") "", false, Wide, "", Never, Any, "a 128-bit product, wrapped, and whether it overflowed (R1b, L13b)", "reads two values, writes the caller's"),
+    rt!("nz.i128_to_f64", "double" ("ptr", "i64") "", false, Wide, "", Never, Any, "a 128-bit value as the nearest Float64 (R1b, L13b)", "reads the value"),
+    rt!("nz.i128_to_f32", "float" ("ptr", "i64") "", false, Wide, "", Never, Any, "a 128-bit value as the nearest Float32 (R1b, L13b)", "reads the value"),
+    rt!("nz.f64_to_i128", "void" ("ptr", "double", "i64") "", false, Wide, "", Never, Any, "a Float64 truncated to 128 bits, saturating (R1b, L13b)", "writes the caller's"),
+    rt!("nz.format_i128", "i64" ("ptr", "ptr", "i64") "", false, Wide, "", Never, Any, "a 128-bit value's decimal digits into a 48-byte buffer (R1b, L13b)", "reads the value, writes into the caller's buffer"),
     rt!("nz.utf8_valid", "i1" ("ptr", "i64") "", false, Strings, "", Never, Any, "whether bytes are UTF-8: shortest forms, no surrogates, at most U+10FFFF (Gate 2)", "borrows the bytes"),
     rt!("nz.utf8_count", "i64" ("ptr", "i64") "", false, Strings, "", Never, Any, "the scalar values UTF-8 bytes encode (Gate 2)", "borrows the bytes"),
     rt!("nz.utf8_decode", "i64" ("ptr", "i64", "i64") "", false, Strings, "", Never, Any, "the scalar value UTF-8 bytes hold at a boundary (Gate 2)", "borrows the bytes"),
@@ -1031,6 +1054,7 @@ mod tests {
             numbers: true,
             files: true,
             net: true,
+            wide: true,
         }
     }
 
@@ -1192,9 +1216,12 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_one_and_reaches_the_system_only_through_its_platform_layer() {
-        // R1a's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 31);
+    fn the_runtime_is_revision_thirty_two_and_reaches_the_system_only_through_its_platform_layer() {
+        // R1b's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 32);
+        // 128-bit integers (R1b, L13b), in the wide part only.
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.i128_divrem("));
+        assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.i128_divrem("));
         // Fixed-point floats (R1a, L4), in the numbers part.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.format_fixed("));
         assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.format_fixed("));
