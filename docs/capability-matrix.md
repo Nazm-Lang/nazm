@@ -297,6 +297,21 @@ LLVM `-O2` and Cranelift; the embedded BLAKE3 vectors checked against the `blake
 `crates/nazm-cli/tests/file_walk.rs` — a tree sorted as bytes, not as a depth-first listing, under
 the interpreter and LLVM; on Unix, links to a file, to a directory, dangling and looping. Seven
 mutants.
+**R1e (2026-10-13)** · *`@std/args`* (`spec.md`, *The standard library*; `openspec/changes/r1-language-
+for-the-rewrite`, S4). A command-line parser in Nazm, for writing the toolchain's own command line:
+a specification built by functions (`args_program`, `args_command` for sub-commands nested to any
+depth, `args_flag`, `args_option` and its default and required forms, `args_positional`,
+`args_rest`, `args_conflict`) into one arena, and `args_parse` over any `Strs` — `process_args(io)`
+for the process's own — answering an `Args` read by name, or an `Err` naming the command and the
+argument at fault. The POSIX and GNU forms: `--name value`, `--name=value`, `-n value`, `-nvalue`,
+bundled `-abc`, `--`, `-`; repeated options and counted flags; `--help`, and the help and usage text
+generated from the specification. No new built-in and no checker change: the arguments come from the
+existing `arg`/`args_count` through `@std/process`. EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/args.rs` — twenty-six command lines (every form, and every mistake with its
+message) and the help of three commands, alike under the interpreter, the LIR oracle, LLVM
+`-O0`/`-O2` and Cranelift with nothing live; and executables built by LLVM and Cranelift parsing the
+arguments they were started with (spaces and non-ASCII in values, `--`, help on standard output,
+an error on standard error with status 2).
 
 **R1c (2026-10-13)** · *`@derive(toml)`* (`spec.md`, *Derived serialisation*, **TOML**;
 `openspec/changes/r1-language-for-the-rewrite`, L2c). The same shape over `@std/toml`'s `Toml` tree,

@@ -134,6 +134,9 @@ const MODULES: &[&str] = &[
     "binary", "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap", "hashset",
     "io", "ioerror", "json", "log", "map", "net", "num", "option", "path", "process", "random",
     "regex", "result", "seq", "show", "sort", "test", "text", "time",
+    "args", "binary", "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap",
+    "hashset", "io", "ioerror", "json", "log", "map", "net", "num", "option", "path", "process",
+    "random", "result", "seq", "show", "sort", "test", "text", "time",
 ];
 
 #[test]
