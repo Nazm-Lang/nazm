@@ -30,7 +30,7 @@ use crate::ast::{
     TypeParam, Variant,
 };
 use crate::cst::{Cst, GreenChild};
-use crate::lexer::{self, Lexeme, Token};
+use crate::lexer::{self, FPiece, Lexeme, Token, TokenKind};
 use crate::parser::{self, Item, Region};
 
 /// Replace the bytes `start..end` of a revision's text with `text`.
@@ -611,12 +611,39 @@ fn shift_lexeme(l: &Lexeme, delta: i64) -> Lexeme {
     let move_span = |s: Span| moved(s, delta);
     match l {
         Lexeme::Token(t) => Lexeme::Token(Token {
-            kind: t.kind.clone(),
+            kind: shift_kind(&t.kind, delta),
             span: move_span(t.span),
         }),
         Lexeme::Whitespace(s) => Lexeme::Whitespace(move_span(*s)),
         Lexeme::Comment(s) => Lexeme::Comment(move_span(*s)),
         Lexeme::Invalid(s) => Lexeme::Invalid(move_span(*s)),
+    }
+}
+
+/// A token's kind, moved: an interpolated string's holes carry positions of their own (L4), which
+/// move with the token.
+fn shift_kind(kind: &TokenKind, delta: i64) -> TokenKind {
+    match kind {
+        TokenKind::FStr(pieces) => TokenKind::FStr(
+            pieces
+                .iter()
+                .map(|p| match p {
+                    FPiece::Hole {
+                        text,
+                        at,
+                        spec,
+                        span,
+                    } => FPiece::Hole {
+                        text: text.clone(),
+                        at: u32::try_from(i64::from(*at) + delta).unwrap_or(0),
+                        spec: *spec,
+                        span: moved(*span, delta),
+                    },
+                    FPiece::Text(t) => FPiece::Text(t.clone()),
+                })
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 
