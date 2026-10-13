@@ -11,6 +11,10 @@ use super::ir::{BinOp, Class, Cmp, Inst, V};
 use super::lower::{class, in_memory, rt, Helper};
 use crate::ir::Ty;
 
+/// The mark an append's copy adds to its storage's capacity (R1b, D2): `nz.str_alloc` records
+/// at most a length, far below 2^62, so a marked capacity is one only an append wrote.
+const GROWABLE: i64 = 1 << 62;
+
 impl Fx<'_, '_> {
     pub(crate) fn arg(&mut self, args: &[mir::Operand], i: usize) -> V {
         match args.get(i) {
@@ -294,6 +298,63 @@ impl Fx<'_, '_> {
                 let rest = self.ptr_add(buf, la);
                 self.rt("memcpy", &[rest, pb, lb]);
                 self.write_str(dst, buf, n, owner);
+            }
+            // `s = str_concat(s, t)` on a `let mut` (R1b, D2): in place where `s`'s storage is its
+            // own — one reference, which the binding is — and has room after `s`'s bytes; the new
+            // value then takes a reference of its own, and the old one's release brings the count
+            // back to one. Otherwise a copy into storage of twice the length, so that appends
+            // after it fit: linear time over a loop of appends.
+            Intrinsic::StrAppend => {
+                let a = self.arg_place(args, 0);
+                let b = self.arg_place(args, 1);
+                let (pa, la) = self.str_parts(a);
+                let owner = self.str_owner(a);
+                let (pb, lb) = self.str_parts(b);
+                let n = self.bin(BinOp::Add, la, lb);
+                let alone_check = self.b.block();
+                let room_check = self.b.block();
+                let in_place = self.b.block();
+                let copy = self.b.block();
+                let done = self.b.block();
+                let literal = self.is_null(owner);
+                self.branch(literal, copy, alone_check);
+                self.b.switch(alone_check);
+                let count = self.load(Class::I64, owner, 0);
+                let alone = self.cmp_imm(Cmp::Eq, count, Class::I64, 1);
+                self.branch(alone, room_check, copy);
+                self.b.switch(room_check);
+                let cap = self.load(Class::I64, owner, 8);
+                let data = self.ptr_off(owner, rt::STRING_HEADER);
+                let at = self.ptr_to_int(pa);
+                let base = self.ptr_to_int(data);
+                let start = self.bin(BinOp::Sub, at, base);
+                // Only storage an append made grows in place: its capacity carries
+                // `GROWABLE`, which no other string's can reach, so `end + GROWABLE <= cap`
+                // is both "an append made this" and "the tail fits" (`docs/spec.md`, *Strings*).
+                let end = self.bin(BinOp::Add, start, n);
+                let marked = self.add_imm(end, GROWABLE);
+                let fits = self.cmp(Cmp::Le, marked, cap);
+                self.branch(fits, in_place, copy);
+                self.b.switch(in_place);
+                let tail = self.ptr_add(pa, la);
+                self.rt("memcpy", &[tail, pb, lb]);
+                self.rt("nz.str_retain", &[owner]);
+                self.write_str(dst, pa, n, owner);
+                self.jump(done);
+                self.b.switch(copy);
+                let twice = self.bin(BinOp::Add, n, n);
+                let small = self.cmp_imm(Cmp::Lt, twice, Class::I64, 16);
+                let sixteen = self.iconst(16);
+                let room = self.select(small, sixteen, twice);
+                let (fresh, buf) = self.string_backing(room);
+                let growable = self.add_imm(room, GROWABLE);
+                self.store(fresh, 8, growable);
+                self.rt("memcpy", &[buf, pa, la]);
+                let rest = self.ptr_add(buf, la);
+                self.rt("memcpy", &[rest, pb, lb]);
+                self.write_str(dst, buf, n, fresh);
+                self.jump(done);
+                self.b.switch(done);
             }
             // Padding (R1a, L4): a new string of `max(width, len)` bytes, the fill's one byte
             // written in a loop before or after the text.
