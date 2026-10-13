@@ -736,13 +736,7 @@ impl Interpreter {
                 }
                 Ok(Value::Int(at))
             }
-            (Intrinsic::TimeNowMs, []) => {
-                static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-                let base = BASE.get_or_init(std::time::Instant::now);
-                Ok(Value::Int(
-                    i64::try_from(base.elapsed().as_millis()).unwrap_or(i64::MAX),
-                ))
-            }
+            (Intrinsic::TimeNowMs, []) => Ok(Value::Int(monotonic_ms())),
             // Gate 2 (§11): nanoseconds on the same monotonic clock, the wall clock, and a wait.
             (Intrinsic::TimeNowNs, []) => {
                 static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -969,4 +963,12 @@ impl Interpreter {
             _ => Err(bug("arguments of the wrong shape")),
         }
     }
+}
+
+/// The monotonic clock `time_now_ms` reads, in milliseconds since this interpreter first read it;
+/// `os_wait_until`'s deadline is a reading of it (R1d).
+pub(super) fn monotonic_ms() -> i64 {
+    static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let base = BASE.get_or_init(std::time::Instant::now);
+    i64::try_from(base.elapsed().as_millis()).unwrap_or(i64::MAX)
 }

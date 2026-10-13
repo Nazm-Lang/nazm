@@ -3000,6 +3000,25 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("os_child_pipe", "Gate 2 process and environment"),
         ("os_wait", "Gate 2 process and environment"),
         ("os_kill", "Gate 2 process and environment"),
+        // R1d (the platform, further): neither `OsHandle` nor `ProcessCap` is in the Nazm
+        // checker's table, as for Gate 2's.
+        ("os_stdout", "R1d platform"),
+        ("os_stderr", "R1d platform"),
+        ("os_spawn_in", "R1d platform"),
+        ("os_spawn_with", "R1d platform"),
+        ("os_pid", "R1d platform"),
+        ("os_child_pid", "R1d platform"),
+        ("os_kill_group", "R1d platform"),
+        ("os_try_wait", "R1d platform"),
+        ("os_wait_until", "R1d platform"),
+        ("os_child_rusage", "R1d platform"),
+        ("os_lstat", "R1d platform"),
+        ("os_chmod", "R1d platform"),
+        ("os_realpath", "R1d platform"),
+        ("os_mkdtemp", "R1d platform"),
+        ("os_lock", "R1d platform"),
+        ("os_try_lock", "R1d platform"),
+        ("os_unlock", "R1d platform"),
         // Gate 2 (randomness): `RandomCap` is not in the Nazm checker's table.
         ("os_random_bytes", "Gate 2 randomness"),
         // Gate 3 (atomics): `Atomic` is not in the Nazm checker's table.

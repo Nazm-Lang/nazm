@@ -48,10 +48,14 @@ declare i64 @nz_net_recvfrom(i32, ptr, i64, ptr, ptr)
 declare i32 @nz_net_shutdown(i32, i32)
 declare i32 @nz_net_name(i32, i32, ptr, ptr)
 declare i64 @nz_net_write(i32, ptr, i64)
-declare i32 @nz_os_spawn(ptr, ptr, ptr, ptr)
-declare i64 @nz_os_reap(i64)
+declare i32 @nz_os_spawn_in(ptr, ptr, ptr, ptr, ptr, i64, ptr)
+declare i64 @nz_os_reap(i64, i32, ptr)
 declare i32 @nz_os_terminate(i64)
 declare i32 @nz_os_key()
+declare i64 @nz_os_child_id(i64)
+declare i64 @nz_os_pid()
+declare i32 @nz_os_signal_group(i64, i64)
+declare void @nz_os_nap(i64)
 
 ; The wall clock in nanoseconds: what `nz.ctimedwait`'s deadline is measured against.
 define hidden i64 @nz.net_now() {
@@ -811,10 +815,16 @@ ask:
 
 /// Child processes (Gate 2, `docs/spec.md`, *Process and environment*): `posix_spawnp` with three
 /// pipes whose parent ends are non-blocking handles that wait as sockets do. A child's handle is
-/// keyed by a descriptor it holds on `/dev/null` and names a record — its process id (0), its
-/// status once waited for (8, -1 before), and its three pipes' handles (16, 24, 32). A program that
-/// runs another ignores `SIGPIPE` from then on, as the interpreter's host always does, so writing to
-/// a child that has gone is `BrokenPipe` and never a signal.
+/// keyed by a descriptor it holds on `/dev/null` and names a record — its process reference (0),
+/// its status once waited for (8, -1 before), its three pipes' handles (16, 24, 32), and (R1d) its
+/// process id (40) and its peak resident memory once waited for (48). A program that runs another
+/// ignores `SIGPIPE` from then on, as the interpreter's host always does, so writing to a child that
+/// has gone is `BrokenPipe` and never a signal.
+///
+/// R1d (`docs/spec.md`, *The platform, further*) adds a child's directory and environment — the
+/// environment ordered by name, so every implementation hands a child the same one — a new process
+/// group and a null standard input, bounded waits that look again at most every 10 ms, a signal to
+/// a group, and this process's id.
 pub(crate) const PROCESS_RUNTIME: &str = r#"
 ; A write to a pipe, pinned by the caller: the bytes the system took, waiting at most its deadline.
 define hidden i64 @nz.net_pipe_write(i64 %h, ptr %buf, i64 %n) {
@@ -844,6 +854,318 @@ stop:
 
 ; Run `program` with the arguments in `args` (a `Strs`): the child's handle, or -errno.
 define hidden i64 @nz.os_spawn(ptr %pp, i64 %pn, ptr %args) {
+entry:
+  %h = call i64 @nz.os_start(ptr %pp, i64 %pn, ptr %args, ptr null, ptr null, i64 0)
+  ret i64 %h
+}
+
+; R1d: `program` in directory `dir` (empty: this process's) with exactly the environment `env` (a
+; `Strs` of `NAME=value`), and `flags` — 1 a new process group, 2 a null standard input. The
+; child's handle, or -errno; -EINVAL, nothing started, for another flag, an entry that is not one,
+; a name given twice, or a zero byte in `dir` or an entry. A relative program named with a `/` is
+; made absolute beside the canonical `dir` first: systems differ on whether a child's directory is
+; changed before its program is looked for, and this way none has to choose.
+define hidden i64 @nz.os_spawn_in(ptr %pp, i64 %pn, ptr %args, ptr %dp, i64 %dn, ptr %env, i64 %flags) {
+entry:
+  %status = alloca i64, align 8
+  %extra = and i64 %flags, -4
+  %unknown = icmp ne i64 %extra, 0
+  br i1 %unknown, label %invalid, label %dircheck
+invalid:
+  ret i64 -22
+dircheck:
+  %nuldir = call i1 @nz.os_has_byte(ptr %dp, i64 %dn, i8 0)
+  br i1 %nuldir, label %invalid, label %environment
+environment:
+  store i64 0, ptr %status
+  %envp = call ptr @nz.os_envp(ptr %env, ptr %status)
+  %noenv = icmp eq ptr %envp, null
+  br i1 %noenv, label %refused, label %where
+refused:
+  %why = load i64, ptr %status
+  ret i64 %why
+where:
+  %here = icmp eq i64 %dn, 0
+  br i1 %here, label %start, label %copydir
+copydir:
+  %d = call ptr @nz.cstr(ptr %dp, i64 %dn)
+  %nod = icmp eq ptr %d, null
+  br i1 %nod, label %oom, label %isdir
+oom:
+  call void @nz.os_envp_free(ptr %envp)
+  ret i64 -12
+isdir:
+  ; The directory is asked about first, so a missing one is `NotFound` and a file
+  ; `NotADirectory` on every system, whatever its `posix_spawnp` folds them into.
+  %facts = alloca [32 x i8], align 8
+  %st = call i32 @nz_os_stat(ptr %d, ptr %facts)
+  %ste = call i64 @nz.os_errno()
+  %nostat = icmp slt i32 %st, 0
+  br i1 %nostat, label %baddir, label %kindcheck
+kindcheck:
+  %kp = getelementptr i8, ptr %facts, i64 8
+  %k = load i64, ptr %kp
+  %dirkind = icmp eq i64 %k, 1
+  br i1 %dirkind, label %start, label %notdir
+notdir:
+  br label %baddir
+baddir:
+  %why2 = phi i64 [ %ste, %isdir ], [ -20, %notdir ]
+  call void @free(ptr %d)
+  call void @nz.os_envp_free(ptr %envp)
+  ret i64 %why2
+start:
+  %dir = phi ptr [ null, %where ], [ %d, %kindcheck ]
+  %slash = call i1 @nz.os_has_byte(ptr %pp, i64 %pn, i8 47)
+  %elsewhere = icmp ne ptr %dir, null
+  %maybe = and i1 %slash, %elsewhere
+  br i1 %maybe, label %rootcheck, label %go
+rootcheck:
+  ; A `/` was found, so the program has a first byte.
+  %first = load i8, ptr %pp
+  %rooted = icmp eq i8 %first, 47
+  br i1 %rooted, label %go, label %join
+join:
+  %joined = call ptr @nz.os_beside(ptr %dir, ptr %pp, i64 %pn, ptr %status)
+  %nojoin = icmp eq ptr %joined, null
+  %jl = load i64, ptr %status
+  br i1 %nojoin, label %unjoined, label %go
+unjoined:
+  call void @free(ptr %dir)
+  call void @nz.os_envp_free(ptr %envp)
+  ret i64 %jl
+go:
+  %prog = phi ptr [ %pp, %start ], [ %pp, %rootcheck ], [ %joined, %join ]
+  %progn = phi i64 [ %pn, %start ], [ %pn, %rootcheck ], [ %jl, %join ]
+  %beside = phi i1 [ false, %start ], [ false, %rootcheck ], [ true, %join ]
+  %h = call i64 @nz.os_start(ptr %prog, i64 %progn, ptr %args, ptr %dir, ptr %envp, i64 %flags)
+  br i1 %beside, label %freejoin, label %done
+freejoin:
+  call void @free(ptr %prog)
+  br label %done
+done:
+  call void @free(ptr %dir)
+  call void @nz.os_envp_free(ptr %envp)
+  ret i64 %h
+}
+
+; Program `pp` (`pn` bytes) beside directory `dir` (a C string), made absolute: the canonical
+; `dir`, a `/` and the program, in a new buffer; its length through `lenp`. Null with -errno there
+; when `dir` has no canonical path.
+define hidden ptr @nz.os_beside(ptr %dir, ptr %pp, i64 %pn, ptr %lenp) {
+entry:
+  %room = add i64 %pn, 4098
+  %buf = call ptr @malloc(i64 %room)
+  %none = icmp eq ptr %buf, null
+  br i1 %none, label %oom, label %ask
+oom:
+  store i64 -12, ptr %lenp
+  ret ptr null
+ask:
+  %n = call i64 @nz_os_realpath(ptr %dir, ptr %buf, i64 4096)
+  %e = call i64 @nz.os_errno()
+  %failed = icmp slt i64 %n, 0
+  br i1 %failed, label %fail, label %fits
+fail:
+  call void @free(ptr %buf)
+  store i64 %e, ptr %lenp
+  ret ptr null
+fits:
+  %long = icmp sgt i64 %n, 4096
+  br i1 %long, label %toolong, label %put
+toolong:
+  call void @free(ptr %buf)
+  store i64 -22, ptr %lenp
+  ret ptr null
+put:
+  %sp = getelementptr i8, ptr %buf, i64 %n
+  store i8 47, ptr %sp
+  %at = add i64 %n, 1
+  %dst = getelementptr i8, ptr %buf, i64 %at
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %pp, i64 %pn, i1 false)
+  %len = add i64 %at, %pn
+  store i64 %len, ptr %lenp
+  ret ptr %buf
+}
+
+; Whether `n` bytes at `p` hold byte `b`.
+define hidden i1 @nz.os_has_byte(ptr %p, i64 %n, i8 %b) {
+entry:
+  br label %scan
+scan:
+  %i = phi i64 [ 0, %entry ], [ %i1, %next ]
+  %end = icmp sge i64 %i, %n
+  br i1 %end, label %none, label %look
+look:
+  %cp = getelementptr i8, ptr %p, i64 %i
+  %c = load i8, ptr %cp
+  %hit = icmp eq i8 %c, %b
+  br i1 %hit, label %found, label %next
+next:
+  %i1 = add i64 %i, 1
+  br label %scan
+found:
+  ret i1 true
+none:
+  ret i1 false
+}
+
+; Two environment entries by name, byte by byte, a name before every longer one it begins:
+; negative, zero (the same name) or positive.
+define hidden i64 @nz.os_env_order(ptr %a, ptr %b) {
+entry:
+  %na = call i64 @nz.os_env_split(ptr %a)
+  %nb = call i64 @nz.os_env_split(ptr %b)
+  %shorter = icmp slt i64 %na, %nb
+  %m = select i1 %shorter, i64 %na, i64 %nb
+  %d = call i32 @memcmp(ptr %a, ptr %b, i64 %m)
+  %differ = icmp ne i32 %d, 0
+  %dw = sext i32 %d to i64
+  %bylen = sub i64 %na, %nb
+  %r = select i1 %differ, i64 %dw, i64 %bylen
+  ret i64 %r
+}
+
+; `env` (a `Strs`) as a null-terminated array of C strings ordered by name, each checked to be an
+; entry with no zero byte and no name repeated; null, with -EINVAL or -ENOMEM at `status`, when
+; one is not.
+define hidden ptr @nz.os_envp(ptr %env, ptr %status) {
+entry:
+  %count = load i64, ptr %env
+  %slots = add i64 %count, 1
+  %bytes = mul i64 %slots, 8
+  %arr = call ptr @malloc(i64 %bytes)
+  %noarr = icmp eq ptr %arr, null
+  br i1 %noarr, label %oom, label %start
+oom:
+  store i64 -12, ptr %status
+  ret ptr null
+start:
+  store ptr null, ptr %arr
+  %data = getelementptr i8, ptr %env, i64 16
+  %elems = load ptr, ptr %data
+  br label %each
+each:
+  %i = phi i64 [ 0, %start ], [ %i1, %placed ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %one, label %done
+one:
+  %off = mul i64 %i, 24
+  %ep = getelementptr i8, ptr %elems, i64 %off
+  %sp = load ptr, ptr %ep
+  %lp = getelementptr i8, ptr %ep, i64 8
+  %sl = load i64, ptr %lp
+  %nul = call i1 @nz.os_has_byte(ptr %sp, i64 %sl, i8 0)
+  br i1 %nul, label %bad, label %copy
+copy:
+  %c = call ptr @nz.cstr(ptr %sp, i64 %sl)
+  %noc = icmp eq ptr %c, null
+  br i1 %noc, label %nomem, label %entry1
+nomem:
+  store i64 -12, ptr %status
+  br label %undo
+entry1:
+  %at = call i64 @nz.os_env_split(ptr %c)
+  %isentry = icmp sgt i64 %at, 0
+  br i1 %isentry, label %insert, label %badc
+badc:
+  call void @free(ptr %c)
+  br label %bad
+bad:
+  store i64 -22, ptr %status
+  br label %undo
+insert:
+  br label %shift
+shift:
+  %j = phi i64 [ %i, %insert ], [ %jm, %moved ]
+  %top = icmp eq i64 %j, 0
+  br i1 %top, label %put, label %compare
+compare:
+  %jm = sub i64 %j, 1
+  %prevp = getelementptr ptr, ptr %arr, i64 %jm
+  %prev = load ptr, ptr %prevp
+  %o = call i64 @nz.os_env_order(ptr %prev, ptr %c)
+  %same = icmp eq i64 %o, 0
+  br i1 %same, label %twice, label %after
+twice:
+  ; The name is there already: undo the shift so far, then refuse.
+  call void @nz.os_env_unshift(ptr %arr, i64 %j, i64 %i)
+  call void @free(ptr %c)
+  br label %bad
+after:
+  %later = icmp sgt i64 %o, 0
+  br i1 %later, label %move, label %put
+move:
+  %dst = getelementptr ptr, ptr %arr, i64 %j
+  store ptr %prev, ptr %dst
+  br label %moved
+moved:
+  br label %shift
+put:
+  %slot = getelementptr ptr, ptr %arr, i64 %j
+  store ptr %c, ptr %slot
+  %i1 = add i64 %i, 1
+  %endp = getelementptr ptr, ptr %arr, i64 %i1
+  store ptr null, ptr %endp
+  br label %placed
+placed:
+  br label %each
+undo:
+  call void @nz.os_envp_free(ptr %arr)
+  ret ptr null
+done:
+  ret ptr %arr
+}
+
+; Entries `from + 1 ..= to` of `arr` moved back down one place: an insertion's shift undone, so the
+; array is again its first `to` entries, ordered, ending in null.
+define hidden void @nz.os_env_unshift(ptr %arr, i64 %from, i64 %to) {
+entry:
+  br label %loop
+loop:
+  %k = phi i64 [ %from, %entry ], [ %k1, %step ]
+  %more = icmp slt i64 %k, %to
+  br i1 %more, label %step, label %end
+step:
+  %k1 = add i64 %k, 1
+  %srcp = getelementptr ptr, ptr %arr, i64 %k1
+  %v = load ptr, ptr %srcp
+  %dstp = getelementptr ptr, ptr %arr, i64 %k
+  store ptr %v, ptr %dstp
+  br label %loop
+end:
+  %lastp = getelementptr ptr, ptr %arr, i64 %to
+  store ptr null, ptr %lastp
+  ret void
+}
+
+; An array `nz.os_envp` made, and every string in it, freed; null is a no-op.
+define hidden void @nz.os_envp_free(ptr %arr) {
+entry:
+  %none = icmp eq ptr %arr, null
+  br i1 %none, label %done, label %walk
+walk:
+  %k = phi i64 [ 0, %entry ], [ %k1, %one ]
+  %p = getelementptr ptr, ptr %arr, i64 %k
+  %s = load ptr, ptr %p
+  %end = icmp eq ptr %s, null
+  br i1 %end, label %all, label %one
+one:
+  call void @free(ptr %s)
+  %k1 = add i64 %k, 1
+  br label %walk
+all:
+  call void @free(ptr %arr)
+  br label %done
+done:
+  ret void
+}
+
+; Start `program` with `args`, in `dir` (null: here), with `envp` (null: this process's), by
+; `flags`: the child's handle, or -errno. A child's record: its process reference (0), its status
+; once waited for (8, -1 before), its three pipes' handles (16, 24, 32), its process id (40) and its
+; peak resident memory once waited for (48).
+define hidden i64 @nz.os_start(ptr %pp, i64 %pn, ptr %args, ptr %dir, ptr %envp, i64 %flags) {
 entry:
   %ends = alloca [3 x i32], align 4
   %pid = alloca i64, align 8
@@ -882,7 +1204,7 @@ terminate:
   %last = add i64 %count, 1
   %endp = getelementptr ptr, ptr %av, i64 %last
   store ptr null, ptr %endp
-  %r = call i32 @nz_os_spawn(ptr %pid, ptr %prog, ptr %av, ptr %ends)
+  %r = call i32 @nz_os_spawn_in(ptr %pid, ptr %prog, ptr %av, ptr %envp, ptr %dir, i64 %flags, ptr %ends)
   br label %free
 free:
   %k = phi i64 [ 0, %terminate ], [ %k1, %free ]
@@ -907,7 +1229,6 @@ started:
   %out0 = load i32, ptr %out0p
   %err0p = getelementptr i32, ptr %ends, i64 2
   %err0 = load i32, ptr %err0p
-  %q0 = call i32 @nz_net_prepare(i32 %in1)
   %q1 = call i32 @nz_net_prepare(i32 %out0)
   %q2 = call i32 @nz_net_prepare(i32 %err0)
   %rec = call ptr @malloc(i64 64)
@@ -915,7 +1236,22 @@ started:
   store i64 %pidw, ptr %rec
   %stp = getelementptr i8, ptr %rec, i64 8
   store i64 -1, ptr %stp
-  %hin = call i64 @nz.os_adopt(i32 %in1, i64 9, ptr null)
+  %idp = getelementptr i8, ptr %rec, i64 40
+  %id = call i64 @nz_os_child_id(i64 %pidw)
+  store i64 %id, ptr %idp
+  %rssp = getelementptr i8, ptr %rec, i64 48
+  store i64 -1, ptr %rssp
+  ; A null standard input (R1d) has no pipe: its handle is one already closed.
+  %nullin = icmp slt i32 %in1, 0
+  br i1 %nullin, label %noinput, label %input
+noinput:
+  br label %outputs
+input:
+  %q0 = call i32 @nz_net_prepare(i32 %in1)
+  %hin1 = call i64 @nz.os_adopt(i32 %in1, i64 9, ptr null)
+  br label %outputs
+outputs:
+  %hin = phi i64 [ -65536, %noinput ], [ %hin1, %input ]
   %hout = call i64 @nz.os_adopt(i32 %out0, i64 7, ptr null)
   %herr = call i64 @nz.os_adopt(i32 %err0, i64 7, ptr null)
   %hinp = getelementptr i8, ptr %rec, i64 16
@@ -983,6 +1319,43 @@ pick:
 ; The child's exit: its code, or 256 and the signal that ended it; the same every time.
 define hidden i64 @nz.os_wait(i64 %h) {
 entry:
+  %r = call i64 @nz.os_wait_for(i64 %h, i64 0, i64 0)
+  ret i64 %r
+}
+
+; R1d: `os_wait`'s answer if the child has ended, -EWOULDBLOCK at once if it has not.
+define hidden i64 @nz.os_try_wait(i64 %h) {
+entry:
+  %r = call i64 @nz.os_wait_for(i64 %h, i64 1, i64 0)
+  ret i64 %r
+}
+
+; R1d: `os_wait`'s answer if the child ends before the monotonic clock reads `deadline`
+; milliseconds, -ETIMEDOUT then, the child left running.
+define hidden i64 @nz.os_wait_until(i64 %h, i64 %deadline) {
+entry:
+  %r = call i64 @nz.os_wait_for(i64 %h, i64 2, i64 %deadline)
+  ret i64 %r
+}
+
+; The monotonic clock `time_now_ms` reads, in milliseconds.
+define hidden i64 @nz.os_mono_ms() {
+entry:
+  %tp = alloca [2 x i64], align 8
+  %r = call i32 @nz_os_clock(i32 4, ptr %tp)
+  %sec = load i64, ptr %tp
+  %tpn = getelementptr i8, ptr %tp, i64 8
+  %nsec = load i64, ptr %tpn
+  %msec = mul i64 %sec, 1000
+  %frac = sdiv i64 %nsec, 1000000
+  %t = add i64 %msec, %frac
+  ret i64 %t
+}
+
+; A wait for child `h`: `mode` 0 until it ends, 1 not at all, 2 until `deadline`, looking again at
+; most every 10 ms. Its end is kept, with its peak memory, so every later wait answers the same.
+define hidden i64 @nz.os_wait_for(i64 %h, i64 %mode, i64 %deadline) {
+entry:
   %live = call i64 @nz.os_status(i64 %h)
   %dead = icmp slt i64 %live, 0
   br i1 %dead, label %failed, label %look
@@ -998,21 +1371,128 @@ known:
   %stp = getelementptr i8, ptr %rec, i64 8
   %was = load i64, ptr %stp
   %done = icmp sge i64 %was, 0
-  br i1 %done, label %again, label %wait
+  br i1 %done, label %again, label %waitkind
 again:
   call void @nz.os_unpin(i64 %h)
   ret i64 %was
-wait:
+waitkind:
   %pid = load i64, ptr %rec
-  %out = call i64 @nz_os_reap(i64 %pid)
-  %bad = icmp slt i64 %out, 0
+  %rssp = getelementptr i8, ptr %rec, i64 48
+  %blocks = icmp eq i64 %mode, 0
+  br i1 %blocks, label %block, label %poll
+block:
+  %out = call i64 @nz_os_reap(i64 %pid, i32 1, ptr %rssp)
+  br label %ended
+poll:
+  %got = call i64 @nz_os_reap(i64 %pid, i32 0, ptr %rssp)
+  %eagain = call i64 @nz_net_eagain()
+  %notyet = sub i64 0, %eagain
+  %running = icmp eq i64 %got, %notyet
+  br i1 %running, label %pending, label %ended
+pending:
+  %once = icmp eq i64 %mode, 1
+  br i1 %once, label %wouldblock, label %clock
+wouldblock:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %notyet
+clock:
+  %now = call i64 @nz.os_mono_ms()
+  %passed = icmp sge i64 %now, %deadline
+  br i1 %passed, label %timedout, label %nap
+timedout:
+  call void @nz.os_unpin(i64 %h)
+  %et = call i64 @nz_net_etimedout()
+  %net = sub i64 0, %et
+  ret i64 %net
+nap:
+  %left = sub i64 %deadline, %now
+  %long = icmp sgt i64 %left, 10
+  %ms = select i1 %long, i64 10, i64 %left
+  call void @nz_os_nap(i64 %ms)
+  br label %poll
+ended:
+  %r = phi i64 [ %out, %block ], [ %got, %poll ]
+  %bad = icmp slt i64 %r, 0
   br i1 %bad, label %give, label %decode
 give:
   call void @nz.os_unpin(i64 %h)
-  ret i64 %out
+  ret i64 %r
 decode:
-  store i64 %out, ptr %stp
+  store i64 %r, ptr %stp
   call void @nz.os_unpin(i64 %h)
+  ret i64 %r
+}
+
+; R1d: a child's process id, kept from its start.
+define hidden i64 @nz.os_child_pid(i64 %h) {
+entry:
+  %live = call i64 @nz.os_status(i64 %h)
+  %dead = icmp slt i64 %live, 0
+  br i1 %dead, label %failed, label %look
+failed:
+  ret i64 %live
+look:
+  %rec = call ptr @nz.os_child(i64 %h)
+  %none = icmp eq ptr %rec, null
+  br i1 %none, label %invalid, label %known
+invalid:
+  ret i64 -22
+known:
+  %idp = getelementptr i8, ptr %rec, i64 40
+  %id = load i64, ptr %idp
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %id
+}
+
+; R1d: a waited child's peak resident memory in bytes; -EINVAL before it has ended.
+define hidden i64 @nz.os_child_rusage(i64 %h) {
+entry:
+  %live = call i64 @nz.os_status(i64 %h)
+  %dead = icmp slt i64 %live, 0
+  br i1 %dead, label %failed, label %look
+failed:
+  ret i64 %live
+look:
+  %rec = call ptr @nz.os_child(i64 %h)
+  %none = icmp eq ptr %rec, null
+  br i1 %none, label %invalid, label %known
+invalid:
+  ret i64 -22
+known:
+  %stp = getelementptr i8, ptr %rec, i64 8
+  %was = load i64, ptr %stp
+  %running = icmp slt i64 %was, 0
+  %rssp = getelementptr i8, ptr %rec, i64 48
+  %rss = load i64, ptr %rssp
+  call void @nz.os_unpin(i64 %h)
+  %out = select i1 %running, i64 -22, i64 %rss
+  ret i64 %out
+}
+
+; R1d: this process's id.
+define hidden i64 @nz.os_pid() {
+entry:
+  %p = call i64 @nz_os_pid()
+  ret i64 %p
+}
+
+; R1d: signal `sig` to every process of group `pgid`: 0, or -errno; -EINVAL, never sent, for a
+; group below 2 or a signal outside 0..=31.
+define hidden i64 @nz.os_kill_group(i64 %pgid, i64 %sig) {
+entry:
+  %group = icmp sgt i64 %pgid, 1
+  %small = icmp slt i64 %pgid, 2147483648
+  %sigok = icmp ult i64 %sig, 32
+  %g = and i1 %group, %small
+  %ok = and i1 %g, %sigok
+  br i1 %ok, label %send, label %invalid
+invalid:
+  ret i64 -22
+send:
+  %r = call i32 @nz_os_signal_group(i64 %pgid, i64 %sig)
+  %e = call i64 @nz.os_errno()
+  %bad = icmp slt i32 %r, 0
+  %out = select i1 %bad, i64 %e, i64 0
   ret i64 %out
 }
 

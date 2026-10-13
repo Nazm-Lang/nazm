@@ -148,6 +148,8 @@
 @std/file pub struct File
 @std/file pub enum FileKind
 @std/file pub struct Metadata
+@std/file pub enum EntryKind
+@std/file pub struct LinkMetadata
 @std/file pub fn file_open(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
 @std/file pub fn file_create(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
 @std/file pub fn file_append(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
@@ -173,6 +175,15 @@
 @std/file pub fn file_remove(io: IoCap, path: Str) -> Result[Int, IoError] ! { io }
 @std/file pub fn file_rename(io: IoCap, from: Str, to: Str) -> Result[Int, IoError] ! { io }
 @std/file pub fn file_replace_atomic(io: IoCap, path: Str, data: Bytes) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_stdout(io: IoCap) -> File ! { io }
+@std/file pub fn file_stderr(io: IoCap) -> File ! { io }
+@std/file pub fn file_symlink_metadata(io: IoCap, path: Str) -> Result[LinkMetadata, IoError] ! { io }
+@std/file pub fn file_set_permissions(io: IoCap, path: Str, mode: Int) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_canonical(io: IoCap, path: Str) -> Result[Str, IoError] ! { io }
+@std/file pub fn dir_create_temp(io: IoCap, parent: Str) -> Result[Str, IoError] ! { io }
+@std/file pub fn file_lock(f: File, exclusive: Bool) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_try_lock(f: File, exclusive: Bool) -> Result[Bool, IoError] ! { io }
+@std/file pub fn file_unlock(f: File) -> Result[Int, IoError] ! { io }
 @std/fmt pub fn fmt_int_zero(n: Int, width: Int) -> Str ! {}
 @std/fmt pub fn fmt_int_width(n: Int, width: Int) -> Str ! {}
 @std/fmt pub fn fmt_hex(n: Int) -> Str ! {}
@@ -184,6 +195,7 @@
 @std/fs pub fn fs_read_lines(io: IoCap, path: Str) -> Result[Strs, Str] ! { io }
 @std/fs pub fn fs_write(io: IoCap, path: Str, text: Str) -> Result[Int, Str] ! { io }
 @std/fs pub fn fs_write_lines(io: IoCap, path: Str, lines: Strs) -> Result[Int, Str] ! { io }
+@std/fs pub fn fs_temp_dir(io: IoCap) -> Result[Str, Str] ! { io }
 @std/hal pub trait Uart
 @std/hal pub trait Pin
 @std/hal pub trait Timer
@@ -378,6 +390,14 @@
 @std/process pub fn process_wait(c: Child) -> Result[Int, IoError] ! { io }
 @std/process pub fn process_kill(c: Child) -> Result[Int, IoError] ! { io }
 @std/process pub fn process_run(p: ProcessCap, sp: SpawnCap, program: Str, args: Strs, input: Bytes) -> Result[ProcessOutput, IoError] ! { io, spawn }
+@std/process pub fn process_id(io: IoCap) -> Int ! { io }
+@std/process pub fn process_spawn_in(p: ProcessCap, program: Str, args: Strs, dir: Str, env: Strs) -> Result[Child, IoError] ! { io }
+@std/process pub fn process_spawn_with(p: ProcessCap, program: Str, args: Strs, dir: Str, env: Strs, new_group: Bool, null_stdin: Bool) -> Result[Child, IoError] ! { io }
+@std/process pub fn process_child_id(c: Child) -> Int ! { io }
+@std/process pub fn process_try_wait(c: Child) -> Result[Option[Int], IoError] ! { io }
+@std/process pub fn process_wait_until(c: Child, deadline: Int) -> Result[Option[Int], IoError] ! { io }
+@std/process pub fn process_kill_group(p: ProcessCap, group: Int, signal: Int) -> Result[Int, IoError] ! { io }
+@std/process pub fn process_peak_memory(c: Child) -> Result[Int, IoError] ! { io }
 @std/random pub struct Rng
 @std/random pub fn random_new(seed: UInt64) -> Rng ! {}
 @std/random pub fn random_u64(r: Rng) -> UInt64 ! {}

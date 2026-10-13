@@ -2365,6 +2365,45 @@ implementation.
 
 ### 16. Standard library — VERIFIED as scoped (1.0, N84)
 
+**R1d (2026-10-14)** · *The platform, further: processes and the file system* (`spec.md`, *The
+platform, further*; `openspec/changes/r1-language-for-the-rewrite`, D4's built-ins, P1 and P2).
+Seventeen prelude built-ins over Gate 2's handle table and statuses. Standard output and errors as
+handles (`os_stdout`, `os_stderr`), written in order with `print`, a close leaving the stream open.
+A child in a directory with exactly a given environment, handed over ordered by name so every
+implementation gives the same one (`os_spawn_in`), leading a new process group or reading a null
+standard input (`os_spawn_with`); its id (`os_child_pid`) and this process's (`os_pid`); bounded
+waits (`os_try_wait` → `WouldBlock`, `os_wait_until` → `TimedOut`, the child left running); a signal
+to a group (`os_kill_group`, `ProcessCap`); a waited child's peak resident memory (`os_child_rusage`,
+`wait4`'s `ru_maxrss`). A path's own facts with a symbolic-link kind, device and inode (`os_lstat`),
+permissions (`os_chmod`), a canonical path (`os_realpath`), a new private directory whose path is a
+`Str` as clean as its parent, so a program may write under it (`os_mkdtemp`), and advisory whole-file
+locks held by the open file (`os_lock`, `os_try_lock`, `os_unlock`: `flock`, `LockFileEx`).
+`@std/file` (`file_stdout`, `file_stderr`, `EntryKind`, `LinkMetadata`, `file_symlink_metadata`,
+`file_set_permissions`, `file_canonical`, `dir_create_temp`, `file_lock`, `file_try_lock`,
+`file_unlock`), `@std/process` (`process_id`, `process_spawn_in`, `process_spawn_with`,
+`process_child_id`, `process_try_wait`, `process_wait_until`, `process_kill_group`,
+`process_peak_memory`) and `@std/fs` (`fs_temp_dir`): API-1.0 gains 20 lines. `file_walk` lists a
+symbolic link and never follows it, as D4 approved. EXPERIMENTAL until R1 closes. Evidence:
+`crates/nazm-cli/tests/platform_files.rs` and `process_control.rs` — each program in a fresh
+directory under the interpreter, LLVM `-O0`/`-O2` and Cranelift with the same memory report and
+nothing live: raw bytes among `print`'s and a closed stream handle; a file, a directory, a link, a
+dangling link and a hard link by `os_lstat` (the same file by device and inode), `chmod` through a
+link, a canonical path, two temporary directories written under and removed; locks held by the open
+file, converted, tried, let go by a close, refused on a directory and standard input; a child's
+environment exactly given and ordered, a relative program beside its directory, seven refusals
+before anything starts, a null standard input; bounded waits on a child that ends and on one that
+does not, a group of two ended by `SIGTERM` and checked gone (by the program and again by the test),
+id, peak memory (positive natively), and the library over all of it; the authority (`N0369`) and
+sink (`N0372`) refusals; a program's own `os_lstat` kept; a WASI build of the file-system ones and
+the refusal by name of a process one; the Windows units built by both backends. `file_walk.rs`:
+links listed, not followed. **Unexecuted**: Windows (written against Win32 — `CreateProcessW` with an
+environment block and directory, `GetFileInformationByHandle`, `GetFinalPathNameByHandleW`,
+`LockFileEx`, `K32GetProcessMemoryInfo` — compiled, not run under Wine), Linux and Android (compiled;
+the contained run has not executed them), WASI (built, not run under Node). **Scope**: the interpreter
+cannot ask a child's peak memory without C and answers `ENOSYS`; it signals a group through the
+system's `kill`; no tree removal (listed names are `file`-origin); no signal handling
+(`limitations.md`).
+
 **Gate 2 (2026-10-09)** · *Reference applications* (`general-purpose.md` §24). Five programs in
 `examples/apps/` — `nwc`, `jsonpipe`, `nbody`, `kvstore`, `kvd` — use the standard library for real
 work: files and standard input, JSON and maps, floats, a synced log with atomic compaction, and a

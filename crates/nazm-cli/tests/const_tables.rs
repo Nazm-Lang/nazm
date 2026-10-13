@@ -260,7 +260,7 @@ fn an_exported_constant_is_in_the_published_interface() {
     );
     assert_eq!(r.code, Some(0), "{r:?}");
     let v: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
-    assert_eq!(v["schema"], "nazm.interface/12");
+    assert_eq!(v["schema"], "nazm.interface/13");
     let names: Vec<&str> = v["consts"]
         .as_array()
         .unwrap()

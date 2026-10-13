@@ -3,9 +3,9 @@
 //! A tree with nested and empty directories, names whose byte order differs from a depth-first
 //! listing's (`a.txt` sorts before `a/x`) and a capital letter,
 //! walked under the interpreter and LLVM: every path, sorted by bytes, never the root.
-//! On Unix, what symbolic links do, as the spec says: a link is walked as what it names, a dangling
-//! one is left out, and one that reaches its own ancestor ends in an `Err`. A missing directory and
-//! a file are each an `Err` of their kind.
+//! On Unix, what symbolic links do, as the spec says since R1d (`os_lstat`): a link is listed and
+//! never followed — not one to a directory, not a dangling one, not one that reaches its own
+//! ancestor. A missing directory and a file are each an `Err` of their kind.
 
 #![allow(
     clippy::unwrap_used,
@@ -124,7 +124,7 @@ fn a_walk_lists_every_file_and_directory_sorted() {
 
 #[cfg(unix)]
 #[test]
-fn a_symbolic_link_is_walked_as_what_it_names() {
+fn a_symbolic_link_is_listed_and_never_followed() {
     use std::os::unix::fs::symlink;
     let d = tempfile::tempdir().unwrap();
     make_tree(d.path());
@@ -147,11 +147,12 @@ fn a_symbolic_link_is_walked_as_what_it_names() {
   tree/b/c
   tree/b/c/deep
   tree/b/link-dir
-  tree/b/link-dir/x
   tree/b/link-file
   tree/b/z
+  tree/dangling
   tree/empty
-loop: Other
+loop: 1
+  loop/up
 0
 ";
     for (label, r) in walk_everywhere(d.path(), &program) {

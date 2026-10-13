@@ -5,8 +5,8 @@
 //!
 //! A handle is a word, `generation << 32 | descriptor`. The table, indexed by descriptor, holds
 //! each descriptor's current generation, how many operations are using it, its state — a file
-//! (1), a directory (2), standard input (3), or nothing (0), with 256 added once a close is
-//! waiting — and, for a directory, its `DIR *`. Every operation **pins** its handle first: the
+//! (1), a directory (2), standard input (3), standard output or errors (10, R1d), or nothing (0),
+//! with 256 added once a close is waiting — and, for a directory, its `DIR *`. Every operation **pins** its handle first: the
 //! generation must be the slot's and the state live, and the use count goes up; it unpins after.
 //! A close of a pinned handle marks it closing and the last unpin closes the descriptor, so no
 //! operation ever runs on a descriptor the system has since given to another open. A failed open
@@ -29,6 +29,8 @@ pub(crate) const FILES_RUNTIME: &str = r#"
 @nz.os_in_at = hidden global i64 0
 @nz.os_in_end = hidden global i64 0
 @nz.os_in_lock = hidden global i32 0
+@nz.os_stdout_h = hidden global i64 0
+@nz.os_stderr_h = hidden global i64 0
 
 declare i32 @nz_os_open(ptr, i64)
 declare i32 @nz_os_mkdir(ptr)
@@ -185,9 +187,13 @@ pin:
   ret i64 %kind
 }
 
-; Close what `fd` or `obj` holds: 0, or -errno.
+; Close what `fd` or `obj` holds: 0, or -errno. Standard output and errors (R1d) stay open: the
+; handle is closed, the stream is not, and `print` keeps writing.
 define hidden i64 @nz.os_shut(i64 %fd, i64 %kind, ptr %obj) {
 entry:
+  %stream = icmp eq i64 %kind, 10
+  br i1 %stream, label %ok, label %which
+which:
   %dir = icmp eq i64 %kind, 2
   br i1 %dir, label %closedir, label %close
 closedir:
@@ -385,6 +391,31 @@ done:
   ret i64 %h
 }
 
+; Standard output (`which` 1) or errors (2), R1d: one handle each, made the first time.
+define hidden i64 @nz.os_std_stream(i64 %which) {
+entry:
+  %errors = icmp eq i64 %which, 2
+  %slot = select i1 %errors, ptr @nz.os_stderr_h, ptr @nz.os_stdout_h
+  %fd = select i1 %errors, i64 2, i64 1
+  call void @nz.os_acquire()
+  %had = load i64, ptr %slot
+  %known = icmp ne i64 %had, 0
+  br i1 %known, label %old, label %new
+old:
+  call void @nz.os_release()
+  ret i64 %had
+new:
+  %h = call i64 @nz.os_register(i64 %fd, i64 10, ptr null)
+  %ok = icmp sgt i64 %h, 0
+  br i1 %ok, label %keep, label %done
+keep:
+  store i64 %h, ptr %slot
+  br label %done
+done:
+  call void @nz.os_release()
+  ret i64 %h
+}
+
 define hidden i64 @nz.os_status(i64 %h) {
 entry:
   %k = call i64 @nz.os_pin(i64 %h)
@@ -414,10 +445,14 @@ pinned:
     i64 7, label %socket
     i64 8, label %einval
     i64 9, label %einval
+    i64 10, label %writeonly
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
   ret i64 -21
+writeonly:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 -9
 einval:
   call void @nz.os_unpin(i64 %h)
   ret i64 -22
@@ -661,6 +696,7 @@ pinned:
     i64 7, label %isstdin
     i64 8, label %isstdin
     i64 9, label %isstdin
+    i64 10, label %isstdin
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -706,6 +742,7 @@ pinned:
     i64 7, label %isstdin
     i64 8, label %isstdin
     i64 9, label %isstdin
+    i64 10, label %isstdin
   ]
 isdir:
   call void @nz.os_unpin(i64 %h)
@@ -987,6 +1024,239 @@ none:
 }
 
 @.nz.empty = private unnamed_addr constant [1 x i8] c"\00"
+"#;
+
+/// The file system, further (R1d, `docs/spec.md`, *The platform, further*): a path's own facts, its
+/// permissions, its canonical form, a new private directory, and advisory whole-file locks, over the
+/// per-target unit's `nz_os_lstat`, `nz_os_chmod`, `nz_os_realpath` and `nz_os_flock` — which WASI's
+/// unit answers with `path_filestat_get` and, for the three it has not got, ENOSYS, as it answers
+/// listing a directory. A temporary directory is private where the system keeps permissions: one
+/// whose `chmod` is ENOSYS (WASI) keeps the directory as made.
+pub(crate) const FS_RUNTIME: &str = r#"
+declare i32 @nz_os_lstat(ptr, ptr)
+declare i32 @nz_os_chmod(ptr, i64)
+declare i64 @nz_os_realpath(ptr, ptr, i64)
+declare i32 @nz_os_flock(i32, i32)
+
+define hidden i64 @nz.os_lstat(ptr %p, i64 %n, ptr %out) {
+entry:
+  %path = call ptr @nz.cstr(ptr %p, i64 %n)
+  %nopath = icmp eq ptr %path, null
+  br i1 %nopath, label %oom, label %stat
+oom:
+  ret i64 -12
+stat:
+  %r = call i32 @nz_os_lstat(ptr %path, ptr %out)
+  %e = call i64 @nz.os_errno()
+  call void @free(ptr %path)
+  %failed = icmp slt i32 %r, 0
+  %res = select i1 %failed, i64 %e, i64 0
+  ret i64 %res
+}
+
+; Permission bits `mode`, `0..=0o7777`; 0 or -errno.
+define hidden i64 @nz.os_chmod(ptr %p, i64 %n, i64 %mode) {
+entry:
+  %bits = icmp ult i64 %mode, 4096
+  br i1 %bits, label %copy, label %invalid
+invalid:
+  ret i64 -22
+copy:
+  %path = call ptr @nz.cstr(ptr %p, i64 %n)
+  %nopath = icmp eq ptr %path, null
+  br i1 %nopath, label %oom, label %go
+oom:
+  ret i64 -12
+go:
+  %r = call i32 @nz_os_chmod(ptr %path, i64 %mode)
+  %e = call i64 @nz.os_errno()
+  call void @free(ptr %path)
+  %failed = icmp slt i32 %r, 0
+  %res = select i1 %failed, i64 %e, i64 0
+  ret i64 %res
+}
+
+; The canonical path into the caller's `cap` bytes: its length, -EINVAL when it does not fit, or
+; -errno.
+define hidden i64 @nz.os_realpath(ptr %p, i64 %n, ptr %out, i64 %cap) {
+entry:
+  %path = call ptr @nz.cstr(ptr %p, i64 %n)
+  %nopath = icmp eq ptr %path, null
+  br i1 %nopath, label %oom, label %go
+oom:
+  ret i64 -12
+go:
+  %r = call i64 @nz_os_realpath(ptr %path, ptr %out, i64 %cap)
+  %e = call i64 @nz.os_errno()
+  call void @free(ptr %path)
+  %failed = icmp slt i64 %r, 0
+  br i1 %failed, label %fail, label %got
+fail:
+  ret i64 %e
+got:
+  %long = icmp sgt i64 %r, %cap
+  %res = select i1 %long, i64 -22, i64 %r
+  ret i64 %res
+}
+
+@.nz.tmpname = private unnamed_addr constant [5 x i8] c"nazm-"
+
+; A new directory in `parent` named `nazm-` and twelve random lowercase letters and digits, made
+; by this call, its permissions 0o700; its path into the caller's `cap` bytes and the path's
+; length. -EINVAL for an empty parent or a path that would not fit, before anything is made;
+; -EEXIST after 64 names were all taken; or -errno.
+define hidden i64 @nz.os_mkdtemp(ptr %p, i64 %n, ptr %out, i64 %cap) {
+entry:
+  %rand = alloca [16 x i8], align 8
+  %empty = icmp eq i64 %n, 0
+  br i1 %empty, label %invalid, label %measure
+invalid:
+  ret i64 -22
+measure:
+  %lastp = getelementptr i8, ptr %p, i64 %n
+  %lastq = getelementptr i8, ptr %lastp, i64 -1
+  %last = load i8, ptr %lastq
+  %ends = icmp eq i8 %last, 47
+  %sep = select i1 %ends, i64 0, i64 1
+  %head = add i64 %n, %sep
+  %total = add i64 %head, 17
+  %long = icmp sgt i64 %total, %cap
+  br i1 %long, label %invalid, label %alloc
+alloc:
+  %room = add i64 %total, 1
+  %buf = call ptr @malloc(i64 %room)
+  %none = icmp eq ptr %buf, null
+  br i1 %none, label %oom, label %fill
+oom:
+  ret i64 -12
+fill:
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %p, i64 %n, i1 false)
+  %slashp = getelementptr i8, ptr %buf, i64 %n
+  store i8 47, ptr %slashp
+  %prefixp = getelementptr i8, ptr %buf, i64 %head
+  call void @llvm.memcpy.p0.p0.i64(ptr %prefixp, ptr @.nz.tmpname, i64 5, i1 false)
+  %endp = getelementptr i8, ptr %buf, i64 %total
+  store i8 0, ptr %endp
+  %namep = getelementptr i8, ptr %prefixp, i64 5
+  br label %attempt
+attempt:
+  %tries = phi i64 [ 0, %fill ], [ %tries1, %taken ]
+  %more = icmp slt i64 %tries, 64
+  br i1 %more, label %draw, label %exhausted
+exhausted:
+  call void @free(ptr %buf)
+  ret i64 -17
+draw:
+  %got = call i32 @nz_os_entropy(ptr %rand, i64 12)
+  %noent = icmp ne i32 %got, 0
+  br i1 %noent, label %fail, label %letters
+letters:
+  %i = phi i64 [ 0, %draw ], [ %i1, %letters ]
+  %rp = getelementptr i8, ptr %rand, i64 %i
+  %rb = load i8, ptr %rp
+  %rw = zext i8 %rb to i64
+  %c = urem i64 %rw, 36
+  %digit = icmp ult i64 %c, 10
+  %dch = add i64 %c, 48
+  %lch = add i64 %c, 87
+  %ch = select i1 %digit, i64 %dch, i64 %lch
+  %ch8 = trunc i64 %ch to i8
+  %np = getelementptr i8, ptr %namep, i64 %i
+  store i8 %ch8, ptr %np
+  %i1 = add i64 %i, 1
+  %named = icmp eq i64 %i1, 12
+  br i1 %named, label %make, label %letters
+make:
+  %m = call i32 @nz_os_mkdir(ptr %buf)
+  %made = icmp eq i32 %m, 0
+  br i1 %made, label %private, label %why
+why:
+  %e = call i64 @nz.os_errno()
+  %exists = icmp eq i64 %e, -17
+  br i1 %exists, label %taken, label %give
+taken:
+  %tries1 = add i64 %tries, 1
+  br label %attempt
+give:
+  call void @free(ptr %buf)
+  ret i64 %e
+private:
+  %pm = call i32 @nz_os_chmod(ptr %buf, i64 448)
+  %pe = call i64 @nz.os_errno()
+  %refused = icmp ne i32 %pm, 0
+  %kept = icmp ne i64 %pe, -38
+  %open = and i1 %refused, %kept
+  br i1 %open, label %undo, label %done
+undo:
+  %u = call i32 @nz_os_rmdir(ptr %buf)
+  call void @free(ptr %buf)
+  ret i64 %pe
+done:
+  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %buf, i64 %total, i1 false)
+  call void @free(ptr %buf)
+  ret i64 %total
+fail:
+  %fe = call i64 @nz.os_errno()
+  call void @free(ptr %buf)
+  ret i64 %fe
+}
+
+; An advisory whole-file lock on file `h`, exclusive or shared, waited for when `wait` is 1, or
+; tried once; 0, or a status: -EISDIR for a directory, -EINVAL for any handle but a file's, and
+; the system's -EWOULDBLOCK while another holds it.
+define hidden i64 @nz.os_file_lock(i64 %h, i1 %exclusive, i64 %wait) {
+entry:
+  %kind = select i1 %exclusive, i32 2, i32 1
+  %waits = icmp ne i64 %wait, 0
+  %nb = select i1 %waits, i32 0, i32 4
+  %op = or i32 %kind, %nb
+  %r = call i64 @nz.os_flock_handle(i64 %h, i32 %op, i1 %waits)
+  ret i64 %r
+}
+
+define hidden i64 @nz.os_file_unlock(i64 %h) {
+entry:
+  %r = call i64 @nz.os_flock_handle(i64 %h, i32 8, i1 false)
+  ret i64 %r
+}
+
+; `flock` operation `op` on file `h`, pinned while it runs; a wait the system interrupts is
+; resumed when `resume` is set.
+define hidden i64 @nz.os_flock_handle(i64 %h, i32 %op, i1 %resume) {
+entry:
+  %k = call i64 @nz.os_pin(i64 %h)
+  %bad = icmp slt i64 %k, 0
+  br i1 %bad, label %failed, label %pinned
+failed:
+  ret i64 %k
+pinned:
+  switch i64 %k, label %einval [
+    i64 1, label %lock
+    i64 2, label %isdir
+  ]
+isdir:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 -21
+einval:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 -22
+lock:
+  %fd = trunc i64 %h to i32
+  %r = call i32 @nz_os_flock(i32 %fd, i32 %op)
+  %ok = icmp eq i32 %r, 0
+  br i1 %ok, label %held, label %refused
+held:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 0
+refused:
+  %e = call i64 @nz.os_errno()
+  %intr = icmp eq i64 %e, -4
+  %again = and i1 %intr, %resume
+  br i1 %again, label %lock, label %give
+give:
+  call void @nz.os_unpin(i64 %h)
+  ret i64 %e
+}
 "#;
 
 /// Where a program reaches files and not the network, the four entries the files part calls for a

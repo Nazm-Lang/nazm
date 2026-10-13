@@ -322,9 +322,13 @@ found only by reading all of it.
   pool until the system answers (only the network will not, §10); listing one directory handle
   from two tasks at once is serialised by the handle table's lock. The native side is verified on
   macOS (aarch64) on the host and on Linux in the contained run; x86-64 macOS's `$INODE64` symbols
-  are written but unverified. No file locking, memory mapping, symbolic-link creation,
-  permission changes or file times other than the modification time; `dir_list` reads a whole
-  directory into memory.
+  are written but unverified. No memory mapping, symbolic-link creation or file times other than
+  the modification time; `dir_list` reads a whole directory into memory. *Narrowed in R1d:* a
+  path's own facts (`os_lstat`), permissions, canonical paths, temporary directories and advisory
+  whole-file locks exist (`spec.md`, *The platform, further*); a lock waited for holds the task's
+  worker; nothing removes a tree, since the names a directory lists are `file`-origin (`N0372`);
+  the Windows forms are compiled and not executed, and on WASI permissions, canonical paths and
+  locks answer `ENOSYS`.
 - Networking (Gate 2): TCP and UDP over literal IPv4 and bracketed IPv6 addresses; no TLS, no
   Unix-domain sockets, no multicast or broadcast, no socket options beyond the deadline and
   address reuse, and no polling of many sockets from one task (a task per socket is the shape).
@@ -335,8 +339,14 @@ found only by reading all of it.
   the contained run is x86-64.
 - Process and environment (Gate 2): no signal handling — a program cannot watch for `SIGINT` or
   `SIGTERM` — and a native program that has started a child ignores `SIGPIPE` from then on.
-  Waiting for a child's exit holds the task's worker; a child cannot be given another directory,
-  environment or standard stream than the parent's pipes. The environment is read, never set.
+  Waiting for a child's exit holds the task's worker. The environment is read, never set.
+  *Narrowed in R1d:* a child may be given a directory, an environment (ordered by name), a new
+  process group and a null standard input, waited for with a bound, and signalled with its group
+  (`spec.md`, *The platform, further*); a bounded wait looks again every 10 ms at most rather than
+  being woken. The interpreter cannot ask a child's peak memory without C and answers `ENOSYS`, and
+  signals a group through the system's `kill`, so a refusal there is `EPERM` when `kill` says so and
+  `ESRCH` otherwise. On Android (API level 30) a child cannot be given a directory (`ENOSYS`); on
+  Windows a group is its leader alone. A child's standard output and errors are still pipes.
 - Logging (Gate 2): `@std/log` writes records to standard error only; there is no `task_id()` or
   `runtime_stats()` built-in, and no trace context carried between tasks.
 - The runtime is its own crate (`nazm-runtime`, N53) but still LLVM text both backends link,

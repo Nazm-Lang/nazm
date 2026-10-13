@@ -106,3 +106,71 @@ pub fn process_run(p: ProcessCap, sp: SpawnCap, program: Str, args: Strs, input:
     let stderr = if vec_len(got) > 0 { vec_get(got, 0) } else { "" };
     Result[ProcessOutput, IoError].Ok(value: ProcessOutput(status: status, stdout: stdout, stderr: stderr))
 }
+
+// R1d (`docs/spec.md`, *The platform, further*): a child in a directory with an environment of its
+// own, a new process group and a null standard input, ids, bounded waits, a signal to a group, and a
+// child's peak memory.
+
+/// This process's id.
+pub fn process_id(io: IoCap) -> Int ! { io } {
+    os_pid()
+}
+
+fn started(h: OsHandle, program: Str) -> Result[Child, IoError] ! {} {
+    let s = os_status(h);
+    if s < 0 { Result[Child, IoError].Err(error: io_context(io_error_from(s), program)) } else { Result[Child, IoError].Ok(value: Child(handle: h)) }
+}
+
+/// Start `program` with `args` in the directory `dir` (`""`: this process's), its environment
+/// exactly `env` — `NAME=value` entries, no name twice — handed over ordered by name. The program
+/// is found on this process's `PATH`, not `env`'s; one named with a `/` is taken relative to `dir`.
+pub fn process_spawn_in(p: ProcessCap, program: Str, args: Strs, dir: Str, env: Strs) -> Result[Child, IoError] ! { io } {
+    started(os_spawn_in(program, args, dir, env), program)
+}
+
+/// `process_spawn_in`, the child leading a new process group (whose id is its process id) when
+/// `new_group` is set, and reading an empty standard input when `null_stdin` is — its input pipe
+/// then answers `Closed`.
+pub fn process_spawn_with(p: ProcessCap, program: Str, args: Strs, dir: Str, env: Strs, new_group: Bool, null_stdin: Bool) -> Result[Child, IoError] ! { io } {
+    let group = if new_group { 1 } else { 0 };
+    let input = if null_stdin { 2 } else { 0 };
+    started(os_spawn_with(program, args, dir, env, group + input), program)
+}
+
+/// `c`'s process id, the same before and after it is waited for.
+pub fn process_child_id(c: Child) -> Int ! { io } {
+    os_child_pid(c.handle)
+}
+
+fn ended(s: Int, running: IoErrorKind) -> Result[Option[Int], IoError] ! {} {
+    if s >= 0 {
+        return Result[Option[Int], IoError].Ok(value: Option[Int].Some(value: s));
+    }
+    if io_kind_of(s) == running {
+        return Result[Option[Int], IoError].Ok(value: Option[Int].None());
+    }
+    Result[Option[Int], IoError].Err(error: io_error_from(s))
+}
+
+/// `c`'s status if it has ended, `None` at once if it has not.
+pub fn process_try_wait(c: Child) -> Result[Option[Int], IoError] ! { io } {
+    ended(os_try_wait(c.handle), IoErrorKind.WouldBlock())
+}
+
+/// `c`'s status if it ends before `time_now_ms()` reads `deadline` — a reading of `@std/time`'s
+/// `time_deadline` — and `None` then, the child left running.
+pub fn process_wait_until(c: Child, deadline: Int) -> Result[Option[Int], IoError] ! { io } {
+    ended(os_wait_until(c.handle, deadline), IoErrorKind.TimedOut())
+}
+
+/// Signal `signal` (the platform's number; 9 ends, 15 asks to end, 0 only asks whether any is
+/// there) to every process of group `group`.
+pub fn process_kill_group(p: ProcessCap, group: Int, signal: Int) -> Result[Int, IoError] ! { io } {
+    io_result(os_kill_group(group, signal))
+}
+
+/// The peak resident memory, in bytes, of `c` once it has been waited for. The interpreter cannot
+/// ask the system without C, and answers an error of kind `Other` there.
+pub fn process_peak_memory(c: Child) -> Result[Int, IoError] ! { io } {
+    io_result(os_child_rusage(c.handle))
+}

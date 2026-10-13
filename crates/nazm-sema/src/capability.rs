@@ -279,6 +279,27 @@ impl CapabilityKind {
             // started is its handle's.
             Intrinsic::OsSpawn => CapabilitySet::of(Self::Process),
             Intrinsic::OsChildPipe | Intrinsic::OsWait | Intrinsic::OsKill => CapabilitySet::EMPTY,
+            // The platform, further (R1d): the standard streams' handles, this process's id and
+            // naming a path are the file system's authority, as `os_stdin` and `os_stat` are;
+            // starting a child anywhere, and signalling a group no handle names, are every
+            // authority those processes have; a child, a file already open, is its handle's.
+            Intrinsic::OsStdout
+            | Intrinsic::OsStderr
+            | Intrinsic::OsPid
+            | Intrinsic::OsLstat
+            | Intrinsic::OsChmod
+            | Intrinsic::OsRealpath
+            | Intrinsic::OsMkdtemp => CapabilitySet::of(Self::Io),
+            Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith | Intrinsic::OsKillGroup => {
+                CapabilitySet::of(Self::Process)
+            }
+            Intrinsic::OsChildPid
+            | Intrinsic::OsTryWait
+            | Intrinsic::OsWaitUntil
+            | Intrinsic::OsChildRusage
+            | Intrinsic::OsLock
+            | Intrinsic::OsTryLock
+            | Intrinsic::OsUnlock => CapabilitySet::EMPTY,
             // Entropy is authority of its own (Gate 2, §21).
             Intrinsic::OsRandomBytes => CapabilitySet::of(Self::Random),
             // The standard streams need only their attenuation (N79), which `IoCap` implies.
@@ -551,6 +572,13 @@ mod tests {
                     | Intrinsic::OsChildPipe
                     | Intrinsic::OsWait
                     | Intrinsic::OsKill
+                    | Intrinsic::OsChildPid
+                    | Intrinsic::OsTryWait
+                    | Intrinsic::OsWaitUntil
+                    | Intrinsic::OsChildRusage
+                    | Intrinsic::OsLock
+                    | Intrinsic::OsTryLock
+                    | Intrinsic::OsUnlock
             ) {
                 assert_eq!(from_effect, CapabilitySet::of(CapabilityKind::Io));
                 assert!(CapabilityKind::of_intrinsic(i).is_empty(), "{}", i.name());
@@ -573,8 +601,15 @@ mod tests {
                 );
                 continue;
             }
-            // Running a program is `io` performed and a `ProcessCap` held (Gate 2).
-            if i == Intrinsic::OsSpawn {
+            // Running a program is `io` performed and a `ProcessCap` held (Gate 2), and so are
+            // running one elsewhere and signalling a group (R1d).
+            if matches!(
+                i,
+                Intrinsic::OsSpawn
+                    | Intrinsic::OsSpawnIn
+                    | Intrinsic::OsSpawnWith
+                    | Intrinsic::OsKillGroup
+            ) {
                 assert_eq!(from_effect, CapabilitySet::of(CapabilityKind::Io));
                 assert_eq!(
                     CapabilityKind::of_intrinsic(i),

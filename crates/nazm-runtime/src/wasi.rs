@@ -77,6 +77,7 @@ pub fn emit_runtime(needs: &Needs) -> String {
     }
     if needs.files {
         out.push_str(crate::files::FILES_RUNTIME);
+        out.push_str(crate::files::FS_RUNTIME);
         out.push_str(crate::files::NET_STUBS);
         out.push_str(OS);
     }
@@ -882,6 +883,69 @@ ok:
   %permp = getelementptr i8, ptr %out, i32 24
   store i64 420, ptr %permp
   ret i32 0
+}
+
+; R1d: a path's own facts, a final link not followed (lookup flags 0): `os_stat`'s four — WASI's
+; filetype 4 a file, 3 a directory, 7 a symbolic link — and its device and inode.
+define hidden i32 @nz_os_lstat(ptr %path, ptr %out) {
+entry:
+  %n = call i64 @strlen(ptr %path)
+  %len = trunc i64 %n to i32
+  %st = alloca [64 x i8], align 8
+  %e = call i32 @wasi.path_filestat_get(i32 3, i32 0, ptr %path, i32 %len, ptr %st)
+  %bad = icmp ne i32 %e, 0
+  br i1 %bad, label %fail, label %ok
+fail:
+  %r = call i32 @nz.wasi_fail(i32 %e)
+  ret i32 %r
+ok:
+  %sizep = getelementptr i8, ptr %st, i32 32
+  %size = load i64, ptr %sizep
+  store i64 %size, ptr %out
+  %tp = getelementptr i8, ptr %st, i32 16
+  %t = load i8, ptr %tp
+  %isfile = icmp eq i8 %t, 4
+  %isdir = icmp eq i8 %t, 3
+  %islink = icmp eq i8 %t, 7
+  %k2 = select i1 %islink, i64 3, i64 2
+  %k1 = select i1 %isdir, i64 1, i64 %k2
+  %kind = select i1 %isfile, i64 0, i64 %k1
+  %kindp = getelementptr i8, ptr %out, i32 8
+  store i64 %kind, ptr %kindp
+  %mp = getelementptr i8, ptr %st, i32 48
+  %mtime = load i64, ptr %mp
+  %mtimep = getelementptr i8, ptr %out, i32 16
+  store i64 %mtime, ptr %mtimep
+  %permp = getelementptr i8, ptr %out, i32 24
+  store i64 420, ptr %permp
+  %dev = load i64, ptr %st
+  %devp = getelementptr i8, ptr %out, i32 32
+  store i64 %dev, ptr %devp
+  %inop = getelementptr i8, ptr %st, i32 8
+  %ino = load i64, ptr %inop
+  %inoout = getelementptr i8, ptr %out, i32 40
+  store i64 %ino, ptr %inoout
+  ret i32 0
+}
+
+; R1d: WASI preview 1 keeps no permissions, resolves no canonical path and takes no lock: each is
+; ENOSYS, as listing a directory is.
+define hidden i32 @nz_os_chmod(ptr %path, i64 %mode) {
+entry:
+  store i32 38, ptr @nz.wasi_errno
+  ret i32 -1
+}
+
+define hidden i64 @nz_os_realpath(ptr %path, ptr %out, i64 %cap) {
+entry:
+  store i32 38, ptr @nz.wasi_errno
+  ret i64 -1
+}
+
+define hidden i32 @nz_os_flock(i32 %fd, i32 %op) {
+entry:
+  store i32 38, ptr @nz.wasi_errno
+  ret i32 -1
 }
 
 ; Directories are not listed on WASI here: opening one to list is ENOSYS.

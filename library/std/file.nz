@@ -30,6 +30,25 @@ pub struct Metadata {
     permissions: Int,
 }
 
+/// What a path itself is, a symbolic link not followed (R1d).
+pub enum EntryKind {
+    Regular,
+    Directory,
+    Symlink,
+    Other,
+}
+
+/// What `file_symlink_metadata` reports (R1d): `Metadata`'s four, about the path itself — a link's
+/// size is its target's length — and the device and inode, which together name one file.
+pub struct LinkMetadata {
+    size: Int,
+    kind: EntryKind,
+    modified_ns: Int,
+    permissions: Int,
+    device: Int,
+    inode: Int,
+}
+
 fn opened(h: OsHandle) -> Result[File, IoError] ! {} {
     let s = os_status(h);
     if s < 0 { Result[File, IoError].Err(error: io_error_from(s)) } else { Result[File, IoError].Ok(value: File(handle: h)) }
@@ -194,13 +213,11 @@ pub fn dir_list(io: IoCap, path: Str) -> Result[Strs, IoError] ! { io } {
     Result[Strs, IoError].Ok(value: sorted(names))
 }
 
-/// Every regular file and directory under the directory `dir`, at any depth, as `dir` joined to
-/// its path below it with `/`, sorted by their bytes; never `dir` itself. An entry that is neither
-/// (a socket, a device) is left out, as is one gone between being listed and being looked at.
-/// There is no way yet to ask whether a name is a symbolic link (`file_metadata` follows links),
-/// so a link is walked as what it names: a link to a file is listed as a file, and a link to a
-/// directory is listed and walked into; a dangling link is left out. A link that reaches its own
-/// ancestor is walked until the system refuses the path, and that failure is the `Err`.
+/// Every regular file, directory and symbolic link under the directory `dir`, at any depth, as
+/// `dir` joined to its path below it with `/`, sorted by their bytes; never `dir` itself. An entry
+/// that is none of them (a socket, a device) is left out, as is one gone between being listed and
+/// being looked at. A symbolic link is listed and never followed (R1d, `os_lstat`): a link to a
+/// directory is not walked into, and a dangling or looping link is listed like any other.
 pub fn file_walk(io: IoCap, dir: Str) -> Result[Strs, IoError] ! { io } {
     let found = strs_new();
     let base = if str_len(dir) > 0 && str_byte(dir, str_len(dir) - 1) == 47 { str_slice(dir, 0, str_len(dir) - 1) } else { dir };
@@ -210,17 +227,17 @@ pub fn file_walk(io: IoCap, dir: Str) -> Result[Strs, IoError] ! { io } {
 
 fn walk_into(io: IoCap, dir: Str, found: Strs) -> Result[Int, IoError] ! { io } {
     let names = dir_list(io, dir)?;
-    let out = bytes_new(32);
+    let out = bytes_new(48);
     for name in names {
         let path = f"{dir}/{name}";
-        let s = os_stat(path, out);
+        let s = os_lstat(path, out);
         if s < 0 {
             if io_kind_of(s) != IoErrorKind.NotFound() {
                 return Result[Int, IoError].Err(error: io_context(io_error_from(s), path));
             }
         } else {
             let kind = bytes_read_le[Int](out, 8);
-            if kind == 0 {
+            if kind == 0 || kind == 3 {
                 strs_push(found, path);
             }
             if kind == 1 {
@@ -393,4 +410,98 @@ pub fn file_replace_atomic(io: IoCap, path: Str, data: Bytes) -> Result[Int, IoE
             Result[Int, IoError].Ok(value: bytes_len(data))
         },
     }
+}
+
+// R1d (`docs/spec.md`, *The platform, further*): standard output and errors as files, what a path
+// itself is, permissions, canonical paths, temporary directories and locks.
+
+/// Standard output as a `File`: raw bytes, in order with `print`. Closing it closes the handle and
+/// not the stream.
+pub fn file_stdout(io: IoCap) -> File ! { io } {
+    File(handle: os_stdout())
+}
+
+/// Standard errors as a `File`, likewise.
+pub fn file_stderr(io: IoCap) -> File ! { io } {
+    File(handle: os_stderr())
+}
+
+fn entry_kind(k: Int) -> EntryKind ! {} {
+    if k == 0 { return EntryKind.Regular(); }
+    if k == 1 { return EntryKind.Directory(); }
+    if k == 3 { return EntryKind.Symlink(); }
+    EntryKind.Other()
+}
+
+/// What `path` itself is: a symbolic link is reported as one, never followed.
+pub fn file_symlink_metadata(io: IoCap, path: Str) -> Result[LinkMetadata, IoError] ! { io } {
+    let out = bytes_new(48);
+    let s = os_lstat(path, out);
+    if s < 0 {
+        return Result[LinkMetadata, IoError].Err(error: io_context(io_error_from(s), path));
+    }
+    Result[LinkMetadata, IoError].Ok(value: LinkMetadata(size: bytes_read_le[Int](out, 0), kind: entry_kind(bytes_read_le[Int](out, 8)), modified_ns: bytes_read_le[Int](out, 16), permissions: bytes_read_le[Int](out, 24), device: bytes_read_le[Int](out, 32), inode: bytes_read_le[Int](out, 40)))
+}
+
+/// Make `path`'s permission bits `mode` (`0` to `0o7777`), following a symbolic link.
+pub fn file_set_permissions(io: IoCap, path: Str, mode: Int) -> Result[Int, IoError] ! { io } {
+    let s = os_chmod(path, mode);
+    if s < 0 {
+        return Result[Int, IoError].Err(error: io_context(io_error_from(s), path));
+    }
+    Result[Int, IoError].Ok(value: 0)
+}
+
+/// The absolute path `path` names, every `.`, `..` and symbolic link resolved; it must exist.
+pub fn file_canonical(io: IoCap, path: Str) -> Result[Str, IoError] ! { io } {
+    let mut room = 1024;
+    while room <= 1048576 {
+        let out = bytes_new(room);
+        let n = os_realpath(path, out);
+        if n >= 0 {
+            return Result[Str, IoError].Ok(value: bytes_to_str(bytes_slice(out, 0, n)));
+        }
+        if io_kind_of(n) != IoErrorKind.InvalidInput() {
+            return Result[Str, IoError].Err(error: io_context(io_error_from(n), path));
+        }
+        room = room * 4;
+    }
+    Result[Str, IoError].Err(error: io_context(io_error_new(IoErrorKind.InvalidInput(), "the canonical path is too long"), path))
+}
+
+/// A new, empty directory in `parent` that only this call made, named `nazm-` and twelve random
+/// letters and digits, readable and writable by its owner only: its path, as clean as `parent` is,
+/// so files may be written under it. Nothing removes it. When none could be made — `parent` missing,
+/// not a directory or not writable — the error is of kind `Other`: asking the system why would make
+/// the path the file system's, which a program may not write under (`N0372`).
+pub fn dir_create_temp(io: IoCap, parent: Str) -> Result[Str, IoError] ! { io } {
+    let made = os_mkdtemp(parent);
+    if str_len(made) == 0 {
+        return Result[Str, IoError].Err(error: io_context(io_error_new(IoErrorKind.Other(), "no temporary directory could be made here"), parent));
+    }
+    Result[Str, IoError].Ok(value: made)
+}
+
+/// Take an advisory lock on the whole of `f`, exclusive or shared, waiting until it can be had. A
+/// lock belongs to the open file: another open of the same path is another holder, and closing `f`
+/// lets the lock go.
+pub fn file_lock(f: File, exclusive: Bool) -> Result[Int, IoError] ! { io } {
+    io_result(os_lock(f.handle, exclusive))
+}
+
+/// Take the lock without waiting: `false` while another holds it.
+pub fn file_try_lock(f: File, exclusive: Bool) -> Result[Bool, IoError] ! { io } {
+    let s = os_try_lock(f.handle, exclusive);
+    if s == 0 {
+        return Result[Bool, IoError].Ok(value: true);
+    }
+    if io_kind_of(s) == IoErrorKind.WouldBlock() {
+        return Result[Bool, IoError].Ok(value: false);
+    }
+    Result[Bool, IoError].Err(error: io_error_from(s))
+}
+
+/// Let `f`'s lock go.
+pub fn file_unlock(f: File) -> Result[Int, IoError] ! { io } {
+    io_result(os_unlock(f.handle))
 }

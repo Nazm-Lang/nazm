@@ -43,6 +43,7 @@ struct Facts {
     name_at: u32,
     /// The 64-bit-inode symbols.
     stat: &'static str,
+    lstat: &'static str,
     opendir: &'static str,
     readdir: &'static str,
     /// The XSI `strerror_r`, which writes the message into the caller's buffer.
@@ -66,6 +67,7 @@ const fn facts(target: SwitchTarget) -> Facts {
         mtime_at: 48,
         name_at: 21,
         stat: "stat",
+        lstat: "lstat",
         opendir: "opendir",
         readdir: "readdir",
         strerror_r: "strerror_r",
@@ -86,6 +88,7 @@ const fn facts(target: SwitchTarget) -> Facts {
         mtime_at: 88,
         name_at: 19,
         stat: "stat",
+        lstat: "lstat",
         opendir: "opendir",
         readdir: "readdir",
         strerror_r: "__xpg_strerror_r",
@@ -95,6 +98,7 @@ const fn facts(target: SwitchTarget) -> Facts {
         // On x86-64 macOS the 64-bit-inode forms are separate symbols.
         SwitchTarget::X86_64Darwin => Facts {
             stat: "\"stat$INODE64\"",
+            lstat: "\"lstat$INODE64\"",
             opendir: "\"opendir$INODE64\"",
             readdir: "\"readdir$INODE64\"",
             ..DARWIN
@@ -287,6 +291,23 @@ pub fn emit_os(target: SwitchTarget) -> String {
     // The files part's own calls (Gate 3): thin forwards here, Win32 and the C runtime's wide
     // forms in `windows_os`, so the files part names no system function itself.
     out.push_str(POSIX_FILE_CALLS);
+    // And the file system's further calls (R1d): `lstat`, `chmod`, `realpath` and `flock`.
+    let dev = if f.family == Family::Darwin {
+        "  %devn = load i32, ptr %st\n  %dev = zext i32 %devn to i64"
+    } else {
+        "  %dev = load i64, ptr %st"
+    };
+    out.push_str(
+        &POSIX_FS_CALLS
+            .replace("{LSTAT}", f.lstat)
+            .replace("{MODE_TY}", mode_ty)
+            .replace("{STAT_SIZE}", &f.stat_size.to_string())
+            .replace("{SIZE_AT}", &f.size_at.to_string())
+            .replace("{MODE_AT}", &f.mode_at.to_string())
+            .replace("{MTIME_AT}", &f.mtime_at.to_string())
+            .replace("{MTIME_NSEC}", &(f.mtime_at + 8).to_string())
+            .replace("{DEV}", dev),
+    );
     // And the network's facts (Gate 2): a program reaching the files part may reach sockets.
     out.push_str(&net_part(target));
     // And where the environment is: macOS's `_NSGetEnviron`, which a library can call where
@@ -379,6 +400,103 @@ entry:
 define hidden i32 @nz_os_entropy(ptr %buf, i64 %n) {
 entry:
   %r = call i32 @getentropy(ptr %buf, i64 %n)
+  ret i32 %r
+}
+";
+
+/// The file system's further calls on POSIX (R1d, `docs/spec.md`, *The platform, further*), as text
+/// with holes the target fills: which symbol `lstat` is, `struct stat`'s layout — the device first
+/// (32 bits on macOS, 64 on Linux) and the inode at 8 everywhere — and `mode_t`'s width.
+///
+/// - `nz_os_lstat(path, out) -> i32`: size, kind (0 a file, 1 a directory, 2 anything else, 3 a
+///   symbolic link), modification time in nanoseconds, permission bits, device and inode, as six
+///   i64s at `out`, a final link not followed; 0, or -1 with errno set.
+/// - `nz_os_chmod(path, mode) -> i32`: 0, or -1 with errno set.
+/// - `nz_os_realpath(path, out, cap) -> i64`: the canonical path's length, copied to `out` when
+///   it fits in `cap` bytes; or -1 with errno set.
+/// - `nz_os_flock(fd, op) -> i32`: `flock`'s operation — 1 shared, 2 exclusive, 8 unlocked, 4 not
+///   waiting — the same numbers on every POSIX target; 0, or -1 with errno set.
+const POSIX_FS_CALLS: &str = r"
+declare i32 @{LSTAT}(ptr, ptr)
+declare i32 @chmod(ptr, {MODE_TY})
+declare ptr @realpath(ptr, ptr)
+declare i32 @flock(i32, i32)
+declare void @free(ptr)
+
+define hidden i32 @nz_os_lstat(ptr %path, ptr %out) {
+entry:
+  %st = alloca [{STAT_SIZE} x i8], align 16
+  %r = call i32 @{LSTAT}(ptr %path, ptr %st)
+  %bad = icmp ne i32 %r, 0
+  br i1 %bad, label %fail, label %ok
+fail:
+  ret i32 -1
+ok:
+  %sizep = getelementptr i8, ptr %st, i64 {SIZE_AT}
+  %size = load i64, ptr %sizep
+  store i64 %size, ptr %out
+  %modep = getelementptr i8, ptr %st, i64 {MODE_AT}
+  %moden = load {MODE_TY}, ptr %modep
+  %mode = zext {MODE_TY} %moden to i64
+  %fmt = and i64 %mode, 61440
+  %isfile = icmp eq i64 %fmt, 32768
+  %isdir = icmp eq i64 %fmt, 16384
+  %islink = icmp eq i64 %fmt, 40960
+  %k2 = select i1 %islink, i64 3, i64 2
+  %k1 = select i1 %isdir, i64 1, i64 %k2
+  %kind = select i1 %isfile, i64 0, i64 %k1
+  %kindp = getelementptr i8, ptr %out, i64 8
+  store i64 %kind, ptr %kindp
+  %secp = getelementptr i8, ptr %st, i64 {MTIME_AT}
+  %sec = load i64, ptr %secp
+  %nsecp = getelementptr i8, ptr %st, i64 {MTIME_NSEC}
+  %nsec = load i64, ptr %nsecp
+  %ns = mul i64 %sec, 1000000000
+  %mtime = add i64 %ns, %nsec
+  %mtimep = getelementptr i8, ptr %out, i64 16
+  store i64 %mtime, ptr %mtimep
+  %perm = and i64 %mode, 4095
+  %permp = getelementptr i8, ptr %out, i64 24
+  store i64 %perm, ptr %permp
+{DEV}
+  %devp = getelementptr i8, ptr %out, i64 32
+  store i64 %dev, ptr %devp
+  %inop = getelementptr i8, ptr %st, i64 8
+  %ino = load i64, ptr %inop
+  %inoout = getelementptr i8, ptr %out, i64 40
+  store i64 %ino, ptr %inoout
+  ret i32 0
+}
+
+define hidden i32 @nz_os_chmod(ptr %path, i64 %mode) {
+entry:
+  %m = trunc i64 %mode to {MODE_TY}
+  %r = call i32 @chmod(ptr %path, {MODE_TY} %m)
+  ret i32 %r
+}
+
+define hidden i64 @nz_os_realpath(ptr %path, ptr %out, i64 %cap) {
+entry:
+  %r = call ptr @realpath(ptr %path, ptr null)
+  %none = icmp eq ptr %r, null
+  br i1 %none, label %fail, label %got
+fail:
+  ret i64 -1
+got:
+  %n = call i64 @strlen(ptr %r)
+  %fits = icmp sle i64 %n, %cap
+  br i1 %fits, label %copy, label %done
+copy:
+  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %r, i64 %n, i1 false)
+  br label %done
+done:
+  call void @free(ptr %r)
+  ret i64 %n
+}
+
+define hidden i32 @nz_os_flock(i32 %fd, i32 %op) {
+entry:
+  %r = call i32 @flock(i32 %fd, i32 %op)
   ret i32 %r
 }
 ";
@@ -700,34 +818,61 @@ ours:
 }
 ";
 
-/// The POSIX forwards behind processes (Gate 3): the pipes, `posix_spawnp`, `waitpid` and `kill`
-/// that Windows answers with `CreateProcessW`, a wait on the process and `TerminateProcess`.
+/// The POSIX forwards behind processes (Gate 3, R1d): the pipes, `posix_spawnp`, `wait4` and `kill`
+/// that Windows answers with `CreateProcessW`, a wait on the process and `TerminateProcess`; as text
+/// with holes the target fills: `mode_t`'s width, `ENOSYS` and `EAGAIN`, and the unit
+/// `ru_maxrss` counts in (bytes on macOS, kibibytes on Linux).
 ///
-/// - `nz_os_spawn(pid, program, argv, ends) -> i32`: `program` started with `argv` and this
-///   environment, its standard input, output and errors three new pipes; the parent's ends (to
-///   the child's input, from its output, from its errors) at `ends`, the child at `pid`; 0, or an
-///   errno with nothing left open.
-/// - `nz_os_reap(pid) -> i64`: the child's end, waited for: its code, or 256 and the signal that
-///   ended it; or -errno.
-/// - `nz_os_terminate(pid) -> i32`: the child ended; 0, or -1 with errno set.
+/// - `nz_os_spawn_in(ref, program, argv, envp, dir, flags, ends) -> i32`: `program` started with
+///   `argv` and `envp` (null: this environment) in `dir` (null: here), its standard input, output
+///   and errors three new pipes — or, with flag 2, its input the null device and the input pipe's
+///   end at `ends` -1 — leading a new process group with flag 1; the parent's ends (to the child's
+///   input, from its output, from its errors) at `ends`, the child at `ref`; 0, or an errno with
+///   nothing left open. A C library without `posix_spawn_file_actions_addchdir_np` (Bionic before
+///   API level 34) answers `ENOSYS` for a `dir`, starting nothing.
+/// - `nz_os_reap(ref, block, rss) -> i64`: the child's end: its code, or 256 and the signal that
+///   ended it, its peak resident memory in bytes at `rss`; with `block` 0 and the child running,
+///   -EAGAIN; or -errno.
+/// - `nz_os_terminate(ref) -> i32`: the child ended; 0, or -1 with errno set.
 /// - `nz_os_key() -> i32`: a descriptor that refers to nothing, a child's key in the handle table.
+/// - `nz_os_child_id(ref) -> i64`: the child's process id.
+/// - `nz_os_pid() -> i64`: this process's id.
+/// - `nz_os_signal_group(pgid, sig) -> i32`: `sig` to every process of group `pgid`; 0, or -1 with
+///   errno set.
+/// - `nz_os_nap(ms)`: at least `ms` milliseconds pass.
 const POSIX_PROC_CALLS: &str = r#"
 declare i32 @pipe(ptr)
 declare i32 @posix_spawnp(ptr, ptr, ptr, ptr, ptr, ptr)
 declare i32 @posix_spawn_file_actions_init(ptr)
 declare i32 @posix_spawn_file_actions_adddup2(ptr, i32, i32)
+declare i32 @posix_spawn_file_actions_addopen(ptr, i32, ptr, i32, {MODE_TY})
+declare extern_weak i32 @posix_spawn_file_actions_addchdir_np(ptr, ptr)
 declare i32 @posix_spawn_file_actions_destroy(ptr)
-declare i32 @waitpid(i32, ptr, i32)
+declare i32 @posix_spawnattr_init(ptr)
+declare i32 @posix_spawnattr_setflags(ptr, i16)
+declare i32 @posix_spawnattr_setpgroup(ptr, i32)
+declare i32 @posix_spawnattr_destroy(ptr)
+declare i32 @wait4(i32, ptr, i32, ptr)
 declare i32 @kill(i32, i32)
+declare i32 @getpid()
+declare i32 @nanosleep(ptr, ptr)
 declare ptr @signal(i32, ptr)
 
 @.nz.devnull = private unnamed_addr constant [10 x i8] c"/dev/null\00"
 
-define hidden i32 @nz_os_spawn(ptr %pid, ptr %prog, ptr %av, ptr %ends) {
+define hidden i32 @nz_os_spawn_in(ptr %pid, ptr %prog, ptr %av, ptr %envp, ptr %dir, i64 %flags, ptr %ends) {
 entry:
   %fa = alloca [256 x i8], align 16
+  %attr = alloca [512 x i8], align 16
   %fds = alloca [6 x i32], align 4
   %cpid = alloca i32, align 4
+  %hasdir = icmp ne ptr %dir, null
+  %nochdir = icmp eq ptr @posix_spawn_file_actions_addchdir_np, null
+  %cannot = and i1 %hasdir, %nochdir
+  br i1 %cannot, label %nosys, label %make
+nosys:
+  ret i32 {ENOSYS}
+make:
   %in = getelementptr i32, ptr %fds, i64 0
   %out = getelementptr i32, ptr %fds, i64 2
   %err = getelementptr i32, ptr %fds, i64 4
@@ -736,7 +881,7 @@ entry:
   %p2 = call i32 @pipe(ptr %err)
   br label %cloexec
 cloexec:
-  %j = phi i64 [ 0, %entry ], [ %j1, %cloexec ]
+  %j = phi i64 [ 0, %make ], [ %j1, %cloexec ]
   %fp = getelementptr i32, ptr %fds, i64 %j
   %f = load i32, ptr %fp
   %ce = call i32 (i32, i32, ...) @fcntl(i32 %f, i32 2, i32 1)
@@ -757,12 +902,38 @@ actions:
   %err0 = load i32, ptr %err0p
   %err1p = getelementptr i32, ptr %fds, i64 5
   %err1 = load i32, ptr %err1p
+  %nullbit = and i64 %flags, 2
+  %nullin = icmp ne i64 %nullbit, 0
+  br i1 %nullin, label %devnull, label %inpipe
+devnull:
+  %o0 = call i32 @posix_spawn_file_actions_addopen(ptr %fa, i32 0, ptr @.nz.devnull, i32 0, {MODE_TY} 0)
+  br label %outputs
+inpipe:
   %d0 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %in0, i32 0)
+  br label %outputs
+outputs:
   %d1 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %out1, i32 1)
   %d2 = call i32 @posix_spawn_file_actions_adddup2(ptr %fa, i32 %err1, i32 2)
-  %env = call ptr @nz_os_environ()
-  %r = call i32 @posix_spawnp(ptr %cpid, ptr %prog, ptr %fa, ptr null, ptr %av, ptr %env)
+  br i1 %hasdir, label %chdir, label %attrs
+chdir:
+  %cd = call i32 @posix_spawn_file_actions_addchdir_np(ptr %fa, ptr %dir)
+  br label %attrs
+attrs:
+  %ti = call i32 @posix_spawnattr_init(ptr %attr)
+  %groupbit = and i64 %flags, 1
+  %group = icmp ne i64 %groupbit, 0
+  br i1 %group, label %setgroup, label %spawn
+setgroup:
+  %sf = call i32 @posix_spawnattr_setflags(ptr %attr, i16 2)
+  %sg = call i32 @posix_spawnattr_setpgroup(ptr %attr, i32 0)
+  br label %spawn
+spawn:
+  %given = icmp ne ptr %envp, null
+  %own = call ptr @nz_os_environ()
+  %env = select i1 %given, ptr %envp, ptr %own
+  %r = call i32 @posix_spawnp(ptr %cpid, ptr %prog, ptr %fa, ptr %attr, ptr %av, ptr %env)
   %ad = call i32 @posix_spawn_file_actions_destroy(ptr %fa)
+  %td = call i32 @posix_spawnattr_destroy(ptr %attr)
   %c0 = call i32 @close(i32 %in0)
   %c1 = call i32 @close(i32 %out1)
   %c2 = call i32 @close(i32 %err1)
@@ -776,7 +947,15 @@ undo:
 started:
   %ign = inttoptr i64 1 to ptr
   %old = call ptr @signal(i32 13, ptr %ign)
+  br i1 %nullin, label %noinput, label %input
+noinput:
+  %u3 = call i32 @close(i32 %in1)
+  store i32 -1, ptr %ends
+  br label %rest
+input:
   store i32 %in1, ptr %ends
+  br label %rest
+rest:
   %e1 = getelementptr i32, ptr %ends, i64 1
   store i32 %out0, ptr %e1
   %e2 = getelementptr i32, ptr %ends, i64 2
@@ -787,15 +966,18 @@ started:
   ret i32 0
 }
 
-define hidden i64 @nz_os_reap(i64 %pid) {
+define hidden i64 @nz_os_reap(i64 %pid, i32 %block, ptr %rss) {
 entry:
   %st = alloca i32, align 4
+  %ru = alloca [144 x i8], align 8
   %p = trunc i64 %pid to i32
+  %waits = icmp ne i32 %block, 0
+  %opt = select i1 %waits, i32 0, i32 1
   br label %wait
 wait:
-  %r = call i32 @waitpid(i32 %p, ptr %st, i32 0)
+  %r = call i32 @wait4(i32 %p, ptr %st, i32 %opt, ptr %ru)
   %bad = icmp slt i32 %r, 0
-  br i1 %bad, label %error, label %decode
+  br i1 %bad, label %error, label %got
 error:
   %ep = call ptr @nz_errno_location()
   %e = load i32, ptr %ep
@@ -805,7 +987,16 @@ give:
   %w = sext i32 %e to i64
   %neg = sub i64 0, %w
   ret i64 %neg
+got:
+  %none = icmp eq i32 %r, 0
+  br i1 %none, label %running, label %decode
+running:
+  ret i64 -{EAGAIN}
 decode:
+  %maxp = getelementptr i8, ptr %ru, i64 32
+  %max = load i64, ptr %maxp
+  %bytes = mul i64 %max, {RSS_SCALE}
+  store i64 %bytes, ptr %rss
   %s = load i32, ptr %st
   %sig = and i32 %s, 127
   %exited = icmp eq i32 %sig, 0
@@ -829,6 +1020,40 @@ define hidden i32 @nz_os_key() {
 entry:
   %fd = call i32 (ptr, i32, ...) @open(ptr @.nz.devnull, i32 {RDONLY_CLOEXEC})
   ret i32 %fd
+}
+
+define hidden i64 @nz_os_child_id(i64 %pid) {
+entry:
+  ret i64 %pid
+}
+
+define hidden i64 @nz_os_pid() {
+entry:
+  %p = call i32 @getpid()
+  %w = sext i32 %p to i64
+  ret i64 %w
+}
+
+define hidden i32 @nz_os_signal_group(i64 %pgid, i64 %sig) {
+entry:
+  %g = trunc i64 %pgid to i32
+  %neg = sub i32 0, %g
+  %s = trunc i64 %sig to i32
+  %r = call i32 @kill(i32 %neg, i32 %s)
+  ret i32 %r
+}
+
+define hidden void @nz_os_nap(i64 %ms) {
+entry:
+  %ts = alloca [16 x i8], align 8
+  %sec = udiv i64 %ms, 1000
+  %rem = urem i64 %ms, 1000
+  %ns = mul i64 %rem, 1000000
+  store i64 %sec, ptr %ts
+  %np = getelementptr i8, ptr %ts, i64 8
+  store i64 %ns, ptr %np
+  %r = call i32 @nanosleep(ptr %ts, ptr null)
+  ret void
 }
 
 define hidden i64 @nz_net_write(i32 %fd, ptr %buf, i64 %n) {
@@ -1049,7 +1274,13 @@ fn net_part(target: SwitchTarget) -> String {
             .replace("{EPDATA}", &ep_data.to_string())
             .replace("{EPSIZE}", &ep_size.to_string())
     };
-    let procs = POSIX_PROC_CALLS.replace("{RDONLY_CLOEXEC}", &facts(target).cloexec.to_string());
+    let f = facts(target);
+    let procs = POSIX_PROC_CALLS
+        .replace("{RDONLY_CLOEXEC}", &f.cloexec.to_string())
+        .replace("{MODE_TY}", if f.mode_bits == 16 { "i16" } else { "i32" })
+        .replace("{ENOSYS}", if darwin { "78" } else { "38" })
+        .replace("{EAGAIN}", if darwin { "35" } else { "11" })
+        .replace("{RSS_SCALE}", if darwin { "1" } else { "1024" });
     format!("{addr}{sock}{POSIX_NET_CALLS}{procs}{poller}")
 }
 
@@ -1062,6 +1293,7 @@ fn windows_os() -> String {
         String::from("; Generated by nazm build. Do not edit.\nsource_filename = \"os\"\n");
     out.push_str(WINDOWS_FILES);
     out.push_str(&net_part(SwitchTarget::X86_64Windows));
+    out.push_str(WINDOWS_FS);
     out
 }
 
@@ -2493,9 +2725,11 @@ entry:
   ret ptr %end
 }
 
-; Three pipes and the child (`CreateProcessW`, the command line `argv` quoted, this environment);
+; Three pipes and the child (`CreateProcessW`, the command line `argv` quoted), with `envp` (null:
+; this environment) as a UTF-16 block, in `dir` (null: here), by `flags` — 1 a new process group
+; (`CREATE_NEW_PROCESS_GROUP`), 2 its standard input `NUL` and the input pipe's end at `ends` -1;
 ; the parent's ends as descriptors at `ends`, the process handle at `pid`; 0 or an errno.
-define hidden i32 @nz_os_spawn(ptr %pid, ptr %prog, ptr %av, ptr %ends) {
+define hidden i32 @nz_os_spawn_in(ptr %pid, ptr %prog, ptr %av, ptr %envp, ptr %dir, i64 %flags, ptr %ends) {
 entry:
   %sa = alloca [24 x i8], align 8
   %si = alloca [104 x i8], align 8
@@ -2548,10 +2782,33 @@ terminated:
   %cmd = call ptr @nz.win.wide(ptr %line)
   call void @free(ptr %line)
   %nocmd = icmp eq ptr %cmd, null
-  br i1 %nocmd, label %badcmd, label %pipes
+  br i1 %nocmd, label %badcmd, label %block
 badcmd:
   ret i32 84
+block:
+  %hasenv = icmp ne ptr %envp, null
+  br i1 %hasenv, label %makeenv, label %where
+makeenv:
+  %eb = call ptr @nz.win.env_block(ptr %envp)
+  %noeb = icmp eq ptr %eb, null
+  br i1 %noeb, label %badenv, label %where
+badenv:
+  call void @free(ptr %cmd)
+  ret i32 84
+where:
+  %envblock = phi ptr [ null, %block ], [ %eb, %makeenv ]
+  %hasdir = icmp ne ptr %dir, null
+  br i1 %hasdir, label %widedir, label %pipes
+widedir:
+  %wd = call ptr @nz.win.wide(ptr %dir)
+  %nowd = icmp eq ptr %wd, null
+  br i1 %nowd, label %baddir, label %pipes
+baddir:
+  call void @free(ptr %cmd)
+  call void @free(ptr %envblock)
+  ret i32 84
 pipes:
+  %wdir = phi ptr [ null, %where ], [ %wd, %widedir ]
   call void @llvm.memset.p0.i64(ptr %sa, i8 0, i64 24, i1 false)
   store i32 24, ptr %sa
   %inh = getelementptr i8, ptr %sa, i64 16
@@ -2570,15 +2827,34 @@ pipes:
   %ok01 = and i32 %c0, %c1
   %ok012 = and i32 %ok01, %c2
   %made = icmp ne i32 %ok012, 0
-  br i1 %made, label %start, label %nopipe
+  br i1 %made, label %nulcheck, label %nopipe
 nopipe:
   %pe = call i32 @nz.win.last_errno()
   call void @nz.win.close_all(ptr %hs)
   call void @ReleaseSRWLockExclusive(ptr @nz.win.spawning)
   call void @free(ptr %cmd)
+  call void @free(ptr %envblock)
+  call void @free(ptr %wdir)
   ret i32 %pe
+nulcheck:
+  %nullbit = and i64 %flags, 2
+  %nullin = icmp ne i64 %nullbit, 0
+  br i1 %nullin, label %opennul, label %start
+opennul:
+  %nf = call i64 @CreateFileW(ptr @.nz.win.wnul, i32 -2147483648, i32 3, ptr %sa, i32 3, i32 0, i64 0)
+  %nulbad = icmp eq i64 %nf, -1
+  br i1 %nulbad, label %nonul, label %start
+nonul:
+  %ne = call i32 @nz.win.last_errno()
+  call void @nz.win.close_all(ptr %hs)
+  call void @ReleaseSRWLockExclusive(ptr @nz.win.spawning)
+  call void @free(ptr %cmd)
+  call void @free(ptr %envblock)
+  call void @free(ptr %wdir)
+  ret i32 %ne
 start:
-  ; The child's ends: input's read (0), output's write (3), errors' write (5).
+  %nulh = phi i64 [ 0, %nulcheck ], [ %nf, %opennul ]
+  ; The child's ends: input's read (0) or `NUL`, output's write (3), errors' write (5).
   %in0 = load i64, ptr %h0
   %in1 = load i64, ptr %h1
   %out0 = load i64, ptr %h2
@@ -2590,22 +2866,35 @@ start:
   %x2 = call i32 @SetHandleInformation(i64 %err0, i32 1, i32 0)
   call void @llvm.memset.p0.i64(ptr %si, i8 0, i64 104, i1 false)
   store i32 104, ptr %si
-  %flags = getelementptr i8, ptr %si, i64 60
-  store i32 256, ptr %flags
+  %sflags = getelementptr i8, ptr %si, i64 60
+  store i32 256, ptr %sflags
+  %childin = select i1 %nullin, i64 %nulh, i64 %in0
   %sin = getelementptr i8, ptr %si, i64 80
-  store i64 %in0, ptr %sin
+  store i64 %childin, ptr %sin
   %sout = getelementptr i8, ptr %si, i64 88
   store i64 %out1, ptr %sout
   %serr = getelementptr i8, ptr %si, i64 96
   store i64 %err1, ptr %serr
   call void @llvm.memset.p0.i64(ptr %pi, i8 0, i64 24, i1 false)
-  %r = call i32 @CreateProcessW(ptr null, ptr %cmd, ptr null, ptr null, i32 1, i32 0, ptr null, ptr null, ptr %si, ptr %pi)
+  %groupbit = and i64 %flags, 1
+  %group = icmp ne i64 %groupbit, 0
+  %cg = select i1 %group, i32 512, i32 0
+  %ce = select i1 %hasenv, i32 1024, i32 0
+  %creation = or i32 %cg, %ce
+  %r = call i32 @CreateProcessW(ptr null, ptr %cmd, ptr null, ptr null, i32 1, i32 %creation, ptr %envblock, ptr %wdir, ptr %si, ptr %pi)
   %re = call i32 @nz.win.last_errno()
   %k0 = call i32 @CloseHandle(i64 %in0)
   %k1 = call i32 @CloseHandle(i64 %out1)
   %k2 = call i32 @CloseHandle(i64 %err1)
+  br i1 %nullin, label %closenul, label %released
+closenul:
+  %kn = call i32 @CloseHandle(i64 %nulh)
+  br label %released
+released:
   call void @ReleaseSRWLockExclusive(ptr @nz.win.spawning)
   call void @free(ptr %cmd)
+  call void @free(ptr %envblock)
+  call void @free(ptr %wdir)
   %started = icmp ne i32 %r, 0
   br i1 %started, label %adopt, label %undo
 undo:
@@ -2619,15 +2908,78 @@ adopt:
   %th = load i64, ptr %thp
   %kt = call i32 @CloseHandle(i64 %th)
   store i64 %proc, ptr %pid
-  %f0 = call i32 @_open_osfhandle(i64 %in1, i32 32769)
   %f1 = call i32 @_open_osfhandle(i64 %out0, i32 32768)
   %f2 = call i32 @_open_osfhandle(i64 %err0, i32 32768)
+  br i1 %nullin, label %noinput, label %input
+noinput:
+  %u3 = call i32 @CloseHandle(i64 %in1)
+  store i32 -1, ptr %ends
+  br label %rest
+input:
+  %f0 = call i32 @_open_osfhandle(i64 %in1, i32 32769)
   store i32 %f0, ptr %ends
+  br label %rest
+rest:
   %e1 = getelementptr i32, ptr %ends, i64 1
   store i32 %f1, ptr %e1
   %e2 = getelementptr i32, ptr %ends, i64 2
   store i32 %f2, ptr %e2
   ret i32 0
+}
+
+@.nz.win.wnul = private unnamed_addr constant [4 x i16] [i16 78, i16 85, i16 76, i16 0]
+
+; A child's environment block: each entry of `envp` (UTF-8, already ordered by name) as UTF-16 and
+; NUL-terminated, then one more NUL; null when an entry is not UTF-8 or memory is refused.
+define internal ptr @nz.win.env_block(ptr %envp) {
+entry:
+  br label %measure
+measure:
+  %i = phi i64 [ 0, %entry ], [ %i1, %counted ]
+  %total = phi i64 [ 0, %entry ], [ %t1, %counted ]
+  %ep = getelementptr ptr, ptr %envp, i64 %i
+  %e = load ptr, ptr %ep
+  %end = icmp eq ptr %e, null
+  br i1 %end, label %alloc, label %count
+count:
+  %n = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %e, i32 -1, ptr null, i32 0)
+  %bad = icmp eq i32 %n, 0
+  br i1 %bad, label %fail, label %counted
+counted:
+  %nw = zext i32 %n to i64
+  %t1 = add i64 %total, %nw
+  %i1 = add i64 %i, 1
+  br label %measure
+fail:
+  ret ptr null
+alloc:
+  %slots = add i64 %total, 2
+  %bytes = mul i64 %slots, 2
+  %blk = call ptr @malloc(i64 %bytes)
+  %none = icmp eq ptr %blk, null
+  br i1 %none, label %fail, label %zero
+zero:
+  call void @llvm.memset.p0.i64(ptr %blk, i8 0, i64 %bytes, i1 false)
+  br label %fill
+fill:
+  %k = phi i64 [ 0, %zero ], [ %k1, %put ]
+  %at = phi i64 [ 0, %zero ], [ %at1, %put ]
+  %fp = getelementptr ptr, ptr %envp, i64 %k
+  %f = load ptr, ptr %fp
+  %done = icmp eq ptr %f, null
+  br i1 %done, label %finish, label %put
+put:
+  %room = sub i64 %slots, %at
+  %room32 = trunc i64 %room to i32
+  %off = mul i64 %at, 2
+  %dst = getelementptr i8, ptr %blk, i64 %off
+  %w = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %f, i32 -1, ptr %dst, i32 %room32)
+  %ww = zext i32 %w to i64
+  %at1 = add i64 %at, %ww
+  %k1 = add i64 %k, 1
+  br label %fill
+finish:
+  ret ptr %blk
 }
 
 define internal void @nz.win.close_all(ptr %hs) {
@@ -2650,19 +3002,34 @@ done:
   ret void
 }
 
-; The child's exit code, waited for; its process handle closed.
-define hidden i64 @nz_os_reap(i64 %pid) {
+; The child's exit code once it has ended, its peak working set at `rss` and its process handle
+; closed; with `block` 0 and the child running, -EAGAIN.
+define hidden i64 @nz_os_reap(i64 %pid, i32 %block, ptr %rss) {
 entry:
   %code = alloca i32, align 4
-  %w = call i32 @WaitForSingleObject(i64 %pid, i32 -1)
+  %pmc = alloca [72 x i8], align 8
+  %waits = icmp ne i32 %block, 0
+  %ms = select i1 %waits, i32 -1, i32 0
+  %w = call i32 @WaitForSingleObject(i64 %pid, i32 %ms)
   %waited = icmp eq i32 %w, 0
-  br i1 %waited, label %ended, label %failed
+  br i1 %waited, label %ended, label %notyet
+notyet:
+  %running = icmp eq i32 %w, 258
+  br i1 %running, label %again, label %failed
+again:
+  ret i64 -11
 failed:
   %e = call i32 @nz.win.last_errno()
   %ew = zext i32 %e to i64
   %neg = sub i64 0, %ew
   ret i64 %neg
 ended:
+  call void @llvm.memset.p0.i64(ptr %pmc, i8 0, i64 72, i1 false)
+  store i32 72, ptr %pmc
+  %m = call i32 @K32GetProcessMemoryInfo(i64 %pid, ptr %pmc, i32 72)
+  %peakp = getelementptr i8, ptr %pmc, i64 8
+  %peak = load i64, ptr %peakp
+  store i64 %peak, ptr %rss
   store i32 0, ptr %code
   %g = call i32 @GetExitCodeProcess(i64 %pid, ptr %code)
   %c = load i32, ptr %code
@@ -2697,6 +3064,318 @@ define hidden i32 @nz_os_key() {
 entry:
   %fd = call i32 (ptr, i32, ...) @_open(ptr @.nz.win.nul, i32 128)
   ret i32 %fd
+}
+
+; The child's process id, from its handle.
+define hidden i64 @nz_os_child_id(i64 %pid) {
+entry:
+  %id = call i32 @GetProcessId(i64 %pid)
+  %w = zext i32 %id to i64
+  ret i64 %w
+}
+
+define hidden i64 @nz_os_pid() {
+entry:
+  %id = call i32 @GetCurrentProcessId()
+  %w = zext i32 %id to i64
+  ret i64 %w
+}
+
+; There are no process groups (`docs/spec.md`, *The platform, further*): the process `pgid` itself,
+; asked whether it exists (`sig` 0) or ended with exit code 1; ESRCH for one there is not.
+define hidden i32 @nz_os_signal_group(i64 %pgid, i64 %sig) {
+entry:
+  %id = trunc i64 %pgid to i32
+  %ask = icmp eq i64 %sig, 0
+  %access = select i1 %ask, i32 4096, i32 1
+  %h = call i64 @OpenProcess(i32 %access, i32 0, i32 %id)
+  %none = icmp eq i64 %h, 0
+  br i1 %none, label %missing, label %found
+missing:
+  %w = call i32 @GetLastError()
+  %invalid = icmp eq i32 %w, 87
+  br i1 %invalid, label %nosuch, label %other
+nosuch:
+  call void @nz.win.set_errno(i32 3)
+  ret i32 -1
+other:
+  %e = call i32 @nz.win.last_errno()
+  call void @nz.win.set_errno(i32 %e)
+  ret i32 -1
+found:
+  br i1 %ask, label %close, label %end
+end:
+  %t = call i32 @TerminateProcess(i64 %h, i32 1)
+  %ok = icmp ne i32 %t, 0
+  br i1 %ok, label %close, label %refused
+refused:
+  %re = call i32 @nz.win.last_errno()
+  %k1 = call i32 @CloseHandle(i64 %h)
+  call void @nz.win.set_errno(i32 %re)
+  ret i32 -1
+close:
+  %k = call i32 @CloseHandle(i64 %h)
+  ret i32 0
+}
+
+define hidden void @nz_os_nap(i64 %ms) {
+entry:
+  %m = trunc i64 %ms to i32
+  call void @Sleep(i32 %m)
+  ret void
+}
+"#;
+
+/// Windows' further file-system calls (R1d, `docs/spec.md`, *The platform, further*, **Where**): a
+/// path's own facts from `GetFileInformationByHandle` on a handle opened without following a
+/// reparse point — any reparse point is a symbolic link, the device the volume's serial number and
+/// the inode the file index; `_wchmod`, which keeps only the owner's write bit; the canonical path
+/// from `GetFinalPathNameByHandleW`, without its `\\?\` prefix before a drive; and `LockFileEx`
+/// over the whole file for a lock.
+const WINDOWS_FS: &str = r#"
+declare i64 @CreateFileW(ptr, i32, i32, ptr, i32, i32, i64)
+declare i32 @GetFileInformationByHandle(i64, ptr)
+declare i32 @GetFinalPathNameByHandleW(i64, ptr, i32, i32)
+declare i32 @LockFileEx(i64, i32, i32, i32, i32, ptr)
+declare i32 @UnlockFileEx(i64, i32, i32, i32, ptr)
+declare i32 @_wchmod(ptr, i32)
+declare i32 @GetProcessId(i64)
+declare i32 @GetCurrentProcessId()
+declare i64 @OpenProcess(i32, i32, i32)
+declare i32 @K32GetProcessMemoryInfo(i64, ptr, i32)
+
+; `path` itself, opened for its facts only (FILE_FLAG_BACKUP_SEMANTICS and, with `follow` 0,
+; FILE_FLAG_OPEN_REPARSE_POINT); -1 with errno set when it cannot be.
+define internal i64 @nz.win.open_facts(ptr %path, i32 %follow) {
+entry:
+  %w = call ptr @nz.win.wide(ptr %path)
+  %none = icmp eq ptr %w, null
+  br i1 %none, label %fail, label %go
+fail:
+  ret i64 -1
+go:
+  %follows = icmp ne i32 %follow, 0
+  %flags = select i1 %follows, i32 33554432, i32 35651584
+  %h = call i64 @CreateFileW(ptr %w, i32 0, i32 7, ptr null, i32 3, i32 %flags, i64 0)
+  %e = call i32 @nz.win.last_errno()
+  call void @free(ptr %w)
+  %bad = icmp eq i64 %h, -1
+  br i1 %bad, label %err, label %done
+err:
+  call void @nz.win.set_errno(i32 %e)
+  ret i64 -1
+done:
+  ret i64 %h
+}
+
+; Size, kind (0 a file, 1 a directory, 3 any reparse point), modification time in nanoseconds since
+; the Unix epoch, permission bits (0o444 read-only or 0o666, and 0o111 more for a directory), the
+; volume's serial number and the file index, as six i64s at `out`; 0, or -1 with errno set.
+; `BY_HANDLE_FILE_INFORMATION`: attributes at 0, the last write at 20, the serial at 28, the size
+; high and low at 32 and 36, the index high and low at 44 and 48.
+define hidden i32 @nz_os_lstat(ptr %path, ptr %out) {
+entry:
+  %info = alloca [52 x i8], align 8
+  %h = call i64 @nz.win.open_facts(ptr %path, i32 0)
+  %bad = icmp eq i64 %h, -1
+  br i1 %bad, label %fail, label %ask
+fail:
+  ret i32 -1
+ask:
+  %ok = call i32 @GetFileInformationByHandle(i64 %h, ptr %info)
+  %e = call i32 @nz.win.last_errno()
+  %k = call i32 @CloseHandle(i64 %h)
+  %got = icmp ne i32 %ok, 0
+  br i1 %got, label %facts, label %err
+err:
+  call void @nz.win.set_errno(i32 %e)
+  ret i32 -1
+facts:
+  %attrs = load i32, ptr %info
+  %shp = getelementptr i8, ptr %info, i64 32
+  %sh = load i32, ptr %shp
+  %slp = getelementptr i8, ptr %info, i64 36
+  %sl = load i32, ptr %slp
+  %shw = zext i32 %sh to i64
+  %slw = zext i32 %sl to i64
+  %shs = shl i64 %shw, 32
+  %size = or i64 %shs, %slw
+  store i64 %size, ptr %out
+  %rp = and i32 %attrs, 1024
+  %isreparse = icmp ne i32 %rp, 0
+  %dp = and i32 %attrs, 16
+  %isdir = icmp ne i32 %dp, 0
+  %k1 = select i1 %isdir, i64 1, i64 0
+  %kind = select i1 %isreparse, i64 3, i64 %k1
+  %kindp = getelementptr i8, ptr %out, i64 8
+  store i64 %kind, ptr %kindp
+  %flp = getelementptr i8, ptr %info, i64 20
+  %fl = load i32, ptr %flp
+  %fhp = getelementptr i8, ptr %info, i64 24
+  %fh = load i32, ptr %fhp
+  %flw = zext i32 %fl to i64
+  %fhw = zext i32 %fh to i64
+  %fhs = shl i64 %fhw, 32
+  %ft = or i64 %fhs, %flw
+  %unix = sub i64 %ft, 116444736000000000
+  %mtime = mul i64 %unix, 100
+  %mtimep = getelementptr i8, ptr %out, i64 16
+  store i64 %mtime, ptr %mtimep
+  %ro = and i32 %attrs, 1
+  %readonly = icmp ne i32 %ro, 0
+  %base = select i1 %readonly, i64 292, i64 438
+  %exec = select i1 %isdir, i64 73, i64 0
+  %perm = or i64 %base, %exec
+  %permp = getelementptr i8, ptr %out, i64 24
+  store i64 %perm, ptr %permp
+  %serp = getelementptr i8, ptr %info, i64 28
+  %ser = load i32, ptr %serp
+  %serw = zext i32 %ser to i64
+  %devp = getelementptr i8, ptr %out, i64 32
+  store i64 %serw, ptr %devp
+  %ihp = getelementptr i8, ptr %info, i64 44
+  %ih = load i32, ptr %ihp
+  %ilp = getelementptr i8, ptr %info, i64 48
+  %il = load i32, ptr %ilp
+  %ihw = zext i32 %ih to i64
+  %ilw = zext i32 %il to i64
+  %ihs = shl i64 %ihw, 32
+  %ino = or i64 %ihs, %ilw
+  %inop = getelementptr i8, ptr %out, i64 40
+  store i64 %ino, ptr %inop
+  ret i32 0
+}
+
+define hidden i32 @nz_os_chmod(ptr %path, i64 %mode) {
+entry:
+  %w = call ptr @nz.win.wide(ptr %path)
+  %none = icmp eq ptr %w, null
+  br i1 %none, label %fail, label %go
+fail:
+  ret i32 -1
+go:
+  %m = trunc i64 %mode to i32
+  %r = call i32 @_wchmod(ptr %w, i32 %m)
+  call void @free(ptr %w)
+  ret i32 %r
+}
+
+; The final path of what `path` names, UTF-8, `\\?\` dropped before a drive: its length, copied
+; to `out` when it fits in `cap` bytes; or -1 with errno set.
+define hidden i64 @nz_os_realpath(ptr %path, ptr %out, i64 %cap) {
+entry:
+  %h = call i64 @nz.win.open_facts(ptr %path, i32 1)
+  %bad = icmp eq i64 %h, -1
+  br i1 %bad, label %fail, label %room
+fail:
+  ret i64 -1
+room:
+  %buf = call ptr @malloc(i64 65536)
+  %nobuf = icmp eq ptr %buf, null
+  br i1 %nobuf, label %nomem, label %ask
+nomem:
+  %k0 = call i32 @CloseHandle(i64 %h)
+  call void @nz.win.set_errno(i32 12)
+  ret i64 -1
+ask:
+  %n = call i32 @GetFinalPathNameByHandleW(i64 %h, ptr %buf, i32 32767, i32 0)
+  %e = call i32 @nz.win.last_errno()
+  %k = call i32 @CloseHandle(i64 %h)
+  %zero = icmp eq i32 %n, 0
+  %over = icmp sgt i32 %n, 32766
+  %failed = or i1 %zero, %over
+  br i1 %failed, label %err, label %prefix
+err:
+  call void @free(ptr %buf)
+  call void @nz.win.set_errno(i32 %e)
+  ret i64 -1
+prefix:
+  ; `\\?\C:` — a backslash at 0, 1 and 3, a question mark at 2, a colon at 5.
+  %long = icmp sgt i32 %n, 5
+  br i1 %long, label %check, label %whole
+check:
+  %c0 = load i16, ptr %buf
+  %p2 = getelementptr i8, ptr %buf, i64 4
+  %c2 = load i16, ptr %p2
+  %p5 = getelementptr i8, ptr %buf, i64 10
+  %c5 = load i16, ptr %p5
+  %s0 = icmp eq i16 %c0, 92
+  %q2 = icmp eq i16 %c2, 63
+  %d5 = icmp eq i16 %c5, 58
+  %a = and i1 %s0, %q2
+  %drive = and i1 %a, %d5
+  br i1 %drive, label %strip, label %whole
+strip:
+  %from = getelementptr i8, ptr %buf, i64 8
+  %n4 = sub i32 %n, 4
+  br label %convert
+whole:
+  br label %convert
+convert:
+  %src = phi ptr [ %from, %strip ], [ %buf, %whole ]
+  %len = phi i32 [ %n4, %strip ], [ %n, %whole ]
+  %need = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %src, i32 %len, ptr null, i32 0, ptr null, ptr null)
+  %bad8 = icmp eq i32 %need, 0
+  br i1 %bad8, label %notutf16, label %fits
+notutf16:
+  call void @free(ptr %buf)
+  call void @nz.win.set_errno(i32 42)
+  ret i64 -1
+fits:
+  %needw = sext i32 %need to i64
+  %small = icmp sle i64 %needw, %cap
+  br i1 %small, label %copy, label %done
+copy:
+  %wrote = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %src, i32 %len, ptr %out, i32 %need, ptr null, ptr null)
+  br label %done
+done:
+  call void @free(ptr %buf)
+  ret i64 %needw
+}
+
+; `flock`'s operation by `LockFileEx` over the whole file: 1 shared, 2 exclusive, 8 unlocked, 4
+; not waiting (LOCKFILE_FAIL_IMMEDIATELY), its refusal EAGAIN; unlocking what is not locked is not
+; an error, as for `flock`.
+define hidden i32 @nz_os_flock(i32 %fd, i32 %op) {
+entry:
+  %ov = alloca [32 x i8], align 8
+  call void @llvm.memset.p0.i64(ptr %ov, i8 0, i64 32, i1 false)
+  %h = call i64 @_get_osfhandle(i32 %fd)
+  %un = and i32 %op, 8
+  %unlock = icmp ne i32 %un, 0
+  br i1 %unlock, label %release, label %take
+release:
+  %ru = call i32 @UnlockFileEx(i64 %h, i32 0, i32 -1, i32 -1, ptr %ov)
+  %rok = icmp ne i32 %ru, 0
+  br i1 %rok, label %done, label %rfail
+rfail:
+  %rw = call i32 @GetLastError()
+  %notlocked = icmp eq i32 %rw, 158
+  br i1 %notlocked, label %done, label %error
+take:
+  %ex = and i32 %op, 2
+  %nb = and i32 %op, 4
+  %exf = icmp ne i32 %ex, 0
+  %nbf = icmp ne i32 %nb, 0
+  %f1 = select i1 %exf, i32 2, i32 0
+  %f2 = select i1 %nbf, i32 1, i32 0
+  %flags = or i32 %f1, %f2
+  %rl = call i32 @LockFileEx(i64 %h, i32 %flags, i32 0, i32 -1, i32 -1, ptr %ov)
+  %lok = icmp ne i32 %rl, 0
+  br i1 %lok, label %done, label %lfail
+lfail:
+  %lw = call i32 @GetLastError()
+  %held = icmp eq i32 %lw, 33
+  br i1 %held, label %busy, label %error
+busy:
+  call void @nz.win.set_errno(i32 11)
+  ret i32 -1
+error:
+  %e = call i32 @nz.win.last_errno()
+  call void @nz.win.set_errno(i32 %e)
+  ret i32 -1
+done:
+  ret i32 0
 }
 "#;
 
@@ -3135,7 +3814,20 @@ mod tests {
     #[test]
     fn every_target_defines_the_same_platform_functions_and_windows_names_no_posix_call() {
         let posix = defined(SwitchTarget::Aarch64Darwin);
-        assert!(posix.contains("nz_os_spawn") && posix.contains("nz_os_clock"));
+        assert!(posix.contains("nz_os_spawn_in") && posix.contains("nz_os_clock"));
+        // R1d's: the file system's further calls and the processes', on every target.
+        for f in [
+            "nz_os_lstat",
+            "nz_os_chmod",
+            "nz_os_realpath",
+            "nz_os_flock",
+            "nz_os_child_id",
+            "nz_os_pid",
+            "nz_os_signal_group",
+            "nz_os_nap",
+        ] {
+            assert!(posix.contains(f), "{f}");
+        }
         for t in SwitchTarget::ALL {
             assert_eq!(defined(t), posix, "{t:?}");
         }
@@ -3151,7 +3843,14 @@ mod tests {
             "@fcntl(",
             "@posix_spawnp(",
             "@waitpid(",
+            "@wait4(",
             "@kill(",
+            "@lstat(",
+            "@realpath(",
+            "@flock(",
+            "@chmod(",
+            "@getpid(",
+            "@nanosleep(",
             "@signal(",
             "@epoll_wait(",
             "@kevent(",

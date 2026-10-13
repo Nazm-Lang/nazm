@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions, ReadDir};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::fd::AsRawFd as _;
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use nazm_sema::Intrinsic;
@@ -33,6 +33,9 @@ const EINVAL: i64 = 22;
 const EISDIR: i64 = 21;
 const ENOTDIR: i64 = 20;
 const ESPIPE: i64 = 29;
+const EEXIST: i64 = 17;
+/// `EWOULDBLOCK`, the family's own number (R1d).
+pub(super) const EAGAIN: i64 = if cfg!(target_os = "linux") { 11 } else { 35 };
 /// The status of a name the resolver did not answer: no system's error number either, so
 /// `@std/ioerror` gives it the kind `NotFound` on every platform.
 pub(super) const NAME_NOT_FOUND: i64 = -65_537;
@@ -47,6 +50,9 @@ pub(super) enum Object {
         list: Mutex<ReadDir>,
     },
     Stdin,
+    /// Standard output and errors (R1d): written in order with `print` and `eprint`, never closed.
+    Stdout,
+    Stderr,
     /// A connected TCP socket, a listening one, and a UDP one (Gate 2, `eval::net`, the one
     /// module of the interpreter that reaches a network).
     Tcp(super::net::Stream),
@@ -68,6 +74,9 @@ struct Table {
     slots: HashMap<i64, Slot>,
     /// Standard input's handle, once a program has asked for it.
     stdin: Option<i64>,
+    /// Standard output's and errors' handles (R1d), likewise.
+    stdout: Option<i64>,
+    stderr: Option<i64>,
 }
 
 fn table() -> &'static Mutex<Table> {
@@ -185,8 +194,9 @@ pub(super) fn os_intrinsic(
     if let Some(r) = super::process::env_at_failure(op, args, at) {
         return Some(Err(r));
     }
-    if let (Intrinsic::OsStat, [_, Value::Bytes(out)]) = (op, args) {
-        if out.len < 32 {
+    if let (Intrinsic::OsStat | Intrinsic::OsLstat, [_, Value::Bytes(out)]) = (op, args) {
+        let wants = if op == Intrinsic::OsLstat { 48 } else { 32 };
+        if out.len < wants {
             return Some(Err(super::RuntimeError {
                 diagnostic: Box::new(
                     nazm_diag::Diagnostic::error(
@@ -195,7 +205,8 @@ pub(super) fn os_intrinsic(
                         "this buffer is too short for the answer",
                     )
                     .help(format!(
-                        "`os_stat` writes 32 bytes; this `Bytes` is {} long",
+                        "`{}` writes {wants} bytes; this `Bytes` is {} long",
+                        op.name(),
                         out.len
                     )),
                 ),
@@ -254,6 +265,25 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             t.stdin = Some(h);
             handle(h)
         }
+        (Intrinsic::OsStdout | Intrinsic::OsStderr, []) => {
+            let out = op == Intrinsic::OsStdout;
+            let mut t = table().lock().ok()?;
+            if let Some(h) = if out { t.stdout } else { t.stderr } {
+                return handle(h);
+            }
+            let fd = if out { 1 } else { 2 };
+            let slot = t.slots.entry(fd).or_insert((0, None, 0));
+            slot.0 += 1;
+            slot.1 = Some(Arc::new(if out { Object::Stdout } else { Object::Stderr }));
+            slot.2 = 0;
+            let h = (slot.0 << 32) | fd;
+            if out {
+                t.stdout = Some(h);
+            } else {
+                t.stderr = Some(h);
+            }
+            handle(h)
+        }
         (Intrinsic::OsStatus, [Value::OsHandle(h)]) => int(object(*h).map_or_else(|s| s, |_| 0)),
         (Intrinsic::OsRead, [Value::OsHandle(h), Value::Bytes(buf)]) => int(match object(*h) {
             Err(s) => s,
@@ -262,6 +292,7 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 let r = match &*o {
                     Object::File(f) => (&*f).read(&mut got),
                     Object::Stdin => std::io::stdin().lock().read(&mut got),
+                    Object::Stdout | Object::Stderr => return int(-EBADF),
                     Object::Dir { .. } => return int(-EISDIR),
                     Object::Tcp(s) => return int(super::net::tcp_read(*h, s, buf)),
                     Object::PipeOut(p) => super::process::pipe_read(p, &mut got),
@@ -285,7 +316,10 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             Ok(o) => match &*o {
                 Object::Stdin => read_line(buf),
                 Object::Dir { .. } => -EISDIR,
+                // Standard output and errors (R1d) are not standard input: as the runtime's.
                 Object::File(_)
+                | Object::Stdout
+                | Object::Stderr
                 | Object::Tcp(_)
                 | Object::Listener(_)
                 | Object::Udp(_)
@@ -299,6 +333,9 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             Ok(o) => match &*o {
                 Object::File(f) => counted((&*f).write(&data.read())),
                 Object::Stdin => -EBADF,
+                // In order with `print` and `eprint`, which write through the same streams.
+                Object::Stdout => stream(&mut std::io::stdout(), &data.read()),
+                Object::Stderr => stream(&mut std::io::stderr(), &data.read()),
                 Object::Dir { .. } => -EISDIR,
                 Object::Tcp(s) => super::net::tcp_write(*h, s, data),
                 Object::PipeIn(p) => counted((&*p).write(&data.read())),
@@ -325,6 +362,8 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                         }
                     }
                     Object::Stdin
+                    | Object::Stdout
+                    | Object::Stderr
                     | Object::Tcp(_)
                     | Object::Listener(_)
                     | Object::Udp(_)
@@ -340,6 +379,8 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             Ok(o) => match &*o {
                 Object::File(f) => done(f.sync_all()),
                 Object::Stdin
+                | Object::Stdout
+                | Object::Stderr
                 | Object::Tcp(_)
                 | Object::Listener(_)
                 | Object::Udp(_)
@@ -397,6 +438,8 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 }
                 Object::File(_)
                 | Object::Stdin
+                | Object::Stdout
+                | Object::Stderr
                 | Object::Tcp(_)
                 | Object::Listener(_)
                 | Object::Udp(_)
@@ -431,6 +474,92 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 }
             })
         }
+        // The platform, further (R1d): a path's own facts, a link not followed.
+        (Intrinsic::OsLstat, [Value::Str(p), Value::Bytes(out)]) => {
+            int(match std::fs::symlink_metadata(path(p)) {
+                Err(e) => status(&e),
+                Ok(m) => {
+                    let ft = m.file_type();
+                    let kind = if ft.is_symlink() {
+                        3
+                    } else if ft.is_file() {
+                        0
+                    } else if ft.is_dir() {
+                        1
+                    } else {
+                        2
+                    };
+                    let modified = m.mtime().saturating_mul(1_000_000_000) + m.mtime_nsec();
+                    // macOS's `dev_t` is 32 bits, read unsigned as natively.
+                    let dev = if cfg!(target_os = "linux") {
+                        m.dev()
+                    } else {
+                        m.dev() & 0xFFFF_FFFF
+                    };
+                    let mut b = Vec::with_capacity(48);
+                    for w in [
+                        i64::try_from(m.size()).unwrap_or(i64::MAX),
+                        kind,
+                        modified,
+                        i64::from(m.mode() & 0o7777),
+                        i64::from_ne_bytes(dev.to_ne_bytes()),
+                        i64::from_ne_bytes(m.ino().to_ne_bytes()),
+                    ] {
+                        b.extend_from_slice(&w.to_le_bytes());
+                    }
+                    write(out, &b);
+                    0
+                }
+            })
+        }
+        (Intrinsic::OsChmod, [Value::Str(p), Value::Int(mode)]) => {
+            let Ok(bits) = u32::try_from(*mode) else {
+                return int(-EINVAL);
+            };
+            if bits > 0o7777 {
+                return int(-EINVAL);
+            }
+            int(done(std::fs::set_permissions(
+                path(p),
+                std::fs::Permissions::from_mode(bits),
+            )))
+        }
+        (Intrinsic::OsRealpath, [Value::Str(p), Value::Bytes(out)]) => {
+            int(match std::fs::canonicalize(path(p)) {
+                Err(e) => status(&e),
+                Ok(full) => {
+                    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(full.as_os_str());
+                    if bytes.len() > out.len {
+                        -EINVAL
+                    } else {
+                        write(out, bytes);
+                        i64::try_from(bytes.len()).unwrap_or(-EINVAL)
+                    }
+                }
+            })
+        }
+        (Intrinsic::OsMkdtemp, [Value::Str(p)]) => {
+            Some(Value::Str(Str::heap(make_temp(p).unwrap_or_default())))
+        }
+        (
+            Intrinsic::OsLock | Intrinsic::OsTryLock,
+            [Value::OsHandle(h), Value::Bool(exclusive)],
+        ) => int(match object(*h) {
+            Err(s) => s,
+            Ok(o) => match &*o {
+                Object::File(f) => lock(f, *exclusive, op == Intrinsic::OsLock),
+                Object::Dir { .. } => -EISDIR,
+                _ => -EINVAL,
+            },
+        }),
+        (Intrinsic::OsUnlock, [Value::OsHandle(h)]) => int(match object(*h) {
+            Err(s) => s,
+            Ok(o) => match &*o {
+                Object::File(f) => done(f.unlock()),
+                Object::Dir { .. } => -EISDIR,
+                _ => -EINVAL,
+            },
+        }),
         (Intrinsic::OsMkdir, [Value::Str(p)]) => int(done(std::fs::create_dir(path(p)))),
         (Intrinsic::OsRmdir, [Value::Str(p)]) => int(done(std::fs::remove_dir(path(p)))),
         (Intrinsic::OsUnlink, [Value::Str(p)]) => int(done(std::fs::remove_file(path(p)))),
@@ -492,4 +621,74 @@ fn read_line(view: &BytesView) -> i64 {
 /// `bytes` over the start of `view`.
 fn write(view: &BytesView, bytes: &[u8]) {
     view.write(0, bytes);
+}
+
+/// Raw bytes on a standard stream (R1d), flushed so they keep their place among `print`'s: the
+/// count, or the status.
+fn stream(w: &mut impl std::io::Write, bytes: &[u8]) -> i64 {
+    match w.write_all(bytes).and_then(|()| w.flush()) {
+        Ok(()) => i64::try_from(bytes.len()).unwrap_or(-EINVAL),
+        Err(e) => status(&e),
+    }
+}
+
+/// An advisory whole-file lock (R1d), the `flock` the native runtime takes: waited for, or tried.
+fn lock(f: &File, exclusive: bool, wait: bool) -> i64 {
+    match (exclusive, wait) {
+        (true, true) => done(f.lock()),
+        (false, true) => done(f.lock_shared()),
+        (true, false) => tried(f.try_lock()),
+        (false, false) => tried(f.try_lock_shared()),
+    }
+}
+
+fn tried(r: Result<(), std::fs::TryLockError>) -> i64 {
+    match r {
+        Ok(()) => 0,
+        Err(std::fs::TryLockError::WouldBlock) => -EAGAIN,
+        Err(std::fs::TryLockError::Error(e)) => status(&e),
+    }
+}
+
+/// A new directory in `parent` named `nazm-` and twelve random lowercase letters and digits, made
+/// by this call, its permissions 0o700 (R1d): its path, or `None` — for an empty parent, a failure
+/// of the system's, or 64 names all taken. The native runtime's rule, step for step.
+fn make_temp(parent: &Str) -> Option<Vec<u8>> {
+    let base = parent.bytes();
+    let &last = base.last()?;
+    let mut head = base.to_vec();
+    if last != b'/' {
+        head.push(b'/');
+    }
+    head.extend_from_slice(b"nazm-");
+    for _ in 0..64 {
+        let mut random = [0_u8; 12];
+        File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut random))
+            .ok()?;
+        let mut name = head.clone();
+        name.extend(random.iter().map(|b| {
+            let c = b % 36;
+            if c < 10 {
+                b'0' + c
+            } else {
+                b'a' + (c - 10)
+            }
+        }));
+        let at = std::path::PathBuf::from(
+            <std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(name.clone()),
+        );
+        match std::fs::create_dir(&at) {
+            Ok(()) => {
+                if std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o700)).is_err() {
+                    let _ = std::fs::remove_dir(&at);
+                    return None;
+                }
+                return Some(name);
+            }
+            Err(e) if status(&e) == -EEXIST => {}
+            Err(_) => return None,
+        }
+    }
+    None
 }

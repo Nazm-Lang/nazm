@@ -280,8 +280,19 @@ pub fn escape(s: &str) -> String {
 /// and which a task's thread, a pool's task stacks and `nz.stack_check` read in place of their
 /// defaults. 32 is R1b's 128-bit integers (L13b): the wide part — `nz.i128_divrem`,
 /// `nz.i128_mul`, `nz.i128_to_f64`, `nz.i128_to_f32`, `nz.f64_to_i128` and `nz.format_i128`,
-/// each taking its 128-bit values by address.
-pub const RUNTIME_ABI_REVISION: u32 = 32;
+/// each taking its 128-bit values by address. 33 is R1d: the counted heap (`nz.heap_reserve`,
+/// `nz.heap_malloc`, `nz.heap_realloc`, `nz.heap_free`, a heap part); lines of standard input
+/// (`nz.os_read_line` and the `nz.os_in_*` buffer, which `nz.os_read` of standard input now
+/// reads through); standard output and errors as handles (`nz.os_std_stream`, `nz.os_stdout_h`,
+/// `nz.os_stderr_h`); process control (`nz.os_spawn_in`, `nz.os_pid`, `nz.os_child_pid`,
+/// `nz.os_kill_group`, `nz.os_try_wait`, `nz.os_wait_until`, `nz.os_child_rusage`, the child
+/// record's process id at 40 and peak memory at 48); the file-system part (`nz.os_lstat`,
+/// `nz.os_chmod`, `nz.os_realpath`, `nz.os_mkdtemp`, `nz.os_file_lock`, `nz.os_file_unlock`); and
+/// the platform layer's `nz_os_spawn_in`, `nz_os_reap(ref, block, rss)` by `wait4`,
+/// `nz_os_child_id`, `nz_os_pid`, `nz_os_signal_group`, `nz_os_nap`, `nz_os_lstat`,
+/// `nz_os_chmod`, `nz_os_realpath` and `nz_os_flock`. Also R1 (5b.3): the entry ends with
+/// `main`'s result as the exit status unless `NAZM_RESULT_REPORT` asks for it printed.
+pub const RUNTIME_ABI_REVISION: u32 = 33;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -508,6 +519,20 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.os_child_pipe", [I64, I64], Some(Word::I64), Net, "a child's pipe's handle, or a status (Gate 2)"),
     import!("nz.os_wait", [I64], Some(Word::I64), Net, "a child's exit, or a status (Gate 2)"),
     import!("nz.os_kill", [I64], Some(Word::I64), Net, "0, or a status (Gate 2)"),
+    import!("nz.os_std_stream", [I64], Some(Word::I64), Files, "standard output's (1) or errors' (2) handle (R1d)"),
+    import!("nz.os_spawn_in", [Ptr, I64, Ptr, Ptr, I64, Ptr, I64], Some(Word::I64), Net, "borrows the program, the arguments, the directory and the environment; the child's handle, or -errno (R1d)"),
+    import!("nz.os_pid", [], Some(Word::I64), Net, "this process's id (R1d)"),
+    import!("nz.os_child_pid", [I64], Some(Word::I64), Net, "a child's process id, or a status (R1d)"),
+    import!("nz.os_kill_group", [I64, I64], Some(Word::I64), Net, "0, or a status (R1d)"),
+    import!("nz.os_try_wait", [I64], Some(Word::I64), Net, "a child's exit, or a status (R1d)"),
+    import!("nz.os_wait_until", [I64, I64], Some(Word::I64), Net, "a child's exit, or a status (R1d)"),
+    import!("nz.os_child_rusage", [I64], Some(Word::I64), Net, "a waited child's peak resident memory, or a status (R1d)"),
+    import!("nz.os_lstat", [Ptr, I64, Ptr], Some(Word::I64), Files, "borrows the path; six words into the caller's 48 bytes; 0 or -errno (R1d)"),
+    import!("nz.os_chmod", [Ptr, I64, I64], Some(Word::I64), Files, "borrows the path; 0 or -errno (R1d)"),
+    import!("nz.os_realpath", [Ptr, I64, Ptr, I64], Some(Word::I64), Files, "borrows the path; the canonical path into the caller's buffer; a length, or a status (R1d)"),
+    import!("nz.os_mkdtemp", [Ptr, I64, Ptr, I64], Some(Word::I64), Files, "borrows the parent; the new directory's path into the caller's buffer; a length, or a status (R1d)"),
+    import!("nz.os_file_lock", [I64, Bit, I64], Some(Word::I64), Files, "0, or a status; waits when the third word is 1 (R1d)"),
+    import!("nz.os_file_unlock", [I64], Some(Word::I64), Files, "0, or a status (R1d)"),
     import!("nz.format_float", [Ptr, F64, Bit], Some(Word::I64), Numbers, "writes a float's shortest round-trip text, as a Float32 when the flag is set, into 40 bytes the caller owns and returns how many (Gate 2)"),
     import!("nz.format_fixed", [Ptr, F64, I64], Some(Word::I64), Numbers, "writes a float with exactly so many decimals, C's `%.*f`, into 360 bytes the caller owns and returns how many (R1a, L4)"),
     import!("nz.format_u64", [Ptr, I64], Some(Word::I64), Numbers, "writes a UInt64's decimal digits into 21 bytes the caller owns and returns how many (Gate 2)"),
@@ -753,6 +778,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_open_write", "i64" ("ptr", "i64", "i64") "", false, Files, "io", Status, Any, "open a file to write, by mode (Gate 2)", "borrows the path"),
     rt!("nz.os_dir_open", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "open a directory to list (Gate 2)", "borrows the path"),
     rt!("nz.os_stdin", "i64" () "", false, Files, "io", Status, Any, "standard input's handle (Gate 2)", "none"),
+    rt!("nz.os_std_stream", "i64" ("i64") "", false, Files, "io", Status, Any, "standard output's or errors' handle (R1d)", "none"),
     rt!("nz.os_status", "i64" ("i64") "", false, Files, "", Status, Any, "whether a handle is live (Gate 2)", "none"),
     rt!("nz.os_read", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "read into a buffer (Gate 2)", "writes the caller's buffer"),
     rt!("nz.heap_reserve", "void" ("i64") "", false, Heap, "", Ends, Any, "count bytes as live, or end the process past the heap limit (R1d, D5)", "none"),
@@ -809,6 +835,29 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_child_pipe", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "a child's pipe (Gate 2)", "none"),
     rt!("nz.os_wait", "i64" ("i64") "", false, Net, "io", Status, Any, "wait for a child's exit (Gate 2)", "none"),
     rt!("nz.os_kill", "i64" ("i64") "", false, Net, "io", Status, Any, "kill a child (Gate 2)", "none"),
+    rt!("nz.os_spawn_in", "i64" ("ptr", "i64", "ptr", "ptr", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "run a program in a directory with an environment, by flags (R1d)", "borrows the program, the arguments, the directory and the environment"),
+    rt!("nz.os_has_byte", "i1" ("ptr", "i64", "i8") "", false, Net, "", Never, Any, "whether bytes hold a given byte (R1d)", "borrows the bytes"),
+    rt!("nz.os_beside", "ptr" ("ptr", "ptr", "i64", "ptr") "", false, Net, "", Null, Any, "a relative program made absolute beside a canonical directory (R1d)", "borrows both; the path is the caller's"),
+    rt!("nz.os_env_order", "i64" ("ptr", "ptr") "", false, Net, "", Never, Any, "two environment entries by name (R1d)", "borrows both"),
+    rt!("nz.os_envp", "ptr" ("ptr", "ptr") "", false, Net, "", Null, Any, "a child's environment, checked and ordered by name (R1d)", "borrows the strings; the array and its strings are the caller's"),
+    rt!("nz.os_env_unshift", "void" ("ptr", "i64", "i64") "", false, Net, "", Never, Any, "an insertion's shift undone (R1d)", "writes the array"),
+    rt!("nz.os_envp_free", "void" ("ptr") "", false, Net, "", Never, Any, "free a child's environment array and its strings (R1d)", "owns what it frees"),
+    rt!("nz.os_start", "i64" ("ptr", "i64", "ptr", "ptr", "ptr", "i64") "", false, Net, "io", Status, Any, "start a program, its pipes and its record (Gate 2, R1d)", "borrows the program, the arguments, the directory and the environment"),
+    rt!("nz.os_try_wait", "i64" ("i64") "", false, Net, "io", Status, Any, "a child's exit if it has ended (R1d)", "none"),
+    rt!("nz.os_wait_until", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "a child's exit if it ends before a deadline (R1d)", "none"),
+    rt!("nz.os_mono_ms", "i64" () "", false, Net, "", Never, Any, "the monotonic clock in milliseconds (R1d)", "none"),
+    rt!("nz.os_wait_for", "i64" ("i64", "i64", "i64") "", false, Net, "io", Status, Any, "wait for a child: until it ends, not at all, or until a deadline (R1d)", "pins the handle"),
+    rt!("nz.os_child_pid", "i64" ("i64") "", false, Net, "io", Status, Any, "a child's process id (R1d)", "none"),
+    rt!("nz.os_child_rusage", "i64" ("i64") "", false, Net, "io", Status, Any, "a waited child's peak resident memory (R1d)", "none"),
+    rt!("nz.os_pid", "i64" () "", false, Net, "io", Never, Any, "this process's id (R1d)", "none"),
+    rt!("nz.os_kill_group", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "a signal to a process group (R1d)", "none"),
+    rt!("nz.os_lstat", "i64" ("ptr", "i64", "ptr") "", false, Files, "io", Status, Any, "a path's own size, kind, time, permissions, device and inode (R1d)", "borrows the path; writes the caller's 48 bytes"),
+    rt!("nz.os_chmod", "i64" ("ptr", "i64", "i64") "", false, Files, "io", Status, Any, "a path's permission bits (R1d)", "borrows the path"),
+    rt!("nz.os_realpath", "i64" ("ptr", "i64", "ptr", "i64") "", false, Files, "io", Status, Any, "a path's canonical form (R1d)", "borrows the path; writes the caller's buffer"),
+    rt!("nz.os_mkdtemp", "i64" ("ptr", "i64", "ptr", "i64") "", false, Files, "io", Status, Any, "a new private directory (R1d)", "borrows the parent; writes the caller's buffer"),
+    rt!("nz.os_file_lock", "i64" ("i64", "i1", "i64") "", false, Files, "io", Status, Any, "an advisory whole-file lock, waited for or tried (R1d)", "none"),
+    rt!("nz.os_file_unlock", "i64" ("i64") "", false, Files, "io", Status, Any, "let a file's lock go (R1d)", "none"),
+    rt!("nz.os_flock_handle", "i64" ("i64", "i32", "i1") "", false, Files, "io", Status, Any, "a lock operation on a pinned file (R1d)", "pins the handle"),
     rt!("nz.format_float", "i64" ("ptr", "double", "i1") "", false, Numbers, "", Never, Any, "a float's shortest round-trip text, by ECMAScript's layout (Gate 2)", "writes into the caller's buffer"),
     rt!("nz.format_fixed", "i64" ("ptr", "double", "i64") "", false, Numbers, "", Never, Any, "a float with exactly so many decimals, C's `%.*f` (R1a, L4)", "writes into the caller's buffer"),
     rt!("nz.fmt_layout", "i64" ("ptr", "ptr", "i64", "i64") "", false, Numbers, "", Never, Any, "lay out a float's digits and exponent by ECMAScript's rule (Gate 2)", "writes into the caller's buffer"),
@@ -865,6 +914,8 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.os_in_at", ty: "i64", thread_local: false, writers: "`nz.os_in_read` and `nz.os_in_line`, under standard input's lock (R1d, P3)" },
     RuntimeGlobal { symbol: "nz.os_in_end", ty: "i64", thread_local: false, writers: "`nz.os_in_line`, under standard input's lock (R1d, P3)" },
     RuntimeGlobal { symbol: "nz.os_in_lock", ty: "i32", thread_local: false, writers: "`nz.os_in_acquire` and `nz.os_in_release`, atomically (R1d, P3)" },
+    RuntimeGlobal { symbol: "nz.os_stdout_h", ty: "i64", thread_local: false, writers: "`nz.os_std_stream`, once, under the handle table's lock (R1d)" },
+    RuntimeGlobal { symbol: "nz.os_stderr_h", ty: "i64", thread_local: false, writers: "`nz.os_std_stream`, once, under the handle table's lock (R1d)" },
     RuntimeGlobal { symbol: "nz.net_state", ty: "i64", thread_local: false, writers: "`nz.net_start`, atomically, once (Gate 2)" },
     RuntimeGlobal { symbol: "nz.net_poller", ty: "i64", thread_local: false, writers: "`nz.net_start`, once, before the reactor runs (Gate 2)" },
     RuntimeGlobal { symbol: "nz.net_thread", ty: "i64", thread_local: false, writers: "`pthread_create`, once (Gate 2)" },
@@ -1248,9 +1299,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_two_and_reaches_the_system_only_through_its_platform_layer() {
+    fn the_runtime_is_revision_thirty_three_and_reaches_the_system_only_through_its_platform_layer()
+    {
         // R1b's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 32);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 33);
         // 128-bit integers (R1b, L13b), in the wide part only.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.i128_divrem("));
         assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.i128_divrem("));

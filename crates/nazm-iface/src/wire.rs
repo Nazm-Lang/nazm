@@ -160,7 +160,7 @@ use nazm_span::Span;
 /// refuse every use as an unknown name — or, worse, take an importer's name for its own — so the
 /// major moves. Absent where empty. R1a's other additions — `{"box":T}`, `{"list":T}`,
 /// `{"tuple":[…]}` — are types an older reader refuses as unknown, and moved nothing.
-pub const SCHEMA: &str = "nazm.interface/12";
+pub const SCHEMA: &str = "nazm.interface/13";
 
 /// A type as persisted.
 ///

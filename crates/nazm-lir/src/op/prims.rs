@@ -120,6 +120,23 @@ impl Fx<'_, '_> {
             | Intrinsic::OsChildPipe
             | Intrinsic::OsWait
             | Intrinsic::OsKill
+            | Intrinsic::OsStdout
+            | Intrinsic::OsStderr
+            | Intrinsic::OsSpawnIn
+            | Intrinsic::OsSpawnWith
+            | Intrinsic::OsPid
+            | Intrinsic::OsChildPid
+            | Intrinsic::OsKillGroup
+            | Intrinsic::OsTryWait
+            | Intrinsic::OsWaitUntil
+            | Intrinsic::OsChildRusage
+            | Intrinsic::OsLstat
+            | Intrinsic::OsChmod
+            | Intrinsic::OsRealpath
+            | Intrinsic::OsMkdtemp
+            | Intrinsic::OsLock
+            | Intrinsic::OsTryLock
+            | Intrinsic::OsUnlock
             | Intrinsic::OsRandomBytes => {
                 let at = self.at;
                 self.lw

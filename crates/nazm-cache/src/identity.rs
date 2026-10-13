@@ -339,7 +339,12 @@ use crate::digest::{self, Framed};
 /// `println` and `eprintln`, moved from refused to accepted, and a function of either name to
 /// refused; an enum construction without its type arguments, `Some`, `None`, `Ok`, `Err` and a
 /// variant without `()`, moved from refused (`N0352`) to accepted where they are decided.
-pub const SEMANTIC_EPOCH: u32 = 72;
+/// `73` — R1, 2026-10-14. A `main` holding no `OutCap` or `IoCap` holds one, unwritten; a
+/// function with no result type, and a call of one used as a value refused (`N0300`); R1d's
+/// built-ins — `os_read_line`, standard output and errors as handles, `os_spawn_in` and
+/// `os_spawn_with`, process ids, groups, waits and peak memory, `os_lstat`, `os_chmod`,
+/// `os_realpath`, `os_mkdtemp` and file locks — moved from refused to accepted.
+pub const SEMANTIC_EPOCH: u32 = 73;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

@@ -3,7 +3,10 @@ name = "nazm-core"
 description = "Type checking, the one lowering to Core IR, and evaluation."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Not `workspace = true` (R1d): the interpreter's `os_lock`, `os_try_lock` and `os_unlock` are
+# `std::fs::File::lock` and its kin, stabilised in 1.89 — the only advisory lock a crate that
+# forbids `unsafe` can take. The workspace floor (1.85) stays the other crates'.
+rust-version = "1.89"
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
