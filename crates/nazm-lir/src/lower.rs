@@ -94,6 +94,10 @@ pub struct Native {
     /// How many capability parameters `main` takes (N37): the root authority the entry
     /// wrapper hands it, one erased word each.
     pub entry_roots: usize,
+    /// Whether the program can have only one thread: not a library, and `main` holds no
+    /// `SpawnCap`, `NetCap` or `ForeignCap` — the only authorities that start a thread or let C
+    /// call back in from one (the speed milestone, `Needs::single`).
+    pub single_thread: bool,
 }
 
 fn type_name(identity: &mir::TypeIdentity) -> NativeTypeName {
@@ -365,6 +369,22 @@ pub fn lower_as(
         None => None,
     };
 
+    // One thread, by `main`'s authority (the speed milestone): without `SpawnCap`, `NetCap`
+    // and `ForeignCap` nothing can start another, and a library's caller may call from any.
+    let single_thread = !library
+        && entry_id.and_then(|e| program.function(e)).is_some_and(|f| {
+            !f.param_types().any(|t| {
+                matches!(
+                    t,
+                    Type::Cap(
+                        nazm_sema::CapabilityKind::Spawn
+                            | nazm_sema::CapabilityKind::Net
+                            | nazm_sema::CapabilityKind::Foreign
+                    )
+                )
+            })
+        });
+
     // A task may not be handed a sequence: it is shared and mutable, and nothing synchronises
     // it.
     for f in &program.functions {
@@ -608,6 +628,7 @@ pub fn lower_as(
         instances,
         entry: entry_symbol,
         entry_roots,
+        single_thread,
         program,
     })
 }

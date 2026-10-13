@@ -343,6 +343,7 @@ fn all() -> nazm_lir::Needs {
         files: true,
         net: true,
         wide: true,
+        single: false,
     }
 }
 

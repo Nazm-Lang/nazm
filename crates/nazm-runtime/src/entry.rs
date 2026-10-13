@@ -57,7 +57,7 @@ pub fn emit_entry_for(
     let mut out = String::new();
     preamble(&mut out, "<nazm entry>");
     declarations(&mut out);
-    runtime_declarations(&mut out);
+    runtime_declarations(&mut out, needs.single);
     let root_types = vec!["i64"; roots].join(", ");
     let root_args = vec!["i64 0"; roots].join(", ");
     let _ = writeln!(out, "declare i64 {entry}({root_types})");

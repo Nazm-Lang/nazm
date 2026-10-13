@@ -394,12 +394,22 @@ impl Backend for LlvmText {
             text
         };
         let needs = m.needs;
-        // A freestanding image has one thread and no thread-local storage (N62, §7.64): the
-        // failure state the unit declares is an ordinary global there.
-        let ir = if self.target.os == Os::None {
+        // A freestanding image has one thread and no thread-local storage (N62, §7.64), and a
+        // hosted program whose `main` holds no authority to start a thread has one thread too
+        // (the speed milestone): the failure state and stack limit the unit declares are ordinary
+        // globals there, as the runtime defines them (`Needs::single`).
+        let one_thread = |l: &str| {
+            nazm_runtime::SINGLE_THREAD_STATE
+                .iter()
+                .any(|g| l.starts_with(&format!("@{g} = ")))
+        };
+        let ir = if self.target.os == Os::None || native.single_thread {
             ir.lines()
                 .map(|l| {
-                    if l.starts_with('@') && l.contains(" = external thread_local global ") {
+                    if l.starts_with('@')
+                        && l.contains(" = external thread_local global ")
+                        && (self.target.os == Os::None || one_thread(l))
+                    {
                         l.replacen(" thread_local ", " ", 1)
                     } else {
                         l.to_owned()

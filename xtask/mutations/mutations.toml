@@ -9109,7 +9109,7 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_servi
 name = "n43-the-failure-state-is-shared-between-threads"
 why = "`nz.failed` is an ordinary global, so one task's failure is another's and the units' thread-local declarations disagree with the definition"
 file = "crates/nazm-runtime/src/core.rs"
-find = """    let _ = writeln!(out, "@nz.failed = hidden thread_local global i1 false");"""
+find = """    let _ = writeln!(out, "@nz.failed = hidden {tls}global i1 false");"""
 replace = """    let _ = writeln!(out, "@nz.failed = hidden global i1 false");"""
 killers = [{ package = "nazm-runtime", lib = true, name = "tests::every_runtime_global_is_inventoried" }]
 
@@ -17666,3 +17666,50 @@ file = "crates/nazm-core/src/derive.rs"
 find = '''            if *format == "json" {'''
 replace = '''            if true {'''
 killers = [{ package = "nazm-cli", test = "derive_toml", name = "a_package_manifest_reads_through_a_derived_record" }]
+
+# --- R1 5b.8: a program of one thread, and the inlined stack check -----------------------------
+
+[[mutation]]
+name = "r1-no-program-has-one-thread"
+why = "no program is found to have one thread, so every one pays a thread-local read per check and per call"
+file = "crates/nazm-lir/src/lower.rs"
+find = '''    let single_thread = !library'''
+replace = '''    let single_thread = false && !library'''
+killers = [{ package = "nazm-cli", test = "single_thread", name = "main_s_authority_decides_whether_the_state_is_thread_local" }]
+
+[[mutation]]
+name = "r1-a-one-thread-unit-keeps-thread-local-state"
+why = "a unit of a program of one thread still declares its failure state thread-local, which the runtime defines as a plain global"
+file = "crates/nazm-lir/src/backend.rs"
+find = '''                        && (self.target.os == Os::None || one_thread(l))'''
+replace = '''                        && self.target.os == Os::None'''
+killers = [{ package = "nazm-cli", test = "single_thread", name = "main_s_authority_decides_whether_the_state_is_thread_local" }]
+
+[[mutation]]
+name = "r1-the-entry-declares-thread-local-state"
+why = "the entry of a program of one thread declares the failure state thread-local, so it reads another variable than the one main wrote"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''        let d = if single && super::SINGLE_THREAD_STATE.contains(&g.symbol) {'''
+replace = '''        let d = if false && super::SINGLE_THREAD_STATE.contains(&g.symbol) {'''
+killers = [{ package = "nazm-cli", test = "single_thread", name = "main_s_authority_decides_whether_the_state_is_thread_local" }]
+
+[[mutation]]
+name = "r1-the-stack-check-is-a-call"
+why = "the stack check is not inlined, so every recursive call calls into the runtime"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''
+        } if args.is_empty()
+            && m.symbol(*callee)'''
+replace = '''
+        } if false
+            && args.is_empty()
+            && m.symbol(*callee)'''
+killers = [{ package = "nazm-cli", test = "single_thread", name = "main_s_authority_decides_whether_the_state_is_thread_local" }]
+
+[[mutation]]
+name = "r1-the-runtime-keeps-thread-local-state"
+why = "the runtime of a program of one thread defines its failure state thread-local, which the units declare plain"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''    let tls = if needs.single { "" } else { "thread_local " };'''
+replace = '''    let tls = "thread_local ";'''
+killers = [{ package = "nazm-cli", test = "single_thread", name = "main_s_authority_decides_whether_the_state_is_thread_local" }]

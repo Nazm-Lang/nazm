@@ -127,6 +127,12 @@ pub fn module(m: &Module) -> String {
     if m.symbols.iter().any(|s| s.name == "nz.failed_now") {
         let _ = writeln!(out, "@nz.failed = external thread_local global i1");
     }
+    // The stack check, inlined (the speed milestone): the limit is read here and the runtime
+    // called only when it is unset or crossed.
+    if m.symbols.iter().any(|s| s.name == "nz.stack_check") {
+        let _ = writeln!(out, "@nz.stack_limit = external thread_local global i64");
+        let _ = writeln!(out, "declare ptr @llvm.frameaddress.p0(i32)");
+    }
     for (i, s) in m.symbols.iter().enumerate() {
         if s.linkage != Linkage::Import {
             continue;
@@ -681,6 +687,45 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
             let _ = writeln!(out, "  {t} = load i1, ptr @nz.failed");
             let d = p.named(*d, Class::I32);
             let _ = writeln!(out, "  {d} = zext i1 {t} to i32");
+        }
+        // The stack check (N49), inlined: this frame against the thread's limit, which the runtime
+        // sets on the thread's first check. Only then — the limit 0 — or past it is the runtime
+        // called, and its answer is the check's; otherwise the answer is 0. One load and two
+        // comparisons where every recursive call was a call into another module.
+        Inst::Call {
+            dst: Some(d),
+            callee,
+            args,
+        } if args.is_empty()
+            && m.symbol(*callee)
+                .is_some_and(|s| s.name == "nz.stack_check") =>
+        {
+            let (fp, sp, lim, past, unset, slow) =
+                (p.temp(), p.temp(), p.temp(), p.temp(), p.temp(), p.temp());
+            let n = p.temp();
+            let n = n.trim_start_matches('%');
+            let r = p.temp();
+            let _ = writeln!(out, "  {fp} = call ptr @llvm.frameaddress.p0(i32 0)");
+            let _ = writeln!(out, "  {sp} = ptrtoint ptr {fp} to i64");
+            let _ = writeln!(out, "  {lim} = load i64, ptr @nz.stack_limit");
+            let _ = writeln!(out, "  {past} = icmp ult i64 {sp}, {lim}");
+            let _ = writeln!(out, "  {unset} = icmp eq i64 {lim}, 0");
+            let _ = writeln!(out, "  {slow} = or i1 {past}, {unset}");
+            let _ = writeln!(
+                out,
+                "  br i1 {slow}, label %sc.slow.{n}, label %sc.fast.{n}"
+            );
+            let _ = writeln!(out, "sc.slow.{n}:");
+            let _ = writeln!(out, "  {r} = call i32 @nz.stack_check()");
+            let _ = writeln!(out, "  br label %sc.join.{n}");
+            let _ = writeln!(out, "sc.fast.{n}:");
+            let _ = writeln!(out, "  br label %sc.join.{n}");
+            let _ = writeln!(out, "sc.join.{n}:");
+            let d = p.named(*d, Class::I32);
+            let _ = writeln!(
+                out,
+                "  {d} = phi i32 [ {r}, %sc.slow.{n} ], [ 0, %sc.fast.{n} ]"
+            );
         }
         Inst::Call { dst, callee, args } => {
             let s = m.sig(*callee).cloned().unwrap_or(Sig {

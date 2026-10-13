@@ -39,10 +39,18 @@ use crate::{preamble, Needs};
 /// The globals are `external`: one definition lives in the runtime unit and every other
 /// object binds to it. Before N5 they were `internal` and there was only ever one module,
 /// so the question did not arise.
-pub fn runtime_declarations(out: &mut String) {
-    // Generated from the inventory, so a declaration cannot disagree with it (N43).
+pub fn runtime_declarations(out: &mut String, single: bool) {
+    // Generated from the inventory, so a declaration cannot disagree with it (N43); in a
+    // program of one thread the failure state and stack limit are plain globals, as the
+    // runtime defines them there (`Needs::single`).
     for g in super::GLOBALS {
-        let _ = writeln!(out, "{}", g.declaration());
+        let d = g.declaration();
+        let d = if single && super::SINGLE_THREAD_STATE.contains(&g.symbol) {
+            d.replacen(" thread_local ", " ", 1)
+        } else {
+            d
+        };
+        let _ = writeln!(out, "{d}");
     }
     for f in super::INVENTORY.iter().filter(|f| f.declared) {
         let _ = writeln!(out, "{}", f.declaration());
@@ -87,16 +95,19 @@ pub fn emit_runtime(needs: Needs) -> String {
     // The failure state is **thread-local**: two tasks can fail at once and neither may
     // see the other's message. Only the *first* failure on a thread is kept, so a second
     // one caused by continuing with the stand-in value of the first cannot overwrite it.
-    let _ = writeln!(out, "@nz.failed = hidden thread_local global i1 false");
-    let _ = writeln!(out, "@nz.errmsg = hidden thread_local global ptr null");
-    let _ = writeln!(out, "@nz.errlen = hidden thread_local global i64 0");
+    // In a program with one thread (`Needs::single`) a plain global: the same state, read
+    // without the call a thread-local read is on macOS.
+    let tls = if needs.single { "" } else { "thread_local " };
+    let _ = writeln!(out, "@nz.failed = hidden {tls}global i1 false");
+    let _ = writeln!(out, "@nz.errmsg = hidden {tls}global ptr null");
+    let _ = writeln!(out, "@nz.errlen = hidden {tls}global i64 0");
     // The stack the program was built to run on (R1b, L14): `nazm build --stack-size`, stored by
     // the platform entry before `main`; 0 where none was asked for, which keeps each default.
     let _ = writeln!(out, "@nz.stack_bytes = hidden global i64 0");
     // The lowest frame address this thread may reach before `nz.stack_check` reports
     // (N49); zero until the thread's first check sets it. Only where something checks.
     if needs.stack {
-        let _ = writeln!(out, "@nz.stack_limit = hidden thread_local global i64 0");
+        let _ = writeln!(out, "@nz.stack_limit = hidden {tls}global i64 0");
     }
     out.push('\n');
 
