@@ -1,9 +1,15 @@
 //! R1b, L14: `nazm build --stack-size` (`docs/spec.md`, *Native recursion, and the stack it runs
 //! on*).
 //!
-//! A program that recurses a million calls deep, in `main` and in a task, meets `N0408` on the
+//! A program that recurses 250,000 calls deep, in `main` and in a task, meets `N0408` on the
 //! default stacks and finishes on the one it asks for — under LLVM and Cranelift, on the pool and
-//! on a thread per task. A board or WebAssembly target, and a size that is not one, are refused.
+//! on a thread per task. Asking for too little is still `N0408`, reported as a failure: `main`
+//! runs on a thread of its own, and how it failed has to reach the report. A board or WebAssembly
+//! target, and a size that is not one, are refused.
+//!
+//! A sized program runs under the many-task address-space ceiling: `main`, the task and every pool
+//! worker each reserve the stack asked for, which a 6-CPU container's pool alone would take past
+//! the default ceiling.
 
 #![allow(
     clippy::unwrap_used,
@@ -21,13 +27,13 @@ use std::process::Command;
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
 const DEEP: &str = "fn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + down(n - 1) } }
-fn task(c: Chan) -> Int { chan_send(c, down(1000000)); 0 }
+fn task(c: Chan) -> Int { chan_send(c, down(250000)); 0 }
 fn main(t: SpawnCap) -> Int ! {spawn} {
     let c = chan_new(1);
     scope { spawn task(c); }
     let got = ints_new();
     chan_recv(c, got);
-    down(1000000) + ints_get(got, 0)
+    down(250000) + ints_get(got, 0)
 }
 ";
 
@@ -60,14 +66,27 @@ fn the_stack_asked_for_carries_a_recursion_the_default_does_not() {
         let plain = build(d.path(), backend, None);
         let r = run_bounded(&mut common::bounded_exe(&plain), backend);
         assert!(r.stderr.contains("error[N0408]"), "{backend}: {r:?}");
-        let sized = build(d.path(), backend, Some("512M"));
+        let sized = build(d.path(), backend, Some("64M"));
+        let small = build(d.path(), backend, Some("4M"));
         for scheduler in ["pool", "threads"] {
             let r = run_bounded(
-                common::bounded_exe(&sized).env("NAZM_SCHEDULER", scheduler),
+                common::bounded_exe_within(&sized, common::TASKS_ADDRESS_SPACE_KB)
+                    .env("NAZM_SCHEDULER", scheduler),
                 backend,
             );
             assert!(
-                r.stdout.starts_with("2000000"),
+                r.stdout.starts_with("500000"),
+                "{backend} {scheduler}: {r:?}"
+            );
+            let r = run_bounded(
+                common::bounded_exe_within(&small, common::TASKS_ADDRESS_SPACE_KB)
+                    .env("NAZM_SCHEDULER", scheduler),
+                backend,
+            );
+            assert_eq!(r.code, Some(2), "{backend} {scheduler}: {r:?}");
+            assert!(r.stdout.is_empty(), "{backend} {scheduler}: {r:?}");
+            assert!(
+                r.stderr.contains("error[N0408]"),
                 "{backend} {scheduler}: {r:?}"
             );
         }

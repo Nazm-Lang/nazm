@@ -17319,3 +17319,11 @@ file = "crates/nazm-core/src/eval/value.rs"
 find = "            if self.start + n <= *room {"
 replace = "            if self.start + n < *room {"
 killers = [{ package = "nazm-cli", test = "memory", name = "only_storage_an_append_made_grows_in_place_and_it_fills_to_its_room" }]
+
+[[mutation]]
+name = "r1b-main-on-its-own-thread-loses-its-failure"
+why = "a sized program's `main` fails on a thread of its own and the entry never learns it, so the process exits 0 with the stand-in value"
+file = "crates/nazm-runtime/src/entry.rs"
+find = '            let _ = writeln!(out, "  store i1 %jf, ptr @nz.failed");'
+replace = ""
+killers = [{ package = "nazm-cli", test = "stack_size", name = "the_stack_asked_for_carries_a_recursion_the_default_does_not" }]
