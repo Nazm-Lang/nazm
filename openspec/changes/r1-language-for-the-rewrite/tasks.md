@@ -45,6 +45,25 @@ each new construct by name until R2 carries it.
 - [x] 5.1 S1 `@std/toml` (2026-10-13; `toml-test` 1.0, 553 of 553, LLVM and Cranelift)
 - [x] 5.2 L2 `@derive(json)` and `@derive(toml)`, with JSON Schema output — L2a `@derive(json)` with its codec and schema, L2b `@codec(…)`, L2c `@derive(toml)`, 2026-10-13
 
+## 5b. Developer experience and speed (the copyright holder's decision, 2026-10-13)
+
+Measured against Go, Python, C, C++ and Rust on the same programs; the targets are minimums. Option
+C for `main`'s authority. Published with the rest of R1 as 0.10.0.
+
+- [ ] 5b.1 Option C: `OutCap` implicit in `main`; every other authority still written
+- [ ] 5b.2 A function with no `-> T` returns nothing
+- [ ] 5b.3 `main`'s `Int` result is the exit status, not printed
+- [ ] 5b.4 `println`
+- [ ] 5b.5 Effects inferred for a function that is not `pub`
+- [ ] 5b.6 `s + t` on strings
+- [ ] 5b.7 `m[k]`, `m[k] = v` and `m[k] += 1` on maps
+- [ ] 5b.8 `fib(35)` ≤ 60 ms (141.6 before; C 37, Go 41) — the stack check inlined, and a program of
+      one thread, known from `main`'s authority, keeping its failure state and stack limit in plain
+      globals: 68.3 ms
+- [ ] 5b.9 Word frequency over 2,000,000 words ≤ 200 ms (453 before; Go 127, C 123): integer text
+      without `snprintf`, fewer allocations, the hash map's probe, retains and releases — 392 ms
+- [ ] 5b.10 The benchmark in the repository, re-run for each publication, and its results on nazm.dev
+
 ## 6. R1d — the platform
 
 - [ ] 6.1 D5 `--heap-limit`

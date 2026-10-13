@@ -75,6 +75,11 @@ pub struct Needs {
     /// `Int128` and `UInt128`'s division, signed product, float conversions and text (R1b,
     /// L13b), which take the C toolchain's 128-bit helpers.
     pub wide: bool,
+    /// The program has one thread (the speed milestone): its `main` holds no `SpawnCap`,
+    /// `NetCap` or `ForeignCap` and it is not a library, so nothing can start another — the
+    /// failure state and the stack limit are then plain globals, not thread-local ones, whose
+    /// every read on macOS is a call. A property of the program, not a service: not named.
+    pub single: bool,
 }
 
 impl Needs {
@@ -96,6 +101,7 @@ impl Needs {
             files: self.files || other.files,
             net: self.net || other.net,
             wide: self.wide || other.wide,
+            single: self.single || other.single,
         }
     }
 
@@ -294,6 +300,7 @@ pub const EVERYTHING: Needs = Needs {
     files: true,
     net: true,
     wide: true,
+    single: false,
 };
 
 /// The runtime's identity as text: blake3 over the whole runtime, the platform entry and the
@@ -997,6 +1004,11 @@ impl RuntimeSymbol {
     }
 }
 
+/// The thread-local globals that are plain ones in a program of one thread (`Needs::single`):
+/// its failure state and its stack limit. The rest stay thread-local; a program of one thread
+/// never reaches them.
+pub const SINGLE_THREAD_STATE: &[&str] = &["nz.failed", "nz.errmsg", "nz.errlen", "nz.stack_limit"];
+
 impl RuntimeGlobal {
     /// How every unit that does not define it declares it.
     #[must_use]
@@ -1055,6 +1067,7 @@ mod tests {
             files: true,
             net: true,
             wide: true,
+            single: false,
         }
     }
 

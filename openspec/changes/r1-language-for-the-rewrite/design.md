@@ -179,6 +179,15 @@ the binding instead (the design Swift uses): it lives in a `Cell` the function a
 name, so a closure outliving its scope leaves nothing dangling, and the cycle argument holds by
 refusing a binding that can hold a function value (`N0386`), as `N0616` refuses such a `Vec`.
 
+**One thread, from authority (5b.8, 2026-10-13).** A program's failure state and stack limit are
+thread-local because tasks run on threads, and on macOS every thread-local read is a call — three
+per call of a recursive function. A program can start a thread only with `SpawnCap` (tasks),
+`NetCap` (the reactor) or `ForeignCap` (C, which may call back from its own); a library may be called
+from any. So a `main` without those three, outside a library, is a program of one thread, a fact the
+capability system already proves: its state is plain globals, decided before any unit is generated
+(`Native::single_thread`), in the units, the entry and the runtime alike (`Needs::single`). A program
+linked against a prebuilt runtime keeps the thread-local state that runtime was built with.
+
 **L2 as carried out (2026-10-13).** Derived serialisation is ordinary Nazm, generated: the loader
 expands a file whose `struct` or `enum` carries `@derive(json)` by appending the functions it means,
 as `nazm test`'s harness already appends its `main` (`crates/nazm-cli/src/harness.rs`). So every

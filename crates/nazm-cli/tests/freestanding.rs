@@ -152,14 +152,24 @@ fn tls_symbols(path: &Path) -> usize {
 
 #[test]
 fn a_unit_for_the_board_refers_to_no_thread_local_storage() {
-    // An addition that can overflow records a failure: in a hosted unit that state is
-    // thread-local, on the board an ordinary global.
-    let d = program(
-        "fn add(a: Int, b: Int) -> Int { a + b }
-fn main() -> Int { add(1, 2) }
-",
-    );
-    for (target, tls) in [("x86_64-unknown-linux-gnu", true), (BOARD, false)] {
+    // An addition that can overflow records a failure: in a hosted unit whose `main` may
+    // start a thread that state is thread-local; on the board, and in a hosted program of one
+    // thread, an ordinary global.
+    const ADD: &str = "fn add(a: Int, b: Int) -> Int { a + b }\n";
+    for (main, target, tls) in [
+        (
+            "fn main(n: NetCap) -> Int { add(1, 2) }\n",
+            "x86_64-unknown-linux-gnu",
+            true,
+        ),
+        (
+            "fn main() -> Int { add(1, 2) }\n",
+            "x86_64-unknown-linux-gnu",
+            false,
+        ),
+        ("fn main() -> Int { add(1, 2) }\n", BOARD, false),
+    ] {
+        let d = program(&format!("{ADD}{main}"));
         let o = nazm(
             d.path(),
             &["build", "--target", target, "--objects", target, "prog.nz"],

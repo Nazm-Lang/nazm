@@ -112,8 +112,11 @@ pub(super) fn lowered(
             nazm_service::vectorize::rewrite(&mut core);
             let program = crate::mir::lower(&core, resolution, &loaded.graph)?;
             clock.mark("mir");
-            let native =
+            let mut native =
                 nazm_lir::lower_as(program, &names, choice.library).map_err(|e| e.diagnostics)?;
+            // A runtime artifact (N82) was built with thread-local failure state: a program
+            // linked to one keeps it, one thread or not.
+            native.single_thread &= choice.runtime.is_none();
             clock.mark("lir");
             foreign = native
                 .sigs
@@ -440,6 +443,10 @@ fn emit_artefacts(
     // After every unit, because what the runtime must define is the union of what the
     // modules reached — a whole-program fact, and the only one emission needs. A runtime
     // artifact (N82) is linked instead, once it is checked to provide all of it.
+    let needs = nazm_lir::Needs {
+        single: native.single_thread,
+        ..needs
+    };
     *reached = needs;
     if !prebuilt {
         out.push(Artefact {

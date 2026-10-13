@@ -220,6 +220,7 @@ impl Backend for Cranelift {
             files: true,
             net: true,
             wide: true,
+            single: false,
         }
     }
 }
