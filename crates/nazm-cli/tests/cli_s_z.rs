@@ -25,6 +25,7 @@ mod schemas;
 mod sections;
 mod secure_service;
 mod select;
+mod short_variants;
 mod simd;
 mod single_thread;
 mod source_identity;

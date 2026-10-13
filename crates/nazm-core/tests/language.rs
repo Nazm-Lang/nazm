@@ -259,9 +259,10 @@ fn a_duplicate_function_points_at_the_first_definition() {
 #[test]
 fn absent_features_are_refused_by_name() {
     // And `print` is no longer one of them: it is a built-in now, checked by the
-    // ordinary call rule, so a wrong argument is a type error rather than a refusal.
+    // ordinary call rule, so an argument with no text is a type error rather than a refusal.
+    // (A number has had one since R1, 5b.13.)
     assert_eq!(
-        sole_error("fn main(out: OutCap) -> Int { print(1) }"),
+        sole_error("struct P { x: Int, } fn main(out: OutCap) -> Int { print(P(x: 1)) }"),
         codes::TYPE_MISMATCH
     );
 

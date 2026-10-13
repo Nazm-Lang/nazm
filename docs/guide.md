@@ -542,7 +542,8 @@ accepts.
 | `statement` | `let_statement \| assignment \| while_statement \| for_statement \| let_else_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| defer_statement \| spawn_statement \| expression_statement` |
 | `let_statement` | `"let" , [ "mut" ] , IDENT , "=" , expression , ";"` |
 | `let_else_statement` | `"let" , pattern , "=" , expression , [ "else" , block ] , ";"` |
-| `assignment` | `place , "=" , expression , ";"` |
+| `assignment` | `place , ( "=" \| compound_operator ) , expression , ";"` |
+| `compound_operator` | `"+=" \| "-=" \| "*=" \| "/=" \| "%=" \| "&=" \| "\|=" \| "^=" \| "<<=" \| ">>="` |
 | `place` | `IDENT , { "." , ( IDENT \| INTEGER ) \| "[" , expression , "]" }` |
 | `while_statement` | `"while" , expression , block` |
 | `for_statement` | `"for" , ( IDENT \| tuple_pattern ) , "in" , ( expression , ".." , expression \| expression ) , block` |
@@ -583,7 +584,7 @@ accepts.
 | `pattern` | `pattern_one , { "\|" , pattern_one }` |
 | `pattern_one` | `"_" \| IDENT \| [ "-" ] , INT \| STRING \| "true" \| "false" \| variant_pattern \| tuple_pattern` |
 | `tuple_pattern` | `"(" , pattern , "," , pattern , { "," , pattern } , [ "," ] , ")"` |
-| `variant_pattern` | `[ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")"` |
+| `variant_pattern` | `[ qualifier ] , IDENT , "." , IDENT , [ "(" , [ pattern_fields ] , ")" ] \| ( "Some" \| "Ok" \| "Err" ) , "(" , pattern , ")" \| "None"` |
 | `pattern_fields` | `pattern_field , { "," , pattern_field } , [ "," ]` |
 | `pattern_field` | `IDENT , ":" , pattern` |
 
@@ -1255,12 +1256,13 @@ fn main() -> Int { let (a, _) = (1, "b"); a }
 ### `assignment`
 
 ```ebnf
-assignment = place , "=" , expression , ";" ;
+assignment = place , ( "=" | compound_operator ) , expression , ";" ;
 ```
 
 The left-hand side is a **place**: a binding, then a path of fields through it.
 Mutability is checked at the binding, so `p.x = 2` needs `let mut p` — see
 `docs/spec.md`, *Binding mutability reaches every field*.
+R1, 5b.12: `place op= e` is `place = place op e`; an index in the place is a name or a number.
 
 ```nazm
 fn main() -> Int { let mut a = 1; a = 2; a }
@@ -1268,6 +1270,20 @@ fn main() -> Int { let mut a = 1; a = 2; a }
 
 ```nazm
 struct P { x: Int, } fn main() -> Int { let mut p = P(x: 1); p.x = 2; p.x }
+```
+
+```nazm
+fn main() -> Int { let mut n = 1; n += 2; n *= 3; n <<= 1; n }
+```
+
+### `compound_operator`
+
+```ebnf
+compound_operator = "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
+```
+
+```nazm
+fn main() -> Int { let mut n = 100; n -= 1; n /= 3; n %= 7; n &= 6; n |= 1; n ^= 2; n >>= 1; n }
 ```
 
 ### `place`
@@ -1887,11 +1903,22 @@ fn main() -> Int { match (1, true) { (0, _) => 0, (n, true) => n, (_, false) => 
 ### `variant_pattern`
 
 ```ebnf
-variant_pattern = [ qualifier ] , IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" ;
+variant_pattern = [ qualifier ] , IDENT , "." , IDENT , [ "(" , [ pattern_fields ] , ")" ] | ( "Some" | "Ok" | "Err" ) , "(" , pattern , ")" | "None" ;
 ```
+
+R1, 5b.14: a variant with no payload needs no `()`; `Some(p)`, `Ok(p)`, `Err(p)` and `None` name the
+prelude's variants.
 
 ```nazm
 enum E { V(x: Int, y: Bool), } fn main() -> Int { match E.V(x: 1, y: true) { E.V(x: 1, y: _) => 1, E.V(x: n, y: _) => n, } }
+```
+
+```nazm
+enum C { R, G, } fn main() -> Int { match C.G { C.R => 1, C.G => 2, } }
+```
+
+```nazm
+fn main() -> Int { match Some(3) { Some(n) => n, None => 0, } }
 ```
 
 ### `pattern_fields`
