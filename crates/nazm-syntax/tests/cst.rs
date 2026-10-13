@@ -697,7 +697,13 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                     }
                     stack.push(Node::Expr(scrutinee));
                     for a in arms {
-                        stack.push(Node::Expr(&a.body));
+                        // An `if let` with no `else` is given an empty one, which nothing wrote:
+                        // a block of no width the concrete tree has no node for.
+                        let synthetic = *source == nazm_syntax::MatchSource::IfLet
+                            && matches!(&a.body, Expr::Block(b) if b.span.start == b.span.end);
+                        if !synthetic {
+                            stack.push(Node::Expr(&a.body));
+                        }
                     }
                 }
                 Expr::Field { base, .. } => stack.push(Node::Expr(base)),

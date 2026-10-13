@@ -247,6 +247,25 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1c (2026-10-13)** · *`@std/toml`* (`spec.md`, *The standard library*; `openspec/changes/r1-language-
+for-the-rewrite`, S1). TOML 1.0, in Nazm: `pub enum Toml`, recursive through `List`, and
+`toml_parse`, `toml_encode`, `toml_get`. A document is built in an arena of mutable nodes — where a
+later header or dotted key can still extend a table, and where each table records how it was made
+(explicitly, as a header's prefix, by a dotted key, inline) so that every redefinition TOML forbids is
+refused — then turned into the immutable tree. Errors are `line:column: what`; nothing traps. The
+LIR oracle gained `nz.float_parse` and `nz.float_parses`, which it had refused by name. The first
+repository source to use interpolation and an `if let` with no `else` found two faults the sweeps
+over every file now hold: the incremental lexer moved an interpolated string after an edit but not
+its holes' positions (fixed), and the syntax test's own walk counted the empty `else` such an `if
+let` is given as a written block (fixed in the test). EXPERIMENTAL
+until R1 closes. Evidence: `crates/nazm-cli/tests/toml.rs` — a document of every form decoded alike
+under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live, its encoding
+a fixed point; eighteen invalid shapes refused at their line and column; every `nazm.toml` in the
+repository and a `nazm.lock` from `nazm lock`, parsed and round-tripped. Beyond the repository: the
+553 TOML 1.0 cases of the `toml-test` suite (v2.2.0), all decoded as expected — and every valid one
+re-encoded, re-parsed to the same values and found a fixed point — under LLVM and under Cranelift; the
+suite is a third party's and is not vendored.
+
 **R1b (2026-10-13)** · *128-bit integers and the widening multiply* (`spec.md`, *Numbers*;
 `openspec/changes/r1-language-for-the-rewrite`, L13b). `Int128` and `UInt128` under every rule of
 *Numbers* at their width; literals up to `UInt128`'s maximum, and a negated one past `Int`'s

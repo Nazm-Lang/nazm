@@ -54,6 +54,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("test", include_str!("../../../library/std/test.nz")),
     ("text", include_str!("../../../library/std/text.nz")),
     ("time", include_str!("../../../library/std/time.nz")),
+    ("toml", include_str!("../../../library/std/toml.nz")),
 ];
 
 /// The standard module an import path names, if it names one: its name and its source.

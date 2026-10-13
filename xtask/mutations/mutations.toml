@@ -17421,3 +17421,85 @@ file = "crates/nazm-core/src/check/foreign.rs"
 find = "        matches!(t, Type::Int | Type::Bool) || matches!(t, Type::Num(k) if k.bits() <= 64)"
 replace = "        matches!(t, Type::Int | Type::Bool) || matches!(t, Type::Num(_))"
 killers = [{ package = "nazm-cli", test = "wide", name = "what_128_bits_cannot_do_is_refused" }]
+
+# --- R1c S1: `@std/toml` (`docs/spec.md`, *The standard library*) ------------------------------
+
+[[mutation]]
+name = "r1c-a-toml-table-may-be-defined-twice"
+why = "a header naming a table already defined by its own header, or by dotted keys, is accepted"
+file = "library/std/toml.nz"
+find = "            if node(p, c).kind != k_table() || flags(p, c) != f_implicit() {"
+replace = "            if node(p, c).kind != k_table() {"
+killers = [{ package = "nazm-cli", test = "toml", name = "every_invalid_shape_is_refused_with_its_line_and_column" }]
+
+[[mutation]]
+name = "r1c-a-dotted-key-extends-a-header-table"
+why = "a dotted key reaches into a table a header defined, which TOML forbids"
+file = "library/std/toml.nz"
+find = "            if node(p, c).kind != k_table() || !has(p, c, f_dotted()) || has(p, c, f_frozen()) {"
+replace = "            if node(p, c).kind != k_table() || has(p, c, f_frozen()) {"
+killers = [{ package = "nazm-cli", test = "toml", name = "every_invalid_shape_is_refused_with_its_line_and_column" }]
+
+[[mutation]]
+name = "r1c-a-toml-integer-wraps"
+why = "an integer's digits are accumulated with a wrapping multiply, so twenty nines read as some other `Int`"
+file = "library/std/toml.nz"
+find = "                Option.Some(value: x) => match checked_mul(x, base) {"
+replace = "                Option.Some(value: x) => match Option[Int].Some(value: wrapping_mul(x, base)) {"
+killers = [{ package = "nazm-cli", test = "toml", name = "every_invalid_shape_is_refused_with_its_line_and_column" }]
+
+[[mutation]]
+name = "r1c-a-toml-integer-may-lead-with-zero"
+why = "`012` is read as twelve, where TOML forbids a leading zero"
+file = "library/std/toml.nz"
+find = "    if j > i + 1 && byte_at(p, i) == 48 { 0 - 1 } else { j }"
+replace = "    j"
+killers = [{ package = "nazm-cli", test = "toml", name = "every_invalid_shape_is_refused_with_its_line_and_column" }]
+
+[[mutation]]
+name = "r1c-every-month-has-thirty-one-days"
+why = "a date is checked against 31 days whatever its month, so `2021-02-29` is accepted"
+file = "library/std/toml.nz"
+find = "        day <= days"
+replace = "        day <= 31"
+killers = [{ package = "nazm-cli", test = "toml", name = "every_invalid_shape_is_refused_with_its_line_and_column" }]
+
+[[mutation]]
+name = "r1c-an-inline-table-may-trail-a-comma"
+why = "an inline table's trailing comma is accepted"
+file = "library/std/toml.nz"
+find = '                if peek(p) == 125 { fail(p, "a trailing `,` in an inline table"); }'
+replace = "                if false { fail(p, \"\"); }"
+killers = [{ package = "nazm-cli", test = "toml", name = "every_invalid_shape_is_refused_with_its_line_and_column" }]
+
+[[mutation]]
+name = "r1c-a-sub-table-is-written-inline-too"
+why = "the encoder writes a sub-table among the plain values as well as under its header, so the text defines it twice"
+file = "library/std/toml.nz"
+find = "        if !is_table(v) && !is_aot(v) {"
+replace = "        if !is_aot(v) {"
+killers = [{ package = "nazm-cli", test = "toml", name = "every_form_decodes_alike_everywhere_and_encodes_to_a_fixed_point" }]
+
+[[mutation]]
+name = "r1c-a-surrogate-escape-is-accepted"
+why = "`\\uD800` is accepted, writing a surrogate's bytes, which are not UTF-8"
+file = "library/std/toml.nz"
+find = "        if !ok || code > 1114111 || (code >= 55296 && code <= 57343) {"
+replace = "        if !ok || code > 1114111 {"
+killers = [{ package = "nazm-cli", test = "toml", name = "every_invalid_shape_is_refused_with_its_line_and_column" }]
+
+[[mutation]]
+name = "r1c-the-oracle-cannot-parse-a-float"
+why = "the LIR oracle refuses `nz.float_parse` by name again, so a program reading a float runs nowhere under it"
+file = "crates/nazm-lir/src/op/interp.rs"
+find = '            "nz.float_parse" => {'
+replace = '            "nz.float_parse_absent" => {'
+killers = [{ package = "nazm-cli", test = "toml", name = "every_form_decodes_alike_everywhere_and_encodes_to_a_fixed_point" }]
+
+[[mutation]]
+name = "r1c-an-fstring-hole-stays-behind-an-edit"
+why = "the incremental lexer moves an interpolated string's token after an edit but not its holes' positions, so the reparse disagrees with a fresh parse"
+file = "crates/nazm-syntax/src/incremental.rs"
+find = "            kind: shift_kind(&t.kind, delta),"
+replace = "            kind: t.kind.clone(),"
+killers = [{ package = "nazm-syntax", test = "incremental", name = "seeded_edit_sequences_converge_to_a_fresh_parse_over_the_whole_repository" }]

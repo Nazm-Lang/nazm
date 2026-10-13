@@ -371,3 +371,7 @@
 @std/time pub fn time_between(a: Instant, b: Instant) -> Duration ! {}
 @std/time pub fn time_wall(t: TimeCap) -> WallTime ! {}
 @std/time pub fn time_sleep(t: TimeCap, d: Duration) -> Int ! {}
+@std/toml pub enum Toml
+@std/toml pub fn toml_get(t: Toml, key: Str) -> Option[Toml] ! {}
+@std/toml pub fn toml_parse(text: Str) -> Result[Toml, Str] ! {}
+@std/toml pub fn toml_encode(t: Toml) -> Str ! {}

@@ -746,6 +746,17 @@ impl Machine<'_> {
                 self.put(arg(0), text.as_bytes())?;
                 Some(text.len() as u64)
             }
+            // A decimal float's value and its grammar (Gate 2): the interpreter's functions.
+            "nz.float_parse" => {
+                let b = self.bytes(arg(0), arg(1))?;
+                Some(nazm_sema::numeric::parse(&String::from_utf8_lossy(&b)).to_bits())
+            }
+            "nz.float_parses" => {
+                let b = self.bytes(arg(0), arg(1))?;
+                Some(u64::from(nazm_sema::numeric::parses(
+                    &String::from_utf8_lossy(&b),
+                )))
+            }
             // 128-bit integers (R1b, L13b), by address, as the runtime takes them.
             "nz.i128_divrem" => {
                 let (x, y) = (self.read_wide(arg(1), 16)?, self.read_wide(arg(2), 16)?);
