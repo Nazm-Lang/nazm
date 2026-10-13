@@ -113,13 +113,24 @@ pub fn emit_entry_for(
         let _ = writeln!(out, "declare void {hook}(i32, ptr, ptr, ptr)");
     }
     // `main` on a thread of the stack asked for (R1b, L14): what it returns is read back after
-    // the join.
+    // the join — and so is how it failed, because the failure state is thread-local and the
+    // report below reads this thread's. Without the hand-back a `main` that failed would end
+    // the process with success and its stand-in value.
     if stack.is_some() {
         let _ = writeln!(out, "@nz.main_result = internal global i64 0");
+        let _ = writeln!(out, "@nz.main_failed = internal global i1 false");
+        let _ = writeln!(out, "@nz.main_errmsg = internal global ptr null");
+        let _ = writeln!(out, "@nz.main_errlen = internal global i64 0");
         let _ = writeln!(out, "define internal ptr @nz.main_thread(ptr %unused) {{");
         let _ = writeln!(out, "entry:");
         let _ = writeln!(out, "  %r = call i64 {entry}({root_args})");
         let _ = writeln!(out, "  store i64 %r, ptr @nz.main_result");
+        let _ = writeln!(out, "  %tf = load i1, ptr @nz.failed");
+        let _ = writeln!(out, "  store i1 %tf, ptr @nz.main_failed");
+        let _ = writeln!(out, "  %tm = load ptr, ptr @nz.errmsg");
+        let _ = writeln!(out, "  store ptr %tm, ptr @nz.main_errmsg");
+        let _ = writeln!(out, "  %tl = load i64, ptr @nz.errlen");
+        let _ = writeln!(out, "  store i64 %tl, ptr @nz.main_errlen");
         let _ = writeln!(out, "  ret ptr null");
         let _ = writeln!(out, "}}");
         out.push('\n');
@@ -174,6 +185,12 @@ pub fn emit_entry_for(
             let _ = writeln!(out, "nz.join:");
             let _ = writeln!(out, "  %mt = load ptr, ptr %mtid");
             let _ = writeln!(out, "  %mjn = call i32 @pthread_join(ptr %mt, ptr null)");
+            let _ = writeln!(out, "  %jf = load i1, ptr @nz.main_failed");
+            let _ = writeln!(out, "  store i1 %jf, ptr @nz.failed");
+            let _ = writeln!(out, "  %jm = load ptr, ptr @nz.main_errmsg");
+            let _ = writeln!(out, "  store ptr %jm, ptr @nz.errmsg");
+            let _ = writeln!(out, "  %jl = load i64, ptr @nz.main_errlen");
+            let _ = writeln!(out, "  store i64 %jl, ptr @nz.errlen");
             let _ = writeln!(out, "  br label %nz.ran");
             let _ = writeln!(out, "nz.ran:");
             let _ = writeln!(out, "  %result = load i64, ptr @nz.main_result");

@@ -239,9 +239,13 @@ if it cannot start — and stores `N` in the runtime's `nz.stack_bytes`, which a
 pool's task stacks (under `NAZM_TASK_STACK`) and `nz.stack_check`'s limit read in place of 8 MiB,
 256 KiB and 8 MiB. Runtime ABI 31; build provenance records the size. The interpreter's threads
 follow `--max-depth`, as before. EXPERIMENTAL until R1 closes. Evidence:
-`crates/nazm-cli/tests/stack_size.rs` — a million-deep recursion in `main` and in a task that
-meets `N0408` by default and finishes with `--stack-size`, under LLVM and Cranelift, on the pool
-and a thread per task; the refusals.
+`crates/nazm-cli/tests/stack_size.rs` — a 250,000-deep recursion in `main` and in a task that
+meets `N0408` by default and finishes with `--stack-size 64M`, and meets it again with `4M`, under
+LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected (2026-10-13):**
+`main`'s thread ended with its failure state, which is thread-local, so a sized program whose
+`main` failed exited 0 with its stand-in value; the thread now hands the state back for the entry's
+report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
+ceiling.
 
 **R1b (2026-10-13)** · *Checked arithmetic* (`spec.md`, *Numbers*, **Functions**;
 `openspec/changes/r1-language-for-the-rewrite`, L13a). `checked_add`, `checked_sub` and
