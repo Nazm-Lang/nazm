@@ -17,7 +17,9 @@
 //!
 //! A **profile** is a named group of whole test targets, declared once in `[[profile]]`
 //! with the source paths it `owns`. A mutation that names none gets the profile owning
-//! the longest prefix of its file, or no profile at all.
+//! the longest prefix of its file, or no profile at all. A profile's test target may name
+//! a `module`: one file of an executable that gathers several (`nazm-cli`'s `cli_*`), run
+//! as the tests whose paths begin with it.
 //!
 //! # What neither of them can do
 //!
@@ -62,6 +64,9 @@ pub(crate) struct TargetSpec {
     pub(crate) test: Option<String>,
     #[serde(default)]
     pub(crate) bin: Option<String>,
+    /// One module of a `test` target that gathers several files: only its tests run.
+    #[serde(default)]
+    pub(crate) module: Option<String>,
 }
 
 /// One test, as the catalogue spells it.
@@ -195,6 +200,8 @@ pub(crate) struct TestSelector {
     pub(crate) target: Target,
     /// `Some` for a killer: exactly this test and no other.
     pub(crate) exact: Option<String>,
+    /// `Some` for one module of a gathered target: the tests whose paths begin with it.
+    pub(crate) module: Option<String>,
 }
 
 impl TestSelector {
@@ -202,6 +209,7 @@ impl TestSelector {
         Ok(Self {
             target: Target::from_parts(&k.package, k.lib, k.test.as_ref(), k.bin.as_ref())?,
             exact: Some(k.name.clone()),
+            module: None,
         })
     }
 
@@ -209,6 +217,15 @@ impl TestSelector {
         Self {
             target,
             exact: None,
+            module: None,
+        }
+    }
+
+    /// One module of `target`, or the whole of it.
+    pub(crate) fn of_module(target: Target, module: Option<&String>) -> Self {
+        Self {
+            module: module.cloned(),
+            ..Self::whole(target)
         }
     }
 
@@ -222,14 +239,17 @@ impl TestSelector {
         if let Some(name) = &self.exact {
             v.push(name.clone());
             v.push("--exact".to_owned());
+        } else if let Some(m) = &self.module {
+            v.push(format!("{m}::"));
         }
         v
     }
 
     pub(crate) fn label(&self) -> String {
-        match &self.exact {
-            Some(n) => format!("{} {n}", self.target.label()),
-            None => self.target.label(),
+        match (&self.exact, &self.module) {
+            (Some(n), _) => format!("{} {n}", self.target.label()),
+            (None, Some(m)) => format!("{} {m}::", self.target.label()),
+            (None, None) => self.target.label(),
         }
     }
 }
@@ -361,7 +381,9 @@ pub(crate) fn plan(
                     let mut targets = Vec::new();
                     for t in &p.targets {
                         match Target::from_spec(t) {
-                            Ok(t) => targets.push(TestSelector::whole(t)),
+                            Ok(target) => {
+                                targets.push(TestSelector::of_module(target, t.module.as_ref()));
+                            }
                             Err(e) => problems.push(format!("profile {}: {e}", p.name)),
                         }
                     }
@@ -678,12 +700,30 @@ pub(crate) fn validate(root: &Path, catalogue: &Catalogue) -> Vec<String> {
         for t in &p.targets {
             match Target::from_spec(t) {
                 Err(e) => bad.push(format!("profile {}: {e}", p.name)),
-                Ok(t) => {
-                    if let Err(e) = target_root(&ws, &t) {
-                        bad.push(format!("profile {}: {e}", p.name));
+                Ok(target) => {
+                    match target_root(&ws, &target) {
+                        Err(e) => bad.push(format!("profile {}: {e}", p.name)),
+                        Ok(root) => {
+                            if let Some(m) = &t.module {
+                                if !matches!(&target.kind, TargetKind::Test(_)) {
+                                    bad.push(format!(
+                                        "profile {}: only a test target has modules, not {}",
+                                        p.name,
+                                        target.label()
+                                    ));
+                                } else if resolve_module(&root, &[m.as_str()]).1.len() == 1 {
+                                    bad.push(format!(
+                                        "profile {}: {} has no module `{m}`",
+                                        p.name,
+                                        target.label()
+                                    ));
+                                }
+                            }
+                        }
                     }
-                    if !seen.insert(t.clone()) {
-                        bad.push(format!("profile {}: {} is listed twice", p.name, t.label()));
+                    let label = TestSelector::of_module(target.clone(), t.module.as_ref()).label();
+                    if !seen.insert(label.clone()) {
+                        bad.push(format!("profile {}: {label} is listed twice", p.name));
                     }
                 }
             }
@@ -857,6 +897,27 @@ replace = "r"
                 "a::b",
                 "--exact"
             ]
+        );
+    }
+
+    #[test]
+    fn a_profile_target_s_module_runs_only_its_own_tests() {
+        let target = super::Target {
+            package: "nazm-cli".to_owned(),
+            kind: super::TargetKind::Test("cli_m_r".to_owned()),
+        };
+        let one = super::TestSelector::of_module(target.clone(), Some(&"mir".to_owned()));
+        let args = one.cargo_args(super::Parallelism::SERIAL);
+        assert_eq!(args.last().map(String::as_str), Some("mir::"), "{args:?}");
+        assert!(!args.contains(&"--exact".to_owned()), "{args:?}");
+        assert_eq!(one.label(), "nazm-cli --test cli_m_r mir::");
+        let whole = super::TestSelector::of_module(target, None);
+        assert_eq!(
+            whole
+                .cargo_args(super::Parallelism::SERIAL)
+                .last()
+                .map(String::as_str),
+            Some("1")
         );
     }
 
