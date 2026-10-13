@@ -189,3 +189,9 @@ overflow-checks = true
 
 [profile.dev]
 overflow-checks = true
+# Line tables are enough for a backtrace; full debug info made linking the many test
+# executables most of a test run.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
