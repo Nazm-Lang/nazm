@@ -23,7 +23,9 @@ fn measured(text: &str) -> Vec<String> {
 
 /// Whether a test function of this name is in the tree's Rust sources.
 fn test_exists(root: &Path, name: &str) -> bool {
-    let needle = format!("fn {name}(");
+    // A test in a module of an executable that gathers several is named by its path.
+    let last = name.rsplit("::").next().unwrap_or(name);
+    let needle = format!("fn {last}(");
     let mut stack = vec![root.join("crates"), root.join("xtask")];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -155,7 +157,7 @@ mod tests {
         assert_eq!(
             command_problem(
                 &root,
-                "cargo test -p nazm-cli --test packages -- --ignored what_packages_cost"
+                "cargo test -p nazm-cli --test cli_m_r -- --ignored packages::what_packages_cost"
             ),
             None
         );
