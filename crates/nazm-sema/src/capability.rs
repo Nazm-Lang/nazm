@@ -248,6 +248,7 @@ impl CapabilityKind {
             | Intrinsic::OsUnlink
             | Intrinsic::OsRename => CapabilitySet::of(Self::Io),
             Intrinsic::OsRead
+            | Intrinsic::OsReadLine
             | Intrinsic::OsWrite
             | Intrinsic::OsSeek
             | Intrinsic::OsSync
@@ -535,6 +536,7 @@ mod tests {
             if matches!(
                 i,
                 Intrinsic::OsRead
+                    | Intrinsic::OsReadLine
                     | Intrinsic::OsWrite
                     | Intrinsic::OsSeek
                     | Intrinsic::OsSync

@@ -2960,6 +2960,8 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("os_stdin", "Gate 2 files and handles"),
         ("os_status", "Gate 2 files and handles"),
         ("os_read", "Gate 2 files and handles"),
+        // R1d, P3: a line of standard input, a handle's as `os_read` is.
+        ("os_read_line", "R1d streaming standard input"),
         ("os_write", "Gate 2 files and handles"),
         ("os_seek", "Gate 2 files and handles"),
         ("os_sync", "Gate 2 files and handles"),

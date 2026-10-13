@@ -176,6 +176,11 @@
           "type": ["integer", "null"],
           "minimum": 0
         },
+        "heap_limit": {
+          "description": "R1d, D5: `nazm build --heap-limit`, or the root package's `heap-limit`, in bytes; null where neither gives one",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "cranelift": {
           "type": "string"
         }

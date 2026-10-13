@@ -389,7 +389,7 @@ impl<'a> Lw<'a> {
             Part::Files => self.needs.files = true,
             Part::Net => self.needs.net = true,
             Part::Wide => self.needs.wide = true,
-            Part::Base | Part::Libc => {}
+            Part::Base | Part::Libc | Part::Heap => {}
         }
         // The word-level entries this lowering calls are the second compiler's shims (N41).
         self.needs.shims = true;

@@ -50,12 +50,16 @@ impl Fx<'_, '_> {
                 };
                 self.rt_v(name, &[h], Class::I64)
             }
-            Intrinsic::OsRead | Intrinsic::OsWrite | Intrinsic::OsDirNext => {
+            Intrinsic::OsRead
+            | Intrinsic::OsReadLine
+            | Intrinsic::OsWrite
+            | Intrinsic::OsDirNext => {
                 let h = self.arg(args, 0);
                 let b = self.arg_place(args, 1);
                 let (bp, bn) = self.str_parts(b);
                 let name = match op {
                     Intrinsic::OsRead => "nz.os_read",
+                    Intrinsic::OsReadLine => "nz.os_read_line",
                     Intrinsic::OsWrite => "nz.os_write",
                     _ => "nz.os_dir_next",
                 };

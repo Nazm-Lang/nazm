@@ -43,6 +43,7 @@ mod generic_impls;
 mod generics;
 mod hash_vectors;
 mod heap;
+mod heap_limit;
 mod incremental;
 mod interpolation;
 mod interrupts;

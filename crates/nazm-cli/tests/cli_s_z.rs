@@ -33,6 +33,7 @@ mod source_root;
 mod speed_text;
 mod stack_size;
 mod statics;
+mod stdin_lines;
 mod stdlib;
 mod stdlib_1_0;
 mod storage;

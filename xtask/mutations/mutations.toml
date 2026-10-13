@@ -11736,11 +11736,11 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "layout::an_ineligib
 name = "n105-cranelift-ignores-the-layout"
 why = "`--layout soa` reaches the LLVM backend and not Cranelift, which silently keeps every element whole: the refusal N68 had is gone, so nothing would say so"
 file = "crates/nazm-cli/src/build/mod.rs"
-find = '''        .with_debug(choice.debug)
-        .with_soa(soa);
+find = '''        .with_soa(soa)
+        .with_counted_heap(heap_limit.is_some());
     let chosen'''
-replace = '''        .with_debug(choice.debug)
-        .with_soa(false);
+replace = '''        .with_soa(false)
+        .with_counted_heap(heap_limit.is_some());
     let chosen'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "layout::the_layout_is_asked_for_by_name_and_both_backends_take_it" }]
 
@@ -18381,3 +18381,137 @@ file = "crates/nazm-core/src/check/construct.rs"
 find = '''        let args: Vec<Type> = args.into_iter().collect::<Option<_>>()?;'''
 replace = '''        let args: Vec<Type> = args.into_iter().map(|a| a.unwrap_or(Type::Int)).collect();'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "short_variants::what_nothing_decides_is_still_written" }]
+
+# --- R1d D5: `--heap-limit` (`docs/spec.md`, *A bounded heap*) ----------------------------------
+
+[[mutation]]
+name = "r1d-the-heap-limit-is-never-passed"
+why = "an allocation past the limit is made anyway, so a heap limit bounds nothing"
+file = "crates/nazm-runtime/src/heap.rs"
+find = "  %past = icmp ugt i64 %new, %limit"
+replace = "  %past = icmp ugt i64 %new, -1"
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::a_program_within_its_limit_runs_as_it_would_and_one_past_it_ends_with_n0406" }]
+
+[[mutation]]
+name = "r1d-a-free-is-not-counted-back"
+why = "a freed block's bytes stay counted, so a program that allocates far more than it holds meets the limit"
+file = "crates/nazm-runtime/src/heap.rs"
+find = '''  %undo = atomicrmw sub ptr @nz.heap_live, i64 %n seq_cst
+  call void @free(ptr %h)'''
+replace = '''  %undo = atomicrmw sub ptr @nz.heap_live, i64 0 seq_cst
+  call void @free(ptr %h)'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::what_is_freed_is_counted_back_in_every_task" }]
+
+[[mutation]]
+name = "r1d-a-growth-is-not-counted"
+why = "a block grown by `realloc` is not reserved first, so a sequence grows past the limit"
+file = "crates/nazm-runtime/src/heap.rs"
+find = "  call void @nz.heap_reserve(i64 %more)"
+replace = "  %unreserved = add i64 %more, 0"
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::a_sequence_s_growth_is_counted" }]
+
+[[mutation]]
+name = "r1d-the-runtime-allocates-past-the-count"
+why = "the runtime's own units keep C's allocator, so what they allocate is uncounted and what the program frees of it is read as a counted block"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "                *text = nazm_lir::runtime::heap::count_heap(text);"
+replace = "                let _ = &text;"
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::a_program_within_its_limit_runs_as_it_would_and_one_past_it_ends_with_n0406" }]
+
+[[mutation]]
+name = "r1d-cranelift-allocates-past-the-count"
+why = "a Cranelift object keeps C's allocator under a heap limit"
+file = "crates/nazm-codegen-clif/src/lib.rs"
+find = "            nazm_lir::op::count_heap(&mut m);"
+replace = "            let _ = &mut m;"
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::what_is_freed_is_counted_back_in_every_task" }]
+
+[[mutation]]
+name = "r1d-llvm-units-allocate-past-the-count"
+why = "an LLVM unit keeps C's allocator under a heap limit"
+file = "crates/nazm-lir/src/backend.rs"
+find = "            nazm_runtime::heap::count_heap(&ir)"
+replace = "            ir"
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::what_is_freed_is_counted_back_in_every_task" }]
+
+[[mutation]]
+name = "r1d-the-manifest-gives-no-limit"
+why = "the root package's `heap-limit` is not read"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "            .and_then(|g| g.packages.get(g.root).and_then(|p| p.heap_limit))"
+replace = "            .and_then(|g| g.packages.get(g.root).and(None::<u64>))"
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::a_manifest_gives_the_limit_and_the_flag_overrides_it" }]
+
+[[mutation]]
+name = "r1d-a-heap-megabyte-is-a-kilobyte"
+why = "`--heap-limit 4M` is read as 4 KiB"
+file = "crates/nazm-package/src/lib.rs"
+find = "        Some((i, 'M' | 'm')) => (raw.get(..i).unwrap_or_default(), 1u64 << 20),"
+replace = "        Some((i, 'M' | 'm')) => (raw.get(..i).unwrap_or_default(), 1u64 << 10),"
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::a_program_within_its_limit_runs_as_it_would_and_one_past_it_ends_with_n0406" }]
+
+[[mutation]]
+name = "r1d-a-library-takes-a-heap-limit"
+why = "a library is built with a heap limit its C host's allocations would not keep"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "        } else if choice.library {"
+replace = "        } else if false {"
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::a_limit_is_a_hosted_programs_and_a_size" }]
+
+# --- R1d P3: streaming standard input (`docs/spec.md`, *Files and handles*) -----------------------
+
+[[mutation]]
+name = "r1d-a-read-of-standard-input-skips-its-buffer"
+why = "`os_read` of standard input reads the descriptor, so what a line read left in the buffer is lost"
+file = "crates/nazm-runtime/src/files.rs"
+find = "    i64 3, label %stdin\n"
+replace = ""
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::headers_frames_and_lines_read_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-buffer-is-never-read-first"
+why = "a read of standard input ignores what its buffer holds"
+file = "crates/nazm-runtime/src/files.rs"
+find = "  %some = icmp sgt i64 %held, 0"
+replace = "  %some = icmp sgt i64 %held, %held"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::headers_frames_and_lines_read_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-line-has-no-end"
+why = "a native line read does not stop at a newline"
+file = "crates/nazm-runtime/src/files.rs"
+find = "  %nl = icmp eq i8 %b, 10"
+replace = "  %nl = icmp eq i8 %b, 0"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::headers_frames_and_lines_read_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-line-read-takes-past-its-newline"
+why = "a native line read copies everything it scanned, what follows the newline included"
+file = "crates/nazm-runtime/src/files.rs"
+find = "  %len = phi i64 [ %k, %look ], [ %j1, %test ]"
+replace = "  %len = phi i64 [ %k, %look ], [ %k, %test ]"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::headers_frames_and_lines_read_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-the-interpreter-reads-past-a-newline"
+why = "the interpreter's line read takes what follows the newline in the buffer"
+file = "crates/nazm-core/src/eval/os.rs"
+find = "            Some(i) => (i + 1, true),"
+replace = "            Some(_) => (window.len(), true),"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::headers_frames_and_lines_read_alike_everywhere" }]
+
+[[mutation]]
+name = "r1d-a-directory-reads-lines-as-a-file"
+why = "a line read of a directory's handle answers `InvalidInput`, not `IsADirectory`"
+file = "crates/nazm-runtime/src/files.rs"
+find = "  %code = select i1 %dir, i64 -21, i64 -22"
+replace = "  %code = select i1 %dir, i64 -22, i64 -22"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::a_line_read_of_another_handle_is_a_value" }]
+
+[[mutation]]
+name = "r1d-io-keeps-a-line-s-newline"
+why = "`io_stdin_read_line` never sees the newline that ends a line, and joins the lines that follow"
+file = "library/std/io.nz"
+find = "            if bytes_get(chunk, n - 1) == 10 {"
+replace = "            if bytes_get(chunk, n - 1) == 0 {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdin_lines::headers_frames_and_lines_read_alike_everywhere" }]
