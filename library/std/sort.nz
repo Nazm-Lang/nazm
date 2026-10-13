@@ -61,6 +61,89 @@ pub fn strs_sort(xs: Strs) -> Strs ! {} {
     out
 }
 
+/// Sort `xs` itself by `less`, as `vec_sort_by` orders it, and return `0`: every handle to `xs`
+/// sees the new order. Stable — elements `less` holds neither way keep their order — and at most
+/// `O(n log n)` calls of `less`: runs of sixteen by insertion, then merged bottom-up between `xs`
+/// and one scratch vector of its length. Polymorphic in `less`'s effects, as `vec_sort_by` is.
+pub fn vec_sort_in_place_by[T, effects E](xs: Vec[T], less: fn(T, T) -> Bool ! { E }) -> Int ! { E } {
+    let n = vec_len(xs);
+    // Insertion sort within each run: an element moves left only past ones it sorts strictly before.
+    let mut lo = 0;
+    while lo < n {
+        let hi = if lo + 16 < n { lo + 16 } else { n };
+        let mut i = lo + 1;
+        while i < hi {
+            let x = vec_get(xs, i);
+            let mut j = i;
+            while j > lo && less(x, vec_get(xs, j - 1)) {
+                vec_set(xs, j, vec_get(xs, j - 1));
+                j = j - 1;
+            }
+            vec_set(xs, j, x);
+            i = i + 1;
+        }
+        lo = hi;
+    }
+    if n > 16 {
+        let scratch = vec_new[T]();
+        let mut k = 0;
+        while k < n { vec_push(scratch, vec_get(xs, k)); k = k + 1; }
+        let mut src = xs;
+        let mut dst = scratch;
+        let mut in_xs = true;
+        let mut width = 16;
+        while width < n {
+            let mut at = 0;
+            while at < n {
+                let mid = if at + width < n { at + width } else { n };
+                let hi = if at + 2 * width < n { at + 2 * width } else { n };
+                let mut a = at;
+                let mut b = mid;
+                let mut o = at;
+                while o < hi {
+                    // The left run's element goes first unless the right one sorts strictly before it.
+                    let from_a = if a < mid { if b < hi { !less(vec_get(src, b), vec_get(src, a)) } else { true } } else { false };
+                    if from_a { vec_set(dst, o, vec_get(src, a)); a = a + 1; } else { vec_set(dst, o, vec_get(src, b)); b = b + 1; }
+                    o = o + 1;
+                }
+                at = hi;
+            }
+            let t = src;
+            src = dst;
+            dst = t;
+            in_xs = !in_xs;
+            width = width * 2;
+        }
+        if !in_xs {
+            k = 0;
+            while k < n { vec_set(xs, k, vec_get(scratch, k)); k = k + 1; }
+        }
+    }
+    0
+}
+
+/// Sort `xs` itself into ascending order, and return `0`.
+pub fn ints_sort_in_place(xs: Ints) -> Int ! {} {
+    let v = vec_new[Int]();
+    let mut i = 0;
+    while i < ints_len(xs) { vec_push(v, ints_get(xs, i)); i = i + 1; }
+    vec_sort_in_place_by(v, fn(a: Int, b: Int) -> Bool { a < b });
+    i = 0;
+    while i < ints_len(xs) { ints_set(xs, i, vec_get(v, i)); i = i + 1; }
+    0
+}
+
+/// Sort `xs` itself into ascending byte order, a prefix first, and return `0`.
+pub fn strs_sort_in_place(xs: Strs) -> Int ! {} {
+    let v = vec_new[Str]();
+    let mut i = 0;
+    while i < strs_len(xs) { vec_push(v, strs_get(xs, i)); i = i + 1; }
+    vec_sort_in_place_by(v, fn(a: Str, b: Str) -> Bool { str_before(a, b) });
+    i = 0;
+    while i < strs_len(xs) { strs_set(xs, i, vec_get(v, i)); i = i + 1; }
+    0
+}
+
 // Whether `a` sorts strictly before `b`, byte by byte, a prefix first.
 fn str_before(a: Str, b: Str) -> Bool ! {} {
     let n = str_len(a);

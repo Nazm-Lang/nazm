@@ -1,0 +1,436 @@
+// `@std/ordmap`: a map from `Ord` keys to values, in key order (R1e, S3).
+//
+// Imported with `use "@std/ordmap";`. `Ord` is an ordinary trait, as `@std/hash`'s `Hash` is: the
+// library implements it for every integer type, `Bool` and `Str` (byte by byte, a prefix first),
+// and a program implements it for its own key types. An `OrdMap[K, V]` is an AVL tree whose nodes
+// live in parallel vectors it shares like any handle: copies of a map are the same map. Every
+// subtree's heights differ by at most one, so insertion, lookup and removal take `O(log n)`
+// comparisons; a removed node's place is taken by the last one, so the vectors hold exactly the
+// entries and nothing removed stays alive. Iteration is in ascending key order.
+
+/// A total order: `compare` is negative, zero or positive as `self` sorts before, with or after
+/// `other`, and must be consistent — antisymmetric and transitive — for a map to find its keys.
+pub trait Ord {
+    fn compare(self: Self, other: Self) -> Int ! {};
+}
+
+// `-1`, `0` or `1` as `a` is less than, equal to or greater than `b`.
+fn sign_of(less: Bool, greater: Bool) -> Int ! {} {
+    if less { 0 - 1 } else { if greater { 1 } else { 0 } }
+}
+
+impl Ord for Int {
+    fn compare(self: Int, other: Int) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for Int8 {
+    fn compare(self: Int8, other: Int8) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for Int16 {
+    fn compare(self: Int16, other: Int16) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for Int32 {
+    fn compare(self: Int32, other: Int32) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for Int128 {
+    fn compare(self: Int128, other: Int128) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for UInt8 {
+    fn compare(self: UInt8, other: UInt8) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for UInt16 {
+    fn compare(self: UInt16, other: UInt16) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for UInt32 {
+    fn compare(self: UInt32, other: UInt32) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for UInt64 {
+    fn compare(self: UInt64, other: UInt64) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for UInt128 {
+    fn compare(self: UInt128, other: UInt128) -> Int ! {} { sign_of(self < other, self > other) }
+}
+
+impl Ord for Bool {
+    fn compare(self: Bool, other: Bool) -> Int ! {} { sign_of(!self && other, self && !other) }
+}
+
+impl Ord for Str {
+    fn compare(self: Str, other: Str) -> Int ! {} {
+        let n = str_len(self);
+        let k = str_len(other);
+        let mut i = 0;
+        let mut r = 2;
+        while r == 2 {
+            if i == n { r = if i == k { 0 } else { 0 - 1 }; } else {
+                if i == k { r = 1; } else {
+                    let x = str_byte(self, i);
+                    let y = str_byte(other, i);
+                    if x < y { r = 0 - 1; } else { if x > y { r = 1; } else { i = i + 1; } }
+                }
+            }
+        }
+        r
+    }
+}
+
+/// One key and its value.
+pub struct OrdEntry[K, V] {
+    key: K,
+    value: V,
+}
+
+/// A map from `K` to `V`, in key order. Node `i` is `keys[i]`, `values[i]`, its children
+/// `left[i]` and `right[i]` (`-1` for none) and its subtree's `height[i]`; `meta` holds the root
+/// (`-1` when empty) and whether the last insertion replaced a value.
+pub struct OrdMap[K, V] {
+    keys: Vec[K],
+    values: Vec[V],
+    left: Ints,
+    right: Ints,
+    height: Ints,
+    meta: Ints,
+}
+
+/// An empty map.
+pub fn ordmap_new[K: Ord, V]() -> OrdMap[K, V] ! {} {
+    let meta = ints_new();
+    ints_push(meta, 0 - 1);
+    ints_push(meta, 0);
+    OrdMap[K, V](keys: vec_new[K](), values: vec_new[V](), left: ints_new(), right: ints_new(), height: ints_new(), meta: meta)
+}
+
+/// How many keys `m` holds.
+pub fn ordmap_len[K: Ord, V](m: OrdMap[K, V]) -> Int ! {} {
+    vec_len(m.keys)
+}
+
+fn root[K: Ord, V](m: OrdMap[K, V]) -> Int ! {} {
+    ints_get(m.meta, 0)
+}
+
+fn h[K: Ord, V](m: OrdMap[K, V], n: Int) -> Int ! {} {
+    if n < 0 { 0 } else { ints_get(m.height, n) }
+}
+
+// Set `n`'s height from its children's.
+fn fix[K: Ord, V](m: OrdMap[K, V], n: Int) -> Int ! {} {
+    let a = h(m, ints_get(m.left, n));
+    let b = h(m, ints_get(m.right, n));
+    ints_set(m.height, n, if a > b { a + 1 } else { b + 1 });
+    n
+}
+
+// `n`'s left child raised above it; the subtree's new root.
+fn raise_left[K: Ord, V](m: OrdMap[K, V], n: Int) -> Int ! {} {
+    let l = ints_get(m.left, n);
+    ints_set(m.left, n, ints_get(m.right, l));
+    ints_set(m.right, l, n);
+    fix(m, n);
+    fix(m, l)
+}
+
+// `n`'s right child raised above it; the subtree's new root.
+fn raise_right[K: Ord, V](m: OrdMap[K, V], n: Int) -> Int ! {} {
+    let r = ints_get(m.right, n);
+    ints_set(m.right, n, ints_get(m.left, r));
+    ints_set(m.left, r, n);
+    fix(m, n);
+    fix(m, r)
+}
+
+// The subtree at `n`, its children balanced, made balanced again: its new root.
+fn balance[K: Ord, V](m: OrdMap[K, V], n: Int) -> Int ! {} {
+    fix(m, n);
+    let l = ints_get(m.left, n);
+    let r = ints_get(m.right, n);
+    let d = h(m, l) - h(m, r);
+    if d > 1 {
+        if h(m, ints_get(m.left, l)) < h(m, ints_get(m.right, l)) {
+            ints_set(m.left, n, raise_right(m, l));
+        }
+        raise_left(m, n)
+    } else {
+        if d < 0 - 1 {
+            if h(m, ints_get(m.right, r)) < h(m, ints_get(m.left, r)) {
+                ints_set(m.right, n, raise_left(m, r));
+            }
+            raise_right(m, n)
+        } else {
+            n
+        }
+    }
+}
+
+// A new node holding `key` and `value`, with no children.
+fn node[K: Ord, V](m: OrdMap[K, V], key: K, value: V) -> Int ! {} {
+    vec_push(m.keys, key);
+    vec_push(m.values, value);
+    ints_push(m.left, 0 - 1);
+    ints_push(m.right, 0 - 1);
+    ints_push(m.height, 1);
+    vec_len(m.keys) - 1
+}
+
+// `key` given `value` in the subtree at `n`: the subtree's new root.
+fn insert_at[K: Ord, V](m: OrdMap[K, V], n: Int, key: K, value: V) -> Int ! {} {
+    if n < 0 {
+        node(m, key, value)
+    } else {
+        let c = key.compare(vec_get(m.keys, n));
+        if c < 0 {
+            ints_set(m.left, n, insert_at(m, ints_get(m.left, n), key, value));
+            balance(m, n)
+        } else {
+            if c > 0 {
+                ints_set(m.right, n, insert_at(m, ints_get(m.right, n), key, value));
+                balance(m, n)
+            } else {
+                vec_set(m.values, n, value);
+                ints_set(m.meta, 1, 1);
+                n
+            }
+        }
+    }
+}
+
+// The node holding `key`, or `-1`.
+fn find[K: Ord, V](m: OrdMap[K, V], key: K) -> Int ! {} {
+    let mut n = root(m);
+    let mut found = 0 - 1;
+    while n >= 0 && found < 0 {
+        let c = key.compare(vec_get(m.keys, n));
+        if c < 0 { n = ints_get(m.left, n); } else { if c > 0 { n = ints_get(m.right, n); } else { found = n; } }
+    }
+    found
+}
+
+/// The value `m` holds for `key`, or `None`.
+pub fn ordmap_get[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[V] ! {} {
+    let at = find(m, key);
+    if at < 0 { Option[V].None() } else { Option[V].Some(value: vec_get(m.values, at)) }
+}
+
+/// Whether `m` holds `key`.
+pub fn ordmap_has[K: Ord, V](m: OrdMap[K, V], key: K) -> Bool ! {} {
+    find(m, key) >= 0
+}
+
+/// Give `key` the value `value` in `m`, replacing any it had; whether one was replaced.
+pub fn ordmap_set[K: Ord, V](m: OrdMap[K, V], key: K, value: V) -> Bool ! {} {
+    ints_set(m.meta, 1, 0);
+    ints_set(m.meta, 0, insert_at(m, root(m), key, value));
+    ints_get(m.meta, 1) == 1
+}
+
+// The subtree at `n` without its least node, which is left detached: the subtree's new root.
+fn remove_min[K: Ord, V](m: OrdMap[K, V], n: Int) -> Int ! {} {
+    let l = ints_get(m.left, n);
+    if l < 0 {
+        ints_get(m.right, n)
+    } else {
+        ints_set(m.left, n, remove_min(m, l));
+        balance(m, n)
+    }
+}
+
+// The subtree at `n` without `key`'s node, which is left detached (`meta[1]` is its index, or
+// `-1` when `key` was not there): the subtree's new root.
+fn remove_at[K: Ord, V](m: OrdMap[K, V], n: Int, key: K) -> Int ! {} {
+    if n < 0 {
+        n
+    } else {
+        let c = key.compare(vec_get(m.keys, n));
+        if c < 0 {
+            ints_set(m.left, n, remove_at(m, ints_get(m.left, n), key));
+            balance(m, n)
+        } else {
+            if c > 0 {
+                ints_set(m.right, n, remove_at(m, ints_get(m.right, n), key));
+                balance(m, n)
+            } else {
+                ints_set(m.meta, 1, n);
+                let l = ints_get(m.left, n);
+                let r = ints_get(m.right, n);
+                if l < 0 { r } else {
+                    if r < 0 { l } else {
+                        // The least node of the right subtree takes `n`'s place.
+                        let mut s = r;
+                        while ints_get(m.left, s) >= 0 { s = ints_get(m.left, s); }
+                        ints_set(m.right, s, remove_min(m, r));
+                        ints_set(m.left, s, l);
+                        balance(m, s)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The detached node `x` removed from the vectors: the last node moves into its place, and the
+// link that reached the last node reaches it there.
+fn compact[K: Ord, V](m: OrdMap[K, V], x: Int) -> Int ! {} {
+    let last = vec_len(m.keys) - 1;
+    if x != last {
+        let key = vec_get(m.keys, last);
+        let mut parent = 0 - 1;
+        let mut n = root(m);
+        while n != last {
+            parent = n;
+            n = if key.compare(vec_get(m.keys, n)) < 0 { ints_get(m.left, n) } else { ints_get(m.right, n) };
+        }
+        if parent < 0 { ints_set(m.meta, 0, x); } else {
+            if ints_get(m.left, parent) == last { ints_set(m.left, parent, x); } else { ints_set(m.right, parent, x); }
+        }
+        vec_set(m.keys, x, key);
+        vec_set(m.values, x, vec_get(m.values, last));
+        ints_set(m.left, x, ints_get(m.left, last));
+        ints_set(m.right, x, ints_get(m.right, last));
+        ints_set(m.height, x, ints_get(m.height, last));
+    }
+    let k = vec_pop(m.keys);
+    let v = vec_pop(m.values);
+    let a = ints_pop(m.left);
+    let b = ints_pop(m.right);
+    let c = ints_pop(m.height);
+    0
+}
+
+/// Take `key` out of `m`, with the value it had, or `None` when it had none.
+pub fn ordmap_remove[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[V] ! {} {
+    let at = find(m, key);
+    if at < 0 {
+        Option[V].None()
+    } else {
+        let gone = vec_get(m.values, at);
+        ints_set(m.meta, 0, remove_at(m, root(m), key));
+        compact(m, at);
+        Option[V].Some(value: gone)
+    }
+}
+
+/// The least key of `m`, or `None` when it is empty.
+pub fn ordmap_first[K: Ord, V](m: OrdMap[K, V]) -> Option[K] ! {} {
+    let mut n = root(m);
+    if n < 0 { Option[K].None() } else {
+        while ints_get(m.left, n) >= 0 { n = ints_get(m.left, n); }
+        Option[K].Some(value: vec_get(m.keys, n))
+    }
+}
+
+/// The greatest key of `m`, or `None` when it is empty.
+pub fn ordmap_last[K: Ord, V](m: OrdMap[K, V]) -> Option[K] ! {} {
+    let mut n = root(m);
+    if n < 0 { Option[K].None() } else {
+        while ints_get(m.right, n) >= 0 { n = ints_get(m.right, n); }
+        Option[K].Some(value: vec_get(m.keys, n))
+    }
+}
+
+/// The greatest key of `m` that is not after `key`, or `None`.
+pub fn ordmap_floor[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[K] ! {} {
+    let mut n = root(m);
+    let mut best = 0 - 1;
+    while n >= 0 {
+        let c = key.compare(vec_get(m.keys, n));
+        if c < 0 { n = ints_get(m.left, n); } else {
+            best = n;
+            n = if c > 0 { ints_get(m.right, n) } else { 0 - 1 };
+        }
+    }
+    if best < 0 { Option[K].None() } else { Option[K].Some(value: vec_get(m.keys, best)) }
+}
+
+/// The least key of `m` that is not before `key`, or `None`.
+pub fn ordmap_ceiling[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[K] ! {} {
+    let mut n = root(m);
+    let mut best = 0 - 1;
+    while n >= 0 {
+        let c = key.compare(vec_get(m.keys, n));
+        if c > 0 { n = ints_get(m.right, n); } else {
+            best = n;
+            n = if c < 0 { ints_get(m.left, n) } else { 0 - 1 };
+        }
+    }
+    if best < 0 { Option[K].None() } else { Option[K].Some(value: vec_get(m.keys, best)) }
+}
+
+// Every node of `m` with a key in `lo..hi` — every node, when `bounded` is false — in key order.
+fn walk[K: Ord, V](m: OrdMap[K, V], bounded: Bool, lo: K, hi: K) -> Ints ! {} {
+    let out = ints_new();
+    let stack = ints_new();
+    let mut n = root(m);
+    while n >= 0 || ints_len(stack) > 0 {
+        if n >= 0 {
+            // A subtree wholly before `lo` is passed over, its right side still visited.
+            if bounded && vec_get(m.keys, n).compare(lo) < 0 {
+                n = ints_get(m.right, n);
+            } else {
+                ints_push(stack, n);
+                n = ints_get(m.left, n);
+            }
+        } else {
+            let top = ints_pop(stack);
+            if bounded && vec_get(m.keys, top).compare(hi) >= 0 {
+                // Everything left on the stack and to the right is at or after `hi`.
+                while ints_len(stack) > 0 { let x = ints_pop(stack); }
+                n = 0 - 1;
+            } else {
+                ints_push(out, top);
+                n = ints_get(m.right, top);
+            }
+        }
+    }
+    out
+}
+
+fn all_nodes[K: Ord, V](m: OrdMap[K, V]) -> Ints ! {} {
+    if vec_len(m.keys) == 0 { ints_new() } else {
+        let k = vec_get(m.keys, 0);
+        walk(m, false, k, k)
+    }
+}
+
+/// Every key of `m`, in ascending order.
+pub fn ordmap_keys[K: Ord, V](m: OrdMap[K, V]) -> Vec[K] ! {} {
+    let nodes = all_nodes(m);
+    let out = vec_new[K]();
+    for i in 0..ints_len(nodes) { vec_push(out, vec_get(m.keys, ints_get(nodes, i))); }
+    out
+}
+
+/// Every value of `m`, in its keys' order.
+pub fn ordmap_values[K: Ord, V](m: OrdMap[K, V]) -> Vec[V] ! {} {
+    let nodes = all_nodes(m);
+    let out = vec_new[V]();
+    for i in 0..ints_len(nodes) { vec_push(out, vec_get(m.values, ints_get(nodes, i))); }
+    out
+}
+
+fn entries_of[K: Ord, V](m: OrdMap[K, V], nodes: Ints) -> Vec[OrdEntry[K, V]] ! {} {
+    let out = vec_new[OrdEntry[K, V]]();
+    for i in 0..ints_len(nodes) {
+        let n = ints_get(nodes, i);
+        vec_push(out, OrdEntry[K, V](key: vec_get(m.keys, n), value: vec_get(m.values, n)));
+    }
+    out
+}
+
+/// Every entry of `m`, in ascending key order.
+pub fn ordmap_entries[K: Ord, V](m: OrdMap[K, V]) -> Vec[OrdEntry[K, V]] ! {} {
+    entries_of(m, all_nodes(m))
+}
+
+/// The entries of `m` whose keys are at or after `lo` and before `hi`, in ascending key order:
+/// `O(log n)` comparisons and one step an entry returned.
+pub fn ordmap_range[K: Ord, V](m: OrdMap[K, V], lo: K, hi: K) -> Vec[OrdEntry[K, V]] ! {} {
+    entries_of(m, walk(m, true, lo, hi))
+}

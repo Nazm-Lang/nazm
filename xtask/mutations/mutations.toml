@@ -17991,3 +17991,109 @@ file = "library/std/args.nz"
 find = '''            strs_push(rows, f"{str_pad_end(strs_get(lefts, i), width + 2, " ")}{r}");'''
 replace = '''            strs_push(rows, f"{str_pad_end(strs_get(lefts, i), width + 1, " ")}{r}");'''
 killers = [{ package = "nazm-cli", test = "args", name = "every_form_and_every_mistake_parse_alike_everywhere" }]
+
+# --- R1e S2 and S3: `@std/bytebuf`, `@std/ordmap`, `@std/bitset`, in-place sorts ------------------
+
+[[mutation]]
+name = "r1e-a-bytebuf-loses-its-bytes-when-it-grows"
+why = "the storage doubles without copying what was written, so every byte before the growth reads as zero"
+file = "library/std/bytebuf.nz"
+find = "        bytes_copy(fresh, bytes_slice(old, 0, len));"
+replace = "        bytes_copy(fresh, bytes_slice(old, 0, 0));"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-sleb128-stops-without-its-sign"
+why = "SLEB128 stops when what is left is all sign bits, whatever the sign bit just written, so 64 reads back as -64"
+file = "library/std/bytebuf.nz"
+find = "        more = !((x == 0 && !sign) || (x == 0 - 1 && sign));"
+replace = "        more = !(x == 0 || x == 0 - 1);"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-an-aligned-bytebuf-is-padded-again"
+why = "aligning a length already aligned adds a whole alignment of zero bytes"
+file = "library/std/bytebuf.nz"
+find = "        let pad = (n - bytebuf_len(b) % n) % n;"
+replace = "        let pad = n - bytebuf_len(b) % n;"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-a-patch-before-the-buffer-traps"
+why = "a patch at a negative offset is not refused as outside the bytes written, so it stops the program instead of answering false"
+file = "library/std/bytebuf.nz"
+find = "    at >= 0 && at + n <= bytebuf_len(b)"
+replace = "    at + n <= bytebuf_len(b)"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-a-str-key-sorts-before-its-own-prefix"
+why = "`Str`'s `compare` puts a longer key before its prefix one way round and after it the other, so the order is not total"
+file = "library/std/ordmap.nz"
+find = "                if i == k { r = 1; } else {"
+replace = "                if i == k { r = 0 - 1; } else {"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-an-ordmap-never-rotates-left"
+why = "a right-heavy subtree is never rebalanced, so ascending keys make a list as deep as the map"
+file = "library/std/ordmap.nz"
+find = "        if d < 0 - 1 {"
+replace = "        if d < 0 - 1000000000 {"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "an_ordmap_stays_balanced_under_ascending_keys" }]
+
+[[mutation]]
+name = "r1e-a-removed-ordmap-node-drops-its-left-subtree"
+why = "the successor that takes a removed node's place is not given the node's left subtree, so those keys vanish"
+file = "library/std/ordmap.nz"
+find = "                        ints_set(m.left, s, l);"
+replace = "                        ints_set(m.left, s, 0 - 1);"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-a-moved-ordmap-node-is-linked-from-the-wrong-side"
+why = "compacting after a removal relinks the moved node as its parent's right child even when it was the left"
+file = "library/std/ordmap.nz"
+find = "            if ints_get(m.left, parent) == last { ints_set(m.left, parent, x); } else { ints_set(m.right, parent, x); }"
+replace = "            ints_set(m.right, parent, x);"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-an-ordmap-range-ignores-its-lower-bound"
+why = "a range walk does not pass over keys before `lo`, so it returns them too"
+file = "library/std/ordmap.nz"
+find = "            if bounded && vec_get(m.keys, n).compare(lo) < 0 {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-removing-an-absent-bit-adds-it"
+why = "a removal toggles the bit rather than clearing it, so removing a member that is not there adds it"
+file = "library/std/bitset.nz"
+find = "        vec_set(s.words, w, old & (bit(i) ^ UInt64(18446744073709551615)));"
+replace = "        vec_set(s.words, w, old ^ bit(i));"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-bitset-next-finds-members-before-from"
+why = "the first word is searched whole, so the walk can return a member before where it was asked to start"
+file = "library/std/bitset.nz"
+find = "        let first = vec_get(s.words, w) & ((bit(start) - UInt64(1)) ^ UInt64(18446744073709551615));"
+replace = "        let first = vec_get(s.words, w);"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-the-in-place-sort-is-unstable"
+why = "an element is moved left past ones equal to it, so equal elements change order"
+file = "library/std/sort.nz"
+find = "            while j > lo && less(x, vec_get(xs, j - 1)) {"
+replace = "            while j > lo && !less(vec_get(xs, j - 1), x) {"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+[[mutation]]
+name = "r1e-the-in-place-sort-leaves-its-result-in-scratch"
+why = "after an odd number of merge passes the sorted elements are in the scratch vector and never copied back"
+file = "library/std/sort.nz"
+find = "        if !in_xs {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "collections_r1e", name = "bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]

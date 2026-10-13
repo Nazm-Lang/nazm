@@ -1,0 +1,134 @@
+// `@std/bitset`: a growable set of small non-negative integers, one bit each (R1e, S3).
+//
+// Imported with `use "@std/bitset";`. A `BitSet` holds bit `i` as bit `i % 64` of word `i / 64`
+// of a vector it shares like any handle: copies of a set are the same set. Adding, removing and
+// testing take constant time, adding past the words held grows them; counting, comparing and
+// the set operations take time in the words. A negative member is ordinary failure: never added,
+// never held, never a trap.
+
+/// A set of non-negative `Int`s.
+pub struct BitSet {
+    words: Vec[UInt64],
+}
+
+/// An empty set.
+pub fn bitset_new() -> BitSet ! {} {
+    BitSet(words: vec_new[UInt64]())
+}
+
+// The bit of `i` within its word.
+fn bit(i: Int) -> UInt64 ! {} {
+    UInt64(1) << (i % 64)
+}
+
+// Word `w` of `s`, zero past those held.
+fn word(s: BitSet, w: Int) -> UInt64 ! {} {
+    if w < vec_len(s.words) { vec_get(s.words, w) } else { UInt64(0) }
+}
+
+/// Put `i` in `s`; whether it was not there already (`false`, and nothing added, when `i < 0`).
+pub fn bitset_add(s: BitSet, i: Int) -> Bool ! {} {
+    if i < 0 { false } else {
+        let w = i / 64;
+        while vec_len(s.words) <= w { vec_push(s.words, UInt64(0)); }
+        let old = vec_get(s.words, w);
+        vec_set(s.words, w, old | bit(i));
+        (old & bit(i)) == UInt64(0)
+    }
+}
+
+/// Take `i` out of `s`; whether it was there.
+pub fn bitset_remove(s: BitSet, i: Int) -> Bool ! {} {
+    if i < 0 || i / 64 >= vec_len(s.words) { false } else {
+        let w = i / 64;
+        let old = vec_get(s.words, w);
+        vec_set(s.words, w, old & (bit(i) ^ UInt64(18446744073709551615)));
+        (old & bit(i)) != UInt64(0)
+    }
+}
+
+/// Whether `s` holds `i`.
+pub fn bitset_has(s: BitSet, i: Int) -> Bool ! {} {
+    i >= 0 && (word(s, i / 64) & bit(i)) != UInt64(0)
+}
+
+/// How many members `s` holds.
+pub fn bitset_count(s: BitSet) -> Int ! {} {
+    let mut n = 0;
+    for w in 0..vec_len(s.words) { n = n + Int(count_ones(vec_get(s.words, w))); }
+    n
+}
+
+/// Empty `s`, keeping its words; returns `0`.
+pub fn bitset_clear(s: BitSet) -> Int ! {} {
+    for w in 0..vec_len(s.words) { vec_set(s.words, w, UInt64(0)); }
+    0
+}
+
+/// The least member of `s` at or after `from`, or `None`: a walk over the members is this from
+/// `0`, then from each one found plus one.
+pub fn bitset_next(s: BitSet, from: Int) -> Option[Int] ! {} {
+    let start = if from < 0 { 0 } else { from };
+    let mut w = start / 64;
+    let mut found = 0 - 1;
+    if w < vec_len(s.words) {
+        // The first word without the bits below `start`.
+        let first = vec_get(s.words, w) & ((bit(start) - UInt64(1)) ^ UInt64(18446744073709551615));
+        if first != UInt64(0) { found = w * 64 + Int(trailing_zeros(first)); }
+        w = w + 1;
+    }
+    while found < 0 && w < vec_len(s.words) {
+        let x = vec_get(s.words, w);
+        if x != UInt64(0) { found = w * 64 + Int(trailing_zeros(x)); }
+        w = w + 1;
+    }
+    if found < 0 { Option[Int].None() } else { Option[Int].Some(value: found) }
+}
+
+/// Every member of `s`, ascending.
+pub fn bitset_items(s: BitSet) -> Ints ! {} {
+    let out = ints_new();
+    for w in 0..vec_len(s.words) {
+        let mut x = vec_get(s.words, w);
+        while x != UInt64(0) {
+            ints_push(out, w * 64 + Int(trailing_zeros(x)));
+            x = x & (x - UInt64(1));
+        }
+    }
+    out
+}
+
+// A new set whose word `w` is `op` of `a`'s and `b`'s: `0` both, `1` either, `2` the first only.
+fn combine(a: BitSet, b: BitSet, op: Int) -> BitSet ! {} {
+    let n = if vec_len(a.words) > vec_len(b.words) { vec_len(a.words) } else { vec_len(b.words) };
+    let out = vec_new[UInt64]();
+    for w in 0..n {
+        let x = word(a, w);
+        let y = word(b, w);
+        vec_push(out, if op == 0 { x & y } else { if op == 1 { x | y } else { x & (y ^ UInt64(18446744073709551615)) } });
+    }
+    BitSet(words: out)
+}
+
+/// A new set of the members of `a` or `b`.
+pub fn bitset_union(a: BitSet, b: BitSet) -> BitSet ! {} {
+    combine(a, b, 1)
+}
+
+/// A new set of the members of both `a` and `b`.
+pub fn bitset_intersection(a: BitSet, b: BitSet) -> BitSet ! {} {
+    combine(a, b, 0)
+}
+
+/// A new set of the members of `a` that are not members of `b`.
+pub fn bitset_difference(a: BitSet, b: BitSet) -> BitSet ! {} {
+    combine(a, b, 2)
+}
+
+/// Whether `a` and `b` have the same members, however many words each holds.
+pub fn bitset_equal(a: BitSet, b: BitSet) -> Bool ! {} {
+    let n = if vec_len(a.words) > vec_len(b.words) { vec_len(a.words) } else { vec_len(b.words) };
+    let mut same = true;
+    for w in 0..n { if word(a, w) != word(b, w) { same = false; } }
+    same
+}
