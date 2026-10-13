@@ -575,8 +575,8 @@ accepts.
 | `initialiser` | `IDENT , ":" , expression` |
 | `variant_construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")"` |
 | `arguments` | `expression , { "," , expression }` |
-| `if_expression` | `"if" , expression , block , [ "else" , ( block \| if_expression ) ]` |
-| `if_let_expression` | `"if" , "let" , pattern , "=" , expression , block , [ "else" , block ]` |
+| `if_expression` | `"if" , expression , block , [ "else" , ( block \| if_expression \| if_let_expression ) ]` |
+| `if_let_expression` | `"if" , "let" , pattern , "=" , expression , block , [ "else" , ( block \| if_expression \| if_let_expression ) ]` |
 | `match_expression` | `"match" , expression , "{" , [ match_arms ] , "}"` |
 | `match_arms` | `match_arm , { "," , match_arm } , [ "," ]` |
 | `match_arm` | `pattern , "=>" , expression` |
@@ -1210,8 +1210,15 @@ fn main() -> Int { 1 }
 statement = let_statement | assignment | while_statement | for_statement | let_else_statement | return_statement | break_statement | continue_statement | scope_statement | defer_statement | spawn_statement | expression_statement ;
 ```
 
+R1, 5b.19: a statement's closing ";" may be left out where a line break or its block's
+"}" follows it; see spec.md, "else if, and a line break for ;".
+
 ```nazm
 fn main() -> Int { let a = 1; a }
+```
+
+```nazm
+fn main() -> Int { let mut n = 0; while n < 5 { n = n + 1; if n == 3 { break } } n }
 ```
 
 ### `let_statement`
@@ -1762,8 +1769,10 @@ fn main() -> Int { ints_set(ints_new(), 0, 1) }
 ### `if_expression`
 
 ```ebnf
-if_expression = "if" , expression , block , [ "else" , ( block | if_expression ) ] ;
+if_expression = "if" , expression , block , [ "else" , ( block | if_expression | if_let_expression ) ] ;
 ```
+
+R1, 5b.11: "else if" is "else { if … }".
 
 ```nazm
 fn main() -> Int { if true { 1 } else { 2 } }
@@ -1773,16 +1782,24 @@ fn main() -> Int { if true { 1 } else { 2 } }
 fn main() -> Int { let mut n = 0; if true { n = 1; } n }
 ```
 
+```nazm
+fn main() -> Int { let n = 50; if n < 10 { 1 } else if n < 100 { 2 } else { 3 } }
+```
+
 ### `if_let_expression`
 
 ```ebnf
-if_let_expression = "if" , "let" , pattern , "=" , expression , block , [ "else" , block ] ;
+if_let_expression = "if" , "let" , pattern , "=" , expression , block , [ "else" , ( block | if_expression | if_let_expression ) ] ;
 ```
 
 R1a: `if let P = e { … } else { … }` means `match e { P => …, _ => … }`.
 
 ```nazm
 fn main() -> Int { if let 3 = 3 { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { if let 3 = 4 { 1 } else if true { 2 } else { 0 } }
 ```
 
 ### `match_expression`

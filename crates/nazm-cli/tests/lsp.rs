@@ -1533,8 +1533,10 @@ fn a_quick_fix_crosses_the_protocol_versioned_in_utf16_and_changes_nothing_until
 
 #[test]
 fn quick_fixes_come_from_current_diagnostics_only_and_only_as_quick_fixes() {
-    const REVIEW: &str =
-        "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; i }\n    i\n}\n";
+    // A contract narrower than its body (N0366): the fix that widens it needs review. (Until
+    // R1 this was a loop body's value, which a line's end now discards.)
+    const REVIEW: &str = "fn f(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\n\
+                          fn main(out: OutCap) -> Int ! {io} { f(out) }\n";
     let (_dir, root) = project(&[("main.nz", FIXED_MAIN), ("loop.nz", REVIEW)]);
     let (main, looped) = (root.join("main.nz"), root.join("loop.nz"));
     let mut c = Client::start(&root);
@@ -1553,32 +1555,35 @@ fn quick_fixes_come_from_current_diagnostics_only_and_only_as_quick_fixes() {
     // A fix that needs review: offered, never preferred, its precondition in the title.
     c.open(&looped, 1, REVIEW);
     c.diagnostics_for(&uri(&looped));
-    let line = REVIEW.lines().nth(2).unwrap();
-    let tail = u32::try_from(line.find("i }").unwrap()).unwrap();
-    let r = c.code_action(&looped, point(2, tail), json!({"diagnostics": []}));
+    let line = REVIEW.lines().nth(1).unwrap();
+    let tail = u32::try_from(line.find("print").unwrap()).unwrap();
+    let r = c.code_action(&looped, point(1, tail), json!({"diagnostics": []}));
     let a = &r["result"][0];
     assert_eq!(a["kind"], "quickfix", "{r}");
     let title = a["title"].as_str().unwrap();
     assert!(
-        title.starts_with("Review fix N0300: discard the value — right only if "),
+        title.starts_with("Review fix N0366: declare `! { io }` — right only if "),
         "{title}"
     );
-    assert!(title.contains("meant to be discarded"), "{title}");
+    assert!(title.contains("meant to exercise"), "{title}");
     assert!(a.get("isPreferred").is_none(), "{a}");
-    assert_eq!(a["edit"]["documentChanges"][0]["edits"][0]["newText"], ";");
+    assert_eq!(
+        a["edit"]["documentChanges"][0]["edits"][0]["newText"],
+        "! { io }"
+    );
 
     // Only refactors or source actions asked for: none; quick fixes asked for: the same.
     for only in [json!(["refactor"]), json!(["source", "source.fixAll"])] {
         let r = c.code_action(
             &looped,
-            point(2, tail),
+            point(1, tail),
             json!({"diagnostics": [], "only": only}),
         );
         assert_eq!(r["result"], json!([]), "{only}: {r}");
     }
     let r = c.code_action(
         &looped,
-        point(2, tail),
+        point(1, tail),
         json!({"diagnostics": [], "only": ["quickfix"]}),
     );
     assert_eq!(r["result"].as_array().unwrap().len(), 1, "{r}");

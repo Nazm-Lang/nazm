@@ -184,7 +184,7 @@ fn syntax_diagnostics_are_indexed_without_a_snapshot_and_their_fixes_are_no_patc
         ),
         (
             "parser: missing `;`",
-            "fn main() -> Int {\n    let a = 1\n    a\n}\n",
+            "fn main() -> Int {\n    let a = 1 a\n}\n",
         ),
         (
             "parser: a mutable parameter",
@@ -232,8 +232,9 @@ fn syntax_diagnostics_are_indexed_without_a_snapshot_and_their_fixes_are_no_patc
 }
 
 const IMMUTABLE: &str = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n";
-const LOOP: &str =
-    "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 {\n        i = i + 1;\n        i\n    }\n    i\n}\n";
+// A contract narrower than its body (N0366): widening it needs review. (Until R1 this was a loop
+// body's value, which a line's end now discards.)
+const LOOP: &str = "fn f(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\nfn main(out: OutCap) -> Int ! {io} { f(out) }\n";
 
 #[test]
 fn a_fix_n29_can_plan_carries_the_request_that_plans_it_and_needs_review_stays() {

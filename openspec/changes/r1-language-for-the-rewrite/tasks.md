@@ -65,7 +65,7 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
       then 222 ms (integer text, the map's table of positions, one string per interpolated integer,
       inlined reference counting)
 - [ ] 5b.10 The benchmark in the repository, re-run for each publication, and its results on nazm.dev
-- [ ] 5b.11 `else if` — the grammar and the guide have promised it since 2026-09-21 and the parser
+- [x] 5b.11 `else if` — the grammar and the guide have promised it since 2026-09-21 and the parser
       never accepted it; a grammar `@example` of it, so the two cannot drift again
 - [ ] 5b.12 Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` and the bit operators'
 - [ ] 5b.13 `print` and `println` of any value with a text (a number, a `Bool`, a `Show`)
@@ -78,7 +78,7 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 - [ ] 5b.17 Methods without a trait (`impl Point { … }`), `while let`, `loop`, match guards, `?` on
       `Option` in a function returning `Option`, `/* … */` comments
 - [ ] 5b.18 One list type: `Strs` and `Ints` interchangeable with `Vec[Str]` and `Vec[Int]`
-- [ ] 5b.19 Semicolon-free lines: a line break ends a statement where a `;` could, as in Go; `;`
+- [x] 5b.19 Semicolon-free lines: a line break ends a statement where a `;` could, as in Go; `;`
       still accepted; `nazm fmt` writes the new form
 
 ## 6. R1d — the platform
