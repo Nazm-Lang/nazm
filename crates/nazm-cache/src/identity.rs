@@ -324,7 +324,9 @@ use crate::digest::{self, Framed};
 /// `67` — R1b, 2026-10-13. `Int128` and `UInt128`, literals up to `UInt128`'s maximum and a
 /// negated one below `Int`'s, and `widening_mul` moved from refused to accepted; a 128-bit
 /// integer at a C export moved to refused.
-pub const SEMANTIC_EPOCH: u32 = 67;
+/// `68` — R1c, 2026-10-13. `@derive(json)` before a `struct` or `enum` moved from refused
+/// (`N0619`) to accepted, generating its codec and schema; a field it cannot carry is `N0619`.
+pub const SEMANTIC_EPOCH: u32 = 68;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

@@ -78,6 +78,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `string-escapes` | STABLE 1.0 | |
 | `string-forms` | EXPERIMENTAL | R1a: multi-line and raw strings, a 1.x addition, experimental until R1 closes |
 | `interpolation` | EXPERIMENTAL | R1a: `f"…"`, fixed-point floats and padding, a 1.x addition, experimental until R1 closes |
+| `derived-serialisation` | EXPERIMENTAL | R1c: `@derive(json)`, its codec and schema, a 1.x addition, experimental until R1 closes |
 | `sequences` | STABLE 1.0 | its *Destruction* row is superseded by `memory`: storage is reclaimed |
 | `memory` | STABLE 1.0 | *Cycles* covers closure environments since Gate 1-C1 (`N0616`) |
 | `outside-world` | STABLE 1.0 | *Authority is explicit where a contract is written, and ambient elsewhere* is HISTORICAL: `capabilities` (N104) governs |
@@ -4192,10 +4193,58 @@ and no macros.
 | **`@interrupt("NAME")`** (Gate 3) | Makes a function a board's interrupt handler (*Boards*, below); before anything else, `N0619`, and a function of another shape `N0627` |
 | **`@on_failure`** (Gate 3) | Makes a function a board's failure hook (*Boards*, below); before anything else, `N0619`, and a function of another shape `N0627` |
 | **`@task(priority = "N", period = "P")`** (Gate 3) | Makes a function a periodic task of a board's fixed-priority scheduler (*Boards*, below); before anything else, or with a priority or period out of range, `N0619`, and a function of another shape `N0627` |
+| **`@derive(json)`** (R1c, L2; EXPERIMENTAL until R1 closes) | Before a `struct` or `enum` that is not generic: gives it a JSON encoding, decoding and schema (*Derived serialisation*, below); before anything else, or with a field of a type it cannot carry, `N0619` |
 | **Refused** | An attribute not in this list, one on a declaration it does not mark, one with arguments it does not take, or one other than `@cfg` written twice is `N0619`. A malformed argument is a syntax error (`N0100`), reported once; the attribute is then not checked again |
 
 Attributes change no expression's meaning. The formatter writes each on its own line, `@` against
 its name.
+
+### Derived serialisation — R1c
+<!-- id: derived-serialisation -->
+
+R1c (L2), EXPERIMENTAL until R1 closes. `@derive(json)` before a `struct` or an `enum` that is not
+generic gives it, in its module and public exactly when the type is, functions named by the type's
+name in snake case — `HttpRequest` is `http_request`:
+
+```nazm
+@derive(json)
+pub struct Point { x: Int, label: Option[Str], tags: Vec[Str], }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let text = point_to_json(Point(x: 1, label: Option[Str].None(), tags: vec_new[Str]()));
+    // {"x":1,"label":null,"tags":[]}
+    match point_from_json(text) { Result.Ok(value: p) => p.x, Result.Err(error: e) => 0, }
+}
+```
+
+| Function | |
+| --- | --- |
+| `point_to_json(v: Point) -> Str` | Compact JSON text |
+| `point_from_json(text: Str) -> Result[Point, Str]` | The value, or an `Err` naming where in the document it went wrong, as a path — `$.tags[2]: expected a string`. Never traps |
+| `point_json_schema() -> Str` | A JSON Schema (2020-12) of the type: a `$ref` to it under `$defs`, with every derived type it reaches beside it, so a recursive type has a finite schema |
+| `point_json_node(doc: JsonDoc, v: Point) -> Int`, `point_json_read(doc: JsonDoc, node: Int, at: Str) -> Result[Point, Str]`, `point_json_defs(seen: Strs, defs: Strs) -> Int` | What another derived type's functions call for a field of this one |
+
+The module needs no `use "@std/json";` of its own: deriving imports it. A function the module already
+has of one of these names is a duplicate (`N0203`).
+
+**The encoding.** Structural, like derived equality (*Ordering and hashing are derived*): a record is
+an object of its fields in the order written; an enum value with no payload is its variant's name as
+a string, and one with a payload an object of one member, the variant's name, whose value is the
+payload as a record's fields are. A field's type decides its value:
+
+| Field type | JSON |
+| --- | --- |
+| `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32` | An integer; on decoding, one outside the type is an `Err` |
+| `Float64`, `Float32` | A number; decoding takes an integer too |
+| `Bool`, `Str` | `true`/`false`, a string |
+| `Option[T]` | `T`'s value, or `null`; on decoding, a missing member is `None` too |
+| `Vec[T]`, `List[T]` | An array |
+| `Box[T]` | `T`'s value |
+| A record or enum — of this module or, qualified, another's | Its own encoding: it must derive `json` too — `N0619` at the field where the program declares the type and it does not; for one the checker cannot see from here, the generated call names a function that does not exist (`N0201`) |
+
+Any other field type — `UInt64` and the 128-bit integers, which a JSON integer here does not carry,
+`Bytes`, `Text`, a handle, a function, an array or a tuple — is refused at the attribute, `N0619`,
+naming the field. Decoding ignores members the type has no field for.
 
 ### Conditional compilation — Gate 2
 <!-- id: conditional-compilation -->
