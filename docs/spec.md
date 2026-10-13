@@ -1776,6 +1776,7 @@ two implementations end up disagreeing:
 | **Conversion** | `int_to_str(n)` is the decimal form, with a leading `-` when negative. `int_to_str(0)` is `"0"`, and the full `Int` range round-trips |
 | **Construction** | `str_from_byte(b)` is a one-byte `Str`, and fails with `N0405` unless `0 <= b <= 255`. Since N49 a literal may write a byte below 128 with an escape (*String escapes*, below); `str_from_byte` remains the way to make one above 127 that UTF-8 source does not already spell |
 | **Declassification** | `str_vouch(s)` is `s` with no origin, needing a `VouchCap` held (N52, *Declassification*) |
+| **Building** (R1b, D2) | `s = str_concat(s, t);` on a `let mut` binding appends in place when `s`'s storage is its own and has room after its bytes, and otherwise copies into storage of twice the length — so a string built by a loop of appends takes time and allocations linear and logarithmic in its length, not quadratic and linear. Nothing a program can observe differs: the bytes are `str_concat`'s, and a string sharing the storage keeps its own. Only storage an append made grows in place, so the interpreter and a compiled program allocate the same strings. EXPERIMENTAL until R1 closes |
 | **Allocation** | `str_concat`, `int_to_str` and `str_from_byte` allocate (and since R1a `str_pad_start`, `str_pad_end`, `float_to_str_fixed` and an interpolation, *String interpolation*); `str_slice` and `str_vouch` do not. A compiled program reports `N0406` if the allocator refuses. The interpreter cannot: its host aborts on allocation failure, and that difference is stated rather than papered over |
 | **Ownership** | Values, not references. Passing, returning, binding and copying a `Str` produce a string with the same bytes, and there is no way to observe whether a copy was made |
 | **Mutation** | There is none. No operation changes an existing `Str` |
@@ -2099,6 +2100,7 @@ Nazm does not call something automatic and leave the reader to find out what it 
 | --- | --- | --- | --- | --- | --- |
 | `let n = a + b;` | no | no | no | no | no |
 | `let s = str_concat(a, b);` | **yes** | **yes** | no | no | no |
+| `s = str_concat(s, t);`, `s` a `let mut` binding (R1b, D2) | **yes**, amortised | **`t` only**, amortised | no | no | no |
 | `let xs = ints_new();` | **yes** | no | no | no | no |
 | `let ys = xs;` | no | no | **yes** | no | no |
 | `f(xs)` | no | no | no | no | no |

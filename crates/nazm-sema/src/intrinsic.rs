@@ -602,6 +602,11 @@ pub enum Intrinsic {
     CheckedSub,
     /// `checked_mul[T](a: T, b: T) -> Option[T]` — `Some` of the product, or `None`.
     CheckedMul,
+    /// Internal (R1b, D2): `s = str_concat(s, t)` on a `let mut` binding, as Core IR lowering
+    /// writes it. The same bytes as `str_concat`; natively it appends in place when `s`'s storage
+    /// is its own and has room, and otherwise copies into storage with room to grow, so a string
+    /// built by repeated appends costs linear time. No program can name it.
+    StrAppend,
 }
 
 impl Intrinsic {
@@ -987,6 +992,7 @@ impl Intrinsic {
             Self::CheckedAdd => "checked_add",
             Self::CheckedSub => "checked_sub",
             Self::CheckedMul => "checked_mul",
+            Self::StrAppend => "str_append",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
         }
@@ -1086,7 +1092,7 @@ impl Intrinsic {
             Self::StrLen | Self::StrVouch => &[Shape::Str],
             Self::StrByte => &[Shape::Str, Shape::Int],
             Self::StrSlice => &[Shape::Str, Shape::Int, Shape::Int],
-            Self::StrConcat => &[Shape::Str, Shape::Str],
+            Self::StrConcat | Self::StrAppend => &[Shape::Str, Shape::Str],
             Self::StrPadStart | Self::StrPadEnd => &[Shape::Str, Shape::Int, Shape::Str],
             Self::FloatToStrFixed => &[Shape::T, Shape::Int],
             Self::IntToStr | Self::StrFromByte => &[Shape::Int],
@@ -1265,6 +1271,7 @@ impl Intrinsic {
             Self::StrLen | Self::StrByte => Shape::Int,
             Self::StrSlice
             | Self::StrConcat
+            | Self::StrAppend
             | Self::IntToStr
             | Self::StrFromByte
             | Self::StrVouch => Shape::Str,

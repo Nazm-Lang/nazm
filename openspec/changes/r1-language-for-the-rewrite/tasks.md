@@ -32,7 +32,7 @@ each new construct by name until R2 carries it.
 - [ ] 4.5 L13 checked arithmetic, widening multiply, `Int128`/`UInt128` — checked arithmetic done (L13a, 2026-10-13); `Int128`/`UInt128` and the widening multiply (L13b) open
 - [x] 4.6 L14 stack size (`nazm build --stack-size`; the interpreter keeps `--max-depth`)
 - [x] 4.8 L15 a warning severity, `--deny-warnings`; L3's covering warning on `_` (`nazm check`, `nazm build`, the service; `nazm run`/`test` and a `@deprecated` use remain)
-- [ ] 4.7 D2 linear `s = str_concat(s, t)`
+- [x] 4.7 D2 linear `s = str_concat(s, t)` (native and interpreter; only storage an append made grows)
 
 ## 5. R1c — serialisation
 

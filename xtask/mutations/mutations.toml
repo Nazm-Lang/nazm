@@ -17250,3 +17250,72 @@ file = "crates/nazm-cli/src/build/lower.rs"
 find = "                if choice.deny_warnings {"
 replace = "                if !choice.deny_warnings && false {"
 killers = [{ package = "nazm-cli", test = "warnings", name = "deny_warnings_refuses_what_the_checker_warns_of" }]
+
+# --- R1b D2: linear-time string building (`docs/spec.md`, *Strings*, **Building**) ---------------
+
+[[mutation]]
+name = "r1b-an-append-is-a-concat"
+why = "`s = str_concat(s, t)` is lowered as a fresh concatenation, so a loop of appends allocates once per append"
+file = "crates/nazm-core/src/lower.rs"
+find = "                        *op = nazm_sema::Intrinsic::StrAppend;"
+replace = "                        *op = nazm_sema::Intrinsic::StrConcat;"
+killers = [{ package = "nazm-cli", test = "string_append", name = "a_loop_of_appends_allocates_a_logarithmic_number_of_strings" }]
+
+[[mutation]]
+name = "r1b-an-append-writes-into-shared-storage"
+why = "an append writes in place into storage another string holds, so that string's next append overwrites it"
+file = "crates/nazm-lir/src/op/prims.rs"
+find = "                let alone = self.cmp_imm(Cmp::Eq, count, Class::I64, 1);"
+replace = "                let alone = self.cmp_imm(Cmp::Ge, count, Class::I64, 1);"
+killers = [{ package = "nazm-cli", test = "string_append", name = "an_append_is_a_concat_everywhere_and_nothing_is_live" }]
+
+[[mutation]]
+name = "r1b-an-in-place-append-takes-no-reference"
+why = "the new value of an in-place append takes no reference, so the old value's release frees the storage it lives in"
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''
+                self.rt("memcpy", &[tail, pb, lb]);
+                self.rt("nz.str_retain", &[owner]);'''
+replace = '''
+                self.rt("memcpy", &[tail, pb, lb]);'''
+killers = [{ package = "nazm-cli", test = "string_append", name = "an_append_is_a_concat_everywhere_and_nothing_is_live" }]
+
+[[mutation]]
+name = "r1b-an-append-copy-has-no-room"
+why = "an append that copies leaves no room to grow, so the next append copies again"
+file = "crates/nazm-lir/src/op/prims.rs"
+find = "                let twice = self.bin(BinOp::Add, n, n);"
+replace = "                let twice = self.add_imm(n, 0);"
+killers = [{ package = "nazm-cli", test = "string_append", name = "a_loop_of_appends_allocates_a_logarithmic_number_of_strings" }]
+
+[[mutation]]
+name = "r1b-an-append-copy-is-not-marked-growable"
+why = "an append's copy records a plain capacity, so no later append grows it and every append allocates"
+file = "crates/nazm-lir/src/op/prims.rs"
+find = "                self.store(fresh, 8, growable);"
+replace = ""
+killers = [{ package = "nazm-cli", test = "string_append", name = "a_loop_of_appends_allocates_a_logarithmic_number_of_strings" }]
+
+[[mutation]]
+name = "r1b-any-string-grows-in-place"
+why = "the growth test ignores the mark, so an append writes into the spare byte of storage no append made and the compiled program allocates fewer strings than the interpreter"
+file = "crates/nazm-lir/src/op/prims.rs"
+find = "                let marked = self.add_imm(end, GROWABLE);"
+replace = "                let marked = self.add_imm(end, 0);"
+killers = [{ package = "nazm-cli", test = "memory", name = "only_storage_an_append_made_grows_in_place_and_it_fills_to_its_room" }]
+
+[[mutation]]
+name = "r1b-the-interpreter-appends-by-copying"
+why = "the interpreter evaluates an append with the binding still holding its string, so it always copies and its allocation count leaves the compiled program's"
+file = "crates/nazm-core/src/eval/exec.rs"
+find = "                return self.append(f, local, tail, env);"
+replace = "                let _ = tail;"
+killers = [{ package = "nazm-cli", test = "memory", name = "only_storage_an_append_made_grows_in_place_and_it_fills_to_its_room" }]
+
+[[mutation]]
+name = "r1b-the-interpreter-leaves-the-last-byte-of-room"
+why = "the interpreter copies an append that exactly fills its room, which the compiled program writes in place"
+file = "crates/nazm-core/src/eval/value.rs"
+find = "            if self.start + n <= *room {"
+replace = "            if self.start + n < *room {"
+killers = [{ package = "nazm-cli", test = "memory", name = "only_storage_an_append_made_grows_in_place_and_it_fills_to_its_room" }]

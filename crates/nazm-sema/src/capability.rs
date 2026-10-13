@@ -305,6 +305,7 @@ impl CapabilityKind {
             | Intrinsic::StrByte
             | Intrinsic::StrSlice
             | Intrinsic::StrConcat
+            | Intrinsic::StrAppend
             | Intrinsic::IntToStr
             | Intrinsic::StrFromByte
             | Intrinsic::IntsNew
