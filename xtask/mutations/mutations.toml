@@ -14721,8 +14721,8 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdlib::hash_maps_s
 name = "g2-a-removal-breaks-the-probe-chain"
 why = "a removed entry leaves an empty slot rather than a marker, so a key placed past it by probing is no longer found"
 file = "library/std/hashmap.nz"
-find = "        vec_set(m.slots, at, Slot[K, V].Gone());"
-replace = "        vec_set(m.slots, at, Slot[K, V].Empty());"
+find = "        vec_set(m.slots, at, 0 - 2);"
+replace = "        vec_set(m.slots, at, 0 - 1);"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdlib::hash_maps_sets_and_deques_behave_alike_everywhere" }]
 
 [[mutation]]
@@ -17413,8 +17413,8 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "wide::literals_and_
 name = "r1b-a-wide-integer-is-written-unsigned"
 why = "a native `num_to_str` writes every 128-bit integer as unsigned, so a negative `Int128` prints as a large positive number"
 file = "crates/nazm-lir/src/op/prims.rs"
-find = "                    let signed = self.iconst(i64::from(k.is_signed()));"
-replace = "                    let signed = self.iconst(i64::from(false));"
+find = "            let signed = self.iconst(i64::from(k.is_signed()));"
+replace = "            let signed = self.iconst(i64::from(false));"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "wide::every_operation_at_128_bits_agrees_everywhere" }]
 
 [[mutation]]
@@ -18097,3 +18097,67 @@ file = "library/std/sort.nz"
 find = "        if !in_xs {"
 replace = "        if false {"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "collections_r1e::bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_live" }]
+
+# --- R1 5b.9: integer text, one string per interpolated integer, the map, inlined counting -----
+
+[[mutation]]
+name = "r1-an-int-s-zero-is-negative"
+why = "an Int's text takes a minus sign when it is not positive, so zero prints as `-0`"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''define hidden i64 @nz.format_int(ptr %buf, i64 %v) {
+entry:
+  %tmp = alloca [24 x i8], align 1
+  %neg = icmp slt i64 %v, 0'''
+replace = '''define hidden i64 @nz.format_int(ptr %buf, i64 %v) {
+entry:
+  %tmp = alloca [24 x i8], align 1
+  %neg = icmp slt i64 %v, 1'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::every_integer_s_text_is_the_same_everywhere" }]
+
+[[mutation]]
+name = "r1-a-uint64-is-negative"
+why = "every UInt64's text takes a minus sign"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %neg = icmp ne i64 0, 0'''
+replace = '''  %neg = icmp eq i64 0, 0'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::every_integer_s_text_is_the_same_everywhere" }]
+
+[[mutation]]
+name = "r1-an-interpolated-int-is-two-strings"
+why = "an interpolation's Int hole is a string of its own and then a copy, so a loop of `f\"w{i}\"` allocates twice what it needs"
+file = "crates/nazm-core/src/lower.rs"
+find = '''            Type::Int => true,'''
+replace = '''            Type::Int => false,'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::an_interpolated_integer_costs_one_string_not_two" }]
+
+[[mutation]]
+name = "r1-the-digits-overwrite-the-text"
+why = "an interpolation's integer is written over the text before it rather than after"
+file = "crates/nazm-lir/src/op/prims.rs"
+find = '''                let d = self.digits_into(k, x, rest);'''
+replace = '''                let d = self.digits_into(k, x, buf);'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::every_integer_s_text_is_the_same_everywhere" }]
+
+[[mutation]]
+name = "r1-a-removal-loses-the-moved-entry"
+why = "a removal moves the last entry into the freed place but leaves its slot pointing at the old one"
+file = "library/std/hashmap.nz"
+find = '''            vec_set(m.slots, i, e);'''
+replace = '''            vec_set(m.slots, i, i);'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::the_hash_map_agrees_with_a_model_of_itself" }]
+
+[[mutation]]
+name = "r1-growth-drops-the-first-entry"
+why = "growing the table drops the entry at position 0"
+file = "library/std/hashmap.nz"
+find = '''        if e >= 0 { vec_push(order, e); }'''
+replace = '''        if e > 0 { vec_push(order, e); }'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::the_hash_map_agrees_with_a_model_of_itself" }]
+
+[[mutation]]
+name = "r1-no-unit-inlines-reference-counting"
+why = "no unit inlines the runtime's reference counting, so every retain and release is two calls"
+file = "crates/nazm-lir/src/backend.rs"
+find = '''            nazm_runtime::inline_reference_counting(&ir)'''
+replace = '''            ir'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::a_hosted_unit_inlines_the_runtime_s_reference_counting" }]

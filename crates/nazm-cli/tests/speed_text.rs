@@ -1,0 +1,204 @@
+//! The speed milestone (R1, 5b.9): an integer's text without the C library, an interpolation's
+//! integer written straight after the text before it, a hash map whose table holds positions, and
+//! the runtime's reference counting inlined where a hosted unit is optimised.
+//!
+//! Each is asked for the same bytes and the same memory report in every implementation, with
+//! nothing live; the map is held to a model of itself under a fixed sequence of operations.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
+use crate::common;
+use crate::differential;
+
+use common::{run_bounded, Ran};
+
+use std::path::Path;
+use std::process::Command;
+
+const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
+
+fn nazm(dir: &Path, args: &[&str]) -> Ran {
+    run_bounded(Command::new(NAZM).current_dir(dir).args(args), "nazm")
+}
+
+#[test]
+fn every_integer_s_text_is_the_same_everywhere() {
+    differential::agrees(
+        "fn main(out: OutCap) -> Int ! {io} {
+    let a = 0 - 9223372036854775807 - 1;
+    let b = UInt64(18446744073709551615);
+    let c = Int8(0 - 127) - Int8(1);
+    let d = UInt32(4294967295);
+    let e = Int16(0 - 7);
+    let f = UInt8(255);
+    print(f\"a{a} b{b} c{c} d{d} e{e} f{f} z{0} n{0 - 42} m{9223372036854775807}\\n\");
+    print(f\"{a}{b}|{c}\\n\");
+    print(str_concat(int_to_str(a), \"\\n\"));
+    0
+}
+",
+        "a-9223372036854775808 b18446744073709551615 c-128 d4294967295 e-7 f255 z0 n-42 \
+         m9223372036854775807\n-922337203685477580818446744073709551615|-128\n\
+         -9223372036854775808\n0",
+    );
+}
+
+#[test]
+fn an_interpolated_integer_costs_one_string_not_two() {
+    // A thousand `f"w{i}"`: the interpreter and each backend allocate the same strings — one
+    // each, the digits written after the `w`.
+    let line = differential::agrees(
+        "fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 1000 {
+        total = total + str_len(f\"w{i}\");
+        i = i + 1;
+    }
+    total
+}
+",
+        "3890",
+    );
+    let allocated: u64 = line
+        .split("strings allocated=")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(u64::MAX);
+    assert!(allocated <= 1010, "{line}");
+}
+
+/// Three thousand operations from a fixed seed on keys from a small range, so that keys are set,
+/// replaced, removed and set again, against two vectors searched from the start; then how many
+/// disagreements, the counts, and the keys summed by table order.
+const MAP: &str = "use \"@std/hash\";
+use \"@std/hashmap\";
+
+fn find(keys: Vec[Int], k: Int) -> Int {
+    let mut i = 0;
+    let mut at = 0 - 1;
+    while i < vec_len(keys) {
+        if vec_get(keys, i) == k { at = i; }
+        i = i + 1;
+    }
+    at
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let m = hashmap_new[Int, Int]();
+    let keys = vec_new[Int]();
+    let values = vec_new[Int]();
+    let mut state = UInt64(7);
+    let mut bad = 0;
+    let mut step = 0;
+    while step < 3000 {
+        state = wrapping_add(wrapping_mul(state, UInt64(6364136223846793005)), UInt64(1442695040888963407));
+        let k = Int((state >> 33) % UInt64(97));
+        let op = Int((state >> 20) % UInt64(3));
+        let at = find(keys, k);
+        if op == 0 {
+            let replaced = hashmap_set(m, k, step);
+            if replaced != (at >= 0) { bad = bad + 1; }
+            if at >= 0 { vec_set(values, at, step); } else { vec_push(keys, k); vec_push(values, step); }
+        } else {
+            if op == 1 {
+                let got = hashmap_remove(m, k);
+                match got {
+                    Option.Some(value: v) => {
+                        if at < 0 { bad = bad + 1; } else {
+                            if vec_get(values, at) != v { bad = bad + 1; }
+                            let last = vec_len(keys) - 1;
+                            vec_set(keys, at, vec_get(keys, last));
+                            vec_set(values, at, vec_get(values, last));
+                            vec_pop(keys);
+                            vec_pop(values);
+                        }
+                    },
+                    Option.None() => { if at >= 0 { bad = bad + 1; } },
+                };
+            } else {
+                match hashmap_get(m, k) {
+                    Option.Some(value: v) => { if at < 0 || vec_get(values, at) != v { bad = bad + 1; } },
+                    Option.None() => { if at >= 0 { bad = bad + 1; } },
+                };
+            }
+        }
+        if hashmap_len(m) != vec_len(keys) { bad = bad + 1; }
+        step = step + 1;
+    }
+    let mut sum = 0;
+    let all = hashmap_keys(m);
+    let mut j = 0;
+    while j < vec_len(all) {
+        sum = sum + vec_get(all, j) * (j + 1);
+        j = j + 1;
+    }
+    print(f\"{bad} {hashmap_len(m)} {vec_len(hashmap_values(m))} {sum}\\n\");
+    0
+}
+";
+
+#[test]
+fn the_hash_map_agrees_with_a_model_of_itself() {
+    // How many keys the same operations leave, from the same sequence here.
+    let mut keys: Vec<u64> = Vec::new();
+    let mut state: u64 = 7;
+    for _ in 0..3000 {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let k = (state >> 33) % 97;
+        let op = (state >> 20) % 3;
+        match (op, keys.iter().position(|x| *x == k)) {
+            (0, None) => keys.push(k),
+            (1, Some(i)) => {
+                keys.swap_remove(i);
+            }
+            _ => {}
+        }
+    }
+    // Table order is the map's own: the interpreter's sum is the one every backend must print.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("prog.nz"), MAP).unwrap();
+    let r = nazm(d.path(), &["run", "prog.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let sum = r.stdout.split_whitespace().nth(3).unwrap().to_owned();
+    let n = keys.len();
+    differential::agrees(MAP, &format!("0 {n} {n} {sum}\n0"));
+}
+
+#[test]
+fn a_hosted_unit_inlines_the_runtime_s_reference_counting() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main() -> Int { let v = vec_new[Str](); vec_push(v, f\"a{1}\"); vec_len(v) }\n",
+    )
+    .unwrap();
+    let b = nazm(
+        d.path(),
+        &["build", "--no-cache", "--emit-ir", "p.nz", "-o", "p"],
+    );
+    assert_eq!(b.code, Some(0), "{b:?}");
+    let mut units = String::new();
+    for e in std::fs::read_dir(d.path()).unwrap() {
+        let p = e.unwrap().path();
+        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+        if name.ends_with(".ll") && !name.contains("entry") && !name.contains("runtime") {
+            units.push_str(&std::fs::read_to_string(&p).unwrap());
+        }
+    }
+    assert!(
+        units.contains("define available_externally hidden void @nz.str_release("),
+        "{units}"
+    );
+    assert!(!units.contains("declare void @nz.str_release("), "{units}");
+    let r = run_bounded(&mut common::bounded_exe(&d.path().join("p")), "p");
+    assert_eq!((r.code, r.stdout.as_str()), (Some(0), "1\n"), "{r:?}");
+}

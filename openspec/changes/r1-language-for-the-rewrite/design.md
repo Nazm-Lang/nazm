@@ -188,6 +188,19 @@ capability system already proves: its state is plain globals, decided before any
 (`Native::single_thread`), in the units, the entry and the runtime alike (`Needs::single`). A program
 linked against a prebuilt runtime keeps the thread-local state that runtime was built with.
 
+**Word frequency, where its time went (5b.9, 2026-10-13).** Profiled, the program spent a quarter of
+its time in the C library's `snprintf`, which parses its format and takes a lock on every call; a
+fifth probing the map, whose probe copied each slot out of the table — a key retained and released
+per step — and divided by the table's length; and most of the rest allocating, freeing, retaining
+and releasing. So: an integer's text is a digit loop in the runtime; the map's table holds positions
+into dense arrays of hashes, keys and values, a power of two long, so a probe compares hashes and
+masks, and replacing a value allocates nothing — the slots are the same as before, so iteration
+order is too; an interpolation's integer hole is written straight after the text before it (the
+internal `str_concat_num`), one string where there were two; and a hosted unit carries
+`available_externally` copies of the runtime's retain and release, which the optimiser inlines.
+392 → 222 ms. Left: the vector retained and released around each built-in reading it, which MIR
+does because an operand that is not a local goes through an owned temporary.
+
 **L2 as carried out (2026-10-13).** Derived serialisation is ordinary Nazm, generated: the loader
 expands a file whose `struct` or `enum` carries `@derive(json)` by appending the functions it means,
 as `nazm test`'s harness already appends its `main` (`crates/nazm-cli/src/harness.rs`). So every
