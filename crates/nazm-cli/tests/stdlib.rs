@@ -131,15 +131,10 @@ fn codes(files: &[(&str, &str)]) -> Vec<String> {
 }
 
 const MODULES: &[&str] = &[
-    "binary", "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap", "hashset",
-    "io", "ioerror", "json", "log", "map", "net", "num", "option", "path", "process", "random",
-    "regex", "result", "seq", "show", "sort", "test", "text", "time",
-    "args", "binary", "chan", "deque", "env", "error", "file", "fmt", "fs", "hash", "hashmap",
-    "hashset", "io", "ioerror", "json", "log", "map", "net", "num", "option", "path", "process",
-    "random", "result", "seq", "show", "sort", "test", "text", "time",
-    "binary", "bitset", "bytebuf", "chan", "deque", "env", "error", "file", "fmt", "fs", "hash",
-    "hashmap", "hashset", "io", "ioerror", "json", "log", "map", "net", "num", "option", "ordmap",
-    "path", "process", "random", "result", "seq", "show", "sort", "test", "text", "time",
+    "args", "binary", "bitset", "blake3", "bytebuf", "chan", "deque", "env", "error", "file",
+    "fmt", "fs", "hash", "hashmap", "hashset", "io", "ioerror", "json", "log", "map", "net", "num",
+    "option", "ordmap", "path", "process", "random", "regex", "result", "seq", "sha256", "show",
+    "sort", "test", "text", "time", "toml",
 ];
 
 #[test]
