@@ -1260,6 +1260,22 @@ impl<'a> Lower<'a> {
                 *span,
             ),
             // A static `Atomic` (Gate 3): its one cell.
+            // `Dot` (R1.5, D4): a name the checker read as a variant with no payload.
+            AstExpr::Var { name, span }
+                if self.res.var(*span).is_none() && self.res.variant(*span).is_some() =>
+            {
+                let as_variant = AstExpr::Variant {
+                    qualifier: None,
+                    ty: String::new(),
+                    ty_span: *span,
+                    type_args: None,
+                    variant: name.clone(),
+                    variant_span: *span,
+                    fields: Vec::new(),
+                    span: *span,
+                };
+                return self.expr(&as_variant);
+            }
             AstExpr::Var { span, .. } if self.res.static_cell(*span).is_some() => {
                 let Some((module, name)) = self.res.static_cell(*span).cloned() else {
                     return defect(*span, "a static the checker did not record");
@@ -1539,6 +1555,29 @@ impl<'a> Lower<'a> {
                 };
                 let ufcs = self.res.var(*ty_span).is_none();
                 self.method_call((!ufcs).then_some(&receiver), *variant_span, &[], *span)?
+            }
+            // `Circle(2)` (R1.5, D4): a construction the checker read as a variant, lowered as
+            // the variant it is — `ty_span` is where the checker recorded it.
+            AstExpr::Construct {
+                ty,
+                ty_span,
+                fields,
+                span,
+                ..
+            } if self.res.construction(*ty_span).is_none()
+                && self.res.variant(*ty_span).is_some() =>
+            {
+                let as_variant = AstExpr::Variant {
+                    qualifier: None,
+                    ty: String::new(),
+                    ty_span: *ty_span,
+                    type_args: None,
+                    variant: ty.clone(),
+                    variant_span: *ty_span,
+                    fields: fields.clone(),
+                    span: *span,
+                };
+                return self.expr(&as_variant);
             }
             AstExpr::Construct {
                 ty_span, fields, ..

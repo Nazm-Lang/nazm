@@ -8335,10 +8335,11 @@ Repointed by R1 a fourth time (5b.18), which moved it to 74 for one list type: a
 Repointed by R1 a fifth time, which moved it to 75: an entry that refused `defer { println(x) }`, or read `p` then a line beginning with `(` as a call, must not be reused.
 Repointed by R1.5 (D1), which moved it to 76: an entry that refused `fn f(n: Int): Int` must not be reused.
 Repointed by R1.5 (D2), which moved it to 77: an entry that refused `fn f(n: Int) = n` must not be reused.
-Repointed by R1.5 (D3), which moved it to 78: an entry that refused `|a, b| a < b` must not be reused."""
+Repointed by R1.5 (D3), which moved it to 78: an entry that refused `|a, b| a < b` must not be reused.
+Repointed by R1.5 (D4), which moved it to 79: an entry that refused `Circle(2)` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 78;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 77;"
+find = "pub const SEMANTIC_EPOCH: u32 = 79;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 78;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19425,3 +19426,27 @@ file = "crates/nazm-cli/src/compiled_run.rs"
 find = "    let _ = std::fs::remove_dir_all(&work);"
 replace = "    let _ = &work;"
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "run_compiled::a_compiled_run_and_the_interpreter_agree_on_every_stream_and_the_status" }]
+
+[[mutation]]
+name = "r1-5-positional-fields-are-not-named"
+why = "fields given by position are checked with no names, so `Point(1, 2)` is refused"
+file = "crates/nazm-core/src/check/construct.rs"
+find = "        let fields: &[FieldInit] = named.as_deref().unwrap_or(fields);\n        let applied = self\n            .resolve_record(ty, ty_span)"
+replace = "        let _ = named;\n        let applied = self\n            .resolve_record(ty, ty_span)"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::fields_by_position_and_variants_without_their_enum_mean_the_long_forms_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-variant-without-its-enum-is-not-found"
+why = "a capitalised name that is no record is not looked for among the enums' variants, so `Circle(2)` is refused"
+file = "crates/nazm-core/src/check/construct.rs"
+find = "        if type_args.is_none() && !matches!(self.quiet_type(ty, ty_span), Type::Record(_)) {"
+replace = "        if false && type_args.is_none() && !matches!(self.quiet_type(ty, ty_span), Type::Record(_)) {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::fields_by_position_and_variants_without_their_enum_mean_the_long_forms_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-positional-payload-pattern-reads-nothing"
+why = "provenance reads a payload pattern given by position as carrying nothing, so a secret bound by position escapes the flow check"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                        Some(_) if f.name.is_empty() => Shaped::whole(v.flow.clone()),"
+replace = "                        Some(_) if f.name.is_empty() => Shaped::default(),"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_secret_bound_by_position_is_still_a_secret" }]

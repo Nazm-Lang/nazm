@@ -577,7 +577,7 @@ accepts.
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
 | `construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
 | `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
-| `initialiser` | `IDENT , ":" , expression` |
+| `initialiser` | `IDENT , ":" , expression \| expression` |
 | `variant_construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")"` |
 | `arguments` | `expression , { "," , expression }` |
 | `if_expression` | `"if" , expression , block , [ "else" , ( block \| if_expression \| if_let_expression ) ]` |
@@ -588,9 +588,9 @@ accepts.
 | `pattern` | `pattern_one , { "\|" , pattern_one }` |
 | `pattern_one` | `"_" \| IDENT \| [ "-" ] , INT \| STRING \| "true" \| "false" \| variant_pattern \| tuple_pattern` |
 | `tuple_pattern` | `"(" , pattern , "," , pattern , { "," , pattern } , [ "," ] , ")"` |
-| `variant_pattern` | `[ qualifier ] , IDENT , "." , IDENT , [ "(" , [ pattern_fields ] , ")" ] \| ( "Some" \| "Ok" \| "Err" ) , "(" , pattern , ")" \| "None"` |
+| `variant_pattern` | `[ qualifier ] , IDENT , "." , IDENT , [ "(" , [ pattern_fields ] , ")" ] \| IDENT , [ "(" , [ pattern_fields ] , ")" ] \| ( "Some" \| "Ok" \| "Err" ) , "(" , pattern , ")" \| "None"` |
 | `pattern_fields` | `pattern_field , { "," , pattern_field } , [ "," ]` |
-| `pattern_field` | `IDENT , ":" , pattern` |
+| `pattern_field` | `IDENT , ":" , pattern \| pattern` |
 
 ### `program`
 
@@ -1807,11 +1807,18 @@ struct P { x: Int, } fn main() -> Int { P(x: 1,).x }
 ### `initialiser`
 
 ```ebnf
-initialiser = IDENT , ":" , expression ;
+initialiser = IDENT , ":" , expression | expression ;
 ```
+
+A field may be given by position (R1.5, D4): every field of the record or variant, in the
+order declared, none named — `Point(1, 2)`, `Shape.Rect(3, 4)`.
 
 ```nazm
 struct P { x: Int, } fn main() -> Int { P(x: 1 + 1).x }
+```
+
+```nazm
+struct P { x: Int, y: Int, } fn main() -> Int { P(1, 2).y }
 ```
 
 ### `variant_construction`
@@ -1975,11 +1982,13 @@ fn main() -> Int { match (1, true) { (0, _) => 0, (n, true) => n, (_, false) => 
 ### `variant_pattern`
 
 ```ebnf
-variant_pattern = [ qualifier ] , IDENT , "." , IDENT , [ "(" , [ pattern_fields ] , ")" ] | ( "Some" | "Ok" | "Err" ) , "(" , pattern , ")" | "None" ;
+variant_pattern = [ qualifier ] , IDENT , "." , IDENT , [ "(" , [ pattern_fields ] , ")" ] | IDENT , [ "(" , [ pattern_fields ] , ")" ] | ( "Some" | "Ok" | "Err" ) , "(" , pattern , ")" | "None" ;
 ```
 
 R1, 5b.14: a variant with no payload needs no `()`; `Some(p)`, `Ok(p)`, `Err(p)` and `None` name the
 prelude's variants.
+A capitalised name alone (R1.5, D4) is a variant of the value's own enum, written without it:
+`Circle(r)`, `Dot`.
 
 ```nazm
 enum E { V(x: Int, y: Bool), } fn main() -> Int { match E.V(x: 1, y: true) { E.V(x: 1, y: _) => 1, E.V(x: n, y: _) => n, } }
@@ -1991,6 +2000,10 @@ enum C { R, G, } fn main() -> Int { match C.G { C.R => 1, C.G => 2, } }
 
 ```nazm
 fn main() -> Int { match Some(3) { Some(n) => n, None => 0, } }
+```
+
+```nazm
+enum S { C(r: Int), D, } fn area(s: S) -> Int { match s { C(r) => r, D => 0, } } fn main() -> Int { area(S.C(r: 2)) }
 ```
 
 ### `pattern_fields`
@@ -2006,7 +2019,7 @@ enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: 
 ### `pattern_field`
 
 ```ebnf
-pattern_field = IDENT , ":" , pattern ;
+pattern_field = IDENT , ":" , pattern | pattern ;
 ```
 
 A payload field matches a pattern — a name binds it, `_` discards it. `_` declines to name

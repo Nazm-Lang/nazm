@@ -532,6 +532,9 @@ pub mod codes {
     /// A short closure's parameter written without a type where no function type is expected
     /// to take it from (R1.5, D3; `docs/spec.md`, *Shorter forms*).
     pub const CLOSURE_PARAMETER_UNTYPED: Code = Code::new("N0635");
+    /// A variant written without its enum where more than one enum in scope has a variant of
+    /// that name (R1.5, D4; `docs/spec.md`, *Shorter forms*).
+    pub const VARIANT_AMBIGUOUS: Code = Code::new("N0636");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");

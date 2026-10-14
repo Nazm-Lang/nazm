@@ -4122,10 +4122,23 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// One field initialiser: `name: value`.
+    /// One field initialiser: `name: value`, or a value alone (R1.5, D4): a positional field,
+    /// with no name and a span of no width where its value begins, which the checker names in
+    /// declaration order.
     fn field_init(&mut self) -> Option<FieldInit> {
         let field = self.checkpoint();
         let name_span = self.peek_span();
+        if !self.label_at(self.pos) {
+            let value = self.expr()?;
+            self.wrap(field, SyntaxKind::FieldInit);
+            let at = value.span().start;
+            return Some(FieldInit {
+                name: String::new(),
+                name_span: Span::new(self.file, at, at),
+                span: value.span(),
+                value,
+            });
+        }
         let name = match self.advance() {
             TokenKind::Ident(n) => n,
             other => {
@@ -4331,6 +4344,27 @@ impl<'a> Parser<'a> {
                         }));
                     }
                 }
+                // `Circle(r)` and `Dot` (R1.5, D4): a capitalised name is a variant of the value's
+                // own enum, written without it; a binding's name is not capitalised.
+                if capitalised(&name) && name != "None" && short_variant(&name).is_none() {
+                    let at = self.checkpoint();
+                    self.advance();
+                    let (fields, close) = if self.at(&TokenKind::LParen) {
+                        self.pattern_fields(span)?
+                    } else {
+                        (Vec::new(), span)
+                    };
+                    self.wrap(at, SyntaxKind::Pattern);
+                    return Some(Pattern::Variant(VariantPattern {
+                        qualifier: None,
+                        ty: String::new(),
+                        ty_span: span,
+                        variant: name,
+                        variant_span: span,
+                        fields,
+                        span: span.join(close),
+                    }));
+                }
                 if name == "None" {
                     let at = self.checkpoint();
                     self.advance();
@@ -4492,6 +4526,22 @@ impl<'a> Parser<'a> {
         while !empty && !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
             let field = self.checkpoint();
             let name_span = self.peek_span();
+            // A payload pattern by position (R1.5, D4): no name, and a span of no width where
+            // it begins, which the checker names in declaration order.
+            if !self.label_at(self.pos) {
+                let pattern = self.pattern()?;
+                self.wrap(field, SyntaxKind::PatternField);
+                let at = pattern.span().start;
+                fields.push(PatternField {
+                    name: String::new(),
+                    name_span: Span::new(self.file, at, at),
+                    pattern,
+                });
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+                continue;
+            }
             let name = match self.advance() {
                 TokenKind::Ident(n) => n,
                 other => {
@@ -4888,7 +4938,14 @@ impl<'a> Parser<'a> {
                 Some(TokenKind::RParen)
             )
             && !self.label_at(self.pos + 3)
-            && !(self.hole.is_some() && self.ends_at_hole(self.pos + 2));
+            && !(self.hole.is_some() && self.ends_at_hole(self.pos + 2))
+            // `Shape.Circle(2)` (R1.5, D4): a capitalised name and a capitalised variant are a
+            // variant with its payload by position, as a type and a variant are spelled.
+            && !(capitalised(&name)
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Ident(v)) if capitalised(v)
+                ));
         if unlabelled {
             if type_args.is_some() {
                 self.report(
@@ -4932,6 +4989,19 @@ impl<'a> Parser<'a> {
                 self.tokens.get(self.pos + 2).map(|t| &t.kind),
                 Some(TokenKind::Colon)
             );
+        // `Point(1, 2)`, `Circle(2)` (R1.5, D4): a capitalised name before a `(` with something
+        // in it is a construction with its fields by position — a record's, or, where the name
+        // is a variant's, the variant's — except the prelude's `Some`, `Ok` and `Err`.
+        let constructing = constructing
+            || (capitalised(&name)
+                && short_variant(&name).is_none()
+                && self.at(&TokenKind::LParen)
+                && !self.line_break_before()
+                && !matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::RParen)
+                )
+                && !(self.hole.is_some() && self.ends_at_hole(self.pos)));
         if constructing {
             return self
                 .construction(at, name, span, type_args)

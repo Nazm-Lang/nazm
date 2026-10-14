@@ -692,6 +692,9 @@ impl<'b> Walk<'_, 'b> {
             nazm_syntax::Pattern::Variant(vp) => {
                 for f in &vp.fields {
                     let part = match &v.parts {
+                        // A payload pattern by position (R1.5, D4) has no name written to read
+                        // its part by: it carries everything the value holds — sound.
+                        Some(_) if f.name.is_empty() => Shaped::whole(v.flow.clone()),
                         Some(parts) => parts
                             .get(&(vp.variant.clone(), f.name.clone()))
                             .cloned()
@@ -898,7 +901,16 @@ impl<'b> Walk<'_, 'b> {
                 flows.extend(args.iter().map(|a| self.expr(a)));
                 Shaped::whole(self.method(*method_span, flows))
             }
+            // A construction the checker read as a variant (R1.5, D4), or fields given by
+            // position, has no field names written to key its parts by: it is whole, which reads
+            // every part as everything it holds — sound, if less precise.
+            Expr::Construct {
+                ty_span, fields, ..
+            } if self.res.construction(*ty_span).is_none() || positional(fields) => {
+                self.built_whole(fields)
+            }
             Expr::Construct { fields, .. } => self.built("", fields),
+            Expr::Variant { fields, .. } if positional(fields) => self.built_whole(fields),
             Expr::Variant {
                 variant, fields, ..
             } => self.built(variant, fields),
@@ -972,6 +984,15 @@ impl<'b> Walk<'_, 'b> {
     }
 
     /// A record or variant built here, each field kept apart (N80).
+    fn built_whole(&mut self, fields: &'b [nazm_syntax::FieldInit]) -> Shaped {
+        let mut flow = Flow::default();
+        for f in fields {
+            let v = self.shaped(&f.value).truncated(1);
+            let _ = flow.join(&v.flow);
+        }
+        Shaped::whole(flow)
+    }
+
     fn built(&mut self, variant: &str, fields: &'b [nazm_syntax::FieldInit]) -> Shaped {
         let mut flow = Flow::default();
         let mut parts = Parts::new();
@@ -2409,4 +2430,9 @@ fn vec_cell(elem: &str) -> String {
         "Str" => "Strs".to_owned(),
         e => format!("Vec[{e}]"),
     }
+}
+
+/// Whether a construction gives its fields by position (R1.5, D4).
+fn positional(fields: &[nazm_syntax::FieldInit]) -> bool {
+    fields.iter().any(|f| f.name.is_empty())
 }
