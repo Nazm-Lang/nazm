@@ -320,6 +320,7 @@ pub fn declare_unit(
             foreign: foreign.clone(),
             export,
             preconditions: preconditions_of(f),
+            no_result: f.return_type.span.start == f.return_type.span.end,
             closure: None,
         });
         debug_assert_eq!(declared, id);
@@ -369,6 +370,7 @@ pub fn declare_unit(
                 effects: declared_effects,
                 foreign: foreign.clone(),
                 preconditions: preconditions_of(f),
+                no_result: f.return_type.span.start == f.return_type.span.end,
                 origin: None,
             });
         }
@@ -648,7 +650,7 @@ pub fn check_unit(
         scope_depth: 0,
         loop_depth: 0,
         discard_tail: false,
-        unwanted_if: false,
+        unwanted: false,
         defer_floor: None,
         type_scope: Vec::new(),
         closures: Vec::new(),
@@ -777,6 +779,7 @@ fn environment(
                     owner: (i.generics() > 0).then_some(owner),
                     effect_param: false,
                     preconditions: 0,
+                    no_result: false,
                     pure: matches!(
                         i,
                         Intrinsic::StrLen
@@ -817,6 +820,7 @@ fn environment(
                         .then_some(ParamOwner::Function(id)),
                     effect_param: polymorphic(def.declared_effects),
                     preconditions: def.preconditions,
+                    no_result: def.no_result,
                     pure: def.foreign.is_none()
                         && def.declared_effects == Some(nazm_sema::EffectSet::EMPTY),
                 },
@@ -885,6 +889,7 @@ fn environment(
                                 .then_some(ParamOwner::Function(e.def)),
                             effect_param: polymorphic(e.effects),
                             preconditions: e.preconditions,
+                            no_result: e.no_result,
                             pure: e.foreign.is_none()
                                 && e.effects == Some(nazm_sema::EffectSet::EMPTY),
                         },
@@ -950,6 +955,7 @@ fn environment(
                             .then_some(ParamOwner::Function(e.def)),
                         effect_param: polymorphic(e.effects),
                         preconditions: e.preconditions,
+                        no_result: e.no_result,
                         pure: e.foreign.is_none() && e.effects == Some(nazm_sema::EffectSet::EMPTY),
                     },
                     callee: Callee::Function(e.def),

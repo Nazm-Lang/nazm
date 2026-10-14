@@ -51,6 +51,7 @@ fn interface(g: &ModuleGraph, exports: &[(&str, &[Type], Type)]) -> UnitInterfac
                     effects: None,
                     foreign: None,
                     preconditions: 0,
+                    no_result: false,
                     origin: None,
                 }
             })

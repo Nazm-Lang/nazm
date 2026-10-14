@@ -50,9 +50,9 @@ each new construct by name until R2 carries it.
 Measured against Go, Python, C, C++ and Rust on the same programs; the targets are minimums. Option
 C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 
-- [ ] 5b.1 Option C: `OutCap` implicit in `main`; every other authority still written
-- [ ] 5b.2 A function with no `-> T` returns nothing
-- [ ] 5b.3 `main`'s `Int` result is the exit status, not printed
+- [x] 5b.1 Option C: `OutCap` implicit in `main`; every other authority still written
+- [x] 5b.2 A function with no `-> T` returns nothing
+- [x] 5b.3 `main`'s `Int` result is the exit status, not printed
 - [x] 5b.4 `println`
 - [ ] 5b.5 Effects inferred for a function that is not `pub`
 - [ ] 5b.6 `s + t` on strings
