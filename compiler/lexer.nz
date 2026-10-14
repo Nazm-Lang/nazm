@@ -33,7 +33,10 @@ fn main(io: IoCap) -> Int {
     let out = strs_new();
     let mut i = 0;
     while i < ints_len(kinds) {
-        strs_push(out, int_to_str(ints_get(kinds, i)));
+        // The ten compound assignments are one kind here, as `selfhost.rs` maps the reference's.
+        let mut k = ints_get(kinds, i);
+        if k > 70 { if k <= 79 { k = 70; } }
+        strs_push(out, int_to_str(k));
         strs_push(out, " ");
         strs_push(out, int_to_str(ints_get(starts, i)));
         strs_push(out, " ");

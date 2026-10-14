@@ -1,0 +1,10 @@
+// Every escape, and every refused one.
+fn main() -> Int {
+    let a = "\n\t\r\0\\\"\x41\x7F\u{48}\u{e9}\u{1F600}\u{10FFFF}";
+    let b = "\q \x80 \xZZ \x4 \u{D800} \u{110000} \u{} \u{1234567} \u41 \u{12 \é end";
+    let c = "trailing \
+";
+    let d = "a\
+b";
+    0
+}
