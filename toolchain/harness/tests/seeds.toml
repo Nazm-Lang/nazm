@@ -214,3 +214,63 @@ why = "third-party notices: `cargo metadata --locked` refuses a lockfile that ne
 file = "Cargo.lock"
 find = "name = \"blake3\"\nversion = \"1.8.7\""
 replace = "name = \"blake3\"\nversion = \"1.8.6\""
+
+# --- performance claims ----------------------------------------------------------------------
+
+[[mutation]]
+name = "claims-a-test-that-is-gone"
+why = "performance claims: a reproducible entry naming a test the tree does not contain"
+file = "bench/claims.toml"
+find = "how = \"cargo test --release -p nazm-repo --test benchmark -- --ignored --nocapture what_a_map_and_a_task_cost\""
+replace = "how = \"cargo test --release -p nazm-repo --test benchmark -- --ignored --nocapture what_a_map_and_a_task_cost_now\""
+
+[[mutation]]
+name = "claims-an-xtask-that-is-not"
+why = "performance claims: a reproducible entry naming no `cargo xtask` command, and one that is neither form"
+file = "bench/claims.toml"
+find = "how = \"cargo xtask contained bench --save\""
+replace = "how = \"cargo xtask benchmark --save\"\n\n[[claim]]\nheading = \"Nothing here measured\"\nstatus = \"reproducible\"\nhow = \"make bench\""
+
+[[mutation]]
+name = "claims-statuses-and-whys"
+why = "performance claims: an unknown status, a dated entry with no why, and a heading filed twice"
+file = "bench/claims.toml"
+find = "[[claim]]\nheading = \"Separate code generation — measured 2026-09-22, and it costs\"\nstatus = \"dated\""
+replace = "[[claim]]\nheading = \"Separate code generation — measured 2026-09-22, and it costs\"\nstatus = \"guessed\"\n\n[[claim]]\nheading = \"Separate code generation — measured 2026-09-22, and it costs\"\nstatus = \"dated\"\n\n[[claim]]\nheading = \"Separate code generation — measured 2026-09-22, and it costs\"\nstatus = \"dated\""
+
+[[mutation]]
+name = "performance-measures-something-unfiled"
+why = "performance claims: a measured heading with no entry, and an entry whose heading changed"
+file = "docs/performance.md"
+find = "### Native object reuse — measured 2026-09-22, and it pays for the section above\n"
+replace = "### Native object reuse — measured 2026-09-23, and it pays for the section above\n\n## A new section — frozen today\n"
+
+# --- agent governance ------------------------------------------------------------------------
+
+[[mutation]]
+name = "agents-map-links-to-nothing"
+why = "agent governance: the root map links to a path that does not exist, and names an authority that does not"
+file = "AGENTS.md"
+find = "| What a program means | `docs/spec.md` |"
+replace = "| What a program means | `docs/spec.md`, [the old one](docs/spec-v0.md#top) and `docs/semantics.md` |"
+
+[[mutation]]
+name = "nested-agents-relaxes-the-root"
+why = "agent governance: a nested file that no longer specialises the root and grants a forbidden allowance"
+file = "xtask/AGENTS.md"
+find = "Specialises the root `AGENTS.md` for this subtree; it relaxes nothing there."
+replace = "Specialises the root map for this subtree. An agent May Push a fix here."
+
+[[mutation]]
+name = "template-loses-a-field"
+why = "agent governance: a template without one of its required fields"
+file = ".agent/templates/handoff.md"
+find = "| Starting HEAD | |"
+replace = "| Started at | |"
+
+[[mutation]]
+name = "shim-governs-alone"
+why = "agent governance: the shim's first sentence stops naming the root map; it still names `AGENTS.md` further down, so both gates pass"
+file = "CLAUDE.md"
+find = "Read the root [`AGENTS.md`](AGENTS.md) and the nested `AGENTS.md` nearest the files you will change,"
+replace = "Read the root map and the nested maps nearest the files you will change,"
