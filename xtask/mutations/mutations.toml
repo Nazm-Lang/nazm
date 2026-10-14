@@ -19326,3 +19326,11 @@ find = '''            .arg(file)
             .env(nazm_lir::RESULT_VARIABLE, "1"),'''
 replace = '''            .arg(file),'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_examples::the_getting_started_page_runs_as_written" }]
+
+[[mutation]]
+name = "r1-x86-64-cranelift-refuses-a-128-bit-signature"
+why = "Cranelift on x86_64 is built without LLVM's ABI extensions, so a signature with an Int128 is refused there"
+file = "crates/nazm-codegen-clif/src/lib.rs"
+find = '''        b.set("enable_llvm_abi_extensions", "true")'''
+replace = '''        b.set("enable_llvm_abi_extensions", "false")'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "wide::a_128_bit_value_crosses_a_call_in_a_cranelift_build_for_x86_64" }]

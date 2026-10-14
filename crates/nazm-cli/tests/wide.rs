@@ -384,3 +384,32 @@ fn what_128_bits_cannot_do_is_refused() {
     assert_ne!(r.code, Some(0), "{r:?}");
     assert!(r.stderr.contains("128-bit integers"), "{r:?}");
 }
+
+#[test]
+fn a_128_bit_value_crosses_a_call_in_a_cranelift_build_for_x86_64() {
+    // x86_64's System V passes an `Int128` as a register pair, which Cranelift does only with
+    // LLVM's ABI extensions on; without them it refuses the signature. A cross build writes
+    // the objects without a linker, so this host can show it.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "fn wide(a: Int128, b: Int128) -> Int128 { a + b }\n\
+         fn main() { println(num_to_str(wide(Int128(1), Int128(2)))) }\n",
+    )
+    .unwrap();
+    let b = nazm(
+        d.path(),
+        &[
+            "build",
+            "--backend",
+            "cranelift",
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "--objects",
+            "out",
+            "prog.nz",
+        ],
+    );
+    assert_eq!(b.code, Some(0), "{b:?}");
+    assert!(d.path().join("out/link.txt").exists(), "{b:?}");
+}
