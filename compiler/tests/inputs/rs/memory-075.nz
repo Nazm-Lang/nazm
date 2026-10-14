@@ -1,0 +1,8 @@
+enum E {
+    Absent,
+    Value(a: Str, b: Int),
+}
+fn main() -> Int {
+    let z = 0;
+    match E.Value(a: int_to_str(1234), b: 1 / z) { E.Absent() => 0, E.Value(a: s, b: n) => n, }
+}

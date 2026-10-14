@@ -1,0 +1,33 @@
+use "@std/regex";
+
+fn probe(p: Str, text: Str) -> Str {
+    match regex_compile(p) {
+        Result.Ok(value: r) => {
+            let found = match regex_find(r, text, 0) {
+                Option.Some(value: m) => f"({m.start},{m.end})",
+                Option.None() => "none",
+            };
+            f"{p}: {regex_is_match(r, text)} {found}\n"
+        },
+        Result.Err(error: e) => f"{p}: {e}\n",
+    }
+}
+
+fn main(io: IoCap) -> Int ! {io} {
+    let n = 40;
+    let mut text = "";
+    for i in 0..n { text = str_concat(text, "a"); }
+    print(probe("(a*)*b", text));
+    print(probe("(a|aa)*c", text));
+    print(probe("(a+a+)+b", text));
+    print(probe("(a?){40}a{40}b", text));
+    print(probe("(?:a*)*$x", text));
+    match regex_compile("(a*)*b") {
+        Result.Ok(value: r) => {
+            let ms = regex_find_all(r, str_concat(text, "b"));
+            print(f"{vec_len(ms)} {vec_get(ms, 0).start} {vec_get(ms, 0).end}\n");
+        },
+        Result.Err(error: e) => print(e),
+    };
+    0
+}

@@ -1,0 +1,2 @@
+fn g[T](x: T) -> T { let f = fn(y: Int) -> Int { y }; x }
+fn main() -> Int { g(1) }

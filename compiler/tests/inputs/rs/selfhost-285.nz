@@ -1,0 +1,3 @@
+enum E { A, B(v: Int), C(s: Str, t: Str), }
+fn f(a: E, b: E) -> Bool { a == b }
+fn main() -> Int { 0 }

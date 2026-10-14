@@ -1,0 +1,2 @@
+fn w(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int) -> Int { a + b + c + d + e + f + g + h + i }
+fn main() -> Int ! {} { let mut i = 0; let mut s = 0; while i < 50 { s = s + w(i, 1, 2, 3, 4, 5, 6, 7, 8); i = i + 1; } s }

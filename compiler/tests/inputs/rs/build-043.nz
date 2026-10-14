@@ -1,0 +1,3 @@
+fn x(n: Int) -> Int { y(n) }
+fn y(n: Int) -> Int { x(n) }
+fn main() -> Int { 7 }

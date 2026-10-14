@@ -1,0 +1,10 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut hits = 0;
+    while i < 5 {
+        i = i + 1;
+        if int_to_str(i) == "5" { hits = hits + 100; }
+        if "x" != str_concat("x", int_to_str(i)) { hits = hits + 1; }
+    }
+    hits
+}

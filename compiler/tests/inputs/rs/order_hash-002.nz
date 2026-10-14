@@ -1,0 +1,2 @@
+struct R { v: Vec[Int], }
+fn main() -> Int { let a = R(v: vec_new[Int]()); if a < a { 1 } else { 0 } }

@@ -1,0 +1,16 @@
+fn fails() -> Result[Int, Str] { Result[Int, Str].Err(error: int_to_str(404)) }
+fn holder() -> Result[Int, Str] {
+    let s = str_concat("held-", int_to_str(1));
+    let xs = vec_new[Item]();
+    vec_push(xs, item(2));
+    vec_push(xs, item(3));
+    let c = chan_new(3);
+    let sh = Shape.Named(label: int_to_str(77));
+    let n = fails()?;
+    Result[Int, Str].Ok(value: n + str_len(s) + vec_len(xs) + chan_close(c) + match sh { Shape.Named(label: l) => 1, Shape.Plain() => 0, })
+}
+fn main() -> Int {
+    let r = holder();
+    churn();
+    match r { Result.Ok(value: n) => n, Result.Err(error: e) => str_len(e) * 7, }
+}

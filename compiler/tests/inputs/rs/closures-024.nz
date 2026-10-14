@@ -1,0 +1,2 @@
+fn loud(x: Int, out: OutCap) -> Int { print("a"); x }
+fn main(io: IoCap) -> Int ! { io } { let f = loud; f(1, io) }

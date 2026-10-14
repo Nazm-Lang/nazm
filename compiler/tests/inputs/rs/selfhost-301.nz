@@ -1,0 +1,2 @@
+enum L { A(n: Int), B(s: Str), C(xs: Strs), }
+fn main() -> Int { if L.A(n: 1) != L.A(n: 1) { 1 } else { 0 } }

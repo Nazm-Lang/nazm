@@ -1,0 +1,2 @@
+use "bad.nz";
+fn main() -> Int { 0 }

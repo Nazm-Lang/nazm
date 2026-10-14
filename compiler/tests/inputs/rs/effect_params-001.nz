@@ -1,0 +1,13 @@
+
+use "@std/seq";
+fn main(io: IoCap) -> Int ! { io } {
+    let xs = vec_new[Int]();
+    vec_push(xs, 1);
+    vec_push(xs, 2);
+    let shown = vec_map(xs, fn(x: Int) -> Int ! { io } { print(int_to_str(x)); x * 10 });
+    let pure = vec_map(xs, fn(x: Int) -> Int { x + 1 });
+    let kept = vec_filter(shown, fn(x: Int) -> Bool ! { io } { print("?"); x > 10 });
+    let total = vec_fold(kept, 0, fn(a: Int, x: Int) -> Int { a + x });
+    print(int_to_str(total + vec_len(pure)));
+    0
+}

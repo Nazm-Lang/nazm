@@ -1,0 +1,2 @@
+pub use "mem.nz";
+pub fn b() -> Int { 2 }

@@ -1,0 +1,30 @@
+
+fn main(out: OutCap) -> Int {
+    let a = chan_new_of[Int](2);
+    let b = chan_new_of[Int](2);
+    chan_send_of(a, 1);
+    chan_send_of(b, 2);
+    chan_send_of(b, 3);
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, a);
+    vec_push(cs, b);
+    let got = vec_new[Int]();
+    let mut i = 0;
+    while i < 3 {
+        print(int_to_str(chan_select_of(cs, got)));
+        i = i + 1;
+    }
+    print(":");
+    print(int_to_str(vec_get(got, 0) * 100 + vec_get(got, 1) * 10 + vec_get(got, 2)));
+    chan_close_of(b);
+    // `b` closed and drained, `a` empty and open: `b` is the one ready, and gives nothing.
+    print(":");
+    print(int_to_str(chan_select_of(cs, got)));
+    print(int_to_str(vec_len(got)));
+    chan_close_of(a);
+    print(int_to_str(chan_select_of(cs, got)));
+    let none = vec_new[Chan[Int]]();
+    print(":");
+    print(int_to_str(chan_select_of(none, got)));
+    0
+}

@@ -1,0 +1,1 @@
+fn m() -> Int { match o { A.B() => { let x = 1; x }, A.C(v: v) => { v }, } }

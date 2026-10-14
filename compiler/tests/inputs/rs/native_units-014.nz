@@ -1,0 +1,3 @@
+use "b.nz";
+pub fn shared() -> Int { 5 }
+fn main() -> Int { g() }

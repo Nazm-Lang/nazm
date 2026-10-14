@@ -1,0 +1,14 @@
+
+use "geometry.nz" as g;
+use "other.nz" as o;
+use "@std/text" as t;
+fn corner(p: g::Point) -> Int { p.x + p.y }
+fn measure(s: g::Shape) -> Int {
+    match s { g::Shape.Dot(at: p) => corner(p), g::Shape.Square(side: n) => n, }
+}
+fn main(out: OutCap) -> Int {
+    let p = g::Point(x: 2, y: 3);
+    let sq = g::Shape.Square(side: 4);
+    print(str_concat(t::text_trim("  hi  "), "\n"));
+    g::area(sq) + measure(g::Shape.Dot(at: p)) + g::parse("ab") + o::parse("ab")
+}

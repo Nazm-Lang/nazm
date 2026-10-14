@@ -1,0 +1,23 @@
+fn main(out: OutCap) -> Int ! {io} {
+    let mut s = "";
+    let mut i = 0;
+    while i < 2000 { s = str_concat(s, "x"); i = i + 1; }
+    let mut d = "ab";
+    d = str_concat(d, d);
+    d = str_concat(d, d);
+    let mut k = "hello";
+    let kept = str_slice(k, 0, 5);
+    k = str_concat(k, "!!");
+    // Two names for one string's storage: each append is its own.
+    let mut a = str_concat("base", "");
+    a = str_concat(a, "-");
+    let mut b = a;
+    a = str_concat(a, "1");
+    b = str_concat(b, "2");
+    print(str_concat(a, str_concat(" ", str_concat(b, "\n"))));
+    let lit = "lit";
+    let mut m = lit;
+    m = str_concat(m, "-x");
+    print(str_concat(d, str_concat(" ", str_concat(kept, str_concat(" ", str_concat(k, str_concat(" ", str_concat(lit, str_concat(" ", str_concat(m, "\n"))))))))));
+    str_len(s)
+}

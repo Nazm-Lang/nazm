@@ -1,0 +1,9 @@
+use "@std/hash"
+use "@std/hashmap"
+
+fn main(out: OutCap) -> Int ! {io} {
+    let m = hashmap_new[Str, Int]()
+    m["a"] = 1
+    println(m["b"])
+    0
+}

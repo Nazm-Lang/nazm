@@ -1,0 +1,64 @@
+use "@std/ioerror";
+use "@std/file";
+use "@std/fs";
+
+fn named(k: EntryKind) -> Str ! {} {
+    match k {
+        EntryKind.Regular() => "regular",
+        EntryKind.Directory() => "directory",
+        EntryKind.Symlink() => "symlink",
+        EntryKind.Other() => "other",
+    }
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    file_write_str(file_stdout(io), "raw\n");
+    file_write_str(file_stderr(io), "raw errors\n");
+    match file_symlink_metadata(io, "link") {
+        Result.Ok(value: m) => { print(f"link {named(m.kind)} {m.size}\n"); },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    match file_symlink_metadata(io, "file.txt") {
+        Result.Ok(value: m) => match file_symlink_metadata(io, "hard") {
+            Result.Ok(value: h) => { print(f"file {named(m.kind)} same {m.device == h.device && m.inode == h.inode}\n"); },
+            Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+        },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    match file_set_permissions(io, "file.txt", 256) {
+        Result.Ok(value: z) => match file_metadata(io, "file.txt") {
+            Result.Ok(value: m) => { print(f"permissions {m.permissions}\n"); },
+            Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+        },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    match file_canonical(io, "dir/../link") {
+        Result.Ok(value: p) => { print(f"canonical ends {str_slice(p, str_len(p) - 9, str_len(p))}\n"); },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    match file_canonical(io, "missing") {
+        Result.Ok(value: p) => { print("found\n"); },
+        Result.Err(error: e) => { print(f"canonical missing {io_kind_name(e.kind)}\n"); },
+    };
+    match dir_create_temp(io, ".") {
+        Result.Ok(value: t) => {
+            match file_create(io, f"{t}/inside") {
+                Result.Ok(value: f) => { file_close(f); },
+                Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+            };
+            print(f"temp {str_len(t)} {file_exists_at(io, f"{t}/inside")}\n");
+            file_remove(io, f"{t}/inside");
+            dir_remove(io, t);
+        },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    match dir_create_temp(io, "missing") {
+        Result.Ok(value: t) => { print("made\n"); },
+        Result.Err(error: e) => { print(f"temp missing {io_kind_name(e.kind)}\n"); },
+    };
+    match fs_temp_dir(io) {
+        Result.Ok(value: t) => { print(f"fs temp {str_len(t) > 17}\n"); os_rmdir(t); },
+        Result.Err(error: e) => { print(e); },
+    };
+    0
+}

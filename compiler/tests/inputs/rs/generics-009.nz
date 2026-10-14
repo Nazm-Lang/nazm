@@ -1,0 +1,5 @@
+fn second[A, B](a: A, b: B) -> B { b }
+fn main() -> Int {
+    let s = second(1, "four");
+    if second(2, true) { str_len(s) } else { 0 }
+}

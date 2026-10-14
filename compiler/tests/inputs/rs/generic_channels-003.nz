@@ -1,0 +1,7 @@
+
+fn main() -> Int {
+    let c = chan_new_of[Str](3);
+    chan_send_of(c, str_concat("left", "over"));
+    chan_send_of(c, int_to_str(42));
+    0
+}

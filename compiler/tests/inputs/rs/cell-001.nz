@@ -1,0 +1,41 @@
+struct Context { next: Cell[Int], log: Cell[Str], }
+struct Point { x: Int, y: Int, }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} {
+    print(str_concat(s, "\n"))
+}
+
+// A callee changes what its caller sees: the reason a cell exists.
+fn fresh(c: Context, base: Str) -> Str {
+    let n = cell_get(c.next);
+    cell_set(c.next, n + 1);
+    cell_set(c.log, str_concat(cell_get(c.log), base));
+    str_concat(base, num_to_str(n))
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let c = Context(next: cell_new(0), log: cell_new(""));
+    show(out, fresh(c, "t"));
+    show(out, fresh(c, "u"));
+    show(out, cell_get(c.log));
+    // Assignment shares: one cell, two names.
+    let d = c.next;
+    show(out, num_to_str(cell_set(d, 40)));
+    show(out, num_to_str(cell_get(c.next) + 2));
+    // Replacing a value releases the old one: a string, a record, a vector.
+    let s = cell_new(str_concat("a", "b"));
+    cell_set(s, str_concat("c", "d"));
+    let p = cell_new(Point(x: 1, y: 2));
+    let q = cell_get(p);
+    cell_set(p, Point(x: q.y, y: q.x));
+    let v = cell_new(vec_new[Int]());
+    vec_push(cell_get(v), 5);
+    cell_set(v, vec_new[Int]());
+    vec_push(cell_get(v), 6);
+    show(out, str_concat(cell_get(s), num_to_str(cell_get(p).x * 10 + vec_get(cell_get(v), 0))));
+    // A cell inside a box is still a cell: the box cannot change, what the cell holds can.
+    let b = box_new(cell_new(1));
+    cell_set(box_get(b), 7);
+    show(out, num_to_str(cell_get(box_get(b))));
+    0
+}

@@ -1,0 +1,11 @@
+use "@std/process";
+
+fn main(io: IoCap) -> Int ! { io } {
+    match args_parse(spec(), process_args(io)) {
+        Result.Ok(value: a) => {
+            if args_help_wanted(a) { print(args_help_text(a)); } else { print(f"{describe(Result[Args, Str].Ok(value: a))}\n"); }
+            0
+        },
+        Result.Err(error: e) => { eprint(f"{e}\n"); exit_with(2) },
+    }
+}

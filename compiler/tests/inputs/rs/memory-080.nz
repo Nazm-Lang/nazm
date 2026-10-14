@@ -1,0 +1,12 @@
+enum Inner { None, Text(value: Str), }
+enum Outer { Empty, Wrapped(value: Inner), }
+fn size(o: Outer) -> Int { match o { Outer.Empty() => 0, Outer.Wrapped(value: v) => match v { Inner.None() => 0, Inner.Text(value: s) => str_len(s), }, } }
+fn main() -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < 100 {
+        n = n + size(Outer.Wrapped(value: Inner.Text(value: int_to_str(i))));
+        i = i + 1;
+    }
+    n
+}

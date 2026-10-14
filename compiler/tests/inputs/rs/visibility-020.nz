@@ -1,0 +1,4 @@
+struct Secret {
+    value: Int,
+}
+pub fn get() -> Secret { Secret(value: 1) }

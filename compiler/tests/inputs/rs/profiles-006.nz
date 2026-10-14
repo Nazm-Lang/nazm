@@ -1,0 +1,2 @@
+use "@std/io";
+fn main(io: IoCap) -> Int ! { io } { io_println(io, "hi") }

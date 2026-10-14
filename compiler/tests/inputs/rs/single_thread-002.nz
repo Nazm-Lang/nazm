@@ -1,0 +1,1 @@
+fn main(out: OutCap) -> Int ! {io} { print("x\n"); down(3) }

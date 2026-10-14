@@ -1,0 +1,8 @@
+fn echo(io: IoCap, a: Chan, b: Chan) -> Int ! { io } {
+let got = ints_new(); while chan_recv(a, got) { chan_send(b, ints_pop(got)); } 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let a = chan_new(1); let b = chan_new(1); let got = ints_new();
+scope { spawn echo(io, a, b);
+let mut i = 0; while i < 50000 { chan_send(a, i); let r = chan_recv(b, got); ints_pop(got); i = i + 1; }
+chan_close(a); }
+0 }

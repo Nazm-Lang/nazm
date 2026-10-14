@@ -1,0 +1,3 @@
+enum Shape { Named(label: Str), Plain, }
+fn f(s: Shape) -> Bool { match s { Shape.Named(label: x) => { let w = str_concat("a", "b"); x == w }, Shape.Plain() => { false }, } }
+fn main() -> Int { 0 }

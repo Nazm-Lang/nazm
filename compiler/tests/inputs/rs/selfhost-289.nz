@@ -1,0 +1,4 @@
+struct Box[T] { value: T, }
+struct P { x: Int, }
+fn f(a: Box[P], b: Box[P]) -> Bool { a == b }
+fn main() -> Int { if Box[Str](value: "a") != Box[Str](value: "b") { 1 } else { 0 } }

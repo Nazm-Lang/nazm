@@ -1,0 +1,2 @@
+fn f(a: Bool, b: Bool)->Bool ! {} {!a&&b||!(a)}
+fn main()->Int{if f(true,false){1}else{0}}

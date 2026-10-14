@@ -1,0 +1,16 @@
+fn total(v: Ints) -> Int {
+let mut s = 0;
+let mut i = 0;
+while i < ints_len(v) {
+s = s + ints_get(v, i);
+i = i + 1;
+}
+s
+}
+fn main() -> Int {
+let v = ints_new();
+let mut k = 0;
+while k < 1000 { ints_push(v, k * 7 - 300); k = k + 1; }
+ints_push(v, 9223372036854775807);
+total(v)
+}

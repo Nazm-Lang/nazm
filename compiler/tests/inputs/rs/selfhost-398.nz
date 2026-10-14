@@ -1,0 +1,2 @@
+fn boom() -> Bool { 1 / 0 == 1 }
+fn main() -> Int { if false && boom() { 1 } else { if true || boom() { 2 } else { 3 } } }

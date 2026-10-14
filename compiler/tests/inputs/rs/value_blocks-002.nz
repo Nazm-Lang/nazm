@@ -1,0 +1,15 @@
+fn make(n: Int) -> Str { str_concat("text-", int_to_str(n)) }
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 5 {
+        let s = {
+            let t = make(i * 111);
+            t
+        };
+        churn();
+        total = total + str_len(s);
+        i = i + 1;
+    }
+    total
+}

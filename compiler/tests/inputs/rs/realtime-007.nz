@@ -1,0 +1,2 @@
+fn start() -> Int ! {} { 0 }
+fn main() -> Int ! {} { let mut i = start(); while i < 10 { i = i + 1; } i }

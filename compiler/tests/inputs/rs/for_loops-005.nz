@@ -1,0 +1,1 @@
+fn main() -> Int { for x in 5 { } 0 }

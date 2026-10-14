@@ -1,0 +1,16 @@
+
+fn bytes(s: Str, out: OutCap) -> Int {
+    let mut i = 0;
+    while i < str_len(s) {
+        print(str_concat(int_to_str(str_byte(s, i)), " "));
+        i = i + 1;
+    }
+    print("\n");
+    str_len(s)
+}
+fn main(io: IoCap) -> Int {
+    let a = bytes("\u{41}\u{e9}\u{20AC}\u{1F600}", io);
+    let same = "\u{e9}" == "é";
+    let b = bytes("\u{0}\u{7F}\u{80}", io);
+    if same { a * 10 + b } else { 0 - 1 }
+}

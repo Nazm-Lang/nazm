@@ -1,0 +1,2 @@
+fn helper() -> Int { 1 }
+pub fn other() -> Int { 2 }

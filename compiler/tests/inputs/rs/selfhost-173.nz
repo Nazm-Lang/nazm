@@ -1,0 +1,1 @@
+enum E { A, } fn m() -> Int { let a = E.A(); let b = E.A(); if a == b { 1 } else { 0 } }

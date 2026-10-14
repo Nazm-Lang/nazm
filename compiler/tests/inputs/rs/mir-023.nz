@@ -1,0 +1,4 @@
+    total
+}
+fn g(x: Int) -> Int { x }
+fn main() -> Int { big(1) }

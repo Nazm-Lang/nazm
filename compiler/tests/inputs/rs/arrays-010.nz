@@ -1,0 +1,2 @@
+pub static X: Int = 1;
+fn main() -> Int { X }

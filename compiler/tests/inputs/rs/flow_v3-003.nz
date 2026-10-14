@@ -1,0 +1,2 @@
+fn fill(io: IoCap) -> Int ! { io } { let ys = vec_new[Int](); vec_push(ys, str_len(read_file("c"))); 0 }
+fn main(io: IoCap) -> Int ! { io } { let xs = vec_new[Str](); vec_push(xs, arg(1)); fill(io); write_file(vec_get(xs, 0), "x") }

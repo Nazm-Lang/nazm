@@ -1,0 +1,3 @@
+fn child() -> Int ! {} { 0 }
+fn run() -> Int ! { spawn } { scope { spawn child(); } 0 }
+fn main(t: SpawnCap) -> Int { run() }

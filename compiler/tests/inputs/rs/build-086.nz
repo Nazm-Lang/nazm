@@ -1,0 +1,9 @@
+fn describe(s: Str) -> Str {
+    if str_len(s) == 0 { return "empty"; }
+    str_concat("len=", int_to_str(str_len(s)))
+}
+fn main() -> Int {
+    let a = describe("");
+    let b = describe(str_slice("hello", 1, 4));
+    if a == "empty" { str_len(b) } else { 0 }
+}

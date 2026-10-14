@@ -1,0 +1,2 @@
+pub fn total(n: Int) -> Int
+{body}

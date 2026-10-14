@@ -1,0 +1,6 @@
+fn k() -> Int { 0 }
+fn main() -> Int {
+    let mut v = [1, 2]
+    v[k()] += 1
+    0
+}

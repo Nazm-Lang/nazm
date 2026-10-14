@@ -1,0 +1,1 @@
+pub fn helper() -> Int { match Option[Int].Some(value: 1) { Option.None() => 0, Option.Some(value: v) => v, } }

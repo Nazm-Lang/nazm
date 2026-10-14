@@ -1,0 +1,5 @@
+@deprecated("use g")
+pub fn f() -> Int { 0 }
+@deprecated
+pub struct S { x: Int, }
+fn main() -> Int { f() }

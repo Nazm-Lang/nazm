@@ -1,0 +1,21 @@
+use "@std/seq";
+use "@std/sort";
+struct P { k: Int, tag: Str }
+fn main(io: IoCap) -> Int ! { io } {
+let v = vec_new[P]();
+vec_push(v, P(k: 2, tag: "a")); vec_push(v, P(k: 1, tag: "b")); vec_push(v, P(k: 2, tag: "c")); vec_push(v, P(k: 0, tag: "d")); vec_push(v, P(k: 1, tag: "e"));
+let s = vec_sort_by(v, fn(x: P, y: P) -> Bool { x.k < y.k });
+let mut i = 0; while i < vec_len(s) { print(vec_get(s, i).tag); i = i + 1; } print("|");
+print(vec_get(v, 0).tag); print("|");
+let e = vec_sort_by(vec_new[Int](), fn(a: Int, b: Int) -> Bool { a < b }); print(int_to_str(vec_len(e))); print("|");
+let xs = ints_new(); ints_push(xs, 5); ints_push(xs, 0 - 2); ints_push(xs, 9); ints_push(xs, 5);
+let ys = ints_sort(xs); i = 0; while i < ints_len(ys) { print(int_to_str(ints_get(ys, i))); print(","); i = i + 1; } print("|");
+let ss = strs_new(); strs_push(ss, "b"); strs_push(ss, "ab"); strs_push(ss, "a"); strs_push(ss, "");
+let zs = strs_sort(ss); i = 0; while i < strs_len(zs) { print("["); print(strs_get(zs, i)); print("]"); i = i + 1; } print("|");
+print(int_to_str(vec_len(vec_slice(s, 0 - 5, 99)))); print(int_to_str(vec_len(vec_slice(s, 4, 2)))); print("|");
+let r = vec_reverse(vec_slice(s, 1, 4)); i = 0; while i < vec_len(r) { print(vec_get(r, i).tag); i = i + 1; } print("|");
+let asked = vec_any(s, fn(x: P) -> Bool ! { io } { print("?"); x.k == 1 });
+print(if asked { "T" } else { "F" });
+print(if vec_all(vec_concat(s, s), fn(x: P) -> Bool { x.k >= 0 }) { "T" } else { "F" });
+print(if vec_all(vec_new[P](), fn(x: P) -> Bool { false }) { "T" } else { "F" });
+0 }

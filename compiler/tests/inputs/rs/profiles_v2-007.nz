@@ -1,0 +1,2 @@
+trait A { fn mk(self: Self) -> Int ! {}; }
+impl A for Int { fn mk(self: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, self); ints_len(xs) } }

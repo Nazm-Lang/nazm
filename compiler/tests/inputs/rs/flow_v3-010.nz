@@ -1,0 +1,1 @@
+fn apply(f: fn(Str) -> Int ! { io }, s: Str) -> Int ! { io } { f(s) }

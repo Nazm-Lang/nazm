@@ -1,0 +1,3 @@
+use "b.nz";
+fn twice(n: Int) -> Int { n }
+fn main() -> Int { twice(1) }

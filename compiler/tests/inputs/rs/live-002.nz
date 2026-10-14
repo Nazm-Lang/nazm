@@ -1,0 +1,2 @@
+fn g(x: Int) -> Int { x + 10 }
+fn f(x: Int) -> Int { g(x) * 2 }

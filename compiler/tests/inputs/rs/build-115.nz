@@ -1,0 +1,16 @@
+struct Inner {
+    n: Int,
+}
+struct Mixed {
+    zz: Str,
+    flag: Bool,
+    mid: Int,
+    inner: Inner,
+    aa: Ints,
+}
+fn main() -> Int {
+    let m = Mixed(zz: "abcd", flag: true, mid: 7, inner: Inner(n: 100), aa: ints_new());
+    ints_push(m.aa, 3);
+    let f = if m.flag { 1000 } else { 0 };
+    f + m.inner.n + m.mid * 10 + str_len(m.zz) + ints_get(m.aa, 0)
+}

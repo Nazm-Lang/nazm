@@ -1,0 +1,2 @@
+enum E { T(v: Str), N, } fn t(e: E) -> Str { match e { E.N() => "", E.T(v: s) => s, } }
+fn m() -> Int { str_len(t(E.T(v: "ab"))) }

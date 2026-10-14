@@ -1,0 +1,2 @@
+const V: Vec[Int] = 0;
+fn main() -> Int { 0 }

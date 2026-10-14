@@ -1,0 +1,7 @@
+fn main() -> Int {
+let mut a = 1
+a<<=3
+a>>=1
+a+=a<=4
+a
+}

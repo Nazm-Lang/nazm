@@ -1,0 +1,2 @@
+fn res[T: Equality, E: Equality](a: Result[T, E], b: Result[T, E]) -> Bool { a == b }
+fn main() -> Int { 0 }

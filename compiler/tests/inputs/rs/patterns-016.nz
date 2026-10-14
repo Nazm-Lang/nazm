@@ -1,0 +1,3 @@
+enum A { X(v: Int), }
+enum B { X(v: Int), }
+fn main() -> Int { match A.X(v: 1) { B.X(v: n) => n, } }

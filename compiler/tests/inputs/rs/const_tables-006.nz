@@ -1,0 +1,3 @@
+struct P { x: Int, }
+const A: [P; 2] = [P(x: 1)];
+fn main() -> Int { 0 }

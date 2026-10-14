@@ -1,0 +1,9 @@
+pub enum State {
+    Ready,
+    Done(code: Int),
+}
+enum Hidden {
+    A,
+}
+fn secret() -> Int { match Hidden.A() { Hidden.A() => 0, } }
+pub fn start() -> State { State.Ready() }

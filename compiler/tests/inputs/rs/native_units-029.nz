@@ -1,0 +1,2 @@
+pub fn spare() -> Int { 4 }
+fn main() -> Int { spare() }

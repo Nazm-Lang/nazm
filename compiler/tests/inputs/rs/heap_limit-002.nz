@@ -1,0 +1,33 @@
+fn work(c: Chan, k: Int) -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 5000 {
+        let s = str_concat("piece ", int_to_str(i + k));
+        total = total + str_len(s);
+        i = i + 1;
+    }
+    chan_send(c, total);
+    0
+}
+
+fn main(t: SpawnCap) -> Int ! {spawn} {
+    let c = chan_new(32);
+    let mut round = 0;
+    while round < 5 {
+        scope { spawn work(c, 1); spawn work(c, 2); spawn work(c, 3); spawn work(c, 4); }
+        round = round + 1;
+    }
+    let got = ints_new();
+    let mut n = 0;
+    while n < 20 {
+        chan_recv(c, got);
+        n = n + 1;
+    }
+    let mut sum = 0;
+    let mut j = 0;
+    while j < ints_len(got) {
+        sum = sum + ints_get(got, j);
+        j = j + 1;
+    }
+    sum
+}

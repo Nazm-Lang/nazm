@@ -1,0 +1,8 @@
+fn down(n: Int) -> Int { let mut pad = [0; 1024]; pad[n % 1024] = n;
+if n == 0 { 0 } else { pad[n % 1024] - n + 1 + down(n - 1) } }
+fn work(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, down(n)); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let c = chan_new(1); let got = ints_new();
+scope { spawn work(io, c, str_len(arg(0)) * 10); }
+let r = chan_recv(c, got);
+print(int_to_str(ints_get(got, 0))); 0 }

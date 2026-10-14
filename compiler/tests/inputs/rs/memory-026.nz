@@ -1,0 +1,6 @@
+fn main() -> Int {
+    let xs = strs_new();
+    strs_push(xs, str_concat("ab", "cd"));
+    strs_set(xs, 0, strs_get(xs, 0));
+    str_byte(strs_get(xs, 0), 0)
+}

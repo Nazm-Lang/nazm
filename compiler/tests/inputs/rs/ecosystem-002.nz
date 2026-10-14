@@ -1,0 +1,2 @@
+use "extra.nz";
+pub fn b2() -> Int ! {} { bad() }

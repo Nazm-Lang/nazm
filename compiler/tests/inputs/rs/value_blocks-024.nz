@@ -1,0 +1,28 @@
+use "b.nz";
+fn score(n: Int) -> Int {
+    let t = token(n);
+    let base = match t {
+        Token.Word(text: s) => {
+            let w = s;
+            str_len(w) * 100
+        },
+        Token.Number(value: v) => {
+            let doubled = v * 2;
+            doubled
+        },
+        Token.End() => {
+            0
+        },
+    };
+    let extra = match find(n) {
+        Option.None() => {
+            0
+        },
+        Option.Some(value: f) => {
+            let g = f;
+            str_len(g)
+        },
+    };
+    base + extra
+}
+fn main() -> Int { score(0) + score(3) * 10 + score(4) * 1000 + score(15) * 100000 }

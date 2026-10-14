@@ -1,0 +1,4 @@
+use "store.nz";
+fn main(io: IoCap) -> Int ! { io } {
+    save(io, read_file("cfg"), "hi")
+}

@@ -1,0 +1,5 @@
+fn f(c: Bool, tasks: SpawnCap) -> Int {
+    let mut z = 0;
+    if c { 1 } else { z = 2; }
+}
+fn main(tasks: SpawnCap) -> Int { f(true, tasks) }

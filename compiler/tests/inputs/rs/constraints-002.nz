@@ -1,0 +1,10 @@
+fn same[T: Equality](a: T, b: T) -> Bool { a == b }
+fn wrap[T: Equality](a: T, b: T) -> Bool { same(a, b) }
+fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }
+fn text(n: Int) -> Str { str_concat("t-", int_to_str(n)) }
+struct Box[T] { value: T, }
+struct Item { name: Str, n: Int, }
+enum Shape { Plain, Named(label: Str), Pair(left: Str, right: Str), }
+fn item(n: Int) -> Item { Item(name: text(n), n: n) }
+fn shape(k: Int) -> Shape { if k % 3 == 0 { return Shape.Plain(); } if k % 3 == 1 { return Shape.Named(label: text(k)); } Shape.Pair(left: text(k), right: text(k + 1)) }
+fn box_same[T: Equality](a: Box[T], b: Box[T]) -> Bool { a == b }

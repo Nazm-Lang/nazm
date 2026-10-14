@@ -1,0 +1,16 @@
+fn sum(n: Int) -> Int {
+    let mut i = 0;
+    let mut s = n;
+    while i < 10 {
+        let mut j = 10;
+        while j >= 1 { s = s + j; j = j - 3; }
+        i = i + 1;
+    }
+    s
+}
+fn main() -> Int ! {} {
+    let limit = 5;
+    let mut k = 0;
+    while k <= limit { k = k + 2; }
+    sum(k)
+}

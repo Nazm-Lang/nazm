@@ -1,0 +1,1 @@
+fn show(out: OutCap, n: Int) -> Int ! {io} { print(str_concat(num_to_str(n), "\n")) }

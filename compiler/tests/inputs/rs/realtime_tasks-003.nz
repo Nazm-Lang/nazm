@@ -1,0 +1,3 @@
+@task(priority = "1", period = "2")
+@on_failure
+fn t(code: Int) -> Int ! {} { 0 }

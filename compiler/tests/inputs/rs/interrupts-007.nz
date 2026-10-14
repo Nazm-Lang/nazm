@@ -1,0 +1,2 @@
+@interrupt("timer")
+fn h[T]() -> Int ! {} { 0 }

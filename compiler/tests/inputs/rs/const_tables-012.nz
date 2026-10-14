@@ -1,0 +1,4 @@
+struct P { x: Int, }
+const A: P = B;
+const B: P = A;
+fn main() -> Int { 0 }

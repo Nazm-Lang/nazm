@@ -1,0 +1,9 @@
+fn helper(n: Int) -> Int {
+    let total = n * 2;
+    total
+}
+fn main() -> Int {
+    let total = 100;
+    let n = 3;
+    total + helper(n)
+}

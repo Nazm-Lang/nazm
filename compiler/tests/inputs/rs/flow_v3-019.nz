@@ -1,0 +1,7 @@
+struct Job { path: Str, body: Str }
+fn main(io: IoCap) -> Int ! { io } {
+let xs = strs_new(); strs_push(xs, "out");
+let j = Job(path: strs_get(xs, 0), body: "b");
+let f = fn(s: Str) -> Int ! {} { str_len(s) };
+print(j.path); f(j.body)
+}

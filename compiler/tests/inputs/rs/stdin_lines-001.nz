@@ -1,0 +1,61 @@
+use "@std/ioerror";
+use "@std/io";
+
+fn show(r: Result[Option[Str], IoError]) -> Str ! {} {
+    match r {
+        Result.Ok(value: o) => match o {
+            Option.Some(value: s) => str_concat("line ", marked(s)),
+            Option.None() => "end",
+        },
+        Result.Err(error: e) => io_kind_name(e.kind),
+    }
+}
+
+fn marked(s: Str) -> Str ! {} {
+    let n = str_len(s);
+    if n > 0 {
+        if str_byte(s, n - 1) == 13 {
+            return str_concat(str_slice(s, 0, n - 1), "<CR>");
+        }
+    }
+    s
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    print(f"{show(io_stdin_read_line(io))}\n");
+    print(f"{show(io_stdin_read_line(io))}\n");
+    let body = bytes_new(5);
+    match io_stdin_read_exact(io, body) {
+        Result.Ok(value: n) => { print(f"frame {n} {bytes_to_str(body)}\n"); },
+        Result.Err(error: e) => { print(f"frame {io_kind_name(e.kind)}\n"); },
+    };
+    let small = bytes_new(3);
+    let h = os_stdin();
+    let mut n = os_read_line(h, small);
+    while n == 3 {
+        print(f"piece {bytes_to_str(small)}\n");
+        if bytes_get(small, 2) == 10 {
+            n = 0 - 1;
+        } else {
+            n = os_read_line(h, small);
+        }
+    }
+    if n >= 0 {
+        print(f"piece {bytes_to_str(bytes_slice(small, 0, n))}|\n");
+    }
+    let one = bytes_new(1);
+    match io_stdin_read(io, one) {
+        Result.Ok(value: k) => { print(f"byte {k} {bytes_to_str(bytes_slice(one, 0, k))}\n"); },
+        Result.Err(error: e) => { print(f"byte {io_kind_name(e.kind)}\n"); },
+    };
+    print(f"{show(io_stdin_read_line(io))}\n");
+    print(f"{show(io_stdin_read_line(io))}\n");
+    print(f"{show(io_stdin_read_line(io))}\n");
+    print(f"{show(io_stdin_read_line(io))}\n");
+    let rest = bytes_new(4);
+    match io_stdin_read_exact(io, rest) {
+        Result.Ok(value: k) => { print(f"rest {k}\n"); },
+        Result.Err(error: e) => { print(f"rest {io_kind_name(e.kind)}\n"); },
+    };
+    0
+}

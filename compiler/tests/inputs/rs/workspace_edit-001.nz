@@ -1,0 +1,2 @@
+pub fn double(x: Int) -> Int ! {} { x * 2 }
+fn helper() -> Int ! {} { double(1) }

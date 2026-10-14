@@ -1,0 +1,4 @@
+fn s(n: Int) -> Str ! {}
+    ensures str_len(result) > 0
+{ if n > 99 { return int_to_str(n); } int_to_str(n + 1) }
+fn main(io: IoCap) -> Int ! { io } { print(s(12)); print(s(120)); 0 }

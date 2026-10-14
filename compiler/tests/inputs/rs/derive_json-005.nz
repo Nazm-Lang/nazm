@@ -1,0 +1,3 @@
+@derive(json)
+struct H { n: Int, }
+fn h_to_json(v: H) -> Str { "" }

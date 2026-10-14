@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let fs = vec_new[fn() -> Int]();
+    let outer = fn() -> Int {
+        let inner = fn() -> Int { vec_len(fs) + vec_len(fs) };
+        inner()
+    };
+    vec_push(fs, outer);
+    0
+}

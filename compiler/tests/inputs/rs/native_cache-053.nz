@@ -1,0 +1,2 @@
+pub fn identity[T](x: T) -> T { x }
+pub fn other() -> Int { 1 }

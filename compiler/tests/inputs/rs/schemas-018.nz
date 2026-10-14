@@ -1,0 +1,3 @@
+fn half(n: Int) -> Int ! {} requires n >= 0 ensures result * 2 <= n { n / 2 }
+fn ap(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(x) }
+fn main() -> Int { half(8) + half(str_len("ab")) + str_byte("a", 0) + ap(half, 4) }

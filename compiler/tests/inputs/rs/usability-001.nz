@@ -1,0 +1,15 @@
+
+fn bytes(s: Str, out: OutCap) -> Int {
+    let mut i = 0;
+    while i < str_len(s) {
+        print(str_concat(int_to_str(str_byte(s, i)), "\n"));
+        i = i + 1;
+    }
+    str_len(s)
+}
+fn main(io: IoCap) -> Int {
+    let n = bytes("a\nb\t\r\0\\\"\x41\x7f", io);
+    print("line one\nline two\n");
+    print("é\x21\n");
+    if "\x41" == "A" { n } else { 0 - 1 }
+}

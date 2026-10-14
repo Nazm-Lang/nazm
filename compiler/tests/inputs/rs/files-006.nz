@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { os_stat("prog.nz", bytes_new(31)) }

@@ -1,0 +1,8 @@
+fn w(c: Chan) -> Int { chan_send(c, 5); 0 }
+fn main(tasks: SpawnCap) -> Int {
+let c = chan_new(2);
+let buf = ints_new();
+let mut t = 0;
+scope { spawn w(c); spawn w(c); chan_recv(c, buf); t = t + ints_pop(buf); chan_recv(c, buf); t = t + ints_pop(buf); }
+t
+}

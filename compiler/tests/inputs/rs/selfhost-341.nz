@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io, io } { 0 }

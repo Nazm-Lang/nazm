@@ -1,0 +1,1 @@
+pub fn sides() -> Int { 4 }

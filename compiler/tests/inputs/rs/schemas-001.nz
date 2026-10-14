@@ -1,0 +1,7 @@
+fn f(mut n: Int) -> Int { n }
+fn g(out: OutCap) -> Int ! {} { print("x"); 0 }
+fn main() -> Int {
+    let x = 1;
+    x = 2;
+    y
+}

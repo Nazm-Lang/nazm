@@ -1,0 +1,2 @@
+struct P { x: Int, name: Str, }
+         fn main() -> Int { if P(x: 1, name: "a") == P(x: 1, name: "a") { 1 } else { 0 } }

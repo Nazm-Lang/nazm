@@ -1,0 +1,11 @@
+fn clamp(n: Int) -> Int {
+    if n > 10 { return 10; }
+    if n < 0 { return 0; }
+    n
+}
+fn main() -> Int {
+    let mut i = 0 - 3;
+    let mut s = 0;
+    while i < 14 { s = s + clamp(i); i = i + 1; }
+    s
+}

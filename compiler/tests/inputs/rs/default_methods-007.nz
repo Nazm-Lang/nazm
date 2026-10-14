@@ -1,0 +1,2 @@
+trait T { fn n(self: Self) -> Int; fn say(self: Self, out: OutCap) -> Int { print("x") } }
+fn main() -> Int { 0 }

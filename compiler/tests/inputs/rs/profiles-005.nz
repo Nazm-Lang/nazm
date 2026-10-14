@@ -1,0 +1,2 @@
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+fn main(f: ForeignCap) -> Int ! { foreign } { c_add(1, 2) }

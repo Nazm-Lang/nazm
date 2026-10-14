@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let mut s = "";
+    let mut i = 0;
+    while i < 16 {
+        s = str_concat(s, "a");
+        i = i + 1;
+    }
+    let mut p = str_pad_end("ab", 3, ".");
+    p = str_concat(p, "x");
+    str_len(s) * 100 + str_len(p) * 10 + str_byte(p, 3) - 120
+}

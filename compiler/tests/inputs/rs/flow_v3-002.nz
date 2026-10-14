@@ -1,0 +1,2 @@
+fn fill(io: IoCap) -> Int ! { io } { let ys = strs_new(); strs_push(ys, read_file("c")); 0 }
+fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, arg(1)); fill(io); write_file(strs_get(xs, 0), "x") }

@@ -1,0 +1,22 @@
+
+        fn drain(jobs: Chan, results: Chan) -> Int {
+            let buf = ints_new();
+            let mut sum = 0;
+            while chan_recv(jobs, buf) { sum = sum + ints_pop(buf); }
+            chan_send(results, sum);
+            0
+        }
+        fn main(tasks: SpawnCap) -> Int {
+            let jobs = chan_new(1);
+            let results = chan_new(1);
+            scope {
+                spawn drain(jobs, results);
+                let mut i = 1;
+                while i <= 200 { chan_send(jobs, i); i = i + 1; }
+                chan_close(jobs);
+            }
+            let buf = ints_new();
+            chan_recv(results, buf);
+            ints_pop(buf)
+        }
+        

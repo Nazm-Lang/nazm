@@ -1,0 +1,2 @@
+fn println(s: Str) -> Int { 0 }
+fn main() -> Int { 0 }

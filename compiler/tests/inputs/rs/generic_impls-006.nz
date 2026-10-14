@@ -1,0 +1,2 @@
+impl[T] Show for P[T, Int] { fn show(self: P[T, Int]) -> Str { "p" } }
+fn main() -> Int { 0 }

@@ -1,0 +1,1 @@
+fn f(n: Int) -> Int { if let k = n { k } else { 0 } }

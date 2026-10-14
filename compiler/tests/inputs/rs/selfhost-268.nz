@@ -1,0 +1,1 @@
+fn main() -> Int { let mut i = 0; while i < 5 { i = i + 1; let v = match Option[Int].Some(value: i) { Option.None() => { continue; }, Option.Some(value: n) => { if n == 3 { break; } n }, }; } i }

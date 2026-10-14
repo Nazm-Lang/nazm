@@ -1,0 +1,2 @@
+use "lib.nz";
+fn main(out: OutCap) -> Int { print(int_to_str(apply_twice(scaler(3), 2))); 0 }

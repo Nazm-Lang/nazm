@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let n = cell_new(str_len(read_file("cfg"))); let c = cell_new("out.txt"); write_file(cell_get(c), "x") }

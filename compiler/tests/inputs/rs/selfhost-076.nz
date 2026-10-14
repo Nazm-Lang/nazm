@@ -1,0 +1,1 @@
+fn m() -> Int { let p = Pair[Int, Str](first: 1, second: "x"); p.first }

@@ -1,0 +1,14 @@
+fn main(out: OutCap) -> Int ! {io} {
+    let name = "world"
+    println("Hello, " + name + "!")
+    let mut s = ""
+    let mut i = 0
+    while i < 20000 {
+        s += "x"
+        i += 1
+    }
+    let mut t = ""
+    t = t + "ab"
+    println(f"{str_len(s)} {t}")
+    0
+}

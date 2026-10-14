@@ -1,0 +1,1 @@
+fn m(s: Int) -> Int { s + if s > 0 { 1 } else { 0 } }

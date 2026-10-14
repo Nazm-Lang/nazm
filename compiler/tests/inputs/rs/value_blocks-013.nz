@@ -1,0 +1,19 @@
+fn later(log: Ints) -> Str {
+    ints_push(log, 1);
+    str_concat("late", "r")
+}
+fn consume(a: Str, b: Str, c: Str) -> Int { str_len(a) + str_len(b) + str_len(c) }
+fn go(fail: Bool, log: Ints) -> Int {
+    consume(int_to_str(12345), {
+        let t = str_concat("mid-", int_to_str(1));
+        if fail { return 0 - 1; }
+        t
+    }, later(log))
+}
+fn main() -> Int {
+    let log = ints_new();
+    let a = go(false, log);
+    let b = go(true, log);
+    churn();
+    a * 1000 + (b + 1) * 100 + ints_len(log)
+}

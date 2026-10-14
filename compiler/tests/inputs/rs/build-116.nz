@@ -1,0 +1,21 @@
+struct Inner {
+    text: Str,
+}
+struct Outer {
+    inner: Inner,
+    count: Int,
+}
+fn make(n: Int) -> Outer { Outer(inner: Inner(text: int_to_str(n)), count: n) }
+fn returned(n: Int) -> Outer {
+    let o = make(n);
+    return o;
+}
+fn size(o: Outer) -> Int { str_len(o.inner.text) + o.count }
+fn main() -> Int {
+    let mut a = make(5);
+    let b = a;
+    a.inner.text = str_concat(a.inner.text, "!");
+    a.count = 6;
+    let c = returned(40);
+    size(a) + size(b) + size(c) + str_len(b.inner.text)
+}

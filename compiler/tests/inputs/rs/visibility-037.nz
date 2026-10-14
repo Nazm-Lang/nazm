@@ -1,0 +1,2 @@
+enum State { Only(s: Str), }
+pub fn from_b() -> Int { match State.Only(s: "abc") { State.Only(s: s) => str_len(s), } }

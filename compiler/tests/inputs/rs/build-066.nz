@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let mut i = 0;
+    while (if i > 1 { break; } else { true }) { i = i + 1; }
+    i
+}

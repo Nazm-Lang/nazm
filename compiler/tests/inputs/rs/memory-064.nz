@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let z = 0;
+    ints_len(ints_new()) + 1 / z
+}

@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let mut outer = ints_new();
+    if 1 < 2 {
+        let inner = ints_new();
+        ints_push(inner, 5);
+        outer = inner;
+    } else {
+        ints_push(outer, 0);
+    }
+    ints_get(outer, 0)
+}

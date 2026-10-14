@@ -1,0 +1,9 @@
+struct Holder {
+    name: Str,
+}
+fn main() -> Int {
+    let mut h = Holder(name: int_to_str(111));
+    h = h;
+    h = Holder(name: int_to_str(2222));
+    str_len(h.name)
+}

@@ -1,0 +1,2 @@
+fn f(x: Bool) -> Result[Int, Oops] { let n = leaf(x)?; Result[Int, Oops].Ok(value: n) }
+fn m() -> Int { 0 }

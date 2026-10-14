@@ -1,0 +1,36 @@
+struct Keyword { text: Str, code: Int, }
+enum Color { Red, Rgb(r: UInt8, g: UInt8, b: UInt8), }
+const N: Int = 3;
+const KEYWORDS: [Keyword; N] = [
+    Keyword(text: "fn", code: 1),
+    Keyword(code: N - 1, text: "let"),
+    Keyword(text: "match", code: N),
+];
+const ORIGIN: (Int, Int) = (0, -1);
+const TEAL: Color = Color.Rgb(r: 0, g: 128, b: UInt8(64) * 2);
+const ZEROS: [Int; 4] = [0; 4];
+const TABLE: [[Str; 2]; 2] = [["a", "b"], ["c", "d"]];
+const COPY: [Keyword; 3] = KEYWORDS;
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+fn code_of(word: Str) -> Int {
+    let mut i = 0;
+    while i < N {
+        if KEYWORDS[i].text == word { return KEYWORDS[i].code; }
+        i = i + 1;
+    }
+    ORIGIN.1
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    show(out, num_to_str(code_of("let") * 100 + code_of("match") * 10 + code_of("zz")));
+    let b = match TEAL { Color.Rgb(r: _, g: _, b: b) => Int(b), Color.Red() => 0, };
+    show(out, num_to_str(b + ZEROS[3]));
+    show(out, str_concat(TABLE[1][0], COPY[0].text));
+    // A use is a copy: writing one changes no other.
+    let mut mine = KEYWORDS;
+    mine[0] = Keyword(text: str_concat("f", "un"), code: 9);
+    show(out, str_concat(mine[0].text, KEYWORDS[0].text));
+    0
+}

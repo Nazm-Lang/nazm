@@ -1,0 +1,7 @@
+struct Holder {
+    name: Str,
+}
+fn main() -> Int {
+    let h = Holder(name: str_concat("ab", "cd"));
+    str_len(h.name)
+}

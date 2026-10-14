@@ -1,0 +1,25 @@
+fn fill(n: Int) -> Vec[Int] {
+    let xs = vec_new[Int]();
+    let mut i = 0;
+    while i < n { vec_push(xs, i * i); i = i + 1; }
+    xs
+}
+fn fill_ints(n: Int) -> Ints {
+    let xs = ints_new();
+    let mut i = 0;
+    while i < n { ints_push(xs, i * i); i = i + 1; }
+    xs
+}
+fn main() -> Int {
+    let v = fill(10);
+    let a = fill_ints(10);
+    let alias = v;
+    vec_push(alias, 7);
+    ints_push(a, 7);
+    vec_set(v, 2, 40);
+    ints_set(a, 2, 40);
+    let p = vec_pop(v);
+    let q = ints_pop(a);
+    let same = if vec_len(v) == ints_len(a) { 1 } else { 0 };
+    vec_get(v, 2) + vec_get(alias, 9) + p + same * 1000 - ints_get(a, 2) - ints_get(a, 9) - q
+}

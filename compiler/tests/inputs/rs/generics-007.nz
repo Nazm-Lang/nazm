@@ -1,0 +1,14 @@
+enum Maybe[T] { None, Some(value: T), }
+fn or[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }
+fn main() -> Int {
+    let xs = vec_new[Maybe[Int]]();
+    let mut i = 0;
+    while i < 10 {
+        if i % 2 == 0 { vec_push(xs, Maybe[Int].Some(value: i)); } else { vec_push(xs, Maybe[Int].None()); }
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < vec_len(xs) { total = total + or(vec_get(xs, k), 100); k = k + 1; }
+    total
+}

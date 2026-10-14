@@ -1,0 +1,38 @@
+use "@std/regex";
+
+fn spans(ms: Vec[Match]) -> Str {
+    let mut out = "";
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i);
+        out = f"{out}({m.start},{m.end})";
+    }
+    out
+}
+
+fn all(pattern: Str, text: Str) -> Str {
+    match regex_compile(pattern) {
+        Result.Ok(value: r) => spans(regex_find_all(r, text)),
+        Result.Err(error: e) => f"error: {e}",
+    }
+}
+
+fn groups(pattern: Str, text: Str) -> Str {
+    match regex_compile(pattern) {
+        Result.Ok(value: r) => match regex_captures(r, text, 0) {
+            Option.Some(value: gs) => {
+                let mut out = "";
+                for i in 0..vec_len(gs) {
+                    let g = match vec_get(gs, i) {
+                        Option.Some(value: m) => f"({m.start},{m.end})",
+                        Option.None() => "-",
+                    };
+                    out = f"{out}{g}";
+                }
+                out
+            },
+            Option.None() => "no match",
+        },
+        Result.Err(error: e) => f"error: {e}",
+    }
+}
+

@@ -1,0 +1,4 @@
+fn f(n: Int) -> Int ! {}
+    requires n
+{ n }
+fn main() -> Int { 0 }

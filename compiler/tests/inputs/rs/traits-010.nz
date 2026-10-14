@@ -1,0 +1,4 @@
+use "shape.nz";
+use "tri.nz";
+impl Shape for Tri { fn sides(self: Tri) -> Int { 3 } }
+fn main() -> Int { 0 }

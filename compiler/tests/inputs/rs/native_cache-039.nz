@@ -1,0 +1,5 @@
+struct Point {
+    x: Int,
+    label: Str,
+}
+fn main() -> Int { let p = Point(x: 1, label: "ab"); p.x + str_len(p.label) }

@@ -1,0 +1,7 @@
+// A point.
+pub struct P { x: Int }
+pub enum E { A, B(p: P) }
+pub extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+pub extern "C" fn tri(x: Int) -> Int ! {} = "tri" { x * 3 }
+pub fn say(io: IoCap) -> Int ! { io } { print("x"); 0 }
+fn main() -> Int { 0 }

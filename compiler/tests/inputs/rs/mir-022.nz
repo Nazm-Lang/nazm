@@ -1,0 +1,2 @@
+fn big(k: Int) -> Int {
+    let mut total = 0;

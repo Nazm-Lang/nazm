@@ -1,0 +1,2 @@
+use "@core/prelude.nz";
+fn main() -> Int { v() }

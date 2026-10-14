@@ -1,0 +1,53 @@
+enum Color { Red, Green, Blue }
+
+fn name(c: Color) -> Str {
+    match c {
+        Color.Red => "red",
+        Color.Green => "green",
+        Color.Blue => "blue",
+    }
+}
+
+fn half(n: Int) -> Option[Int] {
+    if n % 2 == 0 { Some(n / 2) } else { None }
+}
+
+fn parse(s: Str) -> Result[Int, Str] {
+    if s == "one" { Ok(1) } else { Err(f"not a number: {s}") }
+}
+
+fn first(o: Option[Str]) -> Str {
+    match o {
+        Some(t) => t,
+        None => "none",
+    }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(name(Color.Green))
+    let c = Color.Blue
+    println(name(c))
+    match half(8) {
+        Some(h) => println(h),
+        None => println("odd"),
+    }
+    match half(7) {
+        Some(h) => println(h),
+        None => println("odd"),
+    }
+    match parse("two") {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+    // From the payload, with nothing around it; as an argument; written in full still.
+    let o = Some("x")
+    if let Some(t) = o { println(t) }
+    println(first(None))
+    println(first(Some("y")))
+    let w = Option[Int].Some(value: 5)
+    match w {
+        Option.Some(value: v) => println(v),
+        Option.None() => println(0),
+    }
+    0
+}

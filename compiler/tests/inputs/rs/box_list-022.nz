@@ -1,0 +1,2 @@
+fn vec_new(x: Int) -> Int { x }
+fn main() -> Int { 0 }

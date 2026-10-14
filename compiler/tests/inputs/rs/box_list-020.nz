@@ -1,0 +1,3 @@
+struct Box { v: Int, }
+fn box_new(x: Int) -> Box { Box(v: x + 1) }
+fn main() -> Int { box_new(41).v }

@@ -1,0 +1,1 @@
+pub fn apply[effects E](f: fn(Int) -> Int ! { E }, x: Int) -> Int ! { E } { f(x) }

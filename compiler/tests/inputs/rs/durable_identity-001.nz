@@ -1,0 +1,7 @@
+use "lib/util.nz";
+
+pub fn parse(s: Str) -> Int { twice(str_len(s)) }
+
+fn secret() -> Int { 1 }
+
+fn main() -> Int { parse("abc") + secret() }

@@ -1,0 +1,10 @@
+struct Two {
+    a: Str,
+    b: Str,
+}
+fn main() -> Int {
+    let x = Two(a: int_to_str(11), b: int_to_str(22));
+    let y = x;
+    let z = y;
+    str_len(x.a) + str_len(y.b) + str_len(z.a)
+}

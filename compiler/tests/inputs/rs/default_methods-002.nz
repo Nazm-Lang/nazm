@@ -1,0 +1,4 @@
+pub trait Named {
+    fn name(self: Self) -> Str;
+    fn greet(self: Self) -> Str { str_concat("hi ", self.name()) }
+}

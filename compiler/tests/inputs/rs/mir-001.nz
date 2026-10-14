@@ -1,0 +1,57 @@
+
+struct Pair { name: Str, n: Int, }
+enum Shape { Circle(r: Int), Named(title: Str, sides: Int), Empty }
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape.Circle(r: r) => 3 * r * r,
+        Shape.Named(title: t, sides: n) => str_len(t) + n,
+        Shape.Empty() => 0,
+    }
+}
+
+fn parse(s: Str) -> Result[Int, Str] {
+    if str_len(s) == 0 { return Result[Int, Str].Err(error: "empty"); }
+    Result[Int, Str].Ok(value: str_len(s))
+}
+
+fn twice(s: Str) -> Result[Int, Str] {
+    let a = parse(s)?;
+    let b = parse(str_concat(s, s))?;
+    Result[Int, Str].Ok(value: a + b)
+}
+
+fn loops(n: Int) -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < n {
+        i = i + 1;
+        let text = int_to_str(i);
+        if i % 3 == 0 { continue; }
+        if i > 20 { break; }
+        let mut j = 0;
+        while j < i {
+            j = j + 1;
+            if j == 4 { break; }
+            total = total + str_len(text);
+        }
+    }
+    total
+}
+
+fn main() -> Int {
+    let p = Pair(name: "abc", n: 4);
+    let q = Pair(n: p.n + 1, name: str_concat(p.name, "d"));
+    let v = if q.n > 3 { str_len(q.name) } else { 0 };
+    let shapes = vec_new[Shape]();
+    vec_push(shapes, Shape.Circle(r: 2));
+    vec_push(shapes, Shape.Named(title: "tri", sides: 3));
+    vec_push(shapes, Shape.Empty());
+    let mut k = 0;
+    let mut sum = 0;
+    while k < vec_len(shapes) { sum = sum + area(vec_get(shapes, k)); k = k + 1; }
+    let r = match twice("xy") { Result.Ok(value: x) => x, Result.Err(error: e) => str_len(e) };
+    let e = match twice("") { Result.Ok(value: x) => x, Result.Err(error: e) => str_len(e) + 100 };
+    let same = if q == Pair(name: "abcd", n: 5) { 1000 } else { 0 };
+    v + sum + r + e + loops(30) + same
+}

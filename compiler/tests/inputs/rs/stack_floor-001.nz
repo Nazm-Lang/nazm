@@ -1,0 +1,4 @@
+fn g(n: Int) -> Int { n }
+fn f(n: Int) -> Int { n }
+fn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + f(g(down(n - 1))) } }
+fn main() -> Int { down(1000000) }

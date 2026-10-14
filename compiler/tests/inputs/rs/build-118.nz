@@ -1,0 +1,19 @@
+enum Token {
+    Pair(left: Int, right: Int),
+    Eof,
+    Number(value: Int),
+    Name(text: Str),
+}
+fn size(t: Token) -> Int {
+    match t {
+        Token.Eof() => 0,
+        Token.Number(value: n) => n,
+        Token.Name(text: s) => str_len(s),
+        Token.Pair(left: a, right: b) => a + b,
+    }
+}
+fn main() -> Int {
+    size(Token.Eof()) + size(Token.Number(value: 30))
+        + size(Token.Name(text: str_concat("ab", "cd")))
+        + size(Token.Pair(left: 3, right: 5))
+}

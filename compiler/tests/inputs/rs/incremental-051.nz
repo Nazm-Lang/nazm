@@ -1,0 +1,2 @@
+pub fn deep(n: Int, k: Int) -> Int { inner() + n + k }
+fn inner() -> Int { 7 }

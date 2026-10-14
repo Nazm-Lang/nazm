@@ -1,0 +1,2 @@
+fn wrap[T](a: T, b: T) -> Bool { same(a, b) }
+fn main() -> Int { 0 }

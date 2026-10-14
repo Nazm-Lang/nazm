@@ -1,0 +1,2 @@
+use "../util/math.nz";
+fn main() -> Int { double(21) }

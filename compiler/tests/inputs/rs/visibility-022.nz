@@ -1,0 +1,5 @@
+use "a.nz";
+struct User {
+    n: Int,
+}
+fn main() -> Int { 0 }

@@ -1,0 +1,2 @@
+@on_failure("x")
+fn h(code: Int) -> Int ! {} { 0 }

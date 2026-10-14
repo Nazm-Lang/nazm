@@ -1,0 +1,15 @@
+
+fn work(c: Chan) -> Int ! {} { if chan_send(c, 1) { 1 } else { 0 } }
+fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {
+    let xs = ints_new();
+    let mut i = 0;
+    while i < 3 { ints_push(xs, i); i = i + 1; }
+    let s = str_concat("a", "b");
+    let t = s;
+    let f = fn(x: Int) -> Int { x + str_len(t) };
+    let c = chan_new(1);
+    scope { spawn work(c); }
+    let got = ints_new();
+    if chan_recv(c, got) { print(int_to_str(ints_get(got, 0) + f(1))); }
+    0
+}

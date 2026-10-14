@@ -1,0 +1,1 @@
+fn m() -> Int { let x = 1; let y = if true { let x = 2; x } else { x }; y }

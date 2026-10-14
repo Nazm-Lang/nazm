@@ -1,0 +1,27 @@
+static HITS: Atomic = atomic_new(5);
+static UART: Int = 1073758208;
+
+fn show(m: MmioCap, n: Int) -> Int ! {} {
+    let mut v = n;
+    if v < 0 { mmio_write8(UART, 45); v = 0 - v; }
+    let mut d = 1000000000000000000;
+    let mut started = false;
+    while d > 0 {
+        let q = v / d;
+        if q > 0 || started || d == 1 { mmio_write8(UART, 48 + q); started = true; }
+        v = v % d;
+        d = d / 10;
+    }
+    mmio_write8(UART, 10)
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    show(m, -7 / 2);
+    show(m, -7 % 2);
+    show(m, 9223372036854775807 / 3);
+    show(m, 3037000499 * 3037000499);
+    atomic_add(HITS, 10);
+    show(m, atomic_swap(HITS, 1));
+    show(m, if atomic_compare_swap(HITS, 1, 2) { atomic_load(HITS) } else { 0 });
+    3037000500 * 3037000500
+}

@@ -1,0 +1,15 @@
+fn one() -> Strs {
+    let xs = strs_new();
+    strs_push(xs, str_concat("ab", "cd"));
+    xs
+}
+fn main() -> Int {
+    let s = strs_get(one(), 0);
+    let mut i = 0;
+    let mut noise = "";
+    while i < 20 {
+        noise = str_concat("qq", noise);
+        i = i + 1;
+    }
+    str_len(s) * 100 + str_byte(s, 0)
+}

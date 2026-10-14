@@ -1,0 +1,3 @@
+struct Box[T] { v: T, }
+struct S { b: Box[S], }
+fn m() -> Int { 0 }

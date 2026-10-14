@@ -1,0 +1,11 @@
+fn stage(io: IoCap, inp: Chan[Str], out: Chan[Str]) -> Int ! { io } {
+let got = vec_new[Str]();
+while chan_recv_of(inp, got) { chan_send_of(out, str_concat(vec_pop(got), "!")); }
+chan_close_of(out); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let a = chan_new_of[Str](1); let b = chan_new_of[Str](1); let c = chan_new_of[Str](1);
+let got = vec_new[Str]();
+scope { spawn stage(io, a, b); spawn stage(io, b, c);
+let mut i = 0; while i < 20 { chan_send_of(a, int_to_str(i)); let r = chan_recv_of(c, got); i = i + 1; }
+chan_close_of(a); let e = chan_recv_of(c, got); }
+print(vec_get(got, 19)); print(int_to_str(vec_len(got))); 0 }

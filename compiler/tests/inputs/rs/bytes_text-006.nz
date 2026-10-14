@@ -1,0 +1,2 @@
+pub fn greet(t: Text) -> Text ! {} { text_concat("hi ", t) }
+pub fn fill(b: Bytes, v: UInt8) -> Bytes ! {} { bytes_set(b, 0, v); b }

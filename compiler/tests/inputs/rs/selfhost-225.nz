@@ -1,0 +1,2 @@
+fn w[T](v: T) -> Int { 0 }
+fn m() -> Int { scope { spawn w(1); } 0 }

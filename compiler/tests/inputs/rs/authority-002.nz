@@ -1,0 +1,2 @@
+fn wide(i: IoCap) -> Int ! {io} { 0 }
+fn main(o: OutCap) -> Int ! {io} { wide(o) }

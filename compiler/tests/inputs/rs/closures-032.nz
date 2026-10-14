@@ -1,0 +1,2 @@
+fn run(f: fn(Int) -> Bool) -> Bool { f(1) }
+fn main() -> Int { if run(fn(x: Int) -> Int { x }) { 1 } else { 0 } }

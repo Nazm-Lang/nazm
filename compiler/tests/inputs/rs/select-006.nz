@@ -1,0 +1,20 @@
+
+fn one(c: Chan[Int]) -> Bool ! {} { chan_send_of(c, 1) }
+
+fn main(sp: SpawnCap, t: TimeCap) -> Int ! { spawn } {
+    let c = chan_new_of[Int](4);
+    scope {
+        spawn one(c);
+        spawn one(c);
+        spawn one(c);
+    }
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, c);
+    let got = vec_new[Int]();
+    chan_select_of(cs, got);
+    chan_select_until(cs, got, 1);
+    let empty = chan_new_of[Int](1);
+    let es = vec_new[Chan[Int]]();
+    vec_push(es, empty);
+    chan_select_until(es, got, 1)
+}

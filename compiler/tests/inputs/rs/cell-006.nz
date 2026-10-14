@@ -1,0 +1,2 @@
+struct Node { b: Box[Cell[Node]], }
+fn main() -> Int { 0 }

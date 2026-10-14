@@ -1,0 +1,2 @@
+use "b.nz";
+pub fn from_c() -> Int { identity(2) }

@@ -1,0 +1,2 @@
+use "b.nz";
+fn main() -> Int { twice(21, "x") + identity(1) + identity[Int](2) }

@@ -1,0 +1,2 @@
+fn w(l: List[Int]) -> Int { 0 }
+fn main() -> Int ! {spawn} { let l = list_empty[Int](); scope { spawn w(l); } 0 }

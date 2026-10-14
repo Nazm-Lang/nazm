@@ -1,0 +1,7 @@
+struct Job { name: Str, n: Int }
+enum Tag { Plain, Named(label: Str) }
+fn run(c: Chan, j: Job, t: Tag) -> Int { let extra = match t { Tag.Plain() => 0, Tag.Named(label: l) => str_len(l) }; chan_send(c, str_len(j.name) + j.n + extra); 0 }
+fn main(t: SpawnCap) -> Int {
+let c = chan_new(64); let buf = ints_new(); let mut r = 0;
+while r < 20 { scope { let mut i = 0; while i < 32 { let j = Job(name: str_concat("job", int_to_str(i)), n: 1); if i % 2 == 0 { spawn run(c, j, Tag.Plain()); } else { spawn run(c, j, Tag.Named(label: str_concat("x", "y"))); } i = i + 1; } } let mut k = 0; while k < 32 { chan_recv(c, buf); k = k + 1; } r = r + 1; }
+let mut total = 0; let mut j = 0; while j < ints_len(buf) { total = total + ints_get(buf, j); j = j + 1; } total }

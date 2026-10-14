@@ -1,0 +1,2 @@
+fn f(r: Result[Int, Str]) -> Result[Int, Str] { let n = r?; Result[Int, Str].Ok(value: n + 1) }
+fn main() -> Int { match f(Result[Int, Str].Ok(value: 41)) { Result.Ok(value: v) => v, Result.Err(error: e) => 0, } }

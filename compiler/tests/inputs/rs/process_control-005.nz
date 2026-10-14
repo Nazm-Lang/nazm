@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { os_status(os_spawn_in("ls", strs_new(), "", strs_new())) }

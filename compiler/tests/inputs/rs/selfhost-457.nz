@@ -1,0 +1,4 @@
+fn w(sp: SpawnCap, n: Int) -> Int ! { spawn } {
+    if n <= 0 { 0 } else { scope { spawn w(sp, n - 1); } 0 }
+}
+fn main(sp: SpawnCap) -> Int ! { spawn } { w(sp, 2) }

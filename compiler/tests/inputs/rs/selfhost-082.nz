@@ -1,0 +1,1 @@
+fn m(r: Result[Int, Str]) -> Result[Int, Str] { let a = r?; Result[Int, Str].Ok(value: a) }

@@ -1,0 +1,3 @@
+fn apply(f: fn(Str) -> Str ! { io }, s: Str) -> Str ! { io } { f(s) }
+fn same(s: Str) -> Str ! {} { s }
+fn main(io: IoCap) -> Int ! { io } { write_file(apply(same, read_file("c")), "x") }

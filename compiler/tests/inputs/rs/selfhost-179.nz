@@ -1,0 +1,1 @@
+enum L { E, N(r: L), } fn m() -> Int { 0 }

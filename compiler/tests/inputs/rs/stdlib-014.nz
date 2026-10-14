@@ -1,0 +1,19 @@
+use "@std/log";
+fn main(out: OutCap, t: TimeCap) -> Int {
+    let base = log_new(LogLevel.Info());
+    let l = log_with(base, log_fields());
+    let svc = strs_new();
+    strs_push(svc, log_str("service", "kvd"));
+    let lk = log_with(l, svc);
+    let f = strs_new();
+    strs_push(f, log_int("port", 8080));
+    strs_push(f, log_bool("tls", false));
+    strs_push(f, log_str("note", "quote \" and newline \n"));
+    log_info(out, lk, "listening", f);
+    log_debug(out, lk, "dropped", log_fields());
+    log_error(out, lk, "failed", log_fields());
+    let s = log_span_begin(t, "load");
+    let n = log_span_end(out, t, lk, s, log_fields());
+    print(if n > 0 { "span written\n" } else { "no span\n" });
+    0
+}

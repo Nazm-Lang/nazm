@@ -1,0 +1,2 @@
+use "other.nz";
+fn m() -> Int { 1 }

@@ -1,0 +1,23 @@
+fn found(ok: Bool) -> Result[Option[Str], Int] {
+    if ok { Result[Option[Str], Int].Ok(value: Option[Str].Some(value: text(3))) } else { Result[Option[Str], Int].Err(error: 3) }
+}
+fn compare(ok: Bool) -> Result[Int, Int] {
+    let got = found(ok)?;
+    if got == Option[Str].Some(value: text(3)) { Result[Int, Int].Ok(value: 1) } else { Result[Int, Int].Ok(value: 0) }
+}
+fn main() -> Int {
+    let s = shape(1);
+    let same = match s {
+        Shape.Named(label: x) => {
+            let want = text(1);
+            x == want
+        },
+        Shape.Plain() => { false },
+        Shape.Pair(left: _, right: _) => { false },
+    };
+    churn();
+    let one = if same { 1 } else { 0 };
+    let ten = match compare(true) { Result.Ok(value: v) => 10 * v, Result.Err(error: _) => 0, };
+    let hundred = match compare(false) { Result.Ok(value: _) => 0, Result.Err(error: c) => 100 * c, };
+    one + ten + hundred
+}

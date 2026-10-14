@@ -1,0 +1,2 @@
+fn down(n: Int, s: Str) -> Int { let t = str_concat(s, "x"); down(n + 1, str_slice(t, 0, 1)) + str_len(t) }
+fn main() -> Int { down(0, "a") }

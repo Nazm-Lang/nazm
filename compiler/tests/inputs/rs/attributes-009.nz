@@ -1,0 +1,4 @@
+trait T { fn t(self: Self) -> Int; }
+@deprecated
+impl T for Int { fn t(self: Int) -> Int { 0 } }
+fn main() -> Int { 0 }

@@ -1,0 +1,3 @@
+struct P { x: Int, }
+fn f(p: P[Int]) -> Int { 0 }
+fn m() -> Int { 0 }

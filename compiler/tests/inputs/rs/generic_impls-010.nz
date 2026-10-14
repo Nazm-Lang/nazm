@@ -1,0 +1,1 @@
+pub trait Show { fn show(self: Self) -> Str; }

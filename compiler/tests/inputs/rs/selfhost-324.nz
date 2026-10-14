@@ -1,0 +1,2 @@
+struct Equality { x: Int, }
+fn main() -> Int { Equality(x: 1).x }

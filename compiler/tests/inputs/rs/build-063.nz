@@ -1,0 +1,10 @@
+fn boom(n: Int) -> Int { 10 / n }
+fn main() -> Int {
+    let mut i = 0;
+    let mut s = 0;
+    while i < 3 {
+        i = i + 1;
+        s = s + boom(if i == 2 { break; } else { i });
+    }
+    s
+}

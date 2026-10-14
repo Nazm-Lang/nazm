@@ -1,0 +1,1 @@
+fn f(o: Option[Int]) -> Int { let Option.Some(value: x) = o else { 0; }; x }

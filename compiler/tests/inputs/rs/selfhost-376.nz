@@ -1,0 +1,2 @@
+fn shout(o: OutCap) -> Int { print("!"); write_file("f", "x"); print("?"); 0 }
+fn main(io: IoCap) -> Int { shout(io) }

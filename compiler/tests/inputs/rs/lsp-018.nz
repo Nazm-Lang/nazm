@@ -1,0 +1,5 @@
+struct Pt[T] {
+    x: T,
+}
+
+fn main() -> Int { let s = "é😀"; let p = Pt[Int](x: str_len(s)); p.x }

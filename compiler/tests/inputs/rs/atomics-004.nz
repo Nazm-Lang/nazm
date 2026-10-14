@@ -1,0 +1,2 @@
+struct Atomic { x: Int, }
+fn main() -> Int { 0 }

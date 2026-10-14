@@ -1,0 +1,2 @@
+fn f(a: Int, b: Str) -> Str { str_concat(b, int_to_str(a)) }
+fn m() -> Int { str_len(f(1, "x")) }

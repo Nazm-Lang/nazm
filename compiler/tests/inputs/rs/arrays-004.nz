@@ -1,0 +1,3 @@
+struct S { v: Vec[Int], }
+fn f(a: [S; 2]) -> Int { 0 }
+fn main() -> Int { 0 }

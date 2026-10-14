@@ -1,0 +1,21 @@
+fn main() -> Int {
+    let grid = vec_new[Vec[Int]]();
+    let words = vec_new[Vec[Str]]();
+    let mut i = 0;
+    while i < 6 {
+        let row = vec_new[Int]();
+        let texts = vec_new[Str]();
+        let mut j = 0;
+        while j < i {
+            vec_push(row, j);
+            vec_push(texts, int_to_str(i * 10 + j));
+            j = j + 1;
+        }
+        vec_push(grid, row);
+        vec_push(words, texts);
+        i = i + 1;
+    }
+    let kept = vec_get(words, 5);
+    let total = vec_len(vec_get(grid, 5)) + vec_get(vec_get(grid, 4), 3);
+    total * 100 + vec_len(kept) + str_len(vec_get(kept, 4))
+}

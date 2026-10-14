@@ -1,0 +1,32 @@
+use "@std/text"
+
+const LIMIT: Int = 5
+
+// Every statement on its own line, without a `;`.
+fn total(n: Int) -> Int {
+    let mut s = 0
+    let mut i = 0
+    while i < n {
+        i = i + 1
+        if i == 2 { continue }
+        s = s +
+            i
+    }
+    s
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let a = total(LIMIT) // a comment
+    let b = a
+        * 2
+    let words = text_split("a b c", " ")
+    print(f"{a} {b} {strs_len(words)}\n")
+    let mut k = 0
+    while true {
+        k = k + 1
+        if k == 3 { break }
+    }
+    let kind = if a > 10 { "big" } else if a > 5 { "mid" } else { "small" }
+    print(kind); print("\n")
+    k
+}

@@ -1,0 +1,33 @@
+pub struct State { owner: Int, alice: Int, bob: Int, supply: Int, paused: Bool }
+fn init() -> State ! {} { State(owner: 1, alice: 100, bob: 0, supply: 100, paused: false) }
+fn conserved(s: State) -> Int ! {} { s.alice + s.bob }
+pub fn transfer(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {
+if s.paused { return Result[State, Int].Err(error: 3); }
+if amount <= 0 { return Result[State, Int].Err(error: 1); }
+if caller == 1 {
+if s.alice < amount { return Result[State, Int].Err(error: 2); }
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount, bob: s.bob + amount, supply: s.supply, paused: s.paused))
+} else {
+if s.bob < amount { return Result[State, Int].Err(error: 2); }
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice + amount, bob: s.bob - amount, supply: s.supply, paused: s.paused))
+}
+}
+pub fn pause(s: State, caller: Int, on: Int) -> Result[State, Int] ! {} {
+if caller != s.owner { return Result[State, Int].Err(error: 4); }
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob, supply: s.supply, paused: on == 1))
+}
+pub fn airdrop(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob + amount, supply: s.supply, paused: s.paused))
+}
+fn fee(amount: Int) -> Int ! {} { let mut f = 0; let mut i = 0; while i < amount { f = f + 1; i = i + 10; } f }
+pub fn charged(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {
+let f = fee(amount);
+if caller != 1 || s.alice < amount + f { return Result[State, Int].Err(error: 2); }
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount - f, bob: s.bob + amount + f, supply: s.supply, paused: s.paused))
+}
+fn audit(s: State) -> Int ! {} { s.alice }
+pub fn opaque(s: State, caller: Int) -> Result[State, Int] ! {} {
+if audit(s) > 1000 { return Result[State, Int].Err(error: 9); }
+Result[State, Int].Ok(value: s)
+}
+fn main() -> Int ! {} { 0 }

@@ -1,0 +1,4 @@
+fn unused(n: Int) -> Int {
+    if n <= 0 { 0 } else { unused(n - 1) }
+}
+fn main() -> Int { 42 }

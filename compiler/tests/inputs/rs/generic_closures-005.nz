@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let mut p = "out.txt"; let f = fn() -> Int ! { io } { p = read_file("cfg"); 0 }; f(); write_file(p, "x") }

@@ -1,0 +1,2 @@
+struct VouchCap { x: Int, }
+fn main() -> Int { 0 }

@@ -1,0 +1,2 @@
+fn say() -> Int { println("x"); 0 }
+fn main() -> Int { say() }

@@ -1,0 +1,1 @@
+fn main(t: SpawnCap) -> Int ! {spawn} { scope { spawn down(3); } 0 }

@@ -1,0 +1,12 @@
+struct Particle { x: Int, y: Int, z: Int, vx: Int, vy: Int, vz: Int, mass: Int, alive: Bool }
+fn main() -> Int {
+let ps = vec_new[Particle]();
+let mut i = 0;
+while i < 1000 { vec_push(ps, Particle(x: i, y: i * 2, z: 3, vx: 1, vy: -1, vz: 0, mass: i % 7, alive: i % 3 == 0)); i = i + 1; }
+vec_set(ps, 5, Particle(x: 100, y: 0, z: 0, vx: 0, vy: 0, vz: 0, mass: 9, alive: true));
+let last = vec_pop(ps);
+let mut s = 0;
+let mut k = 0;
+while k < vec_len(ps) { let p = vec_get(ps, k); if p.alive { s = s + p.x + p.mass; } else { s = s - p.vy; } k = k + 1; }
+s + last.y + vec_len(ps)
+}

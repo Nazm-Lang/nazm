@@ -1,0 +1,2 @@
+fn logged[effects E](f: fn() -> Int ! { io, E }) -> Int ! { io, E } { f() }
+fn main() -> Int { logged(fn() -> Int { 1 }) }

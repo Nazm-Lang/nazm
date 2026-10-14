@@ -1,0 +1,29 @@
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat("[", str_concat(s, "]\n"))) }
+
+fn main(out: OutCap) -> Int ! {io} {
+    // The closing delimiter's indentation comes off every line; the first and last breaks are
+    // not the value's; escapes are an ordinary string's; a backslash ending a line joins it.
+    let ir = """
+        define i64 @f() {
+          ret i64 "\x41"
+        }
+          two\
+        joined
+        """;
+    show(out, ir);
+    // A blank line inside is a line, whatever indentation it has.
+    show(out, """
+      a
+
+      b
+      """);
+    // Raw: no escapes, quotes with `#`s, line breaks as written.
+    show(out, r"C:\path\n");
+    show(out, r#"say "hi" \n"#);
+    show(out, r##"a "# b"##);
+    show(out, r"two
+lines");
+    show(out, """
+    """);
+    0
+}

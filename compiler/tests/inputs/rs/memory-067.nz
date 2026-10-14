@@ -1,0 +1,8 @@
+struct Holder {
+    name: Str,
+}
+fn main() -> Int {
+    let c = 1 > 0;
+    let h = if c { Holder(name: int_to_str(11)) } else { Holder(name: int_to_str(2)) };
+    str_len(h.name)
+}

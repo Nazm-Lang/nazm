@@ -1,0 +1,1 @@
+pub extern "C" fn f(x: Int) -> Int = "nz_f" { x }

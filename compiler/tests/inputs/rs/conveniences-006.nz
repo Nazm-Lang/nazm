@@ -1,0 +1,1 @@
+fn main() -> Int { let v: Vec[Int] = [1, "a"]; 0 }

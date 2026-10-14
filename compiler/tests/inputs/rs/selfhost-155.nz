@@ -1,0 +1,1 @@
+enum I { A, B, } enum O { W(v: I), E, } fn m() -> Int { match O.W(v: I.A()) { O.E() => 0, O.W(v: v) => match v { I.A() => 1, I.B() => 2, }, } }

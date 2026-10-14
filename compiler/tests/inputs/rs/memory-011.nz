@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let mut n = 0;
+    scope {
+        let xs = ints_new();
+        ints_push(xs, 6);
+        n = ints_get(xs, 0);
+    }
+    n
+}

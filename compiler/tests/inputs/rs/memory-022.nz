@@ -1,0 +1,8 @@
+fn same(s: Str) -> Str { s }
+fn same_returned(s: Str) -> Str { return s; }
+fn main() -> Int {
+    let s = str_concat("ab", "cd");
+    let a = same(s);
+    let b = same_returned(s);
+    str_len(a) + str_len(b) + str_len(s)
+}

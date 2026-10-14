@@ -1,0 +1,21 @@
+
+enum Tok { Word(text: Str), Pair(a: Str, b: Str), Nothing }
+fn size(t: Tok) -> Int {
+    match t {
+        Tok.Word(text: w) => str_len(w),
+        Tok.Pair(a: x, b: y) => str_len(str_concat(x, y)),
+        Tok.Nothing() => 0,
+    }
+}
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 20 {
+        total = total + size(Tok.Word(text: int_to_str(i)));
+        total = total + size(Tok.Pair(a: int_to_str(i), b: str_concat(int_to_str(i), "z")));
+        let kept = Tok.Word(text: int_to_str(i * 3));
+        total = total + match kept { Tok.Word(text: w) => str_len(w), Tok.Pair(a: x, b: _) => str_len(x), Tok.Nothing() => 0 };
+        i = i + 1;
+    }
+    total
+}

@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(out: OutCap) -> Int { let s = start(21); print(int_to_str(match s { State.Ready() => 0, State.Done(code: c) => c * 20, })); 0 }

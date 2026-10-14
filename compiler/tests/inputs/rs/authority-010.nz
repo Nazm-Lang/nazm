@@ -1,0 +1,2 @@
+fn helper() -> Int { print("x\n"); 0 }
+fn main(io: IoCap) -> Int ! {io} { helper() }

@@ -1,0 +1,1 @@
+fn m() -> Int { while { false } { { break; } } 0 }

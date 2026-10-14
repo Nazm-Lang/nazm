@@ -1,0 +1,2 @@
+fn wide(a: Int128, b: Int128) -> Int128 { a + b }
+fn main() { println(num_to_str(wide(Int128(1), Int128(2)))) }

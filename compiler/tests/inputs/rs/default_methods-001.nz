@@ -1,0 +1,34 @@
+trait Describe {
+    fn name(self: Self) -> Str;
+    fn describe(self: Self) -> Str { str_concat("<", str_concat(self.name(), ">")) }
+    fn twice(self: Self) -> Str { str_concat(self.describe(), self.describe()) }
+    fn shout(self: Self, out: OutCap) -> Int ! {io} { print(str_concat(self.name(), "!\n")) }
+}
+
+struct Dog { n: Int, }
+struct Cat { n: Int, }
+
+impl Describe for Dog {
+    fn name(self: Dog) -> Str { "dog" }
+}
+// An impl may still define a method its trait gives a body: it replaces it for this type.
+impl Describe for Cat {
+    fn name(self: Cat) -> Str { "cat" }
+    fn describe(self: Cat) -> Str { "a cat" }
+}
+
+fn through[T: Describe](x: T) -> Str { x.twice() }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let d = Dog(n: 1);
+    let c = Cat(n: 2);
+    show(out, d.describe());
+    show(out, c.describe());
+    show(out, through(d));
+    show(out, through(c));
+    show(out, Describe.twice(d));
+    d.shout(out);
+    0
+}

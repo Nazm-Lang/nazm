@@ -1,0 +1,4 @@
+pub trait Area { fn area(self: Self) -> Int; }
+pub struct Sq { s: Int }
+impl Area for Sq { fn area(self: Sq) -> Int { self.s * self.s } }
+pub fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }

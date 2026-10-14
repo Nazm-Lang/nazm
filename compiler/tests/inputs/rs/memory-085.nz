@@ -1,0 +1,14 @@
+struct R {
+    a: Str,
+    b: Int,
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 3 {
+        i = i + 1;
+        let v = R(a: int_to_str(i), b: if i == 1 { continue; } else { i });
+        total = total + v.b;
+    }
+    total
+}

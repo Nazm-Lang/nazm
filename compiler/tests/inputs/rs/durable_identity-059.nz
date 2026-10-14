@@ -1,0 +1,10 @@
+pub struct Pair[Left, Right] {
+    first: Left,
+    second: Right,
+}
+pub enum Maybe[Value] {
+    None,
+    Some(value: Value),
+}
+pub fn identity[Value](value: Value) -> Value { value }
+pub fn first[X, Y](p: Pair[X, Y]) -> X { p.first }

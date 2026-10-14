@@ -1,0 +1,2 @@
+fn f(o: Option[Int]) -> Int { let mut z = 0; match o { Option.None() => { z = 1; }, Option.Some(value: v) => { v }, } }
+fn main() -> Int { 0 }

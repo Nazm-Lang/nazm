@@ -1,0 +1,27 @@
+struct Item {
+    name: Str,
+    count: Int,
+    tags: Ints,
+}
+fn main() -> Int {
+    let xs = vec_new[Item]();
+    let mut i = 0;
+    while i < 12 {
+        let tags = ints_new();
+        ints_push(tags, i);
+        vec_push(xs, Item(name: str_concat("item", int_to_str(i)), count: i, tags: tags));
+        i = i + 1;
+    }
+    let kept = vec_get(xs, 3);
+    vec_set(xs, 3, Item(name: "other", count: 99, tags: ints_new()));
+    let mut noise = vec_new[Str]();
+    let mut k = 0;
+    while k < 40 { vec_push(noise, int_to_str(k)); k = k + 1; }
+    noise = vec_new[Str]();
+    let mut updated = vec_get(xs, 5);
+    updated.count = 500;
+    vec_set(xs, 5, updated);
+    let last = vec_pop(xs);
+    str_len(kept.name) * 1000 + kept.count * 100 + ints_get(kept.tags, 0) * 10
+        + vec_get(xs, 5).count + last.count + vec_get(xs, 3).count + vec_len(noise)
+}

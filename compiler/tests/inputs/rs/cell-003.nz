@@ -1,0 +1,2 @@
+struct Node { next: Option[Cell[Node]], }
+fn main() -> Int { 0 }

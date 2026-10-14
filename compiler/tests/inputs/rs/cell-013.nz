@@ -1,0 +1,3 @@
+struct Cell { v: Int, }
+fn cell_new(x: Int) -> Cell { Cell(v: x + 1) }
+fn main() -> Int { cell_new(41).v }

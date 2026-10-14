@@ -1,0 +1,7 @@
+pub enum State {
+    Ready,
+    Failed(why: Str, code: Int),
+}
+pub fn failure(n: Int) -> State {
+    State.Failed(why: str_concat("e", int_to_str(n)), code: n)
+}

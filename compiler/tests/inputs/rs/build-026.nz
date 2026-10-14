@@ -1,0 +1,2 @@
+fn pick(flag: Bool, a: Int, b: Int) -> Int { if flag { a } else { b } }
+fn main() -> Int { pick(false, 10, 20) }

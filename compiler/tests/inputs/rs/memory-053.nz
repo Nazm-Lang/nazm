@@ -1,0 +1,14 @@
+struct Holder {
+    name: Str,
+}
+fn main() -> Int {
+    let mut h = Holder(name: str_concat("abcdefgh", ""));
+    h.name = h.name;
+    let mut noise = "";
+    let mut i = 0;
+    while i < 300 {
+        noise = str_concat("z", noise);
+        i = i + 1;
+    }
+    str_byte(h.name, 0) * 100 + str_len(h.name) * 10 + str_len(noise) % 10
+}

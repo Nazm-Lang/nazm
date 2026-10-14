@@ -1,0 +1,32 @@
+static UART: Int = 150994944;
+static TICKS: Atomic = atomic_new(0);
+
+@interrupt("timer")
+fn tick() -> Int ! {} { atomic_add(TICKS, 1) }
+
+// The PL011's flag register, 0x18 past its data register: bit 5 is "transmit FIFO full".
+fn ready(m: MmioCap) -> Bool ! {} { (mmio_read32(UART + 24) & 32) == 0 }
+
+fn put(m: MmioCap, c: Int) -> Int ! {} {
+    while !ready(m) {
+        0;
+    }
+    mmio_write8(UART, c)
+}
+
+@on_failure
+fn halted(code: Int, m: MmioCap) -> Int ! {} {
+    // `F` for the division the workload faults with, `?` for anything else.
+    if code == 401 { put(m, 70) } else { put(m, 63) };
+    put(m, 10)
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    while atomic_load(TICKS) < 3 {
+        0;
+    }
+    put(m, 75);
+    put(m, 10);
+    let t = atomic_load(TICKS);
+    100 / (t - t)
+}

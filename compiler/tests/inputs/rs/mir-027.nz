@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 50 {
+        let a = int_to_str(i);

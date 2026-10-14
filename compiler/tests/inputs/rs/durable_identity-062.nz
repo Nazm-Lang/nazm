@@ -1,0 +1,10 @@
+pub struct Pair[A, B, C] {
+    first: A,
+    second: B,
+}
+pub enum Maybe[T] {
+    None,
+    Some(value: T),
+}
+pub fn identity[T](value: T) -> T { value }
+pub fn first[A, B](p: Pair[A, B, Int]) -> A { p.first }

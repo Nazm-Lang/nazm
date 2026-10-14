@@ -1,0 +1,7 @@
+fn worker(io: IoCap, jobs: Chan, results: Chan) -> Int ! { io } {
+let got = ints_new(); if chan_recv(jobs, got) { chan_send(results, ints_get(got, 0)); } 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let n = str_len(arg(0)); let jobs = chan_new(1); let results = chan_new(1);
+scope { let mut i = 0; while i < n { spawn worker(io, jobs, results); i = i + 1; }
+let mut k = 0; let got = ints_new(); while k < n { chan_send(jobs, k); let r = chan_recv(results, got); k = k + 1; } }
+0 }

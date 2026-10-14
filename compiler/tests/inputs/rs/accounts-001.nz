@@ -1,0 +1,2 @@
+pub struct State { owner: Int, alice: Int, bob: Int, paused: Bool }
+fn init() -> State ! {} { State(owner: 1, alice: 100, bob: 0, paused: false) }

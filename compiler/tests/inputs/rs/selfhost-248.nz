@@ -1,0 +1,2 @@
+enum Result[T, E] { Ok(value: T), Err(error: E), }
+fn m() -> Int { 0 }

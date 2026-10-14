@@ -1,0 +1,39 @@
+fn leaf_s() -> Result[Int, Str] { Result[Int, Str].Err(error: str_concat("broken-", int_to_str(42))) }
+fn leaf_r() -> Result[Int, Item] { Result[Int, Item].Err(error: item(31)) }
+fn leaf_v() -> Result[Int, Vec[Diag]] { Result[Int, Vec[Diag]].Err(error: diags(5)) }
+fn mid_s() -> Result[Int, Str] {
+    let n = leaf_s()?;
+    churn();
+    Result[Int, Str].Ok(value: n)
+}
+fn mid_r() -> Result[Int, Item] {
+    let n = leaf_r()?;
+    Result[Int, Item].Ok(value: n)
+}
+fn mid_v() -> Result[Str, Vec[Diag]] {
+    let n = leaf_v()?;
+    Result[Str, Vec[Diag]].Ok(value: int_to_str(n))
+}
+fn top_s() -> Result[Str, Str] {
+    let n = mid_s()?;
+    Result[Str, Str].Ok(value: int_to_str(n))
+}
+fn top_r() -> Result[Int, Item] {
+    let n = mid_r()?;
+    Result[Int, Item].Ok(value: n)
+}
+fn top_v() -> Result[Int, Vec[Diag]] {
+    let s = mid_v()?;
+    Result[Int, Vec[Diag]].Ok(value: str_len(s))
+}
+fn main() -> Int {
+    let a = top_s();
+    churn();
+    let b = top_r();
+    churn();
+    let c = top_v();
+    churn();
+    match a { Result.Ok(value: s) => 0, Result.Err(error: e) => str_len(e) * 10000, }
+        + match b { Result.Ok(value: n) => 0, Result.Err(error: i) => str_len(i.name) * 100 + ints_get(i.tags, 0), }
+        + match c { Result.Ok(value: n) => 0, Result.Err(error: ds) => vec_len(ds) * 1000000 + str_len(vec_get(ds, 4).code) * 10000000, }
+}

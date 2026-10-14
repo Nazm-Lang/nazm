@@ -1,0 +1,1 @@
+fn main() -> Int { let v = vec_new[Str](); vec_push(v, f"a{1}"); vec_len(v) }

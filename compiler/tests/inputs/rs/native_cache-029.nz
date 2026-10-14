@@ -1,0 +1,2 @@
+fn zero() -> Int { 0 }
+pub fn boom(n: Int) -> Int { n / zero() }

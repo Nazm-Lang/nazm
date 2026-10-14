@@ -1,0 +1,9 @@
+fn square(x: Int) -> Int ! {} { x * x }
+
+pub extern "C" fn sum_squares(a: Int, b: Int) -> Int ! {} = "nazm_sum_squares" {
+    square(a) + square(b)
+}
+
+pub extern "C" fn is_even(n: Int) -> Bool ! {} = "nazm_is_even" { n % 2 == 0 }
+
+pub extern "C" fn wrap(n: Int) -> Int ! {} = "nazm_wrap" { n * 9223372036854775807 }

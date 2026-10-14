@@ -1,0 +1,2 @@
+struct Node { next: Option[Box[Node]], }
+fn main() -> Int { 0 }

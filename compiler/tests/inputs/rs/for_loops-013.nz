@@ -1,0 +1,1 @@
+fn main() -> Int { for i in 0..3 { } break; 0 }

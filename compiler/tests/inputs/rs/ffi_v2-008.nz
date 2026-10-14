@@ -1,0 +1,1 @@
+pub extern "C" fn f(s: Str) -> Int ! {} = "nz_f" { str_len(s) }

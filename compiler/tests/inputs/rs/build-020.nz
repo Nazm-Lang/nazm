@@ -1,0 +1,2 @@
+fn main() -> Int { later(4) }
+fn later(n: Int) -> Int { n * 11 }

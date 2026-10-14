@@ -1,0 +1,1 @@
+fn main() -> Int { Result[Int, Str].Ok(value: 1)? }

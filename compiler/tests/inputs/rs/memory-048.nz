@@ -1,0 +1,13 @@
+struct Line {
+    c: Chan,
+}
+fn main() -> Int {
+    let l = Line(c: chan_new(2));
+    let m = l;
+    chan_send(m.c, 5);
+    chan_close(l.c);
+    let got = ints_new();
+    while chan_recv(m.c, got) {
+    }
+    ints_get(got, 0)
+}

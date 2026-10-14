@@ -1,0 +1,3 @@
+use "helper.nz";
+fn f(x: Int) -> Int ! {} { twice(x) }
+fn main() -> Int { f(2) }

@@ -1,0 +1,19 @@
+struct R {
+    a: Str,
+    b: Int,
+}
+enum E {
+    Absent,
+    Value(a: Str, b: Int),
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        let r = R(a: int_to_str(i), b: if i == 1 { continue; } else { i });
+        let v = E.Value(a: int_to_str(i), b: if i == 2 { continue; } else { r.b });
+        total = total + match v { E.Absent() => 0, E.Value(a: s, b: n) => if i == 3 { continue; } else { n }, };
+    }
+    total
+}

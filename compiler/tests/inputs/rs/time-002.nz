@@ -1,0 +1,14 @@
+fn napper(t: TimeCap, done: Chan) -> Int { time_sleep_ms(300); chan_send(done, 1); 0 }
+fn busy(done: Chan) -> Int { let mut i = 0; let mut s = 0; while i < 100000 { s = s + i % 3; i = i + 1; } chan_send(done, 2); 0 }
+fn main(t: TimeCap, sp: SpawnCap, out: OutCap) -> Int {
+let done = chan_new(4);
+let got = ints_new();
+scope {
+spawn napper(t, done);
+spawn busy(done);
+chan_recv(done, got);
+chan_recv(done, got);
+}
+print(str_concat(int_to_str(ints_get(got, 0)), int_to_str(ints_get(got, 1))));
+0
+}

@@ -1,0 +1,32 @@
+
+fn worker(started: Chan, go: Chan, which: Int, out: OutCap) -> Int {
+    let buf = ints_new();
+    chan_send(started, 1);
+    chan_recv(go, buf);
+    ints_pop(buf);
+    if which == 1 { print("inner finished"); } else { print("outer finished"); }
+    0
+}
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    let os = chan_new(1);
+    let og = chan_new(1);
+    let is = chan_new(1);
+    let ig = chan_new(1);
+    let buf = ints_new();
+    let mut top = 1;
+    scope {
+        spawn worker(os, og, 2, io);
+        chan_recv(os, buf);
+        ints_pop(buf);
+        chan_send(og, 1);
+        scope {
+            spawn worker(is, ig, 1, io);
+            chan_recv(is, buf);
+            ints_pop(buf);
+            chan_send(ig, 1);
+            let mut n = 0;
+            while n < 64 { top = top + top; n = n + 1; }
+        }
+    }
+    top
+}

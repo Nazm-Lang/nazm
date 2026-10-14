@@ -1,0 +1,22 @@
+use "@std/file";
+use "@std/ioerror";
+
+fn show(io: IoCap, dir: Str) -> Int ! {io} {
+    match file_walk(io, dir) {
+        Result.Ok(value: paths) => {
+            print(f"{dir}: {strs_len(paths)}\n");
+            for p in paths { print(f"  {p}\n"); }
+            0
+        },
+        Result.Err(error: e) => { print(f"{dir}: {io_kind_name(e.kind)}\n"); 0 },
+    }
+}
+
+fn main(io: IoCap) -> Int ! {io} {
+    show(io, "tree");
+    show(io, "tree/");
+    show(io, "tree/empty");
+    show(io, "missing");
+    show(io, "tree/a.txt");
+    0
+}

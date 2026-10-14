@@ -1,0 +1,9 @@
+pub struct Point {
+    x: Int,
+}
+struct Hidden {
+    n: Str,
+    extra: Int,
+}
+fn secret() -> Int { str_len(Hidden(n: "", extra: 0).n) + 1 }
+pub fn at(n: Int) -> Point { Point(x: n + secret() - 1) }

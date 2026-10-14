@@ -1,0 +1,26 @@
+fn may_fail(n: Int) -> Result[Int, Str] {
+    if n % 2 == 0 { return Result[Int, Str].Err(error: int_to_str(n)); }
+    Result[Int, Str].Ok(value: n)
+}
+fn later(log: Ints) -> Str {
+    ints_push(log, 1);
+    str_concat("late", "r")
+}
+fn consume(log: Ints, a: Str, b: Int, c: Str) -> Int {
+    ints_push(log, 2);
+    str_len(a) + b + str_len(c)
+}
+fn f(log: Ints, i: Int) -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: consume(log, int_to_str(i * 1000), may_fail(i)?, later(log)))
+}
+fn main() -> Int {
+    let log = ints_new();
+    let mut i = 0;
+    let mut total = 0;
+    while i < 20 {
+        total = total + match f(log, i) { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - str_len(e), };
+        i = i + 1;
+    }
+    churn();
+    total * 100 + ints_len(log)
+}

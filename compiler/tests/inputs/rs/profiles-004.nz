@@ -1,0 +1,3 @@
+fn deep(io: IoCap) -> Int ! { io } { print("x") }
+fn mid(io: IoCap) -> Int ! { io } { deep(io) }
+fn main(io: IoCap) -> Int ! { io } { mid(io) }

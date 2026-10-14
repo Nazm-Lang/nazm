@@ -1,0 +1,2 @@
+fn bytes_new(n: Int) -> Int { n }
+fn main() -> Int { 0 }

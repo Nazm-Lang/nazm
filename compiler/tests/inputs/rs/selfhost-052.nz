@@ -1,0 +1,2 @@
+fn w(a: Int, b: Int) -> Int { a + b }
+fn m() -> Int { scope { spawn w(1, 2 + 3); } 0 }

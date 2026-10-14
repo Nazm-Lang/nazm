@@ -1,0 +1,2 @@
+use "nowhere.nz";
+fn main() -> Int { 0 }

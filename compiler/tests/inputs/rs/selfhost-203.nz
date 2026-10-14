@@ -1,0 +1,2 @@
+fn f(b: Int[Str]) -> Int { 0 }
+fn m() -> Int { 0 }

@@ -1,0 +1,2 @@
+use "lib.nz";
+fn main(io: IoCap) -> Int ! { io } { show(io, read_file("lib.nz")) }

@@ -1,0 +1,24 @@
+use "@std/ioerror";
+fn line(io: IoCap, s: Str) -> Int ! { io } { print(str_concat(s, "\n")) }
+fn main(io: IoCap) -> Int ! { io } {
+let a = os_open_write("a.txt", 0);
+line(io, int_to_str(os_close(a)));
+let b = os_open_write("b.txt", 0);
+let s = os_write(a, bytes_from_str("stray"));
+line(io, io_kind_name(io_kind_of(s)));
+line(io, os_error_text(s));
+line(io, int_to_str(os_status(a)));
+line(io, int_to_str(os_write(b, bytes_from_str("own"))));
+os_close(b);
+line(io, read_file("b.txt"));
+line(io, int_to_str(os_close(a)));
+let missing = os_open_read("missing.txt");
+line(io, io_kind_name(io_kind_of(os_status(missing))));
+line(io, if str_len(os_error_text(os_status(missing))) > 0 { "a message" } else { "no message" });
+line(io, io_kind_name(io_kind_of(os_status(os_open_write("x", 7)))));
+line(io, io_kind_name(io_kind_of(os_seek(b, 0, 9))));
+line(io, int_to_str(str_len(os_error_text(0))));
+os_unlink("a.txt");
+os_unlink("b.txt");
+0
+}

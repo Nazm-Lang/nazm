@@ -1,0 +1,10 @@
+enum E {
+    A,
+    Text(value: Str),
+}
+fn main() -> Int {
+    let a = E.Text(value: str_concat("he", "llo"));
+    let b = a;
+    let c = b;
+    match c { E.A() => 0, E.Text(value: s) => str_len(s), }
+}

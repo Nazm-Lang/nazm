@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let a = vec_new[fn() -> Int]();
+    let b = vec_new[fn() -> Int]();
+    let fa = fn() -> Int { vec_len(b) };
+    let fb = fn() -> Int { vec_len(a) };
+    vec_push(a, fa);
+    vec_push(b, fb);
+    0
+}

@@ -1,0 +1,9 @@
+fn shout(s: Str) -> Str ! {}
+    requires str_len(s) > 0
+    ensures str_len(result) == str_len(s) + 1
+{ str_concat(s, "!") }
+fn main(io: IoCap) -> Int ! { io } {
+    let mut i = 0;
+    while i < 100 { let t = shout(int_to_str(i)); i = i + 1; }
+    print(shout("hey")); 0
+}

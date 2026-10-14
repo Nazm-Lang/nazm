@@ -1,0 +1,2 @@
+struct Sq { s: Int }
+fn main() -> Int { Sq(s: 1).area() }

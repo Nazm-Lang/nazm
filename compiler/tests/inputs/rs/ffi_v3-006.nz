@@ -1,0 +1,3 @@
+extern "C" fn ap(f: fn(Int) -> Int, x: Int) -> Int = "ap";
+fn dbl(x: Int) -> Int ! {} { x * 2 }
+fn main(f: ForeignCap) -> Int ! { foreign } { ap(dbl, 1) }

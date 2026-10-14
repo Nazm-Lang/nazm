@@ -1,0 +1,3 @@
+fn quit(io: IoCap) -> Int { exit_with(3); 0 }
+fn wait(c: Chan) -> Int { let b = ints_new(); chan_recv(c, b); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn wait(c); spawn quit(io); } 5 }

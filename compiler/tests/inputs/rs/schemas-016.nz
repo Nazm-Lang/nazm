@@ -1,0 +1,2 @@
+use "lib.nz" as l;
+fn main() -> Int { let p = l::P(a: l::helper(1)); match l::E.B(v: p.a) { l::E.A() => 0, l::E.B(v: x) => x } }

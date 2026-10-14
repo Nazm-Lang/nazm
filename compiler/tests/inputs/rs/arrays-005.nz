@@ -1,0 +1,2 @@
+struct Q { y: Int }
+fn main() -> Int { let q = Q(y: 1); q[0] }

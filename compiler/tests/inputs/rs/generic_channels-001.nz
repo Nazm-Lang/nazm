@@ -1,0 +1,25 @@
+
+struct Job { name: Str, size: Int, }
+
+fn worker(jobs: Chan[Job], done: Chan[Str]) -> Int ! {} {
+    let got = vec_new[Job]();
+    while chan_recv_of(jobs, got) {
+        let j = vec_pop(got);
+        chan_send_of(done, str_concat(j.name, int_to_str(j.size)));
+    }
+    chan_close_of(done)
+}
+
+fn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {
+    let jobs = chan_new_of[Job](2);
+    let done = chan_new_of[Str](4);
+    scope {
+        spawn worker(jobs, done);
+        chan_send_of(jobs, Job(name: str_concat("a", "b"), size: 1));
+        chan_send_of(jobs, Job(name: "cd", size: 2));
+        chan_close_of(jobs);
+    }
+    let out = vec_new[Str]();
+    while chan_recv_of(done, out) { print(vec_pop(out)); print(";"); }
+    0
+}

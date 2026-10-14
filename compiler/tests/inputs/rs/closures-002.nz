@@ -1,0 +1,12 @@
+
+fn main(out: OutCap) -> Int {
+    let n = 1;
+    let xs = ints_new();
+    let f = fn(x: Int) -> Int { x + n + ints_len(xs) };
+    if true {
+        let n = 100;
+        ints_push(xs, 7);
+        print(int_to_str(f(0) + n));
+    }
+    0
+}

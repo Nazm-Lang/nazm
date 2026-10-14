@@ -1,0 +1,1 @@
+pub extern "C" fn f(x: Int) -> Str ! {} = "nz_f" { int_to_str(x) }

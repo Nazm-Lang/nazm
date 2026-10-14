@@ -1,0 +1,1 @@
+fn main[effects E]() -> Int ! { E } { 0 }

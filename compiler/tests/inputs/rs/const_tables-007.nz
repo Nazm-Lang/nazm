@@ -1,0 +1,3 @@
+struct P { x: UInt8, }
+const A: P = P(x: 300);
+fn main() -> Int { 0 }

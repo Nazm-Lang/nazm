@@ -1,0 +1,18 @@
+use "@std/text"
+
+fn show(xs: Strs) -> Str {
+    let mut s = ""
+    for x in xs { s += f"[{x}]" }
+    s
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(show("a\nb\r\n\nc\n".lines()))
+    println(show("\n".lines()))
+    println(show("".lines()))
+    println(show("x".lines()))
+    println(show("a  b ".split(" ")))
+    println(show("a--b---c".split("--")))
+    println(show("abc".split("")))
+    0
+}

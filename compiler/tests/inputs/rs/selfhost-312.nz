@@ -1,0 +1,2 @@
+struct Point { x: Int, }
+fn main() -> Int { if Point(x: 1) < 2 { 1 } else { 0 } }

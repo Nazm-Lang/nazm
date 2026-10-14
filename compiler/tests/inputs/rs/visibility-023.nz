@@ -1,0 +1,6 @@
+use "a.nz";
+use "b.nz";
+struct Thing {
+    here: Int,
+}
+fn main() -> Int { Thing(here: 1).here + from_a() + from_b() }

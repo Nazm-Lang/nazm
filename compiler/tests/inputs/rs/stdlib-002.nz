@@ -1,0 +1,2 @@
+use "@elsewhere/lib.nz";
+fn main() -> Int { f() }

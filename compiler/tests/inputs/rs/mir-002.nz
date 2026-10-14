@@ -1,0 +1,36 @@
+
+struct Box { s: Str, t: Str, }
+fn inner(k: Int) -> Result[Int, Str] {
+    if k == 3 { return Result[Int, Str].Err(error: int_to_str(k)); }
+    Result[Int, Str].Ok(value: k)
+}
+fn build(k: Int) -> Result[Box, Str] {
+    let b = Box(s: int_to_str(k), t: int_to_str(inner(k)?));
+    Result[Box, Str].Ok(value: b)
+}
+fn early(n: Int) -> Int {
+    let a = int_to_str(n);
+    let mut i = 0;
+    while i < 10 {
+        let x = str_concat(a, "x");
+        i = i + 1;
+        if i == 2 { continue; }
+        if i == n {
+            let y = str_concat(x, "y");
+            return str_len(y);
+        }
+        if i == 7 { break; }
+    }
+    str_len(a)
+}
+fn main() -> Int {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 6 {
+        total = total + early(k);
+        let r = match build(k) { Result.Ok(value: b) => str_len(b.s) + str_len(b.t), Result.Err(error: e) => str_len(e) };
+        total = total + r;
+        k = k + 1;
+    }
+    total
+}

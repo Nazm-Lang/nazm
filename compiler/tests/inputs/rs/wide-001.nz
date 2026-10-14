@@ -1,0 +1,8 @@
+use "lib.nz";
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+fn main(out: OutCap) -> Int ! {io} {
+show(out, num_to_str(BIG));
+show(out, num_to_str(LOW));
+show(out, num_to_str(SMALL));
+0
+}

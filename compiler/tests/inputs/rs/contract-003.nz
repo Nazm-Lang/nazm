@@ -1,0 +1,2 @@
+pub fn boom(s: State, caller: Int, n: Int) -> Result[State, Int] ! {} { Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice * n, bob: s.bob, supply: s.supply, paused: s.paused)) }
+fn main() -> Int ! {} { 0 }

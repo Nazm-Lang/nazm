@@ -1,0 +1,6 @@
+fn main() -> Int {
+    let c = chan_new_of[Str](1);
+    chan_send_of(c, "a");
+    let v = vec_new[Str]();
+    if chan_recv_of(c, v) { 1 } else { 0 }
+}

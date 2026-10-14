@@ -1,0 +1,11 @@
+pub struct Point {
+    x: Int,
+    label: Str,
+}
+pub enum State {
+    Ready,
+    Done(code: Int, why: Str),
+}
+pub fn at(n: Int) -> Point { Point(x: n, label: "p") }
+pub fn start() -> State { State.Ready() }
+pub fn maybe(n: Int) -> Option[Point] { Option[Point].Some(value: at(n)) }

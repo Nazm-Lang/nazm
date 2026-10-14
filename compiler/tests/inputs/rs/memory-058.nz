@@ -1,0 +1,9 @@
+struct Holder {
+    name: Str,
+}
+fn main() -> Int {
+    let mut h = Holder(name: str_concat("ab", "cd"));
+    let z = 0;
+    h.name = int_to_str(1 / z);
+    str_len(h.name)
+}

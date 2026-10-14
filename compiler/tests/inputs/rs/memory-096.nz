@@ -1,0 +1,35 @@
+struct Point {
+    label: Str,
+    x: Int,
+}
+enum Token {
+    Eof,
+    Number(value: Int),
+    Word(text: Str),
+    At(point: Point),
+}
+fn main() -> Int {
+    let toks = vec_new[Token]();
+    let mut i = 0;
+    while i < 40 {
+        vec_push(toks, Token.Eof());
+        vec_push(toks, Token.Number(value: i));
+        vec_push(toks, Token.Word(text: int_to_str(i)));
+        vec_push(toks, Token.At(point: Point(label: str_concat("p", int_to_str(i)), x: i)));
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < vec_len(toks) {
+        total = total + match vec_get(toks, k) {
+            Token.Eof() => 1,
+            Token.Number(value: v) => v,
+            Token.Word(text: t) => str_len(t),
+            Token.At(point: p) => str_len(p.label) + p.x,
+        };
+        k = k + 1;
+    }
+    vec_set(toks, 3, Token.Eof());
+    let popped = vec_pop(toks);
+    total + match popped { Token.At(point: p) => p.x, Token.Eof() => 0, Token.Number(value: v) => v, Token.Word(text: t) => 0, }
+}

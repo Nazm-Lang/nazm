@@ -1,0 +1,1 @@
+fn main(p: ProcessCap) -> Int ! { io } { os_status(os_spawn("ls", strs_new())) }

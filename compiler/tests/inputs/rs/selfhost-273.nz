@@ -1,0 +1,1 @@
+fn main() -> Int { let mut z = 0; let x = { z = 1; }; 0 }

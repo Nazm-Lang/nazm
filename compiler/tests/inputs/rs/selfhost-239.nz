@@ -1,0 +1,2 @@
+fn g() -> Result[Int, Str] { let n = 4?; Result[Int, Str].Ok(value: n) }
+fn m() -> Int { 0 }

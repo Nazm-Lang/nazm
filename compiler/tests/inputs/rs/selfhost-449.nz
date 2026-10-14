@@ -1,0 +1,2 @@
+use "@std/nowhere";
+fn main() -> Int { 0 }

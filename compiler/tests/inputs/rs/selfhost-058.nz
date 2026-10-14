@@ -1,0 +1,1 @@
+fn m() -> Int { f(1, if true { 2 } else { 3 }, 4) }

@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let b = box_new("out.txt"); write_file(box_get(b), "x") }

@@ -1,0 +1,22 @@
+
+const A: Int = 6 * 7;
+const B: Int = A - 2;
+const MASK: UInt32 = 0xFF << 8;
+const HALF: Float32 = 0.5;
+const ON: Bool = A > B && !false;
+const GREETING: Str = "hello";
+const BIG: UInt64 = 18446744073709551615;
+const NEG: Int8 = -128;
+const WIDE: Int = Int(UInt16(65535));
+
+fn main(out: OutCap) -> Int ! {io} {
+    print(str_concat(int_to_str(A + B), "\n"));
+    print(str_concat(num_to_str(MASK), "\n"));
+    print(str_concat(num_to_str(HALF + HALF), "\n"));
+    if ON { print("on\n"); } else { print("off\n"); };
+    print(str_concat(GREETING, "\n"));
+    print(str_concat(num_to_str(BIG), "\n"));
+    print(str_concat(num_to_str(NEG), "\n"));
+    print(str_concat(int_to_str(WIDE), "\n"));
+    0
+}

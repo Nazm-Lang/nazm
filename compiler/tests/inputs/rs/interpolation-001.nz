@@ -1,0 +1,1 @@
+fn main() -> Int { str_len(float_to_str_fixed(1.0, 31)) }

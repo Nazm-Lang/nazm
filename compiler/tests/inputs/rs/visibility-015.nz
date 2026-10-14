@@ -1,0 +1,3 @@
+use "model.nz";
+fn size(p: Point) -> Int { p.x + str_len(p.label) }
+fn main() -> Int { size(Point(x: 40, label: "ab")) }

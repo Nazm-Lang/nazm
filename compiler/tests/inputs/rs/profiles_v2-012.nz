@@ -1,0 +1,7 @@
+fn main() -> Int ! {} {
+    let c = chan_new_of[Int](1);
+    chan_send_of(c, 1);
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, c);
+    chan_select_of(cs, vec_new[Int]())
+}

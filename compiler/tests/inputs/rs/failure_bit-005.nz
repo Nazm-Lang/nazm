@@ -1,0 +1,5 @@
+fn down(n: Int, k: Int) -> Int {
+    if n == 0 { 10 / k } else { down(n - 1, k) + 1 }
+}
+
+pub extern "C" fn deep(n: Int, k: Int) -> Int ! {} = "nazm_deep" { down(n, k) }

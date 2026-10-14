@@ -1,0 +1,14 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 20000 {
+        let mut a = 1;
+        let b = i % 7;
+        let mut c = 0;
+        a = a + b;
+        c = a;
+        total = total + c;
+        i = i + 1;
+    }
+    total
+}

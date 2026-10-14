@@ -1,0 +1,6 @@
+fn main(out_cap: OutCap) -> Int {
+    print("out");
+    eprint("err");
+    print(str_from_byte(10));
+    0
+}

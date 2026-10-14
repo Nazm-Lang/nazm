@@ -1,0 +1,3 @@
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + apply(down, n - 1) } }
+fn main() -> Int { down(100000000) }

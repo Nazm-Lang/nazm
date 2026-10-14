@@ -1,0 +1,6 @@
+trait T { fn n(self: Self) -> Int; fn bad(self: Self) -> Int { self.n() + "x" } }
+struct A { x: Int, }
+struct B { x: Int, }
+impl T for A { fn n(self: A) -> Int { 1 } }
+impl T for B { fn n(self: B) -> Int { 2 } }
+fn main() -> Int { 0 }

@@ -1,0 +1,2 @@
+pub enum E { A(v: Str), } pub fn f(e: E) -> Int { match e { E.A(v: s) => str_len(s), } }
+fn m() -> Int { f(E.A(v: "a")) }

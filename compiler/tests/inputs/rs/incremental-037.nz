@@ -1,0 +1,1 @@
+pub fn names(io: IoCap) -> Strs ! { io } { let xs = strs_new(); strs_push(xs, arg(1)); xs }

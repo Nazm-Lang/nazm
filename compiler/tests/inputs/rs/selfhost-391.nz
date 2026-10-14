@@ -1,0 +1,2 @@
+use "@std/num";
+fn main() -> Int { num_abs(0 - 9) + num_min(4, 2) }

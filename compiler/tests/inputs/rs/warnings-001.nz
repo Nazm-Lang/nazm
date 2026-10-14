@@ -1,0 +1,6 @@
+enum E { A, B(n: Int), C, }
+fn f(e: E) -> Int { match e { E.A() => 1, _ => 0, } }
+fn g(e: E) -> Int { match e { E.A() | E.C() => 1, E.B(n: x) => x, } }
+fn h(e: E) -> Int { match e { E.B(n: 0) => 1, other => 2, } }
+fn i(e: E) -> Int { if let E.A() = e { 1 } else { 0 } }
+fn main() -> Int { f(E.C()) + g(E.A()) + h(E.A()) + i(E.B(n: 1)) }

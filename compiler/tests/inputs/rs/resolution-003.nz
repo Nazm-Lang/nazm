@@ -1,0 +1,2 @@
+fn main() -> Int { later() }
+fn later() -> Int { 7 }

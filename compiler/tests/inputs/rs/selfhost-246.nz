@@ -1,0 +1,2 @@
+fn g[T, E1, E2](r: Result[T, E1]) -> Result[T, E2] { let v = r?; Result[T, E2].Ok(value: v) }
+fn m() -> Int { 0 }

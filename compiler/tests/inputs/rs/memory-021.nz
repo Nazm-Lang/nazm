@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let xs = strs_new();
+    let e = str_join(xs, ",");
+    str_len(e) + if e == "" { 7 } else { 0 }
+}

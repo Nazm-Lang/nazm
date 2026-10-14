@@ -1,0 +1,1 @@
+fn main[T]() -> Int { 0 }

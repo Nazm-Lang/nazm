@@ -1,0 +1,2 @@
+use "facade.nz";
+fn main() -> Int { Square(s: 3).s + twice(4) }

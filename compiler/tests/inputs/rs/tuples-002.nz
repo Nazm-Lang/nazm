@@ -1,0 +1,2 @@
+fn f(x: (Int)) -> (Int) { let (y) = (x); match (y) { (0) => 1, (n) => n, } }
+fn main() -> Int { f(1) }

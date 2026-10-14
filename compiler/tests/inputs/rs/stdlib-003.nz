@@ -1,0 +1,3 @@
+use "@std/text";
+use "@std/seq";
+fn main() -> Int { str_len(text_trim(" a ")) }

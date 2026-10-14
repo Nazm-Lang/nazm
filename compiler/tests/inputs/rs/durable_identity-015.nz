@@ -1,0 +1,2 @@
+fn shown(n: Int) -> Int { helper() + n }
+fn helper() -> Int { 1 }

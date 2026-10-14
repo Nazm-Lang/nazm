@@ -1,0 +1,14 @@
+fn show(o: Option[Int]) -> Str { match o { Option.Some(value: v) => num_to_str(v), Option.None() => "-", } }
+fn show8(o: Option[Int8]) -> Str { match o { Option.Some(value: v) => num_to_str(Int(v)), Option.None() => "-", } }
+fn showu(o: Option[UInt8]) -> Str { match o { Option.Some(value: v) => num_to_str(Int(v)), Option.None() => "-", } }
+fn line(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+fn main(out: OutCap) -> Int ! {io} {
+    let big = 9223372036854775807;
+    let small = 0 - 9223372036854775807 - 1;
+    line(out, str_concat(show(checked_add(1, 2)), str_concat(show(checked_add(big, 1)), show(checked_sub(small, 1)))));
+    line(out, str_concat(show(checked_mul(3, 4)), str_concat(show(checked_mul(big, 2)), str_concat(show(checked_mul(0 - 1, small)), show(checked_mul(0, big))))));
+    line(out, str_concat(show8(checked_add(Int8(100), Int8(27))), str_concat(show8(checked_add(Int8(100), Int8(28))), show8(checked_mul(Int8(-1), Int8(-128))))));
+    line(out, str_concat(showu(checked_sub(UInt8(3), UInt8(4))), str_concat(showu(checked_mul(UInt8(16), UInt8(15))), showu(checked_mul(UInt8(16), UInt8(16))))));
+    line(out, str_concat(show(checked_mul(0 - 1, big)), show(checked_mul(4611686018427387904, 2))));
+    0
+}

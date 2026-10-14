@@ -1,0 +1,11 @@
+
+fn main(out: OutCap) -> Int {
+    let c = chan_new_of[Str](2);
+    chan_close_of(c);
+    let sent = chan_send_of(c, str_concat("never", "queued"));
+    let got = vec_new[Str]();
+    let r = chan_recv_of(c, got);
+    if sent || r { print("wrong"); }
+    print(int_to_str(vec_len(got)));
+    0
+}

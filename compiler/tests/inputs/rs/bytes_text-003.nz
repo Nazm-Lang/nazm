@@ -1,0 +1,2 @@
+struct Text { a: Int, }
+fn main() -> Int { 0 }

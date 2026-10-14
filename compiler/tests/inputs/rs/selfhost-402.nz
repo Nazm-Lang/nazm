@@ -1,0 +1,4 @@
+fn f(n: Int) -> Int ! {}
+    ensures result > n
+{ if n > 5 { return n + 1; } n }
+fn main() -> Int { f(9) + f(3) }

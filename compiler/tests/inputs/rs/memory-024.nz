@@ -1,0 +1,13 @@
+fn main() -> Int {
+    let xs = strs_new();
+    strs_push(xs, str_concat("ab", "cd"));
+    let s = strs_get(xs, 0);
+    strs_set(xs, 0, str_concat("wx", "yz"));
+    let mut i = 0;
+    let mut noise = "";
+    while i < 20 {
+        noise = str_concat("q", noise);
+        i = i + 1;
+    }
+    str_byte(s, 0)
+}

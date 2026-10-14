@@ -1,0 +1,3 @@
+struct Box[T] { value: T, }
+fn f(a: Box[Box[Chan]], b: Box[Box[Chan]]) -> Bool { a == b }
+fn main() -> Int { 0 }

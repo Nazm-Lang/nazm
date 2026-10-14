@@ -1,0 +1,1 @@
+enum E { A, B, } fn m() -> Int { match E.A() { E.A() => 1, E.A() => 2, E.B() => 3, } }
