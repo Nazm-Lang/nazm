@@ -1,7 +1,8 @@
 ## 1. Build time
 - [x] 1.1 Precompiled runtime object per target, cached standard-library objects (design D12)
       — 2026-10-15: the user cache, architecture §7.113, `tests/user_cache.rs`, three mutants
-- [ ] 1.2 The comparison reports cached and uncached builds
+- [x] 1.2 The comparison reports cached and uncached builds — 2026-10-15: two Nazm rows in
+      `compare.py`, `--no-cache` and `(user cache warm)`; measured in `performance.md`, *R1.5 1.2*
 
 ## 2. Running
 - [x] 2.1 `nazm run` compiles with Cranelift and executes; `--interpret` keeps the interpreter
